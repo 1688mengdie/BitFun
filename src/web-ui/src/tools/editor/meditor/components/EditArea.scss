@@ -1,0 +1,24 @@
+@use '../../../../component-library/styles/tokens.scss' as *;
+
+.m-editor-textarea {
+  width: 100%;
+  height: 100%;
+  padding: $size-gap-4;
+  border: none !important;
+  outline: none !important;
+  box-shadow: none !important;
+  resize: none;
+  font-family: $font-family-mono;
+  font-size: $font-size-sm;
+  line-height: $line-height-relaxed;
+  background: transparent;
+  color: inherit;
+
+  &:focus {
+    border: none !important;
+    outline: none !important;
+    box-shadow: none !important;
+  }
+  
+}
+

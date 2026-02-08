@@ -1,0 +1,748 @@
+{
+  "emptyState": {
+    "welcomeBack": "欢迎回来！",
+    "workingIn": "您正在 <workspace>{{workspace}}</workspace> 中",
+    "workingInWithBranch": "您正在 <workspace>{{workspace}}</workspace> 中，工作分支是 <branch>{{branch}}</branch>",
+    "capabilities": "我可以帮你读懂复杂代码，快速实现新功能，",
+    "capabilities2": "重构老旧项目，或是解决那些让人头疼的 Bug。",
+    "readyToHelp": "说出你的想法，我随时待命",
+    "noWorkspace": "这里还空空如也",
+    "openProject": "打开一个项目，让我们一起开始编码之旅"
+  },
+  "panel": {
+    "noTabs": "暂无打开的标签",
+    "selectFromLeft": "从左侧选择文件或内容来创建新标签",
+    "dragTabHere": "拖拽标签到此处",
+    "releaseToAdd": "释放以添加到此栏"
+  },
+  "layout": {
+    "noPanels": "BitFun",
+    "noPanelsHint": "使用底部栏切换面板或按 <kbd>Ctrl+\\</kbd> <kbd>Ctrl+]</kbd> 展开面板",
+    "panelCollapseHintLeft": "<- 松开收起",
+    "panelCollapseHintRight": "松开收起 ->",
+    "panelMode": {
+      "collapsed": "收起",
+      "compact": "紧凑",
+      "comfortable": "舒适",
+      "expanded": "展开"
+    },
+    "resizer": {
+      "leftAriaLabel": "调整左侧面板大小",
+      "centerAriaLabel": "调整面板大小",
+      "rightAriaLabel": "调整右侧面板大小",
+      "title": "拖拽调整面板大小 | 双击切换模式 | 当前: {{mode}}"
+    }
+  },
+  "session": {
+    "new": "新建会话",
+    "newWithIndex": "新建会话 {{count}}",
+    "title": "会话",
+    "chatWithAgent": "与{{name}}的对话",
+    "rename": "重命名会话",
+    "delete": "删除会话",
+    "deleteConfirm": "确定要删除此会话吗？",
+    "empty": "暂无会话",
+    "untitled": "未命名会话",
+    "history": "历史会话",
+    "current": "当前会话",
+    "management": "会话管理",
+    "close": "关闭",
+    "dialogTurns": "{{count}} 轮对话",
+    "noSession": "暂无会话",
+    "switchSession": "切换会话",
+    "create": "创建新会话",
+    "more": "更多会话",
+    "restoreMain": "恢复主窗口"
+  },
+  "scroll": {
+    "toBottom": "回到底部",
+    "toBottomWithCount": "回到底部 ({{count}} 条新消息)",
+    "toLatest": "跳转到最新消息",
+    "clickToLatest": "点击跳转到最新"
+  },
+  "message": {
+    "user": "用户",
+    "assistant": "助手",
+    "system": "系统",
+    "thinking": "思考中...",
+    "generating": "生成中...",
+    "copy": "复制消息",
+    "copied": "已复制",
+    "copyFailed": "已复制!",
+    "regenerate": "重新生成",
+    "edit": "编辑消息",
+    "delete": "删除消息",
+    "retry": "重试",
+    "clickToExpand": "点击展开",
+    "clickToCollapse": "点击收起",
+    "fillToInput": "填充到输入框",
+    "cannotRollback": "无法回滚",
+    "rollbackTo": "回滚到第 {{index}} 轮之前（删除该轮及之后）",
+    "rollbackConfirm": "确定要回滚到第 {{index}} 轮之前吗？\n\n这将：\n• 撤销从该轮开始的所有文件修改\n• 删除该轮及之后的对话记录（不可恢复）",
+    "rollbackSuccess": "已回滚并删除后续对话记录",
+    "rollbackFailed": "回滚失败"
+  },
+  "contextMenu": {
+    "copySelection": "复制选中内容",
+    "copyFullContent": "复制完整内容",
+    "copyContent": "复制内容",
+    "copyDialog": "复制整个对话",
+    "copyToolInput": "复制工具输入",
+    "copyToolOutput": "复制工具输出"
+  },
+  "input": {
+    "placeholder": "有什么可以帮您...",
+    "placeholderWithContext": "输入消息，或拖放文件添加上下文...",
+    "send": "发送",
+    "sendShortcut": "发送 (⏎)",
+    "stop": "停止",
+    "stopGeneration": "停止生成 (Esc)",
+    "clear": "清空",
+    "attach": "附加文件",
+    "collapseInput": "收起输入框",
+    "expandInput": "展开输入框",
+    "retry": "重试",
+    "addImage": "添加图片",
+    "maxImagesWarning": "最多只能选择{{count}}张图片",
+    "imageAddedSuccess": "成功添加 {{count}} 张图片",
+    "imageAddedSingle": "已添加剪贴板图片: {{name}}",
+    "imagePasteFailed": "图片粘贴失败",
+    "openMermaidEditor": "打开 Mermaid 编辑器",
+    "mermaidDualModeDemo": "Mermaid 编辑器",
+    "selectPromptTemplate": "选择提示词模板 (Ctrl+Shift+P)",
+    "willSendAfterStop": "将在停止后发送"
+  },
+  "context": {
+    "title": "上下文",
+    "add": "添加上下文",
+    "remove": "移除上下文",
+    "clear": "清空上下文",
+    "file": "文件",
+    "folder": "文件夹",
+    "selection": "选中内容",
+    "codeBlock": "代码块",
+    "image": "图片",
+    "url": "URL",
+    "dragHint": "拖放文件到此处添加上下文"
+  },
+  "agent": {
+    "title": "智能体",
+    "select": "选择智能体",
+    "default": "默认助手",
+    "coding": "编程助手",
+    "review": "代码审查",
+    "architect": "架构师",
+    "custom": "自定义智能体"
+  },
+  "model": {
+    "title": "模型",
+    "select": "选择模型",
+    "temperature": "温度",
+    "maxTokens": "最大令牌数",
+    "topP": "Top P",
+    "streaming": "流式输出"
+  },
+  "toolbar": {
+    "newSession": "新建会话",
+    "history": "历史记录",
+    "settings": "设置",
+    "export": "导出对话",
+    "clear": "清空对话",
+    "fullscreen": "全屏",
+    "exitFullscreen": "退出全屏"
+  },
+  "status": {
+    "ready": "就绪",
+    "thinking": "思考中",
+    "generating": "生成中",
+    "error": "发生错误",
+    "offline": "离线",
+    "connecting": "连接中",
+    "connected": "已连接"
+  },
+  "error": {
+    "sendFailed": "发送失败",
+    "connectionError": "连接错误",
+    "timeout": "请求超时",
+    "modelError": "模型错误",
+    "contextTooLong": "上下文过长",
+    "rateLimited": "请求过于频繁",
+    "unknown": "未知错误"
+  },
+  "chatInput": {
+    "switchMode": "切换模式",
+    "currentMode": "当前模式: {{mode}}",
+    "noMatchingMode": "没有匹配的模式",
+    "selectHint": "↑↓ 选择 · Enter 确认 · Esc 取消",
+    "current": "当前",
+    "professionalMode": "专业模式",
+    "designMode": "设计模式",
+    "templateHint": "按 <kbd>Tab</kbd> 切换到下一个占位符，<kbd>Shift+Tab</kbd> 返回上一个，<kbd>Esc</kbd> 退出编辑",
+    "templateProgress": "{{current}} / {{total}}",
+    "wip": "开发中",
+    "modeDescriptions": {
+      "agentic": "AI 主导执行，自动规划和完成编码任务，拥有完整的工具访问能力",
+      "Plan": "先规划后执行，先明确需求并制定实施计划，再进行编码",
+      "debug": "证据驱动的系统化调试：提出假设、收集运行时证据、精准定位并修复问题"
+    },
+    "modeNames": {
+      "agentic": "Agentic",
+      "Plan": "Plan",
+      "debug": "Debug"
+    }
+  },
+  "planner": {
+    "title": "任务规划",
+    "completed": "完成",
+    "completedCount": "{{count}} 完成",
+    "inProgress": "进行中",
+    "inProgressCount": "{{count}} 进行中",
+    "pending": "待处理",
+    "pendingCount": "{{count}} 待处理",
+    "todoItems": "待办事项 ({{count}})",
+    "save": "保存",
+    "cancel": "取消",
+    "sendToModel": "将修改发送给模型",
+    "sending": "发送中...",
+    "doubleClickToEdit": "双击编辑",
+    "percentComplete": "{{percent}}% 完成",
+    "currentStatus": "当前状态: {{status}}"
+  },
+  "fileMention": {
+    "searchResults": "搜索结果",
+    "loading": "加载中...",
+    "noMatchingFiles": "没有找到匹配的文件",
+    "emptyDirectory": "空目录",
+    "rootDirectory": "根目录",
+    "goBack": "返回上级目录",
+    "navHint": "导航",
+    "enterHint": "进入",
+    "backHint": "返回",
+    "selectHint": "选择"
+  },
+  "copyOutput": {
+    "copy": "复制",
+    "copied": "已复制",
+    "copyOutputContent": "复制输出内容",
+    "copiedOutputContent": "已复制输出内容",
+    "edit": "编辑",
+    "openInEditor": "在编辑器中打开",
+    "aiReply": "AI回复 {{timestamp}}",
+    "toolCall": "🔧 工具调用: {{name}}",
+    "unknownTool": "未知工具"
+  },
+  "smartRecommendations": {
+    "title": "💡 智能推荐",
+    "close": "关闭"
+  },
+  "flowChatHeader": {
+    "previousTurn": "上一轮对话",
+    "nextTurn": "下一轮对话"
+  },
+  "sessionFilesBadge": {
+    "files": "文件",
+    "reviewLabel": "审查",
+    "reviewAll": "全部审查",
+    "loadFailed": "加载失败",
+    "clickToViewDiff": "点击查看 Diff",
+    "review": {
+      "displayMessage": "审查修改的文件：\n{{files}}",
+      "prompt": "请审查本次会话中修改的以下文件：\n\n{{files}}"
+    }
+  },
+  "sessionFileModificationsBar": {
+    "filesCount": "{{count}} 个文件",
+    "expandList": "展开列表",
+    "collapseList": "收起列表"
+  },
+  "snapshotSystem": {
+    "errors": {
+      "refreshSessionFailed": "刷新会话状态失败",
+      "acceptFileFailed": "接受文件失败",
+      "rejectFileFailed": "拒绝文件失败",
+      "acceptSessionFailed": "接受会话失败",
+      "rejectSessionFailed": "拒绝会话失败",
+      "acceptBlockFailed": "接受块失败",
+      "rejectBlockFailed": "拒绝块失败"
+    }
+  },
+  "exportImage": {
+    "subtitle": "AI 编程助手 · 对话记录",
+    "poweredBy": "Powered by",
+    "aiAssistant": "AI 编程助手",
+    "dialogNotFound": "未找到对话数据",
+    "containerNotFound": "导出容器未找到",
+    "generateFailed": "生成图片失败",
+    "fileNamePrefix": "BitFun对话",
+    "exportSuccess": "图片已导出：{{filePath}}",
+    "exportFailed": "导出图片失败，请重试",
+    "exporting": "正在导出...",
+    "exportToImage": "导出为图片"
+  },
+  "modelRound": {
+    "copyDialog": "复制对话",
+    "copiedDialog": "已复制!",
+    "like": "点赞",
+    "dislike": "点踩",
+    "report": "举报",
+    "feedbackThanks": "感谢您的反馈！",
+    "feedbackDevVersion": "开发版本暂不提供反馈功能",
+    "userLabel": "👤 用户:",
+    "toolCallLabel": "🔧 工具调用: {{name}}"
+  },
+  "exploreRegion": {
+    "readFiles": "读取了 {{count}} 个文件",
+    "searchCount": "进行了 {{count}} 次搜索",
+    "exploreCount": "执行了 {{count}} 次探索",
+    "separator": "，",
+    "collapse": "收起探索过程"
+  },
+  "toolCards": {
+    "file": {
+      "write": "写入文件",
+      "edit": "编辑文件",
+      "delete": "删除文件",
+      "deletedLabel": "删除",
+      "failed": "失败",
+      "parsingPath": "解析文件路径中...",
+      "unknownFile": "未知文件",
+      "receivingParams": "接收参数中...",
+      "analyzing": "分析中...",
+      "expandPreview": "展开预览",
+      "collapsePreview": "收起预览",
+      "viewGitDiff": "查看 Diff",
+      "viewBaselineDiff": "查看基线 Diff"
+    },
+    "getFileDiff": {
+      "diffFile": "文件差异",
+      "gettingDiff": "获取差异",
+      "preparing": "准备获取差异",
+      "failed": "获取差异失败"
+    },
+    "git": {
+      "title": "Git",
+      "commandFailed": "Git命令失败",
+      "executionFailed": "Git命令执行失败",
+      "failed": "失败",
+      "confirmExecute": "确认执行",
+      "cancel": "取消",
+      "expandOutput": "展开输出",
+      "collapseOutput": "收起输出",
+      "noOutput": "(无输出)",
+      "exitCode": "退出码: {{code}}",
+      "duration": "耗时: {{time}}",
+      "directory": "目录: {{dir}}",
+      "output": "输出:",
+      "warning": "警告:",
+      "error": "错误:",
+      "operation": "操作: git {{op}}",
+      "args": "参数: {{args}}",
+      "status": "状态",
+      "diff": "差异",
+      "log": "日志",
+      "add": "暂存",
+      "commit": "提交",
+      "branch": "分支",
+      "checkout": "切换",
+      "switch": "切换",
+      "pull": "拉取",
+      "push": "推送",
+      "fetch": "获取",
+      "merge": "合并",
+      "rebase": "变基",
+      "stash": "暂存",
+      "reset": "重置",
+      "restore": "恢复",
+      "show": "显示",
+      "tag": "标签",
+      "remote": "远程",
+      "clone": "克隆",
+      "init": "初始化",
+      "blame": "追溯",
+      "cherryPick": "挑选"
+    },
+    "terminal": {
+      "executeCommand": "执行命令:",
+      "commandEmpty": "[命令为空 - 请编辑]",
+      "noCommand": "[无命令]",
+      "clickToEditCommand": "点击编辑命令",
+      "inputPlaceholder": "输入命令...",
+      "commandEmptyWarning": "命令为空，无法执行",
+      "executeCommandTitle": "执行命令",
+      "cancel": "取消",
+      "interrupt": "中断命令执行",
+      "openInPanel": "在右侧面板打开Terminal",
+      "expandOutput": "展开输出",
+      "collapseOutput": "收起输出",
+      "rejected": "已拒绝",
+      "cancelled": "已取消",
+      "completed": "已完成",
+      "failed": "执行失败",
+      "executingCommand": "正在执行命令...",
+      "workingDirectory": "工作目录:",
+      "exitCode": "退出码: {{code}}",
+      "commandInterrupted": "命令已被中断",
+      "executionFailed": "命令执行失败"
+    },
+    "plan": {
+      "loadingPlan": "正在加载计划...",
+      "clickToOpenPlan": "点击打开计划文件",
+      "remainingTodos": "{{count}} Remaining To-dos",
+      "viewPlan": "View Plan",
+      "build": "Build",
+      "building": "Building...",
+      "built": "Built"
+    },
+    "common": {
+      "confirm": "确认",
+      "cancel": "取消",
+      "loading": "加载中...",
+      "success": "成功",
+      "failed": "失败",
+      "error": "错误",
+      "expand": "展开",
+      "collapse": "收起",
+      "collapseContent": "收起内容",
+      "expandContent": "展开内容",
+      "inputParams": "输入参数",
+      "executionResult": "执行结果",
+      "viewDetails": "查看详情"
+    },
+    "askUser": {
+      "completed": "已完成",
+      "submittedWaiting": "已提交，等待处理",
+      "submitting": "提交中...",
+      "waitingAnswer": "等待回答",
+      "questionsCount": "{{count}} 个问题",
+      "answerAllBeforeSubmit": "请回答所有问题后再提交",
+      "submit": "提交",
+      "questionsAnswered": "{{count}} 个问题已回答",
+      "notAnswered": "未回答",
+      "timeout": "等待超时（10分钟）",
+      "parseError": "无法解析问题数据",
+      "other": "其他",
+      "customInputHint": "提供自定义文本",
+      "pleaseSpecify": "请输入..."
+    },
+    "think": {
+      "analysis": "思考分析",
+      "thinking": "思考中...",
+      "preparing": "准备思考",
+      "thinkingProcess": "思考过程",
+      "thinkingComplete": "已完成思考",
+      "thinkingCharacters": "思考了 {{count}} 字符"
+    },
+    "webSearch": {
+      "parsingSearchTerm": "解析搜索词中...",
+      "searchTitle": "网络搜索: \"{{term}}\"",
+      "resultsCount": "{{count}} 个结果",
+      "searching": "正在搜索 \"{{term}}\"...",
+      "preparingSearch": "准备搜索 \"{{term}}\"",
+      "clickToOpenLink": "点击打开链接",
+      "noTitle": "无标题"
+    },
+    "todoWrite": {
+      "tasksCount": "{{count}} 项任务",
+      "progress": "({{completed}}/{{total}} 完成)",
+      "allCompleted": "任务全部完成",
+      "tasks": "任务",
+      "collapseList": "收起列表",
+      "expandList": "展开列表"
+    },
+    "snapshot": {
+      "fileDiff": "快照文件差异",
+      "filesCount": "{{count}} 个文件",
+      "acceptAllTooltip": "接受所有文件的修改",
+      "acceptAll": "接受全部",
+      "rejectAllTooltip": "拒绝所有文件的修改",
+      "rejectAll": "拒绝全部",
+      "close": "关闭",
+      "prevFile": "上一个文件 (←)",
+      "nextFile": "下一个文件 (→)",
+      "acceptFileTooltip": "接受当前文件的修改",
+      "acceptFile": "接受文件",
+      "rejectFileTooltip": "拒绝当前文件的修改",
+      "rejectFile": "拒绝文件",
+      "processing": "处理中..."
+    },
+    "taskTool": {
+      "waitingConfirm": "等待确认",
+      "executing": "执行中...",
+      "subAgentFailed": "子代理任务执行失败",
+      "subAgentTaskFailed": "子代理任务失败",
+      "failed": "失败",
+      "confirmDelegate": "确认委派",
+      "cancel": "取消",
+      "task": "任务",
+      "agent": "代理",
+      "collapseDetails": "收起详情",
+      "expandDetails": "展开详情",
+      "openInPanel": "在面板中打开详情"
+    },
+    "taskDetailPanel": {
+      "untitled": "未命名任务",
+      "statusLabel": "状态",
+      "promptLabel": "任务提示词",
+      "errorLabel": "错误信息",
+      "resultLabel": "执行结果",
+      "noData": "无法加载任务数据",
+      "executionContent": "执行内容",
+      "duration": "耗时",
+      "status": {
+        "pending": "等待中",
+        "running": "执行中",
+        "completed": "已完成",
+        "failed": "执行失败"
+      }
+    },
+    "diagram": {
+      "interactive": "可视化交互视图:",
+      "preparing": "准备中",
+      "creating": "创建中",
+      "mermaidInteractive": "Mermaid 交互图表"
+    },
+    "template": {
+      "get": "获取模板:",
+      "getTemplate": "获取模板",
+      "loading": "加载中",
+      "loaded": "已加载",
+      "templateDetails": "模板详情",
+      "templateId": "模板 ID:",
+      "templateName": "模板名称:",
+      "contentSize": "内容大小:",
+      "characters": "{{count}} 字符",
+      "templateReady": "模板已就绪",
+      "templateReadyDesc": "模板结构已成功加载，可用于需求文档创建",
+      "templateLoadFailed": "模板加载失败",
+      "requirementFramework": "需求框架总览",
+      "productVision": "产品愿景",
+      "businessGoals": "业务目标",
+      "userPersonas": "用户画像",
+      "userStories": "用户故事",
+      "featureList": "功能清单",
+      "functionalSpecTemplate": "功能规格模板",
+      "nonFunctionalRequirements": "非功能需求",
+      "acceptanceCriteria": "验收标准"
+    },
+    "mcp": {
+      "confirmExecute": "确认执行",
+      "cancel": "取消"
+    },
+    "default": {
+      "waitingConfirm": "等待确认",
+      "executing": "执行中...",
+      "completed": "已完成",
+      "cancelled": "已取消",
+      "failed": "执行失败",
+      "preparing": "准备中"
+    },
+    "skill": {
+      "unknownSkill": "未知技能",
+      "unknown": "未知",
+      "userLevel": "用户级",
+      "projectLevel": "项目级",
+      "loadSkillFailed": "加载技能失败",
+      "skillAction": "Skill技能:"
+    },
+    "readFile": {
+      "parsingParams": "解析参数中...",
+      "noFileSpecified": "未指定文件",
+      "readFile": "读取文件",
+      "readingFile": "正在读取",
+      "preparingRead": "准备读取"
+    },
+    "imageAnalysis": {
+      "parsingAnalysisInfo": "解析分析信息中...",
+      "unknownImage": "未知图片",
+      "clipboardImage": "剪贴板图片",
+      "analyzeImageContent": "分析图片内容"
+    },
+    "contextCompression": {
+      "beforeUserMessage": "用户消息前",
+      "toolBatchComplete": "工具批次完成",
+      "manualTrigger": "手动触发",
+      "autoTrigger": "自动触发",
+      "contextCompressionFailed": "上下文压缩失败",
+      "contextCompression": "上下文压缩:"
+    },
+    "globSearch": {
+      "parsingPattern": "解析搜索模式中...",
+      "currentDirectory": "当前目录",
+      "searchFile": "搜索文件",
+      "searchingFile": "正在搜索",
+      "preparingSearch": "准备搜索",
+      "filesCount": "{{count}} 个文件",
+      "directoriesCount": "{{count}} 个目录",
+      "filesAndDirs": "{{files}} 个文件，{{directories}} 个目录",
+      "moreFiles": "...还有 {{count}} 个文件",
+      "labelPattern": "模式",
+      "labelPath": "路径",
+      "labelStats": "统计"
+    },
+    "grepSearch": {
+      "parsingPattern": "解析搜索模式中...",
+      "currentDirectory": "当前目录",
+      "searchText": "搜索文本",
+      "searchingText": "正在搜索",
+      "preparingSearch": "准备搜索",
+      "matchesCount": "{{count}} 个匹配",
+      "matchesAndFiles": "{{matches}} 个匹配项，{{files}} 个文件",
+      "labelPattern": "模式",
+      "labelPath": "路径",
+      "labelStats": "统计"
+    },
+    "ideControl": {
+      "parsingOperation": "解析操作中...",
+      "configCenter": "配置中心",
+      "planner": "任务规划",
+      "terminal": "终端",
+      "fileViewer": "文件浏览器",
+      "codeEditor": "代码编辑器",
+      "navigateToPosition": "导航到指定位置",
+      "adjustIdeLayout": "调整IDE布局",
+      "manageTab": "管理标签页",
+      "focusView": "聚焦视图",
+      "executeIdeOperation": "执行IDE操作",
+      "operationType": "操作类型",
+      "panelType": "面板类型",
+      "configSection": "配置区域",
+      "sessionId": "会话ID",
+      "filePath": "文件路径",
+      "workspacePath": "工作区",
+      "panelPosition": "面板位置"
+    },
+    "linter": {
+      "parsingParams": "解析参数中...",
+      "checkFailed": "检查失败:",
+      "unknownError": "未知错误"
+    },
+    "ls": {
+      "parsingPath": "解析路径中...",
+      "listDirectory": "列出目录",
+      "listingDirectory": "正在列出",
+      "preparingList": "准备列出",
+      "filesCount": "{{count}} 个文件",
+      "directoriesCount": "{{count}} 个目录",
+      "filesAndDirs": "{{files}} 个文件，{{directories}} 个目录",
+      "moreEntries": "...还有 {{count}} 个条目",
+      "labelPath": "路径",
+      "labelStats": "统计",
+      "labelSort": "排序",
+      "sortByModifiedTime": "按修改时间（最新在前）"
+    },
+    "userMessage": {
+      "file": "文件",
+      "dir": "目录",
+      "code": "代码",
+      "img": "图片",
+      "cmd": "命令",
+      "chart": "图表",
+      "link": "链接"
+    },
+    "toolStatus": {
+      "pending": "等待中",
+      "paramsReceiving": "接收参数中",
+      "preparing": "准备中",
+      "running": "执行中",
+      "completed": "已完成",
+      "error": "失败",
+      "cancelled": "已取消"
+    },
+    "toolbar": {
+      "executing": "执行中...",
+      "collapseChat": "收起对话",
+      "expandChat": "展开对话",
+      "aiProcessing": "AI 正在处理中...",
+      "inputMessage": "输入消息...",
+      "processing": "处理中...",
+      "startNewChat": "开始新对话..."
+    },
+    "chatInput": {
+      "inputHint": "输入内容..."
+    },
+    "plannerButton": {
+      "planner": "规划"
+    },
+    "turnRollback": {
+      "rollback": "回滚",
+      "rollbackTooltip": "回滚到此轮"
+    },
+    "codeReview": {
+      "reviewResult": "审查结果",
+      "reviewingCode": "正在审查代码...",
+      "preparingReview": "准备代码审查",
+      "reviewFailed": "代码审查失败：{{error}}",
+      "unknownError": "未知错误",
+      "collapseDetails": "收起详情",
+      "expandDetails": "展开详情",
+      "overallAssessment": "总体评估",
+      "riskLevel": "风险等级",
+      "recommendedAction": "建议操作",
+      "contextLimitations": "上下文限制",
+      "issuesCount": "问题 ({{count}})",
+      "suggestion": "建议",
+      "codeStrengths": "代码优点",
+      "riskLevels": {
+        "low": "低风险",
+        "medium": "中风险",
+        "high": "高风险",
+        "critical": "严重风险"
+      },
+      "actions": {
+        "approve": "通过",
+        "approve_with_suggestions": "有条件通过",
+        "request_changes": "需要修改",
+        "block": "阻止合并"
+      },
+      "severities": {
+        "critical": "严重",
+        "high": "高",
+        "medium": "中",
+        "low": "低",
+        "info": "信息"
+      },
+      "certainties": {
+        "confirmed": "已确认",
+        "likely": "可能",
+        "possible": "疑似"
+      }
+    }
+  },
+  "welcome": {
+    "greetingMorning": "早上好",
+    "subtitleMorning": "准备开始编码了吗？",
+    "greetingAfternoon": "下午好",
+    "subtitleAfternoon": "准备开始编码了吗？",
+    "greetingEvening": "晚上好",
+    "subtitleEvening": "准备开始编码了吗？",
+    "greetingNight": "夜深了",
+    "subtitleNight": "准备开始编码了吗？",
+    "aiPartner": "您的 AI 编程伙伴",
+    "featureIntro": "我是您的 AI 编程助手。我可以帮您理解复杂代码，快速实现新功能，重构老旧项目，或是解决那些让人头疼的 Bug。",
+    "lastTimeYouWere": "上次您正在处理：",
+    "branch": "分支：",
+    "aheadCommits": "领先 {{count}} 个提交",
+    "behindCommits": "落后 {{count}} 个提交",
+    "unstagedFiles": "{{count}} 个未暂存文件",
+    "stagedFiles": "{{count}} 个已暂存文件",
+    "unpushedCommits": "{{count}} 个未推送提交",
+    "timeSinceLastCommit": "上次提交：",
+    "timeIcon": "时间",
+    "youMightWant": "您可能想要：",
+    "defaultAction1": "审查最近的更改",
+    "defaultAction1Command": "审查最近的更改",
+    "defaultAction2": "继续之前的工作",
+    "defaultAction2Command": "继续之前的工作",
+    "defaultAction3": "开始新功能",
+    "defaultAction3Command": "开始新功能"
+  },
+  "modelSelector": {
+    "model": "模型",
+    "modelExplanation": "模型说明",
+    "modelSelection": "选择模型",
+    "currentMode": "当前模式",
+    "primaryModel": "Primary 模型",
+    "fastModel": "Fast 模型",
+    "modelNotConfigured": "未配置"
+  }
+}

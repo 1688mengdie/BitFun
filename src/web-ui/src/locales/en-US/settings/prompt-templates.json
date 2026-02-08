@@ -1,0 +1,86 @@
+{
+  "title": "Prompt Templates",
+  "subtitle": "Manage and configure prompt templates",
+  "toolbar": {
+    "searchPlaceholder": "Search templates...",
+    "createTooltip": "Create template",
+    "exportTooltip": "Export config",
+    "importTooltip": "Import config"
+  },
+  "categories": {
+    "all": "All",
+    "uncategorized": "Uncategorized"
+  },
+  "empty": {
+    "noTemplates": "No templates",
+    "createFirst": "Create your first template"
+  },
+  "template": {
+    "contentLabel": "Template content:",
+    "usageCount": "Used {{count}} times"
+  },
+  "actions": {
+    "edit": "Edit",
+    "copy": "Copy",
+    "delete": "Delete"
+  },
+  "shortcuts": {
+    "openPickerReminder": "Open template picker: "
+  },
+  "modal": {
+    "titleEdit": "Edit Template",
+    "titleCreate": "Create Template",
+    "fields": {
+      "name": "Template Name *",
+      "namePlaceholder": "e.g., Code Refactor",
+      "description": "Description",
+      "descriptionPlaceholder": "Brief description of this template",
+      "category": "Category",
+      "categoryPlaceholder": "e.g., Code Optimization",
+      "content": "Template Content *",
+      "contentHint": "Use {{name}} for placeholders, {{name:default}} for defaults",
+      "contentPlaceholder": "Please help me refactor {{funcName|function name}}...\n\nPlaceholder syntax:\n{{name}} - Basic placeholder\n{{name:default}} - With default value\n{{name|description}} - With description",
+      "shortcut": "Shortcut (optional)",
+      "shortcutPlaceholder": "e.g., Ctrl+Alt+1"
+    },
+    "actions": {
+      "cancel": "Cancel",
+      "save": "Save"
+    }
+  },
+  "picker": {
+    "searchPlaceholder": "Search templates...",
+    "closeTooltip": "Close (Esc)",
+    "sectionRecent": "Recent",
+    "sectionFavorites": "Favorites",
+    "sectionSearchResults": "Search results",
+    "sectionAllTemplates": "All templates",
+    "emptyNoMatch": "No matching templates",
+    "emptyHint": "Try other keywords, or create a new template in settings.",
+    "hintNavigate": "Navigate",
+    "hintSelect": "Select",
+    "hintClose": "Close",
+    "matches": "Matches: {{fields}}",
+    "usageCount": "Used {{count}} times"
+  },
+  "messages": {
+    "nameRequired": "Please enter template name",
+    "contentRequired": "Please enter template content",
+    "templateUpdated": "Template updated",
+    "templateCreated": "Template created",
+    "operationFailed": "Operation failed: {{error}}",
+    "confirmDelete": "Are you sure you want to delete this template?",
+    "templateDeleted": "Template deleted",
+    "deleteFailed": "Delete failed: {{error}}",
+    "templateCopied": "Template copied",
+    "copyFailed": "Copy failed: {{error}}",
+    "configExported": "Config exported to: {{filePath}}",
+    "defaultDownloadDir": "the default downloads folder",
+    "exportFailed": "Export failed: {{error}}",
+    "configImported": "Config imported",
+    "importFailed": "Import failed: {{error}}",
+    "importInvalid": "Import failed: Invalid config file",
+    "shortcutUpdated": "Global shortcut updated",
+    "shortcutUpdateFailed": "Update failed: {{error}}"
+  }
+}

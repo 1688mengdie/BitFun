@@ -1,0 +1,162 @@
+/* Explore region styling for consecutive explore tool calls. */
+
+.explore-region {
+  position: relative;
+  padding: 0 3rem; // Match model-round-item horizontal padding.
+
+  @media (max-width: 768px) {
+    padding: 0 1.5rem;
+  }
+
+  &--collapsed {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding-top: 6px;
+    padding-bottom: 6px;
+    margin: 4px 0;
+    color: var(--text-tertiary, #6b7280);
+    font-size: 12px;
+    cursor: pointer;
+    border-radius: 6px;
+    transition: background-color 0.15s ease, color 0.15s ease;
+    
+    &:hover {
+      background: var(--bg-hover, rgba(255, 255, 255, 0.05));
+      color: var(--text-secondary, #9ca3af);
+    }
+    
+    .explore-region__icon {
+      flex-shrink: 0;
+      opacity: 0.6;
+    }
+    
+    .explore-region__summary {
+      opacity: 0.8;
+    }
+  }
+  
+  &--expanded {
+    margin: 4px 0;
+    
+    .explore-region__header {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 0;
+      color: var(--text-tertiary, #6b7280);
+      font-size: 12px;
+      cursor: pointer;
+      transition: color 0.15s ease;
+      
+      &:hover {
+        color: var(--text-secondary, #9ca3af);
+      }
+      
+      .explore-region__icon {
+        flex-shrink: 0;
+        opacity: 0.6;
+      }
+    }
+    
+    .explore-region__content {
+      position: relative;
+      padding: 4px 0;
+      // After streaming ends, height is unrestricted.
+      &::-webkit-scrollbar {
+        width: 4px;
+      }
+      
+      &::-webkit-scrollbar-track {
+        background: transparent;
+      }
+      
+      &::-webkit-scrollbar-thumb {
+        background: var(--border-base, rgba(107, 114, 128, 0.3));
+        border-radius: 2px;
+        
+        &:hover {
+          background: var(--border-hover, rgba(107, 114, 128, 0.5));
+        }
+      }
+    }
+  }
+}
+
+// Top/bottom mask shown only during streaming.
+.explore-region--expanded.explore-region--streaming {
+  // Top mask
+  &::before {
+    content: '';
+    position: absolute;
+    // Account for header height.
+    top: 28px;
+    left: 0;
+    right: 0;
+    height: 16px;
+    pointer-events: none;
+    z-index: 3;
+    background: linear-gradient(
+      to bottom,
+      var(--color-bg-flowchat, #121214) 0%,
+      color-mix(in srgb, var(--color-bg-flowchat, #121214) 60%, transparent) 50%,
+      transparent 100%
+    );
+  }
+  
+  // Bottom mask
+  &::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 16px;
+    pointer-events: none;
+    z-index: 3;
+    background: linear-gradient(
+      to top,
+      var(--color-bg-flowchat, #121214) 0%,
+      color-mix(in srgb, var(--color-bg-flowchat, #121214) 60%, transparent) 50%,
+      transparent 100%
+    );
+  }
+  
+  // Adjust top mask when no header is present.
+  &:not(:has(.explore-region__header))::before {
+    top: 0;
+  }
+}
+
+// Streaming-only adjustments.
+.explore-region--expanded.explore-region--streaming {
+  .explore-region__content {
+    // Limit height and enable scrolling during streaming.
+    max-height: 400px;
+    overflow-y: auto;
+  }
+}
+
+// Reduce spacing between adjacent collapsed regions.
+.explore-region--collapsed + .explore-region--collapsed {
+  margin-top: -2px;
+}
+
+// ==================== Cross-ModelRound collapse ====================
+
+// Reduce spacing for explore-only model rounds.
+.model-round-item--explore-only {
+  margin-bottom: 0;
+
+  // Remove spacing when a hidden collapsed region is present.
+  &:has(.explore-region--hidden) {
+    margin: 0;
+    padding: 0;
+    min-height: 0;
+  }
+}
+
+// Hidden collapsed region (not the last one).
+.explore-region--hidden {
+  display: none;
+}

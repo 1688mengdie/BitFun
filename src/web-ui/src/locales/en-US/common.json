@@ -1,0 +1,396 @@
+{
+  "app": {
+    "name": "BitFun",
+    "version": "Version",
+    "loading": "Loading...",
+    "welcome": "Welcome to BitFun"
+  },
+  "agents": {
+    "general": {
+      "name": "General Assistant",
+      "description": "General AI assistant that can answer a wide range of questions"
+    },
+    "coder": {
+      "name": "Code Assistant",
+      "description": "Professional coding assistant focused on code analysis and generation"
+    },
+    "projectQa": {
+      "name": "Project QA Agent",
+      "description": "Project assistant focused on Q&A and codebase exploration"
+    },
+    "requirementClarification": {
+      "name": "Requirement Clarification Agent",
+      "description": "Agent focused on clarifying requirements and gathering details"
+    },
+    "core": {
+      "name": "Core Agent",
+      "description": "Core assistant for general tasks and coordination"
+    }
+  },
+  "core": {
+    "initializing": "Initializing core systems..."
+  },
+  "agentService": {
+    "clarificationItemTitle": "Clarification {{index}}",
+    "clarificationItemProcessed": "Processed",
+    "clarificationBatchCompleted": "Clarification batch completed"
+  },
+  "header": {
+    "openProject": "Open Project",
+    "newProject": "New Project",
+    "goHome": "Go Home",
+    "about": "About",
+    "openMenu": "Open Menu",
+    "closeMenu": "Close Menu",
+    "selectProjectDirectory": "Select a project directory to open",
+    "configCenter": "Settings",
+    "expandLeftPanel": "Expand Left Panel",
+    "collapseLeftPanel": "Collapse Left Panel",
+    "expandRightPanel": "Expand Right Panel",
+    "collapseRightPanel": "Collapse Right Panel",
+    "switchToToolbar": "Switch to Toolbar Mode",
+    "hideAgentic": "Hide Agentic",
+    "activateAgentic": "Activate Agentic"
+  },
+  "window": {
+    "minimize": "Minimize",
+    "maximize": "Maximize",
+    "restore": "Restore",
+    "close": "Close"
+  },
+  "newProject": {
+    "title": "New Project",
+    "subtitle": "Create a new workspace directory",
+    "parentDirectory": "Parent Directory",
+    "parentDirectoryPlaceholder": "Click the button to select parent directory",
+    "selectParentDirectory": "Select parent directory for new project",
+    "select": "Select",
+    "projectName": "Project Name",
+    "projectNamePlaceholder": "Enter project name, e.g.: my-project",
+    "fullPath": "Full Path",
+    "cancel": "Cancel",
+    "create": "Create",
+    "creating": "Creating...",
+    "errorSelectParent": "Please select a parent directory",
+    "errorEnterName": "Please enter a project name",
+    "errorCreateFailed": "Failed to create project"
+  },
+  "about": {
+    "close": "Close",
+    "copy": "Copy",
+    "version": "Version {{version}}",
+    "buildDate": "Build Date",
+    "commit": "Commit",
+    "branch": "Branch",
+    "copyright": "© 2025 BitFun. All rights reserved."
+  },
+  "actions": {
+    "confirm": "Confirm",
+    "cancel": "Cancel",
+    "save": "Save",
+    "delete": "Delete",
+    "edit": "Edit",
+    "create": "Create",
+    "new": "New",
+    "add": "Add",
+    "remove": "Remove",
+    "close": "Close",
+    "open": "Open",
+    "copy": "Copy",
+    "paste": "Paste",
+    "cut": "Cut",
+    "undo": "Undo",
+    "redo": "Redo",
+    "refresh": "Refresh",
+    "reload": "Reload",
+    "search": "Search",
+    "filter": "Filter",
+    "sort": "Sort",
+    "export": "Export",
+    "import": "Import",
+    "download": "Download",
+    "upload": "Upload",
+    "submit": "Submit",
+    "reset": "Reset",
+    "clear": "Clear",
+    "select": "Select",
+    "selectAll": "Select All",
+    "deselectAll": "Deselect All",
+    "expand": "Expand",
+    "collapse": "Collapse",
+    "more": "More",
+    "less": "Less",
+    "yes": "Yes",
+    "no": "No",
+    "ok": "OK",
+    "apply": "Apply",
+    "back": "Back",
+    "next": "Next",
+    "previous": "Previous",
+    "finish": "Finish",
+    "skip": "Skip",
+    "retry": "Retry",
+    "continue": "Continue",
+    "stop": "Stop",
+    "pause": "Pause",
+    "resume": "Resume",
+    "start": "Start",
+    "end": "End"
+  },
+  "contextMenu": {
+    "descriptions": {
+      "copy": "Copy selected content to clipboard",
+      "cut": "Cut selected content to clipboard",
+      "paste": "Paste content from clipboard",
+      "selectAll": "Select all content",
+      "refresh": "Refresh current content",
+      "delete": "Delete file or folder",
+      "copyPath": "Copy the full path of the file or folder",
+      "copyRelativePath": "Copy the path relative to the workspace"
+    },
+    "status": {
+      "copySuccess": "Copied to clipboard",
+      "cutSuccess": "Cut to clipboard",
+      "pasteSuccess": "Pasted",
+      "selectAllSuccess": "Selected all",
+      "refreshTriggered": "Refresh triggered",
+      "deleteSuccess": "Deleted",
+      "copyPathSuccess": "Path copied to clipboard",
+      "copyRelativePathSuccess": "Relative path copied to clipboard"
+    },
+    "confirmDeleteFile": "Are you sure you want to delete file \"{{name}}\"?",
+    "confirmDeleteFolder": "Are you sure you want to delete folder \"{{name}}\" and all its contents?",
+    "selectionMenu": {
+      "name": "Selection Menu",
+      "description": "Provides text selection actions"
+    },
+    "terminalMenu": {
+      "name": "Terminal Menu",
+      "description": "Provides terminal actions",
+      "clearTerminal": "Clear Terminal"
+    },
+    "editorMenu": {
+      "name": "Editor Menu",
+      "description": "Provides editor-related actions"
+    },
+    "fileExplorerMenu": {
+      "name": "File Explorer Menu",
+      "description": "Provides file and folder actions"
+    },
+    "flowChatMenu": {
+      "name": "FlowChat Menu",
+      "description": "Provides FlowChat conversation actions"
+    },
+    "notificationMenu": {
+      "name": "Notification Menu",
+      "description": "Context menu for notifications",
+      "items": {
+        "copyTitle": "Copy Title",
+        "copyMessage": "Copy Message",
+        "copyAll": "Copy All"
+      }
+    },
+    "globalMenu": {
+      "name": "Global Menu",
+      "description": "Provides global common menu items"
+    },
+    "projectContextDocumentMenu": {
+      "name": "Project Context Document Menu",
+      "description": "Provides deletion for project context documents"
+    }
+  },
+  "status": {
+    "loading": "Loading",
+    "saving": "Saving",
+    "saved": "Saved",
+    "unsaved": "Unsaved",
+    "success": "Success",
+    "error": "Error",
+    "warning": "Warning",
+    "info": "Info",
+    "pending": "Pending",
+    "processing": "Processing",
+    "completed": "Completed",
+    "failed": "Failed",
+    "cancelled": "Cancelled",
+    "active": "Active",
+    "inactive": "Inactive",
+    "enabled": "Enabled",
+    "disabled": "Disabled",
+    "online": "Online",
+    "offline": "Offline",
+    "connected": "Connected",
+    "disconnected": "Disconnected",
+    "ready": "Ready",
+    "notReady": "Not Ready"
+  },
+  "form": {
+    "validationSuccess": {
+      "checkbox": "Setting looks good",
+      "input": "Input looks good",
+      "select": "Selection looks good"
+    }
+  },
+  "time": {
+    "now": "Now",
+    "today": "Today",
+    "yesterday": "Yesterday",
+    "tomorrow": "Tomorrow",
+    "thisWeek": "This Week",
+    "lastWeek": "Last Week",
+    "nextWeek": "Next Week",
+    "thisMonth": "This Month",
+    "lastMonth": "Last Month",
+    "nextMonth": "Next Month",
+    "thisYear": "This Year",
+    "lastYear": "Last Year",
+    "nextYear": "Next Year",
+    "second": "second",
+    "seconds": "seconds",
+    "minute": "minute",
+    "minutes": "minutes",
+    "hour": "hour",
+    "hours": "hours",
+    "day": "day",
+    "days": "days",
+    "week": "week",
+    "weeks": "weeks",
+    "month": "month",
+    "months": "months",
+    "year": "year",
+    "years": "years",
+    "ago": "ago",
+    "later": "later",
+    "just_now": "just now",
+    "minutesAgo": "{{count}} minutes ago",
+    "hoursAgo": "{{count}} hours ago",
+    "daysAgo": "{{count}} days ago",
+    "monthsAgo": "{{count}} months ago",
+    "yearsAgo": "{{count}} years ago"
+  },
+  "file": {
+    "file": "File",
+    "files": "Files",
+    "folder": "Folder",
+    "folders": "Folders",
+    "newFile": "New File",
+    "newFolder": "New Folder",
+    "rename": "Rename",
+    "delete": "Delete",
+    "copy": "Copy",
+    "cut": "Cut",
+    "paste": "Paste",
+    "duplicate": "Duplicate",
+    "move": "Move",
+    "openWith": "Open With",
+    "reveal": "Reveal in Explorer",
+    "copyPath": "Copy Path",
+    "copyRelativePath": "Copy Relative Path",
+    "newFileDescription": "Create a new file in the current folder",
+    "newFolderDescription": "Create a new folder in the current folder",
+    "renameDescription": "Rename a file or folder",
+    "revealDescription": "Open this location in the system file manager",
+    "createFileSuccess": "Created new file",
+    "createFolderSuccess": "Created new folder",
+    "renameStarted": "Rename started",
+    "revealOpening": "Opening file manager",
+    "compressedPathTooltip": "Compressed path: {{compressed}}\nFull path: {{full}}"
+  },
+  "editor": {
+    "formatDocument": "Format Document",
+    "goToDefinition": "Go to Definition",
+    "goToTypeDefinition": "Go to Type Definition",
+    "findAllReferences": "Find All References",
+    "renameSymbol": "Rename Symbol",
+    "quickFix": "Quick Fix...",
+    "goToSymbol": "Go to Symbol...",
+    "highlightAllOccurrences": "Highlight All Occurrences"
+  },
+  "document": {
+    "delete": "Delete Document"
+  },
+  "empty": {
+    "noData": "No Data",
+    "noResults": "No Results",
+    "noFiles": "No Files",
+    "noContent": "No Content"
+  },
+  "validation": {
+    "required": "This field is required",
+    "invalid": "Invalid input",
+    "tooShort": "Input is too short",
+    "tooLong": "Input is too long",
+    "invalidEmail": "Invalid email format",
+    "invalidUrl": "Invalid URL format",
+    "invalidNumber": "Invalid number format",
+    "minLength": "Minimum {{min}} characters",
+    "maxLength": "Maximum {{max}} characters",
+    "minValue": "Minimum value is {{min}}",
+    "maxValue": "Maximum value is {{max}}",
+    "password": {
+      "minLength": "Password must be at least {{min}} characters",
+      "lowercase": "Include at least one lowercase letter",
+      "uppercase": "Include at least one uppercase letter",
+      "number": "Include at least one number",
+      "specialCharSuggested": "Consider adding a special character"
+    }
+  },
+  "startup": {
+    "subtitle": "Where thoughts and code flow as one",
+    "continueLastWork": "Continue Last Work",
+    "openFolder": "Open Folder",
+    "selecting": "Selecting...",
+    "recentlyOpened": "Recently Opened",
+    "projects": "projects",
+    "collapse": "Collapse",
+    "showMore": "Show More ({{count}})",
+    "noProjectsYet": "No projects opened yet",
+    "startYourJourney": "Select a folder to start your coding journey",
+    "selectWorkspaceDirectory": "Select Workspace Directory",
+    "pathNotExist": "Path does not exist",
+    "invalidWorkspacePath": "Workspace path is invalid or empty",
+    "daysAgo": "{{count}} days ago",
+    "weeksAgo": "{{count}} weeks ago",
+    "unknownTime": "Unknown time"
+  },
+  "tabs": {
+    "configCenter": "Config Center",
+    "fixPreview": "Fix Preview",
+    "gitDiff": "Git Diff",
+    "gitSettings": "Git Settings",
+    "taskPlanner": "Task Planner",
+    "fileBrowser": "File Browser",
+    "editor": "Editor",
+    "markdown": "Markdown",
+    "mermaidChart": "Mermaid Chart",
+    "settings": "Settings",
+    "settingsWithSection": "Settings - {{section}}"
+  },
+  "welcome": {
+    "greetingMorning": "Good Morning, Flow Developer",
+    "greetingAfternoon": "Welcome Back to the Flow Zone",
+    "greetingEvening": "Good Evening, Creator",
+    "greetingNight": "Hello Night Owl, Code Poet",
+    "subtitleMorning": "\"A new day, new possibilities. Let's create something amazing.\"",
+    "subtitleAfternoon": "\"Here, AI is not a tool, but your intelligent companion. Thoughts flow like water, ideas become reality instantly.\"",
+    "subtitleEvening": "\"Golden coding hours. Let your inspiration shine in the twilight.\"",
+    "subtitleNight": "\"In the quiet of night, creation awaits. Where AI meets IDE, Magic happens.\"",
+    "aiPartner": "I'm Fang, your AI companion",
+    "featureIntro": "I can help you understand complex code, quickly implement new features, refactor legacy projects, or solve those frustrating bugs...",
+    "lastTimeYouWere": "I remember when you left, you were at...",
+    "branch": "Branch: ",
+    "aheadCommits": "{{count}} commits ahead",
+    "behindCommits": "{{count}} commits behind",
+    "unstagedFiles": "{{count}} unstaged files",
+    "stagedFiles": "{{count}} staged files",
+    "unpushedCommits": "{{count}} unpushed commits",
+    "timeSinceLastCommit": "Time since last commit: ",
+    "youMightWant": "You might want to...",
+    "defaultAction1": "View current code changes",
+    "defaultAction1Command": "Show me what files I've modified",
+    "defaultAction2": "Continue development work",
+    "defaultAction2Command": "Help me continue coding",
+    "defaultAction3": "Commit current changes",
+    "defaultAction3Command": "Help me commit my code"
+  }
+}

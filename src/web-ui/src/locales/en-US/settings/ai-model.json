@@ -1,0 +1,208 @@
+{
+  "title": "Model Configuration",
+  "subtitle": "Configure and manage AI model providers",
+  "editModel": "Edit Model Configuration",
+  "newModel": "New Model Configuration",
+  "editSubtitle": "Configure AI model connection parameters",
+  "confirmDelete": "Are you sure you want to delete this configuration?",
+  "providerSelection": {
+    "title": "Select Model Provider",
+    "subtitle": "Choose a preset provider for quick setup, or select custom for full manual configuration",
+    "or": "or",
+    "orSelectProvider": "or select a preset provider",
+    "customTitle": "Custom Configuration",
+    "customDescription": "Manually configure all parameters, suitable for private deployments or other unlisted providers",
+    "getApiKey": "Get API Key",
+    "backToSelection": "Back to provider selection",
+    "selectModel": "Select model",
+    "searchOrInputModel": "Search or enter model name...",
+    "inputModelName": "Enter model name...",
+    "useCustomModel": "Press Enter to use",
+    "urlHint": "Official API URL pre-filled, modify if using proxy or private deployment",
+    "formatHint": "Automatically selected based on provider, usually no need to change"
+  },
+  "providers": {
+    "anthropic": {
+      "name": "Anthropic Claude",
+      "description": "Anthropic Claude series models"
+    },
+    "minimax": {
+      "name": "MiniMax",
+      "description": "MiniMax M2 series large language models"
+    },
+    "moonshot": {
+      "name": "Moonshot AI",
+      "description": "Moonshot Kimi K2 series models"
+    },
+    "deepseek": {
+      "name": "DeepSeek",
+      "description": "DeepSeek V3 and R1 reasoning models"
+    },
+    "zhipu": {
+      "name": "Zhipu AI",
+      "description": "Zhipu AI GLM series models",
+      "urlOptions": {
+        "default": "OpenAI Format - Default",
+        "anthropic": "Anthropic Format",
+        "codingPlan": "OpenAI Format - CodingPlan"
+      }
+    },
+    "qwen": {
+      "name": "Qwen",
+      "description": "Alibaba Cloud Qwen3 series models"
+    },
+    "volcengine": {
+      "name": "Volcano Engine",
+      "description": "ByteDance Volcano Engine Doubao large language models"
+    }
+  },
+  "tabs": {
+    "api": "API Configuration",
+    "proxy": "Proxy Configuration"
+  },
+  "categories": {
+    "all": "All",
+    "text": "Text",
+    "multimodal": "Image",
+    "other": "Utility"
+  },
+  "category": {
+    "label": "Model Category",
+    "placeholder": "Select model category",
+    "general_chat": "Text Generation",
+    "multimodal": "Image Understanding",
+    "image_generation": "Image Generation",
+    "search_enhanced": "Information Retrieval",
+    "speech_recognition": "Speech Recognition"
+  },
+  "categoryIcons": {
+    "general_chat": "Text",
+    "multimodal": "Vision",
+    "image_generation": "Image",
+    "search_enhanced": "Search",
+    "speech_recognition": "Speech"
+  },
+  "categoryHints": {
+    "general_chat": "Text Generation: Generate text responses, code, etc. for most conversation scenarios",
+    "multimodal": "Image Understanding: Understand image content and have mixed text-image conversations",
+    "image_generation": "Image Generation: Generate images from text descriptions",
+    "search_enhanced": "Information Retrieval: Search the web for real-time information, only need name, API URL and key",
+    "speech_recognition": "Speech Recognition: Convert speech to text (e.g., GLM-ASR)"
+  },
+  "form": {
+    "configName": "Configuration Name",
+    "configNamePlaceholder": "Give this configuration a name",
+    "modelName": "Model Name",
+    "modelNameHint": "GLM-ASR uses glm-asr, other speech models use their corresponding model names",
+    "baseUrl": "API URL",
+    "searchApiHint": "Zhipu AI search API URL, or other compatible search API URL",
+    "apiKey": "API Key",
+    "apiKeyPlaceholder": "Enter your API Key",
+    "provider": "Request Format",
+    "providerPlaceholder": "Select request format",
+    "contextWindow": "Context Window Size",
+    "contextWindowHint": "Maximum context window size supported by the model (for calculating token usage percentage)",
+    "maxTokens": "Max Output Tokens",
+    "maxTokensHint": "Maximum tokens for model output per request (affects response length)",
+    "description": "Description",
+    "descriptionPlaceholder": "Configuration description (optional)"
+  },
+  "thinking": {
+    "enable": "Enable Thinking",
+    "enableHint": "Requires model to support thinking mode",
+    "preserve": "Preserve Historical Thinking",
+    "preserveHint": "When enabled, preserves thinking content from previous conversation turns (requires model to support Preserved Thinking)"
+  },
+  "details": {
+    "basicInfo": "Basic Information",
+    "modelName": "Model Name",
+    "provider": "Request Format",
+    "apiUrl": "API URL",
+    "contextWindow": "Context Window",
+    "maxOutput": "Max Output",
+    "description": "Description",
+    "tokens": "tokens"
+  },
+  "proxy": {
+    "enable": "Enable Proxy",
+    "enableHint": "When enabled, all AI requests will be sent through proxy (requires IDE restart)",
+    "url": "Proxy URL",
+    "urlPlaceholder": "http://127.0.0.1:7890 or socks5://127.0.0.1:1080",
+    "urlHint": "Supports HTTP/HTTPS/SOCKS5 proxy, format: protocol://address:port",
+    "username": "Username (optional)",
+    "usernamePlaceholder": "Proxy authentication username",
+    "password": "Password (optional)",
+    "passwordPlaceholder": "Proxy authentication password",
+    "save": "Save Proxy Configuration",
+    "saveSuccess": "Proxy configuration saved, restart IDE to take effect"
+  },
+  "capabilities": {
+    "text_chat": "Chat",
+    "image_understanding": "Vision",
+    "image_generation": "Image",
+    "search": "Search",
+    "function_calling": "Tools",
+    "speech_recognition": "Speech"
+  },
+  "formats": {
+    "openaiCompatible": "OpenAI Compatible",
+    "claudeApi": "Claude API"
+  },
+  "actions": {
+    "save": "Save",
+    "cancel": "Cancel",
+    "edit": "Edit",
+    "delete": "Delete",
+    "test": "Test Connection",
+    "newConfig": "New Configuration",
+    "createFirst": "Create First Configuration"
+  },
+  "empty": {
+    "noModels": "No model configurations",
+    "noMatchingModels": "No matching models found"
+  },
+  "search": {
+    "placeholder": "Search model name, provider..."
+  },
+  "messages": {
+    "fillRequired": "Please fill in required fields",
+    "fillModelName": "Please fill in model name",
+    "saveFailed": "Save failed",
+    "deleteFailed": "Failed to delete configuration",
+    "loadFailed": "Failed to load AI configuration",
+    "connectionFailed": "Connection failed",
+    "errorDetails": "Error details",
+    "autoSetPrimary": "Automatically set as primary model",
+    "defaultDescription": "{{name}} model configuration",
+    "cloneName": "{{name}} - Copy",
+    "templateName": "{{provider}} - {{modelName}}",
+    "templateDescription": "{{description}} - {{modelName}}"
+  },
+  "advancedSettings": {
+    "title": "Advanced Settings",
+    "skipSslVerify": {
+      "label": "Skip SSL Certificate Verification",
+      "warning": "Skipping SSL verification is a security risk, use only in test or internal network environments!"
+    },
+    "customHeaders": {
+      "label": "Custom Headers",
+      "hint": "Add or modify HTTP request headers",
+      "modeLabel": "Apply Mode",
+      "modeReplace": "Replace All",
+      "modeMerge": "Merge Override",
+      "modeReplaceHint": "Custom headers will completely replace default headers (you need to add Content-Type, Authorization, etc.)",
+      "modeMergeHint": "Apply default headers first, then apply custom headers (can override existing values, add new values)",
+      "addHeader": "Add Field",
+      "keyPlaceholder": "key",
+      "valuePlaceholder": "value"
+    },
+    "customRequestBody": {
+      "label": "Custom Request Body",
+      "hint": "Enter request body fields in JSON format to override default request parameters",
+      "placeholder": "{\n  \"temperature\": 0.8,\n  \"top_p\": 0.9\n}",
+      "invalidJson": "Invalid JSON format, please check syntax",
+      "validJson": "JSON format is valid",
+      "mergeHint": "Custom fields will override corresponding fields in the default request body"
+    }
+  }
+}

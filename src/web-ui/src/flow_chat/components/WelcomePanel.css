@@ -1,0 +1,1017 @@
+/* Welcome panel styling. */
+
+.welcome-panel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  /* Use flex-start to prevent content overflow issue with justify-content: center.
+     Centering is achieved via ::before/::after pseudo-elements below. */
+  justify-content: flex-start;
+  padding: 32px 32px 48px 32px;
+  max-width: 900px;
+  margin: 0 auto;
+  width: 100%;
+  height: 100%;
+  max-height: 100%;
+  box-sizing: border-box;
+  overflow-y: auto;
+  overflow-x: hidden;
+  animation: fadeIn 0.5s ease-out;
+}
+
+/* Flexible centering: when content is short, pseudo-elements expand to center content.
+   When content overflows, pseudo-elements shrink to 0 allowing normal scrolling. */
+.welcome-panel::before {
+  content: '';
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.welcome-panel::after {
+  content: '';
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(15px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Greeting section */
+.welcome-panel__greeting {
+  position: relative;
+  z-index: 1;
+  text-align: center;
+  margin-bottom: 12px;
+  animation: slideDown 0.6s ease-out;
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.welcome-panel__greeting-title {
+  font-size: 30px;
+  font-weight: 700;
+  margin: 0 auto 8px auto;
+  color: var(--color-text-primary);
+  line-height: 1.2;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  padding: 0 20px;
+}
+
+.welcome-panel__greeting-title:last-of-type {
+  margin-bottom: 16px;
+}
+
+.welcome-panel__greeting-description {
+  font-size: 20px !important;
+  color: var(--color-text-muted) !important;
+  margin: 0 auto 8px auto !important;
+  line-height: 1.6 !important;
+  text-align: center !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  box-sizing: border-box !important;
+  padding: 0 20px !important;
+}
+
+.welcome-panel__greeting-tagline {
+  font-size: 18px !important;
+  color: var(--color-text-primary) !important;
+  font-style: italic !important;
+  margin: 0 auto !important;
+  text-align: center !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  box-sizing: border-box !important;
+  padding: 0 20px !important;
+}
+
+/* Background cube container */
+.welcome-panel__cube-background {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 0;
+  pointer-events: none;
+}
+
+/* Cube styling for background layer */
+.welcome-panel__cube-icon {
+  opacity: 0.35;
+  filter: brightness(1.3);
+  transition: all 0.5s ease;
+}
+
+.welcome-panel:hover .welcome-panel__cube-icon {
+  opacity: 0.5;
+  filter: brightness(1.5);
+}
+
+/* Improve cube visibility in light theme */
+:root[data-theme-type="light"] .welcome-panel__cube-icon {
+  opacity: 0.55;
+  filter: brightness(1.0);
+}
+
+:root[data-theme-type="light"] .welcome-panel:hover .welcome-panel__cube-icon {
+  opacity: 0.7;
+  filter: brightness(1.1);
+}
+
+.welcome-panel__cube-icon .cube-icon__rubiks {
+  animation: welcomeCubeRotate 20s linear infinite;
+}
+
+@keyframes welcomeCubeRotate {
+  from {
+    transform: rotateX(-30deg) rotateY(45deg);
+  }
+  to {
+    transform: rotateX(-30deg) rotateY(405deg);
+  }
+}
+
+/* Divider */
+.welcome-panel__divider {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  max-width: 400px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent 0%, var(--border-strong) 50%, transparent 100%);
+  margin: 4px auto 16px auto;
+  animation: fadeIn 0.8s ease-out 0.3s both;
+}
+
+/* Feature intro */
+.welcome-panel__feature-intro {
+  position: relative;
+  z-index: 1;
+  text-align: center;
+  margin-bottom: 32px;
+  animation: fadeIn 0.8s ease-out 0.3s both;
+}
+
+.welcome-panel__feature-text {
+  font-size: 14px !important;
+  font-weight: 600 !important;
+  color: var(--color-text-primary) !important;
+  line-height: 1.8 !important;
+  margin: 0 auto !important;
+  max-width: 100% !important;
+  width: 100% !important;
+  padding: 0 20px !important;
+  box-sizing: border-box !important;
+  text-align: center !important;
+}
+
+/* Keep StreamText and cursor inline in feature intro */
+.welcome-panel__feature-text .stream-text {
+  display: inline !important;
+}
+
+.welcome-panel__feature-text .stream-cursor {
+  display: inline-block !important;
+  margin-left: 1px;
+}
+
+.welcome-panel__typing-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  background-color: var(--color-accent-500);
+  margin-left: 2px;
+  animation: blink 1s step-end infinite;
+  vertical-align: text-bottom;
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+/* Global typewriter cursor styling for emphasis */
+.welcome-panel .stream-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  background-color: var(--color-accent-500);
+  margin-left: 1px;
+  animation: typingBlink 0.8s ease-in-out infinite;
+  vertical-align: text-bottom;
+  position: relative;
+}
+
+.welcome-panel .stream-cursor--line {
+  width: 2px;
+}
+
+.welcome-panel .stream-cursor--block {
+  width: 0.6em;
+  background-color: var(--color-accent-400);
+}
+
+.welcome-panel .stream-cursor--underline {
+  width: 0.6em;
+  height: 2px;
+  background-color: var(--color-accent-500);
+  vertical-align: baseline;
+}
+
+@keyframes typingBlink {
+  0%, 49% { 
+    opacity: 1;
+    background-color: var(--color-accent-500);
+  }
+  50%, 100% { 
+    opacity: 0.3;
+    background-color: var(--color-accent-300);
+  }
+}
+
+/* Keep cursor color consistent in Git status */
+.welcome-panel__git-info--colored .stream-cursor {
+  background-color: var(--color-accent-500) !important;
+}
+
+/* Ensure cursor is visible after colored text */
+.welcome-panel__git-branch-text .stream-cursor,
+.welcome-panel__git-ahead-text .stream-cursor,
+.welcome-panel__git-behind-text .stream-cursor,
+.welcome-panel__git-unstaged-text .stream-cursor,
+.welcome-panel__git-staged-text .stream-cursor,
+.welcome-panel__git-unpushed-text .stream-cursor {
+  background-color: var(--color-accent-500) !important;
+}
+
+/* AI analysis wait indicator */
+.welcome-panel__ai-analyzing {
+  margin: 16px 0;
+  padding: 0;
+  min-height: 24px;
+  width: 100%;
+  text-align: left !important;
+}
+
+.welcome-panel__ai-analyzing-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  background-color: var(--color-accent-500);
+  animation: aiAnalyzingBlink 0.8s ease-in-out infinite;
+  vertical-align: text-bottom;
+}
+
+@keyframes aiAnalyzingBlink {
+  0%, 49% { 
+    opacity: 1;
+    background-color: var(--color-accent-500);
+    box-shadow: 0 0 8px var(--color-accent-400);
+  }
+  50%, 100% { 
+    opacity: 0.2;
+    background-color: var(--color-accent-300);
+    box-shadow: 0 0 4px var(--color-accent-200);
+  }
+}
+
+.welcome-panel__section {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  margin-bottom: 24px;
+}
+
+/* Use fade-in for AI enhanced sections */
+.welcome-panel__section--ai-enhanced {
+  animation: fadeIn 0.5s ease-out;
+}
+
+.welcome-panel__section-title {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0 0 12px 0;
+  color: var(--color-text-primary);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.welcome-panel__section-icon {
+  font-size: 16px;
+}
+
+.welcome-panel__current-state {
+  padding: 16px;
+  transition: all 0.2s ease;
+}
+
+.welcome-panel__state-summary {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  margin: 0 0 16px 0;
+  line-height: 1.6;
+  text-align: left;
+}
+
+/* Typewriter text block */
+.welcome-panel__typewriter {
+  min-height: 24px; /* Prevent layout shift. */
+}
+
+/* Git status */
+.welcome-panel__git-state {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  background: var(--element-bg-subtle);
+  border-radius: 4px;
+  border: 1px dashed var(--border-medium);
+  margin-bottom: 10px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.welcome-panel__git-state:hover {
+  background: var(--element-bg-soft);
+  border-color: var(--border-strong);
+  border-style: dashed;
+  box-shadow: 0 2px 8px var(--color-accent-200);
+  transform: translateY(-1px);
+}
+
+.welcome-panel__git-state:active {
+  transform: translateY(0);
+  box-shadow: 0 1px 4px var(--color-accent-200);
+}
+
+.welcome-panel__git-info {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.welcome-panel__git-info--inline {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.welcome-panel__git-info--simple {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  line-height: 1.6;
+}
+
+.welcome-panel__git-info--simple .stream-text,
+.welcome-panel__git-info--simple .stream-text__content {
+  color: var(--color-text-secondary) !important;
+  text-align: left !important;
+}
+
+/* Colored Git status display */
+.welcome-panel__git-info--colored {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.welcome-panel__git-item {
+  display: inline-flex;
+  align-items: center;
+}
+
+.welcome-panel__git-separator {
+  color: var(--border-medium);
+  margin: 0 2px;
+}
+
+/* Normalize colors for Git info */
+.welcome-panel__git-branch-text,
+.welcome-panel__git-branch-text *,
+.welcome-panel__git-branch-text .stream-text,
+.welcome-panel__git-branch-text .stream-text *,
+.welcome-panel__git-branch-text .stream-text__content,
+.welcome-panel__git-branch-text .stream-text__content--typewriter,
+.welcome-panel__git-branch-text .stream-text__char,
+.welcome-panel__git-branch-text .stream-text--theme-blue,
+.welcome-panel__git-ahead-text,
+.welcome-panel__git-ahead-text *,
+.welcome-panel__git-ahead-text .stream-text,
+.welcome-panel__git-ahead-text .stream-text *,
+.welcome-panel__git-ahead-text .stream-text__content,
+.welcome-panel__git-ahead-text .stream-text__content--typewriter,
+.welcome-panel__git-ahead-text .stream-text__char,
+.welcome-panel__git-ahead-text .stream-text--theme-blue,
+.welcome-panel__git-behind-text,
+.welcome-panel__git-behind-text *,
+.welcome-panel__git-behind-text .stream-text,
+.welcome-panel__git-behind-text .stream-text *,
+.welcome-panel__git-behind-text .stream-text__content,
+.welcome-panel__git-behind-text .stream-text__content--typewriter,
+.welcome-panel__git-behind-text .stream-text__char,
+.welcome-panel__git-behind-text .stream-text--theme-blue,
+.welcome-panel__git-unstaged-text,
+.welcome-panel__git-unstaged-text *,
+.welcome-panel__git-unstaged-text .stream-text,
+.welcome-panel__git-unstaged-text .stream-text *,
+.welcome-panel__git-unstaged-text .stream-text__content,
+.welcome-panel__git-unstaged-text .stream-text__content--typewriter,
+.welcome-panel__git-unstaged-text .stream-text__char,
+.welcome-panel__git-unstaged-text .stream-text--theme-blue,
+.welcome-panel__git-staged-text,
+.welcome-panel__git-staged-text *,
+.welcome-panel__git-staged-text .stream-text,
+.welcome-panel__git-staged-text .stream-text *,
+.welcome-panel__git-staged-text .stream-text__content,
+.welcome-panel__git-staged-text .stream-text__content--typewriter,
+.welcome-panel__git-staged-text .stream-text__char,
+.welcome-panel__git-staged-text .stream-text--theme-blue,
+.welcome-panel__git-unpushed-text,
+.welcome-panel__git-unpushed-text *,
+.welcome-panel__git-unpushed-text .stream-text,
+.welcome-panel__git-unpushed-text .stream-text *,
+.welcome-panel__git-unpushed-text .stream-text__content,
+.welcome-panel__git-unpushed-text .stream-text__content--typewriter,
+.welcome-panel__git-unpushed-text .stream-text__char,
+.welcome-panel__git-unpushed-text .stream-text--theme-blue {
+  color: var(--color-text-secondary) !important;
+}
+
+/* Keep branch name bold */
+.welcome-panel__git-branch-text,
+.welcome-panel__git-branch-text *,
+.welcome-panel__git-branch-text .stream-text,
+.welcome-panel__git-branch-text .stream-text * {
+  font-weight: 600 !important;
+}
+
+.welcome-panel__git-stat {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.welcome-panel__git-icon-svg {
+  flex-shrink: 0;
+  color: var(--color-accent-500);
+}
+
+.welcome-panel__git-icon {
+  font-size: 13px;
+  opacity: 0.8;
+  flex-shrink: 0;
+}
+
+.welcome-panel__git-text {
+  color: var(--color-text-secondary);
+  font-weight: 400;
+}
+
+.welcome-panel__git-branch {
+  color: var(--color-success);
+  font-weight: 600;
+  font-family: 'Monaco', 'Menlo', monospace;
+  font-size: 12px;
+}
+
+.welcome-panel__git-ahead {
+  color: var(--color-accent-500);
+  font-size: 11px;
+  margin-left: 4px;
+}
+
+.welcome-panel__git-behind {
+  color: var(--color-warning);
+  font-size: 11px;
+  margin-left: 4px;
+}
+
+/* Key files section */
+.welcome-panel__ongoing-work {
+  margin-top: 10px;
+}
+
+.welcome-panel__subsection-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  margin: 0 0 8px 0;
+  text-align: left;
+}
+
+.welcome-panel__key-file-group {
+  padding: 10px 12px;
+  background: var(--element-bg-subtle);
+  border-radius: 6px;
+  border: 1px solid var(--border-subtle);
+  margin-bottom: 8px;
+  transition: all 0.2s ease;
+}
+
+.welcome-panel__key-file-group:last-child {
+  margin-bottom: 0;
+}
+
+.welcome-panel__key-file-group:hover {
+  background: var(--element-bg-soft);
+  border-color: var(--color-accent-300);
+  box-shadow: var(--shadow-sm);
+}
+
+.welcome-panel__key-file-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.welcome-panel__category-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  font-size: 10px;
+  font-weight: 600;
+  border-radius: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  flex-shrink: 0;
+}
+
+.welcome-panel__category-badge--frontend {
+  background: var(--color-accent-100);
+  color: var(--color-accent-600);
+  border: 1px solid var(--color-accent-300);
+}
+
+.welcome-panel__category-badge--backend {
+  background: var(--color-success-bg);
+  color: var(--color-success);
+  border: 1px solid var(--color-success-border);
+}
+
+.welcome-panel__category-badge--api {
+  background: var(--color-warning-bg);
+  color: var(--color-warning);
+  border: 1px solid var(--color-warning-border);
+}
+
+.welcome-panel__category-badge--database {
+  background: var(--color-purple-100);
+  color: var(--color-purple-600);
+  border: 1px solid var(--color-purple-300);
+}
+
+.welcome-panel__category-badge--infrastructure {
+  background: var(--element-bg-medium);
+  color: var(--color-text-secondary);
+  border: 1px solid var(--border-medium);
+}
+
+.welcome-panel__category-badge--testing {
+  background: var(--color-error-bg);
+  color: var(--color-error);
+  border: 1px solid var(--color-error-border);
+}
+
+.welcome-panel__category-badge--documentation {
+  background: var(--color-info-bg);
+  color: var(--color-info);
+  border: 1px solid var(--color-info-border);
+}
+
+.welcome-panel__category-badge--other {
+  background: var(--element-bg-medium);
+  color: var(--color-text-muted);
+  border: 1px solid var(--border-base);
+}
+
+.welcome-panel__key-file-description {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--color-text-muted);
+  line-height: 1.4;
+  flex: 1;
+}
+
+.welcome-panel__file-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.welcome-panel__file-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  background: var(--color-bg-secondary);
+  border-radius: 4px;
+  border: 1px solid var(--border-subtle);
+  transition: all 0.2s ease;
+  cursor: pointer;
+}
+
+.welcome-panel__file-item:hover {
+  background: var(--color-bg-tertiary);
+  border-color: var(--color-accent-400);
+  transform: translateX(2px);
+}
+
+.welcome-panel__file-icon {
+  flex-shrink: 0;
+  color: var(--color-accent-500);
+}
+
+.welcome-panel__file-path {
+  font-size: 11px;
+  font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+  color: var(--color-text-secondary);
+  line-height: 1.4;
+  word-break: break-all;
+}
+
+/* Keep legacy styles for compatibility */
+.welcome-panel__work-item {
+  padding: 8px 10px;
+  background: var(--element-bg-subtle);
+  border-radius: 4px;
+  border: 1px solid var(--border-subtle);
+  margin-bottom: 4px;
+  transition: all 0.2s ease;
+}
+
+.welcome-panel__work-item:last-child {
+  margin-bottom: 0;
+}
+
+.welcome-panel__work-item:hover {
+  background: var(--element-bg-soft);
+  border-color: var(--border-base);
+}
+
+.welcome-panel__work-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.welcome-panel__work-icon {
+  font-size: 13px;
+  opacity: 0.8;
+  flex-shrink: 0;
+}
+
+.welcome-panel__work-title {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--color-text-primary);
+  line-height: 1.4;
+}
+
+.welcome-panel__work-details {
+  margin: 4px 0 0 19px;
+  padding: 0;
+  list-style: none;
+  text-align: left;
+}
+
+.welcome-panel__work-details li {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  margin-bottom: 2px;
+  position: relative;
+  padding-left: 10px;
+  line-height: 1.3;
+  text-align: left;
+}
+
+.welcome-panel__work-details li::before {
+  content: "•";
+  position: absolute;
+  left: 0;
+  color: var(--color-accent-400);
+}
+
+.welcome-panel__work-details li:last-child {
+  margin-bottom: 0;
+}
+
+/* AI work summary */
+.welcome-panel__work-summary {
+  margin: 16px 0;
+  padding: 0;
+  text-align: left !important;
+  width: 100%;
+}
+
+.welcome-panel__work-summary-text {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.6;
+  color: var(--color-text-primary);
+  margin: 0;
+  max-width: 100%;
+  width: 100%;
+  text-align: left !important;
+}
+
+/* Keep StreamText and cursor inline in summary */
+.welcome-panel__work-summary-text .stream-text {
+  display: inline !important;
+}
+
+.welcome-panel__work-summary-text .stream-cursor {
+  display: inline-block !important;
+  margin-left: 1px;
+}
+
+/* Ensure StreamText content is left-aligned */
+.welcome-panel__work-summary-text .stream-text,
+.welcome-panel__work-summary-text .stream-text__content {
+  text-align: left !important;
+  display: block !important;
+}
+
+/* Time info */
+.welcome-panel__time-info {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--color-text-muted);
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.welcome-panel__time-icon {
+  font-size: 11px;
+  opacity: 0.7;
+}
+
+.welcome-panel__time-text {
+  font-weight: 400;
+  line-height: 1.3;
+}
+
+/* Intent suggestions */
+.welcome-panel__intents {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Intent card */
+.welcome-panel__intent-card {
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  padding: 14px 16px;
+  transition: all 0.2s ease;
+  cursor: default;
+}
+
+.welcome-panel__intent-card:hover {
+  background: var(--element-bg-soft);
+}
+
+/* Fallback intent card (clickable) */
+.welcome-panel__intent-card--clickable {
+  cursor: pointer;
+}
+
+.welcome-panel__intent-card--clickable:hover {
+  background: var(--color-accent-100);
+  border-color: var(--color-accent-400);
+  transform: translateX(2px);
+}
+
+.welcome-panel__intent-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.welcome-panel__intent-number {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-accent-500);
+}
+
+.welcome-panel__intent-title {
+  flex: 1;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--color-text-primary);
+  line-height: 1.4;
+  text-align: left !important;
+}
+
+/* Keep StreamText and cursor inline in title */
+.welcome-panel__intent-title .stream-text {
+  display: inline !important;
+}
+
+.welcome-panel__intent-title .stream-cursor {
+  display: inline-block !important;
+  margin-left: 1px;
+}
+
+/* Ensure StreamText content is left-aligned */
+.welcome-panel__intent-title .stream-text,
+.welcome-panel__intent-title .stream-text__content {
+  text-align: left !important;
+}
+
+.welcome-panel__intent-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-left: 40px;
+}
+
+.welcome-panel__intent-action-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  text-align: left;
+}
+
+.welcome-panel__intent-action-btn:hover {
+  background: var(--color-accent-100);
+  border-color: var(--color-accent-400);
+  transform: translateX(4px);
+  box-shadow: 0 2px 8px var(--color-accent-200);
+}
+
+.welcome-panel__intent-action-btn:active {
+  transform: translateX(2px);
+  box-shadow: 0 1px 4px var(--color-accent-200);
+}
+
+.welcome-panel__intent-action-icon {
+  flex-shrink: 0;
+  color: var(--color-accent-500);
+}
+
+.welcome-panel__intent-action-text {
+  flex: 1;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--color-text-secondary);
+  line-height: 1.4;
+}
+
+/* Footer */
+.welcome-panel__footer {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  margin-top: 32px;
+}
+
+.welcome-panel__refresh-button {
+  padding: 10px 20px;
+  background: var(--color-bg-elevated);
+  color: var(--color-text-secondary);
+  border: 1px solid var(--border-base);
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.welcome-panel__refresh-button:hover {
+  background: var(--element-bg-base);
+  border-color: var(--color-accent-500);
+  color: var(--color-accent-500);
+}
+
+.welcome-panel__refresh-button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* AI enhanced loading indicator */
+.welcome-panel__loading-indicator {
+  font-size: 12px;
+  color: var(--color-text-muted);
+  font-weight: 400;
+  margin-left: 8px;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
+}
+
+
+/* Responsive layout */
+@media (max-width: 768px) {
+  .welcome-panel {
+    padding: 0 16px 32px 16px;
+    margin: 0 auto 0 auto;
+  }
+
+  .welcome-panel__greeting-title {
+    font-size: 28px;
+  }
+
+  .welcome-panel__greeting-description {
+    font-size: 16px !important;
+  }
+
+  .welcome-panel__greeting-tagline {
+    font-size: 14px !important;
+  }
+
+  .welcome-panel__feature-text {
+    font-size: 13px !important;
+  }
+
+  .welcome-panel__section-title {
+    font-size: 13px;
+  }
+
+  .welcome-panel__quick-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .welcome-panel__current-state {
+    padding: 12px;
+  }
+
+  .welcome-panel__git-init-prompt {
+    padding: 14px 16px;
+  }
+
+  .welcome-panel__git-init-title {
+    font-size: 13px;
+  }
+
+  .welcome-panel__git-init-description {
+    font-size: 12px;
+  }
+
+  .welcome-panel__git-init-button {
+    width: 100%;
+    justify-content: center;
+    padding: 8px 16px;
+  }
+}
+

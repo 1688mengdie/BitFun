@@ -1,0 +1,208 @@
+{
+  "title": "模型配置",
+  "subtitle": "配置和管理 AI 模型提供商",
+  "editModel": "编辑模型配置",
+  "newModel": "新建模型配置",
+  "editSubtitle": "配置AI模型的连接参数",
+  "confirmDelete": "确定删除此配置？",
+  "providerSelection": {
+    "title": "选择模型提供商",
+    "subtitle": "选择一个预设提供商快速配置，或选择自定义完全手动配置",
+    "or": "或者",
+    "orSelectProvider": "或选择预设提供商",
+    "customTitle": "自定义配置",
+    "customDescription": "手动配置所有参数，适用于私有部署或其他未列出的提供商",
+    "getApiKey": "获取 API Key",
+    "backToSelection": "返回选择提供商",
+    "selectModel": "选择模型",
+    "searchOrInputModel": "搜索或输入模型名称...",
+    "inputModelName": "输入模型名称...",
+    "useCustomModel": "按 Enter 使用",
+    "urlHint": "已预填官方 API 地址，如使用代理或私有部署可修改",
+    "formatHint": "已根据提供商自动选择，通常无需修改"
+  },
+  "providers": {
+    "anthropic": {
+      "name": "Anthropic Claude",
+      "description": "Anthropic Claude 系列模型"
+    },
+    "minimax": {
+      "name": "MiniMax",
+      "description": "MiniMax M2 系列大语言模型"
+    },
+    "moonshot": {
+      "name": "月之暗面",
+      "description": "月之暗面 Kimi K2 系列模型"
+    },
+    "deepseek": {
+      "name": "DeepSeek",
+      "description": "DeepSeek V3 和 R1 推理模型"
+    },
+    "zhipu": {
+      "name": "智谱AI",
+      "description": "智谱AI GLM 系列模型",
+      "urlOptions": {
+        "default": "OpenAI格式-默认",
+        "anthropic": "Anthropic格式",
+        "codingPlan": "OpenAI格式-CodingPlan"
+      }
+    },
+    "qwen": {
+      "name": "通义千问",
+      "description": "阿里云通义千问 Qwen3 系列模型"
+    },
+    "volcengine": {
+      "name": "火山引擎",
+      "description": "字节跳动火山引擎豆包大模型"
+    }
+  },
+  "tabs": {
+    "api": "API配置",
+    "proxy": "代理配置"
+  },
+  "categories": {
+    "all": "全部",
+    "text": "文本",
+    "multimodal": "图像",
+    "other": "辅助"
+  },
+  "category": {
+    "label": "模型分类",
+    "placeholder": "选择模型分类",
+    "general_chat": "文本生成",
+    "multimodal": "图像理解",
+    "image_generation": "图像生成",
+    "search_enhanced": "信息检索",
+    "speech_recognition": "语音识别"
+  },
+  "categoryIcons": {
+    "general_chat": "文本",
+    "multimodal": "视觉",
+    "image_generation": "绘图",
+    "search_enhanced": "检索",
+    "speech_recognition": "语音"
+  },
+  "categoryHints": {
+    "general_chat": "文本生成：生成文本回复、代码等，适用于大多数对话场景",
+    "multimodal": "图像理解：理解图片内容并进行图文混合对话",
+    "image_generation": "图像生成：根据文字描述生成图片",
+    "search_enhanced": "信息检索：搜索网络获取实时信息，只需配置名称、API地址和密钥",
+    "speech_recognition": "语音识别：将语音转换为文字（如智谱 GLM-ASR）"
+  },
+  "form": {
+    "configName": "配置名称",
+    "configNamePlaceholder": "为此配置起个名字",
+    "modelName": "模型名称",
+    "modelNameHint": "智谱 GLM-ASR 使用 glm-asr，其他语音模型填写对应的模型名称",
+    "baseUrl": "API地址",
+    "searchApiHint": "智谱AI搜索API地址，或其他兼容的搜索API地址",
+    "apiKey": "API密钥",
+    "apiKeyPlaceholder": "输入您的 API Key",
+    "provider": "请求规范",
+    "providerPlaceholder": "选择请求格式",
+    "contextWindow": "上下文窗口大小",
+    "contextWindowHint": "模型支持的最大上下文窗口大小（用于计算token占用百分比）",
+    "maxTokens": "最大输出Tokens",
+    "maxTokensHint": "单次请求时限制模型输出的最大token数量（影响响应长度）",
+    "description": "描述",
+    "descriptionPlaceholder": "配置说明（可选）"
+  },
+  "thinking": {
+    "enable": "启用思考",
+    "enableHint": "需要模型支持思考模式",
+    "preserve": "保留历史思考",
+    "preserveHint": "开启后将保留之前对话轮的思考内容（需模型支持 Preserved Thinking）"
+  },
+  "details": {
+    "basicInfo": "基本信息",
+    "modelName": "模型名称",
+    "provider": "请求规范",
+    "apiUrl": "API地址",
+    "contextWindow": "上下文窗口",
+    "maxOutput": "最大输出",
+    "description": "描述",
+    "tokens": "tokens"
+  },
+  "proxy": {
+    "enable": "启用代理",
+    "enableHint": "启用后所有AI请求将通过代理发送（需重启IDE生效）",
+    "url": "代理地址",
+    "urlPlaceholder": "http://127.0.0.1:7890 或 socks5://127.0.0.1:1080",
+    "urlHint": "支持 HTTP/HTTPS/SOCKS5 代理，格式：协议://地址:端口",
+    "username": "用户名（可选）",
+    "usernamePlaceholder": "代理认证用户名",
+    "password": "密码（可选）",
+    "passwordPlaceholder": "代理认证密码",
+    "save": "保存代理配置",
+    "saveSuccess": "代理配置已保存，重启IDE后生效"
+  },
+  "capabilities": {
+    "text_chat": "对话",
+    "image_understanding": "识图",
+    "image_generation": "绘图",
+    "search": "搜索",
+    "function_calling": "工具",
+    "speech_recognition": "语音"
+  },
+  "formats": {
+    "openaiCompatible": "OpenAI 兼容",
+    "claudeApi": "Claude API"
+  },
+  "actions": {
+    "save": "保存",
+    "cancel": "取消",
+    "edit": "编辑",
+    "delete": "删除",
+    "test": "测试连接",
+    "newConfig": "新建配置",
+    "createFirst": "创建第一个配置"
+  },
+  "empty": {
+    "noModels": "暂无模型配置",
+    "noMatchingModels": "没有找到匹配的模型"
+  },
+  "search": {
+    "placeholder": "搜索模型名称、提供商..."
+  },
+  "messages": {
+    "fillRequired": "请填写必要字段",
+    "fillModelName": "请填写模型名称",
+    "saveFailed": "保存失败",
+    "deleteFailed": "删除配置失败",
+    "loadFailed": "加载AI配置失败",
+    "connectionFailed": "连接失败",
+    "errorDetails": "详细错误",
+    "autoSetPrimary": "已自动设为主力模型",
+    "defaultDescription": "{{name}} 模型配置",
+    "cloneName": "{{name}} - 副本",
+    "templateName": "{{provider}} - {{modelName}}",
+    "templateDescription": "{{description}} - {{modelName}}"
+  },
+  "advancedSettings": {
+    "title": "高级设置",
+    "skipSslVerify": {
+      "label": "跳过SSL证书验证",
+      "warning": "跳过SSL证书验证存在安全风险，请仅在测试环境或内网环境使用！"
+    },
+    "customHeaders": {
+      "label": "自定义请求头",
+      "hint": "添加或修改HTTP请求头",
+      "modeLabel": "应用模式",
+      "modeReplace": "完全替换",
+      "modeMerge": "合并覆盖",
+      "modeReplaceHint": "自定义请求头将完全替换默认请求头（需要自行添加Content-Type、Authorization等）",
+      "modeMergeHint": "先应用默认请求头，再应用自定义请求头（可覆盖已有值，添加新值）",
+      "addHeader": "添加字段",
+      "keyPlaceholder": "key",
+      "valuePlaceholder": "value"
+    },
+    "customRequestBody": {
+      "label": "自定义请求体",
+      "hint": "输入JSON格式的请求体字段，用于覆盖默认请求参数",
+      "placeholder": "{\n  \"temperature\": 0.8,\n  \"top_p\": 0.9\n}",
+      "invalidJson": "JSON格式错误，请检查语法",
+      "validJson": "JSON格式有效",
+      "mergeHint": "自定义字段将覆盖默认请求体中的对应字段"
+    }
+  }
+}

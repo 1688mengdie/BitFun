@@ -1,0 +1,47 @@
+[package]
+name = "bitfun-desktop"
+version = "0.1.0"
+description = "BitFun Desktop Application (Tauri)"
+authors = ["BitFun Team"]
+edition = "2021"
+
+[lib]
+name = "bitfun_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "bitfun-desktop"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { workspace = true }
+serde_json = { workspace = true }
+
+[dependencies]
+# Internal crates
+bitfun-core = { path = "../../crates/core" }
+bitfun-transport = { path = "../../crates/transport", features = ["tauri-adapter"] }
+
+# Tauri
+tauri = { workspace = true }
+tauri-plugin-opener = { workspace = true }
+tauri-plugin-dialog = { workspace = true }
+tauri-plugin-fs = { workspace = true }
+tauri-plugin-log = { workspace = true }
+
+# Inherited from workspace
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+log = { workspace = true }
+chrono = { workspace = true }
+regex = { workspace = true }
+dirs = { workspace = true }
+once_cell = { workspace = true }
+similar = { workspace = true }
+dashmap = { workspace = true }
+ignore = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+win32job = { workspace = true }

@@ -1,0 +1,922 @@
+/**
+ * Event handling module
+ * Initializes event listeners and handles various Agentic events
+ */
+
+import { FlowChatStore } from '../../store/FlowChatStore';
+import { stateMachineManager } from '../../state-machine';
+import { SessionExecutionEvent, SessionExecutionState } from '../../state-machine/types';
+import { agenticEventListener, type AgenticEventCallbacks } from '../AgenticEventListener';
+import { 
+  generateTextChunkKey, 
+  generateToolEventKey,
+  parseEventKey,
+  type TextChunkEventData,
+  type ToolEventData
+} from '../EventBatcher';
+import { notificationService } from '../../../shared/notification-system';
+import { createLogger } from '@/shared/utils/logger';
+import type { FlowChatContext, DialogTurn, ModelRound, FlowToolItem } from './types';
+import { 
+  debouncedSaveDialogTurn, 
+  immediateSaveDialogTurn, 
+  saveDialogTurnToDisk 
+} from './PersistenceModule';
+import { 
+  processNormalTextChunkInternal, 
+  processThinkingChunkInternal,
+  processToolParamsPartialInternal,
+  processToolProgressInternal,
+  completeActiveTextItems
+} from './TextChunkModule';
+import { 
+  processToolEvent, 
+  handleToolExecutionProgress 
+} from './ToolEventModule';
+import {
+  routeTextChunkToToolCardInternal,
+  routeToolEventToToolCardInternal
+} from './SubagentModule';
+
+const log = createLogger('EventHandlerModule');
+
+/**
+ * Event filtering mechanism: determines if an event should be processed
+ */
+export function shouldProcessEvent(
+  sessionId: string,
+  turnId: string | null,
+  eventType: 'data' | 'control' | 'state_sync'
+): boolean {
+  const machine = stateMachineManager.get(sessionId);
+  if (!machine) {
+    return false;
+  }
+
+  const currentState = machine.getCurrentState();
+  const context = machine.getContext();
+
+  if (eventType === 'state_sync') {
+    return true;
+  }
+
+  if (eventType === 'control') {
+    if (currentState === SessionExecutionState.IDLE || currentState === SessionExecutionState.ERROR) {
+      return true;
+    }
+    return false;
+  }
+
+  if (currentState !== SessionExecutionState.PROCESSING) {
+    return false;
+  }
+
+  if (turnId && context.currentDialogTurnId !== turnId) {
+    log.debug('Event filtered: turnId mismatch', {
+      sessionId,
+      eventTurnId: turnId,
+      currentTurnId: context.currentDialogTurnId,
+      currentState
+    });
+    return false;
+  }
+
+  return true;
+}
+
+/**
+ * Map backend state to frontend state
+ */
+export function mapBackendStateToFrontend(backendState: any): SessionExecutionState {
+  if (typeof backendState === 'object' && backendState !== null) {
+    if ('Idle' in backendState) {
+      return SessionExecutionState.IDLE;
+    }
+    if ('Processing' in backendState) {
+      return SessionExecutionState.PROCESSING;
+    }
+    if ('Error' in backendState) {
+      return SessionExecutionState.ERROR;
+    }
+  }
+  
+  if (typeof backendState === 'string') {
+    switch (backendState) {
+      case 'Idle':
+      case 'Completed':
+      case 'Cancelled':
+        return SessionExecutionState.IDLE;
+        
+      case 'Processing':
+      case 'WaitingForToolResponse':
+      case 'Paused':
+        return SessionExecutionState.PROCESSING;
+        
+      case 'Error':
+        return SessionExecutionState.ERROR;
+        
+      default:
+        log.warn('Unknown backend state', { backendState });
+        return SessionExecutionState.IDLE;
+    }
+  }
+  
+  log.warn('Unable to parse backend state', { backendState });
+  return SessionExecutionState.IDLE;
+}
+
+/**
+ * Initialize global event listeners
+ */
+export async function initializeEventListeners(
+  context: FlowChatContext,
+  onTodoWriteResult: (sessionId: string, turnId: string, result: any) => void
+): Promise<void> {
+  const { listen } = await import('@tauri-apps/api/event');
+  await listen('backend-event-toolexecutionprogress', (event: any) => {
+    handleToolExecutionProgress(event.payload);
+  });
+
+  const callbacks: AgenticEventCallbacks = {
+    onSessionStateChanged: (event) => {
+      handleSessionStateChanged(event);
+    },
+    onDialogTurnStarted: (event) => {
+      handleDialogTurnStarted(context, event);
+    },
+    onTextChunk: (event) => {
+      handleTextChunk(context, event);
+    },
+    onToolEvent: (event) => {
+      handleToolEvent(context, event, onTodoWriteResult);
+    },
+    onModelRoundStarted: (event) => {
+      handleModelRoundStart(context, event);
+    },
+    onDialogTurnCompleted: (event) => {
+      handleDialogTurnComplete(context, event, onTodoWriteResult);
+    },
+    onDialogTurnFailed: (event) => {
+      handleDialogTurnFailed(context, event);
+    },
+    onDialogTurnCancelled: (event) => {
+      handleDialogTurnCancelled(context, event, onTodoWriteResult);
+    },
+    onTokenUsageUpdated: (event) => {
+      handleTokenUsageUpdate(event);
+    },
+    onContextCompressionStarted: (event) => {
+      handleCompressionStarted(context, event);
+    },
+    onContextCompressionCompleted: (event) => {
+      handleCompressionCompleted(context, event);
+    },
+    onContextCompressionFailed: (event) => {
+      handleCompressionFailed(context, event);
+    }
+  };
+
+  await agenticEventListener.startListening(callbacks);
+}
+
+/**
+ * Handle backend session state sync event
+ */
+function handleSessionStateChanged(event: any): void {
+  const { sessionId, newState } = event;
+  
+  const machine = stateMachineManager.get(sessionId);
+  if (!machine) {
+    log.debug('State sync: state machine not found', { sessionId });
+    return;
+  }
+  
+  const frontendState = mapBackendStateToFrontend(newState);
+  const currentFrontendState = machine.getCurrentState();
+  
+  const context = machine.getContext();
+  (context as any).backendSyncedAt = Date.now();
+  
+  if (currentFrontendState !== frontendState) {
+    log.warn('Frontend and backend state mismatch', {
+      sessionId,
+      frontend: currentFrontendState,
+      backend: frontendState,
+      rawBackendState: newState
+    });
+  }
+}
+
+/**
+ * Handle dialog turn started event
+ */
+function handleDialogTurnStarted(context: FlowChatContext, event: any): void {
+  const { sessionId, turnId, subagentParentInfo } = event;
+
+  if (subagentParentInfo) {
+    return;
+  }
+
+  const store = FlowChatStore.getInstance();
+  const state = store.getState();
+  const session = state.sessions.get(sessionId);
+  
+  if (!session) {
+    log.debug('Session not found', { sessionId, sessionsCount: state.sessions.size });
+    return;
+  }
+
+  const dialogTurn = session.dialogTurns.find((turn: DialogTurn) => turn.id === turnId);
+  if (!dialogTurn) {
+    log.debug('Backend turnId does not match frontend', { turnId, sessionId });
+    return;
+  }
+}
+
+/**
+ * Handle text chunk event
+ */
+function handleTextChunk(context: FlowChatContext, event: any): void {
+  const { sessionId, turnId, roundId, text, contentType = 'text', subagentParentInfo } = event;
+  
+  const parentSessionId = subagentParentInfo?.sessionId;
+  const parentTurnId = subagentParentInfo?.dialogTurnId;
+  
+  const targetSessionId = parentSessionId || sessionId;
+  const targetTurnId = parentTurnId || turnId;
+  
+  if (!shouldProcessEvent(targetSessionId, targetTurnId, 'data')) {
+    return;
+  }
+  
+  const store = FlowChatStore.getInstance();
+  const session = store.getState().sessions.get(targetSessionId);
+  
+  if (!session) {
+    if (!context.contentBuffers.has(targetSessionId)) {
+      log.debug('Session not found (text chunk event)', { sessionId: targetSessionId });
+    }
+    return;
+  }
+
+  const dialogTurn = session.dialogTurns.find((turn: DialogTurn) => turn.id === targetTurnId);
+  if (!dialogTurn) {
+    log.debug('Dialog turn not found', { turnId: targetTurnId });
+    return;
+  }
+
+  if (!subagentParentInfo) {
+    const currentState = stateMachineManager.getCurrentState(sessionId);
+    if (currentState === SessionExecutionState.PROCESSING) {
+      stateMachineManager.transition(sessionId, SessionExecutionEvent.TEXT_CHUNK_RECEIVED, {
+        content: text,
+      });
+    }
+  }
+
+  const eventData: TextChunkEventData = {
+    sessionId,
+    turnId,
+    roundId,
+    text,
+    contentType: contentType as 'text' | 'thinking',
+    subagentParentInfo
+  };
+  
+  const key = generateTextChunkKey(eventData);
+  
+  context.eventBatcher.add(
+    key,
+    eventData,
+    'accumulate',
+    (existing, incoming) => ({
+      ...existing,
+      text: existing.text + incoming.text
+    })
+  );
+}
+
+/**
+ * Process batched events
+ */
+export function processBatchedEvents(
+  context: FlowChatContext,
+  events: Array<{ key: string; payload: any }>,
+  onTodoWriteResult: (sessionId: string, turnId: string, result: any) => void
+): void {
+  if (events.length === 0) return;
+  
+  context.flowChatStore.beginSilentMode();
+  
+  try {
+    for (const { key, payload } of events) {
+      const parsed = parseEventKey(key);
+      if (!parsed) continue;
+      
+      const { isSubagent, eventType } = parsed;
+      
+      if (eventType === 'text') {
+        if (isSubagent) {
+          const { sessionId, turnId, roundId, text, contentType, subagentParentInfo } = payload;
+          const parentSessionId = subagentParentInfo?.sessionId;
+          const parentToolId = subagentParentInfo?.toolCallId;
+          
+          if (parentSessionId && parentToolId) {
+            routeTextChunkToToolCardInternal(context, parentSessionId, parentToolId, {
+              sessionId,
+              turnId,
+              roundId,
+              text,
+              contentType
+            });
+          }
+        } else {
+          const { sessionId, turnId, roundId, text, contentType } = payload;
+          if (contentType === 'thinking') {
+            processThinkingChunkInternal(context, sessionId, turnId, roundId, text);
+          } else {
+            processNormalTextChunkInternal(context, sessionId, turnId, roundId, text);
+          }
+          
+          debouncedSaveDialogTurn(context, sessionId, turnId, 2000);
+        }
+      } else if (eventType === 'tool:params') {
+        if (isSubagent) {
+          const { subagentParentInfo } = payload;
+          const parentSessionId = subagentParentInfo?.sessionId;
+          const parentToolId = subagentParentInfo?.toolCallId;
+          
+          if (parentSessionId && parentToolId) {
+            routeToolEventToToolCardInternal(context, parentSessionId, parentToolId, payload, onTodoWriteResult);
+          }
+        } else {
+          const { sessionId, turnId, toolEvent } = payload;
+          processToolParamsPartialInternal(context, sessionId, turnId, toolEvent);
+        }
+      } else if (eventType === 'tool:progress') {
+        if (isSubagent) {
+          const { subagentParentInfo } = payload;
+          const parentSessionId = subagentParentInfo?.sessionId;
+          const parentToolId = subagentParentInfo?.toolCallId;
+          
+          if (parentSessionId && parentToolId) {
+            routeToolEventToToolCardInternal(context, parentSessionId, parentToolId, payload, onTodoWriteResult);
+          }
+        } else {
+          const { sessionId, turnId, toolEvent } = payload;
+          processToolProgressInternal(context, sessionId, turnId, toolEvent);
+        }
+      }
+    }
+  } finally {
+    context.flowChatStore.endSilentMode();
+  }
+}
+
+/**
+ * Handle tool event
+ */
+function handleToolEvent(
+  context: FlowChatContext,
+  event: any,
+  onTodoWriteResult: (sessionId: string, turnId: string, result: any) => void
+): void {
+  const { sessionId, turnId, toolEvent, subagentParentInfo } = event;
+  
+  const parentSessionId = subagentParentInfo?.sessionId;
+  const parentToolId = subagentParentInfo?.toolCallId;
+  const parentTurnId = subagentParentInfo?.dialogTurnId;
+  
+  const targetSessionId = parentSessionId || sessionId;
+  const targetTurnId = parentTurnId || turnId;
+  
+  if (!shouldProcessEvent(targetSessionId, targetTurnId, 'data')) {
+    return;
+  }
+  
+  const eventData: ToolEventData = {
+    sessionId,
+    turnId,
+    toolEvent,
+    subagentParentInfo
+  };
+  
+  const keyInfo = generateToolEventKey(eventData);
+  
+  if (keyInfo) {
+    const { key, strategy } = keyInfo;
+    
+    if (strategy === 'accumulate') {
+      context.eventBatcher.add(
+        key,
+        eventData,
+        'accumulate',
+        (existing, incoming) => ({
+          ...existing,
+          toolEvent: {
+            ...existing.toolEvent,
+            params_partial: (existing.toolEvent.params_partial || '') + (incoming.toolEvent.params_partial || '')
+          }
+        })
+      );
+    } else {
+      context.eventBatcher.add(key, eventData, 'replace');
+    }
+    return;
+  }
+  
+  if (parentSessionId && parentToolId) {
+    import('./SubagentModule').then(({ routeToolEventToToolCard }) => {
+      routeToolEventToToolCard(context, parentSessionId, parentToolId, {
+        sessionId,
+        turnId,
+        toolEvent
+      }, onTodoWriteResult);
+    });
+  } else {
+    processToolEvent(context, sessionId, turnId, toolEvent, undefined, onTodoWriteResult);
+  }
+}
+
+/**
+ * Handle model round started event
+ */
+function handleModelRoundStart(context: FlowChatContext, event: any): void {
+  const { sessionId, turnId, roundId, roundIndex, subagentParentInfo } = event;
+
+  if (subagentParentInfo) {
+    return;
+  }
+  
+  if (!shouldProcessEvent(sessionId, turnId, 'data')) {
+    return;
+  }
+  
+  const store = FlowChatStore.getInstance();
+  const session = store.getState().sessions.get(sessionId);
+  
+  if (!session) {
+    log.debug('Session not found (model round start)', { sessionId });
+    return;
+  }
+
+  const dialogTurn = session.dialogTurns.find((turn: DialogTurn) => turn.id === turnId);
+  if (!dialogTurn) {
+    log.debug('Dialog turn not found (model round start)', { turnId });
+    return;
+  }
+
+  const currentState = stateMachineManager.getCurrentState(sessionId);
+  if (currentState === SessionExecutionState.PROCESSING) {
+    stateMachineManager.transition(sessionId, SessionExecutionEvent.MODEL_ROUND_START, {
+      modelRoundId: roundId,
+    });
+  }
+
+  completeActiveTextItems(context, sessionId, turnId);
+
+  const modelRound: ModelRound = {
+    id: roundId,
+    index: roundIndex || 0,
+    items: [],
+    isStreaming: true,
+    isComplete: false,
+    status: 'streaming',
+    startTime: Date.now()
+  };
+
+  context.flowChatStore.addModelRound(sessionId, turnId, modelRound);
+  
+  immediateSaveDialogTurn(context, sessionId, turnId);
+}
+
+/**
+ * Handle token usage update event
+ */
+function handleTokenUsageUpdate(event: any): void {
+  const { sessionId, inputTokens, outputTokens, totalTokens, maxContextTokens } = event;
+  
+  const store = FlowChatStore.getInstance();
+  const session = store.getState().sessions.get(sessionId);
+  
+  if (!session) {
+    log.debug('Session not found (token usage update)', { sessionId });
+    return;
+  }
+
+  store.updateTokenUsage(sessionId, {
+    inputTokens,
+    outputTokens,
+    totalTokens
+  });
+
+  if (maxContextTokens !== undefined && maxContextTokens !== null) {
+    store.updateSessionMaxContextTokens(sessionId, maxContextTokens);
+  }
+}
+
+/**
+ * Handle context compression started event
+ */
+function handleCompressionStarted(context: FlowChatContext, event: any): void {
+  const { sessionId, turnId, compressionId, trigger, tokensBefore, contextWindow, threshold } = event;
+  
+  log.info('Context compression started', {
+    sessionId, turnId, compressionId, trigger, tokensBefore, contextWindow, threshold
+  });
+  
+  const store = FlowChatStore.getInstance();
+  const session = store.getState().sessions.get(sessionId);
+  
+  if (!session) {
+    log.debug('Session not found (compression started)', { sessionId });
+    return;
+  }
+  
+  const dialogTurn = session.dialogTurns.find(turn => turn.id === turnId);
+  if (!dialogTurn) {
+    log.debug('Dialog turn not found (compression started)', { turnId });
+    return;
+  }
+  
+  const compressionItem: FlowToolItem = {
+    id: compressionId,
+    type: 'tool',
+    toolName: 'ContextCompression',
+    toolCall: {
+      input: {
+        trigger,
+        tokens_before: tokensBefore,
+        context_window: contextWindow,
+        threshold,
+      },
+      id: compressionId
+    },
+    timestamp: Date.now(),
+    status: 'running',
+    requiresConfirmation: false,
+    startTime: Date.now()
+  };
+  
+  let lastModelRound = dialogTurn.modelRounds[dialogTurn.modelRounds.length - 1];
+  if (!lastModelRound) {
+    const newRoundId = `round_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    lastModelRound = {
+      id: newRoundId,
+      index: 0,
+      items: [],
+      isStreaming: true,
+      isComplete: false,
+      status: 'streaming',
+      startTime: Date.now()
+    };
+    store.addModelRound(sessionId, turnId, lastModelRound);
+  }
+  
+  store.addModelRoundItem(sessionId, turnId, compressionItem, lastModelRound.id);
+}
+
+/**
+ * Handle context compression completed event
+ */
+function handleCompressionCompleted(context: FlowChatContext, event: any): void {
+  const { 
+    sessionId, turnId, compressionId, compressionCount, 
+    tokensBefore, tokensAfter, compressionRatio, durationMs
+  } = event;
+  
+  log.info('Context compression completed', {
+    sessionId, turnId, compressionId, compressionCount, 
+    tokensBefore, tokensAfter, compressionRatio, durationMs
+  });
+  
+  const store = FlowChatStore.getInstance();
+  
+  store.updateModelRoundItem(sessionId, turnId, compressionId, {
+    toolResult: {
+      result: {
+        compression_count: compressionCount,
+        tokens_before: tokensBefore,
+        tokens_after: tokensAfter,
+        compression_ratio: compressionRatio,
+        duration: durationMs,
+      },
+      success: true,
+      duration_ms: durationMs || 0
+    },
+    status: 'completed',
+    endTime: Date.now()
+  } as any);
+  
+  immediateSaveDialogTurn(context, sessionId, turnId);
+}
+
+/**
+ * Handle context compression failed event
+ */
+function handleCompressionFailed(context: FlowChatContext, event: any): void {
+  const { sessionId, turnId, compressionId, error } = event;
+  
+  log.error('Context compression failed', { sessionId, turnId, compressionId, error });
+  
+  const store = FlowChatStore.getInstance();
+  
+  store.updateModelRoundItem(sessionId, turnId, compressionId, {
+    toolResult: {
+      result: null,
+      success: false,
+      error,
+      duration_ms: 0
+    },
+    status: 'error',
+    endTime: Date.now()
+  } as any);
+  
+  immediateSaveDialogTurn(context, sessionId, turnId);
+}
+
+/**
+ * Handle dialog turn completed event
+ */
+function handleDialogTurnComplete(
+  context: FlowChatContext,
+  event: any,
+  onTodoWriteResult: (sessionId: string, turnId: string, result: any) => void
+): void {
+  const { sessionId, turnId, subagentParentInfo } = event;
+
+  if (subagentParentInfo) {
+    return;
+  }
+
+  const store = FlowChatStore.getInstance();
+  const session = store.getState().sessions.get(sessionId);
+  
+  if (!session) {
+    log.debug('Session not found (dialog turn complete)', { sessionId });
+    return;
+  }
+
+  if (context.eventBatcher.getBufferSize() > 0) {
+    context.eventBatcher.flushNow();
+  }
+
+  completeActiveTextItems(context, sessionId, turnId);
+  
+  const sessionContentBuffer = context.contentBuffers.get(sessionId);
+  if (sessionContentBuffer) {
+    sessionContentBuffer.clear();
+  }
+
+  context.flowChatStore.updateDialogTurn(sessionId, turnId, turn => {
+    const updatedModelRounds = turn.modelRounds.map((round) => {
+      if (round.isStreaming) {
+        return {
+          ...round,
+          isStreaming: false,
+          isComplete: true,
+          status: 'completed' as const,
+          endTime: Date.now()
+        };
+      }
+      return round;
+    });
+    
+    return {
+      ...turn,
+      modelRounds: updatedModelRounds,
+      status: 'completed' as const,
+      endTime: Date.now()
+    };
+  });
+
+  const currentState = stateMachineManager.getCurrentState(sessionId);
+  if (currentState === SessionExecutionState.PROCESSING) {
+    stateMachineManager.transition(sessionId, SessionExecutionEvent.STREAM_COMPLETE);
+  } else {
+    log.debug('Skipping STREAM_COMPLETE transition', { currentState, sessionId });
+  }
+  
+  const dialogTurn = session.dialogTurns.find(t => t.id === turnId);
+  if (dialogTurn) {
+    appendPlanDisplayItemsIfNeeded(context, sessionId, turnId, dialogTurn);
+  }
+  
+  saveDialogTurnToDisk(context, sessionId, turnId).catch(error => {
+    log.warn('Failed to save dialog turn (non-critical)', { sessionId, turnId, error });
+  });
+}
+
+/**
+ * Handle dialog turn failed event
+ */
+function handleDialogTurnFailed(context: FlowChatContext, event: any): void {
+  const { sessionId, turnId, error, subagentParentInfo } = event;
+
+  if (subagentParentInfo) {
+    return;
+  }
+  
+  log.error('Dialog turn failed', { sessionId, turnId, error });
+  
+  const store = FlowChatStore.getInstance();
+  const session = store.getState().sessions.get(sessionId);
+  
+  if (!session) {
+    log.debug('Session not found (dialog turn failed)', { sessionId });
+    return;
+  }
+  
+  const sessionActiveTextItems = context.activeTextItems.get(sessionId);
+  if (sessionActiveTextItems) {
+    sessionActiveTextItems.clear();
+  }
+  
+  const sessionContentBuffer = context.contentBuffers.get(sessionId);
+  if (sessionContentBuffer) {
+    sessionContentBuffer.clear();
+  }
+  
+  const dialogTurn = session.dialogTurns.find(turn => turn.id === turnId);
+  const hasSuccessfulModelRounds = dialogTurn && dialogTurn.modelRounds.length > 0;
+  
+  if (hasSuccessfulModelRounds) {
+    context.flowChatStore.updateDialogTurn(sessionId, turnId, turn => {
+      const updatedModelRounds = turn.modelRounds.map((round) => {
+        if (round.isStreaming) {
+          return {
+            ...round,
+            isStreaming: false,
+            isComplete: true,
+            status: 'error' as const,
+            endTime: Date.now()
+          };
+        }
+        return round;
+      });
+      
+      return {
+        ...turn,
+        modelRounds: updatedModelRounds,
+        status: 'error' as const,
+        error: error || 'Execution failed',
+        endTime: Date.now()
+      };
+    });
+    
+    saveDialogTurnToDisk(context, sessionId, turnId).catch(err => {
+      log.warn('Failed to save failed dialog turn', { sessionId, turnId, error: err });
+    });
+  } else {
+    if (dialogTurn?.userMessage?.content) {
+      const machine = stateMachineManager.get(sessionId);
+      if (machine) {
+        machine.setQueuedInput(dialogTurn.userMessage.content);
+      }
+    }
+    
+    context.flowChatStore.deleteDialogTurn(sessionId, turnId);
+  }
+  
+  const currentState = stateMachineManager.getCurrentState(sessionId);
+  if (currentState === SessionExecutionState.PROCESSING) {
+    stateMachineManager.transition(sessionId, SessionExecutionEvent.ERROR_OCCURRED, {
+      error: error || 'Execution failed'
+    });
+    stateMachineManager.transition(sessionId, SessionExecutionEvent.RESET);
+  }
+  
+  notificationService.error(error || 'Execution failed', {
+    title: 'Dialog execution failed',
+    duration: 5000
+  });
+}
+
+/**
+ * Handle dialog turn cancelled event
+ */
+function handleDialogTurnCancelled(
+  context: FlowChatContext,
+  event: any,
+  onTodoWriteResult: (sessionId: string, turnId: string, result: any) => void
+): void {
+  const { sessionId, turnId, subagentParentInfo } = event;
+
+  if (subagentParentInfo) {
+    return;
+  }
+  
+  log.info('Dialog turn cancelled', { sessionId, turnId });
+  
+  const store = FlowChatStore.getInstance();
+  const session = store.getState().sessions.get(sessionId);
+  
+  if (!session) {
+    log.debug('Session not found (dialog turn cancelled)', { sessionId });
+    return;
+  }
+  
+  const sessionActiveTextItems = context.activeTextItems.get(sessionId);
+  if (sessionActiveTextItems) {
+    sessionActiveTextItems.clear();
+  }
+  
+  const sessionContentBuffer = context.contentBuffers.get(sessionId);
+  if (sessionContentBuffer) {
+    sessionContentBuffer.clear();
+  }
+  
+  context.flowChatStore.updateDialogTurn(sessionId, turnId, turn => {
+    const updatedModelRounds = turn.modelRounds.map((round) => {
+      if (round.isStreaming) {
+        return {
+          ...round,
+          isStreaming: false,
+          isComplete: true,
+          status: 'cancelled' as const,
+          endTime: Date.now()
+        };
+      }
+      return round;
+    });
+    
+    return {
+      ...turn,
+      modelRounds: updatedModelRounds,
+      status: 'cancelled' as const,
+      endTime: Date.now()
+    };
+  });
+  
+  const dialogTurn = session.dialogTurns.find(t => t.id === turnId);
+  if (dialogTurn) {
+    appendPlanDisplayItemsIfNeeded(context, sessionId, turnId, dialogTurn);
+  }
+  
+  saveDialogTurnToDisk(context, sessionId, turnId).catch(err => {
+    log.warn('Failed to save cancelled dialog turn', { sessionId, turnId, error: err });
+  });
+}
+
+/**
+ * Detect .plan.md files modified by Edit/Write in dialog turn
+ */
+function detectModifiedPlanFiles(dialogTurn: DialogTurn): string[] {
+  const planFiles: string[] = [];
+  const createPlanFiles = new Set<string>();
+  
+  for (const round of dialogTurn.modelRounds) {
+    for (const item of round.items) {
+      if (item.type !== 'tool') continue;
+      const toolItem = item as FlowToolItem;
+      
+      if (toolItem.toolName === 'CreatePlan' && toolItem.toolResult?.success) {
+        const path = toolItem.toolResult.result?.plan_file_path;
+        if (path) createPlanFiles.add(path);
+      }
+      
+      if (['Edit', 'Write'].includes(toolItem.toolName) && toolItem.toolResult?.success) {
+        const input = toolItem.toolCall?.input;
+        const filePath = input?.file_path || input?.target_file || '';
+        if (filePath.endsWith('.plan.md')) {
+          planFiles.push(filePath);
+        }
+      }
+    }
+  }
+  
+  return [...new Set(planFiles)].filter(f => !createPlanFiles.has(f));
+}
+
+/**
+ * Append PlanDisplay tool items if plan files were modified
+ */
+function appendPlanDisplayItemsIfNeeded(
+  context: FlowChatContext,
+  sessionId: string,
+  turnId: string,
+  dialogTurn: DialogTurn
+): void {
+  const modifiedPlanFiles = detectModifiedPlanFiles(dialogTurn);
+  if (modifiedPlanFiles.length === 0) return;
+  
+  const lastRound = dialogTurn.modelRounds[dialogTurn.modelRounds.length - 1];
+  if (!lastRound) return;
+  
+  for (const planFilePath of modifiedPlanFiles) {
+    const planToolItem: FlowToolItem = {
+      id: `plan-display-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      type: 'tool',
+      toolName: 'CreatePlan',
+      toolCall: { input: {}, id: '' },
+      toolResult: {
+        result: { plan_file_path: planFilePath },
+        success: true
+      },
+      timestamp: Date.now(),
+      status: 'completed'
+    };
+    
+    context.flowChatStore.addModelRoundItem(sessionId, turnId, planToolItem, lastRound.id);
+  }
+}

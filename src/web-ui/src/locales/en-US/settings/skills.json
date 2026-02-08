@@ -1,0 +1,70 @@
+{
+  "title": "Skill Management",
+  "subtitle": "Manage user-level and project-level Skills",
+  "toolbar": {
+    "searchPlaceholder": "Search Skills...",
+    "refreshTooltip": "Refresh",
+    "addTooltip": "Add Skill"
+  },
+  "filters": {
+    "all": "All",
+    "user": "User",
+    "project": "Project"
+  },
+  "form": {
+    "title": "Add Skill",
+    "closeTooltip": "Close",
+    "level": {
+      "label": "Level",
+      "user": "User-level (Global)",
+      "project": "Project-level (Current Workspace)",
+      "projectDisabled": " - Need to open workspace first",
+      "currentWorkspace": "Current workspace: {{path}}"
+    },
+    "path": {
+      "label": "Skill Folder Path",
+      "placeholder": "Select or enter Skill folder path",
+      "browseTooltip": "Browse",
+      "hint": "Folder must contain a valid SKILL.md file"
+    },
+    "validating": "Validating...",
+    "actions": {
+      "cancel": "Cancel",
+      "add": "Add",
+      "adding": "Adding..."
+    }
+  },
+  "list": {
+    "loading": "Loading...",
+    "errorPrefix": "Failed to load: ",
+    "empty": {
+      "noMatch": "No matching Skills found",
+      "noSkills": "No Skills configured yet"
+    },
+    "item": {
+      "user": "User",
+      "project": "Project",
+      "deleteTooltip": "Delete",
+      "pathLabel": "Path:"
+    }
+  },
+  "deleteModal": {
+    "title": "Confirm Delete",
+    "message": "Are you sure you want to delete Skill \"{{name}}\"?",
+    "warning": "This will delete the Skill folder and cannot be undone.",
+    "cancel": "Cancel",
+    "delete": "Delete"
+  },
+  "messages": {
+    "invalidPath": "Please select a valid Skill folder",
+    "noWorkspace": "Please open a workspace first to add project-level Skill",
+    "addSuccess": "Skill \"{{name}}\" added successfully",
+    "addFailed": "Failed to add: {{error}}",
+    "deleteSuccess": "Skill \"{{name}}\" deleted",
+    "deleteFailed": "Failed to delete: {{error}}",
+    "toggleSuccess": "Skill \"{{name}}\" {{status}}",
+    "toggleFailed": "Failed to toggle: {{error}}",
+    "enabled": "enabled",
+    "disabled": "disabled"
+  }
+}

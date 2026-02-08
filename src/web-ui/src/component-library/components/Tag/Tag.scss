@@ -1,0 +1,177 @@
+@use '../../styles/tokens.scss' as tokens;
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: tokens.$size-gap-2;
+  padding: tokens.$size-gap-1 tokens.$size-gap-3;
+  border-radius: tokens.$size-radius-sm;
+  font-weight: tokens.$font-weight-medium;
+  transition: all tokens.$motion-base tokens.$easing-standard;
+  border: 1px solid transparent;
+  backdrop-filter: tokens.$blur-base;
+  -webkit-backdrop-filter: tokens.$blur-base;
+  position: relative;
+  overflow: hidden;
+
+  &::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -100%;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(90deg,
+      transparent,
+      rgba(255, 255, 255, 0.05),
+      rgba(255, 255, 255, 0.08),
+      rgba(255, 255, 255, 0.05),
+      transparent);
+    transition: left tokens.$motion-slow tokens.$easing-standard;
+    z-index: 1;
+    pointer-events: none;
+  }
+
+  &:hover::before {
+    left: 100%;
+  }
+
+  &--small {
+    font-size: tokens.$font-size-xs;
+    padding: 2px tokens.$size-gap-2;
+    gap: tokens.$size-gap-1;
+  }
+
+  &--medium {
+    font-size: tokens.$font-size-xs;
+    padding: tokens.$size-gap-1 tokens.$size-gap-3;
+  }
+
+  &--large {
+    font-size: tokens.$font-size-sm;
+    padding: tokens.$size-gap-2 tokens.$size-gap-4;
+  }
+
+  &--blue {
+    background: linear-gradient(135deg,
+      rgba(59, 130, 246, 0.10) 0%,
+      rgba(96, 165, 250, 0.08) 100%);
+    color: tokens.$color-accent-500;
+    border-color: rgba(59, 130, 246, 0.2);
+
+    &:hover {
+      @include tokens.liquid-glass-hover('blue');
+      transform: translateY(-1px) scale(1.02);
+    }
+  }
+
+  &--green {
+    background: linear-gradient(135deg,
+      rgba(52, 211, 153, 0.10) 0%,
+      rgba(34, 197, 94, 0.08) 100%);
+    color: tokens.$color-success;
+    border-color: rgba(52, 211, 153, 0.2);
+
+    &:hover {
+      background: linear-gradient(135deg,
+        rgba(52, 211, 153, 0.20) 0%,
+        rgba(34, 197, 94, 0.15) 100%);
+      transform: translateY(-1px) scale(1.02);
+    }
+  }
+
+  &--red {
+    background: linear-gradient(135deg,
+      rgba(239, 68, 68, 0.10) 0%,
+      rgba(220, 38, 38, 0.08) 100%);
+    color: tokens.$color-error;
+    border-color: rgba(239, 68, 68, 0.2);
+
+    &:hover {
+      background: linear-gradient(135deg,
+        rgba(239, 68, 68, 0.20) 0%,
+        rgba(220, 38, 38, 0.15) 100%);
+      transform: translateY(-1px) scale(1.02);
+    }
+  }
+
+  &--yellow {
+    background: linear-gradient(135deg,
+      rgba(245, 158, 11, 0.10) 0%,
+      rgba(234, 179, 8, 0.08) 100%);
+    color: tokens.$color-warning;
+    border-color: rgba(245, 158, 11, 0.2);
+
+    &:hover {
+      background: linear-gradient(135deg,
+        rgba(245, 158, 11, 0.20) 0%,
+        rgba(234, 179, 8, 0.15) 100%);
+      transform: translateY(-1px) scale(1.02);
+    }
+  }
+
+  &--purple {
+    background: linear-gradient(135deg,
+      rgba(139, 92, 246, 0.10) 0%,
+      rgba(124, 58, 237, 0.08) 100%);
+    color: tokens.$color-purple-500;
+    border-color: rgba(139, 92, 246, 0.2);
+
+    &:hover {
+      @include tokens.liquid-glass-hover('purple');
+      transform: translateY(-1px) scale(1.02);
+    }
+  }
+
+  &--gray {
+    background: linear-gradient(135deg,
+      tokens.$element-bg-medium 0%,
+      tokens.$element-bg-base 100%);
+    color: tokens.$color-text-secondary;
+    border-color: tokens.$border-medium;
+
+    &:hover {
+      background: linear-gradient(135deg,
+        tokens.$element-bg-strong 0%,
+        tokens.$element-bg-medium 100%);
+      color: tokens.$color-text-primary;
+      transform: translateY(-1px) scale(1.02);
+    }
+  }
+
+  &--rounded {
+    border-radius: tokens.$size-radius-full;
+  }
+
+  &__content {
+    line-height: 1;
+    position: relative;
+    z-index: 2;
+  }
+
+  &__close {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
+    padding: 0;
+    background: transparent;
+    border: none;
+    border-radius: 50%;
+    cursor: pointer;
+    transition: all tokens.$motion-base tokens.$easing-standard;
+    position: relative;
+    z-index: 2;
+
+    &:hover {
+      background: rgba(0, 0, 0, 0.15);
+      transform: scale(1.1);
+    }
+
+    svg {
+      width: 10px;
+      height: 10px;
+    }
+  }
+}

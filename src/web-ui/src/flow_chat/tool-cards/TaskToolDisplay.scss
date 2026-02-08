@@ -1,0 +1,360 @@
+/* Task tool card styles (BaseToolCard). */
+.task-tool-display {
+  .task-header-wrapper {
+    display: flex;
+    align-items: stretch;
+    gap: 10px;
+    width: 100%;
+  }
+
+  .task-icon-container {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 32px;
+    align-self: stretch;
+    color: var(--color-text-secondary, #6b7280);
+    position: relative;
+    
+    svg {
+      width: 28px;
+      height: 28px;
+      position: relative;
+      z-index: 1;
+      /* Mask the connector line behind the icon. */
+      background: var(--color-bg-flowchat, #121214);
+      border-radius: 4px;
+      padding: 3px;
+    }
+    
+    &.is-running {
+      color: var(--color-primary, #3b82f6);
+    }
+    
+    /* Expanded state: move icon to top and show connector line. */
+    &.prompt-visible {
+      align-items: flex-start;
+      padding-top: 2px;
+      
+      &::after {
+        content: '';
+        position: absolute;
+        top: 32px;
+        left: 50%;
+        transform: translateX(-50%);
+        width: 0;
+        height: calc(100% - 32px);
+        border-left: 1px dashed var(--border-base, rgba(255, 255, 255, 0.18));
+      }
+    }
+  }
+
+  .task-content-wrapper {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .task-header-main {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    min-height: 20px;
+  }
+
+  .task-action {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--color-text-primary);
+    flex-shrink: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .task-header-main--failed {
+    .task-action {
+      color: var(--color-text-muted, #6b7280);
+    }
+    
+    .agent-type-badge {
+      opacity: 0.6;
+    }
+  }
+
+  .task-failed-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 10px;
+    font-weight: 500;
+    flex-shrink: 0;
+    color: var(--color-text-muted, #6b7280);
+    background: rgba(107, 114, 128, 0.15);
+  }
+
+  .agent-type-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 500;
+    flex-shrink: 0;
+    color: var(--color-text-secondary, #9ca3af);
+    background: rgba(255, 255, 255, 0.1);
+    letter-spacing: 0.02em;
+  }
+
+  .task-header-extra {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    margin-left: auto;
+    flex-shrink: 0;
+  }
+
+  .task-status-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    margin-left: 4px;
+    padding-left: 4px;
+    border-left: 1px solid var(--border-base);
+    
+    .icon-completed {
+      color: var(--color-success);
+    }
+    
+    .loading {
+      width: 16px !important;
+      height: 16px !important;
+    }
+  }
+
+  .task-prompt-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 4px 6px;
+    margin: 0 -6px;  /* Offset padding to keep alignment. */
+    background: transparent;
+    font-size: 11px;
+    color: var(--color-text-secondary, #9ca3af);
+    line-height: 1.4;
+    border-radius: 4px;
+    cursor: default;
+    transition: background 0.15s ease;
+    
+    .task-prompt-content {
+      flex: 1;
+      min-width: 0;
+      word-break: break-word;
+      white-space: pre-wrap;
+    }
+    
+    &.task-prompt-row--clickable {
+      cursor: pointer;
+      
+      &:hover {
+        background: var(--color-bg-hover, rgba(255, 255, 255, 0.04));
+      }
+    }
+    
+    &.task-prompt-row--collapsed {
+      align-items: center;
+      
+      .task-prompt-content {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+    }
+    
+    .task-prompt-toggle-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 18px;
+      height: 18px;
+      padding: 0;
+      border: none;
+      border-radius: 4px;
+      background: transparent;
+      color: var(--color-text-muted);
+      cursor: pointer;
+      transition: all 0.15s ease;
+      flex-shrink: 0;
+      
+      &:hover {
+        background: var(--color-bg-hover, rgba(107, 114, 128, 0.12));
+        color: var(--color-text-primary, #e5e7eb);
+      }
+      
+      &--collapse {
+        align-self: flex-end;
+      }
+    }
+  }
+
+  .duration-text {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    color: var(--tool-card-text-muted);
+    font-size: 10px;
+    
+    svg {
+      flex-shrink: 0;
+    }
+  }
+
+  .open-panel-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--color-text-muted);
+    cursor: pointer;
+    transition: all 0.15s ease;
+    flex-shrink: 0;
+    
+    &:hover {
+      background: var(--color-bg-hover, rgba(255, 255, 255, 0.08));
+      color: var(--color-text-primary);
+    }
+  }
+
+  .section-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 8px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--tool-card-text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    opacity: 0.8;
+  }
+
+  .section-icon {
+    color: var(--color-text-muted, #9ca3af);
+    flex-shrink: 0;
+  }
+
+  .section-title {
+    flex: 1;
+  }
+
+  .task-expanded-content {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+
+  .error-content {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .error-message {
+    font-size: 12px;
+    color: var(--color-error, #ef4444);
+    line-height: 1.4;
+  }
+
+  .error-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    color: var(--tool-card-text-muted);
+  }
+
+  .error-task,
+  .error-agent {
+    flex-shrink: 0;
+  }
+
+  .error-separator {
+    color: var(--tool-card-border);
+  }
+
+  .tool-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 12px;
+  }
+
+  .confirm-button,
+  .reject-button {
+    padding: 6px 12px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    border: none;
+
+    &:disabled {
+      opacity: 0.5;
+      cursor: default;
+    }
+  }
+
+  .confirm-button {
+    background: var(--color-primary, #3b82f6);
+    color: white;
+
+    &:hover:not(:disabled) {
+      background: var(--color-primary-dark, #2563eb);
+    }
+  }
+
+  .reject-button {
+    background: var(--tool-card-bg-secondary);
+    color: var(--tool-card-text-primary);
+    border: 1px solid var(--tool-card-border);
+
+    &:hover:not(:disabled) {
+      background: var(--tool-card-bg-tertiary);
+      border-color: var(--color-error, #ef4444);
+      color: var(--color-error, #ef4444);
+    }
+  }
+}
+
+
+/* Square bottom corners when followed by subagent items. */
+/* FlowToolCard wraps in .flow-tool-card-wrapper, so select from parent. */
+.flow-tool-card-wrapper:has(+ .subagent-items-wrapper) {
+  .base-tool-card-wrapper.task-tool-display {
+    border-radius: 8px 8px 0 0 !important;
+  }
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

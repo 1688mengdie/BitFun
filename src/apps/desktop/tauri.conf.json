@@ -1,0 +1,27 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "BitFun",
+  "version": "0.1.0",
+  "identifier": "com.bitfun.desktop",
+  "build": {
+    "beforeDevCommand": "cd ../.. && npm run dev:web",
+    "devUrl": "http://localhost:1422",
+    "beforeBuildCommand": "cd ../.. && npm run build:web",
+    "frontendDist": "../../../dist"
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  },
+  "app": {
+    "windows": [],
+    "security": {
+      "csp": null
+    },
+    "withGlobalTauri": true
+  }
+}

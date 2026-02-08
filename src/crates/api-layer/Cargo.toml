@@ -1,0 +1,21 @@
+[package]
+name = "bitfun-api-layer"
+version = "0.1.0"
+description = "BitFun API Layer - Platform-agnostic business handlers"
+authors = ["BitFun Team"]
+edition = "2021"
+
+[lib]
+name = "bitfun_api_layer"
+
+[dependencies]
+# Internal crates
+bitfun-transport = { path = "../transport" }
+
+# Inherited from workspace
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+log = { workspace = true }
+uuid = { workspace = true }

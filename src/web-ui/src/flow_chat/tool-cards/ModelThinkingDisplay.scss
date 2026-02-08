@@ -1,0 +1,275 @@
+/**
+ * ModelThinking tool styles.
+ * Shows internal model reasoning.
+ */
+
+@use './_tool-card-common.scss';
+
+/* Minimal, borderless layout */
+.flow-thinking-item {
+  padding: 8px 0;
+  margin: 4px 0;
+  background: transparent;
+  border: none;
+  transition: all 0.2s ease;
+
+  &.streaming {
+    background: transparent;
+  }
+
+  &.collapsed {
+    background: transparent;
+    border: none;
+    padding: 4px 0;
+  }
+}
+
+.thinking-header {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+  height: 14px; /* Fixed height for alignment */
+}
+
+.thinking-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 12px;
+  height: 12px; /* Match Lucide icon size */
+  color: var(--tool-card-text-muted);
+  
+  svg {
+    display: block; /* Remove inline SVG extra space */
+    width: 12px;
+    height: 12px;
+  }
+}
+
+.thinking-label {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--tool-card-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  line-height: 12px; /* Match icon height */
+  height: 12px; /* Fixed height */
+}
+
+.thinking-collapsed-header {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+  height: 20px;
+  border-radius: 4px;
+  cursor: pointer;
+  background: transparent;
+
+  &:hover {
+    .thinking-label {
+      color: var(--tool-card-text-primary);
+    }
+  }
+  
+  .thinking-icon {
+    width: 12px;
+    height: 12px;
+    
+    svg {
+      display: block;
+      width: 12px;
+      height: 12px;
+    }
+  }
+  
+  .thinking-label {
+    line-height: 12px;
+    height: 12px;
+  }
+}
+
+/* Expand container with animation */
+.thinking-expand-container {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 0.25s ease-out;
+  
+  &--open {
+    grid-template-rows: 1fr;
+  }
+  
+  > .thinking-content-wrapper {
+    overflow: hidden;
+  }
+}
+
+.thinking-content {
+  font-size: 12px;
+  line-height: 1.6;
+  font-family: var(--tool-card-font-mono);
+  word-break: break-word;
+  white-space: pre-wrap;
+
+  &.streaming {
+    color: #9ca3af;
+    // Constrain height while streaming; scroll when overflow.
+    max-height: 300px;
+    overflow-y: auto;
+  }
+
+  &.expanded {
+    color: var(--tool-card-text-muted);
+    padding: 10px 12px;
+    background: transparent;
+    border: none;
+    border-radius: 6px;
+    margin-top: 0;
+    // No height limit when expanded.
+    max-height: none;
+    overflow-y: visible;
+    cursor: text;
+    user-select: text;
+    line-height: 1.4;
+
+  }
+}
+
+/* Content wrapper with fade gradients */
+.thinking-content-wrapper {
+  position: relative;
+  
+  /* Top fade gradient */
+  &::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 24px;
+    pointer-events: none;
+    z-index: 1;
+    opacity: 0;
+    transition: opacity 0.2s ease;
+    
+    background: linear-gradient(
+      to bottom,
+      var(--color-bg-primary, #121214) 0%,
+      color-mix(in srgb, var(--color-bg-primary, #121214) 80%, transparent) 40%,
+      color-mix(in srgb, var(--color-bg-primary, #121214) 40%, transparent) 70%,
+      transparent 100%
+    );
+  }
+  
+  /* Bottom fade gradient */
+  &::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 24px;
+    pointer-events: none;
+    z-index: 1;
+    opacity: 0;
+    transition: opacity 0.2s ease;
+    
+    background: linear-gradient(
+      to top,
+      var(--color-bg-primary, #121214) 0%,
+      color-mix(in srgb, var(--color-bg-primary, #121214) 80%, transparent) 40%,
+      color-mix(in srgb, var(--color-bg-primary, #121214) 40%, transparent) 70%,
+      transparent 100%
+    );
+  }
+  
+  /* Show gradients when content scrolls */
+  &.has-scroll {
+    &::before,
+    &::after {
+      opacity: 1;
+    }
+  }
+  
+  /* Hide top fade at the top */
+  &.at-top::before {
+    opacity: 0;
+  }
+  
+  /* Hide bottom fade at the bottom */
+  &.at-bottom::after {
+    opacity: 0;
+  }
+}
+
+.thinking-line {
+  padding: 1px 0;
+  color: var(--tool-card-text-secondary);
+  line-height: 1;
+}
+
+/* Streaming indicator with ink fade */
+.thinking-content--has-content {
+  -webkit-mask-image: linear-gradient(
+    90deg,
+    #000 0%,
+    #000 50%,
+    rgba(0, 0, 0, 0.7) 70%,
+    rgba(0, 0, 0, 0.4) 85%,
+    rgba(0, 0, 0, 0.15) 100%
+  );
+  mask-image: linear-gradient(
+    90deg,
+    #000 0%,
+    #000 50%,
+    rgba(0, 0, 0, 0.7) 70%,
+    rgba(0, 0, 0, 0.4) 85%,
+    rgba(0, 0, 0, 0.15) 100%
+  );
+  animation: thinking-ink-fade-pulse 2s ease-in-out infinite;
+}
+
+/* Ink fade pulse animation */
+@keyframes thinking-ink-fade-pulse {
+  0%, 100% {
+    -webkit-mask-image: linear-gradient(
+      90deg,
+      #000 0%,
+      #000 50%,
+      rgba(0, 0, 0, 0.7) 70%,
+      rgba(0, 0, 0, 0.4) 85%,
+      rgba(0, 0, 0, 0.15) 100%
+    );
+    mask-image: linear-gradient(
+      90deg,
+      #000 0%,
+      #000 50%,
+      rgba(0, 0, 0, 0.7) 70%,
+      rgba(0, 0, 0, 0.4) 85%,
+      rgba(0, 0, 0, 0.15) 100%
+    );
+  }
+  50% {
+    -webkit-mask-image: linear-gradient(
+      90deg,
+      #000 0%,
+      #000 55%,
+      rgba(0, 0, 0, 0.75) 75%,
+      rgba(0, 0, 0, 0.5) 90%,
+      rgba(0, 0, 0, 0.25) 100%
+    );
+    mask-image: linear-gradient(
+      90deg,
+      #000 0%,
+      #000 55%,
+      rgba(0, 0, 0, 0.75) 75%,
+      rgba(0, 0, 0, 0.5) 90%,
+      rgba(0, 0, 0, 0.25) 100%
+    );
+  }
+}
+

@@ -1,0 +1,12 @@
+[package]
+name = "tool-runtime"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+globset = { workspace = true }
+grep-regex = { workspace = true }
+grep-searcher = { workspace = true }
+ignore = { workspace = true }
+log = { workspace = true }
+vte = { workspace = true, features = ["ansi"] }

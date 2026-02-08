@@ -1,0 +1,262 @@
+/**
+ * Component library preview styles (dark theme)
+ */
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-family-sans, 'Noto Sans SC', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background: var(--color-bg-primary);
+  color: #e0e0e0;
+}
+
+.preview-app {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-bg-primary);
+  overflow: hidden;
+}
+
+.preview-header {
+  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+  color: #ffffff;
+  padding: 16px 24px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+  border-bottom: 1px solid #2a2a2a;
+}
+
+.preview-logo {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.preview-logo h1 {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 600;
+}
+
+.preview-version {
+  padding: 4px 12px;
+  background: rgba(102, 126, 234, 0.3);
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #a0b0ff;
+}
+
+.preview-container {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+}
+
+.preview-sidebar {
+  width: 280px;
+  background: #0a0a0a;
+  border-right: 1px solid #2a2a2a;
+  overflow-y: auto;
+  padding: 16px 0;
+}
+
+.preview-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.category-section {
+  margin-bottom: 8px;
+}
+
+.category-button {
+  width: 100%;
+  padding: 12px 24px;
+  background: transparent;
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+  color: #c0c0c0;
+  transition: all 0.2s;
+  text-align: left;
+}
+
+.category-button:hover {
+  background: #1a1a1a;
+  color: #ffffff;
+}
+
+.category-button.active {
+  background: #1a1a2e;
+  color: #8b9eff;
+}
+
+.category-name {
+  flex: 1;
+}
+
+.component-count {
+  background: #2a2a2a;
+  color: #888;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.category-button.active .component-count {
+  background: #667eea;
+  color: #ffffff;
+}
+
+.components-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
+  gap: 24px;
+  margin-top: 24px;
+  max-height: calc(100vh - 300px);
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 8px;
+}
+
+.component-card {
+  background: #0a0a0a;
+  border-radius: 12px;
+  border: 1px solid #1a1a1a;
+  overflow: visible;
+  transition: all 0.3s ease;
+  display: flex;
+  flex-direction: column;
+}
+
+.component-card:hover {
+  border-color: #2a2a2a;
+  box-shadow: 0 4px 16px rgba(102, 126, 234, 0.1);
+}
+
+.component-card-header {
+  padding: 20px;
+  border-bottom: 1px solid #1a1a1a;
+}
+
+.component-card-title {
+  margin: 0 0 8px 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: #ffffff;
+}
+
+.component-card-description {
+  margin: 0;
+  font-size: 13px;
+  color: #888;
+  line-height: 1.5;
+}
+
+.preview-main {
+  flex: 1;
+  padding: 32px;
+  overflow-y: auto;
+  background: var(--color-bg-primary);
+}
+
+/* Full-screen mode - remove padding to fill content */
+.preview-main--full {
+  padding: 0;
+}
+
+.component-header {
+  margin-bottom: 32px;
+}
+
+.component-title {
+  margin: 0 0 8px 0;
+  font-size: 32px;
+  font-weight: 700;
+  color: #ffffff;
+}
+
+.component-description {
+  margin: 0;
+  font-size: 16px;
+  color: #a0a0a0;
+  line-height: 1.6;
+}
+
+.component-preview {
+  padding: 20px;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.preview-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: #555;
+  margin-bottom: 12px;
+  letter-spacing: 0.5px;
+}
+
+.preview-canvas {
+  padding: 32px;
+  background: var(--color-bg-primary);
+  border-radius: 8px;
+  border: 1px dashed #333;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  min-height: 120px;
+  max-height: 600px;
+  overflow-y: auto;
+  overflow-x: auto;
+}
+
+.component-info {
+  padding: 20px;
+  border-top: 1px solid #1a1a1a;
+}
+
+.info-list {
+  margin: 0;
+  display: grid;
+  grid-template-columns: 60px 1fr;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.info-list dt {
+  font-weight: 600;
+  color: #888;
+}
+
+.info-list dd {
+  margin: 0;
+  color: #c0c0c0;
+  font-family: 'Courier New', monospace;
+}
+
+.empty-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 400px;
+  color: #666;
+  font-size: 16px;
+}

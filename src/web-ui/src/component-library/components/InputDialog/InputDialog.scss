@@ -1,0 +1,33 @@
+/**
+ * InputDialog styles
+ */
+.input-dialog {
+  padding: 4px;
+
+  &__description {
+    margin: 0 0 20px 0;
+    font-size: 14px;
+    line-height: 1.6;
+    color: var(--text-secondary);
+  }
+
+  &__input-wrapper {
+    margin-bottom: 24px;
+  }
+
+  &__actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 12px;
+    padding-top: 4px;
+  }
+}
+
+.modal--small .modal__content {
+  min-width: 320px;
+}
+
+.modal-overlay:has(.input-dialog) {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}

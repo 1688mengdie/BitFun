@@ -1,0 +1,169 @@
+/**
+ * Scroll-to-latest bar - minimal divider style.
+ * Fixed at the bottom of flowchat with height tied to ChatInput state.
+ */
+
+.scroll-to-latest-bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 10;
+  cursor: pointer;
+  pointer-events: none;
+  
+  // Default height: ChatInput focused but collapsed
+  height: 90px;
+  
+  transition: height 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+  
+  // ========== ChatInput collapsed ==========
+  &--input-collapsed {
+    height: 50px;
+  }
+  
+  // ========== ChatInput expanded ==========
+  &--input-expanded {
+    // Account for app headers and offsets
+    height: calc(100vh - 200px);
+    
+    // Keep content layer within visible area
+    .scroll-to-latest-bar__content {
+      top: auto;
+      bottom: 4px;
+    }
+  }
+  
+  // ========== Gradient background layer ==========
+  &__gradient {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    
+    // Transparent-to-background gradient using theme-aware flowchat color
+    background: linear-gradient(
+      to bottom,
+      transparent 0%,
+      color-mix(in srgb, var(--color-bg-flowchat) 20%, transparent) 20%,
+      color-mix(in srgb, var(--color-bg-flowchat) 50%, transparent) 40%,
+      color-mix(in srgb, var(--color-bg-flowchat) 80%, transparent) 60%,
+      var(--color-bg-flowchat) 85%
+    );
+    
+    // Subtle glass blur
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    
+    // Mask
+    mask-image: linear-gradient(
+      to bottom,
+      transparent 0%,
+      black 15%,
+      black 100%
+    );
+    -webkit-mask-image: linear-gradient(
+      to bottom,
+      transparent 0%,
+      black 15%,
+      black 100%
+    );
+  }
+  
+  // ========== Divider content layer ==========
+  &__content {
+    position: absolute;
+    top: 4px;
+    left: 0;
+    right: 0;
+    pointer-events: auto;
+    
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    padding: 0 24px;
+    
+    transition: opacity 0.2s ease;
+  }
+  
+  // ========== Divider ==========
+  &__line {
+    flex: 1;
+    max-width: 120px;
+    height: 1px;
+    background: linear-gradient(
+      90deg,
+      transparent 0%,
+      rgba(96, 165, 250, 0.35) 50%,
+      transparent 100%
+    );
+  }
+  
+  // ========== Hint text ==========
+  &__text {
+    font-size: 11px;
+    font-weight: 400;
+    color: rgba(96, 165, 250, 0.6);
+    white-space: nowrap;
+    letter-spacing: 0.05em;
+    user-select: none;
+    
+    transition: color 0.2s ease;
+  }
+  
+  // ========== Hover state ==========
+  &:hover {
+    .scroll-to-latest-bar__text {
+      color: rgba(96, 165, 250, 0.85);
+    }
+    
+    .scroll-to-latest-bar__line {
+      background: linear-gradient(
+        90deg,
+        transparent 0%,
+        rgba(96, 165, 250, 0.5) 50%,
+        transparent 100%
+      );
+    }
+  }
+  
+  // ========== Active state ==========
+  &:active {
+    .scroll-to-latest-bar__text {
+      color: rgba(96, 165, 250, 0.7);
+    }
+  }
+  
+  // ========== Focus state ==========
+  &:focus-visible {
+    outline: none;
+    
+    .scroll-to-latest-bar__text {
+      color: rgba(96, 165, 250, 0.9);
+    }
+  }
+}
+
+// ========== Responsive tweaks ==========
+@media (max-width: 768px) {
+  .scroll-to-latest-bar {
+    height: 80px;
+    
+    &--input-collapsed {
+      height: 45px;
+    }
+    
+    &__content {
+      gap: 10px;
+      padding: 0 16px;
+    }
+    
+    &__line {
+      max-width: 80px;
+    }
+    
+    &__text {
+      font-size: 10px;
+    }
+  }
+}

@@ -1,0 +1,86 @@
+{
+  "title": "Prompt 模板",
+  "subtitle": "管理和配置提示词模板",
+  "toolbar": {
+    "searchPlaceholder": "搜索模板...",
+    "createTooltip": "新建模板",
+    "exportTooltip": "导出配置",
+    "importTooltip": "导入配置"
+  },
+  "categories": {
+    "all": "全部",
+    "uncategorized": "未分类"
+  },
+  "empty": {
+    "noTemplates": "暂无模板",
+    "createFirst": "创建第一个模板"
+  },
+  "template": {
+    "contentLabel": "模板内容:",
+    "usageCount": "使用 {{count}} 次"
+  },
+  "actions": {
+    "edit": "编辑",
+    "copy": "复制",
+    "delete": "删除"
+  },
+  "shortcuts": {
+    "openPickerReminder": "打开模板选择器："
+  },
+  "modal": {
+    "titleEdit": "编辑模板",
+    "titleCreate": "新建模板",
+    "fields": {
+      "name": "模板名称 *",
+      "namePlaceholder": "例如: 代码重构",
+      "description": "描述",
+      "descriptionPlaceholder": "简短描述这个模板的用途",
+      "category": "分类",
+      "categoryPlaceholder": "例如: 代码优化",
+      "content": "模板内容 *",
+      "contentHint": "使用 {{name}} 创建占位符，{{name:默认值}} 添加默认值",
+      "contentPlaceholder": "请帮我重构{{funcName|函数名称}}函数...\n\n支持占位符语法：\n{{name}} - 基础占位符\n{{name:默认值}} - 带默认值\n{{name|描述}} - 带描述",
+      "shortcut": "快捷键（可选）",
+      "shortcutPlaceholder": "例如: Ctrl+Alt+1"
+    },
+    "actions": {
+      "cancel": "取消",
+      "save": "保存"
+    }
+  },
+  "picker": {
+    "searchPlaceholder": "搜索模板...",
+    "closeTooltip": "关闭 (Esc)",
+    "sectionRecent": "最近使用",
+    "sectionFavorites": "收藏",
+    "sectionSearchResults": "搜索结果",
+    "sectionAllTemplates": "全部模板",
+    "emptyNoMatch": "没有匹配的模板",
+    "emptyHint": "试试其他关键词，或在设置中创建新模板。",
+    "hintNavigate": "导航",
+    "hintSelect": "选择",
+    "hintClose": "关闭",
+    "matches": "匹配: {{fields}}",
+    "usageCount": "已使用 {{count}} 次"
+  },
+  "messages": {
+    "nameRequired": "请输入模板名称",
+    "contentRequired": "请输入模板内容",
+    "templateUpdated": "模板已更新",
+    "templateCreated": "模板已创建",
+    "operationFailed": "操作失败：{{error}}",
+    "confirmDelete": "确定要删除这个模板吗？",
+    "templateDeleted": "模板已删除",
+    "deleteFailed": "删除失败：{{error}}",
+    "templateCopied": "模板已复制",
+    "copyFailed": "复制失败：{{error}}",
+    "configExported": "配置已导出到：{{filePath}}",
+    "defaultDownloadDir": "浏览器默认下载目录",
+    "exportFailed": "导出失败：{{error}}",
+    "configImported": "配置已导入",
+    "importFailed": "导入失败：{{error}}",
+    "importInvalid": "导入失败：无效的配置文件",
+    "shortcutUpdated": "全局快捷键已更新",
+    "shortcutUpdateFailed": "更新失败：{{error}}"
+  }
+}

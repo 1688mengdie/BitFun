@@ -1,0 +1,251 @@
+/**
+ * Modal component styles
+ */
+@use '../../styles/tokens.scss' as tokens;
+
+
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.25);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  z-index: tokens.$z-modal;
+  animation: modal-overlay-fade 0.25s ease;
+}
+
+@keyframes modal-overlay-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+
+.modal {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-bg-primary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 14px;
+  box-shadow:
+    0 24px 48px rgba(0, 0, 0, 0.5),
+    0 0 0 1px rgba(255, 255, 255, 0.03);
+  max-height: calc(100vh - 48px);
+  overflow: hidden;
+  animation: modal-dialog-enter 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+
+
+  &--small {
+    width: 100%;
+    max-width: 420px;
+  }
+
+  &--medium {
+    width: 100%;
+    max-width: 560px;
+  }
+
+  &--large {
+    width: 100%;
+    max-width: 800px;
+    max-height: calc(100vh - 48px);
+  }
+
+
+  &--draggable {
+    cursor: default;
+    transition: box-shadow 0.2s ease;
+
+    &:hover {
+      box-shadow:
+        0 28px 56px rgba(0, 0, 0, 0.55),
+        0 0 0 1px rgba(255, 255, 255, 0.05);
+    }
+  }
+
+  &--dragging {
+    box-shadow:
+      0 32px 64px rgba(0, 0, 0, 0.6),
+      0 0 0 1px rgba(99, 102, 241, 0.2);
+    z-index: tokens.$z-modal-active;
+  }
+
+
+  &__header {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--border-subtle);
+    background: transparent;
+
+    &--draggable {
+      cursor: move;
+      user-select: none;
+      transition: background 0.2s ease;
+
+      &:hover {
+        background: var(--element-bg-subtle);
+      }
+    }
+  }
+
+  &__title {
+    margin: 0;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--color-text-secondary);
+  }
+
+
+  &__close {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    margin-left: auto;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    color: var(--color-text-muted);
+    cursor: pointer;
+    transition: all 0.2s ease;
+    outline: none;
+    flex-shrink: 0;
+
+    svg {
+      display: block;
+      width: 12px;
+      height: 12px;
+    }
+
+    &:hover {
+      background: var(--element-bg-subtle);
+      border-color: var(--border-subtle);
+      color: var(--color-text-primary);
+    }
+
+    &:active {
+      transform: scale(0.92);
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--color-accent-500);
+      outline-offset: 2px;
+    }
+  }
+
+
+  &__content {
+    flex: 1;
+    min-height: 0;
+    padding: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    color: var(--color-text-secondary);
+
+  }
+}
+
+
+@keyframes modal-dialog-enter {
+  from {
+    opacity: 0;
+    transform: translateY(20px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.modal--draggable,
+.modal--resizable {
+  animation: modal-overlay-fade 0.2s ease;
+}
+
+
+.modal--resizable {
+  &.modal--resizing {
+    user-select: none;
+    transition: none;
+
+    .modal__content {
+      pointer-events: none;
+    }
+  }
+}
+
+
+.modal__resize-handle {
+  position: absolute;
+  z-index: 10;
+
+  &--n, &--s {
+    left: 0;
+    right: 0;
+    height: 6px;
+    cursor: ns-resize;
+  }
+
+  &--n { top: 0; }
+  &--s { bottom: 0; }
+
+  &--w, &--e {
+    top: 0;
+    bottom: 0;
+    width: 6px;
+    cursor: ew-resize;
+  }
+
+  &--w { left: 0; }
+  &--e { right: 0; }
+
+  &--nw, &--ne, &--sw, &--se {
+    width: 12px;
+    height: 12px;
+  }
+
+  &--nw { top: 0; left: 0; cursor: nw-resize; }
+  &--ne { top: 0; right: 0; cursor: ne-resize; }
+  &--sw { bottom: 0; left: 0; cursor: sw-resize; }
+  &--se { bottom: 0; right: 0; cursor: se-resize; }
+
+  &:hover {
+    background-color: rgba(99, 102, 241, 0.15);
+  }
+}
+
+
+@media (max-width: 480px) {
+  .modal-overlay {
+    padding: 16px;
+  }
+
+  .modal {
+    max-height: calc(100vh - 32px);
+
+    &--small,
+    &--medium {
+      max-width: 100%;
+    }
+
+    &__header {
+      padding: 12px 14px;
+    }
+
+    &__title {
+      font-size: 14px;
+    }
+  }
+}

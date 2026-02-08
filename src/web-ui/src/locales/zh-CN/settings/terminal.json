@@ -1,0 +1,60 @@
+{
+  "title": "终端",
+  "subtitle": "终端配置与 CLI 工具管理",
+  "sections": {
+    "defaultTerminal": "默认终端",
+    "cliAgents": "CLI Agents"
+  },
+  "terminal": {
+    "refreshTooltip": "刷新可用终端列表",
+    "autoDetect": "自动检测 (推荐)",
+    "description": "新建终端时使用的默认 Shell 类型",
+    "placeholder": "选择默认终端",
+    "noShells": "未检测到可用的终端",
+    "warnings": {
+      "cmd": "CMD 不支持 Shell 集成，AI 命令将通过 PowerShell 执行。",
+      "gitBash": "Git Bash 安装 oh-my-zsh 后可能导致 Shell 集成失效，如遇异常建议切换至 PowerShell。"
+    }
+  },
+  "cliAgents": {
+    "description": "管理 AI 编程助手命令行工具，可在终端工坊中快速启动",
+    "refreshTooltip": "刷新 CLI Agents 状态",
+    "checking": "检测中...",
+    "available": "可用",
+    "notInstalled": "未安装",
+    "install": "安装",
+    "installing": "安装中...",
+    "installSessionName": "安装 {{name}}",
+    "installTabTitle": "安装 {{name}}",
+    "launch": "启动",
+    "visitWebsite": "访问 {{name}} 官网",
+    "openInHub": "在终端工坊中打开 {{name}}",
+    "needInstall": "请先安装此工具",
+    "needNpm": "需要先安装 Node.js (npm)"
+  },
+  "recommendations": {
+    "pwsh": {
+      "prefix": "推荐安装使用",
+      "name": "PowerShell Core",
+      "suffix": "以获得更好的跨平台体验和现代化功能",
+      "link": "前往下载"
+    },
+    "npm": {
+      "prefix": "部分工具需要",
+      "name": "Node.js (npm)",
+      "suffix": "才能安装",
+      "link": "前往下载"
+    }
+  },
+  "messages": {
+    "loading": "加载中...",
+    "loadFailed": "加载配置失败",
+    "updated": "默认终端已更新",
+    "saveFailed": "保存配置失败",
+    "refreshed": "已刷新可用终端列表",
+    "cliRefreshed": "已刷新 CLI Agents 状态",
+    "installingAgent": "正在安装 {{name}}，请在终端中查看进度",
+    "installAgentFailed": "安装 {{name}} 失败",
+    "hubCreated": "已在终端工坊中创建 {{name}} 终端"
+  }
+}

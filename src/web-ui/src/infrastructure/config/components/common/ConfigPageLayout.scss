@@ -1,0 +1,26 @@
+ 
+
+@use '../../../../component-library/styles/tokens' as *;
+@use '../../../../component-library/styles/_extended-mixins' as mixins;
+
+
+.bitfun-config-page-layout {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  font-family: var(--font-family-sans);
+}
+
+
+.bitfun-config-page-content {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 0;
+  min-height: 0;
+
+}
+

@@ -1,0 +1,51 @@
+[package]
+name = "bitfun-cli"
+version = "0.1.0"
+description = "BitFun CLI - Terminal User Interface"
+authors = ["BitFun Team"]
+edition = "2021"
+
+[[bin]]
+name = "bitfun-cli"
+path = "src/main.rs"
+
+[dependencies]
+# Internal crates
+bitfun-core = { path = "../../crates/core" }
+bitfun-events = { path = "../../crates/events" }
+
+# CLI framework
+clap = { version = "4", features = ["derive"] }
+
+# TUI framework (Terminal User Interface)
+ratatui = "0.28"
+crossterm = "0.28"
+
+# Config and serialization
+dirs = "5"
+toml = "0.8"
+
+# Session management
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+
+# Async trait
+async-trait = "0.1"
+
+# Unicode width calculation (for correct wide-char handling)
+unicode-width = "0.1"
+
+# Markdown parsing and rendering
+pulldown-cmark = "0.11"
+
+# Inherited from workspace
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[features]
+default = []
+

@@ -1,0 +1,311 @@
+@use '../../../component-library/styles/tokens.scss' as *;
+
+.bitfun-markdown-editor {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  background: var(--color-bg-flowchat);
+  color: var(--color-text-primary);
+  overflow: hidden;
+}
+
+.bitfun-markdown-editor-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  background: var(--color-bg-flowchat);
+  color: var(--color-text-primary);
+}
+
+.bitfun-markdown-editor-error {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  background: var(--color-bg-flowchat);
+  color: var(--color-text-primary);
+
+  .error-content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: $size-gap-4;
+    padding: $size-gap-8;
+    text-align: center;
+    background: $element-bg-base;
+    border-radius: $size-radius-lg;
+    border: 1px solid $border-base;
+    backdrop-filter: blur(8px);
+
+    .error-icon {
+      width: 48px;
+      height: 48px;
+      color: var(--color-error);
+    }
+
+    p {
+      margin: 0;
+      font-size: $font-size-sm;
+      color: var(--color-text-secondary);
+    }
+
+    .retry-button {
+      padding: $size-gap-2 $size-gap-4;
+      background: $button-bg-default;
+      color: var(--color-text-secondary);
+      border: 1px solid $button-border-default;
+      border-radius: $size-radius-base;
+      cursor: pointer;
+      font-size: $font-size-sm;
+      font-weight: $font-weight-medium;
+      transition: all $motion-base $easing-standard;
+      backdrop-filter: blur(8px);
+
+      &:hover {
+        background: $button-bg-hover;
+        border-color: $button-border-hover;
+        color: var(--color-text-primary);
+        transform: translateY(-1px);
+        box-shadow: $shadow-sm;
+      }
+
+      &:active {
+        transform: translateY(0);
+      }
+    }
+  }
+}
+
+// Markdown content styles
+.markdown-body {
+  color: var(--color-text-secondary);
+  font-family: $font-family-sans;
+  font-size: $font-size-sm;
+  line-height: $line-height-relaxed;
+
+  h1, h2, h3, h4, h5, h6 {
+    margin-top: $size-gap-6;
+    margin-bottom: $size-gap-4;
+    font-weight: $font-weight-semibold;
+    line-height: $line-height-tight;
+    color: var(--color-text-primary);
+  }
+
+  strong, b {
+    font-weight: $font-weight-bold;
+    color: #f59e0b;
+  }
+
+  h1 {
+    font-size: $font-size-3xl;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    padding-bottom: $size-gap-3;
+    text-align: center;
+    letter-spacing: 0.5px;
+  }
+
+  h2 {
+    font-size: $font-size-2xl;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+    padding-bottom: $size-gap-2;
+  }
+
+  h3 { font-size: $font-size-xl; }
+  h4 { font-size: $font-size-lg; }
+  h5 { font-size: $font-size-base; }
+  h6 { font-size: $font-size-sm; }
+
+  p {
+    margin-top: 0;
+    margin-bottom: $size-gap-4;
+  }
+
+  a {
+    color: var(--color-accent-500);
+    text-decoration: none;
+    transition: all $motion-fast $easing-standard;
+
+    &:hover {
+      color: var(--color-accent-600);
+      text-decoration: underline;
+    }
+  }
+
+  code {
+    padding: 0.2em 0.4em;
+    margin: 0;
+    font-size: 100%;
+    background-color: rgba(255, 255, 255, 0.08);
+    border-radius: $size-radius-sm;
+    font-family: $font-family-mono;
+    color: var(--color-accent-500);
+  }
+
+  pre {
+    padding: $size-gap-4;
+    overflow: auto;
+    font-size: 100%;
+    line-height: 1.45;
+    background-color: $element-bg-subtle;
+    border: 1px solid rgba(255, 255, 255, 0.03);
+    border-radius: $size-radius-base;
+    margin-bottom: $size-gap-4;
+
+    code {
+      padding: 0;
+      margin: 0;
+      background: transparent;
+      border: 0;
+      display: inline;
+      line-height: inherit;
+      word-wrap: normal;
+    }
+  }
+
+  blockquote {
+    padding: $size-gap-3 $size-gap-4;
+    color: var(--color-text-muted);
+    border-left: 3px solid rgba(255, 255, 255, 0.15);
+    margin: 0 0 $size-gap-4 0;
+    background: $element-bg-subtle;
+    border-radius: 0 $size-radius-base $size-radius-base 0;
+    font-style: italic;
+
+    > :first-child {
+      margin-top: 0;
+    }
+
+    > :last-child {
+      margin-bottom: 0;
+    }
+  }
+
+  ul, ol {
+    padding-left: 2em;
+    margin-top: 0;
+    margin-bottom: $size-gap-4;
+  }
+
+  li {
+    margin-bottom: $size-gap-1;
+
+    > p {
+      margin-top: $size-gap-4;
+    }
+  }
+
+  table {
+    border-spacing: 0;
+    border-collapse: collapse;
+    display: block;
+    width: max-content;
+    max-width: 100%;
+    overflow: auto;
+    margin-bottom: $size-gap-4;
+    border-radius: $size-radius-base;
+    overflow: hidden;
+    border: 1px solid rgba(255, 255, 255, 0.04);
+
+    th {
+      font-weight: $font-weight-semibold;
+      padding: $size-gap-2 $size-gap-3;
+      border: 1px solid rgba(255, 255, 255, 0.04);
+      background: $element-bg-soft;
+      color: var(--color-text-primary);
+    }
+
+    td {
+      padding: $size-gap-2 $size-gap-3;
+      border: 1px solid rgba(255, 255, 255, 0.03);
+    }
+
+    tr {
+      background-color: transparent;
+      border-top: 1px solid rgba(255, 255, 255, 0.03);
+      transition: background-color $motion-fast $easing-standard;
+
+      &:nth-child(2n) {
+        background-color: rgba(255, 255, 255, 0.01);
+      }
+
+      &:hover {
+        background-color: $element-bg-subtle;
+      }
+    }
+  }
+
+  img {
+    max-width: 100%;
+    box-sizing: content-box;
+    background-color: transparent;
+    border-radius: $size-radius-base;
+  }
+
+  hr {
+    height: 1px;
+    padding: 0;
+    margin: $size-gap-6 0;
+    background: linear-gradient(90deg, 
+      transparent 0%, 
+      rgba(255, 255, 255, 0.1) 20%, 
+      rgba(255, 255, 255, 0.1) 80%, 
+      transparent 100%);
+    border: 0;
+    border-radius: 1px;
+  }
+
+  // Task list
+  input[type="checkbox"] {
+    margin: 0 0.2em 0.25em -1.6em;
+    vertical-align: middle;
+  }
+
+  // KaTeX math formula styles
+  .katex {
+    font-size: 1.1em;
+  }
+
+  .katex-display {
+    margin: 1em 0;
+  }
+
+  // Mermaid diagram styles
+  .mermaid-container {
+    margin: $size-gap-4 0;
+    padding: $size-gap-4;
+    background: $element-bg-subtle;
+    border: 1px solid rgba(255, 255, 255, 0.03);
+    border-radius: $size-radius-base;
+    overflow-x: auto;
+
+    &.mermaid-rendered {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+
+    svg {
+      max-width: 100%;
+      height: auto;
+    }
+  }
+
+  .mermaid-placeholder {
+    text-align: center;
+    color: var(--color-text-muted);
+    font-size: $font-size-sm;
+    padding: $size-gap-4;
+  }
+
+  .mermaid-error {
+    color: var(--color-error);
+    font-size: $font-size-sm;
+    padding: $size-gap-2;
+    text-align: center;
+  }
+}
+

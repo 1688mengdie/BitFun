@@ -1,0 +1,381 @@
+/**
+ * Files panel styles - SCSS version
+ * Follows BEM naming conventions and design token system
+ * Three display modes: compact/comfortable/expanded
+ * 
+ * Threshold configuration (from panelConfig.ts):
+ * - Compact mode: <140px
+ * - Comfortable mode: 140px - 360px
+ * - Expanded mode: >=360px
+ */
+
+@use '../../../component-library/styles/tokens.scss' as *;
+
+  // ==================== Files Panel Root Container ====================
+.bitfun-files-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--color-bg-primary);
+  container-type: inline-size;
+  container-name: files-panel;
+
+  &__sync-indicator {
+    display: inline-flex;
+    align-items: center;
+    font-size: 10px;
+    opacity: 0.6;
+    animation: subtle-spin 2s linear infinite;
+  }
+
+  @keyframes subtle-spin {
+    from {
+      transform: rotate(0deg);
+    }
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  &__view-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border: none;
+    border-radius: $size-radius-sm;
+    background: transparent;
+    color: var(--color-text-muted);
+    cursor: pointer;
+    transition: background $motion-base $easing-standard, 
+                color $motion-base $easing-standard;
+
+    &:hover {
+      background: var(--element-bg-soft);
+      color: var(--color-text-secondary);
+    }
+
+    svg {
+      flex-shrink: 0;
+    }
+  }
+
+  // ==================== Search Bar ====================
+  &__search {
+    padding: $size-gap-2;
+    border-bottom: 1px solid $border-base;
+    flex-shrink: 0;
+  }
+
+  &__search-content {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    overflow: hidden;
+  }
+
+  &__search-results {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  &__search-status {
+    display: flex;
+    align-items: center;
+    gap: $size-gap-2;
+    padding: $size-gap-2 $size-gap-3;
+    background: var(--element-bg-subtle);
+    border-bottom: 1px solid $border-base;
+    font-size: $font-size-xs;
+    color: $color-accent-600;
+    flex-shrink: 0;
+  }
+
+  &__search-spinner {
+    animation: bitfun-files-panel-spin 0.8s linear infinite;
+    flex-shrink: 0;
+  }
+  
+  &__search-options {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    flex-shrink: 0;
+    margin-left: $size-gap-1;
+    padding-right: $size-gap-1;
+    border-right: 1px solid $border-base;
+  }
+  
+  &__search-option {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border: none;
+    border-radius: $size-radius-sm;
+    background: transparent;
+    color: var(--color-text-muted);
+    cursor: pointer;
+    transition: all $motion-base $easing-standard;
+    
+    &:hover {
+      background: var(--element-bg-soft);
+      color: var(--color-text-secondary);
+    }
+    
+    &.active {
+      background: var(--color-accent-100);
+      color: var(--color-accent-700);
+      
+      &:hover {
+        background: var(--color-accent-200);
+      }
+    }
+  }
+
+  // ==================== Panel Content ====================
+  &__content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: var(--color-bg-primary);
+  }
+
+  &__main-content {
+    flex: 1;
+    overflow: hidden;
+  }
+
+  &__explorer {
+    height: 100%;
+    background: transparent;
+  }
+
+  // ==================== Loading State ====================
+  &__loading {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    color: var(--color-text-muted);
+    text-align: center;
+
+    p {
+      font-size: $font-size-sm;
+      color: var(--color-text-muted);
+      margin: 0;
+    }
+  }
+
+  &__loading-spinner {
+    width: 20px;
+    height: 20px;
+    border: 2px solid var(--element-bg-base);
+    border-top: 2px solid $color-accent-600;
+    border-radius: $size-radius-full;
+    animation: bitfun-files-panel-spin 1s linear infinite;
+    margin-bottom: $size-gap-3;
+  }
+
+  // ==================== Error State ====================
+  &__error {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 200px;
+    color: var(--color-error);
+    text-align: center;
+    padding: $size-gap-5;
+
+    p {
+      font-size: $font-size-sm;
+      margin: 0 0 $size-gap-3 0;
+    }
+  }
+
+  &__retry-button {
+    padding: $size-gap-1 $size-gap-3;
+    border: 1px solid $border-base;
+    border-radius: $size-radius-sm;
+    background: transparent;
+    color: var(--color-text-muted);
+    cursor: pointer;
+    transition: all $motion-base $easing-standard;
+    font-size: $font-size-xs;
+
+    &:hover {
+      background: var(--element-bg-soft);
+      border-color: $border-medium;
+      color: var(--color-text-secondary);
+    }
+  }
+
+  // ==================== Placeholder State ====================
+  &__placeholder {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    color: var(--color-text-muted);
+    text-align: center;
+    padding: $size-gap-5;
+
+    p {
+      font-size: $font-size-sm;
+      color: var(--color-text-muted);
+      margin: 0;
+    }
+  }
+
+  &__placeholder-icon {
+    margin-bottom: $size-gap-3;
+    opacity: $opacity-disabled;
+
+    svg {
+      color: var(--color-text-disabled);
+    }
+  }
+}
+
+// ==================== Animation Definitions ====================
+@keyframes bitfun-files-panel-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+// ==================== Container Query Responsive (Three Modes) ====================
+
+// Compact mode
+@container files-panel (max-width: 140px) {
+  .bitfun-files-panel {
+    &__search {
+      padding: 4px 6px;
+    }
+
+    &__search-options {
+      display: none;
+    }
+
+    &__search-status {
+      padding: 4px 6px;
+      font-size: 10px;
+      gap: 4px;
+    }
+
+    &__placeholder {
+      padding: 16px 8px;
+      
+      p {
+        font-size: 11px;
+      }
+    }
+
+    &__placeholder-icon svg {
+      width: 24px;
+      height: 24px;
+    }
+
+    &__loading {
+      p {
+        font-size: 11px;
+      }
+    }
+
+    &__loading-spinner {
+      width: 16px;
+      height: 16px;
+    }
+
+    &__error {
+      padding: 16px 8px;
+      
+      p {
+        font-size: 11px;
+      }
+    }
+
+    &__retry-button {
+      padding: 3px 8px;
+      font-size: 10px;
+    }
+  }
+}
+
+// Expanded mode
+@container files-panel (min-width: 360px) {
+  .bitfun-files-panel {
+    &__search {
+      padding: $size-gap-3 $size-gap-4;
+    }
+
+    &__search-options {
+      gap: 4px;
+      margin-left: $size-gap-2;
+      padding-right: $size-gap-2;
+    }
+
+    &__search-option {
+      width: 26px;
+      height: 26px;
+      
+      svg {
+        width: 16px;
+        height: 16px;
+      }
+    }
+
+    &__search-status {
+      padding: $size-gap-3 $size-gap-4;
+      font-size: $font-size-sm;
+    }
+
+    &__placeholder {
+      padding: $size-gap-8;
+      
+      p {
+        font-size: $font-size-base;
+      }
+    }
+
+    &__placeholder-icon svg {
+      width: 40px;
+      height: 40px;
+    }
+
+    &__loading {
+      p {
+        font-size: $font-size-base;
+      }
+    }
+
+    &__loading-spinner {
+      width: 24px;
+      height: 24px;
+    }
+
+    &__error {
+      padding: $size-gap-8;
+      
+      p {
+        font-size: $font-size-base;
+      }
+    }
+
+    &__retry-button {
+      padding: $size-gap-2 $size-gap-4;
+      font-size: $font-size-sm;
+    }
+  }
+}

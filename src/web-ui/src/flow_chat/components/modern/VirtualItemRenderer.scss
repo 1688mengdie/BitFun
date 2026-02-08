@@ -1,0 +1,24 @@
+/**
+ * Virtual item renderer wrapper styles.
+ * A4-like reading width with centered content.
+ */
+
+.virtual-item-wrapper {
+  width: 100%;
+  max-width: 900px; /* A4-like max width. */
+  margin: 0 auto; /* Center horizontally. */
+  box-sizing: border-box;
+  min-height: 1px; /* Prevent zero-size errors in react-virtuoso. */
+  padding: 0; /* Spacing handled by children. */
+  
+  // Responsive: medium screens.
+  @media (max-width: 1200px) {
+    max-width: 800px;
+  }
+  
+  // Responsive: small screens.
+  @media (max-width: 768px) {
+    max-width: 100%;
+  }
+}
+

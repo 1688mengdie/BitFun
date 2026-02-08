@@ -1,0 +1,45 @@
+{
+  "title": "Tool Settings",
+  "subtitle": "Tool execution configuration and available tool list",
+  "config": {
+    "autoExecute": "Auto Execute",
+    "confirmTimeout": "Confirm Timeout",
+    "executionTimeout": "Execution Timeout",
+    "seconds": "sec"
+  },
+  "filters": {
+    "all": "All",
+    "readonly": "Read-only",
+    "writable": "Writable"
+  },
+  "search": {
+    "placeholder": "Search tools..."
+  },
+  "badges": {
+    "readonly": "Read-only",
+    "writable": "Writable",
+    "concurrent": "Concurrency Safe",
+    "permission": "Requires Permission"
+  },
+  "properties": {
+    "title": "Tool Properties",
+    "readonlyMode": "Read-only Mode",
+    "concurrencySafe": "Concurrency Safe",
+    "needsPermission": "Requires Permission",
+    "yes": "Yes",
+    "no": "No"
+  },
+  "schema": {
+    "title": "Input Parameter Schema"
+  },
+  "messages": {
+    "loading": "Loading...",
+    "loadFailed": "Load failed",
+    "retry": "Retry",
+    "noTools": "No available tools",
+    "noMatchingTools": "No matching tools found",
+    "autoExecuteEnabled": "Auto execute enabled",
+    "autoExecuteDisabled": "Auto execute disabled",
+    "saveFailed": "Save failed"
+  }
+}

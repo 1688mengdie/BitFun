@@ -1,0 +1,687 @@
+/**
+ * About dialog styles.
+ * Inspired by the startup screen right-side design.
+ */
+
+@use '../../../component-library/styles/tokens' as *;
+
+// ==================== Overlay ====================
+
+.bitfun-about-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: $z-modal;
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(16px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  animation: about-overlay-fade 0.25s ease;
+}
+
+@keyframes about-overlay-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+// ==================== Dialog shell ====================
+
+.bitfun-about-dialog {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-bg-primary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  box-shadow: 
+    0 32px 64px rgba(0, 0, 0, 0.6),
+    0 0 0 1px rgba(255, 255, 255, 0.03),
+    0 0 120px rgba(139, 92, 246, 0.08);
+  width: 416px;
+  max-width: calc(100vw - 48px);
+  min-height: 400px;
+  max-height: min(680px, calc(100vh - 48px));
+  overflow: hidden;
+  animation: about-dialog-enter 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes about-dialog-enter {
+  from {
+    opacity: 0;
+    transform: translateY(24px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+// ==================== Close button ====================
+
+.bitfun-about-dialog__close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 10;
+  background: transparent;
+  border: none;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  padding: 6px;
+  border-radius: 6px;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  
+  &:hover {
+    background: var(--element-bg-subtle);
+    color: var(--color-text-primary);
+  }
+  
+  &:active {
+    transform: scale(0.92);
+  }
+}
+
+// ==================== Content area ====================
+
+.bitfun-about-dialog__content {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0; // Important: allow flex children to shrink
+  overflow: hidden;
+}
+
+// ==================== Hero section ====================
+
+.bitfun-about-dialog__hero {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 32px 32px 24px;
+  text-align: center;
+  position: relative;
+  overflow: hidden;
+  
+  // Background glow effect
+  &::before {
+    content: '';
+    position: absolute;
+    top: -60%;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 300px;
+    height: 200px;
+    background: radial-gradient(ellipse, rgba(139, 92, 246, 0.1) 0%, transparent 70%);
+    filter: blur(40px);
+    pointer-events: none;
+    animation: about-glow-float 12s ease-in-out infinite;
+  }
+
+  &::after {
+    content: '';
+    position: absolute;
+    top: 20%;
+    right: 5%;
+    width: 100px;
+    height: 100px;
+    background: radial-gradient(circle, rgba(59, 130, 246, 0.06) 0%, transparent 70%);
+    filter: blur(25px);
+    pointer-events: none;
+    animation: about-glow-float 10s ease-in-out infinite reverse;
+  }
+}
+
+@keyframes about-glow-float {
+  0%, 100% { transform: translateX(-50%) translate(0, 0) scale(1); }
+  33% { transform: translateX(-50%) translate(15px, -10px) scale(1.03); }
+  66% { transform: translateX(-50%) translate(-10px, 8px) scale(0.98); }
+}
+
+// Cube container
+.bitfun-about-dialog__cube-wrapper {
+  position: relative;
+  z-index: 1;
+  margin-bottom: 24px;
+  animation: about-cube-enter 0.6s ease-out;
+}
+
+.bitfun-about-dialog__cube-icon {
+  filter: drop-shadow(0 4px 20px rgba(100, 180, 255, 0.15));
+  transition: transform 0.3s ease;
+  
+  &:hover {
+    transform: scale(1.05);
+  }
+}
+
+@keyframes about-cube-enter {
+  from {
+    opacity: 0;
+    transform: scale(0.8) rotateY(-20deg);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) rotateY(0deg);
+  }
+}
+
+.bitfun-about-dialog__title {
+  font-family: var(--font-family-sans);
+  font-size: 28px;
+  font-weight: 700;
+  margin: 0 0 10px 0;
+  letter-spacing: -0.03em;
+  color: var(--color-text-primary);
+  text-shadow: 0 0 40px rgba(100, 180, 255, 0.2);
+  position: relative;
+  z-index: 1;
+  animation: about-title-enter 0.5s ease-out 0.1s both;
+  line-height: 1.2;
+}
+
+@keyframes about-title-enter {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.bitfun-about-dialog__version-badge {
+  display: inline-flex;
+  align-items: center;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  font-weight: 400;
+  font-family: 'Consolas', 'Monaco', monospace;
+  letter-spacing: 0.02em;
+  position: relative;
+  z-index: 1;
+  animation: about-badge-enter 0.5s ease-out 0.15s both;
+}
+
+@keyframes about-badge-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+// Decorative divider
+.bitfun-about-dialog__divider {
+  width: 60px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent 0%, rgba(139, 92, 246, 0.25) 50%, transparent 100%);
+  margin-top: 18px;
+  position: relative;
+  z-index: 1;
+  animation: about-divider-enter 0.6s ease-out 0.2s both;
+}
+
+@keyframes about-divider-enter {
+  from {
+    opacity: 0;
+    width: 0;
+  }
+  to {
+    opacity: 1;
+    width: 60px;
+  }
+}
+
+// Decorative dots
+.bitfun-about-dialog__dots {
+  display: flex;
+  gap: 6px;
+  margin-top: 12px;
+  position: relative;
+  z-index: 1;
+  animation: about-dots-enter 0.6s ease-out 0.25s both;
+
+  span {
+    width: 3px;
+    height: 3px;
+    background: linear-gradient(135deg, #8B5CF6, #3B82F6);
+    border-radius: 50%;
+    opacity: 0.35;
+    animation: about-dot-pulse 2.5s ease-in-out infinite;
+
+    &:nth-child(2) { animation-delay: 0.25s; }
+    &:nth-child(3) { animation-delay: 0.5s; }
+  }
+}
+
+@keyframes about-dots-enter {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes about-dot-pulse {
+  0%, 100% { opacity: 0.25; transform: scale(1); }
+  50% { opacity: 0.6; transform: scale(1.3); }
+}
+
+// ==================== Scrollable area ====================
+
+.bitfun-about-dialog__scrollable {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 0 24px;
+  
+}
+
+// ==================== Info section ====================
+
+.bitfun-about-dialog__info-section {
+  margin-bottom: 16px;
+  animation: about-section-enter 0.4s ease-out 0.2s both;
+}
+
+@keyframes about-section-enter {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.bitfun-about-dialog__info-card {
+  padding: 10px 14px;
+  background: transparent;
+  border: 1px dashed var(--border-subtle);
+  border-radius: 8px;
+}
+
+.bitfun-about-dialog__info-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 5px 0;
+  min-height: 28px;
+  
+  &:first-child {
+    padding-top: 0;
+  }
+  
+  &:last-child {
+    padding-bottom: 0;
+  }
+}
+
+.bitfun-about-dialog__info-label {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--color-text-muted);
+  font-weight: 400;
+  opacity: 0.7;
+}
+
+.bitfun-about-dialog__info-value {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  font-weight: 400;
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  
+  &--mono {
+    font-family: 'Consolas', 'Monaco', monospace;
+    font-size: 10px;
+    opacity: 0.8;
+  }
+}
+
+.bitfun-about-dialog__info-value-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.bitfun-about-dialog__copy-btn {
+  flex-shrink: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  
+  &:hover {
+    background: var(--element-bg-subtle);
+    border-color: var(--border-subtle);
+    color: var(--color-accent-400);
+  }
+  
+  &:active {
+    transform: scale(0.9);
+  }
+}
+
+// ==================== Dependencies section ====================
+
+.bitfun-about-dialog__dependencies-section {
+  margin-bottom: 16px;
+  animation: about-section-enter 0.4s ease-out 0.25s both;
+}
+
+.bitfun-about-dialog__dependencies-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: transparent;
+  border: 1px dashed var(--border-subtle);
+  border-radius: 8px;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.25s ease;
+  
+  &:hover {
+    background: var(--element-bg-subtle);
+    border-color: var(--border-base);
+    border-style: solid;
+    color: var(--color-text-primary);
+    
+    svg {
+      color: var(--color-accent-500);
+    }
+  }
+  
+  span {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  svg {
+    color: var(--color-text-muted);
+    transition: all 0.2s ease;
+  }
+}
+
+.bitfun-about-dialog__dependencies-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 18px;
+  padding: 0 6px;
+  background: rgba(99, 102, 241, 0.1);
+  color: var(--color-accent-400);
+  font-size: 10px;
+  font-weight: 600;
+  border-radius: 9px;
+}
+
+.bitfun-about-dialog__dependencies-list {
+  margin-top: 8px;
+  padding: 4px;
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  animation: about-list-expand 0.25s ease-out;
+}
+
+@keyframes about-list-expand {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.bitfun-about-dialog__dependencies-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 4px;
+}
+
+.bitfun-about-dialog__dependency-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  transition: all 0.2s ease;
+  min-width: 0;
+  
+  &:hover {
+    background: var(--element-bg-subtle);
+    border-color: var(--border-subtle);
+    
+    .bitfun-about-dialog__dependency-icon {
+      background: rgba(99, 102, 241, 0.1);
+      
+      svg {
+        color: var(--color-accent-500);
+      }
+    }
+  }
+}
+
+.bitfun-about-dialog__dependency-icon {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--element-bg-subtle);
+  border-radius: 6px;
+  transition: all 0.2s ease;
+
+  svg {
+    width: 12px;
+    height: 12px;
+    color: var(--color-text-secondary);
+    transition: color 0.2s ease;
+  }
+}
+
+.bitfun-about-dialog__dependency-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.bitfun-about-dialog__dependency-name {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--color-text-primary);
+  font-family: 'Consolas', 'Monaco', monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bitfun-about-dialog__dependency-license {
+  font-size: 9px;
+  color: var(--color-text-muted);
+}
+
+.bitfun-about-dialog__dependency-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 5px;
+  font-size: 8px;
+  font-weight: 600;
+  border-radius: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  margin-left: auto;
+  flex-shrink: 0;
+  
+  // Frontend tag - blue
+  &--frontend {
+    background: rgba(59, 130, 246, 0.12);
+    color: #60A5FA;
+    border: 1px solid rgba(59, 130, 246, 0.2);
+  }
+  
+  // Backend tag - green
+  &--backend {
+    background: rgba(34, 197, 94, 0.12);
+    color: #4ADE80;
+    border: 1px solid rgba(34, 197, 94, 0.2);
+  }
+  
+  // General tag - purple
+  &--general {
+    background: rgba(168, 85, 247, 0.12);
+    color: #C084FC;
+    border: 1px solid rgba(168, 85, 247, 0.2);
+  }
+}
+
+// ==================== Footer ====================
+
+.bitfun-about-dialog__footer {
+  flex-shrink: 0;
+  padding: 16px 24px 20px;
+  text-align: center;
+  position: relative;
+  animation: about-section-enter 0.4s ease-out 0.3s both;
+  
+  &::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 24px;
+    right: 24px;
+    height: 1px;
+    background: linear-gradient(90deg, transparent 0%, var(--border-subtle) 50%, transparent 100%);
+  }
+}
+
+.bitfun-about-dialog__license {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+  margin: 0 0 6px 0;
+}
+
+.bitfun-about-dialog__copyright {
+  font-size: 10px;
+  color: var(--color-text-muted);
+  opacity: 0.6;
+  margin: 0;
+  letter-spacing: 0.02em;
+}
+
+// ==================== Responsive layout ====================
+
+@media (max-width: 580px) {
+  .bitfun-about-overlay {
+    padding: 16px;
+  }
+
+  .bitfun-about-dialog {
+    width: 100%;
+    min-height: 360px;
+    max-height: calc(100vh - 32px);
+  }
+
+  .bitfun-about-dialog__hero {
+    padding: 24px 20px 20px;
+  }
+
+  .bitfun-about-dialog__logo {
+    width: 60px;
+    height: 60px;
+    border-radius: 14px;
+  }
+
+  .bitfun-about-dialog__title {
+    font-size: 20px;
+  }
+
+  .bitfun-about-dialog__scrollable {
+    padding: 0 16px;
+  }
+
+  .bitfun-about-dialog__dependencies-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .bitfun-about-dialog__footer {
+    padding: 14px 16px 16px;
+
+    &::before {
+      left: 16px;
+      right: 16px;
+    }
+  }
+}
+
+// Extra-small height adjustments
+@media (max-height: 500px) {
+  .bitfun-about-dialog {
+    min-height: 320px;
+  }
+
+  .bitfun-about-dialog__hero {
+    padding: 20px 24px 16px;
+  }
+
+  .bitfun-about-dialog__logo-wrapper {
+    margin-bottom: 10px;
+  }
+
+  .bitfun-about-dialog__logo {
+    width: 56px;
+    height: 56px;
+  }
+
+  .bitfun-about-dialog__title {
+    font-size: 20px;
+    margin-bottom: 8px;
+  }
+
+  .bitfun-about-dialog__divider {
+    margin-top: 12px;
+  }
+
+  .bitfun-about-dialog__dots {
+    margin-top: 8px;
+  }
+
+  .bitfun-about-dialog__footer {
+    padding: 12px 24px 14px;
+  }
+}

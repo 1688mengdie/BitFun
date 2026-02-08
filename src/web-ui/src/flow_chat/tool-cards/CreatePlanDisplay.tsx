@@ -1,0 +1,609 @@
+/**
+ * Plan display components.
+ *
+ * PlanDisplay renders plan file data and supports view/build/refresh.
+ * CreatePlanDisplay maps toolItem data into PlanDisplay.
+ */
+
+import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
+import { FileText, Circle, Loader2, CheckCircle, CheckCircle2, PlayCircle, XCircle, ChevronDown, ChevronUp } from 'lucide-react';
+import type { ToolCardProps } from '../types/flow-chat';
+import { ideControl } from '@/shared/services/ide-control/api';
+import { flowChatManager } from '@/flow_chat/services/FlowChatManager';
+import { workspaceAPI } from '@/infrastructure/api/service-api/WorkspaceAPI';
+import { fileSystemService } from '@/tools/file-system/services/FileSystemService';
+import yaml from 'yaml';
+import { Tooltip } from '@/component-library';
+import { createLogger } from '@/shared/utils/logger';
+import './CreatePlanDisplay.scss';
+
+const log = createLogger('PlanDisplay');
+
+interface TodoWriteUpdateEvent {
+  sessionId: string;
+  turnId: string;
+  todos: Array<{ id: string; content: string; status: string }>;
+  merge: boolean;
+}
+
+interface PlanTodo {
+  id: string;
+  content: string;
+  status?: string;
+  dependencies?: string[];
+}
+
+interface PlanData {
+  name: string;
+  overview: string;
+  todos: PlanTodo[];
+  planFilePath: string;
+  planContent?: string;
+}
+
+// Module-level cache to keep refreshed data after unmount.
+// key: cacheKey (toolId or planFilePath), value: PlanData
+const planDataCache = new Map<string, PlanData>();
+
+// Track active builds by cacheKey to match TodoWrite events.
+const buildingPlans = new Map<string, Set<string>>();
+
+// Subscribers for cache updates, keyed by cacheKey.
+const cacheSubscribers = new Map<string, Set<(data: PlanData) => void>>();
+
+/**
+ * Subscribe to cache updates for a cacheKey.
+ */
+function subscribeToCacheUpdate(cacheKey: string, callback: (data: PlanData) => void): () => void {
+  if (!cacheSubscribers.has(cacheKey)) {
+    cacheSubscribers.set(cacheKey, new Set());
+  }
+  cacheSubscribers.get(cacheKey)!.add(callback);
+  
+  return () => {
+    const subscribers = cacheSubscribers.get(cacheKey);
+    if (subscribers) {
+      subscribers.delete(callback);
+      if (subscribers.size === 0) {
+        cacheSubscribers.delete(cacheKey);
+      }
+    }
+  };
+}
+
+function notifyCacheUpdate(cacheKey: string, data: PlanData): void {
+  const subscribers = cacheSubscribers.get(cacheKey);
+  if (subscribers) {
+    subscribers.forEach(callback => callback(data));
+  }
+}
+
+/**
+ * Module-level TodoWrite handler to keep cache updated after unmount.
+ */
+async function handleGlobalTodoWriteUpdate(event: Event): Promise<void> {
+  const customEvent = event as CustomEvent<TodoWriteUpdateEvent>;
+  const { todos: incomingTodos } = customEvent.detail;
+  
+  if (!incomingTodos.length) {
+    return;
+  }
+  
+  for (const [cacheKey, todoIds] of buildingPlans.entries()) {
+    const matchedTodos = incomingTodos.filter(t => todoIds.has(t.id));
+    if (matchedTodos.length === 0) {
+      continue;
+    }
+    
+    const cachedPlan = planDataCache.get(cacheKey);
+    if (!cachedPlan) {
+      log.warn('Cached plan data not found', { cacheKey });
+      continue;
+    }
+    
+    try {
+      const content = await workspaceAPI.readFileContent(cachedPlan.planFilePath);
+      
+      const frontmatterMatch = content.match(/^---\n([\s\S]*?)\n---/);
+      if (!frontmatterMatch) {
+        log.warn('Failed to parse plan file frontmatter', { filePath: cachedPlan.planFilePath });
+        continue;
+      }
+      
+      const parsed = yaml.parse(frontmatterMatch[1]);
+      const planContent = content.replace(/^---\n[\s\S]*?\n---\n*/, '').trim();
+      
+      const updatedTodos = (parsed.todos || []).map((todo: PlanTodo) => {
+        const incomingTodo = incomingTodos.find(t => t.id === todo.id);
+        if (incomingTodo) {
+          return { ...todo, status: incomingTodo.status };
+        }
+        return todo;
+      });
+      
+      const updatedFrontmatter = yaml.stringify({
+        ...parsed,
+        todos: updatedTodos
+      });
+      const updatedContent = `---\n${updatedFrontmatter}---\n\n${planContent}`;
+      
+      // Mark file as writing to avoid watcher feedback loops.
+      markFileWriting(cachedPlan.planFilePath);
+      await workspaceAPI.writeFileContent('', cachedPlan.planFilePath, updatedContent);
+      
+      const newPlanData: PlanData = {
+        name: parsed.name || cachedPlan.name,
+        overview: parsed.overview || cachedPlan.overview,
+        todos: updatedTodos,
+        planFilePath: cachedPlan.planFilePath,
+        planContent: planContent,
+      };
+      
+      planDataCache.set(cacheKey, newPlanData);
+      
+      notifyCacheUpdate(cacheKey, newPlanData);
+      
+      const allCompleted = updatedTodos.every((t: PlanTodo) => t.status === 'completed');
+      if (allCompleted) {
+        buildingPlans.delete(cacheKey);
+      }
+      
+    } catch (error) {
+      log.error('Failed to sync todo status', { cacheKey, error });
+    }
+  }
+}
+
+// Set up the global listener once.
+let isGlobalListenerSetup = false;
+function setupGlobalTodoWriteListener(): void {
+  if (isGlobalListenerSetup) return;
+  isGlobalListenerSetup = true;
+  
+  window.addEventListener('bitfun:todowrite-update', handleGlobalTodoWriteUpdate);
+}
+
+setupGlobalTodoWriteListener();
+
+// Clear build tracking when a dialog is cancelled.
+window.addEventListener('bitfun:dialog-cancelled', () => {
+  if (buildingPlans.size > 0) {
+    buildingPlans.clear();
+  }
+});
+
+// Track files being written to avoid watcher loops.
+const writingFiles = new Set<string>();
+
+/**
+ * Mark a file as being written.
+ */
+function markFileWriting(filePath: string): void {
+  const normalizedPath = filePath.replace(/\\/g, '/');
+  writingFiles.add(normalizedPath);
+  setTimeout(() => {
+    writingFiles.delete(normalizedPath);
+  }, 1000);
+}
+
+function isFileWriting(filePath: string): boolean {
+  const normalizedPath = filePath.replace(/\\/g, '/');
+  return writingFiles.has(normalizedPath);
+}
+
+// ==================== PlanDisplay core component ====================
+
+export interface PlanDisplayProps {
+  /** Full plan file path. */
+  planFilePath: string;
+  /** Initial name (optional, first render optimization). */
+  initialName?: string;
+  /** Initial overview (optional, first render optimization). */
+  initialOverview?: string;
+  /** Initial todos (optional, first render optimization). */
+  initialTodos?: PlanTodo[];
+  /** Tool status (used for loading state). */
+  status?: 'pending' | 'preparing' | 'streaming' | 'running' | 'completed' | 'cancelled' | 'error' | 'analyzing';
+  /** Cache key (defaults to planFilePath). */
+  cacheKey?: string;
+}
+
+export const PlanDisplay: React.FC<PlanDisplayProps> = ({
+  planFilePath,
+  initialName = '',
+  initialOverview = '',
+  initialTodos = [],
+  status = 'completed',
+  cacheKey,
+}) => {
+  const { t } = useTranslation('flow-chat');
+  const effectiveCacheKey = cacheKey || planFilePath;
+  
+  const [refreshedData, setRefreshedData] = useState<PlanData | null>(() => {
+    return planDataCache.get(effectiveCacheKey) || null;
+  });
+  
+  // Initialize build state from the global tracker to survive unmounts.
+  const [isBuildStarted, setIsBuildStarted] = useState(() => {
+    return buildingPlans.has(effectiveCacheKey);
+  });
+  
+  const [isTodosExpanded, setIsTodosExpanded] = useState(false);
+
+  const hasAutoLoaded = useRef(false);
+
+  // Streaming may provide partial data before planFilePath is available.
+  const initialPlanData = useMemo((): PlanData | null => {
+    const hasAnyData = planFilePath || initialName || initialOverview || initialTodos.length > 0;
+    if (!hasAnyData) return null;
+    
+    return {
+      name: initialName,
+      overview: initialOverview,
+      todos: initialTodos,
+      planFilePath: planFilePath,
+      planContent: undefined,
+    };
+  }, [planFilePath, initialName, initialOverview, initialTodos]);
+
+  const planData = refreshedData || initialPlanData;
+
+  // Load latest content on mount and refresh on file changes.
+  useEffect(() => {
+    if (!planFilePath) {
+      return;
+    }
+
+    const normalizedPlanPath = planFilePath.replace(/\\/g, '/');
+    // Keep original format for FileSystemService.startsWith comparisons.
+    const dirPath = planFilePath.substring(0, planFilePath.lastIndexOf('\\') >= 0 
+      ? planFilePath.lastIndexOf('\\') 
+      : planFilePath.lastIndexOf('/'));
+
+    const loadFromFile = async () => {
+      // Skip refresh while writing to avoid feedback loops.
+      if (isFileWriting(planFilePath)) {
+        return;
+      }
+
+      try {
+        const content = await workspaceAPI.readFileContent(planFilePath);
+        
+        const frontmatterMatch = content.match(/^---\n([\s\S]*?)\n---/);
+        if (frontmatterMatch) {
+          const parsed = yaml.parse(frontmatterMatch[1]);
+          const planContent = content.replace(/^---\n[\s\S]*?\n---\n*/, '').trim();
+          
+          const newPlanData: PlanData = {
+            name: parsed.name || initialName,
+            overview: parsed.overview || initialOverview,
+            todos: parsed.todos || initialTodos,
+            planFilePath: planFilePath,
+            planContent: planContent,
+          };
+          
+          setRefreshedData(newPlanData);
+          planDataCache.set(effectiveCacheKey, newPlanData);
+        }
+      } catch (error) {
+        log.warn('Failed to load plan file', { planFilePath, error });
+      }
+    };
+
+    // Always load once on mount to capture changes during unmount.
+    if (!hasAutoLoaded.current) {
+      hasAutoLoaded.current = true;
+      loadFromFile();
+    }
+
+    let debounceTimer: NodeJS.Timeout | null = null;
+
+    const unwatch = fileSystemService.watchFileChanges(dirPath, (event) => {
+      const eventPath = event.path.replace(/\\/g, '/');
+      if (eventPath !== normalizedPlanPath) {
+        return;
+      }
+      
+      if (event.type !== 'modified') {
+        return;
+      }
+
+      // Extra 300ms debounce on the client (server already debounces 500ms).
+      if (debounceTimer) {
+        clearTimeout(debounceTimer);
+      }
+      debounceTimer = setTimeout(() => {
+        loadFromFile();
+      }, 300);
+    });
+
+    return () => {
+      unwatch();
+      if (debounceTimer) {
+        clearTimeout(debounceTimer);
+      }
+    };
+  }, [effectiveCacheKey, planFilePath, initialName, initialOverview, initialTodos]);
+
+  const remainingTodos = useMemo(() => {
+    if (!planData?.todos) return 0;
+    return planData.todos.filter(t => t.status !== 'completed').length;
+  }, [planData]);
+
+  // Build button status transitions: build -> building -> built.
+  const buildStatus = useMemo((): 'build' | 'building' | 'built' => {
+    if (planData?.todos?.length) {
+      const statuses = planData.todos.map(t => t.status);
+      if (statuses.every(s => s === 'completed')) {
+        return 'built';
+      }
+    }
+    if (isBuildStarted) {
+      return 'building';
+    }
+    return 'build';
+  }, [planData, isBuildStarted]);
+
+  useEffect(() => {
+    if (buildStatus === 'built') {
+      if (isBuildStarted) {
+        setIsBuildStarted(false);
+      }
+    }
+  }, [buildStatus, isBuildStarted]);
+  
+  useEffect(() => {
+    const unsubscribe = subscribeToCacheUpdate(effectiveCacheKey, (newData) => {
+      setRefreshedData(newData);
+    });
+    
+    return () => {
+      unsubscribe();
+    };
+  }, [effectiveCacheKey]);
+
+  // Reset build state on dialog cancel (keep todos to preserve progress).
+  useEffect(() => {
+    if (!isBuildStarted) return;
+
+    const handleDialogCancelled = () => {
+      if (buildStatus === 'built') return;
+      
+      setIsBuildStarted(false);
+    };
+
+    window.addEventListener('bitfun:dialog-cancelled', handleDialogCancelled);
+    return () => {
+      window.removeEventListener('bitfun:dialog-cancelled', handleDialogCancelled);
+    };
+  }, [isBuildStarted, buildStatus]);
+
+  // The global TodoWrite listener keeps cache updated after unmount.
+
+  const planFileName = useMemo(() => {
+    if (!planData?.planFilePath) return '';
+    const parts = planData.planFilePath.replace(/\\/g, '/').split('/');
+    return parts[parts.length - 1] || '';
+  }, [planData]);
+
+  const handleViewPlan = useCallback(() => {
+    if (planData?.planFilePath) {
+      ideControl.navigation.goToFile(planData.planFilePath);
+    }
+  }, [planData]);
+
+  const handleBuild = useCallback(async () => {
+    if (!planFilePath || buildStatus !== 'build') return;
+    
+    try {
+      const content = await workspaceAPI.readFileContent(planFilePath);
+      
+      const frontmatterMatch = content.match(/^---\n([\s\S]*?)\n---/);
+      if (!frontmatterMatch) {
+        throw new Error('Unable to parse plan file frontmatter');
+      }
+      
+      const parsed = yaml.parse(frontmatterMatch[1]);
+      const planContent = content.replace(/^---\n[\s\S]*?\n---\n*/, '').trim();
+      
+      const latestPlanData: PlanData = {
+        name: parsed.name || initialName,
+        overview: parsed.overview || initialOverview,
+        todos: parsed.todos || initialTodos,
+        planFilePath: planFilePath,
+        planContent: planContent,
+      };
+      
+      setRefreshedData(latestPlanData);
+      planDataCache.set(effectiveCacheKey, latestPlanData);
+
+      // Register build tracking so unmounted components still receive updates.
+      const todoIds = new Set(latestPlanData.todos.map(t => t.id));
+      buildingPlans.set(effectiveCacheKey, todoIds);
+      
+      setIsBuildStarted(true);
+
+      // Send message using the latest data.
+      const simpleTodos = latestPlanData.todos.map(t => ({ 
+        id: t.id, 
+        content: t.content,
+        status: t.status
+      }));
+
+      const message = `Implement the plan as specified, it is attached for your reference. Do NOT edit the plan file itself. To-do's from the plan have already been created. Do not create them again. Mark them as in_progress as you work, starting with the first one. Don't stop until you have completed all the to-dos.
+
+<attached_file path="${latestPlanData.planFilePath}">
+<plan>
+${planContent}
+</plan>
+<todos>
+${JSON.stringify(simpleTodos, null, 2)}
+</todos>
+</attached_file>`;
+
+      const displayMessage = `Build Plan: ${latestPlanData.name}`;
+      await flowChatManager.sendMessage(message, undefined, displayMessage, 'agentic', 'agentic');
+    } catch (error) {
+      log.error('Build failed', { cacheKey: effectiveCacheKey, planFilePath, error });
+      buildingPlans.delete(effectiveCacheKey);
+      setIsBuildStarted(false);
+    }
+  }, [planFilePath, buildStatus, effectiveCacheKey, initialName, initialOverview, initialTodos]);
+
+  const isLoading = status === 'preparing' || status === 'streaming' || status === 'running';
+
+  if (!planData) {
+    return (
+      <div className="create-plan-display create-plan-display--loading">
+        <div className="create-plan-header">
+          <Loader2 className="animate-spin" size={14} />
+          <span>{t('toolCards.plan.loadingPlan')}</span>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className={`create-plan-display status-${status}`}>
+      <Tooltip content={t('toolCards.plan.clickToOpenPlan')}>
+        <div 
+          className="create-plan-header create-plan-header--clickable"
+          onClick={handleViewPlan}
+        >
+          <div className="header-left">
+            <div className="file-icon-wrapper">
+              <FileText size={14} />
+            </div>
+            <span className="file-name">{planFileName}</span>
+          </div>
+        </div>
+      </Tooltip>
+
+      <div className="create-plan-content">
+        <h3 className="plan-title">{planData.name}</h3>
+        <p className="plan-overview">{planData.overview}</p>
+      </div>
+
+      {planData.todos && planData.todos.length > 0 && (
+        <div className={`create-plan-todos ${isTodosExpanded ? 'create-plan-todos--expanded' : ''}`}>
+          <div 
+            className="todos-header"
+            onClick={() => setIsTodosExpanded(!isTodosExpanded)}
+          >
+            <span className="todos-count">{t('toolCards.plan.remainingTodos', { count: remainingTodos })}</span>
+            <button className="todos-toggle-btn" type="button">
+              {isTodosExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+            </button>
+          </div>
+          {isTodosExpanded && (
+            <div className="todos-list">
+              {planData.todos.map((todo, index) => (
+                <div 
+                  key={todo.id || index} 
+                  className={`todo-item status-${todo.status || 'pending'}`}
+                >
+                  {todo.status === 'completed' && (
+                    <CheckCircle2 size={12} className="todo-icon todo-icon--completed" />
+                  )}
+                  {todo.status === 'in_progress' && (
+                    <PlayCircle size={12} className="todo-icon todo-icon--in-progress" />
+                  )}
+                  {(!todo.status || todo.status === 'pending') && (
+                    <Circle size={12} className="todo-icon todo-icon--pending" />
+                  )}
+                  {todo.status === 'cancelled' && (
+                    <XCircle size={12} className="todo-icon todo-icon--cancelled" />
+                  )}
+                  <span className="todo-content">{todo.content}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="create-plan-footer">
+        <button 
+          className="view-plan-btn"
+          onClick={handleViewPlan}
+          disabled={isLoading}
+        >
+          {t('toolCards.plan.viewPlan')}
+        </button>
+        <button 
+          className={`build-btn build-btn--${buildStatus}`}
+          onClick={handleBuild}
+          disabled={buildStatus !== 'build' || isLoading}
+        >
+          {buildStatus === 'building' ? (
+            <>
+              <Loader2 size={14} className="animate-spin" />
+              <span>{t('toolCards.plan.building')}</span>
+            </>
+          ) : buildStatus === 'built' ? (
+            <>
+              <CheckCircle size={14} />
+              <span>{t('toolCards.plan.built')}</span>
+            </>
+          ) : (
+            <span>{t('toolCards.plan.build')}</span>
+          )}
+        </button>
+      </div>
+    </div>
+  );
+};
+
+// ==================== CreatePlanDisplay tool wrapper ====================
+
+/**
+ * Tool wrapper that maps toolItem data into PlanDisplay.
+ */
+export const CreatePlanDisplay: React.FC<ToolCardProps> = ({
+  toolItem,
+}) => {
+  const { status, toolResult, partialParams, isParamsStreaming } = toolItem;
+  
+  const planFilePath = useMemo(() => {
+    if (isParamsStreaming && partialParams?.plan_file_path) {
+      return partialParams.plan_file_path;
+    }
+    return toolResult?.result?.plan_file_path || '';
+  }, [isParamsStreaming, partialParams, toolResult]);
+
+  const initialName = useMemo(() => {
+    if (isParamsStreaming && partialParams?.name) {
+      return partialParams.name;
+    }
+    return toolResult?.result?.name || '';
+  }, [isParamsStreaming, partialParams, toolResult]);
+
+  const initialOverview = useMemo(() => {
+    if (isParamsStreaming && partialParams?.overview) {
+      return partialParams.overview;
+    }
+    return toolResult?.result?.overview || '';
+  }, [isParamsStreaming, partialParams, toolResult]);
+
+  const initialTodos = useMemo(() => {
+    if (isParamsStreaming && partialParams?.todos && Array.isArray(partialParams.todos)) {
+      return partialParams.todos;
+    }
+    if (toolResult?.result?.todos && Array.isArray(toolResult.result.todos)) {
+      return toolResult.result.todos;
+    }
+    return [];
+  }, [isParamsStreaming, partialParams, toolResult]);
+  
+  return (
+    <PlanDisplay
+      planFilePath={planFilePath}
+      initialName={initialName}
+      initialOverview={initialOverview}
+      initialTodos={initialTodos}
+      status={status}
+      cacheKey={toolItem.id}
+    />
+  );
+};

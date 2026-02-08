@@ -1,0 +1,79 @@
+/* Large card layout styles */
+
+.large-card-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.large-card {
+  background: #0a0a0a;
+  border-radius: 12px;
+  border: 1px solid #1a1a1a;
+  overflow: hidden;
+  transition: all 0.3s ease;
+}
+
+.large-card:hover {
+  border-color: #2a2a2a;
+  box-shadow: 0 4px 20px rgba(102, 126, 234, 0.1);
+}
+
+.large-card-header {
+  padding: 20px 24px;
+  border-bottom: 1px solid #1a1a1a;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.large-card-info {
+  flex: 1;
+}
+
+.large-card-title {
+  margin: 0 0 8px 0;
+  font-size: 20px;
+  font-weight: 600;
+  color: #ffffff;
+}
+
+.large-card-description {
+  margin: 0;
+  font-size: 14px;
+  color: #888;
+  line-height: 1.5;
+}
+
+.expand-button {
+  padding: 8px 16px;
+  background: #1a1a2e;
+  border: 1px solid #2a2a3e;
+  border-radius: 6px;
+  color: #8b9eff;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.expand-button:hover {
+  background: #252545;
+  border-color: #3a3a5e;
+  color: #a0b0ff;
+}
+
+.large-card-preview {
+  padding: 24px;
+  background: var(--color-bg-primary);
+  min-height: 400px;
+  max-height: 500px;
+  overflow: auto;
+  transition: max-height 0.3s ease;
+}
+
+.large-card.expanded .large-card-preview {
+  max-height: 800px;
+}
