@@ -24,15 +24,47 @@ const ROOT_DIR = path.resolve(__dirname, '..');
  */
 function runSilent(command, cwd = ROOT_DIR) {
   try {
-    execSync(command, { 
+    const stdout = execSync(command, { 
       cwd, 
       stdio: 'pipe',
-      encoding: 'utf-8'
+      encoding: 'buffer'
     });
-    return true;
+    return { ok: true, stdout: decodeOutput(stdout), stderr: '' };
   } catch (error) {
-    return false;
+    const stdout = error.stdout ? decodeOutput(error.stdout) : '';
+    const stderr = error.stderr ? decodeOutput(error.stderr) : '';
+    return { ok: false, stdout, stderr, error };
   }
+}
+
+function decodeOutput(output) {
+  if (!output) return '';
+  if (typeof output === 'string') return output;
+  const buffer = Buffer.isBuffer(output) ? output : Buffer.from(output);
+  if (process.platform !== 'win32') return buffer.toString('utf-8');
+
+  const utf8 = buffer.toString('utf-8');
+  if (!utf8.includes('�')) return utf8;
+
+  try {
+    const { TextDecoder } = require('util');
+    const decoder = new TextDecoder('gbk');
+    const gbk = decoder.decode(buffer);
+    if (gbk && !gbk.includes('�')) return gbk;
+    return gbk || utf8;
+  } catch (error) {
+    return utf8;
+  }
+}
+
+function tailOutput(output, maxLines = 12) {
+  if (!output) return '';
+  const lines = output
+    .split(/\r?\n/)
+    .map((line) => line.trimEnd())
+    .filter((line) => line.trim() !== '');
+  if (lines.length <= maxLines) return lines.join('\n');
+  return lines.slice(-maxLines).join('\n');
 }
 
 /**
@@ -41,9 +73,9 @@ function runSilent(command, cwd = ROOT_DIR) {
 function runInherit(command, cwd = ROOT_DIR) {
   try {
     execSync(command, { cwd, stdio: 'inherit' });
-    return true;
+    return { ok: true, error: null };
   } catch (error) {
-    return false;
+    return { ok: false, error };
   }
 }
 
@@ -86,17 +118,35 @@ async function main() {
   
   // Step 1: Copy resources
   printStep(1, 3, 'Copy resources');
-  if (runSilent('npm run copy-monaco --silent')) {
+  const copyResult = runSilent('npm run copy-monaco --silent');
+  if (copyResult.ok) {
     printSuccess('Monaco Editor resources ready');
   } else {
     printError('Copy resources failed');
+    const output = tailOutput(copyResult.stderr || copyResult.stdout);
+    if (output) {
+      printError(output);
+    } else if (copyResult.error) {
+      printError(copyResult.error.message);
+    }
+    if (copyResult.error && copyResult.error.status !== undefined) {
+      printError(`Exit code: ${copyResult.error.status}`);
+    }
+    printInfo('Hint: run `pnpm install` in repo root if dependencies are missing');
     process.exit(1);
   }
   
   // Step 2: Generate version info
   printStep(2, 3, 'Generate version info');
-  if (!runInherit('node scripts/generate-version.cjs')) {
+  const versionResult = runInherit('node scripts/generate-version.cjs');
+  if (!versionResult.ok) {
     printError('Generate version info failed');
+    if (versionResult.error && versionResult.error.message) {
+      printError(versionResult.error.message);
+    }
+    if (versionResult.error && versionResult.error.status !== undefined) {
+      printError(`Exit code: ${versionResult.error.status}`);
+    }
     process.exit(1);
   }
   
