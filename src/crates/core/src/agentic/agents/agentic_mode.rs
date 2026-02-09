@@ -26,6 +26,7 @@ impl AgenticMode {
                 "AnalyzeImage".to_string(),
                 "Skill".to_string(),
                 "AskUserQuestion".to_string(),
+                "Git".to_string(),
             ],
         }
     }
