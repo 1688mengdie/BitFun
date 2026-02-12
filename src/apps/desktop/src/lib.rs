@@ -60,25 +60,37 @@ pub async fn run() {
 
     eprintln!("=== BitFun Desktop Starting ===");
 
-    bitfun_core::service::config::initialize_global_config()
-        .await
-        .expect("Failed to initialize global config service");
+    if let Err(e) = bitfun_core::service::config::initialize_global_config().await {
+        log::error!("Failed to initialize global config service: {}", e);
+        return;
+    }
 
-    AIClientFactory::initialize_global()
-        .await
-        .expect("Failed to initialize global AIClientFactory");
+    if let Err(e) = AIClientFactory::initialize_global().await {
+        log::error!("Failed to initialize global AIClientFactory: {}", e);
+        return;
+    }
 
-    let (coordinator, event_queue, event_router, ai_client_factory) = init_agentic_system()
-        .await
-        .expect("Failed to initialize agentic system");
+    let (coordinator, event_queue, event_router, ai_client_factory) =
+        match init_agentic_system().await {
+            Ok(state) => state,
+            Err(e) => {
+                log::error!("Failed to initialize agentic system: {}", e);
+                return;
+            }
+        };
 
-    init_function_agents(ai_client_factory.clone())
-        .await
-        .expect("Failed to initialize function agents");
+    if let Err(e) = init_function_agents(ai_client_factory.clone()).await {
+        log::error!("Failed to initialize function agents: {}", e);
+        return;
+    }
 
-    let app_state = AppState::new_async()
-        .await
-        .expect("Failed to initialize AppState");
+    let app_state = match AppState::new_async().await {
+        Ok(state) => state,
+        Err(e) => {
+            log::error!("Failed to initialize AppState: {}", e);
+            return;
+        }
+    };
 
     let coordinator_state = CoordinatorState {
         coordinator: coordinator.clone(),
@@ -90,7 +102,7 @@ pub async fn run() {
 
     setup_panic_hook();
 
-    tauri::Builder::default()
+    let run_result = tauri::Builder::default()
         .plugin(
             tauri_plugin_log::Builder::new()
                 .level(log_config.level)
@@ -492,8 +504,10 @@ pub async fn run() {
             i18n_get_config,
             i18n_set_config,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .run(tauri::generate_context!());
+    if let Err(e) = run_result {
+        log::error!("Error while running tauri application: {}", e);
+    }
 }
 
 async fn init_agentic_system() -> anyhow::Result<(

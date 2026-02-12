@@ -6,8 +6,21 @@
 use super::types::*;
 use crate::util::errors::*;
 use async_trait::async_trait;
-use log::info;
+use log::{error, info};
 use std::collections::HashMap;
+
+fn serialize_default_config(section: &str, value: impl serde::Serialize) -> serde_json::Value {
+    match serde_json::to_value(value) {
+        Ok(serialized) => serialized,
+        Err(err) => {
+            error!(
+                "Failed to serialize default config section: section={}, error={}",
+                section, err
+            );
+            serde_json::Value::Object(serde_json::Map::new())
+        }
+    }
+}
 
 /// AI configuration provider.
 pub struct AIConfigProvider;
@@ -19,7 +32,7 @@ impl ConfigProvider for AIConfigProvider {
     }
 
     fn get_default_config(&self) -> serde_json::Value {
-        serde_json::to_value(AIConfig::default()).unwrap()
+        serialize_default_config("ai", AIConfig::default())
     }
 
     async fn validate_config(&self, config: &serde_json::Value) -> BitFunResult<Vec<String>> {
@@ -152,7 +165,7 @@ impl ConfigProvider for ThemeConfigProvider {
     }
 
     fn get_default_config(&self) -> serde_json::Value {
-        serde_json::to_value(ThemeConfig::default()).unwrap()
+        serialize_default_config("theme", ThemeConfig::default())
     }
 
     async fn validate_config(&self, config: &serde_json::Value) -> BitFunResult<Vec<String>> {
@@ -219,7 +232,7 @@ impl ConfigProvider for ThemesConfigProvider {
     }
 
     fn get_default_config(&self) -> serde_json::Value {
-        serde_json::to_value(ThemesConfig::default()).unwrap()
+        serialize_default_config("themes", ThemesConfig::default())
     }
 
     async fn validate_config(&self, config: &serde_json::Value) -> BitFunResult<Vec<String>> {
@@ -268,7 +281,7 @@ impl ConfigProvider for EditorConfigProvider {
     }
 
     fn get_default_config(&self) -> serde_json::Value {
-        serde_json::to_value(EditorConfig::default()).unwrap()
+        serialize_default_config("editor", EditorConfig::default())
     }
 
     async fn validate_config(&self, config: &serde_json::Value) -> BitFunResult<Vec<String>> {
@@ -328,7 +341,7 @@ impl ConfigProvider for TerminalConfigProvider {
     }
 
     fn get_default_config(&self) -> serde_json::Value {
-        serde_json::to_value(TerminalConfig::default()).unwrap()
+        serialize_default_config("terminal", TerminalConfig::default())
     }
 
     async fn validate_config(&self, config: &serde_json::Value) -> BitFunResult<Vec<String>> {
@@ -384,7 +397,7 @@ impl ConfigProvider for WorkspaceConfigProvider {
     }
 
     fn get_default_config(&self) -> serde_json::Value {
-        serde_json::to_value(WorkspaceConfig::default()).unwrap()
+        serialize_default_config("workspace", WorkspaceConfig::default())
     }
 
     async fn validate_config(&self, config: &serde_json::Value) -> BitFunResult<Vec<String>> {
@@ -442,7 +455,7 @@ impl ConfigProvider for AppConfigProvider {
     }
 
     fn get_default_config(&self) -> serde_json::Value {
-        serde_json::to_value(AppConfig::default()).unwrap()
+        serialize_default_config("app", AppConfig::default())
     }
 
     async fn validate_config(&self, config: &serde_json::Value) -> BitFunResult<Vec<String>> {

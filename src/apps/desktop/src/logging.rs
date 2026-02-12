@@ -201,7 +201,12 @@ async fn do_cleanup_log_sessions(
     logs_root: &PathBuf,
     max_sessions: usize,
 ) -> Result<(), std::io::Error> {
-    let regex = regex::Regex::new(SESSION_DIR_PATTERN).expect("Invalid session dir pattern");
+    let regex = regex::Regex::new(SESSION_DIR_PATTERN).map_err(|e| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("Invalid session dir pattern: {}", e),
+        )
+    })?;
     let mut entries = tokio::fs::read_dir(logs_root).await?;
     let mut session_dirs: Vec<String> = Vec::new();
 
