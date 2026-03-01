@@ -514,6 +514,14 @@ pub async fn run() {
             i18n_get_supported_languages,
             i18n_get_config,
             i18n_set_config,
+            // Remote Connect
+            api::remote_connect_api::remote_connect_get_device_info,
+            api::remote_connect_api::remote_connect_get_methods,
+            api::remote_connect_api::remote_connect_start,
+            api::remote_connect_api::remote_connect_stop,
+            api::remote_connect_api::remote_connect_status,
+            api::remote_connect_api::remote_connect_configure_custom_server,
+            api::remote_connect_api::remote_connect_configure_bot,
         ])
         .run(tauri::generate_context!());
     if let Err(e) = run_result {

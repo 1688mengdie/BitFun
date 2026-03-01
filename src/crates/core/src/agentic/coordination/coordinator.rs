@@ -82,9 +82,17 @@ impl ConversationCoordinator {
         agent_type: String,
         config: SessionConfig,
     ) -> BitFunResult<Session> {
-        self.session_manager
+        let session = self
+            .session_manager
             .create_session(session_name, agent_type, config)
-            .await
+            .await?;
+        self.emit_event(AgenticEvent::SessionCreated {
+            session_id: session.session_id.clone(),
+            session_name: session.session_name.clone(),
+            agent_type: session.agent_type.clone(),
+        })
+        .await;
+        Ok(session)
     }
 
     /// Create a new session with optional session ID
@@ -95,9 +103,17 @@ impl ConversationCoordinator {
         agent_type: String,
         config: SessionConfig,
     ) -> BitFunResult<Session> {
-        self.session_manager
+        let session = self
+            .session_manager
             .create_session_with_id(session_id, session_name, agent_type, config)
-            .await
+            .await?;
+        self.emit_event(AgenticEvent::SessionCreated {
+            session_id: session.session_id.clone(),
+            session_name: session.session_name.clone(),
+            agent_type: session.agent_type.clone(),
+        })
+        .await;
+        Ok(session)
     }
 
     async fn wrap_user_input(&self, agent_type: &str, user_input: String) -> BitFunResult<String> {

@@ -41,6 +41,18 @@ impl fmt::Debug for TauriTransportAdapter {
 impl TransportAdapter for TauriTransportAdapter {
     async fn emit_event(&self, _session_id: &str, event: AgenticEvent) -> anyhow::Result<()> {
         match event {
+            AgenticEvent::SessionCreated { session_id, session_name, agent_type } => {
+                self.app_handle.emit("agentic://session-created", json!({
+                    "sessionId": session_id,
+                    "sessionName": session_name,
+                    "agentType": agent_type,
+                }))?;
+            }
+            AgenticEvent::SessionDeleted { session_id } => {
+                self.app_handle.emit("agentic://session-deleted", json!({
+                    "sessionId": session_id,
+                }))?;
+            }
             AgenticEvent::DialogTurnStarted { session_id, turn_id, subagent_parent_info, .. } => {
                 self.app_handle.emit("agentic://dialog-turn-started", json!({
                     "sessionId": session_id,

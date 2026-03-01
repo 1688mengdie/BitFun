@@ -138,6 +138,12 @@ export async function initializeEventListeners(
   });
 
   const callbacks: AgenticEventCallbacks = {
+    onSessionCreated: (event) => {
+      handleSessionCreated(context, event);
+    },
+    onSessionDeleted: (event) => {
+      handleSessionDeleted(event);
+    },
     onSessionStateChanged: (event) => {
       handleSessionStateChanged(event);
     },
@@ -177,6 +183,41 @@ export async function initializeEventListeners(
   };
 
   await agenticEventListener.startListening(callbacks);
+}
+
+/**
+ * Handle session created event (e.g. remote mobile created a session)
+ */
+function handleSessionCreated(context: FlowChatContext, event: any): void {
+  const { sessionId, sessionName, agentType } = event;
+  
+  const store = FlowChatStore.getInstance();
+  const existing = store.getState().sessions.get(sessionId);
+  if (existing) return;
+
+  log.info('Remote session created, adding to store', { sessionId, sessionName, agentType });
+  store.createSession(
+    sessionId,
+    { maxContextTokens: 128128, autoCompact: true, enableTools: true },
+    undefined,
+    sessionName || 'Remote Session',
+    128128,
+    agentType || 'agentic'
+  );
+}
+
+/**
+ * Handle session deleted event (backend already deleted; only remove from store)
+ */
+function handleSessionDeleted(event: any): void {
+  const { sessionId } = event;
+  
+  const store = FlowChatStore.getInstance();
+  const existing = store.getState().sessions.get(sessionId);
+  if (!existing) return;
+
+  log.info('Remote session deleted', { sessionId });
+  store.clearSession(sessionId);
 }
 
 /**

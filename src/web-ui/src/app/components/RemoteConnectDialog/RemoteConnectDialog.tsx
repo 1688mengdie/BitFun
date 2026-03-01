@@ -1,70 +1,33 @@
 /**
- * Remote Connect dialog component.
- * Shows a connection type tab switcher and QR code placeholder.
- * Uses component library Modal.
+ * Remote Connect dialog — lets the user pick a connection method,
+ * displays a QR code (or bot pairing code), and shows pairing status.
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { QRCodeSVG } from 'qrcode.react';
 import { useI18n } from '@/infrastructure/i18n';
 import { Modal, Badge } from '@/component-library';
+import {
+  remoteConnectAPI,
+  type ConnectionResult,
+  type RemoteConnectStatus,
+} from '@/infrastructure/api/service-api/RemoteConnectAPI';
 import './RemoteConnectDialog.scss';
 
-type ConnectionType = 'nat' | 'relay';
+type ConnectionTab = 'lan' | 'ngrok' | 'bitfun_server' | 'custom_server' | 'bot';
 
-const QrCodePlaceholder: React.FC = () => (
-  <svg
-    className="bitfun-remote-connect__qr-svg"
-    viewBox="0 0 100 100"
-    fill="none"
-    xmlns="http://www.w3.org/2000/svg"
-    aria-hidden="true"
-  >
-    <rect x="8" y="8" width="26" height="26" rx="3" fill="none" stroke="currentColor" strokeWidth="3" />
-    <rect x="14" y="14" width="14" height="14" rx="1.5" fill="currentColor" />
-    <rect x="66" y="8" width="26" height="26" rx="3" fill="none" stroke="currentColor" strokeWidth="3" />
-    <rect x="72" y="14" width="14" height="14" rx="1.5" fill="currentColor" />
-    <rect x="8" y="66" width="26" height="26" rx="3" fill="none" stroke="currentColor" strokeWidth="3" />
-    <rect x="14" y="72" width="14" height="14" rx="1.5" fill="currentColor" />
-    <rect x="42" y="8"  width="6" height="6" rx="1" fill="currentColor" opacity="0.65" />
-    <rect x="50" y="8"  width="6" height="6" rx="1" fill="currentColor" opacity="0.65" />
-    <rect x="58" y="8"  width="6" height="6" rx="1" fill="currentColor" opacity="0.65" />
-    <rect x="42" y="16" width="6" height="6" rx="1" fill="currentColor" opacity="0.65" />
-    <rect x="58" y="16" width="6" height="6" rx="1" fill="currentColor" opacity="0.65" />
-    <rect x="50" y="24" width="6" height="6" rx="1" fill="currentColor" opacity="0.65" />
-    <rect x="8"  y="42" width="6" height="6" rx="1" fill="currentColor" opacity="0.65" />
-    <rect x="16" y="42" width="6" height="6" rx="1" fill="currentColor" opacity="0.65" />
-    <rect x="24" y="42" width="6" height="6" rx="1" fill="currentColor" opacity="0.65" />
-    <rect x="8"  y="50" width="6" height="6" rx="1" fill="currentColor" opacity="0.65" />
-    <rect x="24" y="50" width="6" height="6" rx="1" fill="currentColor" opacity="0.65" />
-    <rect x="8"  y="58" width="6" height="6" rx="1" fill="currentColor" opacity="0.65" />
-    <rect x="16" y="58" width="6" height="6" rx="1" fill="currentColor" opacity="0.65" />
-    <rect x="24" y="58" width="6" height="6" rx="1" fill="currentColor" opacity="0.65" />
-    <rect x="42" y="42" width="6" height="6" rx="1" fill="currentColor" opacity="0.65" />
-    <rect x="50" y="42" width="6" height="6" rx="1" fill="currentColor" opacity="0.65" />
-    <rect x="58" y="42" width="6" height="6" rx="1" fill="currentColor" opacity="0.65" />
-    <rect x="66" y="42" width="6" height="6" rx="1" fill="currentColor" opacity="0.65" />
-    <rect x="74" y="42" width="6" height="6" rx="1" fill="currentColor" opacity="0.65" />
-    <rect x="86" y="42" width="6" height="6" rx="1" fill="currentColor" opacity="0.65" />
-    <rect x="42" y="50" width="6" height="6" rx="1" fill="currentColor" opacity="0.65" />
-    <rect x="66" y="50" width="6" height="6" rx="1" fill="currentColor" opacity="0.65" />
-    <rect x="86" y="50" width="6" height="6" rx="1" fill="currentColor" opacity="0.65" />
-    <rect x="42" y="58" width="6" height="6" rx="1" fill="currentColor" opacity="0.65" />
-    <rect x="50" y="58" width="6" height="6" rx="1" fill="currentColor" opacity="0.65" />
-    <rect x="74" y="58" width="6" height="6" rx="1" fill="currentColor" opacity="0.65" />
-    <rect x="86" y="58" width="6" height="6" rx="1" fill="currentColor" opacity="0.65" />
-    <rect x="42" y="66" width="6" height="6" rx="1" fill="currentColor" opacity="0.65" />
-    <rect x="58" y="66" width="6" height="6" rx="1" fill="currentColor" opacity="0.65" />
-    <rect x="74" y="66" width="6" height="6" rx="1" fill="currentColor" opacity="0.65" />
-    <rect x="42" y="74" width="6" height="6" rx="1" fill="currentColor" opacity="0.65" />
-    <rect x="50" y="74" width="6" height="6" rx="1" fill="currentColor" opacity="0.65" />
-    <rect x="66" y="74" width="6" height="6" rx="1" fill="currentColor" opacity="0.65" />
-    <rect x="86" y="74" width="6" height="6" rx="1" fill="currentColor" opacity="0.65" />
-    <rect x="42" y="86" width="6" height="6" rx="1" fill="currentColor" opacity="0.65" />
-    <rect x="58" y="86" width="6" height="6" rx="1" fill="currentColor" opacity="0.65" />
-    <rect x="74" y="86" width="6" height="6" rx="1" fill="currentColor" opacity="0.65" />
-    <rect x="86" y="86" width="6" height="6" rx="1" fill="currentColor" opacity="0.65" />
-  </svg>
-);
+interface TabDef {
+  id: ConnectionTab;
+  labelKey: string;
+}
+
+const TABS: TabDef[] = [
+  { id: 'lan', labelKey: 'remoteConnect.tabLan' },
+  { id: 'ngrok', labelKey: 'remoteConnect.tabNgrok' },
+  { id: 'bitfun_server', labelKey: 'remoteConnect.tabBitfunServer' },
+  { id: 'custom_server', labelKey: 'remoteConnect.tabCustomServer' },
+  { id: 'bot', labelKey: 'remoteConnect.tabBot' },
+];
 
 interface RemoteConnectDialogProps {
   isOpen: boolean;
@@ -76,46 +39,353 @@ export const RemoteConnectDialog: React.FC<RemoteConnectDialogProps> = ({
   onClose,
 }) => {
   const { t } = useI18n('common');
-  const [activeTab, setActiveTab] = useState<ConnectionType>('nat');
+  const [activeTab, setActiveTab] = useState<ConnectionTab>('lan');
+  const [connectionResult, setConnectionResult] = useState<ConnectionResult | null>(null);
+  const [status, setStatus] = useState<RemoteConnectStatus | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [customUrl, setCustomUrl] = useState('');
+  const [botType, setBotType] = useState<'bot_feishu' | 'bot_telegram'>('bot_telegram');
+
+  // Bot credential fields
+  const [tgToken, setTgToken] = useState('');
+  const [feishuAppId, setFeishuAppId] = useState('');
+  const [feishuAppSecret, setFeishuAppSecret] = useState('');
+
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) {
+      if (pollRef.current) clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, [isOpen]);
+
+  const startPolling = useCallback(() => {
+    if (pollRef.current) clearInterval(pollRef.current);
+    pollRef.current = setInterval(async () => {
+      try {
+        const s = await remoteConnectAPI.getStatus();
+        setStatus(s);
+        if (s.pairing_state === 'connected') {
+          if (pollRef.current) clearInterval(pollRef.current);
+          pollRef.current = null;
+        }
+      } catch {
+        // ignore
+      }
+    }, 2000);
+  }, []);
+
+  const handleConnect = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    setConnectionResult(null);
+    setStatus(null);
+
+    try {
+      let method = activeTab as string;
+      let serverUrl: string | undefined;
+
+      if (activeTab === 'bot') {
+        method = botType;
+        // Save bot credentials first
+        if (botType === 'bot_telegram' && tgToken) {
+          await remoteConnectAPI.configureBot({ botType: 'telegram', botToken: tgToken });
+        } else if (botType === 'bot_feishu' && feishuAppId) {
+          await remoteConnectAPI.configureBot({
+            botType: 'feishu',
+            appId: feishuAppId,
+            appSecret: feishuAppSecret,
+          });
+        }
+      } else if (activeTab === 'custom_server') {
+        serverUrl = customUrl || undefined;
+      }
+
+      const result = await remoteConnectAPI.startConnection(method, serverUrl);
+      setConnectionResult(result);
+      startPolling();
+    } catch (e: any) {
+      setError(e?.message || String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, [activeTab, botType, customUrl, tgToken, feishuAppId, feishuAppSecret, startPolling]);
+
+  const handleDisconnect = useCallback(async () => {
+    try {
+      await remoteConnectAPI.stopConnection();
+      setConnectionResult(null);
+      setStatus(null);
+    } catch {
+      // best effort
+    }
+  }, []);
+
+  const isConnected = status?.pairing_state === 'connected';
+
+  const renderPairingState = () => {
+    if (!status) return null;
+    const state = status.pairing_state;
+    const stateMap: Record<string, { label: string; variant: 'info' | 'warning' | 'success' | 'error' }> = {
+      idle: { label: t('remoteConnect.stateIdle'), variant: 'info' },
+      waiting_for_scan: { label: t('remoteConnect.stateWaiting'), variant: 'warning' },
+      handshaking: { label: t('remoteConnect.stateHandshaking'), variant: 'warning' },
+      verifying: { label: t('remoteConnect.stateVerifying'), variant: 'warning' },
+      connected: { label: t('remoteConnect.stateConnected'), variant: 'success' },
+      disconnected: { label: t('remoteConnect.stateDisconnected'), variant: 'info' },
+    };
+    const info = stateMap[state] || { label: state, variant: 'info' as const };
+
+    return (
+      <div className="bitfun-remote-connect__status">
+        <Badge variant={info.variant}>{info.label}</Badge>
+        {isConnected && status.peer_device_name && (
+          <span className="bitfun-remote-connect__peer-name">
+            {status.peer_device_name}
+          </span>
+        )}
+      </div>
+    );
+  };
+
+  const renderQrCode = () => {
+    if (!connectionResult) return null;
+
+    if (connectionResult.qr_url) {
+      return (
+        <div className="bitfun-remote-connect__qr-box">
+          <QRCodeSVG
+            value={connectionResult.qr_url}
+            size={180}
+            level="M"
+            includeMargin
+          />
+        </div>
+      );
+    }
+
+    if (connectionResult.bot_pairing_code) {
+      return (
+        <div className="bitfun-remote-connect__pairing-code-box">
+          <div className="bitfun-remote-connect__pairing-code">
+            {connectionResult.bot_pairing_code}
+          </div>
+        </div>
+      );
+    }
+
+    return null;
+  };
+
+  const renderBotConfigForm = () => (
+    <div className="bitfun-remote-connect__body">
+      <div className="bitfun-remote-connect__bot-selector">
+        <button
+          type="button"
+          className={`bitfun-remote-connect__bot-option${botType === 'bot_telegram' ? ' is-active' : ''}`}
+          onClick={() => setBotType('bot_telegram')}
+        >
+          Telegram
+        </button>
+        <button
+          type="button"
+          className={`bitfun-remote-connect__bot-option${botType === 'bot_feishu' ? ' is-active' : ''}`}
+          onClick={() => setBotType('bot_feishu')}
+        >
+          {t('remoteConnect.feishu')}
+        </button>
+      </div>
+
+      {botType === 'bot_telegram' && (
+        <div className="bitfun-remote-connect__bot-guide">
+          <div className="bitfun-remote-connect__steps">
+            <p className="bitfun-remote-connect__step">
+              1. {t('remoteConnect.botTgStep1')}
+            </p>
+            <p className="bitfun-remote-connect__step">
+              2. {t('remoteConnect.botTgStep2')}
+            </p>
+            <p className="bitfun-remote-connect__step">
+              3. {t('remoteConnect.botTgStep3')}
+            </p>
+          </div>
+          <div className="bitfun-remote-connect__input-group">
+            <label>Bot Token</label>
+            <input
+              type="text"
+              className="bitfun-remote-connect__input"
+              placeholder="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"
+              value={tgToken}
+              onChange={(e) => setTgToken(e.target.value)}
+            />
+          </div>
+        </div>
+      )}
+
+      {botType === 'bot_feishu' && (
+        <div className="bitfun-remote-connect__bot-guide">
+          <div className="bitfun-remote-connect__steps">
+            <p className="bitfun-remote-connect__step">
+              1. {t('remoteConnect.botFeishuStep1')}
+            </p>
+            <p className="bitfun-remote-connect__step">
+              2. {t('remoteConnect.botFeishuStep2')}
+            </p>
+            <p className="bitfun-remote-connect__step">
+              3. {t('remoteConnect.botFeishuStep3')}
+            </p>
+          </div>
+          <div className="bitfun-remote-connect__input-group">
+            <label>App ID</label>
+            <input
+              type="text"
+              className="bitfun-remote-connect__input"
+              placeholder="cli_xxxxxxxx"
+              value={feishuAppId}
+              onChange={(e) => setFeishuAppId(e.target.value)}
+            />
+          </div>
+          <div className="bitfun-remote-connect__input-group">
+            <label>App Secret</label>
+            <input
+              type="password"
+              className="bitfun-remote-connect__input"
+              placeholder="xxxxxxxxxxxxxxxx"
+              value={feishuAppSecret}
+              onChange={(e) => setFeishuAppSecret(e.target.value)}
+            />
+          </div>
+        </div>
+      )}
+
+      {error && <p className="bitfun-remote-connect__error">{error}</p>}
+
+      <button
+        type="button"
+        className="bitfun-remote-connect__btn bitfun-remote-connect__btn--connect"
+        onClick={handleConnect}
+        disabled={loading || (botType === 'bot_telegram' ? !tgToken : !feishuAppId)}
+      >
+        {loading ? t('remoteConnect.connecting') : t('remoteConnect.connect')}
+      </button>
+    </div>
+  );
+
+  const renderTabContent = () => {
+    if (isConnected) {
+      return (
+        <div className="bitfun-remote-connect__connected">
+          {renderPairingState()}
+          <p className="bitfun-remote-connect__hint">
+            {t('remoteConnect.connectedHint')}
+          </p>
+          <button
+            type="button"
+            className="bitfun-remote-connect__btn bitfun-remote-connect__btn--disconnect"
+            onClick={handleDisconnect}
+          >
+            {t('remoteConnect.disconnect')}
+          </button>
+        </div>
+      );
+    }
+
+    if (connectionResult) {
+      return (
+        <div className="bitfun-remote-connect__body">
+          {renderQrCode()}
+          {renderPairingState()}
+          <p className="bitfun-remote-connect__hint">
+            {activeTab === 'bot'
+              ? t('remoteConnect.botHint')
+              : t('remoteConnect.scanHint')}
+          </p>
+          <button
+            type="button"
+            className="bitfun-remote-connect__btn bitfun-remote-connect__btn--cancel"
+            onClick={handleDisconnect}
+          >
+            {t('remoteConnect.cancel')}
+          </button>
+        </div>
+      );
+    }
+
+    if (activeTab === 'bot') {
+      return renderBotConfigForm();
+    }
+
+    return (
+      <div className="bitfun-remote-connect__body">
+        {activeTab === 'custom_server' && (
+          <div className="bitfun-remote-connect__input-group">
+            <label>{t('remoteConnect.serverUrl')}</label>
+            <input
+              type="url"
+              className="bitfun-remote-connect__input"
+              placeholder="https://your-server:9700"
+              value={customUrl}
+              onChange={(e) => setCustomUrl(e.target.value)}
+            />
+          </div>
+        )}
+
+        <p className="bitfun-remote-connect__description">
+          {t(`remoteConnect.desc_${activeTab}`)}
+        </p>
+
+        {error && <p className="bitfun-remote-connect__error">{error}</p>}
+
+        <button
+          type="button"
+          className="bitfun-remote-connect__btn bitfun-remote-connect__btn--connect"
+          onClick={handleConnect}
+          disabled={loading}
+        >
+          {loading ? t('remoteConnect.connecting') : t('remoteConnect.connect')}
+        </button>
+      </div>
+    );
+  };
 
   return (
     <Modal
       isOpen={isOpen}
       onClose={onClose}
       title={t('remoteConnect.title')}
-      titleExtra={<Badge variant="warning">WIP</Badge>}
-      showCloseButton={true}
-      size="small"
+      showCloseButton
+      size="medium"
     >
       <div className="bitfun-remote-connect">
-
         <div className="bitfun-remote-connect__tabs">
-          <button
-            type="button"
-            className={`bitfun-remote-connect__tab${activeTab === 'nat' ? ' is-active' : ''}`}
-            onClick={() => setActiveTab('nat')}
-          >
-            {t('remoteConnect.typeNatTraversal')}
-          </button>
-          <span className="bitfun-remote-connect__tab-divider" aria-hidden="true" />
-          <button
-            type="button"
-            className={`bitfun-remote-connect__tab${activeTab === 'relay' ? ' is-active' : ''}`}
-            onClick={() => setActiveTab('relay')}
-          >
-            {t('remoteConnect.typeRelayServer')}
-          </button>
+          {TABS.map((tab, i) => (
+            <React.Fragment key={tab.id}>
+              {i > 0 && (
+                <span className="bitfun-remote-connect__tab-divider" aria-hidden="true" />
+              )}
+              <button
+                type="button"
+                className={`bitfun-remote-connect__tab${activeTab === tab.id ? ' is-active' : ''}`}
+                onClick={() => {
+                  setActiveTab(tab.id);
+                  setConnectionResult(null);
+                  setStatus(null);
+                  setError(null);
+                }}
+                disabled={!!connectionResult}
+              >
+                {t(tab.labelKey)}
+              </button>
+            </React.Fragment>
+          ))}
         </div>
 
-        <div className="bitfun-remote-connect__body">
-          <div className="bitfun-remote-connect__qr-box">
-            <QrCodePlaceholder />
-          </div>
-          <p className="bitfun-remote-connect__hint">
-            {t('remoteConnect.hint')}
-          </p>
-        </div>
-
+        {renderTabContent()}
       </div>
     </Modal>
   );
