@@ -95,7 +95,6 @@ export class RelayConnection {
 
     this.ws.onopen = () => {
       if (this.destroyed) return;
-      // Join the room via WebSocket protocol
       this.ws!.send(JSON.stringify({
         type: 'join_room',
         room_id: this.roomId,
@@ -105,7 +104,6 @@ export class RelayConnection {
       }));
       this.callbacks.onStateChange('connected');
       this.startHeartbeat();
-
     };
 
     this.ws.onmessage = async (event: MessageEvent) => {

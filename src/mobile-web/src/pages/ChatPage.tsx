@@ -108,9 +108,13 @@ const ToolCard: React.FC<{ tool: ToolCallEntry; now: number }> = ({ tool, now })
           {tool.status === 'running' ? (
             <span className="chat-tool-card__spinner" />
           ) : tool.status === 'done' ? (
-            <span className="chat-tool-card__check">✓</span>
+            <span className="chat-tool-card__check">
+              <svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M3 8.5L6.5 12L13 4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+            </span>
           ) : (
-            <span className="chat-tool-card__error-icon">✗</span>
+            <span className="chat-tool-card__error-icon">
+              <svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M4 4L12 12M12 4L4 12" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/></svg>
+            </span>
           )}
         </span>
         <span className="chat-tool-card__name">{tool.name}</span>
@@ -425,7 +429,12 @@ const ChatPage: React.FC<ChatPageProps> = ({ sessionMgr, sessionId, sessionName,
               <path d="M2 4L8 6L14 4" stroke="currentColor" strokeWidth="1.2"/>
             </svg>
             <span className="chat-page__workspace-name">{workspaceName}</span>
-            {gitBranch && <span className="chat-page__workspace-branch">⎇ {gitBranch}</span>}
+            {gitBranch && (
+              <span className="chat-page__workspace-branch">
+                <svg width="12" height="12" viewBox="0 0 16 16" fill="none"><circle cx="5" cy="4" r="2" stroke="currentColor" strokeWidth="1.3"/><circle cx="11" cy="4" r="2" stroke="currentColor" strokeWidth="1.3"/><circle cx="5" cy="12" r="2" stroke="currentColor" strokeWidth="1.3"/><path d="M5 6V10M11 6V8C11 9.1046 10.1046 10 9 10H5" stroke="currentColor" strokeWidth="1.3"/></svg>
+                {gitBranch}
+              </span>
+            )}
           </div>
         )}
       </div>

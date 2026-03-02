@@ -155,6 +155,25 @@ pub async fn run() {
         .setup(move |app| {
             logging::register_runtime_log_state(startup_log_level, session_log_dir.clone());
 
+            // Register bundled mobile-web resource path for remote connect.
+            // Try multiple candidate paths: Tauri array-format bundling preserves
+            // the source directory structure, so the files may be at different
+            // relative locations depending on the bundling config.
+            {
+                let candidates = [
+                    "mobile-web/dist",
+                    "mobile-web",
+                ];
+                for candidate in &candidates {
+                    if let Ok(p) = app.path().resolve(candidate, tauri::path::BaseDirectory::Resource) {
+                        if p.join("index.html").exists() {
+                            api::remote_connect_api::set_mobile_web_resource_path(p);
+                            break;
+                        }
+                    }
+                }
+            }
+
             let app_handle = app.handle().clone();
             theme::create_main_window(&app_handle);
 

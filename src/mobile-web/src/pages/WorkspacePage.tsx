@@ -98,7 +98,9 @@ const WorkspacePage: React.FC<WorkspacePageProps> = ({ sessionMgr, onReady }) =>
               <div className="workspace-page__project-path">{workspaceInfo.path}</div>
               {workspaceInfo.git_branch && (
                 <div className="workspace-page__git-branch">
-                  <span className="workspace-page__branch-icon">⎇</span>
+                  <span className="workspace-page__branch-icon">
+                    <svg width="12" height="12" viewBox="0 0 16 16" fill="none"><circle cx="5" cy="4" r="2" stroke="currentColor" strokeWidth="1.3"/><circle cx="11" cy="4" r="2" stroke="currentColor" strokeWidth="1.3"/><circle cx="5" cy="12" r="2" stroke="currentColor" strokeWidth="1.3"/><path d="M5 6V10M11 6V8C11 9.1046 10.1046 10 9 10H5" stroke="currentColor" strokeWidth="1.3"/></svg>
+                  </span>
                   {workspaceInfo.git_branch}
                 </div>
               )}
@@ -114,7 +116,9 @@ const WorkspacePage: React.FC<WorkspacePageProps> = ({ sessionMgr, onReady }) =>
           </div>
         ) : (
           <div className="workspace-page__no-workspace">
-            <div className="workspace-page__no-workspace-icon">📂</div>
+            <div className="workspace-page__no-workspace-icon">
+              <svg width="40" height="40" viewBox="0 0 16 16" fill="none"><path d="M2 4V12C2 12.5523 2.44772 13 3 13H13C13.5523 13 14 12.5523 14 12V6C14 5.44772 13.5523 5 13 5H8L6.5 3H3C2.44772 3 2 3.44772 2 4Z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/></svg>
+            </div>
             <div className="workspace-page__no-workspace-text">
               No workspace is currently open on the desktop.
             </div>

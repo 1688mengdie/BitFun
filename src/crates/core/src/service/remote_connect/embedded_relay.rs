@@ -163,10 +163,15 @@ pub async fn start_embedded_relay(port: u16, static_dir: Option<&str>) -> anyhow
 
     if let Some(dir) = static_dir {
         info!("Embedded relay: serving static files from {dir}");
-        app = app.fallback_service(
-            tower_http::services::ServeDir::new(dir)
-                .append_index_html_on_directories(true),
-        );
+        let serve_dir = tower_http::services::ServeDir::new(dir)
+            .append_index_html_on_directories(true);
+        // Wrap with cache-control middleware:
+        //  - HTML: no-cache (always fetch fresh to pick up new asset hashes)
+        //  - Hashed assets: immutable long-cache (filename contains content hash)
+        let static_app = Router::<()>::new()
+            .fallback_service(serve_dir)
+            .layer(axum::middleware::from_fn(static_cache_headers));
+        app = app.fallback_service(static_app);
     }
 
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}"))
@@ -186,6 +191,34 @@ pub async fn start_embedded_relay(port: u16, static_dir: Option<&str>) -> anyhow
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
     Ok(EmbeddedRelayHandle { _shutdown: Some(shutdown_tx) })
+}
+
+/// Middleware that sets Cache-Control headers for static file responses.
+/// HTML files get `no-cache` so the browser always checks for updates,
+/// while hashed asset files (JS/CSS in /assets/) get long-term caching.
+async fn static_cache_headers(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let path = request.uri().path().to_string();
+    let mut response = next.run(request).await;
+    let headers = response.headers_mut();
+    if path == "/" || path.ends_with(".html") {
+        headers.insert(
+            axum::http::header::CACHE_CONTROL,
+            axum::http::HeaderValue::from_static("no-cache, no-store, must-revalidate"),
+        );
+        headers.insert(
+            axum::http::header::PRAGMA,
+            axum::http::HeaderValue::from_static("no-cache"),
+        );
+    } else if path.starts_with("/assets/") {
+        headers.insert(
+            axum::http::header::CACHE_CONTROL,
+            axum::http::HeaderValue::from_static("public, max-age=31536000, immutable"),
+        );
+    }
+    response
 }
 
 pub struct EmbeddedRelayHandle {

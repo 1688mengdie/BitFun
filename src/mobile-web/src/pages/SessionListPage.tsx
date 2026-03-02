@@ -166,12 +166,17 @@ const SessionListPage: React.FC<SessionListPageProps> = ({ sessionMgr, onSelectS
 
       {/* Workspace banner — tap to switch */}
       <div className="session-list__workspace-bar" onClick={onOpenWorkspace}>
-        <span className="session-list__workspace-icon">📂</span>
+        <span className="session-list__workspace-icon">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 4V12C2 12.5523 2.44772 13 3 13H13C13.5523 13 14 12.5523 14 12V6C14 5.44772 13.5523 5 13 5H8L6.5 3H3C2.44772 3 2 3.44772 2 4Z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/></svg>
+        </span>
         <span className="session-list__workspace-name">
           {currentWorkspace?.project_name || currentWorkspace?.path || 'No workspace'}
         </span>
         {currentWorkspace?.git_branch && (
-          <span className="session-list__workspace-branch">⎇ {currentWorkspace.git_branch}</span>
+          <span className="session-list__workspace-branch">
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="none"><circle cx="5" cy="4" r="2" stroke="currentColor" strokeWidth="1.3"/><circle cx="11" cy="4" r="2" stroke="currentColor" strokeWidth="1.3"/><circle cx="5" cy="12" r="2" stroke="currentColor" strokeWidth="1.3"/><path d="M5 6V10M11 6V8C11 9.1046 10.1046 10 9 10H5" stroke="currentColor" strokeWidth="1.3"/></svg>
+            {currentWorkspace.git_branch}
+          </span>
         )}
         <span className="session-list__workspace-switch">Switch ›</span>
       </div>

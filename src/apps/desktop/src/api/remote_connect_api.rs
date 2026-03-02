@@ -6,14 +6,26 @@ use bitfun_core::service::remote_connect::{
 };
 use once_cell::sync::OnceCell;
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
 static REMOTE_CONNECT_SERVICE: OnceCell<Arc<RwLock<Option<RemoteConnectService>>>> =
     OnceCell::new();
 
+/// Tauri resource directory path for mobile-web, set during app setup.
+static MOBILE_WEB_RESOURCE_PATH: OnceCell<PathBuf> = OnceCell::new();
+
+
 fn get_service_holder() -> &'static Arc<RwLock<Option<RemoteConnectService>>> {
     REMOTE_CONNECT_SERVICE.get_or_init(|| Arc::new(RwLock::new(None)))
+}
+
+/// Called from Tauri setup to register the resolved resource directory path
+/// for the bundled mobile-web files.
+pub fn set_mobile_web_resource_path(path: PathBuf) {
+    log::info!("Registered mobile-web resource path: {}", path.display());
+    let _ = MOBILE_WEB_RESOURCE_PATH.set(path);
 }
 
 /// Synchronous cleanup called when the application exits.
@@ -40,32 +52,107 @@ async fn ensure_service() -> Result<(), String> {
 }
 
 /// Auto-detect the mobile-web build output directory.
+///
+/// Detection order:
+/// 1. `BITFUN_MOBILE_WEB_DIR` environment variable (explicit override)
+/// 2. Tauri bundled resource path (set via `set_mobile_web_resource_path` during app setup)
+/// 3. Executable-relative paths (for bundled apps without Tauri path API)
+/// 4. CWD-relative paths (for development mode)
 fn detect_mobile_web_dir() -> Option<String> {
+    // 1. Explicit env var override
     if let Ok(dir) = std::env::var("BITFUN_MOBILE_WEB_DIR") {
         let p = std::path::Path::new(&dir);
         if p.join("index.html").exists() {
+            log::info!("Using BITFUN_MOBILE_WEB_DIR: {dir}");
             return Some(dir);
         }
+        log::warn!("BITFUN_MOBILE_WEB_DIR set but index.html not found: {dir}");
     }
 
-    let cwd = std::env::current_dir().ok()?;
-    let candidates = [
-        cwd.join("src/mobile-web/dist"),
-        cwd.join("../../mobile-web/dist"),   // from src/apps/desktop
-        cwd.join("../mobile-web/dist"),
-    ];
-
-    for candidate in &candidates {
-        if candidate.join("index.html").exists() {
-            if let Ok(abs) = candidate.canonicalize() {
-                log::info!("Detected mobile-web dir: {}", abs.display());
-                return Some(abs.to_string_lossy().into_owned());
-            }
+    // 2. Tauri resource path (registered during app setup)
+    if let Some(resource_path) = MOBILE_WEB_RESOURCE_PATH.get() {
+        if is_valid_mobile_web_dir(resource_path) {
+            let dir = resource_path.to_string_lossy().into_owned();
+            log::info!("Using Tauri bundled mobile-web: {dir}");
+            return Some(dir);
         }
+        log::debug!(
+            "Tauri resource path registered but not a valid mobile-web dir: {}",
+            resource_path.display()
+        );
+    }
+
+    // 3. Executable-relative paths (bundled app fallback)
+    if let Some(dir) = detect_from_exe() {
+        return Some(dir);
+    }
+
+    // 4. CWD-relative paths (development mode)
+    if let Some(dir) = detect_from_cwd() {
+        return Some(dir);
     }
 
     log::warn!("mobile-web dist directory not found; LAN/Ngrok modes will not serve static files");
     None
+}
+
+/// Detect mobile-web relative to the current executable.
+/// Handles macOS .app bundle, Windows install dir, and Linux package layouts.
+fn detect_from_exe() -> Option<String> {
+    let exe = std::env::current_exe().ok()?;
+    let exe_dir = exe.parent()?;
+
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    // macOS: exe is at AppName.app/Contents/MacOS/exe
+    //        resources at AppName.app/Contents/Resources/
+    if cfg!(target_os = "macos") {
+        candidates.push(exe_dir.join("../Resources/mobile-web"));
+    }
+
+    // Windows / Linux: resources alongside exe or in a resources/ subdir
+    candidates.push(exe_dir.join("mobile-web"));
+    candidates.push(exe_dir.join("resources/mobile-web"));
+
+    // Linux: /usr/lib/<app>/mobile-web or /usr/share/<app>/mobile-web
+    if cfg!(target_os = "linux") {
+        candidates.push(exe_dir.join("../lib/bitfun/mobile-web"));
+        candidates.push(exe_dir.join("../share/bitfun/mobile-web"));
+        candidates.push(exe_dir.join("../share/com.bitfun.desktop/mobile-web"));
+    }
+
+    check_candidates(&candidates, "exe-relative")
+}
+
+/// Detect mobile-web relative to the current working directory (dev mode).
+fn detect_from_cwd() -> Option<String> {
+    let cwd = std::env::current_dir().ok()?;
+    let candidates = [
+        cwd.join("src/mobile-web/dist"),
+        cwd.join("../../mobile-web/dist"), // from src/apps/desktop
+        cwd.join("../mobile-web/dist"),
+    ];
+
+    check_candidates(&candidates, "cwd-relative")
+}
+
+fn check_candidates(candidates: &[PathBuf], source: &str) -> Option<String> {
+    for candidate in candidates {
+        if is_valid_mobile_web_dir(candidate) {
+            if let Ok(abs) = candidate.canonicalize() {
+                log::info!("Detected mobile-web dir ({}): {}", source, abs.display());
+                return Some(abs.to_string_lossy().into_owned());
+            }
+        }
+    }
+    None
+}
+
+/// Validate that a directory is a proper mobile-web build output.
+/// Requires both `index.html` and `assets/` to exist, since the HTML
+/// references JS/CSS via relative `./assets/` paths.
+fn is_valid_mobile_web_dir(dir: &std::path::Path) -> bool {
+    dir.join("index.html").exists() && dir.join("assets").is_dir()
 }
 
 // ── Request / Response DTOs ────────────────────────────────────────
