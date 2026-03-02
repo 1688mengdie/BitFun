@@ -69,6 +69,13 @@ const PairingPage: React.FC<PairingPageProps> = ({ onPaired }) => {
     error: 'Connection error',
   };
 
+  const handleRetry = () => {
+    // Reload the page — browser will reconnect and re-join the room.
+    window.location.reload();
+  };
+
+  const showRetry = (connectionState === 'error' || connectionState === 'disconnected') && !!error;
+
   return (
     <div className="pairing-page">
       <div className="pairing-page__logo">BitFun</div>
@@ -81,6 +88,11 @@ const PairingPage: React.FC<PairingPageProps> = ({ onPaired }) => {
         {stateLabels[connectionState] || connectionState}
       </div>
       {error && <div className="pairing-page__error">{error}</div>}
+      {showRetry && (
+        <button className="pairing-page__retry" onClick={handleRetry}>
+          Retry
+        </button>
+      )}
     </div>
   );
 };

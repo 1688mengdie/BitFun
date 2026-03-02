@@ -18,6 +18,7 @@ import type { SessionMode } from '../../../../stores/sessionModeStore';
 import { useApp } from '../../../../hooks/useApp';
 import type { SceneTabId } from '../../../SceneBar/types';
 import { createLogger } from '@/shared/utils/logger';
+import { workspaceManager } from '@/infrastructure/services/business/workspaceManager';
 import './SessionsSection.scss';
 
 const MAX_VISIBLE_SESSIONS = 8;
@@ -50,10 +51,22 @@ const SessionsSection: React.FC = () => {
   const [editingTitle, setEditingTitle] = useState('');
   const [showAll, setShowAll] = useState(false);
   const editInputRef = useRef<HTMLInputElement>(null);
+  const [currentWorkspacePath, setCurrentWorkspacePath] = useState<string>(
+    () => workspaceManager.getWorkspacePath()
+  );
 
   useEffect(() => {
     const unsub = flowChatStore.subscribe(s => setFlowChatState(s));
     return () => unsub();
+  }, []);
+
+  useEffect(() => {
+    const removeListener = workspaceManager.addEventListener((event) => {
+      if (event.type === 'workspace:opened' || event.type === 'workspace:switched') {
+        setCurrentWorkspacePath(event.workspace.rootPath);
+      }
+    });
+    return removeListener;
   }, []);
 
   useEffect(() => {
@@ -65,10 +78,15 @@ const SessionsSection: React.FC = () => {
 
   const sessions = useMemo(
     () =>
-      Array.from(flowChatState.sessions.values()).sort(
-        (a: Session, b: Session) => b.lastActiveAt - a.lastActiveAt
-      ),
-    [flowChatState.sessions]
+      Array.from(flowChatState.sessions.values())
+        .filter((s: Session) => {
+          if (!s.workspacePath || !currentWorkspacePath) return true;
+          return s.workspacePath === currentWorkspacePath;
+        })
+        .sort(
+          (a: Session, b: Session) => b.lastActiveAt - a.lastActiveAt
+        ),
+    [flowChatState.sessions, currentWorkspacePath]
   );
 
   const visibleSessions = useMemo(

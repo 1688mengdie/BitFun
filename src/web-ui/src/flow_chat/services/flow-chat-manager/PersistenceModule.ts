@@ -148,16 +148,16 @@ export async function saveDialogTurnToDisk(
 ): Promise<void> {
   try {
     const { conversationAPI } = await import('@/infrastructure/api');
-    const workspacePath = await globalAPI.getCurrentWorkspacePath();
-    
-    if (!workspacePath) {
-      log.debug('Cannot get workspace path, skipping save', { sessionId, turnId });
-      return;
-    }
 
     const session = context.flowChatStore.getState().sessions.get(sessionId);
     if (!session) {
       log.debug('Session not found, skipping save', { sessionId, turnId });
+      return;
+    }
+
+    const workspacePath = session.workspacePath || await globalAPI.getCurrentWorkspacePath();
+    if (!workspacePath) {
+      log.debug('Cannot determine workspace path, skipping save', { sessionId, turnId });
       return;
     }
     
@@ -312,12 +312,12 @@ export async function updateSessionMetadata(
 ): Promise<void> {
   try {
     const { conversationAPI } = await import('@/infrastructure/api');
-    const workspacePath = await globalAPI.getCurrentWorkspacePath();
-    
-    if (!workspacePath) return;
 
     const session = context.flowChatStore.getState().sessions.get(sessionId);
     if (!session) return;
+
+    const workspacePath = session.workspacePath || await globalAPI.getCurrentWorkspacePath();
+    if (!workspacePath) return;
 
     const turnCount = session.dialogTurns.length;
     const messageCount = session.dialogTurns.reduce((sum, turn) => {

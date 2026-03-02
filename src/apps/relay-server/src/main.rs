@@ -53,11 +53,13 @@ async fn main() -> anyhow::Result<()> {
         .layer(CorsLayer::permissive())
         .with_state(state);
 
-    // Serve mobile web static files if configured
+    // Serve mobile web static files as a fallback for requests that
+    // don't match any API or WebSocket route.
+    // Using fallback_service (not nest_service) to ensure API routes
+    // take priority over static file serving.
     if let Some(static_dir) = &cfg.static_dir {
         info!("Serving static files from: {static_dir}");
-        app = app.nest_service(
-            "/",
+        app = app.fallback_service(
             tower_http::services::ServeDir::new(static_dir)
                 .append_index_html_on_directories(true),
         );

@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { RemoteSessionManager } from '../services/RemoteSessionManager';
@@ -8,47 +9,180 @@ import { useMobileStore } from '../services/store';
 interface ChatPageProps {
   sessionMgr: RemoteSessionManager;
   sessionId: string;
+  sessionName?: string;
   onBack: () => void;
 }
 
-const ChatPage: React.FC<ChatPageProps> = ({ sessionMgr, sessionId, onBack }) => {
+interface ToolCallEntry {
+  id: string;
+  name: string;
+  status: 'running' | 'done' | 'error';
+  duration?: number;
+  startMs: number;
+}
+
+interface StreamingAccum {
+  thinking: string;
+  text: string;
+  toolCalls: ToolCallEntry[];
+}
+
+/** Renders markdown content with syntax highlighting */
+const MarkdownContent: React.FC<{ content: string }> = ({ content }) => (
+  <ReactMarkdown
+    remarkPlugins={[remarkGfm]}
+    components={{
+      code({ className, children, ...props }) {
+        const match = /language-(\w+)/.exec(className || '');
+        const codeStr = String(children).replace(/\n$/, '');
+        return match ? (
+          <SyntaxHighlighter style={oneDark} language={match[1]} PreTag="div">
+            {codeStr}
+          </SyntaxHighlighter>
+        ) : (
+          <code className={className} {...props}>
+            {children}
+          </code>
+        );
+      },
+    }}
+  >
+    {content}
+  </ReactMarkdown>
+);
+
+/** Desktop-style collapsible thinking block */
+const ThinkingBlock: React.FC<{ thinking: string; streaming?: boolean }> = ({ thinking, streaming }) => {
+  const [open, setOpen] = useState(false);
+  if (!thinking && !streaming) return null;
+  const charCount = thinking.length;
+  return (
+    <div className="chat-thinking">
+      <button className="chat-thinking__toggle" onClick={() => setOpen(o => !o)}>
+        <span className={`chat-thinking__arrow ${open ? 'is-open' : ''}`}>▷</span>
+        <span className="chat-thinking__label">
+          {streaming && charCount === 0
+            ? '思考中…'
+            : `思考了 ${charCount} 字符`}
+        </span>
+      </button>
+      {open && thinking && (
+        <div className="chat-thinking__content">
+          <MarkdownContent content={thinking} />
+        </div>
+      )}
+    </div>
+  );
+};
+
+/** Desktop-style individual tool card */
+const ToolCard: React.FC<{ tool: ToolCallEntry; now: number }> = ({ tool, now }) => {
+  const [_expanded, setExpanded] = useState(false);
+
+  const durationLabel = tool.status === 'done' && tool.duration != null
+    ? `${(tool.duration / 1000).toFixed(1)}s`
+    : tool.status === 'running'
+    ? `${((now - tool.startMs) / 1000).toFixed(1)}s`
+    : '';
+
+  const toolTypeMap: Record<string, string> = {
+    'explore': 'Explore',
+    'read_file': 'Read',
+    'write_file': 'Write',
+    'list_directory': 'LS',
+    'bash': 'Shell',
+    'glob': 'Glob',
+    'grep': 'Grep',
+    'create_file': 'Write',
+    'delete_file': 'Delete',
+    'execute_subagent': 'Task',
+    'search': 'Search',
+  };
+  const toolKey = tool.name.toLowerCase().replace(/[\s-]/g, '_');
+  const typeLabel = toolTypeMap[toolKey] || toolTypeMap[tool.name] || 'Tool';
+
+  return (
+    <div className={`chat-tool-card chat-tool-card--${tool.status}`}>
+      <div className="chat-tool-card__row" onClick={() => setExpanded(e => !e)}>
+        <span className="chat-tool-card__icon">
+          {tool.status === 'running' ? (
+            <span className="chat-tool-card__spinner" />
+          ) : tool.status === 'done' ? (
+            <span className="chat-tool-card__check">✓</span>
+          ) : (
+            <span className="chat-tool-card__error-icon">✗</span>
+          )}
+        </span>
+        <span className="chat-tool-card__name">{tool.name}</span>
+        <span className="chat-tool-card__type">{typeLabel}</span>
+        {durationLabel && (
+          <span className="chat-tool-card__duration">{durationLabel}</span>
+        )}
+      </div>
+    </div>
+  );
+};
+
+/** Tool list */
+const ToolList: React.FC<{ toolCalls: ToolCallEntry[]; now: number }> = ({ toolCalls, now }) => {
+  if (!toolCalls || toolCalls.length === 0) return null;
+  return (
+    <div className="chat-tool-list">
+      {toolCalls.map((tc) => (
+        <ToolCard key={tc.id} tool={tc} now={now} />
+      ))}
+    </div>
+  );
+};
+
+/** Typing indicator dots */
+const TypingDots: React.FC = () => (
+  <span className="chat-msg__typing">
+    <span /><span /><span />
+  </span>
+);
+
+const ChatPage: React.FC<ChatPageProps> = ({ sessionMgr, sessionId, sessionName, onBack }) => {
   const {
     getMessages,
     setMessages,
     appendMessage,
-    updateLastMessage,
+    updateLastMessageFull,
     isStreaming,
     setIsStreaming,
     setError,
+    currentWorkspace,
   } = useMobileStore();
 
   const messages = getMessages(sessionId);
   const [input, setInput] = useState('');
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  // Track accumulated text for the current streaming assistant message
-  const accumulatedTextRef = useRef('');
+  const streamRef = useRef<StreamingAccum>({ thinking: '', text: '', toolCalls: [] });
 
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
 
+  // Live timer for running tools
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!isStreaming) return;
+    const timer = setInterval(() => setNow(Date.now()), 500);
+    return () => clearInterval(timer);
+  }, [isStreaming]);
+
   const loadMessages = useCallback(async (beforeId?: string) => {
     if (isLoadingMore || (!hasMore && beforeId)) return;
-    
     try {
       setIsLoadingMore(true);
       const resp = await sessionMgr.getSessionMessages(sessionId, 50, beforeId);
-      
       if (beforeId) {
-        // Prepend older messages
         const currentMsgs = getMessages(sessionId);
         setMessages(sessionId, [...resp.messages, ...currentMsgs]);
       } else {
-        // Initial load
         setMessages(sessionId, resp.messages);
       }
-      
       setHasMore(resp.has_more);
     } catch (e: any) {
       setError(e.message);
@@ -57,83 +191,124 @@ const ChatPage: React.FC<ChatPageProps> = ({ sessionMgr, sessionId, onBack }) =>
     }
   }, [sessionMgr, sessionId, setMessages, setError, getMessages, isLoadingMore, hasMore]);
 
-  // Handle scroll for lazy loading
   const handleScroll = useCallback(() => {
     const container = messagesContainerRef.current;
     if (!container) return;
-    
-    // If scrolled near top, load more
     if (container.scrollTop < 100 && hasMore && !isLoadingMore) {
       const msgs = getMessages(sessionId);
-      if (msgs.length > 0) {
-        const firstMsgId = msgs[0].id;
-        loadMessages(firstMsgId);
-      }
+      if (msgs.length > 0) loadMessages(msgs[0].id);
     }
   }, [hasMore, isLoadingMore, getMessages, sessionId, loadMessages]);
 
   useEffect(() => {
-    // Subscribe to session stream when entering
     sessionMgr.subscribeSession(sessionId).catch(console.error);
-    
-    // Initial load
     loadMessages();
 
     const unsub = sessionMgr.onStreamEvent((event) => {
       if (event.session_id !== sessionId) return;
-
       const eventType = event.event_type;
 
       if (eventType === 'stream_start') {
+        streamRef.current = { thinking: '', text: '', toolCalls: [] };
         setIsStreaming(true);
-        accumulatedTextRef.current = '';
         appendMessage(sessionId, {
           id: `stream-${Date.now()}`,
           role: 'assistant',
           content: '',
           timestamp: new Date().toISOString(),
+          metadata: { thinking: '', toolCalls: [] },
         });
+
+        const userInput = event.payload?.user_input;
+        if (userInput && userInput.trim()) {
+          const currentMsgs = getMessages(sessionId);
+          const lastUserMsg = [...currentMsgs].reverse().find(m => m.role === 'user');
+          if (!lastUserMsg || lastUserMsg.content !== userInput.trim()) {
+            const msgs = getMessages(sessionId);
+            const newUserMsg = {
+              id: `user-remote-${Date.now()}`,
+              role: 'user',
+              content: userInput.trim(),
+              timestamp: new Date().toISOString(),
+            };
+            setMessages(sessionId, [
+              ...msgs.slice(0, -1),
+              newUserMsg,
+              msgs[msgs.length - 1],
+            ]);
+          }
+        }
       } else if (eventType === 'text_chunk') {
-        const chunk = event.payload?.text || '';
-        accumulatedTextRef.current += chunk;
-        updateLastMessage(sessionId, accumulatedTextRef.current);
+        streamRef.current.text += event.payload?.text || '';
+        updateLastMessageFull(sessionId, streamRef.current.text, {
+          thinking: streamRef.current.thinking,
+          toolCalls: streamRef.current.toolCalls,
+        });
       } else if (eventType === 'thinking_chunk') {
-        // Optionally show thinking content
-        const chunk = event.payload?.content || '';
-        accumulatedTextRef.current += chunk;
-        updateLastMessage(sessionId, accumulatedTextRef.current);
+        streamRef.current.thinking += event.payload?.content || '';
+        updateLastMessageFull(sessionId, streamRef.current.text, {
+          thinking: streamRef.current.thinking,
+          toolCalls: streamRef.current.toolCalls,
+        });
+      } else if (eventType === 'tool_event') {
+        const toolEvt = event.payload?.tool_event;
+        if (toolEvt?.event_type === 'Started') {
+          streamRef.current.toolCalls = [
+            ...streamRef.current.toolCalls,
+            {
+              id: toolEvt.tool_id || `${toolEvt.tool_name}-${Date.now()}`,
+              name: toolEvt.tool_name,
+              status: 'running',
+              startMs: Date.now(),
+            },
+          ];
+          updateLastMessageFull(sessionId, streamRef.current.text, {
+            thinking: streamRef.current.thinking,
+            toolCalls: streamRef.current.toolCalls,
+          });
+        } else if (toolEvt?.event_type === 'Completed' || toolEvt?.event_type === 'Succeeded') {
+          streamRef.current.toolCalls = streamRef.current.toolCalls.map(tc =>
+            (tc.id === toolEvt.tool_id || tc.name === toolEvt.tool_name) && tc.status === 'running'
+              ? { ...tc, status: 'done' as const, duration: toolEvt.duration_ms }
+              : tc
+          );
+          updateLastMessageFull(sessionId, streamRef.current.text, {
+            thinking: streamRef.current.thinking,
+            toolCalls: streamRef.current.toolCalls,
+          });
+        } else if (toolEvt?.event_type === 'Failed') {
+          streamRef.current.toolCalls = streamRef.current.toolCalls.map(tc =>
+            (tc.id === toolEvt.tool_id || tc.name === toolEvt.tool_name) && tc.status === 'running'
+              ? { ...tc, status: 'error' as const }
+              : tc
+          );
+          updateLastMessageFull(sessionId, streamRef.current.text, {
+            thinking: streamRef.current.thinking,
+            toolCalls: streamRef.current.toolCalls,
+          });
+        }
       } else if (eventType === 'stream_end') {
         setIsStreaming(false);
-        accumulatedTextRef.current = '';
+        streamRef.current = { thinking: '', text: '', toolCalls: [] };
+        // Reload to get persisted history
+        loadMessages();
       } else if (eventType === 'stream_error') {
         setIsStreaming(false);
         setError(event.payload?.error || 'Stream error');
-        accumulatedTextRef.current = '';
+        streamRef.current = { thinking: '', text: '', toolCalls: [] };
       } else if (eventType === 'stream_cancelled') {
         setIsStreaming(false);
-        accumulatedTextRef.current = '';
-      } else if (eventType === 'tool_event') {
-        // Append tool activity as a brief system message
-        const toolEvt = event.payload?.tool_event;
-        if (toolEvt?.event_type === 'Started') {
-          const toolInfo = `[Tool: ${toolEvt.tool_name}]`;
-          accumulatedTextRef.current += `\n\n${toolInfo}\n`;
-          updateLastMessage(sessionId, accumulatedTextRef.current);
-        }
-      } else if (eventType === 'session_title') {
-        // Title was generated; could update session list
+        streamRef.current = { thinking: '', text: '', toolCalls: [] };
       }
     });
 
     return () => {
       unsub();
-      // Unsubscribe from session stream when leaving
       sessionMgr.unsubscribeSession(sessionId).catch(console.error);
     };
-  }, [sessionId, sessionMgr, setIsStreaming, appendMessage, updateLastMessage, setError]); // Removed loadMessages from deps to avoid re-triggering
+  }, [sessionId, sessionMgr, setIsStreaming, appendMessage, updateLastMessageFull, setError, setMessages, getMessages]);
 
   useEffect(() => {
-    // Only scroll to bottom on initial load or new message at bottom
     if (!isLoadingMore) {
       messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
@@ -142,7 +317,6 @@ const ChatPage: React.FC<ChatPageProps> = ({ sessionMgr, sessionId, onBack }) =>
   const handleSend = useCallback(async () => {
     const text = input.trim();
     if (!text || isStreaming) return;
-
     setInput('');
     appendMessage(sessionId, {
       id: `user-${Date.now()}`,
@@ -150,7 +324,6 @@ const ChatPage: React.FC<ChatPageProps> = ({ sessionMgr, sessionId, onBack }) =>
       content: text,
       timestamp: new Date().toISOString(),
     });
-
     try {
       await sessionMgr.sendMessage(sessionId, text);
     } catch (e: any) {
@@ -173,67 +346,107 @@ const ChatPage: React.FC<ChatPageProps> = ({ sessionMgr, sessionId, onBack }) =>
     }
   };
 
+  const workspaceName = currentWorkspace?.project_name || currentWorkspace?.path?.split('/').pop() || '';
+  const gitBranch = currentWorkspace?.git_branch;
+  const displayName = sessionName || 'Session';
+
   return (
     <div className="chat-page">
+      {/* Header */}
       <div className="chat-page__header">
-        <button className="chat-page__back" onClick={onBack}>
-          &larr;
+        <button className="chat-page__back" onClick={onBack} aria-label="Back">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+            <path d="M12 4L6 10L12 16" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
         </button>
-        <span className="chat-page__title">Session</span>
-        {isStreaming && (
-          <button className="chat-page__cancel" onClick={handleCancel}>
-            Stop
-          </button>
-        )}
+        <div className="chat-page__header-center">
+          <span className="chat-page__session-label">会话</span>
+          <span className="chat-page__header-sep">/</span>
+          <span className="chat-page__title" title={displayName}>{displayName}</span>
+        </div>
+        <div className="chat-page__header-right">
+          {workspaceName && (
+            <span className="chat-page__workspace-chip" title={currentWorkspace?.path}>
+              {workspaceName}
+              {gitBranch && <span className="chat-page__workspace-branch">⎇ {gitBranch}</span>}
+            </span>
+          )}
+          {isStreaming && (
+            <button className="chat-page__cancel" onClick={handleCancel}>Stop</button>
+          )}
+        </div>
       </div>
 
+      {/* Messages */}
       <div className="chat-page__messages" ref={messagesContainerRef} onScroll={handleScroll}>
-        {isLoadingMore && <div className="chat-page__loading">Loading older messages...</div>}
-        {messages.map((m) => (
-          <div key={m.id} className={`chat-msg chat-msg--${m.role}`}>
-            <div className="chat-msg__role">{m.role === 'user' ? 'You' : 'BitFun'}</div>
-            <div className="chat-msg__content">
-              <ReactMarkdown
-                components={{
-                  code({ className, children, ...props }) {
-                    const match = /language-(\w+)/.exec(className || '');
-                    const codeStr = String(children).replace(/\n$/, '');
-                    return match ? (
-                      <SyntaxHighlighter style={oneDark} language={match[1]} PreTag="div">
-                        {codeStr}
-                      </SyntaxHighlighter>
-                    ) : (
-                      <code className={className} {...props}>
-                        {children}
-                      </code>
-                    );
-                  },
-                }}
-              >
-                {m.content}
-              </ReactMarkdown>
+        {isLoadingMore && (
+          <div className="chat-page__load-more-indicator">Loading older messages…</div>
+        )}
+
+        {messages.map((m) => {
+          if (m.role === 'system' || m.role === 'tool') return null;
+
+          const thinking: string = m.metadata?.thinking || '';
+          const toolCalls: ToolCallEntry[] = m.metadata?.toolCalls || [];
+          const isLastMsg = messages.indexOf(m) === messages.length - 1;
+          const streamingThis = isStreaming && isLastMsg && m.role === 'assistant';
+
+          if (m.role === 'user') {
+            return (
+              <div key={m.id} className="chat-msg chat-msg--user">
+                <div className="chat-msg__bubble-user">
+                  {m.content}
+                </div>
+              </div>
+            );
+          }
+
+          // Assistant message
+          return (
+            <div key={m.id} className="chat-msg chat-msg--assistant">
+              {/* Thinking block */}
+              {(thinking || (streamingThis && !m.content)) && (
+                <ThinkingBlock thinking={thinking} streaming={streamingThis && !thinking && !m.content} />
+              )}
+
+              {/* Tool cards */}
+              <ToolList toolCalls={toolCalls} now={now} />
+
+              {/* Main content */}
+              {m.content ? (
+                <div className="chat-msg__assistant-content">
+                  <MarkdownContent content={m.content} />
+                </div>
+              ) : streamingThis && !thinking && toolCalls.length === 0 ? (
+                <div className="chat-msg__assistant-content">
+                  <TypingDots />
+                </div>
+              ) : null}
             </div>
-          </div>
-        ))}
+          );
+        })}
+
         <div ref={messagesEndRef} />
       </div>
 
+      {/* Input bar */}
       <div className="chat-page__input-bar">
         <textarea
           ref={inputRef}
           className="chat-page__input"
-          placeholder="Type a message..."
+          placeholder="输入消息..."
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
           rows={1}
+          disabled={isStreaming}
         />
         <button
-          className="chat-page__send"
+          className={`chat-page__send${isStreaming ? ' is-streaming' : ''}`}
           onClick={handleSend}
           disabled={!input.trim() || isStreaming}
         >
-          Send
+          发送
         </button>
       </div>
     </div>

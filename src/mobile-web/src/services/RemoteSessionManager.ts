@@ -31,6 +31,8 @@ export interface SessionInfo {
   created_at: string;
   updated_at: string;
   message_count: number;
+  workspace_path?: string;
+  workspace_name?: string;
 }
 
 export interface ChatMessage {
@@ -41,15 +43,32 @@ export interface ChatMessage {
   metadata?: any;
 }
 
+export interface InitialSyncData {
+  has_workspace: boolean;
+  path?: string;
+  project_name?: string;
+  git_branch?: string;
+  sessions: SessionInfo[];
+  has_more_sessions: boolean;
+}
+
 export class RemoteSessionManager {
   private relay: RelayConnection;
   private pendingCallbacks = new Map<string, (data: any) => void>();
   private streamListeners: ((event: any) => void)[] = [];
+  private initialSyncListeners: ((data: InitialSyncData) => void)[] = [];
 
   constructor(relay: RelayConnection) {
     this.relay = relay;
-    // Start polling for buffered messages from the relay server
     this.relay.startPolling(2000);
+  }
+
+  /** Register a listener that fires once when the desktop pushes initial sync after pairing. */
+  onInitialSync(listener: (data: InitialSyncData) => void) {
+    this.initialSyncListeners.push(listener);
+    return () => {
+      this.initialSyncListeners = this.initialSyncListeners.filter(l => l !== listener);
+    };
   }
 
   onStreamEvent(listener: (event: any) => void) {
@@ -62,6 +81,21 @@ export class RemoteSessionManager {
   handleMessage(json: string) {
     try {
       const msg = JSON.parse(json);
+
+      // Desktop pushes this right after pairing — workspace + sessions in one shot
+      if (msg.resp === 'initial_sync') {
+        console.log('[SessionMgr] Received initial_sync from desktop', msg);
+        const data: InitialSyncData = {
+          has_workspace: msg.has_workspace,
+          path: msg.path,
+          project_name: msg.project_name,
+          git_branch: msg.git_branch,
+          sessions: msg.sessions || [],
+          has_more_sessions: msg.has_more_sessions ?? false,
+        };
+        this.initialSyncListeners.forEach(l => l(data));
+        return;
+      }
 
       if (msg.resp === 'stream_event') {
         this.streamListeners.forEach(l => l(msg));
@@ -129,16 +163,33 @@ export class RemoteSessionManager {
     return resp;
   }
 
-  async listSessions(): Promise<SessionInfo[]> {
-    const resp = await this.request<{ resp: string; sessions: SessionInfo[] }>({ cmd: 'list_sessions' });
-    return resp.sessions || [];
+  async listSessions(
+    workspacePath?: string,
+    limit = 30,
+    offset = 0,
+  ): Promise<{ sessions: SessionInfo[]; has_more: boolean }> {
+    const resp = await this.request<{
+      resp: string;
+      sessions: SessionInfo[];
+      has_more: boolean;
+    }>({
+      cmd: 'list_sessions',
+      workspace_path: workspacePath ?? null,
+      limit,
+      offset,
+    });
+    return {
+      sessions: resp.sessions || [],
+      has_more: resp.has_more ?? false,
+    };
   }
 
-  async createSession(agentType?: string, sessionName?: string): Promise<string> {
+  async createSession(agentType?: string, sessionName?: string, workspacePath?: string): Promise<string> {
     const resp = await this.request<{ resp: string; session_id: string }>({
       cmd: 'create_session',
       agent_type: agentType || undefined,
       session_name: sessionName || undefined,
+      workspace_path: workspacePath ?? null,
     });
     return resp.session_id;
   }

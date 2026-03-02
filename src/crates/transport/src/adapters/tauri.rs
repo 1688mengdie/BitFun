@@ -41,11 +41,12 @@ impl fmt::Debug for TauriTransportAdapter {
 impl TransportAdapter for TauriTransportAdapter {
     async fn emit_event(&self, _session_id: &str, event: AgenticEvent) -> anyhow::Result<()> {
         match event {
-            AgenticEvent::SessionCreated { session_id, session_name, agent_type } => {
+            AgenticEvent::SessionCreated { session_id, session_name, agent_type, workspace_path } => {
                 self.app_handle.emit("agentic://session-created", json!({
                     "sessionId": session_id,
                     "sessionName": session_name,
                     "agentType": agent_type,
+                    "workspacePath": workspace_path,
                 }))?;
             }
             AgenticEvent::SessionDeleted { session_id } => {
@@ -53,10 +54,11 @@ impl TransportAdapter for TauriTransportAdapter {
                     "sessionId": session_id,
                 }))?;
             }
-            AgenticEvent::DialogTurnStarted { session_id, turn_id, subagent_parent_info, .. } => {
+            AgenticEvent::DialogTurnStarted { session_id, turn_id, user_input, subagent_parent_info, .. } => {
                 self.app_handle.emit("agentic://dialog-turn-started", json!({
                     "sessionId": session_id,
                     "turnId": turn_id,
+                    "userInput": user_input,
                     "subagentParentInfo": subagent_parent_info,
                 }))?;
             }

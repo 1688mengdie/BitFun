@@ -278,8 +278,20 @@ impl RemoteConnectService {
                                                         }
                                                     });
 
-                                                    *server_arc.write().await =
-                                                        Some(RemoteServer::new(*s, stream_tx));
+                                                    let server = RemoteServer::new(*s, stream_tx);
+
+                                                    // Push initial sync (workspace + sessions) immediately after pairing
+                                                    let initial_sync = server.generate_initial_sync().await;
+                                                    if let Ok((enc, nonce)) = server.encrypt_response(&initial_sync, None) {
+                                                        if let Some(ref client) = *relay_arc.read().await {
+                                                            if let Some(room) = pw.room_id() {
+                                                                info!("Sending initial sync to mobile after pairing");
+                                                                let _ = client.send_encrypted(room, &enc, &nonce).await;
+                                                            }
+                                                        }
+                                                    }
+
+                                                    *server_arc.write().await = Some(server);
                                                 }
                                             }
                                             Ok(false) => {
@@ -296,6 +308,13 @@ impl RemoteConnectService {
                     }
                     relay_client::RelayEvent::PeerDisconnected { device_id } => {
                         info!("Peer disconnected: {device_id}");
+                        pairing_arc.write().await.disconnect().await;
+                        *server_arc.write().await = None;
+                    }
+                    relay_client::RelayEvent::Reconnected => {
+                        // Relay reconnected and room was recreated.
+                        // Reset pairing so mobile can re-pair with fresh keys.
+                        info!("Relay reconnected, resetting pairing state");
                         pairing_arc.write().await.disconnect().await;
                         *server_arc.write().await = None;
                     }

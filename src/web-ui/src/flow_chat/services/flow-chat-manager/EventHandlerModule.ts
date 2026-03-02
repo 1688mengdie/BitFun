@@ -189,21 +189,17 @@ export async function initializeEventListeners(
  * Handle session created event (e.g. remote mobile created a session)
  */
 function handleSessionCreated(context: FlowChatContext, event: any): void {
-  const { sessionId, sessionName, agentType } = event;
-  
+  const { sessionId, sessionName, agentType, workspacePath } = event;
+
   const store = FlowChatStore.getInstance();
   const existing = store.getState().sessions.get(sessionId);
   if (existing) return;
 
-  log.info('Remote session created, adding to store', { sessionId, sessionName, agentType });
-  store.createSession(
-    sessionId,
-    { maxContextTokens: 128128, autoCompact: true, enableTools: true },
-    undefined,
-    sessionName || 'Remote Session',
-    128128,
-    agentType || 'agentic'
-  );
+  // #region agent log
+  fetch('http://127.0.0.1:7682/ingest/19e63f07-99ee-4098-b8c6-1e032fa6efd0',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'196075'},body:JSON.stringify({sessionId:'196075',location:'EventHandlerModule.ts:handleSessionCreated',message:'SessionCreated: adding to store for event processing',data:{eventSessionId:sessionId,sessionName,agentType,workspacePath,currentWsPath:context.currentWorkspacePath},timestamp:Date.now(),runId:'post-fix',hypothesisId:'A'})}).catch(()=>{});
+  // #endregion
+
+  store.addExternalSession(sessionId, sessionName || 'Remote Session', agentType || 'agentic', workspacePath);
 }
 
 /**
@@ -251,8 +247,27 @@ function handleSessionStateChanged(event: any): void {
 /**
  * Handle dialog turn started event
  */
+/**
+ * Strip agent-internal XML wrapper tags from user input before displaying.
+ * Handles: <user_query>...</user_query> and trailing <system_reminder>...</system_reminder>
+ */
+function cleanRemoteUserInput(raw: string): string {
+  let s = raw.trim();
+  if (s.startsWith('<user_query>')) {
+    const endIdx = s.indexOf('</user_query>');
+    if (endIdx !== -1) {
+      s = s.slice('<user_query>'.length, endIdx).trim();
+    }
+  }
+  const reminderIdx = s.indexOf('<system_reminder>');
+  if (reminderIdx !== -1) {
+    s = s.slice(0, reminderIdx).trim();
+  }
+  return s;
+}
+
 function handleDialogTurnStarted(context: FlowChatContext, event: any): void {
-  const { sessionId, turnId, subagentParentInfo } = event;
+  const { sessionId, turnId, userInput, subagentParentInfo } = event;
 
   if (subagentParentInfo) {
     return;
@@ -261,15 +276,41 @@ function handleDialogTurnStarted(context: FlowChatContext, event: any): void {
   const store = FlowChatStore.getInstance();
   const state = store.getState();
   const session = state.sessions.get(sessionId);
-  
+
   if (!session) {
-    log.debug('Session not found', { sessionId, sessionsCount: state.sessions.size });
-    return;
+    // #region agent log
+    fetch('http://127.0.0.1:7682/ingest/19e63f07-99ee-4098-b8c6-1e032fa6efd0',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'196075'},body:JSON.stringify({sessionId:'196075',location:'EventHandlerModule.ts:handleDialogTurnStarted',message:'Session not in store, creating placeholder',data:{eventSessionId:sessionId,turnId,sessionsCount:state.sessions.size},timestamp:Date.now(),runId:'post-fix',hypothesisId:'B'})}).catch(()=>{});
+    // #endregion
+    log.warn('DialogTurnStarted: session not in store, creating placeholder', { sessionId, sessionsCount: state.sessions.size });
+    store.addExternalSession(sessionId, 'Remote Session', 'agentic');
   }
 
-  const dialogTurn = session.dialogTurns.find((turn: DialogTurn) => turn.id === turnId);
+  const freshSession = store.getState().sessions.get(sessionId);
+  const dialogTurn = freshSession?.dialogTurns.find((turn: DialogTurn) => turn.id === turnId);
   if (!dialogTurn) {
-    log.debug('Backend turnId does not match frontend', { turnId, sessionId });
+    // Turn was created remotely (e.g., from mobile) - create it in the store
+    const newTurn: DialogTurn = {
+      id: turnId,
+      sessionId,
+      userMessage: {
+        id: `user_remote_${Date.now()}`,
+        content: cleanRemoteUserInput(userInput || ''),
+        timestamp: Date.now()
+      },
+      modelRounds: [],
+      status: 'pending',
+      startTime: Date.now()
+    };
+    store.addDialogTurn(sessionId, newTurn);
+
+    context.contentBuffers.set(sessionId, new Map());
+    context.activeTextItems.set(sessionId, new Map());
+
+    // Transition state machine to PROCESSING so subsequent events are not filtered
+    stateMachineManager.transition(sessionId, SessionExecutionEvent.START, {
+      taskId: sessionId,
+      dialogTurnId: turnId,
+    });
     return;
   }
 }

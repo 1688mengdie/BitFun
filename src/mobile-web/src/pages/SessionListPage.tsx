@@ -1,10 +1,13 @@
-import React, { useEffect, useCallback, useState } from 'react';
-import { RemoteSessionManager, SessionInfo } from '../services/RemoteSessionManager';
+import React, { useEffect, useRef, useCallback, useState } from 'react';
+import { RemoteSessionManager } from '../services/RemoteSessionManager';
 import { useMobileStore } from '../services/store';
+
+const PAGE_SIZE = 30;
 
 interface SessionListPageProps {
   sessionMgr: RemoteSessionManager;
-  onSelectSession: (sessionId: string) => void;
+  onSelectSession: (sessionId: string, sessionName?: string) => void;
+  onOpenWorkspace: () => void;
 }
 
 function formatTime(unixStr: string): string {
@@ -36,19 +39,25 @@ function agentLabel(agentType: string): string {
   }
 }
 
-const SessionListPage: React.FC<SessionListPageProps> = ({ sessionMgr, onSelectSession }) => {
-  const { sessions, setSessions, setError } = useMobileStore();
+const SessionListPage: React.FC<SessionListPageProps> = ({ sessionMgr, onSelectSession, onOpenWorkspace }) => {
+  const { sessions, setSessions, appendSessions, setError, currentWorkspace, setCurrentWorkspace } = useMobileStore();
   const [creating, setCreating] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
   const [showNewMenu, setShowNewMenu] = useState(false);
+  const offsetRef = useRef(0);
+  const listRef = useRef<HTMLDivElement>(null);
 
-  const loadSessions = useCallback(async () => {
+  /** Load first page for the given workspace and reset the list */
+  const loadFirstPage = useCallback(async (workspacePath: string | undefined) => {
     setLoading(true);
+    offsetRef.current = 0;
     try {
-      const list = await sessionMgr.listSessions();
-      // Sort by updated_at descending (most recent first)
-      list.sort((a, b) => parseInt(b.updated_at, 10) - parseInt(a.updated_at, 10));
-      setSessions(list);
+      const resp = await sessionMgr.listSessions(workspacePath, PAGE_SIZE, 0);
+      setSessions(resp.sessions);
+      setHasMore(resp.has_more);
+      offsetRef.current = resp.sessions.length;
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -56,18 +65,70 @@ const SessionListPage: React.FC<SessionListPageProps> = ({ sessionMgr, onSelectS
     }
   }, [sessionMgr, setSessions, setError]);
 
+  /** Append next page (triggered on scroll) */
+  const loadNextPage = useCallback(async (workspacePath: string | undefined) => {
+    if (loadingMore || !hasMore) return;
+    setLoadingMore(true);
+    try {
+      const resp = await sessionMgr.listSessions(workspacePath, PAGE_SIZE, offsetRef.current);
+      appendSessions(resp.sessions);
+      setHasMore(resp.has_more);
+      offsetRef.current += resp.sessions.length;
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [sessionMgr, appendSessions, setError, loadingMore, hasMore]);
+
+  /** On mount: fetch workspace then load first page */
   useEffect(() => {
-    loadSessions();
-  }, [loadSessions]);
+    let cancelled = false;
+    const init = async () => {
+      try {
+        const info = await sessionMgr.getWorkspaceInfo();
+        if (cancelled) return;
+        const ws = info.has_workspace ? info : null;
+        setCurrentWorkspace(ws);
+        await loadFirstPage(ws?.path);
+      } catch (e: any) {
+        if (!cancelled) setError(e.message);
+      }
+    };
+    init();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /** Scroll handler: detect near-bottom to trigger next page */
+  const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
+    const el = e.currentTarget;
+    if (el.scrollHeight - el.scrollTop - el.clientHeight < 150) {
+      loadNextPage(currentWorkspace?.path);
+    }
+  }, [currentWorkspace?.path, loadNextPage]);
+
+  const handleRefresh = async () => {
+    try {
+      const info = await sessionMgr.getWorkspaceInfo();
+      const ws = info.has_workspace ? info : null;
+      setCurrentWorkspace(ws);
+      await loadFirstPage(ws?.path);
+    } catch (e: any) {
+      setError(e.message);
+    }
+  };
 
   const handleCreate = async (agentType: string) => {
     if (creating) return;
     setCreating(true);
     setShowNewMenu(false);
     try {
-      const id = await sessionMgr.createSession(agentType);
-      await loadSessions();
-      onSelectSession(id);
+      const id = await sessionMgr.createSession(agentType, undefined, currentWorkspace?.path);
+      // Reload first page to show the new session at the top
+      await loadFirstPage(currentWorkspace?.path);
+      const agentLabel = agentType === 'cowork' || agentType === 'Cowork' ? 'Remote Cowork Session' : 'Remote Code Session';
+      onSelectSession(id, agentLabel);
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -90,17 +151,11 @@ const SessionListPage: React.FC<SessionListPageProps> = ({ sessionMgr, onSelectS
           </button>
           {showNewMenu && (
             <div className="session-list__new-menu">
-              <button
-                className="session-list__menu-item"
-                onClick={() => handleCreate('code')}
-              >
+              <button className="session-list__menu-item" onClick={() => handleCreate('code')}>
                 <span className="session-list__menu-icon">{'</>'}</span>
                 Code Session
               </button>
-              <button
-                className="session-list__menu-item"
-                onClick={() => handleCreate('cowork')}
-              >
+              <button className="session-list__menu-item" onClick={() => handleCreate('cowork')}>
                 <span className="session-list__menu-icon">{'<>'}</span>
                 Cowork Session
               </button>
@@ -109,7 +164,19 @@ const SessionListPage: React.FC<SessionListPageProps> = ({ sessionMgr, onSelectS
         </div>
       </div>
 
-      <div className="session-list__items">
+      {/* Workspace banner — tap to switch */}
+      <div className="session-list__workspace-bar" onClick={onOpenWorkspace}>
+        <span className="session-list__workspace-icon">📂</span>
+        <span className="session-list__workspace-name">
+          {currentWorkspace?.project_name || currentWorkspace?.path || 'No workspace'}
+        </span>
+        {currentWorkspace?.git_branch && (
+          <span className="session-list__workspace-branch">⎇ {currentWorkspace.git_branch}</span>
+        )}
+        <span className="session-list__workspace-switch">Switch ›</span>
+      </div>
+
+      <div className="session-list__items" ref={listRef} onScroll={handleScroll}>
         {loading && sessions.length === 0 && (
           <div className="session-list__empty">Loading sessions...</div>
         )}
@@ -120,7 +187,7 @@ const SessionListPage: React.FC<SessionListPageProps> = ({ sessionMgr, onSelectS
           <div
             key={s.session_id}
             className="session-list__item"
-            onClick={() => onSelectSession(s.session_id)}
+            onClick={() => onSelectSession(s.session_id, s.name)}
           >
             <div className="session-list__item-top">
               <div className="session-list__item-name">{s.name || 'Untitled Session'}</div>
@@ -134,9 +201,12 @@ const SessionListPage: React.FC<SessionListPageProps> = ({ sessionMgr, onSelectS
             </div>
           </div>
         ))}
+        {loadingMore && (
+          <div className="session-list__load-more">Loading more...</div>
+        )}
       </div>
 
-      <button className="session-list__refresh" onClick={loadSessions} disabled={loading}>
+      <button className="session-list__refresh" onClick={handleRefresh} disabled={loading || loadingMore}>
         {loading ? 'Refreshing...' : 'Refresh'}
       </button>
     </div>

@@ -1,13 +1,18 @@
 import { create } from 'zustand';
-import type { SessionInfo, ChatMessage } from './RemoteSessionManager';
+import type { SessionInfo, ChatMessage, WorkspaceInfo } from './RemoteSessionManager';
 import type { ConnectionState } from './RelayConnection';
 
 interface MobileStore {
   connectionState: ConnectionState;
   setConnectionState: (s: ConnectionState) => void;
 
+  // Current workspace context (used when creating new sessions)
+  currentWorkspace: WorkspaceInfo | null;
+  setCurrentWorkspace: (w: WorkspaceInfo | null) => void;
+
   sessions: SessionInfo[];
   setSessions: (s: SessionInfo[]) => void;
+  appendSessions: (s: SessionInfo[]) => void;
 
   activeSessionId: string | null;
   setActiveSessionId: (id: string | null) => void;
@@ -18,6 +23,7 @@ interface MobileStore {
   setMessages: (sessionId: string, m: ChatMessage[]) => void;
   appendMessage: (sessionId: string, m: ChatMessage) => void;
   updateLastMessage: (sessionId: string, content: string) => void;
+  updateLastMessageFull: (sessionId: string, content: string, metadata: Record<string, any>) => void;
 
   error: string | null;
   setError: (e: string | null) => void;
@@ -30,8 +36,13 @@ export const useMobileStore = create<MobileStore>((set, get) => ({
   connectionState: 'disconnected',
   setConnectionState: (connectionState) => set({ connectionState }),
 
+  currentWorkspace: null,
+  setCurrentWorkspace: (currentWorkspace) => set({ currentWorkspace }),
+
   sessions: [],
   setSessions: (sessions) => set({ sessions }),
+  appendSessions: (newSessions) =>
+    set((state) => ({ sessions: [...state.sessions, ...newSessions] })),
 
   activeSessionId: null,
   setActiveSessionId: (activeSessionId) => set({ activeSessionId }),
@@ -56,6 +67,16 @@ export const useMobileStore = create<MobileStore>((set, get) => ({
       const msgs = [...(s.messagesBySession[sessionId] || [])];
       if (msgs.length > 0) {
         msgs[msgs.length - 1] = { ...msgs[msgs.length - 1], content };
+      }
+      return {
+        messagesBySession: { ...s.messagesBySession, [sessionId]: msgs },
+      };
+    }),
+  updateLastMessageFull: (sessionId, content, metadata) =>
+    set((s) => {
+      const msgs = [...(s.messagesBySession[sessionId] || [])];
+      if (msgs.length > 0) {
+        msgs[msgs.length - 1] = { ...msgs[msgs.length - 1], content, metadata };
       }
       return {
         messagesBySession: { ...s.messagesBySession, [sessionId]: msgs },
