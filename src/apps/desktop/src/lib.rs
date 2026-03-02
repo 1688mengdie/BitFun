@@ -224,6 +224,7 @@ pub async fn run() {
                         {
                             log::info!("Main window close requested, cleaning up");
                             bitfun_core::util::process_manager::cleanup_all_processes();
+                            api::remote_connect_api::cleanup_on_exit();
 
                             window.app_handle().exit(0);
                         } else {

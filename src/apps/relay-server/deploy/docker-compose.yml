@@ -10,6 +10,11 @@ services:
     environment:
       - RELAY_PORT=9700
       - RELAY_STATIC_DIR=/app/static
+      - RELAY_ROOM_WEB_DIR=/app/room-web
       - RELAY_ROOM_TTL=3600
     volumes:
       - ./static:/app/static:ro
+      - room-web:/app/room-web
+
+volumes:
+  room-web:

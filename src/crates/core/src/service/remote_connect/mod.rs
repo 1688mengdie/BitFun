@@ -22,7 +22,7 @@ pub use relay_client::RelayClient;
 pub use remote_server::RemoteServer;
 
 use anyhow::Result;
-use log::{debug, error, info};
+use log::{error, info};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -48,6 +48,11 @@ pub struct RemoteConnectConfig {
     pub custom_server_url: Option<String>,
     pub bot_feishu: Option<bot::BotConfig>,
     pub bot_telegram: Option<bot::BotConfig>,
+    /// Path to mobile-web build output directory. When provided, the embedded
+    /// relay (LAN/Ngrok) will serve these static files so that the mobile
+    /// browser can load the web app from the local relay instead of the remote
+    /// BitFun server.
+    pub mobile_web_dir: Option<String>,
 }
 
 impl Default for RemoteConnectConfig {
@@ -59,6 +64,7 @@ impl Default for RemoteConnectConfig {
             custom_server_url: None,
             bot_feishu: None,
             bot_telegram: None,
+            mobile_web_dir: None,
         }
     }
 }
@@ -126,16 +132,18 @@ impl RemoteConnectService {
     pub async fn start(&self, method: ConnectionMethod) -> Result<ConnectionResult> {
         info!("Starting remote connect: {method:?}");
 
+        let static_dir = self.config.mobile_web_dir.as_deref();
+
         let relay_url = match &method {
             ConnectionMethod::Lan => {
                 let handle =
-                    embedded_relay::start_embedded_relay(self.config.lan_port).await?;
+                    embedded_relay::start_embedded_relay(self.config.lan_port, static_dir).await?;
                 *self.embedded_relay.write().await = Some(handle);
                 lan::build_lan_relay_url(self.config.lan_port)?
             }
             ConnectionMethod::Ngrok => {
                 let handle =
-                    embedded_relay::start_embedded_relay(self.config.lan_port).await?;
+                    embedded_relay::start_embedded_relay(self.config.lan_port, static_dir).await?;
                 *self.embedded_relay.write().await = Some(handle);
 
                 let tunnel = ngrok::start_ngrok_tunnel(self.config.lan_port).await?;
@@ -154,20 +162,22 @@ impl RemoteConnectService {
         pairing.reset().await;
         let qr_payload = pairing.initiate(&relay_url).await?;
 
-        // QR URL = web app hosted on BitFun server + relay WS address as param
-        let qr_url = QrGenerator::build_url(&qr_payload, &self.config.web_app_url);
-        let qr_svg = QrGenerator::generate_svg_from_url(&qr_url)?;
-        let qr_data = QrGenerator::generate_png_base64_from_url(&qr_url)?;
-
-        *self.active_method.write().await = Some(method.clone());
-
-        // Connect desktop relay client to the relay server
-        let ws_url = format!(
-            "{}/ws",
-            relay_url
-                .replace("https://", "wss://")
-                .replace("http://", "ws://")
-        );
+        // Desktop relay client WebSocket URL:
+        // For LAN/Ngrok the relay runs locally — connect to localhost directly
+        // instead of going through the public URL (ngrok would block with 401).
+        let ws_url = match &method {
+            ConnectionMethod::Lan | ConnectionMethod::Ngrok => {
+                format!("ws://127.0.0.1:{}/ws", self.config.lan_port)
+            }
+            _ => {
+                format!(
+                    "{}/ws",
+                    relay_url
+                        .replace("https://", "wss://")
+                        .replace("http://", "ws://")
+                )
+            }
+        };
 
         let (client, mut event_rx) = RelayClient::new();
         client.connect(&ws_url).await?;
@@ -179,6 +189,37 @@ impl RemoteConnectService {
             )
             .await?;
 
+        // For BitfunServer / CustomServer: upload mobile-web files to the relay
+        // server so the mobile browser loads the same version as the desktop.
+        // The QR URL then points to /r/{room_id}/ on the relay server.
+        let web_app_url: String = match &method {
+            ConnectionMethod::Lan | ConnectionMethod::Ngrok => relay_url.clone(),
+            ConnectionMethod::BitfunServer | ConnectionMethod::CustomServer { .. } => {
+                if let Some(web_dir) = static_dir {
+                    match upload_mobile_web(&relay_url, &qr_payload.room_id, web_dir).await {
+                        Ok(()) => {
+                            let url = format!("{}/r/{}", relay_url.trim_end_matches('/'), qr_payload.room_id);
+                            info!("Uploaded mobile-web to relay: {url}");
+                            url
+                        }
+                        Err(e) => {
+                            error!("Failed to upload mobile-web to relay: {e}; falling back to server-hosted version");
+                            self.config.web_app_url.clone()
+                        }
+                    }
+                } else {
+                    info!("No mobile_web_dir configured; using server-hosted mobile web");
+                    self.config.web_app_url.clone()
+                }
+            }
+            _ => self.config.web_app_url.clone(),
+        };
+
+        let qr_url = QrGenerator::build_url(&qr_payload, &web_app_url);
+        let qr_svg = QrGenerator::generate_svg_from_url(&qr_url)?;
+        let qr_data = QrGenerator::generate_png_base64_from_url(&qr_url)?;
+
+        *self.active_method.write().await = Some(method.clone());
         *self.relay_client.write().await = Some(client);
 
         let pairing_arc = self.pairing.clone();
@@ -409,4 +450,79 @@ impl RemoteConnectService {
     pub async fn peer_device_name(&self) -> Option<String> {
         self.pairing.read().await.peer_device_name().map(String::from)
     }
+}
+
+/// Read all files from `web_dir` and upload them (base64-encoded) to
+/// the relay server at `POST {relay_url}/api/rooms/{room_id}/upload-web`.
+async fn upload_mobile_web(relay_url: &str, room_id: &str, web_dir: &str) -> Result<()> {
+    use base64::{engine::general_purpose::STANDARD as B64, Engine};
+    use std::collections::HashMap;
+
+    let base = std::path::Path::new(web_dir);
+    if !base.join("index.html").exists() {
+        return Err(anyhow::anyhow!(
+            "mobile-web dir missing index.html: {}",
+            web_dir
+        ));
+    }
+
+    let mut files: HashMap<String, String> = HashMap::new();
+    collect_files(base, base, &mut files, &B64)?;
+
+    let url = format!(
+        "{}/api/rooms/{}/upload-web",
+        relay_url.trim_end_matches('/'),
+        room_id
+    );
+
+    info!(
+        "Uploading {} mobile-web files ({} bytes base64) to {url}",
+        files.len(),
+        files.values().map(|v| v.len()).sum::<usize>()
+    );
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(&url)
+        .json(&serde_json::json!({ "files": files }))
+        .timeout(std::time::Duration::from_secs(30))
+        .send()
+        .await
+        .map_err(|e| anyhow::anyhow!("upload mobile-web: {e}"))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(anyhow::anyhow!(
+            "upload mobile-web failed: HTTP {status} — {body}"
+        ));
+    }
+
+    Ok(())
+}
+
+fn collect_files(
+    base: &std::path::Path,
+    dir: &std::path::Path,
+    out: &mut std::collections::HashMap<String, String>,
+    b64: &base64::engine::GeneralPurpose,
+) -> Result<()> {
+    use base64::Engine;
+
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            collect_files(base, &path, out, b64)?;
+        } else if path.is_file() {
+            let rel = path
+                .strip_prefix(base)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            let content = std::fs::read(&path)?;
+            out.insert(rel, b64.encode(&content));
+        }
+    }
+    Ok(())
 }

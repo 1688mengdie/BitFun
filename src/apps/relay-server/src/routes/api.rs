@@ -4,6 +4,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::relay::room::{BufferedMessage, MessageDirection};
@@ -13,6 +14,8 @@ use crate::relay::RoomManager;
 pub struct AppState {
     pub room_manager: Arc<RoomManager>,
     pub start_time: std::time::Instant,
+    /// Base directory for per-room uploaded mobile-web files.
+    pub room_web_dir: String,
 }
 
 #[derive(Serialize)]
@@ -177,4 +180,128 @@ pub async fn ack_messages(
         .room_manager
         .ack_messages(&room_id, direction, body.ack_seq);
     StatusCode::OK
+}
+
+// ── Per-room mobile-web upload & serving ───────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct UploadWebRequest {
+    pub files: HashMap<String, String>,
+}
+
+/// `POST /api/rooms/:room_id/upload-web`
+///
+/// Desktop uploads mobile-web dist files (base64-encoded) so the mobile
+/// browser can load the exact same version the desktop is running.
+pub async fn upload_web(
+    State(state): State<AppState>,
+    Path(room_id): Path<String>,
+    Json(body): Json<UploadWebRequest>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    use base64::{engine::general_purpose::STANDARD as B64, Engine};
+
+    if !state.room_manager.room_exists(&room_id) {
+        return Err(StatusCode::NOT_FOUND);
+    }
+
+    let room_dir = std::path::PathBuf::from(&state.room_web_dir).join(&room_id);
+    if let Err(e) = std::fs::create_dir_all(&room_dir) {
+        tracing::error!("Failed to create room web dir {}: {e}", room_dir.display());
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    let mut written = 0usize;
+    for (rel_path, b64_content) in &body.files {
+        if rel_path.contains("..") {
+            continue;
+        }
+        let decoded = B64.decode(b64_content).map_err(|_| StatusCode::BAD_REQUEST)?;
+        let dest = room_dir.join(rel_path);
+        if let Some(parent) = dest.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        std::fs::write(&dest, &decoded).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        written += 1;
+    }
+
+    tracing::info!("Room {room_id}: uploaded {written} mobile-web files");
+    Ok(Json(serde_json::json!({ "status": "ok", "files_written": written })))
+}
+
+/// `GET /r/{*rest}` — serve per-room mobile-web static files.
+///
+/// The `rest` path is expected to be `room_id` or `room_id/file/path`.
+/// Falls back to `index.html` for SPA routing.
+pub async fn serve_room_web_catchall(
+    State(state): State<AppState>,
+    Path(rest): Path<String>,
+) -> Result<axum::response::Response, StatusCode> {
+    use axum::body::Body;
+    use axum::http::header;
+    use axum::response::IntoResponse;
+
+    let rest = rest.trim_start_matches('/');
+    let (room_id, file_path) = match rest.find('/') {
+        Some(idx) => (&rest[..idx], &rest[idx + 1..]),
+        None => (rest, ""),
+    };
+
+    if room_id.is_empty() {
+        return Err(StatusCode::NOT_FOUND);
+    }
+
+    let room_dir = std::path::PathBuf::from(&state.room_web_dir).join(room_id);
+    if !room_dir.exists() {
+        return Err(StatusCode::NOT_FOUND);
+    }
+
+    let target = if file_path.is_empty() {
+        room_dir.join("index.html")
+    } else {
+        room_dir.join(file_path)
+    };
+
+    let file = if target.is_file() {
+        target
+    } else {
+        room_dir.join("index.html")
+    };
+
+    if !file.is_file() {
+        return Err(StatusCode::NOT_FOUND);
+    }
+
+    let content = std::fs::read(&file).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let mime = mime_from_path(&file);
+
+    Ok(([(header::CONTENT_TYPE, mime)], Body::from(content)).into_response())
+}
+
+fn mime_from_path(p: &std::path::Path) -> &'static str {
+    match p.extension().and_then(|e| e.to_str()) {
+        Some("html") => "text/html; charset=utf-8",
+        Some("js") => "application/javascript; charset=utf-8",
+        Some("css") => "text/css; charset=utf-8",
+        Some("json") => "application/json",
+        Some("png") => "image/png",
+        Some("svg") => "image/svg+xml",
+        Some("ico") => "image/x-icon",
+        Some("woff2") => "font/woff2",
+        Some("woff") => "font/woff",
+        Some("ttf") => "font/ttf",
+        Some("wasm") => "application/wasm",
+        _ => "application/octet-stream",
+    }
+}
+
+/// Remove the per-room web directory (called on room cleanup).
+pub fn cleanup_room_web(room_web_dir: &str, room_id: &str) {
+    let dir = std::path::PathBuf::from(room_web_dir).join(room_id);
+    if dir.exists() {
+        if let Err(e) = std::fs::remove_dir_all(&dir) {
+            tracing::warn!("Failed to clean up room web dir {}: {e}", dir.display());
+        } else {
+            tracing::info!("Cleaned up room web dir for {room_id}");
+        }
+    }
 }

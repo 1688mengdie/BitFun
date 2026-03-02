@@ -219,11 +219,18 @@ export class RemoteSessionManager {
     await this.request({ cmd: 'unsubscribe_session', session_id: sessionId });
   }
 
-  async sendMessage(sessionId: string, content: string): Promise<string> {
+  async sendMessage(
+    sessionId: string,
+    content: string,
+    agentType?: string,
+    images?: { name: string; data_url: string }[],
+  ): Promise<string> {
     const resp = await this.request<{ resp: string; turn_id: string }>({
       cmd: 'send_message',
       session_id: sessionId,
       content,
+      agent_type: agentType || undefined,
+      images: images && images.length > 0 ? images : undefined,
     });
     return resp.turn_id;
   }

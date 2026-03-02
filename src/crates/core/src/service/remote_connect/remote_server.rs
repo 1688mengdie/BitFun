@@ -16,6 +16,13 @@ use tokio::sync::mpsc;
 
 use super::encryption;
 
+/// Image sent from mobile as a base64 data-URL.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImageAttachment {
+    pub name: String,
+    pub data_url: String,
+}
+
 /// Commands that the mobile client can send to the desktop.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "cmd", rename_all = "snake_case")]
@@ -48,6 +55,11 @@ pub enum RemoteCommand {
     SendMessage {
         session_id: String,
         content: String,
+        /// When provided, overrides the session's current agent type for this
+        /// turn (e.g. "agentic", "Plan", "debug").
+        agent_type: Option<String>,
+        /// Images attached by the mobile user (base64 data-URL).
+        images: Option<Vec<ImageAttachment>>,
     },
     CancelTask {
         session_id: String,
@@ -194,10 +206,46 @@ fn strip_user_input_tags(content: &str) -> String {
 /// Map mobile-friendly agent type names to the actual agent registry IDs.
 fn resolve_agent_type(mobile_type: Option<&str>) -> &'static str {
     match mobile_type {
-        Some("code") | Some("agentic") => "agentic",
+        Some("code") | Some("agentic") | Some("Agentic") => "agentic",
         Some("cowork") | Some("Cowork") => "Cowork",
+        Some("plan") | Some("Plan") => "Plan",
+        Some("debug") | Some("Debug") => "debug",
         _ => "agentic",
     }
+}
+
+/// Decode a `data:image/...;base64,...` URL and save it as a file.
+/// Returns the absolute path to the saved image on success.
+fn save_data_url_image(
+    dir: &std::path::Path,
+    name: &str,
+    data_url: &str,
+) -> Option<std::path::PathBuf> {
+    use base64::{engine::general_purpose::STANDARD as B64, Engine};
+
+    let (header, b64_data) = data_url.split_once(",")?;
+    let ext = if header.contains("png") {
+        "png"
+    } else if header.contains("gif") {
+        "gif"
+    } else if header.contains("webp") {
+        "webp"
+    } else {
+        "jpg"
+    };
+
+    let decoded = B64.decode(b64_data.trim()).ok()?;
+
+    let stem = std::path::Path::new(name)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("image");
+    let ts = chrono::Utc::now().timestamp_millis();
+    let filename = format!("{stem}_{ts}.{ext}");
+    let path = dir.join(&filename);
+
+    std::fs::write(&path, &decoded).ok()?;
+    Some(path)
 }
 
 /// Bridges remote commands to local session operations.
@@ -729,34 +777,74 @@ impl RemoteServer {
             RemoteCommand::SendMessage {
                 session_id,
                 content,
+                agent_type: requested_agent_type,
+                images,
             } => {
                 let session_mgr = coordinator.get_session_manager();
-                let (agent_type, session_ws) = session_mgr
+                let (session_agent_type, session_ws) = session_mgr
                     .get_session(session_id)
                     .map(|s| (s.agent_type.clone(), s.config.workspace_path.clone()))
                     .unwrap_or_else(|| ("default".to_string(), None));
 
-                // Silently update the global workspace path so that AI tools (file read,
-                // glob, etc.) operate in the session's own workspace. We use
-                // set_workspace_path (not open_workspace) to avoid firing a
-                // workspace:switched event that would reload the desktop UI and create
-                // a race condition with the in-flight dialog turn.
-                if let Some(ws_path_str) = session_ws {
+                let agent_type = requested_agent_type
+                    .as_deref()
+                    .map(|t| resolve_agent_type(Some(t)).to_string())
+                    .unwrap_or(session_agent_type);
+
+                if let Some(ws_path_str) = &session_ws {
                     use crate::infrastructure::{get_workspace_path, set_workspace_path};
                     let current = get_workspace_path();
                     let current_str = current.as_ref().map(|p| p.to_string_lossy().to_string());
                     if current_str.as_deref() != Some(ws_path_str.as_str()) {
                         info!("Remote send_message: temporarily setting workspace for session={session_id} to {ws_path_str}");
-                        set_workspace_path(Some(std::path::PathBuf::from(&ws_path_str)));
+                        set_workspace_path(Some(std::path::PathBuf::from(ws_path_str)));
                     }
                 }
 
-                info!("Remote send_message: session={session_id}");
+                let full_content = if let Some(imgs) = &images {
+                    if imgs.is_empty() {
+                        content.clone()
+                    } else {
+                        let save_dir = if let Some(ws) = &session_ws {
+                            let d = std::path::PathBuf::from(ws)
+                                .join(".bitfun")
+                                .join("remote-images");
+                            let _ = std::fs::create_dir_all(&d);
+                            Some(d)
+                        } else {
+                            None
+                        };
+
+                        let mut extra = String::new();
+                        for (i, img) in imgs.iter().enumerate() {
+                            if let Some(ref dir) = save_dir {
+                                if let Some(saved) = save_data_url_image(dir, &img.name, &img.data_url) {
+                                    let path_str = saved.to_string_lossy();
+                                    extra.push_str(&format!(
+                                        "\n\n[Image: {}]\nPath: {}\nTip: You can use the AnalyzeImage tool with the image_path parameter.",
+                                        img.name, path_str
+                                    ));
+                                    info!("Remote image {i} saved: {path_str}");
+                                    continue;
+                                }
+                            }
+                            extra.push_str(&format!(
+                                "\n\n[Image: {} (inline)]\nData URL provided inline.\nTip: You can use the AnalyzeImage tool with the data_url parameter.",
+                                img.name
+                            ));
+                        }
+                        format!("{content}{extra}")
+                    }
+                } else {
+                    content.clone()
+                };
+
+                info!("Remote send_message: session={session_id}, agent_type={agent_type}, images={}", images.as_ref().map_or(0, |v| v.len()));
                 let turn_id = format!("turn_{}", chrono::Utc::now().timestamp_millis());
                 match coordinator
                     .start_dialog_turn(
                         session_id.clone(),
-                        content.clone(),
+                        full_content,
                         Some(turn_id.clone()),
                         agent_type,
                         true,

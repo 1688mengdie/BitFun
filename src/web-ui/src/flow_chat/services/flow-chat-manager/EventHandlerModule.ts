@@ -195,10 +195,6 @@ function handleSessionCreated(context: FlowChatContext, event: any): void {
   const existing = store.getState().sessions.get(sessionId);
   if (existing) return;
 
-  // #region agent log
-  fetch('http://127.0.0.1:7682/ingest/19e63f07-99ee-4098-b8c6-1e032fa6efd0',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'196075'},body:JSON.stringify({sessionId:'196075',location:'EventHandlerModule.ts:handleSessionCreated',message:'SessionCreated: adding to store for event processing',data:{eventSessionId:sessionId,sessionName,agentType,workspacePath,currentWsPath:context.currentWorkspacePath},timestamp:Date.now(),runId:'post-fix',hypothesisId:'A'})}).catch(()=>{});
-  // #endregion
-
   store.addExternalSession(sessionId, sessionName || 'Remote Session', agentType || 'agentic', workspacePath);
 }
 
@@ -278,9 +274,6 @@ function handleDialogTurnStarted(context: FlowChatContext, event: any): void {
   const session = state.sessions.get(sessionId);
 
   if (!session) {
-    // #region agent log
-    fetch('http://127.0.0.1:7682/ingest/19e63f07-99ee-4098-b8c6-1e032fa6efd0',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'196075'},body:JSON.stringify({sessionId:'196075',location:'EventHandlerModule.ts:handleDialogTurnStarted',message:'Session not in store, creating placeholder',data:{eventSessionId:sessionId,turnId,sessionsCount:state.sessions.size},timestamp:Date.now(),runId:'post-fix',hypothesisId:'B'})}).catch(()=>{});
-    // #endregion
     log.warn('DialogTurnStarted: session not in store, creating placeholder', { sessionId, sessionsCount: state.sessions.size });
     store.addExternalSession(sessionId, 'Remote Session', 'agentic');
   }

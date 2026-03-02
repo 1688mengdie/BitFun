@@ -14,7 +14,7 @@ use axum::{
 };
 use dashmap::DashMap;
 use futures_util::{SinkExt, StreamExt};
-use log::{debug, error, info, warn};
+use log::{debug, info};
 use serde::{Deserialize, Serialize};
 use std::sync::{
     atomic::{AtomicU64, Ordering},
@@ -123,7 +123,10 @@ enum Outbound {
 
 /// Start the embedded relay and return a shutdown handle.
 /// The server listens on `0.0.0.0:{port}`.
-pub async fn start_embedded_relay(port: u16) -> anyhow::Result<EmbeddedRelayHandle> {
+///
+/// If `static_dir` is provided, the server also serves mobile-web static files
+/// as a fallback for requests that don't match any API or WebSocket route.
+pub async fn start_embedded_relay(port: u16, static_dir: Option<&str>) -> anyhow::Result<EmbeddedRelayHandle> {
     let state = RelayState::new();
     let app_state = state.clone();
 
@@ -148,7 +151,7 @@ pub async fn start_embedded_relay(port: u16) -> anyhow::Result<EmbeddedRelayHand
         }
     });
 
-    let app = Router::new()
+    let mut app = Router::new()
         .route("/ws", get(ws_handler))
         .route("/health", get(health))
         .route("/api/rooms/{room_id}/join", axum::routing::post(join_room_http))
@@ -157,6 +160,14 @@ pub async fn start_embedded_relay(port: u16) -> anyhow::Result<EmbeddedRelayHand
         .route("/api/rooms/{room_id}/ack", axum::routing::post(ack_messages_http))
         .layer(tower_http::cors::CorsLayer::permissive())
         .with_state(app_state);
+
+    if let Some(dir) = static_dir {
+        info!("Embedded relay: serving static files from {dir}");
+        app = app.fallback_service(
+            tower_http::services::ServeDir::new(dir)
+                .append_index_html_on_directories(true),
+        );
+    }
 
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}"))
         .await
@@ -172,7 +183,6 @@ pub async fn start_embedded_relay(port: u16) -> anyhow::Result<EmbeddedRelayHand
             .ok();
     });
 
-    // Brief wait for server to be ready
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
     Ok(EmbeddedRelayHandle { _shutdown: Some(shutdown_tx) })

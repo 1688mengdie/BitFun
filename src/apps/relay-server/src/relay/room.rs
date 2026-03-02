@@ -424,7 +424,8 @@ impl RoomManager {
     }
 
     /// Clean up stale rooms based on last_activity rather than created_at.
-    pub fn cleanup_stale_rooms(&self, ttl_secs: u64) {
+    /// Returns the list of room IDs that were removed.
+    pub fn cleanup_stale_rooms(&self, ttl_secs: u64) -> Vec<String> {
         let now = Utc::now().timestamp();
         let stale_ids: Vec<String> = self
             .rooms
@@ -441,6 +442,8 @@ impl RoomManager {
                 info!("Stale room {room_id} cleaned up");
             }
         }
+
+        stale_ids
     }
 
     pub fn send_to_others_in_room(&self, room_id: &str, exclude_conn_id: ConnId, message: &str) {
@@ -478,6 +481,10 @@ impl RoomManager {
             room.last_activity = Utc::now().timestamp();
             room.ack_messages(direction, ack_seq);
         }
+    }
+
+    pub fn room_exists(&self, room_id: &str) -> bool {
+        self.rooms.contains_key(room_id)
     }
 
     pub fn room_count(&self) -> usize {

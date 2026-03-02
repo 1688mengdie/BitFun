@@ -16,6 +16,13 @@ fn get_service_holder() -> &'static Arc<RwLock<Option<RemoteConnectService>>> {
     REMOTE_CONNECT_SERVICE.get_or_init(|| Arc::new(RwLock::new(None)))
 }
 
+/// Synchronous cleanup called when the application exits.
+/// Stops any running ngrok process and embedded relay to avoid orphaned processes.
+pub fn cleanup_on_exit() {
+    bitfun_core::service::remote_connect::ngrok::cleanup_all_ngrok();
+    log::info!("Remote connect cleanup completed on exit");
+}
+
 async fn ensure_service() -> Result<(), String> {
     let holder = get_service_holder();
     let guard = holder.read().await;
@@ -24,11 +31,41 @@ async fn ensure_service() -> Result<(), String> {
     }
     drop(guard);
 
-    let config = RemoteConnectConfig::default();
+    let mut config = RemoteConnectConfig::default();
+    config.mobile_web_dir = detect_mobile_web_dir();
     let service =
         RemoteConnectService::new(config).map_err(|e| format!("init remote connect: {e}"))?;
     *holder.write().await = Some(service);
     Ok(())
+}
+
+/// Auto-detect the mobile-web build output directory.
+fn detect_mobile_web_dir() -> Option<String> {
+    if let Ok(dir) = std::env::var("BITFUN_MOBILE_WEB_DIR") {
+        let p = std::path::Path::new(&dir);
+        if p.join("index.html").exists() {
+            return Some(dir);
+        }
+    }
+
+    let cwd = std::env::current_dir().ok()?;
+    let candidates = [
+        cwd.join("src/mobile-web/dist"),
+        cwd.join("../../mobile-web/dist"),   // from src/apps/desktop
+        cwd.join("../mobile-web/dist"),
+    ];
+
+    for candidate in &candidates {
+        if candidate.join("index.html").exists() {
+            if let Ok(abs) = candidate.canonicalize() {
+                log::info!("Detected mobile-web dir: {}", abs.display());
+                return Some(abs.to_string_lossy().into_owned());
+            }
+        }
+    }
+
+    log::warn!("mobile-web dist directory not found; LAN/Ngrok modes will not serve static files");
+    None
 }
 
 // ── Request / Response DTOs ────────────────────────────────────────

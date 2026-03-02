@@ -142,6 +142,14 @@ const TypingDots: React.FC = () => (
   </span>
 );
 
+type AgentMode = 'agentic' | 'Plan' | 'debug';
+
+const MODE_OPTIONS: { id: AgentMode; label: string }[] = [
+  { id: 'agentic', label: 'Agentic' },
+  { id: 'Plan', label: 'Plan' },
+  { id: 'debug', label: 'Debug' },
+];
+
 const ChatPage: React.FC<ChatPageProps> = ({ sessionMgr, sessionId, sessionName, onBack }) => {
   const {
     getMessages,
@@ -156,7 +164,10 @@ const ChatPage: React.FC<ChatPageProps> = ({ sessionMgr, sessionId, sessionName,
 
   const messages = getMessages(sessionId);
   const [input, setInput] = useState('');
+  const [agentMode, setAgentMode] = useState<AgentMode>('agentic');
+  const [pendingImages, setPendingImages] = useState<{ name: string; dataUrl: string }[]>([]);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const streamRef = useRef<StreamingAccum>({ thinking: '', text: '', toolCalls: [] });
 
   const [isLoadingMore, setIsLoadingMore] = useState(false);
@@ -316,20 +327,59 @@ const ChatPage: React.FC<ChatPageProps> = ({ sessionMgr, sessionId, sessionName,
 
   const handleSend = useCallback(async () => {
     const text = input.trim();
-    if (!text || isStreaming) return;
+    const imgs = pendingImages;
+    if ((!text && imgs.length === 0) || isStreaming) return;
     setInput('');
+    setPendingImages([]);
+
+    const displayParts = [text];
+    if (imgs.length > 0) {
+      displayParts.push(`[${imgs.length} image(s) attached]`);
+    }
     appendMessage(sessionId, {
       id: `user-${Date.now()}`,
       role: 'user',
-      content: text,
+      content: displayParts.filter(Boolean).join('\n'),
       timestamp: new Date().toISOString(),
     });
     try {
-      await sessionMgr.sendMessage(sessionId, text);
+      const imagePayload = imgs.length > 0
+        ? imgs.map(i => ({ name: i.name, data_url: i.dataUrl }))
+        : undefined;
+      await sessionMgr.sendMessage(sessionId, text || '(see attached images)', agentMode, imagePayload);
     } catch (e: any) {
       setError(e.message);
     }
-  }, [input, isStreaming, sessionId, sessionMgr, appendMessage, setError]);
+  }, [input, pendingImages, isStreaming, sessionId, sessionMgr, appendMessage, setError, agentMode]);
+
+  const handleImageSelect = useCallback(() => {
+    fileInputRef.current?.click();
+  }, []);
+
+  const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files) return;
+    const maxImages = 5;
+    const remaining = maxImages - pendingImages.length;
+    const toProcess = Array.from(files).slice(0, remaining);
+
+    toProcess.forEach((file) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const dataUrl = reader.result as string;
+        setPendingImages((prev) => {
+          if (prev.length >= maxImages) return prev;
+          return [...prev, { name: file.name, dataUrl }];
+        });
+      };
+      reader.readAsDataURL(file);
+    });
+    e.target.value = '';
+  }, [pendingImages.length]);
+
+  const removeImage = useCallback((idx: number) => {
+    setPendingImages((prev) => prev.filter((_, i) => i !== idx));
+  }, []);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -354,27 +404,30 @@ const ChatPage: React.FC<ChatPageProps> = ({ sessionMgr, sessionId, sessionName,
     <div className="chat-page">
       {/* Header */}
       <div className="chat-page__header">
-        <button className="chat-page__back" onClick={onBack} aria-label="Back">
-          <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-            <path d="M12 4L6 10L12 16" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
-          </svg>
-        </button>
-        <div className="chat-page__header-center">
-          <span className="chat-page__session-label">会话</span>
-          <span className="chat-page__header-sep">/</span>
-          <span className="chat-page__title" title={displayName}>{displayName}</span>
-        </div>
-        <div className="chat-page__header-right">
-          {workspaceName && (
-            <span className="chat-page__workspace-chip" title={currentWorkspace?.path}>
-              {workspaceName}
-              {gitBranch && <span className="chat-page__workspace-branch">⎇ {gitBranch}</span>}
-            </span>
-          )}
+        <div className="chat-page__header-row">
+          <button className="chat-page__back" onClick={onBack} aria-label="Back">
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+              <path d="M12 4L6 10L12 16" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+          </button>
+          <div className="chat-page__header-center">
+            <span className="chat-page__title" title={displayName}>{displayName}</span>
+          </div>
           {isStreaming && (
             <button className="chat-page__cancel" onClick={handleCancel}>Stop</button>
           )}
         </div>
+        {workspaceName && (
+          <div className="chat-page__header-workspace" title={currentWorkspace?.path}>
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+              <path d="M2 4L8 2L14 4V12L8 14L2 12V4Z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round"/>
+              <path d="M8 2V14" stroke="currentColor" strokeWidth="1.2"/>
+              <path d="M2 4L8 6L14 4" stroke="currentColor" strokeWidth="1.2"/>
+            </svg>
+            <span className="chat-page__workspace-name">{workspaceName}</span>
+            {gitBranch && <span className="chat-page__workspace-branch">⎇ {gitBranch}</span>}
+          </div>
+        )}
       </div>
 
       {/* Messages */}
@@ -431,23 +484,73 @@ const ChatPage: React.FC<ChatPageProps> = ({ sessionMgr, sessionId, sessionName,
 
       {/* Input bar */}
       <div className="chat-page__input-bar">
-        <textarea
-          ref={inputRef}
-          className="chat-page__input"
-          placeholder="输入消息..."
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={handleKeyDown}
-          rows={1}
-          disabled={isStreaming}
-        />
-        <button
-          className={`chat-page__send${isStreaming ? ' is-streaming' : ''}`}
-          onClick={handleSend}
-          disabled={!input.trim() || isStreaming}
-        >
-          发送
-        </button>
+        <div className="chat-page__input-toolbar">
+          <div className="chat-page__mode-selector">
+            {MODE_OPTIONS.map((opt) => (
+              <button
+                key={opt.id}
+                className={`chat-page__mode-btn${agentMode === opt.id ? ' is-active' : ''}`}
+                onClick={() => setAgentMode(opt.id)}
+                disabled={isStreaming}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {pendingImages.length > 0 && (
+          <div className="chat-page__image-preview-row">
+            {pendingImages.map((img, idx) => (
+              <div key={idx} className="chat-page__image-thumb">
+                <img src={img.dataUrl} alt={img.name} />
+                <button className="chat-page__image-remove" onClick={() => removeImage(idx)}>×</button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="chat-page__input-row">
+          <button
+            className="chat-page__attach-btn"
+            onClick={handleImageSelect}
+            disabled={isStreaming || pendingImages.length >= 5}
+            aria-label="Attach image"
+          >
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+              <rect x="2" y="3" width="16" height="14" rx="2" stroke="currentColor" strokeWidth="1.5"/>
+              <circle cx="7" cy="8" r="1.5" stroke="currentColor" strokeWidth="1.2"/>
+              <path d="M2 14L6 10L9 13L13 9L18 14" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/>
+            </svg>
+          </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/png,image/jpeg,image/jpg,image/gif,image/webp"
+            multiple
+            style={{ display: 'none' }}
+            onChange={handleFileChange}
+          />
+          <textarea
+            ref={inputRef}
+            className="chat-page__input"
+            placeholder="输入消息..."
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={handleKeyDown}
+            rows={1}
+            disabled={isStreaming}
+          />
+          <button
+            className={`chat-page__send${isStreaming ? ' is-streaming' : ''}`}
+            onClick={handleSend}
+            disabled={(!input.trim() && pendingImages.length === 0) || isStreaming}
+          >
+            <svg width="18" height="18" viewBox="0 0 20 20" fill="none">
+              <path d="M3 10L17 3L10 17V10H3Z" fill="currentColor"/>
+            </svg>
+          </button>
+        </div>
       </div>
     </div>
   );

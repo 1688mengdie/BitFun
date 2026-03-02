@@ -3,6 +3,7 @@
 //! WebSocket relay for Remote Connect. Manages rooms and forwards E2E encrypted
 //! messages between desktop and mobile clients. Also serves mobile web static files.
 
+use axum::extract::DefaultBodyLimit;
 use axum::routing::{get, post};
 use axum::Router;
 use tower_http::cors::CorsLayer;
@@ -30,33 +31,41 @@ async fn main() -> anyhow::Result<()> {
 
     let cleanup_rm = room_manager.clone();
     let cleanup_ttl = cfg.room_ttl_secs;
+    let cleanup_room_web_dir = cfg.room_web_dir.clone();
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(60)).await;
-            cleanup_rm.cleanup_stale_rooms(cleanup_ttl);
+            let stale_ids = cleanup_rm.cleanup_stale_rooms(cleanup_ttl);
+            for room_id in &stale_ids {
+                api::cleanup_room_web(&cleanup_room_web_dir, room_id);
+            }
         }
     });
 
     let state = AppState {
         room_manager,
         start_time: std::time::Instant::now(),
+        room_web_dir: cfg.room_web_dir.clone(),
     };
 
     let mut app = Router::new()
         .route("/health", get(api::health_check))
         .route("/api/info", get(api::server_info))
-        .route("/api/rooms/{room_id}/join", post(api::join_room))
-        .route("/api/rooms/{room_id}/message", post(api::relay_message))
-        .route("/api/rooms/{room_id}/poll", get(api::poll_messages))
-        .route("/api/rooms/{room_id}/ack", post(api::ack_messages))
+        .route("/api/rooms/:room_id/join", post(api::join_room))
+        .route("/api/rooms/:room_id/message", post(api::relay_message))
+        .route("/api/rooms/:room_id/poll", get(api::poll_messages))
+        .route("/api/rooms/:room_id/ack", post(api::ack_messages))
+        .route(
+            "/api/rooms/:room_id/upload-web",
+            post(api::upload_web).layer(DefaultBodyLimit::max(10 * 1024 * 1024)),
+        )
+        .route("/r/*rest", get(api::serve_room_web_catchall))
         .route("/ws", get(websocket::websocket_handler))
         .layer(CorsLayer::permissive())
         .with_state(state);
 
     // Serve mobile web static files as a fallback for requests that
     // don't match any API or WebSocket route.
-    // Using fallback_service (not nest_service) to ensure API routes
-    // take priority over static file serving.
     if let Some(static_dir) = &cfg.static_dir {
         info!("Serving static files from: {static_dir}");
         app = app.fallback_service(
@@ -64,6 +73,8 @@ async fn main() -> anyhow::Result<()> {
                 .append_index_html_on_directories(true),
         );
     }
+
+    info!("Room web upload dir: {}", cfg.room_web_dir);
 
     let listener = tokio::net::TcpListener::bind(cfg.listen_addr).await?;
     info!("Relay server listening on {}", cfg.listen_addr);
