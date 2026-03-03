@@ -7,6 +7,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import { useI18n } from '@/infrastructure/i18n';
 import { Modal, Badge } from '@/component-library';
+import { systemAPI } from '@/infrastructure/api/service-api/SystemAPI';
 import {
   remoteConnectAPI,
   type ConnectionResult,
@@ -15,6 +16,7 @@ import {
 import './RemoteConnectDialog.scss';
 
 type ConnectionTab = 'lan' | 'ngrok' | 'bitfun_server' | 'custom_server' | 'bot';
+const NGROK_SETUP_URL = 'https://dashboard.ngrok.com/get-started/setup';
 
 interface TabDef {
   id: ConnectionTab;
@@ -39,7 +41,7 @@ export const RemoteConnectDialog: React.FC<RemoteConnectDialogProps> = ({
   onClose,
 }) => {
   const { t } = useI18n('common');
-  const [activeTab, setActiveTab] = useState<ConnectionTab>('lan');
+  const [activeTab, setActiveTab] = useState<ConnectionTab>('bitfun_server');
   const [connectionResult, setConnectionResult] = useState<ConnectionResult | null>(null);
   const [status, setStatus] = useState<RemoteConnectStatus | null>(null);
   const [loading, setLoading] = useState(false);
@@ -127,6 +129,30 @@ export const RemoteConnectDialog: React.FC<RemoteConnectDialogProps> = ({
   }, []);
 
   const isConnected = status?.pairing_state === 'connected';
+  const isNgrokNotInstalledError = !!error?.includes('ngrok is not installed');
+
+  const handleOpenNgrokSetup = useCallback(() => {
+    void systemAPI.openExternal(NGROK_SETUP_URL);
+  }, []);
+
+  const renderErrorBlock = () => {
+    if (!error) return null;
+
+    return (
+      <div className="bitfun-remote-connect__error-group">
+        <p className="bitfun-remote-connect__error">{error}</p>
+        {isNgrokNotInstalledError && (
+          <button
+            type="button"
+            className="bitfun-remote-connect__error-action"
+            onClick={handleOpenNgrokSetup}
+          >
+            {t('remoteConnect.openNgrokSetup')}
+          </button>
+        )}
+      </div>
+    );
+  };
 
   const renderPairingState = () => {
     if (!status) return null;
@@ -263,7 +289,7 @@ export const RemoteConnectDialog: React.FC<RemoteConnectDialogProps> = ({
         </div>
       )}
 
-      {error && <p className="bitfun-remote-connect__error">{error}</p>}
+      {renderErrorBlock()}
 
       <button
         type="button"
@@ -339,7 +365,7 @@ export const RemoteConnectDialog: React.FC<RemoteConnectDialogProps> = ({
           {t(`remoteConnect.desc_${activeTab}`)}
         </p>
 
-        {error && <p className="bitfun-remote-connect__error">{error}</p>}
+        {renderErrorBlock()}
 
         <button
           type="button"

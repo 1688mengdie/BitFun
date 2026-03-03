@@ -122,8 +122,9 @@ pub async fn start_ngrok_tunnel(local_port: u16) -> Result<NgrokTunnel> {
     let ngrok_path = find_ngrok().ok_or_else(|| {
         anyhow!(
             "ngrok is not installed.\n\
-             Please install it from https://ngrok.com/download and make sure \
-             it is in your PATH."
+             Please install ngrok and configure your auth token, then retry.\n\
+             No need to start ngrok manually — BitFun will start it automatically.\n\
+             Setup guide: https://dashboard.ngrok.com/get-started/setup"
         )
     })?;
 
@@ -153,8 +154,9 @@ pub async fn start_ngrok_tunnel(local_port: u16) -> Result<NgrokTunnel> {
         .map_err(|e| {
             anyhow!(
                 "Failed to start ngrok process: {e}\n\
-                 Make sure ngrok is installed correctly and has a valid auth token \
-                 (run: ngrok config add-authtoken <YOUR_TOKEN>)."
+                 Please ensure ngrok is installed and your auth token is configured \
+                 (run: ngrok config add-authtoken <YOUR_TOKEN>).\n\
+                 No need to start ngrok manually — BitFun will start it automatically."
             )
         })?;
 
@@ -176,7 +178,8 @@ pub async fn start_ngrok_tunnel(local_port: u16) -> Result<NgrokTunnel> {
                  Possible causes:\n\
                  - ngrok auth token not configured (run: ngrok config add-authtoken <YOUR_TOKEN>)\n\
                  - Network connectivity issue\n\
-                 - ngrok service outage"
+                 - ngrok service outage\n\
+                 Note: You do not need to start ngrok manually."
             ));
         }
     };

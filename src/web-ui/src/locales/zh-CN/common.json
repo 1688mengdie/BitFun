@@ -172,9 +172,9 @@
     "stateVerifying": "验证中...",
     "stateConnected": "已连接",
     "stateDisconnected": "已断开",
-    "desc_lan": "通过局域网连接，两台设备需在同一WiFi下。",
-    "desc_bitfun_server": "通过BitFun官方中继服务器连接，有网络即可使用。",
-    "desc_ngrok": "通过ngrok隧道连接，需要本机安装并认证ngrok。",
+    "desc_lan": "通过局域网连接，两台设备需在同一LAN/WiFi下。",
+    "desc_bitfun_server": "通过BitFun官方中继服务器连接。",
+    "desc_ngrok": "通过ngrok隧道连接，首次使用需安装ngrok并完成授权（无需手动启动ngrok）。",
     "desc_custom_server": "通过自建中继服务器连接。",
     "desc_bot": "通过飞书或Telegram机器人连接，请先配置机器人凭证。",
     "botTgStep1": "打开Telegram，搜索 @BotFather",
@@ -182,7 +182,8 @@
     "botTgStep3": "复制Bot Token，粘贴到下方",
     "botFeishuStep1": "前往飞书开放平台，创建应用",
     "botFeishuStep2": "启用机器人能力，配置事件订阅",
-    "botFeishuStep3": "将App ID和App Secret填入下方"
+    "botFeishuStep3": "将App ID和App Secret填入下方",
+    "openNgrokSetup": "打开 ngrok 安装与配置页面"
   },
   "about": {
     "close": "关闭",

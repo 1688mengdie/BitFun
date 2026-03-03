@@ -62,8 +62,8 @@ const ThinkingBlock: React.FC<{ thinking: string; streaming?: boolean }> = ({ th
         <span className={`chat-thinking__arrow ${open ? 'is-open' : ''}`}>▷</span>
         <span className="chat-thinking__label">
           {streaming && charCount === 0
-            ? '思考中…'
-            : `思考了 ${charCount} 字符`}
+            ? 'Thinking...'
+            : `Thought for ${charCount} characters`}
         </span>
       </button>
       {open && thinking && (
@@ -543,7 +543,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ sessionMgr, sessionId, sessionName,
           <textarea
             ref={inputRef}
             className="chat-page__input"
-            placeholder="输入消息..."
+            placeholder="Type a message..."
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}

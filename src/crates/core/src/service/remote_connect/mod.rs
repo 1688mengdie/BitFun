@@ -132,6 +132,9 @@ impl RemoteConnectService {
     /// Start a remote connection with the given method.
     pub async fn start(&self, method: ConnectionMethod) -> Result<ConnectionResult> {
         info!("Starting remote connect: {method:?}");
+        // Always clean stale resources before starting a new session.
+        // This avoids leftover embedded relay/ngrok state from previous failed starts.
+        self.stop().await;
 
         let static_dir = self.config.mobile_web_dir.as_deref();
 
@@ -140,14 +143,32 @@ impl RemoteConnectService {
                 let handle =
                     embedded_relay::start_embedded_relay(self.config.lan_port, static_dir).await?;
                 *self.embedded_relay.write().await = Some(handle);
-                lan::build_lan_relay_url(self.config.lan_port)?
+                match lan::build_lan_relay_url(self.config.lan_port) {
+                    Ok(url) => url,
+                    Err(e) => {
+                        if let Some(ref mut relay) = *self.embedded_relay.write().await {
+                            relay.stop();
+                        }
+                        *self.embedded_relay.write().await = None;
+                        return Err(e);
+                    }
+                }
             }
             ConnectionMethod::Ngrok => {
                 let handle =
                     embedded_relay::start_embedded_relay(self.config.lan_port, static_dir).await?;
                 *self.embedded_relay.write().await = Some(handle);
 
-                let tunnel = ngrok::start_ngrok_tunnel(self.config.lan_port).await?;
+                let tunnel = match ngrok::start_ngrok_tunnel(self.config.lan_port).await {
+                    Ok(tunnel) => tunnel,
+                    Err(e) => {
+                        if let Some(ref mut relay) = *self.embedded_relay.write().await {
+                            relay.stop();
+                        }
+                        *self.embedded_relay.write().await = None;
+                        return Err(e);
+                    }
+                };
                 let url = tunnel.public_url.clone();
                 *self.ngrok_tunnel.write().await = Some(tunnel);
                 url
