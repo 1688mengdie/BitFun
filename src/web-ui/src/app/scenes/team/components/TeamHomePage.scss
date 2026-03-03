@@ -430,7 +430,13 @@
   background: var(--element-bg-subtle);
   display: flex;
   flex-direction: column;
-  gap: $size-gap-3;
+  gap: 0;
+
+  & > * + * {
+    margin-top: $size-gap-3;
+    border-top: 1px dashed var(--border-subtle);
+    padding-top: $size-gap-3;
+  }
 }
 
 .th-list__detail-desc {
@@ -568,7 +574,6 @@
   line-height: 1;
 }
 
-// 管理操作按钮组（全选/全清/重置/展开）
 .th-list__tools-actions {
   display: inline-flex;
   align-items: center;
@@ -576,11 +581,17 @@
   margin-left: auto;
 }
 
-// 折叠状态下的已启用工具 chip 行
 .th-list__tools-grid {
   display: flex;
   flex-wrap: wrap;
   gap: $size-gap-2;
+}
+
+.th-list__tools-empty {
+  font-size: 10px;
+  color: var(--color-text-tertiary);
+  font-style: italic;
+  opacity: 0.6;
 }
 
 .th-list__tool-chip {
@@ -601,7 +612,6 @@
 
 }
 
-// 展开状态下的工具交互面板
 .th-list__tools-panel {
   display: flex;
   flex-wrap: wrap;
@@ -621,7 +631,6 @@
   }
 }
 
-// 工具面板内的可点击工具 item
 .th-list__tool-item {
   display: inline-flex;
   align-items: center;

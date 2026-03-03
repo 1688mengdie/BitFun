@@ -25,7 +25,7 @@ BitFun is a next-generation Agent system built around the idea of **"AI assistan
 
 Every user has their own Agent assistant — one that remembers your habits and preferences, carries a unique personality, and keeps growing over time. On top of this assistant, BitFun ships with two built-in capabilities: **Code Agent** (coding assistant) and **Cowork Agent** (knowledge work assistant), along with a unified extension mechanism to define additional Agent roles as needed.
 
-Your assistant isn't confined to the desktop — it can be reached through multiple channels, such as WeChat, Telegram, WhatsApp, and other social platforms, letting you issue instructions anytime, anywhere. Tasks keep running in the background, and you check in or give feedback whenever convenient.
+Your assistant isn't confined to the desktop — it can be reached through multiple channels, such as Telegram, WhatsApp, and other social platforms, letting you issue instructions anytime, anywhere. Tasks keep running in the background, and you check in or give feedback whenever convenient.
 
 Built with **Rust + TypeScript** for an ultra-lightweight, fluid, cross-platform experience.
 
@@ -117,7 +117,7 @@ The project uses a Rust + TypeScript tech stack, supporting cross-platform and m
 | **CLI** | Windows, macOS, Linux | 🚧 In Development |
 | **Server** | - | 🚧 In Development |
 | **Mobile** (Native App) | iOS, Android | 🚧 In Development |
-| **Social Platform Integration** | WeChat, Telegram, WhatsApp, Discord, etc. | 🚧 In Development |
+| **Social Platform Integration** | Telegram, WhatsApp, Discord, etc. | 🚧 In Development |
 
 
 

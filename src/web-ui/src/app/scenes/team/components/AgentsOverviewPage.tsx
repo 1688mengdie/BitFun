@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useEffect } from 'react';
-import { Bot, SlidersHorizontal, Wrench, RotateCcw, Pencil, X, Plus } from 'lucide-react';
+import { Bot, SlidersHorizontal, Wrench, RotateCcw, Pencil, X, Plus, Puzzle } from 'lucide-react';
 
 import { useTranslation } from 'react-i18next';
 import { Search, Switch, IconButton, Badge } from '@/component-library';
@@ -13,7 +13,7 @@ import { agentAPI } from '@/infrastructure/api/service-api/AgentAPI';
 import { SubagentAPI } from '@/infrastructure/api/service-api/SubagentAPI';
 import type { SubagentSource } from '@/infrastructure/api/service-api/SubagentAPI';
 import { configAPI } from '@/infrastructure/api/service-api/ConfigAPI';
-import type { ModeConfigItem } from '@/infrastructure/config/types';
+import type { ModeConfigItem, SkillInfo } from '@/infrastructure/config/types';
 import { useNotification } from '@/shared/notification-system';
 import './TeamHomePage.scss';
 
@@ -80,10 +80,13 @@ const AgentListItem: React.FC<{
   modeConfig: ModeConfigItem | null;
   onToggleTool: (agentId: string, toolName: string) => Promise<void>;
   onResetTools: (agentId: string) => Promise<void>;
-}> = ({ agent, soloEnabled, onToggleSolo, index, availableTools, modeConfig, onToggleTool, onResetTools }) => {
+  availableSkills: SkillInfo[];
+  onToggleSkill: (agentId: string, skillName: string) => Promise<void>;
+}> = ({ agent, soloEnabled, onToggleSolo, index, availableTools, modeConfig, onToggleTool, onResetTools, availableSkills, onToggleSkill }) => {
   const { t } = useTranslation('scenes/team');
   const [expanded, setExpanded] = useState(false);
   const [toolsEditing, setToolsEditing] = useState(false);
+  const [skillsEditing, setSkillsEditing] = useState(false);
 
   const toggleExpand = useCallback(() => setExpanded((v) => !v), []);
 
@@ -92,6 +95,8 @@ const AgentListItem: React.FC<{
   const isMode = agent.agentKind === 'mode';
   const enabledTools = modeConfig?.available_tools ?? agent.defaultTools ?? [];
   const totalTools = isMode ? availableTools.length : (agent.defaultTools?.length ?? 0);
+  const enabledSkills = modeConfig?.available_skills ?? [];
+  const enabledSkillsDisplay = availableSkills.filter((s) => enabledSkills.includes(s.name));
 
   return (
     <div
@@ -144,7 +149,6 @@ const AgentListItem: React.FC<{
         <div className="th-list__item-details">
           <p className="th-list__detail-desc">{agent.description}</p>
 
-          {/* 能力评级 */}
           <div className="th-list__cap-grid">
             {agent.capabilities.map((cap) => (
               <div key={cap.category} className="th-list__cap-row">
@@ -172,10 +176,8 @@ const AgentListItem: React.FC<{
             ))}
           </div>
 
-          {/* 工具管理区块 */}
           {totalTools > 0 && (
             <div className="th-list__tools-section">
-              {/* 标题行 */}
               <div className="th-list__tools-header">
                 <Wrench size={11} />
                 <span className="th-list__tools-label">{t('agentsOverview.tools', '工具')}</span>
@@ -183,7 +185,6 @@ const AgentListItem: React.FC<{
                   {isMode ? `${enabledTools.length}/${totalTools}` : totalTools}
                 </span>
 
-                {/* mode agent：编辑 / 取消 + 重置 */}
                 {isMode && (
                   <div className="th-list__tools-actions" onClick={(e) => e.stopPropagation()}>
                     {toolsEditing ? (
@@ -219,7 +220,6 @@ const AgentListItem: React.FC<{
                 )}
               </div>
 
-              {/* mode agent 编辑态：全部工具可点击切换 */}
               {isMode && toolsEditing && (
                 <div className="th-list__tools-panel" onClick={(e) => e.stopPropagation()}>
                   {[...availableTools]
@@ -247,7 +247,6 @@ const AgentListItem: React.FC<{
                 </div>
               )}
 
-              {/* mode agent 默认态：只显示已启用的工具 chip */}
               {isMode && !toolsEditing && (
                 <div className="th-list__tools-grid">
                   {enabledTools.map((tool) => (
@@ -258,7 +257,6 @@ const AgentListItem: React.FC<{
                 </div>
               )}
 
-              {/* sub-agent：只读工具 chip */}
               {!isMode && (
                 <div className="th-list__tools-grid">
                   {(agent.defaultTools ?? []).map((tool) => (
@@ -266,6 +264,80 @@ const AgentListItem: React.FC<{
                       {tool.replace(/_/g, ' ')}
                     </span>
                   ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {isMode && availableSkills.length > 0 && (
+            <div className="th-list__tools-section">
+              <div className="th-list__tools-header">
+                <Puzzle size={11} />
+                <span className="th-list__tools-label">{t('agentsOverview.skills', 'Skills')}</span>
+                <span className="th-list__tools-count">
+                  {`${enabledSkills.length}/${availableSkills.length}`}
+                </span>
+                <div className="th-list__tools-actions" onClick={(e) => e.stopPropagation()}>
+                  {skillsEditing ? (
+                    <IconButton
+                      size="small"
+                      variant="ghost"
+                      tooltip={t('agentsOverview.skillsCancel', '取消编辑')}
+                      onClick={() => setSkillsEditing(false)}
+                    >
+                      <X size={12} />
+                    </IconButton>
+                  ) : (
+                    <IconButton
+                      size="small"
+                      variant="ghost"
+                      tooltip={t('agentsOverview.skillsEdit', '管理 Skills')}
+                      onClick={() => setSkillsEditing(true)}
+                    >
+                      <Pencil size={12} />
+                    </IconButton>
+                  )}
+                </div>
+              </div>
+
+              {skillsEditing && (
+                <div className="th-list__tools-panel" onClick={(e) => e.stopPropagation()}>
+                  {[...availableSkills]
+                    .sort((a, b) => {
+                      const aOn = enabledSkills.includes(a.name);
+                      const bOn = enabledSkills.includes(b.name);
+                      if (aOn && !bOn) return -1;
+                      if (!aOn && bOn) return 1;
+                      return 0;
+                    })
+                    .map((skill) => {
+                      const isOn = enabledSkills.includes(skill.name);
+                      return (
+                        <button
+                          key={skill.name}
+                          type="button"
+                          className={`th-list__tool-item${isOn ? ' is-on' : ''}`}
+                          title={skill.description || skill.name}
+                          onClick={() => onToggleSkill(agent.id, skill.name)}
+                        >
+                          <span className="th-list__tool-item-name">{skill.name}</span>
+                        </button>
+                      );
+                    })}
+                </div>
+              )}
+
+              {!skillsEditing && (
+                <div className="th-list__tools-grid">
+                  {enabledSkillsDisplay.length === 0 ? (
+                    <span className="th-list__tools-empty">{t('agentsOverview.noSkills', '未启用任何 Skill')}</span>
+                  ) : (
+                    enabledSkillsDisplay.map((skill) => (
+                      <span key={skill.name} className="th-list__tool-chip" title={skill.description || skill.name}>
+                        {skill.name}
+                      </span>
+                    ))
+                  )}
                 </div>
               )}
             </div>
@@ -293,6 +365,7 @@ const AgentsOverviewPage: React.FC = () => {
   const [allAgents, setAllAgents] = useState<AgentWithCapabilities[]>([]);
   const [loading, setLoading] = useState(true);
   const [availableTools, setAvailableTools] = useState<ToolInfo[]>([]);
+  const [availableSkills, setAvailableSkills] = useState<SkillInfo[]>([]);
   const [modeConfigs, setModeConfigs] = useState<Record<string, ModeConfigItem>>({});
 
   const loadAgents = useCallback(async () => {
@@ -306,11 +379,12 @@ const AgentsOverviewPage: React.FC = () => {
       }
     };
     try {
-      const [modes, subagents, tools, configs] = await Promise.all([
+      const [modes, subagents, tools, configs, skills] = await Promise.all([
         agentAPI.getAvailableModes().catch(() => []),
         SubagentAPI.listSubagents().catch(() => []),
         fetchTools(),
         configAPI.getModeConfigs().catch(() => ({})),
+        configAPI.getSkillConfigs().catch(() => []),
       ]);
       const modeAgents: AgentWithCapabilities[] = modes.map((m) =>
         enrichCapabilities({
@@ -325,6 +399,7 @@ const AgentsOverviewPage: React.FC = () => {
       );
       setAllAgents([...modeAgents, ...subAgents]);
       setAvailableTools(tools);
+      setAvailableSkills(skills.filter((s: SkillInfo) => s.enabled));
       setModeConfigs(configs as Record<string, ModeConfigItem>);
     } finally {
       setLoading(false);
@@ -333,7 +408,6 @@ const AgentsOverviewPage: React.FC = () => {
 
   useEffect(() => { loadAgents(); }, [loadAgents]);
 
-  // 获取 mode 的有效配置（含默认值回退）
   const getModeConfig = useCallback((agentId: string): ModeConfigItem | null => {
     const agent = allAgents.find((a) => a.id === agentId && a.agentKind === 'mode');
     if (!agent) return null;
@@ -388,18 +462,29 @@ const AgentsOverviewPage: React.FC = () => {
     }
   }, [notification, t]);
 
+  const handleToggleSkill = useCallback(async (agentId: string, skillName: string) => {
+    const config = getModeConfig(agentId);
+    if (!config) return;
+    const skills = config.available_skills ?? [];
+    const isEnabling = !skills.includes(skillName);
+    const newSkills = isEnabling ? [...skills, skillName] : skills.filter((s) => s !== skillName);
+    try {
+      await saveModeConfig(agentId, { available_skills: newSkills });
+    } catch {
+      notification.error(t('agentsOverview.skillToggleFailed', 'Skill 切换失败'));
+    }
+  }, [getModeConfig, saveModeConfig, notification, t]);
+
   const filteredAgents = allAgents.filter((a) => {
-    // 文本搜索
     if (query) {
       const q = query.toLowerCase();
       if (!a.name.toLowerCase().includes(q) && !a.description.toLowerCase().includes(q)) return false;
     }
-    // 类型筛选
     if (filterType !== 'all') {
       if (filterType === 'mode' && a.agentKind !== 'mode') return false;
       if (filterType === 'subagent' && a.agentKind !== 'subagent') return false;
     }
-    // 级别筛选（mode 归属 builtin）
+    // mode agents always map to 'builtin' level
     if (filterLevel !== 'all') {
       const level = a.agentKind === 'mode' ? 'builtin' : (a.subagentSource ?? 'builtin');
       if (level !== filterLevel) return false;
@@ -506,6 +591,8 @@ const AgentsOverviewPage: React.FC = () => {
                   modeConfig={a.agentKind === 'mode' ? getModeConfig(a.id) : null}
                   onToggleTool={handleToggleTool}
                   onResetTools={handleResetTools}
+                  availableSkills={availableSkills}
+                  onToggleSkill={handleToggleSkill}
                 />
               ))}
             </div>
