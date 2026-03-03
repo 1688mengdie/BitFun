@@ -209,6 +209,18 @@ pub async fn run() {
 
             start_event_loop_with_transport(event_queue, event_router, transport);
 
+            // Eagerly initialize the remote connect service so previously
+            // paired bots start listening immediately on app startup.
+            api::remote_connect_api::init_on_startup();
+
+            // #region agent log 64147a
+            {
+                const P: &str = "/Users/liwenbo/ide_dev/repo/BitFun/.cursor/debug-64147a.log";
+                let payload = serde_json::json!({"sessionId":"64147a","hypothesisId":"H1","location":"lib.rs:setup","message":"app setup finished - init_on_startup called","timestamp":chrono::Utc::now().timestamp_millis()});
+                if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(P) { use std::io::Write; let _ = writeln!(f, "{}", payload); }
+            }
+            // #endregion
+
             {
                 let _terminal_state: tauri::State<'_, api::terminal_api::TerminalState> =
                     app.state();
@@ -539,6 +551,7 @@ pub async fn run() {
             api::remote_connect_api::remote_connect_get_methods,
             api::remote_connect_api::remote_connect_start,
             api::remote_connect_api::remote_connect_stop,
+            api::remote_connect_api::remote_connect_stop_bot,
             api::remote_connect_api::remote_connect_status,
             api::remote_connect_api::remote_connect_configure_custom_server,
             api::remote_connect_api::remote_connect_configure_bot,

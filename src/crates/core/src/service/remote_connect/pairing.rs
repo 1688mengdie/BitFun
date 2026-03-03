@@ -188,6 +188,11 @@ impl PairingProtocol {
         self.peer_device_name = None;
     }
 
+    pub async fn set_bot_connected(&mut self, peer_name: String) {
+        self.peer_device_name = Some(peer_name);
+        *self.state.write().await = PairingState::Connected;
+    }
+
     /// Generate a 6-digit pairing code for bot connections.
     pub fn generate_bot_pairing_code() -> String {
         let code: u32 = rand::thread_rng().gen_range(100_000..1_000_000);

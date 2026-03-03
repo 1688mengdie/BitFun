@@ -1,14 +1,207 @@
 //! Feishu (Lark) bot integration for Remote Connect.
 //!
 //! Users create their own Feishu bot on the Feishu Open Platform and provide
-//! App ID + App Secret. Desktop listens for messages via the event subscription API.
+//! App ID + App Secret.  The desktop receives messages via Feishu's WebSocket
+//! long connection and routes them through the shared command router.
 
 use anyhow::{anyhow, Result};
-use log::{debug, info};
+use futures_util::{SinkExt, StreamExt};
+use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tokio_tungstenite::tungstenite::Message as WsMessage;
+
+use super::command_router::{
+    execute_forwarded_turn, handle_command, paired_success_message, parse_command, BotChatState,
+    WELCOME_MESSAGE,
+};
+use super::{load_bot_persistence, save_bot_persistence, BotConfig, SavedBotConnection};
+
+// ── Minimal protobuf codec for Feishu WebSocket binary protocol ─────────
+
+mod pb {
+    //! Protobuf codec matching Feishu SDK's pbbp2.proto.
+    //! Field numbers from pbbp2.pb.go (proto2 with required fields):
+    //!   1: SeqID (uint64)
+    //!   2: LogID (uint64)
+    //!   3: Service (int32)
+    //!   4: Method (int32)       — 0 = control, 1 = data
+    //!   5: Headers (repeated Header)
+    //!   6: PayloadEncoding (string)
+    //!   7: PayloadType (string)
+    //!   8: Payload (bytes)
+    //!   9: LogIDNew (string)
+
+    #[derive(Debug, Default, Clone)]
+    pub struct Frame {
+        pub seq_id: u64,
+        pub log_id: u64,
+        pub service: i32,
+        pub method: i32,
+        pub headers: Vec<(String, String)>,
+        pub payload_encoding: String,
+        pub payload_type: String,
+        pub payload: Vec<u8>,
+        pub log_id_new: String,
+    }
+
+    pub const FRAME_TYPE_CONTROL: i32 = 0;
+    pub const FRAME_TYPE_DATA: i32 = 1;
+
+    fn decode_varint(data: &[u8], pos: &mut usize) -> Option<u64> {
+        let mut result: u64 = 0;
+        let mut shift = 0u32;
+        loop {
+            if *pos >= data.len() { return None; }
+            let byte = data[*pos];
+            *pos += 1;
+            result |= ((byte & 0x7F) as u64) << shift;
+            if byte & 0x80 == 0 { return Some(result); }
+            shift += 7;
+            if shift >= 64 { return None; }
+        }
+    }
+
+    fn encode_varint(mut val: u64) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(10);
+        loop {
+            let mut byte = (val & 0x7F) as u8;
+            val >>= 7;
+            if val != 0 { byte |= 0x80; }
+            buf.push(byte);
+            if val == 0 { break; }
+        }
+        buf
+    }
+
+    fn read_len<'a>(data: &'a [u8], pos: &mut usize) -> Option<&'a [u8]> {
+        let len = decode_varint(data, pos)? as usize;
+        if *pos + len > data.len() { return None; }
+        let slice = &data[*pos..*pos + len];
+        *pos += len;
+        Some(slice)
+    }
+
+    fn decode_header(data: &[u8]) -> Option<(String, String)> {
+        let mut pos = 0;
+        let (mut key, mut val) = (String::new(), String::new());
+        while pos < data.len() {
+            let tag = decode_varint(data, &mut pos)? as u32;
+            match (tag >> 3, tag & 7) {
+                (1, 2) => key = String::from_utf8_lossy(read_len(data, &mut pos)?).into(),
+                (2, 2) => val = String::from_utf8_lossy(read_len(data, &mut pos)?).into(),
+                (_, 0) => { decode_varint(data, &mut pos)?; }
+                (_, 2) => { read_len(data, &mut pos)?; }
+                _ => return None,
+            }
+        }
+        Some((key, val))
+    }
+
+    pub fn decode_frame(data: &[u8]) -> Option<Frame> {
+        let mut pos = 0;
+        let mut f = Frame::default();
+        while pos < data.len() {
+            let tag = decode_varint(data, &mut pos)? as u32;
+            match (tag >> 3, tag & 7) {
+                (1, 0) => f.seq_id = decode_varint(data, &mut pos)?,
+                (2, 0) => f.log_id = decode_varint(data, &mut pos)?,
+                (3, 0) => f.service = decode_varint(data, &mut pos)? as i32,
+                (4, 0) => f.method = decode_varint(data, &mut pos)? as i32,
+                (5, 2) => {
+                    if let Some(h) = decode_header(read_len(data, &mut pos)?) {
+                        f.headers.push(h);
+                    }
+                }
+                (6, 2) => f.payload_encoding = String::from_utf8_lossy(read_len(data, &mut pos)?).into(),
+                (7, 2) => f.payload_type = String::from_utf8_lossy(read_len(data, &mut pos)?).into(),
+                (8, 2) => f.payload = read_len(data, &mut pos)?.to_vec(),
+                (9, 2) => f.log_id_new = String::from_utf8_lossy(read_len(data, &mut pos)?).into(),
+                (_, 0) => { decode_varint(data, &mut pos)?; }
+                (_, 2) => { read_len(data, &mut pos)?; }
+                (_, 5) => { pos += 4; } // fixed32
+                (_, 1) => { pos += 8; } // fixed64
+                _ => return None,
+            }
+        }
+        Some(f)
+    }
+
+    fn write_varint(buf: &mut Vec<u8>, field: u32, val: u64) {
+        buf.extend(encode_varint(((field << 3) | 0) as u64));
+        buf.extend(encode_varint(val));
+    }
+
+    fn write_bytes(buf: &mut Vec<u8>, field: u32, data: &[u8]) {
+        buf.extend(encode_varint(((field << 3) | 2) as u64));
+        buf.extend(encode_varint(data.len() as u64));
+        buf.extend(data);
+    }
+
+    fn encode_header(key: &str, value: &str) -> Vec<u8> {
+        let mut buf = Vec::new();
+        write_bytes(&mut buf, 1, key.as_bytes());
+        write_bytes(&mut buf, 2, value.as_bytes());
+        buf
+    }
+
+    pub fn encode_frame(frame: &Frame) -> Vec<u8> {
+        let mut buf = Vec::new();
+        write_varint(&mut buf, 1, frame.seq_id);
+        write_varint(&mut buf, 2, frame.log_id);
+        write_varint(&mut buf, 3, frame.service as u64);
+        write_varint(&mut buf, 4, frame.method as u64);
+        for (k, v) in &frame.headers {
+            let hdr = encode_header(k, v);
+            write_bytes(&mut buf, 5, &hdr);
+        }
+        if !frame.payload_encoding.is_empty() {
+            write_bytes(&mut buf, 6, frame.payload_encoding.as_bytes());
+        }
+        if !frame.payload_type.is_empty() {
+            write_bytes(&mut buf, 7, frame.payload_type.as_bytes());
+        }
+        if !frame.payload.is_empty() {
+            write_bytes(&mut buf, 8, &frame.payload);
+        }
+        if !frame.log_id_new.is_empty() {
+            write_bytes(&mut buf, 9, frame.log_id_new.as_bytes());
+        }
+        buf
+    }
+
+    impl Frame {
+        pub fn get_header(&self, key: &str) -> Option<&str> {
+            self.headers.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str())
+        }
+
+        pub fn new_ping(service_id: i32) -> Self {
+            Frame {
+                method: FRAME_TYPE_CONTROL,
+                service: service_id,
+                headers: vec![("type".into(), "ping".into())],
+                ..Default::default()
+            }
+        }
+
+        pub fn new_response(original: &Frame, status_code: u16) -> Self {
+            let mut headers = original.headers.clone();
+            headers.push(("biz_rt".into(), "0".into()));
+            Frame {
+                seq_id: original.seq_id,
+                log_id: original.log_id,
+                service: original.service,
+                method: original.method,
+                headers,
+                payload: serde_json::to_vec(&serde_json::json!({"code": status_code})).unwrap_or_default(),
+                log_id_new: original.log_id_new.clone(),
+                ..Default::default()
+            }
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FeishuConfig {
@@ -26,6 +219,7 @@ pub struct FeishuBot {
     config: FeishuConfig,
     token: Arc<RwLock<Option<FeishuToken>>>,
     pending_pairings: Arc<RwLock<HashMap<String, PendingPairing>>>,
+    chat_states: Arc<RwLock<HashMap<String, BotChatState>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -39,10 +233,17 @@ impl FeishuBot {
             config,
             token: Arc::new(RwLock::new(None)),
             pending_pairings: Arc::new(RwLock::new(HashMap::new())),
+            chat_states: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
-    /// Get or refresh the tenant access token.
+    pub async fn restore_chat_state(&self, chat_id: &str, state: BotChatState) {
+        self.chat_states
+            .write()
+            .await
+            .insert(chat_id.to_string(), state);
+    }
+
     async fn get_access_token(&self) -> Result<String> {
         {
             let guard = self.token.read().await;
@@ -64,7 +265,21 @@ impl FeishuBot {
             .await
             .map_err(|e| anyhow!("feishu token request: {e}"))?;
 
-        let body: serde_json::Value = resp.json().await?;
+        // #region agent log
+        let token_resp_status = resp.status();
+        let token_resp_text = resp.text().await.unwrap_or_default();
+        {
+            use std::io::Write;
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/Users/liwenbo/ide_dev/repo/BitFun/.cursor/debug-0c385b.log") {
+                let _ = writeln!(f, r#"{{"sessionId":"0c385b","hypothesisId":"H3","location":"feishu.rs:get_access_token","message":"token response raw","data":{{"status":{},"body_preview":"{}"}}, "timestamp":{}}}"#,
+                    token_resp_status.as_u16(),
+                    token_resp_text.chars().take(500).collect::<String>().replace('\\', "\\\\").replace('"', "\\\""),
+                    chrono::Utc::now().timestamp_millis());
+            }
+        }
+        // #endregion
+        let body: serde_json::Value = serde_json::from_str(&token_resp_text)
+            .map_err(|e| anyhow!("feishu token response parse error: {e}, body: {}", &token_resp_text[..token_resp_text.len().min(200)]))?;
         let access_token = body["tenant_access_token"]
             .as_str()
             .ok_or_else(|| anyhow!("missing tenant_access_token in response"))?
@@ -80,7 +295,6 @@ impl FeishuBot {
         Ok(access_token)
     }
 
-    /// Send a text message to a Feishu chat.
     pub async fn send_message(&self, chat_id: &str, content: &str) -> Result<()> {
         let token = self.get_access_token().await?;
         let client = reqwest::Client::new();
@@ -100,12 +314,10 @@ impl FeishuBot {
             let body = resp.text().await.unwrap_or_default();
             return Err(anyhow!("feishu send_message failed: {body}"));
         }
-
         debug!("Feishu message sent to {chat_id}");
         Ok(())
     }
 
-    /// Register a pairing code and wait for the user to send it via bot.
     pub async fn register_pairing(&self, pairing_code: &str) -> Result<()> {
         self.pending_pairings.write().await.insert(
             pairing_code.to_string(),
@@ -116,7 +328,6 @@ impl FeishuBot {
         Ok(())
     }
 
-    /// Verify a pairing code received from a Feishu message.
     pub async fn verify_pairing_code(&self, code: &str) -> bool {
         let mut pairings = self.pending_pairings.write().await;
         if let Some(p) = pairings.remove(code) {
@@ -126,34 +337,467 @@ impl FeishuBot {
         false
     }
 
-    /// Process an incoming Feishu event (webhook callback).
-    pub async fn handle_event(&self, event: &serde_json::Value) -> Result<Option<String>> {
-        let msg_type = event
-            .pointer("/event/message/message_type")
-            .and_then(|v| v.as_str());
+    /// Obtain a WebSocket URL from Feishu for long-connection event delivery.
+    /// Uses direct AppID/AppSecret auth per Feishu SDK protocol (no bearer token).
+    async fn get_ws_endpoint(&self) -> Result<(String, serde_json::Value)> {
+        let client = reqwest::Client::new();
+        let resp = client
+            .post("https://open.feishu.cn/callback/ws/endpoint")
+            .json(&serde_json::json!({
+                "AppID": self.config.app_id,
+                "AppSecret": self.config.app_secret,
+            }))
+            .send()
+            .await
+            .map_err(|e| anyhow!("feishu ws endpoint request: {e}"))?;
 
-        if msg_type != Some("text") {
-            return Ok(None);
-        }
-
-        let content_str = event
-            .pointer("/event/message/content")
-            .and_then(|v| v.as_str())
-            .unwrap_or("{}");
-
-        let content: serde_json::Value = serde_json::from_str(content_str).unwrap_or_default();
-        let text = content["text"].as_str().unwrap_or("").trim().to_string();
-
-        if text.len() == 6 && text.chars().all(|c| c.is_ascii_digit()) {
-            if self.verify_pairing_code(&text).await {
-                let chat_id = event
-                    .pointer("/event/message/chat_id")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                return Ok(Some(chat_id.to_string()));
+        // #region agent log
+        let ws_resp_status = resp.status();
+        let ws_resp_text = resp.text().await.unwrap_or_default();
+        {
+            use std::io::Write;
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/Users/liwenbo/ide_dev/repo/BitFun/.cursor/debug-0c385b.log") {
+                let _ = writeln!(f, r#"{{"sessionId":"0c385b","hypothesisId":"H1_H2","location":"feishu.rs:get_ws_endpoint","message":"ws endpoint response raw","data":{{"status":{},"body_preview":"{}"}}, "timestamp":{}}}"#,
+                    ws_resp_status.as_u16(),
+                    ws_resp_text.chars().take(500).collect::<String>().replace('\\', "\\\\").replace('"', "\\\""),
+                    chrono::Utc::now().timestamp_millis());
             }
         }
+        // #endregion
+        let body: serde_json::Value = serde_json::from_str(&ws_resp_text)
+            .map_err(|e| anyhow!("feishu ws endpoint parse error: {e}, body: {}", &ws_resp_text[..ws_resp_text.len().min(300)]))?;
+        let code = body["code"].as_i64().unwrap_or(-1);
+        if code != 0 {
+            let msg = body["msg"].as_str().unwrap_or("unknown error");
+            return Err(anyhow!("feishu ws endpoint error {code}: {msg}"));
+        }
 
-        Ok(None)
+        let url = body
+            .pointer("/data/URL")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow!("missing WebSocket URL in feishu response"))?
+            .to_string();
+        let client_config = body
+            .pointer("/data/ClientConfig")
+            .cloned()
+            .unwrap_or_default();
+
+        Ok((url, client_config))
+    }
+
+    /// Extract (chat_id, text) from a Feishu WebSocket event message.
+    fn parse_ws_event(event: &serde_json::Value) -> Option<(String, String)> {
+        let event_type = event
+            .pointer("/header/event_type")
+            .and_then(|v| v.as_str())?;
+        if event_type != "im.message.receive_v1" {
+            return None;
+        }
+
+        let msg_type = event
+            .pointer("/event/message/message_type")
+            .and_then(|v| v.as_str())?;
+        if msg_type != "text" {
+            return None;
+        }
+
+        let chat_id = event
+            .pointer("/event/message/chat_id")
+            .and_then(|v| v.as_str())?
+            .to_string();
+        let content_str = event
+            .pointer("/event/message/content")
+            .and_then(|v| v.as_str())?;
+        let content: serde_json::Value = serde_json::from_str(content_str).ok()?;
+        let text = content["text"].as_str()?.trim().to_string();
+        Some((chat_id, text))
+    }
+
+    /// Handle a single incoming protobuf data frame.
+    /// Returns Some(chat_id) if pairing succeeded, None to continue waiting.
+    async fn handle_data_frame_for_pairing(
+        &self,
+        frame: &pb::Frame,
+        write: &Arc<RwLock<futures_util::stream::SplitSink<
+            tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+            WsMessage,
+        >>>,
+    ) -> Option<String> {
+        let msg_type = frame.get_header("type").unwrap_or("");
+        if msg_type != "event" {
+            return None;
+        }
+
+        let event: serde_json::Value = serde_json::from_slice(&frame.payload).ok()?;
+
+        // #region agent log
+        {
+            use std::io::Write as _;
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/Users/liwenbo/ide_dev/repo/BitFun/.cursor/debug-0c385b.log") {
+                let preview: String = String::from_utf8_lossy(&frame.payload).chars().take(300).collect();
+                let _ = writeln!(f, r#"{{"sessionId":"0c385b","hypothesisId":"PROTO","location":"feishu.rs:handle_data_frame_for_pairing","message":"event payload","data":{{"preview":"{}"}}, "timestamp":{}}}"#,
+                    preview.replace('\\', "\\\\").replace('"', "\\\""),
+                    chrono::Utc::now().timestamp_millis());
+            }
+        }
+        // #endregion
+
+        // Send ack response for this frame
+        let resp_frame = pb::Frame::new_response(frame, 200);
+        let _ = write.write().await.send(WsMessage::Binary(pb::encode_frame(&resp_frame))).await;
+
+        if let Some((chat_id, msg_text)) = Self::parse_ws_event(&event) {
+            let trimmed = msg_text.trim();
+
+            if trimmed == "/start" {
+                self.send_message(&chat_id, WELCOME_MESSAGE).await.ok();
+            } else if trimmed.len() == 6 && trimmed.chars().all(|c| c.is_ascii_digit()) {
+                if self.verify_pairing_code(trimmed).await {
+                    info!("Feishu pairing successful, chat_id={chat_id}");
+                    let msg = paired_success_message();
+                    self.send_message(&chat_id, &msg).await.ok();
+
+                    let mut state = BotChatState::new(chat_id.clone());
+                    state.paired = true;
+                    self.chat_states
+                        .write()
+                        .await
+                        .insert(chat_id.clone(), state.clone());
+                    self.persist_chat_state(&chat_id, &state).await;
+
+                    return Some(chat_id);
+                } else {
+                    self.send_message(&chat_id, "Invalid or expired pairing code. Please try again.")
+                        .await.ok();
+                }
+            } else {
+                self.send_message(&chat_id, "Please enter the 6-digit pairing code from BitFun Desktop.")
+                    .await.ok();
+            }
+        }
+        None
+    }
+
+    /// Start polling for pairing codes.  Returns the chat_id on success.
+    pub async fn wait_for_pairing(&self) -> Result<String> {
+        info!("Feishu bot waiting for pairing code via WebSocket...");
+
+        let (ws_url, config) = self.get_ws_endpoint().await?;
+
+        // #region agent log
+        {
+            use std::io::Write;
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/Users/liwenbo/ide_dev/repo/BitFun/.cursor/debug-0c385b.log") {
+                let _ = writeln!(f, r#"{{"sessionId":"0c385b","hypothesisId":"WS_CONNECT","location":"feishu.rs:wait_for_pairing","message":"got ws endpoint","data":{{"url_preview":"{}"}}, "timestamp":{}}}"#,
+                    ws_url.chars().take(100).collect::<String>().replace('\\', "\\\\").replace('"', "\\\""),
+                    chrono::Utc::now().timestamp_millis());
+            }
+        }
+        // #endregion
+
+        let (ws_stream, _) = tokio_tungstenite::connect_async(&ws_url)
+            .await
+            .map_err(|e| anyhow!("feishu ws connect: {e}"))?;
+
+        let (write, mut read) = ws_stream.split();
+        let write = Arc::new(RwLock::new(write));
+        info!("Feishu WebSocket connected (binary proto), waiting for pairing...");
+
+        let service_id = Self::extract_service_id_from_url(&ws_url);
+
+        let ping_interval = config
+            .get("PingInterval")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(120);
+
+        let mut ping_timer = tokio::time::interval(std::time::Duration::from_secs(ping_interval));
+
+        loop {
+            tokio::select! {
+                msg = read.next() => {
+                    // #region agent log
+                    {
+                        use std::io::Write as _;
+                        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/Users/liwenbo/ide_dev/repo/BitFun/.cursor/debug-0c385b.log") {
+                            let desc = match &msg {
+                                Some(Ok(WsMessage::Binary(d))) => format!("Binary(len={})", d.len()),
+                                Some(Ok(WsMessage::Text(t))) => format!("Text(len={},preview={})", t.len(), t.chars().take(200).collect::<String>().replace('\\', "\\\\").replace('"', "\\\"").replace('\n', " ")),
+                                Some(Ok(WsMessage::Ping(_))) => "Ping".to_string(),
+                                Some(Ok(WsMessage::Pong(_))) => "Pong".to_string(),
+                                Some(Ok(WsMessage::Close(c))) => format!("Close({c:?})"),
+                                Some(Err(e)) => format!("Error({e})"),
+                                None => "StreamEnd".to_string(),
+                                _ => "Other".to_string(),
+                            };
+                            let _ = writeln!(f, r#"{{"sessionId":"0c385b","hypothesisId":"H6_H7","location":"feishu.rs:wait_for_pairing:loop","message":"ws msg received","data":{{"type":"{}"}}, "timestamp":{}}}"#,
+                                desc.replace('"', "\\\""), chrono::Utc::now().timestamp_millis());
+                        }
+                    }
+                    // #endregion
+                    match msg {
+                        Some(Ok(WsMessage::Binary(data))) => {
+                            // #region agent log
+                            {
+                                use std::io::Write as _;
+                                if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/Users/liwenbo/ide_dev/repo/BitFun/.cursor/debug-0c385b.log") {
+                                    let hex_preview: String = data.iter().take(64).map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(" ");
+                                    let decode_ok = pb::decode_frame(&data).is_some();
+                                    let _ = writeln!(f, r#"{{"sessionId":"0c385b","hypothesisId":"H7","location":"feishu.rs:wait_for_pairing:binary","message":"binary frame detail","data":{{"len":{},"hex":"{}","decode_ok":{}}}, "timestamp":{}}}"#,
+                                        data.len(), hex_preview, decode_ok, chrono::Utc::now().timestamp_millis());
+                                }
+                            }
+                            // #endregion
+                            let frame = match pb::decode_frame(&data) {
+                                Some(f) => f,
+                                None => continue,
+                            };
+                            // #region agent log
+                            {
+                                use std::io::Write as _;
+                                if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/Users/liwenbo/ide_dev/repo/BitFun/.cursor/debug-0c385b.log") {
+                                    let hdrs: String = frame.headers.iter().map(|(k,v)| format!("{k}={v}")).collect::<Vec<_>>().join(",");
+                                    let _ = writeln!(f, r#"{{"sessionId":"0c385b","hypothesisId":"H7","location":"feishu.rs:wait_for_pairing:frame","message":"decoded frame","data":{{"method":{},"headers":"{}","payload_len":{}}}, "timestamp":{}}}"#,
+                                        frame.method, hdrs.replace('"', "\\\""), frame.payload.len(), chrono::Utc::now().timestamp_millis());
+                                }
+                            }
+                            // #endregion
+                            match frame.method {
+                                pb::FRAME_TYPE_DATA => {
+                                    if let Some(chat_id) = self.handle_data_frame_for_pairing(&frame, &write).await {
+                                        return Ok(chat_id);
+                                    }
+                                }
+                                pb::FRAME_TYPE_CONTROL => {
+                                    debug!("Feishu WS control frame: type={}", frame.get_header("type").unwrap_or("?"));
+                                }
+                                _ => {}
+                            }
+                        }
+                        Some(Ok(WsMessage::Ping(data))) => {
+                            let _ = write.write().await.send(WsMessage::Pong(data)).await;
+                        }
+                        Some(Err(e)) => {
+                            error!("Feishu WebSocket error during pairing: {e}");
+                            return Err(anyhow!("feishu ws error: {e}"));
+                        }
+                        None => {
+                            return Err(anyhow!("feishu ws connection closed during pairing"));
+                        }
+                        _ => {}
+                    }
+                }
+                _ = ping_timer.tick() => {
+                    let ping = pb::Frame::new_ping(service_id);
+                    let _ = write.write().await.send(WsMessage::Binary(pb::encode_frame(&ping))).await;
+                }
+            }
+        }
+    }
+
+    fn extract_service_id_from_url(url: &str) -> i32 {
+        url.split('?')
+            .nth(1)
+            .and_then(|qs| {
+                qs.split('&').find_map(|pair| {
+                    let mut kv = pair.splitn(2, '=');
+                    match (kv.next(), kv.next()) {
+                        (Some("service_id"), Some(v)) => v.parse::<i32>().ok(),
+                        _ => None,
+                    }
+                })
+            })
+            .unwrap_or(0)
+    }
+
+    /// Main message loop that runs after pairing is complete.
+    /// Connects to Feishu WebSocket (binary protobuf protocol) and routes
+    /// incoming messages through the command router.
+    pub async fn run_message_loop(
+        self: Arc<Self>,
+        stop_rx: tokio::sync::watch::Receiver<bool>,
+    ) {
+        info!("Feishu bot message loop started");
+        let mut stop = stop_rx;
+
+        loop {
+            if *stop.borrow() {
+                info!("Feishu bot message loop stopped by signal");
+                break;
+            }
+
+            let ws_result = self.get_ws_endpoint().await;
+            let (ws_url, config) = match ws_result {
+                Ok(v) => v,
+                Err(e) => {
+                    error!("Failed to get Feishu WS endpoint: {e}");
+                    tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                    continue;
+                }
+            };
+
+            let ping_interval = config
+                .get("PingInterval")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(120);
+
+            let service_id = Self::extract_service_id_from_url(&ws_url);
+
+            let ws_conn = tokio_tungstenite::connect_async(&ws_url).await;
+            let (ws_stream, _) = match ws_conn {
+                Ok(v) => v,
+                Err(e) => {
+                    error!("Feishu WS connect failed: {e}");
+                    tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                    continue;
+                }
+            };
+            info!("Feishu WebSocket connected for message loop (binary proto)");
+
+            let (write, mut read) = ws_stream.split();
+            let write = Arc::new(RwLock::new(write));
+
+            let mut ping_timer =
+                tokio::time::interval(std::time::Duration::from_secs(ping_interval));
+
+            loop {
+                tokio::select! {
+                    _ = stop.changed() => {
+                        info!("Feishu bot message loop stopped by signal");
+                        return;
+                    }
+                    msg = read.next() => {
+                        match msg {
+                            Some(Ok(WsMessage::Binary(data))) => {
+                                let frame = match pb::decode_frame(&data) {
+                                    Some(f) => f,
+                                    None => continue,
+                                };
+
+                                match frame.method {
+                                    pb::FRAME_TYPE_DATA => {
+                                        let msg_type = frame.get_header("type").unwrap_or("");
+                                        if msg_type == "event" {
+                                            if let Ok(event) = serde_json::from_slice::<serde_json::Value>(&frame.payload) {
+                                                // Send ack
+                                                let resp = pb::Frame::new_response(&frame, 200);
+                                                let _ = write.write().await.send(WsMessage::Binary(pb::encode_frame(&resp))).await;
+
+                                                if let Some((chat_id, msg_text)) = Self::parse_ws_event(&event) {
+                                                    let bot = self.clone();
+                                                    tokio::spawn(async move {
+                                                        bot.handle_incoming_message(&chat_id, &msg_text).await;
+                                                    });
+                                                }
+                                            }
+                                        }
+                                    }
+                                    pb::FRAME_TYPE_CONTROL => {
+                                        debug!("Feishu WS control: type={}", frame.get_header("type").unwrap_or("?"));
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            Some(Ok(WsMessage::Ping(data))) => {
+                                let _ = write.write().await.send(WsMessage::Pong(data)).await;
+                            }
+                            Some(Err(e)) => {
+                                error!("Feishu WS error: {e}");
+                                break;
+                            }
+                            None => {
+                                warn!("Feishu WS closed, reconnecting...");
+                                break;
+                            }
+                            _ => {}
+                        }
+                    }
+                    _ = ping_timer.tick() => {
+                        let ping = pb::Frame::new_ping(service_id);
+                        let _ = write.write().await.send(WsMessage::Binary(pb::encode_frame(&ping))).await;
+                    }
+                }
+            }
+
+            let reconnect_interval = config
+                .get("ReconnectInterval")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(3);
+            tokio::time::sleep(std::time::Duration::from_secs(reconnect_interval)).await;
+        }
+    }
+
+    async fn handle_incoming_message(self: &Arc<Self>, chat_id: &str, text: &str) {
+        let mut states = self.chat_states.write().await;
+        let state = states
+            .entry(chat_id.to_string())
+            .or_insert_with(|| {
+                let mut s = BotChatState::new(chat_id.to_string());
+                s.paired = true;
+                s
+            });
+
+        if !state.paired {
+            let trimmed = text.trim();
+            if trimmed == "/start" {
+                self.send_message(chat_id, WELCOME_MESSAGE).await.ok();
+                return;
+            }
+            if trimmed.len() == 6 && trimmed.chars().all(|c| c.is_ascii_digit()) {
+                if self.verify_pairing_code(trimmed).await {
+                    state.paired = true;
+                    let msg = paired_success_message();
+                    self.send_message(chat_id, &msg).await.ok();
+                    self.persist_chat_state(chat_id, state).await;
+                    return;
+                } else {
+                    self.send_message(
+                        chat_id,
+                        "Invalid or expired pairing code. Please try again.",
+                    )
+                    .await
+                    .ok();
+                    return;
+                }
+            }
+            self.send_message(
+                chat_id,
+                "Please enter the 6-digit pairing code from BitFun Desktop.",
+            )
+            .await
+            .ok();
+            return;
+        }
+
+        let cmd = parse_command(text);
+        let result = handle_command(state, cmd).await;
+
+        self.persist_chat_state(chat_id, state).await;
+        drop(states);
+
+        self.send_message(chat_id, &result.reply).await.ok();
+
+        if let Some(forward) = result.forward_to_session {
+            let bot = self.clone();
+            let cid = chat_id.to_string();
+            tokio::spawn(async move {
+                let response = execute_forwarded_turn(forward).await;
+                bot.send_message(&cid, &response).await.ok();
+            });
+        }
+    }
+
+    async fn persist_chat_state(&self, chat_id: &str, state: &BotChatState) {
+        let mut data = load_bot_persistence();
+        data.upsert(SavedBotConnection {
+            bot_type: "feishu".to_string(),
+            chat_id: chat_id.to_string(),
+            config: BotConfig::Feishu {
+                app_id: self.config.app_id.clone(),
+                app_secret: self.config.app_secret.clone(),
+            },
+            chat_state: state.clone(),
+            connected_at: chrono::Utc::now().timestamp(),
+        });
+        save_bot_persistence(&data);
     }
 }

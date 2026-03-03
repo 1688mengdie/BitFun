@@ -35,6 +35,7 @@ export interface RemoteConnectStatus {
   pairing_state: string;
   active_method: string | null;
   peer_device_name: string | null;
+  bot_connected: string | null;
 }
 
 class RemoteConnectAPIService {
@@ -83,6 +84,15 @@ class RemoteConnectAPIService {
       return await this.adapter.request<RemoteConnectStatus>('remote_connect_status');
     } catch (e) {
       log.error('getStatus failed', e);
+      throw e;
+    }
+  }
+
+  async stopBot(): Promise<void> {
+    try {
+      await this.adapter.request<void>('remote_connect_stop_bot');
+    } catch (e) {
+      log.error('stopBot failed', e);
       throw e;
     }
   }

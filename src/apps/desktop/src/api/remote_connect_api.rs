@@ -16,7 +16,6 @@ static REMOTE_CONNECT_SERVICE: OnceCell<Arc<RwLock<Option<RemoteConnectService>>
 /// Tauri resource directory path for mobile-web, set during app setup.
 static MOBILE_WEB_RESOURCE_PATH: OnceCell<PathBuf> = OnceCell::new();
 
-
 fn get_service_holder() -> &'static Arc<RwLock<Option<RemoteConnectService>>> {
     REMOTE_CONNECT_SERVICE.get_or_init(|| Arc::new(RwLock::new(None)))
 }
@@ -28,8 +27,18 @@ pub fn set_mobile_web_resource_path(path: PathBuf) {
     let _ = MOBILE_WEB_RESOURCE_PATH.set(path);
 }
 
+/// Called from Tauri setup to eagerly initialize the remote connect service
+/// and restore any previously paired bot connections.  Without this, bots
+/// only start listening after the user first opens the Remote Connect dialog.
+pub fn init_on_startup() {
+    tokio::spawn(async {
+        if let Err(e) = ensure_service().await {
+            log::warn!("Remote connect startup init failed: {e}");
+        }
+    });
+}
+
 /// Synchronous cleanup called when the application exits.
-/// Stops any running ngrok process and embedded relay to avoid orphaned processes.
 pub fn cleanup_on_exit() {
     bitfun_core::service::remote_connect::ngrok::cleanup_all_ngrok();
     log::info!("Remote connect cleanup completed on exit");
@@ -43,23 +52,91 @@ async fn ensure_service() -> Result<(), String> {
     }
     drop(guard);
 
+    // #region agent log 64147a
+    {
+        const P: &str = "/Users/liwenbo/ide_dev/repo/BitFun/.cursor/debug-64147a.log";
+        let payload = serde_json::json!({"sessionId":"64147a","hypothesisId":"H1","location":"remote_connect_api.rs:ensure_service","message":"ensure_service called for first time (lazy init) - bot was NOT running before this","timestamp":chrono::Utc::now().timestamp_millis()});
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(P) { use std::io::Write; let _ = writeln!(f, "{}", payload); }
+    }
+    // #endregion
+
+    // #region agent log
+    emit_agent_debug("c7eac2-restore", "H2", "api:ensure_service", "creating new service + calling restore_saved_bots", serde_json::json!({}));
+    // #endregion
+
     let mut config = RemoteConnectConfig::default();
     config.mobile_web_dir = detect_mobile_web_dir();
     let service =
         RemoteConnectService::new(config).map_err(|e| format!("init remote connect: {e}"))?;
     *holder.write().await = Some(service);
+
+    // Auto-restore previously paired bots
+    restore_saved_bots().await;
+
+    // #region agent log
+    emit_agent_debug("c7eac2-restore", "H2", "api:ensure_service", "restore_saved_bots completed", serde_json::json!({}));
+    // #endregion
+
     Ok(())
 }
 
+/// Restore any bot connections that were previously saved to disk.
+async fn restore_saved_bots() {
+    use bitfun_core::service::remote_connect::bot;
+
+    let data = bot::load_bot_persistence();
+    // #region agent log
+    emit_agent_debug("c7eac2-persist", "H1", "api:restore_saved_bots", "loaded persistence", serde_json::json!({"count": data.connections.len(), "types": data.connections.iter().map(|c| format!("{}:{}", c.bot_type, c.chat_id)).collect::<Vec<_>>()}));
+    // #endregion
+
+    // #region agent log 64147a
+    {
+        const P: &str = "/Users/liwenbo/ide_dev/repo/BitFun/.cursor/debug-64147a.log";
+        let payload = serde_json::json!({"sessionId":"64147a","hypothesisId":"H2","location":"remote_connect_api.rs:restore_saved_bots","message":"restore_saved_bots called","data":{"connection_count": data.connections.len(), "connections": data.connections.iter().map(|c| serde_json::json!({"bot_type":&c.bot_type,"chat_id":&c.chat_id,"paired":c.chat_state.paired})).collect::<Vec<_>>()},"timestamp":chrono::Utc::now().timestamp_millis()});
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(P) { use std::io::Write; let _ = writeln!(f, "{}", payload); }
+    }
+    // #endregion
+
+    if data.connections.is_empty() {
+        return;
+    }
+
+    let holder = get_service_holder();
+    let guard = holder.read().await;
+    let Some(service) = guard.as_ref() else { return };
+
+    for conn in &data.connections {
+        if !conn.chat_state.paired {
+            // #region agent log 64147a
+            {
+                const P: &str = "/Users/liwenbo/ide_dev/repo/BitFun/.cursor/debug-64147a.log";
+                let payload = serde_json::json!({"sessionId":"64147a","hypothesisId":"H2","location":"remote_connect_api.rs:restore_saved_bots","message":"skipping unpaired bot","data":{"bot_type":&conn.bot_type,"chat_id":&conn.chat_id},"timestamp":chrono::Utc::now().timestamp_millis()});
+                if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(P) { use std::io::Write; let _ = writeln!(f, "{}", payload); }
+            }
+            // #endregion
+            continue;
+        }
+        log::info!(
+            "Restoring {} bot connection for chat_id={}",
+            conn.bot_type,
+            conn.chat_id
+        );
+        let result = service.restore_bot(conn).await;
+        // #region agent log 64147a
+        {
+            const P: &str = "/Users/liwenbo/ide_dev/repo/BitFun/.cursor/debug-64147a.log";
+            let payload = serde_json::json!({"sessionId":"64147a","hypothesisId":"H3","location":"remote_connect_api.rs:restore_saved_bots","message":"restore_bot result","data":{"bot_type":&conn.bot_type,"chat_id":&conn.chat_id,"ok": result.is_ok(),"err": result.as_ref().err().map(|e| e.to_string())},"timestamp":chrono::Utc::now().timestamp_millis()});
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(P) { use std::io::Write; let _ = writeln!(f, "{}", payload); }
+        }
+        // #endregion
+        if let Err(e) = result {
+            log::warn!("Failed to restore {} bot: {e}", conn.bot_type);
+        }
+    }
+}
+
 /// Auto-detect the mobile-web build output directory.
-///
-/// Detection order:
-/// 1. `BITFUN_MOBILE_WEB_DIR` environment variable (explicit override)
-/// 2. Tauri bundled resource path (set via `set_mobile_web_resource_path` during app setup)
-/// 3. Executable-relative paths (for bundled apps without Tauri path API)
-/// 4. CWD-relative paths (for development mode)
 fn detect_mobile_web_dir() -> Option<String> {
-    // 1. Explicit env var override
     if let Ok(dir) = std::env::var("BITFUN_MOBILE_WEB_DIR") {
         let p = std::path::Path::new(&dir);
         if p.join("index.html").exists() {
@@ -69,7 +146,6 @@ fn detect_mobile_web_dir() -> Option<String> {
         log::warn!("BITFUN_MOBILE_WEB_DIR set but index.html not found: {dir}");
     }
 
-    // 2. Tauri resource path (registered during app setup)
     if let Some(resource_path) = MOBILE_WEB_RESOURCE_PATH.get() {
         if is_valid_mobile_web_dir(resource_path) {
             let dir = resource_path.to_string_lossy().into_owned();
@@ -82,12 +158,10 @@ fn detect_mobile_web_dir() -> Option<String> {
         );
     }
 
-    // 3. Executable-relative paths (bundled app fallback)
     if let Some(dir) = detect_from_exe() {
         return Some(dir);
     }
 
-    // 4. CWD-relative paths (development mode)
     if let Some(dir) = detect_from_cwd() {
         return Some(dir);
     }
@@ -96,25 +170,18 @@ fn detect_mobile_web_dir() -> Option<String> {
     None
 }
 
-/// Detect mobile-web relative to the current executable.
-/// Handles macOS .app bundle, Windows install dir, and Linux package layouts.
 fn detect_from_exe() -> Option<String> {
     let exe = std::env::current_exe().ok()?;
     let exe_dir = exe.parent()?;
 
     let mut candidates: Vec<PathBuf> = Vec::new();
 
-    // macOS: exe is at AppName.app/Contents/MacOS/exe
-    //        resources at AppName.app/Contents/Resources/
     if cfg!(target_os = "macos") {
         candidates.push(exe_dir.join("../Resources/mobile-web"));
     }
-
-    // Windows / Linux: resources alongside exe or in a resources/ subdir
     candidates.push(exe_dir.join("mobile-web"));
     candidates.push(exe_dir.join("resources/mobile-web"));
 
-    // Linux: /usr/lib/<app>/mobile-web or /usr/share/<app>/mobile-web
     if cfg!(target_os = "linux") {
         candidates.push(exe_dir.join("../lib/bitfun/mobile-web"));
         candidates.push(exe_dir.join("../share/bitfun/mobile-web"));
@@ -124,12 +191,11 @@ fn detect_from_exe() -> Option<String> {
     check_candidates(&candidates, "exe-relative")
 }
 
-/// Detect mobile-web relative to the current working directory (dev mode).
 fn detect_from_cwd() -> Option<String> {
     let cwd = std::env::current_dir().ok()?;
     let candidates = [
         cwd.join("src/mobile-web/dist"),
-        cwd.join("../../mobile-web/dist"), // from src/apps/desktop
+        cwd.join("../../mobile-web/dist"),
         cwd.join("../mobile-web/dist"),
     ];
 
@@ -148,9 +214,6 @@ fn check_candidates(candidates: &[PathBuf], source: &str) -> Option<String> {
     None
 }
 
-/// Validate that a directory is a proper mobile-web build output.
-/// Requires both `index.html` and `assets/` to exist, since the HTML
-/// references JS/CSS via relative `./assets/` paths.
 fn is_valid_mobile_web_dir(dir: &std::path::Path) -> bool {
     dir.join("index.html").exists() && dir.join("assets").is_dir()
 }
@@ -169,6 +232,9 @@ pub struct RemoteConnectStatusResponse {
     pub pairing_state: PairingState,
     pub active_method: Option<String>,
     pub peer_device_name: Option<String>,
+    /// Independent bot connection info — e.g. "Telegram(7096812005)".
+    /// Present when a bot is active, regardless of relay pairing state.
+    pub bot_connected: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -293,8 +359,23 @@ pub async fn remote_connect_stop() -> Result<(), String> {
     let holder = get_service_holder();
     let guard = holder.read().await;
     if let Some(service) = guard.as_ref() {
-        service.stop().await;
+        service.stop_relay().await;
     }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn remote_connect_stop_bot() -> Result<(), String> {
+    let holder = get_service_holder();
+    let guard = holder.read().await;
+    if let Some(service) = guard.as_ref() {
+        service.stop_bots().await;
+    }
+    // Remove persistence so the bot is not auto-restored
+    use bitfun_core::service::remote_connect::bot;
+    let mut data = bot::load_bot_persistence();
+    data.connections.clear();
+    bot::save_bot_persistence(&data);
     Ok(())
 }
 
@@ -308,12 +389,18 @@ pub async fn remote_connect_status() -> Result<RemoteConnectStatusResponse, Stri
     let state = service.pairing_state().await;
     let method = service.active_method().await;
     let peer = service.peer_device_name().await;
+    let bot_connected = service.bot_connected_info().await;
+
+    // #region agent log
+    emit_agent_debug("c7eac2-v2", "H1", "api:remote_connect_status", "polled status", serde_json::json!({"pairing": format!("{state:?}"), "bot": &bot_connected}));
+    // #endregion
 
     Ok(RemoteConnectStatusResponse {
         is_connected: state == PairingState::Connected,
         pairing_state: state,
         active_method: method.map(|m| format!("{m:?}")),
         peer_device_name: peer,
+        bot_connected,
     })
 }
 
@@ -359,6 +446,7 @@ pub async fn remote_connect_configure_bot(
 
     if guard.is_none() {
         let mut config = RemoteConnectConfig::default();
+        config.mobile_web_dir = detect_mobile_web_dir();
         match &bot_config {
             BotConfig::Feishu { .. } => config.bot_feishu = Some(bot_config),
             BotConfig::Telegram { .. } => config.bot_telegram = Some(bot_config),
@@ -366,7 +454,17 @@ pub async fn remote_connect_configure_bot(
         let service =
             RemoteConnectService::new(config).map_err(|e| format!("init: {e}"))?;
         *guard = Some(service);
+    } else if let Some(service) = guard.as_mut() {
+        service.update_bot_config(bot_config);
     }
 
     Ok(())
 }
+
+// #region agent log
+fn emit_agent_debug(_run_id: &str, _hyp: &str, location: &str, message: &str, data: serde_json::Value) {
+    const P: &str = "/Users/liwenbo/ide_dev/repo/BitFun/.cursor/debug-c7eac2.log";
+    let payload = serde_json::json!({"sessionId":"c7eac2","location":location,"message":message,"data":data,"timestamp":chrono::Utc::now().timestamp_millis()});
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(P) { use std::io::Write; let _ = writeln!(f, "{}", payload); }
+}
+// #endregion

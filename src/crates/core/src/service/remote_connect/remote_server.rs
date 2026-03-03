@@ -1167,6 +1167,7 @@ mod tests {
         if let RemoteCommand::SendMessage {
             session_id,
             content,
+            ..
         } = decoded
         {
             assert_eq!(session_id, "sess-123");
