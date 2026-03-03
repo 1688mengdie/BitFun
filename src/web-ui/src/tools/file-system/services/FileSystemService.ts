@@ -72,9 +72,10 @@ class FileSystemService implements IFileSystemService {
     let unlisten: UnlistenFn | null = null;
     let isActive = true;
 
-    // Normalize to forward-slash, lower-case, no trailing slash for robust comparison.
+    // Normalize separators and trailing slash for robust cross-platform comparison.
+    // Case is preserved intentionally: paths are case-sensitive.
     const normalizeForCompare = (p: string) =>
-      p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+      p.replace(/\\/g, '/').replace(/\/+$/, '');
 
     const normalizedRoot = normalizeForCompare(rootPath);
 
