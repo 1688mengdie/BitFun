@@ -72,6 +72,12 @@ class FileSystemService implements IFileSystemService {
     let unlisten: UnlistenFn | null = null;
     let isActive = true;
 
+    // Normalize to forward-slash, lower-case, no trailing slash for robust comparison.
+    const normalizeForCompare = (p: string) =>
+      p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+
+    const normalizedRoot = normalizeForCompare(rootPath);
+
     const initWatcher = async () => {
       try {
         unlisten = await listen<FileWatchEvent[]>('file-system-changed', (event) => {
@@ -80,7 +86,8 @@ class FileSystemService implements IFileSystemService {
           const events = event.payload;
 
           events.forEach((fileEvent) => {
-            if (!fileEvent.path.startsWith(rootPath)) {
+            const normalizedEventPath = normalizeForCompare(fileEvent.path);
+            if (!normalizedEventPath.startsWith(normalizedRoot)) {
               return;
             }
 
