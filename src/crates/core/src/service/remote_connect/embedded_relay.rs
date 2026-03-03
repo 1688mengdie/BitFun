@@ -160,14 +160,14 @@ pub async fn start_embedded_relay(port: u16, static_dir: Option<&str>) -> anyhow
     let mut app = Router::new()
         .route("/ws", get(ws_handler))
         .route("/health", get(health))
-        .route("/api/rooms/{room_id}/join", axum::routing::post(join_room_http))
-        .route("/api/rooms/{room_id}/message", axum::routing::post(relay_message_http))
-        .route("/api/rooms/{room_id}/poll", get(poll_messages_http))
-        .route("/api/rooms/{room_id}/ack", axum::routing::post(ack_messages_http))
-        .route("/api/rooms/{room_id}/upload-web", axum::routing::post(upload_web_http))
-        .route("/api/rooms/{room_id}/check-web-files", axum::routing::post(check_web_files_http))
-        .route("/api/rooms/{room_id}/upload-web-files", axum::routing::post(upload_web_files_http))
-        .route("/r/{room_id}/{*rest}", get(serve_room_web_http))
+        .route("/api/rooms/:room_id/join", axum::routing::post(join_room_http))
+        .route("/api/rooms/:room_id/message", axum::routing::post(relay_message_http))
+        .route("/api/rooms/:room_id/poll", get(poll_messages_http))
+        .route("/api/rooms/:room_id/ack", axum::routing::post(ack_messages_http))
+        .route("/api/rooms/:room_id/upload-web", axum::routing::post(upload_web_http))
+        .route("/api/rooms/:room_id/check-web-files", axum::routing::post(check_web_files_http))
+        .route("/api/rooms/:room_id/upload-web-files", axum::routing::post(upload_web_files_http))
+        .route("/r/*path", get(serve_room_web_http))
         .layer(tower_http::cors::CorsLayer::permissive())
         .with_state(app_state);
 
@@ -786,14 +786,19 @@ async fn upload_web_files_http(
 
 async fn serve_room_web_http(
     State(state): State<Arc<RelayState>>,
-    axum::extract::Path((room_id, rest)): axum::extract::Path<(String, String)>,
+    axum::extract::Path(path): axum::extract::Path<String>,
 ) -> Result<axum::response::Response, axum::http::StatusCode> {
     use axum::body::Body;
     use axum::http::header;
     use axum::response::IntoResponse;
 
-    let file_path = if rest.is_empty() { "index.html" } else { rest.trim_start_matches('/') };
+    let path = path.trim_start_matches('/');
+    let (room_id, file_path) = match path.find('/') {
+        Some(idx) => (&path[..idx], &path[idx + 1..]),
+        None => (path, ""),
+    };
     let file_path = if file_path.is_empty() { "index.html" } else { file_path };
+    let room_id = room_id.to_string();
 
     let manifest = state
         .room_manifests
