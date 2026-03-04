@@ -32,35 +32,18 @@ describe('L0 Tab Bar', () => {
 
       await browser.pause(500);
 
-      const tabBarSelectors = [
-        '.bitfun-scene-bar__tabs',
-        '.canvas-tab-bar__tabs',
-        '[data-testid="tab-bar"]',
-        '.bitfun-tab-bar',
-        '[class*="tab-bar"]',
-        '[class*="TabBar"]',
-        '.tabs-container',
-        '[role="tablist"]',
-      ];
+      // Use correct selector from TabBar.tsx
+      const tabBar = await $('.canvas-tab-bar');
+      const tabBarExists = await tabBar.isExisting();
 
-      let tabBarFound = false;
-      for (const selector of tabBarSelectors) {
-        const element = await $(selector);
-        const exists = await element.isExisting();
+      console.log('[L0] Tab bar found:', tabBarExists);
 
-        if (exists) {
-          console.log(`[L0] Tab bar found: ${selector}`);
-          tabBarFound = true;
-          break;
-        }
+      if (!tabBarExists) {
+        console.log('[L0] Tab bar not visible - may not have any open files yet');
       }
 
-      if (!tabBarFound) {
-        console.log('[L0] Tab bar not found - may not have any open files yet');
-        console.log('[L0] This is expected if no files have been opened');
-      }
-
-      expect(typeof tabBarFound).toBe('boolean');
+      // Tab bar may not exist if no files are open, which is valid
+      expect(typeof tabBarExists).toBe('boolean');
     });
   });
 
@@ -68,61 +51,34 @@ describe('L0 Tab Bar', () => {
     it('open tabs should be visible if any files are open', async function () {
       expect(hasWorkspace).toBe(true);
 
-      const tabSelectors = [
-        '.canvas-tab',
-        '[data-testid^="tab-"]',
-        '.bitfun-tabs__tab',
-        '[class*="tab-item"]',
-        '[role="tab"]',
-        '.tab',
-      ];
+      // Use correct selector from Tab.tsx
+      const tabs = await $$('.canvas-tab');
+      const tabCount = tabs.length;
 
-      let tabsFound = false;
-      let tabCount = 0;
+      console.log(`[L0] Found ${tabCount} tabs`);
 
-      for (const selector of tabSelectors) {
-        const tabs = await browser.$$(selector);
-        if (tabs.length > 0) {
-          console.log(`[L0] Found ${tabs.length} tabs: ${selector}`);
-          tabsFound = true;
-          tabCount = tabs.length;
-          break;
-        }
-      }
-
-      if (!tabsFound) {
+      if (tabCount === 0) {
         console.log('[L0] No open tabs found - expected if no files opened');
       }
 
-      expect(typeof tabsFound).toBe('boolean');
+      // Tabs may not exist if no files are open
+      expect(typeof tabCount).toBe('number');
     });
 
     it('tab close buttons should be present if tabs exist', async function () {
       expect(hasWorkspace).toBe(true);
 
-      const closeBtnSelectors = [
-        '.canvas-tab__close',
-        '[data-testid^="tab-close-"]',
-        '.tab-close-btn',
-        '[class*="tab-close"]',
-        '.bitfun-tabs__tab-close',
-      ];
+      // Use correct selector from Tab.tsx
+      const closeButtons = await $$('.canvas-tab__close-btn');
+      const btnCount = closeButtons.length;
 
-      let closeBtnFound = false;
-      for (const selector of closeBtnSelectors) {
-        const btns = await browser.$$(selector);
-        if (btns.length > 0) {
-          console.log(`[L0] Found ${btns.length} tab close buttons: ${selector}`);
-          closeBtnFound = true;
-          break;
-        }
+      console.log(`[L0] Found ${btnCount} tab close buttons`);
+
+      if (btnCount === 0) {
+        console.log('[L0] No tab close buttons found - expected if no tabs open');
       }
 
-      if (!closeBtnFound) {
-        console.log('[L0] No tab close buttons found');
-      }
-
-      expect(typeof closeBtnFound).toBe('boolean');
+      expect(typeof btnCount).toBe('number');
     });
   });
 
@@ -130,19 +86,12 @@ describe('L0 Tab Bar', () => {
     it('workspace should have main content area for tabs', async function () {
       expect(hasWorkspace).toBe(true);
 
+      // Check for main content area
       const mainContent = await $('[data-testid="app-main-content"]');
       const mainExists = await mainContent.isExisting();
 
-      if (mainExists) {
-        console.log('[L0] Main content area found');
-      } else {
-        const alternativeMain = await $('.bitfun-app-main-workspace');
-        const altExists = await alternativeMain.isExisting();
-        console.log('[L0] Main content area (alternative) found:', altExists);
-      }
-
-      // Test passes if workspace was successfully opened and we can check the content area
-      expect(typeof mainExists).toBe('boolean');
+      console.log('[L0] Main content area found:', mainExists);
+      expect(mainExists).toBe(true);
     });
   });
 

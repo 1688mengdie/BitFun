@@ -43,52 +43,16 @@ describe('L0 Notification', () => {
 
   describe('Notification entry visibility', () => {
     it('notification entry/button should be visible in header', async function () {
-      // Skip if workspace could not be opened
-      if (!hasWorkspace) {
-        console.log('[L0] Skipping notification entry test - workspace not open');
-        expect(typeof hasWorkspace).toBe('boolean');
-        return;
-      }
+      expect(hasWorkspace).toBe(true);
 
       await browser.pause(500);
 
-      const selectors = [
-        '.bitfun-notification-btn',
-        '[data-testid="header-notification-btn"]',
-        '.notification-bell',
-        '[class*="notification-btn"]',
-        '[class*="notification-trigger"]',
-        '[class*="NotificationBell"]',
-        '[data-context-type="notification"]',
-      ];
+      // Notification button is in NavPanel footer (not header)
+      const notificationBtn = await $('.bitfun-nav-panel__footer-btn.bitfun-notification-btn');
+      const btnExists = await notificationBtn.isExisting();
 
-      let entryFound = false;
-      for (const selector of selectors) {
-        const element = await $(selector);
-        const exists = await element.isExisting();
-
-        if (exists) {
-          console.log(`[L0] Notification entry found: ${selector}`);
-          entryFound = true;
-          break;
-        }
-      }
-
-      if (!entryFound) {
-        console.log('[L0] Notification entry not found directly');
-        
-        // Check in header right area
-        const headerRight = await $('.bitfun-header-right');
-        const headerExists = await headerRight.isExisting();
-        
-        if (headerExists) {
-          console.log('[L0] Checking header right area for notification icon');
-          const buttons = await headerRight.$$('button');
-          console.log(`[L0] Found ${buttons.length} header buttons`);
-        }
-      }
-
-      expect(entryFound || hasWorkspace).toBe(true);
+      console.log('[L0] Notification button found:', btnExists);
+      expect(btnExists).toBe(true);
     });
   });
 
@@ -96,30 +60,50 @@ describe('L0 Notification', () => {
     it('notification center should be accessible', async function () {
       expect(hasWorkspace).toBe(true);
 
+      await browser.pause(1000);
+
+      // Use JavaScript to click notification button (bypasses overlay)
+      const clicked = await browser.execute(() => {
+        const btn = document.querySelector('.bitfun-nav-panel__footer-btn.bitfun-notification-btn') as HTMLElement;
+        if (btn) {
+          btn.click();
+          return true;
+        }
+        return false;
+      });
+
+      console.log('[L0] Notification button clicked via JS:', clicked);
+      expect(clicked).toBe(true);
+
+      await browser.pause(1000);
+
+      // Check for notification center
       const notificationCenter = await $('.notification-center');
       const centerExists = await notificationCenter.isExisting();
 
-      if (centerExists) {
-        console.log('[L0] Notification center exists');
-      } else {
-        console.log('[L0] Notification center not visible (may need to be triggered)');
-      }
+      console.log('[L0] Notification center opened:', centerExists);
+      expect(centerExists).toBe(true);
 
-      expect(typeof centerExists).toBe('boolean');
+      // Close it
+      if (centerExists) {
+        await browser.execute(() => {
+          const btn = document.querySelector('.bitfun-nav-panel__footer-btn.bitfun-notification-btn') as HTMLElement;
+          if (btn) btn.click();
+        });
+        await browser.pause(500);
+      }
     });
 
     it('notification container should exist for toast notifications', async function () {
       expect(hasWorkspace).toBe(true);
 
+      // Check for notification container
       const container = await $('.notification-container');
       const containerExists = await container.isExisting();
 
-      if (containerExists) {
-        console.log('[L0] Notification container exists');
-      } else {
-        console.log('[L0] Notification container not visible');
-      }
+      console.log('[L0] Notification container exists:', containerExists);
 
+      // Container may not exist until a notification is shown
       expect(typeof containerExists).toBe('boolean');
     });
   });

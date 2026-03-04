@@ -56,32 +56,52 @@ describe('L0 Internationalization', () => {
 
       await browser.pause(500);
 
-      const selectors = [
-        '.language-selector',
-        '.theme-config__language-select',
-        '[data-testid="language-selector"]',
-        '[class*="language-selector"]',
-        '[class*="LanguageSelector"]',
-        '[class*="lang-selector"]',
-      ];
+      // Open more options menu in footer
+      const moreBtn = await $('.bitfun-nav-panel__footer-btn--icon');
+      await moreBtn.click();
+      await browser.pause(500);
 
-      let selectorFound = false;
-      for (const selector of selectors) {
-        const element = await $(selector);
-        const exists = await element.isExisting();
-
-        if (exists) {
-          console.log(`[L0] Language selector found: ${selector}`);
-          selectorFound = true;
+      // Click settings menu item
+      const menuItems = await $$('.bitfun-nav-panel__footer-menu-item');
+      let settingsItem = null;
+      for (const item of menuItems) {
+        const html = await item.getHTML();
+        if (html.includes('Settings') || html.includes('settings')) {
+          settingsItem = item;
           break;
         }
       }
 
-      if (!selectorFound) {
-        console.log('[L0] Language selector not found directly - may be in settings panel');
+      expect(settingsItem).not.toBeNull();
+      await settingsItem!.click();
+      await browser.pause(2000);
+
+      // Navigate to theme tab (language selector is in theme config)
+      const navItems = await $$('.bitfun-settings-nav__item');
+      console.log(`[L0] Found ${navItems.length} settings nav items`);
+
+      let themeTab = null;
+      for (const item of navItems) {
+        const text = await item.getText();
+        // Theme tab is labeled "外观" (Appearance) in Chinese
+        if (text.includes('外观') || text.toLowerCase().includes('theme') || text.includes('主题')) {
+          themeTab = item;
+          console.log(`[L0] Found theme tab: "${text}"`);
+          break;
+        }
       }
 
-      expect(selectorFound || hasWorkspace).toBe(true);
+      if (themeTab) {
+        await themeTab.click();
+        await browser.pause(2000); // Wait for lazy load
+      }
+
+      // Check for language selector in settings
+      const langSelect = await $('.theme-config__language-select');
+      const selectExists = await langSelect.isExisting();
+
+      console.log('[L0] Language selector found:', selectExists);
+      expect(selectExists).toBe(true);
     });
   });
 
