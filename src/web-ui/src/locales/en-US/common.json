@@ -52,7 +52,7 @@
     "showChatPanel": "Show Chat Panel",
     "hideChatPanel": "Hide Chat Panel",
     "switchToToolbar": "Switch to Toolbar Mode",
-    "remoteConnect": "Remote Connect",
+    "remoteConnect": "Remote Connect (Beta)",
     "modeSwitchAriaLabel": "View mode switch",
     "modeCowork": "Cowork",
     "modeCoder": "Coder",
@@ -150,7 +150,7 @@
     "errorCreateFailed": "Failed to create project"
   },
   "remoteConnect": {
-    "title": "Remote Connect",
+    "title": "Remote Connect (Beta)",
     "tabLan": "LAN",
     "tabBitfunServer": "BitFun Server",
     "tabNgrok": "NAT Traversal",

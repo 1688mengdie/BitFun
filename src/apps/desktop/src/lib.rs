@@ -156,19 +156,36 @@ pub async fn run() {
             logging::register_runtime_log_state(startup_log_level, session_log_dir.clone());
 
             // Register bundled mobile-web resource path for remote connect.
-            // Try multiple candidate paths: Tauri array-format bundling preserves
-            // the source directory structure, so the files may be at different
-            // relative locations depending on the bundling config.
+            // tauri.conf.json maps "../../mobile-web/dist" -> "mobile-web/dist",
+            // so the primary candidate is "mobile-web/dist". Additional fallbacks
+            // handle legacy or non-standard bundle layouts.
             {
                 let candidates = [
                     "mobile-web/dist",
                     "mobile-web",
+                    "dist",
                 ];
+                let mut found = false;
                 for candidate in &candidates {
                     if let Ok(p) = app.path().resolve(candidate, tauri::path::BaseDirectory::Resource) {
                         if p.join("index.html").exists() {
+                            log::info!("Found bundled mobile-web at: {}", p.display());
                             api::remote_connect_api::set_mobile_web_resource_path(p);
+                            found = true;
                             break;
+                        }
+                    }
+                }
+                if !found {
+                    // Last resort: scan the resource root for any index.html
+                    if let Ok(res_dir) = app.path().resource_dir() {
+                        for sub in &["mobile-web/dist", "mobile-web", "dist", ""] {
+                            let p = if sub.is_empty() { res_dir.clone() } else { res_dir.join(sub) };
+                            if p.join("index.html").exists() {
+                                log::info!("Found mobile-web via resource root scan: {}", p.display());
+                                api::remote_connect_api::set_mobile_web_resource_path(p);
+                                break;
+                            }
                         }
                     }
                 }

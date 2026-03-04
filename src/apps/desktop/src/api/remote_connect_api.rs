@@ -177,14 +177,24 @@ fn detect_from_exe() -> Option<String> {
     let mut candidates: Vec<PathBuf> = Vec::new();
 
     if cfg!(target_os = "macos") {
+        // Primary: tauri.conf.json maps dist -> mobile-web/dist in Resources
+        candidates.push(exe_dir.join("../Resources/mobile-web/dist"));
+        // Fallback: legacy layout without dist subdirectory
         candidates.push(exe_dir.join("../Resources/mobile-web"));
+        // Fallback: array-format bundling may place files at Resources/dist directly
+        candidates.push(exe_dir.join("../Resources/dist"));
     }
+    candidates.push(exe_dir.join("mobile-web/dist"));
     candidates.push(exe_dir.join("mobile-web"));
+    candidates.push(exe_dir.join("resources/mobile-web/dist"));
     candidates.push(exe_dir.join("resources/mobile-web"));
 
     if cfg!(target_os = "linux") {
+        candidates.push(exe_dir.join("../lib/bitfun/mobile-web/dist"));
         candidates.push(exe_dir.join("../lib/bitfun/mobile-web"));
+        candidates.push(exe_dir.join("../share/bitfun/mobile-web/dist"));
         candidates.push(exe_dir.join("../share/bitfun/mobile-web"));
+        candidates.push(exe_dir.join("../share/com.bitfun.desktop/mobile-web/dist"));
         candidates.push(exe_dir.join("../share/com.bitfun.desktop/mobile-web"));
     }
 

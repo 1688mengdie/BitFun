@@ -15,7 +15,9 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": ["../../mobile-web/dist/"]
+    "resources": {
+      "../../mobile-web/dist": "mobile-web/dist"
+    }
   },
   "app": {
     "windows": [],

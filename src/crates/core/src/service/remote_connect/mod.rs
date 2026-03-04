@@ -255,7 +255,7 @@ impl RemoteConnectService {
 
         let web_app_url: String = match &method {
             ConnectionMethod::Lan | ConnectionMethod::Ngrok => relay_url.clone(),
-            ConnectionMethod::BitfunServer | ConnectionMethod::CustomServer { .. } => {
+            ConnectionMethod::BitfunServer => {
                 if let Some(web_dir) = static_dir {
                     match upload_mobile_web(&relay_url, &qr_payload.room_id, web_dir).await {
                         Ok(()) => {
@@ -275,6 +275,28 @@ impl RemoteConnectService {
                 } else {
                     info!("No mobile_web_dir configured; using server-hosted mobile web");
                     self.config.web_app_url.clone()
+                }
+            }
+            ConnectionMethod::CustomServer { .. } => {
+                if let Some(web_dir) = static_dir {
+                    match upload_mobile_web(&relay_url, &qr_payload.room_id, web_dir).await {
+                        Ok(()) => {
+                            let url = format!(
+                                "{}/r/{}",
+                                relay_url.trim_end_matches('/'),
+                                qr_payload.room_id
+                            );
+                            info!("Uploaded mobile-web to relay: {url}");
+                            url
+                        }
+                        Err(e) => {
+                            error!("Failed to upload mobile-web to custom relay: {e}; using custom server URL directly");
+                            relay_url.clone()
+                        }
+                    }
+                } else {
+                    info!("No mobile_web_dir configured; using custom server URL directly");
+                    relay_url.clone()
                 }
             }
             _ => self.config.web_app_url.clone(),

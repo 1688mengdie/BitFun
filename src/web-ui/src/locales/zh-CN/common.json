@@ -52,7 +52,7 @@
     "showChatPanel": "显示聊天面板",
     "hideChatPanel": "隐藏聊天面板",
     "switchToToolbar": "切换到工具栏模式",
-    "remoteConnect": "远程连接",
+    "remoteConnect": "远程连接 (Beta)",
     "modeSwitchAriaLabel": "视图模式切换",
     "modeCowork": "Cowork",
     "modeCoder": "Coder",
@@ -150,7 +150,7 @@
     "errorCreateFailed": "创建工程失败"
   },
   "remoteConnect": {
-    "title": "远程连接",
+    "title": "远程连接 (Beta)",
     "tabLan": "局域网",
     "tabBitfunServer": "BitFun服务器",
     "tabNgrok": "内网穿透",
