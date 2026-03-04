@@ -35,6 +35,7 @@ const BOT_TABS: { id: BotTab; label: string }[] = [
 ];
 
 const NGROK_SETUP_URL = 'https://dashboard.ngrok.com/get-started/setup';
+const RELAY_SERVER_README_URL = 'https://github.com/GCWing/BitFun/blob/main/src/apps/relay-server/README.md';
 
 const methodToNetworkTab = (method: string | null | undefined): NetworkTab | null => {
   if (!method) return null;
@@ -72,6 +73,7 @@ export const RemoteConnectDialog: React.FC<RemoteConnectDialogProps> = ({
   const [status, setStatus] = useState<RemoteConnectStatus | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [lanNetworkInfo, setLanNetworkInfo] = useState<{ localIp: string; gatewayIp: string | null } | null>(null);
 
   const [customUrl, setCustomUrl] = useState('');
   const [tgToken, setTgToken] = useState('');
@@ -156,6 +158,25 @@ export const RemoteConnectDialog: React.FC<RemoteConnectDialogProps> = ({
     };
   }, [isOpen, startPolling]);
 
+  useEffect(() => {
+    if (!isOpen || activeGroup !== 'network' || networkTab !== 'lan') return;
+    let cancelled = false;
+    const loadLanNetworkInfo = async () => {
+      const info = await remoteConnectAPI.getLanNetworkInfo();
+      if (!cancelled) {
+        setLanNetworkInfo(
+          info
+            ? { localIp: info.local_ip, gatewayIp: info.gateway_ip ?? null }
+            : null,
+        );
+      }
+    };
+    void loadLanNetworkInfo();
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, activeGroup, networkTab]);
+
   // ── Connection handlers ──────────────────────────────────────────
 
   const handleConnect = useCallback(async () => {
@@ -228,6 +249,10 @@ export const RemoteConnectDialog: React.FC<RemoteConnectDialogProps> = ({
     void systemAPI.openExternal(NGROK_SETUP_URL);
   }, []);
 
+  const handleOpenRelayReadme = useCallback(() => {
+    void systemAPI.openExternal(RELAY_SERVER_README_URL);
+  }, []);
+
   // ── Sub-tab disabled logic ───────────────────────────────────────
 
   const isNetworkSubDisabled = (tabId: NetworkTab): boolean => {
@@ -287,7 +312,11 @@ export const RemoteConnectDialog: React.FC<RemoteConnectDialogProps> = ({
           </div>
         )}
         <div className="bitfun-remote-connect__status">
-          <Badge variant="warning">{t('remoteConnect.stateWaiting')}</Badge>
+          <Badge variant="warning">
+            {activeGroup === 'bot'
+              ? t('remoteConnect.stateWaitingBot')
+              : t('remoteConnect.stateWaiting')}
+          </Badge>
         </div>
         <p className="bitfun-remote-connect__hint">
           {activeGroup === 'bot' ? t('remoteConnect.botHint') : t('remoteConnect.scanHint')}
@@ -313,8 +342,48 @@ export const RemoteConnectDialog: React.FC<RemoteConnectDialogProps> = ({
     }
     return (
       <div className="bitfun-remote-connect__body">
+        {networkTab === 'lan' && lanNetworkInfo?.localIp && (
+          <p className="bitfun-remote-connect__hint">
+            {t('remoteConnect.currentIp')}: {lanNetworkInfo.localIp}
+          </p>
+        )}
+        {networkTab === 'lan' && lanNetworkInfo?.gatewayIp && (
+          <p className="bitfun-remote-connect__hint">
+            {t('remoteConnect.gatewayIp')}: {lanNetworkInfo.gatewayIp}
+          </p>
+        )}
         <p className="bitfun-remote-connect__description">
-          {t(`remoteConnect.desc_${networkTab}`)}
+          {networkTab === 'custom_server' ? (
+            <>
+              {t('remoteConnect.desc_custom_server_prefix')}
+              <span
+                className="bitfun-remote-connect__description-link"
+                role="link"
+                tabIndex={0}
+                onClick={handleOpenRelayReadme}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleOpenRelayReadme(); }}
+              >
+                {t('remoteConnect.desc_custom_server_link')}
+              </span>
+              {t('remoteConnect.desc_custom_server_suffix')}
+            </>
+          ) : networkTab === 'ngrok' ? (
+            <>
+              {t('remoteConnect.desc_ngrok_prefix')}
+              <span
+                className="bitfun-remote-connect__description-link"
+                role="link"
+                tabIndex={0}
+                onClick={handleOpenNgrokSetup}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleOpenNgrokSetup(); }}
+              >
+                {t('remoteConnect.desc_ngrok_link')}
+              </span>
+              {t('remoteConnect.desc_ngrok_suffix')}
+            </>
+          ) : (
+            t(`remoteConnect.desc_${networkTab}`)
+          )}
         </p>
         {networkTab === 'custom_server' && (
           <div className="bitfun-remote-connect__input-group">

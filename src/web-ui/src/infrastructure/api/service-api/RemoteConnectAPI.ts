@@ -38,6 +38,11 @@ export interface RemoteConnectStatus {
   bot_connected: string | null;
 }
 
+export interface LanNetworkInfo {
+  local_ip: string;
+  gateway_ip: string | null;
+}
+
 class RemoteConnectAPIService {
   private adapter = getTransportAdapter();
 
@@ -47,6 +52,24 @@ class RemoteConnectAPIService {
     } catch (e) {
       log.error('getDeviceInfo failed', e);
       throw e;
+    }
+  }
+
+  async getLanIp(): Promise<string | null> {
+    try {
+      return await this.adapter.request<string>('remote_connect_get_lan_ip');
+    } catch (e) {
+      log.warn('getLanIp failed', e);
+      return null;
+    }
+  }
+
+  async getLanNetworkInfo(): Promise<LanNetworkInfo | null> {
+    try {
+      return await this.adapter.request<LanNetworkInfo>('remote_connect_get_lan_network_info');
+    } catch (e) {
+      log.warn('getLanNetworkInfo failed', e);
+      return null;
     }
   }
 

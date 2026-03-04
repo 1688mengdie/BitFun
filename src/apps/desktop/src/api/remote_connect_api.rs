@@ -1,12 +1,14 @@
 //! Tauri commands for Remote Connect.
 
 use bitfun_core::service::remote_connect::{
-    bot::BotConfig, ConnectionMethod, ConnectionResult, PairingState, RemoteConnectConfig,
+    bot::BotConfig, lan, ConnectionMethod, ConnectionResult, PairingState, RemoteConnectConfig,
     RemoteConnectService,
 };
 use once_cell::sync::OnceCell;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::process::Command;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -220,6 +222,65 @@ pub struct DeviceInfo {
     pub mac_address: String,
 }
 
+#[derive(Debug, Serialize)]
+pub struct LanNetworkInfo {
+    pub local_ip: String,
+    pub gateway_ip: Option<String>,
+}
+
+fn detect_default_gateway_ip() -> Option<String> {
+    #[cfg(target_os = "macos")]
+    {
+        let output = Command::new("route")
+            .args(["-n", "get", "default"])
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let re = Regex::new(r"(?m)^\s*gateway:\s*([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)\s*$").ok()?;
+        return re
+            .captures(&stdout)
+            .and_then(|c| c.get(1).map(|m| m.as_str().to_string()));
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let output = Command::new("ip")
+            .args(["route", "show", "default"])
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let re = Regex::new(r"(?m)^default\s+via\s+([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)\b").ok()?;
+        return re
+            .captures(&stdout)
+            .and_then(|c| c.get(1).map(|m| m.as_str().to_string()));
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let output = Command::new("route").args(["print", "-4"]).output().ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let re = Regex::new(
+            r"(?m)^\s*0\.0\.0\.0\s+0\.0\.0\.0\s+([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)\s+",
+        )
+        .ok()?;
+        return re
+            .captures(&stdout)
+            .and_then(|c| c.get(1).map(|m| m.as_str().to_string()));
+    }
+
+    #[allow(unreachable_code)]
+    None
+}
+
 // ── Tauri Commands ─────────────────────────────────────────────────
 
 #[tauri::command]
@@ -233,6 +294,21 @@ pub async fn remote_connect_get_device_info() -> Result<DeviceInfo, String> {
         device_id: id.device_id.clone(),
         device_name: id.device_name.clone(),
         mac_address: id.mac_address.clone(),
+    })
+}
+
+#[tauri::command]
+pub async fn remote_connect_get_lan_ip() -> Result<String, String> {
+    lan::get_local_ip().map_err(|e| format!("get local ip: {e}"))
+}
+
+#[tauri::command]
+pub async fn remote_connect_get_lan_network_info() -> Result<LanNetworkInfo, String> {
+    let local_ip = lan::get_local_ip().map_err(|e| format!("get local ip: {e}"))?;
+    let gateway_ip = detect_default_gateway_ip();
+    Ok(LanNetworkInfo {
+        local_ip,
+        gateway_ip,
     })
 }
 
