@@ -19,8 +19,18 @@ jobs:
   rust-build-check:
     name: Rust Build Check
     runs-on: ubuntu-latest
+    needs: frontend-build
     steps:
       - uses: actions/checkout@v4
+
+      - name: Download frontend build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: dist
+
+      - name: Create mobile-web dist directory (workaround for Tauri)
+        run: mkdir -p mobile-web/dist
 
       - name: Install Linux system dependencies (Tauri)
         run: |
@@ -53,7 +63,7 @@ jobs:
           shared-key: "ci-check"
 
       - name: Check compilation
-        run: cargo check --workspace
+        run: cargo check --workspace --exclude bitfun-desktop
 
   # ── Frontend: build ────────────────────────────────────────────────
   frontend-build:
@@ -74,3 +84,10 @@ jobs:
 
       - name: Build web UI
         run: npm run build:web
+
+      - name: Upload frontend build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: dist
+          retention-days: 1

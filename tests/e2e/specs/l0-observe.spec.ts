@@ -37,6 +37,6 @@ describe('L0 Observe - Keep window open', () => {
     }
 
     console.log('[Observe] Done');
-    expect(true).toBe(true);
+    expect(title).toBeDefined();
   });
 });

@@ -1,80 +1,69 @@
 /**
- * L0 open workspace spec: open recent workspace and keep UI visible.
+ * L0 open workspace spec: verifies workspace opening flow.
+ * Tests the ability to detect and interact with startup page and workspace state.
  */
 
 import { browser, expect, $ } from '@wdio/globals';
+import { openWorkspace } from '../helpers/workspace-helper';
 
-describe('L0 Open workspace', () => {
-  it('app starts and waits for UI', async () => {
-    console.log('[L0] Waiting for app to start...');
-    await browser.pause(1000);
-    const title = await browser.getTitle();
-    console.log('[L0] App title:', title);
-    expect(title).toBeDefined();
-  });
+describe('L0 Workspace Opening', () => {
+  let hasWorkspace = false;
 
-  it('checks startup page or workspace state', async () => {
-    await browser.pause(500);
-    const startupContainer = await $('[data-testid="startup-container"]');
-    const isStartupPage = await startupContainer.isExisting();
+  describe('App initialization', () => {
+    it('app should start successfully', async () => {
+      console.log('[L0] Waiting for app initialization...');
+      await browser.pause(2000);
+      const title = await browser.getTitle();
+      console.log('[L0] App title:', title);
+      expect(title).toBeDefined();
+    });
 
-    if (isStartupPage) {
-      console.log('[L0] On startup page');
-    } else {
-      console.log('[L0] Workspace may already be open');
-    }
-
-    const body = await $('body');
-    const html = await body.getHTML();
-    console.log('[L0] Body HTML length:', html.length);
-    if (html.length < 100) {
-      console.log('[L0] Body HTML:', html);
-    }
-    expect(true).toBe(true);
-  });
-
-  it('tries to click Continue last session', async () => {
-    await browser.pause(1000);
-    const continueBtn = await $('.startup-content__continue-btn');
-    const exists = await continueBtn.isExisting();
-
-    if (exists) {
-      console.log('[L0] Found Continue button, clicking');
-      await continueBtn.click();
-      console.log('[L0] Waiting for workspace to load...');
-      await browser.pause(3000);
-      const startupAfter = await $('[data-testid="startup-container"]');
-      const stillStartup = await startupAfter.isExisting();
-      if (!stillStartup) {
-        console.log('[L0] Workspace opened, startup page gone');
-      } else {
-        console.log('[L0] Startup page still visible');
-      }
-    } else {
-      console.log('[L0] Continue button not found');
-      const historyItem = await $('.startup-content__history-item');
-      const hasHistory = await historyItem.isExisting();
-      if (hasHistory) {
-        console.log('[L0] Found history item, clicking first');
-        await historyItem.click();
-        await browser.pause(3000);
-      } else {
-        console.log('[L0] No history, skipping');
-      }
-    }
-    expect(true).toBe(true);
-  });
-
-  it('keeps UI open for 30 seconds', async () => {
-    console.log('[L0] Keeping UI open for 30s...');
-    for (let i = 0; i < 6; i++) {
-      await browser.pause(5000);
-      console.log(`[L0] Waited ${(i + 1) * 5}s...`);
+    it('should have valid DOM structure', async () => {
       const body = await $('body');
-      const childCount = await body.$$('*').then(els => els.length);
-      console.log(`[L0] DOM element count: ${childCount}`);
-    }
-    console.log('[L0] Wait complete');
-    expect(true).toBe(true);
+      const html = await body.getHTML();
+      expect(html.length).toBeGreaterThan(100);
+      console.log('[L0] DOM loaded, HTML length:', html.length);
+    });
+  });
+
+  describe('Workspace opening', () => {
+    it('should open workspace successfully', async () => {
+      await browser.pause(2000);
+
+      hasWorkspace = await openWorkspace();
+
+      console.log('[L0] Workspace opened:', hasWorkspace);
+      expect(hasWorkspace).toBe(true);
+    });
+
+    it('should have workspace UI elements', async () => {
+      expect(hasWorkspace).toBe(true);
+
+      const chatInput = await $('[data-testid="chat-input-container"]');
+      const hasChatInput = await chatInput.isExisting();
+
+      console.log('[L0] Chat input exists:', hasChatInput);
+      expect(hasChatInput).toBe(true);
+    });
+  });
+
+  describe('UI stability check', () => {
+    it('UI should remain stable', async () => {
+      expect(hasWorkspace).toBe(true);
+
+      console.log('[L0] Monitoring UI stability for 10 seconds...');
+
+      for (let i = 0; i < 2; i++) {
+        await browser.pause(5000);
+
+        const body = await $('body');
+        const childCount = await body.$$('*').then(els => els.length);
+        console.log(`[L0] ${(i + 1) * 5}s - DOM elements: ${childCount}`);
+
+        expect(childCount).toBeGreaterThan(10);
+      }
+
+      console.log('[L0] UI stability confirmed');
+    });
   });
 });
