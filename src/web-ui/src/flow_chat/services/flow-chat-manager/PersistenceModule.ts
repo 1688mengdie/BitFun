@@ -330,8 +330,6 @@ export async function updateSessionMetadata(
       // ignore
     }
 
-    const isFullyLoaded = !session.isHistorical;
-
     const inMemoryTurnCount = session.dialogTurns.length;
     const inMemoryMessageCount = session.dialogTurns.reduce((sum, turn) => {
       return sum + 1 + turn.modelRounds.reduce((roundSum, round) => {
@@ -352,8 +350,8 @@ export async function updateSessionMetadata(
       createdAt: existingMetadata?.createdAt || session.createdAt,
       lastActiveAt: Date.now(),
       turnCount: Math.max(inMemoryTurnCount, existingMetadata?.turnCount ?? 0),
-      messageCount: isFullyLoaded ? inMemoryMessageCount : (existingMetadata?.messageCount ?? inMemoryMessageCount),
-      toolCallCount: isFullyLoaded ? inMemoryToolCallCount : (existingMetadata?.toolCallCount ?? inMemoryToolCallCount),
+      messageCount: Math.max(inMemoryMessageCount, existingMetadata?.messageCount ?? 0),
+      toolCallCount: Math.max(inMemoryToolCallCount, existingMetadata?.toolCallCount ?? 0),
       status: 'active',
       tags: existingMetadata?.tags || [],
       todos: session.todos || existingMetadata?.todos || [],

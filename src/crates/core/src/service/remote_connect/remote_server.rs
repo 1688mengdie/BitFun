@@ -374,7 +374,7 @@ impl RemoteServer {
                                 agent_type: s.agent_type,
                                 created_at: (s.created_at / 1000).to_string(),
                                 updated_at: (s.last_active_at / 1000).to_string(),
-                                message_count: s.message_count,
+                                message_count: s.turn_count,
                                 workspace_path: Some(ws_str.clone()),
                                 workspace_name: ws_name.clone(),
                             })
@@ -553,7 +553,7 @@ impl RemoteServer {
                                                     agent_type: s.agent_type,
                                                     created_at: created,
                                                     updated_at: updated,
-                                                    message_count: s.message_count,
+                                                    message_count: s.turn_count,
                                                     workspace_path: Some(ws_str.clone()),
                                                     workspace_name: workspace_name.clone(),
                                                 }

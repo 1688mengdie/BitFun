@@ -16,6 +16,7 @@ import {
 } from '../EventBatcher';
 import { notificationService } from '../../../shared/notification-system';
 import { createLogger } from '@/shared/utils/logger';
+import { globalAPI } from '@/infrastructure/api';
 import type { FlowChatContext, DialogTurn, ModelRound, FlowToolItem } from './types';
 import { 
   debouncedSaveDialogTurn, 
@@ -276,6 +277,17 @@ function handleDialogTurnStarted(context: FlowChatContext, event: any): void {
   if (!session) {
     log.warn('DialogTurnStarted: session not in store, creating placeholder', { sessionId, sessionsCount: state.sessions.size });
     store.addExternalSession(sessionId, 'Remote Session', 'agentic');
+    globalAPI.getCurrentWorkspacePath().then(workspacePath => {
+      if (workspacePath) {
+        store.setState(prev => {
+          const s = prev.sessions.get(sessionId);
+          if (!s || s.workspacePath) return prev;
+          const newSessions = new Map(prev.sessions);
+          newSessions.set(sessionId, { ...s, workspacePath });
+          return { ...prev, sessions: newSessions };
+        });
+      }
+    }).catch(() => { /* ignore */ });
   }
 
   const freshSession = store.getState().sessions.get(sessionId);

@@ -391,11 +391,12 @@ async fn handle_new_session(state: &mut BotChatState, agent_type: &str) -> Handl
             persist_new_session(&session_id, session_name, agent_type, ws_path.as_deref()).await;
             state.current_session_id = Some(session_id.clone());
             let label = if agent_type == "Cowork" { "cowork" } else { "coding" };
+            let workspace = ws_path.as_deref().unwrap_or("(unknown)");
             HandleResult {
                 reply: format!(
-                    "Created new {} session: {}\nSession ID: {}\n\n\
+                    "Created new {} session: {}\nSession ID: {}\nWorkspace: {}\n\n\
                      You can now send messages to interact with the AI agent.",
-                    label, session_name, session_id
+                    label, session_name, session_id, workspace
                 ),
                 forward_to_session: None,
             }
