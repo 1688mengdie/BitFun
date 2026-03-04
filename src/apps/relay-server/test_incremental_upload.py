@@ -14,7 +14,6 @@ Tests:
 
 Usage:
     python3 test_incremental_upload.py [relay_url]
-    # default: http://116.204.120.240/relay
 """
 
 import asyncio
@@ -34,7 +33,7 @@ except ImportError:
     subprocess.check_call([sys.executable, "-m", "pip", "install", "websockets", "-q"])
     import websockets
 
-RELAY_URL = sys.argv[1] if len(sys.argv) > 1 else "http://116.204.120.240/relay"
+RELAY_URL = sys.argv[1] if len(sys.argv) > 1 else "http://remote.openbitfun.com/relay"
 WS_URL = RELAY_URL.replace("http://", "ws://").replace("https://", "wss://") + "/ws"
 
 PASS = 0

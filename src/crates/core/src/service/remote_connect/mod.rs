@@ -60,8 +60,8 @@ impl Default for RemoteConnectConfig {
     fn default() -> Self {
         Self {
             lan_port: 9700,
-            bitfun_server_url: "http://116.204.120.240/relay".to_string(),
-            web_app_url: "http://116.204.120.240/relay".to_string(),
+            bitfun_server_url: "http://remote.openbitfun.com/relay".to_string(),
+            web_app_url: "http://remote.openbitfun.com/relay".to_string(),
             custom_server_url: None,
             bot_feishu: None,
             bot_telegram: None,
