@@ -4,6 +4,7 @@
  */
 
 import { browser, expect, $ } from '@wdio/globals';
+import { openWorkspace } from '../helpers/workspace-helper';
 
 describe('L0 Navigation Panel', () => {
   let hasWorkspace = false;
@@ -19,61 +20,18 @@ describe('L0 Navigation Panel', () => {
 
     it('should detect workspace or startup state', async () => {
       await browser.pause(1000);
-      
-      // Check for workspace UI (chat input indicates workspace is open)
-      const chatInput = await $('[data-testid="chat-input-container"]');
-      hasWorkspace = await chatInput.isExisting();
-      
-      if (hasWorkspace) {
-        console.log('[L0] Workspace is open');
-        expect(hasWorkspace).toBe(true);
-        return;
-      }
 
-      // Check for welcome/startup scene with multiple selectors
-      const welcomeSelectors = [
-        '.welcome-scene--first-time',
-        '.welcome-scene',
-        '.bitfun-scene-viewport--welcome',
-      ];
+      hasWorkspace = await openWorkspace();
 
-      let isStartup = false;
-      for (const selector of welcomeSelectors) {
-        try {
-          const element = await $(selector);
-          isStartup = await element.isExisting();
-          if (isStartup) {
-            console.log(`[L0] On startup page via ${selector}`);
-            break;
-          }
-        } catch (e) {
-          // Try next selector
-        }
-      }
-
-      if (!isStartup) {
-        // Fallback: check for scene viewport
-        const sceneViewport = await $('.bitfun-scene-viewport');
-        isStartup = await sceneViewport.isExisting();
-        console.log('[L0] Fallback check - scene viewport exists:', isStartup);
-      }
-
-      if (!isStartup && !hasWorkspace) {
-        console.error('[L0] CRITICAL: Neither welcome nor workspace UI found');
-      }
-
-      expect(isStartup || hasWorkspace).toBe(true);
+      console.log('[L0] Workspace opened:', hasWorkspace);
+      expect(hasWorkspace).toBe(true);
     });
 
     it('should have navigation panel or sidebar when workspace is open', async function () {
-      if (!hasWorkspace) {
-        console.log('[L0] Skipping: no workspace open');
-        this.skip();
-        return;
-      }
+      expect(hasWorkspace).toBe(true);
 
-      await browser.pause(500);
-      
+      await browser.pause(1000);
+
       const selectors = [
         '[data-testid="nav-panel"]',
         '.bitfun-nav-panel',
@@ -87,7 +45,7 @@ describe('L0 Navigation Panel', () => {
       for (const selector of selectors) {
         const element = await $(selector);
         const exists = await element.isExisting();
-        
+
         if (exists) {
           console.log(`[L0] Navigation panel found: ${selector}`);
           navFound = true;
@@ -101,11 +59,7 @@ describe('L0 Navigation Panel', () => {
 
   describe('Navigation items visibility', () => {
     it('navigation items should be present if workspace is open', async function () {
-      if (!hasWorkspace) {
-        console.log('[L0] Skipping: workspace not open');
-        this.skip();
-        return;
-      }
+      expect(hasWorkspace).toBe(true);
 
       await browser.pause(500);
       
@@ -139,11 +93,7 @@ describe('L0 Navigation Panel', () => {
     });
 
     it('navigation sections should be present', async function () {
-      if (!hasWorkspace) {
-        console.log('[L0] Skipping: workspace not open');
-        this.skip();
-        return;
-      }
+      expect(hasWorkspace).toBe(true);
 
       const sectionSelectors = [
         '.bitfun-nav-panel__sections',
@@ -172,21 +122,13 @@ describe('L0 Navigation Panel', () => {
 
   describe('Navigation interactivity', () => {
     it('navigation items should be clickable', async function () {
-      if (!hasWorkspace) {
-        console.log('[L0] Skipping: workspace not open');
-        this.skip();
-        return;
-      }
+      expect(hasWorkspace).toBe(true);
 
       const navItems = await browser.$$('.bitfun-nav-panel__inline-item');
       
       if (navItems.length === 0) {
         const altItems = await browser.$$('.bitfun-nav-panel__item');
-        if (altItems.length === 0) {
-          console.log('[L0] No nav items found to test clickability');
-          this.skip();
-          return;
-        }
+        expect(altItems.length).toBeGreaterThan(0);
       }
 
       const firstItem = navItems.length > 0 ? navItems[0] : (await browser.$$('.bitfun-nav-panel__item'))[0];

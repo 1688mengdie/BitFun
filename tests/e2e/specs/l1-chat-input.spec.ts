@@ -228,7 +228,7 @@ describe('L1 Chat Input Validation', () => {
         return;
       }
       
-      const testMessage = 'Test message';
+      const testMessage = 'E2E L1 test - please ignore';
       await chatInput.typeMessage(testMessage);
       
       const countBefore = await chatPage.getMessageCount();

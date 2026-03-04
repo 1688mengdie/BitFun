@@ -4,6 +4,7 @@
  */
 
 import { browser, expect, $ } from '@wdio/globals';
+import { openWorkspace } from '../helpers/workspace-helper';
 
 describe('L0 Tab Bar', () => {
   let hasWorkspace = false;
@@ -19,21 +20,15 @@ describe('L0 Tab Bar', () => {
 
     it('should detect workspace state', async function () {
       await browser.pause(1000);
-      
-      // Check for workspace UI (chat input indicates workspace is open)
-      const chatInput = await $('[data-testid="chat-input-container"]');
-      hasWorkspace = await chatInput.isExisting();
-      
-      console.log('[L0] Has workspace:', hasWorkspace);
-      expect(typeof hasWorkspace).toBe('boolean');
+
+      hasWorkspace = await openWorkspace();
+
+      console.log('[L0] Workspace opened:', hasWorkspace);
+      expect(hasWorkspace).toBe(true);
     });
 
     it('should have tab bar or tab container in workspace', async function () {
-      if (!hasWorkspace) {
-        console.log('[L0] Skipping: workspace not open');
-        this.skip();
-        return;
-      }
+      expect(hasWorkspace).toBe(true);
 
       await browser.pause(500);
 
@@ -71,11 +66,7 @@ describe('L0 Tab Bar', () => {
 
   describe('Tab visibility', () => {
     it('open tabs should be visible if any files are open', async function () {
-      if (!hasWorkspace) {
-        console.log('[L0] Skipping: workspace not open');
-        this.skip();
-        return;
-      }
+      expect(hasWorkspace).toBe(true);
 
       const tabSelectors = [
         '.canvas-tab',
@@ -107,11 +98,7 @@ describe('L0 Tab Bar', () => {
     });
 
     it('tab close buttons should be present if tabs exist', async function () {
-      if (!hasWorkspace) {
-        console.log('[L0] Skipping: workspace not open');
-        this.skip();
-        return;
-      }
+      expect(hasWorkspace).toBe(true);
 
       const closeBtnSelectors = [
         '.canvas-tab__close',
@@ -141,11 +128,7 @@ describe('L0 Tab Bar', () => {
 
   describe('Tab bar UI elements', () => {
     it('workspace should have main content area for tabs', async function () {
-      if (!hasWorkspace) {
-        console.log('[L0] Skipping: workspace not open');
-        this.skip();
-        return;
-      }
+      expect(hasWorkspace).toBe(true);
 
       const mainContent = await $('[data-testid="app-main-content"]');
       const mainExists = await mainContent.isExisting();
@@ -158,7 +141,8 @@ describe('L0 Tab Bar', () => {
         console.log('[L0] Main content area (alternative) found:', altExists);
       }
 
-      expect(hasWorkspace).toBe(true);
+      // Test passes if workspace was successfully opened and we can check the content area
+      expect(typeof mainExists).toBe('boolean');
     });
   });
 

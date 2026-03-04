@@ -4,6 +4,7 @@
  */
 
 import { browser, expect, $ } from '@wdio/globals';
+import { openWorkspace } from '../helpers/workspace-helper';
 
 describe('L0 Internationalization', () => {
   let hasWorkspace = false;
@@ -19,13 +20,11 @@ describe('L0 Internationalization', () => {
 
     it('should detect workspace state', async function () {
       await browser.pause(1000);
-      
-      // Check for workspace UI (chat input indicates workspace is open)
-      const chatInput = await $('[data-testid="chat-input-container"]');
-      hasWorkspace = await chatInput.isExisting();
-      
-      console.log('[L0] Has workspace:', hasWorkspace);
-      expect(typeof hasWorkspace).toBe('boolean');
+
+      hasWorkspace = await openWorkspace();
+
+      console.log('[L0] Workspace opened:', hasWorkspace);
+      expect(hasWorkspace).toBe(true);
     });
 
     it('should have language configuration', async () => {
@@ -53,11 +52,7 @@ describe('L0 Internationalization', () => {
 
   describe('Language selector visibility', () => {
     it('language selector should exist in settings', async function () {
-      if (!hasWorkspace) {
-        console.log('[L0] Skipping: workspace not open');
-        this.skip();
-        return;
-      }
+      expect(hasWorkspace).toBe(true);
 
       await browser.pause(500);
 
@@ -92,11 +87,7 @@ describe('L0 Internationalization', () => {
 
   describe('Language switching', () => {
     it('should be able to detect current language', async function () {
-      if (!hasWorkspace) {
-        console.log('[L0] Skipping: workspace not open');
-        this.skip();
-        return;
-      }
+      expect(hasWorkspace).toBe(true);
 
       const langInfo = await browser.execute(() => {
         // Try to get current language from various sources
@@ -114,11 +105,7 @@ describe('L0 Internationalization', () => {
     });
 
     it('i18n system should be functional', async function () {
-      if (!hasWorkspace) {
-        console.log('[L0] Skipping: workspace not open');
-        this.skip();
-        return;
-      }
+      expect(hasWorkspace).toBe(true);
 
       // Check if the app has text content (indicating i18n is working)
       const hasTextContent = await browser.execute(() => {

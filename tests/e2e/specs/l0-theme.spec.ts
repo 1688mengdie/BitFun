@@ -4,6 +4,7 @@
  */
 
 import { browser, expect, $ } from '@wdio/globals';
+import { openWorkspace } from '../helpers/workspace-helper';
 
 describe('L0 Theme', () => {
   let hasWorkspace = false;
@@ -19,13 +20,11 @@ describe('L0 Theme', () => {
 
     it('should detect workspace state', async function () {
       await browser.pause(1000);
-      
-      // Check for workspace UI (chat input indicates workspace is open)
-      const chatInput = await $('[data-testid="chat-input-container"]');
-      hasWorkspace = await chatInput.isExisting();
-      
-      console.log('[L0] Has workspace:', hasWorkspace);
-      expect(typeof hasWorkspace).toBe('boolean');
+
+      hasWorkspace = await openWorkspace();
+
+      console.log('[L0] Workspace opened:', hasWorkspace);
+      expect(hasWorkspace).toBe(true);
     });
 
     it('should have theme attribute on root element', async () => {
@@ -73,11 +72,7 @@ describe('L0 Theme', () => {
 
   describe('Theme selector visibility', () => {
     it('theme selector should be visible in settings', async function () {
-      if (!hasWorkspace) {
-        console.log('[L0] Skipping: workspace not open');
-        this.skip();
-        return;
-      }
+      expect(hasWorkspace).toBe(true);
 
       await browser.pause(500);
 
@@ -113,33 +108,25 @@ describe('L0 Theme', () => {
 
   describe('Theme switching', () => {
     it('should be able to detect current theme type', async function () {
-      if (!hasWorkspace) {
-        console.log('[L0] Skipping: workspace not open');
-        this.skip();
-        return;
-      }
+      expect(hasWorkspace).toBe(true);
 
       const themeType = await browser.execute(() => {
         return document.documentElement.getAttribute('data-theme-type');
       });
 
       console.log('[L0] Current theme type:', themeType);
-      
+
       // Theme type should be either dark or light
       expect(['dark', 'light', null]).toContain(themeType);
     });
 
     it('should have valid theme structure', async function () {
-      if (!hasWorkspace) {
-        console.log('[L0] Skipping: workspace not open');
-        this.skip();
-        return;
-      }
+      expect(hasWorkspace).toBe(true);
 
       const themeInfo = await browser.execute(() => {
         const root = document.documentElement;
         const styles = window.getComputedStyle(root);
-        
+
         return {
           theme: root.getAttribute('data-theme'),
           themeType: root.getAttribute('data-theme-type'),
@@ -150,7 +137,7 @@ describe('L0 Theme', () => {
       });
 
       console.log('[L0] Theme structure:', themeInfo);
-      
+
       // At least theme type should be set
       expect(themeInfo.themeType !== null).toBe(true);
     });
