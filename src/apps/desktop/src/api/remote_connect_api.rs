@@ -52,18 +52,6 @@ async fn ensure_service() -> Result<(), String> {
     }
     drop(guard);
 
-    // #region agent log 64147a
-    {
-        const P: &str = "/Users/liwenbo/ide_dev/repo/BitFun/.cursor/debug-64147a.log";
-        let payload = serde_json::json!({"sessionId":"64147a","hypothesisId":"H1","location":"remote_connect_api.rs:ensure_service","message":"ensure_service called for first time (lazy init) - bot was NOT running before this","timestamp":chrono::Utc::now().timestamp_millis()});
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(P) { use std::io::Write; let _ = writeln!(f, "{}", payload); }
-    }
-    // #endregion
-
-    // #region agent log
-    emit_agent_debug("c7eac2-restore", "H2", "api:ensure_service", "creating new service + calling restore_saved_bots", serde_json::json!({}));
-    // #endregion
-
     let mut config = RemoteConnectConfig::default();
     config.mobile_web_dir = detect_mobile_web_dir();
     let service =
@@ -73,10 +61,6 @@ async fn ensure_service() -> Result<(), String> {
     // Auto-restore previously paired bots
     restore_saved_bots().await;
 
-    // #region agent log
-    emit_agent_debug("c7eac2-restore", "H2", "api:ensure_service", "restore_saved_bots completed", serde_json::json!({}));
-    // #endregion
-
     Ok(())
 }
 
@@ -85,18 +69,6 @@ async fn restore_saved_bots() {
     use bitfun_core::service::remote_connect::bot;
 
     let data = bot::load_bot_persistence();
-    // #region agent log
-    emit_agent_debug("c7eac2-persist", "H1", "api:restore_saved_bots", "loaded persistence", serde_json::json!({"count": data.connections.len(), "types": data.connections.iter().map(|c| format!("{}:{}", c.bot_type, c.chat_id)).collect::<Vec<_>>()}));
-    // #endregion
-
-    // #region agent log 64147a
-    {
-        const P: &str = "/Users/liwenbo/ide_dev/repo/BitFun/.cursor/debug-64147a.log";
-        let payload = serde_json::json!({"sessionId":"64147a","hypothesisId":"H2","location":"remote_connect_api.rs:restore_saved_bots","message":"restore_saved_bots called","data":{"connection_count": data.connections.len(), "connections": data.connections.iter().map(|c| serde_json::json!({"bot_type":&c.bot_type,"chat_id":&c.chat_id,"paired":c.chat_state.paired})).collect::<Vec<_>>()},"timestamp":chrono::Utc::now().timestamp_millis()});
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(P) { use std::io::Write; let _ = writeln!(f, "{}", payload); }
-    }
-    // #endregion
-
     if data.connections.is_empty() {
         return;
     }
@@ -107,13 +79,6 @@ async fn restore_saved_bots() {
 
     for conn in &data.connections {
         if !conn.chat_state.paired {
-            // #region agent log 64147a
-            {
-                const P: &str = "/Users/liwenbo/ide_dev/repo/BitFun/.cursor/debug-64147a.log";
-                let payload = serde_json::json!({"sessionId":"64147a","hypothesisId":"H2","location":"remote_connect_api.rs:restore_saved_bots","message":"skipping unpaired bot","data":{"bot_type":&conn.bot_type,"chat_id":&conn.chat_id},"timestamp":chrono::Utc::now().timestamp_millis()});
-                if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(P) { use std::io::Write; let _ = writeln!(f, "{}", payload); }
-            }
-            // #endregion
             continue;
         }
         log::info!(
@@ -122,13 +87,6 @@ async fn restore_saved_bots() {
             conn.chat_id
         );
         let result = service.restore_bot(conn).await;
-        // #region agent log 64147a
-        {
-            const P: &str = "/Users/liwenbo/ide_dev/repo/BitFun/.cursor/debug-64147a.log";
-            let payload = serde_json::json!({"sessionId":"64147a","hypothesisId":"H3","location":"remote_connect_api.rs:restore_saved_bots","message":"restore_bot result","data":{"bot_type":&conn.bot_type,"chat_id":&conn.chat_id,"ok": result.is_ok(),"err": result.as_ref().err().map(|e| e.to_string())},"timestamp":chrono::Utc::now().timestamp_millis()});
-            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(P) { use std::io::Write; let _ = writeln!(f, "{}", payload); }
-        }
-        // #endregion
         if let Err(e) = result {
             log::warn!("Failed to restore {} bot: {e}", conn.bot_type);
         }
@@ -401,10 +359,6 @@ pub async fn remote_connect_status() -> Result<RemoteConnectStatusResponse, Stri
     let peer = service.peer_device_name().await;
     let bot_connected = service.bot_connected_info().await;
 
-    // #region agent log
-    emit_agent_debug("c7eac2-v2", "H1", "api:remote_connect_status", "polled status", serde_json::json!({"pairing": format!("{state:?}"), "bot": &bot_connected}));
-    // #endregion
-
     Ok(RemoteConnectStatusResponse {
         is_connected: state == PairingState::Connected,
         pairing_state: state,
@@ -471,10 +425,3 @@ pub async fn remote_connect_configure_bot(
     Ok(())
 }
 
-// #region agent log
-fn emit_agent_debug(_run_id: &str, _hyp: &str, location: &str, message: &str, data: serde_json::Value) {
-    const P: &str = "/Users/liwenbo/ide_dev/repo/BitFun/.cursor/debug-c7eac2.log";
-    let payload = serde_json::json!({"sessionId":"c7eac2","location":location,"message":message,"data":data,"timestamp":chrono::Utc::now().timestamp_millis()});
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(P) { use std::io::Write; let _ = writeln!(f, "{}", payload); }
-}
-// #endregion

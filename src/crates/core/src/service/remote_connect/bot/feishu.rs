@@ -265,19 +265,7 @@ impl FeishuBot {
             .await
             .map_err(|e| anyhow!("feishu token request: {e}"))?;
 
-        // #region agent log
-        let token_resp_status = resp.status();
         let token_resp_text = resp.text().await.unwrap_or_default();
-        {
-            use std::io::Write;
-            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/Users/liwenbo/ide_dev/repo/BitFun/.cursor/debug-0c385b.log") {
-                let _ = writeln!(f, r#"{{"sessionId":"0c385b","hypothesisId":"H3","location":"feishu.rs:get_access_token","message":"token response raw","data":{{"status":{},"body_preview":"{}"}}, "timestamp":{}}}"#,
-                    token_resp_status.as_u16(),
-                    token_resp_text.chars().take(500).collect::<String>().replace('\\', "\\\\").replace('"', "\\\""),
-                    chrono::Utc::now().timestamp_millis());
-            }
-        }
-        // #endregion
         let body: serde_json::Value = serde_json::from_str(&token_resp_text)
             .map_err(|e| anyhow!("feishu token response parse error: {e}, body: {}", &token_resp_text[..token_resp_text.len().min(200)]))?;
         let access_token = body["tenant_access_token"]
@@ -351,19 +339,7 @@ impl FeishuBot {
             .await
             .map_err(|e| anyhow!("feishu ws endpoint request: {e}"))?;
 
-        // #region agent log
-        let ws_resp_status = resp.status();
         let ws_resp_text = resp.text().await.unwrap_or_default();
-        {
-            use std::io::Write;
-            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/Users/liwenbo/ide_dev/repo/BitFun/.cursor/debug-0c385b.log") {
-                let _ = writeln!(f, r#"{{"sessionId":"0c385b","hypothesisId":"H1_H2","location":"feishu.rs:get_ws_endpoint","message":"ws endpoint response raw","data":{{"status":{},"body_preview":"{}"}}, "timestamp":{}}}"#,
-                    ws_resp_status.as_u16(),
-                    ws_resp_text.chars().take(500).collect::<String>().replace('\\', "\\\\").replace('"', "\\\""),
-                    chrono::Utc::now().timestamp_millis());
-            }
-        }
-        // #endregion
         let body: serde_json::Value = serde_json::from_str(&ws_resp_text)
             .map_err(|e| anyhow!("feishu ws endpoint parse error: {e}, body: {}", &ws_resp_text[..ws_resp_text.len().min(300)]))?;
         let code = body["code"].as_i64().unwrap_or(-1);
@@ -430,18 +406,6 @@ impl FeishuBot {
 
         let event: serde_json::Value = serde_json::from_slice(&frame.payload).ok()?;
 
-        // #region agent log
-        {
-            use std::io::Write as _;
-            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/Users/liwenbo/ide_dev/repo/BitFun/.cursor/debug-0c385b.log") {
-                let preview: String = String::from_utf8_lossy(&frame.payload).chars().take(300).collect();
-                let _ = writeln!(f, r#"{{"sessionId":"0c385b","hypothesisId":"PROTO","location":"feishu.rs:handle_data_frame_for_pairing","message":"event payload","data":{{"preview":"{}"}}, "timestamp":{}}}"#,
-                    preview.replace('\\', "\\\\").replace('"', "\\\""),
-                    chrono::Utc::now().timestamp_millis());
-            }
-        }
-        // #endregion
-
         // Send ack response for this frame
         let resp_frame = pb::Frame::new_response(frame, 200);
         let _ = write.write().await.send(WsMessage::Binary(pb::encode_frame(&resp_frame))).await;
@@ -484,17 +448,6 @@ impl FeishuBot {
 
         let (ws_url, config) = self.get_ws_endpoint().await?;
 
-        // #region agent log
-        {
-            use std::io::Write;
-            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/Users/liwenbo/ide_dev/repo/BitFun/.cursor/debug-0c385b.log") {
-                let _ = writeln!(f, r#"{{"sessionId":"0c385b","hypothesisId":"WS_CONNECT","location":"feishu.rs:wait_for_pairing","message":"got ws endpoint","data":{{"url_preview":"{}"}}, "timestamp":{}}}"#,
-                    ws_url.chars().take(100).collect::<String>().replace('\\', "\\\\").replace('"', "\\\""),
-                    chrono::Utc::now().timestamp_millis());
-            }
-        }
-        // #endregion
-
         let (ws_stream, _) = tokio_tungstenite::connect_async(&ws_url)
             .await
             .map_err(|e| anyhow!("feishu ws connect: {e}"))?;
@@ -515,52 +468,12 @@ impl FeishuBot {
         loop {
             tokio::select! {
                 msg = read.next() => {
-                    // #region agent log
-                    {
-                        use std::io::Write as _;
-                        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/Users/liwenbo/ide_dev/repo/BitFun/.cursor/debug-0c385b.log") {
-                            let desc = match &msg {
-                                Some(Ok(WsMessage::Binary(d))) => format!("Binary(len={})", d.len()),
-                                Some(Ok(WsMessage::Text(t))) => format!("Text(len={},preview={})", t.len(), t.chars().take(200).collect::<String>().replace('\\', "\\\\").replace('"', "\\\"").replace('\n', " ")),
-                                Some(Ok(WsMessage::Ping(_))) => "Ping".to_string(),
-                                Some(Ok(WsMessage::Pong(_))) => "Pong".to_string(),
-                                Some(Ok(WsMessage::Close(c))) => format!("Close({c:?})"),
-                                Some(Err(e)) => format!("Error({e})"),
-                                None => "StreamEnd".to_string(),
-                                _ => "Other".to_string(),
-                            };
-                            let _ = writeln!(f, r#"{{"sessionId":"0c385b","hypothesisId":"H6_H7","location":"feishu.rs:wait_for_pairing:loop","message":"ws msg received","data":{{"type":"{}"}}, "timestamp":{}}}"#,
-                                desc.replace('"', "\\\""), chrono::Utc::now().timestamp_millis());
-                        }
-                    }
-                    // #endregion
                     match msg {
                         Some(Ok(WsMessage::Binary(data))) => {
-                            // #region agent log
-                            {
-                                use std::io::Write as _;
-                                if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/Users/liwenbo/ide_dev/repo/BitFun/.cursor/debug-0c385b.log") {
-                                    let hex_preview: String = data.iter().take(64).map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(" ");
-                                    let decode_ok = pb::decode_frame(&data).is_some();
-                                    let _ = writeln!(f, r#"{{"sessionId":"0c385b","hypothesisId":"H7","location":"feishu.rs:wait_for_pairing:binary","message":"binary frame detail","data":{{"len":{},"hex":"{}","decode_ok":{}}}, "timestamp":{}}}"#,
-                                        data.len(), hex_preview, decode_ok, chrono::Utc::now().timestamp_millis());
-                                }
-                            }
-                            // #endregion
                             let frame = match pb::decode_frame(&data) {
                                 Some(f) => f,
                                 None => continue,
                             };
-                            // #region agent log
-                            {
-                                use std::io::Write as _;
-                                if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/Users/liwenbo/ide_dev/repo/BitFun/.cursor/debug-0c385b.log") {
-                                    let hdrs: String = frame.headers.iter().map(|(k,v)| format!("{k}={v}")).collect::<Vec<_>>().join(",");
-                                    let _ = writeln!(f, r#"{{"sessionId":"0c385b","hypothesisId":"H7","location":"feishu.rs:wait_for_pairing:frame","message":"decoded frame","data":{{"method":{},"headers":"{}","payload_len":{}}}, "timestamp":{}}}"#,
-                                        frame.method, hdrs.replace('"', "\\\""), frame.payload.len(), chrono::Utc::now().timestamp_millis());
-                                }
-                            }
-                            // #endregion
                             match frame.method {
                                 pb::FRAME_TYPE_DATA => {
                                     if let Some(chat_id) = self.handle_data_frame_for_pairing(&frame, &write).await {
