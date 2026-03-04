@@ -206,6 +206,16 @@
   max-width: 420px;
 }
 
+.bitfun-remote-connect__description-link {
+  color: var(--color-text-muted);
+  text-decoration: underline;
+  cursor: pointer;
+
+  &:hover {
+    color: var(--color-text-muted);
+  }
+}
+
 .bitfun-remote-connect__error {
   font-size: 12px;
   color: var(--color-danger);
@@ -276,11 +286,17 @@
   transition: all 0.15s ease;
 
   &--connect {
-    background: var(--color-accent);
+    background: var(--color-accent-600, #2563eb);
     color: #fff;
+    border: 1px solid color-mix(in srgb, var(--color-accent-700, #1d4ed8) 35%, transparent);
 
     &:hover:not(:disabled) {
-      opacity: 0.9;
+      background: var(--color-accent-700, #1d4ed8);
+    }
+
+    &:focus-visible {
+      outline: 2px solid color-mix(in srgb, var(--color-accent-500, #3b82f6) 55%, transparent);
+      outline-offset: 1px;
     }
 
     &:disabled {
@@ -326,11 +342,12 @@
 }
 
 .bitfun-remote-connect__step-link {
-  color: var(--color-accent);
+  color: var(--color-text-muted);
   text-decoration: underline;
   cursor: pointer;
 
   &:hover {
-    opacity: 0.85;
+    color: var(--color-text-muted);
   }
 }
+

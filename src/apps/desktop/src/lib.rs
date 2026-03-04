@@ -557,6 +557,8 @@ pub async fn run() {
             i18n_set_config,
             // Remote Connect
             api::remote_connect_api::remote_connect_get_device_info,
+            api::remote_connect_api::remote_connect_get_lan_ip,
+            api::remote_connect_api::remote_connect_get_lan_network_info,
             api::remote_connect_api::remote_connect_get_methods,
             api::remote_connect_api::remote_connect_start,
             api::remote_connect_api::remote_connect_stop,
