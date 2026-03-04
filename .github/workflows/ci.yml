@@ -29,6 +29,9 @@ jobs:
           name: frontend-dist
           path: dist
 
+      - name: Create mobile-web dist directory (workaround for Tauri)
+        run: mkdir -p mobile-web/dist
+
       - name: Install Linux system dependencies (Tauri)
         run: |
           sudo apt-get update
