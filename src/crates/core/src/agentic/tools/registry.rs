@@ -89,6 +89,7 @@ impl ToolRegistry {
         self.register_tool(Arc::new(FileEditTool::new()));
         self.register_tool(Arc::new(DeleteFileTool::new()));
         self.register_tool(Arc::new(BashTool::new()));
+        self.register_tool(Arc::new(TerminalControlTool::new()));
 
         // TodoWrite tool
         self.register_tool(Arc::new(TodoWriteTool::new()));

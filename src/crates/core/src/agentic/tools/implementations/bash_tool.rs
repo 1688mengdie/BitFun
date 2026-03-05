@@ -105,8 +105,17 @@ impl BashTool {
         }
     }
 
-    fn render_result(&self, output_text: &str, interrupted: bool, exit_code: i32) -> String {
+    fn render_result(
+        &self,
+        session_id: &str,
+        output_text: &str,
+        interrupted: bool,
+        exit_code: i32,
+    ) -> String {
         let mut result_string = String::new();
+
+        // Session ID
+        result_string.push_str(&format!("<session_id>{}</session_id>", session_id));
 
         // Exit code
         result_string.push_str(&format!("<exit_code>{}</exit_code>", exit_code));
@@ -176,6 +185,7 @@ Usage notes:
   - It is very helpful if you write a clear, concise description of what this command does. For simple commands, keep it brief (5-10 words). For complex commands (piped commands, obscure flags, or anything hard to understand at a glance), add enough context to clarify what it does.
   - If the output exceeds {MAX_OUTPUT_LENGTH} characters, output will be truncated before being returned to you.
   - You can use the `run_in_background` parameter to run the command in a new dedicated background terminal session. The tool returns the background session ID immediately without waiting for the command to finish. Only use this for long-running processes (e.g., dev servers, watchers) where you don't need the output right away. You do not need to append '&' to the command. NOTE: `timeout_ms` is ignored when `run_in_background` is true.
+  - Each result includes a `<session_id>` tag identifying the terminal session. The persistent shell session ID remains constant throughout the entire conversation; background sessions each have their own unique ID.
   
   - Avoid using this tool with the `find`, `grep`, `cat`, `head`, `tail`, `sed`, `awk`, or `echo` commands, unless explicitly instructed or when these commands are truly necessary for the task. Instead, always prefer using the dedicated tools for these commands:
     - File search: Use Glob (NOT find or ls)
@@ -356,10 +366,37 @@ Usage notes:
         // 2. Resolve shell type
         let shell_type = Self::resolve_shell().await.shell_type;
 
-        // 3. Get or create primary terminal session (needed for cwd in both branches)
         let binding = terminal_api.session_manager().binding();
         let workspace_path = get_workspace_path().map(|p| p.to_string_lossy().to_string());
 
+        if run_in_background {
+            // For background commands, inherit CWD from an already-running primary session
+            // if one exists; otherwise fall back to workspace path.  This avoids forcing a
+            // primary session to be created just to read its working directory.
+            let initial_cwd = if let Some(existing_id) = binding.get(chat_session_id) {
+                terminal_api
+                    .get_session(&existing_id)
+                    .await
+                    .map(|s| s.cwd)
+                    .unwrap_or_else(|_| workspace_path.clone().unwrap_or_default())
+            } else {
+                workspace_path.clone().unwrap_or_default()
+            };
+
+            return self
+                .call_background(
+                    command_str,
+                    chat_session_id,
+                    &initial_cwd,
+                    shell_type,
+                    &terminal_api,
+                    &binding,
+                    start_time,
+                )
+                .await;
+        }
+
+        // 3. Foreground: get or create the primary terminal session
         let primary_session_id = binding
             .get_or_create(
                 chat_session_id,
@@ -388,20 +425,6 @@ Usage notes:
             .await
             .map(|s| s.cwd)
             .unwrap_or_else(|_| workspace_path.clone().unwrap_or_default());
-
-        if run_in_background {
-            return self
-                .call_background(
-                    command_str,
-                    chat_session_id,
-                    &primary_cwd,
-                    shell_type,
-                    &terminal_api,
-                    &binding,
-                    start_time,
-                )
-                .await;
-        }
 
         // --- Foreground execution ---
 
@@ -535,6 +558,7 @@ Usage notes:
         });
 
         let result_for_assistant = self.render_result(
+            &primary_session_id,
             &accumulated_output,
             was_interrupted,
             final_exit_code.unwrap_or(-1),
@@ -683,7 +707,7 @@ impl BashTool {
         let result_data = json!({
             "success": true,
             "command": command_str,
-            "output": "Command started in background terminal session.",
+            "output": format!("Command started in background terminal session.{}", output_file_note),
             "exit_code": null,
             "interrupted": false,
             "working_directory": initial_cwd,

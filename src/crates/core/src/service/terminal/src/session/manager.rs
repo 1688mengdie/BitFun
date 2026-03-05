@@ -1338,6 +1338,11 @@ impl SessionManager {
             sessions.remove(session_id);
         }
 
+        // Remove any binding pointing to this session so the next get_or_create
+        // creates a fresh session rather than returning a stale ID.
+        // For primary sessions owner_id == session_id, so unbind(session_id) is sufficient.
+        self.binding.unbind(session_id);
+
         // Emit session destroyed event for frontend
         let _ = self
             .event_emitter

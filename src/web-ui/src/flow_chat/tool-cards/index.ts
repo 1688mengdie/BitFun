@@ -30,6 +30,7 @@ import { GitToolDisplay } from './GitToolDisplay';
 import { GetFileDiffDisplay } from './GetFileDiffDisplay';
 import { CreatePlanDisplay } from './CreatePlanDisplay';
 import { TerminalToolCard } from './TerminalToolCard';
+import { TerminalControlDisplay } from './TerminalControlDisplay';
 
 // Tool card config map - uses backend tool names
 export const TOOL_CARD_CONFIGS: Record<string, ToolCardConfig> = {
@@ -271,6 +272,18 @@ export const TOOL_CARD_CONFIGS: Record<string, ToolCardConfig> = {
     primaryColor: '#f59e0b' // Orange
   },
 
+  // TerminalControl tool
+  'TerminalControl': {
+    toolName: 'TerminalControl',
+    displayName: 'Terminal Control',
+    icon: 'TC',
+    requiresConfirmation: false,
+    resultDisplayType: 'summary',
+    description: 'Kill or interrupt a terminal session',
+    displayMode: 'compact',
+    primaryColor: '#ef4444'
+  },
+
   // Bash terminal tool
   'Bash': {
     toolName: 'Bash',
@@ -336,6 +349,9 @@ export const TOOL_CARD_COMPONENTS = {
 
   // CreatePlan tool
   'CreatePlan': CreatePlanDisplay,
+
+  // TerminalControl tool
+  'TerminalControl': TerminalControlDisplay,
 
   // Bash tool
   'Bash': TerminalToolCard

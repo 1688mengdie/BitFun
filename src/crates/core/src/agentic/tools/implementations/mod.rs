@@ -23,6 +23,7 @@ pub mod git_tool;
 pub mod create_plan_tool;
 pub mod get_file_diff_tool;
 pub mod code_review_tool;
+pub mod terminal_control_tool;
 pub mod util;
 
 pub use file_read_tool::FileReadTool;
@@ -47,3 +48,4 @@ pub use git_tool::GitTool;
 pub use create_plan_tool::CreatePlanTool;
 pub use get_file_diff_tool::GetFileDiffTool;
 pub use code_review_tool::CodeReviewTool;
+pub use terminal_control_tool::TerminalControlTool;
