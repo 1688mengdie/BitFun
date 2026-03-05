@@ -26,15 +26,14 @@ pub async fn analyze_images(
 
     let image_model = resolve_vision_model_from_ai_config(&ai_config).map_err(|e| {
         error!(
-            "No image understanding model available: available_models={:?}, error={}",
+            "Image understanding model resolution failed: available_models={:?}, error={}",
             ai_config.models.iter().map(|m| &m.id).collect::<Vec<_>>(),
             e
         );
         format!(
-            "Image understanding model not configured and no compatible model found.\n\n\
-             Please add a model that supports image understanding \
-             in [Settings → AI Model Config], enable 'image_understanding' capability, \
-             and assign it in [Settings → Super Agent].\n\nDetails: {}",
+            "Image understanding model is not configured.\n\n\
+             Please select a model for [Settings → Default Model Config → Image Understanding Model].\n\n\
+             Details: {}",
             e
         )
     })?;

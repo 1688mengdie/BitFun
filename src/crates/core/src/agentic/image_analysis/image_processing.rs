@@ -1,8 +1,10 @@
 //! Shared image processing utilities used by both API-side image analysis and tool-driven image analysis.
 
-use super::types::ImageLimits;
+use super::types::{ImageContextData, ImageLimits};
 use crate::service::config::get_global_config_service;
-use crate::service::config::types::{AIConfig as ServiceAIConfig, AIModelConfig, ModelCapability};
+use crate::service::config::types::{
+    AIConfig as ServiceAIConfig, AIModelConfig, ModelCapability, ModelCategory,
+};
 use crate::util::errors::{BitFunError, BitFunResult};
 use crate::util::types::Message;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
@@ -31,34 +33,41 @@ pub fn resolve_vision_model_from_ai_config(
     let target_model_id = ai_config
         .default_models
         .image_understanding
-        .as_ref()
+        .as_deref()
+        .map(str::trim)
         .filter(|id| !id.is_empty());
 
-    if let Some(id) = target_model_id {
-        return ai_config
-            .models
-            .iter()
-            .find(|m| m.id == *id)
-            .cloned()
-            .ok_or_else(|| BitFunError::service(format!("Model not found: {}", id)));
-    }
+    let Some(id) = target_model_id else {
+        return Err(BitFunError::service(
+            "Image understanding model is not configured.\nPlease select a model in Settings."
+                .to_string(),
+        ));
+    };
 
-    ai_config
+    let model = ai_config
         .models
         .iter()
-        .find(|m| {
-            m.enabled
-                && m.capabilities
-                    .iter()
-                    .any(|cap| matches!(cap, ModelCapability::ImageUnderstanding))
-        })
+        .find(|m| m.id == id)
         .cloned()
-        .ok_or_else(|| {
-            BitFunError::service(
-                "No image understanding model found.\nPlease configure an image understanding model in settings"
-                    .to_string(),
-            )
-        })
+        .ok_or_else(|| BitFunError::service(format!("Model not found: {}", id)))?;
+
+    if !model.enabled {
+        return Err(BitFunError::service(format!("Model is disabled: {}", id)));
+    }
+
+    let supports_image_understanding = model
+        .capabilities
+        .iter()
+        .any(|cap| matches!(cap, ModelCapability::ImageUnderstanding))
+        || matches!(model.category, ModelCategory::Multimodal);
+    if !supports_image_understanding {
+        return Err(BitFunError::service(format!(
+            "Model does not support image understanding: {}",
+            id
+        )));
+    }
+
+    Ok(model)
 }
 
 pub async fn resolve_vision_model_from_global_config() -> BitFunResult<AIModelConfig> {
@@ -273,6 +282,105 @@ pub fn build_multimodal_message(
     };
 
     Ok(vec![message])
+}
+
+pub async fn process_image_contexts_for_provider(
+    image_contexts: &[ImageContextData],
+    provider: &str,
+    workspace_path: Option<&Path>,
+) -> BitFunResult<Vec<ProcessedImage>> {
+    let limits = ImageLimits::for_provider(provider);
+
+    if image_contexts.len() > limits.max_images_per_request {
+        return Err(BitFunError::validation(format!(
+            "Too many images in one request: {} > {}",
+            image_contexts.len(),
+            limits.max_images_per_request
+        )));
+    }
+
+    let mut results = Vec::with_capacity(image_contexts.len());
+
+    for ctx in image_contexts {
+        let (image_data, fallback_mime) = if let Some(data_url) = &ctx.data_url {
+            let (data, data_url_mime) = decode_data_url(data_url)?;
+            (data, data_url_mime.or_else(|| Some(ctx.mime_type.clone())))
+        } else if let Some(path_str) = &ctx.image_path {
+            let path = resolve_image_path(path_str, workspace_path)?;
+            let data = load_image_from_path(&path, workspace_path).await?;
+            let detected_mime = detect_mime_type_from_bytes(&data, Some(&ctx.mime_type)).ok();
+            (data, detected_mime.or_else(|| Some(ctx.mime_type.clone())))
+        } else {
+            return Err(BitFunError::validation(format!(
+                "Image context missing image_path/data_url: id={}",
+                ctx.id
+            )));
+        };
+
+        let processed =
+            optimize_image_for_provider(image_data, provider, fallback_mime.as_deref())?;
+        results.push(processed);
+    }
+
+    Ok(results)
+}
+
+pub fn build_multimodal_message_with_images(
+    prompt: &str,
+    images: &[ProcessedImage],
+    provider: &str,
+) -> BitFunResult<Vec<Message>> {
+    if images.is_empty() {
+        return Ok(vec![Message::user(prompt.to_string())]);
+    }
+
+    let provider_lower = provider.to_lowercase();
+
+    let content_json = if provider_lower.contains("anthropic") {
+        let mut blocks = Vec::with_capacity(images.len() + 1);
+        for img in images {
+            let base64_data = BASE64.encode(&img.data);
+            blocks.push(json!({
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": img.mime_type,
+                    "data": base64_data
+                }
+            }));
+        }
+        blocks.push(json!({
+            "type": "text",
+            "text": prompt
+        }));
+        json!(blocks)
+    } else {
+        let mut blocks = Vec::with_capacity(images.len() + 1);
+        for img in images {
+            let base64_data = BASE64.encode(&img.data);
+            blocks.push(json!({
+                "type": "image_url",
+                "image_url": {
+                    "url": format!("data:{};base64,{}", img.mime_type, base64_data)
+                }
+            }));
+        }
+        blocks.push(json!({
+            "type": "text",
+            "text": prompt
+        }));
+        json!(blocks)
+    };
+
+    Ok(vec![Message {
+        role: "user".to_string(),
+        content: Some(serde_json::to_string(&content_json)?),
+        reasoning_content: None,
+        thinking_signature: None,
+        tool_calls: None,
+        tool_call_id: None,
+        name: None,
+    }])
 }
 
 fn image_format_to_mime(format: ImageFormat) -> Option<&'static str> {

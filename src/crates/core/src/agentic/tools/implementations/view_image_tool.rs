@@ -5,13 +5,17 @@
 //! that can evolve toward direct multimodal attachment in the future.
 
 use async_trait::async_trait;
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use image::GenericImageView;
 use log::{debug, info, trace};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use uuid::Uuid;
 
 use crate::agentic::image_analysis::{
     build_multimodal_message, decode_data_url, detect_mime_type_from_bytes, load_image_from_path,
     optimize_image_for_provider, resolve_image_path, resolve_vision_model_from_global_config,
+    ImageContextData as ModelImageContextData,
 };
 use crate::agentic::tools::framework::{
     Tool, ToolRenderOptions, ToolResult, ToolUseContext, ValidationResult,
@@ -41,6 +45,26 @@ pub struct ViewImageTool;
 impl ViewImageTool {
     pub fn new() -> Self {
         Self
+    }
+
+    fn primary_model_supports_images(context: &ToolUseContext) -> bool {
+        context
+            .options
+            .as_ref()
+            .and_then(|o| o.custom_data.as_ref())
+            .and_then(|m| m.get("primary_model_supports_image_understanding"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+    }
+
+    fn primary_model_provider(context: &ToolUseContext) -> Option<&str> {
+        context
+            .options
+            .as_ref()
+            .and_then(|o| o.custom_data.as_ref())
+            .and_then(|m| m.get("primary_model_provider"))
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
     }
 
     fn build_prompt(
@@ -78,6 +102,181 @@ impl ViewImageTool {
         prompt.push_str(detail_guide);
 
         prompt
+    }
+
+    async fn build_attachment_image_context(
+        &self,
+        input_data: &ViewImageInput,
+        context: &ToolUseContext,
+        primary_provider: &str,
+    ) -> BitFunResult<(ModelImageContextData, String)> {
+        let workspace_path = get_workspace_path();
+
+        if let Some(image_id) = &input_data.image_id {
+            let provider = context.image_context_provider.as_ref().ok_or_else(|| {
+                BitFunError::tool(
+                    "image_id mode requires ImageContextProvider support, but no provider was injected.\n\
+                     Please inject image_context_provider when calling the tool, or use image_path/data_url mode."
+                        .to_string(),
+                )
+            })?;
+
+            let ctx = provider.get_image(image_id).ok_or_else(|| {
+                BitFunError::tool(format!(
+                    "Image context not found: image_id={}. Image may have expired (5-minute validity) or was never uploaded.",
+                    image_id
+                ))
+            })?;
+
+            let crate::agentic::tools::image_context::ImageContextData {
+                id: ctx_id,
+                image_path: ctx_image_path,
+                data_url: ctx_data_url,
+                mime_type: ctx_mime_type,
+                image_name: ctx_image_name,
+                file_size: ctx_file_size,
+                width: ctx_width,
+                height: ctx_height,
+                source: ctx_source,
+            } = ctx;
+
+            let description = format!("{} (clipboard)", ctx_image_name);
+
+            if let Some(path_str) = ctx_image_path.as_ref().filter(|s| !s.is_empty()) {
+                let path = resolve_image_path(path_str, workspace_path.as_deref())?;
+                let metadata = json!({
+                    "name": ctx_image_name,
+                    "width": ctx_width,
+                    "height": ctx_height,
+                    "file_size": ctx_file_size,
+                    "source": ctx_source,
+                    "origin": "image_id",
+                    "image_id": ctx_id.clone(),
+                });
+
+                return Ok((
+                    ModelImageContextData {
+                        id: ctx_id,
+                        image_path: Some(path.display().to_string()),
+                        data_url: None,
+                        mime_type: ctx_mime_type,
+                        metadata: Some(metadata),
+                    },
+                    description,
+                ));
+            }
+
+            if let Some(data_url) = ctx_data_url.as_ref().filter(|s| !s.is_empty()) {
+                let (data, data_url_mime) = decode_data_url(data_url)?;
+                let fallback_mime = data_url_mime
+                    .as_deref()
+                    .or_else(|| Some(ctx_mime_type.as_str()));
+                let processed =
+                    optimize_image_for_provider(data, primary_provider, fallback_mime)?;
+                let optimized_data_url = format!(
+                    "data:{};base64,{}",
+                    processed.mime_type,
+                    BASE64.encode(&processed.data)
+                );
+
+                let metadata = json!({
+                    "name": ctx_image_name,
+                    "width": processed.width,
+                    "height": processed.height,
+                    "file_size": processed.data.len(),
+                    "source": ctx_source,
+                    "origin": "image_id",
+                    "image_id": ctx_id.clone(),
+                });
+
+                return Ok((
+                    ModelImageContextData {
+                        id: ctx_id,
+                        image_path: None,
+                        data_url: Some(optimized_data_url),
+                        mime_type: processed.mime_type,
+                        metadata: Some(metadata),
+                    },
+                    description,
+                ));
+            }
+
+            return Err(BitFunError::tool(format!(
+                "Image context {} has neither data_url nor image_path",
+                image_id
+            )));
+        }
+
+        if let Some(data_url) = &input_data.data_url {
+            let (data, data_url_mime) = decode_data_url(data_url)?;
+            let processed =
+                optimize_image_for_provider(data, primary_provider, data_url_mime.as_deref())?;
+            let optimized_data_url = format!(
+                "data:{};base64,{}",
+                processed.mime_type,
+                BASE64.encode(&processed.data)
+            );
+            let metadata = json!({
+                "name": "clipboard_image",
+                "width": processed.width,
+                "height": processed.height,
+                "file_size": processed.data.len(),
+                "source": "data_url",
+                "origin": "data_url"
+            });
+
+            return Ok((
+                ModelImageContextData {
+                    id: format!("img-view-{}", Uuid::new_v4()),
+                    image_path: None,
+                    data_url: Some(optimized_data_url),
+                    mime_type: processed.mime_type,
+                    metadata: Some(metadata),
+                },
+                "clipboard_image".to_string(),
+            ));
+        }
+
+        if let Some(image_path_str) = &input_data.image_path {
+            let abs_path = resolve_image_path(image_path_str, workspace_path.as_deref())?;
+            let data = load_image_from_path(&abs_path, workspace_path.as_deref()).await?;
+
+            let mime_type = detect_mime_type_from_bytes(&data, None)?;
+            let dynamic = image::load_from_memory(&data).map_err(|e| {
+                BitFunError::validation(format!("Failed to decode image data: {}", e))
+            })?;
+            let (width, height) = dynamic.dimensions();
+
+            let name = abs_path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("image")
+                .to_string();
+
+            let metadata = json!({
+                "name": name,
+                "width": width,
+                "height": height,
+                "file_size": data.len(),
+                "source": "local_path",
+                "origin": "image_path"
+            });
+
+            return Ok((
+                ModelImageContextData {
+                    id: format!("img-view-{}", Uuid::new_v4()),
+                    image_path: Some(abs_path.display().to_string()),
+                    data_url: None,
+                    mime_type,
+                    metadata: Some(metadata),
+                },
+                abs_path.display().to_string(),
+            ));
+        }
+
+        Err(BitFunError::validation(
+            "Must provide one of image_path, data_url, or image_id",
+        ))
     }
 
     async fn load_source(
@@ -156,8 +355,8 @@ impl Tool for ViewImageTool {
 Use this tool when the user provides an image (file path, data URL, or uploaded clipboard image_id) and asks questions about it.
 
 Current behavior:
-- For text-only primary models, this tool converts image content to structured text.
-- For multimodal-capable setups, this interface can be extended to direct image attachment in future.
+- For text-only primary models, this tool converts image content to structured text (uses the configured image understanding model).
+- For multimodal primary models, this tool attaches the image for the primary model to analyze directly.
 
 Parameters:
 - image_path / data_url / image_id: provide one image source
@@ -318,6 +517,28 @@ Parameters:
 
         let input_data: ViewImageInput = serde_json::from_value(input.clone())
             .map_err(|e| BitFunError::parse(format!("Failed to parse input: {}", e)))?;
+
+        let primary_provider = Self::primary_model_provider(context).unwrap_or("openai");
+        if Self::primary_model_supports_images(context) {
+            let (image, image_source_description) = self
+                .build_attachment_image_context(&input_data, context, primary_provider)
+                .await?;
+
+            let result_for_assistant = format!(
+                "Image attached for primary model analysis ({})",
+                image_source_description
+            );
+
+            return Ok(vec![ToolResult::Result {
+                data: json!({
+                    "success": true,
+                    "mode": "attached_to_primary_model",
+                    "image_source": image_source_description,
+                    "image": image,
+                }),
+                result_for_assistant: Some(result_for_assistant),
+            }]);
+        }
 
         let (image_data, fallback_mime, image_source_description) =
             self.load_source(&input_data, context).await?;

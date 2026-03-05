@@ -51,20 +51,46 @@ interface ImageAnalysisResult {
   analysis_time_ms: number;
 }
 
-// Keep this off for now: transport currently accepts text-only `userInput`.
-// When backend supports multimodal turn input, this can be flipped (or moved to config).
-const ENABLE_DIRECT_ATTACH_WHEN_SUPPORTED = false;
+const ENABLE_DIRECT_ATTACH_WHEN_SUPPORTED = true;
 
 async function resolveSessionModelId(
   flowChatManager: FlowChatManager,
-  sessionId: string | undefined
+  sessionId: string | undefined,
+  agentType?: string
 ): Promise<string | null> {
   const state = flowChatManager.getFlowChatState();
   const session = sessionId ? state.sessions.get(sessionId) : undefined;
-  const configuredModel = session?.config?.modelName;
+  const configuredModel = session?.config?.modelName || null;
+  const { configManager } = await import('@/infrastructure/config/services/ConfigManager');
+  const defaultModels = await configManager.getConfig<Record<string, string>>('ai.default_models') || {};
+  const agentModels = await configManager.getConfig<Record<string, string>>('ai.agent_models') || {};
 
-  if (configuredModel && configuredModel !== 'default') {
-    return configuredModel;
+  const resolveAlias = (modelId: string | null): string | null => {
+    if (!modelId) return null;
+    if (modelId === 'primary') {
+      return defaultModels.primary || null;
+    }
+    if (modelId === 'fast') {
+      return defaultModels.fast || defaultModels.primary || null;
+    }
+    if (modelId === 'default') {
+      return defaultModels.primary || null;
+    }
+    return modelId;
+  };
+
+  const effectiveAgentType = (agentType || session?.mode || 'agentic').trim();
+  const configuredFromAgentModels = resolveAlias(
+    effectiveAgentType ? (agentModels[effectiveAgentType] ?? null) : null
+  );
+  if (configuredFromAgentModels) {
+    return configuredFromAgentModels;
+  }
+
+  // Backward-compatibility fallback for historical sessions.
+  const resolvedConfigured = resolveAlias(configuredModel);
+  if (resolvedConfigured) {
+    return resolvedConfigured;
   }
 
   const { getDefaultPrimaryModel } = await import('@/infrastructure/config/utils/modelConfigHelpers');
@@ -76,16 +102,22 @@ async function modelSupportsImageUnderstanding(modelId: string | null): Promise<
 
   const { configManager } = await import('@/infrastructure/config/services/ConfigManager');
   const allModels = await configManager.getConfig<any[]>('ai.models') || [];
-  const model = allModels.find(m => m.id === modelId || m.name === modelId);
+  const model = allModels.find(
+    m => m.id === modelId || m.name === modelId || m.model_name === modelId
+  );
+  if (!model || model.enabled === false) return false;
+
   const capabilities = Array.isArray(model?.capabilities) ? model.capabilities : [];
-  return capabilities.includes('image_understanding');
+  const category = typeof model?.category === 'string' ? model.category : '';
+  return capabilities.includes('image_understanding') || category === 'multimodal';
 }
 
 async function chooseImageInputStrategy(
   flowChatManager: FlowChatManager,
-  sessionId: string | undefined
+  sessionId: string | undefined,
+  agentType?: string
 ): Promise<StrategyDecision> {
-  const modelId = await resolveSessionModelId(flowChatManager, sessionId);
+  const modelId = await resolveSessionModelId(flowChatManager, sessionId, agentType);
   const supportsImageUnderstanding = await modelSupportsImageUnderstanding(modelId);
 
   if (supportsImageUnderstanding && ENABLE_DIRECT_ATTACH_WHEN_SUPPORTED) {
@@ -102,7 +134,7 @@ async function chooseImageInputStrategy(
     modelId,
     supportsImageUnderstanding,
     reason: supportsImageUnderstanding
-      ? 'direct_attach_disabled_until_multimodal_turn_input_is_available'
+      ? 'direct_attach_disabled_by_feature_flag'
       : 'primary_model_is_text_only',
   };
 }
@@ -136,13 +168,18 @@ async function analyzeImagesBeforeSend(
 
 function formatImageContextLine(
   ctx: ImageContext,
-  analysis?: ImageAnalysisResult
+  analysis?: ImageAnalysisResult,
+  strategy?: ImageInputStrategy
 ): string {
   const imgName = ctx.imageName || 'Untitled image';
   const imgSize = ctx.fileSize ? ` (${(ctx.fileSize / 1024).toFixed(1)}KB)` : '';
   const sourceLine = ctx.isLocal
     ? `Path: ${ctx.imagePath}`
     : `Image ID: ${ctx.id}`;
+
+  if (strategy === 'direct-attach') {
+    return `[Image: ${imgName}${imgSize}]\n${sourceLine}\nAttached as multimodal image input.`;
+  }
 
   if (!analysis) {
     return `[Image: ${imgName}${imgSize}]\n${sourceLine}\nTip: You can use the view_image tool (${ctx.isLocal ? 'image_path' : 'image_id'}).`;
@@ -237,7 +274,11 @@ export function useMessageSender(props: UseMessageSenderProps): UseMessageSender
         reason: 'fallback_default_preanalysis',
       };
       try {
-        strategyDecision = await chooseImageInputStrategy(flowChatManager, sessionId);
+        strategyDecision = await chooseImageInputStrategy(
+          flowChatManager,
+          sessionId,
+          currentAgentType || undefined
+        );
       } catch (error) {
         log.warn('Failed to resolve image input strategy, using pre-analysis fallback', {
           sessionId,
@@ -255,28 +296,21 @@ export function useMessageSender(props: UseMessageSenderProps): UseMessageSender
 
       let imageAnalyses: ImageAnalysisResult[] = [];
       if (imageContexts.length > 0) {
-        if (strategyDecision.strategy === 'direct-attach') {
-          // Future extensibility hook:
-          // once start_dialog_turn supports multimodal payloads, this branch can send image items directly.
-          log.info('Direct image attach strategy is selected but transport is still text-only; using pre-analysis fallback', {
-            sessionId,
-            modelId: strategyDecision.modelId,
-          });
-        }
-
-        try {
-          imageAnalyses = await analyzeImagesBeforeSend(imageContexts, sessionId!, trimmedMessage);
-          log.debug('Image pre-analysis completed', {
-            sessionId,
-            imageCount: imageContexts.length,
-            analysisCount: imageAnalyses.length,
-          });
-        } catch (error) {
-          log.warn('Image pre-analysis failed, continuing with context hints only', {
-            sessionId,
-            imageCount: imageContexts.length,
-            error: (error as Error)?.message ?? 'unknown',
-          });
+        if (strategyDecision.strategy === 'vision-preanalysis') {
+          try {
+            imageAnalyses = await analyzeImagesBeforeSend(imageContexts, sessionId!, trimmedMessage);
+            log.debug('Image pre-analysis completed', {
+              sessionId,
+              imageCount: imageContexts.length,
+              analysisCount: imageAnalyses.length,
+            });
+          } catch (error) {
+            log.warn('Image pre-analysis failed, continuing with context hints only', {
+              sessionId,
+              imageCount: imageContexts.length,
+              error: (error as Error)?.message ?? 'unknown',
+            });
+          }
         }
       }
 
@@ -295,7 +329,7 @@ export function useMessageSender(props: UseMessageSenderProps): UseMessageSender
             case 'code-snippet':
               return `[Code Snippet: ${ctx.filePath}:${ctx.startLine}-${ctx.endLine}]`;
             case 'image': {
-              return formatImageContextLine(ctx, analysisByImageId.get(ctx.id));
+              return formatImageContextLine(ctx, analysisByImageId.get(ctx.id), strategyDecision.strategy);
             }
             case 'terminal-command':
               return `[Command: ${ctx.command}]`;
@@ -319,7 +353,27 @@ export function useMessageSender(props: UseMessageSenderProps): UseMessageSender
         fullMessage,
         sessionId || undefined,
         displayMessage,
-        currentAgentType || 'agentic'
+        currentAgentType || 'agentic',
+        undefined,
+        strategyDecision.strategy === 'direct-attach'
+          ? {
+              imageContexts: imageContexts.map(ctx => ({
+                id: ctx.id,
+                image_path: ctx.isLocal ? ctx.imagePath : undefined,
+                // Clipboard images are uploaded first and referenced by image_id only
+                // to avoid sending large base64 payloads in the turn request.
+                data_url: undefined,
+                mime_type: ctx.mimeType,
+                metadata: {
+                  name: ctx.imageName,
+                  width: ctx.width,
+                  height: ctx.height,
+                  file_size: ctx.fileSize,
+                  source: ctx.source,
+                },
+              })),
+            }
+          : undefined
       );
 
       onClearContexts();
