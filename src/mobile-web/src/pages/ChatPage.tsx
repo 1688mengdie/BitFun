@@ -9,6 +9,7 @@ import {
   type PollResponse,
   type ActiveTurnSnapshot,
   type RemoteToolStatus,
+  type ChatMessage,
 } from '../services/RemoteSessionManager';
 import { useMobileStore } from '../services/store';
 import { useTheme } from '../theme';
@@ -414,9 +415,6 @@ const ChatPage: React.FC<ChatPageProps> = ({ sessionMgr, sessionId, sessionName,
             <button className="chat-page__theme-btn" onClick={toggleTheme} aria-label="Toggle theme">
               <ThemeToggleIcon isDark={isDark} />
             </button>
-            {isStreaming && (
-              <button className="chat-page__cancel" onClick={handleCancel}>Stop</button>
-            )}
           </div>
         </div>
         {workspaceName && (
@@ -459,9 +457,17 @@ const ChatPage: React.FC<ChatPageProps> = ({ sessionMgr, sessionId, sessionName,
 
           return (
             <div key={m.id} className="chat-msg chat-msg--assistant">
-              <div className="chat-msg__assistant-content">
-                <MarkdownContent content={m.content} />
-              </div>
+              {m.thinking && (
+                <ThinkingBlock thinking={m.thinking} />
+              )}
+              {m.tools && m.tools.length > 0 && (
+                <ToolList tools={m.tools} now={now} />
+              )}
+              {m.content && (
+                <div className="chat-msg__assistant-content">
+                  <MarkdownContent content={m.content} />
+                </div>
+              )}
             </div>
           );
         })}
@@ -554,15 +560,27 @@ const ChatPage: React.FC<ChatPageProps> = ({ sessionMgr, sessionId, sessionName,
             rows={1}
             disabled={isStreaming}
           />
-          <button
-            className={`chat-page__send${isStreaming ? ' is-streaming' : ''}`}
-            onClick={handleSend}
-            disabled={(!input.trim() && pendingImages.length === 0) || isStreaming}
-          >
-            <svg width="16" height="16" viewBox="0 0 20 20" fill="none">
-              <path d="M3 10L17 3L10 17V10H3Z" fill="currentColor"/>
-            </svg>
-          </button>
+          {isStreaming ? (
+            <button
+              className="chat-page__send is-stop"
+              onClick={handleCancel}
+              aria-label="Stop"
+            >
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                <rect x="2" y="2" width="12" height="12" rx="2" fill="currentColor"/>
+              </svg>
+            </button>
+          ) : (
+            <button
+              className="chat-page__send"
+              onClick={handleSend}
+              disabled={!input.trim() && pendingImages.length === 0}
+            >
+              <svg width="16" height="16" viewBox="0 0 20 20" fill="none">
+                <path d="M3 10L17 3L10 17V10H3Z" fill="currentColor"/>
+              </svg>
+            </button>
+          )}
         </div>
       </div>
     </div>

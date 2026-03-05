@@ -165,6 +165,10 @@ pub struct ChatMessage {
     pub content: String,
     pub timestamp: String,
     pub metadata: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<RemoteToolStatus>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -198,6 +202,97 @@ pub struct RemoteToolStatus {
 }
 
 pub type EncryptedPayload = (String, String);
+
+fn message_to_chat_message(m: &crate::agentic::core::Message) -> ChatMessage {
+    use crate::agentic::core::{MessageContent, MessageRole};
+
+    let role = match m.role {
+        MessageRole::User => "user",
+        MessageRole::Assistant => "assistant",
+        MessageRole::Tool => "tool",
+        MessageRole::System => "system",
+    };
+
+    let (raw_content, tools, thinking) = match &m.content {
+        MessageContent::Text(t) => (t.clone(), None, None),
+        MessageContent::Mixed {
+            text,
+            tool_calls,
+            reasoning_content,
+        } => {
+            let tools = if tool_calls.is_empty() {
+                None
+            } else {
+                Some(
+                    tool_calls
+                        .iter()
+                        .map(|tc| {
+                            let preview = tc
+                                .arguments
+                                .as_str()
+                                .map(|s| s.chars().take(120).collect::<String>())
+                                .or_else(|| {
+                                    serde_json::to_string(&tc.arguments)
+                                        .ok()
+                                        .map(|s| s.chars().take(120).collect())
+                                });
+                            RemoteToolStatus {
+                                id: tc.tool_id.clone(),
+                                name: tc.tool_name.clone(),
+                                status: if tc.is_error {
+                                    "error".to_string()
+                                } else {
+                                    "completed".to_string()
+                                },
+                                duration_ms: None,
+                                start_ms: None,
+                                input_preview: preview,
+                            }
+                        })
+                        .collect(),
+                )
+            };
+            let thinking = reasoning_content
+                .as_ref()
+                .filter(|s| !s.is_empty())
+                .cloned();
+            (text.clone(), tools, thinking)
+        }
+        MessageContent::ToolResult {
+            result_for_assistant,
+            result,
+            ..
+        } => (
+            result_for_assistant
+                .clone()
+                .unwrap_or_else(|| result.to_string()),
+            None,
+            None,
+        ),
+    };
+
+    let content = if matches!(m.role, MessageRole::User) {
+        strip_user_input_tags(&raw_content)
+    } else {
+        raw_content
+    };
+    let ts = m
+        .timestamp
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        .to_string();
+
+    ChatMessage {
+        id: m.id.clone(),
+        role: role.to_string(),
+        content,
+        timestamp: ts,
+        metadata: None,
+        tools,
+        thinking,
+    }
+}
 
 fn strip_user_input_tags(content: &str) -> String {
     let s = content.trim();
@@ -718,48 +813,9 @@ impl RemoteServer {
                 let total = all_msgs.len();
                 let skip = *known_msg_count;
                 let new_msgs: Vec<ChatMessage> = all_msgs
-                    .into_iter()
+                    .iter()
                     .skip(skip)
-                    .map(|m| {
-                        use crate::agentic::core::MessageRole;
-                        let role = match m.role {
-                            MessageRole::User => "user",
-                            MessageRole::Assistant => "assistant",
-                            MessageRole::Tool => "tool",
-                            MessageRole::System => "system",
-                        };
-                        let raw_content = match &m.content {
-                            crate::agentic::core::MessageContent::Text(t) => t.clone(),
-                            crate::agentic::core::MessageContent::Mixed { text, .. } => {
-                                text.clone()
-                            }
-                            crate::agentic::core::MessageContent::ToolResult {
-                                result_for_assistant,
-                                result,
-                                ..
-                            } => result_for_assistant
-                                .clone()
-                                .unwrap_or_else(|| result.to_string()),
-                        };
-                        let content = if matches!(m.role, MessageRole::User) {
-                            strip_user_input_tags(&raw_content)
-                        } else {
-                            raw_content
-                        };
-                        let ts = m
-                            .timestamp
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_secs()
-                            .to_string();
-                        ChatMessage {
-                            id: m.id.clone(),
-                            role: role.to_string(),
-                            content,
-                            timestamp: ts,
-                            metadata: None,
-                        }
-                    })
+                    .map(message_to_chat_message)
                     .collect();
                 (new_msgs, total)
             }
@@ -1112,47 +1168,8 @@ impl RemoteServer {
                 {
                     Ok((messages, has_more)) => {
                         let chat_msgs = messages
-                            .into_iter()
-                            .map(|m| {
-                                use crate::agentic::core::MessageRole;
-                                let role = match m.role {
-                                    MessageRole::User => "user",
-                                    MessageRole::Assistant => "assistant",
-                                    MessageRole::Tool => "tool",
-                                    MessageRole::System => "system",
-                                };
-                                let raw_content = match &m.content {
-                                    crate::agentic::core::MessageContent::Text(t) => t.clone(),
-                                    crate::agentic::core::MessageContent::Mixed {
-                                        text, ..
-                                    } => text.clone(),
-                                    crate::agentic::core::MessageContent::ToolResult {
-                                        result_for_assistant,
-                                        result,
-                                        ..
-                                    } => result_for_assistant
-                                        .clone()
-                                        .unwrap_or_else(|| result.to_string()),
-                                };
-                                let content = if matches!(m.role, MessageRole::User) {
-                                    strip_user_input_tags(&raw_content)
-                                } else {
-                                    raw_content
-                                };
-                                let ts = m
-                                    .timestamp
-                                    .duration_since(std::time::UNIX_EPOCH)
-                                    .unwrap_or_default()
-                                    .as_secs()
-                                    .to_string();
-                                ChatMessage {
-                                    id: m.id.clone(),
-                                    role: role.to_string(),
-                                    content,
-                                    timestamp: ts,
-                                    metadata: None,
-                                }
-                            })
+                            .iter()
+                            .map(message_to_chat_message)
                             .collect();
                         RemoteResponse::Messages {
                             session_id: session_id.clone(),

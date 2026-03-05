@@ -189,9 +189,11 @@
 
   &:active:not(:disabled) { opacity: 0.8; }
 
-  &.is-streaming {
-    background: var(--element-bg-base);
-    color: var(--color-text-muted);
+  &.is-stop {
+    background: var(--color-error);
+    color: #fff;
+
+    &:active { opacity: 0.7; }
   }
 }
 

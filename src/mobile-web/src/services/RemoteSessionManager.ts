@@ -40,6 +40,8 @@ export interface ChatMessage {
   content: string;
   timestamp: string;
   metadata?: any;
+  tools?: RemoteToolStatus[];
+  thinking?: string;
 }
 
 export interface ActiveTurnSnapshot {

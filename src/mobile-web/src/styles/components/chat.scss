@@ -89,20 +89,6 @@
   }
 }
 
-.chat-page__cancel {
-  background: var(--color-error-bg);
-  color: var(--color-error);
-  border: 1px solid var(--color-error-border);
-  border-radius: var(--size-radius-sm);
-  padding: 3px var(--size-gap-2);
-  font-size: var(--font-size-xs);
-  font-weight: var(--font-weight-medium);
-  cursor: pointer;
-  flex-shrink: 0;
-  transition: all var(--motion-fast) var(--easing-standard);
-
-  &:active { opacity: 0.7; }
-}
 
 .chat-page__header-workspace {
   display: flex;
