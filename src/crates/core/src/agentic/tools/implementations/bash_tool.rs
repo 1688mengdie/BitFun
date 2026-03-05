@@ -14,8 +14,10 @@ use serde_json::{json, Value};
 use std::time::Instant;
 use terminal_core::shell::{ShellDetector, ShellType};
 use terminal_core::{
-    CommandStreamEvent, ExecuteCommandRequest, SignalRequest, TerminalApi, TerminalBindingOptions,
+    CommandStreamEvent, ExecuteCommandRequest, SendCommandRequest, SignalRequest, TerminalApi,
+    TerminalBindingOptions, TerminalSessionBinding,
 };
+use tokio::io::AsyncWriteExt;
 use tool_runtime::util::ansi_cleaner::strip_ansi;
 
 const MAX_OUTPUT_LENGTH: usize = 30000;
@@ -173,7 +175,7 @@ Usage notes:
   - You can specify an optional timeout in milliseconds (up to 600000ms / 10 minutes). If not specified, commands will timeout after 120000ms (2 minutes).
   - It is very helpful if you write a clear, concise description of what this command does. For simple commands, keep it brief (5-10 words). For complex commands (piped commands, obscure flags, or anything hard to understand at a glance), add enough context to clarify what it does.
   - If the output exceeds {MAX_OUTPUT_LENGTH} characters, output will be truncated before being returned to you.
-  - You can use the `run_in_background` parameter to run the command in the background. Only use this if you don't need the result immediately. You do not need to use '&' at the end of the command when using this parameter.
+  - You can use the `run_in_background` parameter to run the command in a new dedicated background terminal session. The tool returns the background session ID immediately without waiting for the command to finish. Only use this for long-running processes (e.g., dev servers, watchers) where you don't need the output right away. You do not need to append '&' to the command. NOTE: `timeout_ms` is ignored when `run_in_background` is true.
   
   - Avoid using this tool with the `find`, `grep`, `cat`, `head`, `tail`, `sed`, `awk`, or `echo` commands, unless explicitly instructed or when these commands are truly necessary for the task. Instead, always prefer using the dedicated tools for these commands:
     - File search: Use Glob (NOT find or ls)
@@ -207,7 +209,11 @@ Usage notes:
                 },
                 "timeout_ms": {
                     "type": "number",
-                    "description": "Optional timeout in milliseconds (default 120000, max 600000)"
+                    "description": "Optional timeout in milliseconds (default 120000, max 600000). Ignored when run_in_background is true."
+                },
+                "run_in_background": {
+                    "type": "boolean",
+                    "description": "If true, runs the command in a new dedicated background terminal session and returns the session ID immediately without waiting for completion. Useful for long-running processes like dev servers or file watchers. timeout_ms is ignored when this is true."
                 },
                 "description": {
                     "type": "string",
@@ -237,6 +243,10 @@ Usage notes:
         _context: Option<&ToolUseContext>,
     ) -> ValidationResult {
         let command = input.get("command").and_then(|v| v.as_str());
+        let run_in_background = input
+            .get("run_in_background")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
         if let Some(cmd) = command {
             let parts: Vec<&str> = cmd.split_whitespace().collect();
@@ -259,6 +269,18 @@ Usage notes:
                 result: false,
                 message: Some("command is required".to_string()),
                 error_code: Some(400),
+                meta: None,
+            };
+        }
+
+        // Warn if timeout_ms is set alongside run_in_background
+        if run_in_background && input.get("timeout_ms").is_some() {
+            return ValidationResult {
+                result: true,
+                message: Some(
+                    "Note: timeout_ms is ignored when run_in_background is true".to_string(),
+                ),
+                error_code: None,
                 meta: None,
             };
         }
@@ -310,15 +332,10 @@ Usage notes:
             .and_then(|v| v.as_str())
             .ok_or_else(|| BitFunError::tool("command is required".to_string()))?;
 
-        const DEFAULT_TIMEOUT_MS: u64 = 120_000;
-        const MAX_TIMEOUT_MS: u64 = 600_000;
-        let timeout_ms = Some(
-            input
-                .get("timeout_ms")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(DEFAULT_TIMEOUT_MS)
-                .min(MAX_TIMEOUT_MS),
-        );
+        let run_in_background = input
+            .get("run_in_background")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
         // Get session_id (for binding terminal session)
         let chat_session_id = context
@@ -331,25 +348,19 @@ Usage notes:
             .tool_call_id
             .clone()
             .unwrap_or_else(|| format!("bash_{}", uuid::Uuid::new_v4()));
-        let tool_name = self.name().to_string();
-
-        debug!(
-            "Bash tool executing command: {}, session_id: {}, tool_id: {}",
-            command_str, chat_session_id, tool_use_id
-        );
 
         // 1. Get Terminal API
         let terminal_api = TerminalApi::from_singleton()
             .map_err(|e| BitFunError::tool(format!("Terminal not initialized: {}", e)))?;
 
-        // 2. Resolve shell type (falls back to system default if configured shell doesn't support integration)
+        // 2. Resolve shell type
         let shell_type = Self::resolve_shell().await.shell_type;
 
-        // 3. Get or create terminal session
+        // 3. Get or create primary terminal session (needed for cwd in both branches)
         let binding = terminal_api.session_manager().binding();
         let workspace_path = get_workspace_path().map(|p| p.to_string_lossy().to_string());
 
-        let terminal_session_id = binding
+        let primary_session_id = binding
             .get_or_create(
                 chat_session_id,
                 TerminalBindingOptions {
@@ -359,13 +370,10 @@ Usage notes:
                         "Chat-{}",
                         &chat_session_id[..8.min(chat_session_id.len())]
                     )),
-                    shell_type,
+                    shell_type: shell_type.clone(),
                     env: Some({
                         let mut env = std::collections::HashMap::new();
-                        env.insert(
-                            "BITFUN_NONINTERACTIVE".to_string(),
-                            "1".to_string(),
-                        );
+                        env.insert("BITFUN_NONINTERACTIVE".to_string(), "1".to_string());
                         env
                     }),
                     ..Default::default()
@@ -374,21 +382,49 @@ Usage notes:
             .await
             .map_err(|e| BitFunError::tool(format!("Failed to create Terminal session: {}", e)))?;
 
-        // Get actual working directory
-        let working_directory = terminal_api
-            .get_session(&terminal_session_id)
+        // Get actual working directory from primary session
+        let primary_cwd = terminal_api
+            .get_session(&primary_session_id)
             .await
             .map(|s| s.cwd)
-            .unwrap_or_default();
+            .unwrap_or_else(|_| workspace_path.clone().unwrap_or_default());
+
+        if run_in_background {
+            return self
+                .call_background(
+                    command_str,
+                    chat_session_id,
+                    &primary_cwd,
+                    shell_type,
+                    &terminal_api,
+                    &binding,
+                    start_time,
+                )
+                .await;
+        }
+
+        // --- Foreground execution ---
+
+        let tool_name = self.name().to_string();
+
+        const DEFAULT_TIMEOUT_MS: u64 = 120_000;
+        const MAX_TIMEOUT_MS: u64 = 600_000;
+        let timeout_ms = Some(
+            input
+                .get("timeout_ms")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(DEFAULT_TIMEOUT_MS)
+                .min(MAX_TIMEOUT_MS),
+        );
 
         debug!(
-            "Bash tool using terminal session: {} (bound to chat: {})",
-            terminal_session_id, chat_session_id
+            "Bash tool executing command: {}, session_id: {}, tool_id: {}",
+            command_str, chat_session_id, tool_use_id
         );
 
         // 4. Create streaming execution request
         let request = ExecuteCommandRequest {
-            session_id: terminal_session_id.clone(),
+            session_id: primary_session_id.clone(),
             command: command_str.to_string(),
             timeout_ms,
             prevent_history: Some(true),
@@ -407,21 +443,16 @@ Usage notes:
             // Check cancellation request
             if let Some(token) = &context.cancellation_token {
                 if token.is_cancelled() && !was_interrupted {
-                    // Only send signal on first cancellation detection
                     debug!("Bash tool received cancellation request, sending interrupt signal, tool_id: {}", tool_use_id);
                     was_interrupted = true;
 
-                    // Send interrupt signal to PTY
                     let _ = terminal_api
                         .signal(SignalRequest {
-                            session_id: terminal_session_id.clone(),
+                            session_id: primary_session_id.clone(),
                             signal: "SIGINT".to_string(),
                         })
                         .await;
 
-                    // Set exit code and exit directly
-                    // Unix/Linux: 130 (128 + SIGINT=2)
-                    // Windows: -1073741510 (STATUS_CONTROL_C_EXIT)
                     #[cfg(windows)]
                     {
                         final_exit_code = Some(-1073741510);
@@ -441,7 +472,6 @@ Usage notes:
                 CommandStreamEvent::Output { data } => {
                     accumulated_output.push_str(&data);
 
-                    // Send progress event to frontend
                     let progress_event = ToolExecutionProgress(ToolExecutionProgressInfo {
                         tool_use_id: tool_use_id.clone(),
                         tool_name: tool_name.clone(),
@@ -468,12 +498,10 @@ Usage notes:
                     );
                     final_exit_code = exit_code;
 
-                    // Even if was_interrupted is false (e.g., user pressed Ctrl+C directly in terminal), should mark as interrupted
                     if matches!(exit_code, Some(130) | Some(-1073741510)) {
                         was_interrupted = true;
                     }
 
-                    // Use complete output (may be more complete than accumulated)
                     if !total_output.is_empty() {
                         accumulated_output = total_output;
                     }
@@ -492,7 +520,7 @@ Usage notes:
             }
         }
 
-        // 5. Build result
+        // 6. Build result
         let execution_time_ms = start_time.elapsed().as_millis() as u64;
 
         let result_data = json!({
@@ -501,16 +529,172 @@ Usage notes:
             "output": accumulated_output,
             "exit_code": final_exit_code,
             "interrupted": was_interrupted,
-            "working_directory": working_directory,
+            "working_directory": primary_cwd,
             "execution_time_ms": execution_time_ms,
-            "terminal_session_id": terminal_session_id,
+            "terminal_session_id": primary_session_id,
         });
 
-        // Generate result for AI
         let result_for_assistant = self.render_result(
             &accumulated_output,
             was_interrupted,
             final_exit_code.unwrap_or(-1),
+        );
+
+        Ok(vec![ToolResult::Result {
+            data: result_data,
+            result_for_assistant: Some(result_for_assistant),
+        }])
+    }
+}
+
+impl BashTool {
+    /// Execute a command in a new background terminal session.
+    /// Returns immediately with the new session ID.
+    async fn call_background(
+        &self,
+        command_str: &str,
+        chat_session_id: &str,
+        initial_cwd: &str,
+        shell_type: Option<ShellType>,
+        terminal_api: &TerminalApi,
+        binding: &TerminalSessionBinding,
+        start_time: Instant,
+    ) -> BitFunResult<Vec<ToolResult>> {
+        debug!(
+            "Bash tool starting background command: {}, owner: {}",
+            command_str, chat_session_id
+        );
+
+        // Create a dedicated background terminal session sharing the primary session's cwd
+        let bg_session_id = binding
+            .create_background_session(
+                chat_session_id,
+                TerminalBindingOptions {
+                    working_directory: Some(initial_cwd.to_string()),
+                    session_id: None,
+                    session_name: None,
+                    shell_type,
+                    env: Some({
+                        let mut env = std::collections::HashMap::new();
+                        env.insert("BITFUN_NONINTERACTIVE".to_string(), "1".to_string());
+                        env
+                    }),
+                    ..Default::default()
+                },
+            )
+            .await
+            .map_err(|e| {
+                BitFunError::tool(format!(
+                    "Failed to create background terminal session: {}",
+                    e
+                ))
+            })?;
+
+        // Subscribe to session output before sending the command so no data is missed
+        let mut output_rx = terminal_api.subscribe_session_output(&bg_session_id);
+
+        // Fire-and-forget: write the command to the PTY without waiting for completion
+        terminal_api
+            .send_command(SendCommandRequest {
+                session_id: bg_session_id.clone(),
+                command: command_str.to_string(),
+            })
+            .await
+            .map_err(|e| BitFunError::tool(format!("Failed to send background command: {}", e)))?;
+
+        debug!(
+            "Background command started, session_id: {}, owner: {}",
+            bg_session_id, chat_session_id
+        );
+
+        // Determine output file path: <workspace>/.bitfun/terminals/<bg_session_id>.txt
+        let output_file_path = get_workspace_path().map(|ws| {
+            ws.join(".bitfun")
+                .join("terminals")
+                .join(format!("{}.txt", bg_session_id))
+        });
+
+        // Spawn task: write PTY output to file, delete when session ends
+        if let Some(file_path) = output_file_path.clone() {
+            let bg_id_for_log = bg_session_id.clone();
+            tokio::spawn(async move {
+                if let Some(parent) = file_path.parent() {
+                    if let Err(e) = tokio::fs::create_dir_all(parent).await {
+                        error!(
+                            "Failed to create terminals output dir for bg session {}: {}",
+                            bg_id_for_log, e
+                        );
+                        return;
+                    }
+                }
+
+                let file = match tokio::fs::OpenOptions::new()
+                    .create(true)
+                    .write(true)
+                    .truncate(true)
+                    .open(&file_path)
+                    .await
+                {
+                    Ok(f) => f,
+                    Err(e) => {
+                        error!(
+                            "Failed to open output file for bg session {}: {}",
+                            bg_id_for_log, e
+                        );
+                        return;
+                    }
+                };
+
+                let mut writer = tokio::io::BufWriter::new(file);
+
+                while let Some(data) = output_rx.recv().await {
+                    if let Err(e) = writer.write_all(data.as_bytes()).await {
+                        error!(
+                            "Failed to write output for bg session {}: {}",
+                            bg_id_for_log, e
+                        );
+                        break;
+                    }
+                    let _ = writer.flush().await;
+                }
+
+                // Channel closed means session was destroyed - delete the log file
+                drop(writer);
+                if let Err(e) = tokio::fs::remove_file(&file_path).await {
+                    debug!(
+                        "Could not remove output file for bg session {} (may already be gone): {}",
+                        bg_id_for_log, e
+                    );
+                } else {
+                    debug!("Removed output file for bg session {}", bg_id_for_log);
+                }
+            });
+        }
+
+        let execution_time_ms = start_time.elapsed().as_millis() as u64;
+
+        let output_file_str = output_file_path.as_deref().map(|p| p.display().to_string());
+
+        let output_file_note = output_file_str
+            .as_deref()
+            .map(|s| format!("\nOutput is being written to: {}", s))
+            .unwrap_or_default();
+
+        let result_data = json!({
+            "success": true,
+            "command": command_str,
+            "output": "Command started in background terminal session.",
+            "exit_code": null,
+            "interrupted": false,
+            "working_directory": initial_cwd,
+            "execution_time_ms": execution_time_ms,
+            "terminal_session_id": bg_session_id,
+            "output_file": output_file_str,
+        });
+
+        let result_for_assistant = format!(
+            "Command started in background terminal session (id: {}).{}",
+            bg_session_id, output_file_note
         );
 
         Ok(vec![ToolResult::Result {
