@@ -61,6 +61,11 @@ pub enum RemoteCommand {
     DeleteSession {
         session_id: String,
     },
+    /// Submit answers for an AskUserQuestion tool.
+    AnswerQuestion {
+        tool_id: String,
+        answers: serde_json::Value,
+    },
     /// Incremental poll — returns only what changed since `since_version`.
     PollSession {
         session_id: String,
@@ -138,6 +143,7 @@ pub enum RemoteResponse {
         #[serde(skip_serializing_if = "Option::is_none")]
         active_turn: Option<ActiveTurnSnapshot>,
     },
+    AnswerAccepted,
     Pong,
     Error {
         message: String,
@@ -169,6 +175,19 @@ pub struct ChatMessage {
     pub tools: Option<Vec<RemoteToolStatus>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking: Option<String>,
+    /// Ordered items preserving the interleaved display order from the desktop.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub items: Option<Vec<ChatMessageItem>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatMessageItem {
+    #[serde(rename = "type")]
+    pub item_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool: Option<RemoteToolStatus>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -186,6 +205,8 @@ pub struct ActiveTurnSnapshot {
     pub thinking: String,
     pub tools: Vec<RemoteToolStatus>,
     pub round_index: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub items: Option<Vec<ChatMessageItem>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -199,99 +220,157 @@ pub struct RemoteToolStatus {
     pub start_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input_preview: Option<String>,
+    /// Full tool input for interactive tools (e.g. AskUserQuestion).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_input: Option<serde_json::Value>,
 }
 
 pub type EncryptedPayload = (String, String);
 
-fn message_to_chat_message(m: &crate::agentic::core::Message) -> ChatMessage {
-    use crate::agentic::core::{MessageContent, MessageRole};
+/// Convert ConversationPersistenceManager turns into mobile ChatMessages.
+/// This is the same data source the desktop frontend uses.
+fn turns_to_chat_messages(
+    turns: &[crate::service::conversation::DialogTurnData],
+) -> Vec<ChatMessage> {
+    let mut result = Vec::new();
 
-    let role = match m.role {
-        MessageRole::User => "user",
-        MessageRole::Assistant => "assistant",
-        MessageRole::Tool => "tool",
-        MessageRole::System => "system",
-    };
+    for turn in turns {
+        result.push(ChatMessage {
+            id: turn.user_message.id.clone(),
+            role: "user".to_string(),
+            content: strip_user_input_tags(&turn.user_message.content),
+            timestamp: (turn.user_message.timestamp / 1000).to_string(),
+            metadata: None,
+            tools: None,
+            thinking: None,
+            items: None,
+        });
 
-    let (raw_content, tools, thinking) = match &m.content {
-        MessageContent::Text(t) => (t.clone(), None, None),
-        MessageContent::Mixed {
-            text,
-            tool_calls,
-            reasoning_content,
-        } => {
-            let tools = if tool_calls.is_empty() {
+        // Collect ordered items across all rounds, preserving interleaved order
+        struct OrderedEntry {
+            order_index: usize,
+            item: ChatMessageItem,
+        }
+        let mut ordered: Vec<OrderedEntry> = Vec::new();
+        let mut tools_flat = Vec::new();
+        let mut thinking_parts = Vec::new();
+        let mut text_parts = Vec::new();
+
+        for round in &turn.model_rounds {
+            for t in &round.text_items {
+                if t.is_subagent_item.unwrap_or(false) {
+                    continue;
+                }
+                if !t.content.is_empty() {
+                    text_parts.push(t.content.clone());
+                    ordered.push(OrderedEntry {
+                        order_index: t.order_index.unwrap_or(usize::MAX),
+                        item: ChatMessageItem {
+                            item_type: "text".to_string(),
+                            content: Some(t.content.clone()),
+                            tool: None,
+                        },
+                    });
+                }
+            }
+            for t in &round.thinking_items {
+                if t.is_subagent_item.unwrap_or(false) {
+                    continue;
+                }
+                if !t.content.is_empty() {
+                    thinking_parts.push(t.content.clone());
+                    ordered.push(OrderedEntry {
+                        order_index: t.order_index.unwrap_or(usize::MAX),
+                        item: ChatMessageItem {
+                            item_type: "thinking".to_string(),
+                            content: Some(t.content.clone()),
+                            tool: None,
+                        },
+                    });
+                }
+            }
+            for t in &round.tool_items {
+                if t.is_subagent_item.unwrap_or(false) {
+                    continue;
+                }
+                let status_str = t.status.as_deref().unwrap_or(
+                    if t.tool_result.is_some() {
+                        "completed"
+                    } else {
+                        "running"
+                    },
+                );
+                let tool_status = RemoteToolStatus {
+                    id: t.id.clone(),
+                    name: t.tool_name.clone(),
+                    status: status_str.to_string(),
+                    duration_ms: t.duration_ms,
+                    start_ms: Some(t.start_time),
+                    input_preview: None,
+                    tool_input: None,
+                };
+                tools_flat.push(tool_status.clone());
+                ordered.push(OrderedEntry {
+                    order_index: t.order_index.unwrap_or(usize::MAX),
+                    item: ChatMessageItem {
+                        item_type: "tool".to_string(),
+                        content: None,
+                        tool: Some(tool_status),
+                    },
+                });
+            }
+        }
+
+        ordered.sort_by_key(|e| e.order_index);
+        let items: Vec<ChatMessageItem> = ordered.into_iter().map(|e| e.item).collect();
+
+        let ts = turn
+            .model_rounds
+            .last()
+            .map(|r| r.end_time.unwrap_or(r.start_time))
+            .unwrap_or(turn.start_time);
+
+        result.push(ChatMessage {
+            id: format!("{}_assistant", turn.turn_id),
+            role: "assistant".to_string(),
+            content: text_parts.join("\n\n"),
+            timestamp: (ts / 1000).to_string(),
+            metadata: None,
+            tools: if tools_flat.is_empty() { None } else { Some(tools_flat) },
+            thinking: if thinking_parts.is_empty() {
                 None
             } else {
-                Some(
-                    tool_calls
-                        .iter()
-                        .map(|tc| {
-                            let preview = tc
-                                .arguments
-                                .as_str()
-                                .map(|s| s.chars().take(120).collect::<String>())
-                                .or_else(|| {
-                                    serde_json::to_string(&tc.arguments)
-                                        .ok()
-                                        .map(|s| s.chars().take(120).collect())
-                                });
-                            RemoteToolStatus {
-                                id: tc.tool_id.clone(),
-                                name: tc.tool_name.clone(),
-                                status: if tc.is_error {
-                                    "error".to_string()
-                                } else {
-                                    "completed".to_string()
-                                },
-                                duration_ms: None,
-                                start_ms: None,
-                                input_preview: preview,
-                            }
-                        })
-                        .collect(),
-                )
-            };
-            let thinking = reasoning_content
-                .as_ref()
-                .filter(|s| !s.is_empty())
-                .cloned();
-            (text.clone(), tools, thinking)
-        }
-        MessageContent::ToolResult {
-            result_for_assistant,
-            result,
-            ..
-        } => (
-            result_for_assistant
-                .clone()
-                .unwrap_or_else(|| result.to_string()),
-            None,
-            None,
-        ),
-    };
-
-    let content = if matches!(m.role, MessageRole::User) {
-        strip_user_input_tags(&raw_content)
-    } else {
-        raw_content
-    };
-    let ts = m
-        .timestamp
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
-        .to_string();
-
-    ChatMessage {
-        id: m.id.clone(),
-        role: role.to_string(),
-        content,
-        timestamp: ts,
-        metadata: None,
-        tools,
-        thinking,
+                Some(thinking_parts.join("\n\n"))
+            },
+            items: if items.is_empty() { None } else { Some(items) },
+        });
     }
+
+    result
+}
+
+/// Load historical chat messages from ConversationPersistenceManager.
+/// Uses the same data source as the desktop frontend.
+async fn load_chat_messages_from_conversation_persistence(
+    session_id: &str,
+) -> (Vec<ChatMessage>, bool) {
+    use crate::infrastructure::{get_workspace_path, PathManager};
+    use crate::service::conversation::ConversationPersistenceManager;
+
+    let Some(wp) = get_workspace_path() else {
+        return (vec![], false);
+    };
+    let Ok(pm) = PathManager::new() else {
+        return (vec![], false);
+    };
+    let pm = std::sync::Arc::new(pm);
+    let Ok(conv_mgr) = ConversationPersistenceManager::new(pm, wp).await else {
+        return (vec![], false);
+    };
+    let Ok(turns) = conv_mgr.load_session_turns(session_id).await else {
+        return (vec![], false);
+    };
+    (turns_to_chat_messages(&turns), false)
 }
 
 fn strip_user_input_tags(content: &str) -> String {
@@ -363,6 +442,8 @@ struct TrackerState {
     accumulated_thinking: String,
     active_tools: Vec<RemoteToolStatus>,
     round_index: usize,
+    /// Ordered items preserving the interleaved arrival order for real-time display.
+    active_items: Vec<ChatMessageItem>,
 }
 
 /// Tracks the real-time state of a session for polling by the mobile client.
@@ -387,6 +468,7 @@ impl RemoteSessionStateTracker {
                 accumulated_thinking: String::new(),
                 active_tools: Vec::new(),
                 round_index: 0,
+                active_items: Vec::new(),
             }),
         }
     }
@@ -408,6 +490,7 @@ impl RemoteSessionStateTracker {
             thinking: s.accumulated_thinking.clone(),
             tools: s.active_tools.clone(),
             round_index: s.round_index,
+            items: if s.active_items.is_empty() { None } else { Some(s.active_items.clone()) },
         })
     }
 
@@ -444,6 +527,24 @@ impl RemoteSessionStateTracker {
             AE::TextChunk { text, .. } => {
                 let mut s = self.state.write().unwrap();
                 s.accumulated_text.push_str(text);
+                if let Some(last) = s.active_items.last_mut() {
+                    if last.item_type == "text" {
+                        let c = last.content.get_or_insert_with(String::new);
+                        c.push_str(text);
+                    } else {
+                        s.active_items.push(ChatMessageItem {
+                            item_type: "text".to_string(),
+                            content: Some(text.clone()),
+                            tool: None,
+                        });
+                    }
+                } else {
+                    s.active_items.push(ChatMessageItem {
+                        item_type: "text".to_string(),
+                        content: Some(text.clone()),
+                        tool: None,
+                    });
+                }
                 drop(s);
                 self.bump_version();
             }
@@ -454,6 +555,24 @@ impl RemoteSessionStateTracker {
                     .replace("<thinking>", "");
                 let mut s = self.state.write().unwrap();
                 s.accumulated_thinking.push_str(&clean);
+                if let Some(last) = s.active_items.last_mut() {
+                    if last.item_type == "thinking" {
+                        let c = last.content.get_or_insert_with(String::new);
+                        c.push_str(&clean);
+                    } else {
+                        s.active_items.push(ChatMessageItem {
+                            item_type: "thinking".to_string(),
+                            content: Some(clean),
+                            tool: None,
+                        });
+                    }
+                } else {
+                    s.active_items.push(ChatMessageItem {
+                        item_type: "thinking".to_string(),
+                        content: Some(clean),
+                        tool: None,
+                    });
+                }
                 drop(s);
                 self.bump_version();
             }
@@ -481,13 +600,19 @@ impl RemoteSessionStateTracker {
                                 .get("input")
                                 .and_then(|v| v.as_str())
                                 .map(|s| s.chars().take(100).collect());
+                            let tool_input = if tool_name == "AskUserQuestion" {
+                                val.get("params").cloned()
+                            } else {
+                                None
+                            };
                             let tool_count = s.active_tools.len();
-                            s.active_tools.push(RemoteToolStatus {
-                                id: if tool_id.is_empty() {
-                                    format!("{}-{}", tool_name, tool_count)
-                                } else {
-                                    tool_id
-                                },
+                            let resolved_id = if tool_id.is_empty() {
+                                format!("{}-{}", tool_name, tool_count)
+                            } else {
+                                tool_id
+                            };
+                            let tool_status = RemoteToolStatus {
+                                id: resolved_id,
                                 name: tool_name,
                                 status: "running".to_string(),
                                 duration_ms: None,
@@ -498,7 +623,14 @@ impl RemoteSessionStateTracker {
                                         .as_millis() as u64,
                                 ),
                                 input_preview,
+                                tool_input,
+                            };
+                            s.active_items.push(ChatMessageItem {
+                                item_type: "tool".to_string(),
+                                content: None,
+                                tool: Some(tool_status.clone()),
                             });
+                            s.active_tools.push(tool_status);
                         }
                         "Completed" | "Succeeded" => {
                             let duration = val
@@ -510,12 +642,27 @@ impl RemoteSessionStateTracker {
                                 t.status = "completed".to_string();
                                 t.duration_ms = duration;
                             }
+                            if let Some(item) = s.active_items.iter_mut().rev().find(|i| {
+                                i.item_type == "tool" && i.tool.as_ref().map_or(false, |t| (t.id == tool_id || t.name == tool_name) && t.status == "running")
+                            }) {
+                                if let Some(t) = item.tool.as_mut() {
+                                    t.status = "completed".to_string();
+                                    t.duration_ms = duration;
+                                }
+                            }
                         }
                         "Failed" => {
                             if let Some(t) = s.active_tools.iter_mut().rev().find(|t| {
                                 (t.id == tool_id || t.name == tool_name) && t.status == "running"
                             }) {
                                 t.status = "failed".to_string();
+                            }
+                            if let Some(item) = s.active_items.iter_mut().rev().find(|i| {
+                                i.item_type == "tool" && i.tool.as_ref().map_or(false, |t| (t.id == tool_id || t.name == tool_name) && t.status == "running")
+                            }) {
+                                if let Some(t) = item.tool.as_mut() {
+                                    t.status = "failed".to_string();
+                                }
                             }
                         }
                         _ => {}
@@ -531,6 +678,7 @@ impl RemoteSessionStateTracker {
                 s.accumulated_text.clear();
                 s.accumulated_thinking.clear();
                 s.active_tools.clear();
+                s.active_items.clear();
                 s.round_index = 0;
                 s.session_state = "running".to_string();
                 drop(s);
@@ -543,6 +691,7 @@ impl RemoteSessionStateTracker {
                 s.accumulated_text.clear();
                 s.accumulated_thinking.clear();
                 s.active_tools.clear();
+                s.active_items.clear();
                 s.session_state = "idle".to_string();
                 drop(s);
                 self.bump_version();
@@ -672,7 +821,9 @@ impl RemoteServer {
             | RemoteCommand::GetSessionMessages { .. }
             | RemoteCommand::DeleteSession { .. } => self.handle_session_command(cmd).await,
 
-            RemoteCommand::SendMessage { .. } | RemoteCommand::CancelTask { .. } => {
+            RemoteCommand::SendMessage { .. }
+            | RemoteCommand::CancelTask { .. }
+            | RemoteCommand::AnswerQuestion { .. } => {
                 self.handle_execution_command(cmd).await
             }
 
@@ -791,36 +942,12 @@ impl RemoteServer {
             };
         }
 
-        let coordinator = match crate::agentic::coordination::get_global_coordinator() {
-            Some(c) => c,
-            None => {
-                return RemoteResponse::Error {
-                    message: "Desktop session system not ready".into(),
-                };
-            }
-        };
-
-        let session_mgr = coordinator.get_session_manager();
-        if session_mgr.get_session(session_id).is_none() {
-            let _ = coordinator.restore_session(session_id).await;
-        }
-
-        let (new_messages, total_msg_count) = match coordinator
-            .get_messages_paginated(session_id, 1000, None)
-            .await
-        {
-            Ok((all_msgs, _)) => {
-                let total = all_msgs.len();
-                let skip = *known_msg_count;
-                let new_msgs: Vec<ChatMessage> = all_msgs
-                    .iter()
-                    .skip(skip)
-                    .map(message_to_chat_message)
-                    .collect();
-                (new_msgs, total)
-            }
-            Err(_) => (vec![], *known_msg_count),
-        };
+        let (all_chat_msgs, _) =
+            load_chat_messages_from_conversation_persistence(session_id).await;
+        let total_msg_count = all_chat_msgs.len();
+        let skip = *known_msg_count;
+        let new_messages: Vec<ChatMessage> =
+            all_chat_msgs.into_iter().skip(skip).collect();
 
         let active_turn = tracker.snapshot_active_turn();
         let sess_state = tracker.session_state();
@@ -1154,32 +1281,15 @@ impl RemoteServer {
             }
             RemoteCommand::GetSessionMessages {
                 session_id,
-                limit,
-                before_message_id,
+                limit: _,
+                before_message_id: _,
             } => {
-                let limit = limit.unwrap_or(50);
-                let session_mgr = coordinator.get_session_manager();
-                if session_mgr.get_session(session_id).is_none() {
-                    let _ = coordinator.restore_session(session_id).await;
-                }
-                match coordinator
-                    .get_messages_paginated(session_id, limit, before_message_id.as_deref())
-                    .await
-                {
-                    Ok((messages, has_more)) => {
-                        let chat_msgs = messages
-                            .iter()
-                            .map(message_to_chat_message)
-                            .collect();
-                        RemoteResponse::Messages {
-                            session_id: session_id.clone(),
-                            messages: chat_msgs,
-                            has_more,
-                        }
-                    }
-                    Err(e) => RemoteResponse::Error {
-                        message: e.to_string(),
-                    },
+                let (chat_msgs, has_more) =
+                    load_chat_messages_from_conversation_persistence(session_id).await;
+                RemoteResponse::Messages {
+                    session_id: session_id.clone(),
+                    messages: chat_msgs,
+                    has_more,
                 }
             }
             RemoteCommand::DeleteSession { session_id } => {
@@ -1358,6 +1468,14 @@ impl RemoteServer {
                 }
                 RemoteResponse::TaskCancelled {
                     session_id: session_id.clone(),
+                }
+            }
+            RemoteCommand::AnswerQuestion { tool_id, answers } => {
+                use crate::agentic::tools::user_input_manager::get_user_input_manager;
+                let mgr = get_user_input_manager();
+                match mgr.send_answer(tool_id, answers.clone()) {
+                    Ok(()) => RemoteResponse::AnswerAccepted,
+                    Err(e) => RemoteResponse::Error { message: e },
                 }
             }
             _ => RemoteResponse::Error {

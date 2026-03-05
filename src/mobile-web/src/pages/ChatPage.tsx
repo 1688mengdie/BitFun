@@ -10,6 +10,7 @@ import {
   type ActiveTurnSnapshot,
   type RemoteToolStatus,
   type ChatMessage,
+  type ChatMessageItem,
 } from '../services/RemoteSessionManager';
 import { useMobileStore } from '../services/store';
 import { useTheme } from '../theme';
@@ -211,6 +212,227 @@ const TypingDots: React.FC = () => (
   </span>
 );
 
+// ─── AskUserQuestion Card ─────────────────────────────────────────────────
+
+interface AskQuestionCardProps {
+  tool: RemoteToolStatus;
+  onAnswer: (toolId: string, answers: any) => void;
+}
+
+const AskQuestionCard: React.FC<AskQuestionCardProps> = ({ tool, onAnswer }) => {
+  const questions: any[] = tool.tool_input?.questions || [];
+  const [selected, setSelected] = useState<Record<number, string | string[]>>({});
+  const [customTexts, setCustomTexts] = useState<Record<number, string>>({});
+  const [submitted, setSubmitted] = useState(false);
+
+  if (questions.length === 0) return null;
+
+  const handleSelect = (qIdx: number, label: string, multi: boolean) => {
+    setSelected(prev => {
+      if (multi) {
+        const arr = (prev[qIdx] as string[] | undefined) || [];
+        return { ...prev, [qIdx]: arr.includes(label) ? arr.filter(l => l !== label) : [...arr, label] };
+      }
+      return { ...prev, [qIdx]: prev[qIdx] === label ? undefined! : label };
+    });
+  };
+
+  const handleSubmit = () => {
+    const answers: Record<string, any> = {};
+    questions.forEach((q, idx) => {
+      const sel = selected[idx];
+      if (sel === '其他' || sel === 'Other') {
+        answers[String(idx)] = customTexts[idx] || sel;
+      } else {
+        answers[String(idx)] = sel ?? '';
+      }
+    });
+    setSubmitted(true);
+    onAnswer(tool.id, answers);
+  };
+
+  const allAnswered = questions.every((q, idx) => {
+    const s = selected[idx];
+    if (q.multiSelect) return Array.isArray(s) && s.length > 0;
+    return !!s;
+  });
+
+  return (
+    <div className="chat-ask-card">
+      <div className="chat-ask-card__header">
+        <span className="chat-ask-card__count">{questions.length} question{questions.length > 1 ? 's' : ''}</span>
+        <button
+          className="chat-ask-card__submit"
+          disabled={!allAnswered || submitted}
+          onClick={handleSubmit}
+        >
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M2 8L6 12L14 4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+          {submitted ? 'Submitted' : 'Submit'}
+        </button>
+        {!submitted && (
+          <span className="chat-ask-card__waiting">Waiting</span>
+        )}
+      </div>
+      {questions.map((q, qIdx) => {
+        const isOtherSelected = selected[qIdx] === '其他' || selected[qIdx] === 'Other';
+        return (
+          <div key={qIdx} className="chat-ask-card__question">
+            <div className="chat-ask-card__question-header">
+              <span className="chat-ask-card__tag">{q.header}</span>
+              <span className="chat-ask-card__question-text">{q.question}</span>
+            </div>
+            <div className="chat-ask-card__options">
+              {(q.options || []).map((opt: any, oIdx: number) => {
+                const isSelected = q.multiSelect
+                  ? (selected[qIdx] as string[] || []).includes(opt.label)
+                  : selected[qIdx] === opt.label;
+                return (
+                  <button
+                    key={oIdx}
+                    className={`chat-ask-card__option ${isSelected ? 'is-selected' : ''}`}
+                    onClick={() => handleSelect(qIdx, opt.label, q.multiSelect)}
+                    disabled={submitted}
+                  >
+                    <span className={`chat-ask-card__radio ${q.multiSelect ? 'chat-ask-card__radio--multi' : ''}`}>
+                      {isSelected && (
+                        <svg width="8" height="8" viewBox="0 0 16 16" fill="none">
+                          <path d="M3 8L6.5 11.5L13 4.5" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
+                        </svg>
+                      )}
+                    </span>
+                    <span className="chat-ask-card__option-label">{opt.label}</span>
+                    {opt.description && (
+                      <span className="chat-ask-card__option-desc">{opt.description}</span>
+                    )}
+                  </button>
+                );
+              })}
+              {/* "Other" option */}
+              <button
+                className={`chat-ask-card__option ${isOtherSelected ? 'is-selected' : ''}`}
+                onClick={() => handleSelect(qIdx, '其他', q.multiSelect)}
+                disabled={submitted}
+              >
+                <span className={`chat-ask-card__radio ${q.multiSelect ? 'chat-ask-card__radio--multi' : ''}`}>
+                  {isOtherSelected && (
+                    <svg width="8" height="8" viewBox="0 0 16 16" fill="none">
+                      <path d="M3 8L6.5 11.5L13 4.5" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
+                    </svg>
+                  )}
+                </span>
+                <span className="chat-ask-card__option-label">Other</span>
+                <span className="chat-ask-card__option-desc">Custom text input</span>
+              </button>
+              {isOtherSelected && (
+                <input
+                  className="chat-ask-card__custom-input"
+                  placeholder="Type your answer..."
+                  value={customTexts[qIdx] || ''}
+                  onChange={(e) => setCustomTexts(prev => ({ ...prev, [qIdx]: e.target.value }))}
+                  disabled={submitted}
+                />
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+};
+
+// ─── Ordered Items renderer ─────────────────────────────────────────────────
+
+function renderOrderedItems(items: ChatMessageItem[], now: number) {
+  const groups: { type: string; entries: ChatMessageItem[] }[] = [];
+  for (const item of items) {
+    const last = groups[groups.length - 1];
+    if (last && last.type === item.type) {
+      last.entries.push(item);
+    } else {
+      groups.push({ type: item.type, entries: [item] });
+    }
+  }
+
+  return groups.map((g, gi) => {
+    if (g.type === 'thinking') {
+      const text = g.entries.map(e => e.content || '').join('\n\n');
+      return <ThinkingBlock key={`g${gi}`} thinking={text} />;
+    }
+    if (g.type === 'tool') {
+      const tools = g.entries.map(e => e.tool!).filter(Boolean);
+      return <ToolList key={`g${gi}`} tools={tools} now={now} />;
+    }
+    if (g.type === 'text') {
+      return g.entries.map((entry, ii) =>
+        entry.content ? (
+          <div key={`g${gi}_${ii}`} className="chat-msg__assistant-content">
+            <MarkdownContent content={entry.content} />
+          </div>
+        ) : null,
+      );
+    }
+    return null;
+  });
+}
+
+// ─── Active turn items renderer (with AskUserQuestion support) ─────────────
+
+function renderActiveTurnItems(
+  items: ChatMessageItem[],
+  now: number,
+  sessionMgr: RemoteSessionManager,
+  setError: (e: string) => void,
+) {
+  const groups: { type: string; entries: ChatMessageItem[] }[] = [];
+  for (const item of items) {
+    const last = groups[groups.length - 1];
+    if (last && last.type === item.type) {
+      last.entries.push(item);
+    } else {
+      groups.push({ type: item.type, entries: [item] });
+    }
+  }
+
+  return groups.map((g, gi) => {
+    if (g.type === 'thinking') {
+      const text = g.entries.map(e => e.content || '').join('\n\n');
+      return <ThinkingBlock key={`ag${gi}`} thinking={text} />;
+    }
+    if (g.type === 'tool') {
+      const askEntries = g.entries.filter(
+        e => e.tool?.name === 'AskUserQuestion' && e.tool?.status === 'running' && e.tool?.tool_input,
+      );
+      const regularEntries = g.entries.filter(e => !askEntries.includes(e));
+      const regularTools = regularEntries.map(e => e.tool!).filter(Boolean);
+
+      return (
+        <React.Fragment key={`ag${gi}`}>
+          {regularTools.length > 0 && <ToolList tools={regularTools} now={now} />}
+          {askEntries.map(e => (
+            <AskQuestionCard
+              key={e.tool!.id}
+              tool={e.tool!}
+              onAnswer={(toolId, answers) => {
+                sessionMgr.answerQuestion(toolId, answers).catch(err => { setError(String(err)); });
+              }}
+            />
+          ))}
+        </React.Fragment>
+      );
+    }
+    if (g.type === 'text') {
+      return g.entries.map((entry, ii) =>
+        entry.content ? (
+          <div key={`ag${gi}_${ii}`} className="chat-msg__assistant-content">
+            <MarkdownContent content={entry.content} />
+          </div>
+        ) : null,
+      );
+    }
+    return null;
+  });
+}
+
 // ─── Theme toggle icon ─────────────────────────────────────────────────────
 
 const ThemeToggleIcon: React.FC<{ isDark: boolean }> = ({ isDark }) => (
@@ -333,6 +555,17 @@ const ChatPage: React.FC<ChatPageProps> = ({ sessionMgr, sessionId, sessionName,
     }
   }, [messages, activeTurn, isLoadingMore]);
 
+  // Reload messages when a turn completes so the messages array
+  // contains the final persisted content instead of stale partial data.
+  const prevActiveTurnRef = useRef<ActiveTurnSnapshot | null>(null);
+  useEffect(() => {
+    const prev = prevActiveTurnRef.current;
+    prevActiveTurnRef.current = activeTurn;
+    if (prev && !activeTurn) {
+      loadMessages();
+    }
+  }, [activeTurn, loadMessages]);
+
   const handleSend = useCallback(async () => {
     const text = input.trim();
     const imgs = pendingImages;
@@ -441,7 +674,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ sessionMgr, sessionId, sessionName,
           <div className="chat-page__load-more-indicator">Loading older messages…</div>
         )}
 
-        {messages.map((m) => {
+        {messages.map((m, _idx) => {
           if (m.role === 'system' || m.role === 'tool') return null;
 
           if (m.role === 'user') {
@@ -457,44 +690,70 @@ const ChatPage: React.FC<ChatPageProps> = ({ sessionMgr, sessionId, sessionName,
 
           return (
             <div key={m.id} className="chat-msg chat-msg--assistant">
-              {m.thinking && (
-                <ThinkingBlock thinking={m.thinking} />
-              )}
-              {m.tools && m.tools.length > 0 && (
-                <ToolList tools={m.tools} now={now} />
-              )}
-              {m.content && (
-                <div className="chat-msg__assistant-content">
-                  <MarkdownContent content={m.content} />
-                </div>
+              {m.items && m.items.length > 0 ? (
+                renderOrderedItems(m.items, now)
+              ) : (
+                <>
+                  {m.thinking && <ThinkingBlock thinking={m.thinking} />}
+                  {m.tools && m.tools.length > 0 && <ToolList tools={m.tools} now={now} />}
+                  {m.content && (
+                    <div className="chat-msg__assistant-content">
+                      <MarkdownContent content={m.content} />
+                    </div>
+                  )}
+                </>
               )}
             </div>
           );
         })}
 
         {/* Active turn overlay (streaming content from poller) */}
-        {activeTurn && (
-          <div className="chat-msg chat-msg--assistant">
-            {(activeTurn.thinking || activeTurn.status === 'active') && (
-              <ThinkingBlock
-                thinking={activeTurn.thinking}
-                streaming={activeTurn.status === 'active' && !activeTurn.thinking && !activeTurn.text}
-              />
-            )}
-
-            <ToolList tools={activeTurn.tools} now={now} />
-
-            {activeTurn.text ? (
-              <div className="chat-msg__assistant-content">
-                <MarkdownContent content={activeTurn.text} />
+        {activeTurn && (() => {
+          if (activeTurn.items && activeTurn.items.length > 0) {
+            return (
+              <div className="chat-msg chat-msg--assistant">
+                {renderActiveTurnItems(activeTurn.items, now, sessionMgr, setError)}
+                {activeTurn.status === 'active' && !activeTurn.thinking && !activeTurn.text && activeTurn.tools.length === 0 && (
+                  <div className="chat-msg__assistant-content"><TypingDots /></div>
+                )}
               </div>
-            ) : activeTurn.status === 'active' && !activeTurn.thinking && activeTurn.tools.length === 0 ? (
-              <div className="chat-msg__assistant-content">
-                <TypingDots />
-              </div>
-            ) : null}
-          </div>
-        )}
+            );
+          }
+
+          const askTools = activeTurn.tools.filter(
+            t => t.name === 'AskUserQuestion' && t.status === 'running' && t.tool_input,
+          );
+          const askToolIds = new Set(askTools.map(t => t.id));
+          const regularTools = activeTurn.tools.filter(t => !askToolIds.has(t.id));
+
+          return (
+            <div className="chat-msg chat-msg--assistant">
+              {(activeTurn.thinking || activeTurn.status === 'active') && (
+                <ThinkingBlock
+                  thinking={activeTurn.thinking}
+                  streaming={activeTurn.status === 'active' && !activeTurn.thinking && !activeTurn.text}
+                />
+              )}
+              <ToolList tools={regularTools} now={now} />
+              {askTools.map(at => (
+                <AskQuestionCard
+                  key={at.id}
+                  tool={at}
+                  onAnswer={(toolId, answers) => {
+                    sessionMgr.answerQuestion(toolId, answers).catch(err => { setError(String(err)); });
+                  }}
+                />
+              ))}
+              {activeTurn.text ? (
+                <div className="chat-msg__assistant-content">
+                  <MarkdownContent content={activeTurn.text} />
+                </div>
+              ) : activeTurn.status === 'active' && !activeTurn.thinking && activeTurn.tools.length === 0 ? (
+                <div className="chat-msg__assistant-content"><TypingDots /></div>
+              ) : null}
+            </div>
+          );
+        })()}
 
         <div ref={messagesEndRef} />
       </div>

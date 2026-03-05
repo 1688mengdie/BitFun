@@ -34,6 +34,12 @@ export interface SessionInfo {
   workspace_name?: string;
 }
 
+export interface ChatMessageItem {
+  type: 'text' | 'tool' | 'thinking';
+  content?: string;
+  tool?: RemoteToolStatus;
+}
+
 export interface ChatMessage {
   id: string;
   role: string;
@@ -42,6 +48,7 @@ export interface ChatMessage {
   metadata?: any;
   tools?: RemoteToolStatus[];
   thinking?: string;
+  items?: ChatMessageItem[];
 }
 
 export interface ActiveTurnSnapshot {
@@ -51,6 +58,7 @@ export interface ActiveTurnSnapshot {
   thinking: string;
   tools: RemoteToolStatus[];
   round_index: number;
+  items?: ChatMessageItem[];
 }
 
 export interface RemoteToolStatus {
@@ -60,6 +68,7 @@ export interface RemoteToolStatus {
   duration_ms?: number;
   start_ms?: number;
   input_preview?: string;
+  tool_input?: any;
 }
 
 export interface PollResponse {
@@ -209,6 +218,10 @@ export class RemoteSessionManager {
 
   async deleteSession(sessionId: string): Promise<void> {
     await this.request({ cmd: 'delete_session', session_id: sessionId });
+  }
+
+  async answerQuestion(toolId: string, answers: any): Promise<void> {
+    await this.request({ cmd: 'answer_question', tool_id: toolId, answers });
   }
 
   async pollSession(
