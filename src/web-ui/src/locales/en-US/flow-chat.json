@@ -582,7 +582,14 @@
       "parsingAnalysisInfo": "Parsing analysis info...",
       "unknownImage": "Unknown image",
       "clipboardImage": "Clipboard image",
-      "analyzeImageContent": "Analyze image content"
+      "analyzeImageContent": "Analyze image content",
+      "imageAnalysis": "Image analysis",
+      "completed": "Completed",
+      "analyzing": "Analyzing",
+      "preparing": "Preparing",
+      "analysisPrompt": "Analysis prompt",
+      "focusAreas": "Focus areas",
+      "analysisResult": "Analysis result"
     },
     "contextCompression": {
       "beforeUserMessage": "Before user message",

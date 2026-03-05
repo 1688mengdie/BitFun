@@ -191,8 +191,8 @@ export const TOOL_CARD_CONFIGS: Record<string, ToolCardConfig> = {
     displayMode: 'compact',
     primaryColor: '#8b5cf6'
   },
-  'AnalyzeImage': {
-    toolName: 'AnalyzeImage',
+  'view_image': {
+    toolName: 'view_image',
     displayName: 'Image Analysis',
     icon: 'IMG',
     requiresConfirmation: false,
@@ -329,7 +329,7 @@ export const TOOL_CARD_COMPONENTS = {
   'submit_code_review': CodeReviewToolCard,
   
   // Image analysis tools
-  'AnalyzeImage': ImageAnalysisCard,
+  'view_image': ImageAnalysisCard,
   
   // Context compression
   'ContextCompression': ContextCompressionDisplay,
