@@ -118,6 +118,13 @@ impl AIClient {
         url.contains("dashscope.aliyuncs.com")
     }
 
+    /// Whether the URL is MiniMax API.
+    /// MiniMax (api.minimaxi.com) uses `reasoning_split=true` to enable streamed thinking content
+    /// delivered via `delta.reasoning_details` rather than the standard `reasoning_content` field.
+    fn is_minimax_url(url: &str) -> bool {
+        url.contains("api.minimaxi.com")
+    }
+
     /// Apply thinking-related fields onto the request body (mutates `request_body`).
     ///
     /// * `enable` - whether thinking process is enabled
@@ -135,6 +142,12 @@ impl AIClient {
     ) {
         if Self::is_dashscope_url(url) && api_format.eq_ignore_ascii_case("openai") {
             request_body["enable_thinking"] = serde_json::json!(enable);
+            return;
+        }
+        if Self::is_minimax_url(url) && api_format.eq_ignore_ascii_case("openai") {
+            if enable {
+                request_body["reasoning_split"] = serde_json::json!(true);
+            }
             return;
         }
         let thinking_value = if enable {
