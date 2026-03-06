@@ -12,7 +12,9 @@ import { SessionExecutionEvent, SessionExecutionState } from '../../state-machin
 import { generateTempTitle } from '../../utils/titleUtils';
 import { createLogger } from '@/shared/utils/logger';
 import type { FlowChatContext, DialogTurn } from './types';
+import { ensureBackendSession, retryCreateBackendSession } from './SessionModule';
 import { cleanupSessionBuffers } from './TextChunkModule';
+import type { ImageContextData as ImageInputContextData } from '@/infrastructure/api/service-api/ImageAnalysisAPI';
 
 const log = createLogger('MessageModule');
 
@@ -30,7 +32,10 @@ export async function sendMessage(
   sessionId: string,
   displayMessage?: string,
   agentType?: string,
-  switchToMode?: string
+  switchToMode?: string,
+  options?: {
+    imageContexts?: ImageInputContextData[];
+  }
 ): Promise<void> {
   const session = context.flowChatStore.getState().sessions.get(sessionId);
   if (!session) {
@@ -86,6 +91,12 @@ export async function sendMessage(
       throw new Error(`Session lost after adding dialog turn: ${sessionId}`);
     }
     
+    try {
+      await ensureBackendSession(context, sessionId);
+    } catch (createError: any) {
+      log.warn('Backend session create/restore failed', { sessionId: sessionId, error: createError });
+    }
+    
     context.contentBuffers.set(sessionId, new Map());
     context.activeTextItems.set(sessionId, new Map());
 
@@ -98,9 +109,27 @@ export async function sendMessage(
         userInput: message,
         turnId: dialogTurnId,
         agentType: currentAgentType,
+        imageContexts: options?.imageContexts,
       });
     } catch (error: any) {
-      throw error;
+      if (error?.message?.includes('Session does not exist') || error?.message?.includes('Not found')) {
+        log.warn('Backend session still not found, retrying creation', {
+          sessionId: sessionId,
+          dialogTurnsCount: updatedSession.dialogTurns.length
+        });
+        
+        await retryCreateBackendSession(context, sessionId);
+        
+        turnResponse = await agentAPI.startDialogTurn({
+          sessionId: sessionId,
+          userInput: message,
+          turnId: dialogTurnId,
+          agentType: currentAgentType,
+          imageContexts: options?.imageContexts,
+        });
+      } else {
+        throw error;
+      }
     }
 
     const sessionStateMachine = stateMachineManager.get(sessionId);

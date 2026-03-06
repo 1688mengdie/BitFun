@@ -13,6 +13,7 @@ use crate::agentic::events::{
 use crate::agentic::execution::{ExecutionContext, ExecutionEngine};
 use crate::agentic::session::SessionManager;
 use crate::agentic::tools::pipeline::{SubagentParentInfo, ToolPipeline};
+use crate::agentic::image_analysis::ImageContextData;
 use crate::util::errors::{BitFunError, BitFunResult};
 use log::{debug, error, info, warn};
 use std::sync::Arc;
@@ -294,6 +295,39 @@ impl ConversationCoordinator {
         agent_type: String,
         trigger_source: DialogTriggerSource,
     ) -> BitFunResult<()> {
+        self.start_dialog_turn_internal(session_id, user_input, None, turn_id, agent_type, trigger_source)
+            .await
+    }
+
+    pub async fn start_dialog_turn_with_image_contexts(
+        &self,
+        session_id: String,
+        user_input: String,
+        image_contexts: Vec<ImageContextData>,
+        turn_id: Option<String>,
+        agent_type: String,
+        trigger_source: DialogTriggerSource,
+    ) -> BitFunResult<()> {
+        self.start_dialog_turn_internal(
+            session_id,
+            user_input,
+            Some(image_contexts),
+            turn_id,
+            agent_type,
+            trigger_source,
+        )
+        .await
+    }
+
+    async fn start_dialog_turn_internal(
+        &self,
+        session_id: String,
+        user_input: String,
+        image_contexts: Option<Vec<ImageContextData>>,
+        turn_id: Option<String>,
+        agent_type: String,
+        trigger_source: DialogTriggerSource,
+    ) -> BitFunResult<()> {
         // Get latest session, restoring from persistence on demand so every entry
         // point can use the same start_dialog_turn flow.
         let session = match self.session_manager.get_session(&session_id) {
@@ -424,7 +458,12 @@ impl ConversationCoordinator {
         // Pass frontend turnId, generate if not provided
         let turn_id = self
             .session_manager
-            .start_dialog_turn(&session_id, wrapped_user_input.clone(), turn_id)
+            .start_dialog_turn(
+                &session_id,
+                wrapped_user_input.clone(),
+                turn_id,
+                image_contexts,
+            )
             .await?;
 
         // Send dialog turn started event
