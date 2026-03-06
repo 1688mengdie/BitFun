@@ -93,13 +93,26 @@ echo "[3/3] Starting services..."
 docker compose up -d
 
 if [ "$SKIP_HEALTH_CHECK" = false ]; then
+  echo "Waiting for services to start..."
+  sleep 5
   echo "Checking relay health endpoint..."
   if command -v curl >/dev/null 2>&1; then
-    if curl -fsS --max-time 8 "http://127.0.0.1:9700/health" >/dev/null; then
-      echo "Health check passed: http://127.0.0.1:9700/health"
-    else
-      echo "Warning: health check failed. Check logs below."
-    fi
+    MAX_RETRIES=6
+    RETRY=0
+    while [ $RETRY -lt $MAX_RETRIES ]; do
+      if curl -fsS --max-time 5 "http://127.0.0.1:9700/health" >/dev/null 2>&1; then
+        echo "Health check passed: http://127.0.0.1:9700/health"
+        break
+      fi
+      RETRY=$((RETRY + 1))
+      if [ $RETRY -lt $MAX_RETRIES ]; then
+        echo "  Retry $RETRY/$MAX_RETRIES in 3s..."
+        sleep 3
+      else
+        echo "Warning: health check failed after $MAX_RETRIES attempts. Check logs:"
+        docker compose logs --tail=30 relay-server
+      fi
+    done
   else
     echo "Warning: 'curl' not found, skipped health check."
   fi

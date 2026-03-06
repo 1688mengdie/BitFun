@@ -6,10 +6,11 @@ use std::sync::Arc;
 use tauri::{AppHandle, State};
 
 use crate::api::app_state::AppState;
-use crate::api::context_upload_api::get_image_context;
-use bitfun_core::agentic::coordination::ConversationCoordinator;
+use bitfun_core::agentic::tools::image_context::get_image_context;
+use bitfun_core::agentic::coordination::{ConversationCoordinator, DialogTriggerSource};
 use bitfun_core::agentic::core::*;
 use bitfun_core::agentic::image_analysis::ImageContextData;
+use bitfun_core::infrastructure::get_workspace_path;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -146,6 +147,9 @@ pub async fn create_session(
     coordinator: State<'_, Arc<ConversationCoordinator>>,
     request: CreateSessionRequest,
 ) -> Result<CreateSessionResponse, String> {
+    let workspace_path = get_workspace_path()
+        .map(|p| p.to_string_lossy().to_string());
+
     let config = request
         .config
         .map(|c| SessionConfig {
@@ -161,11 +165,12 @@ pub async fn create_session(
         .unwrap_or_default();
 
     let session = coordinator
-        .create_session_with_id(
+        .create_session_with_workspace(
             request.session_id,
             request.session_name.clone(),
             request.agent_type.clone(),
             config,
+            workspace_path,
         )
         .await
         .map_err(|e| format!("Failed to create session: {}", e))?;
@@ -204,6 +209,7 @@ pub async fn start_dialog_turn(
                 resolved_image_contexts,
                 turn_id,
                 agent_type,
+                DialogTriggerSource::DesktopUi,
             )
             .await
             .map_err(|e| format!("Failed to start dialog turn: {}", e))?;
@@ -214,7 +220,7 @@ pub async fn start_dialog_turn(
                 user_input,
                 turn_id,
                 agent_type,
-                false,
+                DialogTriggerSource::DesktopUi,
             )
             .await
             .map_err(|e| format!("Failed to start dialog turn: {}", e))?;
@@ -254,13 +260,13 @@ fn resolve_missing_image_payloads(
             image.image_path = stored
                 .image_path
                 .clone()
-                .filter(|s| !s.trim().is_empty());
+                .filter(|s: &String| !s.trim().is_empty());
         }
         if is_blank_text(image.data_url.as_ref()) {
             image.data_url = stored
                 .data_url
                 .clone()
-                .filter(|s| !s.trim().is_empty());
+                .filter(|s: &String| !s.trim().is_empty());
         }
         if image.mime_type.trim().is_empty() {
             image.mime_type = stored.mime_type.clone();

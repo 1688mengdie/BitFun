@@ -171,16 +171,11 @@ function handleTitleGeneration(
   message: string
 ): void {
   const tempTitle = generateTempTitle(message, 20);
-  context.flowChatStore.updateSessionTitle(sessionId, tempTitle, 'generating');
-  
+
   if (aiExperienceConfigService.isSessionTitleGenerationEnabled()) {
-    agentAPI.generateSessionTitle(sessionId, message, 20)
-      .then((_aiTitle) => {
-      })
-      .catch((error) => {
-        log.debug('AI title generation failed, keeping temp title', { sessionId, error });
-        context.flowChatStore.updateSessionTitle(sessionId, tempTitle, 'generated');
-      });
+    // Set temp title while waiting for coordinator's auto-generated AI title
+    // (delivered via SessionTitleGenerated event).
+    context.flowChatStore.updateSessionTitle(sessionId, tempTitle, 'generating');
   } else {
     context.flowChatStore.updateSessionTitle(sessionId, tempTitle, 'generated');
   }

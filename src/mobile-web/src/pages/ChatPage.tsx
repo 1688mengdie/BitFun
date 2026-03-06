@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
@@ -118,11 +118,16 @@ const TOOL_TYPE_MAP: Record<string, string> = {
   web_search: 'Web',
 };
 
-const ToolCard: React.FC<{ tool: RemoteToolStatus; now: number }> = ({ tool, now }) => {
+const ToolCard: React.FC<{
+  tool: RemoteToolStatus;
+  now: number;
+  onCancelTool?: (toolId: string) => void;
+}> = ({ tool, now, onCancelTool }) => {
   const toolKey = tool.name.toLowerCase().replace(/[\s-]/g, '_');
   const typeLabel = TOOL_TYPE_MAP[toolKey] || TOOL_TYPE_MAP[tool.name] || 'Tool';
   const isRunning = tool.status === 'running';
   const isCompleted = tool.status === 'completed';
+  const showCancel = isRunning && !!onCancelTool;
 
   const durationLabel = isCompleted && tool.duration_ms != null
     ? `${(tool.duration_ms / 1000).toFixed(1)}s`
@@ -154,13 +159,22 @@ const ToolCard: React.FC<{ tool: RemoteToolStatus; now: number }> = ({ tool, now
           <span className="chat-tool-card__duration">{durationLabel}</span>
         )}
       </div>
+      {showCancel && (
+        <div style={{ marginTop: 8, display: 'flex', justifyContent: 'flex-end' }}>
+          <button className="chat-ask-card__submit" onClick={() => onCancelTool?.(tool.id)}>Cancel tool</button>
+        </div>
+      )}
     </div>
   );
 };
 
 const TOOL_LIST_COLLAPSE_THRESHOLD = 2;
 
-const ToolList: React.FC<{ tools: RemoteToolStatus[]; now: number }> = ({ tools, now }) => {
+const ToolList: React.FC<{
+  tools: RemoteToolStatus[];
+  now: number;
+  onCancelTool?: (toolId: string) => void;
+}> = ({ tools, now, onCancelTool }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const prevCountRef = useRef(0);
 
@@ -177,7 +191,7 @@ const ToolList: React.FC<{ tools: RemoteToolStatus[]; now: number }> = ({ tools,
     return (
       <div className="chat-tool-list">
         {tools.map((tc) => (
-          <ToolCard key={tc.id} tool={tc} now={now} />
+          <ToolCard key={tc.id} tool={tc} now={now} onCancelTool={onCancelTool} />
         ))}
       </div>
     );
@@ -197,7 +211,7 @@ const ToolList: React.FC<{ tools: RemoteToolStatus[]; now: number }> = ({ tools,
       </div>
       <div className="chat-tool-list__scroll" ref={scrollRef}>
         {tools.map((tc) => (
-          <ToolCard key={tc.id} tool={tc} now={now} />
+          <ToolCard key={tc.id} tool={tc} now={now} onCancelTool={onCancelTool} />
         ))}
       </div>
     </div>
@@ -216,16 +230,35 @@ const TypingDots: React.FC = () => (
 
 interface AskQuestionCardProps {
   tool: RemoteToolStatus;
-  onAnswer: (toolId: string, answers: any) => void;
+  onAnswer: (toolId: string, answers: any) => Promise<void>;
 }
+
+const isPendingAskUserQuestion = (tool?: RemoteToolStatus | null) => {
+  if (!tool || tool.name !== 'AskUserQuestion' || !tool.tool_input) return false;
+  return !['completed', 'failed', 'cancelled', 'rejected'].includes(tool.status);
+};
+
+const isOtherQuestionOption = (label?: string) => {
+  const normalized = (label || '').trim().toLowerCase();
+  return normalized === 'other' || normalized === '其他';
+};
 
 const AskQuestionCard: React.FC<AskQuestionCardProps> = ({ tool, onAnswer }) => {
   const questions: any[] = tool.tool_input?.questions || [];
   const [selected, setSelected] = useState<Record<number, string | string[]>>({});
   const [customTexts, setCustomTexts] = useState<Record<number, string>>({});
+  const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
 
-  if (questions.length === 0) return null;
+  const normalizedQuestions = useMemo(() => {
+    return questions.map((q) => {
+      const options = Array.isArray(q.options) ? q.options : [];
+      const hasBuiltInOther = options.some((opt: any) => isOtherQuestionOption(opt?.label));
+      return { ...q, options, hasBuiltInOther };
+    });
+  }, [questions]);
+
+  if (normalizedQuestions.length === 0) return null;
 
   const handleSelect = (qIdx: number, label: string, multi: boolean) => {
     setSelected(prev => {
@@ -237,44 +270,54 @@ const AskQuestionCard: React.FC<AskQuestionCardProps> = ({ tool, onAnswer }) => 
     });
   };
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
+    if (!allAnswered || submitting || submitted) return;
+
     const answers: Record<string, any> = {};
-    questions.forEach((q, idx) => {
+    normalizedQuestions.forEach((q, idx) => {
       const sel = selected[idx];
-      if (sel === '其他' || sel === 'Other') {
-        answers[String(idx)] = customTexts[idx] || sel;
+      const customText = (customTexts[idx] || '').trim();
+      if (Array.isArray(sel)) {
+        answers[String(idx)] = sel.map(value => isOtherQuestionOption(value) ? (customText || value) : value);
+      } else if (isOtherQuestionOption(sel)) {
+        answers[String(idx)] = customText || sel;
       } else {
         answers[String(idx)] = sel ?? '';
       }
     });
-    setSubmitted(true);
-    onAnswer(tool.id, answers);
+
+    setSubmitting(true);
+    try {
+      await onAnswer(tool.id, answers);
+      setSubmitted(true);
+    } finally {
+      setSubmitting(false);
+    }
   };
 
-  const allAnswered = questions.every((q, idx) => {
+  const allAnswered = normalizedQuestions.every((q, idx) => {
     const s = selected[idx];
-    if (q.multiSelect) return Array.isArray(s) && s.length > 0;
-    return !!s;
+    const hasSelection = q.multiSelect ? Array.isArray(s) && s.length > 0 : !!s;
+    if (!hasSelection) return false;
+    const requiresCustomText = Array.isArray(s)
+      ? s.some(value => isOtherQuestionOption(value))
+      : isOtherQuestionOption(s);
+    return !requiresCustomText || !!(customTexts[idx] || '').trim();
   });
 
   return (
     <div className="chat-ask-card">
       <div className="chat-ask-card__header">
         <span className="chat-ask-card__count">{questions.length} question{questions.length > 1 ? 's' : ''}</span>
-        <button
-          className="chat-ask-card__submit"
-          disabled={!allAnswered || submitted}
-          onClick={handleSubmit}
-        >
-          <svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M2 8L6 12L14 4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
-          {submitted ? 'Submitted' : 'Submit'}
-        </button>
-        {!submitted && (
+        {!submitted && !submitting && (
           <span className="chat-ask-card__waiting">Waiting</span>
         )}
       </div>
-      {questions.map((q, qIdx) => {
-        const isOtherSelected = selected[qIdx] === '其他' || selected[qIdx] === 'Other';
+      {normalizedQuestions.map((q, qIdx) => {
+        const answer = selected[qIdx];
+        const isOtherSelected = Array.isArray(answer)
+          ? answer.some(value => isOtherQuestionOption(value))
+          : isOtherQuestionOption(answer);
         return (
           <div key={qIdx} className="chat-ask-card__question">
             <div className="chat-ask-card__question-header">
@@ -291,7 +334,7 @@ const AskQuestionCard: React.FC<AskQuestionCardProps> = ({ tool, onAnswer }) => 
                     key={oIdx}
                     className={`chat-ask-card__option ${isSelected ? 'is-selected' : ''}`}
                     onClick={() => handleSelect(qIdx, opt.label, q.multiSelect)}
-                    disabled={submitted}
+                    disabled={submitted || submitting}
                   >
                     <span className={`chat-ask-card__radio ${q.multiSelect ? 'chat-ask-card__radio--multi' : ''}`}>
                       {isSelected && (
@@ -307,42 +350,49 @@ const AskQuestionCard: React.FC<AskQuestionCardProps> = ({ tool, onAnswer }) => 
                   </button>
                 );
               })}
-              {/* "Other" option */}
-              <button
-                className={`chat-ask-card__option ${isOtherSelected ? 'is-selected' : ''}`}
-                onClick={() => handleSelect(qIdx, '其他', q.multiSelect)}
-                disabled={submitted}
-              >
-                <span className={`chat-ask-card__radio ${q.multiSelect ? 'chat-ask-card__radio--multi' : ''}`}>
-                  {isOtherSelected && (
-                    <svg width="8" height="8" viewBox="0 0 16 16" fill="none">
-                      <path d="M3 8L6.5 11.5L13 4.5" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
-                    </svg>
-                  )}
-                </span>
-                <span className="chat-ask-card__option-label">Other</span>
-                <span className="chat-ask-card__option-desc">Custom text input</span>
-              </button>
+              {!q.hasBuiltInOther && (
+                <button
+                  className={`chat-ask-card__option ${isOtherSelected ? 'is-selected' : ''}`}
+                  onClick={() => handleSelect(qIdx, 'Other', q.multiSelect)}
+                  disabled={submitted || submitting}
+                >
+                  <span className={`chat-ask-card__radio ${q.multiSelect ? 'chat-ask-card__radio--multi' : ''}`}>
+                    {isOtherSelected && (
+                      <svg width="8" height="8" viewBox="0 0 16 16" fill="none">
+                        <path d="M3 8L6.5 11.5L13 4.5" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
+                      </svg>
+                    )}
+                  </span>
+                  <span className="chat-ask-card__option-label">Other</span>
+                  <span className="chat-ask-card__option-desc">Custom text input</span>
+                </button>
+              )}
               {isOtherSelected && (
                 <input
                   className="chat-ask-card__custom-input"
                   placeholder="Type your answer..."
                   value={customTexts[qIdx] || ''}
                   onChange={(e) => setCustomTexts(prev => ({ ...prev, [qIdx]: e.target.value }))}
-                  disabled={submitted}
+                  disabled={submitted || submitting}
                 />
               )}
             </div>
           </div>
         );
       })}
+      <button
+        className="chat-ask-card__submit chat-ask-card__submit--bottom"
+        disabled={!allAnswered || submitted || submitting}
+        onClick={handleSubmit}
+      >
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M2 8L6 12L14 4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+        {submitted ? 'Submitted' : submitting ? 'Submitting...' : 'Submit'}
+      </button>
     </div>
   );
 };
 
-// ─── Ordered Items renderer ─────────────────────────────────────────────────
-
-function renderOrderedItems(items: ChatMessageItem[], now: number) {
+function groupChatItems(items: ChatMessageItem[]) {
   const groups: { type: string; entries: ChatMessageItem[] }[] = [];
   for (const item of items) {
     const last = groups[groups.length - 1];
@@ -352,27 +402,84 @@ function renderOrderedItems(items: ChatMessageItem[], now: number) {
       groups.push({ type: item.type, entries: [item] });
     }
   }
+  return groups;
+}
 
+function renderQuestionEntries(
+  entries: ChatMessageItem[],
+  keyPrefix: string,
+  onAnswer?: (toolId: string, answers: any) => Promise<void>,
+) {
+  if (!onAnswer) return null;
+  return entries.map((entry, idx) => (
+    <AskQuestionCard
+      key={`${keyPrefix}-ask-${entry.tool!.id}-${idx}`}
+      tool={entry.tool!}
+      onAnswer={onAnswer}
+    />
+  ));
+}
+
+function renderStandardGroups(
+  groups: { type: string; entries: ChatMessageItem[] }[],
+  keyPrefix: string,
+  now: number,
+  onCancelTool?: (toolId: string) => void,
+) {
   return groups.map((g, gi) => {
     if (g.type === 'thinking') {
       const text = g.entries.map(e => e.content || '').join('\n\n');
-      return <ThinkingBlock key={`g${gi}`} thinking={text} />;
+      return <ThinkingBlock key={`${keyPrefix}-thinking-${gi}`} thinking={text} />;
     }
     if (g.type === 'tool') {
       const tools = g.entries.map(e => e.tool!).filter(Boolean);
-      return <ToolList key={`g${gi}`} tools={tools} now={now} />;
+      return <ToolList key={`${keyPrefix}-tool-${gi}`} tools={tools} now={now} onCancelTool={onCancelTool} />;
     }
     if (g.type === 'text') {
-      return g.entries.map((entry, ii) =>
-        entry.content ? (
-          <div key={`g${gi}_${ii}`} className="chat-msg__assistant-content">
-            <MarkdownContent content={entry.content} />
-          </div>
-        ) : null,
-      );
+      const text = g.entries.map(e => e.content || '').join('');
+      return text ? (
+        <div key={`${keyPrefix}-text-${gi}`} className="chat-msg__assistant-content">
+          <MarkdownContent content={text} />
+        </div>
+      ) : null;
     }
     return null;
   });
+}
+
+// ─── Ordered Items renderer ─────────────────────────────────────────────────
+
+function renderOrderedItems(
+  items: ChatMessageItem[],
+  now: number,
+  onCancelTool?: (toolId: string) => void,
+  onAnswer?: (toolId: string, answers: any) => Promise<void>,
+) {
+  const askEntries = items.filter(item => isPendingAskUserQuestion(item.tool));
+  if (askEntries.length === 0) {
+    return renderStandardGroups(groupChatItems(items), 'ordered', now, onCancelTool);
+  }
+
+  const beforeAskItems: ChatMessageItem[] = [];
+  const afterAskItems: ChatMessageItem[] = [];
+  let foundFirstAsk = false;
+  for (const item of items) {
+    if (isPendingAskUserQuestion(item.tool)) {
+      foundFirstAsk = true;
+    } else if (!foundFirstAsk) {
+      beforeAskItems.push(item);
+    } else {
+      afterAskItems.push(item);
+    }
+  }
+
+  return (
+    <>
+      {renderStandardGroups(groupChatItems(beforeAskItems), 'ordered-before', now, onCancelTool)}
+      {renderQuestionEntries(askEntries, 'ordered', onAnswer)}
+      {renderStandardGroups(groupChatItems(afterAskItems), 'ordered-after', now, onCancelTool)}
+    </>
+  );
 }
 
 // ─── Active turn items renderer (with AskUserQuestion support) ─────────────
@@ -382,55 +489,37 @@ function renderActiveTurnItems(
   now: number,
   sessionMgr: RemoteSessionManager,
   setError: (e: string) => void,
+  onAnswer: (toolId: string, answers: any) => Promise<void>,
 ) {
-  const groups: { type: string; entries: ChatMessageItem[] }[] = [];
+  const askEntries = items.filter(item => isPendingAskUserQuestion(item.tool));
+  const onCancel = (toolId: string) => {
+    sessionMgr.cancelTool(toolId, 'User cancelled').catch(err => { setError(String(err)); });
+  };
+
+  if (askEntries.length === 0) {
+    return renderStandardGroups(groupChatItems(items), 'active', now, onCancel);
+  }
+
+  const beforeAskItems: ChatMessageItem[] = [];
+  const afterAskItems: ChatMessageItem[] = [];
+  let foundFirstAsk = false;
   for (const item of items) {
-    const last = groups[groups.length - 1];
-    if (last && last.type === item.type) {
-      last.entries.push(item);
+    if (isPendingAskUserQuestion(item.tool)) {
+      foundFirstAsk = true;
+    } else if (!foundFirstAsk) {
+      beforeAskItems.push(item);
     } else {
-      groups.push({ type: item.type, entries: [item] });
+      afterAskItems.push(item);
     }
   }
 
-  return groups.map((g, gi) => {
-    if (g.type === 'thinking') {
-      const text = g.entries.map(e => e.content || '').join('\n\n');
-      return <ThinkingBlock key={`ag${gi}`} thinking={text} />;
-    }
-    if (g.type === 'tool') {
-      const askEntries = g.entries.filter(
-        e => e.tool?.name === 'AskUserQuestion' && e.tool?.status === 'running' && e.tool?.tool_input,
-      );
-      const regularEntries = g.entries.filter(e => !askEntries.includes(e));
-      const regularTools = regularEntries.map(e => e.tool!).filter(Boolean);
-
-      return (
-        <React.Fragment key={`ag${gi}`}>
-          {regularTools.length > 0 && <ToolList tools={regularTools} now={now} />}
-          {askEntries.map(e => (
-            <AskQuestionCard
-              key={e.tool!.id}
-              tool={e.tool!}
-              onAnswer={(toolId, answers) => {
-                sessionMgr.answerQuestion(toolId, answers).catch(err => { setError(String(err)); });
-              }}
-            />
-          ))}
-        </React.Fragment>
-      );
-    }
-    if (g.type === 'text') {
-      return g.entries.map((entry, ii) =>
-        entry.content ? (
-          <div key={`ag${gi}_${ii}`} className="chat-msg__assistant-content">
-            <MarkdownContent content={entry.content} />
-          </div>
-        ) : null,
-      );
-    }
-    return null;
-  });
+  return (
+    <>
+      {renderStandardGroups(groupChatItems(beforeAskItems), 'active-before', now, onCancel)}
+      {renderQuestionEntries(askEntries, 'active', onAnswer)}
+      {renderStandardGroups(groupChatItems(afterAskItems), 'active-after', now, onCancel)}
+    </>
+  );
 }
 
 // ─── Theme toggle icon ─────────────────────────────────────────────────────
@@ -488,6 +577,15 @@ const ChatPage: React.FC<ChatPageProps> = ({ sessionMgr, sessionId, sessionName,
   const isStreaming = activeTurn != null && activeTurn.status === 'active';
 
   const [now, setNow] = useState(() => Date.now());
+  const handleAnswerQuestion = useCallback(async (toolId: string, answers: any) => {
+    try {
+      await sessionMgr.answerQuestion(toolId, answers);
+    } catch (err) {
+      setError(String(err));
+      throw err;
+    }
+  }, [sessionMgr, setError]);
+
   useEffect(() => {
     if (!isStreaming) return;
     const timer = setInterval(() => setNow(Date.now()), 500);
@@ -621,7 +719,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ sessionMgr, sessionId, sessionName,
 
   const handleCancel = async () => {
     try {
-      await sessionMgr.cancelTask(sessionId);
+      await sessionMgr.cancelTask(sessionId, activeTurn?.turn_id);
     } catch {
       // best effort
     }
@@ -691,7 +789,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ sessionMgr, sessionId, sessionName,
           return (
             <div key={m.id} className="chat-msg chat-msg--assistant">
               {m.items && m.items.length > 0 ? (
-                renderOrderedItems(m.items, now)
+                renderOrderedItems(m.items, now, undefined, handleAnswerQuestion)
               ) : (
                 <>
                   {m.thinking && <ThinkingBlock thinking={m.thinking} />}
@@ -712,7 +810,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ sessionMgr, sessionId, sessionName,
           if (activeTurn.items && activeTurn.items.length > 0) {
             return (
               <div className="chat-msg chat-msg--assistant">
-                {renderActiveTurnItems(activeTurn.items, now, sessionMgr, setError)}
+                {renderActiveTurnItems(activeTurn.items, now, sessionMgr, setError, handleAnswerQuestion)}
                 {activeTurn.status === 'active' && !activeTurn.thinking && !activeTurn.text && activeTurn.tools.length === 0 && (
                   <div className="chat-msg__assistant-content"><TypingDots /></div>
                 )}
@@ -734,14 +832,18 @@ const ChatPage: React.FC<ChatPageProps> = ({ sessionMgr, sessionId, sessionName,
                   streaming={activeTurn.status === 'active' && !activeTurn.thinking && !activeTurn.text}
                 />
               )}
-              <ToolList tools={regularTools} now={now} />
+              <ToolList
+                tools={regularTools}
+                now={now}
+                onCancelTool={(toolId) => {
+                  sessionMgr.cancelTool(toolId, 'User cancelled').catch(err => { setError(String(err)); });
+                }}
+              />
               {askTools.map(at => (
                 <AskQuestionCard
                   key={at.id}
                   tool={at}
-                  onAnswer={(toolId, answers) => {
-                    sessionMgr.answerQuestion(toolId, answers).catch(err => { setError(String(err)); });
-                  }}
+                  onAnswer={handleAnswerQuestion}
                 />
               ))}
               {activeTurn.text ? (

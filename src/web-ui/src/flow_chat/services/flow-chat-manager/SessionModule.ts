@@ -8,7 +8,7 @@ import { notificationService } from '../../../shared/notification-system';
 import { createLogger } from '@/shared/utils/logger';
 import { i18nService } from '@/infrastructure/i18n';
 import type { FlowChatContext, SessionConfig } from './types';
-import { saveNewSessionMetadata, touchSessionActivity, cleanupSaveState } from './PersistenceModule';
+import { touchSessionActivity, cleanupSaveState } from './PersistenceModule';
 
 const log = createLogger('SessionModule');
 
@@ -96,8 +96,6 @@ export async function createChatSession(
       maxContextTokens,
       mode
     );
-    
-    await saveNewSessionMetadata(response.sessionId, config, sessionName, mode);
 
     return response.sessionId;
   } catch (error) {
@@ -276,3 +274,4 @@ export async function retryCreateBackendSession(
     }
   });
 }
+

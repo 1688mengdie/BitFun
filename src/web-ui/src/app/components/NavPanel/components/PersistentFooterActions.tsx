@@ -9,16 +9,11 @@ import { useNotification } from '@/shared/notification-system';
 import NotificationButton from '../../TitleBar/NotificationButton';
 import { AboutDialog } from '../../AboutDialog';
 import { RemoteConnectDialog } from '../../RemoteConnectDialog';
-
-const REMOTE_CONNECT_DISCLAIMER_KEY = 'bitfun:remote-connect:disclaimer-agreed:v1';
-
-const getRemoteDisclaimerAgreed = (): boolean => {
-  try {
-    return localStorage.getItem(REMOTE_CONNECT_DISCLAIMER_KEY) === 'true';
-  } catch {
-    return false;
-  }
-};
+import {
+  getRemoteConnectDisclaimerAgreed,
+  setRemoteConnectDisclaimerAgreed,
+  RemoteConnectDisclaimerContent,
+} from '../../RemoteConnectDialog/RemoteConnectDisclaimer';
 
 const PersistentFooterActions: React.FC = () => {
   const { t } = useI18n('common');
@@ -32,7 +27,7 @@ const PersistentFooterActions: React.FC = () => {
   const [showAbout, setShowAbout] = useState(false);
   const [showRemoteConnect, setShowRemoteConnect] = useState(false);
   const [showRemoteDisclaimer, setShowRemoteDisclaimer] = useState(false);
-  const [hasAgreedRemoteDisclaimer, setHasAgreedRemoteDisclaimer] = useState<boolean>(() => getRemoteDisclaimerAgreed());
+  const [hasAgreedRemoteDisclaimer, setHasAgreedRemoteDisclaimer] = useState<boolean>(() => getRemoteConnectDisclaimerAgreed());
 
   const closeMenu = useCallback(() => {
     setMenuClosing(true);
@@ -73,7 +68,7 @@ const PersistentFooterActions: React.FC = () => {
 
     closeMenu();
 
-    if (hasAgreedRemoteDisclaimer || getRemoteDisclaimerAgreed()) {
+    if (hasAgreedRemoteDisclaimer || getRemoteConnectDisclaimerAgreed()) {
       setHasAgreedRemoteDisclaimer(true);
       setShowRemoteConnect(true);
       return;
@@ -83,11 +78,7 @@ const PersistentFooterActions: React.FC = () => {
   }, [hasWorkspace, warning, t, closeMenu, hasAgreedRemoteDisclaimer]);
 
   const handleAgreeDisclaimer = useCallback(() => {
-    try {
-      localStorage.setItem(REMOTE_CONNECT_DISCLAIMER_KEY, 'true');
-    } catch {
-      // Ignore storage failures and keep in-memory consent for current session.
-    }
+    setRemoteConnectDisclaimerAgreed();
     setHasAgreedRemoteDisclaimer(true);
     setShowRemoteDisclaimer(false);
     setShowRemoteConnect(true);
@@ -179,44 +170,11 @@ const PersistentFooterActions: React.FC = () => {
         size="large"
         contentInset
       >
-        <div className="bitfun-nav-panel__remote-disclaimer">
-          <p className="bitfun-nav-panel__remote-disclaimer-text">{t('remoteConnect.disclaimerIntro')}</p>
-          <ol className="bitfun-nav-panel__remote-disclaimer-list">
-            <li>{t('remoteConnect.disclaimerItemBeta')}</li>
-            <li>{t('remoteConnect.disclaimerItemSecurity')}</li>
-            <li>{t('remoteConnect.disclaimerItemEncryption')}</li>
-            <li>{t('remoteConnect.disclaimerItemOpenSource')}</li>
-            <li>{t('remoteConnect.disclaimerItemPrivacy')}</li>
-            <li>{t('remoteConnect.disclaimerItemDataUsage')}</li>
-            <li>{t('remoteConnect.disclaimerItemCredentials')}</li>
-            <li>{t('remoteConnect.disclaimerItemQrCode')}</li>
-            <li>{t('remoteConnect.disclaimerItemNgrok')}</li>
-            <li>{t('remoteConnect.disclaimerItemSelfHosted')}</li>
-            <li>{t('remoteConnect.disclaimerItemNetwork')}</li>
-            <li>{t('remoteConnect.disclaimerItemBot')}</li>
-            <li>{t('remoteConnect.disclaimerItemBotPersistence')}</li>
-            <li>{t('remoteConnect.disclaimerItemMobileBrowser')}</li>
-            <li>{t('remoteConnect.disclaimerItemCompliance')}</li>
-            <li>{t('remoteConnect.disclaimerItemLiability')}</li>
-          </ol>
-
-          <div className="bitfun-nav-panel__remote-disclaimer-actions">
-            <button
-              type="button"
-              className="bitfun-nav-panel__remote-disclaimer-btn bitfun-nav-panel__remote-disclaimer-btn--secondary"
-              onClick={() => setShowRemoteDisclaimer(false)}
-            >
-              {t('remoteConnect.disclaimerDecline')}
-            </button>
-            <button
-              type="button"
-              className="bitfun-nav-panel__remote-disclaimer-btn bitfun-nav-panel__remote-disclaimer-btn--primary"
-              onClick={handleAgreeDisclaimer}
-            >
-              {t('remoteConnect.disclaimerAgree')}
-            </button>
-          </div>
-        </div>
+        <RemoteConnectDisclaimerContent
+          agreed={hasAgreedRemoteDisclaimer}
+          onClose={() => setShowRemoteDisclaimer(false)}
+          onAgree={handleAgreeDisclaimer}
+        />
       </Modal>
     </div>
   );

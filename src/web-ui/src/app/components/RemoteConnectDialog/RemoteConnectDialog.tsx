@@ -15,6 +15,11 @@ import {
   type ConnectionResult,
   type RemoteConnectStatus,
 } from '@/infrastructure/api/service-api/RemoteConnectAPI';
+import {
+  getRemoteConnectDisclaimerAgreed,
+  setRemoteConnectDisclaimerAgreed,
+  RemoteConnectDisclaimerContent,
+} from './RemoteConnectDisclaimer';
 import './RemoteConnectDialog.scss';
 
 // ── Types ────────────────────────────────────────────────────────────
@@ -36,6 +41,10 @@ const BOT_TABS: { id: BotTab; label: string }[] = [
 
 const NGROK_SETUP_URL = 'https://dashboard.ngrok.com/get-started/setup';
 const RELAY_SERVER_README_URL = 'https://github.com/GCWing/BitFun/blob/main/src/apps/relay-server/README.md';
+const FEISHU_SETUP_GUIDE_URLS = {
+  'zh-CN': 'https://github.com/GCWing/BitFun/blob/main/docs/remote-connect/feishu-bot-setup.zh-CN.md',
+  'en-US': 'https://github.com/GCWing/BitFun/blob/main/docs/remote-connect/feishu-bot-setup.md',
+} as const;
 
 const methodToNetworkTab = (method: string | null | undefined): NetworkTab | null => {
   if (!method) return null;
@@ -63,7 +72,7 @@ export const RemoteConnectDialog: React.FC<RemoteConnectDialogProps> = ({
   isOpen,
   onClose,
 }) => {
-  const { t } = useI18n('common');
+  const { t, currentLanguage } = useI18n('common');
 
   const [activeGroup, setActiveGroup] = useState<ActiveGroup>('network');
   const [networkTab, setNetworkTab] = useState<NetworkTab>(NETWORK_TABS[0].id);
@@ -74,6 +83,8 @@ export const RemoteConnectDialog: React.FC<RemoteConnectDialogProps> = ({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lanNetworkInfo, setLanNetworkInfo] = useState<{ localIp: string; gatewayIp: string | null } | null>(null);
+  const [showDisclaimer, setShowDisclaimer] = useState(false);
+  const [hasAgreedDisclaimer, setHasAgreedDisclaimer] = useState<boolean>(() => getRemoteConnectDisclaimerAgreed());
 
   const [customUrl, setCustomUrl] = useState('');
   const [tgToken, setTgToken] = useState('');
@@ -117,6 +128,9 @@ export const RemoteConnectDialog: React.FC<RemoteConnectDialogProps> = ({
       pollRef.current = null;
       return;
     }
+
+    setHasAgreedDisclaimer(getRemoteConnectDisclaimerAgreed());
+
     let cancelled = false;
     const checkExisting = async () => {
       for (let attempt = 0; attempt < 3; attempt++) {
@@ -252,6 +266,10 @@ export const RemoteConnectDialog: React.FC<RemoteConnectDialogProps> = ({
   const handleOpenRelayReadme = useCallback(() => {
     void systemAPI.openExternal(RELAY_SERVER_README_URL);
   }, []);
+
+  const handleOpenFeishuGuide = useCallback(() => {
+    void systemAPI.openExternal(FEISHU_SETUP_GUIDE_URLS[currentLanguage]);
+  }, [currentLanguage]);
 
   // ── Sub-tab disabled logic ───────────────────────────────────────
 
@@ -436,6 +454,19 @@ export const RemoteConnectDialog: React.FC<RemoteConnectDialogProps> = ({
           </div>
         ) : (
           <div className="bitfun-remote-connect__bot-guide">
+            <p className="bitfun-remote-connect__description">
+              {t('remoteConnect.botFeishuDocPrefix')}
+              <span
+                className="bitfun-remote-connect__description-link"
+                role="link"
+                tabIndex={0}
+                onClick={handleOpenFeishuGuide}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleOpenFeishuGuide(); }}
+              >
+                {t('remoteConnect.botFeishuDocLink')}
+              </span>
+              {t('remoteConnect.botFeishuDocSuffix')}
+            </p>
             <div className="bitfun-remote-connect__steps">
               <p className="bitfun-remote-connect__step">
                 1. {t('remoteConnect.botFeishuStep1Prefix')}
@@ -482,78 +513,117 @@ export const RemoteConnectDialog: React.FC<RemoteConnectDialogProps> = ({
 
   const isNetworkConnecting = !!connectionResult && activeGroup === 'network' && !isRelayConnected;
   const isBotConnecting = !!connectionResult && activeGroup === 'bot' && !isBotConnected;
+  const handleAgreeDisclaimer = useCallback(() => {
+    setRemoteConnectDisclaimerAgreed();
+    setHasAgreedDisclaimer(true);
+    setShowDisclaimer(false);
+  }, []);
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title={t('remoteConnect.title')} showCloseButton size="large">
-      <div className="bitfun-remote-connect">
-        {/* ── Group tabs ── */}
-        <div className="bitfun-remote-connect__groups">
-          <button
-            type="button"
-            className={`bitfun-remote-connect__group-btn${activeGroup === 'network' ? ' is-active' : ''}`}
-            onClick={() => { setActiveGroup('network'); setConnectionResult(null); setError(null); }}
-            disabled={isBotConnecting}
-          >
-            {t('remoteConnect.groupNetwork')}
-            {isRelayConnected && <span className="bitfun-remote-connect__dot" />}
-          </button>
-          <span className="bitfun-remote-connect__group-divider" />
-          <button
-            type="button"
-            className={`bitfun-remote-connect__group-btn${activeGroup === 'bot' ? ' is-active' : ''}`}
-            onClick={() => { setActiveGroup('bot'); setConnectionResult(null); setError(null); }}
-            disabled={isNetworkConnecting}
-          >
-            {t('remoteConnect.groupBot')}
-            {isBotConnected && <span className="bitfun-remote-connect__dot" />}
-          </button>
-        </div>
-
-        {/* ── Sub-tabs ── */}
-        {activeGroup === 'network' ? (
-          <div className="bitfun-remote-connect__subtabs">
-            {NETWORK_TABS.map((tab, i) => (
-              <React.Fragment key={tab.id}>
-                {i > 0 && <span className="bitfun-remote-connect__subtab-divider" />}
-                <button
-                  type="button"
-                  className={`bitfun-remote-connect__subtab${networkTab === tab.id ? ' is-active' : ''}${isRelayConnected && connectedNetworkTab === tab.id ? ' is-connected' : ''}`}
-                  onClick={() => { setNetworkTab(tab.id); setConnectionResult(null); setError(null); }}
-                  disabled={isNetworkSubDisabled(tab.id) || isNetworkConnecting}
-                >
-                  {t(tab.labelKey)}
-                  {isRelayConnected && connectedNetworkTab === tab.id && networkTab !== tab.id && (
-                    <span className="bitfun-remote-connect__dot-sm" />
-                  )}
-                </button>
-              </React.Fragment>
-            ))}
-          </div>
-        ) : (
-          <div className="bitfun-remote-connect__subtabs">
-            {BOT_TABS.map((tab, i) => (
-              <React.Fragment key={tab.id}>
-                {i > 0 && <span className="bitfun-remote-connect__subtab-divider" />}
-                <button
-                  type="button"
-                  className={`bitfun-remote-connect__subtab${botTab === tab.id ? ' is-active' : ''}${isBotConnected && connectedBotTab === tab.id ? ' is-connected' : ''}`}
-                  onClick={() => { setBotTab(tab.id); setConnectionResult(null); setError(null); }}
-                  disabled={isBotSubDisabled(tab.id) || isBotConnecting}
-                >
-                  {tab.id === 'feishu' ? t('remoteConnect.feishu') : tab.label}
-                  {isBotConnected && connectedBotTab === tab.id && botTab !== tab.id && (
-                    <span className="bitfun-remote-connect__dot-sm" />
-                  )}
-                </button>
-              </React.Fragment>
-            ))}
-          </div>
+    <>
+      <Modal
+        isOpen={isOpen}
+        onClose={onClose}
+        title={t('remoteConnect.title')}
+        titleExtra={(
+          <span className="bitfun-remote-connect__title-extra">
+            <button
+              type="button"
+              className="bitfun-remote-connect__disclaimer-trigger"
+              onClick={() => setShowDisclaimer(true)}
+            >
+              {t('remoteConnect.disclaimerReview')}
+            </button>
+          </span>
         )}
+        showCloseButton
+        size="large"
+      >
+        <div className="bitfun-remote-connect">
+          {/* ── Group tabs ── */}
+          <div className="bitfun-remote-connect__groups">
+            <button
+              type="button"
+              className={`bitfun-remote-connect__group-btn${activeGroup === 'network' ? ' is-active' : ''}`}
+              onClick={() => { setActiveGroup('network'); setConnectionResult(null); setError(null); }}
+              disabled={isBotConnecting}
+            >
+              {t('remoteConnect.groupNetwork')}
+              {isRelayConnected && <span className="bitfun-remote-connect__dot" />}
+            </button>
+            <span className="bitfun-remote-connect__group-divider" />
+            <button
+              type="button"
+              className={`bitfun-remote-connect__group-btn${activeGroup === 'bot' ? ' is-active' : ''}`}
+              onClick={() => { setActiveGroup('bot'); setConnectionResult(null); setError(null); }}
+              disabled={isNetworkConnecting}
+            >
+              {t('remoteConnect.groupBot')}
+              {isBotConnected && <span className="bitfun-remote-connect__dot" />}
+            </button>
+          </div>
 
-        {/* ── Content ── */}
-        {activeGroup === 'network' ? renderNetworkContent() : renderBotContent()}
-      </div>
-    </Modal>
+          {/* ── Sub-tabs ── */}
+          {activeGroup === 'network' ? (
+            <div className="bitfun-remote-connect__subtabs">
+              {NETWORK_TABS.map((tab, i) => (
+                <React.Fragment key={tab.id}>
+                  {i > 0 && <span className="bitfun-remote-connect__subtab-divider" />}
+                  <button
+                    type="button"
+                    className={`bitfun-remote-connect__subtab${networkTab === tab.id ? ' is-active' : ''}${isRelayConnected && connectedNetworkTab === tab.id ? ' is-connected' : ''}`}
+                    onClick={() => { setNetworkTab(tab.id); setConnectionResult(null); setError(null); }}
+                    disabled={isNetworkSubDisabled(tab.id) || isNetworkConnecting}
+                  >
+                    {t(tab.labelKey)}
+                    {isRelayConnected && connectedNetworkTab === tab.id && networkTab !== tab.id && (
+                      <span className="bitfun-remote-connect__dot-sm" />
+                    )}
+                  </button>
+                </React.Fragment>
+              ))}
+            </div>
+          ) : (
+            <div className="bitfun-remote-connect__subtabs">
+              {BOT_TABS.map((tab, i) => (
+                <React.Fragment key={tab.id}>
+                  {i > 0 && <span className="bitfun-remote-connect__subtab-divider" />}
+                  <button
+                    type="button"
+                    className={`bitfun-remote-connect__subtab${botTab === tab.id ? ' is-active' : ''}${isBotConnected && connectedBotTab === tab.id ? ' is-connected' : ''}`}
+                    onClick={() => { setBotTab(tab.id); setConnectionResult(null); setError(null); }}
+                    disabled={isBotSubDisabled(tab.id) || isBotConnecting}
+                  >
+                    {tab.id === 'feishu' ? t('remoteConnect.feishu') : tab.label}
+                    {isBotConnected && connectedBotTab === tab.id && botTab !== tab.id && (
+                      <span className="bitfun-remote-connect__dot-sm" />
+                    )}
+                  </button>
+                </React.Fragment>
+              ))}
+            </div>
+          )}
+
+          {/* ── Content ── */}
+          {activeGroup === 'network' ? renderNetworkContent() : renderBotContent()}
+        </div>
+      </Modal>
+
+      <Modal
+        isOpen={showDisclaimer}
+        onClose={() => setShowDisclaimer(false)}
+        title={t('remoteConnect.disclaimerTitle')}
+        showCloseButton
+        size="large"
+        contentInset
+      >
+        <RemoteConnectDisclaimerContent
+          agreed={hasAgreedDisclaimer}
+          onClose={() => setShowDisclaimer(false)}
+          onAgree={hasAgreedDisclaimer ? undefined : handleAgreeDisclaimer}
+        />
+      </Modal>
+    </>
   );
 };
 

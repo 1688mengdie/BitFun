@@ -76,8 +76,8 @@ impl AskUserQuestionTool {
             }
 
             // Validate options
-            if question.options.len() < 2 || question.options.len() > 4 {
-                return Err(format!("Question {} must have 2-4 options", q_num));
+            if question.options.len() < 2 || question.options.len() > 5 {
+                return Err(format!("Question {} must have 2-5 options", q_num));
             }
 
             for (opt_idx, opt) in question.options.iter().enumerate() {
@@ -171,6 +171,8 @@ impl Tool for AskUserQuestionTool {
 4. Offer choices to the user about what direction to take.
 
 Usage notes:
+- This tool ends the current dialog turn and waits for the user's reply before the assistant continues
+- Put all questions you need into a single AskUserQuestion call instead of calling it repeatedly in one response
 - Users will always be able to select "Other" to provide custom text input
 - Use multiSelect: true to allow multiple answers to be selected for a question"#.to_string())
     }
@@ -213,8 +215,8 @@ Usage notes:
                                     "additionalProperties": false
                                 },
                                 "minItems": 2,
-                                "maxItems": 4,
-                                "description": "The available choices for this question. Must have 2-4 options. Each option should be a distinct, mutually exclusive choice (unless multiSelect is enabled). There should be no 'Other' option, that will be provided automatically."
+                                "maxItems": 5,
+                                "description": "The available choices for this question. Must have 2-5 options. Each option should be a distinct, mutually exclusive choice (unless multiSelect is enabled). There should be no 'Other' option, that will be provided automatically."
                             },
                             "multiSelect": {
                                 "type": "boolean",
@@ -249,6 +251,10 @@ Usage notes:
         true
     }
 
+    fn should_end_turn(&self) -> bool {
+        false
+    }
+
     async fn call_impl(
         &self,
         input: &Value,
@@ -264,8 +270,9 @@ Usage notes:
             })?;
 
         // 2. Validate question format
-        Self::validate_input(&tool_input)
-            .map_err(|e| crate::util::errors::BitFunError::Validation(e))?;
+        if let Err(error) = Self::validate_input(&tool_input) {
+            return Err(crate::util::errors::BitFunError::Validation(error));
+        }
 
         let question_count = tool_input.questions.len();
         debug!(
@@ -307,7 +314,6 @@ Usage notes:
         let timeout_duration = Duration::from_secs(600); // 10 minutes
         match timeout(timeout_duration, rx).await {
             Ok(Ok(response)) => {
-                // Received user answer
                 debug!(
                     "AskUserQuestion tool received user response, tool_id: {}",
                     tool_id
@@ -337,7 +343,6 @@ Usage notes:
                 }])
             }
             Ok(Err(_)) => {
-                // Channel was closed
                 warn!("AskUserQuestion tool channel closed, tool_id: {}", tool_id);
                 Ok(vec![ToolResult::Result {
                     data: json!({
@@ -348,7 +353,6 @@ Usage notes:
                 }])
             }
             Err(_) => {
-                // Timeout
                 warn!(
                     "AskUserQuestion tool timeout after 600 seconds, tool_id: {}",
                     tool_id

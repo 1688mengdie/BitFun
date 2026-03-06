@@ -146,7 +146,7 @@ export const AskUserQuestionCard: React.FC<ToolCardProps> = ({
   };
 
   const renderQuestion = (q: QuestionData, questionIndex: number) => {
-    const answer = answers[questionIndex];
+    const answer = getEffectiveAnswer(questionIndex);
     const otherInput = otherInputs[questionIndex] || '';
     
     const isOtherSelected = q.multiSelect 
@@ -280,15 +280,28 @@ export const AskUserQuestionCard: React.FC<ToolCardProps> = ({
     );
   };
 
+  const getEffectiveAnswer = useCallback((questionIndex: number): string | string[] | undefined => {
+    const localAnswer = answers[questionIndex];
+    if (localAnswer !== undefined) return localAnswer;
+
+    if (status === 'completed' && toolResult?.result) {
+      const result = typeof toolResult.result === 'string'
+        ? JSON.parse(toolResult.result)
+        : toolResult.result;
+      return result?.answers?.[String(questionIndex)];
+    }
+    return undefined;
+  }, [answers, status, toolResult]);
+
   const getAnswerDisplay = (questionIndex: number): string => {
-    const answer = answers[questionIndex];
+    const answer = getEffectiveAnswer(questionIndex);
     const otherInput = otherInputs[questionIndex] || '';
     
     if (!answer) return '';
     if (Array.isArray(answer)) {
       return answer.map(v => v === 'Other' ? otherInput || 'Other' : v).join(', ');
     }
-    return answer === 'Other' ? otherInput || 'Other' : answer;
+    return answer === 'Other' ? otherInput || 'Other' : String(answer);
   };
 
   const getAnswersSummary = (): string => {

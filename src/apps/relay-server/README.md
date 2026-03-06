@@ -1,14 +1,15 @@
 # BitFun Relay Server
 
-WebSocket relay server for BitFun Remote Connect. Provides room-based message relaying between desktop and mobile clients with E2E encryption support.
+WebSocket relay server for BitFun Remote Connect. Bridges desktop (WebSocket) and mobile (HTTP) clients with E2E encryption support.
 
 ## Features
 
-- Room-based WebSocket relay
+- Desktop connects via WebSocket, mobile via HTTP — relay bridges between them
 - End-to-end encrypted message passthrough (server cannot decrypt)
-- Heartbeat-based connection management
-- Static file serving for mobile web client
-- Docker deployment ready
+- Correlation-based HTTP-to-WebSocket request-response matching
+- Per-room mobile-web static file upload & serving (content-addressable, incremental)
+- Heartbeat-based connection management with configurable room TTL
+- Docker deployment ready with Caddy reverse proxy
 
 ## Quick Start
 
@@ -18,7 +19,7 @@ WebSocket relay server for BitFun Remote Connect. Provides room-based message re
 # One-click deploy
 bash deploy.sh
 
-# With mobile web client
+# With mobile web client rebuild
 bash deploy.sh --build-mobile
 ```
 
@@ -47,49 +48,75 @@ RELAY_PORT=9700 ./target/release/bitfun-relay-server
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `RELAY_PORT` | `9700` | Server listen port |
-| `RELAY_STATIC_DIR` | `./static` | Path to mobile web static files |
+| `RELAY_STATIC_DIR` | `./static` | Path to mobile web static files (fallback SPA) |
+| `RELAY_ROOM_WEB_DIR` | `/tmp/bitfun-room-web` | Directory for per-room uploaded mobile-web files |
 | `RELAY_ROOM_TTL` | `3600` | Room TTL in seconds (0 = no expiry) |
 
 ## API Endpoints
 
+### Health & Info
+
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/health` | GET | Health check |
-| `/api/info` | GET | Server info |
-| `/ws` | WebSocket | Main relay endpoint |
+| `/health` | GET | Health check (returns status, version, uptime, room/connection counts) |
+| `/api/info` | GET | Server info (name, version, protocol_version) |
 
-## WebSocket Protocol
+### Room Operations (Mobile HTTP → Desktop WS bridge)
 
-### Client → Server
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/rooms/:room_id/pair` | POST | Mobile initiates pairing — relay forwards to desktop via WS, waits for response |
+| `/api/rooms/:room_id/command` | POST | Mobile sends encrypted command — relay forwards to desktop, returns response |
+
+### Per-Room Mobile-Web File Management
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/rooms/:room_id/upload-web` | POST | Full upload: base64-encoded files keyed by path (10MB body limit) |
+| `/api/rooms/:room_id/check-web-files` | POST | Incremental: check which files the server already has by hash |
+| `/api/rooms/:room_id/upload-web-files` | POST | Incremental: upload only the missing files (10MB body limit) |
+| `/r/:room_id/*path` | GET | Serve uploaded mobile-web static files for a room |
+
+### WebSocket
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/ws` | WebSocket | Desktop client connection endpoint |
+
+## WebSocket Protocol (Desktop Only)
+
+Only desktop clients connect via WebSocket. Mobile clients use the HTTP endpoints above.
+
+### Desktop → Server (Inbound)
 
 ```json
-// Create a room (desktop)
-{ "type": "create_room", "room_id": "...", "device_id": "...", "device_type": "desktop", "public_key": "base64..." }
+// Create a room
+{ "type": "create_room", "room_id": "optional-id", "device_id": "...", "device_type": "desktop", "public_key": "base64..." }
 
-// Join a room (mobile)
-{ "type": "join_room", "room_id": "...", "device_id": "...", "device_type": "mobile", "public_key": "base64..." }
-
-// Relay an encrypted message
-{ "type": "relay", "room_id": "...", "encrypted_data": "base64...", "nonce": "base64..." }
+// Respond to a bridged HTTP request (pair or command)
+{ "type": "relay_response", "correlation_id": "...", "encrypted_data": "base64...", "nonce": "base64..." }
 
 // Heartbeat
 { "type": "heartbeat" }
 ```
 
-### Server → Client
+### Server → Desktop (Outbound)
 
 ```json
-// Peer joined notification
-{ "type": "peer_joined", "device_id": "...", "device_type": "...", "public_key": "base64..." }
+// Room created confirmation
+{ "type": "room_created", "room_id": "..." }
 
-// Relayed message
-{ "type": "relay", "from_device_id": "...", "encrypted_data": "base64...", "nonce": "base64..." }
+// Pair request forwarded from mobile HTTP
+{ "type": "pair_request", "correlation_id": "...", "public_key": "base64...", "device_id": "...", "device_name": "..." }
 
-// Peer disconnected
-{ "type": "peer_disconnected", "device_id": "..." }
+// Encrypted command forwarded from mobile HTTP
+{ "type": "command", "correlation_id": "...", "encrypted_data": "base64...", "nonce": "base64..." }
 
 // Heartbeat acknowledgment
 { "type": "heartbeat_ack" }
+
+// Error
+{ "type": "error", "message": "..." }
 ```
 
 ## Self-Hosted Deployment
@@ -120,11 +147,16 @@ RELAY_PORT=9700 ./target/release/bitfun-relay-server
 ## Architecture
 
 ```
-Mobile Phone ──WSS──► Relay Server ◄──WSS── Desktop Client
-                         │
-                    E2E Encrypted
-                    (server cannot
-                     read messages)
+Mobile Phone ──HTTP POST──► Relay Server ◄──WebSocket── Desktop Client
+                               │
+                          E2E Encrypted
+                          (server cannot
+                           read messages)
 ```
 
-The relay server only manages rooms and forwards opaque encrypted payloads. All encryption/decryption happens on the client side.
+The relay server bridges HTTP and WebSocket:
+
+- **Desktop** connects via WebSocket, creates a room, and stays connected.
+- **Mobile** sends HTTP POST requests (`/pair`, `/command`). The relay forwards them to the desktop over WS using correlation IDs, waits for the WS response, and returns it to mobile via HTTP.
+- The relay only manages rooms and forwards opaque encrypted payloads. All encryption/decryption happens on the client side.
+- Per-room mobile-web static files can be uploaded via the incremental upload API and served at `/r/:room_id/`.
