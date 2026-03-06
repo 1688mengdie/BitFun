@@ -30,6 +30,21 @@ pub struct SubagentResult {
     pub tool_arguments: Option<serde_json::Value>,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum DialogTriggerSource {
+    DesktopUi,
+    DesktopApi,
+    RemoteRelay,
+    Bot,
+    Cli,
+}
+
+impl DialogTriggerSource {
+    fn skip_tool_confirmation(self) -> bool {
+        matches!(self, Self::RemoteRelay | Self::Bot)
+    }
+}
+
 /// Cancel token cleanup guard
 ///
 /// Automatically cleans up cancel tokens in ExecutionEngine when dropped
@@ -107,21 +122,127 @@ impl ConversationCoordinator {
         mut config: SessionConfig,
         workspace_path: Option<String>,
     ) -> BitFunResult<Session> {
-        // Persist the workspace binding inside the session config so that SendMessage
-        // can retrieve it from memory (no slow disk search needed).
-        config.workspace_path = workspace_path.clone();
+        let effective_workspace_path = workspace_path.or_else(|| {
+            crate::infrastructure::get_workspace_path()
+                .map(|p| p.to_string_lossy().to_string())
+        });
+
+        // Persist the workspace binding inside the session config so execution can
+        // consistently restore the correct workspace regardless of the entry point.
+        config.workspace_path = effective_workspace_path.clone();
         let session = self
             .session_manager
             .create_session_with_id(session_id, session_name, agent_type, config)
             .await?;
+
+        self.sync_session_metadata_to_workspace(&session, effective_workspace_path.clone())
+            .await;
+
         self.emit_event(AgenticEvent::SessionCreated {
             session_id: session.session_id.clone(),
             session_name: session.session_name.clone(),
             agent_type: session.agent_type.clone(),
-            workspace_path,
+            workspace_path: effective_workspace_path,
         })
         .await;
         Ok(session)
+    }
+
+    async fn sync_session_metadata_to_workspace(
+        &self,
+        session: &Session,
+        workspace_path: Option<String>,
+    ) {
+        use crate::infrastructure::PathManager;
+        use crate::service::conversation::{
+            ConversationPersistenceManager, SessionMetadata, SessionStatus,
+        };
+
+        let Some(workspace_path) = workspace_path else {
+            return;
+        };
+
+        let path_manager = match PathManager::new() {
+            Ok(pm) => Arc::new(pm),
+            Err(e) => {
+                warn!("Failed to initialize PathManager for session metadata sync: {e}");
+                return;
+            }
+        };
+
+        let conv_mgr = match ConversationPersistenceManager::new(
+            path_manager,
+            std::path::PathBuf::from(&workspace_path),
+        )
+        .await
+        {
+            Ok(mgr) => mgr,
+            Err(e) => {
+                warn!(
+                    "Failed to initialize ConversationPersistenceManager for session metadata sync: {e}"
+                );
+                return;
+            }
+        };
+
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+
+        let existing = match conv_mgr.load_session_metadata(&session.session_id).await {
+            Ok(meta) => meta,
+            Err(e) => {
+                debug!(
+                    "Failed to load existing session metadata before sync: session_id={}, error={}",
+                    session.session_id, e
+                );
+                None
+            }
+        };
+
+        let metadata = SessionMetadata {
+            session_id: session.session_id.clone(),
+            session_name: session.session_name.clone(),
+            agent_type: session.agent_type.clone(),
+            model_name: existing
+                .as_ref()
+                .map(|m| m.model_name.clone())
+                .filter(|name| !name.is_empty())
+                .unwrap_or_else(|| "default".to_string()),
+            created_at: existing.as_ref().map(|m| m.created_at).unwrap_or(now_ms),
+            last_active_at: now_ms,
+            turn_count: existing.as_ref().map(|m| m.turn_count).unwrap_or(0),
+            message_count: existing.as_ref().map(|m| m.message_count).unwrap_or(0),
+            tool_call_count: existing.as_ref().map(|m| m.tool_call_count).unwrap_or(0),
+            status: existing
+                .as_ref()
+                .map(|m| m.status.clone())
+                .unwrap_or(SessionStatus::Active),
+            terminal_session_id: existing
+                .as_ref()
+                .and_then(|m| m.terminal_session_id.clone()),
+            snapshot_session_id: session
+                .snapshot_session_id
+                .clone()
+                .or_else(|| existing.as_ref().and_then(|m| m.snapshot_session_id.clone())),
+            tags: existing
+                .as_ref()
+                .map(|m| m.tags.clone())
+                .unwrap_or_default(),
+            custom_metadata: existing
+                .as_ref()
+                .and_then(|m| m.custom_metadata.clone()),
+            todos: existing.as_ref().and_then(|m| m.todos.clone()),
+            workspace_path: Some(workspace_path),
+        };
+
+        if let Err(e) = conv_mgr.save_session_metadata(&metadata).await {
+            warn!(
+                "Failed to sync session metadata to workspace: session_id={}, error={}",
+                session.session_id, e
+            );
+        }
     }
 
     /// Create a subagent session for internal AI execution.
@@ -162,21 +283,35 @@ impl ConversationCoordinator {
     }
 
     /// Start a new dialog turn
-    /// Note: Events are sent to frontend via EventLoop, no Stream returned
-    /// skip_tool_confirmation: when true, all tool executions auto-approve (used by remote mobile messages)
+    /// Note: Events are sent to frontend via EventLoop, no Stream returned.
+    /// Channel-specific interaction policy is decided here from `trigger_source`
+    /// so adapters only declare where the message came from.
     pub async fn start_dialog_turn(
         &self,
         session_id: String,
         user_input: String,
         turn_id: Option<String>,
         agent_type: String,
-        skip_tool_confirmation: bool,
+        trigger_source: DialogTriggerSource,
     ) -> BitFunResult<()> {
-        // Get latest session (re-fetch each time to ensure latest state)
-        let session = self
-            .session_manager
-            .get_session(&session_id)
-            .ok_or_else(|| BitFunError::NotFound(format!("Session not found: {}", session_id)))?;
+        // Get latest session, restoring from persistence on demand so every entry
+        // point can use the same start_dialog_turn flow.
+        let session = match self.session_manager.get_session(&session_id) {
+            Some(session) => session,
+            None => {
+                debug!(
+                    "Session not found in memory, attempting restore before starting dialog: session_id={}",
+                    session_id
+                );
+                self.session_manager.restore_session(&session_id).await?
+            }
+        };
+
+        let effective_agent_type = if session.agent_type.is_empty() {
+            agent_type
+        } else {
+            session.agent_type.clone()
+        };
 
         debug!(
             "Checking session state: session_id={}, state={:?}",
@@ -279,7 +414,10 @@ impl ConversationCoordinator {
             }
         }
 
-        let wrapped_user_input = self.wrap_user_input(&agent_type, user_input).await?;
+        let original_user_input = user_input.clone();
+        let wrapped_user_input = self
+            .wrap_user_input(&effective_agent_type, user_input)
+            .await?;
 
         // Start new dialog turn (sets state to Processing internally)
         let turn_index = self.session_manager.get_turn_count(&session_id);
@@ -328,11 +466,53 @@ impl ConversationCoordinator {
             session_id: session_id.clone(),
             dialog_turn_id: turn_id.clone(),
             turn_index,
-            agent_type: session.agent_type.clone(),
+            agent_type: effective_agent_type.clone(),
             context: context_vars,
             subagent_parent_info: None,
-            skip_tool_confirmation,
+            skip_tool_confirmation: trigger_source.skip_tool_confirmation(),
         };
+
+        // Auto-generate session title on first message
+        if turn_index == 0 {
+            let sm = self.session_manager.clone();
+            let eq = self.event_queue.clone();
+            let sid = session_id.clone();
+            let msg = original_user_input;
+            tokio::spawn(async move {
+                let enabled = match crate::service::config::get_global_config_service().await {
+                    Ok(svc) => svc
+                        .get_config::<bool>(Some(
+                            "app.ai_experience.enable_session_title_generation",
+                        ))
+                        .await
+                        .unwrap_or(true),
+                    Err(_) => true,
+                };
+                if !enabled {
+                    return;
+                }
+                match sm.generate_session_title(&msg, Some(20)).await {
+                    Ok(title) => {
+                        if let Err(e) = sm.update_session_title(&sid, &title).await {
+                            debug!("Failed to persist auto-generated title: {e}");
+                        }
+                        let _ = eq
+                            .enqueue(
+                                AgenticEvent::SessionTitleGenerated {
+                                    session_id: sid,
+                                    title,
+                                    method: "ai".to_string(),
+                                },
+                                Some(EventPriority::Normal),
+                            )
+                            .await;
+                    }
+                    Err(e) => {
+                        debug!("Auto session title generation failed: {e}");
+                    }
+                }
+            });
+        }
 
         // Start async execution task
         let session_manager = self.session_manager.clone();
@@ -340,11 +520,26 @@ impl ConversationCoordinator {
         let event_queue = self.event_queue.clone();
         let session_id_clone = session_id.clone();
         let turn_id_clone = turn_id.clone();
+        let session_workspace_path = session.config.workspace_path.clone();
+        let effective_agent_type_clone = effective_agent_type.clone();
 
         tokio::spawn(async move {
             // Note: Don't check cancellation here as cancel token hasn't been created yet
             // Cancel token is created in execute_dialog_turn -> execute_round
             // execute_dialog_turn has proper cancellation checks internally
+
+            if let Some(workspace_path) = session_workspace_path {
+                use crate::infrastructure::{get_workspace_path, set_workspace_path};
+
+                let current = get_workspace_path().map(|p| p.to_string_lossy().to_string());
+                if current.as_deref() != Some(workspace_path.as_str()) {
+                    info!(
+                        "Activating session workspace before dialog turn: session_id={}, workspace_path={}",
+                        session_id_clone, workspace_path
+                    );
+                    set_workspace_path(Some(std::path::PathBuf::from(workspace_path)));
+                }
+            }
 
             let _ = session_manager
                 .update_session_state(
@@ -357,7 +552,7 @@ impl ConversationCoordinator {
                 .await;
 
             match execution_engine
-                .execute_dialog_turn(agent_type, messages, execution_context)
+                .execute_dialog_turn(effective_agent_type_clone, messages, execution_context)
                 .await
             {
                 Ok(execution_result) => {
@@ -773,7 +968,10 @@ impl ConversationCoordinator {
 
     /// Generate session title
     ///
-    /// Use AI to generate a concise and accurate session title based on user message content
+    /// Use AI to generate a concise and accurate session title based on user message content.
+    /// Also persists the title to the session backend. Callers that go through
+    /// `start_dialog_turn` do NOT need to call this separately — first-message
+    /// title generation is handled automatically inside `start_dialog_turn`.
     pub async fn generate_session_title(
         &self,
         session_id: &str,
@@ -784,6 +982,14 @@ impl ConversationCoordinator {
             .session_manager
             .generate_session_title(user_message, max_length)
             .await?;
+
+        if let Err(e) = self
+            .session_manager
+            .update_session_title(session_id, &title)
+            .await
+        {
+            debug!("Failed to persist generated title: {e}");
+        }
 
         let event = AgenticEvent::SessionTitleGenerated {
             session_id: session_id.to_string(),

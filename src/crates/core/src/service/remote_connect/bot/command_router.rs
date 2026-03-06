@@ -6,6 +6,10 @@
 
 use log::{error, info};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
 
 // ── Per-chat state ──────────────────────────────────────────────────
 
@@ -41,6 +45,14 @@ pub enum PendingAction {
         page: usize,
         has_more: bool,
     },
+    AskUserQuestion {
+        tool_id: String,
+        questions: Vec<BotQuestion>,
+        current_index: usize,
+        answers: Vec<Value>,
+        awaiting_custom_text: bool,
+        pending_answer: Option<Value>,
+    },
 }
 
 // ── Parsed command ──────────────────────────────────────────────────
@@ -52,6 +64,7 @@ pub enum BotCommand {
     ResumeSession,
     NewCodeSession,
     NewCoworkSession,
+    CancelTask(Option<String>),
     Help,
     PairingCode(String),
     NumberSelection(usize),
@@ -63,20 +76,94 @@ pub enum BotCommand {
 
 pub struct HandleResult {
     pub reply: String,
+    pub actions: Vec<BotAction>,
     pub forward_to_session: Option<ForwardRequest>,
 }
+
+#[derive(Debug, Clone)]
+pub struct BotInteractiveRequest {
+    pub reply: String,
+    pub actions: Vec<BotAction>,
+    pub pending_action: PendingAction,
+}
+
+pub type BotInteractionHandler = Arc<
+    dyn Fn(BotInteractiveRequest) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync,
+>;
+
+pub type BotMessageSender = Arc<
+    dyn Fn(String) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync,
+>;
 
 pub struct ForwardRequest {
     pub session_id: String,
     pub content: String,
     pub agent_type: String,
-    pub workspace_path: Option<String>,
+    pub turn_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BotQuestionOption {
+    pub label: String,
+    #[serde(default)]
+    pub description: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BotQuestion {
+    #[serde(default)]
+    pub question: String,
+    #[serde(default)]
+    pub header: String,
+    #[serde(default)]
+    pub options: Vec<BotQuestionOption>,
+    #[serde(rename = "multiSelect", default)]
+    pub multi_select: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct BotAction {
+    pub label: String,
+    pub command: String,
+    pub style: BotActionStyle,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BotActionStyle {
+    Primary,
+    Default,
+}
+
+impl BotAction {
+    pub fn primary(label: impl Into<String>, command: impl Into<String>) -> Self {
+        Self {
+            label: label.into(),
+            command: command.into(),
+            style: BotActionStyle::Primary,
+        }
+    }
+
+    pub fn secondary(label: impl Into<String>, command: impl Into<String>) -> Self {
+        Self {
+            label: label.into(),
+            command: command.into(),
+            style: BotActionStyle::Default,
+        }
+    }
 }
 
 // ── Command parsing ─────────────────────────────────────────────────
 
 pub fn parse_command(text: &str) -> BotCommand {
     let trimmed = text.trim();
+    if let Some(rest) = trimmed.strip_prefix("/cancel_task") {
+        let arg = rest.trim();
+        return if arg.is_empty() {
+            BotCommand::CancelTask(None)
+        } else {
+            BotCommand::CancelTask(Some(arg.to_string()))
+        };
+    }
     match trimmed {
         "/start" => BotCommand::Start,
         "/switch_workspace" => BotCommand::SwitchWorkspace,
@@ -116,10 +203,44 @@ Available commands:
 /resume_session - Resume an existing session
 /new_code_session - Create a new coding session
 /new_cowork_session - Create a new cowork session
+/cancel_task - Cancel the current task
 /help - Show this help message";
 
 pub fn paired_success_message() -> String {
     format!("Pairing successful! BitFun is now connected.\n\n{}", HELP_MESSAGE)
+}
+
+pub fn main_menu_actions() -> Vec<BotAction> {
+    vec![
+        BotAction::primary("Switch Workspace", "/switch_workspace"),
+        BotAction::secondary("Resume Session", "/resume_session"),
+        BotAction::secondary("New Code Session", "/new_code_session"),
+        BotAction::secondary("New Cowork Session", "/new_cowork_session"),
+        BotAction::secondary("Help", "/help"),
+    ]
+}
+
+fn workspace_required_actions() -> Vec<BotAction> {
+    vec![BotAction::primary("Switch Workspace", "/switch_workspace")]
+}
+
+fn session_entry_actions() -> Vec<BotAction> {
+    vec![
+        BotAction::primary("Resume Session", "/resume_session"),
+        BotAction::secondary("New Code Session", "/new_code_session"),
+        BotAction::secondary("New Cowork Session", "/new_cowork_session"),
+    ]
+}
+
+fn new_session_actions() -> Vec<BotAction> {
+    vec![
+        BotAction::primary("New Code Session", "/new_code_session"),
+        BotAction::secondary("New Cowork Session", "/new_cowork_session"),
+    ]
+}
+
+fn cancel_task_actions(command: impl Into<String>) -> Vec<BotAction> {
+    vec![BotAction::secondary("Cancel Task", command.into())]
 }
 
 // ── Main dispatch ───────────────────────────────────────────────────
@@ -127,17 +248,25 @@ pub fn paired_success_message() -> String {
 pub async fn handle_command(state: &mut BotChatState, cmd: BotCommand) -> HandleResult {
     match cmd {
         BotCommand::Start | BotCommand::Help => {
-            let reply = if state.paired {
-                HELP_MESSAGE.to_string()
+            if state.paired {
+                HandleResult {
+                    reply: HELP_MESSAGE.to_string(),
+                    actions: main_menu_actions(),
+                    forward_to_session: None,
+                }
             } else {
-                WELCOME_MESSAGE.to_string()
-            };
-            HandleResult { reply, forward_to_session: None }
+                HandleResult {
+                    reply: WELCOME_MESSAGE.to_string(),
+                    actions: vec![],
+                    forward_to_session: None,
+                }
+            }
         }
         BotCommand::PairingCode(_) => HandleResult {
             reply: "Pairing codes are handled automatically. If you need to re-pair, \
                     please restart the connection from BitFun Desktop."
                 .to_string(),
+            actions: vec![],
             forward_to_session: None,
         },
         BotCommand::SwitchWorkspace => {
@@ -173,6 +302,12 @@ pub async fn handle_command(state: &mut BotChatState, cmd: BotCommand) -> Handle
             }
             handle_new_session(state, "Cowork").await
         }
+        BotCommand::CancelTask(turn_id) => {
+            if !state.paired {
+                return not_paired();
+            }
+            handle_cancel_task(state, turn_id.as_deref()).await
+        }
         BotCommand::NumberSelection(n) => {
             if !state.paired {
                 return not_paired();
@@ -200,6 +335,7 @@ fn not_paired() -> HandleResult {
     HandleResult {
         reply: "Not connected to BitFun Desktop. Please enter the 6-digit pairing code first."
             .to_string(),
+        actions: vec![],
         forward_to_session: None,
     }
 }
@@ -207,7 +343,111 @@ fn not_paired() -> HandleResult {
 fn need_workspace() -> HandleResult {
     HandleResult {
         reply: "No workspace selected. Use /switch_workspace first.".to_string(),
+        actions: workspace_required_actions(),
         forward_to_session: None,
+    }
+}
+
+fn question_option_line(index: usize, option: &BotQuestionOption) -> String {
+    if option.description.is_empty() {
+        format!("{}. {}", index + 1, option.label)
+    } else {
+        format!("{}. {} - {}", index + 1, option.label, option.description)
+    }
+}
+
+fn truncate_action_label(label: &str, max_chars: usize) -> String {
+    let trimmed = label.trim();
+    if trimmed.chars().count() <= max_chars {
+        trimmed.to_string()
+    } else {
+        let truncated: String = trimmed.chars().take(max_chars.saturating_sub(3)).collect();
+        format!("{truncated}...")
+    }
+}
+
+fn numbered_actions(labels: &[String]) -> Vec<BotAction> {
+    labels
+        .iter()
+        .enumerate()
+        .map(|(idx, label)| {
+            BotAction::secondary(
+                truncate_action_label(label, 28),
+                (idx + 1).to_string(),
+            )
+        })
+        .collect()
+}
+
+fn build_question_prompt(
+    tool_id: String,
+    questions: Vec<BotQuestion>,
+    current_index: usize,
+    answers: Vec<Value>,
+    awaiting_custom_text: bool,
+    pending_answer: Option<Value>,
+) -> BotInteractiveRequest {
+    let question = &questions[current_index];
+    let mut actions = Vec::new();
+    let mut reply = format!(
+        "Question {}/{}\n",
+        current_index + 1,
+        questions.len()
+    );
+    if !question.header.is_empty() {
+        reply.push_str(&format!("{}\n", question.header));
+    }
+    reply.push_str(&format!("{}\n\n", question.question));
+    for (idx, option) in question.options.iter().enumerate() {
+        reply.push_str(&format!("{}\n", question_option_line(idx, option)));
+    }
+    reply.push_str(&format!(
+        "{}. Other\n\n",
+        question.options.len() + 1
+    ));
+    if awaiting_custom_text {
+        reply.push_str("Please type your custom answer.");
+    } else if question.multi_select {
+        reply.push_str("Reply with one or more option numbers, separated by commas. Example: 1,3");
+    } else {
+        reply.push_str("Reply with a single option number.");
+        let mut labels: Vec<String> = question
+            .options
+            .iter()
+            .map(|option| option.label.clone())
+            .collect();
+        labels.push("Other".to_string());
+        actions = numbered_actions(&labels);
+    }
+
+    BotInteractiveRequest {
+        reply,
+        actions,
+        pending_action: PendingAction::AskUserQuestion {
+            tool_id,
+            questions,
+            current_index,
+            answers,
+            awaiting_custom_text,
+            pending_answer,
+        },
+    }
+}
+
+fn parse_question_numbers(input: &str) -> Option<Vec<usize>> {
+    let mut result = Vec::new();
+    for part in input.split(',') {
+        let trimmed = part.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let value = trimmed.parse::<usize>().ok()?;
+        result.push(value);
+    }
+    if result.is_empty() {
+        None
+    } else {
+        Some(result)
     }
 }
 
@@ -222,6 +462,7 @@ async fn handle_switch_workspace(state: &mut BotChatState) -> HandleResult {
         None => {
             return HandleResult {
                 reply: "Workspace service not available.".to_string(),
+                actions: vec![],
                 forward_to_session: None,
             };
         }
@@ -232,6 +473,7 @@ async fn handle_switch_workspace(state: &mut BotChatState) -> HandleResult {
         return HandleResult {
             reply: "No workspaces found. Please open a project in BitFun Desktop first."
                 .to_string(),
+            actions: vec![],
             forward_to_session: None,
         };
     }
@@ -256,8 +498,13 @@ async fn handle_switch_workspace(state: &mut BotChatState) -> HandleResult {
     }
     text.push_str("\nReply with the workspace number.");
 
+    let action_labels: Vec<String> = options.iter().map(|(_, name)| name.clone()).collect();
     state.pending_action = Some(PendingAction::SelectWorkspace { options });
-    HandleResult { reply: text, forward_to_session: None }
+    HandleResult {
+        reply: text,
+        actions: numbered_actions(&action_labels),
+        forward_to_session: None,
+    }
 }
 
 async fn handle_resume_session(state: &mut BotChatState, page: usize) -> HandleResult {
@@ -277,6 +524,7 @@ async fn handle_resume_session(state: &mut BotChatState, page: usize) -> HandleR
         Err(e) => {
             return HandleResult {
                 reply: format!("Failed to load sessions: {e}"),
+                actions: vec![],
                 forward_to_session: None,
             };
         }
@@ -287,6 +535,7 @@ async fn handle_resume_session(state: &mut BotChatState, page: usize) -> HandleR
         Err(e) => {
             return HandleResult {
                 reply: format!("Failed to load sessions: {e}"),
+                actions: vec![],
                 forward_to_session: None,
             };
         }
@@ -297,6 +546,7 @@ async fn handle_resume_session(state: &mut BotChatState, page: usize) -> HandleR
         Err(e) => {
             return HandleResult {
                 reply: format!("Failed to list sessions: {e}"),
+                actions: vec![],
                 forward_to_session: None,
             };
         }
@@ -307,6 +557,7 @@ async fn handle_resume_session(state: &mut BotChatState, page: usize) -> HandleR
             reply: "No sessions found in this workspace. Use /new_code_session or \
                     /new_cowork_session to create one."
                 .to_string(),
+            actions: new_session_actions(),
             forward_to_session: None,
         };
     }
@@ -353,7 +604,20 @@ async fn handle_resume_session(state: &mut BotChatState, page: usize) -> HandleR
     text.push_str("\nReply with the session number.");
 
     state.pending_action = Some(PendingAction::SelectSession { options, page, has_more });
-    HandleResult { reply: text, forward_to_session: None }
+    let mut action_labels: Vec<String> = sessions
+        .iter()
+        .map(|session| format!("[{}] {}", session.agent_type, session.session_name))
+        .collect();
+    let mut actions = numbered_actions(&action_labels);
+    if has_more {
+        action_labels.push("Next Page".to_string());
+        actions.push(BotAction::secondary("Next Page", "0"));
+    }
+    HandleResult {
+        reply: text,
+        actions,
+        forward_to_session: None,
+    }
 }
 
 async fn handle_new_session(state: &mut BotChatState, agent_type: &str) -> HandleResult {
@@ -365,6 +629,7 @@ async fn handle_new_session(state: &mut BotChatState, agent_type: &str) -> Handl
         None => {
             return HandleResult {
                 reply: "BitFun session system not ready.".to_string(),
+                actions: vec![],
                 forward_to_session: None,
             };
         }
@@ -388,7 +653,6 @@ async fn handle_new_session(state: &mut BotChatState, agent_type: &str) -> Handl
     {
         Ok(session) => {
             let session_id = session.session_id.clone();
-            persist_new_session(&session_id, session_name, agent_type, ws_path.as_deref()).await;
             state.current_session_id = Some(session_id.clone());
             let label = if agent_type == "Cowork" { "cowork" } else { "coding" };
             let workspace = ws_path.as_deref().unwrap_or("(unknown)");
@@ -398,63 +662,15 @@ async fn handle_new_session(state: &mut BotChatState, agent_type: &str) -> Handl
                      You can now send messages to interact with the AI agent.",
                     label, session_name, session_id, workspace
                 ),
+                actions: vec![],
                 forward_to_session: None,
             }
         }
         Err(e) => HandleResult {
             reply: format!("Failed to create session: {e}"),
+            actions: vec![],
             forward_to_session: None,
         },
-    }
-}
-
-async fn persist_new_session(
-    session_id: &str,
-    session_name: &str,
-    agent_type: &str,
-    workspace_path: Option<&str>,
-) {
-    use crate::infrastructure::PathManager;
-    use crate::service::conversation::{
-        ConversationPersistenceManager, SessionMetadata, SessionStatus,
-    };
-
-    let Some(wp_str) = workspace_path else { return };
-    let wp = std::path::PathBuf::from(wp_str);
-
-    let pm = match PathManager::new() {
-        Ok(pm) => std::sync::Arc::new(pm),
-        Err(_) => return,
-    };
-    let conv_mgr = match ConversationPersistenceManager::new(pm, wp).await {
-        Ok(m) => m,
-        Err(_) => return,
-    };
-
-    let now_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64;
-    let meta = SessionMetadata {
-        session_id: session_id.to_string(),
-        session_name: session_name.to_string(),
-        agent_type: agent_type.to_string(),
-        model_name: "default".to_string(),
-        created_at: now_ms,
-        last_active_at: now_ms,
-        turn_count: 0,
-        message_count: 0,
-        tool_call_count: 0,
-        status: SessionStatus::Active,
-        terminal_session_id: None,
-        snapshot_session_id: None,
-        tags: vec![],
-        custom_metadata: None,
-        todos: None,
-        workspace_path: workspace_path.map(String::from),
-    };
-    if let Err(e) = conv_mgr.save_session_metadata(&meta).await {
-        error!("Failed to persist bot session metadata: {e}");
     }
 }
 
@@ -468,6 +684,7 @@ async fn handle_number_selection(state: &mut BotChatState, n: usize) -> HandleRe
                     reply: format!("Invalid selection. Please enter 1-{}.", state.pending_action.as_ref()
                         .map(|a| match a { PendingAction::SelectWorkspace { options } => options.len(), _ => 0 })
                         .unwrap_or(0)),
+                    actions: vec![],
                     forward_to_session: None,
                 };
             }
@@ -480,11 +697,32 @@ async fn handle_number_selection(state: &mut BotChatState, n: usize) -> HandleRe
                 state.pending_action = Some(PendingAction::SelectSession { options, page, has_more });
                 return HandleResult {
                     reply: format!("Invalid selection. Please enter 1-{max}."),
+                    actions: vec![],
                     forward_to_session: None,
                 };
             }
             let (session_id, session_name) = options[n - 1].clone();
             select_session(state, &session_id, &session_name).await
+        }
+        Some(PendingAction::AskUserQuestion {
+            tool_id,
+            questions,
+            current_index,
+            answers,
+            awaiting_custom_text,
+            pending_answer,
+        }) => {
+            handle_question_reply(
+                state,
+                tool_id,
+                questions,
+                current_index,
+                answers,
+                awaiting_custom_text,
+                pending_answer,
+                &n.to_string(),
+            )
+            .await
         }
         None => handle_chat_message(state, &n.to_string()).await,
     }
@@ -498,6 +736,7 @@ async fn select_workspace(state: &mut BotChatState, path: &str, name: &str) -> H
         None => {
             return HandleResult {
                 reply: "Workspace service not available.".to_string(),
+                actions: vec![],
                 forward_to_session: None,
             };
         }
@@ -520,10 +759,20 @@ async fn select_workspace(state: &mut BotChatState, path: &str, name: &str) -> H
 
             let session_count = count_workspace_sessions(path).await;
             let reply = build_workspace_switched_reply(name, session_count);
-            HandleResult { reply, forward_to_session: None }
+            let actions = if session_count > 0 {
+                session_entry_actions()
+            } else {
+                new_session_actions()
+            };
+            HandleResult {
+                reply,
+                actions,
+                forward_to_session: None,
+            }
         }
         Err(e) => HandleResult {
             reply: format!("Failed to switch workspace: {e}"),
+            actions: vec![],
             forward_to_session: None,
         },
     }
@@ -570,12 +819,6 @@ async fn select_session(
     session_id: &str,
     session_name: &str,
 ) -> HandleResult {
-    use crate::agentic::coordination::get_global_coordinator;
-
-    if let Some(coordinator) = get_global_coordinator() {
-        let _ = coordinator.restore_session(session_id).await;
-    }
-
     state.current_session_id = Some(session_id.to_string());
     info!("Bot resumed session: {session_id}");
 
@@ -592,7 +835,11 @@ async fn select_session(
         reply.push_str("You can now send messages to interact with the AI agent.");
     }
 
-    HandleResult { reply, forward_to_session: None }
+    HandleResult {
+        reply,
+        actions: vec![],
+        forward_to_session: None,
+    }
 }
 
 /// Load the last user/assistant dialog pair from ConversationPersistenceManager,
@@ -681,6 +928,327 @@ fn truncate_text(text: &str, max_chars: usize) -> String {
     }
 }
 
+async fn handle_cancel_task(
+    state: &mut BotChatState,
+    requested_turn_id: Option<&str>,
+) -> HandleResult {
+    use crate::agentic::coordination::get_global_coordinator;
+    use crate::agentic::core::SessionState;
+
+    let session_id = match state.current_session_id.clone() {
+        Some(id) => id,
+        None => {
+            return HandleResult {
+                reply: "No active session to cancel.".to_string(),
+                actions: session_entry_actions(),
+                forward_to_session: None,
+            };
+        }
+    };
+
+    let coordinator = match get_global_coordinator() {
+        Some(c) => c,
+        None => {
+            return HandleResult {
+                reply: "BitFun session system not ready.".to_string(),
+                actions: vec![],
+                forward_to_session: None,
+            };
+        }
+    };
+
+    let session = match coordinator.restore_session(&session_id).await {
+        Ok(session) => session,
+        Err(e) => {
+            return HandleResult {
+                reply: format!("Failed to load session: {e}"),
+                actions: vec![],
+                forward_to_session: None,
+            };
+        }
+    };
+
+    let current_turn_id = match session.state {
+        SessionState::Processing { current_turn_id, .. } => current_turn_id,
+        _ => {
+            return HandleResult {
+                reply: if requested_turn_id.is_some() {
+                    "This request has already finished.".to_string()
+                } else {
+                    "No running task to cancel.".to_string()
+                },
+                actions: vec![],
+                forward_to_session: None,
+            };
+        }
+    };
+
+    if let Some(requested_turn_id) = requested_turn_id {
+        if requested_turn_id != current_turn_id {
+            return HandleResult {
+                reply: "This request is no longer running.".to_string(),
+                actions: vec![],
+                forward_to_session: None,
+            };
+        }
+    }
+
+    match coordinator
+        .cancel_dialog_turn(&session_id, &current_turn_id)
+        .await
+    {
+        Ok(_) => {
+            state.pending_action = None;
+            HandleResult {
+                reply: "Cancellation requested for the current task.".to_string(),
+                actions: vec![],
+                forward_to_session: None,
+            }
+        }
+        Err(e) => HandleResult {
+            reply: format!("Failed to cancel task: {e}"),
+            actions: vec![],
+            forward_to_session: None,
+        },
+    }
+}
+
+fn restore_question_pending_action(
+    state: &mut BotChatState,
+    tool_id: String,
+    questions: Vec<BotQuestion>,
+    current_index: usize,
+    answers: Vec<Value>,
+    awaiting_custom_text: bool,
+    pending_answer: Option<Value>,
+) {
+    state.pending_action = Some(PendingAction::AskUserQuestion {
+        tool_id,
+        questions,
+        current_index,
+        answers,
+        awaiting_custom_text,
+        pending_answer,
+    });
+}
+
+async fn submit_question_answers(tool_id: &str, answers: &[Value]) -> HandleResult {
+    use crate::agentic::tools::user_input_manager::get_user_input_manager;
+
+    let mut payload = serde_json::Map::new();
+    for (idx, value) in answers.iter().enumerate() {
+        payload.insert(idx.to_string(), value.clone());
+    }
+
+    let manager = get_user_input_manager();
+    match manager.send_answer(tool_id, Value::Object(payload)) {
+        Ok(_) => HandleResult {
+            reply: "Answers submitted. Waiting for the assistant to continue...".to_string(),
+            actions: vec![],
+            forward_to_session: None,
+        },
+        Err(e) => HandleResult {
+            reply: format!("Failed to submit answers: {e}"),
+            actions: vec![],
+            forward_to_session: None,
+        },
+    }
+}
+
+async fn handle_question_reply(
+    state: &mut BotChatState,
+    tool_id: String,
+    questions: Vec<BotQuestion>,
+    current_index: usize,
+    mut answers: Vec<Value>,
+    awaiting_custom_text: bool,
+    pending_answer: Option<Value>,
+    message: &str,
+) -> HandleResult {
+    let Some(question) = questions.get(current_index).cloned() else {
+        return HandleResult {
+            reply: "Question state is invalid.".to_string(),
+            actions: vec![],
+            forward_to_session: None,
+        };
+    };
+
+    if awaiting_custom_text {
+        let custom_text = message.trim();
+        if custom_text.is_empty() {
+            restore_question_pending_action(
+                state,
+                tool_id,
+                questions,
+                current_index,
+                answers,
+                true,
+                pending_answer,
+            );
+            return HandleResult {
+                reply: "Custom answer cannot be empty. Please type your custom answer.".to_string(),
+                actions: vec![],
+                forward_to_session: None,
+            };
+        }
+
+        let final_value = match pending_answer {
+            Some(Value::String(_)) => Value::String(custom_text.to_string()),
+            Some(Value::Array(existing)) => {
+                let mut values: Vec<Value> = existing
+                    .into_iter()
+                    .filter(|value| value.as_str() != Some("Other"))
+                    .collect();
+                values.push(Value::String(custom_text.to_string()));
+                Value::Array(values)
+            }
+            _ => Value::String(custom_text.to_string()),
+        };
+        answers.push(final_value);
+    } else {
+        let selections = match parse_question_numbers(message) {
+            Some(values) => values,
+            None => {
+                restore_question_pending_action(
+                    state,
+                    tool_id,
+                    questions,
+                    current_index,
+                    answers,
+                    false,
+                    None,
+                );
+                return HandleResult {
+                    reply: if question.multi_select {
+                        "Invalid input. Reply with option numbers like `1,3`.".to_string()
+                    } else {
+                        "Invalid input. Reply with a single option number.".to_string()
+                    },
+                    actions: vec![],
+                    forward_to_session: None,
+                };
+            }
+        };
+
+        if !question.multi_select && selections.len() != 1 {
+            restore_question_pending_action(
+                state,
+                tool_id,
+                questions,
+                current_index,
+                answers,
+                false,
+                None,
+            );
+            return HandleResult {
+                reply: "Please reply with a single option number.".to_string(),
+                actions: vec![],
+                forward_to_session: None,
+            };
+        }
+
+        let other_index = question.options.len() + 1;
+        let mut labels = Vec::new();
+        let mut includes_other = false;
+        for selection in selections {
+            if selection == other_index {
+                includes_other = true;
+                labels.push(Value::String("Other".to_string()));
+            } else if selection >= 1 && selection <= question.options.len() {
+                labels.push(Value::String(
+                    question.options[selection - 1].label.clone(),
+                ));
+            } else {
+                restore_question_pending_action(
+                    state,
+                    tool_id,
+                    questions,
+                    current_index,
+                    answers,
+                    false,
+                    None,
+                );
+                return HandleResult {
+                    reply: format!(
+                        "Invalid selection. Please choose between 1 and {}.",
+                        other_index
+                    ),
+                    actions: vec![],
+                    forward_to_session: None,
+                };
+            }
+        }
+
+        let pending_answer = if question.multi_select {
+            Some(Value::Array(labels.clone()))
+        } else {
+            labels.into_iter().next()
+        };
+
+        if includes_other {
+            restore_question_pending_action(
+                state,
+                tool_id,
+                questions,
+                current_index,
+                answers,
+                true,
+                pending_answer,
+            );
+            return HandleResult {
+                reply: "Please type your custom answer for `Other`.".to_string(),
+                actions: vec![],
+                forward_to_session: None,
+            };
+        }
+
+        answers.push(if question.multi_select {
+            pending_answer.unwrap_or_else(|| Value::Array(Vec::new()))
+        } else {
+            pending_answer.unwrap_or_else(|| Value::String(String::new()))
+        });
+    }
+
+    if current_index + 1 < questions.len() {
+        let prompt = build_question_prompt(
+            tool_id,
+            questions,
+            current_index + 1,
+            answers,
+            false,
+            None,
+        );
+        restore_question_pending_action(
+            state,
+            match &prompt.pending_action {
+                PendingAction::AskUserQuestion { tool_id, .. } => tool_id.clone(),
+                _ => String::new(),
+            },
+            match &prompt.pending_action {
+                PendingAction::AskUserQuestion { questions, .. } => questions.clone(),
+                _ => Vec::new(),
+            },
+            match &prompt.pending_action {
+                PendingAction::AskUserQuestion { current_index, .. } => *current_index,
+                _ => 0,
+            },
+            match &prompt.pending_action {
+                PendingAction::AskUserQuestion { answers, .. } => answers.clone(),
+                _ => Vec::new(),
+            },
+            false,
+            None,
+        );
+        return HandleResult {
+            reply: prompt.reply,
+            actions: prompt.actions,
+            forward_to_session: None,
+        };
+    }
+
+    submit_question_answers(&tool_id, &answers).await
+}
+
 async fn handle_next_page(state: &mut BotChatState) -> HandleResult {
     let pending = state.pending_action.take();
     match pending {
@@ -691,6 +1259,7 @@ async fn handle_next_page(state: &mut BotChatState) -> HandleResult {
             state.pending_action = Some(action);
             HandleResult {
                 reply: "No more pages available.".to_string(),
+                actions: vec![],
                 forward_to_session: None,
             }
         }
@@ -699,9 +1268,51 @@ async fn handle_next_page(state: &mut BotChatState) -> HandleResult {
 }
 
 async fn handle_chat_message(state: &mut BotChatState, message: &str) -> HandleResult {
+    if let Some(PendingAction::AskUserQuestion {
+        tool_id,
+        questions,
+        current_index,
+        answers,
+        awaiting_custom_text,
+        pending_answer,
+    }) = state.pending_action.take()
+    {
+        return handle_question_reply(
+            state,
+            tool_id,
+            questions,
+            current_index,
+            answers,
+            awaiting_custom_text,
+            pending_answer,
+            message,
+        )
+        .await;
+    }
+    if let Some(pending) = state.pending_action.clone() {
+        return match pending {
+            PendingAction::SelectWorkspace { .. } => HandleResult {
+                reply: "Please reply with the workspace number.".to_string(),
+                actions: vec![],
+                forward_to_session: None,
+            },
+            PendingAction::SelectSession { has_more, .. } => HandleResult {
+                reply: if has_more {
+                    "Please reply with the session number, or `0` for the next page.".to_string()
+                } else {
+                    "Please reply with the session number.".to_string()
+                },
+                actions: vec![],
+                forward_to_session: None,
+            },
+            PendingAction::AskUserQuestion { .. } => unreachable!(),
+        };
+    }
+
     if state.current_workspace.is_none() {
         return HandleResult {
             reply: "No workspace selected. Use /switch_workspace to select one first.".to_string(),
+            actions: workspace_required_actions(),
             forward_to_session: None,
         };
     }
@@ -710,31 +1321,25 @@ async fn handle_chat_message(state: &mut BotChatState, message: &str) -> HandleR
             reply: "No active session. Use /resume_session to resume one or \
                     /new_code_session to create a new one."
                 .to_string(),
+            actions: session_entry_actions(),
             forward_to_session: None,
         };
     }
 
     let session_id = state.current_session_id.clone().unwrap();
-    let workspace_path = state.current_workspace.clone();
-
-    let agent_type = {
-        use crate::agentic::coordination::get_global_coordinator;
-        get_global_coordinator()
-            .and_then(|c| {
-                c.get_session_manager()
-                    .get_session(&session_id)
-                    .map(|s| s.agent_type.clone())
-            })
-            .unwrap_or_else(|| "agentic".to_string())
-    };
-
+    let turn_id = format!("turn_{}", uuid::Uuid::new_v4());
+    let cancel_command = format!("/cancel_task {}", turn_id);
     HandleResult {
-        reply: "Processing your message...".to_string(),
+        reply: format!(
+            "Processing your message...\n\nIf needed, send `{}` to stop this request.",
+            cancel_command
+        ),
+        actions: cancel_task_actions(cancel_command),
         forward_to_session: Some(ForwardRequest {
             session_id,
             content: message.to_string(),
-            agent_type,
-            workspace_path,
+            agent_type: "agentic".to_string(),
+            turn_id,
         }),
     }
 }
@@ -743,6 +1348,9 @@ async fn handle_chat_message(state: &mut BotChatState, message: &str) -> HandleR
 
 enum StreamChunk {
     Text(String),
+    Thinking(String),
+    ThinkingEnd,
+    Interaction(BotInteractiveRequest),
     Done,
     Error(String),
 }
@@ -763,6 +1371,41 @@ impl crate::agentic::events::EventSubscriber for BotResponseCollector {
             AE::TextChunk { text, session_id, .. } if session_id == &self.session_id => {
                 let _ = self.chunk_tx.send(StreamChunk::Text(text.clone()));
             }
+            AE::ThinkingChunk { content, session_id, .. } if session_id == &self.session_id => {
+                if content == "<thinking_end>" {
+                    let _ = self.chunk_tx.send(StreamChunk::ThinkingEnd);
+                } else {
+                    let _ = self.chunk_tx.send(StreamChunk::Thinking(content.clone()));
+                }
+            }
+            AE::ToolEvent {
+                session_id,
+                tool_event,
+                ..
+            } if session_id == &self.session_id => match tool_event {
+                bitfun_events::ToolEventData::Started {
+                    tool_id,
+                    tool_name,
+                    params,
+                } if tool_name == "AskUserQuestion" => {
+                    if let Some(questions_value) = params.get("questions").cloned() {
+                        if let Ok(questions) =
+                            serde_json::from_value::<Vec<BotQuestion>>(questions_value)
+                        {
+                            let request = build_question_prompt(
+                                tool_id.clone(),
+                                questions,
+                                0,
+                                Vec::new(),
+                                false,
+                                None,
+                            );
+                            let _ = self.chunk_tx.send(StreamChunk::Interaction(request));
+                        }
+                    }
+                }
+                _ => {}
+            },
             AE::DialogTurnCompleted { session_id, .. } if session_id == &self.session_id => {
                 let _ = self.chunk_tx.send(StreamChunk::Done);
             }
@@ -780,21 +1423,20 @@ impl crate::agentic::events::EventSubscriber for BotResponseCollector {
 /// Called from the bot implementations after `handle_command` returns a
 /// `ForwardRequest`.  Subscribes to session events, starts the turn, and
 /// collects text chunks until completion or timeout.
-pub async fn execute_forwarded_turn(forward: ForwardRequest) -> String {
-    use crate::agentic::coordination::get_global_coordinator;
+///
+/// `message_sender` is called to send intermediate messages (e.g. thinking
+/// content) before the final response is returned.
+pub async fn execute_forwarded_turn(
+    forward: ForwardRequest,
+    interaction_handler: Option<BotInteractionHandler>,
+    message_sender: Option<BotMessageSender>,
+) -> String {
+    use crate::agentic::coordination::{get_global_coordinator, DialogTriggerSource};
 
     let coordinator = match get_global_coordinator() {
         Some(c) => c,
         None => return "Session system not ready.".to_string(),
     };
-
-    if let Some(wp) = &forward.workspace_path {
-        use crate::infrastructure::{get_workspace_path, set_workspace_path};
-        let current = get_workspace_path().map(|p| p.to_string_lossy().to_string());
-        if current.as_deref() != Some(wp.as_str()) {
-            set_workspace_path(Some(std::path::PathBuf::from(wp)));
-        }
-    }
 
     let (chunk_tx, mut chunk_rx) = tokio::sync::mpsc::unbounded_channel::<StreamChunk>();
     let subscriber_id = format!("bot_forward_{}", uuid::Uuid::new_v4());
@@ -804,14 +1446,13 @@ pub async fn execute_forwarded_turn(forward: ForwardRequest) -> String {
     };
     coordinator.subscribe_internal(subscriber_id.clone(), collector);
 
-    let turn_id = format!("turn_{}", chrono::Utc::now().timestamp_millis());
     if let Err(e) = coordinator
         .start_dialog_turn(
             forward.session_id.clone(),
             forward.content,
-            Some(turn_id),
+            Some(forward.turn_id),
             forward.agent_type,
-            true,
+            DialogTriggerSource::Bot,
         )
         .await
     {
@@ -821,10 +1462,25 @@ pub async fn execute_forwarded_turn(forward: ForwardRequest) -> String {
 
     let sub_id = subscriber_id.clone();
     let result = tokio::time::timeout(std::time::Duration::from_secs(300), async {
+        let mut thinking = String::new();
         let mut response = String::new();
         while let Some(chunk) = chunk_rx.recv().await {
             match chunk {
+                StreamChunk::Thinking(t) => thinking.push_str(&t),
+                StreamChunk::ThinkingEnd => {
+                    if !thinking.is_empty() {
+                        if let Some(sender) = message_sender.as_ref() {
+                            sender(thinking.clone()).await;
+                        }
+                        thinking.clear();
+                    }
+                }
                 StreamChunk::Text(t) => response.push_str(&t),
+                StreamChunk::Interaction(interaction) => {
+                    if let Some(handler) = interaction_handler.as_ref() {
+                        handler(interaction).await;
+                    }
+                }
                 StreamChunk::Done => break,
                 StreamChunk::Error(e) => return format!("Error: {e}"),
             }

@@ -219,6 +219,9 @@
     "disclaimerItemMobileBrowser": "The mobile client loads as a web application in a browser. Browser cache, local storage, page screenshots, system clipboard, and other browser/system features may introduce additional information exposure risks.",
     "disclaimerItemCompliance": "Some countries or regions have legal restrictions on encrypted communication, tunneling services, cross-border data transfer, and related activities. Please evaluate compliance with your local laws and regulations, including potential policy changes.",
     "disclaimerItemLiability": "Any risks, losses, disputes, or other adverse consequences arising during your use of Remote Connect (including but not limited to data leakage, service interruption, account anomalies, or service unavailability) are your responsibility; BitFun is not liable for resulting issues.",
+    "disclaimerReview": "View disclaimer",
+    "disclaimerStatusAgreed": "Agreed",
+    "disclaimerStatusPending": "Not agreed",
     "disclaimerDecline": "Decline",
     "disclaimerAgree": "Agree and Continue"
   },

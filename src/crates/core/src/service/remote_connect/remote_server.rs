@@ -12,7 +12,7 @@ use anyhow::{anyhow, Result};
 use dashmap::DashMap;
 use log::{debug, error, info};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 
@@ -57,9 +57,22 @@ pub enum RemoteCommand {
     },
     CancelTask {
         session_id: String,
+        turn_id: Option<String>,
     },
     DeleteSession {
         session_id: String,
+    },
+    ConfirmTool {
+        tool_id: String,
+        updated_input: Option<serde_json::Value>,
+    },
+    RejectTool {
+        tool_id: String,
+        reason: Option<String>,
+    },
+    CancelTool {
+        tool_id: String,
+        reason: Option<String>,
     },
     /// Submit answers for an AskUserQuestion tool.
     AnswerQuestion {
@@ -144,6 +157,10 @@ pub enum RemoteResponse {
         active_turn: Option<ActiveTurnSnapshot>,
     },
     AnswerAccepted,
+    InteractionAccepted {
+        action: String,
+        target_id: String,
+    },
     Pong,
     Error {
         message: String,
@@ -248,13 +265,16 @@ fn turns_to_chat_messages(
 
         // Collect ordered items across all rounds, preserving interleaved order
         struct OrderedEntry {
-            order_index: usize,
+            order_index: Option<usize>,
+            timestamp: u64,
+            sequence: usize,
             item: ChatMessageItem,
         }
         let mut ordered: Vec<OrderedEntry> = Vec::new();
         let mut tools_flat = Vec::new();
         let mut thinking_parts = Vec::new();
         let mut text_parts = Vec::new();
+        let mut sequence = 0usize;
 
         for round in &turn.model_rounds {
             for t in &round.text_items {
@@ -264,13 +284,16 @@ fn turns_to_chat_messages(
                 if !t.content.is_empty() {
                     text_parts.push(t.content.clone());
                     ordered.push(OrderedEntry {
-                        order_index: t.order_index.unwrap_or(usize::MAX),
+                        order_index: t.order_index,
+                        timestamp: t.timestamp,
+                        sequence,
                         item: ChatMessageItem {
                             item_type: "text".to_string(),
                             content: Some(t.content.clone()),
                             tool: None,
                         },
                     });
+                    sequence += 1;
                 }
             }
             for t in &round.thinking_items {
@@ -280,13 +303,16 @@ fn turns_to_chat_messages(
                 if !t.content.is_empty() {
                     thinking_parts.push(t.content.clone());
                     ordered.push(OrderedEntry {
-                        order_index: t.order_index.unwrap_or(usize::MAX),
+                        order_index: t.order_index,
+                        timestamp: t.timestamp,
+                        sequence,
                         item: ChatMessageItem {
                             item_type: "thinking".to_string(),
                             content: Some(t.content.clone()),
                             tool: None,
                         },
                     });
+                    sequence += 1;
                 }
             }
             for t in &round.tool_items {
@@ -307,21 +333,39 @@ fn turns_to_chat_messages(
                     duration_ms: t.duration_ms,
                     start_ms: Some(t.start_time),
                     input_preview: None,
-                    tool_input: None,
+                    tool_input: if t.tool_name == "AskUserQuestion" {
+                        Some(t.tool_call.input.clone())
+                    } else {
+                        None
+                    },
                 };
                 tools_flat.push(tool_status.clone());
                 ordered.push(OrderedEntry {
-                    order_index: t.order_index.unwrap_or(usize::MAX),
+                    order_index: t.order_index,
+                    timestamp: t.start_time,
+                    sequence,
                     item: ChatMessageItem {
                         item_type: "tool".to_string(),
                         content: None,
                         tool: Some(tool_status),
                     },
                 });
+                sequence += 1;
             }
         }
 
-        ordered.sort_by_key(|e| e.order_index);
+        ordered.sort_by(|a, b| match (a.order_index, b.order_index) {
+            (Some(a_idx), Some(b_idx)) => a_idx
+                .cmp(&b_idx)
+                .then_with(|| a.timestamp.cmp(&b.timestamp))
+                .then_with(|| a.sequence.cmp(&b.sequence)),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => a
+                .timestamp
+                .cmp(&b.timestamp)
+                .then_with(|| a.sequence.cmp(&b.sequence)),
+        });
         let items: Vec<ChatMessageItem> = ordered.into_iter().map(|e| e.item).collect();
 
         let ts = turn
@@ -397,36 +441,48 @@ fn resolve_agent_type(mobile_type: Option<&str>) -> &'static str {
     }
 }
 
-fn save_data_url_image(
-    dir: &std::path::Path,
-    name: &str,
-    data_url: &str,
-) -> Option<std::path::PathBuf> {
-    use base64::{engine::general_purpose::STANDARD as B64, Engine};
-
-    let (header, b64_data) = data_url.split_once(",")?;
-    let ext = if header.contains("png") {
-        "png"
-    } else if header.contains("gif") {
-        "gif"
-    } else if header.contains("webp") {
-        "webp"
-    } else {
-        "jpg"
+fn build_message_with_remote_images(content: &str, images: &[ImageAttachment]) -> String {
+    use crate::agentic::tools::image_context::{
+        format_image_context_reference, store_image_context, ImageContextData,
     };
 
-    let decoded = B64.decode(b64_data.trim()).ok()?;
+    if images.is_empty() {
+        return content.to_string();
+    }
 
-    let stem = std::path::Path::new(name)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("image");
-    let ts = chrono::Utc::now().timestamp_millis();
-    let filename = format!("{stem}_{ts}.{ext}");
-    let path = dir.join(&filename);
+    let context_section = images
+        .iter()
+        .map(|img| {
+            let mime_type = img
+                .data_url
+                .split_once(',')
+                .and_then(|(header, _)| {
+                    header
+                        .strip_prefix("data:")
+                        .and_then(|rest| rest.split(';').next())
+                })
+                .unwrap_or("image/png")
+                .to_string();
 
-    std::fs::write(&path, &decoded).ok()?;
-    Some(path)
+            let image_context = ImageContextData {
+                id: format!("remote_img_{}", uuid::Uuid::new_v4()),
+                image_path: None,
+                data_url: Some(img.data_url.clone()),
+                mime_type,
+                image_name: img.name.clone(),
+                file_size: 0,
+                width: None,
+                height: None,
+                source: "remote".to_string(),
+            };
+
+            store_image_context(image_context.clone());
+            format_image_context_reference(&image_context)
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    format!("{context_section}\n\n{content}")
 }
 
 // ── RemoteSessionStateTracker ──────────────────────────────────────
@@ -500,6 +556,78 @@ impl RemoteSessionStateTracker {
 
     pub fn title(&self) -> String {
         self.state.read().unwrap().title.clone()
+    }
+
+    fn upsert_active_tool(
+        state: &mut TrackerState,
+        tool_id: &str,
+        tool_name: &str,
+        status: &str,
+        input_preview: Option<String>,
+        tool_input: Option<serde_json::Value>,
+    ) {
+        let resolved_id = if tool_id.is_empty() {
+            format!("{}-{}", tool_name, state.active_tools.len())
+        } else {
+            tool_id.to_string()
+        };
+        let allow_name_fallback = tool_id.is_empty() && !tool_name.is_empty();
+
+        if let Some(tool) = state
+            .active_tools
+            .iter_mut()
+            .rev()
+            .find(|t| t.id == resolved_id || (allow_name_fallback && t.name == tool_name))
+        {
+            tool.status = status.to_string();
+            if input_preview.is_some() {
+                tool.input_preview = input_preview.clone();
+            }
+            if tool_input.is_some() {
+                tool.tool_input = tool_input.clone();
+            }
+        } else {
+            let tool_status = RemoteToolStatus {
+                id: resolved_id.clone(),
+                name: tool_name.to_string(),
+                status: status.to_string(),
+                duration_ms: None,
+                start_ms: Some(
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64,
+                ),
+                input_preview,
+                tool_input,
+            };
+            state.active_tools.push(tool_status.clone());
+            state.active_items.push(ChatMessageItem {
+                item_type: "tool".to_string(),
+                content: None,
+                tool: Some(tool_status),
+            });
+            return;
+        }
+
+        if let Some(item) = state.active_items.iter_mut().rev().find(|i| {
+            i.item_type == "tool"
+                && i.tool
+                    .as_ref()
+                    .map_or(false, |t| {
+                        t.id == resolved_id || (allow_name_fallback && t.name == tool_name)
+                    })
+        }) {
+            if let Some(tool) = item.tool.as_mut() {
+                tool.status = status.to_string();
+                if input_preview.is_some() {
+                    tool.input_preview = input_preview;
+                }
+                if tool_input.is_some() {
+                    tool.tool_input = tool_input;
+                }
+            }
+        }
     }
 
     fn handle_event(&self, event: &crate::agentic::events::AgenticEvent) {
@@ -594,56 +722,100 @@ impl RemoteSessionStateTracker {
                         .to_string();
 
                     let mut s = self.state.write().unwrap();
+                    let allow_name_fallback = tool_id.is_empty() && !tool_name.is_empty();
                     match event_type {
+                        "EarlyDetected" => {
+                            Self::upsert_active_tool(
+                                &mut s,
+                                &tool_id,
+                                &tool_name,
+                                "preparing",
+                                None,
+                                None,
+                            );
+                        }
+                        "ConfirmationNeeded" => {
+                            let params = val.get("params").cloned();
+                            let input_preview = params.as_ref().map(|v| {
+                                let text = if v.is_string() {
+                                    v.as_str().unwrap_or_default().to_string()
+                                } else {
+                                    serde_json::to_string(v).unwrap_or_default()
+                                };
+                                text.chars().take(160).collect()
+                            });
+                            Self::upsert_active_tool(
+                                &mut s,
+                                &tool_id,
+                                &tool_name,
+                                "pending_confirmation",
+                                input_preview,
+                                params,
+                            );
+                        }
                         "Started" => {
-                            let input_preview = val
-                                .get("input")
-                                .and_then(|v| v.as_str())
-                                .map(|s| s.chars().take(100).collect());
+                            let params = val.get("params").cloned();
+                            let input_preview = params.as_ref().map(|v| {
+                                let text = if v.is_string() {
+                                    v.as_str().unwrap_or_default().to_string()
+                                } else {
+                                    serde_json::to_string(v).unwrap_or_default()
+                                };
+                                text.chars().take(160).collect()
+                            });
                             let tool_input = if tool_name == "AskUserQuestion" {
-                                val.get("params").cloned()
+                                params
                             } else {
                                 None
                             };
-                            let tool_count = s.active_tools.len();
-                            let resolved_id = if tool_id.is_empty() {
-                                format!("{}-{}", tool_name, tool_count)
-                            } else {
-                                tool_id
-                            };
-                            let tool_status = RemoteToolStatus {
-                                id: resolved_id,
-                                name: tool_name,
-                                status: "running".to_string(),
-                                duration_ms: None,
-                                start_ms: Some(
-                                    std::time::SystemTime::now()
-                                        .duration_since(std::time::UNIX_EPOCH)
-                                        .unwrap_or_default()
-                                        .as_millis() as u64,
-                                ),
+                            Self::upsert_active_tool(
+                                &mut s,
+                                &tool_id,
+                                &tool_name,
+                                "running",
                                 input_preview,
                                 tool_input,
-                            };
-                            s.active_items.push(ChatMessageItem {
-                                item_type: "tool".to_string(),
-                                content: None,
-                                tool: Some(tool_status.clone()),
-                            });
-                            s.active_tools.push(tool_status);
+                            );
+                        }
+                        "Confirmed" => {
+                            Self::upsert_active_tool(
+                                &mut s,
+                                &tool_id,
+                                &tool_name,
+                                "confirmed",
+                                None,
+                                None,
+                            );
+                        }
+                        "Rejected" => {
+                            Self::upsert_active_tool(
+                                &mut s,
+                                &tool_id,
+                                &tool_name,
+                                "rejected",
+                                None,
+                                None,
+                            );
                         }
                         "Completed" | "Succeeded" => {
                             let duration = val
                                 .get("duration_ms")
                                 .and_then(|v| v.as_u64());
                             if let Some(t) = s.active_tools.iter_mut().rev().find(|t| {
-                                (t.id == tool_id || t.name == tool_name) && t.status == "running"
+                                (t.id == tool_id
+                                    || (allow_name_fallback && t.name == tool_name))
+                                    && t.status == "running"
                             }) {
                                 t.status = "completed".to_string();
                                 t.duration_ms = duration;
                             }
                             if let Some(item) = s.active_items.iter_mut().rev().find(|i| {
-                                i.item_type == "tool" && i.tool.as_ref().map_or(false, |t| (t.id == tool_id || t.name == tool_name) && t.status == "running")
+                                i.item_type == "tool"
+                                    && i.tool.as_ref().map_or(false, |t| {
+                                        (t.id == tool_id
+                                            || (allow_name_fallback && t.name == tool_name))
+                                            && t.status == "running"
+                                    })
                             }) {
                                 if let Some(t) = item.tool.as_mut() {
                                     t.status = "completed".to_string();
@@ -653,15 +825,49 @@ impl RemoteSessionStateTracker {
                         }
                         "Failed" => {
                             if let Some(t) = s.active_tools.iter_mut().rev().find(|t| {
-                                (t.id == tool_id || t.name == tool_name) && t.status == "running"
+                                (t.id == tool_id
+                                    || (allow_name_fallback && t.name == tool_name))
+                                    && t.status == "running"
                             }) {
                                 t.status = "failed".to_string();
                             }
                             if let Some(item) = s.active_items.iter_mut().rev().find(|i| {
-                                i.item_type == "tool" && i.tool.as_ref().map_or(false, |t| (t.id == tool_id || t.name == tool_name) && t.status == "running")
+                                i.item_type == "tool"
+                                    && i.tool.as_ref().map_or(false, |t| {
+                                        (t.id == tool_id
+                                            || (allow_name_fallback && t.name == tool_name))
+                                            && t.status == "running"
+                                    })
                             }) {
                                 if let Some(t) = item.tool.as_mut() {
                                     t.status = "failed".to_string();
+                                }
+                            }
+                        }
+                        "Cancelled" => {
+                            if let Some(t) = s.active_tools.iter_mut().rev().find(|t| {
+                                (t.id == tool_id
+                                    || (allow_name_fallback && t.name == tool_name))
+                                    && matches!(
+                                        t.status.as_str(),
+                                        "running" | "pending_confirmation" | "confirmed"
+                                    )
+                            }) {
+                                t.status = "cancelled".to_string();
+                            }
+                            if let Some(item) = s.active_items.iter_mut().rev().find(|i| {
+                                i.item_type == "tool"
+                                    && i.tool.as_ref().map_or(false, |t| {
+                                        (t.id == tool_id
+                                            || (allow_name_fallback && t.name == tool_name))
+                                            && matches!(
+                                                t.status.as_str(),
+                                                "running" | "pending_confirmation" | "confirmed"
+                                            )
+                                    })
+                            }) {
+                                if let Some(t) = item.tool.as_mut() {
+                                    t.status = "cancelled".to_string();
                                 }
                             }
                         }
@@ -823,6 +1029,9 @@ impl RemoteServer {
 
             RemoteCommand::SendMessage { .. }
             | RemoteCommand::CancelTask { .. }
+            | RemoteCommand::ConfirmTool { .. }
+            | RemoteCommand::RejectTool { .. }
+            | RemoteCommand::CancelTool { .. }
             | RemoteCommand::AnswerQuestion { .. } => {
                 self.handle_execution_command(cmd).await
             }
@@ -952,6 +1161,24 @@ impl RemoteServer {
         let active_turn = tracker.snapshot_active_turn();
         let sess_state = tracker.session_state();
         let title = tracker.title();
+
+        let active_turn_ask_tool_ids = active_turn
+            .as_ref()
+            .map(|turn| {
+                turn.tools
+                    .iter()
+                    .filter(|tool| tool.name == "AskUserQuestion")
+                    .map(|tool| tool.id.clone())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let new_message_ask_tool_ids = new_messages
+            .iter()
+            .flat_map(|message| message.items.iter().flatten())
+            .filter_map(|item| item.tool.as_ref())
+            .filter(|tool| tool.name == "AskUserQuestion")
+            .map(|tool| tool.id.clone())
+            .collect::<Vec<_>>();
 
         RemoteResponse::SessionPoll {
             version: current_version,
@@ -1189,10 +1416,7 @@ impl RemoteServer {
                 session_name: custom_name,
                 workspace_path: requested_ws_path,
             } => {
-                use crate::infrastructure::{get_workspace_path, PathManager};
-                use crate::service::conversation::{
-                    ConversationPersistenceManager, SessionMetadata, SessionStatus,
-                };
+                use crate::infrastructure::get_workspace_path;
 
                 let agent = resolve_agent_type(agent_type.as_deref());
                 let session_name = custom_name
@@ -1227,51 +1451,6 @@ impl RemoteServer {
                 {
                     Ok(session) => {
                         let session_id = session.session_id.clone();
-
-                        if let Some(wp) = binding_ws_path {
-                            if let Ok(pm) = PathManager::new() {
-                                let pm = std::sync::Arc::new(pm);
-                                if let Ok(conv_mgr) =
-                                    ConversationPersistenceManager::new(pm, wp.clone()).await
-                                {
-                                    let now_ms = std::time::SystemTime::now()
-                                        .duration_since(std::time::UNIX_EPOCH)
-                                        .unwrap_or_default()
-                                        .as_millis()
-                                        as u64;
-                                    let meta = SessionMetadata {
-                                        session_id: session_id.clone(),
-                                        session_name: session_name.to_string(),
-                                        agent_type: agent.to_string(),
-                                        model_name: "default".to_string(),
-                                        created_at: now_ms,
-                                        last_active_at: now_ms,
-                                        turn_count: 0,
-                                        message_count: 0,
-                                        tool_call_count: 0,
-                                        status: SessionStatus::Active,
-                                        terminal_session_id: None,
-                                        snapshot_session_id: None,
-                                        tags: vec![],
-                                        custom_metadata: None,
-                                        todos: None,
-                                        workspace_path: binding_ws_str,
-                                    };
-                                    if let Err(e) =
-                                        conv_mgr.save_session_metadata(&meta).await
-                                    {
-                                        error!(
-                                            "Failed to sync remote session to workspace: {e}"
-                                        );
-                                    } else {
-                                        info!(
-                                            "Remote session synced to workspace: {session_id}"
-                                        );
-                                    }
-                                }
-                            }
-                        }
-
                         RemoteResponse::SessionCreated { session_id }
                     }
                     Err(e) => RemoteResponse::Error {
@@ -1318,7 +1497,7 @@ impl RemoteServer {
     // ── Execution commands ──────────────────────────────────────────
 
     async fn handle_execution_command(&self, cmd: &RemoteCommand) -> RemoteResponse {
-        use crate::agentic::coordination::get_global_coordinator;
+        use crate::agentic::coordination::{get_global_coordinator, DialogTriggerSource};
 
         let coordinator = match get_global_coordinator() {
             Some(c) => c,
@@ -1339,71 +1518,20 @@ impl RemoteServer {
                 self.ensure_tracker(session_id);
 
                 let session_mgr = coordinator.get_session_manager();
-                let (session_agent_type, session_ws) = session_mgr
-                    .get_session(session_id)
-                    .map(|s| (s.agent_type.clone(), s.config.workspace_path.clone()))
-                    .unwrap_or_else(|| ("default".to_string(), None));
+                let _ = match session_mgr.get_session(session_id) {
+                    Some(session) => Some(session),
+                    None => coordinator.restore_session(session_id).await.ok(),
+                };
 
                 let agent_type = requested_agent_type
                     .as_deref()
                     .map(|t| resolve_agent_type(Some(t)).to_string())
-                    .unwrap_or(session_agent_type);
+                    .unwrap_or_else(|| "agentic".to_string());
 
-                if let Some(ws_path_str) = &session_ws {
-                    use crate::infrastructure::{get_workspace_path, set_workspace_path};
-                    let current = get_workspace_path();
-                    let current_str =
-                        current.as_ref().map(|p| p.to_string_lossy().to_string());
-                    if current_str.as_deref() != Some(ws_path_str.as_str()) {
-                        info!("Remote send_message: temporarily setting workspace for session={session_id} to {ws_path_str}");
-                        set_workspace_path(Some(std::path::PathBuf::from(ws_path_str)));
-                    }
-                }
-
-                let full_content = if let Some(imgs) = &images {
-                    if imgs.is_empty() {
-                        content.clone()
-                    } else {
-                        let save_dir = if let Some(ws) = &session_ws {
-                            let d = std::path::PathBuf::from(ws)
-                                .join(".bitfun")
-                                .join("remote-images");
-                            let _ = std::fs::create_dir_all(&d);
-                            Some(d)
-                        } else {
-                            None
-                        };
-
-                        let mut extra = String::new();
-                        for (i, img) in imgs.iter().enumerate() {
-                            if let Some(ref dir) = save_dir {
-                                if let Some(saved) =
-                                    save_data_url_image(dir, &img.name, &img.data_url)
-                                {
-                                    let path_str = saved.to_string_lossy();
-                                    extra.push_str(&format!(
-                                        "\n\n[Image: {}]\nPath: {}\nTip: You can use the AnalyzeImage tool with the image_path parameter.",
-                                        img.name, path_str
-                                    ));
-                                    info!("Remote image {i} saved: {path_str}");
-                                    continue;
-                                }
-                            }
-                            extra.push_str(&format!(
-                                "\n\n[Image: {} (inline)]\nData URL provided inline.\nTip: You can use the AnalyzeImage tool with the data_url parameter.",
-                                img.name
-                            ));
-                        }
-                        format!("{content}{extra}")
-                    }
-                } else {
-                    content.clone()
-                };
-
-                let is_first_message = session_mgr
-                    .get_session(session_id)
-                    .map(|s| s.dialog_turn_ids.is_empty())
-                    .unwrap_or(true);
+                let full_content = images
+                    .as_ref()
+                    .map(|imgs| build_message_with_remote_images(content, imgs))
+                    .unwrap_or_else(|| content.clone());
 
                 info!(
                     "Remote send_message: session={session_id}, agent_type={agent_type}, images={}",
@@ -1416,58 +1544,106 @@ impl RemoteServer {
                         full_content,
                         Some(turn_id.clone()),
                         agent_type,
-                        true,
+                        DialogTriggerSource::RemoteRelay,
                     )
                     .await
                 {
-                    Ok(()) => {
-                        if is_first_message {
-                            let sid = session_id.clone();
-                            let msg = content.clone();
-                            let ws = session_ws.clone();
-                            tokio::spawn(async move {
-                                if let Some(coord) = get_global_coordinator() {
-                                    match coord
-                                        .generate_session_title(&sid, &msg, Some(20))
-                                        .await
-                                    {
-                                        Ok(title) => {
-                                            Self::persist_session_title(&sid, &title, ws.as_ref())
-                                                .await;
-                                        }
-                                        Err(e) => {
-                                            debug!(
-                                                "Remote session title generation failed: {e}"
-                                            );
-                                        }
-                                    }
-                                }
-                            });
-                        }
-                        RemoteResponse::MessageSent {
-                            session_id: session_id.clone(),
-                            turn_id,
-                        }
-                    }
+                    Ok(()) => RemoteResponse::MessageSent {
+                        session_id: session_id.clone(),
+                        turn_id,
+                    },
                     Err(e) => RemoteResponse::Error {
                         message: e.to_string(),
                     },
                 }
             }
-            RemoteCommand::CancelTask { session_id } => {
-                let session_mgr = coordinator.get_session_manager();
-                if let Some(session) = session_mgr.get_session(session_id) {
-                    use crate::agentic::core::SessionState;
-                    let _ = session_mgr
-                        .update_session_state(session_id, SessionState::Idle)
-                        .await;
-                    if let Some(last_turn_id) = session.dialog_turn_ids.last() {
-                        let _ =
-                            coordinator.cancel_dialog_turn(session_id, last_turn_id).await;
+            RemoteCommand::CancelTask {
+                session_id,
+                turn_id,
+            } => {
+                let session = match coordinator.get_session_manager().get_session(session_id) {
+                    Some(session) => Some(session),
+                    None => coordinator.restore_session(session_id).await.ok(),
+                };
+
+                let Some(session) = session else {
+                    return RemoteResponse::Error {
+                        message: format!("Session not found: {}", session_id),
+                    };
+                };
+
+                let running_turn_id = match &session.state {
+                    crate::agentic::core::SessionState::Processing { current_turn_id, .. } => {
+                        Some(current_turn_id.clone())
                     }
+                    _ => None,
+                };
+
+                match (running_turn_id, turn_id.as_ref()) {
+                    (Some(current_turn_id), Some(requested_turn_id))
+                        if requested_turn_id != &current_turn_id =>
+                    {
+                        RemoteResponse::Error {
+                            message: "This task is no longer running.".to_string(),
+                        }
+                    }
+                    (Some(current_turn_id), _) => match coordinator
+                        .cancel_dialog_turn(session_id, &current_turn_id)
+                        .await
+                    {
+                        Ok(_) => RemoteResponse::TaskCancelled {
+                            session_id: session_id.clone(),
+                        },
+                        Err(e) => RemoteResponse::Error {
+                            message: e.to_string(),
+                        },
+                    },
+                    (None, Some(_)) => RemoteResponse::Error {
+                        message: "This task is already finished.".to_string(),
+                    },
+                    (None, None) => RemoteResponse::Error {
+                        message: format!("No running task to cancel for session: {}", session_id),
+                    },
                 }
-                RemoteResponse::TaskCancelled {
-                    session_id: session_id.clone(),
+            }
+            RemoteCommand::ConfirmTool {
+                tool_id,
+                updated_input,
+            } => match coordinator.confirm_tool(tool_id, updated_input.clone()).await {
+                Ok(_) => RemoteResponse::InteractionAccepted {
+                    action: "confirm_tool".to_string(),
+                    target_id: tool_id.clone(),
+                },
+                Err(e) => RemoteResponse::Error {
+                    message: e.to_string(),
+                },
+            },
+            RemoteCommand::RejectTool { tool_id, reason } => {
+                let reject_reason = reason
+                    .clone()
+                    .unwrap_or_else(|| "User rejected".to_string());
+                match coordinator.reject_tool(tool_id, reject_reason).await {
+                    Ok(_) => RemoteResponse::InteractionAccepted {
+                        action: "reject_tool".to_string(),
+                        target_id: tool_id.clone(),
+                    },
+                    Err(e) => RemoteResponse::Error {
+                        message: e.to_string(),
+                    },
+                }
+            }
+            RemoteCommand::CancelTool { tool_id, reason } => {
+                let cancel_reason = reason
+                    .clone()
+                    .unwrap_or_else(|| "User cancelled".to_string());
+                match coordinator.cancel_tool(tool_id, cancel_reason).await {
+                    Ok(_) => RemoteResponse::InteractionAccepted {
+                        action: "cancel_tool".to_string(),
+                        target_id: tool_id.clone(),
+                    },
+                    Err(e) => RemoteResponse::Error {
+                        message: e.to_string(),
+                    },
                 }
             }
             RemoteCommand::AnswerQuestion { tool_id, answers } => {
@@ -1484,40 +1660,6 @@ impl RemoteServer {
         }
     }
 
-    async fn persist_session_title(
-        session_id: &str,
-        title: &str,
-        workspace_path: Option<&String>,
-    ) {
-        use crate::infrastructure::{get_workspace_path, PathManager};
-        use crate::service::conversation::ConversationPersistenceManager;
-
-        let ws = workspace_path
-            .map(std::path::PathBuf::from)
-            .or_else(get_workspace_path);
-        let Some(wp) = ws else { return };
-
-        let pm = match PathManager::new() {
-            Ok(pm) => std::sync::Arc::new(pm),
-            Err(_) => return,
-        };
-        let conv_mgr = match ConversationPersistenceManager::new(pm, wp).await {
-            Ok(m) => m,
-            Err(_) => return,
-        };
-        if let Ok(Some(mut meta)) = conv_mgr.load_session_metadata(session_id).await {
-            meta.session_name = title.to_string();
-            meta.last_active_at = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as u64;
-            if let Err(e) = conv_mgr.save_session_metadata(&meta).await {
-                error!("Failed to persist remote session title: {e}");
-            } else {
-                info!("Remote session title persisted: session_id={session_id}, title={title}");
-            }
-        }
-    }
 }
 
 #[cfg(test)]

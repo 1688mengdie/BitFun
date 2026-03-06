@@ -8,7 +8,7 @@ import { notificationService } from '../../../shared/notification-system';
 import { createLogger } from '@/shared/utils/logger';
 import { i18nService } from '@/infrastructure/i18n';
 import type { FlowChatContext, SessionConfig } from './types';
-import { saveNewSessionMetadata, touchSessionActivity, cleanupSaveState } from './PersistenceModule';
+import { touchSessionActivity, cleanupSaveState } from './PersistenceModule';
 
 const log = createLogger('SessionModule');
 
@@ -96,8 +96,6 @@ export async function createChatSession(
       maxContextTokens,
       mode
     );
-    
-    await saveNewSessionMetadata(response.sessionId, config, sessionName, mode);
 
     return response.sessionId;
   } catch (error) {
@@ -207,72 +205,3 @@ export async function deleteChatSession(
   }
 }
 
-/**
- * Ensure backend session exists (check before sending message)
- */
-export async function ensureBackendSession(
-  context: FlowChatContext,
-  sessionId: string
-): Promise<void> {
-  const session = context.flowChatStore.getState().sessions.get(sessionId);
-  if (!session) {
-    throw new Error(`Session does not exist: ${sessionId}`);
-  }
-  
-  const isHistoricalSession = session.isHistorical === true;
-  const isFirstTurn = session.dialogTurns.length <= 1;
-  const needsBackendSetup = isHistoricalSession || isFirstTurn;
-  
-  if (needsBackendSetup) {
-    try {
-      await agentAPI.restoreSession(sessionId);
-      
-      if (isHistoricalSession) {
-        context.flowChatStore.setState(prev => {
-          const newSessions = new Map(prev.sessions);
-          const sess = newSessions.get(sessionId);
-          if (sess) {
-            newSessions.set(sessionId, { ...sess, isHistorical: false });
-          }
-          return { ...prev, sessions: newSessions };
-        });
-      }
-    } catch (restoreError: any) {
-      log.debug('Session restore failed, creating new session', { sessionId, error: restoreError });
-      await agentAPI.createSession({
-        sessionId: sessionId,
-        sessionName: session.title || `Session ${sessionId.slice(0, 8)}`,
-        agentType: session.mode || 'agentic',
-        config: {
-          modelName: session.config.modelName || 'default',
-          enableTools: true,
-          safeMode: true
-        }
-      });
-    }
-  }
-}
-
-/**
- * Retry creating backend session (retry after message send failure)
- */
-export async function retryCreateBackendSession(
-  context: FlowChatContext,
-  sessionId: string
-): Promise<void> {
-  const session = context.flowChatStore.getState().sessions.get(sessionId);
-  if (!session) {
-    throw new Error(`Session does not exist: ${sessionId}`);
-  }
-  
-  await agentAPI.createSession({
-    sessionId: sessionId,
-    sessionName: session.title || `Session ${sessionId.slice(0, 8)}`,
-    agentType: session.mode || 'agentic',
-    config: {
-      modelName: session.config.modelName || 'default',
-      enableTools: true,
-      safeMode: true
-    }
-  });
-}

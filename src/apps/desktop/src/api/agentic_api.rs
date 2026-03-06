@@ -6,8 +6,9 @@ use std::sync::Arc;
 use tauri::{AppHandle, State};
 
 use crate::api::app_state::AppState;
-use bitfun_core::agentic::coordination::ConversationCoordinator;
+use bitfun_core::agentic::coordination::{ConversationCoordinator, DialogTriggerSource};
 use bitfun_core::agentic::core::*;
+use bitfun_core::infrastructure::get_workspace_path;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -142,6 +143,9 @@ pub async fn create_session(
     coordinator: State<'_, Arc<ConversationCoordinator>>,
     request: CreateSessionRequest,
 ) -> Result<CreateSessionResponse, String> {
+    let workspace_path = get_workspace_path()
+        .map(|p| p.to_string_lossy().to_string());
+
     let config = request
         .config
         .map(|c| SessionConfig {
@@ -157,11 +161,12 @@ pub async fn create_session(
         .unwrap_or_default();
 
     let session = coordinator
-        .create_session_with_id(
+        .create_session_with_workspace(
             request.session_id,
             request.session_name.clone(),
             request.agent_type.clone(),
             config,
+            workspace_path,
         )
         .await
         .map_err(|e| format!("Failed to create session: {}", e))?;
@@ -185,7 +190,7 @@ pub async fn start_dialog_turn(
             request.user_input,
             request.turn_id,
             request.agent_type,
-            false,
+            DialogTriggerSource::DesktopUi,
         )
         .await
         .map_err(|e| format!("Failed to start dialog turn: {}", e))?;

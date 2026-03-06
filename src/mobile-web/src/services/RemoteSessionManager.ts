@@ -212,8 +212,20 @@ export class RemoteSessionManager {
     return resp.turn_id;
   }
 
-  async cancelTask(sessionId: string): Promise<void> {
-    await this.request({ cmd: 'cancel_task', session_id: sessionId });
+  async cancelTask(sessionId: string, turnId?: string): Promise<void> {
+    await this.request({
+      cmd: 'cancel_task',
+      session_id: sessionId,
+      turn_id: turnId ?? undefined,
+    });
+  }
+
+  async cancelTool(toolId: string, reason?: string): Promise<void> {
+    await this.request({
+      cmd: 'cancel_tool',
+      tool_id: toolId,
+      reason: reason ?? undefined,
+    });
   }
 
   async deleteSession(sessionId: string): Promise<void> {

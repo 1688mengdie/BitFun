@@ -180,6 +180,9 @@ export async function initializeEventListeners(
     },
     onContextCompressionFailed: (event) => {
       handleCompressionFailed(context, event);
+    },
+    onSessionTitleGenerated: (event) => {
+      handleSessionTitleGenerated(event);
     }
   };
 
@@ -197,6 +200,17 @@ function handleSessionCreated(context: FlowChatContext, event: any): void {
   if (existing) return;
 
   store.addExternalSession(sessionId, sessionName || 'Remote Session', agentType || 'agentic', workspacePath);
+}
+
+/**
+ * Handle session title generated event (from AI auto-generation)
+ */
+function handleSessionTitleGenerated(event: any): void {
+  const { sessionId, title } = event;
+  if (!sessionId || !title) return;
+
+  const store = FlowChatStore.getInstance();
+  store.updateSessionTitle(sessionId, title, 'generated');
 }
 
 /**

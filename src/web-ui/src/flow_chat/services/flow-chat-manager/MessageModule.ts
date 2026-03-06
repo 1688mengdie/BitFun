@@ -12,7 +12,6 @@ import { SessionExecutionEvent, SessionExecutionState } from '../../state-machin
 import { generateTempTitle } from '../../utils/titleUtils';
 import { createLogger } from '@/shared/utils/logger';
 import type { FlowChatContext, DialogTurn } from './types';
-import { ensureBackendSession, retryCreateBackendSession } from './SessionModule';
 import { cleanupSessionBuffers } from './TextChunkModule';
 
 const log = createLogger('MessageModule');
@@ -87,12 +86,6 @@ export async function sendMessage(
       throw new Error(`Session lost after adding dialog turn: ${sessionId}`);
     }
     
-    try {
-      await ensureBackendSession(context, sessionId);
-    } catch (createError: any) {
-      log.warn('Backend session create/restore failed', { sessionId: sessionId, error: createError });
-    }
-    
     context.contentBuffers.set(sessionId, new Map());
     context.activeTextItems.set(sessionId, new Map());
 
@@ -107,23 +100,7 @@ export async function sendMessage(
         agentType: currentAgentType,
       });
     } catch (error: any) {
-      if (error?.message?.includes('Session does not exist') || error?.message?.includes('Not found')) {
-        log.warn('Backend session still not found, retrying creation', {
-          sessionId: sessionId,
-          dialogTurnsCount: updatedSession.dialogTurns.length
-        });
-        
-        await retryCreateBackendSession(context, sessionId);
-        
-        turnResponse = await agentAPI.startDialogTurn({
-          sessionId: sessionId,
-          userInput: message,
-          turnId: dialogTurnId,
-          agentType: currentAgentType,
-        });
-      } else {
-        throw error;
-      }
+      throw error;
     }
 
     const sessionStateMachine = stateMachineManager.get(sessionId);
@@ -165,16 +142,11 @@ function handleTitleGeneration(
   message: string
 ): void {
   const tempTitle = generateTempTitle(message, 20);
-  context.flowChatStore.updateSessionTitle(sessionId, tempTitle, 'generating');
-  
+
   if (aiExperienceConfigService.isSessionTitleGenerationEnabled()) {
-    agentAPI.generateSessionTitle(sessionId, message, 20)
-      .then((_aiTitle) => {
-      })
-      .catch((error) => {
-        log.debug('AI title generation failed, keeping temp title', { sessionId, error });
-        context.flowChatStore.updateSessionTitle(sessionId, tempTitle, 'generated');
-      });
+    // Set temp title while waiting for coordinator's auto-generated AI title
+    // (delivered via SessionTitleGenerated event).
+    context.flowChatStore.updateSessionTitle(sessionId, tempTitle, 'generating');
   } else {
     context.flowChatStore.updateSessionTitle(sessionId, tempTitle, 'generated');
   }

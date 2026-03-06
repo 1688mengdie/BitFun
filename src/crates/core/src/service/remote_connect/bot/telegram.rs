@@ -12,8 +12,8 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use super::command_router::{
-    execute_forwarded_turn, handle_command, paired_success_message, parse_command, BotChatState,
-    WELCOME_MESSAGE,
+    execute_forwarded_turn, handle_command, paired_success_message, parse_command,
+    BotInteractiveRequest, BotInteractionHandler, BotMessageSender, BotChatState, WELCOME_MESSAGE,
 };
 use super::{load_bot_persistence, save_bot_persistence, BotConfig, SavedBotConnection};
 
@@ -84,6 +84,7 @@ impl TelegramBot {
                 { "command": "resume_session", "description": "Resume an existing session" },
                 { "command": "new_code_session", "description": "Create a new coding session" },
                 { "command": "new_cowork_session", "description": "Create a new cowork session" },
+                { "command": "cancel_task", "description": "Cancel the current task" },
                 { "command": "help", "description": "Show available commands" },
             ]
         });
@@ -301,10 +302,42 @@ impl TelegramBot {
         if let Some(forward) = result.forward_to_session {
             let bot = self.clone();
             tokio::spawn(async move {
-                let response = execute_forwarded_turn(forward).await;
+                let interaction_bot = bot.clone();
+                let handler: BotInteractionHandler = std::sync::Arc::new(move |interaction: BotInteractiveRequest| {
+                    let interaction_bot = interaction_bot.clone();
+                    Box::pin(async move {
+                        interaction_bot
+                            .deliver_interaction(chat_id, interaction)
+                            .await;
+                    })
+                });
+                let msg_bot = bot.clone();
+                let sender: BotMessageSender = std::sync::Arc::new(move |text: String| {
+                    let msg_bot = msg_bot.clone();
+                    Box::pin(async move {
+                        msg_bot.send_message(chat_id, &text).await.ok();
+                    })
+                });
+                let response = execute_forwarded_turn(forward, Some(handler), Some(sender)).await;
                 bot.send_message(chat_id, &response).await.ok();
             });
         }
+    }
+
+    async fn deliver_interaction(&self, chat_id: i64, interaction: BotInteractiveRequest) {
+        let mut states = self.chat_states.write().await;
+        let state = states
+            .entry(chat_id)
+            .or_insert_with(|| {
+                let mut s = BotChatState::new(chat_id.to_string());
+                s.paired = true;
+                s
+            });
+        state.pending_action = Some(interaction.pending_action.clone());
+        self.persist_chat_state(chat_id, state).await;
+        drop(states);
+
+        self.send_message(chat_id, &interaction.reply).await.ok();
     }
 
     async fn persist_chat_state(&self, chat_id: i64, state: &BotChatState) {

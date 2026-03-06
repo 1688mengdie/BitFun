@@ -228,19 +228,11 @@ export const useFlowChat = () => {
     flowChatStore.addDialogTurn(targetSessionId, dialogTurn);
 
     if (isFirstMessage) {
-      // Use a temp title from the message prefix to avoid slow title generation.
       const tempTitle = generateTempTitle(content, 20);
-      flowChatStore.updateSessionTitle(targetSessionId, tempTitle, 'generating');
-      
       if (aiExperienceConfigService.isSessionTitleGenerationEnabled()) {
-        agentAPI.generateSessionTitle(targetSessionId, content, 20)
-          .then((aiTitle) => {
-            log.debug('AI title generated successfully', { sessionId: targetSessionId, title: aiTitle });
-          })
-          .catch((error) => {
-            log.warn('AI title generation failed, keeping temporary title', { sessionId: targetSessionId, error });
-            flowChatStore.updateSessionTitle(targetSessionId, tempTitle, 'generated');
-          });
+        // Set temp title while waiting for coordinator's auto-generated AI title
+        // (delivered via SessionTitleGenerated event).
+        flowChatStore.updateSessionTitle(targetSessionId, tempTitle, 'generating');
       } else {
         flowChatStore.updateSessionTitle(targetSessionId, tempTitle, 'generated');
       }

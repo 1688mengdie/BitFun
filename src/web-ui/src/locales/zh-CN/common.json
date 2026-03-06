@@ -219,6 +219,9 @@
     "disclaimerItemMobileBrowser": "移动端通过浏览器加载 Web 应用进行连接，浏览器缓存、本地存储、页面截图、系统剪贴板等都可能带来额外的信息暴露风险，其他浏览器插件或系统功能亦可能扩大风险面。",
     "disclaimerItemCompliance": "部分国家或地区对加密通信、隧道服务、跨境数据传输等有法规限制，请自行评估当地法律合规性；其他监管政策变化也可能影响功能可用性与合规义务。",
     "disclaimerItemLiability": "使用远程连接功能过程中产生的风险、损失、纠纷或其他不利后果（包括但不限于数据泄露、连接中断、账号异常、服务不可用等）由你自行承担；BitFun 不对由此造成的问题负责。",
+    "disclaimerReview": "查看免责声明",
+    "disclaimerStatusAgreed": "已同意",
+    "disclaimerStatusPending": "未同意",
     "disclaimerDecline": "不同意",
     "disclaimerAgree": "同意并继续"
   },

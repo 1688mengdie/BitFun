@@ -245,6 +245,14 @@
   &:not(:disabled):active {
     background: var(--color-accent-100);
   }
+
+  &--bottom {
+    width: 100%;
+    justify-content: center;
+    padding: 10px;
+    margin-top: 8px;
+    font-size: 13px;
+  }
 }
 
 .chat-ask-card__waiting {

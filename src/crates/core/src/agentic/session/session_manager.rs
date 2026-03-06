@@ -173,6 +173,65 @@ impl SessionManager {
         Ok(())
     }
 
+    /// Update session title (in-memory + persistence)
+    pub async fn update_session_title(
+        &self,
+        session_id: &str,
+        title: &str,
+    ) -> BitFunResult<()> {
+        let workspace_path = self
+            .sessions
+            .get(session_id)
+            .and_then(|session| session.config.workspace_path.clone())
+            .map(std::path::PathBuf::from)
+            .or_else(get_workspace_path);
+
+        if let Some(mut session) = self.sessions.get_mut(session_id) {
+            session.session_name = title.to_string();
+            session.updated_at = SystemTime::now();
+        }
+
+        if self.config.enable_persistence {
+            if let Some(session) = self.sessions.get(session_id) {
+                self.persistence_manager.save_session(&session).await?;
+            }
+        }
+
+        if let Some(workspace_path) = workspace_path {
+            match ConversationPersistenceManager::new(
+                self.persistence_manager.path_manager().clone(),
+                workspace_path,
+            )
+            .await
+            {
+                Ok(conv_mgr) => {
+                    if let Ok(Some(mut meta)) =
+                        conv_mgr.load_session_metadata(session_id).await
+                    {
+                        meta.session_name = title.to_string();
+                        meta.touch();
+                        if let Err(e) = conv_mgr.save_session_metadata(&meta).await {
+                            warn!(
+                                "Failed to persist session title in conversation metadata: {}",
+                                e
+                            );
+                        }
+                    }
+                }
+                Err(e) => {
+                    debug!("Failed to update conversation metadata title: {}", e);
+                }
+            }
+        }
+
+        info!(
+            "Session title updated: session_id={}, title={}",
+            session_id, title
+        );
+
+        Ok(())
+    }
+
     /// Update session activity time
     pub fn touch_session(&self, session_id: &str) {
         if let Some(mut session) = self.sessions.get_mut(session_id) {
