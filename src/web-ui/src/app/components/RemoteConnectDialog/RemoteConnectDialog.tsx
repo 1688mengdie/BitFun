@@ -41,6 +41,10 @@ const BOT_TABS: { id: BotTab; label: string }[] = [
 
 const NGROK_SETUP_URL = 'https://dashboard.ngrok.com/get-started/setup';
 const RELAY_SERVER_README_URL = 'https://github.com/GCWing/BitFun/blob/main/src/apps/relay-server/README.md';
+const FEISHU_SETUP_GUIDE_URLS = {
+  'zh-CN': 'https://github.com/GCWing/BitFun/blob/main/docs/remote-connect/feishu-bot-setup.zh-CN.md',
+  'en-US': 'https://github.com/GCWing/BitFun/blob/main/docs/remote-connect/feishu-bot-setup.md',
+} as const;
 
 const methodToNetworkTab = (method: string | null | undefined): NetworkTab | null => {
   if (!method) return null;
@@ -68,7 +72,7 @@ export const RemoteConnectDialog: React.FC<RemoteConnectDialogProps> = ({
   isOpen,
   onClose,
 }) => {
-  const { t } = useI18n('common');
+  const { t, currentLanguage } = useI18n('common');
 
   const [activeGroup, setActiveGroup] = useState<ActiveGroup>('network');
   const [networkTab, setNetworkTab] = useState<NetworkTab>(NETWORK_TABS[0].id);
@@ -263,6 +267,10 @@ export const RemoteConnectDialog: React.FC<RemoteConnectDialogProps> = ({
     void systemAPI.openExternal(RELAY_SERVER_README_URL);
   }, []);
 
+  const handleOpenFeishuGuide = useCallback(() => {
+    void systemAPI.openExternal(FEISHU_SETUP_GUIDE_URLS[currentLanguage]);
+  }, [currentLanguage]);
+
   // ── Sub-tab disabled logic ───────────────────────────────────────
 
   const isNetworkSubDisabled = (tabId: NetworkTab): boolean => {
@@ -446,6 +454,19 @@ export const RemoteConnectDialog: React.FC<RemoteConnectDialogProps> = ({
           </div>
         ) : (
           <div className="bitfun-remote-connect__bot-guide">
+            <p className="bitfun-remote-connect__description">
+              {t('remoteConnect.botFeishuDocPrefix')}
+              <span
+                className="bitfun-remote-connect__description-link"
+                role="link"
+                tabIndex={0}
+                onClick={handleOpenFeishuGuide}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleOpenFeishuGuide(); }}
+              >
+                {t('remoteConnect.botFeishuDocLink')}
+              </span>
+              {t('remoteConnect.botFeishuDocSuffix')}
+            </p>
             <div className="bitfun-remote-connect__steps">
               <p className="bitfun-remote-connect__step">
                 1. {t('remoteConnect.botFeishuStep1Prefix')}

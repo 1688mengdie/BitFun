@@ -106,6 +106,32 @@ function runCommand(command, cwd = ROOT_DIR) {
 }
 
 /**
+ * Clean stale mobile-web resource copies in Tauri target directories.
+ *
+ * Tauri copies resources from src/mobile-web/dist/ into target/{profile}/mobile-web/dist/
+ * on each dev/build run, but never removes old files. Since Vite generates content-hashed
+ * filenames, previous builds leave behind orphaned assets that accumulate over time.
+ * This causes the relay upload to send hundreds of stale files instead of just a few.
+ */
+function cleanStaleMobileWebResources() {
+  const fs = require('fs');
+  const targetDir = path.join(ROOT_DIR, 'target');
+  if (!fs.existsSync(targetDir)) return;
+
+  let cleaned = 0;
+  for (const profile of fs.readdirSync(targetDir)) {
+    const mobileWebDir = path.join(targetDir, profile, 'mobile-web');
+    if (fs.existsSync(mobileWebDir) && fs.statSync(mobileWebDir).isDirectory()) {
+      fs.rmSync(mobileWebDir, { recursive: true, force: true });
+      cleaned++;
+    }
+  }
+  if (cleaned > 0) {
+    printInfo(`Cleaned stale mobile-web resources from ${cleaned} target profile(s)`);
+  }
+}
+
+/**
  * Main entry
  */
 async function main() {
@@ -173,6 +199,7 @@ async function main() {
       }
       process.exit(1);
     }
+    cleanStaleMobileWebResources();
     printSuccess('mobile-web build complete');
   }
 
