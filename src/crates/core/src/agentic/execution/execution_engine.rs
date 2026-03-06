@@ -452,11 +452,7 @@ impl ExecutionEngine {
                 round_number: round_index,
                 messages: messages.clone(),
                 available_tools: available_tools.clone(),
-                model_name: context
-                    .context
-                    .get("model_name")
-                    .cloned()
-                    .unwrap_or_else(|| "default".to_string()),
+                model_name: model_id.clone(),
                 agent_type: agent_type.clone(),
                 context_vars: round_context_vars,
                 cancellation_token: CancellationToken::new(),
