@@ -58,10 +58,14 @@ Add callback - Search "card.action.trigger" - Select all - Confirm
 
 ### Step10
 
+Publish the bot
+
+### Step11
+
 Open Feishu - Search "{robot name}" -
 
 Click the robot to open the chat box - Input any message and send
 
-### Step11
+### Step12
 
 Enter the 6-digit pairing code from BitFun Desktop - Send - Connection successful
