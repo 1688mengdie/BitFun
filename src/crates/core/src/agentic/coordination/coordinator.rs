@@ -173,7 +173,7 @@ impl ConversationCoordinator {
         agent_type: String,
         skip_tool_confirmation: bool,
     ) -> BitFunResult<()> {
-        self.start_dialog_turn_internal(session_id, user_input, None, turn_id, agent_type)
+        self.start_dialog_turn_internal(session_id, user_input, None, turn_id, agent_type, skip_tool_confirmation)
             .await
     }
 
@@ -191,6 +191,7 @@ impl ConversationCoordinator {
             Some(image_contexts),
             turn_id,
             agent_type,
+            false,
         )
         .await
     }
@@ -202,6 +203,7 @@ impl ConversationCoordinator {
         image_contexts: Option<Vec<ImageContextData>>,
         turn_id: Option<String>,
         agent_type: String,
+        skip_tool_confirmation: bool,
     ) -> BitFunResult<()> {
         // Get latest session (re-fetch each time to ensure latest state)
         let session = self
