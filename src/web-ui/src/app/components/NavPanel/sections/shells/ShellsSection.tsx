@@ -75,6 +75,16 @@ interface ShellEntry {
   startupCommand?: string;
 }
 
+function activateOnEnterOrSpace(
+  event: React.KeyboardEvent,
+  action: () => void
+) {
+  if (event.key === 'Enter' || event.key === ' ') {
+    event.preventDefault();
+    action();
+  }
+}
+
 const ShellsSection: React.FC = () => {
   const { t } = useTranslation('panels/terminal');
   const setActiveSession = useTerminalSceneStore(s => s.setActiveSession);
@@ -419,11 +429,13 @@ const ShellsSection: React.FC = () => {
 
   const renderTerminalItem = (entry: ShellEntry) => {
     return (
-      <button
+      <div
         key={entry.sessionId}
-        type="button"
+        role="button"
+        tabIndex={0}
         className="bitfun-nav-panel__inline-item"
         onClick={() => handleOpen(entry)}
+        onKeyDown={(e) => activateOnEnterOrSpace(e, () => handleOpen(entry))}
         title={entry.name}
       >
         <SquareTerminal size={12} className="bitfun-nav-panel__inline-item-icon" />
@@ -463,7 +475,7 @@ const ShellsSection: React.FC = () => {
             </button>
           </Tooltip>
         </div>
-      </button>
+      </div>
     );
   };
 

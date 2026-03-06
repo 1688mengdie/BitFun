@@ -56,6 +56,9 @@ pub enum CommandState {
 
 impl CommandState {
     /// Check if we should still collect output (executing or just finished)
+    ///
+    /// Note: This only checks the state itself. `ShellIntegration::should_collect_output()`
+    /// also considers the `post_command_collecting` flag for ConPTY late output.
     pub fn should_collect_output(&self) -> bool {
         matches!(
             self,
@@ -114,6 +117,14 @@ pub struct ShellIntegration {
     last_exit_code: Option<i32>,
     /// Flag indicating a command just finished (for output collection)
     command_just_finished: bool,
+    /// Flag for collecting late output after CommandFinished.
+    /// On Windows, ConPTY may deliver rendered output AFTER shell integration
+    /// sequences (CommandFinished/PromptStart/CommandInputStart). This flag
+    /// keeps output collection active until the next CommandExecutionStart.
+    post_command_collecting: bool,
+    /// When true, we are between PromptStart and CommandInputStart,
+    /// checking whether prompt text exists to detect ConPTY reordering.
+    detecting_conpty_reorder: bool,
 }
 
 impl ShellIntegration {
@@ -132,6 +143,8 @@ impl ShellIntegration {
             in_osc: false,
             last_exit_code: None,
             command_just_finished: false,
+            post_command_collecting: false,
+            detecting_conpty_reorder: false,
         }
     }
 
@@ -168,6 +181,13 @@ impl ShellIntegration {
     /// Check if rich command detection is supported
     pub fn has_rich_detection(&self) -> bool {
         self.has_rich_detection
+    }
+
+    /// Check if output should be collected, considering both state and post-command flag.
+    /// On Windows ConPTY, rendered output may arrive after shell integration sequences
+    /// have already transitioned the state to Prompt/Input.
+    fn should_collect(&self) -> bool {
+        self.state.should_collect_output() || self.post_command_collecting
     }
 
     /// Get accumulated output for current command
@@ -207,7 +227,7 @@ impl ShellIntegration {
                         );
                         if should_flush
                             && !plain_output.is_empty()
-                            && self.state.should_collect_output()
+                            && self.should_collect()
                         {
                             self.output_buffer.push_str(&plain_output);
                             if let Some(cmd_id) = &self.current_command_id {
@@ -218,6 +238,19 @@ impl ShellIntegration {
                             } else {
                                 plain_output.clear();
                             }
+                        }
+
+                        // ConPTY reorder detection: at CommandInputStart, if no
+                        // prompt text accumulated since PromptStart, ConPTY sent
+                        // the sequences before the rendered output. Re-enable
+                        // post-command collection so late output is captured.
+                        if self.detecting_conpty_reorder
+                            && matches!(seq, OscSequence::CommandInputStart)
+                        {
+                            if plain_output.is_empty() {
+                                self.post_command_collecting = true;
+                            }
+                            self.detecting_conpty_reorder = false;
                         }
 
                         if let Some(event) = self.handle_sequence(seq) {
@@ -245,9 +278,10 @@ impl ShellIntegration {
             }
         }
 
-        // Accumulate plain output if we should collect output
-        // Continue collecting even after Finished until we see PromptStart
-        if !plain_output.is_empty() && self.state.should_collect_output() {
+        // Accumulate plain output if we should collect output.
+        // Continue collecting after Finished via post_command_collecting flag,
+        // because ConPTY may deliver rendered output after shell integration sequences.
+        if !plain_output.is_empty() && self.should_collect() {
             self.output_buffer.push_str(&plain_output);
 
             if let Some(cmd_id) = &self.current_command_id {
@@ -347,6 +381,14 @@ impl ShellIntegration {
             OscSequence::PromptStart => {
                 // When we see the next prompt, the previous command is truly done
                 // Clear all state from previous command
+                if self.post_command_collecting {
+                    // Temporarily disable post-command collection.
+                    // If no prompt text appears between PromptStart and
+                    // CommandInputStart, ConPTY reordering is detected and
+                    // collection will be re-enabled at CommandInputStart.
+                    self.post_command_collecting = false;
+                    self.detecting_conpty_reorder = true;
+                }
                 self.current_command_id = None;
                 self.current_command = None;
                 self.state = CommandState::Prompt;
@@ -362,6 +404,8 @@ impl ShellIntegration {
                 // Clear previous command's exit code when new command starts
                 self.last_exit_code = None;
                 self.command_just_finished = false;
+                self.post_command_collecting = false;
+                self.detecting_conpty_reorder = false;
 
                 // Generate command ID if we have a command
                 if self.current_command.is_some() {
@@ -383,6 +427,9 @@ impl ShellIntegration {
                 // Save exit code - this survives state transitions
                 self.last_exit_code = exit_code;
                 self.command_just_finished = true;
+                // Keep collecting output after finish — ConPTY may deliver
+                // rendered output after the shell integration sequences.
+                self.post_command_collecting = true;
 
                 // Emit event but keep command_id for output collection
                 let event = if let Some(cmd_id) = &self.current_command_id {

@@ -96,6 +96,7 @@ export class TerminalService {
     const eventType = rawEvent.type;
     const payload = rawEvent.payload || {};
     const sessionId = payload.session_id;
+    const isSessionDestroyed = eventType === 'SessionDestroyed';
 
     let event: TerminalEvent;
     switch (eventType) {
@@ -112,8 +113,9 @@ export class TerminalService {
         event = { type: 'exit', sessionId, exitCode: payload.exit_code };
         break;
       case 'SessionDestroyed':
-        // Map backend-initiated session removal to exit.
-        event = { type: 'exit', sessionId, exitCode: null };
+        // Backend-initiated terminal removal should both mark the terminal exited
+        // and notify other UI surfaces to close tabs/scenes bound to this session.
+        event = { type: 'exit', sessionId, exitCode: undefined };
         break;
       case 'Error':
         event = { type: 'error', sessionId, message: payload.message || payload.error };
@@ -153,6 +155,15 @@ export class TerminalService {
         log.error('Global callback error', error);
       }
     });
+
+    if (isSessionDestroyed && sessionId) {
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(
+          new CustomEvent('terminal-session-destroyed', { detail: { sessionId } })
+        );
+      }
+      this.eventListeners.delete(sessionId);
+    }
   }
 
   onSessionEvent(sessionId: string, callback: TerminalEventCallback): UnsubscribeFunction {

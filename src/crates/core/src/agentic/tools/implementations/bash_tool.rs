@@ -11,16 +11,17 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use log::{debug, error};
 use serde_json::{json, Value};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use terminal_core::shell::{ShellDetector, ShellType};
 use terminal_core::{
-    CommandStreamEvent, ExecuteCommandRequest, SendCommandRequest, SignalRequest, TerminalApi,
-    TerminalBindingOptions, TerminalSessionBinding,
+    CommandCompletionReason, CommandStreamEvent, ExecuteCommandRequest, SendCommandRequest,
+    SignalRequest, TerminalApi, TerminalBindingOptions, TerminalSessionBinding,
 };
 use tokio::io::AsyncWriteExt;
 use tool_runtime::util::ansi_cleaner::strip_ansi;
 
 const MAX_OUTPUT_LENGTH: usize = 30000;
+const INTERRUPT_OUTPUT_DRAIN_MS: u64 = 500;
 
 const BANNED_COMMANDS: &[&str] = &[
     "alias",
@@ -110,6 +111,7 @@ impl BashTool {
         session_id: &str,
         output_text: &str,
         interrupted: bool,
+        timed_out: bool,
         exit_code: i32,
     ) -> String {
         let mut result_string = String::new();
@@ -136,7 +138,11 @@ impl BashTool {
         }
 
         // Interruption notice
-        if interrupted {
+        if timed_out {
+            result_string.push_str(
+                "<status type=\"timeout\">Command timed out before completion. Partial output, if any, is included above.</status>",
+            );
+        } else if interrupted {
             result_string.push_str(
                 "<status type=\"interrupted\">Command was canceled by the user. ASK THE USER what they would like to do next.</status>"
             );
@@ -186,6 +192,7 @@ Usage notes:
   - If the output exceeds {MAX_OUTPUT_LENGTH} characters, output will be truncated before being returned to you.
   - You can use the `run_in_background` parameter to run the command in a new dedicated background terminal session. The tool returns the background session ID immediately without waiting for the command to finish. Only use this for long-running processes (e.g., dev servers, watchers) where you don't need the output right away. You do not need to append '&' to the command. NOTE: `timeout_ms` is ignored when `run_in_background` is true.
   - Each result includes a `<session_id>` tag identifying the terminal session. The persistent shell session ID remains constant throughout the entire conversation; background sessions each have their own unique ID.
+  - The output may include the command echo and/or the shell prompt (e.g., `PS C:\path>`). Do not treat these as part of the command's actual result.
   
   - Avoid using this tool with the `find`, `grep`, `cat`, `head`, `tail`, `sed`, `awk`, or `echo` commands, unless explicitly instructed or when these commands are truly necessary for the task. Instead, always prefer using the dedicated tools for these commands:
     - File search: Use Glob (NOT find or ls)
@@ -458,16 +465,40 @@ Usage notes:
         let mut accumulated_output = String::new();
         let mut final_exit_code: Option<i32> = None;
         let mut was_interrupted = false;
+        let mut timed_out = false;
+        let mut interrupt_drain_deadline: Option<tokio::time::Instant> = None;
 
         // Get event system for sending progress
         let event_system = get_global_event_system();
 
-        while let Some(event) = stream.next().await {
+        loop {
+            let next_event = if let Some(deadline) = interrupt_drain_deadline {
+                let now = tokio::time::Instant::now();
+                if now >= deadline {
+                    break;
+                }
+
+                match tokio::time::timeout_at(deadline, stream.next()).await {
+                    Ok(event) => event,
+                    Err(_) => break,
+                }
+            } else {
+                stream.next().await
+            };
+
+            let Some(event) = next_event else {
+                break;
+            };
+
             // Check cancellation request
             if let Some(token) = &context.cancellation_token {
                 if token.is_cancelled() && !was_interrupted {
                     debug!("Bash tool received cancellation request, sending interrupt signal, tool_id: {}", tool_use_id);
                     was_interrupted = true;
+                    interrupt_drain_deadline = Some(
+                        tokio::time::Instant::now()
+                            + Duration::from_millis(INTERRUPT_OUTPUT_DRAIN_MS),
+                    );
 
                     let _ = terminal_api
                         .signal(SignalRequest {
@@ -484,7 +515,6 @@ Usage notes:
                     {
                         final_exit_code = Some(130);
                     }
-                    break;
                 }
             }
 
@@ -514,14 +544,16 @@ Usage notes:
                 CommandStreamEvent::Completed {
                     exit_code,
                     total_output,
+                    completion_reason,
                 } => {
                     debug!(
                         "Bash command completed, exit_code: {:?}, tool_id: {}",
                         exit_code, tool_use_id
                     );
-                    final_exit_code = exit_code;
+                    final_exit_code = exit_code.or(final_exit_code);
+                    timed_out = completion_reason == CommandCompletionReason::TimedOut;
 
-                    if matches!(exit_code, Some(130) | Some(-1073741510)) {
+                    if !timed_out && matches!(exit_code, Some(130) | Some(-1073741510)) {
                         was_interrupted = true;
                     }
 
@@ -552,6 +584,7 @@ Usage notes:
             "output": accumulated_output,
             "exit_code": final_exit_code,
             "interrupted": was_interrupted,
+            "timed_out": timed_out,
             "working_directory": primary_cwd,
             "execution_time_ms": execution_time_ms,
             "terminal_session_id": primary_session_id,
@@ -561,6 +594,7 @@ Usage notes:
             &primary_session_id,
             &accumulated_output,
             was_interrupted,
+            timed_out,
             final_exit_code.unwrap_or(-1),
         );
 
