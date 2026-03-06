@@ -110,6 +110,9 @@ image = { workspace = true }
 # WebSocket client
 tokio-tungstenite = { workspace = true }
 
+# Relay server shared library (embedded relay reuses standalone relay logic)
+bitfun-relay-server = { path = "../../apps/relay-server" }
+
 # Event layer dependency (lowest layer)
 bitfun-events = { path = "../events" }
 
