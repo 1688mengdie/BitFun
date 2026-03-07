@@ -59,6 +59,16 @@ interface HubConfig {
   worktrees: Record<string, HubTerminalEntry[]>;
 }
 
+function activateOnEnterOrSpace(
+  event: React.KeyboardEvent,
+  action: () => void
+) {
+  if (event.key === 'Enter' || event.key === ' ') {
+    event.preventDefault();
+    action();
+  }
+}
+
 function loadHubConfig(workspacePath: string): HubConfig {
   try {
     const raw = localStorage.getItem(`${TERMINAL_HUB_STORAGE_KEY}:${workspacePath}`);
@@ -404,11 +414,13 @@ const ShellHubSection: React.FC = () => {
     const running = isRunning(entry.sessionId);
 
     return (
-      <button
+      <div
         key={entry.sessionId}
-        type="button"
+        role="button"
+        tabIndex={0}
         className="bitfun-nav-panel__inline-item"
         onClick={() => handleOpen(entry, worktreePath)}
+        onKeyDown={(e) => activateOnEnterOrSpace(e, () => handleOpen(entry, worktreePath))}
         title={entry.name}
       >
         <SquareTerminal size={12} className="bitfun-nav-panel__inline-item-icon" />
@@ -448,7 +460,7 @@ const ShellHubSection: React.FC = () => {
             </button>
           </Tooltip>
         </div>
-      </button>
+      </div>
     );
   };
 
@@ -488,10 +500,12 @@ const ShellHubSection: React.FC = () => {
 
         return (
           <div key={wt.path} className="shell-hub-worktree">
-            <button
-              type="button"
+            <div
+              role="button"
+              tabIndex={0}
               className="shell-hub-worktree__header"
               onClick={() => toggleWorktree(wt.path)}
+              onKeyDown={(e) => activateOnEnterOrSpace(e, () => toggleWorktree(wt.path))}
             >
               <ChevronRight
                 size={10}
@@ -511,7 +525,7 @@ const ShellHubSection: React.FC = () => {
                   </button>
                 </Tooltip>
               </div>
-            </button>
+            </div>
             {expanded && terms.length > 0 && (
               <div className="shell-hub-worktree__list">
                 {terms.map(entry => renderTerminalItem(entry, wt.path))}

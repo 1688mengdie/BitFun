@@ -79,6 +79,7 @@ export interface ExecuteCommandResponse {
   commandId: string;
   output: string;
   exitCode?: number;
+  completionReason: 'completed' | 'timedOut';
 }
 
 export interface SendCommandRequest {
@@ -91,6 +92,10 @@ export interface GetHistoryResponse {
   data: string;
   /** Current history size in bytes. */
   historySize: number;
+  /** PTY column count when history was captured. */
+  cols: number;
+  /** PTY row count when history was captured. */
+  rows: number;
 }
 
 export type TerminalEventType = 

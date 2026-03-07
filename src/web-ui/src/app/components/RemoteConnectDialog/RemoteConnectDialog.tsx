@@ -136,9 +136,6 @@ export const RemoteConnectDialog: React.FC<RemoteConnectDialogProps> = ({
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
           const s = await remoteConnectAPI.getStatus();
-          // #region agent log
-          fetch('http://127.0.0.1:7682/ingest/19e63f07-99ee-4098-b8c6-1e032fa6efd0',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c7eac2'},body:JSON.stringify({sessionId:'c7eac2',location:'RemoteConnectDialog:checkExisting',message:'status check',data:{attempt,pairing_state:s.pairing_state,bot_connected:s.bot_connected,active_method:s.active_method},timestamp:Date.now()})}).catch(()=>{});
-          // #endregion
           if (cancelled) return;
           setStatus(s);
 
