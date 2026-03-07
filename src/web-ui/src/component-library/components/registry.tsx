@@ -1040,7 +1040,7 @@ console.log(user.greet());`);
         category: 'flowchat-cards',
         component: () => (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', padding: '20px' }}>
-            <h3 style={{ color: '#ffffff', marginBottom: '8px' }}>Read - Success</h3>
+            <h3 style={{ color: '#ffffff', marginBottom: '8px' }}>读取文件 - 成功</h3>
             <ReadFileDisplay
               toolItem={createMockToolItem('Read',
                 { target_file: 'src/App.tsx', offset: 1, limit: 50 },
@@ -1056,7 +1056,7 @@ console.log(user.greet());`);
               sessionId="preview-session"
             />
 
-            <h3 style={{ color: '#ffffff', marginTop: '16px', marginBottom: '8px' }}>Read - Running</h3>
+            <h3 style={{ color: '#ffffff', marginTop: '16px', marginBottom: '8px' }}>读取文件 - 执行中</h3>
             <ReadFileDisplay
               toolItem={createMockToolItem('Read',
                 { target_file: 'src/components/Header.tsx' },
@@ -1127,7 +1127,7 @@ console.log(user.greet());`);
       {
         id: 'search-card',
         name: 'Search - 搜索卡片',
-        description: 'Demo',
+        description: '搜索工具结果展示',
         category: 'flowchat-cards',
         component: () => (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', padding: '20px' }}>
@@ -1207,16 +1207,16 @@ console.log(user.greet());`);
       {
         id: 'task-card',
         name: 'Task - AI任务卡片',
-        description: 'AI task execution',
+        description: 'AI 任务执行卡片',
         category: 'flowchat-cards',
         component: () => (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', padding: '20px' }}>
-            <h3 style={{ color: '#ffffff', marginBottom: '8px' }}>AI Task - Running</h3>
+            <h3 style={{ color: '#ffffff', marginBottom: '8px' }}>AI 任务 - 执行中</h3>
             <TaskToolDisplay
               toolItem={createMockToolItem('Task',
                 {
-                  description: 'Demo',
-                  prompt: 'Analyze the codebase structure',
+                  description: '分析代码库结构',
+                  prompt: '分析当前项目的代码结构',
                   model_name: 'claude-3.5-sonnet',
                   subagent_type: 'code-analyzer'
                 },
@@ -1227,25 +1227,25 @@ console.log(user.greet());`);
               sessionId="preview-session"
             />
 
-            <h3 style={{ color: '#ffffff', marginTop: '16px', marginBottom: '8px' }}>AI Task - Completed</h3>
+            <h3 style={{ color: '#ffffff', marginTop: '16px', marginBottom: '8px' }}>AI 任务 - 已完成</h3>
             <TaskToolDisplay
               toolItem={createMockToolItem('Task',
                 {
-                  description: 'Task description',
-                  prompt: 'Create a new feature',
+                  description: '创建新功能',
+                  prompt: '创建一个新的功能模块',
                   model_name: 'claude-3.5-sonnet',
                   subagent_type: 'architect'
                 },
                 {
                   status: 'completed',
-                  result: `Task completed successfully
+                  result: `任务已成功完成
 
-1. Setup React + TypeScript
-2. Configure Zustand store
-3. Add SCSS + BEM styles
-4. Implement components
+1. 搭建 React + TypeScript 环境
+2. 配置 Zustand 状态管理
+3. 添加 SCSS 与 BEM 样式体系
+4. 实现核心组件
 
-All requirements met`,
+所有需求均已满足`,
                   duration_ms: 12500,
                   tool_uses: 8
                 },
@@ -1260,25 +1260,25 @@ All requirements met`,
       {
         id: 'todo-card',
         name: 'TodoWrite - Todo任务管理',
-        description: 'Demo',
+        description: 'Todo 任务状态卡片',
         category: 'flowchat-cards',
         component: () => (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', padding: '20px' }}>
-            <h3 style={{ color: '#ffffff', marginBottom: '8px' }}>Todo - Basic</h3>
+            <h3 style={{ color: '#ffffff', marginBottom: '8px' }}>Todo - 基础示例</h3>
             <TodoWriteDisplay
               toolItem={createMockToolItem('TodoWrite',
                 {
                   todos: [
-                    { id: '1', content: 'Task A', status: 'completed' },
-                    { id: '2', content: 'Task B', status: 'in_progress' },
-                    { id: '3', content: 'Task C', status: 'pending' }
+                    { id: '1', content: '任务 A', status: 'completed' },
+                    { id: '2', content: '任务 B', status: 'in_progress' },
+                    { id: '3', content: '任务 C', status: 'pending' }
                   ]
                 },
                 {
                   todos: [
-                    { id: '1', content: 'Task A', status: 'completed' },
-                    { id: '2', content: 'Task B', status: 'in_progress' },
-                    { id: '3', content: 'Task C', status: 'pending' }
+                    { id: '1', content: '任务 A', status: 'completed' },
+                    { id: '2', content: '任务 B', status: 'in_progress' },
+                    { id: '3', content: '任务 C', status: 'pending' }
                   ]
                 },
                 'completed'
@@ -1287,27 +1287,27 @@ All requirements met`,
               sessionId="preview-session"
             />
 
-            <h3 style={{ color: '#ffffff', marginTop: '16px', marginBottom: '8px' }}>Todo - Multiple</h3>
+            <h3 style={{ color: '#ffffff', marginTop: '16px', marginBottom: '8px' }}>Todo - 多任务示例</h3>
             <TodoWriteDisplay
               toolItem={createMockToolItem('TodoWrite',
                 {
                   todos: [
-                    { id: '1', content: 'Task 1', status: 'completed' },
-                    { id: '2', content: 'Task 2', status: 'in_progress' },
-                    { id: '3', content: 'API integration', status: 'in_progress' },
-                    { id: '4', content: 'Task 4', status: 'in_progress' },
-                    { id: '5', content: 'Task 5', status: 'pending' },
-                    { id: '6', content: 'Task 6', status: 'pending' }
+                    { id: '1', content: '任务 1', status: 'completed' },
+                    { id: '2', content: '任务 2', status: 'in_progress' },
+                    { id: '3', content: '集成 API', status: 'in_progress' },
+                    { id: '4', content: '任务 4', status: 'in_progress' },
+                    { id: '5', content: '任务 5', status: 'pending' },
+                    { id: '6', content: '任务 6', status: 'pending' }
                   ]
                 },
                 {
                   todos: [
-                    { id: '1', content: 'Task 1', status: 'completed' },
-                    { id: '2', content: 'Task 2', status: 'in_progress' },
-                    { id: '3', content: 'API integration', status: 'in_progress' },
-                    { id: '4', content: 'Task 4', status: 'in_progress' },
-                    { id: '5', content: 'Task 5', status: 'pending' },
-                    { id: '6', content: 'Task 6', status: 'pending' }
+                    { id: '1', content: '任务 1', status: 'completed' },
+                    { id: '2', content: '任务 2', status: 'in_progress' },
+                    { id: '3', content: '集成 API', status: 'in_progress' },
+                    { id: '4', content: '任务 4', status: 'in_progress' },
+                    { id: '5', content: '任务 5', status: 'pending' },
+                    { id: '6', content: '任务 6', status: 'pending' }
                   ]
                 },
                 'completed'
@@ -1321,45 +1321,20 @@ All requirements met`,
               toolItem={createMockToolItem('TodoWrite',
                 {
                   todos: [
-                    { id: '1', content: 'Task 1', status: 'completed' },
-                    { id: '2', content: 'Task 2', status: 'completed' },
-                    { id: '3', content: 'Task 3', status: 'in_progress' },
-                    { id: '4', content: 'Task 4', status: 'pending' },
-                    { id: '5', content: 'Task 5', status: 'pending' }
+                    { id: '1', content: '任务 1', status: 'completed' },
+                    { id: '2', content: '任务 2', status: 'completed' },
+                    { id: '3', content: '任务 3', status: 'in_progress' },
+                    { id: '4', content: '任务 4', status: 'pending' },
+                    { id: '5', content: '任务 5', status: 'pending' }
                   ]
                 },
                 {
                   todos: [
-                    { id: '1', content: 'Task 1', status: 'completed' },
-                    { id: '2', content: 'Task 2', status: 'completed' },
-                    { id: '3', content: 'Task 3', status: 'in_progress' },
-                    { id: '4', content: 'Task 4', status: 'pending' },
-                    { id: '5', content: 'Task 5', status: 'pending' }
-                  ]
-                },
-                'completed'
-              )}
-              config={TOOL_CARD_CONFIGS['TodoWrite']}
-              sessionId="preview-session"
-            />
-
-            <h3 style={{ color: '#ffffff', marginTop: '16px', marginBottom: '8px' }}>Todo - Pending</h3>
-            <TodoWriteDisplay
-              toolItem={createMockToolItem('TodoWrite',
-                {
-                  todos: [
-                    { id: '1', content: 'Item', status: 'pending' },
-                    { id: '2', content: 'API integration', status: 'pending' },
-                    { id: '3', content: 'Task 3', status: 'pending' },
-                    { id: '4', content: 'Task 4', status: 'pending' }
-                  ]
-                },
-                {
-                  todos: [
-                    { id: '1', content: 'Item', status: 'pending' },
-                    { id: '2', content: 'API integration', status: 'pending' },
-                    { id: '3', content: 'Task 3', status: 'pending' },
-                    { id: '4', content: 'Task 4', status: 'pending' }
+                    { id: '1', content: '任务 1', status: 'completed' },
+                    { id: '2', content: '任务 2', status: 'completed' },
+                    { id: '3', content: '任务 3', status: 'in_progress' },
+                    { id: '4', content: '任务 4', status: 'pending' },
+                    { id: '5', content: '任务 5', status: 'pending' }
                   ]
                 },
                 'completed'
@@ -1368,21 +1343,46 @@ All requirements met`,
               sessionId="preview-session"
             />
 
-            <h3 style={{ color: '#ffffff', marginTop: '16px', marginBottom: '8px' }}>Todo - Completed</h3>
+            <h3 style={{ color: '#ffffff', marginTop: '16px', marginBottom: '8px' }}>Todo - 待处理</h3>
             <TodoWriteDisplay
               toolItem={createMockToolItem('TodoWrite',
                 {
                   todos: [
-                    { id: '1', content: 'Task 1', status: 'completed' },
-                    { id: '2', content: 'Task 2', status: 'completed' },
-                    { id: '3', content: 'Task 3', status: 'completed' }
+                    { id: '1', content: '事项', status: 'pending' },
+                    { id: '2', content: '集成 API', status: 'pending' },
+                    { id: '3', content: '任务 3', status: 'pending' },
+                    { id: '4', content: '任务 4', status: 'pending' }
                   ]
                 },
                 {
                   todos: [
-                    { id: '1', content: 'Task 1', status: 'completed' },
-                    { id: '2', content: 'Task 2', status: 'completed' },
-                    { id: '3', content: 'Task 3', status: 'completed' }
+                    { id: '1', content: '事项', status: 'pending' },
+                    { id: '2', content: '集成 API', status: 'pending' },
+                    { id: '3', content: '任务 3', status: 'pending' },
+                    { id: '4', content: '任务 4', status: 'pending' }
+                  ]
+                },
+                'completed'
+              )}
+              config={TOOL_CARD_CONFIGS['TodoWrite']}
+              sessionId="preview-session"
+            />
+
+            <h3 style={{ color: '#ffffff', marginTop: '16px', marginBottom: '8px' }}>Todo - 已完成</h3>
+            <TodoWriteDisplay
+              toolItem={createMockToolItem('TodoWrite',
+                {
+                  todos: [
+                    { id: '1', content: '任务 1', status: 'completed' },
+                    { id: '2', content: '任务 2', status: 'completed' },
+                    { id: '3', content: '任务 3', status: 'completed' }
+                  ]
+                },
+                {
+                  todos: [
+                    { id: '1', content: '任务 1', status: 'completed' },
+                    { id: '2', content: '任务 2', status: 'completed' },
+                    { id: '3', content: '任务 3', status: 'completed' }
                   ]
                 },
                 'completed'
@@ -1400,16 +1400,16 @@ All requirements met`,
         category: 'flowchat-cards',
         component: () => (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', padding: '20px' }}>
-            <h3 style={{ color: '#ffffff', marginBottom: '8px' }}>Web Search - Results</h3>
+            <h3 style={{ color: '#ffffff', marginBottom: '8px' }}>网页搜索 - 结果</h3>
             <RealWebSearchCard
               toolItem={createMockToolItem('WebSearch',
-                { query: 'React hooks tutorial' },
+                { query: 'React Hooks 教程' },
                 {
                   results: [
                     {
-                      title: 'React Hooks Guide',
+                      title: 'React Hooks 指南',
                       url: 'https://react.dev/hooks',
-                      snippet: 'Learn about React Hooks...'
+                      snippet: '学习 React Hooks 的基础用法与最佳实践...'
                     }
                   ]
                 },
@@ -1484,7 +1484,7 @@ All requirements met`,
               sessionId="preview-session"
             />
 
-            <h3 style={{ color: '#ffffff', marginTop: '16px', marginBottom: '8px' }}>MCP - Running</h3>
+            <h3 style={{ color: '#ffffff', marginTop: '16px', marginBottom: '8px' }}>MCP - 执行中</h3>
             <MCPToolDisplay
               toolItem={createMockToolItem('mcp_server_fetch_data',
                 { url: 'https://api.example.com/data' },
@@ -1513,12 +1513,12 @@ All requirements met`,
         category: 'flowchat-cards',
         component: () => (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', padding: '20px' }}>
-            <h3 style={{ color: '#ffffff', marginBottom: '8px' }}>Mermaid - Completed</h3>
+            <h3 style={{ color: '#ffffff', marginBottom: '8px' }}>Mermaid - 已完成</h3>
             <MermaidInteractiveDisplay
               toolItem={createMockToolItem('MermaidInteractive',
                 {
                   mermaid_code: 'graph TD\n  A[Start] --> B[Process]\n  B --> C[End]',
-                  title: 'Diagram',
+                  title: '流程图',
                   mode: 'interactive'
                 },
                 {
@@ -1531,12 +1531,12 @@ All requirements met`,
               sessionId="preview-session"
             />
 
-            <h3 style={{ color: '#ffffff', marginTop: '16px', marginBottom: '8px' }}>Mermaid - Running</h3>
+            <h3 style={{ color: '#ffffff', marginTop: '16px', marginBottom: '8px' }}>Mermaid - 执行中</h3>
             <MermaidInteractiveDisplay
               toolItem={createMockToolItem('MermaidInteractive',
                 {
                   mermaid_code: 'sequenceDiagram\n  Alice->>Bob: Hello',
-                  title: 'Diagram',
+                  title: '时序图',
                   mode: 'interactive'
                 },
                 undefined,
@@ -1550,12 +1550,12 @@ All requirements met`,
       },
       {
         id: 'context-compression-card',
-        name: 'ContextCompression - Demo',
-        description: 'Demo',
+        name: 'ContextCompression - 上下文压缩',
+        description: '上下文压缩过程卡片',
         category: 'flowchat-cards',
         component: () => (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', padding: '20px' }}>
-            <h3 style={{ color: '#ffffff', marginBottom: '8px' }}>Context Compression - Demo</h3>
+            <h3 style={{ color: '#ffffff', marginBottom: '8px' }}>上下文压缩 - 示例</h3>
             <ContextCompressionDisplay
               toolItem={createMockToolItem('ContextCompression',
                 {
@@ -1574,7 +1574,7 @@ All requirements met`,
               )}
             />
 
-            <h3 style={{ color: '#ffffff', marginTop: '16px', marginBottom: '8px' }}>Context Compression - Running</h3>
+            <h3 style={{ color: '#ffffff', marginTop: '16px', marginBottom: '8px' }}>上下文压缩 - 执行中</h3>
             <ContextCompressionDisplay
               toolItem={createMockToolItem('ContextCompression',
                 { trigger: 'user_message' },
@@ -1592,16 +1592,16 @@ All requirements met`,
         category: 'flowchat-cards',
         component: () => (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', padding: '20px' }}>
-            <h3 style={{ color: '#ffffff', marginBottom: '8px' }}>Read - Success</h3>
+            <h3 style={{ color: '#ffffff', marginBottom: '8px' }}>图片分析 - 成功</h3>
             <ImageAnalysisCard
               toolItem={createMockToolItem('view_image',
                 {
                   image_path: '/path/to/screenshot.png',
-                  analysis_prompt: 'Analyze the UI components',
-                  focus_areas: ['UI elements', 'Layout', 'Colors']
+                  analysis_prompt: '分析界面中的 UI 组件',
+                  focus_areas: ['界面元素', '布局结构', '配色方案']
                 },
                 {
-                  analysis: 'The screenshot shows a TypeScript/React application with a modern UI design. The layout includes a header, sidebar, and main content area.',
+                  analysis: '截图展示了一个基于 TypeScript 与 React 构建的应用界面，整体包含顶部区域、侧边栏和主内容区。',
                   model_used: 'gpt-4-vision',
                   image_path: '/path/to/screenshot.png'
                 },
@@ -1620,7 +1620,7 @@ All requirements met`,
         category: 'flowchat-cards',
         component: () => (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', padding: '20px' }}>
-            <h3 style={{ color: '#ffffff', marginBottom: '8px' }}>IDE Control - Demo</h3>
+            <h3 style={{ color: '#ffffff', marginBottom: '8px' }}>IDE 控制 - 示例</h3>
             <IdeControlToolCard
               toolItem={createMockToolItem('IdeControl',
                 {
@@ -1638,12 +1638,12 @@ All requirements met`,
       },
       {
         id: 'linter-card',
-        name: 'ReadLints - Demo',
-        description: 'Demo',
+        name: 'ReadLints - 诊断卡片',
+        description: '代码诊断结果卡片',
         category: 'flowchat-cards',
         component: () => (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', padding: '20px' }}>
-            <h3 style={{ color: '#ffffff', marginBottom: '8px' }}>Linter - Demo</h3>
+            <h3 style={{ color: '#ffffff', marginBottom: '8px' }}>代码诊断 - 示例</h3>
             <LinterToolCard
               toolItem={createMockToolItem('ReadLints',
                 { path: 'src/App.tsx' },
@@ -1702,7 +1702,7 @@ All requirements met`,
       },
       {
         id: 'skill-card',
-        name: 'Skill - Demo',
+        name: 'Skill - 技能调用',
         description: '展示Skill技能调用组件',
         category: 'flowchat-cards',
         component: () => (
@@ -1715,8 +1715,8 @@ All requirements met`,
                   skill_input: { file_path: 'src/App.tsx' }
                 },
                 {
-                  result: 'Code review completed',
-                  suggestions: ['Use React.memo', 'Optimize render', 'Fix warnings']
+                  result: '代码审查已完成',
+                  suggestions: ['使用 React.memo', '优化渲染性能', '修复现有警告']
                 },
                 'completed'
               )}
@@ -1729,22 +1729,22 @@ All requirements met`,
       {
         id: 'ask-user-card',
         name: 'AskUserQuestion - 用户问题',
-        description: 'AI user question',
+        description: 'AI 用户提问卡片',
         category: 'flowchat-cards',
         component: () => (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', padding: '20px' }}>
-            <h3 style={{ color: '#ffffff', marginBottom: '8px' }}>Ask User - Question</h3>
+            <h3 style={{ color: '#ffffff', marginBottom: '8px' }}>向用户提问 - 单题示例</h3>
             <AskUserQuestionCard
               toolItem={createMockToolItem('AskUserQuestion',
                 {
                   questions: [
                     {
-                      question: 'Which option do you prefer?',
-                      header: 'Question',
+                      question: '您更偏好哪个选项?',
+                      header: '问题',
                       options: [
-                        { label: 'Option 1', description: 'First option' },
-                        { label: 'Option 2', description: 'Second option' },
-                        { label: 'Option 3', description: 'Third option' }
+                        { label: '选项 1', description: '第一个选项' },
+                        { label: '选项 2', description: '第二个选项' },
+                        { label: '选项 3', description: '第三个选项' }
                       ],
                       multiSelect: false
                     }
@@ -1863,7 +1863,7 @@ All requirements met`,
                 onProceed={() => {}}
               />
 
-              <h3 style={{ color: '#ffffff', marginTop: '16px', marginBottom: '8px' }}>Completed</h3>
+              <h3 style={{ color: '#ffffff', marginTop: '16px', marginBottom: '8px' }}>已完成</h3>
               <CompletedReproductionSteps />
             </div>
           );
@@ -1872,7 +1872,7 @@ All requirements met`,
       {
         id: 'create-plan-card',
         name: 'CreatePlan - 计划创建',
-        description: 'Demo',
+        description: '计划创建卡片',
         category: 'flowchat-cards',
         component: () => (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', padding: '20px' }}>
@@ -1890,7 +1890,7 @@ All requirements met`,
               sessionId="preview-session"
             />
 
-            <h3 style={{ color: '#ffffff', marginTop: '16px', marginBottom: '8px' }}>Create Plan - Completed</h3>
+            <h3 style={{ color: '#ffffff', marginTop: '16px', marginBottom: '8px' }}>创建计划 - 已完成</h3>
             <CreatePlanDisplay
               toolItem={createMockToolItem('CreatePlan',
                 {},
@@ -2033,7 +2033,7 @@ index abc1234..def5678 100644
               sessionId="preview-session"
             />
 
-            <h3 style={{ color: '#ffffff', marginTop: '16px', marginBottom: '8px' }}>Git Push - Running</h3>
+            <h3 style={{ color: '#ffffff', marginTop: '16px', marginBottom: '8px' }}>Git Push - 执行中</h3>
             <GitToolDisplay
               toolItem={createMockToolItem('Git',
                 {
@@ -2078,8 +2078,8 @@ Aborting`,
       },
       {
         id: 'model-thinking-card',
-        name: 'ModelThinking - Demo',
-        description: '展示AI模型推理过程的思考状态组件',
+        name: 'ModelThinking - 思考过程',
+        description: '展示 AI 模型推理过程的思考状态组件',
         category: 'flowchat-cards',
         component: () => {
           const createMockThinkingItem = (
