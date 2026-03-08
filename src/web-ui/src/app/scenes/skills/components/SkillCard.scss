@@ -1,0 +1,210 @@
+@use '../../../../component-library/styles/tokens' as *;
+
+/* ───────────────────────────────────────────────────
+   SkillCard — horizontal card with icon column + body
+   DOM:
+     .skill-card
+       .skill-card__icon-area
+       .skill-card__body
+         .skill-card__header   (name + badges + actions)
+         .skill-card__desc
+         .skill-card__meta
+         .skill-card__detail-wrap
+   ─────────────────────────────────────────────────── */
+
+.skill-card {
+  display: flex;
+  flex-direction: row;
+  border-radius: $size-radius-lg;
+  background: var(--element-bg-soft);
+  border: 1px solid transparent;
+  cursor: pointer;
+  position: relative;
+  animation: skill-card-in 0.22s $easing-decelerate both;
+  animation-delay: calc(var(--card-index, 0) * 35ms);
+  transition:
+    background $motion-fast $easing-standard,
+    border-color $motion-fast $easing-standard,
+    box-shadow $motion-fast $easing-standard,
+    transform $motion-fast $easing-standard;
+
+  &:hover {
+    background: var(--element-bg-medium);
+    border-color: var(--border-subtle);
+    transform: translateY(-1px);
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.12);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--color-accent-500);
+    outline-offset: 2px;
+  }
+
+  // ── Icon column ──
+  &__icon-area {
+    width: 56px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--skill-card-gradient);
+    border-radius: $size-radius-lg 0 0 $size-radius-lg;
+  }
+
+  &__icon {
+    color: var(--color-text-primary);
+    animation: skill-card-icon-pop 0.46s $easing-decelerate both;
+    animation-delay: calc(var(--card-index, 0) * 35ms + 50ms);
+  }
+
+  // ── Body column (vertical flow) ──
+  &__body {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    padding: $size-gap-3;
+    gap: 4px;
+    overflow: hidden;
+  }
+
+  // ── Header: name + badges + action buttons ──
+  &__header {
+    display: flex;
+    align-items: flex-start;
+    gap: $size-gap-2;
+  }
+
+  &__header-text {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: baseline;
+    gap: $size-gap-2;
+    flex-wrap: wrap;
+  }
+
+  &__name {
+    font-size: $font-size-sm;
+    font-weight: $font-weight-semibold;
+    color: var(--color-text-primary);
+    line-height: $line-height-base;
+    word-break: break-word;
+  }
+
+  // ── Description ──
+  &__desc {
+    margin: 0;
+    font-size: $font-size-xs;
+    color: var(--color-text-secondary);
+    line-height: $line-height-relaxed;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    word-break: break-word;
+  }
+
+  // ── Meta row ──
+  &__meta {
+    display: flex;
+    align-items: center;
+    gap: $size-gap-1;
+    flex-wrap: wrap;
+    margin-top: auto;
+    padding-top: $size-gap-2;
+    color: var(--color-text-muted);
+    font-size: $font-size-xs;
+    line-height: $line-height-base;
+  }
+
+  // ── Action buttons ──
+  &__actions {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    flex-shrink: 0;
+  }
+
+  &__action-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    border: none;
+    border-radius: $size-radius-sm;
+    background: transparent;
+    color: var(--color-text-muted);
+    cursor: pointer;
+    transition:
+      background $motion-fast $easing-standard,
+      color $motion-fast $easing-standard;
+
+    &:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+
+    &:not(:disabled):hover {
+      background: var(--element-bg-strong);
+      color: var(--color-text-primary);
+    }
+
+    &--primary:not(:disabled):hover {
+      color: var(--color-accent-400);
+    }
+
+    &--success:not(:disabled):hover {
+      color: var(--color-success);
+    }
+
+    &--danger:not(:disabled):hover {
+      color: var(--color-error);
+    }
+  }
+}
+
+// ── Responsive ──
+@media (max-width: 720px) {
+  .skill-card {
+    &__icon-area {
+      width: 48px;
+    }
+  }
+}
+
+// ── Animations ──
+@keyframes skill-card-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes skill-card-icon-pop {
+  0% {
+    opacity: 0;
+    transform: scale(0.55) rotate(-10deg);
+  }
+  60% {
+    opacity: 1;
+    transform: scale(1.15) rotate(3deg);
+  }
+  100% {
+    transform: scale(1) rotate(0deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skill-card,
+  .skill-card__icon {
+    animation: none;
+    transition: none;
+  }
+}

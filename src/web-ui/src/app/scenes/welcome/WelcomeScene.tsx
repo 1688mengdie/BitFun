@@ -127,15 +127,23 @@ const WelcomeScene: React.FC = () => {
 
           {/* Greeting */}
           <div className="welcome-scene__greeting">
-            <p className="welcome-scene__greeting-label">{t('welcomeScene.welcomeBack')}</p>
-            <h1 className="welcome-scene__workspace-title">{currentWorkspace?.name}</h1>
-            <div className="welcome-scene__workspace-meta">
-              {isRepository && currentBranch && (
-                <span className="welcome-scene__meta-tag">
-                  <GitBranch size={11} />
-                  <span>{currentBranch}</span>
-                </span>
-              )}
+            <div className="welcome-scene__greeting-inner">
+              <div className="welcome-scene__panda" aria-hidden="true">
+                <img src="/panda_full_1.png" className="welcome-scene__panda-frame welcome-scene__panda-frame--1" alt="" />
+                <img src="/panda_full_2.png" className="welcome-scene__panda-frame welcome-scene__panda-frame--2" alt="" />
+              </div>
+              <div className="welcome-scene__greeting-text">
+                <p className="welcome-scene__greeting-label">{t('welcomeScene.welcomeBack')}</p>
+                <div className="welcome-scene__title-row">
+                  <h1 className="welcome-scene__workspace-title">{currentWorkspace?.name}</h1>
+                  {isRepository && currentBranch && (
+                    <span className="welcome-scene__meta-tag">
+                      <GitBranch size={11} />
+                      <span>{currentBranch}</span>
+                    </span>
+                  )}
+                </div>
+              </div>
             </div>
           </div>
 

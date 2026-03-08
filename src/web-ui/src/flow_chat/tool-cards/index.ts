@@ -300,11 +300,11 @@ export const TOOL_CARD_CONFIGS: Record<string, ToolCardConfig> = {
   // MiniApp tool
   'InitMiniApp': {
     toolName: 'InitMiniApp',
-    displayName: 'Init MiniApp',
+    displayName: 'Init Mini App',
     icon: 'APP',
     requiresConfirmation: false,
     resultDisplayType: 'detailed',
-    description: 'Create MiniApp skeleton for editing',
+    description: 'Create Mini App skeleton for editing',
     displayMode: 'standard',
     primaryColor: '#7c8cef'
   },

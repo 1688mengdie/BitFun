@@ -5,7 +5,7 @@ use crate::api::dto::WorkspaceInfoDto;
 use bitfun_core::infrastructure::{file_watcher, FileOperationOptions, SearchMatchType};
 use log::{debug, error, info, warn};
 use serde::Deserialize;
-use tauri::State;
+use tauri::{AppHandle, State};
 
 #[derive(Debug, Deserialize)]
 pub struct OpenWorkspaceRequest {
@@ -16,6 +16,18 @@ pub struct OpenWorkspaceRequest {
 #[serde(rename_all = "camelCase")]
 pub struct ScanWorkspaceInfoRequest {
     pub workspace_path: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CloseWorkspaceRequest {
+    pub workspace_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetActiveWorkspaceRequest {
+    pub workspace_id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -126,6 +138,96 @@ pub struct CreateDirectoryRequest {
 #[derive(Debug, Deserialize)]
 pub struct RevealInExplorerRequest {
     pub path: String,
+}
+
+async fn clear_active_workspace_context(state: &State<'_, AppState>, app: &AppHandle) {
+    #[cfg(not(target_os = "macos"))]
+    let _ = app;
+
+    *state.workspace_path.write().await = None;
+    state.miniapp_manager.set_workspace_path(None).await;
+
+    if let Some(ref pool) = state.js_worker_pool {
+        pool.stop_all().await;
+    }
+
+    state.ai_rules_service.clear_workspace().await;
+    state.agent_registry.clear_custom_subagents();
+
+    #[cfg(target_os = "macos")]
+    {
+        let language = state
+            .config_service
+            .get_config::<String>(Some("app.language"))
+            .await
+            .unwrap_or_else(|_| "zh-CN".to_string());
+        let _ = crate::macos_menubar::set_macos_menubar_with_mode(
+            app,
+            &language,
+            crate::macos_menubar::MenubarMode::Startup,
+        );
+    }
+}
+
+async fn apply_active_workspace_context(
+    state: &State<'_, AppState>,
+    app: &AppHandle,
+    workspace_info: &bitfun_core::service::workspace::manager::WorkspaceInfo,
+) {
+    #[cfg(not(target_os = "macos"))]
+    let _ = app;
+
+    clear_active_workspace_context(state, app).await;
+
+    *state.workspace_path.write().await = Some(workspace_info.root_path.clone());
+    state
+        .miniapp_manager
+        .set_workspace_path(Some(workspace_info.root_path.clone()))
+        .await;
+
+    if let Err(e) = bitfun_core::service::snapshot::initialize_global_snapshot_manager(
+        workspace_info.root_path.clone(),
+        None,
+    )
+    .await
+    {
+        warn!(
+            "Failed to initialize snapshot system: path={}, error={}",
+            workspace_info.root_path.display(),
+            e
+        );
+    }
+
+    state
+        .agent_registry
+        .load_custom_subagents(&workspace_info.root_path)
+        .await;
+
+    if let Err(e) = state
+        .ai_rules_service
+        .set_workspace(workspace_info.root_path.clone())
+        .await
+    {
+        warn!(
+            "Failed to set AI rules workspace: path={}, error={}",
+            workspace_info.root_path.display(),
+            e
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let language = state
+            .config_service
+            .get_config::<String>(Some("app.language"))
+            .await
+            .unwrap_or_else(|_| "zh-CN".to_string());
+        let _ = crate::macos_menubar::set_macos_menubar_with_mode(
+            app,
+            &language,
+            crate::macos_menubar::MenubarMode::Workspace,
+        );
+    }
 }
 
 #[tauri::command]
@@ -454,7 +556,7 @@ pub async fn update_app_status(
 #[tauri::command]
 pub async fn open_workspace(
     state: State<'_, AppState>,
-    _app: tauri::AppHandle,
+    app: tauri::AppHandle,
     request: OpenWorkspaceRequest,
 ) -> Result<WorkspaceInfoDto, String> {
     match state
@@ -463,55 +565,7 @@ pub async fn open_workspace(
         .await
     {
         Ok(workspace_info) => {
-            *state.workspace_path.write().await = Some(workspace_info.root_path.clone());
-            state
-                .miniapp_manager
-                .set_workspace_path(Some(workspace_info.root_path.clone()))
-                .await;
-
-            if let Err(e) = bitfun_core::service::snapshot::initialize_global_snapshot_manager(
-                workspace_info.root_path.clone(),
-                None,
-            )
-            .await
-            {
-                warn!(
-                    "Failed to initialize snapshot system: path={}, error={}",
-                    workspace_info.root_path.display(),
-                    e
-                );
-            }
-
-            state
-                .agent_registry
-                .load_custom_subagents(&workspace_info.root_path)
-                .await;
-
-            if let Err(e) = state
-                .ai_rules_service
-                .set_workspace(workspace_info.root_path.clone())
-                .await
-            {
-                warn!(
-                    "Failed to set AI rules workspace: path={}, error={}",
-                    workspace_info.root_path.display(),
-                    e
-                );
-            }
-
-            #[cfg(target_os = "macos")]
-            {
-                let language = state
-                    .config_service
-                    .get_config::<String>(Some("app.language"))
-                    .await
-                    .unwrap_or_else(|_| "zh-CN".to_string());
-                let _ = crate::macos_menubar::set_macos_menubar_with_mode(
-                    &_app,
-                    &language,
-                    crate::macos_menubar::MenubarMode::Workspace,
-                );
-            }
+            apply_active_workspace_context(&state, &app, &workspace_info).await;
 
             info!(
                 "Workspace opened: name={}, path={}",
@@ -530,39 +584,62 @@ pub async fn open_workspace(
 #[tauri::command]
 pub async fn close_workspace(
     state: State<'_, AppState>,
-    _app: tauri::AppHandle,
+    app: tauri::AppHandle,
+    request: CloseWorkspaceRequest,
 ) -> Result<(), String> {
-    match state.workspace_service.close_workspace("default").await {
+    match state
+        .workspace_service
+        .close_workspace(&request.workspace_id)
+        .await
+    {
         Ok(_) => {
-            *state.workspace_path.write().await = None;
-            state.miniapp_manager.set_workspace_path(None).await;
-            if let Some(ref pool) = state.js_worker_pool {
-                pool.stop_all().await;
-            }
-            state.ai_rules_service.clear_workspace().await;
-
-            state.agent_registry.clear_custom_subagents();
-
-            #[cfg(target_os = "macos")]
-            {
-                let language = state
-                    .config_service
-                    .get_config::<String>(Some("app.language"))
-                    .await
-                    .unwrap_or_else(|_| "zh-CN".to_string());
-                let _ = crate::macos_menubar::set_macos_menubar_with_mode(
-                    &_app,
-                    &language,
-                    crate::macos_menubar::MenubarMode::Startup,
-                );
+            if let Some(workspace_info) = state.workspace_service.get_current_workspace().await {
+                apply_active_workspace_context(&state, &app, &workspace_info).await;
+            } else {
+                clear_active_workspace_context(&state, &app).await;
             }
 
-            info!("Workspace closed");
+            info!("Workspace closed: workspace_id={}", request.workspace_id);
             Ok(())
         }
         Err(e) => {
             error!("Failed to close workspace: {}", e);
             Err(format!("Failed to close workspace: {}", e))
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn set_active_workspace(
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+    request: SetActiveWorkspaceRequest,
+) -> Result<WorkspaceInfoDto, String> {
+    match state
+        .workspace_service
+        .set_active_workspace(&request.workspace_id)
+        .await
+    {
+        Ok(_) => {
+            let workspace_info = state
+                .workspace_service
+                .get_current_workspace()
+                .await
+                .ok_or_else(|| "Active workspace not found after switching".to_string())?;
+
+            apply_active_workspace_context(&state, &app, &workspace_info).await;
+
+            info!(
+                "Active workspace changed: workspace_id={}, path={}",
+                workspace_info.id,
+                workspace_info.root_path.display()
+            );
+
+            Ok(WorkspaceInfoDto::from_workspace_info(&workspace_info))
+        }
+        Err(e) => {
+            error!("Failed to set active workspace: {}", e);
+            Err(format!("Failed to set active workspace: {}", e))
         }
     }
 }
@@ -585,6 +662,19 @@ pub async fn get_recent_workspaces(
     let workspace_service = &state.workspace_service;
     Ok(workspace_service
         .get_recent_workspaces()
+        .await
+        .into_iter()
+        .map(|info| WorkspaceInfoDto::from_workspace_info(&info))
+        .collect())
+}
+
+#[tauri::command]
+pub async fn get_opened_workspaces(
+    state: State<'_, AppState>,
+) -> Result<Vec<WorkspaceInfoDto>, String> {
+    let workspace_service = &state.workspace_service;
+    Ok(workspace_service
+        .get_opened_workspaces()
         .await
         .into_iter()
         .map(|info| WorkspaceInfoDto::from_workspace_info(&info))

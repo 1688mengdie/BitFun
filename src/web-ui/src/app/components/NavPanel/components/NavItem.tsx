@@ -1,7 +1,7 @@
 /**
  * NavItem — a single navigation row inside the NavPanel.
  *
- * Renders icon + label + optional expand chevron + optional badge.
+ * Renders icon + label + optional badge.
  * Scene-type items display a compact badge (e.g. git branch name).
  * Optional action icon (e.g. Plus for new session) for quick actions.
  */
@@ -18,7 +18,6 @@ interface NavItemProps {
   /** Custom tooltip content (overrides displayLabel as tooltip when provided) */
   tooltipContent?: string;
   isActive: boolean;
-  isOpen?: boolean;
   /** Optional badge text shown at the right (e.g. branch name) */
   badge?: string;
   /** Called when badge area is clicked (e.g. open BranchQuickSwitch) */
@@ -39,7 +38,6 @@ const NavItem: React.FC<NavItemProps> = ({
   displayLabel,
   tooltipContent,
   isActive,
-  isOpen = false,
   badge,
   onBadgeClick,
   actionIcon: ActionIcon,
@@ -48,7 +46,7 @@ const NavItem: React.FC<NavItemProps> = ({
   renderActions,
   onClick,
 }) => {
-  const { Icon, inlineExpandable } = item;
+  const { Icon } = item;
   const badgeRef = useRef<HTMLSpanElement>(null);
 
   const handleBadgeClick = (e: React.MouseEvent) => {
@@ -69,12 +67,10 @@ const NavItem: React.FC<NavItemProps> = ({
       className={[
         'bitfun-nav-panel__item',
         isActive && 'is-active',
-        isOpen   && 'is-open',
       ]
         .filter(Boolean)
         .join(' ')}
       onClick={onClick}
-      aria-expanded={inlineExpandable ? isOpen : undefined}
     >
       <span className="bitfun-nav-panel__item-icon" aria-hidden="true">
         <Icon size={15} />

@@ -78,25 +78,24 @@
       "sessions": "Sessions",
       "project": "Directory",
       "persona": "Profile",
-      "team": "Team",
+      "agents": "Agents",
       "skills": "Skills",
       "tools": "Tools",
       "terminal": "Shell",
-      "shellHub": "Shell Hub",
       "git": "Git",
-      "miniApps": "Toolbox"
+      "miniApps": "Mini App"
     },
     "tooltips": {
       "persona": "Agent profile — identity, rules, memory, knowledge & capabilities",
-      "team": "Who it can call — specialist sub-agents",
+      "agents": "Which Agents and Agent Teams it can call",
       "skills": "What it knows — specialized knowledge files",
       "tools": "What it can use — built-in tools & MCP services",
-      "toolbox": "AI-generated instant apps — MiniApp Toolbox"
+      "toolbox": "Generated in chat, ready to use"
     },
     "toolbox": {
-      "openGallery": "Open Gallery",
-      "newMiniApp": "New App",
-      "noApps": "No apps running · Open Gallery to start one",
+      "openGallery": "Open Mini App",
+      "newMiniApp": "New Mini App",
+      "noApps": "Mini Apps are generated instantly during conversations with AI. Open one to use it right away and keep iterating.",
       "runningApps": "Running",
       "myApps": "Opened",
       "stop": "Stop"
@@ -104,7 +103,46 @@
     "sections": {
       "workspace": "Workspace",
       "myAgent": "My Agent",
-      "devSuite": "Developer Suite"
+      "shell": "Shell"
+    },
+    "myAgent": {
+      "title": "My Agent",
+      "categories": {
+        "identity": "Identity",
+        "collaboration": "Collaboration"
+      }
+    },
+    "shell": {
+      "title": "Shell",
+      "views": {
+        "all": "All",
+        "hub": "Hub"
+      },
+      "actions": {
+        "newTerminal": "New Terminal",
+        "newHubTerminal": "New Hub Terminal",
+        "addWorktree": "Add Worktree",
+        "refresh": "Refresh"
+      },
+      "context": {
+        "start": "Start",
+        "stop": "Stop",
+        "edit": "Edit",
+        "editConfig": "Edit Config",
+        "delete": "Delete",
+        "close": "Close",
+        "rename": "Rename",
+        "promoteToHub": "Save to Hub",
+        "newWorktreeTerminal": "New Terminal",
+        "removeWorktree": "Remove Worktree"
+      },
+      "badges": {
+        "startupCommand": "cmd"
+      },
+      "empty": {
+        "all": "Create a terminal from the menu to get started",
+        "hub": "No Hub terminals yet"
+      }
     },
     "sessions": {
       "newSession": "New session",
@@ -115,6 +153,8 @@
       "newCoworkSessionDefault": "New Cowork session (default)",
       "modeCode": "Code",
       "modeCowork": "Cowork",
+      "codeSessionMode": "Code Session",
+      "coworkSessionMode": "Cowork Session",
       "noSessions": "No sessions",
       "rename": "Rename",
       "delete": "Delete",
@@ -123,7 +163,24 @@
       "showMore": "{{count}} more sessions",
       "showLess": "Show less"
     },
-    "team": {
+    "workspaces": {
+      "empty": "No opened workspaces yet",
+      "closeFailed": "Failed to close workspace",
+      "revealFailed": "Failed to reveal workspace folder",
+      "createSessionFailed": "Failed to create session",
+      "worktreeCreated": "Worktree created",
+      "worktreeCreateFailed": "Failed to create worktree: {{error}}",
+      "expandSessions": "Expand sessions",
+      "collapseSessions": "Collapse sessions",
+      "actions": {
+        "more": "More actions",
+        "newSession": "New session",
+        "newWorktree": "New worktree",
+        "reveal": "Reveal in explorer",
+        "close": "Close workspace"
+      }
+    },
+    "agents": {
       "allAgents": "All Agents",
       "newAgent": "New Agent",
       "agentsOverview": "Agents",
@@ -541,7 +598,6 @@
     "subtitleAfternoon": "\"Here, AI is not a tool, but your intelligent companion. Thoughts flow like water, ideas become reality instantly.\"",
     "subtitleEvening": "\"Golden coding hours. Let your inspiration shine in the twilight.\"",
     "subtitleNight": "\"In the quiet of night, creation awaits. Where AI meets IDE, Magic happens.\"",
-    "aiPartner": "I'm Fang, your AI companion",
     "featureIntro": "I can help you understand complex code, quickly implement new features, refactor legacy projects, or solve those frustrating bugs...",
     "featureIntroCowork": "I can help organize your desktop, gather information, and create PPT and PDF documents...",
     "lastTimeYouWere": "I remember when you left, you were at...",
@@ -568,9 +624,11 @@
     "fileViewer": "File Viewer",
     "projectContext": "Profile",
     "capabilities": "Capabilities",
-    "team": "Team",
+    "agents": "Agents",
     "skills": "Skills",
-    "toolbox": "Toolbox"
+    "toolbox": "Mini App",
+    "myAgent": "My Agent",
+    "shell": "Shell"
   },
   "welcomeScene": {
     "tabLabel": "Welcome",

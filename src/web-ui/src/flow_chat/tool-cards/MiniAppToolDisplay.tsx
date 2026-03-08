@@ -1,5 +1,5 @@
 /**
- * MiniAppToolDisplay — shows InitMiniApp result with Open in Toolbox button.
+ * MiniAppToolDisplay — shows InitMiniApp result with Open in Mini App button.
  */
 import React, { useMemo } from 'react';
 import { Wrench, ExternalLink, CheckCircle2, Loader2 } from 'lucide-react';
@@ -28,7 +28,7 @@ export const InitMiniAppDisplay: React.FC<ToolCardProps> = ({ toolItem }) => {
           {isLoading ? <Loader2 size={14} className="spinning" /> : <Wrench size={14} />}
         </div>
         <span className="miniapp-tool-display__label">
-          {isLoading ? 'Creating MiniApp…' : success ? 'MiniApp Skeleton Created' : 'Init MiniApp'}
+          {isLoading ? 'Creating Mini App…' : success ? 'Mini App Skeleton Created' : 'Init Mini App'}
         </span>
         {success && <CheckCircle2 size={14} className="miniapp-tool-display__check" />}
       </div>
@@ -41,10 +41,10 @@ export const InitMiniAppDisplay: React.FC<ToolCardProps> = ({ toolItem }) => {
             <button
               className="miniapp-tool-display__open-btn"
               onClick={() => openScene('toolbox')}
-              title="Open in Toolbox"
+              title="Open in Mini App"
             >
               <ExternalLink size={12} />
-              <span>Open in Toolbox</span>
+              <span>Open in Mini App</span>
             </button>
           </>
         )}

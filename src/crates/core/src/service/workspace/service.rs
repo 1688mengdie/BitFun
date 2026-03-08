@@ -183,6 +183,26 @@ impl WorkspaceService {
         };
 
         if result.is_ok() {
+            if let Err(e) = self.save_workspace_data().await {
+                warn!("Failed to save workspace data after closing: {}", e);
+            }
+            self.sync_global_workspace_path().await;
+        }
+
+        result
+    }
+
+    /// Sets the active workspace from the opened workspace list.
+    pub async fn set_active_workspace(&self, workspace_id: &str) -> BitFunResult<()> {
+        let result = {
+            let mut manager = self.manager.write().await;
+            manager.set_active_workspace(workspace_id)
+        };
+
+        if result.is_ok() {
+            if let Err(e) = self.save_workspace_data().await {
+                warn!("Failed to save workspace data after switching active workspace: {}", e);
+            }
             self.sync_global_workspace_path().await;
         }
 
@@ -191,16 +211,7 @@ impl WorkspaceService {
 
     /// Switches to the specified workspace.
     pub async fn switch_to_workspace(&self, workspace_id: &str) -> BitFunResult<()> {
-        let result = {
-            let mut manager = self.manager.write().await;
-            manager.set_current_workspace(workspace_id.to_string())
-        };
-
-        if result.is_ok() {
-            self.sync_global_workspace_path().await;
-        }
-
-        result
+        self.set_active_workspace(workspace_id).await
     }
 
     /// Returns the current workspace.
@@ -213,6 +224,16 @@ impl WorkspaceService {
     pub async fn get_workspace(&self, workspace_id: &str) -> Option<WorkspaceInfo> {
         let manager = self.manager.read().await;
         manager.get_workspace(workspace_id).cloned()
+    }
+
+    /// Returns all currently opened workspaces.
+    pub async fn get_opened_workspaces(&self) -> Vec<WorkspaceInfo> {
+        let manager = self.manager.read().await;
+        manager
+            .get_opened_workspace_infos()
+            .into_iter()
+            .cloned()
+            .collect()
     }
 
     /// Lists all workspaces.
@@ -593,6 +614,7 @@ impl WorkspaceService {
 
         let workspace_data = WorkspacePersistenceData {
             workspaces: manager.get_workspaces().clone(),
+            opened_workspace_ids: manager.get_opened_workspace_ids().clone(),
             current_workspace_id: manager.get_current_workspace().map(|w| w.id.clone()),
             recent_workspaces: manager.get_recent_workspaces().clone(),
             saved_at: chrono::Utc::now(),
@@ -627,6 +649,7 @@ impl WorkspaceService {
             let mut manager = self.manager.write().await;
 
             *manager.get_workspaces_mut() = data.workspaces;
+            manager.set_opened_workspace_ids(data.opened_workspace_ids);
             manager.set_recent_workspaces(data.recent_workspaces);
 
             if let Some(current_id) = data.current_workspace_id {
@@ -664,7 +687,20 @@ impl WorkspaceService {
             let mut manager = self.manager.write().await;
 
             *manager.get_workspaces_mut() = data.workspaces;
+            manager.set_opened_workspace_ids(data.opened_workspace_ids.clone());
             manager.set_recent_workspaces(data.recent_workspaces);
+
+            let current_id = data
+                .current_workspace_id
+                .or_else(|| data.opened_workspace_ids.first().cloned());
+
+            if let Some(current_id) = current_id {
+                if manager.get_workspaces().contains_key(&current_id) {
+                    if let Err(e) = manager.set_current_workspace(current_id) {
+                        warn!("Failed to restore current workspace on startup: {}", e);
+                    }
+                }
+            }
         }
 
         Ok(())
@@ -755,6 +791,8 @@ pub struct WorkspaceQuickSummary {
 #[derive(Debug, Serialize, Deserialize)]
 struct WorkspacePersistenceData {
     pub workspaces: std::collections::HashMap<String, WorkspaceInfo>,
+    #[serde(default)]
+    pub opened_workspace_ids: Vec<String>,
     pub current_workspace_id: Option<String>,
     pub recent_workspaces: Vec<String>,
     pub saved_at: chrono::DateTime<chrono::Utc>,

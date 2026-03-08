@@ -56,6 +56,14 @@ function buildSceneTab(id: SceneTabId, now: number): SceneTab {
   return { id, openedAt: now, lastUsed: now };
 }
 
+function resolveNavSceneId(sceneId: SceneTabId): SceneTabId | null {
+  if (sceneId === 'terminal') {
+    return 'shell';
+  }
+
+  return getSceneNav(sceneId) ? sceneId : null;
+}
+
 interface SceneState {
   openTabs: SceneTab[];
   activeTabId: SceneTabId;
@@ -146,10 +154,10 @@ export const useSceneStore = create<SceneState>((set, get) => ({
 
     // Already active — re-sync left nav in case user navigated back to MainNav
     if (id === activeTabId) {
-      const hasNav = !!getSceneNav(id);
+      const navSceneId = resolveNavSceneId(id);
       const navStore = useNavSceneStore.getState();
-      if (hasNav && !navStore.showSceneNav) {
-        navStore.openNavScene(id);
+      if (navSceneId && (!navStore.showSceneNav || navStore.navSceneId !== navSceneId)) {
+        navStore.openNavScene(navSceneId);
       }
       return;
     }
@@ -285,10 +293,10 @@ if (typeof window !== 'undefined') {
   useSceneStore.subscribe((state) => {
     if (state.activeTabId !== prev) {
       prev = state.activeTabId;
-      const hasNav = !!getSceneNav(state.activeTabId);
+      const navSceneId = resolveNavSceneId(state.activeTabId);
       const navStore = useNavSceneStore.getState();
-      if (hasNav) {
-        navStore.openNavScene(state.activeTabId);
+      if (navSceneId) {
+        navStore.openNavScene(navSceneId);
       } else {
         navStore.closeNavScene();
       }

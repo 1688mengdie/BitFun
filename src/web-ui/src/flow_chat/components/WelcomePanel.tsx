@@ -1,643 +1,276 @@
 /**
  * Welcome panel shown in the empty chat state.
- * Displays work-state analysis and onboarding content.
+ * Layout mirrors WelcomeScene: centered container, left-aligned content.
  */
 
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { startchatAgentAPI, gitAPI } from '../../infrastructure/api';
-import { globalStateAPI } from '../../shared/types';
-import type { WorkStateAnalysis, PredictedAction, QuickAction, GitWorkState } from '../../infrastructure/api/service-api/StartchatAgentAPI';
+import { FolderOpen, ChevronDown, Check, GitBranch } from 'lucide-react';
+import { gitAPI } from '../../infrastructure/api';
+import type { GitWorkState } from '../../infrastructure/api/service-api/StartchatAgentAPI';
 import { useApp } from '../../app/hooks/useApp';
-import { StreamText } from '../../component-library';
-import { aiExperienceConfigService } from '@/infrastructure/config/services';
 import { createLogger } from '@/shared/utils/logger';
+import { useWorkspaceContext } from '@/infrastructure/contexts/WorkspaceContext';
+import type { WorkspaceInfo } from '@/shared/types';
 import CoworkExampleCards from './CoworkExampleCards';
 import './WelcomePanel.css';
 
 const log = createLogger('WelcomePanel');
 
 interface WelcomePanelProps {
-  /** Callback when a quick action is clicked. */
   onQuickAction?: (command: string) => void;
-  /** Custom class name. */
   className?: string;
-  /** Current session mode, used to tailor empty-state content. */
   sessionMode?: string;
 }
-
-// Session-level AI analysis failure flag to avoid repeated retries.
-let aiAnalysisFailedThisSession = false;
-const aiAnalysisCache = new Map<string, WorkStateAnalysis>();
-const aiAnalysisInFlight = new Map<string, Promise<WorkStateAnalysis | null>>();
 
 export const WelcomePanel: React.FC<WelcomePanelProps> = ({
   onQuickAction,
   className = '',
   sessionMode,
 }) => {
-  const { t, i18n } = useTranslation();
-  const [analysis, setAnalysis] = useState<WorkStateAnalysis | null>(null);
-  const [fallbackGitState, setFallbackGitState] = useState<GitWorkState | null>(null);
-  const [aiAnalysisCompleted, setAiAnalysisCompleted] = useState<boolean>(false);
-  const [visibleIntentsCount, setVisibleIntentsCount] = useState<number>(0);
+  const { t } = useTranslation('flow-chat');
+  const [gitState, setGitState] = useState<GitWorkState | null>(null);
+  const [workspaceDropdownOpen, setWorkspaceDropdownOpen] = useState(false);
+  const [isSelectingWorkspace, setIsSelectingWorkspace] = useState(false);
+  const workspaceDropdownRef = useRef<HTMLDivElement>(null);
 
-  // Streaming sequence state
-  const [featureIntroCompleted, setFeatureIntroCompleted] = useState<boolean>(false);
-  const [showGitState, setShowGitState] = useState<boolean>(false);
-  const [gitStateCompleted, setGitStateCompleted] = useState<boolean>(false);
-  const [showSummary, setShowSummary] = useState<boolean>(false);
-  const [showIntents, setShowIntents] = useState<boolean>(false);
-  
-  // Prevent double-trigger to avoid intent list flicker.
-  const defaultIntentsStartedRef = useRef<boolean>(false);
-  
   const { switchLeftPanelTab } = useApp();
+  const {
+    hasWorkspace,
+    currentWorkspace,
+    openedWorkspacesList,
+    openWorkspace,
+    switchWorkspace,
+  } = useWorkspaceContext();
   const isCoworkSession = (sessionMode || '').toLowerCase() === 'cowork';
-  // AI enhancement failures are handled silently.
-  
-  // Static greeting content (available immediately).
-  const staticGreeting = React.useMemo(() => {
+
+  const greeting = useMemo(() => {
     const hour = new Date().getHours();
-    
-    let title = t('welcome.greetingAfternoon');
-    let subtitle = t('welcome.subtitleAfternoon');
-    
-    if (hour >= 5 && hour < 12) {
-      title = t('welcome.greetingMorning');
-      subtitle = t('welcome.subtitleMorning');
-    } else if (hour >= 12 && hour < 18) {
-      title = t('welcome.greetingAfternoon');
-      subtitle = t('welcome.subtitleAfternoon');
-    } else if (hour >= 18 && hour < 23) {
-      title = t('welcome.greetingEvening');
-      subtitle = t('welcome.subtitleEvening');
-    } else {
-      title = t('welcome.greetingNight');
-      subtitle = t('welcome.subtitleNight');
-    }
-    
-    return { title, subtitle };
-  }, [t]);
+    const s = isCoworkSession ? 'Cowork' : '';
+    if (hour >= 5 && hour < 12) return { title: t('welcome.greetingMorning'), subtitle: t(`welcome.subtitleMorning${s}`) };
+    if (hour >= 12 && hour < 18) return { title: t('welcome.greetingAfternoon'), subtitle: t(`welcome.subtitleAfternoon${s}`) };
+    if (hour >= 18 && hour < 23) return { title: t('welcome.greetingEvening'), subtitle: t(`welcome.subtitleEvening${s}`) };
+    return { title: t('welcome.greetingNight'), subtitle: t(`welcome.subtitleNight${s}`) };
+  }, [t, isCoworkSession]);
 
-  const featureIntro = t(isCoworkSession ? 'welcome.featureIntroCowork' : 'welcome.featureIntro');
+  const tagline = greeting.subtitle;
+  const aiPartnerKey = isCoworkSession ? 'welcome.aiPartnerCowork' : 'welcome.aiPartner';
 
-  // Load fallback Git state without AI.
-  const loadFallbackGitState = useCallback(async (workspacePath: string) => {
-    try {
-      const isGitRepo = await gitAPI.isGitRepository(workspacePath);
-      if (!isGitRepo) {
-        return;
-      }
+  const otherWorkspaces = useMemo(
+    () => openedWorkspacesList.filter(ws => ws.id !== currentWorkspace?.id),
+    [openedWorkspacesList, currentWorkspace?.id],
+  );
 
-      const gitStatus = await gitAPI.getStatus(workspacePath);
-
-      const gitWorkState: GitWorkState = {
-        currentBranch: gitStatus.current_branch,
-        unstagedFiles: gitStatus.unstaged.length + gitStatus.untracked.length,
-        stagedFiles: gitStatus.staged.length,
-        unpushedCommits: gitStatus.ahead,
-        aheadBehind: {
-          ahead: gitStatus.ahead,
-          behind: gitStatus.behind
-        },
-        modifiedFiles: []
-      };
-
-      setFallbackGitState(gitWorkState);
-      
-      // Show Git state immediately once the intro is done.
-      if (featureIntroCompleted) {
-        setTimeout(() => setShowGitState(true), 200);
-      }
-    } catch (err) {
-      log.warn('Failed to load fallback git state', err);
-    }
-  }, [featureIntroCompleted]);
-
-  // Show default intents line by line; each StreamText onComplete triggers the next.
-  const startShowingDefaultIntents = useCallback(() => {
-    if (defaultIntentsStartedRef.current) return;
-    defaultIntentsStartedRef.current = true;
-
-    setTimeout(() => setVisibleIntentsCount(1), 300);
-  }, []);
-
-  // After the current intent line finishes, show the next one.
-  const onIntentLineComplete = useCallback((index: number) => {
-    if (index < 2) setVisibleIntentsCount(index + 2);
-  }, []);
-
-  // Load AI enhancements asynchronously without blocking the static content.
-  const loadAiEnhancements = useCallback(async () => {
-    const isAiEnabled = aiExperienceConfigService.isWelcomePanelAIAnalysisEnabled();
-    try {
-      if (aiAnalysisFailedThisSession) {
-        setAiAnalysisCompleted(true);
-        startShowingDefaultIntents();
-        return;
-      }
-
-      if (!isAiEnabled) {
-        setAiAnalysisCompleted(true);
-        startShowingDefaultIntents();
-        return;
-      }
-
-      const workspace = await globalStateAPI.getCurrentWorkspace();
-      const currentWorkspacePath = workspace?.rootPath;
-      const language = i18n.language?.startsWith('zh') ? 'Chinese' : 'English';
-      const cacheKey = currentWorkspacePath ? `${currentWorkspacePath}::${language}` : '';
-
-      if (!currentWorkspacePath) {
-        setAiAnalysisCompleted(true);
-        startShowingDefaultIntents();
-        return;
-      }
-
-      const cachedAnalysis = aiAnalysisCache.get(cacheKey);
-      if (cachedAnalysis) {
-        setAnalysis(cachedAnalysis);
-        setAiAnalysisCompleted(true);
-        return;
-      }
-
-      let inFlight = aiAnalysisInFlight.get(cacheKey);
-      if (!inFlight) {
-        inFlight = (async () => {
-          const isGitRepo = await gitAPI.isGitRepository(currentWorkspacePath);
-          if (!isGitRepo) {
-            return null;
-          }
-
-          return startchatAgentAPI.quickAnalyzeWorkState(currentWorkspacePath, language);
-        })();
-        aiAnalysisInFlight.set(cacheKey, inFlight);
-      }
-
-      let result: WorkStateAnalysis | null = null;
-      try {
-        result = await inFlight;
-      } finally {
-        if (aiAnalysisInFlight.get(cacheKey) === inFlight) {
-          aiAnalysisInFlight.delete(cacheKey);
-        }
-      }
-
-      if (!result) {
-        setAiAnalysisCompleted(true);
-        return;
-      }
-
-      aiAnalysisCache.set(cacheKey, result);
-      setAnalysis(result);
-      setAiAnalysisCompleted(true);
-    } catch (err) {
-      log.warn('AI enhancement failed', err);
-      aiAnalysisFailedThisSession = true;
-      setAiAnalysisCompleted(true);
-      startShowingDefaultIntents();
-    }
-  }, [startShowingDefaultIntents]);
-
-  useEffect(() => {
-    const loadInitialState = async () => {
-      if (isCoworkSession) {
-        return;
-      }
-
-      try {
-        const workspace = await globalStateAPI.getCurrentWorkspace();
-        if (workspace?.rootPath) {
-          await loadFallbackGitState(workspace.rootPath);
-          
-          loadAiEnhancements();
-        }
-      } catch (err) {
-        log.warn('Failed to load initial state', err);
-      }
-    };
-
-    loadInitialState();
-  }, [loadFallbackGitState, loadAiEnhancements, isCoworkSession]);
-
-  const handleQuickActionClick = useCallback((command: string) => {
-    onQuickAction?.(command);
-  }, [onQuickAction]);
-
-  const handleGitStateClick = useCallback(() => {
+  const handleGitClick = useCallback(() => {
     switchLeftPanelTab('git');
   }, [switchLeftPanelTab]);
 
+  const isGitClean = useMemo(
+    () => !!gitState && gitState.unstagedFiles === 0 && gitState.stagedFiles === 0 && gitState.unpushedCommits === 0,
+    [gitState],
+  );
 
-  // Use static greeting content instead of AI-generated copy.
-  const greeting = {
-    title: staticGreeting.title,
-    subtitle: staticGreeting.subtitle
-  };
-
-  const currentState = analysis?.currentState;
-  
-  // Use AI-provided git state or fallback git state.
-  const gitState = currentState?.gitState || fallbackGitState;
-  
-  // Cache AI analysis content so it stays stable across renders.
-  const summaryTextRef = useRef<string>('');
-  const predictedActionsRef = useRef<PredictedAction[]>([]);
-  const quickActionsRef = useRef<QuickAction[]>([]);
-  
-  if (currentState?.summary && !summaryTextRef.current) {
-    summaryTextRef.current = currentState.summary;
-  }
-  
-  if (analysis?.predictedActions && analysis.predictedActions.length > 0 && predictedActionsRef.current.length === 0) {
-    predictedActionsRef.current = analysis.predictedActions;
-  }
-  
-  if (analysis?.quickActions && analysis.quickActions.length > 0 && quickActionsRef.current.length === 0) {
-    quickActionsRef.current = analysis.quickActions;
-  }
-  
-  const workSummaryText = summaryTextRef.current;
-  const predictedActions = predictedActionsRef.current;
-  const quickActions = quickActionsRef.current;
-  
-  const gitStateLastItem = React.useMemo(() => {
+  const buildGitNarrative = useCallback((): React.ReactNode => {
     if (!gitState) return null;
-    
-    if (gitState.unpushedCommits > 0) return 'unpushed';
-    if (gitState.stagedFiles > 0) return 'staged';
-    if (gitState.unstagedFiles > 0) return 'unstaged';
-    if (gitState.aheadBehind && gitState.aheadBehind.behind > 0) return 'behind';
-    if (gitState.aheadBehind && gitState.aheadBehind.ahead > 0) return 'ahead';
-    return 'branch';
-  }, [gitState]);
-  
-  // Default recommended actions (fallback).
-  const defaultActions = [
-    {
-      description: t('welcome.defaultAction1'),
-      command: t('welcome.defaultAction1Command'),
-    },
-    {
-      description: t('welcome.defaultAction2'),
-      command: t('welcome.defaultAction2Command'),
-    },
-    {
-      description: t('welcome.defaultAction3'),
-      command: t('welcome.defaultAction3Command'),
-    },
-  ];
+    const parts: { key: string; label: string; suffix: string }[] = [];
+    if (gitState.unstagedFiles > 0)
+      parts.push({ key: 'unstaged', label: `${gitState.unstagedFiles} 个文件`, suffix: '等待暂存' });
+    if (gitState.stagedFiles > 0)
+      parts.push({ key: 'staged', label: `${gitState.stagedFiles} 个文件`, suffix: '已暂存待提交' });
+    if (gitState.unpushedCommits > 0)
+      parts.push({ key: 'unpushed', label: `${gitState.unpushedCommits} 个提交`, suffix: '待推送' });
+    if (parts.length === 0) return null;
+    return (
+      <>
+        目前有{' '}
+        {parts.map(({ key, label, suffix }, i) => (
+          <React.Fragment key={key}>
+            {i > 0 && '，'}
+            <button type="button" className="welcome-panel__inline-btn" onClick={handleGitClick}>
+              {label}
+            </button>
+            {' '}{suffix}
+          </React.Fragment>
+        ))}
+        。
+      </>
+    );
+  }, [gitState, handleGitClick]);
 
-  useEffect(() => {
-    if (isCoworkSession) return;
-
-    if (featureIntroCompleted && gitState && !showGitState && !gitStateCompleted) {
-      setTimeout(() => setShowGitState(true), 200);
+  const loadGitState = useCallback(async (workspacePath: string) => {
+    try {
+      const isGitRepo = await gitAPI.isGitRepository(workspacePath);
+      if (!isGitRepo) { setGitState(null); return; }
+      const s = await gitAPI.getStatus(workspacePath);
+      setGitState({
+        currentBranch: s.current_branch,
+        unstagedFiles: s.unstaged.length + s.untracked.length,
+        stagedFiles: s.staged.length,
+        unpushedCommits: s.ahead,
+        aheadBehind: { ahead: s.ahead, behind: s.behind },
+        modifiedFiles: [],
+      });
+    } catch (err) {
+      log.warn('Failed to load git state', err);
+      setGitState(null);
     }
-  }, [featureIntroCompleted, gitState, showGitState, gitStateCompleted, isCoworkSession]);
+  }, []);
 
   useEffect(() => {
-    if (isCoworkSession) return;
-
-    if (featureIntroCompleted && aiAnalysisCompleted && !gitState && !showIntents) {
-      setTimeout(() => {
-        setShowIntents(true);
-        startShowingDefaultIntents();
-      }, 200);
-    }
-  }, [featureIntroCompleted, aiAnalysisCompleted, gitState, showIntents, startShowingDefaultIntents, isCoworkSession]);
+    if (isCoworkSession || !currentWorkspace?.rootPath) { setGitState(null); return; }
+    void loadGitState(currentWorkspace.rootPath);
+  }, [currentWorkspace?.rootPath, isCoworkSession, loadGitState]);
 
   useEffect(() => {
-    if (isCoworkSession) return;
-
-    if (gitStateCompleted && !showSummary && !showIntents) {
-      if (currentState?.summary) {
-        setTimeout(() => setShowSummary(true), 200);
-      } else if (aiAnalysisCompleted) {
-        setTimeout(() => {
-          setShowIntents(true);
-          startShowingDefaultIntents();
-        }, 200);
+    if (!workspaceDropdownOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (workspaceDropdownRef.current && !workspaceDropdownRef.current.contains(e.target as Node)) {
+        setWorkspaceDropdownOpen(false);
       }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [workspaceDropdownOpen]);
+
+  const handleSwitchWorkspace = useCallback(async (ws: WorkspaceInfo) => {
+    try { setWorkspaceDropdownOpen(false); await switchWorkspace(ws); }
+    catch (err) { log.warn('Failed to switch workspace', err); }
+  }, [switchWorkspace]);
+
+  const handleOpenOtherFolder = useCallback(async () => {
+    try {
+      setWorkspaceDropdownOpen(false);
+      setIsSelectingWorkspace(true);
+      const { open } = await import('@tauri-apps/plugin-dialog');
+      const selected = await open({ directory: true, multiple: false });
+      if (selected && typeof selected === 'string') await openWorkspace(selected);
+    } catch (err) {
+      log.warn('Failed to open workspace folder', err);
+    } finally {
+      setIsSelectingWorkspace(false);
     }
-  }, [gitStateCompleted, showSummary, showIntents, currentState, aiAnalysisCompleted, startShowingDefaultIntents, isCoworkSession]);
+  }, [openWorkspace]);
+
+  const handleQuickActionClick = useCallback((cmd: string) => {
+    onQuickAction?.(cmd);
+  }, [onQuickAction]);
 
   return (
     <div className={`welcome-panel ${className}`}>
       <div className="welcome-panel__content">
+        {/* Greeting */}
         <div className="welcome-panel__greeting">
-        <h1 className="welcome-panel__greeting-title">{greeting.title}</h1>
-        <h1 className="welcome-panel__greeting-title">{t('welcome.aiPartner')}</h1>
-        <p className="welcome-panel__greeting-description">{greeting.subtitle}</p>
-      </div>
-
-      <div className="welcome-panel__divider"></div>
-
-      <div className="welcome-panel__feature-intro">
-        <p className="welcome-panel__feature-text">
-          <StreamText 
-            key="feature-intro"
-            text={featureIntro}
-            effect="typewriter"
-            speed={30}
-            showCursor={!featureIntroCompleted}
-            className="welcome-panel__stream-text"
-            autoStart={true}
-            onComplete={() => {
-              setFeatureIntroCompleted(true);
-              // Sequencing continues via useEffect.
-            }}
-          />
-        </p>
+          <div className="welcome-panel__greeting-inner">
+            <div className="welcome-panel__panda" aria-hidden="true">
+              <img src="/panda_full_1.png" className="welcome-panel__panda-frame welcome-panel__panda-frame--1" alt="" />
+              <img src="/panda_full_2.png" className="welcome-panel__panda-frame welcome-panel__panda-frame--2" alt="" />
+            </div>
+            <div className="welcome-panel__greeting-text">
+              <h1 className="welcome-panel__heading">{greeting.title}，{t(aiPartnerKey)}</h1>
+              <p className="welcome-panel__tagline">{tagline}</p>
+            </div>
+          </div>
         </div>
 
+        <div className="welcome-panel__divider" />
 
-        {isCoworkSession && featureIntroCompleted && (
-          <div className="welcome-panel__section welcome-panel__section--cowork-examples">
-            <CoworkExampleCards
-              resetKey={0}
-              onSelectPrompt={(prompt) => handleQuickActionClick(prompt)}
-            />
-          </div>
-        )}
-
-        {!isCoworkSession && showGitState && gitState && (
-          <div className="welcome-panel__section welcome-panel__section--ai-enhanced">
-          <h2 className="welcome-panel__section-title">
-            {t('welcome.lastTimeYouWere')}
-          </h2>
-          <div className="welcome-panel__current-state">
-            <div className="welcome-panel__git-state" onClick={handleGitStateClick}>
-              <div className="welcome-panel__git-info welcome-panel__git-info--colored">
-                <span className="welcome-panel__git-item">
-                  <StreamText 
-                    text={t('welcome.branch')}
-                    effect="typewriter"
-                    speed={20}
-                    showCursor={false}
-                    className="welcome-panel__stream-text"
-                    colorTheme={undefined as any}
-                  />
-                  <StreamText 
-                    text={gitState.currentBranch}
-                    effect="typewriter"
-                    speed={20}
-                    showCursor={gitStateLastItem === 'branch' && !gitStateCompleted}
-                    className="welcome-panel__stream-text welcome-panel__git-branch-text"
-                    colorTheme={undefined as any}
-                    onComplete={() => {
-                      if (gitStateLastItem === 'branch') {
-                        setGitStateCompleted(true);
-                      }
-                    }}
-                  />
-                </span>
-                {gitState.aheadBehind && gitState.aheadBehind.ahead > 0 && (
-                  <>
-                    <span className="welcome-panel__git-separator"> · </span>
-                    <span className="welcome-panel__git-item">
-                      <StreamText 
-                        text={t('welcome.aheadCommits', { count: gitState.aheadBehind.ahead })}
-                        effect="typewriter"
-                        speed={20}
-                        showCursor={gitStateLastItem === 'ahead' && !gitStateCompleted}
-                        className="welcome-panel__stream-text welcome-panel__git-ahead-text"
-                        colorTheme={undefined as any}
-                        onComplete={() => {
-                          if (gitStateLastItem === 'ahead') {
-                            setGitStateCompleted(true);
-                          }
-                        }}
+        {/* Narrative: workspace + git in natural language */}
+        <div className="welcome-panel__narrative">
+          <p className="welcome-panel__narrative-text">
+            {!hasWorkspace ? (
+              <>
+                还没有选择项目，
+                <button
+                  type="button"
+                  className="welcome-panel__inline-btn"
+                  onClick={() => { void handleOpenOtherFolder(); }}
+                  disabled={isSelectingWorkspace}
+                >
+                  打开一个
+                </button>
+                {' '}开始吧。
+              </>
+            ) : (
+              <>
+                我们正在
+                <span className="welcome-panel__context-row">
+                  <span className="welcome-panel__workspace-anchor" ref={workspaceDropdownRef}>
+                    <button
+                      type="button"
+                      className={`welcome-panel__inline-btn${workspaceDropdownOpen ? ' welcome-panel__inline-btn--active' : ''}`}
+                      onClick={() => setWorkspaceDropdownOpen(v => !v)}
+                      disabled={isSelectingWorkspace}
+                      title={currentWorkspace?.rootPath}
+                    >
+                      <FolderOpen size={13} className="welcome-panel__inline-icon" />
+                      {currentWorkspace?.name || t('welcome.workspace')}
+                      <ChevronDown
+                        size={11}
+                        className={`welcome-panel__inline-chevron${workspaceDropdownOpen ? ' welcome-panel__inline-chevron--open' : ''}`}
                       />
-                    </span>
-                  </>
-                )}
-                {gitState.aheadBehind && gitState.aheadBehind.behind > 0 && (
-                  <>
-                    <span className="welcome-panel__git-separator"> · </span>
-                    <span className="welcome-panel__git-item">
-                      <StreamText 
-                        text={t('welcome.behindCommits', { count: gitState.aheadBehind.behind })}
-                        effect="typewriter"
-                        speed={20}
-                        showCursor={gitStateLastItem === 'behind' && !gitStateCompleted}
-                        className="welcome-panel__stream-text welcome-panel__git-behind-text"
-                        colorTheme={undefined as any}
-                        onComplete={() => {
-                          if (gitStateLastItem === 'behind') {
-                            setGitStateCompleted(true);
-                          }
-                        }}
-                      />
-                    </span>
-                  </>
-                )}
-                {(gitState.unstagedFiles > 0 || gitState.stagedFiles > 0) && (
-                  <>
-                    <span className="welcome-panel__git-separator"> · </span>
-                    <span className="welcome-panel__git-item">
-                      <StreamText 
-                        text={t('welcome.unstagedFiles', { count: gitState.unstagedFiles + gitState.stagedFiles })}
-                        effect="typewriter"
-                        speed={20}
-                        showCursor={gitStateLastItem === 'unstaged' && !gitStateCompleted}
-                        className="welcome-panel__stream-text welcome-panel__git-unstaged-text"
-                        colorTheme={undefined as any}
-                        onComplete={() => {
-                          if (gitStateLastItem === 'unstaged') {
-                            setGitStateCompleted(true);
-                          }
-                        }}
-                      />
-                    </span>
-                  </>
-                )}
-                {gitState.stagedFiles > 0 && (
-                  <>
-                    <span className="welcome-panel__git-separator"> · </span>
-                    <span className="welcome-panel__git-item">
-                      <StreamText 
-                        text={t('welcome.stagedFiles', { count: gitState.stagedFiles })}
-                        effect="typewriter"
-                        speed={20}
-                        showCursor={gitStateLastItem === 'staged' && !gitStateCompleted}
-                        className="welcome-panel__stream-text welcome-panel__git-staged-text"
-                        colorTheme={undefined as any}
-                        onComplete={() => {
-                          if (gitStateLastItem === 'staged') {
-                            setGitStateCompleted(true);
-                          }
-                        }}
-                      />
-                    </span>
-                  </>
-                )}
-                {gitState.unpushedCommits > 0 && (
-                  <>
-                    <span className="welcome-panel__git-separator"> · </span>
-                    <span className="welcome-panel__git-item">
-                      <StreamText 
-                        text={t('welcome.unpushedCommits', { count: gitState.unpushedCommits })}
-                        effect="typewriter"
-                        speed={20}
-                        showCursor={gitStateLastItem === 'unpushed' && !gitStateCompleted}
-                        className="welcome-panel__stream-text welcome-panel__git-unpushed-text"
-                        colorTheme={undefined as any}
-                        onComplete={() => {
-                          if (gitStateLastItem === 'unpushed') {
-                            setGitStateCompleted(true);
-                          }
-                        }}
-                      />
-                    </span>
-                  </>
-                )}
-              </div>
-            </div>
-
-            {gitStateCompleted && currentState?.timeInfo?.lastCommitTimeDesc && (
-              <div className="welcome-panel__time-info">
-                <span className="welcome-panel__time-icon">{t('welcome.timeIcon')}</span>
-                <span className="welcome-panel__time-text">
-                  {t('welcome.timeSinceLastCommit')}{currentState.timeInfo.lastCommitTimeDesc}
-                </span>
-              </div>
-            )}
-          </div>
-          </div>
-        )}
-
-        {!isCoworkSession && gitStateCompleted && !showSummary && !showIntents && (
-          <div className="welcome-panel__ai-analyzing">
-            <span className="welcome-panel__ai-analyzing-cursor"></span>
-          </div>
-        )}
-
-        {!isCoworkSession && showSummary && workSummaryText && (
-          <div className="welcome-panel__work-summary" key="work-summary-container">
-            <p className="welcome-panel__work-summary-text">
-              <StreamText 
-                key="work-summary-stream"
-                text={workSummaryText}
-                effect="typewriter"
-                speed={30}
-                showCursor={false}
-                className="welcome-panel__stream-text"
-                autoStart={true}
-                onComplete={() => {
-                  // After summary completes, start showing the intent list.
-                  setTimeout(() => {
-                    setShowIntents(true);
-                    setVisibleIntentsCount(1);
-                  }, 200);
-                }}
-              />
-            </p>
-          </div>
-        )}
-
-        {!isCoworkSession && (showIntents && predictedActions.length > 0 ? (
-          <div className="welcome-panel__section">
-            <h2 className="welcome-panel__section-title">
-              {t('welcome.youMightWant')}
-            </h2>
-            
-            <div className="welcome-panel__intents">
-              {predictedActions.slice(0, 3).map((action: PredictedAction, index: number) => {
-                if (index >= visibleIntentsCount) return null;
-
-                const isCurrentLine = index === visibleIntentsCount - 1;
-                const startIdx = index * 2;
-                const intentActions = quickActions.slice(startIdx, startIdx + 2);
-
-                return (
-                  <div key={`intent-${index}`} className="welcome-panel__intent-card" style={{ animation: 'fadeInUp 0.4s ease-out' }}>
-                    <div className="welcome-panel__intent-header">
-                      <div className="welcome-panel__intent-number">{index + 1}</div>
-                      <div className="welcome-panel__intent-title">
-                        {isCurrentLine ? (
-                          <StreamText
-                            key={`intent-desc-${index}`}
-                            text={action.description}
-                            effect="typewriter"
-                            speed={30}
-                            showCursor={true}
-                            className="welcome-panel__stream-text"
-                            autoStart={true}
-                            onComplete={() => onIntentLineComplete(index)}
-                          />
-                        ) : (
-                          action.description
+                    </button>
+                    {workspaceDropdownOpen && (
+                      <div className="welcome-panel__dropdown">
+                        {hasWorkspace && currentWorkspace && (
+                          <div className="welcome-panel__dropdown-current">
+                            <Check size={11} />
+                            <FolderOpen size={12} />
+                            <span className="welcome-panel__dropdown-name">{currentWorkspace.name}</span>
+                          </div>
                         )}
-                      </div>
-                    </div>
-                    
-                    {intentActions.length > 0 && (
-                      <div className="welcome-panel__intent-actions">
-                        {intentActions.map((quickAction: QuickAction, actionIdx: number) => (
-                          <button
-                            key={actionIdx}
-                            className="welcome-panel__intent-action-btn"
-                            onClick={() => handleQuickActionClick(quickAction.command)}
-                            title={quickAction.command}
-                          >
-                            <svg className="welcome-panel__intent-action-icon" width="14" height="14" viewBox="0 0 14 14" fill="none">
-                              <path d="M5 7h6M8 4l3 3-3 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                            </svg>
-                            <span className="welcome-panel__intent-action-text">{quickAction.title}</span>
-                          </button>
-                        ))}
+                        {otherWorkspaces.length > 0 && (
+                          <>
+                            {hasWorkspace && <div className="welcome-panel__dropdown-sep" />}
+                            {otherWorkspaces.map(ws => (
+                              <button
+                                key={ws.id}
+                                type="button"
+                                className="welcome-panel__dropdown-item"
+                                onClick={() => { void handleSwitchWorkspace(ws); }}
+                                title={ws.rootPath}
+                              >
+                                <FolderOpen size={12} />
+                                <span className="welcome-panel__dropdown-name">{ws.name}</span>
+                              </button>
+                            ))}
+                          </>
+                        )}
                       </div>
                     )}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        ) : showIntents && aiAnalysisCompleted && gitState ? (
-          <div className="welcome-panel__section">
-            <h2 className="welcome-panel__section-title">
-              {t('welcome.youMightWant')}
-            </h2>
-            
-            <div className="welcome-panel__intents">
-              {defaultActions.map((action, index) => {
-                if (index >= visibleIntentsCount) return null;
+                  </span>
+                  {!isCoworkSession && gitState && (
+                    <>
+                      <span className="welcome-panel__context-sep">/</span>
+                      <button type="button" className="welcome-panel__inline-btn" onClick={handleGitClick}>
+                        <GitBranch size={13} className="welcome-panel__inline-icon" />
+                        {gitState.currentBranch}
+                      </button>
+                    </>
+                  )}
+                </span>
+                {!isCoworkSession && gitState ? (
+                  <>
+                    工作。
+                    <br />
+                    {isGitClean
+                      ? <span className="welcome-panel__narrative-clean">一切干净，可以放手大干了 ✦</span>
+                      : buildGitNarrative()
+                    }
+                  </>
+                ) : (
+                  <>项目里工作。</>
+                )}
+              </>
+            )}
+          </p>
+        </div>
 
-                const isCurrentLine = index === visibleIntentsCount - 1;
-                return (
-                  <div 
-                    key={`default-intent-${index}`}
-                    className="welcome-panel__intent-card welcome-panel__intent-card--clickable" 
-                    onClick={() => handleQuickActionClick(action.command)}
-                    style={{ animation: 'fadeInUp 0.4s ease-out' }}
-                  >
-                    <div className="welcome-panel__intent-header">
-                      <div className="welcome-panel__intent-number">{index + 1}</div>
-                      <div className="welcome-panel__intent-title">
-                        {isCurrentLine ? (
-                          <StreamText
-                            key={`default-intent-desc-${index}`}
-                            text={action.description}
-                            effect="typewriter"
-                            speed={30}
-                            showCursor={true}
-                            className="welcome-panel__stream-text"
-                            autoStart={true}
-                            onComplete={() => onIntentLineComplete(index)}
-                          />
-                        ) : (
-                          action.description
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+        {/* Cowork examples */}
+        {isCoworkSession && (
+          <div className="welcome-panel__cowork">
+            <CoworkExampleCards resetKey={0} onSelectPrompt={p => handleQuickActionClick(p)} />
           </div>
-        ) : null)}
+        )}
       </div>
     </div>
   );

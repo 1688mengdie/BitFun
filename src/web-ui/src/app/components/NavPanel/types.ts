@@ -21,14 +21,14 @@ export interface NavItem {
   sceneId?: SceneTabId;
   /** Optional nav-panel scene switch without opening right-side scene */
   navSceneId?: SceneTabId;
-  /** When true, clicking this item toggles an inline content area below it */
-  inlineExpandable?: boolean;
 }
 
 export interface NavSection {
   id: string;
   /** Null hides the section header row entirely */
   label: string | null;
+  /** Optional scene opened when clicking the section header */
+  sceneId?: SceneTabId;
   collapsible?: boolean;
   defaultExpanded?: boolean;
   items: NavItem[];

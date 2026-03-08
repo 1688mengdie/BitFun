@@ -7,7 +7,19 @@
  *  - pinned = false: can be auto-evicted and manually closed.
  */
 
-import { MessageSquare, Terminal, GitBranch, Settings, FileCode2, CircleUserRound, Blocks, Users, Puzzle, Wrench } from 'lucide-react';
+import {
+  MessageSquare,
+  Terminal,
+  GitBranch,
+  Settings,
+  FileCode2,
+  CircleUserRound,
+  Blocks,
+  Users,
+  Puzzle,
+  Boxes,
+  UserCircle2,
+} from 'lucide-react';
 import type { SceneTabDef, SceneTabId } from '../components/SceneBar/types';
 
 export const MAX_OPEN_SCENES = 3;
@@ -79,9 +91,9 @@ export const SCENE_TAB_REGISTRY: SceneTabDef[] = [
     defaultOpen: false,
   },
   {
-    id: 'team' as SceneTabId,
-    label: 'Team',
-    labelKey: 'scenes.team',
+    id: 'agents' as SceneTabId,
+    label: 'Agents',
+    labelKey: 'scenes.agents',
     Icon: Users,
     pinned: false,
     singleton: true,
@@ -98,9 +110,27 @@ export const SCENE_TAB_REGISTRY: SceneTabDef[] = [
   },
   {
     id: 'toolbox' as SceneTabId,
-    label: 'Toolbox',
+    label: 'Mini App',
     labelKey: 'scenes.toolbox',
-    Icon: Wrench,
+    Icon: Boxes,
+    pinned: false,
+    singleton: true,
+    defaultOpen: false,
+  },
+  {
+    id: 'my-agent' as SceneTabId,
+    label: 'My Agent',
+    labelKey: 'scenes.myAgent',
+    Icon: UserCircle2,
+    pinned: false,
+    singleton: true,
+    defaultOpen: false,
+  },
+  {
+    id: 'shell' as SceneTabId,
+    label: 'Shell',
+    labelKey: 'scenes.shell',
+    Icon: Terminal,
     pinned: false,
     singleton: true,
     defaultOpen: false,

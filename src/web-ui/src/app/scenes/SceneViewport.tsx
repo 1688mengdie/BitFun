@@ -9,7 +9,7 @@
  */
 
 import React, { Suspense, lazy } from 'react';
-import { MessageSquare, Terminal, GitBranch, Settings, FileCode2, CircleUserRound, Puzzle, Wrench } from 'lucide-react';
+import { MessageSquare, Terminal, GitBranch, Settings, FileCode2, UserCircle2, Boxes } from 'lucide-react';
 import type { SceneTabId } from '../components/SceneBar/types';
 import { useSceneManager } from '../hooks/useSceneManager';
 import { useI18n } from '@/infrastructure/i18n/hooks/useI18n';
@@ -21,9 +21,11 @@ const GitScene        = lazy(() => import('./git/GitScene'));
 const SettingsScene   = lazy(() => import('./settings/SettingsScene'));
 const FileViewerScene = lazy(() => import('./file-viewer/FileViewerScene'));
 const ProfileScene    = lazy(() => import('./profile/ProfileScene'));
-const TeamScene       = lazy(() => import('./team/TeamScene'));
+const AgentsScene       = lazy(() => import('./agents/AgentsScene'));
 const SkillsScene     = lazy(() => import('./skills/SkillsScene'));
 const ToolboxScene    = lazy(() => import('./toolbox/ToolboxScene'));
+const MyAgentScene    = lazy(() => import('./my-agent/MyAgentScene'));
+const ShellScene      = lazy(() => import('./shell/ShellScene'));
 const WelcomeScene    = lazy(() => import('./welcome/WelcomeScene'));
 const MiniAppScene    = lazy(() => import('./toolbox/MiniAppScene'));
 
@@ -45,13 +47,12 @@ const SceneViewport: React.FC<SceneViewportProps> = ({ workspacePath, isEntering
           <div className="bitfun-scene-viewport__empty-actions">
             {[
               { id: 'session'      as SceneTabId, Icon: MessageSquare, labelKey: 'scenes.aiAgent'       },
-              { id: 'terminal'     as SceneTabId, Icon: Terminal,      labelKey: 'scenes.terminal'      },
+              { id: 'shell'        as SceneTabId, Icon: Terminal,      labelKey: 'scenes.shell'         },
               { id: 'git'          as SceneTabId, Icon: GitBranch,     labelKey: 'scenes.git'           },
               { id: 'settings'     as SceneTabId, Icon: Settings,      labelKey: 'scenes.settings'      },
               { id: 'file-viewer'  as SceneTabId, Icon: FileCode2,     labelKey: 'scenes.fileViewer'    },
-              { id: 'profile'      as SceneTabId, Icon: CircleUserRound, labelKey: 'scenes.projectContext' },
-              { id: 'skills'       as SceneTabId, Icon: Puzzle,        labelKey: 'scenes.skills'        },
-              { id: 'toolbox'      as SceneTabId, Icon: Wrench,        labelKey: 'scenes.toolbox'       },
+              { id: 'my-agent'     as SceneTabId, Icon: UserCircle2,   labelKey: 'scenes.myAgent'       },
+              { id: 'toolbox'      as SceneTabId, Icon: Boxes,         labelKey: 'scenes.toolbox'       },
             ].map(({ id, Icon, labelKey }) => {
               const label = t(labelKey);
               return (
@@ -107,12 +108,16 @@ function renderScene(id: SceneTabId, workspacePath?: string, isEntering?: boolea
       return <FileViewerScene workspacePath={workspacePath} />;
     case 'profile':
       return <ProfileScene workspacePath={workspacePath} />;
-    case 'team':
-      return <TeamScene />;
+    case 'agents':
+      return <AgentsScene />;
     case 'skills':
       return <SkillsScene />;
     case 'toolbox':
       return <ToolboxScene />;
+    case 'my-agent':
+      return <MyAgentScene workspacePath={workspacePath} />;
+    case 'shell':
+      return <ShellScene />;
     default:
       if (typeof id === 'string' && id.startsWith('miniapp:')) {
         return <MiniAppScene appId={id.slice('miniapp:'.length)} />;
