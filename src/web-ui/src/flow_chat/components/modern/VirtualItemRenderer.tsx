@@ -49,7 +49,7 @@ export const VirtualItemRenderer = React.memo<VirtualItemRendererProps>(
                 header={
                   <CompactToolCardHeader
                     statusIcon={<Loader2 className="animate-spin" size={12} />}
-                    content="Analyzing image with vision model..."
+                    content="Analyzing image with image understanding model..."
                   />
                 }
               />
