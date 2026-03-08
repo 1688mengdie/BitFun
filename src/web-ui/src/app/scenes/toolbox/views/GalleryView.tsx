@@ -1,13 +1,14 @@
 import React, { useState, useMemo, useCallback } from 'react';
 import {
-  Activity,
-  ChevronDown,
+  Box,
   FolderPlus,
   LayoutGrid,
   Play,
   RefreshCw,
   Sparkles,
   Square,
+  Tag,
+  Trash2,
 } from 'lucide-react';
 import { open } from '@tauri-apps/plugin-dialog';
 import { useToolboxStore } from '../toolboxStore';
@@ -16,8 +17,18 @@ import MiniAppCard from '../components/MiniAppCard';
 import type { MiniAppMeta } from '@/infrastructure/api/service-api/MiniAppAPI';
 import { miniAppAPI } from '@/infrastructure/api/service-api/MiniAppAPI';
 import { createLogger } from '@/shared/utils/logger';
-import { Search, Empty, ConfirmDialog } from '@/component-library';
+import { Search, ConfirmDialog, Button, Badge } from '@/component-library';
+import {
+  GalleryDetailModal,
+  GalleryEmpty,
+  GalleryGrid,
+  GalleryLayout,
+  GalleryPageHeader,
+  GallerySkeleton,
+  GalleryZone,
+} from '@/app/components';
 import type { SceneTabId } from '@/app/components/SceneBar/types';
+import { getMiniAppIconGradient, renderMiniAppIcon } from '../utils/miniAppIcons';
 import './GalleryView.scss';
 
 const log = createLogger('GalleryView');
@@ -33,8 +44,8 @@ const GalleryView: React.FC = () => {
 
   const [search, setSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('all');
-  const [runningCollapsed, setRunningCollapsed] = useState(false);
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+  const [selectedApp, setSelectedApp] = useState<MiniAppMeta | null>(null);
 
   const openTabIds = useMemo(() => new Set(openTabs.map((tab) => tab.id)), [openTabs]);
   const runningIdSet = useMemo(() => new Set(runningWorkerIds), [runningWorkerIds]);
@@ -130,7 +141,7 @@ const GalleryView: React.FC = () => {
       const selected = await open({
         directory: true,
         multiple: false,
-        title: '选择 MiniApp 目录（需包含 meta.json 与 source/）',
+                title: '选择小应用目录（需包含 meta.json 与 source/）',
       });
       const path = Array.isArray(selected) ? selected[0] : selected;
       if (!path) return;
@@ -148,202 +159,171 @@ const GalleryView: React.FC = () => {
 
   const renderGrid = () => {
     if (loading && apps.length === 0) {
-      return (
-        <div className="toolbox-gallery__skeleton-grid">
-          {Array.from({ length: 8 }).map((_, i) => (
-            <div
-              key={i}
-              className="toolbox-gallery__skeleton-card"
-              style={{ '--card-index': i } as React.CSSProperties}
-            />
-          ))}
-        </div>
-      );
+      return <GallerySkeleton count={8} cardHeight={152} />;
     }
 
     if (filtered.length === 0) {
       return (
-        <div className="toolbox-gallery__empty">
-          <Empty
-            image={
-              apps.length === 0 ? (
-                <Sparkles size={36} strokeWidth={1.2} className="toolbox-gallery__empty-icon" />
-              ) : (
-                <LayoutGrid size={36} strokeWidth={1.2} className="toolbox-gallery__empty-icon" />
-              )
-            }
-            imageSize={48}
-            description={
-              apps.length === 0
-                ? '还没有 MiniApp，和 AI 对话生成第一个吧。'
-                : '没有匹配的应用。'
-            }
-          />
-        </div>
+        <GalleryEmpty
+          icon={
+            apps.length === 0
+              ? <Sparkles size={36} strokeWidth={1.2} />
+              : <LayoutGrid size={36} strokeWidth={1.2} />
+          }
+          message={apps.length === 0
+            ? '边聊边生成，马上可用。和 AI 对话生成第一个小应用吧。'
+            : '没有匹配的应用。'}
+        />
       );
     }
 
     return (
-      <div className="toolbox-gallery__grid">
+      <GalleryGrid>
         {filtered.map((app, index) => (
           <MiniAppCard
             key={app.id}
             app={app}
             index={index}
             isRunning={runningIdSet.has(app.id)}
+            onOpenDetails={setSelectedApp}
             onOpen={handleOpenApp}
             onDelete={handleDeleteRequest}
           />
         ))}
-      </div>
+      </GalleryGrid>
     );
   };
 
   return (
-    <div className="toolbox-gallery">
-      {/* Scrollable body */}
-      <div className="toolbox-gallery__body">
-        <div className="toolbox-gallery__body-inner">
-          {/* Hero — big centered title */}
-          <div className="toolbox-gallery__hero">
-            <h2 className="toolbox-gallery__hero-title">工具箱</h2>
-            <p className="toolbox-gallery__hero-sub">统一查看、启动和切换 MiniApp</p>
-          </div>
-
-          {/* Search zone — centered row with search + actions, sticky when scrolling */}
-          <div className="toolbox-gallery__search-zone">
-            <div className="toolbox-gallery__search-inner">
-              <Search value={search} onChange={setSearch} placeholder="搜索应用..." size="small" />
-              <button
-                type="button"
-                className="toolbox-gallery__action-btn toolbox-gallery__action-btn--primary"
-                onClick={handleAddFromFolder}
-                disabled={loading}
-                title="从文件夹导入"
-              >
-                <FolderPlus size={15} />
-              </button>
-              <button
-                type="button"
-                className="toolbox-gallery__action-btn"
-                onClick={handleRefresh}
-                disabled={loading}
-                title="刷新列表"
-              >
-                <RefreshCw
-                  size={15}
-                  className={loading ? 'toolbox-gallery__spinning' : undefined}
-                />
-              </button>
-            </div>
-          </div>
-
-          {/* Zones content — centered max-width container */}
-          <div className="toolbox-gallery__zones">
-
-          {/* Running zone — only when apps are running */}
-          {runningApps.length > 0 && (
-          <section className="toolbox-gallery__zone">
-            <div
-              className="toolbox-gallery__zone-header toolbox-gallery__zone-header--clickable"
-              onClick={() => setRunningCollapsed((v) => !v)}
-              role="button"
-              tabIndex={0}
-              onKeyDown={(e) => e.key === 'Enter' && setRunningCollapsed((v) => !v)}
+    <GalleryLayout className="toolbox-gallery">
+      <GalleryPageHeader
+        title="小应用"
+        subtitle="即时生成的小应用，打开就能用，也能继续迭代。"
+        actions={(
+          <>
+            <Search value={search} onChange={setSearch} placeholder="搜索小应用..." size="small" />
+            <button
+              type="button"
+              className="gallery-action-btn gallery-action-btn--primary"
+              onClick={handleAddFromFolder}
+              disabled={loading}
+              title="从文件夹导入"
             >
-              <Activity size={13} className="toolbox-gallery__zone-icon toolbox-gallery__zone-icon--running" />
-              <span className="toolbox-gallery__zone-label">运行中</span>
-              <span className="toolbox-gallery__zone-badge">{runningApps.length}</span>
-              <ChevronDown
-                size={13}
-                className={[
-                  'toolbox-gallery__zone-chevron',
-                  runningCollapsed && 'toolbox-gallery__zone-chevron--collapsed',
-                ]
-                  .filter(Boolean)
-                  .join(' ')}
+              <FolderPlus size={15} />
+            </button>
+            <button
+              type="button"
+              className="gallery-action-btn"
+              onClick={handleRefresh}
+              disabled={loading}
+              title="刷新列表"
+            >
+              <RefreshCw
+                size={15}
+                className={loading ? 'gallery-spinning' : undefined}
               />
-            </div>
-
-            {!runningCollapsed && (
-              <div className="toolbox-gallery__run-strip">
-                {runningApps.map((app) => (
-                  <div
-                    key={app.id}
-                    className="toolbox-gallery__run-tile"
-                    onClick={() => handleOpenApp(app.id)}
-                    role="button"
-                    tabIndex={0}
-                    onKeyDown={(e) => e.key === 'Enter' && handleOpenApp(app.id)}
-                  >
-                    <span className="toolbox-gallery__run-dot" />
-                    <span className="toolbox-gallery__run-name">{app.name}</span>
-                    {app.category && (
-                      <span className="toolbox-gallery__run-cat">{app.category}</span>
-                    )}
-                    <div className="toolbox-gallery__run-actions">
-                      <button
-                        type="button"
-                        className="toolbox-gallery__run-btn"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleOpenApp(app.id);
-                        }}
-                        title="打开"
-                      >
-                        <Play size={12} fill="currentColor" strokeWidth={0} />
-                      </button>
-                      <button
-                        type="button"
-                        className="toolbox-gallery__run-btn toolbox-gallery__run-btn--danger"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          void handleStopRunning(app.id);
-                        }}
-                        title="停止"
-                      >
-                        <Square size={11} />
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </section>
+            </button>
+          </>
         )}
+      />
 
-        {/* All apps zone */}
-        <section className="toolbox-gallery__zone">
-          <div className="toolbox-gallery__zone-header">
-            <LayoutGrid size={13} className="toolbox-gallery__zone-icon" />
-            <span className="toolbox-gallery__zone-label">全部应用</span>
-            {categories.length > 1 && (
-              <div className="toolbox-gallery__zone-cats">
-                {categories.map((cat) => (
-                  <button
-                    key={cat}
-                    type="button"
-                    className={[
-                      'toolbox-gallery__cat-chip',
-                      categoryFilter === cat && 'toolbox-gallery__cat-chip--active',
-                    ]
-                      .filter(Boolean)
-                      .join(' ')}
-                    onClick={() => setCategoryFilter(cat)}
-                  >
-                    {cat === 'all' ? '全部' : cat}
-                  </button>
-                ))}
-              </div>
-            )}
-            <span className="toolbox-gallery__zone-count">{filtered.length} 个</span>
-          </div>
+      <div className="gallery-zones">
+        <GalleryZone
+          title="已启动"
+          tools={runningApps.length > 0 ? <span className="gallery-zone-badge">{runningApps.length}</span> : null}
+        >
+          {runningApps.length > 0 ? (
+            <GalleryGrid>
+              {runningApps.map((app, index) => (
+                <MiniAppCard
+                  key={app.id}
+                  app={app}
+                  index={index}
+                  isRunning
+                  onOpenDetails={setSelectedApp}
+                  onOpen={handleOpenApp}
+                  onDelete={handleDeleteRequest}
+                  onStop={handleStopRunning}
+                />
+              ))}
+            </GalleryGrid>
+          ) : (
+            <div className="gallery-run-empty">
+              暂无运行中的应用
+            </div>
+          )}
+        </GalleryZone>
 
+        <GalleryZone
+          title="全部应用"
+          tools={(
+            <>
+              {categories.length > 1 ? (
+                <div className="gallery-chip-row">
+                  {categories.map((cat) => (
+                    <button
+                      key={cat}
+                      type="button"
+                      className={[
+                        'gallery-cat-chip',
+                        categoryFilter === cat && 'gallery-cat-chip--active',
+                      ]
+                        .filter(Boolean)
+                        .join(' ')}
+                      onClick={() => setCategoryFilter(cat)}
+                    >
+                      {cat === 'all' ? '全部' : cat}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+              <span className="gallery-zone-count">{filtered.length} 个</span>
+            </>
+          )}
+        >
           {renderGrid()}
-        </section>
-          </div>{/* end __zones */}
-        </div>
+        </GalleryZone>
       </div>
+
+      <GalleryDetailModal
+        isOpen={Boolean(selectedApp)}
+        onClose={() => setSelectedApp(null)}
+        icon={selectedApp ? renderMiniAppIcon(selectedApp.icon || 'box', 24) : <Box size={24} />}
+        iconGradient={selectedApp ? getMiniAppIconGradient(selectedApp.icon || 'box') : undefined}
+        title={selectedApp?.name ?? ''}
+        badges={selectedApp?.category ? <Badge variant="info">{selectedApp.category}</Badge> : null}
+        description={selectedApp?.description}
+        meta={selectedApp ? <span>v{selectedApp.version}</span> : null}
+        actions={selectedApp ? (
+          <>
+            {runningIdSet.has(selectedApp.id) ? (
+              <Button variant="secondary" size="small" onClick={() => void handleStopRunning(selectedApp.id)}>
+                <Square size={14} />
+                停止
+              </Button>
+            ) : null}
+            <Button variant="danger" size="small" onClick={() => setPendingDeleteId(selectedApp.id)}>
+              <Trash2 size={14} />
+              删除
+            </Button>
+            <Button variant="primary" size="small" onClick={() => handleOpenApp(selectedApp.id)}>
+              <Play size={14} />
+              打开
+            </Button>
+          </>
+        ) : null}
+      >
+        {selectedApp?.tags.length ? (
+          <div className="toolbox-gallery__detail-tags">
+            {selectedApp.tags.map((tag) => (
+              <span key={tag} className="toolbox-gallery__detail-tag">
+                <Tag size={11} />
+                {tag}
+              </span>
+            ))}
+          </div>
+        ) : null}
+      </GalleryDetailModal>
 
       <ConfirmDialog
         isOpen={pendingDeleteId !== null}
@@ -356,7 +336,7 @@ const GalleryView: React.FC = () => {
         confirmText="删除"
         cancelText="取消"
       />
-    </div>
+    </GalleryLayout>
   );
 };
 

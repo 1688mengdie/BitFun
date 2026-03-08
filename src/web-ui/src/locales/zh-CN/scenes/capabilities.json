@@ -1,6 +1,6 @@
 {
   "skills": "Skill",
-  "subagents": "Agents",
+  "subagents": "智能体",
   "mcp": "MCP",
   "refresh": "刷新能力状态",
   "reconnect": "重连",
@@ -10,8 +10,8 @@
   "mcpReconnectSuccess": "{{name}} 重连成功",
   "mcpReconnectFailed": "{{name}} 重连失败",
   "emptySkills": "暂无 Skill，可在设置中添加",
-  "emptySubagents": "暂无 Agents",
-  "emptyAgents": "暂无 Agents",
+  "emptySubagents": "暂无智能体",
+  "emptyAgents": "暂无智能体",
   "emptyMcp": "暂无 MCP 服务",
   "path": "路径",
   "toolCount": "工具数",

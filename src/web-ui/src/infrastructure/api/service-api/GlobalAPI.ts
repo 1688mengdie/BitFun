@@ -32,6 +32,14 @@ export interface OpenWorkspaceRequest {
   path: string;
 }
 
+export interface CloseWorkspaceRequest {
+  workspaceId: string;
+}
+
+export interface SetActiveWorkspaceRequest {
+  workspaceId: string;
+}
+
 export interface ScanWorkspaceInfoRequest {
   workspacePath: string;
 }
@@ -82,13 +90,23 @@ export class GlobalAPI {
   }
 
    
-  async closeWorkspace(): Promise<void> {
+  async closeWorkspace(workspaceId: string): Promise<void> {
     try {
       await api.invoke('close_workspace', { 
-        request: {} 
+        request: { workspaceId } 
       });
     } catch (error) {
-      throw createTauriCommandError('close_workspace', error);
+      throw createTauriCommandError('close_workspace', error, { workspaceId });
+    }
+  }
+
+  async setActiveWorkspace(workspaceId: string): Promise<WorkspaceInfo> {
+    try {
+      return await api.invoke('set_active_workspace', {
+        request: { workspaceId }
+      });
+    } catch (error) {
+      throw createTauriCommandError('set_active_workspace', error, { workspaceId });
     }
   }
 
@@ -111,6 +129,16 @@ export class GlobalAPI {
       });
     } catch (error) {
       throw createTauriCommandError('get_recent_workspaces', error);
+    }
+  }
+
+  async getOpenedWorkspaces(): Promise<WorkspaceInfo[]> {
+    try {
+      return await api.invoke('get_opened_workspaces', {
+        request: {}
+      });
+    } catch (error) {
+      throw createTauriCommandError('get_opened_workspaces', error);
     }
   }
 

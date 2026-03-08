@@ -9,12 +9,10 @@
  * - WindowControls (minimize/maximize/close) replace the old TitleBar chrome.
  */
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
-import { ArrowLeft, ArrowRight, FolderOpen, FolderPlus, History, Check } from 'lucide-react';
+import React, { useCallback, useMemo, useRef } from 'react';
+import { ArrowLeft, ArrowRight } from 'lucide-react';
 import { Tooltip } from '@/component-library';
 import { useNavSceneStore } from '../../stores/navSceneStore';
-import { useWorkspaceContext } from '../../../infrastructure/contexts/WorkspaceContext';
 import { useI18n } from '../../../infrastructure/i18n';
 import { PanelLeftIcon } from '../TitleBar/PanelIcons';
 import { createLogger } from '@/shared/utils/logger';
@@ -54,12 +52,6 @@ const NavBar: React.FC<NavBarProps> = ({
   const goForward    = useNavSceneStore(s => s.goForward);
   const canGoBack    = showSceneNav && !!navSceneId;
   const canGoForward = !showSceneNav && !!navSceneId;
-  const { currentWorkspace, recentWorkspaces, openWorkspace, switchWorkspace } = useWorkspaceContext();
-  const [showLogoMenu, setShowLogoMenu] = useState(false);
-  const [logoMenuClosing, setLogoMenuClosing] = useState(false);
-  const [menuPos, setMenuPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
-  const containerRef = useRef<HTMLDivElement>(null);
-  const menuPortalRef = useRef<HTMLDivElement>(null);
   const lastMouseDownTimeRef = useRef<number>(0);
 
   const handleBarMouseDown = useCallback((e: React.MouseEvent) => {
@@ -90,150 +82,11 @@ const NavBar: React.FC<NavBarProps> = ({
     onMaximize?.();
   }, [onMaximize]);
 
-  const closeLogoMenu = useCallback(() => {
-    setLogoMenuClosing(true);
-    setTimeout(() => {
-      setShowLogoMenu(false);
-      setLogoMenuClosing(false);
-    }, 150);
-  }, []);
-
-  const openLogoMenu = useCallback(() => {
-    const btn = containerRef.current?.querySelector<HTMLElement>('.bitfun-nav-bar__logo-button');
-    if (btn) {
-      const rect = btn.getBoundingClientRect();
-      setMenuPos({ top: rect.bottom + 4, left: rect.left });
-    }
-    setShowLogoMenu(true);
-  }, []);
-
-  useEffect(() => {
-    if (!showLogoMenu) return;
-    const onMouseDown = (event: MouseEvent) => {
-      const target = event.target as Node | null;
-      if (!target) return;
-      if (containerRef.current?.contains(target)) return;
-      if (menuPortalRef.current?.contains(target)) return;
-      closeLogoMenu();
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') closeLogoMenu();
-    };
-    document.addEventListener('mousedown', onMouseDown);
-    document.addEventListener('keydown', onKeyDown);
-    return () => {
-      document.removeEventListener('mousedown', onMouseDown);
-      document.removeEventListener('keydown', onKeyDown);
-    };
-  }, [showLogoMenu, closeLogoMenu]);
-
-  const handleOpenProject = useCallback(async () => {
-    closeLogoMenu();
-    try {
-      const { open } = await import('@tauri-apps/plugin-dialog');
-      const selected = await open({ directory: true, multiple: false }) as string;
-      if (selected) await openWorkspace(selected);
-    } catch {}
-  }, [closeLogoMenu, openWorkspace]);
-
-  const handleNewProject = useCallback(() => {
-    closeLogoMenu();
-    window.dispatchEvent(new CustomEvent('nav:new-project'));
-  }, [closeLogoMenu]);
-
-  const handleSwitchWorkspace = useCallback(async (workspaceId: string) => {
-    const targetWorkspace = recentWorkspaces.find(item => item.id === workspaceId);
-    if (!targetWorkspace) return;
-    closeLogoMenu();
-    try {
-      await switchWorkspace(targetWorkspace);
-    } catch {}
-  }, [closeLogoMenu, recentWorkspaces, switchWorkspace]);
-  const recentWorkspaceItems = useMemo(
-    () =>
-      recentWorkspaces.map((workspace) => (
-        <Tooltip key={workspace.id} content={workspace.rootPath} placement="right" followCursor>
-          <button
-            type="button"
-            className="bitfun-nav-bar__menu-item bitfun-nav-bar__menu-item--workspace"
-            role="menuitem"
-            onClick={() => {
-              void handleSwitchWorkspace(workspace.id);
-            }}
-          >
-            <FolderOpen size={13} aria-hidden="true" />
-            <span className="bitfun-nav-bar__menu-item-main">{workspace.name}</span>
-            {workspace.id === currentWorkspace?.id && <Check size={12} aria-hidden="true" />}
-          </button>
-        </Tooltip>
-      )),
-    [recentWorkspaces, handleSwitchWorkspace, currentWorkspace?.id]
-  );
-
-  const logoMenuPortal = showLogoMenu
-    ? createPortal(
-        <div
-          ref={menuPortalRef}
-          className={`bitfun-nav-bar__menu${logoMenuClosing ? ' is-closing' : ''}`}
-          role="menu"
-          style={{ top: menuPos.top, left: menuPos.left }}
-        >
-          {!isMacOS && (
-            <>
-              <button type="button" className="bitfun-nav-bar__menu-item" role="menuitem" onClick={() => { void handleOpenProject(); }}>
-                <FolderOpen size={13} aria-hidden="true" />
-                <span>{t('header.openProject')}</span>
-              </button>
-              <button type="button" className="bitfun-nav-bar__menu-item" role="menuitem" onClick={handleNewProject}>
-                <FolderPlus size={13} aria-hidden="true" />
-                <span>{t('header.newProject')}</span>
-              </button>
-              <div className="bitfun-nav-bar__menu-divider" role="separator" />
-            </>
-          )}
-          <div className="bitfun-nav-bar__menu-section-title">
-            <History size={12} aria-hidden="true" />
-            <span>{t('header.recentWorkspaces')}</span>
-          </div>
-
-          {recentWorkspaceItems.length === 0 ? (
-            <div className="bitfun-nav-bar__menu-empty">
-              <span>{t('header.noRecentWorkspaces')}</span>
-            </div>
-          ) : (
-            <div className="bitfun-nav-bar__menu-workspaces">{recentWorkspaceItems}</div>
-          )}
-        </div>,
-        document.body
-      )
-    : null;
-
   const rootClassName = `bitfun-nav-bar${isCollapsed ? ' bitfun-nav-bar--collapsed' : ''}${isMacOS ? ' bitfun-nav-bar--macos' : ''} ${className}`;
 
   if (isCollapsed) {
     return (
       <div className={rootClassName} role="toolbar" aria-label={t('nav.aria.navControl')} onMouseDown={handleBarMouseDown} onDoubleClick={handleBarDoubleClick}>
-        <div className="bitfun-nav-bar__logo-menu" ref={containerRef}>
-          <button
-            type="button"
-            className="bitfun-nav-bar__logo-button"
-            aria-label={t('header.openMenu')}
-            aria-expanded={showLogoMenu}
-            onClick={() => showLogoMenu ? closeLogoMenu() : openLogoMenu()}
-            onContextMenu={(e) => {
-              e.preventDefault();
-              openLogoMenu();
-            }}
-          >
-            <img
-              src="/Logo-ICON.png"
-              alt="BitFun"
-              className="bitfun-nav-bar__logo"
-              aria-hidden="true"
-            />
-          </button>
-          {logoMenuPortal}
-        </div>
         <Tooltip content={t('header.expandLeftPanel')} placement="bottom" followCursor>
           <button
             type="button"
@@ -250,27 +103,16 @@ const NavBar: React.FC<NavBarProps> = ({
 
   return (
     <div className={rootClassName} role="toolbar" aria-label={t('nav.aria.navControl')} onMouseDown={handleBarMouseDown} onDoubleClick={handleBarDoubleClick}>
-      <div className="bitfun-nav-bar__logo-menu" ref={containerRef}>
+      <Tooltip content={t('header.collapseLeftPanel')} placement="bottom" followCursor>
         <button
           type="button"
-          className="bitfun-nav-bar__logo-button"
-          aria-label={t('header.openMenu')}
-          aria-expanded={showLogoMenu}
-          onClick={() => showLogoMenu ? closeLogoMenu() : openLogoMenu()}
-          onContextMenu={(e) => {
-            e.preventDefault();
-            openLogoMenu();
-          }}
+          className="bitfun-nav-bar__panel-toggle"
+          onClick={onExpandNav}
+          aria-label={t('header.collapseLeftPanel')}
         >
-          <img
-            src="/Logo-ICON.png"
-            alt="BitFun"
-            className="bitfun-nav-bar__logo"
-            aria-hidden="true"
-          />
+          <PanelLeftIcon size={13} />
         </button>
-        {logoMenuPortal}
-      </div>
+      </Tooltip>
 
       {/* Back / Forward */}
       <Tooltip content={t('nav.backShortcut')} placement="bottom" followCursor disabled={!canGoBack}>

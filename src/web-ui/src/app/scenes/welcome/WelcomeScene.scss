@@ -6,6 +6,7 @@
 @use '../../../component-library/styles/tokens.scss' as *;
 
 .welcome-scene {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -32,10 +33,33 @@
     gap: $size-gap-1;
   }
 
+  &__greeting-inner {
+    display: flex;
+    flex-direction: row;
+    align-items: flex-end;
+    gap: $size-gap-4;
+  }
+
+  &__greeting-text {
+    display: flex;
+    flex-direction: column;
+    gap: $size-gap-1;
+    min-width: 0;
+  }
+
+  &__title-row {
+    display: flex;
+    align-items: baseline;
+    gap: $size-gap-2;
+    flex-wrap: nowrap;
+    min-width: 0;
+  }
+
   &__greeting-label {
     font-size: $font-size-base;
     color: var(--color-text-muted);
-    margin: 0;
+    white-space: nowrap;
+    flex-shrink: 0;
   }
 
   &__workspace-title {
@@ -45,18 +69,15 @@
     margin: 0;
     line-height: $line-height-tight;
     letter-spacing: -0.02em;
-  }
-
-  &__workspace-meta {
-    display: flex;
-    align-items: center;
-    gap: $size-gap-2;
-    margin-top: $size-gap-1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   &__meta-tag {
     display: inline-flex;
     align-items: center;
+    align-self: center;
     gap: 3px;
     padding: 2px $size-gap-2;
     border-radius: $size-radius-sm;
@@ -356,6 +377,35 @@
     border-radius: $size-radius-lg;
   }
 
+  // ── Panda mascot ─────────────────────────────────────
+
+  &__panda {
+    position: relative;
+    flex-shrink: 0;
+    width: 100px;
+    pointer-events: none;
+    user-select: none;
+    image-rendering: pixelated;
+  }
+
+  &__panda-frame {
+    display: block;
+    width: 100%;
+    height: auto;
+    image-rendering: pixelated;
+  }
+
+  &__panda-frame--2 {
+    position: absolute;
+    top: 0;
+    left: 0;
+    animation: panda-blink 1.2s steps(1, end) infinite;
+  }
+
+  &__panda-frame--1 {
+    animation: panda-blink-inv 1.2s steps(1, end) infinite;
+  }
+
   // ── First-time modifier ──────────────────────────────
 
   &--first-time {
@@ -375,7 +425,17 @@
   }
 }
 
-// ── Animation ─────────────────────────────────────────
+// ── Animations ────────────────────────────────────────
+
+@keyframes panda-blink {
+  0%, 49%  { opacity: 0; }
+  50%, 100% { opacity: 1; }
+}
+
+@keyframes panda-blink-inv {
+  0%, 49%  { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
 
 @keyframes welcome-fade-in {
   from {
@@ -401,6 +461,9 @@
 @media (prefers-reduced-motion: reduce) {
   .welcome-scene {
     animation: none;
+
+    &__panda-frame--1 { animation: none; opacity: 1; }
+    &__panda-frame--2 { animation: none; opacity: 0; }
 
     &__session-btn,
     &__primary-action,

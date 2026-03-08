@@ -93,7 +93,7 @@ $_section-header-height: 24px;
 
       // Split-open scenes (file-viewer): clip-path reveal from anchor.
       // The opaque background ensures revealed portions fully cover MainNav
-      // so departing items (e.g. WorkspaceHeader) never bleed through.
+      // so departing items never bleed through.
       .is-split-open & {
         clip-path: inset(var(--clip-origin-top) 0 var(--clip-origin-bottom) 0);
         transition: clip-path 0.26s cubic-bezier(0.22, 1, 0.36, 1),
@@ -125,6 +125,8 @@ $_section-header-height: 24px;
   &__workspace-bot {
     width: 52px;
     height: 52px;
+    padding: 0;
+    border: none;
     border-radius: 50%;
     display: inline-flex;
     align-items: center;
@@ -135,27 +137,66 @@ $_section-header-height: 24px;
     position: relative;
     z-index: 1;
     overflow: hidden;
+    cursor: pointer;
+    transition: transform $motion-fast $easing-standard,
+                box-shadow $motion-fast $easing-standard;
+
+    &:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-primary) 28%, transparent);
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--color-accent-500);
+      outline-offset: 2px;
+    }
 
     img {
       width: 100%;
       height: 100%;
       object-fit: cover;
       display: block;
+      position: absolute;
+      top: 0;
+      left: 0;
+    }
+
+    &-default {
+      z-index: 1;
+    }
+
+    &-hover {
+      z-index: 2;
+      opacity: 0;
+      transition: opacity $motion-fast $easing-standard;
+    }
+
+    &:hover &-hover {
+      opacity: 1;
     }
   }
 
-  &__workspace-create {
+  &__workspace-create-group {
+    flex: 1;
+    display: flex;
+    align-items: stretch;
+    gap: 1px;
+    height: 36px;
+    min-width: 0;
+  }
+
+  &__workspace-create-main {
     flex: 1;
     display: inline-flex;
     align-items: center;
     justify-content: center;
     gap: 6px;
-    height: 36px;
+    min-width: 0;
     padding: 0 $size-gap-2;
     border: none;
-    border-radius: $size-radius-base;
-    background: var(--element-bg-medium);
-    color: var(--color-text-primary);
+    border-radius: $size-radius-base 0 0 $size-radius-base;
+    background: var(--element-bg-soft);
+    color: var(--color-primary);
     font-size: 12px;
     font-weight: 600;
     cursor: pointer;
@@ -163,19 +204,130 @@ $_section-header-height: 24px;
                 color $motion-fast $easing-standard,
                 transform $motion-fast $easing-standard;
 
-    &:hover {
-      background: var(--element-bg-soft);
-      color: var(--color-primary);
+    span {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
-    &:active {
-      transform: translateY(1px);
+    svg { flex-shrink: 0; }
+
+    &:hover {
+      background: var(--element-bg-medium);
+      color: var(--color-text-primary);
     }
+
+    &:active { transform: translateY(1px); }
 
     &:focus-visible {
       outline: 1px solid var(--color-accent-500);
       outline-offset: 1px;
     }
+  }
+
+  &__workspace-create-mode {
+    width: 28px;
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: none;
+    border-radius: 0 $size-radius-base $size-radius-base 0;
+    background: var(--element-bg-soft);
+    color: var(--color-text-muted);
+    cursor: pointer;
+    transition: background $motion-fast $easing-standard,
+                color $motion-fast $easing-standard,
+                transform $motion-fast $easing-standard;
+
+    &:hover {
+      background: var(--element-bg-medium);
+      color: var(--color-text-primary);
+    }
+
+    &.is-active {
+      background: var(--element-bg-medium);
+      color: var(--color-primary);
+    }
+
+    &:active { transform: translateY(1px); }
+
+    &:focus-visible {
+      outline: 1px solid var(--color-accent-500);
+      outline-offset: 1px;
+    }
+  }
+
+  // ──────────────────────────────────────────────
+  // Session mode dropdown
+  // ──────────────────────────────────────────────
+
+  &__mode-dropdown {
+    position: fixed;
+    min-width: 180px;
+    padding: $size-gap-1 0;
+    background: var(--color-bg-elevated, #1e1e22);
+    border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+    border-radius: $size-radius-base;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+    z-index: 9999;
+    transform-origin: top left;
+    animation: bitfun-footer-menu-in $motion-fast $easing-decelerate forwards;
+
+    &.is-closing {
+      animation: bitfun-footer-menu-out $motion-fast $easing-accelerate forwards;
+    }
+  }
+
+  &__mode-dropdown-item {
+    display: flex;
+    align-items: center;
+    gap: $size-gap-2;
+    width: 100%;
+    padding: $size-gap-2 $size-gap-3;
+    border: none;
+    background: transparent;
+    color: var(--color-text-secondary);
+    cursor: pointer;
+    font-size: $font-size-sm;
+    text-align: left;
+    transition: color $motion-fast $easing-standard,
+                background $motion-fast $easing-standard;
+
+    &:hover {
+      color: var(--color-text-primary);
+      background: var(--element-bg-soft);
+    }
+
+    &.is-active {
+      color: var(--color-text-primary);
+    }
+  }
+
+  &__mode-dropdown-item-icon {
+    flex-shrink: 0;
+
+    &.is-code {
+      color: color-mix(in srgb, var(--color-primary) 75%, var(--color-text-muted));
+    }
+
+    &.is-cowork {
+      color: color-mix(in srgb, var(--color-accent-500) 75%, var(--color-text-muted));
+    }
+  }
+
+  &__mode-dropdown-item-label {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__mode-dropdown-item-check {
+    flex-shrink: 0;
+    color: var(--color-primary);
+    margin-left: auto;
   }
 
   // ──────────────────────────────────────────────
@@ -203,15 +355,16 @@ $_section-header-height: 24px;
   &__section-header {
     display: flex;
     align-items: center;
+    gap: $size-gap-1;
     height: $_section-header-height;
     padding: 0 $size-gap-3;
     margin: 0 $size-gap-2;
     border-radius: 4px;
-    opacity: 0.4;
+    opacity: 0.72;
     transition: background $motion-fast $easing-standard,
                 opacity $motion-fast $easing-standard;
 
-    &--collapsible {
+    &--interactive {
       cursor: pointer;
 
       &:hover {
@@ -236,16 +389,323 @@ $_section-header-height: 24px;
   }
 
   &__section-label {
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 700;
-    letter-spacing: 0.08em;
+    letter-spacing: 0.06em;
     text-transform: uppercase;
-    color: var(--color-text-muted);
+    color: var(--color-text-secondary);
     flex: 1;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
     transition: color $motion-fast $easing-standard;
+  }
+
+  &__section-header--scene-entry &__section-label {
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: normal;
+    text-transform: none;
+    color: var(--color-text-primary);
+  }
+
+  &__toolbox-footer {
+    flex-shrink: 0;
+    padding: $size-gap-1 $size-gap-2 $size-gap-2;
+  }
+
+  &__toolbox-entry-wrap {
+    margin: 0;
+  }
+
+  &__toolbox-entry {
+    width: 100%;
+    min-height: 42px;
+    display: flex;
+    align-items: center;
+    gap: $size-gap-2;
+    padding: 8px 10px 8px 12px;
+    border: 1px dashed color-mix(in srgb, var(--border-subtle) 90%, transparent);
+    border-radius: 10px;
+    background: transparent;
+    color: var(--color-text-secondary);
+    cursor: pointer;
+    text-align: left;
+    transition: border-color $motion-fast $easing-standard,
+                background $motion-fast $easing-standard,
+                color $motion-fast $easing-standard,
+                transform $motion-fast $easing-standard,
+                box-shadow $motion-fast $easing-standard;
+
+    &:hover {
+      color: var(--color-text-primary);
+      background: color-mix(in srgb, var(--element-bg-soft) 78%, transparent);
+      border-color: color-mix(in srgb, var(--color-primary) 28%, var(--border-subtle));
+    }
+
+    &:active {
+      transform: translateY(1px);
+      background: color-mix(in srgb, var(--element-bg-medium) 82%, transparent);
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--color-accent-500);
+      outline-offset: 0;
+    }
+
+    &.has-running-apps {
+      border-style: dashed;
+    }
+
+    &.is-active {
+      color: var(--color-text-primary);
+      background: color-mix(in srgb, var(--element-bg-soft) 88%, transparent);
+      border-color: color-mix(in srgb, var(--color-primary) 50%, var(--border-subtle));
+      box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-primary) 18%, transparent);
+    }
+  }
+
+  &__toolbox-entry-main {
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex: 1;
+  }
+
+  &__toolbox-entry-icon {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: inherit;
+    opacity: 0.72;
+    transition: opacity $motion-fast $easing-standard;
+
+    .bitfun-nav-panel__toolbox-entry:hover &,
+    .bitfun-nav-panel__toolbox-entry.is-active & {
+      opacity: 1;
+    }
+  }
+
+  &__toolbox-entry-copy {
+    min-width: 0;
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+  }
+
+  &__toolbox-entry-title {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 13px;
+    font-weight: 500;
+    line-height: 1.1;
+    opacity: 0.72;
+    transition: opacity $motion-fast $easing-standard;
+
+    .bitfun-nav-panel__toolbox-entry:hover &,
+    .bitfun-nav-panel__toolbox-entry.is-active & {
+      opacity: 1;
+    }
+  }
+
+  &__toolbox-entry-apps {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    margin-left: auto;
+    min-width: 0;
+  }
+
+  &__toolbox-app-bubble {
+    width: 26px;
+    height: 26px;
+    border-radius: 999px;
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--color-text-primary);
+    border: none;
+    box-shadow: none;
+    overflow: hidden;
+    transition: transform $motion-fast $easing-standard,
+                box-shadow $motion-fast $easing-standard;
+
+    & + & {
+      margin-left: -8px;
+    }
+
+    &:hover {
+      transform: translateY(-2px) scale(1.06);
+      box-shadow: 0 10px 20px rgba(0, 0, 0, 0.24);
+    }
+
+    &.is-active {
+      box-shadow: 0 8px 18px rgba(0, 0, 0, 0.22),
+                  0 0 0 3px color-mix(in srgb, var(--color-primary) 28%, transparent);
+    }
+
+    &--more {
+      background: color-mix(in srgb, var(--element-bg-medium) 92%, transparent);
+      color: var(--color-text-secondary);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.01em;
+    }
+  }
+
+  &__section-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: auto;
+    opacity: 1;
+  }
+
+  &__section-indicator {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--color-text-muted);
+    opacity: 0.7;
+    transition: color $motion-fast $easing-standard,
+                opacity $motion-fast $easing-standard,
+                transform $motion-fast $easing-standard;
+
+    .bitfun-nav-panel__section-header--scene-link:hover & {
+      color: var(--color-text-secondary);
+      opacity: 1;
+      transform: translateX(1px);
+    }
+  }
+
+  &__section-action {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--color-text-muted);
+    cursor: pointer;
+    transition: color $motion-fast $easing-standard,
+                background $motion-fast $easing-standard;
+
+    &:hover {
+      color: var(--color-text-primary);
+      background: var(--element-bg-soft);
+    }
+
+    &.is-active {
+      color: var(--color-text-primary);
+      background: var(--element-bg-medium);
+    }
+
+    &:active {
+      background: var(--element-bg-medium);
+    }
+
+    &:focus-visible {
+      outline: 1px solid var(--color-accent-500);
+      outline-offset: 1px;
+    }
+  }
+
+  &__workspace-action-wrap {
+    position: relative;
+  }
+
+  &__workspace-menu {
+    position: fixed;
+    min-width: 156px;
+    padding: $size-gap-1 0;
+    background: var(--color-bg-elevated, #1e1e22);
+    border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+    border-radius: $size-radius-base;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+    z-index: 9999;
+    transform-origin: top left;
+    animation: bitfun-footer-menu-in $motion-fast $easing-decelerate forwards;
+
+    &.is-closing {
+      animation: bitfun-footer-menu-out $motion-fast $easing-accelerate forwards;
+    }
+  }
+
+  &__workspace-menu-item {
+    display: flex;
+    align-items: center;
+    gap: $size-gap-2;
+    width: 100%;
+    padding: $size-gap-2 $size-gap-3;
+    border: none;
+    background: transparent;
+    color: var(--color-text-secondary);
+    cursor: pointer;
+    font-size: $font-size-sm;
+    text-align: left;
+    transition: color $motion-fast $easing-standard,
+                background $motion-fast $easing-standard;
+
+    &:hover {
+      color: var(--color-text-primary);
+      background: var(--element-bg-soft);
+    }
+
+    svg {
+      flex-shrink: 0;
+    }
+
+    span {
+      flex: 1;
+    }
+
+    &--workspace {
+      padding-right: $size-gap-2;
+    }
+  }
+
+  &__workspace-menu-item-main {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__workspace-menu-divider {
+    height: 1px;
+    margin: $size-gap-1 0;
+    background: var(--border-subtle);
+  }
+
+  &__workspace-menu-section-title {
+    display: flex;
+    align-items: center;
+    gap: $size-gap-1;
+    padding: $size-gap-1 $size-gap-3;
+    color: var(--color-text-muted);
+    font-size: $font-size-xs;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  &__workspace-menu-empty {
+    padding: $size-gap-2 $size-gap-3;
+    color: var(--color-text-muted);
+    font-size: $font-size-xs;
+  }
+
+  &__workspace-menu-workspaces {
+    max-height: 240px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
   }
 
   // ──────────────────────────────────────────────
@@ -258,6 +718,10 @@ $_section-header-height: 24px;
     transition: grid-template-rows $motion-base $easing-standard,
                 transform $motion-base $easing-decelerate,
                 opacity $motion-base $easing-decelerate;
+
+    &.is-hidden {
+      display: none;
+    }
 
     &.is-collapsed {
       grid-template-rows: 0fr;
@@ -295,16 +759,7 @@ $_section-header-height: 24px;
   $_depart-duration: 0.24s;
   $_depart-easing: cubic-bezier(0.4, 0, 0.2, 1);
 
-  &__workspace-header-slot {
-    flex-shrink: 0;
-    transition: opacity $_depart-duration $_depart-easing;
-
-    &.is-departing-up {
-      opacity: 0;
-    }
-  }
-  // Inline expanded sections (e.g. SessionsSection, GitSection)
-  // also depart when their parent item departs.
+  // Item slots depart with the split-open animation used by scene navs.
 
   &__section {
     margin-bottom: $size-gap-2;
@@ -760,7 +1215,6 @@ $_section-header-height: 24px;
     &__item,
     &__item-slot,
     &__item-icon,
-    &__workspace-header-slot,
     &__section,
     &__section-label,
     &__layer--scene,

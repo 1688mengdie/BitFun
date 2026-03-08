@@ -119,27 +119,6 @@
 
 .branch-select-dialog__input {
   width: 100%;
-  padding: 8px 12px;
-  font-size: 13px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 6px;
-  background: var(--color-bg-secondary);
-  color: var(--color-text-primary);
-  outline: none !important;
-  transition: border-color 0.15s ease, background 0.15s ease;
-
-  &:focus,
-  &:focus-visible,
-  &:focus-within,
-  &:active {
-    border-color: var(--color-accent-500);
-    outline: none !important;
-    box-shadow: none;
-  }
-
-  &::placeholder {
-    color: var(--color-text-muted);
-  }
 }
 
 // ==================== Error Message ====================

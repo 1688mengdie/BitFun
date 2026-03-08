@@ -16,6 +16,11 @@ import './TerminalScene.scss';
 const TerminalScene: React.FC = () => {
   const { activeSessionId, setActiveSession } = useTerminalSceneStore();
   const { t } = useTranslation('panels/terminal');
+  // #region agent log
+  React.useEffect(() => {
+    console.error('[DBG-366fda][H-D] TerminalScene activeSessionId changed', {activeSessionId});
+  }, [activeSessionId]);
+  // #endregion
 
   const handleExit = useCallback(() => {
     setActiveSession(null);

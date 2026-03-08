@@ -78,25 +78,24 @@
       "sessions": "会话",
       "project": "目录",
       "persona": "档案",
-      "team": "团队",
+      "agents": "智能体",
       "skills": "技能",
       "tools": "工具",
       "terminal": "Shell",
-      "shellHub": "Shell Hub",
       "git": "Git",
-      "miniApps": "工具箱"
+      "miniApps": "小应用"
     },
     "tooltips": {
       "persona": "智能体档案 — 身份、规则、记忆、知识与能力",
-      "team": "它能叫谁帮忙 — 子智能体专家团队",
+      "agents": "它能调用哪些 Agent 与 Agent Team",
       "skills": "它懂什么专项知识 — 技能知识文件",
       "tools": "它能用什么工具 — 内置工具与 MCP 服务",
-      "toolbox": "AI 生成的即时可用应用 — MiniApp 工具箱"
+      "toolbox": "边聊边生成，马上可用"
     },
     "toolbox": {
-      "openGallery": "打开工具箱",
-      "newMiniApp": "新建应用",
-      "noApps": "暂无运行中的应用 · 打开工具箱启动",
+      "openGallery": "打开小应用",
+      "newMiniApp": "新建小应用",
+      "noApps": "即时生成的小应用，打开就能用，也能继续迭代。",
       "runningApps": "运行中",
       "myApps": "已打开",
       "stop": "停止"
@@ -104,7 +103,46 @@
     "sections": {
       "workspace": "工作区",
       "myAgent": "我的智能体",
-      "devSuite": "开发套件"
+      "shell": "Shell"
+    },
+    "myAgent": {
+      "title": "我的智能体",
+      "categories": {
+        "identity": "身份",
+        "collaboration": "协作"
+      }
+    },
+    "shell": {
+      "title": "Shell",
+      "views": {
+        "all": "全部",
+        "hub": "Hub"
+      },
+      "actions": {
+        "newTerminal": "新建终端",
+        "newHubTerminal": "新建 Hub 终端",
+        "addWorktree": "添加 Worktree",
+        "refresh": "刷新"
+      },
+      "context": {
+        "start": "启动",
+        "stop": "停止",
+        "edit": "编辑",
+        "editConfig": "编辑配置",
+        "delete": "删除",
+        "close": "关闭",
+        "rename": "重命名",
+        "promoteToHub": "保存到 Hub",
+        "newWorktreeTerminal": "新建终端",
+        "removeWorktree": "移除 Worktree"
+      },
+      "badges": {
+        "startupCommand": "cmd"
+      },
+      "empty": {
+        "all": "从菜单里创建一个终端开始使用",
+        "hub": "还没有 Hub 终端"
+      }
     },
     "sessions": {
       "newSession": "新建会话",
@@ -115,6 +153,8 @@
       "newCoworkSessionDefault": "新建 Cowork 会话（默认模式）",
       "modeCode": "Code",
       "modeCowork": "Cowork",
+      "codeSessionMode": "Code 会话",
+      "coworkSessionMode": "Cowork 会话",
       "noSessions": "暂无会话",
       "rename": "重命名",
       "delete": "删除",
@@ -123,10 +163,27 @@
       "showMore": "还有 {{count}} 个会话",
       "showLess": "收起"
     },
-    "team": {
+    "workspaces": {
+      "empty": "暂无已打开工作区",
+      "closeFailed": "关闭工作区失败",
+      "revealFailed": "打开工作区目录失败",
+      "createSessionFailed": "新建会话失败",
+      "worktreeCreated": "已创建 worktree",
+      "worktreeCreateFailed": "创建 worktree 失败：{{error}}",
+      "expandSessions": "展开会话列表",
+      "collapseSessions": "收起会话列表",
+      "actions": {
+        "more": "更多操作",
+        "newSession": "新建会话",
+        "newWorktree": "新建 worktree",
+        "reveal": "在资源管理器中打开",
+        "close": "关闭工作区"
+      }
+    },
+    "agents": {
       "allAgents": "全部子智能体",
       "newAgent": "新建子智能体",
-      "agentsOverview": "Agents",
+      "agentsOverview": "Agent 总览",
       "expertTeams": "专家团队"
     },
     "skills": {
@@ -567,9 +624,11 @@
     "fileViewer": "文件查看",
     "projectContext": "项目概况",
     "capabilities": "能力配置",
-    "team": "团队",
+    "agents": "智能体",
     "skills": "技能",
-    "toolbox": "工具箱"
+    "toolbox": "小应用",
+    "myAgent": "我的智能体",
+    "shell": "Shell"
   },
   "welcomeScene": {
     "tabLabel": "欢迎使用",

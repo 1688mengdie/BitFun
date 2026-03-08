@@ -4,10 +4,11 @@ import React, {
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import {
-  Bot, ChevronRight, Pencil, X,
-  ListChecks, RotateCcw,
+  ChevronRight, Pencil, X,
+  ListChecks, RotateCcw, Puzzle,
+  Brain, Zap, Sliders,
 } from 'lucide-react';
-import { Input, Select, type SelectOption } from '@/component-library';
+import { Input, Search, Select, Switch, type SelectOption } from '@/component-library';
 import { AIRulesAPI, RuleLevel, type AIRule } from '@/infrastructure/api/service-api/AIRulesAPI';
 import { getAllMemories, toggleMemory, type AIMemory } from '@/infrastructure/api/aiMemoryApi';
 import { promptTemplateService } from '@/infrastructure/services/PromptTemplateService';
@@ -22,6 +23,7 @@ import type {
 import { useSettingsStore } from '@/app/scenes/settings/settingsStore';
 import type { ConfigTab } from '@/app/scenes/settings/settingsConfig';
 import { quickActions } from '@/shared/services/ide-control';
+import { getCardGradient } from '@/shared/utils/cardGradients';
 import { PersonaRadar } from './PersonaRadar';
 import { notificationService } from '@/shared/notification-system';
 import { createLogger } from '@/shared/utils/logger';
@@ -39,7 +41,26 @@ interface ToolInfo { name: string; description: string; is_readonly: boolean; }
 const C = 'bp';
 const IDENTITY_KEY = 'bf_agent_identity';
 const DEFAULT_NAME = 'BitFun Agent';
-const CHIP_LIMIT   = 12;
+const CHIP_LIMIT = 12;
+const TOOL_LIST_LIMIT = 10;
+const SKILL_GRID_LIMIT = 4;
+
+// ── Zone switching drag mechanics ─────────────────────────────
+const ZONE_ORDER = ['brain', 'capabilities', 'interaction'] as const;
+type ZoneId = typeof ZONE_ORDER[number];
+const DRAG_THRESHOLD = 200;  // accumulated deltaY to trigger switch
+const MAX_DISPLACE    = 22;  // max visual translateY in px
+
+/** Elastic displacement: fast start, asymptotically approaches MAX_DISPLACE */
+function elasticDisplace(accum: number): number {
+  const t = Math.min(Math.abs(accum) / DRAG_THRESHOLD, 1);
+  return MAX_DISPLACE * (1 - Math.exp(-t * 3.4)) * Math.sign(accum);
+}
+/** Ghost opacity: 0 before 50% threshold, ramps to 0.36 at 100% */
+function ghostOpacity(accum: number): number {
+  const t = Math.min(Math.abs(accum) / DRAG_THRESHOLD, 1);
+  return t < 0.5 ? 0 : ((t - 0.5) / 0.5) * 0.36;
+}
 
 // Structural slot keys only — labels/descs are resolved via i18n at render time
 const MODEL_SLOT_KEYS = ['primary', 'fast', 'compression', 'image', 'voice', 'retrieval'] as const;
@@ -54,6 +75,12 @@ const SLOT_PRESET_IDS: Record<ModelSlotKey, { id: string }[]> = {
   voice:       [],
   retrieval:   [],
 };
+
+function getImportanceDotCount(importance: number): number {
+  if (importance >= 8) return 3;
+  if (importance >= 4) return 2;
+  return 1;
+}
 
 interface ToggleChipProps {
   label: string;
@@ -76,6 +103,110 @@ const ToggleChip: React.FC<ToggleChipProps> = ({
   >
     <span className={`${C}-chip__label`}>{label}</span>
   </button>
+);
+
+interface ToolToggleRowProps {
+  name: string;
+  description?: string;
+  enabled: boolean;
+  loading?: boolean;
+  onToggle: () => void;
+}
+const ToolToggleRow: React.FC<ToolToggleRowProps> = ({
+  name, description, enabled, loading, onToggle,
+}) => (
+  <div className={`${C}-tool-row`}>
+    <div className={`${C}-tool-row__meta`}>
+      <span className={`${C}-tool-row__name`}>{name}</span>
+      <span className={`${C}-tool-row__desc`} title={description || name}>
+        {description || name}
+      </span>
+    </div>
+    <Switch
+      size="small"
+      checked={enabled}
+      loading={loading}
+      onChange={() => onToggle()}
+      aria-label={name}
+      className={`${C}-tool-row__switch`}
+    />
+  </div>
+);
+
+interface SkillMiniCardProps {
+  name: string;
+  description?: string;
+  enabled: boolean;
+  loading?: boolean;
+  onToggle: () => void;
+  onOpen: () => void;
+}
+const SkillMiniCard: React.FC<SkillMiniCardProps> = ({
+  name, description, enabled, loading, onToggle, onOpen,
+}) => (
+  <div
+    className={`${C}-skill-mini`}
+    role="button"
+    tabIndex={0}
+    onClick={onOpen}
+    onKeyDown={(e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        onOpen();
+      }
+    }}
+    aria-label={name}
+  >
+    <div
+      className={`${C}-skill-mini__icon`}
+      style={{ '--skill-mini-gradient': getCardGradient(name) } as React.CSSProperties}
+    >
+      <Puzzle size={16} strokeWidth={1.8} />
+    </div>
+    <div className={`${C}-skill-mini__body`}>
+      <span className={`${C}-skill-mini__name`}>{name}</span>
+      <span className={`${C}-skill-mini__desc`} title={description || name}>
+        {description || name}
+      </span>
+    </div>
+    <div
+      className={`${C}-skill-mini__switch`}
+      onClick={e => e.stopPropagation()}
+      onKeyDown={e => e.stopPropagation()}
+    >
+      <Switch
+        size="small"
+        checked={enabled}
+        loading={loading}
+        onChange={() => onToggle()}
+        aria-label={name}
+      />
+    </div>
+  </div>
+);
+
+interface PrefToggleRowProps {
+  label: string;
+  description: string;
+  enabled: boolean;
+  onToggle: () => void;
+}
+const PrefToggleRow: React.FC<PrefToggleRowProps> = ({
+  label, description, enabled, onToggle,
+}) => (
+  <div className={`${C}-pref-row`}>
+    <div className={`${C}-pref-row__info`}>
+      <span className={`${C}-pref-row__title`}>{label}</span>
+      <span className={`${C}-pref-row__desc`}>{description}</span>
+    </div>
+    <Switch
+      size="small"
+      checked={enabled}
+      onChange={() => onToggle()}
+      aria-label={label}
+      className={`${C}-pref-row__switch`}
+    />
+  </div>
 );
 
 interface ModelPillProps {
@@ -204,18 +335,39 @@ const PersonaView: React.FC<{ workspacePath: string }> = () => {
   const [rulesExpanded,    setRulesExpanded]    = useState(false);
   const [memoriesExpanded, setMemoriesExpanded] = useState(false);
   const [skillsExpanded,   setSkillsExpanded]   = useState(false);
+  const [toolsExpanded, setToolsExpanded] = useState(false);
+  const [toolQuery, setToolQuery] = useState('');
+
+  const [activeZone, setActiveZone] = useState<'brain' | 'capabilities' | 'interaction'>('brain');
+  const [railExpanded, setRailExpanded] = useState(false);
 
   const [radarOpen,    setRadarOpen]    = useState(false);
   const [radarClosing, setRadarClosing] = useState(false);
   const closingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // section refs for radar-click navigation
+  // home ↔ detail view transition
+  const [detailMode, setDetailMode] = useState(false);
+
+  // section refs for radar-click scroll navigation
   const rulesRef     = useRef<HTMLDivElement>(null);
   const memoryRef    = useRef<HTMLDivElement>(null);
   const toolsRef     = useRef<HTMLDivElement>(null);
   const skillsRef    = useRef<HTMLDivElement>(null);
   const templatesRef = useRef<HTMLDivElement>(null);
-  const interactionRef = useRef<HTMLElement>(null);
+  const prefsRef     = useRef<HTMLDivElement>(null);
+
+  // detail section ref (kept for internal scroll-to section)
+  const detailRef = useRef<HTMLDivElement>(null);
+
+  // panel refs for wheel drag mechanics
+  const brainPanelRef        = useRef<HTMLDivElement>(null);
+  const capabilitiesPanelRef = useRef<HTMLDivElement>(null);
+  const interactionPanelRef  = useRef<HTMLDivElement>(null);
+  const dragAccumRef         = useRef(0);
+  const dragTimerRef         = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isSwitchingRef       = useRef(false);
+  // tab-rail dot refs for drag animation
+  const tabDotsRef           = useRef<(HTMLSpanElement | null)[]>([]);
 
   useEffect(() => {
     (async () => {
@@ -297,23 +449,43 @@ const PersonaView: React.FC<{ workspacePath: string }> = () => {
   }, [radarOpen, closeRadar]);
   useEffect(() => () => { if (closingTimer.current) clearTimeout(closingTimer.current); }, []);
 
+  const ZONE_TABS = useMemo(() => [
+    { id: 'brain'        as const, Icon: Brain,   label: t('sections.brain'),        shortLabel: t('nav.brain',        { defaultValue: '大脑' }) },
+    { id: 'capabilities' as const, Icon: Zap,     label: t('sections.capabilities'), shortLabel: t('nav.capabilities', { defaultValue: '能力' }) },
+    { id: 'interaction'  as const, Icon: Sliders,  label: t('sections.interaction'),  shortLabel: t('nav.interaction',  { defaultValue: '交互' }) },
+  ], [t]);
+
+  const dimToZone = useMemo<Record<string, 'brain' | 'capabilities' | 'interaction'>>(() => ({
+    [t('radar.dims.rigor')]:        'brain',
+    [t('radar.dims.memory')]:       'brain',
+    [t('radar.dims.autonomy')]:     'capabilities',
+    [t('radar.dims.adaptability')]: 'capabilities',
+    [t('radar.dims.creativity')]:   'interaction',
+    [t('radar.dims.expression')]:   'interaction',
+  }), [t]);
+
   const handleRadarDimClick = useCallback((label: string) => {
-    const map: Record<string, React.RefObject<HTMLDivElement | HTMLElement>> = {
-      [t('radar.dims.rigor')]:       rulesRef,
-      [t('radar.dims.memory')]:      memoryRef,
-      [t('radar.dims.autonomy')]:    toolsRef,
+    const zone = dimToZone[label];
+    const refMap: Record<string, React.RefObject<HTMLDivElement>> = {
+      [t('radar.dims.rigor')]:        rulesRef,
+      [t('radar.dims.memory')]:       memoryRef,
+      [t('radar.dims.autonomy')]:     toolsRef,
       [t('radar.dims.adaptability')]: skillsRef,
-      [t('radar.dims.creativity')]:  templatesRef,
-      [t('radar.dims.expression')]:  interactionRef,
+      [t('radar.dims.creativity')]:   templatesRef,
+      [t('radar.dims.expression')]:   prefsRef,
     };
-    const target = map[label];
-    if (target?.current) {
-      target.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      target.current.classList.add('is-pulse');
-      setTimeout(() => target.current?.classList.remove('is-pulse'), 900);
-    }
+    if (zone) setActiveZone(zone);
+    // delay to let panel become visible before scrollIntoView
+    setTimeout(() => {
+      const target = refMap[label];
+      if (target?.current) {
+        target.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        target.current.classList.add('is-pulse');
+        setTimeout(() => target.current?.classList.remove('is-pulse'), 900);
+      }
+    }, 60);
     if (radarOpen) closeRadar();
-  }, [radarOpen, closeRadar, t]);
+  }, [dimToZone, radarOpen, closeRadar, t]);
 
   const handleModelChange = useCallback(async (key: string, id: string) => {
     try {
@@ -410,6 +582,201 @@ const PersonaView: React.FC<{ workspacePath: string }> = () => {
     catch { setAiExp(p => ({ ...p, [key]: cur })); }
   }, [aiExp]);
 
+  const openSkillsScene = useCallback(() => {
+    window.dispatchEvent(new CustomEvent('scene:open', { detail: { sceneId: 'skills' } }));
+  }, []);
+
+  const goToDetail = useCallback((zone?: ZoneId) => {
+    if (zone) setActiveZone(zone);
+    setDetailMode(true);
+  }, []);
+
+  const goToHome = useCallback(() => {
+    setDetailMode(false);
+  }, []);
+
+  const scrollToZone = useCallback((zone: ZoneId) => {
+    goToDetail(zone);
+  }, [goToDetail]);
+
+  // Helper: get panel DOM element by zone id
+  const getPanel = useCallback((id: ZoneId) => {
+    if (id === 'brain')        return brainPanelRef.current;
+    if (id === 'capabilities') return capabilitiesPanelRef.current;
+    return interactionPanelRef.current;
+  }, []);
+
+  // Tab click — simple crossfade
+  const handleTabClick = useCallback((id: ZoneId) => {
+    if (id === activeZone || isSwitchingRef.current) return;
+    isSwitchingRef.current = true;
+    const cur = getPanel(activeZone);
+    if (cur) {
+      cur.style.transition = 'opacity 0.14s ease';
+      cur.style.opacity = '0';
+    }
+    setTimeout(() => {
+      if (cur) { cur.style.transition = ''; cur.style.opacity = ''; }
+      setActiveZone(id);
+      isSwitchingRef.current = false;
+    }, 140);
+  }, [activeZone, getPanel]);
+
+  // Wheel — elastic resistance + ghost preview + slide switch + dot merge animation
+  const handleWheel = useCallback((e: React.WheelEvent<HTMLDivElement>) => {
+    if (isSwitchingRef.current) return;
+
+    const curPanel = getPanel(activeZone);
+    if (!curPanel) return;
+
+    const goDown = e.deltaY > 0;
+    const atBottom = curPanel.scrollTop + curPanel.clientHeight >= curPanel.scrollHeight - 2;
+    const atTop    = curPanel.scrollTop <= 0;
+    if (goDown && !atBottom) return;
+    if (!goDown && !atTop)   return;
+
+    const dir    = goDown ? 1 : -1;
+    const idx    = ZONE_ORDER.indexOf(activeZone);
+    const nextId = ZONE_ORDER[idx + dir] as ZoneId | undefined;
+    if (!nextId) return;
+
+    if (dragAccumRef.current !== 0 && Math.sign(e.deltaY) !== Math.sign(dragAccumRef.current)) {
+      dragAccumRef.current = e.deltaY;
+    } else {
+      dragAccumRef.current += e.deltaY;
+    }
+    const accum    = dragAccumRef.current;
+    const progress = Math.min(Math.abs(accum) / DRAG_THRESHOLD, 1);
+
+    // ── panel visual feedback ──────────────────────────
+    const displace  = elasticDisplace(accum);
+    const gOpacity  = ghostOpacity(accum);
+    const nextPanel = getPanel(nextId);
+
+    curPanel.style.transform = `translateY(${displace}px)`;
+    curPanel.style.opacity   = String(1 - gOpacity * 0.25);
+
+    if (nextPanel) {
+      if (gOpacity > 0) {
+        const t = Math.min(Math.abs(accum) / DRAG_THRESHOLD, 1);
+        const ghostOffset = dir * 28 * (1 - (t - 0.5) / 0.5);
+        nextPanel.style.display        = 'flex';
+        nextPanel.style.flexDirection  = 'column';
+        nextPanel.style.position       = 'absolute';
+        nextPanel.style.inset          = '0';
+        nextPanel.style.overflowY      = 'hidden';
+        nextPanel.style.pointerEvents  = 'none';
+        nextPanel.style.zIndex         = '0';
+        nextPanel.style.transform      = `translateY(${ghostOffset}px)`;
+        nextPanel.style.opacity        = String(gOpacity);
+      } else {
+        nextPanel.style.display   = '';
+        nextPanel.style.position  = '';
+        nextPanel.style.transform = '';
+        nextPanel.style.opacity   = '';
+      }
+    }
+
+    // ── dot merge animation ────────────────────────────
+    const curDot  = tabDotsRef.current[idx];
+    const nextDot = tabDotsRef.current[idx + dir];
+
+    if (curDot) {
+      // active dot stretches into a pill toward the next dot
+      const stretchH    = 8 + progress * 18;           // 8px → 26px
+      const pillMove    = dir * (stretchH - 8) / 2;    // keep one edge anchored
+      curDot.style.transition  = 'none';
+      curDot.style.height      = `${stretchH}px`;
+      curDot.style.borderRadius = progress > 0.08 ? '3px' : '50%';
+      curDot.style.transform   = `translateY(${pillMove}px)`;
+    }
+    if (nextDot) {
+      // next dot grows and brightens with accent color
+      const nextScale = 1 + progress * 0.65;
+      nextDot.style.transition  = 'none';
+      nextDot.style.transform   = `scale(${nextScale})`;
+      nextDot.style.background  = 'var(--color-accent-500)';
+      nextDot.style.opacity     = String(0.25 + progress * 0.75);
+    }
+
+    // ── threshold → execute switch ─────────────────────
+    if (Math.abs(accum) >= DRAG_THRESHOLD) {
+      if (dragTimerRef.current) clearTimeout(dragTimerRef.current);
+      isSwitchingRef.current = true;
+      dragAccumRef.current   = 0;
+
+      curPanel.style.transition = 'transform 0.22s cubic-bezier(0.4,0,1,0.6), opacity 0.22s ease';
+      curPanel.style.transform  = `translateY(${dir * -44}px)`;
+      curPanel.style.opacity    = '0';
+
+      if (nextPanel) {
+        nextPanel.style.transition    = '';
+        nextPanel.style.position      = 'absolute';
+        nextPanel.style.inset         = '0';
+        nextPanel.style.display       = 'flex';
+        nextPanel.style.flexDirection = 'column';
+        nextPanel.style.overflowY     = 'auto';
+        nextPanel.style.zIndex        = '1';
+        nextPanel.style.pointerEvents = 'none';
+        nextPanel.style.transform     = `translateY(${dir * 34}px)`;
+        nextPanel.style.opacity       = '0.28';
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          if (nextPanel) {
+            nextPanel.style.transition = 'transform 0.28s cubic-bezier(0.2,0,0.2,1), opacity 0.28s ease';
+            nextPanel.style.transform  = '';
+            nextPanel.style.opacity    = '';
+          }
+        }));
+      }
+
+      // commit state — clear all inline styles so CSS class takes over
+      setTimeout(() => {
+        curPanel.style.cssText = '';
+        if (nextPanel) nextPanel.style.cssText = '';
+        if (curDot)  curDot.style.cssText  = '';
+        if (nextDot) nextDot.style.cssText  = '';
+        setActiveZone(nextId);
+        isSwitchingRef.current = false;
+      }, 295);
+      return;
+    }
+
+    // ── spring-back timer ──────────────────────────────
+    if (dragTimerRef.current) clearTimeout(dragTimerRef.current);
+    dragTimerRef.current = setTimeout(() => {
+      dragAccumRef.current = 0;
+      dragTimerRef.current = null;
+
+      // panel spring back with overshoot
+      curPanel.style.transition = 'transform 0.36s cubic-bezier(0.34,1.56,0.64,1), opacity 0.28s ease';
+      curPanel.style.transform  = '';
+      curPanel.style.opacity    = '';
+      setTimeout(() => { curPanel.style.transition = ''; }, 360);
+
+      if (nextPanel && parseFloat(nextPanel.style.opacity || '0') > 0) {
+        nextPanel.style.transition = 'opacity 0.2s ease, transform 0.2s ease';
+        nextPanel.style.opacity    = '0';
+        setTimeout(() => { if (nextPanel) nextPanel.style.cssText = ''; }, 200);
+      }
+
+      // dot spring back — current dot un-stretches with overshoot
+      if (curDot) {
+        curDot.style.transition   = 'height 0.36s cubic-bezier(0.34,1.56,0.64,1), transform 0.36s cubic-bezier(0.34,1.56,0.64,1), border-radius 0.2s ease';
+        curDot.style.height       = '';
+        curDot.style.borderRadius = '';
+        curDot.style.transform    = '';
+        setTimeout(() => { if (curDot) curDot.style.transition = ''; }, 360);
+      }
+      if (nextDot) {
+        nextDot.style.transition  = 'transform 0.22s ease, opacity 0.22s ease, background 0.22s ease';
+        nextDot.style.transform   = '';
+        nextDot.style.opacity     = '';
+        nextDot.style.background  = '';
+        setTimeout(() => { if (nextDot) nextDot.style.transition = ''; }, 220);
+      }
+    }, 160);
+  }, [activeZone, getPanel]);
+
   const sortRules = useMemo(() =>
     [...rules].sort((a, b) => a.enabled === b.enabled ? 0 : a.enabled ? -1 : 1), [rules]);
   const sortMem = useMemo(() =>
@@ -428,6 +795,30 @@ const PersonaView: React.FC<{ workspacePath: string }> = () => {
   const sortTemplates = useMemo(() =>
     [...templates].sort((a, b) => a.isFavorite !== b.isFavorite ? (a.isFavorite ? -1 : 1) : b.usageCount - a.usageCount),
     [templates]);
+  const userRulesList = useMemo(
+    () => sortRules.filter(rule => rule.level === RuleLevel.User),
+    [sortRules],
+  );
+  const projectRulesList = useMemo(
+    () => sortRules.filter(rule => rule.level === RuleLevel.Project),
+    [sortRules],
+  );
+  const filteredTools = useMemo(() => {
+    const query = toolQuery.trim().toLowerCase();
+    if (!query) return sortTools;
+    return sortTools.filter(tool =>
+      tool.name.toLowerCase().includes(query)
+      || tool.description.toLowerCase().includes(query),
+    );
+  }, [sortTools, toolQuery]);
+  const visibleTools = useMemo(
+    () => (toolsExpanded ? filteredTools : filteredTools.slice(0, TOOL_LIST_LIMIT)),
+    [filteredTools, toolsExpanded],
+  );
+  const visibleSkills = useMemo(
+    () => (skillsExpanded ? sortSkills : sortSkills.slice(0, SKILL_GRID_LIMIT)),
+    [sortSkills, skillsExpanded],
+  );
 
   const enabledRules = useMemo(() => rules.filter(r => r.enabled).length, [rules]);
   const userRules    = useMemo(() => rules.filter(r => r.level === RuleLevel.User).length, [rules]);
@@ -495,276 +886,461 @@ const PersonaView: React.FC<{ workspacePath: string }> = () => {
     },
   ], [t]);
 
+  const HOME_ZONES = useMemo(() => [
+    { id: 'brain'        as ZoneId, Icon: Brain,   label: t('sections.brain'),        desc: t('home.brainDesc',        { defaultValue: '模型 · 规则 · 记忆' }) },
+    { id: 'capabilities' as ZoneId, Icon: Zap,     label: t('sections.capabilities'), desc: t('home.capabilitiesDesc', { defaultValue: '工具 · 技能 · MCP' }) },
+    { id: 'interaction'  as ZoneId, Icon: Sliders, label: t('sections.interaction'),  desc: t('home.interactionDesc',  { defaultValue: '模板 · 偏好' }) },
+  ], [t]);
+
   return (
     <div className={C}>
 
-      <header className={`${C}-hero`}>
-        <div className={`${C}-hero__left`}>
-          <div className={`${C}-hero__avatar`}>
-            <Bot size={56} strokeWidth={1.3} />
+      {/* ══════════ Home / 首页 ══════════════════════════════ */}
+      <section className={`${C}-home${detailMode ? ' is-hidden' : ''}`}>
+
+        {/* Left — Full-body panda */}
+        <div className={`${C}-home__left`}>
+          <div className={`${C}-home__panda`}>
+            <img className={`${C}-home__panda-img ${C}-home__panda-img--default`} src="/panda_full_1.png" alt={t('hero.avatarAlt', { defaultValue: 'Agent avatar' })} />
+            <img className={`${C}-home__panda-img ${C}-home__panda-img--hover`} src="/panda_full_2.png" alt="" />
           </div>
+        </div>
 
-          <div className={`${C}-hero__info`}>
-            <div className={`${C}-hero__name-row`}>
-              {editingField === 'name' ? (
-                <Input
-                  ref={nameInputRef}
-                  className={`${C}-hero__name-input`}
-                  value={editValue}
-                  onChange={e => setEditValue(e.target.value)}
-                  onBlur={commitEdit}
-                  onKeyDown={onEditKey}
-                  inputSize="small"
-                />
-              ) : (
-                <h1
-                  className={`${C}-hero__name`}
-                  onClick={() => startEdit('name')}
-                  title={t('hero.editNameTitle')}
-                >
-                  {identity.name}
-                  <Pencil size={11} className={`${C}-hero__name-edit`} strokeWidth={1.6} />
-                </h1>
-              )}
-              <span className={`${C}-hero__badge`}>Super Agent</span>
-            </div>
+        {/* Right — Identity + body row + CTA */}
+        <div className={`${C}-home__right`}>
 
-            {editingField === 'desc' ? (
+          {/* Name row */}
+          <div className={`${C}-home__name-row`}>
+            {editingField === 'name' ? (
               <Input
-                ref={descInputRef}
-                className={`${C}-hero__desc-input`}
+                ref={nameInputRef}
+                className={`${C}-home__name-input`}
                 value={editValue}
                 onChange={e => setEditValue(e.target.value)}
                 onBlur={commitEdit}
                 onKeyDown={onEditKey}
-                placeholder={t('hero.descPlaceholder')}
                 inputSize="small"
               />
             ) : (
-              <p
-                className={`${C}-hero__desc`}
-                onClick={() => startEdit('desc')}
-                title={t('hero.editDescTitle')}
+              <h1
+                className={`${C}-home__name`}
+                onClick={() => startEdit('name')}
+                title={t('hero.editNameTitle')}
               >
-                {identity.desc || t('defaultDesc')}
-              </p>
+                {identity.name}
+                <Pencil size={12} className={`${C}-home__name-edit`} strokeWidth={1.5} />
+              </h1>
             )}
+            <div className={`${C}-home__wip`} title="功能开发中，敬请期待">
+              <span className={`${C}-home__wip-dot`} />
+              WIP · 建设中
+            </div>
+          </div>
+
+          {/* Description + Radar side by side */}
+          <div className={`${C}-home__body-row`}>
+            <div className={`${C}-home__desc-block`} onClick={() => !editingField && startEdit('desc')}>
+              {editingField === 'desc' ? (
+                <Input
+                  ref={descInputRef}
+                  className={`${C}-home__desc-input`}
+                  value={editValue}
+                  onChange={e => setEditValue(e.target.value)}
+                  onBlur={commitEdit}
+                  onKeyDown={onEditKey}
+                  placeholder={t('hero.descPlaceholder')}
+                  inputSize="small"
+                />
+              ) : (
+                <p
+                  className={`${C}-home__desc`}
+                  title={t('hero.editDescTitle')}
+                >
+                  {identity.desc || t('defaultDesc')}
+                </p>
+              )}
+              {!editingField && (
+                <p className={`${C}-home__desc-block-hint`}>
+                  {t('home.descHint', { defaultValue: '点击编辑，描述你的大熊猫 Agent 风格与偏好' })}
+                </p>
+              )}
+            </div>
+          </div>
+
+          {/* Hint + inline CTA */}
+          <p className={`${C}-home__hint`}>
+            {t('home.hint', { defaultValue: '选择章节装配你的大熊猫，或' })}
+            <button type="button" className={`${C}-home__enter`} onClick={() => goToDetail()}>
+              {t('home.viewDetail', { defaultValue: '查看详情' })}
+            </button>
+          </p>
+
+          {/* Category chips */}
+          <div className={`${C}-home__action-row`}>
+            {HOME_ZONES.map(({ id, Icon, label, desc }) => (
+              <button
+                key={id}
+                type="button"
+                className={`${C}-home__cat`}
+                onClick={() => scrollToZone(id)}
+              >
+                <Icon size={14} strokeWidth={1.8} />
+                <span className={`${C}-home__cat-label`}>{label}</span>
+                <span className={`${C}-home__cat-desc`}>{desc}</span>
+              </button>
+            ))}
           </div>
         </div>
+      </section>
 
+      {/* ══════════ Detail / 章节 ═════════════════════════════ */}
+      <div ref={detailRef} className={`${C}-detail${detailMode ? '' : ' is-hidden'}`}>
+
+      {/* ── Persistent header ────────────────────────────── */}
+      <header className={`${C}-hero`}>
+        <div className={`${C}-hero__left`}>
+          <div
+            className={`${C}-hero__panda`}
+            role="button"
+            tabIndex={0}
+            onClick={goToHome}
+            title={t('hero.backTitle', { defaultValue: '点击返回首页' })}
+            onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); goToHome(); } }}
+          >
+            <img className={`${C}-hero__panda-default`} src="/panda_full_1.png" alt={t('hero.avatarAlt', { defaultValue: 'Agent avatar' })} />
+            <img className={`${C}-hero__panda-hover`} src="/panda_full_2.png" alt="" />
+          </div>
+          <div className={`${C}-hero__info`}>
+            <div className={`${C}-hero__name-row`}>
+              <h2 className={`${C}-hero__name`} onClick={() => startEdit('name')} title={t('hero.editNameTitle')}>
+                {identity.name}
+                <Pencil size={10} className={`${C}-hero__name-edit`} strokeWidth={1.6} />
+              </h2>
+            </div>
+            <p className={`${C}-hero__desc`} onClick={() => startEdit('desc')} title={t('hero.editDescTitle')}>
+              {identity.desc || t('defaultDesc')}
+            </p>
+          </div>
+        </div>
         <div className={`${C}-hero__radar`} title={t('hero.radarTitle')}>
-          <PersonaRadar dims={radarDims} size={140} onDimClick={handleRadarDimClick} onChartClick={openRadar} />
+          <PersonaRadar dims={radarDims} size={110} onDimClick={handleRadarDimClick} onChartClick={openRadar} />
         </div>
       </header>
 
-      <section className={`${C}-section`}>
-        <h2 className={`${C}-section__title`}>{t('sections.brain')}</h2>
+      {/* ── Content: zone viewport + tab rail ───────────── */}
+      <div className={`${C}-content`}>
+        <div className={`${C}-zone-viewport`} onWheel={handleWheel}>
 
-        <div className={`${C}-card`}>
-          <div className={`${C}-card__head`}>
-            <span className={`${C}-card__label`}>{t('cards.model')}</span>
-            <button type="button" className={`${C}-link`} onClick={() => navToSettings('models')}>
-              {t('actions.globalManage')} <ChevronRight size={11} />
-            </button>
-          </div>
-          <div className={`${C}-model-grid`}>
-            {MODEL_SLOT_KEYS.map(key => (
-              <ModelPill
-                key={key}
-                slotKey={key}
-                slotLabel={t(`modelSlots.${key}.label`)}
-                slotDesc={t(`modelSlots.${key}.desc`)}
-                currentId={slotIds[key]}
-                models={models}
-                defaultModels={defaultModels}
-                onChange={id => handleModelChange(key, id)}
-              />
-            ))}
-          </div>
-        </div>
-
-        <div ref={rulesRef} className={`${C}-card`}>
-          <div className={`${C}-card__head`}>
-            <span className={`${C}-card__label`}>{t('cards.rules')}</span>
-            <span className={`${C}-card__kpi`}>
-              {t('kpi.rules', { user: userRules, project: projRules, enabled: enabledRules })}
-            </span>
-            <button type="button" className={`${C}-link`} onClick={() => navToSettings('ai-context')}>
-              {t('actions.manage')} <ChevronRight size={11} />
-            </button>
-          </div>
-          <div className={`${C}-chip-row`}>
-            {(rules.length > CHIP_LIMIT && !rulesExpanded ? sortRules.slice(0, CHIP_LIMIT) : sortRules).map(r => (
-              <ToggleChip
-                key={`${r.level}-${r.name}`}
-                label={r.name}
-                enabled={r.enabled}
-                onToggle={() => toggleRule(r)}
-                accentColor="#60a5fa"
-                loading={rulesLoading[`${r.level}-${r.name}`]}
-              />
-            ))}
-            {sortRules.length === 0 && <span className={`${C}-empty-hint`}>{t('empty.rules')}</span>}
-            {rules.length > CHIP_LIMIT && (
-              <button type="button" className={`${C}-chip ${C}-chip--more`} onClick={() => setRulesExpanded(v => !v)}>
-                {rulesExpanded ? t('actions.collapse') : `+${rules.length - CHIP_LIMIT}`}
-              </button>
-            )}
-          </div>
-        </div>
-
-        <div ref={memoryRef} className={`${C}-card`}>
-          <div className={`${C}-card__head`}>
-            <span className={`${C}-card__label`}>{t('cards.memory')}</span>
-            <span className={`${C}-card__kpi`}>{t('kpi.memory', { count: enabledMems })}</span>
-            <button type="button" className={`${C}-link`} onClick={() => navToSettings('ai-context')}>
-              {t('actions.manage')} <ChevronRight size={11} />
-            </button>
-          </div>
-          <div className={`${C}-chip-row`}>
-            {(memories.length > CHIP_LIMIT && !memoriesExpanded ? sortMem.slice(0, CHIP_LIMIT) : sortMem).map(m => (
-              <ToggleChip
-                key={m.id}
-                label={m.title}
-                enabled={m.enabled}
-                onToggle={() => toggleMem(m)}
-                accentColor="#c9944d"
-                loading={memoriesLoading[m.id]}
-                tooltip={m.title}
-              />
-            ))}
-            {sortMem.length === 0 && <span className={`${C}-empty-hint`}>{t('empty.memory')}</span>}
-            {memories.length > CHIP_LIMIT && (
-              <button type="button" className={`${C}-chip ${C}-chip--more`} onClick={() => setMemoriesExpanded(v => !v)}>
-                {memoriesExpanded ? t('actions.collapse') : `+${memories.length - CHIP_LIMIT}`}
-              </button>
-            )}
-          </div>
-        </div>
-      </section>
-
-      <section className={`${C}-section`}>
-        <h2 className={`${C}-section__title`}>{t('sections.capabilities')}</h2>
-
-        <div ref={toolsRef} className={`${C}-card`}>
-          <div className={`${C}-card__head`}>
-            <span className={`${C}-card__label`}>{t('cards.toolsMcp')}</span>
-            <span className={`${C}-card__kpi`}>{toolKpi}</span>
-            <div className={`${C}-card__actions`}>
-              <button type="button" className={`${C}-icon-btn`} onClick={selectAllTools} title={t('actions.selectAll')}>
-                <ListChecks size={13} strokeWidth={1.8} />
-              </button>
-              <button type="button" className={`${C}-icon-btn`} onClick={clearAllTools} title={t('actions.clearAll')}>
-                <X size={13} strokeWidth={1.8} />
-              </button>
-              <button type="button" className={`${C}-icon-btn`} onClick={resetTools} title={t('actions.reset')}>
-                <RotateCcw size={13} strokeWidth={1.8} />
-              </button>
+          {/* Brain */}
+          <div className={`${C}-zone-panel ${activeZone === 'brain' ? 'is-active' : ''}`} ref={brainPanelRef}>
+          <div className={`${C}-zone-inner`}>
+            <div className={`${C}-card`}>
+              <div className={`${C}-card__head`}>
+                <span className={`${C}-card__label`}>{t('cards.model')}</span>
+                <button type="button" className={`${C}-link`} onClick={() => navToSettings('models')}>
+                  {t('actions.globalManage')} <ChevronRight size={11} />
+                </button>
+              </div>
+              <div className={`${C}-model-grid`}>
+                <div className={`${C}-model-grid__col ${C}-model-grid__col--primary`}>
+                  {(['primary', 'fast'] as ModelSlotKey[]).map(key => (
+                    <ModelPill
+                      key={key}
+                      slotKey={key}
+                      slotLabel={t(`modelSlots.${key}.label`)}
+                      slotDesc={t(`modelSlots.${key}.desc`)}
+                      currentId={slotIds[key]}
+                      models={models}
+                      defaultModels={defaultModels}
+                      onChange={id => handleModelChange(key, id)}
+                    />
+                  ))}
+                </div>
+                <div className={`${C}-model-grid__divider`} />
+                <div className={`${C}-model-grid__col ${C}-model-grid__col--secondary`}>
+                  {(['compression', 'image', 'voice', 'retrieval'] as ModelSlotKey[]).map(key => (
+                    <ModelPill
+                      key={key}
+                      slotKey={key}
+                      slotLabel={t(`modelSlots.${key}.label`)}
+                      slotDesc={t(`modelSlots.${key}.desc`)}
+                      currentId={slotIds[key]}
+                      models={models}
+                      defaultModels={defaultModels}
+                      onChange={id => handleModelChange(key, id)}
+                    />
+                  ))}
+                </div>
+              </div>
             </div>
-          </div>
-          <div className={`${C}-chip-row`}>
-            {sortTools.map(tool => (
-              <ToggleChip
-                key={tool.name}
-                label={tool.name}
-                enabled={agenticConfig?.available_tools?.includes(tool.name) ?? false}
-                onToggle={() => toggleTool(tool.name)}
-                accentColor="#6eb88c"
-                loading={toolsLoading[tool.name]}
-                tooltip={tool.description || tool.name}
-              />
-            ))}
-            {availableTools.length === 0 && <span className={`${C}-empty-hint`}>{t('empty.tools')}</span>}
-          </div>
+            <div ref={rulesRef} className={`${C}-card`}>
+              <div className={`${C}-card__head`}>
+                <span className={`${C}-card__label`}>{t('cards.rules')}</span>
+                <span className={`${C}-card__kpi`}>
+                  {t('kpi.rules', { user: userRules, project: projRules, enabled: enabledRules })}
+                </span>
+                <button type="button" className={`${C}-link`} onClick={() => navToSettings('ai-context')}>
+                  {t('actions.manage')} <ChevronRight size={11} />
+                </button>
+              </div>
+              {sortRules.length === 0 && <span className={`${C}-empty-hint`}>{t('empty.rules')}</span>}
+              {sortRules.length > 0 && (
+                <>
+                  {[
+                    { label: 'User', items: userRulesList },
+                    { label: 'Project', items: projectRulesList },
+                  ].map(group => {
+                    const groupItems = rulesExpanded ? group.items : group.items.slice(0, CHIP_LIMIT);
+                    if (group.items.length === 0) return null;
+                    return (
+                      <div key={group.label} className={`${C}-rules-group`}>
+                        <span className={`${C}-rules-group__label`}>{group.label}</span>
+                        <div className={`${C}-chip-row`}>
+                          {groupItems.map(rule => (
+                            <ToggleChip
+                              key={`${rule.level}-${rule.name}`}
+                              label={rule.name}
+                              enabled={rule.enabled}
+                              onToggle={() => toggleRule(rule)}
+                              accentColor="#60a5fa"
+                              loading={rulesLoading[`${rule.level}-${rule.name}`]}
+                            />
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {rules.length > CHIP_LIMIT && (
+                    <button type="button" className={`${C}-chip ${C}-chip--more`} onClick={() => setRulesExpanded(v => !v)}>
+                      {rulesExpanded ? t('actions.collapse') : `+${rules.length - CHIP_LIMIT}`}
+                    </button>
+                  )}
+                </>
+              )}
+            </div>
+            <div ref={memoryRef} className={`${C}-card`}>
+              <div className={`${C}-card__head`}>
+                <span className={`${C}-card__label`}>{t('cards.memory')}</span>
+                <span className={`${C}-card__kpi`}>{t('kpi.memory', { count: enabledMems })}</span>
+                <button type="button" className={`${C}-link`} onClick={() => navToSettings('ai-context')}>
+                  {t('actions.manage')} <ChevronRight size={11} />
+                </button>
+              </div>
+              <div className={`${C}-chip-row`}>
+                {(memories.length > CHIP_LIMIT && !memoriesExpanded ? sortMem.slice(0, CHIP_LIMIT) : sortMem).map(m => (
+                  <div key={m.id} className={`${C}-memory-chip`}>
+                    <ToggleChip
+                      label={m.title}
+                      enabled={m.enabled}
+                      onToggle={() => toggleMem(m)}
+                      accentColor="#c9944d"
+                      loading={memoriesLoading[m.id]}
+                      tooltip={m.title}
+                    />
+                    <span className={`${C}-imp-dots`} aria-hidden="true">
+                      {Array.from({ length: getImportanceDotCount(m.importance) }, (_, index) => (
+                        <span
+                          key={`${m.id}-dot-${index + 1}`}
+                          className={`${C}-imp-dot ${m.enabled ? 'is-on' : 'is-off'}`}
+                        />
+                      ))}
+                    </span>
+                  </div>
+                ))}
+                {sortMem.length === 0 && <span className={`${C}-empty-hint`}>{t('empty.memory')}</span>}
+                {memories.length > CHIP_LIMIT && (
+                  <button type="button" className={`${C}-chip ${C}-chip--more`} onClick={() => setMemoriesExpanded(v => !v)}>
+                    {memoriesExpanded ? t('actions.collapse') : `+${memories.length - CHIP_LIMIT}`}
+                  </button>
+                )}
+              </div>
+            </div>
+          </div></div>
 
-          {mcpServers.length > 0 && (
-            <div className={`${C}-mcp-row`}>
-              <span className={`${C}-mcp-row__label`}>MCP</span>
-              {mcpServers.map(srv => {
-                const ok = srv.status === 'Healthy' || srv.status === 'Connected';
-                return (
-                  <span key={srv.id} className={`${C}-mcp-tag ${ok ? 'is-ok' : 'is-err'}`}>
-                    <span className={`${C}-mcp-tag__dot`} />
-                    {srv.name}
+          {/* Capabilities */}
+          <div className={`${C}-zone-panel ${activeZone === 'capabilities' ? 'is-active' : ''}`} ref={capabilitiesPanelRef}>
+          <div className={`${C}-zone-inner`}>
+            <div ref={toolsRef} className={`${C}-card`}>
+              <div className={`${C}-card__head`}>
+                <span className={`${C}-card__label`}>{t('cards.toolsMcp')}</span>
+                <span className={`${C}-card__kpi`}>{toolKpi}</span>
+                <div className={`${C}-card__actions`}>
+                  <button type="button" className={`${C}-icon-btn`} onClick={selectAllTools} title={t('actions.selectAll')}>
+                    <ListChecks size={13} strokeWidth={1.8} />
+                  </button>
+                  <button type="button" className={`${C}-icon-btn`} onClick={clearAllTools} title={t('actions.clearAll')}>
+                    <X size={13} strokeWidth={1.8} />
+                  </button>
+                  <button type="button" className={`${C}-icon-btn`} onClick={resetTools} title={t('actions.reset')}>
+                    <RotateCcw size={13} strokeWidth={1.8} />
+                  </button>
+                </div>
+              </div>
+              {availableTools.length > 15 && (
+                <Search
+                  size="small"
+                  value={toolQuery}
+                  onChange={setToolQuery}
+                  placeholder={t('profile.toolSearch', { defaultValue: '搜索工具' })}
+                  className={`${C}-tool-search`}
+                />
+              )}
+              <div className={`${C}-tool-grid`}>
+                {visibleTools.map(tool => (
+                  <ToolToggleRow
+                    key={tool.name}
+                    name={tool.name}
+                    description={tool.description}
+                    enabled={agenticConfig?.available_tools?.includes(tool.name) ?? false}
+                    loading={toolsLoading[tool.name]}
+                    onToggle={() => toggleTool(tool.name)}
+                  />
+                ))}
+              </div>
+              {filteredTools.length === 0 && (
+                <span className={`${C}-empty-hint`}>
+                  {toolQuery.trim()
+                    ? t('profile.toolSearchEmpty', { defaultValue: '没有匹配的工具' })
+                    : t('empty.tools')}
+                </span>
+              )}
+              {filteredTools.length > TOOL_LIST_LIMIT && (
+                <button type="button" className={`${C}-chip ${C}-chip--more`} onClick={() => setToolsExpanded(v => !v)}>
+                  {toolsExpanded ? t('actions.collapse') : `+${filteredTools.length - TOOL_LIST_LIMIT}`}
+                </button>
+              )}
+              {mcpServers.length > 0 && (
+                <div className={`${C}-mcp-row`}>
+                  <span className={`${C}-mcp-row__label`}>MCP</span>
+                  {mcpServers.map(srv => {
+                    const ok = srv.status === 'Healthy' || srv.status === 'Connected';
+                    return (
+                      <span key={srv.id} className={`${C}-mcp-tag ${ok ? 'is-ok' : 'is-err'}`}>
+                        <span className={`${C}-mcp-tag__dot`} />
+                        {srv.name}
+                      </span>
+                    );
+                  })}
+                  <button type="button" className={`${C}-link`} onClick={() => navToSettings('mcp')}>
+                    {t('actions.manage')} <ChevronRight size={11} />
+                  </button>
+                </div>
+              )}
+            </div>
+            <div ref={skillsRef} className={`${C}-card`}>
+              <div className={`${C}-card__head`}>
+                <span className={`${C}-card__label`}>{t('cards.skills')}</span>
+                <span className={`${C}-card__kpi`}>{t('kpi.skills', { count: enabledSkls })}</span>
+                <button type="button" className={`${C}-link`} onClick={openSkillsScene}>
+                  {t('actions.manage')} <ChevronRight size={11} />
+                </button>
+              </div>
+              <div className={`${C}-skill-grid`}>
+                {visibleSkills.map(sk => (
+                  <SkillMiniCard
+                    key={sk.name}
+                    name={sk.name}
+                    description={sk.description}
+                    enabled={sk.enabled}
+                    loading={skillsLoading[sk.name]}
+                    onToggle={() => toggleSkill(sk)}
+                    onOpen={openSkillsScene}
+                  />
+                ))}
+              </div>
+              {sortSkills.length === 0 && <span className={`${C}-empty-hint`}>{t('empty.skills')}</span>}
+              {skills.length > SKILL_GRID_LIMIT && (
+                <button type="button" className={`${C}-chip ${C}-chip--more`} onClick={() => setSkillsExpanded(v => !v)}>
+                  {skillsExpanded ? t('actions.collapse') : `+${skills.length - SKILL_GRID_LIMIT}`}
+                </button>
+              )}
+            </div>
+          </div></div>
+
+          {/* Interaction */}
+          <div className={`${C}-zone-panel ${activeZone === 'interaction' ? 'is-active' : ''}`} ref={interactionPanelRef}>
+          <div className={`${C}-zone-inner`}>
+            <div ref={templatesRef} className={`${C}-card`}>
+              <div className={`${C}-card__head`}>
+                <span className={`${C}-card__label`}>{t('cards.templates')}</span>
+                <span className={`${C}-card__kpi`}>{t('kpi.templateCount', { count: templates.length })}</span>
+                <button type="button" className={`${C}-link`} onClick={() => navToSettings('prompt-templates')}>
+                  {t('actions.manage')} <ChevronRight size={11} />
+                </button>
+              </div>
+              <div className={`${C}-chip-row`}>
+                {sortTemplates.slice(0, 14).map(tmpl => (
+                  <span key={tmpl.id} className={`${C}-tpl-chip ${tmpl.isFavorite ? 'is-fav' : ''}`}>
+                    {tmpl.isFavorite && '★ '}{tmpl.name}
                   </span>
-                );
-              })}
-              <button type="button" className={`${C}-link`} onClick={() => navToSettings('mcp')}>
-                {t('actions.manage')} <ChevronRight size={11} />
-              </button>
+                ))}
+                {templates.length === 0 && <span className={`${C}-empty-hint`}>{t('empty.templates')}</span>}
+              </div>
             </div>
-          )}
+            <div ref={prefsRef} className={`${C}-card`}>
+              <div className={`${C}-card__head`}>
+                <span className={`${C}-card__label`}>{t('cards.preferences')}</span>
+              </div>
+              <div className={`${C}-pref-list`}>
+                {prefItems.map(({ key, label, desc }) => (
+                  <PrefToggleRow
+                    key={key}
+                    label={label}
+                    description={desc}
+                    enabled={!!aiExp[key]}
+                    onToggle={() => togglePref(key)}
+                  />
+                ))}
+              </div>
+            </div>
+          </div></div>
+
         </div>
 
-        <div ref={skillsRef} className={`${C}-card`}>
-          <div className={`${C}-card__head`}>
-            <span className={`${C}-card__label`}>{t('cards.skills')}</span>
-            <span className={`${C}-card__kpi`}>{t('kpi.skills', { count: enabledSkls })}</span>
-            <button type="button" className={`${C}-link`} onClick={() => window.dispatchEvent(new CustomEvent('scene:open', { detail: { sceneId: 'skills' } }))}>
-              {t('actions.manage')} <ChevronRight size={11} />
-            </button>
-          </div>
-          <div className={`${C}-chip-row`}>
-            {(skills.length > CHIP_LIMIT && !skillsExpanded ? sortSkills.slice(0, CHIP_LIMIT) : sortSkills).map(sk => (
-              <ToggleChip
-                key={sk.name}
-                label={sk.name}
-                enabled={sk.enabled}
-                onToggle={() => toggleSkill(sk)}
-                accentColor="#8b5cf6"
-                loading={skillsLoading[sk.name]}
-                tooltip={sk.description}
-              />
-            ))}
-            {sortSkills.length === 0 && <span className={`${C}-empty-hint`}>{t('empty.skills')}</span>}
-            {skills.length > CHIP_LIMIT && (
-              <button type="button" className={`${C}-chip ${C}-chip--more`} onClick={() => setSkillsExpanded(v => !v)}>
-                {skillsExpanded ? t('actions.collapse') : `+${skills.length - CHIP_LIMIT}`}
+        {/* ── Tab Rail ─────────────────────────────────── */}
+        {/* nav stays 28 px wide in layout; list floats as overlay */}
+        <nav
+          className={`${C}-tab-rail${railExpanded ? ' is-expanded' : ''}`}
+          aria-label="Section navigation"
+          onMouseEnter={() => setRailExpanded(true)}
+          onMouseLeave={() => setRailExpanded(false)}
+        >
+          {/* dots column — always in flow */}
+          <div className={`${C}-tab-rail__dots`}>
+            {ZONE_TABS.map(({ id }, zi) => (
+              <button
+                key={id}
+                type="button"
+                className={`${C}-tab-btn ${activeZone === id ? 'is-active' : ''}`}
+                onClick={() => handleTabClick(id)}
+                aria-pressed={activeZone === id}
+              >
+                <span
+                  className={`${C}-tab-btn__dot`}
+                  ref={el => { tabDotsRef.current[zi] = el; }}
+                />
               </button>
-            )}
-          </div>
-        </div>
-      </section>
-
-      <section className={`${C}-section`} ref={interactionRef as React.RefObject<HTMLElement>}>
-        <h2 className={`${C}-section__title`}>{t('sections.interaction')}</h2>
-
-        <div ref={templatesRef} className={`${C}-card`}>
-          <div className={`${C}-card__head`}>
-            <span className={`${C}-card__label`}>{t('cards.templates')}</span>
-            <span className={`${C}-card__kpi`}>{t('kpi.templateCount', { count: templates.length })}</span>
-            <button type="button" className={`${C}-link`} onClick={() => navToSettings('prompt-templates')}>
-              {t('actions.manage')} <ChevronRight size={11} />
-            </button>
-          </div>
-          <div className={`${C}-chip-row`}>
-            {sortTemplates.slice(0, 14).map(tmpl => (
-              <span key={tmpl.id} className={`${C}-tpl-chip ${tmpl.isFavorite ? 'is-fav' : ''}`}>
-                {tmpl.isFavorite && '★ '}{tmpl.name}
-              </span>
-            ))}
-            {templates.length === 0 && <span className={`${C}-empty-hint`}>{t('empty.templates')}</span>}
-          </div>
-        </div>
-
-        <div className={`${C}-card`}>
-          <div className={`${C}-card__head`}>
-            <span className={`${C}-card__label`}>{t('cards.preferences')}</span>
-          </div>
-          <div className={`${C}-chip-row`}>
-            {prefItems.map(({ key, label, desc }) => (
-              <ToggleChip
-                key={key}
-                label={label}
-                enabled={!!aiExp[key]}
-                onToggle={() => togglePref(key)}
-                tooltip={`${label}：${desc}`}
-                accentColor="#7096c4"
-              />
             ))}
           </div>
-        </div>
-      </section>
+
+          {/* overlay list — absolutely positioned, no layout impact */}
+          <div className={`${C}-tab-rail__list`} role="menu">
+            {ZONE_TABS.map(({ id, label }) => (
+              <button
+                key={id}
+                type="button"
+                role="menuitem"
+                className={`${C}-tab-rail__item ${activeZone === id ? 'is-active' : ''}`}
+                onClick={() => handleTabClick(id)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </nav>
+      </div>
+
+      </div>{/* ── /detail ── */}
 
       {radarOpen && createPortal(
         <div

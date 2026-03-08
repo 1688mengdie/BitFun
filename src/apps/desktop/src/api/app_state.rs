@@ -109,12 +109,26 @@ impl AppState {
             uptime_seconds: 0,
         }));
 
+        let initial_workspace_path = workspace_service
+            .get_current_workspace()
+            .await
+            .map(|workspace| workspace.root_path);
+
+        if let Some(workspace_path) = initial_workspace_path.clone() {
+            miniapp_manager
+                .set_workspace_path(Some(workspace_path.clone()))
+                .await;
+            if let Err(e) = ai_rules_service.set_workspace(workspace_path).await {
+                log::warn!("Failed to restore AI rules workspace on startup: {}", e);
+            }
+        }
+
         let app_state = Self {
             ai_client,
             ai_client_factory,
             tool_registry,
             workspace_service,
-            workspace_path: Arc::new(RwLock::new(None)),
+            workspace_path: Arc::new(RwLock::new(initial_workspace_path)),
             config_service,
             filesystem_service,
             ai_rules_service,

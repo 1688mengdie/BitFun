@@ -1,20 +1,27 @@
-/**
- * skillsSceneStore — Zustand store for the Skills scene.
- *
- * Shared between SkillsNav (left sidebar) and SkillsScene (content area)
- * so both reflect the same active view.
- */
-
 import { create } from 'zustand';
 
-export type SkillsView = 'market' | 'installed-all' | 'installed-user' | 'installed-project';
+export type InstalledFilter = 'all' | 'user' | 'project';
 
 interface SkillsSceneState {
-  activeView: SkillsView;
-  setActiveView: (view: SkillsView) => void;
+  searchDraft: string;
+  marketQuery: string;
+  installedFilter: InstalledFilter;
+  isAddFormOpen: boolean;
+  setSearchDraft: (value: string) => void;
+  submitMarketQuery: () => void;
+  setInstalledFilter: (filter: InstalledFilter) => void;
+  setAddFormOpen: (open: boolean) => void;
+  toggleAddForm: () => void;
 }
 
 export const useSkillsSceneStore = create<SkillsSceneState>((set) => ({
-  activeView: 'market',
-  setActiveView: (view) => set({ activeView: view }),
+  searchDraft: '',
+  marketQuery: '',
+  installedFilter: 'all',
+  isAddFormOpen: false,
+  setSearchDraft: (value) => set({ searchDraft: value }),
+  submitMarketQuery: () => set((state) => ({ marketQuery: state.searchDraft.trim() })),
+  setInstalledFilter: (filter) => set({ installedFilter: filter }),
+  setAddFormOpen: (open) => set({ isAddFormOpen: open }),
+  toggleAddForm: () => set((state) => ({ isAddFormOpen: !state.isAddFormOpen })),
 }));
