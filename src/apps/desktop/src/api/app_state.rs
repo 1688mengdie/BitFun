@@ -2,7 +2,7 @@
 
 use bitfun_core::agentic::{agents, tools};
 use bitfun_core::infrastructure::ai::{AIClient, AIClientFactory};
-use bitfun_core::miniapp::{initialize_global_miniapp_manager, MiniAppManager, JsWorkerPool};
+use bitfun_core::miniapp::{initialize_global_miniapp_manager, JsWorkerPool, MiniAppManager};
 use bitfun_core::service::{ai_rules, config, filesystem, mcp, token_usage, workspace};
 use bitfun_core::util::errors::*;
 
@@ -120,6 +120,18 @@ impl AppState {
             miniapp_manager
                 .set_workspace_path(Some(workspace_path.clone()))
                 .await;
+            if let Err(e) = bitfun_core::service::snapshot::initialize_global_snapshot_manager(
+                workspace_path.clone(),
+                None,
+            )
+            .await
+            {
+                log::warn!(
+                    "Failed to restore snapshot system on startup: path={}, error={}",
+                    workspace_path.display(),
+                    e
+                );
+            }
             if let Err(e) = ai_rules_service.set_workspace(workspace_path).await {
                 log::warn!("Failed to restore AI rules workspace on startup: {}", e);
             }
