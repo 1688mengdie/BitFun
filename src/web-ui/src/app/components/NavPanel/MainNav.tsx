@@ -235,6 +235,22 @@ const MainNav: React.FC<MainNavProps> = ({
 
           return (
             <div key={section.id} className={`bitfun-nav-panel__section${sectionDepartCls}`}>
+              {section.id === 'workspace' && (
+                <div className="bitfun-nav-panel__workspace-toolbar">
+                  <div className="bitfun-nav-panel__workspace-bot" aria-hidden="true">
+                    <img src="/panda.png" alt="" />
+                  </div>
+                  <button
+                    type="button"
+                    className="bitfun-nav-panel__workspace-create"
+                    onClick={handleCreateSession}
+                    title={defaultSessionMode === 'cowork' ? t('nav.sessions.newCoworkSession') : t('nav.sessions.newCodeSession')}
+                  >
+                    <Plus size={14} />
+                    <span>{t('nav.sessions.newSession')}</span>
+                  </button>
+                </div>
+              )}
               {section.label && (
                 <SectionHeader
                   label={getSectionLabel(section.id, section.label) ?? section.label}

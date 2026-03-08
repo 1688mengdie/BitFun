@@ -13,7 +13,6 @@
     flex-direction: column;
     padding: 2px $size-gap-2 $size-gap-1;
     gap: 1px;
-    border-left: 1px solid var(--border-subtle);
     margin: 1px $size-gap-2 2px calc(#{$size-gap-2} + 14px);
   }
 
