@@ -6,8 +6,8 @@ use super::manager::{
     ScanOptions, WorkspaceInfo, WorkspaceManager, WorkspaceManagerConfig,
     WorkspaceManagerStatistics, WorkspaceStatus, WorkspaceSummary, WorkspaceType,
 };
-use crate::infrastructure::{PathManager, try_get_path_manager_arc};
 use crate::infrastructure::storage::{PersistenceService, StorageOptions};
+use crate::infrastructure::{try_get_path_manager_arc, PathManager};
 use crate::util::errors::*;
 use log::{info, warn};
 
@@ -196,7 +196,10 @@ impl WorkspaceService {
 
         if result.is_ok() {
             if let Err(e) = self.save_workspace_data().await {
-                warn!("Failed to save workspace data after switching active workspace: {}", e);
+                warn!(
+                    "Failed to save workspace data after switching active workspace: {}",
+                    e
+                );
             }
         }
 
@@ -216,10 +219,11 @@ impl WorkspaceService {
 
     /// Best-effort synchronous read for contexts that cannot `await`.
     pub fn try_get_current_workspace_path(&self) -> Option<PathBuf> {
-        self.manager
-            .try_read()
-            .ok()
-            .and_then(|manager| manager.get_current_workspace().map(|workspace| workspace.root_path.clone()))
+        self.manager.try_read().ok().and_then(|manager| {
+            manager
+                .get_current_workspace()
+                .map(|workspace| workspace.root_path.clone())
+        })
     }
 
     /// Returns workspace details.
@@ -447,8 +451,7 @@ impl WorkspaceService {
             manager.cleanup_invalid_workspaces().await
         };
 
-        if result.is_ok() {
-        }
+        if result.is_ok() {}
 
         result
     }

@@ -2,7 +2,9 @@
 use crate::agentic::util::get_formatted_files_list;
 use crate::infrastructure::try_get_path_manager_arc;
 use crate::service::ai_memory::AIMemoryManager;
+use crate::service::agent_memory::build_workspace_agent_memory_prompt;
 use crate::service::ai_rules::get_global_ai_rules_service;
+use crate::service::bootstrap::build_workspace_persona_prompt;
 use crate::service::config::global::GlobalConfigManager;
 use crate::service::project_context::ProjectContextService;
 use crate::util::errors::{BitFunError, BitFunResult};
@@ -10,6 +12,7 @@ use log::{debug, warn};
 use std::path::Path;
 
 /// Placeholder constants
+const PLACEHOLDER_PERSONA: &str = "{PERSONA}";
 const PLACEHOLDER_ENV_INFO: &str = "{ENV_INFO}";
 const PLACEHOLDER_PROJECT_LAYOUT: &str = "{PROJECT_LAYOUT}";
 // PROJECT_CONTEXT_FILES needs configuration parsing
@@ -17,6 +20,7 @@ const PLACEHOLDER_PROJECT_LAYOUT: &str = "{PROJECT_LAYOUT}";
 const PLACEHOLDER_RULES: &str = "{RULES}";
 const PLACEHOLDER_MEMORIES: &str = "{MEMORIES}";
 const PLACEHOLDER_LANGUAGE_PREFERENCE: &str = "{LANGUAGE_PREFERENCE}";
+const PLACEHOLDER_AGENT_MEMORY: &str = "{AGENT_MEMORY}";
 const PLACEHOLDER_VISUAL_MODE: &str = "{VISUAL_MODE}";
 
 pub struct PromptBuilder {
@@ -214,10 +218,12 @@ Prefer MermaidInteractive tool when available, otherwise output Mermaid code blo
     /// Build prompt from template, automatically fill content based on placeholders
     ///
     /// Supported placeholders:
+    /// - `{PERSONA}` - Workspace persona files (BOOTSTRAP.md, SOUL.md, USER.md, IDENTITY.MD)
     /// - `{LANGUAGE_PREFERENCE}` - User language preference (read from global config)
     /// - `{ENV_INFO}` - Environment information
     /// - `{PROJECT_LAYOUT}` - Project file layout
     /// - `{PROJECT_CONTEXT_FILES}` - Project context files (AGENTS.md, CLAUDE.md, etc.)
+    /// - `{AGENT_MEMORY}` - Agent memory instructions + auto-loaded memory index
     /// - `{RULES}` - AI rules
     /// - `{MEMORIES}` - AI memories
     /// - `{VISUAL_MODE}` - Visual mode instruction (Mermaid diagrams, read from global config)
@@ -225,6 +231,23 @@ Prefer MermaidInteractive tool when available, otherwise output Mermaid code blo
     /// If a placeholder is not in the template, corresponding content will not be added
     pub async fn build_prompt_from_template(&self, template: &str) -> BitFunResult<String> {
         let mut result = template.to_string();
+
+        // Replace {PERSONA}
+        if result.contains(PLACEHOLDER_PERSONA) {
+            let workspace = Path::new(&self.workspace_path);
+            let persona = match build_workspace_persona_prompt(workspace).await {
+                Ok(prompt) => prompt.unwrap_or_default(),
+                Err(e) => {
+                    warn!(
+                        "Failed to build workspace persona prompt: path={} error={}",
+                        workspace.display(),
+                        e
+                    );
+                    String::new()
+                }
+            };
+            result = result.replace(PLACEHOLDER_PERSONA, &persona);
+        }
 
         // Replace {LANGUAGE_PREFERENCE}
         if result.contains(PLACEHOLDER_LANGUAGE_PREFERENCE) {
@@ -277,6 +300,23 @@ Prefer MermaidInteractive tool when available, otherwise output Mermaid code blo
                 .unwrap_or_default();
 
             result = result.replace(placeholder, &project_context);
+        }
+
+        // Replace {AGENT_MEMORY}
+        if result.contains(PLACEHOLDER_AGENT_MEMORY) {
+            let workspace = Path::new(&self.workspace_path);
+            let agent_memory = match build_workspace_agent_memory_prompt(workspace).await {
+                Ok(prompt) => prompt,
+                Err(e) => {
+                    warn!(
+                        "Failed to build workspace agent memory prompt: path={} error={}",
+                        workspace.display(),
+                        e
+                    );
+                    String::new()
+                }
+            };
+            result = result.replace(PLACEHOLDER_AGENT_MEMORY, &agent_memory);
         }
 
         // Replace {RULES}

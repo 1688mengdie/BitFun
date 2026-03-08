@@ -310,20 +310,15 @@ pub async fn test_ai_config_connection(
     request: TestAIConfigConnectionRequest,
 ) -> Result<bitfun_core::util::types::ConnectionTestResult, String> {
     let model_name = request.config.name.clone();
-    let supports_image_input = request
-        .config
-        .capabilities
-        .iter()
-        .any(|cap| {
-            matches!(
-                cap,
-                bitfun_core::service::config::types::ModelCapability::ImageUnderstanding
-            )
-        })
-        || matches!(
-            request.config.category,
-            bitfun_core::service::config::types::ModelCategory::Multimodal
-        );
+    let supports_image_input = request.config.capabilities.iter().any(|cap| {
+        matches!(
+            cap,
+            bitfun_core::service::config::types::ModelCapability::ImageUnderstanding
+        )
+    }) || matches!(
+        request.config.category,
+        bitfun_core::service::config::types::ModelCategory::Multimodal
+    );
 
     let ai_config = match request.config.try_into() {
         Ok(config) => config,
@@ -374,9 +369,7 @@ pub async fn test_ai_config_connection(
                         let merged = bitfun_core::util::types::ConnectionTestResult {
                             success: true,
                             response_time_ms,
-                            model_response: image_result
-                                .model_response
-                                .or(result.model_response),
+                            model_response: image_result.model_response.or(result.model_response),
                             error_details: None,
                         };
                         info!(

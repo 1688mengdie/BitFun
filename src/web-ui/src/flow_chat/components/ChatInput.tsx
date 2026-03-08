@@ -1210,7 +1210,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                       {t(`chatInput.modeNames.${modeState.current}`, { defaultValue: '' }) || modeState.available.find(m => m.id === modeState.current)?.name || modeState.current}
                     </IconButton>
                   {modeState.dropdownOpen && (() => {
-                    const modeOrder = ['agentic', 'Plan', 'debug'];
+                    const modeOrder = ['agentic', 'Claw', 'Plan', 'debug'];
                     
                     const sortedModes = [...switchableModes].sort((a, b) => {
                       const aIndex = modeOrder.indexOf(a.id);
@@ -1234,7 +1234,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                           }}
                         >
                           <span className="bitfun-chat-input__mode-option-name">{modeName}</span>
-                          {!['agentic', 'Plan', 'debug'].includes(modeOption.id) && <span className="bitfun-chat-input__mode-option-badge bitfun-chat-input__mode-option-badge--wip">{t('chatInput.wip')}</span>}
+                          {!modeOrder.includes(modeOption.id) && <span className="bitfun-chat-input__mode-option-badge bitfun-chat-input__mode-option-badge--wip">{t('chatInput.wip')}</span>}
                         </div>
                       </Tooltip>
                       );
