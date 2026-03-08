@@ -328,18 +328,6 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     handleCollapseGroup,
   ]);
   
-  const handlePreviousTurn = useCallback(() => {
-    if (virtualListRef.current && visibleTurnInfo && visibleTurnInfo.turnIndex > 1) {
-      virtualListRef.current.scrollToTurn(visibleTurnInfo.turnIndex - 1);
-    }
-  }, [visibleTurnInfo]);
-
-  const handleNextTurn = useCallback(() => {
-    if (virtualListRef.current && visibleTurnInfo && visibleTurnInfo.turnIndex < visibleTurnInfo.totalTurns) {
-      virtualListRef.current.scrollToTurn(visibleTurnInfo.turnIndex + 1);
-    }
-  }, [visibleTurnInfo]);
-  
   return (
     <FlowChatContext.Provider value={contextValue}>
       <div className={`modern-flowchat-container ${className}`}>
@@ -348,8 +336,6 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
           totalTurns={visibleTurnInfo?.totalTurns ?? 0}
           currentUserMessage={visibleTurnInfo?.userMessage ?? ''}
           visible={virtualItems.length > 0}
-          onPreviousTurn={handlePreviousTurn}
-          onNextTurn={handleNextTurn}
           sessionId={activeSession?.sessionId}
         />
 

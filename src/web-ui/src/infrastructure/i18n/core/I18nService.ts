@@ -32,7 +32,7 @@ import zhCNNotifications from '../../../locales/zh-CN/notifications.json';
 import zhCNComponents from '../../../locales/zh-CN/components.json';
 
 import zhCNScenesCapabilities from '../../../locales/zh-CN/scenes/capabilities.json';
-import zhCNScenesTeam from '../../../locales/zh-CN/scenes/team.json';
+import zhCNScenesAgents from '../../../locales/zh-CN/scenes/agents.json';
 import zhCNScenesProfile from '../../../locales/zh-CN/scenes/profile.json';
 import zhCNScenesSkills from '../../../locales/zh-CN/scenes/skills.json';
 import zhCNPanelsFiles from '../../../locales/zh-CN/panels/files.json';
@@ -71,7 +71,7 @@ import enUSNotifications from '../../../locales/en-US/notifications.json';
 import enUSComponents from '../../../locales/en-US/components.json';
 
 import enUSScenesCapabilities from '../../../locales/en-US/scenes/capabilities.json';
-import enUSScenesTeam from '../../../locales/en-US/scenes/team.json';
+import enUSScenesAgents from '../../../locales/en-US/scenes/agents.json';
 import enUSScenesProfile from '../../../locales/en-US/scenes/profile.json';
 import enUSScenesSkills from '../../../locales/en-US/scenes/skills.json';
 import enUSPanelsFiles from '../../../locales/en-US/panels/files.json';
@@ -117,7 +117,7 @@ const resources = {
     components: zhCNComponents,
     
     'scenes/capabilities': zhCNScenesCapabilities,
-    'scenes/team': zhCNScenesTeam,
+    'scenes/agents': zhCNScenesAgents,
     'scenes/profile': zhCNScenesProfile,
     'scenes/skills': zhCNScenesSkills,
     'panels/files': zhCNPanelsFiles,
@@ -157,7 +157,7 @@ const resources = {
     components: enUSComponents,
     
     'scenes/capabilities': enUSScenesCapabilities,
-    'scenes/team': enUSScenesTeam,
+    'scenes/agents': enUSScenesAgents,
     'scenes/profile': enUSScenesProfile,
     'scenes/skills': enUSScenesSkills,
     'panels/files': enUSPanelsFiles,
@@ -220,7 +220,7 @@ export class I18nService {
           'components',
           
           'scenes/capabilities',
-          'scenes/team',
+          'scenes/agents',
           'scenes/profile',
           'scenes/skills',
           'panels/files',

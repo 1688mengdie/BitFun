@@ -82,7 +82,10 @@ export const useWorkspace = () => {
       setError(null);
       
       log.info('Closing workspace');
-      await globalStateAPI.closeWorkspace();
+      if (!currentWorkspace?.id) {
+        return;
+      }
+      await globalStateAPI.closeWorkspace(currentWorkspace.id);
       
       setCurrentWorkspace(null);
       
@@ -95,7 +98,7 @@ export const useWorkspace = () => {
     } finally {
       setLoading(false);
     }
-  }, [loadRecentWorkspaces]);
+  }, [currentWorkspace?.id, loadRecentWorkspaces]);
 
   
   const scanWorkspaceInfo = useCallback(async (): Promise<WorkspaceInfo | null> => {

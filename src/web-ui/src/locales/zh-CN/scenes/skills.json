@@ -1,6 +1,15 @@
 {
   "nav": {
     "title": "技能",
+    "summary": "在本地已安装技能与外部技能市场之间快速切换查看。",
+    "anchors": {
+      "installed": "已安装技能",
+      "market": "技能市场"
+    },
+    "anchorDescriptions": {
+      "installed": "管理当前环境中已经可用的技能。",
+      "market": "从 skills.sh 检索并下载更多技能。"
+    },
     "categories": {
       "discover": "探索",
       "installed": "已安装"
@@ -11,6 +20,11 @@
       "installedUser": "用户级",
       "installedProject": "项目级"
     }
+  },
+  "page": {
+    "title": "技能",
+    "subtitle": "统一管理已安装技能，并从外部技能市场发现更多可复用能力。",
+    "searchPlaceholder": "搜索已安装技能和市场技能..."
   },
   "installed": {
     "titleAll": "已安装技能",
@@ -41,6 +55,8 @@
   "market": {
     "title": "技能市场",
     "subtitle": "搜索并下载可复用技能（默认下载到当前项目）",
+    "subtitlePrefix": "从",
+    "subtitleSuffix": "浏览和下载可复用技能。",
     "searchPlaceholder": "搜索市场技能...",
     "refreshTooltip": "刷新市场结果",
     "loading": "正在加载市场技能...",
@@ -68,6 +84,10 @@
     "sourceNote": {
       "prefix": "数据来源",
       "suffix": " · 最多显示前 {{max}} 条结果"
+    },
+    "detail": {
+      "installsLabel": "安装量",
+      "linkLabel": "链接"
     }
   },
   "form": {

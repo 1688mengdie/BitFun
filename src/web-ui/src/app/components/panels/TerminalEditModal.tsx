@@ -14,6 +14,7 @@ export interface TerminalEditModalProps {
   onSave: (name: string, startupCommand?: string) => void;
   initialName: string;
   initialStartupCommand?: string;
+  showStartupCommand?: boolean;
 }
 
 export const TerminalEditModal: React.FC<TerminalEditModalProps> = ({
@@ -21,7 +22,8 @@ export const TerminalEditModal: React.FC<TerminalEditModalProps> = ({
   onClose,
   onSave,
   initialName,
-  initialStartupCommand = ''
+  initialStartupCommand = '',
+  showStartupCommand = true,
 }) => {
   const { t } = useI18n('panels/terminal');
   const [name, setName] = useState(initialName);
@@ -79,14 +81,16 @@ export const TerminalEditModal: React.FC<TerminalEditModalProps> = ({
           placeholder={t('dialog.editTerminal.namePlaceholder')}
         />
 
-        <Input
-          label={t('dialog.editTerminal.startupCommandLabel')}
-          value={startupCommand}
-          onChange={(e) => setStartupCommand(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder={t('dialog.editTerminal.startupCommandPlaceholder')}
-          hint={t('dialog.editTerminal.startupCommandHint')}
-        />
+        {showStartupCommand ? (
+          <Input
+            label={t('dialog.editTerminal.startupCommandLabel')}
+            value={startupCommand}
+            onChange={(e) => setStartupCommand(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder={t('dialog.editTerminal.startupCommandPlaceholder')}
+            hint={t('dialog.editTerminal.startupCommandHint')}
+          />
+        ) : null}
       </div>
 
       <div className="terminal-edit-dialog__footer">

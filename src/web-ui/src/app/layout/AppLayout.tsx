@@ -86,7 +86,7 @@ const AppLayout: React.FC<AppLayoutProps> = ({ className = '' }) => {
     }
   }, [openWorkspace]);
 
-  // Listen for nav-panel events dispatched by WorkspaceHeader
+  // Listen for nav-panel events dispatched by the workspace area
   useEffect(() => {
     const onNewProject = () => handleNewProject();
     window.addEventListener('nav:new-project', onNewProject);

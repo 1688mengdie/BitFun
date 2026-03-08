@@ -50,6 +50,12 @@ pub struct CoordinatorState {
     pub coordinator: Arc<bitfun_core::agentic::coordination::ConversationCoordinator>,
 }
 
+/// Dialog scheduler state (primary entry point for user messages)
+#[derive(Clone)]
+pub struct SchedulerState {
+    pub scheduler: Arc<bitfun_core::agentic::coordination::DialogScheduler>,
+}
+
 /// Tauri application entry point
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub async fn run() {
@@ -72,7 +78,7 @@ pub async fn run() {
         return;
     }
 
-    let (coordinator, event_queue, event_router, ai_client_factory) =
+    let (coordinator, scheduler, event_queue, event_router, ai_client_factory) =
         match init_agentic_system().await {
             Ok(state) => state,
             Err(e) => {
@@ -96,6 +102,10 @@ pub async fn run() {
 
     let coordinator_state = CoordinatorState {
         coordinator: coordinator.clone(),
+    };
+
+    let scheduler_state = SchedulerState {
+        scheduler: scheduler.clone(),
     };
 
     let terminal_state = api::terminal_api::TerminalState::new();
@@ -149,8 +159,10 @@ pub async fn run() {
         })
         .manage(app_state)
         .manage(coordinator_state)
+        .manage(scheduler_state)
         .manage(path_manager)
         .manage(coordinator)
+        .manage(scheduler)
         .manage(terminal_state)
         .setup(move |app| {
             logging::register_runtime_log_state(startup_log_level, session_log_dir.clone());
@@ -160,14 +172,13 @@ pub async fn run() {
             // so the primary candidate is "mobile-web/dist". Additional fallbacks
             // handle legacy or non-standard bundle layouts.
             {
-                let candidates = [
-                    "mobile-web/dist",
-                    "mobile-web",
-                    "dist",
-                ];
+                let candidates = ["mobile-web/dist", "mobile-web", "dist"];
                 let mut found = false;
                 for candidate in &candidates {
-                    if let Ok(p) = app.path().resolve(candidate, tauri::path::BaseDirectory::Resource) {
+                    if let Ok(p) = app
+                        .path()
+                        .resolve(candidate, tauri::path::BaseDirectory::Resource)
+                    {
                         if p.join("index.html").exists() {
                             log::info!("Found bundled mobile-web at: {}", p.display());
                             api::remote_connect_api::set_mobile_web_resource_path(p);
@@ -180,9 +191,16 @@ pub async fn run() {
                     // Last resort: scan the resource root for any index.html
                     if let Ok(res_dir) = app.path().resource_dir() {
                         for sub in &["mobile-web/dist", "mobile-web", "dist", ""] {
-                            let p = if sub.is_empty() { res_dir.clone() } else { res_dir.join(sub) };
+                            let p = if sub.is_empty() {
+                                res_dir.clone()
+                            } else {
+                                res_dir.join(sub)
+                            };
                             if p.join("index.html").exists() {
-                                log::info!("Found mobile-web via resource root scan: {}", p.display());
+                                log::info!(
+                                    "Found mobile-web via resource root scan: {}",
+                                    p.display()
+                                );
                                 api::remote_connect_api::set_mobile_web_resource_path(p);
                                 break;
                             }
@@ -522,8 +540,10 @@ pub async fn run() {
             subscribe_config_updates,
             get_model_configs,
             get_recent_workspaces,
+            get_opened_workspaces,
             open_workspace,
             close_workspace,
+            set_active_workspace,
             get_current_workspace,
             scan_workspace_info,
             api::prompt_template_api::get_prompt_template_config,
@@ -566,6 +586,27 @@ pub async fn run() {
             api::remote_connect_api::remote_connect_status,
             api::remote_connect_api::remote_connect_configure_custom_server,
             api::remote_connect_api::remote_connect_configure_bot,
+            // MiniApp API
+            api::miniapp_api::list_miniapps,
+            api::miniapp_api::get_miniapp,
+            api::miniapp_api::create_miniapp,
+            api::miniapp_api::update_miniapp,
+            api::miniapp_api::delete_miniapp,
+            api::miniapp_api::get_miniapp_versions,
+            api::miniapp_api::rollback_miniapp,
+            api::miniapp_api::get_miniapp_storage,
+            api::miniapp_api::set_miniapp_storage,
+            api::miniapp_api::grant_miniapp_workspace,
+            api::miniapp_api::grant_miniapp_path,
+            api::miniapp_api::miniapp_runtime_status,
+            api::miniapp_api::miniapp_worker_call,
+            api::miniapp_api::miniapp_worker_stop,
+            api::miniapp_api::miniapp_worker_list_running,
+            api::miniapp_api::miniapp_install_deps,
+            api::miniapp_api::miniapp_recompile,
+            api::miniapp_api::miniapp_dialog_message,
+            api::miniapp_api::miniapp_import_from_path,
+            api::miniapp_api::miniapp_sync_from_fs,
         ])
         .run(tauri::generate_context!());
     if let Err(e) = run_result {
@@ -575,6 +616,7 @@ pub async fn run() {
 
 async fn init_agentic_system() -> anyhow::Result<(
     Arc<bitfun_core::agentic::coordination::ConversationCoordinator>,
+    Arc<bitfun_core::agentic::coordination::DialogScheduler>,
     Arc<bitfun_core::agentic::events::EventQueue>,
     Arc<bitfun_core::agentic::events::EventRouter>,
     Arc<AIClientFactory>,
@@ -636,7 +678,7 @@ async fn init_agentic_system() -> anyhow::Result<(
     ));
 
     let coordinator = Arc::new(coordination::ConversationCoordinator::new(
-        session_manager,
+        session_manager.clone(),
         execution_engine,
         tool_pipeline,
         event_queue.clone(),
@@ -645,8 +687,20 @@ async fn init_agentic_system() -> anyhow::Result<(
 
     coordination::ConversationCoordinator::set_global(coordinator.clone());
 
+    // Create the DialogScheduler and wire up the outcome notification channel
+    let scheduler =
+        coordination::DialogScheduler::new(coordinator.clone(), session_manager.clone());
+    coordinator.set_scheduler_notifier(scheduler.outcome_sender());
+    coordination::set_global_scheduler(scheduler.clone());
+
     log::info!("Agentic system initialized");
-    Ok((coordinator, event_queue, event_router, ai_client_factory))
+    Ok((
+        coordinator,
+        scheduler,
+        event_queue,
+        event_router,
+        ai_client_factory,
+    ))
 }
 
 async fn init_function_agents(ai_client_factory: Arc<AIClientFactory>) -> anyhow::Result<()> {

@@ -1,8 +1,10 @@
 import React, { useState, useCallback } from 'react';
-import { Settings, Info, MoreVertical, PictureInPicture2, Wifi } from 'lucide-react';
+import { Settings, Info, MoreVertical, PictureInPicture2, SquareTerminal, Wifi } from 'lucide-react';
 import { Tooltip, Modal } from '@/component-library';
 import { useI18n } from '@/infrastructure/i18n/hooks/useI18n';
 import { useSceneManager } from '../../../hooks/useSceneManager';
+import { useNavSceneStore } from '../../../stores/navSceneStore';
+import { useSceneStore } from '../../../stores/sceneStore';
 import { useToolbarModeContext } from '@/flow_chat/components/toolbar-mode/ToolbarModeContext';
 import { useCurrentWorkspace } from '@/infrastructure/contexts/WorkspaceContext';
 import { useNotification } from '@/shared/notification-system';
@@ -18,6 +20,10 @@ import {
 const PersistentFooterActions: React.FC = () => {
   const { t } = useI18n('common');
   const { openScene } = useSceneManager();
+  const showSceneNav = useNavSceneStore((s) => s.showSceneNav);
+  const navSceneId = useNavSceneStore((s) => s.navSceneId);
+  const openNavScene = useNavSceneStore((s) => s.openNavScene);
+  const closeNavScene = useNavSceneStore((s) => s.closeNavScene);
   const { enableToolbarMode } = useToolbarModeContext();
   const { hasWorkspace } = useCurrentWorkspace();
   const { warning } = useNotification();
@@ -49,6 +55,14 @@ const PersistentFooterActions: React.FC = () => {
     closeMenu();
     openScene('settings');
   };
+
+  const handleOpenShell = useCallback(() => {
+    if (showSceneNav && navSceneId === 'shell') {
+      closeNavScene();
+      return;
+    }
+    openNavScene('shell');
+  }, [closeNavScene, navSceneId, openNavScene, showSceneNav]);
 
   const handleShowAbout = () => {
     closeMenu();
@@ -158,6 +172,18 @@ const PersistentFooterActions: React.FC = () => {
           </>
         )}
       </div>
+
+      <Tooltip content={t('scenes.shell')} placement="right">
+        <button
+          type="button"
+          className={`bitfun-nav-panel__footer-btn bitfun-nav-panel__footer-btn--icon${showSceneNav && navSceneId === 'shell' ? ' is-active' : ''}`}
+          aria-label={t('scenes.shell')}
+          aria-pressed={showSceneNav && navSceneId === 'shell'}
+          onClick={handleOpenShell}
+        >
+          <SquareTerminal size={15} />
+        </button>
+      </Tooltip>
 
       <NotificationButton className="bitfun-nav-panel__footer-btn" />
       <AboutDialog isOpen={showAbout} onClose={() => setShowAbout(false)} />

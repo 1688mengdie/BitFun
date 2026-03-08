@@ -71,42 +71,11 @@
   &__actions {
     display: flex;
     align-items: center;
-    gap: 2px;
+    gap: $size-gap-1;
     flex-shrink: 0;
 
     &--left {
       margin-right: $size-gap-2;
-    }
-  }
-
-  &__nav-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 20px;
-    height: 20px;
-    padding: 0;
-    background: transparent;
-    border: none;
-    border-radius: $size-radius-sm;
-    color: var(--color-text-secondary);
-    cursor: pointer;
-    transition: all $motion-fast $easing-standard;
-
-    &:hover:not(:disabled) {
-      background: var(--element-bg-base);
-      color: var(--color-text-primary);
-    }
-
-    &:disabled {
-      opacity: 0.3;
-      cursor: default;
-      pointer-events: none;
-    }
-
-    svg {
-      width: 16px;
-      height: 16px;
     }
   }
 }

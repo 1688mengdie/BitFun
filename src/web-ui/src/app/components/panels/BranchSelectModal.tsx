@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { GitBranch, Plus, X } from 'lucide-react';
 import { createLogger } from '@/shared/utils/logger';
 import { IconButton, Button, Input } from '@/component-library';
@@ -153,7 +154,7 @@ export const BranchSelectModal: React.FC<BranchSelectModalProps> = ({
 
   if (!isOpen) return null;
 
-  return (
+  const modalContent = (
     <div className="branch-select-overlay" onClick={onClose}>
       <div className="branch-select-dialog" onClick={(e) => e.stopPropagation()}>
         <IconButton 
@@ -276,6 +277,12 @@ export const BranchSelectModal: React.FC<BranchSelectModalProps> = ({
       </div>
     </div>
   );
+
+  if (typeof document === 'undefined') {
+    return modalContent;
+  }
+
+  return createPortal(modalContent, document.body);
 };
 
 export default BranchSelectModal;

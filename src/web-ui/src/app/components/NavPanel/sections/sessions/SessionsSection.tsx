@@ -6,14 +6,13 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Plus, Pencil, Trash2, Check, X, Code2, Users } from 'lucide-react';
+import { Pencil, Trash2, Check, X, Code2, Users } from 'lucide-react';
 import { IconButton, Input, Tooltip } from '@/component-library';
 import { useI18n } from '@/infrastructure/i18n';
 import { flowChatStore } from '../../../../../flow_chat/store/FlowChatStore';
 import { flowChatManager } from '../../../../../flow_chat/services/FlowChatManager';
 import type { FlowChatState, Session } from '../../../../../flow_chat/types/flow-chat';
 import { useSceneStore } from '../../../../stores/sceneStore';
-import type { SessionMode } from '../../../../stores/sessionModeStore';
 import { useApp } from '../../../../hooks/useApp';
 import type { SceneTabId } from '../../../SceneBar/types';
 import { createLogger } from '@/shared/utils/logger';
@@ -21,6 +20,8 @@ import { workspaceManager } from '@/infrastructure/services/business/workspaceMa
 import './SessionsSection.scss';
 
 const MAX_VISIBLE_SESSIONS = 8;
+const INACTIVE_WORKSPACE_COLLAPSED_SESSIONS = 3;
+const INACTIVE_WORKSPACE_EXPANDED_SESSIONS = 7;
 const log = createLogger('SessionsSection');
 const AGENT_SCENE: SceneTabId = 'session';
 
@@ -31,7 +32,17 @@ const resolveSessionMode = (session: Session): SessionMode => {
 const getTitle = (session: Session): string =>
   session.title?.trim() || `Session ${session.sessionId.slice(0, 6)}`;
 
-const SessionsSection: React.FC = () => {
+interface SessionsSectionProps {
+  workspaceId?: string;
+  workspacePath?: string;
+  isActiveWorkspace?: boolean;
+}
+
+const SessionsSection: React.FC<SessionsSectionProps> = ({
+  workspaceId,
+  workspacePath,
+  isActiveWorkspace = true,
+}) => {
   const { t } = useI18n('common');
   const { switchLeftPanelTab } = useApp();
   const openScene = useSceneStore(s => s.openScene);
@@ -53,10 +64,8 @@ const SessionsSection: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    const removeListener = workspaceManager.addEventListener((event) => {
-      if (event.type === 'workspace:opened' || event.type === 'workspace:switched') {
-        setCurrentWorkspacePath(event.workspace.rootPath);
-      }
+    const removeListener = workspaceManager.addEventListener(() => {
+      setCurrentWorkspacePath(workspaceManager.getWorkspacePath());
     });
     return removeListener;
   }, []);
@@ -68,25 +77,47 @@ const SessionsSection: React.FC = () => {
     }
   }, [editingSessionId]);
 
+  useEffect(() => {
+    setShowAll(false);
+  }, [workspaceId, workspacePath, isActiveWorkspace]);
+
   const sessions = useMemo(
     () =>
       Array.from(flowChatState.sessions.values())
         .filter((s: Session) => {
+          if (workspacePath) {
+            return s.workspacePath === workspacePath || (!s.workspacePath && isActiveWorkspace);
+          }
           if (!s.workspacePath || !currentWorkspacePath) return true;
           return s.workspacePath === currentWorkspacePath;
         })
         .sort(
           (a: Session, b: Session) => b.lastActiveAt - a.lastActiveAt
         ),
-    [flowChatState.sessions, currentWorkspacePath]
+    [flowChatState.sessions, currentWorkspacePath, isActiveWorkspace, workspacePath]
   );
+
+  const sessionDisplayLimit = useMemo(() => {
+    if (isActiveWorkspace) {
+      return showAll || sessions.length <= MAX_VISIBLE_SESSIONS
+        ? sessions.length
+        : MAX_VISIBLE_SESSIONS;
+    }
+
+    return showAll
+      ? Math.min(sessions.length, INACTIVE_WORKSPACE_EXPANDED_SESSIONS)
+      : Math.min(sessions.length, INACTIVE_WORKSPACE_COLLAPSED_SESSIONS);
+  }, [isActiveWorkspace, sessions.length, showAll]);
 
   const visibleSessions = useMemo(
-    () => (showAll || sessions.length <= MAX_VISIBLE_SESSIONS ? sessions : sessions.slice(0, MAX_VISIBLE_SESSIONS)),
-    [sessions, showAll]
+    () => sessions.slice(0, sessionDisplayLimit),
+    [sessionDisplayLimit, sessions]
   );
 
-  const hiddenCount = sessions.length - MAX_VISIBLE_SESSIONS;
+  const toggleThreshold = isActiveWorkspace
+    ? MAX_VISIBLE_SESSIONS
+    : INACTIVE_WORKSPACE_COLLAPSED_SESSIONS;
+  const hiddenCount = Math.max(0, sessions.length - toggleThreshold);
 
   const activeSessionId = flowChatState.activeSessionId;
 
@@ -97,6 +128,9 @@ const SessionsSection: React.FC = () => {
       switchLeftPanelTab('sessions');
       if (sessionId === activeSessionId) return;
       try {
+        if (workspaceId && !isActiveWorkspace) {
+          await workspaceManager.setActiveWorkspace(workspaceId);
+        }
         await flowChatManager.switchChatSession(sessionId);
         window.dispatchEvent(
           new CustomEvent('flowchat:switch-session', { detail: { sessionId } })
@@ -105,21 +139,8 @@ const SessionsSection: React.FC = () => {
         log.error('Failed to switch session', err);
       }
     },
-    [activeSessionId, openScene, switchLeftPanelTab, editingSessionId]
+    [activeSessionId, editingSessionId, isActiveWorkspace, openScene, switchLeftPanelTab, workspaceId]
   );
-
-  const handleCreate = useCallback(async (mode: SessionMode) => {
-    openScene('session');
-    switchLeftPanelTab('sessions');
-    try {
-      await flowChatManager.createChatSession(
-        { modelName: 'claude-sonnet-4.5' },
-        mode === 'cowork' ? 'Cowork' : 'agentic'
-      );
-    } catch (err) {
-      log.error('Failed to create session', err);
-    }
-  }, [openScene, switchLeftPanelTab]);
 
   const resolveSessionTitle = useCallback(
     (session: Session): string => {
@@ -192,29 +213,6 @@ const SessionsSection: React.FC = () => {
 
   return (
     <div className="bitfun-nav-panel__inline-list">
-      <div className="bitfun-nav-panel__inline-action-row">
-        <Tooltip content={t('nav.sessions.newCodeSession')} placement="right" followCursor>
-          <button
-            type="button"
-            className="bitfun-nav-panel__inline-action is-code"
-            onClick={() => handleCreate('code')}
-          >
-            <Plus size={12} />
-            <span>Code</span>
-          </button>
-        </Tooltip>
-        <Tooltip content={t('nav.sessions.newCoworkSession')} placement="right" followCursor>
-          <button
-            type="button"
-            className="bitfun-nav-panel__inline-action is-cowork"
-            onClick={() => handleCreate('cowork')}
-          >
-            <Plus size={12} />
-            <span>Cowork</span>
-          </button>
-        </Tooltip>
-      </div>
-
       {sessions.length === 0 ? (
         <div className="bitfun-nav-panel__inline-empty">{t('nav.sessions.noSessions')}</div>
       ) : (
@@ -309,7 +307,7 @@ const SessionsSection: React.FC = () => {
         })
       )}
 
-      {sessions.length > MAX_VISIBLE_SESSIONS && (
+      {sessions.length > toggleThreshold && (
         <button
           type="button"
           className="bitfun-nav-panel__inline-toggle"

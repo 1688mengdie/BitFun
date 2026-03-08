@@ -3,10 +3,9 @@
  */
 
 .bitfun-cowork-example-cards {
-  background: var(--color-bg-secondary);
   border: 1px solid var(--color-border);
   border-radius: 10px;
-  padding: 12px 14px;
+  padding: 12px 14px 12px 0;
   margin-bottom: 10px;
 
   &__header {

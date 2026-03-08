@@ -106,7 +106,15 @@ export class FlowChatStore {
     };
   }
 
-  public createSession(sessionId: string, config: SessionConfig, _unused?: undefined, title?: string, maxContextTokens?: number, mode?: string): void {
+  public createSession(
+    sessionId: string,
+    config: SessionConfig,
+    _unused?: undefined,
+    title?: string,
+    maxContextTokens?: number,
+    mode?: string,
+    workspacePath?: string
+  ): void {
     import('../state-machine').then(({ stateMachineManager }) => {
       stateMachineManager.getOrCreate(sessionId);
     });
@@ -124,6 +132,7 @@ export class FlowChatStore {
         error: null,
         maxContextTokens: maxContextTokens || 128128,
         mode: mode || 'agentic',
+        workspacePath,
       };
 
       const newSessions = new Map(prev.sessions);
@@ -861,8 +870,8 @@ export class FlowChatStore {
       try {
         const { conversationAPI } = await import('@/infrastructure/api');
         const { workspaceManager } = await import('@/infrastructure/services/business/workspaceManager');
-        
-        const workspacePath = workspaceManager.getState().currentWorkspace?.rootPath;
+        const session = this.state.sessions.get(sessionId);
+        const workspacePath = session.workspacePath || workspaceManager.getState().currentWorkspace?.rootPath;
         if (!workspacePath) {
           log.warn('Workspace path not available, skipping title sync', { sessionId });
           return;
@@ -977,18 +986,16 @@ export class FlowChatStore {
    */
   private async saveCancelledDialogTurn(sessionId: string, turnId: string): Promise<void> {
     try {
-      const { globalAPI } = await import('@/infrastructure/api');
       const { conversationAPI } = await import('@/infrastructure/api');
-      
-      const workspacePath = await globalAPI.getCurrentWorkspacePath();
-      if (!workspacePath) {
-        log.warn('Workspace path not available, skipping save', { sessionId, turnId });
-        return;
-      }
-
       const session = this.state.sessions.get(sessionId);
       if (!session) {
         log.warn('Session not found, skipping save', { sessionId, turnId });
+        return;
+      }
+
+      const workspacePath = session.workspacePath;
+      if (!workspacePath) {
+        log.warn('Workspace path not available, skipping save', { sessionId, turnId });
         return;
       }
 
@@ -1077,17 +1084,6 @@ export class FlowChatStore {
    */
   public async initializeFromDisk(workspacePath: string): Promise<void> {
     try {
-      this.setState(prev => {
-        const newSessions = new Map<string, Session>();
-        for (const [id, session] of prev.sessions) {
-          if (!session.workspacePath || session.workspacePath === workspacePath) {
-            newSessions.set(id, session);
-          }
-        }
-        if (newSessions.size === prev.sessions.size) return prev;
-        return { ...prev, sessions: newSessions };
-      });
-
       const { conversationAPI } = await import('@/infrastructure/api');
       const sessions = await conversationAPI.getConversationSessions(workspacePath);
       

@@ -11,7 +11,8 @@ mod singleton;
 
 pub use binding::{TerminalBindingOptions, TerminalSessionBinding};
 pub use manager::{
-    CommandExecuteResult, CommandStream, CommandStreamEvent, ExecuteOptions, SessionManager,
+    CommandCompletionReason, CommandExecuteResult, CommandStream, CommandStreamEvent,
+    ExecuteOptions, SessionManager,
 };
 pub use persistent::PersistentSession;
 pub use serializer::SessionSerializer;

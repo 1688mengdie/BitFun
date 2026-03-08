@@ -87,7 +87,7 @@ const WorkspaceBody: React.FC<WorkspaceBodyProps> = ({
 
       {/* Left: nav history bar + navigation sidebar — always rendered for slide animation */}
       <div className={`bitfun-workspace-body__nav-area${isNavCollapsed ? ' is-collapsed' : ''}`}>
-        <NavBar onMaximize={onMaximize} />
+        <NavBar onExpandNav={toggleLeftPanel} onMaximize={onMaximize} />
         <NavPanel className="bitfun-workspace-body__nav-panel" />
         {!isNavCollapsed && (
           <div

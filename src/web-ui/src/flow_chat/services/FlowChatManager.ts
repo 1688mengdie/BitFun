@@ -18,7 +18,6 @@ import type { FlowChatContext, SessionConfig, DialogTurn } from './flow-chat-man
 import {
   saveAllInProgressTurns,
   immediateSaveDialogTurn,
-  clearAllBuffers,
   createChatSession as createChatSessionModule,
   switchChatSession as switchChatSessionModule,
   deleteChatSession as deleteChatSessionModule,
@@ -68,32 +67,31 @@ export class FlowChatManager {
   }
 
   async initialize(workspacePath: string, preferredMode?: string): Promise<boolean> {
-    const workspaceChanged = this.context.currentWorkspacePath && 
-                            this.context.currentWorkspacePath !== workspacePath;
-    
-    if (workspaceChanged) {
-      await this.cleanup();
-      this.initialized = false;
-    }
-    
-    if (this.initialized && !workspaceChanged) {
-      return this.context.flowChatStore.getState().sessions.size > 0;
-    }
-    
     try {
       await this.initializeEventListeners();
       await this.context.flowChatStore.initializeFromDisk(workspacePath);
-      
+
       const state = this.context.flowChatStore.getState();
-      const hasHistoricalSessions = state.sessions.size > 0;
-      
-      if (hasHistoricalSessions && !state.activeSessionId) {
-        const sessions = Array.from(state.sessions.values());
+      const workspaceSessions = Array.from(state.sessions.values())
+        .filter(session => (session.workspacePath || workspacePath) === workspacePath);
+      const hasHistoricalSessions = workspaceSessions.length > 0;
+      const activeSession = state.activeSessionId
+        ? state.sessions.get(state.activeSessionId) ?? null
+        : null;
+      const activeSessionBelongsToWorkspace = !!activeSession &&
+        (activeSession.workspacePath || workspacePath) === workspacePath;
+
+      if (hasHistoricalSessions && !activeSessionBelongsToWorkspace) {
+        const sortedWorkspaceSessions = [...workspaceSessions].sort((a, b) => b.lastActiveAt - a.lastActiveAt);
         const latestSession = (preferredMode
-          ? sessions
-              .filter(s => s.mode === preferredMode)
-              .sort((a, b) => b.lastActiveAt - a.lastActiveAt)[0]
-          : undefined) || sessions.sort((a, b) => b.lastActiveAt - a.lastActiveAt)[0];
+          ? sortedWorkspaceSessions.find(session => session.mode === preferredMode)
+          : undefined) || sortedWorkspaceSessions[0];
+
+        if (!latestSession) {
+          this.initialized = true;
+          this.context.currentWorkspacePath = workspacePath;
+          return hasHistoricalSessions;
+        }
 
         // If no session matches preferred mode, keep activeSessionId unset for caller to create one.
         if (preferredMode && latestSession.mode !== preferredMode) {
@@ -105,29 +103,17 @@ export class FlowChatManager {
         if (latestSession.isHistorical) {
           await this.context.flowChatStore.loadSessionHistory(latestSession.sessionId, workspacePath);
         }
-        
+
         this.context.flowChatStore.switchSession(latestSession.sessionId);
       }
-      
+
       this.initialized = true;
       this.context.currentWorkspacePath = workspacePath;
-      
+
       return hasHistoricalSessions;
     } catch (error) {
       log.error('Initialization failed', error);
       return false;
-    }
-  }
-
-  private async cleanup(): Promise<void> {
-    try {
-      clearAllBuffers(this.context);
-      this.context.flowChatStore.setState(() => ({
-        sessions: new Map(),
-        activeSessionId: null
-      }));
-    } catch (error) {
-      log.error('Cleanup failed', error);
     }
   }
 

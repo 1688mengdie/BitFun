@@ -1,5 +1,5 @@
 {
-  "title": "Agents",
+  "title": "智能体",
   "subtitle": "管理用户级和项目级智能体",
   "toolbar": {
     "searchPlaceholder": "搜索Agent...",
@@ -61,11 +61,11 @@
   },
   "list": {
     "loading": "加载中...",
-    "loadingBuiltin": "加载内置 Sub Agents...",
+    "loadingBuiltin": "加载内置 Sub-Agent...",
     "errorPrefix": "加载失败: ",
     "empty": {
-      "noMatch": "没有找到匹配的Agent",
-      "noMatchBuiltin": "没有找到匹配的内置 Sub Agent"
+      "noMatch": "没有找到匹配的 Agent",
+      "noMatchBuiltin": "没有找到匹配的内置 Sub-Agent"
     },
     "item": {
       "builtin": "内置",
