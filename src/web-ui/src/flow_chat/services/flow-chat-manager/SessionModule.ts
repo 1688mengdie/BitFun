@@ -8,7 +8,9 @@ import { notificationService } from '../../../shared/notification-system';
 import { createLogger } from '@/shared/utils/logger';
 import { i18nService } from '@/infrastructure/i18n';
 import type { FlowChatContext, SessionConfig } from './types';
-import { saveNewSessionMetadata, touchSessionActivity, cleanupSaveState } from './PersistenceModule';
+import { touchSessionActivity, cleanupSaveState } from './PersistenceModule';
+import { workspaceManager } from '@/infrastructure/services/business/workspaceManager';
+import type { WorkspaceInfo } from '@/shared/types';
 
 const log = createLogger('SessionModule');
 
@@ -17,6 +19,23 @@ type SessionDisplayMode = 'code' | 'cowork';
 const normalizeSessionDisplayMode = (mode?: string): SessionDisplayMode => {
   if (!mode) return 'code';
   return mode.toLowerCase() === 'cowork' ? 'cowork' : 'code';
+};
+
+const resolveSessionWorkspace = (): WorkspaceInfo | null => {
+  const state = workspaceManager.getState();
+  if (state.currentWorkspace) {
+    return state.currentWorkspace;
+  }
+
+  if (state.lastUsedWorkspaceId) {
+    return (
+      state.openedWorkspaces.get(state.lastUsedWorkspaceId) ||
+      state.recentWorkspaces.find(workspace => workspace.id === state.lastUsedWorkspaceId) ||
+      null
+    );
+  }
+
+  return state.recentWorkspaces[0] || Array.from(state.openedWorkspaces.values())[0] || null;
 };
 
 /**
@@ -62,6 +81,12 @@ export async function createChatSession(
 ): Promise<string> {
   try {
     const sessionMode = normalizeSessionDisplayMode(mode);
+    const targetWorkspace = resolveSessionWorkspace();
+
+    if (targetWorkspace && workspaceManager.getState().currentWorkspace?.id !== targetWorkspace.id) {
+      await workspaceManager.switchWorkspace(targetWorkspace);
+    }
+
     const sameModeCount =
       Array.from(context.flowChatStore.getState().sessions.values()).filter(
         session => normalizeSessionDisplayMode(session.mode) === sessionMode
@@ -94,10 +119,9 @@ export async function createChatSession(
       undefined,
       sessionName,
       maxContextTokens,
-      mode
+      mode,
+      targetWorkspace?.rootPath
     );
-    
-    await saveNewSessionMetadata(response.sessionId, config, sessionName, mode);
 
     return response.sessionId;
   } catch (error) {
@@ -276,3 +300,4 @@ export async function retryCreateBackendSession(
     }
   });
 }
+

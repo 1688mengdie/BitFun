@@ -1,6 +1,15 @@
 {
   "nav": {
     "title": "Skills",
+    "summary": "Browse installed skills locally and jump to the external marketplace section.",
+    "anchors": {
+      "installed": "Installed Skills",
+      "market": "Marketplace"
+    },
+    "anchorDescriptions": {
+      "installed": "Manage skills already available in this environment.",
+      "market": "Search and download more skills from skills.sh."
+    },
     "categories": {
       "discover": "Discover",
       "installed": "Installed"
@@ -11,6 +20,11 @@
       "installedUser": "User",
       "installedProject": "Project"
     }
+  },
+  "page": {
+    "title": "Skills",
+    "subtitle": "Manage installed skills and discover reusable skills from the external marketplace.",
+    "searchPlaceholder": "Search installed and marketplace skills..."
   },
   "installed": {
     "titleAll": "Installed Skills",
@@ -41,6 +55,8 @@
   "market": {
     "title": "Skill Marketplace",
     "subtitle": "Search and download reusable skills (default scope: current project)",
+    "subtitlePrefix": "Browse reusable skills from",
+    "subtitleSuffix": ".",
     "searchPlaceholder": "Search marketplace skills...",
     "refreshTooltip": "Refresh marketplace results",
     "loading": "Loading marketplace skills...",
@@ -68,6 +84,10 @@
     "sourceNote": {
       "prefix": "Source:",
       "suffix": " · Up to {{max}} results"
+    },
+    "detail": {
+      "installsLabel": "Installs",
+      "linkLabel": "Link"
     }
   },
   "form": {

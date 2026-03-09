@@ -96,6 +96,13 @@ export interface TerminalProps {
    * Uses the default multi-line confirmation when omitted.
    */
   onPaste?: (text: string) => Promise<boolean> | boolean;
+  /**
+   * When set to a positive value, doXtermResize skips any resize that would
+   * shrink the terminal below this column count. Used during history replay to
+   * prevent CSS-animation intermediate sizes from permanently truncating buffered
+   * content. Set back to 0 (or leave unset) to restore normal resize behaviour.
+   */
+  preventShrinkBelowColsRef?: React.MutableRefObject<number>;
 }
 
 export interface TerminalRef {
@@ -157,6 +164,7 @@ const Terminal = forwardRef<TerminalRef, TerminalProps>(({
   onResize,
   onReady,
   onPaste,
+  preventShrinkBelowColsRef,
 }, ref) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<XTerm | null>(null);
@@ -195,12 +203,21 @@ const Terminal = forwardRef<TerminalRef, TerminalProps>(({
       if (terminal.cols === cols && terminal.rows === rows) {
         return;
       }
-      
+
+      // While the caller has set a minimum column guard (e.g., during history
+      // replay), skip any resize that would shrink below that value.  This
+      // prevents CSS open-animation intermediate widths from permanently
+      // truncating buffered content that was written at a wider column count.
+      const minCols = preventShrinkBelowColsRef?.current ?? 0;
+      if (minCols > 0 && cols < minCols) {
+        return;
+      }
+
       terminal.resize(cols, rows);
     } catch (error) {
       log.warn('Xterm resize error', { cols, rows, error });
     }
-  }, []);
+  }, [preventShrinkBelowColsRef]);
 
   // Notify backend PTY with deduping.
   const doBackendResize = useCallback((cols: number, rows: number) => {
@@ -240,6 +257,16 @@ const Terminal = forwardRef<TerminalRef, TerminalProps>(({
 
       const dims = fitAddonRef.current.proposeDimensions();
       if (!dims || dims.cols <= 0 || dims.rows <= 0) {
+        return;
+      }
+
+      // Skip tiny intermediate dimensions that occur when a panel CSS-animates
+      // from zero width to its final size. xterm.js permanently truncates buffer
+      // lines to the current column count on resize, so we must avoid resizing
+      // to columns fewer than any content already in the buffer.
+      // 40 cols is the minimum usable terminal width (below this, most shells
+      // are unusable anyway and content would be permanently damaged).
+      if (dims.cols < 40 || dims.rows < 3) {
         return;
       }
 

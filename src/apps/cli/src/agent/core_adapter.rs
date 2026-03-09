@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use super::{Agent, AgentEvent, AgentResponse};
 use crate::session::{ToolCall, ToolCallStatus};
-use bitfun_core::agentic::coordination::ConversationCoordinator;
+use bitfun_core::agentic::coordination::{ConversationCoordinator, DialogTriggerSource};
 use bitfun_core::agentic::core::SessionConfig;
 use bitfun_core::agentic::events::EventQueue;
 use bitfun_events::{AgenticEvent as CoreEvent, ToolEventData};
@@ -85,7 +85,7 @@ impl Agent for CoreAgentAdapter {
             message.clone(),
             None,
             self.agent_type.clone(),
-            false,
+            DialogTriggerSource::Cli,
         ).await?;
         
         let mut accumulated_text = String::new();

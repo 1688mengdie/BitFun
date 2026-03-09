@@ -6,7 +6,7 @@
 import { globalAPI } from '@/infrastructure/api';
 import { createLogger } from '@/shared/utils/logger';
 import { i18nService } from '@/infrastructure/i18n';
-import type { FlowChatContext, DialogTurn, SessionConfig } from './types';
+import type { FlowChatContext, DialogTurn } from './types';
 
 const log = createLogger('PersistenceModule');
 
@@ -229,6 +229,18 @@ export function convertDialogTurnToBackendFormat(dialogTurn: DialogTurn, turnInd
       id: dialogTurn.userMessage.id,
       content: dialogTurn.userMessage.content,
       timestamp: dialogTurn.userMessage.timestamp,
+      metadata: dialogTurn.userMessage.images?.length
+        ? {
+            images: dialogTurn.userMessage.images.map(img => ({
+              id: img.id,
+              name: img.name,
+              data_url: img.dataUrl,
+              image_path: img.imagePath,
+              mime_type: img.mimeType,
+            })),
+            original_text: dialogTurn.userMessage.content,
+          }
+        : undefined,
     },
     modelRounds: dialogTurn.modelRounds.map((round, roundIndex) => {
       return {
@@ -360,45 +372,6 @@ export async function updateSessionMetadata(
     await conversationAPI.saveSessionMetadata(metadata, workspacePath);
   } catch (error) {
     log.warn('Failed to update session metadata', { sessionId, error });
-  }
-}
-
-/**
- * Save new session metadata
- */
-export async function saveNewSessionMetadata(
-  sessionId: string,
-  config: SessionConfig,
-  sessionName: string,
-  mode?: string
-): Promise<void> {
-  try {
-    const { conversationAPI } = await import('@/infrastructure/api');
-    const workspacePath = await globalAPI.getCurrentWorkspacePath();
-    
-    if (!workspacePath) {
-      log.debug('Cannot get workspace path, skipping save', { sessionId });
-      return;
-    }
-
-    const metadata: any = {
-      sessionId,
-      sessionName,
-      agentType: mode || 'agentic',
-      modelName: config.modelName || 'default',
-      createdAt: Date.now(),
-      lastActiveAt: Date.now(),
-      turnCount: 0,
-      messageCount: 0,
-      toolCallCount: 0,
-      status: 'active',
-      tags: [],
-      todos: [],
-    };
-
-    await conversationAPI.saveSessionMetadata(metadata, workspacePath);
-  } catch (error) {
-    log.warn('Failed to save new session metadata', { sessionId, error });
   }
 }
 

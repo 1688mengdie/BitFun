@@ -8,7 +8,7 @@
  */
 
 import { agentAPI } from '@/infrastructure/api';
-import type { TextChunkEvent, ToolEvent, AgenticEvent } from '@/infrastructure/api/service-api/AgentAPI';
+import type { TextChunkEvent, ToolEvent, AgenticEvent, SessionTitleGeneratedEvent, ImageAnalysisEvent } from '@/infrastructure/api/service-api/AgentAPI';
 import { createLogger } from '@/shared/utils/logger';
 
 type UnlistenFn = () => void;
@@ -19,6 +19,8 @@ export interface AgenticEventCallbacks {
   onSessionCreated?: (event: AgenticEvent) => void;
   onSessionDeleted?: (event: AgenticEvent) => void;
   onSessionStateChanged?: (event: AgenticEvent) => void;
+  onImageAnalysisStarted?: (event: ImageAnalysisEvent) => void;
+  onImageAnalysisCompleted?: (event: ImageAnalysisEvent) => void;
   onDialogTurnStarted?: (event: AgenticEvent) => void;
   onModelRoundStarted?: (event: AgenticEvent) => void;
   onTextChunk?: (event: TextChunkEvent) => void;
@@ -30,6 +32,7 @@ export interface AgenticEventCallbacks {
   onContextCompressionStarted?: (event: AgenticEvent) => void;
   onContextCompressionCompleted?: (event: AgenticEvent) => void;
   onContextCompressionFailed?: (event: AgenticEvent) => void;
+  onSessionTitleGenerated?: (event: SessionTitleGeneratedEvent) => void;
 }
 
 export class AgenticEventListener {
@@ -65,6 +68,22 @@ export class AgenticEventListener {
         const unlisten = agentAPI.onSessionStateChanged((event) => {
           logger.debug('Session state changed:', event);
           callbacks.onSessionStateChanged?.(event);
+        });
+        this.unlistenFunctions.push(unlisten);
+      }
+
+      if (callbacks.onImageAnalysisStarted) {
+        const unlisten = agentAPI.onImageAnalysisStarted((event) => {
+          logger.debug('Image analysis started:', event);
+          callbacks.onImageAnalysisStarted?.(event);
+        });
+        this.unlistenFunctions.push(unlisten);
+      }
+
+      if (callbacks.onImageAnalysisCompleted) {
+        const unlisten = agentAPI.onImageAnalysisCompleted((event) => {
+          logger.debug('Image analysis completed:', event);
+          callbacks.onImageAnalysisCompleted?.(event);
         });
         this.unlistenFunctions.push(unlisten);
       }
@@ -151,6 +170,14 @@ export class AgenticEventListener {
         const unlisten = agentAPI.onContextCompressionFailed((event) => {
           logger.error('Context compression failed:', event);
           callbacks.onContextCompressionFailed?.(event);
+        });
+        this.unlistenFunctions.push(unlisten);
+      }
+
+      if (callbacks.onSessionTitleGenerated) {
+        const unlisten = agentAPI.onSessionTitleGenerated((event) => {
+          logger.debug('Session title generated:', event);
+          callbacks.onSessionTitleGenerated?.(event);
         });
         this.unlistenFunctions.push(unlisten);
       }

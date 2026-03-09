@@ -12,9 +12,9 @@ use anyhow::{anyhow, Result};
 use dashmap::DashMap;
 use log::{debug, error, info};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 
 use super::encryption;
 
@@ -54,12 +54,26 @@ pub enum RemoteCommand {
         content: String,
         agent_type: Option<String>,
         images: Option<Vec<ImageAttachment>>,
+        image_contexts: Option<Vec<crate::agentic::image_analysis::ImageContextData>>,
     },
     CancelTask {
         session_id: String,
+        turn_id: Option<String>,
     },
     DeleteSession {
         session_id: String,
+    },
+    ConfirmTool {
+        tool_id: String,
+        updated_input: Option<serde_json::Value>,
+    },
+    RejectTool {
+        tool_id: String,
+        reason: Option<String>,
+    },
+    CancelTool {
+        tool_id: String,
+        reason: Option<String>,
     },
     /// Submit answers for an AskUserQuestion tool.
     AnswerQuestion {
@@ -144,6 +158,10 @@ pub enum RemoteResponse {
         active_turn: Option<ActiveTurnSnapshot>,
     },
     AnswerAccepted,
+    InteractionAccepted {
+        action: String,
+        target_id: String,
+    },
     Pong,
     Error {
         message: String,
@@ -165,6 +183,12 @@ pub struct SessionInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatImageAttachment {
+    pub name: String,
+    pub data_url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub id: String,
     pub role: String,
@@ -178,6 +202,8 @@ pub struct ChatMessage {
     /// Ordered items preserving the interleaved display order from the desktop.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub items: Option<Vec<ChatMessageItem>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub images: Option<Vec<ChatImageAttachment>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -188,6 +214,8 @@ pub struct ChatMessageItem {
     pub content: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool: Option<RemoteToolStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_subagent: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -227,52 +255,163 @@ pub struct RemoteToolStatus {
 
 pub type EncryptedPayload = (String, String);
 
+/// Build a slim version of tool params for mobile preview.
+/// Strips large string values (file content, diffs, etc.) to keep payload small,
+/// while preserving all short fields so the frontend can parse and display them.
+fn make_slim_params(params: &serde_json::Value) -> Option<String> {
+    match params {
+        serde_json::Value::Object(obj) => {
+            let slim: serde_json::Map<String, serde_json::Value> = obj
+                .iter()
+                .filter_map(|(k, v)| match v {
+                    serde_json::Value::String(s) if s.len() > 200 => None,
+                    _ => Some((k.clone(), v.clone())),
+                })
+                .collect();
+            if slim.is_empty() {
+                return None;
+            }
+            serde_json::to_string(&serde_json::Value::Object(slim)).ok()
+        }
+        serde_json::Value::String(s) => Some(s.chars().take(200).collect()),
+        _ => None,
+    }
+}
+
+/// Compress a base64 data-URL image to a small thumbnail for mobile display.
+/// Falls back to the original if decoding/compression fails or the image is
+/// already within `max_bytes`.
+fn compress_data_url_for_mobile(data_url: &str, max_bytes: usize) -> String {
+    use base64::engine::general_purpose::STANDARD as BASE64;
+    use base64::Engine;
+    use image::imageops::FilterType;
+
+    const MAX_THUMBNAIL_DIM: u32 = 400;
+
+    let Some(comma_pos) = data_url.find(',') else {
+        return data_url.to_string();
+    };
+    let b64_data = &data_url[comma_pos + 1..];
+
+    if b64_data.len() * 3 / 4 <= max_bytes {
+        return data_url.to_string();
+    }
+
+    let Ok(raw_bytes) = BASE64.decode(b64_data) else {
+        return data_url.to_string();
+    };
+
+    let Ok(img) = image::load_from_memory(&raw_bytes) else {
+        return data_url.to_string();
+    };
+
+    let resized = if img.width() > MAX_THUMBNAIL_DIM || img.height() > MAX_THUMBNAIL_DIM {
+        img.resize(MAX_THUMBNAIL_DIM, MAX_THUMBNAIL_DIM, FilterType::Triangle)
+    } else {
+        img
+    };
+
+    fn encode_jpeg(img: &image::DynamicImage, quality: u8) -> Option<Vec<u8>> {
+        let mut buf = Vec::new();
+        let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, quality);
+        img.write_with_encoder(encoder).ok()?;
+        Some(buf)
+    }
+
+    for quality in [75u8, 60, 45, 30] {
+        if let Some(buf) = encode_jpeg(&resized, quality) {
+            if buf.len() <= max_bytes || quality == 30 {
+                let b64 = BASE64.encode(&buf);
+                return format!("data:image/jpeg;base64,{b64}");
+            }
+        }
+    }
+
+    data_url.to_string()
+}
+
+/// Max thumbnail size per image sent to mobile (100 KB).
+const MOBILE_IMAGE_MAX_BYTES: usize = 100 * 1024;
+
 /// Convert ConversationPersistenceManager turns into mobile ChatMessages.
 /// This is the same data source the desktop frontend uses.
 fn turns_to_chat_messages(
     turns: &[crate::service::conversation::DialogTurnData],
 ) -> Vec<ChatMessage> {
+    use crate::service::conversation::TurnStatus;
+
     let mut result = Vec::new();
 
     for turn in turns {
+        let images = turn
+            .user_message
+            .metadata
+            .as_ref()
+            .and_then(|m| m.get("images"))
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| {
+                        let name = v.get("name")?.as_str()?.to_string();
+                        let raw_url = v.get("data_url")?.as_str()?;
+                        let data_url =
+                            compress_data_url_for_mobile(raw_url, MOBILE_IMAGE_MAX_BYTES);
+                        Some(ChatImageAttachment { name, data_url })
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .filter(|v| !v.is_empty());
+
+        // Prefer original_text from metadata (pre-enhancement) for display
+        let display_content = turn
+            .user_message
+            .metadata
+            .as_ref()
+            .and_then(|m| m.get("original_text"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| strip_user_input_tags(&turn.user_message.content));
+
         result.push(ChatMessage {
             id: turn.user_message.id.clone(),
             role: "user".to_string(),
-            content: strip_user_input_tags(&turn.user_message.content),
+            content: display_content,
             timestamp: (turn.user_message.timestamp / 1000).to_string(),
             metadata: None,
             tools: None,
             thinking: None,
             items: None,
+            images,
         });
+
+        // Skip assistant message for in-progress turns.  The active turn's
+        // content is delivered via the real-time overlay, not the historical
+        // list.  Including an empty / partial assistant message here would
+        // "consume" a slot in the count-based skip cursor and prevent the
+        // final version from ever being delivered.
+        if turn.status == TurnStatus::InProgress {
+            continue;
+        }
 
         // Collect ordered items across all rounds, preserving interleaved order
         struct OrderedEntry {
-            order_index: usize,
+            order_index: Option<usize>,
+            timestamp: u64,
+            sequence: usize,
+            round_idx: usize,
             item: ChatMessageItem,
         }
         let mut ordered: Vec<OrderedEntry> = Vec::new();
         let mut tools_flat = Vec::new();
         let mut thinking_parts = Vec::new();
         let mut text_parts = Vec::new();
+        let mut sequence = 0usize;
 
-        for round in &turn.model_rounds {
-            for t in &round.text_items {
-                if t.is_subagent_item.unwrap_or(false) {
-                    continue;
-                }
-                if !t.content.is_empty() {
-                    text_parts.push(t.content.clone());
-                    ordered.push(OrderedEntry {
-                        order_index: t.order_index.unwrap_or(usize::MAX),
-                        item: ChatMessageItem {
-                            item_type: "text".to_string(),
-                            content: Some(t.content.clone()),
-                            tool: None,
-                        },
-                    });
-                }
-            }
+        for (round_idx, round) in turn.model_rounds.iter().enumerate() {
+            // Iterate in streaming order: thinking → text → tools.
+            // The model first thinks, then outputs text (which may reference
+            // tool calls), and finally the tools are detected and executed.
+            // This matches the real-time display order on the tracker.
             for t in &round.thinking_items {
                 if t.is_subagent_item.unwrap_or(false) {
                     continue;
@@ -280,13 +419,39 @@ fn turns_to_chat_messages(
                 if !t.content.is_empty() {
                     thinking_parts.push(t.content.clone());
                     ordered.push(OrderedEntry {
-                        order_index: t.order_index.unwrap_or(usize::MAX),
+                        order_index: t.order_index,
+                        timestamp: t.timestamp,
+                        sequence,
+                        round_idx,
                         item: ChatMessageItem {
                             item_type: "thinking".to_string(),
                             content: Some(t.content.clone()),
                             tool: None,
+                            is_subagent: None,
                         },
                     });
+                    sequence += 1;
+                }
+            }
+            for t in &round.text_items {
+                if t.is_subagent_item.unwrap_or(false) {
+                    continue;
+                }
+                if !t.content.is_empty() {
+                    text_parts.push(t.content.clone());
+                    ordered.push(OrderedEntry {
+                        order_index: t.order_index,
+                        timestamp: t.timestamp,
+                        sequence,
+                        round_idx,
+                        item: ChatMessageItem {
+                            item_type: "text".to_string(),
+                            content: Some(t.content.clone()),
+                            tool: None,
+                            is_subagent: None,
+                        },
+                    });
+                    sequence += 1;
                 }
             }
             for t in &round.tool_items {
@@ -306,22 +471,48 @@ fn turns_to_chat_messages(
                     status: status_str.to_string(),
                     duration_ms: t.duration_ms,
                     start_ms: Some(t.start_time),
-                    input_preview: None,
-                    tool_input: None,
+                    input_preview: make_slim_params(&t.tool_call.input),
+                    tool_input: if t.tool_name == "AskUserQuestion"
+                        || t.tool_name == "Task"
+                        || t.tool_name == "TodoWrite"
+                    {
+                        Some(t.tool_call.input.clone())
+                    } else {
+                        None
+                    },
                 };
                 tools_flat.push(tool_status.clone());
                 ordered.push(OrderedEntry {
-                    order_index: t.order_index.unwrap_or(usize::MAX),
+                    order_index: t.order_index,
+                    timestamp: round.start_time,
+                    sequence,
+                    round_idx,
                     item: ChatMessageItem {
                         item_type: "tool".to_string(),
                         content: None,
                         tool: Some(tool_status),
+                        is_subagent: None,
                     },
                 });
+                sequence += 1;
             }
         }
 
-        ordered.sort_by_key(|e| e.order_index);
+        // Sort by round first (rounds are strictly sequential), then by
+        // order_index within each round.  order_index is per-round (resets
+        // to 0 each round), so it must NOT be compared across rounds.
+        ordered.sort_by(|a, b| {
+            let round_cmp = a.round_idx.cmp(&b.round_idx);
+            if round_cmp != std::cmp::Ordering::Equal {
+                return round_cmp;
+            }
+            match (a.order_index, b.order_index) {
+                (Some(a_idx), Some(b_idx)) => a_idx.cmp(&b_idx),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => a.sequence.cmp(&b.sequence),
+            }
+        });
         let items: Vec<ChatMessageItem> = ordered.into_iter().map(|e| e.item).collect();
 
         let ts = turn
@@ -343,6 +534,7 @@ fn turns_to_chat_messages(
                 Some(thinking_parts.join("\n\n"))
             },
             items: if items.is_empty() { None } else { Some(items) },
+            images: None,
         });
     }
 
@@ -384,6 +576,12 @@ fn strip_user_input_tags(content: &str) -> String {
     if let Some(pos) = s.find("<system_reminder>") {
         return s[..pos].trim().to_string();
     }
+    // Extract original question from enhancer-wrapped content
+    if s.starts_with("User uploaded") {
+        if let Some(pos) = s.find("User's question:\n") {
+            return s[pos + "User's question:\n".len()..].trim().to_string();
+        }
+    }
     s.to_string()
 }
 
@@ -397,36 +595,82 @@ fn resolve_agent_type(mobile_type: Option<&str>) -> &'static str {
     }
 }
 
-fn save_data_url_image(
-    dir: &std::path::Path,
-    name: &str,
-    data_url: &str,
-) -> Option<std::path::PathBuf> {
-    use base64::{engine::general_purpose::STANDARD as B64, Engine};
+/// Convert legacy `ImageAttachment` to unified `ImageContextData`.
+pub fn images_to_contexts(
+    images: Option<&Vec<ImageAttachment>>,
+) -> Vec<crate::agentic::image_analysis::ImageContextData> {
+    let Some(imgs) = images.filter(|v| !v.is_empty()) else {
+        return Vec::new();
+    };
+    imgs.iter()
+        .map(|img| {
+            let mime_type = img
+                .data_url
+                .split_once(',')
+                .and_then(|(header, _)| {
+                    header
+                        .strip_prefix("data:")
+                        .and_then(|rest| rest.split(';').next())
+                })
+                .unwrap_or("image/png")
+                .to_string();
 
-    let (header, b64_data) = data_url.split_once(",")?;
-    let ext = if header.contains("png") {
-        "png"
-    } else if header.contains("gif") {
-        "gif"
-    } else if header.contains("webp") {
-        "webp"
-    } else {
-        "jpg"
+            crate::agentic::image_analysis::ImageContextData {
+                id: format!("remote_img_{}", uuid::Uuid::new_v4()),
+                image_path: None,
+                data_url: Some(img.data_url.clone()),
+                mime_type,
+                metadata: Some(serde_json::json!({
+                    "name": img.name,
+                    "source": "remote"
+                })),
+            }
+        })
+        .collect()
+}
+
+fn build_message_with_remote_images(content: &str, images: &[ImageAttachment]) -> String {
+    use crate::agentic::tools::image_context::{
+        format_image_context_reference, store_image_context, ImageContextData,
     };
 
-    let decoded = B64.decode(b64_data.trim()).ok()?;
+    if images.is_empty() {
+        return content.to_string();
+    }
 
-    let stem = std::path::Path::new(name)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("image");
-    let ts = chrono::Utc::now().timestamp_millis();
-    let filename = format!("{stem}_{ts}.{ext}");
-    let path = dir.join(&filename);
+    let context_section = images
+        .iter()
+        .map(|img| {
+            let mime_type = img
+                .data_url
+                .split_once(',')
+                .and_then(|(header, _)| {
+                    header
+                        .strip_prefix("data:")
+                        .and_then(|rest| rest.split(';').next())
+                })
+                .unwrap_or("image/png")
+                .to_string();
 
-    std::fs::write(&path, &decoded).ok()?;
-    Some(path)
+            let image_context = ImageContextData {
+                id: format!("remote_img_{}", uuid::Uuid::new_v4()),
+                image_path: None,
+                data_url: Some(img.data_url.clone()),
+                mime_type,
+                image_name: img.name.clone(),
+                file_size: 0,
+                width: None,
+                height: None,
+                source: "remote".to_string(),
+            };
+
+            store_image_context(image_context.clone());
+            format_image_context_reference(&image_context)
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    format!("{context_section}\n\n{content}")
 }
 
 // ── RemoteSessionStateTracker ──────────────────────────────────────
@@ -444,18 +688,41 @@ struct TrackerState {
     round_index: usize,
     /// Ordered items preserving the interleaved arrival order for real-time display.
     active_items: Vec<ChatMessageItem>,
+    /// Set on structural events (turn start/complete) that change persisted
+    /// messages.  Cleared after the poll handler loads persistence.  Allows
+    /// skipping the expensive disk read during streaming.
+    persistence_dirty: bool,
+}
+
+/// Lightweight event broadcast by the tracker for real-time consumers (e.g. bots).
+#[derive(Debug, Clone)]
+pub enum TrackerEvent {
+    TextChunk(String),
+    ThinkingChunk(String),
+    ThinkingEnd,
+    ToolStarted {
+        tool_id: String,
+        tool_name: String,
+        params: Option<serde_json::Value>,
+    },
+    TurnCompleted,
+    TurnFailed(String),
+    TurnCancelled,
 }
 
 /// Tracks the real-time state of a session for polling by the mobile client.
 /// Subscribes to `AgenticEvent` and updates an in-memory snapshot.
+/// Also broadcasts lightweight `TrackerEvent`s for real-time consumers.
 pub struct RemoteSessionStateTracker {
     target_session_id: String,
     version: AtomicU64,
     state: RwLock<TrackerState>,
+    event_tx: tokio::sync::broadcast::Sender<TrackerEvent>,
 }
 
 impl RemoteSessionStateTracker {
     pub fn new(session_id: String) -> Self {
+        let (event_tx, _) = tokio::sync::broadcast::channel(256);
         Self {
             target_session_id: session_id,
             version: AtomicU64::new(0),
@@ -469,8 +736,15 @@ impl RemoteSessionStateTracker {
                 active_tools: Vec::new(),
                 round_index: 0,
                 active_items: Vec::new(),
+                persistence_dirty: true,
             }),
+            event_tx,
         }
+    }
+
+    /// Subscribe to real-time tracker events (for bot streaming).
+    pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<TrackerEvent> {
+        self.event_tx.subscribe()
     }
 
     pub fn version(&self) -> u64 {
@@ -483,14 +757,17 @@ impl RemoteSessionStateTracker {
 
     pub fn snapshot_active_turn(&self) -> Option<ActiveTurnSnapshot> {
         let s = self.state.read().unwrap();
+        let has_items = !s.active_items.is_empty();
         s.turn_id.as_ref().map(|tid| ActiveTurnSnapshot {
             turn_id: tid.clone(),
             status: s.turn_status.clone(),
-            text: s.accumulated_text.clone(),
-            thinking: s.accumulated_thinking.clone(),
+            // When items exist they already contain the text/thinking content.
+            // Skip the duplicate top-level fields to halve the payload.
+            text: if has_items { String::new() } else { s.accumulated_text.clone() },
+            thinking: if has_items { String::new() } else { s.accumulated_thinking.clone() },
             tools: s.active_tools.clone(),
             round_index: s.round_index,
-            items: if s.active_items.is_empty() { None } else { Some(s.active_items.clone()) },
+            items: if has_items { Some(s.active_items.clone()) } else { None },
         })
     }
 
@@ -500,6 +777,142 @@ impl RemoteSessionStateTracker {
 
     pub fn title(&self) -> String {
         self.state.read().unwrap().title.clone()
+    }
+
+    pub fn turn_status(&self) -> String {
+        self.state.read().unwrap().turn_status.clone()
+    }
+
+    /// Returns true if the turn has ended (completed/failed/cancelled) but
+    /// the tracker state hasn't been cleaned up yet (waiting for persistence).
+    pub fn is_turn_finished(&self) -> bool {
+        let s = self.state.read().unwrap();
+        s.turn_id.is_some()
+            && matches!(
+                s.turn_status.as_str(),
+                "completed" | "failed" | "cancelled"
+            )
+    }
+
+    /// Clear tracker state after the persisted historical message is confirmed
+    /// available. Called by the poll handler to complete the atomic transition.
+    pub fn finalize_completed_turn(&self) {
+        let mut s = self.state.write().unwrap();
+        if matches!(s.turn_status.as_str(), "completed" | "failed" | "cancelled") {
+            s.turn_id = None;
+            s.accumulated_text.clear();
+            s.accumulated_thinking.clear();
+            s.active_tools.clear();
+            s.active_items.clear();
+        }
+    }
+
+    /// Whether the persisted message list may have changed since the last
+    /// poll.  Structural events (turn start / complete) set this flag;
+    /// streaming events (text / thinking chunks) do not.
+    pub fn is_persistence_dirty(&self) -> bool {
+        self.state.read().unwrap().persistence_dirty
+    }
+
+    pub fn mark_persistence_clean(&self) {
+        self.state.write().unwrap().persistence_dirty = false;
+    }
+
+    /// Find the last item of `target_type` with matching `subagent_marker` that
+    /// can be extended, skipping over the complementary text/thinking type.
+    /// Tool items act as boundaries — we never merge across tool items.
+    /// This mirrors the desktop's EventBatcher behaviour where text and thinking
+    /// accumulate independently within a single ModelRound.
+    fn find_mergeable_item(
+        items: &[ChatMessageItem],
+        target_type: &str,
+        subagent_marker: &Option<bool>,
+    ) -> Option<usize> {
+        for i in (0..items.len()).rev() {
+            let item = &items[i];
+            if item.item_type == "tool" {
+                return None;
+            }
+            if item.item_type == target_type && &item.is_subagent == subagent_marker {
+                return Some(i);
+            }
+        }
+        None
+    }
+
+    fn upsert_active_tool(
+        state: &mut TrackerState,
+        tool_id: &str,
+        tool_name: &str,
+        status: &str,
+        input_preview: Option<String>,
+        tool_input: Option<serde_json::Value>,
+        is_subagent: bool,
+    ) {
+        let resolved_id = if tool_id.is_empty() {
+            format!("{}-{}", tool_name, state.active_tools.len())
+        } else {
+            tool_id.to_string()
+        };
+        let allow_name_fallback = tool_id.is_empty() && !tool_name.is_empty();
+        let subagent_marker = if is_subagent { Some(true) } else { None };
+
+        if let Some(tool) = state
+            .active_tools
+            .iter_mut()
+            .rev()
+            .find(|t| t.id == resolved_id || (allow_name_fallback && t.name == tool_name))
+        {
+            tool.status = status.to_string();
+            if input_preview.is_some() {
+                tool.input_preview = input_preview.clone();
+            }
+            if tool_input.is_some() {
+                tool.tool_input = tool_input.clone();
+            }
+        } else {
+            let tool_status = RemoteToolStatus {
+                id: resolved_id.clone(),
+                name: tool_name.to_string(),
+                status: status.to_string(),
+                duration_ms: None,
+                start_ms: Some(
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64,
+                ),
+                input_preview,
+                tool_input,
+            };
+            state.active_tools.push(tool_status.clone());
+            state.active_items.push(ChatMessageItem {
+                item_type: "tool".to_string(),
+                content: None,
+                tool: Some(tool_status),
+                is_subagent: subagent_marker,
+            });
+            return;
+        }
+
+        if let Some(item) = state.active_items.iter_mut().rev().find(|i| {
+            i.item_type == "tool"
+                && i.tool
+                    .as_ref()
+                    .map_or(false, |t| {
+                        t.id == resolved_id || (allow_name_fallback && t.name == tool_name)
+                    })
+        }) {
+            if let Some(tool) = item.tool.as_mut() {
+                tool.status = status.to_string();
+                if input_preview.is_some() {
+                    tool.input_preview = input_preview;
+                }
+                if tool_input.is_some() {
+                    tool.tool_input = tool_input;
+                }
+            }
+        }
     }
 
     fn handle_event(&self, event: &crate::agentic::events::AgenticEvent) {
@@ -525,56 +938,58 @@ impl RemoteSessionStateTracker {
 
         match event {
             AE::TextChunk { text, .. } => {
+                let subagent_marker = if is_subagent { Some(true) } else { None };
                 let mut s = self.state.write().unwrap();
-                s.accumulated_text.push_str(text);
-                if let Some(last) = s.active_items.last_mut() {
-                    if last.item_type == "text" {
-                        let c = last.content.get_or_insert_with(String::new);
-                        c.push_str(text);
-                    } else {
-                        s.active_items.push(ChatMessageItem {
-                            item_type: "text".to_string(),
-                            content: Some(text.clone()),
-                            tool: None,
-                        });
-                    }
+                if !is_subagent {
+                    s.accumulated_text.push_str(text);
+                }
+                let extend_idx = Self::find_mergeable_item(&s.active_items, "text", &subagent_marker);
+                if let Some(idx) = extend_idx {
+                    let item = &mut s.active_items[idx];
+                    let c = item.content.get_or_insert_with(String::new);
+                    c.push_str(text);
                 } else {
                     s.active_items.push(ChatMessageItem {
                         item_type: "text".to_string(),
                         content: Some(text.clone()),
                         tool: None,
+                        is_subagent: subagent_marker,
                     });
                 }
                 drop(s);
                 self.bump_version();
+                let _ = self.event_tx.send(TrackerEvent::TextChunk(text.clone()));
             }
             AE::ThinkingChunk { content, .. } => {
                 let clean = content
                     .replace("<thinking_end>", "")
                     .replace("</thinking>", "")
                     .replace("<thinking>", "");
+                let subagent_marker = if is_subagent { Some(true) } else { None };
                 let mut s = self.state.write().unwrap();
-                s.accumulated_thinking.push_str(&clean);
-                if let Some(last) = s.active_items.last_mut() {
-                    if last.item_type == "thinking" {
-                        let c = last.content.get_or_insert_with(String::new);
-                        c.push_str(&clean);
-                    } else {
-                        s.active_items.push(ChatMessageItem {
-                            item_type: "thinking".to_string(),
-                            content: Some(clean),
-                            tool: None,
-                        });
-                    }
+                if !is_subagent {
+                    s.accumulated_thinking.push_str(&clean);
+                }
+                let extend_idx = Self::find_mergeable_item(&s.active_items, "thinking", &subagent_marker);
+                if let Some(idx) = extend_idx {
+                    let item = &mut s.active_items[idx];
+                    let c = item.content.get_or_insert_with(String::new);
+                    c.push_str(&clean);
                 } else {
                     s.active_items.push(ChatMessageItem {
                         item_type: "thinking".to_string(),
                         content: Some(clean),
                         tool: None,
+                        is_subagent: subagent_marker,
                     });
                 }
                 drop(s);
                 self.bump_version();
+                if content == "<thinking_end>" {
+                    let _ = self.event_tx.send(TrackerEvent::ThinkingEnd);
+                } else {
+                    let _ = self.event_tx.send(TrackerEvent::ThinkingChunk(content.clone()));
+                }
             }
             AE::ToolEvent { tool_event, .. } => {
                 if let Ok(val) = serde_json::to_value(tool_event) {
@@ -594,56 +1009,103 @@ impl RemoteSessionStateTracker {
                         .to_string();
 
                     let mut s = self.state.write().unwrap();
+                    let allow_name_fallback = tool_id.is_empty() && !tool_name.is_empty();
                     match event_type {
+                        "EarlyDetected" => {
+                            Self::upsert_active_tool(
+                                &mut s,
+                                &tool_id,
+                                &tool_name,
+                                "preparing",
+                                None,
+                                None,
+                                is_subagent,
+                            );
+                        }
+                        "ConfirmationNeeded" => {
+                            let params = val.get("params").cloned();
+                            let input_preview = params
+                                .as_ref()
+                                .and_then(|v| make_slim_params(v));
+                            Self::upsert_active_tool(
+                                &mut s,
+                                &tool_id,
+                                &tool_name,
+                                "pending_confirmation",
+                                input_preview,
+                                params,
+                                is_subagent,
+                            );
+                        }
                         "Started" => {
-                            let input_preview = val
-                                .get("input")
-                                .and_then(|v| v.as_str())
-                                .map(|s| s.chars().take(100).collect());
-                            let tool_input = if tool_name == "AskUserQuestion" {
-                                val.get("params").cloned()
+                            let params = val.get("params").cloned();
+                            let input_preview = params
+                                .as_ref()
+                                .and_then(|v| make_slim_params(v));
+                            let tool_input = if tool_name == "AskUserQuestion"
+                                || tool_name == "Task"
+                                || tool_name == "TodoWrite"
+                            {
+                                params.clone()
                             } else {
                                 None
                             };
-                            let tool_count = s.active_tools.len();
-                            let resolved_id = if tool_id.is_empty() {
-                                format!("{}-{}", tool_name, tool_count)
-                            } else {
-                                tool_id
-                            };
-                            let tool_status = RemoteToolStatus {
-                                id: resolved_id,
-                                name: tool_name,
-                                status: "running".to_string(),
-                                duration_ms: None,
-                                start_ms: Some(
-                                    std::time::SystemTime::now()
-                                        .duration_since(std::time::UNIX_EPOCH)
-                                        .unwrap_or_default()
-                                        .as_millis() as u64,
-                                ),
+                            Self::upsert_active_tool(
+                                &mut s,
+                                &tool_id,
+                                &tool_name,
+                                "running",
                                 input_preview,
                                 tool_input,
-                            };
-                            s.active_items.push(ChatMessageItem {
-                                item_type: "tool".to_string(),
-                                content: None,
-                                tool: Some(tool_status.clone()),
+                                is_subagent,
+                            );
+                            let _ = self.event_tx.send(TrackerEvent::ToolStarted {
+                                tool_id: tool_id.clone(),
+                                tool_name: tool_name.clone(),
+                                params,
                             });
-                            s.active_tools.push(tool_status);
+                        }
+                        "Confirmed" => {
+                            Self::upsert_active_tool(
+                                &mut s,
+                                &tool_id,
+                                &tool_name,
+                                "confirmed",
+                                None,
+                                None,
+                                is_subagent,
+                            );
+                        }
+                        "Rejected" => {
+                            Self::upsert_active_tool(
+                                &mut s,
+                                &tool_id,
+                                &tool_name,
+                                "rejected",
+                                None,
+                                None,
+                                is_subagent,
+                            );
                         }
                         "Completed" | "Succeeded" => {
                             let duration = val
                                 .get("duration_ms")
                                 .and_then(|v| v.as_u64());
                             if let Some(t) = s.active_tools.iter_mut().rev().find(|t| {
-                                (t.id == tool_id || t.name == tool_name) && t.status == "running"
+                                (t.id == tool_id
+                                    || (allow_name_fallback && t.name == tool_name))
+                                    && t.status == "running"
                             }) {
                                 t.status = "completed".to_string();
                                 t.duration_ms = duration;
                             }
                             if let Some(item) = s.active_items.iter_mut().rev().find(|i| {
-                                i.item_type == "tool" && i.tool.as_ref().map_or(false, |t| (t.id == tool_id || t.name == tool_name) && t.status == "running")
+                                i.item_type == "tool"
+                                    && i.tool.as_ref().map_or(false, |t| {
+                                        (t.id == tool_id
+                                            || (allow_name_fallback && t.name == tool_name))
+                                            && t.status == "running"
+                                    })
                             }) {
                                 if let Some(t) = item.tool.as_mut() {
                                     t.status = "completed".to_string();
@@ -653,15 +1115,49 @@ impl RemoteSessionStateTracker {
                         }
                         "Failed" => {
                             if let Some(t) = s.active_tools.iter_mut().rev().find(|t| {
-                                (t.id == tool_id || t.name == tool_name) && t.status == "running"
+                                (t.id == tool_id
+                                    || (allow_name_fallback && t.name == tool_name))
+                                    && t.status == "running"
                             }) {
                                 t.status = "failed".to_string();
                             }
                             if let Some(item) = s.active_items.iter_mut().rev().find(|i| {
-                                i.item_type == "tool" && i.tool.as_ref().map_or(false, |t| (t.id == tool_id || t.name == tool_name) && t.status == "running")
+                                i.item_type == "tool"
+                                    && i.tool.as_ref().map_or(false, |t| {
+                                        (t.id == tool_id
+                                            || (allow_name_fallback && t.name == tool_name))
+                                            && t.status == "running"
+                                    })
                             }) {
                                 if let Some(t) = item.tool.as_mut() {
                                     t.status = "failed".to_string();
+                                }
+                            }
+                        }
+                        "Cancelled" => {
+                            if let Some(t) = s.active_tools.iter_mut().rev().find(|t| {
+                                (t.id == tool_id
+                                    || (allow_name_fallback && t.name == tool_name))
+                                    && matches!(
+                                        t.status.as_str(),
+                                        "running" | "pending_confirmation" | "confirmed"
+                                    )
+                            }) {
+                                t.status = "cancelled".to_string();
+                            }
+                            if let Some(item) = s.active_items.iter_mut().rev().find(|i| {
+                                i.item_type == "tool"
+                                    && i.tool.as_ref().map_or(false, |t| {
+                                        (t.id == tool_id
+                                            || (allow_name_fallback && t.name == tool_name))
+                                            && matches!(
+                                                t.status.as_str(),
+                                                "running" | "pending_confirmation" | "confirmed"
+                                            )
+                                    })
+                            }) {
+                                if let Some(t) = item.tool.as_mut() {
+                                    t.status = "cancelled".to_string();
                                 }
                             }
                         }
@@ -681,36 +1177,36 @@ impl RemoteSessionStateTracker {
                 s.active_items.clear();
                 s.round_index = 0;
                 s.session_state = "running".to_string();
+                s.persistence_dirty = true;
                 drop(s);
                 self.bump_version();
             }
             AE::DialogTurnCompleted { .. } if is_direct => {
                 let mut s = self.state.write().unwrap();
                 s.turn_status = "completed".to_string();
-                s.turn_id = None;
-                s.accumulated_text.clear();
-                s.accumulated_thinking.clear();
-                s.active_tools.clear();
-                s.active_items.clear();
                 s.session_state = "idle".to_string();
+                s.persistence_dirty = true;
                 drop(s);
                 self.bump_version();
+                let _ = self.event_tx.send(TrackerEvent::TurnCompleted);
             }
-            AE::DialogTurnFailed { .. } if is_direct => {
+            AE::DialogTurnFailed { error, .. } if is_direct => {
                 let mut s = self.state.write().unwrap();
                 s.turn_status = "failed".to_string();
-                s.turn_id = None;
                 s.session_state = "idle".to_string();
+                s.persistence_dirty = true;
                 drop(s);
                 self.bump_version();
+                let _ = self.event_tx.send(TrackerEvent::TurnFailed(error.clone()));
             }
             AE::DialogTurnCancelled { .. } if is_direct => {
                 let mut s = self.state.write().unwrap();
                 s.turn_status = "cancelled".to_string();
-                s.turn_id = None;
                 s.session_state = "idle".to_string();
+                s.persistence_dirty = true;
                 drop(s);
                 self.bump_version();
+                let _ = self.event_tx.send(TrackerEvent::TurnCancelled);
             }
             AE::ModelRoundStarted { round_index, .. } if is_direct => {
                 let mut s = self.state.write().unwrap();
@@ -746,32 +1242,182 @@ impl crate::agentic::events::EventSubscriber for Arc<RemoteSessionStateTracker> 
     }
 }
 
-// ── RemoteServer ───────────────────────────────────────────────────
+// ── RemoteExecutionDispatcher (global singleton) ────────────────────
 
-/// Bridges remote commands to local session operations.
-pub struct RemoteServer {
-    shared_secret: [u8; 32],
+/// Shared dispatch layer that owns the session state trackers.
+/// Both `RemoteServer` (mobile relay) and the bot use this to
+/// dispatch commands through the same path.
+pub struct RemoteExecutionDispatcher {
     state_trackers: Arc<DashMap<String, Arc<RemoteSessionStateTracker>>>,
 }
 
-impl Drop for RemoteServer {
-    fn drop(&mut self) {
-        use crate::agentic::coordination::get_global_coordinator;
-        if let Some(coordinator) = get_global_coordinator() {
-            for entry in self.state_trackers.iter() {
-                let sub_id = format!("remote_tracker_{}", entry.key());
+static GLOBAL_DISPATCHER: OnceLock<Arc<RemoteExecutionDispatcher>> = OnceLock::new();
+
+pub fn get_or_init_global_dispatcher() -> Arc<RemoteExecutionDispatcher> {
+    GLOBAL_DISPATCHER
+        .get_or_init(|| {
+            Arc::new(RemoteExecutionDispatcher {
+                state_trackers: Arc::new(DashMap::new()),
+            })
+        })
+        .clone()
+}
+
+pub fn get_global_dispatcher() -> Option<Arc<RemoteExecutionDispatcher>> {
+    GLOBAL_DISPATCHER.get().cloned()
+}
+
+impl RemoteExecutionDispatcher {
+    /// Ensure a state tracker exists for the given session and return it.
+    pub fn ensure_tracker(&self, session_id: &str) -> Arc<RemoteSessionStateTracker> {
+        if let Some(tracker) = self.state_trackers.get(session_id) {
+            return tracker.clone();
+        }
+
+        let tracker = Arc::new(RemoteSessionStateTracker::new(session_id.to_string()));
+        self.state_trackers
+            .insert(session_id.to_string(), tracker.clone());
+
+        if let Some(coordinator) = crate::agentic::coordination::get_global_coordinator() {
+            let sub_id = format!("remote_tracker_{}", session_id);
+            coordinator.subscribe_internal(sub_id, tracker.clone());
+            info!("Registered state tracker for session {session_id}");
+        }
+
+        tracker
+    }
+
+    pub fn get_tracker(&self, session_id: &str) -> Option<Arc<RemoteSessionStateTracker>> {
+        self.state_trackers.get(session_id).map(|t| t.clone())
+    }
+
+    pub fn remove_tracker(&self, session_id: &str) {
+        if let Some((_, _)) = self.state_trackers.remove(session_id) {
+            if let Some(coordinator) = crate::agentic::coordination::get_global_coordinator() {
+                let sub_id = format!("remote_tracker_{}", session_id);
                 coordinator.unsubscribe_internal(&sub_id);
             }
         }
     }
+
+    /// Dispatch a SendMessage command: ensure tracker, restore session, start dialog turn.
+    /// Returns `(session_id, turn_id)` on success.
+    /// If `turn_id` is `None`, one is auto-generated.
+    ///
+    /// All platforms (desktop, mobile, bot) use the same `ImageContextData` format.
+    pub async fn send_message(
+        &self,
+        session_id: &str,
+        content: String,
+        agent_type: Option<&str>,
+        image_contexts: Vec<crate::agentic::image_analysis::ImageContextData>,
+        trigger_source: crate::agentic::coordination::DialogTriggerSource,
+        turn_id: Option<String>,
+    ) -> std::result::Result<(String, String), String> {
+        use crate::agentic::coordination::get_global_coordinator;
+
+        let coordinator = get_global_coordinator()
+            .ok_or_else(|| "Desktop session system not ready".to_string())?;
+
+        self.ensure_tracker(session_id);
+
+        let session_mgr = coordinator.get_session_manager();
+        let _ = match session_mgr.get_session(session_id) {
+            Some(session) => Some(session),
+            None => coordinator.restore_session(session_id).await.ok(),
+        };
+
+        let resolved_agent_type = agent_type
+            .map(|t| resolve_agent_type(Some(t)).to_string())
+            .unwrap_or_else(|| "agentic".to_string());
+
+        let turn_id =
+            turn_id.unwrap_or_else(|| format!("turn_{}", chrono::Utc::now().timestamp_millis()));
+
+        if image_contexts.is_empty() {
+            coordinator
+                .start_dialog_turn(
+                    session_id.to_string(),
+                    content.clone(),
+                    Some(turn_id.clone()),
+                    resolved_agent_type,
+                    trigger_source,
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+        } else {
+            coordinator
+                .start_dialog_turn_with_image_contexts(
+                    session_id.to_string(),
+                    content.clone(),
+                    image_contexts,
+                    Some(turn_id.clone()),
+                    resolved_agent_type,
+                    trigger_source,
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+
+        Ok((session_id.to_string(), turn_id))
+    }
+
+    /// Cancel a running dialog turn.
+    pub async fn cancel_task(
+        &self,
+        session_id: &str,
+        requested_turn_id: Option<&str>,
+    ) -> std::result::Result<(), String> {
+        use crate::agentic::coordination::get_global_coordinator;
+
+        let coordinator = get_global_coordinator()
+            .ok_or_else(|| "Desktop session system not ready".to_string())?;
+
+        let session_mgr = coordinator.get_session_manager();
+        let session = match session_mgr.get_session(session_id) {
+            Some(s) => s,
+            None => coordinator
+                .restore_session(session_id)
+                .await
+                .map_err(|e| format!("Session not found: {e}"))?,
+        };
+
+        let running_turn_id = match &session.state {
+            crate::agentic::core::SessionState::Processing {
+                current_turn_id, ..
+            } => Some(current_turn_id.clone()),
+            _ => None,
+        };
+
+        match (running_turn_id, requested_turn_id) {
+            (Some(current_turn_id), Some(req_id)) if req_id != current_turn_id => {
+                Err("This task is no longer running.".to_string())
+            }
+            (Some(current_turn_id), _) => coordinator
+                .cancel_dialog_turn(session_id, &current_turn_id)
+                .await
+                .map_err(|e| e.to_string()),
+            (None, Some(_)) => Err("This task is already finished.".to_string()),
+            (None, None) => Err(format!(
+                "No running task to cancel for session: {}",
+                session_id
+            )),
+        }
+    }
+}
+
+// ── RemoteServer ───────────────────────────────────────────────────
+
+/// Bridges remote commands to local session operations.
+/// Delegates execution and tracker management to the global `RemoteExecutionDispatcher`.
+pub struct RemoteServer {
+    shared_secret: [u8; 32],
 }
 
 impl RemoteServer {
     pub fn new(shared_secret: [u8; 32]) -> Self {
-        Self {
-            shared_secret,
-            state_trackers: Arc::new(DashMap::new()),
-        }
+        get_or_init_global_dispatcher();
+        Self { shared_secret }
     }
 
     pub fn shared_secret(&self) -> &[u8; 32] {
@@ -823,6 +1469,9 @@ impl RemoteServer {
 
             RemoteCommand::SendMessage { .. }
             | RemoteCommand::CancelTask { .. }
+            | RemoteCommand::ConfirmTool { .. }
+            | RemoteCommand::RejectTool { .. }
+            | RemoteCommand::CancelTool { .. }
             | RemoteCommand::AnswerQuestion { .. } => {
                 self.handle_execution_command(cmd).await
             }
@@ -831,23 +1480,8 @@ impl RemoteServer {
         }
     }
 
-    /// Ensure a state tracker exists for the given session and return it.
     fn ensure_tracker(&self, session_id: &str) -> Arc<RemoteSessionStateTracker> {
-        if let Some(tracker) = self.state_trackers.get(session_id) {
-            return tracker.clone();
-        }
-
-        let tracker = Arc::new(RemoteSessionStateTracker::new(session_id.to_string()));
-        self.state_trackers
-            .insert(session_id.to_string(), tracker.clone());
-
-        if let Some(coordinator) = crate::agentic::coordination::get_global_coordinator() {
-            let sub_id = format!("remote_tracker_{}", session_id);
-            coordinator.subscribe_internal(sub_id, tracker.clone());
-            info!("Registered state tracker for session {session_id}");
-        }
-
-        tracker
+        get_or_init_global_dispatcher().ensure_tracker(session_id)
     }
 
     pub async fn generate_initial_sync(&self) -> RemoteResponse {
@@ -857,9 +1491,11 @@ impl RemoteServer {
         let ws_path = get_workspace_path();
         let (has_workspace, path_str, project_name, git_branch) = if let Some(ref p) = ws_path {
             let name = p.file_name().map(|n| n.to_string_lossy().to_string());
-            let branch = git2::Repository::open(p)
-                .ok()
-                .and_then(|repo| repo.head().ok().and_then(|h| h.shorthand().map(String::from)));
+            let branch = git2::Repository::open(p).ok().and_then(|repo| {
+                repo.head()
+                    .ok()
+                    .and_then(|h| h.shorthand().map(String::from))
+            });
             (true, Some(p.to_string_lossy().to_string()), name, branch)
         } else {
             (false, None, None, None)
@@ -942,6 +1578,26 @@ impl RemoteServer {
             };
         }
 
+        // Fast path: during active streaming, only the real-time snapshot
+        // changes — persisted messages stay the same.  Skip the expensive
+        // disk read and return just the snapshot.
+        let needs_persistence = *since_version == 0 || tracker.is_persistence_dirty();
+
+        if !needs_persistence {
+            let active_turn = tracker.snapshot_active_turn();
+            let sess_state = tracker.session_state();
+            let title = tracker.title();
+            return RemoteResponse::SessionPoll {
+                version: current_version,
+                changed: true,
+                session_state: Some(sess_state),
+                title: if title.is_empty() { None } else { Some(title) },
+                new_messages: None,
+                total_msg_count: None,
+                active_turn,
+            };
+        }
+
         let (all_chat_msgs, _) =
             load_chat_messages_from_conversation_persistence(session_id).await;
         let total_msg_count = all_chat_msgs.len();
@@ -949,7 +1605,38 @@ impl RemoteServer {
         let new_messages: Vec<ChatMessage> =
             all_chat_msgs.into_iter().skip(skip).collect();
 
-        let active_turn = tracker.snapshot_active_turn();
+        let turn_finished = tracker.is_turn_finished();
+        let has_assistant_msg = new_messages.iter().any(|m| m.role == "assistant");
+
+        let active_turn = if turn_finished && has_assistant_msg {
+            tracker.finalize_completed_turn();
+            None
+        } else if turn_finished {
+            let ts = tracker.turn_status();
+            if ts == "completed" {
+                tracker.snapshot_active_turn()
+            } else {
+                tracker.finalize_completed_turn();
+                tracker.mark_persistence_clean();
+                None
+            }
+        } else {
+            tracker.snapshot_active_turn()
+        };
+
+        let (send_msgs, send_total) = if turn_finished && !has_assistant_msg {
+            // Turn is finished but disk doesn't have the completed assistant
+            // message yet — the frontend's immediateSaveDialogTurn hasn't
+            // landed.  Don't send partial data; the snapshot overlay keeps the
+            // user informed.  Next poll will re-read from disk.
+            (None, None)
+        } else {
+            if !new_messages.is_empty() {
+                tracker.mark_persistence_clean();
+            }
+            (Some(new_messages), Some(total_msg_count))
+        };
+
         let sess_state = tracker.session_state();
         let title = tracker.title();
 
@@ -958,8 +1645,8 @@ impl RemoteServer {
             changed: true,
             session_state: Some(sess_state),
             title: if title.is_empty() { None } else { Some(title) },
-            new_messages: Some(new_messages),
-            total_msg_count: Some(total_msg_count),
+            new_messages: send_msgs,
+            total_msg_count: send_total,
             active_turn,
         }
     }
@@ -997,9 +1684,7 @@ impl RemoteServer {
                 let ws_service = match get_global_workspace_service() {
                     Some(s) => s,
                     None => {
-                        return RemoteResponse::RecentWorkspaces {
-                            workspaces: vec![],
-                        };
+                        return RemoteResponse::RecentWorkspaces { workspaces: vec![] };
                     }
                 };
                 let recent = ws_service.get_recent_workspaces().await;
@@ -1011,7 +1696,9 @@ impl RemoteServer {
                         last_opened: w.last_accessed.to_rfc3339(),
                     })
                     .collect();
-                RemoteResponse::RecentWorkspaces { workspaces: entries }
+                RemoteResponse::RecentWorkspaces {
+                    workspaces: entries,
+                }
             }
             RemoteCommand::SetWorkspace { path } => {
                 let ws_service = match get_global_workspace_service() {
@@ -1189,10 +1876,7 @@ impl RemoteServer {
                 session_name: custom_name,
                 workspace_path: requested_ws_path,
             } => {
-                use crate::infrastructure::{get_workspace_path, PathManager};
-                use crate::service::conversation::{
-                    ConversationPersistenceManager, SessionMetadata, SessionStatus,
-                };
+                use crate::infrastructure::get_workspace_path;
 
                 let agent = resolve_agent_type(agent_type.as_deref());
                 let session_name = custom_name
@@ -1227,51 +1911,6 @@ impl RemoteServer {
                 {
                     Ok(session) => {
                         let session_id = session.session_id.clone();
-
-                        if let Some(wp) = binding_ws_path {
-                            if let Ok(pm) = PathManager::new() {
-                                let pm = std::sync::Arc::new(pm);
-                                if let Ok(conv_mgr) =
-                                    ConversationPersistenceManager::new(pm, wp.clone()).await
-                                {
-                                    let now_ms = std::time::SystemTime::now()
-                                        .duration_since(std::time::UNIX_EPOCH)
-                                        .unwrap_or_default()
-                                        .as_millis()
-                                        as u64;
-                                    let meta = SessionMetadata {
-                                        session_id: session_id.clone(),
-                                        session_name: session_name.to_string(),
-                                        agent_type: agent.to_string(),
-                                        model_name: "default".to_string(),
-                                        created_at: now_ms,
-                                        last_active_at: now_ms,
-                                        turn_count: 0,
-                                        message_count: 0,
-                                        tool_call_count: 0,
-                                        status: SessionStatus::Active,
-                                        terminal_session_id: None,
-                                        snapshot_session_id: None,
-                                        tags: vec![],
-                                        custom_metadata: None,
-                                        todos: None,
-                                        workspace_path: binding_ws_str,
-                                    };
-                                    if let Err(e) =
-                                        conv_mgr.save_session_metadata(&meta).await
-                                    {
-                                        error!(
-                                            "Failed to sync remote session to workspace: {e}"
-                                        );
-                                    } else {
-                                        info!(
-                                            "Remote session synced to workspace: {session_id}"
-                                        );
-                                    }
-                                }
-                            }
-                        }
-
                         RemoteResponse::SessionCreated { session_id }
                     }
                     Err(e) => RemoteResponse::Error {
@@ -1293,13 +1932,7 @@ impl RemoteServer {
                 }
             }
             RemoteCommand::DeleteSession { session_id } => {
-                self.state_trackers.remove(session_id);
-                if let Some(coordinator) =
-                    crate::agentic::coordination::get_global_coordinator()
-                {
-                    let sub_id = format!("remote_tracker_{}", session_id);
-                    coordinator.unsubscribe_internal(&sub_id);
-                }
+                get_or_init_global_dispatcher().remove_tracker(session_id);
                 match coordinator.delete_session(session_id).await {
                     Ok(_) => RemoteResponse::SessionDeleted {
                         session_id: session_id.clone(),
@@ -1318,16 +1951,9 @@ impl RemoteServer {
     // ── Execution commands ──────────────────────────────────────────
 
     async fn handle_execution_command(&self, cmd: &RemoteCommand) -> RemoteResponse {
-        use crate::agentic::coordination::get_global_coordinator;
+        use crate::agentic::coordination::{get_global_coordinator, DialogTriggerSource};
 
-        let coordinator = match get_global_coordinator() {
-            Some(c) => c,
-            None => {
-                return RemoteResponse::Error {
-                    message: "Desktop session system not ready".into(),
-                };
-            }
-        };
+        let dispatcher = get_or_init_global_dispatcher();
 
         match cmd {
             RemoteCommand::SendMessage {
@@ -1335,139 +1961,113 @@ impl RemoteServer {
                 content,
                 agent_type: requested_agent_type,
                 images,
+                image_contexts,
             } => {
-                self.ensure_tracker(session_id);
-
-                let session_mgr = coordinator.get_session_manager();
-                let (session_agent_type, session_ws) = session_mgr
-                    .get_session(session_id)
-                    .map(|s| (s.agent_type.clone(), s.config.workspace_path.clone()))
-                    .unwrap_or_else(|| ("default".to_string(), None));
-
-                let agent_type = requested_agent_type
-                    .as_deref()
-                    .map(|t| resolve_agent_type(Some(t)).to_string())
-                    .unwrap_or(session_agent_type);
-
-                if let Some(ws_path_str) = &session_ws {
-                    use crate::infrastructure::{get_workspace_path, set_workspace_path};
-                    let current = get_workspace_path();
-                    let current_str =
-                        current.as_ref().map(|p| p.to_string_lossy().to_string());
-                    if current_str.as_deref() != Some(ws_path_str.as_str()) {
-                        info!("Remote send_message: temporarily setting workspace for session={session_id} to {ws_path_str}");
-                        set_workspace_path(Some(std::path::PathBuf::from(ws_path_str)));
-                    }
-                }
-
-                let full_content = if let Some(imgs) = &images {
-                    if imgs.is_empty() {
-                        content.clone()
-                    } else {
-                        let save_dir = if let Some(ws) = &session_ws {
-                            let d = std::path::PathBuf::from(ws)
-                                .join(".bitfun")
-                                .join("remote-images");
-                            let _ = std::fs::create_dir_all(&d);
-                            Some(d)
-                        } else {
-                            None
-                        };
-
-                        let mut extra = String::new();
-                        for (i, img) in imgs.iter().enumerate() {
-                            if let Some(ref dir) = save_dir {
-                                if let Some(saved) =
-                                    save_data_url_image(dir, &img.name, &img.data_url)
-                                {
-                                    let path_str = saved.to_string_lossy();
-                                    extra.push_str(&format!(
-                                        "\n\n[Image: {}]\nPath: {}\nTip: You can use the AnalyzeImage tool with the image_path parameter.",
-                                        img.name, path_str
-                                    ));
-                                    info!("Remote image {i} saved: {path_str}");
-                                    continue;
-                                }
-                            }
-                            extra.push_str(&format!(
-                                "\n\n[Image: {} (inline)]\nData URL provided inline.\nTip: You can use the AnalyzeImage tool with the data_url parameter.",
-                                img.name
-                            ));
-                        }
-                        format!("{content}{extra}")
-                    }
-                } else {
-                    content.clone()
-                };
-
-                let is_first_message = session_mgr
-                    .get_session(session_id)
-                    .map(|s| s.dialog_turn_ids.is_empty())
-                    .unwrap_or(true);
-
+                // Unified: prefer image_contexts (new format), fall back to legacy images
+                let resolved_contexts = image_contexts.clone().unwrap_or_else(|| {
+                    images_to_contexts(images.as_ref())
+                });
                 info!(
-                    "Remote send_message: session={session_id}, agent_type={agent_type}, images={}",
-                    images.as_ref().map_or(0, |v| v.len())
+                    "Remote send_message: session={session_id}, agent_type={}, image_contexts={}",
+                    requested_agent_type.as_deref().unwrap_or("agentic"),
+                    resolved_contexts.len()
                 );
-                let turn_id = format!("turn_{}", chrono::Utc::now().timestamp_millis());
-                match coordinator
-                    .start_dialog_turn(
-                        session_id.clone(),
-                        full_content,
-                        Some(turn_id.clone()),
-                        agent_type,
-                        true,
+                match dispatcher
+                    .send_message(
+                        session_id,
+                        content.clone(),
+                        requested_agent_type.as_deref(),
+                        resolved_contexts,
+                        DialogTriggerSource::RemoteRelay,
+                        None,
                     )
                     .await
                 {
-                    Ok(()) => {
-                        if is_first_message {
-                            let sid = session_id.clone();
-                            let msg = content.clone();
-                            let ws = session_ws.clone();
-                            tokio::spawn(async move {
-                                if let Some(coord) = get_global_coordinator() {
-                                    match coord
-                                        .generate_session_title(&sid, &msg, Some(20))
-                                        .await
-                                    {
-                                        Ok(title) => {
-                                            Self::persist_session_title(&sid, &title, ws.as_ref())
-                                                .await;
-                                        }
-                                        Err(e) => {
-                                            debug!(
-                                                "Remote session title generation failed: {e}"
-                                            );
-                                        }
-                                    }
-                                }
-                            });
-                        }
-                        RemoteResponse::MessageSent {
-                            session_id: session_id.clone(),
-                            turn_id,
-                        }
+                    Ok((sid, turn_id)) => RemoteResponse::MessageSent {
+                        session_id: sid,
+                        turn_id,
+                    },
+                    Err(e) => RemoteResponse::Error { message: e },
+                }
+            }
+            RemoteCommand::CancelTask {
+                session_id,
+                turn_id,
+            } => {
+                match dispatcher
+                    .cancel_task(session_id, turn_id.as_deref())
+                    .await
+                {
+                    Ok(()) => RemoteResponse::TaskCancelled {
+                        session_id: session_id.clone(),
+                    },
+                    Err(e) => RemoteResponse::Error { message: e },
+                }
+            }
+            RemoteCommand::ConfirmTool {
+                tool_id,
+                updated_input,
+            } => {
+                let coordinator = match get_global_coordinator() {
+                    Some(c) => c,
+                    None => {
+                        return RemoteResponse::Error {
+                            message: "Desktop session system not ready".into(),
+                        };
                     }
+                };
+                match coordinator.confirm_tool(tool_id, updated_input.clone()).await {
+                    Ok(_) => RemoteResponse::InteractionAccepted {
+                        action: "confirm_tool".to_string(),
+                        target_id: tool_id.clone(),
+                    },
                     Err(e) => RemoteResponse::Error {
                         message: e.to_string(),
                     },
                 }
             }
-            RemoteCommand::CancelTask { session_id } => {
-                let session_mgr = coordinator.get_session_manager();
-                if let Some(session) = session_mgr.get_session(session_id) {
-                    use crate::agentic::core::SessionState;
-                    let _ = session_mgr
-                        .update_session_state(session_id, SessionState::Idle)
-                        .await;
-                    if let Some(last_turn_id) = session.dialog_turn_ids.last() {
-                        let _ =
-                            coordinator.cancel_dialog_turn(session_id, last_turn_id).await;
+            RemoteCommand::RejectTool { tool_id, reason } => {
+                let coordinator = match get_global_coordinator() {
+                    Some(c) => c,
+                    None => {
+                        return RemoteResponse::Error {
+                            message: "Desktop session system not ready".into(),
+                        };
                     }
+                };
+                let reject_reason = reason
+                    .clone()
+                    .unwrap_or_else(|| "User rejected".to_string());
+                match coordinator.reject_tool(tool_id, reject_reason).await {
+                    Ok(_) => RemoteResponse::InteractionAccepted {
+                        action: "reject_tool".to_string(),
+                        target_id: tool_id.clone(),
+                    },
+                    Err(e) => RemoteResponse::Error {
+                        message: e.to_string(),
+                    },
                 }
-                RemoteResponse::TaskCancelled {
-                    session_id: session_id.clone(),
+            }
+            RemoteCommand::CancelTool { tool_id, reason } => {
+                let coordinator = match get_global_coordinator() {
+                    Some(c) => c,
+                    None => {
+                        return RemoteResponse::Error {
+                            message: "Desktop session system not ready".into(),
+                        };
+                    }
+                };
+                let cancel_reason = reason
+                    .clone()
+                    .unwrap_or_else(|| "User cancelled".to_string());
+                match coordinator.cancel_tool(tool_id, cancel_reason).await {
+                    Ok(_) => RemoteResponse::InteractionAccepted {
+                        action: "cancel_tool".to_string(),
+                        target_id: tool_id.clone(),
+                    },
+                    Err(e) => RemoteResponse::Error {
+                        message: e.to_string(),
+                    },
                 }
             }
             RemoteCommand::AnswerQuestion { tool_id, answers } => {
@@ -1484,40 +2084,6 @@ impl RemoteServer {
         }
     }
 
-    async fn persist_session_title(
-        session_id: &str,
-        title: &str,
-        workspace_path: Option<&String>,
-    ) {
-        use crate::infrastructure::{get_workspace_path, PathManager};
-        use crate::service::conversation::ConversationPersistenceManager;
-
-        let ws = workspace_path
-            .map(std::path::PathBuf::from)
-            .or_else(get_workspace_path);
-        let Some(wp) = ws else { return };
-
-        let pm = match PathManager::new() {
-            Ok(pm) => std::sync::Arc::new(pm),
-            Err(_) => return,
-        };
-        let conv_mgr = match ConversationPersistenceManager::new(pm, wp).await {
-            Ok(m) => m,
-            Err(_) => return,
-        };
-        if let Ok(Some(mut meta)) = conv_mgr.load_session_metadata(session_id).await {
-            meta.session_name = title.to_string();
-            meta.last_active_at = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as u64;
-            if let Err(e) = conv_mgr.save_session_metadata(&meta).await {
-                error!("Failed to persist remote session title: {e}");
-            } else {
-                info!("Remote session title persisted: session_id={session_id}, title={title}");
-            }
-        }
-    }
 }
 
 #[cfg(test)]

@@ -10,6 +10,7 @@ use tokio::sync::Mutex;
 use bitfun_core::service::runtime::RuntimeManager;
 use bitfun_core::service::terminal::{
     AcknowledgeRequest as CoreAcknowledgeRequest, CloseSessionRequest as CoreCloseSessionRequest,
+    CommandCompletionReason as CoreCommandCompletionReason,
     CreateSessionRequest as CoreCreateSessionRequest,
     ExecuteCommandRequest as CoreExecuteCommandRequest,
     ExecuteCommandResponse as CoreExecuteCommandResponse,
@@ -198,6 +199,7 @@ pub struct ExecuteCommandResponse {
     pub command_id: String,
     pub output: String,
     pub exit_code: Option<i32>,
+    pub completion_reason: String,
 }
 
 impl From<CoreExecuteCommandResponse> for ExecuteCommandResponse {
@@ -207,6 +209,10 @@ impl From<CoreExecuteCommandResponse> for ExecuteCommandResponse {
             command_id: resp.command_id,
             output: resp.output,
             exit_code: resp.exit_code,
+            completion_reason: match resp.completion_reason {
+                CoreCommandCompletionReason::Completed => "completed".to_string(),
+                CoreCommandCompletionReason::TimedOut => "timedOut".to_string(),
+            },
         }
     }
 }
@@ -230,6 +236,10 @@ pub struct GetHistoryResponse {
     pub session_id: String,
     pub data: String,
     pub history_size: usize,
+    /// PTY column count at the time history was captured.
+    pub cols: u16,
+    /// PTY row count at the time history was captured.
+    pub rows: u16,
 }
 
 impl From<CoreGetHistoryResponse> for GetHistoryResponse {
@@ -238,6 +248,8 @@ impl From<CoreGetHistoryResponse> for GetHistoryResponse {
             session_id: resp.session_id,
             data: resp.data,
             history_size: resp.history_size,
+            cols: resp.cols,
+            rows: resp.rows,
         }
     }
 }
@@ -494,6 +506,8 @@ pub async fn terminal_get_history(
         session_id: response.session_id,
         data: response.data,
         history_size: response.history_size,
+        cols: response.cols,
+        rows: response.rows,
     })
 }
 

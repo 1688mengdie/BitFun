@@ -217,6 +217,7 @@ struct StreamContext {
     thinking_chunks_count: usize,
     thinking_completed_sent: bool,
     has_effective_output: bool,
+    encountered_end_turn_tool: bool,
 }
 
 impl StreamContext {
@@ -243,6 +244,7 @@ impl StreamContext {
             thinking_chunks_count: 0,
             thinking_completed_sent: false,
             has_effective_output: false,
+            encountered_end_turn_tool: false,
         }
     }
 
@@ -509,7 +511,15 @@ impl StreamProcessor {
 
         // Check if JSON is complete
         if ctx.tool_call_buffer.is_valid() {
-            ctx.tool_calls.push(ctx.tool_call_buffer.to_tool_call());
+            let tool_call = ctx.tool_call_buffer.to_tool_call();
+            if tool_call.should_end_turn {
+                debug!(
+                    "End-turn tool fully detected during streaming: {} ({})",
+                    tool_call.tool_name, tool_call.tool_id
+                );
+                ctx.encountered_end_turn_tool = true;
+            }
+            ctx.tool_calls.push(tool_call);
 
             // Clear buffer
             // Normally there should be no delta data after parameters are complete, but this has been triggered in practice, possibly due to network issues or model output anomalies
@@ -754,6 +764,13 @@ impl StreamProcessor {
                         self.handle_tool_call_chunk(&mut ctx, tool_call).await;
                         if let Some(err) = self.check_cancellation(&mut ctx, cancellation_token, "processing tool call").await {
                             return err;
+                        }
+                        if ctx.encountered_end_turn_tool {
+                            debug!(
+                                "Stopping stream after end-turn tool detection: session_id={}, turn_id={}",
+                                ctx.session_id, ctx.dialog_turn_id
+                            );
+                            break;
                         }
                     }
                 }

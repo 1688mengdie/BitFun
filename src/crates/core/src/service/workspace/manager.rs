@@ -403,6 +403,7 @@ pub struct WorkspaceSummary {
 /// Workspace manager.
 pub struct WorkspaceManager {
     workspaces: HashMap<String, WorkspaceInfo>,
+    opened_workspace_ids: Vec<String>,
     current_workspace_id: Option<String>,
     recent_workspaces: Vec<String>,
     max_recent_workspaces: usize,
@@ -431,6 +432,7 @@ impl WorkspaceManager {
     pub fn new(config: WorkspaceManagerConfig) -> Self {
         Self {
             workspaces: HashMap::new(),
+            opened_workspace_ids: Vec::new(),
             current_workspace_id: None,
             recent_workspaces: Vec::new(),
             max_recent_workspaces: config.max_recent_workspaces,
@@ -460,6 +462,7 @@ impl WorkspaceManager {
             .map(|w| w.id.clone());
 
         if let Some(workspace_id) = existing_workspace_id {
+            self.ensure_workspace_open(&workspace_id);
             self.set_current_workspace(workspace_id.clone())?;
             return self.workspaces.get(&workspace_id).cloned().ok_or_else(|| {
                 BitFunError::service(format!(
@@ -474,6 +477,7 @@ impl WorkspaceManager {
 
         self.workspaces
             .insert(workspace_id.clone(), workspace.clone());
+        self.ensure_workspace_open(&workspace_id);
         self.set_current_workspace(workspace_id.clone())?;
 
         Ok(workspace)
@@ -481,25 +485,49 @@ impl WorkspaceManager {
 
     /// Closes the current workspace.
     pub fn close_current_workspace(&mut self) -> BitFunResult<()> {
-        if let Some(workspace_id) = &self.current_workspace_id {
-            if let Some(workspace) = self.workspaces.get_mut(workspace_id) {
-                workspace.status = WorkspaceStatus::Inactive;
-            }
-            self.current_workspace_id = None;
+        let current_workspace_id = self.current_workspace_id.clone();
+        match current_workspace_id {
+            Some(workspace_id) => self.close_workspace(&workspace_id),
+            None => Ok(()),
         }
-        Ok(())
     }
 
     /// Closes the specified workspace.
     pub fn close_workspace(&mut self, workspace_id: &str) -> BitFunResult<()> {
+        if !self.workspaces.contains_key(workspace_id) {
+            return Err(BitFunError::service(format!(
+                "Workspace not found: {}",
+                workspace_id
+            )));
+        }
+
+        self.opened_workspace_ids.retain(|id| id != workspace_id);
+
         if let Some(workspace) = self.workspaces.get_mut(workspace_id) {
             workspace.status = WorkspaceStatus::Inactive;
+        }
 
-            if self.current_workspace_id.as_ref() == Some(&workspace_id.to_string()) {
-                self.current_workspace_id = None;
+        if self.current_workspace_id.as_deref() == Some(workspace_id) {
+            self.current_workspace_id = None;
+
+            if let Some(next_workspace_id) = self.opened_workspace_ids.first().cloned() {
+                self.set_current_workspace(next_workspace_id)?;
             }
         }
+
         Ok(())
+    }
+
+    /// Sets the active workspace among already opened workspaces.
+    pub fn set_active_workspace(&mut self, workspace_id: &str) -> BitFunResult<()> {
+        if !self.opened_workspace_ids.iter().any(|id| id == workspace_id) {
+            return Err(BitFunError::service(format!(
+                "Workspace is not opened: {}",
+                workspace_id
+            )));
+        }
+
+        self.set_current_workspace(workspace_id.to_string())
     }
 
     /// Sets the current workspace.
@@ -509,6 +537,16 @@ impl WorkspaceManager {
                 "Workspace not found: {}",
                 workspace_id
             )));
+        }
+
+        self.ensure_workspace_open(&workspace_id);
+
+        if let Some(previous_workspace_id) = &self.current_workspace_id {
+            if previous_workspace_id != &workspace_id {
+                if let Some(previous_workspace) = self.workspaces.get_mut(previous_workspace_id) {
+                    previous_workspace.status = WorkspaceStatus::Inactive;
+                }
+            }
         }
 
         if let Some(workspace) = self.workspaces.get_mut(&workspace_id) {
@@ -535,6 +573,14 @@ impl WorkspaceManager {
     /// Gets a workspace by id.
     pub fn get_workspace(&self, workspace_id: &str) -> Option<&WorkspaceInfo> {
         self.workspaces.get(workspace_id)
+    }
+
+    /// Gets all opened workspaces.
+    pub fn get_opened_workspace_infos(&self) -> Vec<&WorkspaceInfo> {
+        self.opened_workspace_ids
+            .iter()
+            .filter_map(|id| self.workspaces.get(id))
+            .collect()
     }
 
     /// Lists all workspaces.
@@ -623,6 +669,11 @@ impl WorkspaceManager {
         }
     }
 
+    fn ensure_workspace_open(&mut self, workspace_id: &str) {
+        self.opened_workspace_ids.retain(|id| id != workspace_id);
+        self.opened_workspace_ids.insert(0, workspace_id.to_string());
+    }
+
     /// Returns manager statistics.
     pub fn get_statistics(&self) -> WorkspaceManagerStatistics {
         let mut stats = WorkspaceManagerStatistics::default();
@@ -664,6 +715,19 @@ impl WorkspaceManager {
     /// Returns a mutable reference to the workspace map (for import).
     pub fn get_workspaces_mut(&mut self) -> &mut HashMap<String, WorkspaceInfo> {
         &mut self.workspaces
+    }
+
+    /// Returns the opened workspace ids.
+    pub fn get_opened_workspace_ids(&self) -> &Vec<String> {
+        &self.opened_workspace_ids
+    }
+
+    /// Sets the opened workspace ids.
+    pub fn set_opened_workspace_ids(&mut self, opened_workspace_ids: Vec<String>) {
+        self.opened_workspace_ids = opened_workspace_ids
+            .into_iter()
+            .filter(|id| self.workspaces.contains_key(id))
+            .collect();
     }
 
     /// Returns a reference to the recent-workspaces list.

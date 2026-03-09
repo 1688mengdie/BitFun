@@ -179,7 +179,7 @@ const TitleBar: React.FC<TitleBarProps> = ({
     setIsOrbHovered(false);
   }, []);
 
-  // Listen for nav panel events dispatched by WorkspaceHeader
+  // Listen for nav panel events dispatched by the workspace area
   useEffect(() => {
     const onNewProject = () => handleNewProject();
     const onGoHome = () => handleGoHome();

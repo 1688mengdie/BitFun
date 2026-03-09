@@ -14,7 +14,7 @@ use crate::config::TerminalConfig;
 use crate::events::TerminalEvent;
 use crate::session::{
     get_session_manager, init_session_manager, is_session_manager_initialized,
-    CommandExecuteResult, ExecuteOptions, SessionManager, TerminalSession,
+    CommandCompletionReason, CommandExecuteResult, ExecuteOptions, SessionManager, TerminalSession,
 };
 use crate::shell::{ShellDetector, ShellType};
 use crate::{TerminalError, TerminalResult};
@@ -155,6 +155,10 @@ pub struct GetHistoryResponse {
     /// Current history size in bytes
     #[serde(rename = "historySize")]
     pub history_size: usize,
+    /// Terminal column count when history was recorded (PTY current size)
+    pub cols: u16,
+    /// Terminal row count when history was recorded (PTY current size)
+    pub rows: u16,
 }
 
 /// Shell information response
@@ -202,6 +206,9 @@ pub struct ExecuteCommandResponse {
     /// Exit code (if available)
     #[serde(rename = "exitCode")]
     pub exit_code: Option<i32>,
+    /// Why command execution stopped.
+    #[serde(rename = "completionReason")]
+    pub completion_reason: CommandCompletionReason,
 }
 
 impl From<CommandExecuteResult> for ExecuteCommandResponse {
@@ -211,6 +218,7 @@ impl From<CommandExecuteResult> for ExecuteCommandResponse {
             command_id: result.command_id,
             output: result.output,
             exit_code: result.exit_code,
+            completion_reason: result.completion_reason,
         }
     }
 }
@@ -383,6 +391,8 @@ impl TerminalApi {
             session_id: request.session_id,
             data,
             history_size,
+            cols: session.cols,
+            rows: session.rows,
         })
     }
 

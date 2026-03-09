@@ -7,7 +7,19 @@
  *  - pinned = false: can be auto-evicted and manually closed.
  */
 
-import { MessageSquare, Terminal, GitBranch, Settings, FileCode2, CircleUserRound, Blocks, Users, Puzzle } from 'lucide-react';
+import {
+  MessageSquare,
+  Terminal,
+  GitBranch,
+  Settings,
+  FileCode2,
+  CircleUserRound,
+  Blocks,
+  Users,
+  Puzzle,
+  Boxes,
+  UserCircle2,
+} from 'lucide-react';
 import type { SceneTabDef, SceneTabId } from '../components/SceneBar/types';
 
 export const MAX_OPEN_SCENES = 3;
@@ -79,9 +91,9 @@ export const SCENE_TAB_REGISTRY: SceneTabDef[] = [
     defaultOpen: false,
   },
   {
-    id: 'team' as SceneTabId,
-    label: 'Team',
-    labelKey: 'scenes.team',
+    id: 'agents' as SceneTabId,
+    label: 'Agents',
+    labelKey: 'scenes.agents',
     Icon: Users,
     pinned: false,
     singleton: true,
@@ -96,8 +108,50 @@ export const SCENE_TAB_REGISTRY: SceneTabDef[] = [
     singleton: true,
     defaultOpen: false,
   },
+  {
+    id: 'toolbox' as SceneTabId,
+    label: 'Mini App',
+    labelKey: 'scenes.toolbox',
+    Icon: Boxes,
+    pinned: false,
+    singleton: true,
+    defaultOpen: false,
+  },
+  {
+    id: 'my-agent' as SceneTabId,
+    label: 'My Agent',
+    labelKey: 'scenes.myAgent',
+    Icon: UserCircle2,
+    pinned: false,
+    singleton: true,
+    defaultOpen: false,
+  },
+  {
+    id: 'shell' as SceneTabId,
+    label: 'Shell',
+    labelKey: 'scenes.shell',
+    Icon: Terminal,
+    pinned: false,
+    singleton: true,
+    defaultOpen: false,
+  },
 ];
 
 export function getSceneDef(id: SceneTabId): SceneTabDef | undefined {
   return SCENE_TAB_REGISTRY.find(d => d.id === id);
+}
+
+/** Dynamic scene def for a MiniApp tab (used by SceneBar and useSceneManager). */
+export function getMiniAppSceneDef(appId: string, appName?: string): SceneTabDef {
+  const id: SceneTabId = `miniapp:${appId}`;
+  return {
+    id,
+    label: appName ?? appId,
+    Icon: Puzzle,
+    pinned: false,
+    fixed: false,
+    closable: true,
+    singleton: false,
+    defaultOpen: false,
+  };
 }

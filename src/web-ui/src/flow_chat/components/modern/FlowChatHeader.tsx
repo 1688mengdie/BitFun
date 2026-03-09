@@ -5,8 +5,6 @@
  */
 
 import React from 'react';
-import { useTranslation } from 'react-i18next';
-import { ChevronUp, ChevronDown } from 'lucide-react';
 import { Tooltip } from '@/component-library';
 import { SessionFilesBadge } from './SessionFilesBadge';
 import './FlowChatHeader.scss';
@@ -20,10 +18,6 @@ export interface FlowChatHeaderProps {
   currentUserMessage: string;
   /** Whether the header is visible. */
   visible: boolean;
-  /** Previous turn callback. */
-  onPreviousTurn?: () => void;
-  /** Next turn callback. */
-  onNextTurn?: () => void;
   /** Session ID. */
   sessionId?: string;
 }
@@ -32,12 +26,8 @@ export const FlowChatHeader: React.FC<FlowChatHeaderProps> = ({
   totalTurns,
   currentUserMessage,
   visible,
-  onPreviousTurn,
-  onNextTurn,
   sessionId,
 }) => {
-  const { t } = useTranslation('flow-chat');
-
   if (!visible || totalTurns === 0) {
     return null;
   }
@@ -63,24 +53,6 @@ export const FlowChatHeader: React.FC<FlowChatHeaderProps> = ({
         <span className="flowchat-header__turn-info">
           {currentTurnIndex} / {totalTurns}
         </span>
-        <Tooltip content={t('flowChatHeader.previousTurn')}>
-          <button
-            className="flowchat-header__nav-btn"
-            onClick={onPreviousTurn}
-            disabled={currentTurnIndex <= 1}
-          >
-            <ChevronUp size={16} />
-          </button>
-        </Tooltip>
-        <Tooltip content={t('flowChatHeader.nextTurn')}>
-          <button
-            className="flowchat-header__nav-btn"
-            onClick={onNextTurn}
-            disabled={currentTurnIndex >= totalTurns}
-          >
-            <ChevronDown size={16} />
-          </button>
-        </Tooltip>
       </div>
     </div>
   );

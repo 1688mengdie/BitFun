@@ -174,6 +174,90 @@ impl SessionManager {
         Ok(())
     }
 
+    /// Update session title (in-memory + persistence)
+    pub async fn update_session_title(&self, session_id: &str, title: &str) -> BitFunResult<()> {
+        let workspace_path = self
+            .sessions
+            .get(session_id)
+            .and_then(|session| session.config.workspace_path.clone())
+            .map(std::path::PathBuf::from)
+            .or_else(get_workspace_path);
+
+        if let Some(mut session) = self.sessions.get_mut(session_id) {
+            session.session_name = title.to_string();
+            session.updated_at = SystemTime::now();
+        }
+
+        if self.config.enable_persistence {
+            if let Some(session) = self.sessions.get(session_id) {
+                self.persistence_manager.save_session(&session).await?;
+            }
+        }
+
+        if let Some(workspace_path) = workspace_path {
+            match ConversationPersistenceManager::new(
+                self.persistence_manager.path_manager().clone(),
+                workspace_path,
+            )
+            .await
+            {
+                Ok(conv_mgr) => {
+                    if let Ok(Some(mut meta)) = conv_mgr.load_session_metadata(session_id).await {
+                        meta.session_name = title.to_string();
+                        meta.touch();
+                        if let Err(e) = conv_mgr.save_session_metadata(&meta).await {
+                            warn!(
+                                "Failed to persist session title in conversation metadata: {}",
+                                e
+                            );
+                        }
+                    }
+                }
+                Err(e) => {
+                    debug!("Failed to update conversation metadata title: {}", e);
+                }
+            }
+        }
+
+        info!(
+            "Session title updated: session_id={}, title={}",
+            session_id, title
+        );
+
+        Ok(())
+    }
+
+    /// Update session agent type (in-memory + persistence)
+    pub async fn update_session_agent_type(
+        &self,
+        session_id: &str,
+        agent_type: &str,
+    ) -> BitFunResult<()> {
+        if let Some(mut session) = self.sessions.get_mut(session_id) {
+            session.agent_type = agent_type.to_string();
+            session.updated_at = SystemTime::now();
+            session.last_activity_at = SystemTime::now();
+        } else {
+            return Err(BitFunError::NotFound(format!(
+                "Session not found: {}",
+                session_id
+            )));
+        }
+
+        if self.config.enable_persistence {
+            if let Some(session) = self.sessions.get(session_id) {
+                self.persistence_manager.save_session(&session).await?;
+            }
+        }
+
+        debug!(
+            "Session agent type updated: session_id={}, agent_type={}",
+            session_id, agent_type
+        );
+
+        Ok(())
+    }
+
     /// Update session activity time
     pub fn touch_session(&self, session_id: &str) {
         if let Some(mut session) = self.sessions.get_mut(session_id) {
@@ -493,13 +577,12 @@ impl SessionManager {
         }
 
         // 2. Add user message to history and compression managers
-        let user_message = if let Some(images) =
-            image_contexts.as_ref().filter(|v| !v.is_empty()).cloned()
-        {
-            Message::user_multimodal(user_input, images).with_turn_id(turn_id.clone())
-        } else {
-            Message::user(user_input).with_turn_id(turn_id.clone())
-        };
+        let user_message =
+            if let Some(images) = image_contexts.as_ref().filter(|v| !v.is_empty()).cloned() {
+                Message::user_multimodal(user_input, images).with_turn_id(turn_id.clone())
+            } else {
+                Message::user(user_input).with_turn_id(turn_id.clone())
+            };
         self.history_manager
             .add_message(session_id, user_message.clone())
             .await?;
@@ -582,6 +665,54 @@ impl SessionManager {
         Ok(())
     }
 
+    /// Mark a dialog turn as failed and persist it.
+    /// Unlike `complete_dialog_turn`, this sets the state to `Failed` with an error message.
+    pub async fn fail_dialog_turn(
+        &self,
+        session_id: &str,
+        turn_id: &str,
+        error: String,
+    ) -> BitFunResult<()> {
+        let mut turn = self
+            .persistence_manager
+            .load_dialog_turn(session_id, turn_id)
+            .await?;
+
+        turn.state = DialogTurnState::Failed { error };
+        turn.completed_at = Some(SystemTime::now());
+
+        if self.config.enable_persistence {
+            match self.get_context_messages(session_id).await {
+                Ok(context_messages) => {
+                    if let Err(err) = self
+                        .persistence_manager
+                        .save_turn_context_snapshot(session_id, turn.turn_index, &context_messages)
+                        .await
+                    {
+                        warn!(
+                            "failed to save turn context snapshot on failure: session_id={}, turn_index={}, err={}",
+                            session_id, turn.turn_index, err
+                        );
+                    }
+                }
+                Err(err) => {
+                    warn!(
+                        "failed to build context messages for snapshot on failure: session_id={}, turn_index={}, err={}",
+                        session_id, turn.turn_index, err
+                    );
+                }
+            }
+            self.persistence_manager.save_dialog_turn(&turn).await?;
+        }
+
+        debug!(
+            "Dialog turn marked as failed: turn_id={}, turn_index={}",
+            turn_id, turn.turn_index
+        );
+
+        Ok(())
+    }
+
     // ============ Helper Methods ============
 
     /// Get session's message history (complete)
@@ -596,7 +727,9 @@ impl SessionManager {
         limit: usize,
         before_message_id: Option<&str>,
     ) -> BitFunResult<(Vec<Message>, bool)> {
-        self.history_manager.get_messages_paginated(session_id, limit, before_message_id).await
+        self.history_manager
+            .get_messages_paginated(session_id, limit, before_message_id)
+            .await
     }
 
     /// Get session's context messages (may be compressed)

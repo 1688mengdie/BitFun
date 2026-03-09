@@ -17,7 +17,7 @@
       "promptTemplates": "提示词",
       "skills": "技能",
       "mcpTools": "MCP & 工具",
-      "agents": "Agents",
+      "agents": "智能体",
       "editor": "编辑器",
       "lsp": "语言服务",
       "debug": "调试",
@@ -391,7 +391,7 @@
     "noSkillsHint": "技能可以扩展 AI 的能力"
   },
   "agents": {
-    "title": "Agents",
+    "title": "智能体",
     "subtitle": "配置智能体",
     "addAgent": "添加智能体",
     "noAgents": "暂无子智能体",

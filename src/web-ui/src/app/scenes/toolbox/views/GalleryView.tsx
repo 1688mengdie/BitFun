@@ -1,0 +1,343 @@
+import React, { useState, useMemo, useCallback } from 'react';
+import {
+  Box,
+  FolderPlus,
+  LayoutGrid,
+  Play,
+  RefreshCw,
+  Sparkles,
+  Square,
+  Tag,
+  Trash2,
+} from 'lucide-react';
+import { open } from '@tauri-apps/plugin-dialog';
+import { useToolboxStore } from '../toolboxStore';
+import { useSceneManager } from '@/app/hooks/useSceneManager';
+import MiniAppCard from '../components/MiniAppCard';
+import type { MiniAppMeta } from '@/infrastructure/api/service-api/MiniAppAPI';
+import { miniAppAPI } from '@/infrastructure/api/service-api/MiniAppAPI';
+import { createLogger } from '@/shared/utils/logger';
+import { Search, ConfirmDialog, Button, Badge } from '@/component-library';
+import {
+  GalleryDetailModal,
+  GalleryEmpty,
+  GalleryGrid,
+  GalleryLayout,
+  GalleryPageHeader,
+  GallerySkeleton,
+  GalleryZone,
+} from '@/app/components';
+import type { SceneTabId } from '@/app/components/SceneBar/types';
+import { getMiniAppIconGradient, renderMiniAppIcon } from '../utils/miniAppIcons';
+import './GalleryView.scss';
+
+const log = createLogger('GalleryView');
+
+const GalleryView: React.FC = () => {
+  const apps = useToolboxStore((s) => s.apps);
+  const loading = useToolboxStore((s) => s.loading);
+  const runningWorkerIds = useToolboxStore((s) => s.runningWorkerIds);
+  const setApps = useToolboxStore((s) => s.setApps);
+  const setLoading = useToolboxStore((s) => s.setLoading);
+  const markWorkerStopped = useToolboxStore((s) => s.markWorkerStopped);
+  const { openScene, activateScene, closeScene, openTabs } = useSceneManager();
+
+  const [search, setSearch] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState('all');
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+  const [selectedApp, setSelectedApp] = useState<MiniAppMeta | null>(null);
+
+  const openTabIds = useMemo(() => new Set(openTabs.map((tab) => tab.id)), [openTabs]);
+  const runningIdSet = useMemo(() => new Set(runningWorkerIds), [runningWorkerIds]);
+
+  const runningApps = useMemo(
+    () =>
+      runningWorkerIds
+        .map((id) => apps.find((app) => app.id === id))
+        .filter((app): app is MiniAppMeta => Boolean(app)),
+    [runningWorkerIds, apps]
+  );
+
+  const categories = useMemo(() => {
+    const cats = Array.from(new Set(apps.map((a) => a.category).filter(Boolean)));
+    return ['all', ...cats];
+  }, [apps]);
+
+  const filtered = useMemo(() => {
+    return apps.filter((a) => {
+      const keyword = search.toLowerCase();
+      const matchSearch =
+        !search ||
+        a.name.toLowerCase().includes(keyword) ||
+        a.description.toLowerCase().includes(keyword) ||
+        a.tags.some((t) => t.toLowerCase().includes(keyword));
+      const matchCategory = categoryFilter === 'all' || a.category === categoryFilter;
+      return matchSearch && matchCategory;
+    });
+  }, [apps, search, categoryFilter]);
+
+  const handleOpenApp = useCallback(
+    (appId: string) => {
+      const tabId: SceneTabId = `miniapp:${appId}`;
+      if (openTabIds.has(tabId)) {
+        activateScene(tabId);
+      } else {
+        openScene(tabId);
+      }
+    },
+    [openTabIds, activateScene, openScene]
+  );
+
+  const handleStopRunning = useCallback(
+    async (appId: string) => {
+      const tabId: SceneTabId = `miniapp:${appId}`;
+      try {
+        await miniAppAPI.workerStop(appId);
+      } catch (error) {
+        log.warn('Stop worker failed, removing local running state', error);
+      } finally {
+        markWorkerStopped(appId);
+        if (openTabIds.has(tabId)) {
+          closeScene(tabId);
+        }
+      }
+    },
+    [markWorkerStopped, closeScene, openTabIds]
+  );
+
+  const handleDeleteRequest = (appId: string) => {
+    setPendingDeleteId(appId);
+  };
+
+  const handleDeleteConfirm = async () => {
+    if (!pendingDeleteId) return;
+    const appId = pendingDeleteId;
+    setPendingDeleteId(null);
+    try {
+      await miniAppAPI.deleteMiniApp(appId);
+      setApps(apps.filter((a) => a.id !== appId));
+      markWorkerStopped(appId);
+      const tabId: SceneTabId = `miniapp:${appId}`;
+      if (openTabIds.has(tabId)) {
+        closeScene(tabId);
+      }
+    } catch (error) {
+      log.error('Delete failed', error);
+    }
+  };
+
+  const handleRefresh = async () => {
+    setLoading(true);
+    try {
+      const refreshed = await miniAppAPI.listMiniApps();
+      setApps(refreshed);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleAddFromFolder = async () => {
+    try {
+      const selected = await open({
+        directory: true,
+        multiple: false,
+                title: '选择小应用目录（需包含 meta.json 与 source/）',
+      });
+      const path = Array.isArray(selected) ? selected[0] : selected;
+      if (!path) return;
+
+      setLoading(true);
+      const app = await miniAppAPI.importFromPath(path);
+      setApps([app, ...apps]);
+      handleOpenApp(app.id);
+    } catch (error) {
+      log.error('Import from folder failed', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const renderGrid = () => {
+    if (loading && apps.length === 0) {
+      return <GallerySkeleton count={8} cardHeight={152} />;
+    }
+
+    if (filtered.length === 0) {
+      return (
+        <GalleryEmpty
+          icon={
+            apps.length === 0
+              ? <Sparkles size={36} strokeWidth={1.2} />
+              : <LayoutGrid size={36} strokeWidth={1.2} />
+          }
+          message={apps.length === 0
+            ? '边聊边生成，马上可用。和 AI 对话生成第一个小应用吧。'
+            : '没有匹配的应用。'}
+        />
+      );
+    }
+
+    return (
+      <GalleryGrid>
+        {filtered.map((app, index) => (
+          <MiniAppCard
+            key={app.id}
+            app={app}
+            index={index}
+            isRunning={runningIdSet.has(app.id)}
+            onOpenDetails={setSelectedApp}
+            onOpen={handleOpenApp}
+            onDelete={handleDeleteRequest}
+          />
+        ))}
+      </GalleryGrid>
+    );
+  };
+
+  return (
+    <GalleryLayout className="toolbox-gallery">
+      <GalleryPageHeader
+        title="小应用"
+        subtitle="即时生成的小应用，打开就能用，也能继续迭代。"
+        actions={(
+          <>
+            <Search value={search} onChange={setSearch} placeholder="搜索小应用..." size="small" />
+            <button
+              type="button"
+              className="gallery-action-btn gallery-action-btn--primary"
+              onClick={handleAddFromFolder}
+              disabled={loading}
+              title="从文件夹导入"
+            >
+              <FolderPlus size={15} />
+            </button>
+            <button
+              type="button"
+              className="gallery-action-btn"
+              onClick={handleRefresh}
+              disabled={loading}
+              title="刷新列表"
+            >
+              <RefreshCw
+                size={15}
+                className={loading ? 'gallery-spinning' : undefined}
+              />
+            </button>
+          </>
+        )}
+      />
+
+      <div className="gallery-zones">
+        <GalleryZone
+          title="已启动"
+          tools={runningApps.length > 0 ? <span className="gallery-zone-badge">{runningApps.length}</span> : null}
+        >
+          {runningApps.length > 0 ? (
+            <GalleryGrid>
+              {runningApps.map((app, index) => (
+                <MiniAppCard
+                  key={app.id}
+                  app={app}
+                  index={index}
+                  isRunning
+                  onOpenDetails={setSelectedApp}
+                  onOpen={handleOpenApp}
+                  onDelete={handleDeleteRequest}
+                  onStop={handleStopRunning}
+                />
+              ))}
+            </GalleryGrid>
+          ) : (
+            <div className="gallery-run-empty">
+              暂无运行中的应用
+            </div>
+          )}
+        </GalleryZone>
+
+        <GalleryZone
+          title="全部应用"
+          tools={(
+            <>
+              {categories.length > 1 ? (
+                <div className="gallery-chip-row">
+                  {categories.map((cat) => (
+                    <button
+                      key={cat}
+                      type="button"
+                      className={[
+                        'gallery-cat-chip',
+                        categoryFilter === cat && 'gallery-cat-chip--active',
+                      ]
+                        .filter(Boolean)
+                        .join(' ')}
+                      onClick={() => setCategoryFilter(cat)}
+                    >
+                      {cat === 'all' ? '全部' : cat}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+              <span className="gallery-zone-count">{filtered.length} 个</span>
+            </>
+          )}
+        >
+          {renderGrid()}
+        </GalleryZone>
+      </div>
+
+      <GalleryDetailModal
+        isOpen={Boolean(selectedApp)}
+        onClose={() => setSelectedApp(null)}
+        icon={selectedApp ? renderMiniAppIcon(selectedApp.icon || 'box', 24) : <Box size={24} />}
+        iconGradient={selectedApp ? getMiniAppIconGradient(selectedApp.icon || 'box') : undefined}
+        title={selectedApp?.name ?? ''}
+        badges={selectedApp?.category ? <Badge variant="info">{selectedApp.category}</Badge> : null}
+        description={selectedApp?.description}
+        meta={selectedApp ? <span>v{selectedApp.version}</span> : null}
+        actions={selectedApp ? (
+          <>
+            {runningIdSet.has(selectedApp.id) ? (
+              <Button variant="secondary" size="small" onClick={() => void handleStopRunning(selectedApp.id)}>
+                <Square size={14} />
+                停止
+              </Button>
+            ) : null}
+            <Button variant="danger" size="small" onClick={() => setPendingDeleteId(selectedApp.id)}>
+              <Trash2 size={14} />
+              删除
+            </Button>
+            <Button variant="primary" size="small" onClick={() => handleOpenApp(selectedApp.id)}>
+              <Play size={14} />
+              打开
+            </Button>
+          </>
+        ) : null}
+      >
+        {selectedApp?.tags.length ? (
+          <div className="toolbox-gallery__detail-tags">
+            {selectedApp.tags.map((tag) => (
+              <span key={tag} className="toolbox-gallery__detail-tag">
+                <Tag size={11} />
+                {tag}
+              </span>
+            ))}
+          </div>
+        ) : null}
+      </GalleryDetailModal>
+
+      <ConfirmDialog
+        isOpen={pendingDeleteId !== null}
+        onClose={() => setPendingDeleteId(null)}
+        onConfirm={handleDeleteConfirm}
+        title={`删除 "${apps.find((a) => a.id === pendingDeleteId)?.name ?? ''}"？`}
+        message="此操作不可撤销，应用及其所有数据将被永久删除。"
+        type="warning"
+        confirmDanger
+        confirmText="删除"
+        cancelText="取消"
+      />
+    </GalleryLayout>
+  );
+};
+
+export default GalleryView;

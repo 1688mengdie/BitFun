@@ -18,6 +18,13 @@ const log = createLogger('ConnectedTerminal');
 /** Line threshold for multi-line paste confirmation. */
 const MULTILINE_PASTE_THRESHOLD = 1;
 
+/**
+ * Matches a standalone absolute cursor position command: ESC [ R ; C H
+ * ConPTY sends these after resize to reposition the cursor in its own coordinate
+ * system, which diverges from xterm.js coordinates after history replay.
+ */
+const CURSOR_POS_RE = /^\x1b\[(\d+);(\d+)H$/;
+
 export interface ConnectedTerminalProps {
   sessionId: string;
   className?: string;
@@ -54,7 +61,61 @@ const ConnectedTerminal: React.FC<ConnectedTerminalProps> = memo(({
   const isTerminalReadyRef = useRef(false);
   const outputQueueRef = useRef<string[]>([]);
 
+  // After history replay, ConPTY sends absolute cursor-position commands (ESC[R;CH)
+  // that reference its own coordinate system, which diverges from xterm.js after replay.
+  // We let those commands pass through (to avoid side effects from redirecting them) and
+  // instead restore the correct cursor position via write callbacks after each one.
+  const postHistoryCursorRef = useRef<{ row: number; col: number; ignoreCount: number } | null>(null);
+
+  // PTY dimensions stored with the history snapshot.
+  // Used to resize xterm.js to the correct size before replaying history, so that
+  // absolute cursor-position sequences in the history (e.g. ESC[27;1H) are not
+  // clamped to the xterm.js default row count (24).
+  const historyDimsRef = useRef<{ cols: number; rows: number } | null>(null);
+
+  // While set to a positive value, Terminal's doXtermResize will refuse to shrink
+  // the column count below this threshold.  Set during history flush so that the
+  // CSS open-animation (which drives the terminal through many narrow intermediate
+  // widths) cannot permanently truncate content written at the historical width.
+  // Cleared when post-history cursor mode exits.
+  const preventShrinkBelowColsRef = useRef<number>(0);
+
   const handleOutput = useCallback((data: string) => {
+    // Post-history cursor restoration:
+    // ConPTY sends standalone cursor-position commands after resize in its own coordinate
+    // system. We let them pass through unmodified (redirecting them caused content side
+    // effects) and instead snap the cursor back to the saved correct position via a
+    // write callback after each one is processed by xterm.js.
+    if (postHistoryCursorRef.current && postHistoryCursorRef.current.ignoreCount > 0) {
+      const isCursorOnly = CURSOR_POS_RE.test(data);
+      if (isCursorOnly) {
+        const cursor = postHistoryCursorRef.current;
+        cursor.ignoreCount--;
+        const restoreSeq = `\x1b[${cursor.row};${cursor.col}H`;
+        if (!isTerminalReadyRef.current || !terminalRef.current) {
+          outputQueueRef.current.push(data);
+          outputQueueRef.current.push(restoreSeq);
+          return;
+        }
+        const xterm = terminalRef.current.getTerminal?.();
+        if (xterm) {
+          // Write the original cursor move, then immediately queue the restore so
+          // the visible cursor always lands at the correct history-end position.
+          xterm.write(data, () => {
+            xterm.write(restoreSeq);
+          });
+        } else {
+          terminalRef.current.write(data);
+          terminalRef.current.write(restoreSeq);
+        }
+        return;
+      } else {
+        // Real content arrived — cursor is already at correct position from last restore.
+        postHistoryCursorRef.current = null;
+        preventShrinkBelowColsRef.current = 0;
+      }
+    }
+
     if (!isTerminalReadyRef.current || !terminalRef.current) {
       outputQueueRef.current.push(data);
       return;
@@ -67,7 +128,44 @@ const ConnectedTerminal: React.FC<ConnectedTerminalProps> = memo(({
     if (queue.length === 0) return;
     // Clear first to prevent orphaned items if new data arrives during flush
     outputQueueRef.current = [];
+
+    // If we have historical PTY dimensions, resize xterm.js to the correct row
+    // count before replaying content.  This prevents absolute cursor-position
+    // sequences embedded in the history (e.g. ESC[27;1H) from being clamped to
+    // xterm.js's default 24-row size, which would corrupt the rendered output.
+    // We also lock doXtermResize against shrinking so that the CSS open-animation
+    // (which passes through many narrow column counts) cannot permanently truncate
+    // the history content that is about to be written at the historical width.
+    const dims = historyDimsRef.current;
+    if (dims) {
+      const xterm = terminalRef.current?.getTerminal?.();
+      if (xterm) {
+        const targetRows = Math.max(xterm.rows, dims.rows);
+        try {
+          if (xterm.rows !== targetRows) {
+            xterm.resize(xterm.cols, targetRows);
+          }
+        } catch { /* ignore */ }
+        // Prevent doXtermResize from shrinking below the historical col width.
+        preventShrinkBelowColsRef.current = dims.cols;
+      }
+    }
+
     queue.forEach(data => terminalRef.current?.write(data));
+
+    // After all history writes complete, save the cursor row so that subsequent
+    // ConPTY cursor-only updates can be redirected to this correct position.
+    const xterm = terminalRef.current?.getTerminal?.();
+    if (xterm) {
+      xterm.write('', () => {
+        const cursorY = xterm.buffer.active.cursorY; // 0-indexed
+        const cursorRow = cursorY + 1; // 1-indexed for ANSI
+        if (cursorRow > 0) {
+          const cursorCol = xterm.buffer.active.cursorX + 1; // 1-indexed
+          postHistoryCursorRef.current = { row: cursorRow, col: cursorCol, ignoreCount: 10 };
+        }
+      });
+    }
   }, []);
 
   const handleReady = useCallback(() => {
@@ -85,6 +183,10 @@ const ConnectedTerminal: React.FC<ConnectedTerminalProps> = memo(({
     log.error('Terminal error', { sessionId, message });
   }, [sessionId]);
 
+  const handleHistoryDims = useCallback((cols: number, rows: number) => {
+    historyDimsRef.current = { cols, rows };
+  }, []);
+
   const {
     session,
     isLoading,
@@ -101,6 +203,7 @@ const ConnectedTerminal: React.FC<ConnectedTerminalProps> = memo(({
     onReady: handleReady,
     onExit: handleExit,
     onError: handleError,
+    onHistoryDims: handleHistoryDims,
   });
 
   const handleData = useCallback((data: string) => {
@@ -117,6 +220,18 @@ const ConnectedTerminal: React.FC<ConnectedTerminalProps> = memo(({
       return;
     }
     lastSentSizeRef.current = { cols, rows };
+
+    // If post-history cursor mode is active, update the saved cursor position
+    // ONLY when the terminal is growing (wider cols). Shrinking resizes may place
+    // the cursor at a damaged/truncated position, so we ignore those updates.
+    // Growing resizes simply add columns on the right; the cursor row/col stays valid.
+    if (postHistoryCursorRef.current) {
+      const xterm = terminalRef.current?.getTerminal?.();
+      if (xterm && cols >= xterm.cols) {
+        postHistoryCursorRef.current.row = xterm.buffer.active.cursorY + 1;
+        postHistoryCursorRef.current.col = xterm.buffer.active.cursorX + 1;
+      }
+    }
 
     resize(cols, rows).then(() => {
     }).catch(err => {
@@ -295,6 +410,7 @@ const ConnectedTerminal: React.FC<ConnectedTerminalProps> = memo(({
         onTitleChange={handleTitleChange}
         onReady={handleTerminalReady}
         onPaste={handlePaste}
+        preventShrinkBelowColsRef={preventShrinkBelowColsRef}
       />
 
       {showStatusBar && session && (

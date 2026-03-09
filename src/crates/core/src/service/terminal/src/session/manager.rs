@@ -6,10 +6,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use dashmap::DashMap;
-use futures::Stream;
-use log::warn;
+use futures::{Stream, StreamExt};
+use log::{debug, warn};
+use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, RwLock};
-use tokio::time::timeout;
 
 use crate::config::{ShellConfig, TerminalConfig};
 use crate::events::{TerminalEvent, TerminalEventEmitter};
@@ -22,6 +22,18 @@ use crate::{TerminalError, TerminalResult};
 
 use super::{SessionStatus, TerminalSession};
 
+const COMMAND_TIMEOUT_INTERRUPT_GRACE_MS: Duration = Duration::from_millis(500);
+
+/// Why a command stream reached completion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CommandCompletionReason {
+    /// Command finished normally, including signal-driven exits not caused by timeout.
+    Completed,
+    /// Command hit the configured timeout and terminal attempted to interrupt it.
+    TimedOut,
+}
+
 /// Result of executing a command
 #[derive(Debug, Clone)]
 pub struct CommandExecuteResult {
@@ -33,6 +45,8 @@ pub struct CommandExecuteResult {
     pub output: String,
     /// Exit code (if available)
     pub exit_code: Option<i32>,
+    /// Why command execution stopped.
+    pub completion_reason: CommandCompletionReason,
 }
 
 /// Options for command execution
@@ -60,10 +74,11 @@ pub enum CommandStreamEvent {
     Started { command_id: String },
     /// Output data received
     Output { data: String },
-    /// Command completed successfully
+    /// Command reached a terminal state.
     Completed {
         exit_code: Option<i32>,
         total_output: String,
+        completion_reason: CommandCompletionReason,
     },
     /// Command execution failed
     Error { message: String },
@@ -71,6 +86,33 @@ pub enum CommandStreamEvent {
 
 /// A stream of command execution events
 pub type CommandStream = Pin<Box<dyn Stream<Item = CommandStreamEvent> + Send>>;
+
+fn compute_stream_output_delta(last_sent_output: &mut String, output: &str) -> Option<String> {
+    if output.len() < last_sent_output.len() || !output.starts_with(last_sent_output.as_str()) {
+        last_sent_output.clear();
+    }
+
+    let new_data = output
+        .strip_prefix(last_sent_output.as_str())
+        .filter(|data| !data.is_empty())
+        .map(|data| data.to_string());
+
+    last_sent_output.clear();
+    last_sent_output.push_str(output);
+
+    new_data
+}
+
+async fn get_integration_output_snapshot(
+    session_integrations: &Arc<RwLock<HashMap<String, ShellIntegration>>>,
+    session_id: &str,
+) -> String {
+    let integrations = session_integrations.read().await;
+    integrations
+        .get(session_id)
+        .map(|i| i.get_output().to_string())
+        .unwrap_or_default()
+}
 
 /// Session manager for terminal sessions
 pub struct SessionManager {
@@ -701,211 +743,51 @@ impl SessionManager {
         command: &str,
         options: ExecuteOptions,
     ) -> TerminalResult<CommandExecuteResult> {
-        // Check if session exists
-        let _session = {
-            let sessions = self.sessions.read().await;
-            sessions
-                .get(session_id)
-                .cloned()
-                .ok_or_else(|| TerminalError::SessionNotFound(session_id.to_string()))?
-        };
+        let mut stream = self.execute_command_stream_with_options(
+            session_id.to_string(),
+            command.to_string(),
+            options,
+        );
+        let mut command_id = uuid::Uuid::new_v4().to_string();
+        let mut output = String::new();
 
-        // Check if shell integration is available
-        let has_integration = {
-            let integrations = self.session_integrations.read().await;
-            integrations.contains_key(session_id)
-        };
+        while let Some(event) = stream.next().await {
+            match event {
+                CommandStreamEvent::Started {
+                    command_id: started_command_id,
+                } => {
+                    command_id = started_command_id;
+                }
+                CommandStreamEvent::Output { data } => {
+                    output.push_str(&data);
+                }
+                CommandStreamEvent::Completed {
+                    exit_code,
+                    total_output,
+                    completion_reason,
+                } => {
+                    if !total_output.is_empty() {
+                        output = total_output;
+                    }
 
-        if !has_integration {
-            return Err(TerminalError::Session(
-                "Shell integration is not enabled for this session".to_string(),
-            ));
-        }
-
-        // Wait for session to be ready before executing command
-        Self::wait_for_session_ready_static(&self.sessions, &self.session_integrations, session_id)
-            .await?;
-
-        // Generate command ID
-        let command_id = uuid::Uuid::new_v4().to_string();
-
-        // Clear any previous output
-        {
-            let mut integrations = self.session_integrations.write().await;
-            if let Some(integration) = integrations.get_mut(session_id) {
-                integration.clear_output();
-            }
-        }
-
-        // Prepare the command (optionally with leading space to prevent history)
-        let cmd_to_send = if options.prevent_history {
-            format!(" {}\r", command) // Leading space prevents bash history
-        } else {
-            format!("{}\r", command)
-        };
-
-        // Send the command
-        self.write(session_id, cmd_to_send.as_bytes()).await?;
-
-        // Wait for command completion (with optional timeout)
-        match options.timeout {
-            Some(timeout_duration) => {
-                let result = timeout(
-                    timeout_duration,
-                    self.wait_for_command_completion(session_id),
-                )
-                .await;
-
-                match result {
-                    Ok(Ok((output, exit_code))) => Ok(CommandExecuteResult {
+                    return Ok(CommandExecuteResult {
                         command: command.to_string(),
                         command_id,
                         output,
                         exit_code,
-                    }),
-                    Ok(Err(e)) => Err(e),
-                    Err(_) => {
-                        // Timeout - get whatever output we have
-                        let output = {
-                            let integrations = self.session_integrations.read().await;
-                            integrations
-                                .get(session_id)
-                                .map(|i| i.get_output().to_string())
-                                .unwrap_or_default()
-                        };
-
-                        Err(TerminalError::Timeout(format!(
-                            "Command timed out after {:?}. Partial output: {}",
-                            timeout_duration,
-                            if output.len() > 200 {
-                                &output[..200]
-                            } else {
-                                &output
-                            }
-                        )))
-                    }
+                        completion_reason,
+                    });
                 }
-            }
-            None => {
-                // No timeout - wait indefinitely
-                let (output, exit_code) = self.wait_for_command_completion(session_id).await?;
-                Ok(CommandExecuteResult {
-                    command: command.to_string(),
-                    command_id,
-                    output,
-                    exit_code,
-                })
-            }
-        }
-    }
-
-    /// Wait for command completion using shell integration
-    async fn wait_for_command_completion(
-        &self,
-        session_id: &str,
-    ) -> TerminalResult<(String, Option<i32>)> {
-        let poll_interval = Duration::from_millis(50);
-        let max_idle_checks = 20; // After 1 second of idle, check for prompt
-        let mut idle_count = 0;
-        let mut last_output_len = 0;
-        let mut finished_exit_code: Option<Option<i32>> = None;
-        let mut post_finish_idle_count = 0;
-        // Wait for output to stabilize after CommandFinished
-        let post_finish_idle_required = 4; // 200ms of idle after finish
-
-        loop {
-            tokio::time::sleep(poll_interval).await;
-
-            // Check current state
-            let (state, output, output_len, cmd_finished, last_exit) = {
-                let integrations = self.session_integrations.read().await;
-                if let Some(integration) = integrations.get(session_id) {
-                    let output = integration.get_output().to_string();
-                    let len = output.len();
-                    let cmd_finished = integration.command_just_finished();
-                    let last_exit = integration.last_exit_code();
-                    (
-                        integration.state().clone(),
-                        output,
-                        len,
-                        cmd_finished,
-                        last_exit,
-                    )
-                } else {
-                    return Err(TerminalError::Session("Integration not found".to_string()));
-                }
-            };
-
-            // If command just finished, record it even if state already changed
-            if cmd_finished && finished_exit_code.is_none() {
-                finished_exit_code = Some(last_exit);
-                post_finish_idle_count = 0;
-                last_output_len = output_len;
-                // Clear the flag
-                let mut integrations = self.session_integrations.write().await;
-                if let Some(integration) = integrations.get_mut(session_id) {
-                    integration.clear_command_finished();
-                }
-            }
-
-            // Check if command finished
-            match state {
-                CommandState::Finished { exit_code } => {
-                    // First time seeing Finished state - record it
-                    if finished_exit_code.is_none() {
-                        finished_exit_code = Some(exit_code);
-                        post_finish_idle_count = 0;
-                        last_output_len = output_len;
-                    } else {
-                        // Already in finished state - wait for output to stabilize
-                        if output_len == last_output_len {
-                            post_finish_idle_count += 1;
-                            if post_finish_idle_count >= post_finish_idle_required {
-                                // Output has been stable, return result
-                                return Ok((output, finished_exit_code.flatten()));
-                            }
-                        } else {
-                            // New output arrived, reset counter
-                            post_finish_idle_count = 0;
-                            last_output_len = output_len;
-                        }
-                    }
-                }
-                CommandState::Idle | CommandState::Prompt | CommandState::Input => {
-                    // If we previously detected Finished, wait for output to stabilize then return
-                    if finished_exit_code.is_some() {
-                        if output_len == last_output_len {
-                            post_finish_idle_count += 1;
-                            if post_finish_idle_count >= post_finish_idle_required {
-                                return Ok((output, finished_exit_code.flatten()));
-                            }
-                        } else {
-                            post_finish_idle_count = 0;
-                            last_output_len = output_len;
-                        }
-                    } else {
-                        // Command might have completed without proper shell integration sequence
-                        // Use idle detection as fallback
-                        if output_len == last_output_len {
-                            idle_count += 1;
-                            if idle_count >= max_idle_checks {
-                                // Assume command completed
-                                return Ok((output, None));
-                            }
-                        } else {
-                            idle_count = 0;
-                            last_output_len = output_len;
-                        }
-                    }
-                }
-                CommandState::Executing => {
-                    // Still executing, reset idle count
-                    idle_count = 0;
-                    finished_exit_code = None;
-                    last_output_len = output_len;
+                CommandStreamEvent::Error { message } => {
+                    return Err(TerminalError::Session(message));
                 }
             }
         }
+
+        Err(TerminalError::Session(format!(
+            "Command stream ended unexpectedly for session {}",
+            session_id
+        )))
     }
 
     /// Execute a command and return a stream of events
@@ -1017,30 +899,44 @@ impl SessionManager {
             let max_idle_checks = 20;
             let mut idle_count = 0;
             let mut last_output_len = 0;
-            let mut last_sent_len = 0;
+            let mut last_sent_output = String::new();
             let start_time = std::time::Instant::now();
             let mut finished_exit_code: Option<Option<i32>> = None;
             let mut post_finish_idle_count = 0;
             let post_finish_idle_required = 4; // 200ms of idle after finish
+            let mut timed_out = false;
+            let mut timeout_interrupt_deadline: Option<tokio::time::Instant> = None;
 
             loop {
-                // Check timeout (only if timeout is configured)
-                if let Some(timeout_dur) = timeout_duration {
-                    if start_time.elapsed() > timeout_dur {
-                        let output = {
-                            let integrations = session_integrations.read().await;
-                            integrations
-                                .get(&session_id)
-                                .map(|i| i.get_output().to_string())
-                                .unwrap_or_default()
-                        };
-                        send(CommandStreamEvent::Error {
-                            message: format!("Command timed out after {:?}", timeout_dur),
-                        })
-                        .await;
+                if !timed_out {
+                    if let Some(timeout_dur) = timeout_duration {
+                        if start_time.elapsed() > timeout_dur {
+                            timed_out = true;
+                            timeout_interrupt_deadline = Some(
+                                tokio::time::Instant::now() + COMMAND_TIMEOUT_INTERRUPT_GRACE_MS,
+                            );
+
+                            debug!(
+                                "Command timed out in session {}, sending SIGINT",
+                                session_id
+                            );
+                            if let Err(err) = pty_service.signal(pty_id, "SIGINT").await {
+                                warn!(
+                                    "Failed to interrupt timed out command in session {}: {}",
+                                    session_id, err
+                                );
+                            }
+                        }
+                    }
+                } else if let Some(deadline) = timeout_interrupt_deadline {
+                    if tokio::time::Instant::now() >= deadline {
+                        let output =
+                            get_integration_output_snapshot(&session_integrations, &session_id)
+                                .await;
                         send(CommandStreamEvent::Completed {
-                            exit_code: None,
+                            exit_code: finished_exit_code.flatten(),
                             total_output: output,
+                            completion_reason: CommandCompletionReason::TimedOut,
                         })
                         .await;
                         return;
@@ -1080,11 +976,10 @@ impl SessionManager {
 
                 let output_len = output.len();
 
-                // Send any new output
-                if output_len > last_sent_len {
-                    let new_data = output[last_sent_len..].to_string();
+                if let Some(new_data) =
+                    compute_stream_output_delta(&mut last_sent_output, output.as_str())
+                {
                     send(CommandStreamEvent::Output { data: new_data }).await;
-                    last_sent_len = output_len;
                 }
 
                 // Check if command finished
@@ -1103,6 +998,11 @@ impl SessionManager {
                                     send(CommandStreamEvent::Completed {
                                         exit_code: finished_exit_code.flatten(),
                                         total_output: output,
+                                        completion_reason: if timed_out {
+                                            CommandCompletionReason::TimedOut
+                                        } else {
+                                            CommandCompletionReason::Completed
+                                        },
                                     })
                                     .await;
                                     return;
@@ -1124,6 +1024,11 @@ impl SessionManager {
                                     send(CommandStreamEvent::Completed {
                                         exit_code: finished_exit_code.flatten(),
                                         total_output: output,
+                                        completion_reason: if timed_out {
+                                            CommandCompletionReason::TimedOut
+                                        } else {
+                                            CommandCompletionReason::Completed
+                                        },
                                     })
                                     .await;
                                     return;
@@ -1141,6 +1046,11 @@ impl SessionManager {
                                     send(CommandStreamEvent::Completed {
                                         exit_code: None,
                                         total_output: output,
+                                        completion_reason: if timed_out {
+                                            CommandCompletionReason::TimedOut
+                                        } else {
+                                            CommandCompletionReason::Completed
+                                        },
                                     })
                                     .await;
                                     return;
@@ -1426,4 +1336,53 @@ impl SessionManager {
 
 impl Drop for SessionManager {
     fn drop(&mut self) {}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{compute_stream_output_delta, CommandCompletionReason};
+
+    #[test]
+    fn stream_output_delta_returns_utf8_suffix_without_cutting_chars() {
+        let mut last_sent_output = "你好！我是 Bitfun，".to_string();
+        let output = "你好！我是 Bitfun，可以帮助你完成软件工程任务。".to_string();
+
+        let delta = compute_stream_output_delta(&mut last_sent_output, &output);
+
+        assert_eq!(delta.as_deref(), Some("可以帮助你完成软件工程任务。"));
+        assert_eq!(last_sent_output, output);
+    }
+
+    #[test]
+    fn stream_output_delta_resets_when_previous_snapshot_is_not_prefix() {
+        let mut last_sent_output = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxx".to_string();
+        let output = "你好！我是 Bitfun，可以帮助你完成软件工程任务。有什么我可以帮你的吗？";
+
+        let delta = compute_stream_output_delta(&mut last_sent_output, output);
+
+        assert_eq!(delta.as_deref(), Some(output));
+        assert_eq!(last_sent_output, output);
+    }
+
+    #[test]
+    fn stream_output_delta_returns_none_when_output_is_unchanged() {
+        let mut last_sent_output = "hello 你好".to_string();
+
+        let delta = compute_stream_output_delta(&mut last_sent_output, "hello 你好");
+
+        assert_eq!(delta, None);
+        assert_eq!(last_sent_output, "hello 你好");
+    }
+
+    #[test]
+    fn completion_reason_serializes_with_camel_case_contract() {
+        assert_eq!(
+            serde_json::to_string(&CommandCompletionReason::Completed).unwrap(),
+            "\"completed\""
+        );
+        assert_eq!(
+            serde_json::to_string(&CommandCompletionReason::TimedOut).unwrap(),
+            "\"timedOut\""
+        );
+    }
 }

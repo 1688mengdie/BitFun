@@ -51,7 +51,7 @@ RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/
 WORKDIR /app
 COPY --from=builder /build/target/release/bitfun-relay-server /app/bitfun-relay-server
 
-COPY src/mobile-web/dist /app/static
+COPY src/apps/relay-server/static /app/static
 
 ENV RELAY_PORT=9700
 ENV RELAY_STATIC_DIR=/app/static

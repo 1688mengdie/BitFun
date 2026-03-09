@@ -1,0 +1,37 @@
+@use '../../../../component-library/styles/tokens' as *;
+
+.toolbox-gallery {
+  .gallery-page-header__actions {
+    > :first-child {
+      width: 180px;
+    }
+  }
+
+  &__detail-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: $size-gap-2;
+  }
+
+  &__detail-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 10px;
+    border-radius: $size-radius-full;
+    background: var(--element-bg-medium);
+    border: 1px solid var(--border-subtle);
+    font-size: $font-size-xs;
+    color: var(--color-text-secondary);
+  }
+}
+
+@media (max-width: 720px) {
+  .toolbox-gallery {
+    .gallery-page-header__actions {
+      > :first-child {
+        width: 100%;
+      }
+    }
+  }
+}

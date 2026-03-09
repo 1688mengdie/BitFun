@@ -119,8 +119,10 @@ export interface GlobalStateAPI {
 
   
   openWorkspace(path: string): Promise<WorkspaceInfo>;
-  closeWorkspace(): Promise<void>;
+  closeWorkspace(workspaceId: string): Promise<void>;
+  setActiveWorkspace(workspaceId: string): Promise<WorkspaceInfo>;
   getCurrentWorkspace(): Promise<WorkspaceInfo | null>;
+  getOpenedWorkspaces(): Promise<WorkspaceInfo[]>;
   getRecentWorkspaces(): Promise<WorkspaceInfo[]>;
   scanWorkspaceInfo(workspacePath: string): Promise<WorkspaceInfo | null>;
   
@@ -163,12 +165,20 @@ export function createGlobalStateAPI(): GlobalStateAPI {
       return await globalAPI.openWorkspace(path);
     },
 
-    async closeWorkspace(): Promise<void> {
-      return await globalAPI.closeWorkspace();
+    async closeWorkspace(workspaceId: string): Promise<void> {
+      return await globalAPI.closeWorkspace(workspaceId);
+    },
+
+    async setActiveWorkspace(workspaceId: string): Promise<WorkspaceInfo> {
+      return await globalAPI.setActiveWorkspace(workspaceId);
     },
 
     async getCurrentWorkspace(): Promise<WorkspaceInfo | null> {
       return await globalAPI.getCurrentWorkspace();
+    },
+
+    async getOpenedWorkspaces(): Promise<WorkspaceInfo[]> {
+      return await globalAPI.getOpenedWorkspaces();
     },
 
     async getRecentWorkspaces(): Promise<WorkspaceInfo[]> {

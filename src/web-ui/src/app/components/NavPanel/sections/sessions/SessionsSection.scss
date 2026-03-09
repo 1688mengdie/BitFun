@@ -13,16 +13,7 @@
     flex-direction: column;
     padding: 2px $size-gap-2 $size-gap-1;
     gap: 1px;
-    border-left: 1px solid var(--border-subtle);
     margin: 1px $size-gap-2 2px calc(#{$size-gap-2} + 14px);
-  }
-
-  // Row containing the new-session button + mode chips
-  &__inline-action-row {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    margin-bottom: $size-gap-3;
   }
 
   &__inline-action {
@@ -52,17 +43,6 @@
       white-space: nowrap;
     }
 
-    &.is-code:hover {
-      color: var(--color-primary);
-      background: color-mix(in srgb, var(--color-primary) 8%, transparent);
-      border-color: var(--color-primary);
-    }
-
-    &.is-cowork:hover {
-      color: var(--color-accent-500);
-      background: color-mix(in srgb, var(--color-accent-500) 8%, transparent);
-      border-color: var(--color-accent-500);
-    }
   }
 
   &__inline-empty {
@@ -267,7 +247,7 @@
     }
   }
 
-  // Shell running-status dot (used by ShellsSection)
+  // Shell running-status dot
   &__shell-dot {
     flex-shrink: 0;
     border-radius: 50%;

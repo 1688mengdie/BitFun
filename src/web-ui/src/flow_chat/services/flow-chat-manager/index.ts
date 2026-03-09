@@ -10,7 +10,6 @@ export {
   saveAllInProgressTurns,
   convertDialogTurnToBackendFormat,
   updateSessionMetadata,
-  saveNewSessionMetadata,
   touchSessionActivity
 } from './PersistenceModule';
 
@@ -40,9 +39,7 @@ export {
   getModelMaxTokens,
   createChatSession,
   switchChatSession,
-  deleteChatSession,
-  ensureBackendSession,
-  retryCreateBackendSession
+  deleteChatSession
 } from './SessionModule';
 
 export {
