@@ -11,8 +11,7 @@ import './styles/index.scss';
 type Page = 'pairing' | 'workspace' | 'sessions' | 'chat';
 type NavDirection = 'push' | 'pop' | null;
 
-const NAV_PUSH_DURATION = 350;
-const NAV_POP_DURATION = 250;
+const NAV_DURATION = 300;
 
 function getNavClass(
   targetPage: Page,
@@ -47,7 +46,7 @@ const AppContent: React.FC = () => {
     });
     setNavDir(direction);
     clearTimeout(timerRef.current);
-    const duration = direction === 'pop' ? NAV_POP_DURATION : NAV_PUSH_DURATION;
+    const duration = NAV_DURATION;
     timerRef.current = setTimeout(() => {
       setPrevPage(null);
       setNavDir(null);
@@ -82,7 +81,7 @@ const AppContent: React.FC = () => {
 
   const handleBackToSessions = useCallback(() => {
     navigateTo('sessions', 'pop');
-    setTimeout(() => setActiveSessionId(null), NAV_POP_DURATION);
+    setTimeout(() => setActiveSessionId(null), NAV_DURATION);
   }, [navigateTo]);
 
   const isAnimating = navDir !== null;

@@ -397,8 +397,15 @@ impl RelayClient {
 }
 
 async fn dial(ws_url: &str) -> Result<WsStream> {
-    let (stream, _) = tokio_tungstenite::connect_async(ws_url)
-        .await
-        .map_err(|e| anyhow!("dial {ws_url}: {e}"))?;
+    let config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig {
+        max_message_size: Some(64 * 1024 * 1024),
+        max_frame_size: Some(64 * 1024 * 1024),
+        max_write_buffer_size: 64 * 1024 * 1024,
+        ..Default::default()
+    };
+    let (stream, _) =
+        tokio_tungstenite::connect_async_with_config(ws_url, Some(config), false)
+            .await
+            .map_err(|e| anyhow!("dial {ws_url}: {e}"))?;
     Ok(stream)
 }

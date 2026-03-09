@@ -12,7 +12,7 @@ use anyhow::{anyhow, Result};
 use dashmap::DashMap;
 use log::{debug, error, info};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock, RwLock};
 
@@ -85,6 +85,29 @@ pub enum RemoteCommand {
         session_id: String,
         since_version: u64,
         known_msg_count: usize,
+    },
+    /// Read a workspace file and return its base64-encoded content.
+    ///
+    /// `path` may be an absolute path or a path relative to the current
+    /// workspace root (e.g. `artifacts/report.docx`).  Files larger than
+    /// 10 MB are rejected with an `Error` response.
+    ReadFile {
+        path: String,
+    },
+    /// Read a chunk of a workspace file.  `offset` is the byte offset into the
+    /// raw file and `limit` is the maximum number of raw bytes to return.
+    /// The response contains the base64-encoded chunk plus total file size so
+    /// the client knows when it has all the data.
+    ReadFileChunk {
+        path: String,
+        offset: u64,
+        limit: u64,
+    },
+    /// Get metadata (name, size, mime_type) for a workspace file without
+    /// transferring its content.  Used by the mobile client to display file
+    /// cards before the user confirms the download.
+    GetFileInfo {
+        path: String,
     },
     Ping,
 }
@@ -161,6 +184,28 @@ pub enum RemoteResponse {
     InteractionAccepted {
         action: String,
         target_id: String,
+    },
+    /// Response to `ReadFile`: the file contents encoded as a base64 data-URL.
+    FileContent {
+        name: String,
+        content_base64: String,
+        mime_type: String,
+        size: u64,
+    },
+    /// Response to `ReadFileChunk`.
+    FileChunk {
+        name: String,
+        chunk_base64: String,
+        offset: u64,
+        chunk_size: u64,
+        total_size: u64,
+        mime_type: String,
+    },
+    /// Response to `GetFileInfo`: metadata only, no file content.
+    FileInfo {
+        name: String,
+        size: u64,
+        mime_type: String,
     },
     Pong,
     Error {
@@ -722,7 +767,7 @@ pub struct RemoteSessionStateTracker {
 
 impl RemoteSessionStateTracker {
     pub fn new(session_id: String) -> Self {
-        let (event_tx, _) = tokio::sync::broadcast::channel(256);
+        let (event_tx, _) = tokio::sync::broadcast::channel(1024);
         Self {
             target_session_id: session_id,
             version: AtomicU64::new(0),
@@ -781,6 +826,15 @@ impl RemoteSessionStateTracker {
 
     pub fn turn_status(&self) -> String {
         self.state.read().unwrap().turn_status.clone()
+    }
+
+    /// Return the full accumulated response text for the current turn.
+    ///
+    /// Unlike the broadcast channel (which can lag and drop chunks), this
+    /// is maintained directly from the source `AgenticEvent` stream and is
+    /// therefore authoritative.
+    pub fn accumulated_text(&self) -> String {
+        self.state.read().unwrap().accumulated_text.clone()
     }
 
     /// Returns true if the turn has ended (completed/failed/cancelled) but
@@ -1327,6 +1381,51 @@ impl RemoteExecutionDispatcher {
             None => coordinator.restore_session(session_id).await.ok(),
         };
 
+        // Pre-warm the terminal so shell integration is ready before BashTool runs.
+        // Bot/remote sessions have no Terminal panel to pre-create the session, so the
+        // AI model's processing time (typically 5-15 s) gives shell integration a head
+        // start.  When BashTool eventually calls get_or_create, the binding already
+        // exists and the 30-second readiness wait is skipped entirely.
+        {
+            use crate::infrastructure::get_workspace_path;
+            use terminal_core::{TerminalApi, TerminalBindingOptions};
+            let sid = session_id.to_string();
+            tokio::spawn(async move {
+                let Ok(api) = TerminalApi::from_singleton() else {
+                    return;
+                };
+                let binding = api.session_manager().binding();
+                if binding.get(&sid).is_some() {
+                    return;
+                }
+                let workspace = get_workspace_path().map(|p| p.to_string_lossy().into_owned());
+                let name = format!("Chat-{}", &sid[..8.min(sid.len())]);
+                match binding
+                    .get_or_create(
+                        &sid,
+                        TerminalBindingOptions {
+                            working_directory: workspace,
+                            session_id: Some(sid.clone()),
+                            session_name: Some(name),
+                            env: Some({
+                                let mut m = std::collections::HashMap::new();
+                                m.insert(
+                                    "BITFUN_NONINTERACTIVE".to_string(),
+                                    "1".to_string(),
+                                );
+                                m
+                            }),
+                            ..Default::default()
+                        },
+                    )
+                    .await
+                {
+                    Ok(_) => info!("Terminal pre-warmed for remote session {sid}"),
+                    Err(e) => debug!("Terminal pre-warm skipped for {sid}: {e}"),
+                }
+            });
+        }
+
         let resolved_agent_type = agent_type
             .map(|t| resolve_agent_type(Some(t)).to_string())
             .unwrap_or_else(|| "agentic".to_string());
@@ -1477,6 +1576,14 @@ impl RemoteServer {
             }
 
             RemoteCommand::PollSession { .. } => self.handle_poll_command(cmd).await,
+
+            RemoteCommand::ReadFile { path } => self.handle_read_file(path).await,
+            RemoteCommand::ReadFileChunk {
+                path,
+                offset,
+                limit,
+            } => self.handle_read_file_chunk(path, *offset, *limit).await,
+            RemoteCommand::GetFileInfo { path } => self.handle_get_file_info(path).await,
         }
     }
 
@@ -1648,6 +1755,153 @@ impl RemoteServer {
             new_messages: send_msgs,
             total_msg_count: send_total,
             active_turn,
+        }
+    }
+
+    // ── ReadFile ────────────────────────────────────────────────────
+
+    /// Read a workspace file and return its base64-encoded content.
+    ///
+    /// Relative paths are resolved against the current workspace root.
+    /// Rejects files larger than 10 MB.
+    async fn handle_read_file(&self, raw_path: &str) -> RemoteResponse {
+        use crate::service::remote_connect::bot::{read_workspace_file, WorkspaceFileContent};
+
+        const MAX_SIZE: u64 = 30 * 1024 * 1024; // Unified 30 MB cap (Feishu API hard limit)
+        match read_workspace_file(raw_path, MAX_SIZE).await {
+            Ok(WorkspaceFileContent {
+                name,
+                bytes,
+                mime_type,
+                size,
+            }) => {
+                use base64::Engine as _;
+                let content_base64 =
+                    base64::engine::general_purpose::STANDARD.encode(&bytes);
+                RemoteResponse::FileContent {
+                    name,
+                    content_base64,
+                    mime_type: mime_type.to_string(),
+                    size,
+                }
+            }
+            Err(e) => RemoteResponse::Error {
+                message: e.to_string(),
+            },
+        }
+    }
+
+    async fn handle_read_file_chunk(
+        &self,
+        raw_path: &str,
+        offset: u64,
+        limit: u64,
+    ) -> RemoteResponse {
+        use crate::service::remote_connect::bot::{detect_mime_type, resolve_workspace_path};
+
+        let abs = match resolve_workspace_path(raw_path) {
+            Some(p) => p,
+            None => {
+                return RemoteResponse::Error {
+                    message: format!("No workspace open to resolve path: {raw_path}"),
+                }
+            }
+        };
+        if !abs.exists() || !abs.is_file() {
+            return RemoteResponse::Error {
+                message: format!("File not found or not a regular file: {}", abs.display()),
+            };
+        }
+
+        let total_size = match tokio::fs::metadata(&abs).await {
+            Ok(m) => m.len(),
+            Err(e) => {
+                return RemoteResponse::Error {
+                    message: format!("Cannot read file metadata: {e}"),
+                }
+            }
+        };
+
+        // Must be divisible by 3 so each intermediate chunk's base64 has no
+        // padding; the client joins chunk base64 strings and `atob()` requires
+        // padding only at the very end.
+        const MAX_CHUNK: u64 = 3 * 1024 * 1024; // 3 MB raw → 4 MB base64
+        let actual_limit = limit.min(MAX_CHUNK);
+
+        let bytes = match tokio::fs::read(&abs).await {
+            Ok(b) => b,
+            Err(e) => {
+                return RemoteResponse::Error {
+                    message: format!("Cannot read file: {e}"),
+                }
+            }
+        };
+
+        let start = (offset as usize).min(bytes.len());
+        let end = (start + actual_limit as usize).min(bytes.len());
+        let chunk = &bytes[start..end];
+
+        use base64::Engine as _;
+        let chunk_base64 = base64::engine::general_purpose::STANDARD.encode(chunk);
+
+        let name = abs
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("file")
+            .to_string();
+
+        RemoteResponse::FileChunk {
+            name,
+            chunk_base64,
+            offset,
+            chunk_size: (end - start) as u64,
+            total_size,
+            mime_type: detect_mime_type(&abs).to_string(),
+        }
+    }
+
+    async fn handle_get_file_info(&self, raw_path: &str) -> RemoteResponse {
+        use crate::service::remote_connect::bot::{detect_mime_type, resolve_workspace_path};
+
+        let abs = match resolve_workspace_path(raw_path) {
+            Some(p) => p,
+            None => {
+                return RemoteResponse::Error {
+                    message: format!("No workspace open to resolve path: {raw_path}"),
+                }
+            }
+        };
+
+        if !abs.exists() {
+            return RemoteResponse::Error {
+                message: format!("File not found: {}", abs.display()),
+            };
+        }
+        if !abs.is_file() {
+            return RemoteResponse::Error {
+                message: format!("Path is not a regular file: {}", abs.display()),
+            };
+        }
+
+        let size = match std::fs::metadata(&abs) {
+            Ok(m) => m.len(),
+            Err(e) => {
+                return RemoteResponse::Error {
+                    message: format!("Cannot read file metadata: {e}"),
+                }
+            }
+        };
+
+        let name = abs
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("file")
+            .to_string();
+
+        RemoteResponse::FileInfo {
+            name,
+            size,
+            mime_type: detect_mime_type(&abs).to_string(),
         }
     }
 

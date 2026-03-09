@@ -442,6 +442,188 @@ impl FeishuBot {
         }
     }
 
+    /// Upload a local file to Feishu and return its `file_key`.
+    ///
+    /// Files larger than 30 MB are rejected (Feishu IM file-upload limit).
+    async fn upload_file_to_feishu(&self, file_path: &str) -> Result<String> {
+        let token = self.get_access_token().await?;
+
+        const MAX_SIZE: u64 = 30 * 1024 * 1024; // Unified 30 MB cap (Feishu API hard limit)
+        let content = super::read_workspace_file(file_path, MAX_SIZE).await?;
+
+        // Feishu uses its own file_type enum rather than MIME types.
+        let ext = std::path::Path::new(&content.name)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+        let file_type = match ext.as_str() {
+            "pdf" => "pdf",
+            "doc" | "docx" => "doc",
+            "xls" | "xlsx" => "xls",
+            "ppt" | "pptx" => "ppt",
+            "mp4" => "mp4",
+            _ => "stream",
+        };
+
+        let part = reqwest::multipart::Part::bytes(content.bytes)
+            .file_name(content.name.clone())
+            .mime_str("application/octet-stream")?;
+
+        let form = reqwest::multipart::Form::new()
+            .text("file_type", file_type.to_string())
+            .text("file_name", content.name)
+            .part("file", part);
+
+        let client = reqwest::Client::new();
+        let resp = client
+            .post("https://open.feishu.cn/open-apis/im/v1/files")
+            .bearer_auth(&token)
+            .multipart(form)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(anyhow!("Feishu file upload failed: {body}"));
+        }
+
+        let body: serde_json::Value = resp.json().await?;
+        body.pointer("/data/file_key")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .ok_or_else(|| anyhow!("Feishu upload response missing file_key"))
+    }
+
+    /// Upload a local file and send it to a Feishu chat as a file message.
+    async fn send_file_to_feishu_chat(&self, chat_id: &str, file_path: &str) -> Result<()> {
+        let file_key = self.upload_file_to_feishu(file_path).await?;
+        let token = self.get_access_token().await?;
+
+        let client = reqwest::Client::new();
+        let resp = client
+            .post("https://open.feishu.cn/open-apis/im/v1/messages")
+            .query(&[("receive_id_type", "chat_id")])
+            .bearer_auth(&token)
+            .json(&serde_json::json!({
+                "receive_id": chat_id,
+                "msg_type": "file",
+                "content": serde_json::to_string(&serde_json::json!({"file_key": file_key}))?,
+            }))
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(anyhow!("Feishu file message failed: {body}"));
+        }
+        debug!("Feishu file sent to {chat_id}: {file_path}");
+        Ok(())
+    }
+
+    /// Scan `text` for `computer://` links, store them as pending downloads and
+    /// send an interactive card with one download button per file.
+    /// The actual transfer only starts when the user clicks the button.
+    async fn notify_files_ready(&self, chat_id: &str, text: &str) {
+        let paths = super::extract_computer_file_paths(text);
+        if paths.is_empty() {
+            return;
+        }
+
+        let mut actions: Vec<BotAction> = Vec::new();
+        {
+            let mut states = self.chat_states.write().await;
+            let state = states
+                .entry(chat_id.to_string())
+                .or_insert_with(|| {
+                    let mut s = BotChatState::new(chat_id.to_string());
+                    s.paired = true;
+                    s
+                });
+            for path in &paths {
+                if let Some((name, size)) = super::get_file_metadata(path) {
+                    let token: String = {
+                        use std::time::{SystemTime, UNIX_EPOCH};
+                        let ns = SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .subsec_nanos();
+                        format!("{:08x}", ns ^ (chat_id.len() as u32))
+                    };
+                    state.pending_files.insert(token.clone(), path.clone());
+                    actions.push(BotAction::secondary(
+                        &format!("📥 {} ({})", name, super::format_file_size(size)),
+                        &format!("download_file:{token}"),
+                    ));
+                }
+            }
+        }
+
+        if actions.is_empty() {
+            return;
+        }
+
+        let intro = if actions.len() == 1 {
+            "📎 1 file ready to download:".to_string()
+        } else {
+            format!("📎 {} files ready to download:", actions.len())
+        };
+
+        let result = HandleResult {
+            reply: intro,
+            actions,
+            forward_to_session: None,
+        };
+        if let Err(e) = self.send_handle_result(chat_id, &result).await {
+            warn!("Failed to send file notification to Feishu: {e}");
+        }
+    }
+
+    /// Handle a `download_file:<token>` action: look up the pending file and
+    /// upload it to Feishu.  Sends a plain-text error if the token has expired
+    /// or the transfer fails.
+    async fn handle_download_request(&self, chat_id: &str, token: &str) {
+        let path = {
+            let mut states = self.chat_states.write().await;
+            states
+                .get_mut(chat_id)
+                .and_then(|s| s.pending_files.remove(token))
+        };
+
+        match path {
+            None => {
+                let _ = self
+                    .send_message(
+                        chat_id,
+                        "This download link has expired. Please ask the agent again.",
+                    )
+                    .await;
+            }
+            Some(path) => {
+                let file_name = std::path::Path::new(&path)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("file")
+                    .to_string();
+                let _ = self
+                    .send_message(chat_id, &format!("Sending \"{file_name}\"…"))
+                    .await;
+                match self.send_file_to_feishu_chat(chat_id, &path).await {
+                    Ok(()) => info!("Sent file to Feishu chat {chat_id}: {path}"),
+                    Err(e) => {
+                        warn!("Failed to send file to Feishu: {e}");
+                        let _ = self
+                            .send_message(
+                                chat_id,
+                                &format!("⚠️ Could not send \"{file_name}\": {e}"),
+                            )
+                            .await;
+                    }
+                }
+            }
+        }
+    }
+
     fn build_action_card(chat_id: &str, content: &str, actions: &[BotAction]) -> serde_json::Value {
         let body = Self::card_body_text(content);
         let mut elements = vec![serde_json::json!({
@@ -813,8 +995,15 @@ impl FeishuBot {
     }
 
     /// Start polling for pairing codes.  Returns the chat_id on success.
-    pub async fn wait_for_pairing(&self) -> Result<String> {
+    pub async fn wait_for_pairing(
+        &self,
+        stop_rx: &mut tokio::sync::watch::Receiver<bool>,
+    ) -> Result<String> {
         info!("Feishu bot waiting for pairing code via WebSocket...");
+
+        if *stop_rx.borrow() {
+            return Err(anyhow!("bot stop requested"));
+        }
 
         let (ws_url, config) = self.get_ws_endpoint().await?;
 
@@ -837,6 +1026,10 @@ impl FeishuBot {
 
         loop {
             tokio::select! {
+                _ = stop_rx.changed() => {
+                    info!("Feishu wait_for_pairing stopped by signal");
+                    return Err(anyhow!("bot stop requested"));
+                }
                 msg = read.next() => {
                     match msg {
                         Some(Ok(WsMessage::Binary(data))) => {
@@ -1098,6 +1291,14 @@ impl FeishuBot {
             return;
         }
 
+        // Intercept file download callbacks before normal command routing.
+        if text.starts_with("download_file:") {
+            let token = text["download_file:".len()..].trim().to_string();
+            drop(states);
+            self.handle_download_request(chat_id, &token).await;
+            return;
+        }
+
         let cmd = parse_command(text);
         let result = handle_command(state, cmd, images).await;
 
@@ -1130,8 +1331,9 @@ impl FeishuBot {
                         msg_bot.send_message(&msg_cid, &text).await.ok();
                     })
                 });
-                let response = execute_forwarded_turn(forward, Some(handler), Some(sender)).await;
-                bot.send_message(&cid, &response).await.ok();
+                let result = execute_forwarded_turn(forward, Some(handler), Some(sender)).await;
+                bot.send_message(&cid, &result.display_text).await.ok();
+                bot.notify_files_ready(&cid, &result.full_text).await;
             });
         }
     }

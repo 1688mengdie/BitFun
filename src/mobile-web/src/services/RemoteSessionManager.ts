@@ -266,6 +266,85 @@ export class RemoteSessionManager {
   async ping(): Promise<void> {
     await this.request({ cmd: 'ping' });
   }
+
+  /**
+   * Fetch metadata for a workspace file (name, size, MIME type) without
+   * transferring its content.  Used to render file cards before the user
+   * confirms a download.
+   */
+  async getFileInfo(path: string): Promise<{
+    name: string;
+    size: number;
+    mimeType: string;
+  }> {
+    const resp = await this.request<{
+      resp: string;
+      name: string;
+      size: number;
+      mime_type: string;
+    }>({ cmd: 'get_file_info', path });
+    return {
+      name: resp.name,
+      size: resp.size,
+      mimeType: resp.mime_type,
+    };
+  }
+
+  /**
+   * Read a workspace file using chunked transfer.
+   *
+   * Downloads the file in 4 MB chunks, reassembles the base64 pieces, and
+   * calls `onProgress(downloaded, total)` after each chunk so the UI can
+   * display a progress bar.
+   */
+  async readFile(
+    path: string,
+    onProgress?: (downloaded: number, total: number) => void,
+  ): Promise<{
+    name: string;
+    contentBase64: string;
+    mimeType: string;
+    size: number;
+  }> {
+    // Must be divisible by 3 so intermediate base64 chunks have no `=` padding;
+    // joining padded chunks would produce invalid base64 for `atob()`.
+    const CHUNK_SIZE = 3 * 1024 * 1024; // 3 MB per request
+    let offset = 0;
+    const chunks: string[] = [];
+    let fileName = '';
+    let mimeType = '';
+    let totalSize = 0;
+
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const resp = await this.request<{
+        resp: string;
+        name: string;
+        chunk_base64: string;
+        offset: number;
+        chunk_size: number;
+        total_size: number;
+        mime_type: string;
+      }>({ cmd: 'read_file_chunk', path, offset, limit: CHUNK_SIZE });
+
+      chunks.push(resp.chunk_base64);
+      fileName = resp.name;
+      mimeType = resp.mime_type;
+      totalSize = resp.total_size;
+      offset += resp.chunk_size;
+
+      onProgress?.(Math.min(offset, totalSize), totalSize);
+
+      if (offset >= totalSize || resp.chunk_size === 0) break;
+    }
+
+    return {
+      name: fileName,
+      contentBase64: chunks.join(''),
+      mimeType,
+      size: totalSize,
+    };
+  }
 }
 
 // ── SessionPoller ─────────────────────────────────────────────────

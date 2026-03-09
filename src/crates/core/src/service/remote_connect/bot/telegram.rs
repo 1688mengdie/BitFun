@@ -13,9 +13,11 @@ use tokio::sync::RwLock;
 
 use super::command_router::{
     execute_forwarded_turn, handle_command, paired_success_message, parse_command,
-    BotInteractiveRequest, BotInteractionHandler, BotMessageSender, BotChatState, WELCOME_MESSAGE,
+    BotAction, BotChatState, BotInteractiveRequest, BotInteractionHandler, BotMessageSender,
+    HandleResult, WELCOME_MESSAGE,
 };
 use super::{load_bot_persistence, save_bot_persistence, BotConfig, SavedBotConnection};
+use crate::service::remote_connect::remote_server::ImageAttachment;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TelegramConfig {
@@ -75,6 +77,230 @@ impl TelegramBot {
         Ok(())
     }
 
+    /// Send a message with Telegram inline keyboard buttons.
+    ///
+    /// Each `BotAction` becomes one button row.  The `callback_data` carries
+    /// the full command string so the bot receives it as a synthetic message
+    /// when the user taps the button.
+    ///
+    /// Telegram limits `callback_data` to 64 bytes.  All commands used here
+    /// (including `/cancel_task turn_<uuid>`) fit within that limit.
+    async fn send_message_with_keyboard(
+        &self,
+        chat_id: i64,
+        text: &str,
+        actions: &[BotAction],
+    ) -> Result<()> {
+        // Build inline keyboard: one button per row for clarity.
+        let keyboard: Vec<Vec<serde_json::Value>> = actions
+            .iter()
+            .map(|action| {
+                vec![serde_json::json!({
+                    "text": action.label,
+                    "callback_data": action.command,
+                })]
+            })
+            .collect();
+
+        let client = reqwest::Client::new();
+        let resp = client
+            .post(&self.api_url("sendMessage"))
+            .json(&serde_json::json!({
+                "chat_id": chat_id,
+                "text": text,
+                "reply_markup": {
+                    "inline_keyboard": keyboard,
+                },
+            }))
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(anyhow!("telegram sendMessage (keyboard) failed: {body}"));
+        }
+        debug!("Telegram keyboard message sent to chat {chat_id}");
+        Ok(())
+    }
+
+    /// Send a local file to a Telegram chat as a document attachment.
+    ///
+    /// Skips files larger than 50 MB (Telegram Bot API hard limit).
+    async fn send_file_as_document(&self, chat_id: i64, file_path: &str) -> Result<()> {
+        const MAX_SIZE: u64 = 30 * 1024 * 1024; // Unified 30 MB cap (Feishu API hard limit)
+        let content = super::read_workspace_file(file_path, MAX_SIZE).await?;
+
+        let part = reqwest::multipart::Part::bytes(content.bytes)
+            .file_name(content.name.clone())
+            .mime_str("application/octet-stream")?;
+
+        let form = reqwest::multipart::Form::new()
+            .text("chat_id", chat_id.to_string())
+            .part("document", part);
+
+        let client = reqwest::Client::new();
+        let resp = client
+            .post(&self.api_url("sendDocument"))
+            .multipart(form)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(anyhow!("telegram sendDocument failed: {body}"));
+        }
+        debug!("Telegram document sent to chat {chat_id}: {}", content.name);
+        Ok(())
+    }
+
+    /// Scan `text` for `computer://` links, store them as pending downloads and
+    /// send a notification message with one inline-keyboard button per file.
+    /// The actual transfer only starts when the user clicks the button.
+    async fn notify_files_ready(&self, chat_id: i64, text: &str) {
+        let paths = super::extract_computer_file_paths(text);
+        if paths.is_empty() {
+            return;
+        }
+
+        let mut actions: Vec<BotAction> = Vec::new();
+        {
+            let mut states = self.chat_states.write().await;
+            let state = states.entry(chat_id).or_insert_with(|| {
+                let mut s = BotChatState::new(chat_id.to_string());
+                s.paired = true;
+                s
+            });
+            for path in &paths {
+                if let Some((name, size)) = super::get_file_metadata(path) {
+                    let token: String = {
+                        use std::time::{SystemTime, UNIX_EPOCH};
+                        let ns = SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .subsec_nanos();
+                        format!("{:08x}", ns ^ (chat_id as u32))
+                    };
+                    state.pending_files.insert(token.clone(), path.clone());
+                    actions.push(BotAction::secondary(
+                        &format!("📥 {} ({})", name, super::format_file_size(size)),
+                        &format!("download_file:{token}"),
+                    ));
+                }
+            }
+        }
+
+        if actions.is_empty() {
+            return;
+        }
+
+        let intro = if actions.len() == 1 {
+            "📎 1 file ready to download:".to_string()
+        } else {
+            format!("📎 {} files ready to download:", actions.len())
+        };
+
+        if let Err(e) = self.send_message_with_keyboard(chat_id, &intro, &actions).await {
+            warn!("Failed to send file notification to Telegram: {e}");
+        }
+    }
+
+    /// Handle a `download_file:<token>` callback: look up the pending file and
+    /// send it.  Sends a plain-text error if the token has expired or the
+    /// transfer fails.
+    async fn handle_download_request(&self, chat_id: i64, token: &str) {
+        let path = {
+            let mut states = self.chat_states.write().await;
+            states
+                .get_mut(&chat_id)
+                .and_then(|s| s.pending_files.remove(token))
+        };
+
+        match path {
+            None => {
+                let _ = self
+                    .send_message(
+                        chat_id,
+                        "This download link has expired. Please ask the agent again.",
+                    )
+                    .await;
+            }
+            Some(path) => {
+                let file_name = std::path::Path::new(&path)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("file")
+                    .to_string();
+                let _ = self
+                    .send_message(chat_id, &format!("Sending \"{file_name}\"…"))
+                    .await;
+                match self.send_file_as_document(chat_id, &path).await {
+                    Ok(()) => info!("Sent file to Telegram chat {chat_id}: {path}"),
+                    Err(e) => {
+                        warn!("Failed to send file to Telegram: {e}");
+                        let _ = self
+                            .send_message(
+                                chat_id,
+                                &format!("⚠️ Could not send \"{file_name}\": {e}"),
+                            )
+                            .await;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Acknowledge a callback query so Telegram removes the button loading state.
+    async fn answer_callback_query(&self, callback_query_id: &str) {
+        let client = reqwest::Client::new();
+        let _ = client
+            .post(&self.api_url("answerCallbackQuery"))
+            .json(&serde_json::json!({ "callback_query_id": callback_query_id }))
+            .send()
+            .await;
+    }
+
+    /// Send a `HandleResult`, using an inline keyboard when actions are present.
+    ///
+    /// For the "Processing your message…" reply the cancel command line in the
+    /// text is replaced with a friendlier prompt, and a Cancel Task button is
+    /// added via the inline keyboard.
+    async fn send_handle_result(&self, chat_id: i64, result: &HandleResult) {
+        let text = Self::clean_reply_text(&result.reply, !result.actions.is_empty());
+        if result.actions.is_empty() {
+            self.send_message(chat_id, &text).await.ok();
+        } else {
+            if let Err(e) = self.send_message_with_keyboard(chat_id, &text, &result.actions).await
+            {
+                warn!("Failed to send Telegram keyboard message: {e}; falling back to plain text");
+                self.send_message(chat_id, &result.reply).await.ok();
+            }
+        }
+    }
+
+    /// Remove raw `/cancel_task <turn_id>` instruction lines and replace them
+    /// with a short hint that the button below can be used instead.
+    fn clean_reply_text(text: &str, has_actions: bool) -> String {
+        let mut lines: Vec<String> = Vec::new();
+        let mut replaced_cancel = false;
+
+        for line in text.lines() {
+            let trimmed = line.trim();
+            if trimmed.contains("/cancel_task ") {
+                if has_actions && !replaced_cancel {
+                    lines.push(
+                        "If needed, tap the Cancel Task button below to stop this request."
+                            .to_string(),
+                    );
+                    replaced_cancel = true;
+                }
+                continue;
+            }
+            lines.push(line.to_string());
+        }
+
+        lines.join("\n").trim().to_string()
+    }
+
     /// Register the bot command menu visible in Telegram's "/" menu.
     pub async fn set_bot_commands(&self) -> Result<()> {
         let client = reqwest::Client::new();
@@ -119,7 +345,65 @@ impl TelegramBot {
         false
     }
 
-    pub async fn poll_updates(&self) -> Result<Vec<(i64, String)>> {
+    /// Download a Telegram photo by file_id and return it as an `ImageAttachment`.
+    ///
+    /// Telegram photo updates contain multiple `PhotoSize` entries; callers should
+    /// pass the `file_id` of the last (largest) entry.
+    async fn download_photo(&self, file_id: &str) -> Result<ImageAttachment> {
+        let client = reqwest::Client::new();
+
+        // Step 1: resolve file_path via getFile
+        let get_file_url = self.api_url("getFile");
+        let resp = client
+            .post(&get_file_url)
+            .json(&serde_json::json!({ "file_id": file_id }))
+            .send()
+            .await?;
+        let body: serde_json::Value = resp.json().await?;
+        let file_path = body
+            .pointer("/result/file_path")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow!("Telegram getFile: missing file_path for file_id={file_id}"))?
+            .to_string();
+
+        // Step 2: download the actual bytes
+        let download_url = format!(
+            "https://api.telegram.org/file/bot{}/{}",
+            self.config.bot_token, file_path
+        );
+        let bytes = client.get(&download_url).send().await?.bytes().await?;
+
+        // Step 3: encode as base64 data-URL
+        use base64::Engine as _;
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+        let mime_type = if file_path.ends_with(".jpg") || file_path.ends_with(".jpeg") {
+            "image/jpeg"
+        } else if file_path.ends_with(".png") {
+            "image/png"
+        } else if file_path.ends_with(".gif") {
+            "image/gif"
+        } else if file_path.ends_with(".webp") {
+            "image/webp"
+        } else {
+            "image/jpeg"
+        };
+        let data_url = format!("data:{mime_type};base64,{b64}");
+        let name = file_path
+            .rsplit('/')
+            .next()
+            .unwrap_or("photo.jpg")
+            .to_string();
+
+        debug!("Telegram photo downloaded: file_id={file_id}, size={}B", bytes.len());
+        Ok(ImageAttachment { name, data_url })
+    }
+
+    /// Returns `(chat_id, text, images)` tuples for each incoming message.
+    ///
+    /// Handles both plain-text messages and photo messages with an optional
+    /// caption.  For photo messages the highest-resolution variant is downloaded
+    /// and returned as an `ImageAttachment`.
+    pub async fn poll_updates(&self) -> Result<Vec<(i64, String, Vec<ImageAttachment>)>> {
         let offset = *self.last_update_id.read().await;
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(35))
@@ -146,11 +430,63 @@ impl TelegramBot {
                 }
             }
 
-            if let (Some(chat_id), Some(text)) = (
-                update.pointer("/message/chat/id").and_then(|v| v.as_i64()),
-                update.pointer("/message/text").and_then(|v| v.as_str()),
-            ) {
-                messages.push((chat_id, text.trim().to_string()));
+            // Inline keyboard button press – treat callback_data as a message.
+            if let Some(cq) = update.get("callback_query") {
+                let cq_id = cq["id"].as_str().unwrap_or("").to_string();
+                let chat_id = cq
+                    .pointer("/message/chat/id")
+                    .and_then(|v| v.as_i64());
+                let data = cq["data"].as_str().map(|s| s.trim().to_string());
+
+                if let (Some(chat_id), Some(data)) = (chat_id, data) {
+                    // Answer the callback query to dismiss the button spinner.
+                    self.answer_callback_query(&cq_id).await;
+                    messages.push((chat_id, data, vec![]));
+                }
+                continue;
+            }
+
+            let Some(chat_id) = update
+                .pointer("/message/chat/id")
+                .and_then(|v| v.as_i64())
+            else {
+                continue;
+            };
+
+            // Plain-text message
+            if let Some(text) = update.pointer("/message/text").and_then(|v| v.as_str()) {
+                messages.push((chat_id, text.trim().to_string(), vec![]));
+                continue;
+            }
+
+            // Photo message (caption is optional)
+            if let Some(photo_array) = update.pointer("/message/photo").and_then(|v| v.as_array()) {
+                // The last PhotoSize entry has the highest resolution
+                let file_id = photo_array
+                    .last()
+                    .and_then(|p| p["file_id"].as_str())
+                    .map(|s| s.to_string());
+
+                let caption = update
+                    .pointer("/message/caption")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+
+                let images = if let Some(fid) = file_id {
+                    match self.download_photo(&fid).await {
+                        Ok(attachment) => vec![attachment],
+                        Err(e) => {
+                            warn!("Failed to download Telegram photo file_id={fid}: {e}");
+                            vec![]
+                        }
+                    }
+                } else {
+                    vec![]
+                };
+
+                messages.push((chat_id, caption, images));
             }
         }
 
@@ -159,12 +495,25 @@ impl TelegramBot {
 
     /// Start a polling loop that checks for pairing codes.
     /// Returns the chat_id when a valid pairing code is received.
-    pub async fn wait_for_pairing(&self) -> Result<i64> {
+    pub async fn wait_for_pairing(
+        &self,
+        stop_rx: &mut tokio::sync::watch::Receiver<bool>,
+    ) -> Result<i64> {
         info!("Telegram bot waiting for pairing code...");
         loop {
-            match self.poll_updates().await {
+            if *stop_rx.borrow() {
+                return Err(anyhow!("bot stop requested"));
+            }
+            let poll_result = tokio::select! {
+                result = self.poll_updates() => result,
+                _ = stop_rx.changed() => {
+                    info!("Telegram wait_for_pairing stopped by signal");
+                    return Err(anyhow!("bot stop requested"));
+                }
+            };
+            match poll_result {
                 Ok(messages) => {
-                    for (chat_id, text) in messages {
+                    for (chat_id, text, _images) in messages {
                         let trimmed = text.trim();
 
                         if trimmed == "/start" {
@@ -233,10 +582,10 @@ impl TelegramBot {
 
             match poll_result {
                 Ok(messages) => {
-                    for (chat_id, text) in messages {
+                    for (chat_id, text, images) in messages {
                         let bot = self.clone();
                         tokio::spawn(async move {
-                            bot.handle_incoming_message(chat_id, &text).await;
+                            bot.handle_incoming_message(chat_id, &text, images).await;
                         });
                     }
                 }
@@ -248,7 +597,12 @@ impl TelegramBot {
         }
     }
 
-    async fn handle_incoming_message(self: &Arc<Self>, chat_id: i64, text: &str) {
+    async fn handle_incoming_message(
+        self: &Arc<Self>,
+        chat_id: i64,
+        text: &str,
+        images: Vec<ImageAttachment>,
+    ) {
         let mut states = self.chat_states.write().await;
         let state = states
             .entry(chat_id)
@@ -291,26 +645,33 @@ impl TelegramBot {
             return;
         }
 
+        // Intercept file download callbacks before normal command routing.
+        if text.starts_with("download_file:") {
+            let token = text["download_file:".len()..].trim().to_string();
+            drop(states);
+            self.handle_download_request(chat_id, &token).await;
+            return;
+        }
+
         let cmd = parse_command(text);
-        let result = handle_command(state, cmd, vec![]).await;
+        let result = handle_command(state, cmd, images).await;
 
         self.persist_chat_state(chat_id, state).await;
         drop(states);
 
-        self.send_message(chat_id, &result.reply).await.ok();
+        self.send_handle_result(chat_id, &result).await;
 
         if let Some(forward) = result.forward_to_session {
             let bot = self.clone();
             tokio::spawn(async move {
                 let interaction_bot = bot.clone();
-                let handler: BotInteractionHandler = std::sync::Arc::new(move |interaction: BotInteractiveRequest| {
-                    let interaction_bot = interaction_bot.clone();
-                    Box::pin(async move {
-                        interaction_bot
-                            .deliver_interaction(chat_id, interaction)
-                            .await;
-                    })
-                });
+                let handler: BotInteractionHandler =
+                    std::sync::Arc::new(move |interaction: BotInteractiveRequest| {
+                        let interaction_bot = interaction_bot.clone();
+                        Box::pin(async move {
+                            interaction_bot.deliver_interaction(chat_id, interaction).await;
+                        })
+                    });
                 let msg_bot = bot.clone();
                 let sender: BotMessageSender = std::sync::Arc::new(move |text: String| {
                     let msg_bot = msg_bot.clone();
@@ -318,8 +679,9 @@ impl TelegramBot {
                         msg_bot.send_message(chat_id, &text).await.ok();
                     })
                 });
-                let response = execute_forwarded_turn(forward, Some(handler), Some(sender)).await;
-                bot.send_message(chat_id, &response).await.ok();
+                let result = execute_forwarded_turn(forward, Some(handler), Some(sender)).await;
+                bot.send_message(chat_id, &result.display_text).await.ok();
+                bot.notify_files_ready(chat_id, &result.full_text).await;
             });
         }
     }
@@ -337,7 +699,12 @@ impl TelegramBot {
         self.persist_chat_state(chat_id, state).await;
         drop(states);
 
-        self.send_message(chat_id, &interaction.reply).await.ok();
+        let result = HandleResult {
+            reply: interaction.reply,
+            actions: interaction.actions,
+            forward_to_session: None,
+        };
+        self.send_handle_result(chat_id, &result).await;
     }
 
     async fn persist_chat_state(&self, chat_id: i64, state: &BotChatState) {

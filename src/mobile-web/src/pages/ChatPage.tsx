@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
@@ -87,7 +87,169 @@ const CopyButton: React.FC<{ code: string }> = ({ code }) => {
   );
 };
 
-const MarkdownContent: React.FC<{ content: string }> = ({ content }) => {
+const COMPUTER_LINK_PREFIX = 'computer://';
+
+function formatFileSize(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${bytes} B`;
+}
+
+const FileTextIcon: React.FC<{ size?: number; style?: React.CSSProperties }> = ({ size = 20, style }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    xmlns="http://www.w3.org/2000/svg"
+    style={style}
+    aria-hidden="true"
+  >
+    <path d="M15.3929 4.05365L14.8912 4.61112L15.3929 4.05365ZM19.3517 7.61654L18.85 8.17402L19.3517 7.61654ZM21.654 10.1541L20.9689 10.4592V10.4592L21.654 10.1541ZM3.17157 20.8284L3.7019 20.2981H3.7019L3.17157 20.8284ZM20.8284 20.8284L20.2981 20.2981L20.2981 20.2981L20.8284 20.8284ZM14 21.25H10V22.75H14V21.25ZM2.75 14V10H1.25V14H2.75ZM21.25 13.5629V14H22.75V13.5629H21.25ZM14.8912 4.61112L18.85 8.17402L19.8534 7.05907L15.8947 3.49618L14.8912 4.61112ZM22.75 13.5629C22.75 11.8745 22.7651 10.8055 22.3391 9.84897L20.9689 10.4592C21.2349 11.0565 21.25 11.742 21.25 13.5629H22.75ZM18.85 8.17402C20.2034 9.3921 20.7029 9.86199 20.9689 10.4592L22.3391 9.84897C21.9131 8.89241 21.1084 8.18853 19.8534 7.05907L18.85 8.17402ZM10.0298 2.75C11.6116 2.75 12.2085 2.76158 12.7405 2.96573L13.2779 1.5653C12.4261 1.23842 11.498 1.25 10.0298 1.25V2.75ZM15.8947 3.49618C14.8087 2.51878 14.1297 1.89214 13.2779 1.5653L12.7405 2.96573C13.2727 3.16993 13.7215 3.55836 14.8912 4.61112L15.8947 3.49618ZM10 21.25C8.09318 21.25 6.73851 21.2484 5.71085 21.1102C4.70476 20.975 4.12511 20.7213 3.7019 20.2981L2.64124 21.3588C3.38961 22.1071 4.33855 22.4392 5.51098 22.5969C6.66182 22.7516 8.13558 22.75 10 22.75V21.25ZM1.25 14C1.25 15.8644 1.24841 17.3382 1.40313 18.489C1.56076 19.6614 1.89288 20.6104 2.64124 21.3588L3.7019 20.2981C3.27869 19.8749 3.02502 19.2952 2.88976 18.2892C2.75159 17.2615 2.75 15.9068 2.75 14H1.25ZM14 22.75C15.8644 22.75 17.3382 22.7516 18.489 22.5969C19.6614 22.4392 20.6104 22.1071 21.3588 21.3588L20.2981 20.2981C19.8749 20.7213 19.2952 20.975 18.2892 21.1102C17.2615 21.2484 15.9068 21.25 14 21.25V22.75ZM21.25 14C21.25 15.9068 21.2484 17.2615 21.1102 18.2892C20.975 19.2952 20.7213 19.8749 20.2981 20.2981L21.3588 21.3588C22.1071 20.6104 22.4392 19.6614 22.5969 18.489C22.7516 17.3382 22.75 15.8644 22.75 14H21.25ZM2.75 10C2.75 8.09318 2.75159 6.73851 2.88976 5.71085C3.02502 4.70476 3.27869 4.12511 3.7019 3.7019L2.64124 2.64124C1.89288 3.38961 1.56076 4.33855 1.40313 5.51098C1.24841 6.66182 1.25 8.13558 1.25 10H2.75ZM10.0298 1.25C8.15538 1.25 6.67442 1.24842 5.51887 1.40307C4.34232 1.56054 3.39019 1.8923 2.64124 2.64124L3.7019 3.7019C4.12453 3.27928 4.70596 3.02525 5.71785 2.88982C6.75075 2.75158 8.11311 2.75 10.0298 2.75V1.25Z" fill="currentColor"/>
+    <path d="M6 14.5H14" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+    <path d="M6 18H11.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+    <path d="M13 2.5V5C13 7.35702 13 8.53553 13.7322 9.26777C14.4645 10 15.643 10 18 10H22" stroke="currentColor" strokeWidth="1.5"/>
+  </svg>
+);
+
+type FileCardState =
+  | { status: 'loading' }
+  | { status: 'ready'; name: string; size: number; mimeType: string }
+  | { status: 'downloading'; name: string; size: number; mimeType: string; progress: number }
+  | { status: 'done'; name: string; size: number; mimeType: string }
+  | { status: 'error'; message: string };
+
+interface FileCardProps {
+  path: string;
+  onGetFileInfo: (path: string) => Promise<{ name: string; size: number; mimeType: string }>;
+  onDownload: (path: string, onProgress?: (downloaded: number, total: number) => void) => Promise<void>;
+}
+
+const FileCard: React.FC<FileCardProps> = ({ path, onGetFileInfo, onDownload }) => {
+  const { isDark } = useTheme();
+  const [state, setState] = useState<FileCardState>({ status: 'loading' });
+  const onGetFileInfoRef = useRef(onGetFileInfo);
+  onGetFileInfoRef.current = onGetFileInfo;
+
+  useEffect(() => {
+    let cancelled = false;
+    onGetFileInfoRef.current(path)
+      .then(({ name, size, mimeType }) => {
+        if (!cancelled) setState({ status: 'ready', name, size, mimeType });
+      })
+      .catch((err) => {
+        if (!cancelled)
+          setState({ status: 'error', message: err instanceof Error ? err.message : String(err) });
+      });
+    return () => { cancelled = true; };
+  }, [path]);
+
+  const handleClick = useCallback(async () => {
+    if (state.status !== 'ready' && state.status !== 'done') return;
+    const info = state as { status: 'ready' | 'done'; name: string; size: number; mimeType: string };
+    setState({ status: 'downloading', name: info.name, size: info.size, mimeType: info.mimeType, progress: 0 });
+    try {
+      await onDownload(path, (downloaded, total) => {
+        setState(prev => {
+          if (prev.status !== 'downloading') return prev;
+          return { ...prev, progress: total > 0 ? downloaded / total : 0 };
+        });
+      });
+      setState({ status: 'done', name: info.name, size: info.size, mimeType: info.mimeType });
+    } catch {
+      setState({ status: 'ready', name: info.name, size: info.size, mimeType: info.mimeType });
+    }
+  }, [state, path, onDownload]);
+
+  const cardStyle: React.CSSProperties = {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '10px',
+    padding: '10px 14px',
+    border: `1px solid ${isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.12)'}`,
+    borderRadius: '10px',
+    background: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)',
+    cursor: state.status === 'ready' || state.status === 'done' ? 'pointer' : 'default',
+    maxWidth: '300px',
+    verticalAlign: 'middle',
+    transition: 'background 0.15s',
+  };
+
+  const iconColor = isDark ? 'rgba(255,255,255,0.6)' : 'rgba(0,0,0,0.5)';
+
+  if (state.status === 'loading') {
+    return (
+      <span className="file-card" style={cardStyle}>
+        <FileTextIcon size={20} style={{ color: iconColor, flexShrink: 0 }} />
+        <span style={{ fontSize: '0.8rem', opacity: 0.5 }}>Loading…</span>
+      </span>
+    );
+  }
+  if (state.status === 'error') {
+    return (
+      <span className="file-card" style={{ ...cardStyle, cursor: 'default', opacity: 0.5 }} title={state.message}>
+        <FileTextIcon size={20} style={{ color: iconColor, flexShrink: 0 }} />
+        <span style={{ fontSize: '0.8rem' }}>File unavailable</span>
+      </span>
+    );
+  }
+
+  const { name, size } = state as { name: string; size: number; mimeType: string; status: string };
+  const isDownloading = state.status === 'downloading';
+  const isDone = state.status === 'done';
+
+  return (
+    <span
+      className="file-card"
+      style={cardStyle}
+      onClick={handleClick}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') handleClick(); }}
+      title={isDownloading ? 'Downloading…' : isDone ? 'Downloaded' : 'Click to download'}
+    >
+      <FileTextIcon size={20} style={{ color: iconColor, flexShrink: 0 }} />
+      <span style={{ minWidth: 0, overflow: 'hidden' }}>
+        <span style={{
+          display: 'block',
+          fontSize: '0.85rem',
+          fontWeight: 500,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+          color: isDark ? 'rgba(255,255,255,0.9)' : 'rgba(0,0,0,0.85)',
+        }}>
+          {name}
+        </span>
+        <span style={{
+          display: 'block',
+          fontSize: '0.75rem',
+          color: isDark ? 'rgba(255,255,255,0.45)' : 'rgba(0,0,0,0.45)',
+          marginTop: '2px',
+        }}>
+          {formatFileSize(size)}
+        </span>
+      </span>
+      <span style={{
+        flexShrink: 0,
+        fontSize: '0.75rem',
+        color: isDone
+          ? (isDark ? '#4ade80' : '#16a34a')
+          : (isDark ? 'rgba(255,255,255,0.55)' : 'rgba(0,0,0,0.45)'),
+      }}>
+        {isDownloading ? `${Math.round((state as any).progress * 100)}%` : isDone ? '✓' : '↓'}
+      </span>
+    </span>
+  );
+};
+
+interface MarkdownContentProps {
+  content: string;
+  onFileDownload?: (path: string, onProgress?: (downloaded: number, total: number) => void) => Promise<void>;
+  onGetFileInfo?: (path: string) => Promise<{ name: string; size: number; mimeType: string }>;
+}
+
+const MarkdownContent: React.FC<MarkdownContentProps> = ({ content, onFileDownload, onGetFileInfo }) => {
   const { isDark } = useTheme();
   const syntaxTheme = isDark ? vscDarkPlus : vs;
 
@@ -138,6 +300,61 @@ const MarkdownContent: React.FC<{ content: string }> = ({ content }) => {
       );
     },
 
+    a({ href, children }: any) {
+      const isComputerLink =
+        typeof href === 'string' && href.startsWith(COMPUTER_LINK_PREFIX);
+
+      if (isComputerLink && onGetFileInfo && onFileDownload) {
+        const filePath = href.slice(COMPUTER_LINK_PREFIX.length);
+        return (
+          <FileCard
+            path={filePath}
+            onGetFileInfo={onGetFileInfo}
+            onDownload={onFileDownload}
+          />
+        );
+      }
+      // Fallback: plain clickable link when only onFileDownload is available.
+      if (isComputerLink && onFileDownload) {
+        const filePath = href.slice(COMPUTER_LINK_PREFIX.length);
+        return (
+          <button
+            className="file-link"
+            onClick={(e) => { e.preventDefault(); e.stopPropagation(); onFileDownload(filePath); }}
+            type="button"
+            style={{
+              cursor: 'pointer',
+              color: 'var(--color-accent, #3b82f6)',
+              textDecoration: 'underline',
+              background: 'none',
+              border: 'none',
+              font: 'inherit',
+              padding: 0,
+            }}
+          >
+            {children}
+          </button>
+        );
+      }
+
+      // Fallback: render as plain text for computer:// links without handler,
+      // or as a regular link for http(s) links.
+      if (typeof href === 'string' && (href.startsWith('http://') || href.startsWith('https://'))) {
+        return (
+          <a
+            href={href}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{ color: 'var(--color-accent, #3b82f6)', textDecoration: 'underline' }}
+          >
+            {children}
+          </a>
+        );
+      }
+
+      return <span style={{ textDecoration: 'underline', opacity: 0.7 }}>{children}</span>;
+    },
+
     table({ children }: any) {
       return (
         <div className="table-wrapper">
@@ -149,10 +366,23 @@ const MarkdownContent: React.FC<{ content: string }> = ({ content }) => {
     blockquote({ children }: any) {
       return <blockquote className="custom-blockquote">{children}</blockquote>;
     },
-  }), [syntaxTheme, isDark]);
+  }), [syntaxTheme, isDark, onFileDownload, onGetFileInfo]);
 
   return (
-    <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      components={components}
+      urlTransform={(url) => {
+        // react-markdown v9 strips non-standard protocols by default.
+        // Preserve computer:// so our FileCard renderer receives the href intact.
+        if (url.startsWith('computer://')) return url;
+        // Keep default-safe behaviour for everything else.
+        if (/^(https?|mailto|tel):/i.test(url) || url.startsWith('#') || url.startsWith('/')) {
+          return url;
+        }
+        return '';
+      }}
+    >
       {content}
     </ReactMarkdown>
   );
@@ -760,9 +990,13 @@ function useTypewriter(targetText: string, animate: boolean): string {
   return displayText;
 }
 
-const TypewriterText: React.FC<{ content: string }> = ({ content }) => {
+const TypewriterText: React.FC<{
+  content: string;
+  onFileDownload?: (path: string, onProgress?: (downloaded: number, total: number) => void) => Promise<void>;
+  onGetFileInfo?: (path: string) => Promise<{ name: string; size: number; mimeType: string }>;
+}> = ({ content, onFileDownload, onGetFileInfo }) => {
   const displayText = useTypewriter(content, true);
-  return <MarkdownContent content={displayText} />;
+  return <MarkdownContent content={displayText} onFileDownload={onFileDownload} onGetFileInfo={onGetFileInfo} />;
 };
 
 // ─── AskUserQuestion Card ─────────────────────────────────────────────────
@@ -1002,6 +1236,8 @@ function renderStandardGroups(
   now: number,
   onCancelTool?: (toolId: string) => void,
   animate?: boolean,
+  onFileDownload?: (path: string, onProgress?: (downloaded: number, total: number) => void) => Promise<void>,
+  onGetFileInfo?: (path: string) => Promise<{ name: string; size: number; mimeType: string }>,
 ) {
   return groups.map((g, gi) => {
     if (g.type === 'thinking') {
@@ -1058,7 +1294,9 @@ function renderStandardGroups(
       const text = g.entries.map(e => e.content || '').join('');
       return text ? (
         <div key={`${keyPrefix}-text-${gi}`} className="chat-msg__assistant-content">
-          {animate ? <TypewriterText content={text} /> : <MarkdownContent content={text} />}
+          {animate
+            ? <TypewriterText content={text} onFileDownload={onFileDownload} onGetFileInfo={onGetFileInfo} />
+            : <MarkdownContent content={text} onFileDownload={onFileDownload} onGetFileInfo={onGetFileInfo} />}
         </div>
       ) : null;
     }
@@ -1073,11 +1311,13 @@ function renderOrderedItems(
   now: number,
   onCancelTool?: (toolId: string) => void,
   onAnswer?: (toolId: string, answers: any) => Promise<void>,
+  onFileDownload?: (path: string, onProgress?: (downloaded: number, total: number) => void) => Promise<void>,
+  onGetFileInfo?: (path: string) => Promise<{ name: string; size: number; mimeType: string }>,
 ) {
   const items = filterSubagentItems(rawItems);
   const askEntries = items.filter(item => isPendingAskUserQuestion(item.tool));
   if (askEntries.length === 0) {
-    return renderStandardGroups(groupChatItems(items), 'ordered', now, onCancelTool);
+    return renderStandardGroups(groupChatItems(items), 'ordered', now, onCancelTool, false, onFileDownload, onGetFileInfo);
   }
 
   const beforeAskItems: ChatMessageItem[] = [];
@@ -1095,9 +1335,9 @@ function renderOrderedItems(
 
   return (
     <>
-      {renderStandardGroups(groupChatItems(beforeAskItems), 'ordered-before', now, onCancelTool)}
+      {renderStandardGroups(groupChatItems(beforeAskItems), 'ordered-before', now, onCancelTool, false, onFileDownload, onGetFileInfo)}
       {renderQuestionEntries(askEntries, 'ordered', onAnswer)}
-      {renderStandardGroups(groupChatItems(afterAskItems), 'ordered-after', now, onCancelTool)}
+      {renderStandardGroups(groupChatItems(afterAskItems), 'ordered-after', now, onCancelTool, false, onFileDownload, onGetFileInfo)}
     </>
   );
 }
@@ -1110,6 +1350,8 @@ function renderActiveTurnItems(
   sessionMgr: RemoteSessionManager,
   setError: (e: string) => void,
   onAnswer: (toolId: string, answers: any) => Promise<void>,
+  onFileDownload?: (path: string, onProgress?: (downloaded: number, total: number) => void) => Promise<void>,
+  onGetFileInfo?: (path: string) => Promise<{ name: string; size: number; mimeType: string }>,
 ) {
   const items = filterSubagentItems(rawItems);
   const askEntries = items.filter(item => isPendingAskUserQuestion(item.tool));
@@ -1118,7 +1360,7 @@ function renderActiveTurnItems(
   };
 
   if (askEntries.length === 0) {
-    return renderStandardGroups(groupChatItems(items), 'active', now, onCancel, true);
+    return renderStandardGroups(groupChatItems(items), 'active', now, onCancel, true, onFileDownload, onGetFileInfo);
   }
 
   const beforeAskItems: ChatMessageItem[] = [];
@@ -1136,9 +1378,9 @@ function renderActiveTurnItems(
 
   return (
     <>
-      {renderStandardGroups(groupChatItems(beforeAskItems), 'active-before', now, onCancel, true)}
+      {renderStandardGroups(groupChatItems(beforeAskItems), 'active-before', now, onCancel, true, onFileDownload, onGetFileInfo)}
       {renderQuestionEntries(askEntries, 'active', onAnswer)}
-      {renderStandardGroups(groupChatItems(afterAskItems), 'active-after', now, onCancel, true)}
+      {renderStandardGroups(groupChatItems(afterAskItems), 'active-after', now, onCancel, true, onFileDownload, onGetFileInfo)}
     </>
   );
 }
@@ -1214,6 +1456,40 @@ const ChatPage: React.FC<ChatPageProps> = ({ sessionMgr, sessionId, sessionName,
     }
   }, [sessionMgr, setError]);
 
+  /** Fetch metadata for a workspace file before the user confirms the download. */
+  const handleGetFileInfo = useCallback(
+    (filePath: string) => sessionMgr.getFileInfo(filePath),
+    [sessionMgr],
+  );
+
+  /** Download a workspace file referenced by a `computer://` link. */
+  const handleFileDownload = useCallback(async (
+    filePath: string,
+    onProgress?: (downloaded: number, total: number) => void,
+  ) => {
+    try {
+      const { name, contentBase64, mimeType } = await sessionMgr.readFile(filePath, onProgress);
+      const byteCharacters = atob(contentBase64);
+      const byteNumbers = new Uint8Array(byteCharacters.length);
+      for (let i = 0; i < byteCharacters.length; i++) {
+        byteNumbers[i] = byteCharacters.charCodeAt(i);
+      }
+      const blob = new Blob([byteNumbers], { type: mimeType });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = name;
+      document.body.appendChild(anchor);
+      anchor.click();
+      document.body.removeChild(anchor);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      // Use the backend's message directly; it's already user-readable.
+      const msg = err instanceof Error ? err.message : String(err);
+      setError(msg);
+    }
+  }, [sessionMgr, setError]);
+
   useEffect(() => {
     if (!isStreaming) return;
     const timer = setInterval(() => setNow(Date.now()), 500);
@@ -1245,9 +1521,16 @@ const ChatPage: React.FC<ChatPageProps> = ({ sessionMgr, sessionId, sessionName,
     }
   }, [sessionMgr, sessionId, setMessages, setError, getMessages, isLoadingMore, hasMore]);
 
+  const isNearBottomRef = useRef(true);
+  const BOTTOM_THRESHOLD = 80;
+
   const handleScroll = useCallback(() => {
     const container = messagesContainerRef.current;
     if (!container) return;
+
+    const gap = container.scrollHeight - container.scrollTop - container.clientHeight;
+    isNearBottomRef.current = gap < BOTTOM_THRESHOLD;
+
     if (container.scrollTop < 100 && hasMore && !isLoadingMore) {
       const msgs = getMessages(sessionId);
       if (msgs.length > 0) loadMessages(msgs[0].id);
@@ -1256,20 +1539,13 @@ const ChatPage: React.FC<ChatPageProps> = ({ sessionMgr, sessionId, sessionName,
 
   // Initial load + start poller
   const initialScrollDone = useRef(false);
+  const pendingInitialScroll = useRef(false);
   useEffect(() => {
     initialScrollDone.current = false;
+    pendingInitialScroll.current = false;
     loadMessages().then(() => {
       const initialMsgCount = useMobileStore.getState().getMessages(sessionId).length;
-
-      // Scroll to bottom after initial load — use rAF + setTimeout to ensure
-      // the DOM has finished laying out the newly rendered messages.
-      requestAnimationFrame(() => {
-        setTimeout(() => {
-          messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
-          initialScrollDone.current = true;
-          prevMsgCountRef.current = useMobileStore.getState().getMessages(sessionId).length;
-        }, 50);
-      });
+      pendingInitialScroll.current = true;
 
       const poller = new SessionPoller(sessionMgr, sessionId, (resp: PollResponse) => {
         if (resp.new_messages && resp.new_messages.length > 0) {
@@ -1307,12 +1583,26 @@ const ChatPage: React.FC<ChatPageProps> = ({ sessionMgr, sessionId, sessionName,
   }, [sessionId, sessionMgr]);
 
   const prevMsgCountRef = useRef(0);
+
+  // Scroll to bottom BEFORE paint on initial message load,
+  // so the user never sees the list at scroll-top then flash to bottom.
+  useLayoutEffect(() => {
+    if (!pendingInitialScroll.current || messages.length === 0) return;
+    pendingInitialScroll.current = false;
+    const container = messagesContainerRef.current;
+    if (container) {
+      container.scrollTop = container.scrollHeight;
+    }
+    initialScrollDone.current = true;
+    prevMsgCountRef.current = messages.length;
+  }, [messages]);
+
   useEffect(() => {
     if (!initialScrollDone.current) return;
     if (messages.length !== prevMsgCountRef.current) {
       const isNewAppend = messages.length > prevMsgCountRef.current;
       prevMsgCountRef.current = messages.length;
-      if (isNewAppend && !isLoadingMore) {
+      if (isNewAppend && !isLoadingMore && isNearBottomRef.current) {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
       }
     }
@@ -1320,11 +1610,13 @@ const ChatPage: React.FC<ChatPageProps> = ({ sessionMgr, sessionId, sessionName,
 
   useEffect(() => {
     if (!initialScrollDone.current || !isStreaming) return;
+    if (!isNearBottomRef.current) return;
     messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
   }, [activeTurn, isStreaming]);
 
   useEffect(() => {
     if (optimisticMsg) {
+      isNearBottomRef.current = true;
       messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
   }, [optimisticMsg]);
@@ -1334,11 +1626,12 @@ const ChatPage: React.FC<ChatPageProps> = ({ sessionMgr, sessionId, sessionName,
     const container = messagesContainerRef.current;
     if (!container) return;
     const tid = setInterval(() => {
+      if (!isNearBottomRef.current) return;
       const gap = container.scrollHeight - container.scrollTop - container.clientHeight;
-      if (gap > 10 && gap < 300) {
-        container.scrollTop = container.scrollHeight;
+      if (gap > 10 && gap < 400) {
+        container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
       }
-    }, 200);
+    }, 300);
     return () => clearInterval(tid);
   }, [isStreaming]);
 
@@ -1445,8 +1738,25 @@ const ChatPage: React.FC<ChatPageProps> = ({ sessionMgr, sessionId, sessionName,
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [inputExpanded, input, pendingImages.length]);
 
+  const isComposingRef = useRef(false);
+
+  const handleCompositionStart = useCallback(() => {
+    isComposingRef.current = true;
+  }, []);
+
+  const handleCompositionEnd = useCallback(() => {
+    // Delay clearing to handle Safari's event ordering where
+    // compositionend fires before the final keydown(Enter)
+    setTimeout(() => {
+      isComposingRef.current = false;
+    }, 0);
+  }, []);
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
+      if ((e.nativeEvent as KeyboardEvent).isComposing || isComposingRef.current) {
+        return;
+      }
       e.preventDefault();
       handleSend();
     }
@@ -1591,14 +1901,14 @@ const ChatPage: React.FC<ChatPageProps> = ({ sessionMgr, sessionId, sessionName,
                   </button>
                 )}
                 {hasItems ? (
-                  renderOrderedItems(m.items!, now, undefined, handleAnswerQuestion)
+                  renderOrderedItems(m.items!, now, undefined, handleAnswerQuestion, handleFileDownload, handleGetFileInfo)
                 ) : (
                   <>
                     {m.thinking && <ThinkingBlock thinking={m.thinking} />}
                     {m.tools && m.tools.length > 0 && <ToolList tools={m.tools} now={now} />}
                     {m.content && (
                       <div className="chat-msg__assistant-content">
-                        <MarkdownContent content={m.content} />
+                        <MarkdownContent content={m.content} onFileDownload={handleFileDownload} onGetFileInfo={handleGetFileInfo} />
                       </div>
                     )}
                   </>
@@ -1617,8 +1927,8 @@ const ChatPage: React.FC<ChatPageProps> = ({ sessionMgr, sessionId, sessionName,
             return (
               <div className="chat-msg chat-msg--assistant">
                 {turnIsActive
-                  ? renderActiveTurnItems(turn.items, now, sessionMgr, setError, handleAnswerQuestion)
-                  : renderOrderedItems(turn.items, now)}
+                  ? renderActiveTurnItems(turn.items, now, sessionMgr, setError, handleAnswerQuestion, handleFileDownload, handleGetFileInfo)
+                  : renderOrderedItems(turn.items, now, undefined, undefined, handleFileDownload, handleGetFileInfo)}
                 {turnIsActive && !turn.thinking && !turn.text && turn.tools.length === 0 && (
                   <div className="chat-msg__assistant-content"><TypingDots /></div>
                 )}
@@ -1672,7 +1982,9 @@ const ChatPage: React.FC<ChatPageProps> = ({ sessionMgr, sessionId, sessionName,
               ))}
               {!hasRunningSubagent && turn.text ? (
                 <div className="chat-msg__assistant-content">
-                  {turnIsActive ? <TypewriterText content={turn.text} /> : <MarkdownContent content={turn.text} />}
+                  {turnIsActive
+                    ? <TypewriterText content={turn.text} onFileDownload={handleFileDownload} onGetFileInfo={handleGetFileInfo} />
+                    : <MarkdownContent content={turn.text} onFileDownload={handleFileDownload} onGetFileInfo={handleGetFileInfo} />}
                 </div>
               ) : turnIsActive && !turn.thinking && turn.tools.length === 0 ? (
                 <div className="chat-msg__assistant-content"><TypingDots /></div>
@@ -1748,6 +2060,8 @@ const ChatPage: React.FC<ChatPageProps> = ({ sessionMgr, sessionId, sessionName,
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
+                onCompositionStart={handleCompositionStart}
+                onCompositionEnd={handleCompositionEnd}
                 rows={1}
                 disabled={isStreaming || imageAnalyzing}
               />
