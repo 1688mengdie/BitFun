@@ -62,6 +62,11 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const addContext = useContextStore(state => state.addContext);
   const removeContext = useContextStore(state => state.removeContext);
   const clearContexts = useContextStore(state => state.clearContexts);
+
+  const currentImageCount = useMemo(
+    () => contexts.filter(c => c.type === 'image').length,
+    [contexts],
+  );
   
   const activeSessionState = useActiveSessionState();
   const currentSessionId = activeSessionState.sessionId;
@@ -753,11 +758,6 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       transition(SessionExecutionEvent.USER_CANCEL);
     }
   }, [handleSendOrCancel, derivedState, transition, templateState.fillState, moveToNextPlaceholder, moveToPrevPlaceholder, exitTemplateMode, slashCommandState, getFilteredModes, selectSlashCommandMode, canSwitchModes]);
-  
-  const currentImageCount = useMemo(
-    () => contexts.filter(c => c.type === 'image').length,
-    [contexts],
-  );
 
   const handleImageInput = useCallback(() => {
     const remaining = CHAT_INPUT_CONFIG.image.maxCount - currentImageCount;
