@@ -115,6 +115,7 @@ impl AppState {
             .map(|workspace| workspace.root_path);
 
         if let Some(workspace_path) = initial_workspace_path.clone() {
+            bitfun_core::infrastructure::set_workspace_path(Some(workspace_path.clone()));
             miniapp_manager
                 .set_workspace_path(Some(workspace_path.clone()))
                 .await;
