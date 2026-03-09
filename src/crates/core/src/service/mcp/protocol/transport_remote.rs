@@ -9,7 +9,7 @@ use super::types::{
     ResourcesListResult, ResourcesReadResult, ToolsListResult,
 };
 use crate::util::errors::{BitFunError, BitFunResult};
-use futures_util::StreamExt;
+use futures::StreamExt;
 use log::{debug, error, info, warn};
 use reqwest::header::{
     HeaderMap, HeaderName, HeaderValue, ACCEPT, CONTENT_TYPE, USER_AGENT, WWW_AUTHENTICATE,
@@ -123,7 +123,7 @@ impl StreamableHttpClient for BitFunStreamableHttpClient {
         last_event_id: Option<String>,
         auth_token: Option<String>,
     ) -> Result<
-        futures_util::stream::BoxStream<'static, Result<Sse, SseError>>,
+        futures::stream::BoxStream<'static, Result<Sse, SseError>>,
         StreamableHttpError<Self::Error>,
     > {
         let mut request_builder = self

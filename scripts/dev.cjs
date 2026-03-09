@@ -146,7 +146,7 @@ async function main() {
 
   // Step 1: Copy resources
   printStep(1, totalSteps, 'Copy resources');
-  const copyResult = runSilent('npm run copy-monaco --silent');
+  const copyResult = runSilent('pnpm run copy-monaco --silent');
   if (copyResult.ok) {
     printSuccess('Monaco Editor resources ready');
   } else {
@@ -160,7 +160,7 @@ async function main() {
     if (copyResult.error && copyResult.error.status !== undefined) {
       printError(`Exit code: ${copyResult.error.status}`);
     }
-    printInfo('Hint: run `npm install` in repo root if dependencies are missing');
+    printInfo('Hint: run `pnpm install` in repo root if dependencies are missing');
     process.exit(1);
   }
   
@@ -184,14 +184,14 @@ async function main() {
   if (mode === 'desktop') {
     printStep(3, 4, 'Build mobile-web');
     const mobileWebDir = path.join(ROOT_DIR, 'src/mobile-web');
-    const mobileWebResult = runSilent('npm install --silent', mobileWebDir);
+    const mobileWebResult = runSilent('pnpm install --silent', mobileWebDir);
     if (!mobileWebResult.ok) {
-      printError('mobile-web npm install failed');
+      printError('mobile-web pnpm install failed');
       const output = tailOutput(mobileWebResult.stderr || mobileWebResult.stdout);
       if (output) printError(output);
       process.exit(1);
     }
-    const buildResult = runInherit('npm run build', mobileWebDir);
+    const buildResult = runInherit('pnpm run build', mobileWebDir);
     if (!buildResult.ok) {
       printError('mobile-web build failed');
       if (buildResult.error && buildResult.error.message) {
@@ -211,9 +211,9 @@ async function main() {
   
   try {
     if (mode === 'desktop') {
-      await runCommand('npm exec -- tauri dev', path.join(ROOT_DIR, 'src/apps/desktop'));
+      await runCommand('npx tauri dev', path.join(ROOT_DIR, 'src/apps/desktop'));
     } else {
-      await runCommand('npx vite', path.join(ROOT_DIR, 'src/web-ui'));
+      await runCommand('pnpm exec vite', path.join(ROOT_DIR, 'src/web-ui'));
     }
   } catch (error) {
     printError('Dev server failed to start');

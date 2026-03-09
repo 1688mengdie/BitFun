@@ -10,6 +10,7 @@
 
 import { loader } from '@monaco-editor/react';
 import type * as Monaco from 'monaco-editor';
+import { registerMermaidLanguage } from '../languages/mermaid.language';
 import { registerTomlLanguage } from '../languages/toml.language';
 import { themeManager } from './ThemeManager';
 import { createLogger } from '@/shared/utils/logger';
@@ -124,9 +125,11 @@ class MonacoInitManager {
   private registerCustomLanguages(monaco: typeof Monaco): void {
     try {
       registerTomlLanguage(monaco);
+      registerMermaidLanguage(monaco);
       log.debug('TOML language registered');
+      log.debug('Mermaid language registered');
     } catch (error) {
-      log.error('Failed to register TOML language', error);
+      log.error('Failed to register custom Monaco languages', error);
     }
   }
   
@@ -145,7 +148,11 @@ class MonacoInitManager {
       }
       
       monaco.editor.registerEditorOpener({
-        openCodeEditor: async (_source, resource, selectionOrPosition) => {
+        openCodeEditor: async (
+          _source: unknown,
+          resource: Monaco.Uri,
+          selectionOrPosition?: Monaco.IRange | Monaco.IPosition
+        ) => {
           log.debug('EditorOpener open request', { uri: resource.toString(), selection: selectionOrPosition });
           
           let targetLine = 1;

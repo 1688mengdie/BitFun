@@ -17,18 +17,18 @@ pub use http_server::IngestServerManager;
 
 use anyhow::Result;
 use chrono::Utc;
-use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
+use std::sync::LazyLock;
 use tokio::task;
 use uuid::Uuid;
 
 const DEFAULT_SESSION_ID: &str = "debug-session";
 
-static DEFAULT_LOG_PATH: Lazy<PathBuf> = Lazy::new(|| {
+static DEFAULT_LOG_PATH: LazyLock<PathBuf> = LazyLock::new(|| {
     if let Ok(env_path) = std::env::var("BITFUN_DEBUG_LOG_PATH") {
         return PathBuf::from(env_path);
     }
@@ -39,7 +39,7 @@ static DEFAULT_LOG_PATH: Lazy<PathBuf> = Lazy::new(|| {
         .join("debug.log")
 });
 
-static DEFAULT_INGEST_URL: Lazy<Option<String>> = Lazy::new(|| {
+static DEFAULT_INGEST_URL: LazyLock<Option<String>> = LazyLock::new(|| {
     std::env::var("BITFUN_DEBUG_INGEST_URL").ok()
 });
 

@@ -4,9 +4,8 @@
 //! directly depending on specific implementations.
 
 use dashmap::DashMap;
-use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Image context data
@@ -23,7 +22,8 @@ pub struct ImageContextData {
     pub source: String,
 }
 
-static IMAGE_STORAGE: Lazy<DashMap<String, (ImageContextData, u64)>> = Lazy::new(DashMap::new);
+static IMAGE_STORAGE: LazyLock<DashMap<String, (ImageContextData, u64)>> =
+    LazyLock::new(DashMap::new);
 const DEFAULT_IMAGE_MAX_AGE_SECS: u64 = 300;
 
 /// Image context provider trait

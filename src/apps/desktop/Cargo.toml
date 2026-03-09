@@ -38,9 +38,7 @@ log = { workspace = true }
 chrono = { workspace = true }
 regex = { workspace = true }
 dirs = { workspace = true }
-once_cell = { workspace = true }
 similar = { workspace = true }
-dashmap = { workspace = true }
 ignore = { workspace = true }
 urlencoding = { workspace = true }
 reqwest = { workspace = true }

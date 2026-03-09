@@ -15,10 +15,10 @@
 cargo install tauri-driver --locked
 
 # 构建应用
-npm run desktop:build
+pnpm run desktop:build
 
 # 安装测试依赖
-cd tests/e2e && npm install
+cd tests/e2e && pnpm install
 ```
 
 ### 2. 运行测试
@@ -27,14 +27,14 @@ cd tests/e2e && npm install
 cd tests/e2e
 
 # L0 冒烟测试 (最快)
-npm run test:l0
-npm run test:l0:all
+pnpm run test:l0
+pnpm run test:l0:all
 
 # L1 功能测试
-npm run test:l1
+pnpm run test:l1
 
 # 运行所有测试
-npm test
+pnpm test
 ```
 
 ## 测试级别
@@ -67,7 +67,7 @@ cargo install tauri-driver --locked
 ### 应用未构建
 
 ```bash
-npm run desktop:build
+pnpm run desktop:build
 ```
 
 ### 测试超时

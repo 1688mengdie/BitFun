@@ -91,18 +91,19 @@ Other form factors are currently only specification drafts and not yet developed
 Make sure you have the following prerequisites installed:
 
 - Node.js (LTS recommended)
+- pnpm
 - Rust toolchain (install via [rustup](https://rustup.rs/))
 - [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for desktop development
 
 ```bash
 # Install dependencies
-npm install
+pnpm install
 
 # Run desktop app in development mode
-npm run desktop:dev
+pnpm run desktop:dev
 
 # Build desktop app
-npm run desktop:build
+pnpm run desktop:build
 ```
 
 For more details, see the [Contributing Guide](./CONTRIBUTING.md).

@@ -7,9 +7,9 @@ use super::types::{
 use crate::infrastructure::PathManager;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Datelike, Duration, Utc};
-use log::{debug, error, info, warn};
+use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::fs;

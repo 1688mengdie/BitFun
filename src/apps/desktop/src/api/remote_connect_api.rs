@@ -4,19 +4,18 @@ use bitfun_core::service::remote_connect::{
     bot::BotConfig, lan, ConnectionMethod, ConnectionResult, PairingState, RemoteConnectConfig,
     RemoteConnectService,
 };
-use once_cell::sync::OnceCell;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use tokio::sync::RwLock;
 
-static REMOTE_CONNECT_SERVICE: OnceCell<Arc<RwLock<Option<RemoteConnectService>>>> =
-    OnceCell::new();
+static REMOTE_CONNECT_SERVICE: OnceLock<Arc<RwLock<Option<RemoteConnectService>>>> =
+    OnceLock::new();
 
 /// Tauri resource directory path for mobile-web, set during app setup.
-static MOBILE_WEB_RESOURCE_PATH: OnceCell<PathBuf> = OnceCell::new();
+static MOBILE_WEB_RESOURCE_PATH: OnceLock<PathBuf> = OnceLock::new();
 
 fn get_service_holder() -> &'static Arc<RwLock<Option<RemoteConnectService>>> {
     REMOTE_CONNECT_SERVICE.get_or_init(|| Arc::new(RwLock::new(None)))

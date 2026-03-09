@@ -13,24 +13,25 @@ Be respectful, kind, and constructive. We welcome contributors of all background
 ### Prerequisites
 
 - Node.js (LTS recommended)
+- pnpm
 - Rust toolchain (install via [rustup](https://rustup.rs/))
 - [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for desktop development
 
 ### Install dependencies
 
 ```bash
-npm install
+pnpm install
 ```
 
 ### Common commands
 
 ```bash
 # Desktop
-npm run desktop:dev
-npm run desktop:build
+pnpm run desktop:dev
+pnpm run desktop:build
 
 # E2E
-npm run e2e:test
+pnpm run e2e:test
 ```
 
 > Note: More granular scripts are available (e.g. `dev:web`, `cli:dev`, `website:dev`). See `package.json` for details.
@@ -127,7 +128,7 @@ Run relevant tests for your change:
 cargo test --workspace
 
 # E2E
-npm run e2e:test
+pnpm run e2e:test
 ```
 
 If you cannot run tests, explain why in the PR and provide manual verification steps.

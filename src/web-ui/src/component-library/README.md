@@ -9,7 +9,7 @@ This is the BitFun component preview system for quickly viewing and testing UI c
 ### Start the preview server
 
 ```bash
-npm run preview-components
+pnpm run preview-components
 ```
 
 Starts a dev server and opens the preview page at `http://localhost:3000`.
@@ -17,7 +17,7 @@ Starts a dev server and opens the preview page at `http://localhost:3000`.
 ### Build the preview site
 
 ```bash
-npm run build-components
+pnpm run build-components
 ```
 
 Build output is written to `dist-preview`.
@@ -71,7 +71,7 @@ export { YourNewComponent } from '@/shared/ui/YourNewComponent';
 
 ### 3. Preview it
 
-Run `npm run preview-components` and the component will appear in the preview app.
+Run `pnpm run preview-components` and the component will appear in the preview app.
 
 ## Component Categories
 

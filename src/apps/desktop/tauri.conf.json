@@ -3,9 +3,9 @@
   "productName": "BitFun",
   "identifier": "com.bitfun.desktop",
   "build": {
-    "beforeDevCommand": "npm run dev:web",
+    "beforeDevCommand": "pnpm run dev:web",
     "devUrl": "http://localhost:1422",
-    "beforeBuildCommand": "npm run build:web && npm run build:mobile-web",
+    "beforeBuildCommand": "pnpm run build:web && pnpm run build:mobile-web",
     "frontendDist": "../../../dist"
   },
   "bundle": {

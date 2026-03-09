@@ -3,7 +3,7 @@
 use crate::agentic::events::{AgenticEvent, EventSubscriber};
 use crate::service::token_usage::TokenUsageService;
 use crate::util::errors::BitFunResult;
-use log::{debug, error, info};
+use log::{debug, error};
 use std::sync::Arc;
 
 /// Token usage event subscriber

@@ -1,9 +1,8 @@
 //! Unified process management to avoid Windows child process leaks
 
 use log::warn;
-use once_cell::sync::Lazy;
 use std::process::Command;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use tokio::process::Command as TokioCommand;
 
 #[cfg(windows)]
@@ -15,7 +14,7 @@ use win32job::Job;
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
-static GLOBAL_PROCESS_MANAGER: Lazy<ProcessManager> = Lazy::new(ProcessManager::new);
+static GLOBAL_PROCESS_MANAGER: LazyLock<ProcessManager> = LazyLock::new(ProcessManager::new);
 
 pub struct ProcessManager {
     #[cfg(windows)]

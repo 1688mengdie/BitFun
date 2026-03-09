@@ -9,7 +9,7 @@
 ### 启动预览服务
 
 ```bash
-npm run preview-components
+pnpm run preview-components
 ```
 
 这会启动开发服务器，并在 `http://localhost:3000` 打开预览页面。
@@ -17,7 +17,7 @@ npm run preview-components
 ### 构建预览站点
 
 ```bash
-npm run build-components
+pnpm run build-components
 ```
 
 构建产物输出到 `dist-preview` 目录。
@@ -71,7 +71,7 @@ export { YourNewComponent } from '@/shared/ui/YourNewComponent';
 
 ### 3. 查看预览
 
-运行 `npm run preview-components`，新组件会出现在预览系统中。
+运行 `pnpm run preview-components`，新组件会出现在预览系统中。
 
 ## 组件分类
 

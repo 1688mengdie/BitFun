@@ -116,11 +116,11 @@ Install required dependencies:
 cargo install tauri-driver --locked
 
 # Build the application (from project root)
-npm run desktop:build
+pnpm run desktop:build
 
 # Install E2E test dependencies
 cd tests/e2e
-npm install
+pnpm install
 ```
 
 ### 2. Verify Installation
@@ -136,16 +136,16 @@ Check that the app binary exists:
 # From tests/e2e directory
 
 # Run L0 smoke tests (fastest)
-npm run test:l0
+pnpm run test:l0
 
 # Run all L0 tests
-npm run test:l0:all
+pnpm run test:l0:all
 
 # Run L1 functional tests
-npm run test:l1
+pnpm run test:l1
 
 # Run specific test file
-npm test -- --spec ./specs/l0-smoke.spec.ts
+pnpm test -- --spec ./specs/l0-smoke.spec.ts
 ```
 
 ### 4. Test Running Mode (Release vs Dev)
@@ -427,7 +427,7 @@ echo %PATH% # Windows
 **Solution**:
 ```bash
 # Build the app (from project root)
-npm run desktop:build
+pnpm run desktop:build
 
 # Verify binary exists
 # Windows
@@ -501,7 +501,7 @@ Run tests with debugging enabled:
 
 ```bash
 # Enable WebDriverIO debug logs
-npm test -- --spec ./specs/l0-smoke.spec.ts --log-level=debug
+pnpm test -- --spec ./specs/l0-smoke.spec.ts --log-level=debug
 ```
 
 ### Screenshot Analysis
@@ -518,7 +518,7 @@ Screenshots are automatically saved to `tests/e2e/reports/screenshots/` on test 
 4. **Create or update Page Objects** in `page-objects/`
 5. **Write test following template**
 6. **Run test locally** to verify
-7. **Add npm script** to `package.json` (optional)
+7. **Add pnpm script** to `package.json` (optional)
 8. **Update config** to include new spec file
 
 ### Example: Adding L1 File Tree Test
@@ -545,7 +545,7 @@ Screenshots are automatically saved to `tests/e2e/reports/screenshots/` on test 
      });
    });
    ```
-5. Run: `npm test -- --spec ./specs/l1-file-tree.spec.ts`
+5. Run: `pnpm test -- --spec ./specs/l1-file-tree.spec.ts`
 6. Update `config/wdio.conf_l1.ts` to include the new spec
 
 ## CI/CD Integration
@@ -563,20 +563,25 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v3
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.0
       - name: Setup Node.js
         uses: actions/setup-node@v3
         with:
           node-version: '20'
+          cache: 'pnpm'
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
       - name: Install tauri-driver
         run: cargo install tauri-driver --locked
       - name: Build app
-        run: npm run desktop:build
+        run: pnpm run desktop:build
       - name: Install test dependencies
-        run: cd tests/e2e && npm install
+        run: cd tests/e2e && pnpm install
       - name: Run L0 tests
-        run: cd tests/e2e && npm run test:l0:all
+        run: cd tests/e2e && pnpm run test:l0:all
         
   l1-tests:
     runs-on: windows-latest
@@ -585,9 +590,9 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - name: Build app
-        run: npm run desktop:build
+        run: pnpm run desktop:build
       - name: Run L1 tests
-        run: cd tests/e2e && npm run test:l1
+        run: cd tests/e2e && pnpm run test:l1
 ```
 
 ### Test Execution Matrix
@@ -599,23 +604,23 @@ jobs:
 | Nightly build | Yes | Yes | Yes |
 | Pre-release | Yes | Yes | Yes |
 
-## Available npm Scripts
+## Available pnpm Scripts
 
 | Script | Description |
 |--------|-------------|
-| `npm run test` | Run all tests with default config |
-| `npm run test:l0` | Run L0 smoke test only |
-| `npm run test:l0:all` | Run all L0 tests |
-| `npm run test:l1` | Run all L1 tests |
-| `npm run test:l0:workspace` | Run workspace test |
-| `npm run test:l0:settings` | Run settings test |
-| `npm run test:l0:navigation` | Run navigation test |
-| `npm run test:l0:tabs` | Run tabs test |
-| `npm run test:l0:theme` | Run theme test |
-| `npm run test:l0:i18n` | Run i18n test |
-| `npm run test:l0:notification` | Run notification test |
-| `npm run test:l0:observe` | Run observation test (60s) |
-| `npm run clean` | Clean reports directory |
+| `pnpm run test` | Run all tests with default config |
+| `pnpm run test:l0` | Run L0 smoke test only |
+| `pnpm run test:l0:all` | Run all L0 tests |
+| `pnpm run test:l1` | Run all L1 tests |
+| `pnpm run test:l0:workspace` | Run workspace test |
+| `pnpm run test:l0:settings` | Run settings test |
+| `pnpm run test:l0:navigation` | Run navigation test |
+| `pnpm run test:l0:tabs` | Run tabs test |
+| `pnpm run test:l0:theme` | Run theme test |
+| `pnpm run test:l0:i18n` | Run i18n test |
+| `pnpm run test:l0:notification` | Run notification test |
+| `pnpm run test:l0:observe` | Run observation test (60s) |
+| `pnpm run clean` | Clean reports directory |
 
 ## Resources
 

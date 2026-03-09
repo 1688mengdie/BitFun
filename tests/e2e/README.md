@@ -15,10 +15,10 @@ E2E test framework using WebDriverIO + tauri-driver.
 cargo install tauri-driver --locked
 
 # Build the app
-npm run desktop:build
+pnpm run desktop:build
 
 # Install test dependencies
-cd tests/e2e && npm install
+cd tests/e2e && pnpm install
 ```
 
 ### 2. Run Tests
@@ -27,14 +27,14 @@ cd tests/e2e && npm install
 cd tests/e2e
 
 # L0 smoke tests (fastest)
-npm run test:l0
-npm run test:l0:all
+pnpm run test:l0
+pnpm run test:l0:all
 
 # L1 functional tests
-npm run test:l1
+pnpm run test:l1
 
 # Run all tests
-npm test
+pnpm test
 ```
 
 ## Test Levels
@@ -67,7 +67,7 @@ cargo install tauri-driver --locked
 ### App not built
 
 ```bash
-npm run desktop:build
+pnpm run desktop:build
 ```
 
 ### Test timeout
