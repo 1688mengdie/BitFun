@@ -3,7 +3,7 @@
 use bitfun_core::agentic::{agents, tools};
 use bitfun_core::infrastructure::ai::{AIClient, AIClientFactory};
 use bitfun_core::miniapp::{initialize_global_miniapp_manager, MiniAppManager, JsWorkerPool};
-use bitfun_core::service::{ai_rules, config, filesystem, mcp, workspace};
+use bitfun_core::service::{ai_rules, config, filesystem, mcp, token_usage, workspace};
 use bitfun_core::util::errors::*;
 
 use serde::{Deserialize, Serialize};
@@ -38,6 +38,7 @@ pub struct AppState {
     pub ai_rules_service: Arc<ai_rules::AIRulesService>,
     pub agent_registry: Arc<agents::AgentRegistry>,
     pub mcp_service: Option<Arc<mcp::MCPService>>,
+    pub token_usage_service: Arc<token_usage::TokenUsageService>,
     pub miniapp_manager: Arc<MiniAppManager>,
     pub js_worker_pool: Option<Arc<JsWorkerPool>>,
     pub statistics: Arc<RwLock<AppStatistics>>,
@@ -45,7 +46,7 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub async fn new_async() -> BitFunResult<Self> {
+    pub async fn new_async(token_usage_service: Arc<token_usage::TokenUsageService>) -> BitFunResult<Self> {
         let start_time = std::time::Instant::now();
 
         let config_service = config::get_global_config_service().await.map_err(|e| {
@@ -135,6 +136,7 @@ impl AppState {
             ai_rules_service,
             agent_registry,
             mcp_service,
+            token_usage_service,
             miniapp_manager,
             js_worker_pool,
             statistics,

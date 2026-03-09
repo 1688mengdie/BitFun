@@ -803,6 +803,11 @@ impl ConversationCoordinator {
             session.config.enable_tools.to_string(),
         );
 
+        // Pass model_id for token usage tracking
+        if let Some(model_id) = &session.config.model_id {
+            context_vars.insert("model_name".to_string(), model_id.clone());
+        }
+
         // Pass snapshot session ID
         if let Some(snapshot_id) = &session.snapshot_session_id {
             context_vars.insert("snapshot_session_id".to_string(), snapshot_id.clone());
