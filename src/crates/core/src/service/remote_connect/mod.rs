@@ -27,7 +27,7 @@ pub use relay_client::RelayClient;
 pub use remote_server::RemoteServer;
 
 use anyhow::Result;
-use log::{debug, error, info, warn};
+use log::{debug, error, info};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -503,15 +503,23 @@ impl RemoteConnectService {
                         *tg_bot_ref.write().await = Some(tg_bot.clone());
 
                         tokio::spawn(async move {
-                            match bot_for_pair.wait_for_pairing().await {
+                            let mut stop_rx = stop_rx;
+                            match bot_for_pair.wait_for_pairing(&mut stop_rx).await {
                                 Ok(chat_id) => {
-                                    *bot_connected_info.write().await =
-                                        Some(format!("Telegram({chat_id})"));
-                                    info!("Telegram bot paired, starting message loop");
-                                    bot_for_loop.run_message_loop(stop_rx).await;
+                                    // Guard against the race where stop_bots() cleared
+                                    // bot_connected_info between pairing completing and
+                                    // this task running.
+                                    if !*stop_rx.borrow() {
+                                        *bot_connected_info.write().await =
+                                            Some(format!("Telegram({chat_id})"));
+                                        info!("Telegram bot paired, starting message loop");
+                                        bot_for_loop.run_message_loop(stop_rx).await;
+                                    } else {
+                                        info!("Telegram pairing completed but bot was stopped; discarding");
+                                    }
                                 }
                                 Err(e) => {
-                                    error!("Telegram pairing failed: {e}");
+                                    info!("Telegram pairing ended: {e}");
                                 }
                             }
                         });
@@ -555,15 +563,23 @@ impl RemoteConnectService {
                         *fs_bot_ref.write().await = Some(fs_bot.clone());
 
                         tokio::spawn(async move {
-                            match bot_for_pair.wait_for_pairing().await {
+                            let mut stop_rx = stop_rx;
+                            match bot_for_pair.wait_for_pairing(&mut stop_rx).await {
                                 Ok(chat_id) => {
-                                    *bot_connected_info.write().await =
-                                        Some(format!("Feishu({chat_id})"));
-                                    info!("Feishu bot paired, starting message loop");
-                                    bot_for_loop.run_message_loop(stop_rx).await;
+                                    // Guard against the race where stop_bots() cleared
+                                    // bot_connected_info between pairing completing and
+                                    // this task running.
+                                    if !*stop_rx.borrow() {
+                                        *bot_connected_info.write().await =
+                                            Some(format!("Feishu({chat_id})"));
+                                        info!("Feishu bot paired, starting message loop");
+                                        bot_for_loop.run_message_loop(stop_rx).await;
+                                    } else {
+                                        info!("Feishu pairing completed but bot was stopped; discarding");
+                                    }
                                 }
                                 Err(e) => {
-                                    error!("Feishu pairing failed: {e}");
+                                    info!("Feishu pairing ended: {e}");
                                 }
                             }
                         });

@@ -21,6 +21,12 @@ pub struct BotChatState {
     pub current_session_id: Option<String>,
     #[serde(skip)]
     pub pending_action: Option<PendingAction>,
+    /// Pending file downloads awaiting user confirmation.
+    /// Key: short token embedded in the download button callback.
+    /// Value: absolute file path on the desktop.
+    /// Not persisted — cleared on bot restart.
+    #[serde(skip)]
+    pub pending_files: std::collections::HashMap<String, String>,
 }
 
 impl BotChatState {
@@ -31,6 +37,7 @@ impl BotChatState {
             current_workspace: None,
             current_session_id: None,
             pending_action: None,
+            pending_files: std::collections::HashMap::new(),
         }
     }
 }
@@ -101,6 +108,15 @@ pub struct ForwardRequest {
     pub agent_type: String,
     pub turn_id: String,
     pub image_contexts: Vec<crate::agentic::image_analysis::ImageContextData>,
+}
+
+/// Result returned by [`execute_forwarded_turn`].
+pub struct ForwardedTurnResult {
+    /// Truncated text suitable for display in bot messages (≤ 4000 chars).
+    pub display_text: String,
+    /// Full untruncated response text from the tracker, suitable for
+    /// `computer://` link extraction.  Not affected by broadcast lag.
+    pub full_text: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -220,7 +236,7 @@ pub fn main_menu_actions() -> Vec<BotAction> {
         BotAction::secondary("Resume Session", "/resume_session"),
         BotAction::secondary("New Code Session", "/new_code_session"),
         BotAction::secondary("New Cowork Session", "/new_cowork_session"),
-        BotAction::secondary("Help", "/help"),
+        BotAction::secondary("Help (send /help for menu)", "/help"),
     ]
 }
 
@@ -258,6 +274,18 @@ pub async fn handle_command(
         super::super::remote_server::images_to_contexts(
             if images.is_empty() { None } else { Some(&images) },
         );
+
+    // If the bot session has no workspace yet, silently inherit the desktop's
+    // currently-open workspace.  This avoids asking users to run
+    // /switch_workspace right after pairing when the desktop already has a
+    // project open.
+    if state.current_workspace.is_none() {
+        use crate::infrastructure::get_workspace_path;
+        if let Some(ws_path) = get_workspace_path() {
+            state.current_workspace = Some(ws_path.to_string_lossy().to_string());
+        }
+    }
+
     match cmd {
         BotCommand::Start | BotCommand::Help => {
             if state.paired {
@@ -1302,7 +1330,7 @@ async fn handle_chat_message(
     if state.current_session_id.is_none() {
         return HandleResult {
             reply: "No active session. Use /resume_session to resume one or \
-                    /new_code_session to create a new one."
+                    /new_code_session /new_cowork_session to create a new one."
                 .to_string(),
             actions: session_entry_actions(),
             forward_to_session: None,
@@ -1343,7 +1371,7 @@ pub async fn execute_forwarded_turn(
     forward: ForwardRequest,
     interaction_handler: Option<BotInteractionHandler>,
     message_sender: Option<BotMessageSender>,
-) -> String {
+) -> ForwardedTurnResult {
     use crate::agentic::coordination::DialogTriggerSource;
     use crate::service::remote_connect::remote_server::{
         get_or_init_global_dispatcher, TrackerEvent,
@@ -1365,7 +1393,11 @@ pub async fn execute_forwarded_turn(
         )
         .await
     {
-        return format!("Failed to send message: {e}");
+        let msg = format!("Failed to send message: {e}");
+        return ForwardedTurnResult {
+            display_text: msg.clone(),
+            full_text: msg,
+        };
     }
 
     let result = tokio::time::timeout(std::time::Duration::from_secs(300), async {
@@ -1410,9 +1442,19 @@ pub async fn execute_forwarded_turn(
                         }
                     }
                     TrackerEvent::TurnCompleted => break,
-                    TrackerEvent::TurnFailed(e) => return format!("Error: {e}"),
+                    TrackerEvent::TurnFailed(e) => {
+                        let msg = format!("Error: {e}");
+                        return ForwardedTurnResult {
+                            display_text: msg.clone(),
+                            full_text: msg,
+                        };
+                    }
                     TrackerEvent::TurnCancelled => {
-                        return "Task was cancelled.".to_string();
+                        let msg = "Task was cancelled.".to_string();
+                        return ForwardedTurnResult {
+                            display_text: msg.clone(),
+                            full_text: msg,
+                        };
                     }
                     _ => {}
                 },
@@ -1424,24 +1466,37 @@ pub async fn execute_forwarded_turn(
                 }
             }
         }
-        response
+
+        // Use the tracker's authoritative accumulated_text as the full
+        // response — it is maintained directly from AgenticEvent and is not
+        // subject to broadcast channel lag.
+        let full_text = tracker.accumulated_text();
+        let full_text = if full_text.is_empty() { response } else { full_text };
+
+        let mut display_text = full_text.clone();
+        const MAX_BOT_MSG_LEN: usize = 4000;
+        if display_text.len() > MAX_BOT_MSG_LEN {
+            let mut end = MAX_BOT_MSG_LEN;
+            while !display_text.is_char_boundary(end) {
+                end -= 1;
+            }
+            display_text.truncate(end);
+            display_text.push_str("\n\n... (truncated)");
+        }
+
+        ForwardedTurnResult {
+            display_text: if display_text.is_empty() {
+                "(No response)".to_string()
+            } else {
+                display_text
+            },
+            full_text,
+        }
     })
     .await;
 
-    match result {
-        Ok(text) if text.is_empty() => "(No response)".to_string(),
-        Ok(mut text) => {
-            const MAX_BOT_MSG_LEN: usize = 4000;
-            if text.len() > MAX_BOT_MSG_LEN {
-                let mut end = MAX_BOT_MSG_LEN;
-                while !text.is_char_boundary(end) {
-                    end -= 1;
-                }
-                text.truncate(end);
-                text.push_str("\n\n... (truncated)");
-            }
-            text
-        }
-        Err(_) => "Response timed out after 5 minutes.".to_string(),
-    }
+    result.unwrap_or_else(|_| ForwardedTurnResult {
+        display_text: "Response timed out after 5 minutes.".to_string(),
+        full_text: String::new(),
+    })
 }

@@ -209,9 +209,29 @@ impl SessionManager {
                         PtyServiceEvent::ResizeCompleted { id, .. } => *id,
                     };
 
+                    // Retry the pty_to_session lookup a few times for
+                    // non-Data events.  create_session sets the mapping
+                    // AFTER create_process returns, but event forwarding
+                    // can deliver ProcessReady before the mapping exists.
                     let session_id = {
                         let mapping = pty_to_session.read().await;
-                        mapping.get(&pty_id).cloned()
+                        match mapping.get(&pty_id).cloned() {
+                            Some(sid) => Some(sid),
+                            None if !matches!(event, PtyServiceEvent::ProcessData { .. }) => {
+                                drop(mapping);
+                                let mut found = None;
+                                for _ in 0..50 {
+                                    tokio::time::sleep(Duration::from_millis(10)).await;
+                                    let m = pty_to_session.read().await;
+                                    if let Some(sid) = m.get(&pty_id).cloned() {
+                                        found = Some(sid);
+                                        break;
+                                    }
+                                }
+                                found
+                            }
+                            None => None,
+                        }
                     };
 
                     if let Some(session_id) = session_id {
@@ -651,7 +671,6 @@ impl SessionManager {
         let ready_timeout = Duration::from_secs(30);
         let ready_start = std::time::Instant::now();
         let mut initial_integration_state = None;
-
         while ready_start.elapsed() < ready_timeout {
             // Check session status
             let session_status = {
@@ -671,33 +690,28 @@ impl SessionManager {
             }
 
             match (session_status, integration_state) {
-                // Session must be Active
-                (Some(SessionStatus::Active), Some(int_state)) => {
-                    // For NEW sessions: wait for state to transition from Idle to Prompt/Input
-                    // This indicates shell integration has loaded
+                // Session active or starting with integration info available.
+                // Accept Starting here because ProcessReady can be delayed by the
+                // pty_to_session mapping race; the shell is functional once
+                // integration reaches Prompt/Input regardless of session status.
+                (Some(SessionStatus::Active), Some(int_state))
+                | (Some(SessionStatus::Starting), Some(int_state)) => {
                     if initial_integration_state == Some(CommandState::Idle) {
-                        // This is a newly created session, wait for prompt
                         match int_state {
                             CommandState::Prompt | CommandState::Input => {
                                 return Ok(());
                             }
                             CommandState::Idle => {
-                                // Still at initial Idle, wait for transition to Prompt
-                                // But don't wait forever - use a shorter timeout for new sessions
                                 if ready_start.elapsed() >= ready_timeout {
-                                    // Give up after ready_timeout and try anyway
                                     return Ok(());
                                 }
-                                // Wait before next check to avoid busy loop
                                 tokio::time::sleep(Duration::from_millis(500)).await;
                             }
                             _ => {
-                                // Executing or Finished - shell is working, can send command
                                 return Ok(());
                             }
                         }
                     } else {
-                        // Not a new session (initial state was not Idle), can proceed immediately
                         return Ok(());
                     }
                 }
@@ -708,7 +722,6 @@ impl SessionManager {
                     )));
                 }
                 _ => {
-                    // Still starting, wait
                     tokio::time::sleep(Duration::from_millis(500)).await;
                 }
             }

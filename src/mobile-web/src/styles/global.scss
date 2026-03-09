@@ -101,37 +101,45 @@ body {
 .nav-page {
   position: absolute;
   inset: 0;
-  will-change: transform, opacity;
+  background: var(--color-bg-primary);
+  z-index: 1;
 }
 
+// Push: new page slides in from right ON TOP, old page shifts left underneath
 .nav-push-enter {
-  animation: navPushIn 0.35s var(--easing-decelerate) both;
+  z-index: 2;
+  animation: navPushIn 0.3s cubic-bezier(0.2, 0.9, 0.3, 1) both;
 }
 .nav-push-exit {
-  animation: navPushOut 0.35s var(--easing-accelerate) both;
+  z-index: 1;
+  animation: navPushOut 0.3s cubic-bezier(0.2, 0.9, 0.3, 1) both;
 }
+
+// Pop: old page slides out to right ON TOP, underlying page shifts in from left
 .nav-pop-enter {
-  animation: navPopIn 0.25s var(--easing-decelerate) both;
+  z-index: 1;
+  animation: navPopIn 0.3s cubic-bezier(0.2, 0.9, 0.3, 1) both;
 }
 .nav-pop-exit {
-  animation: navPopOut 0.25s var(--easing-accelerate) both;
+  z-index: 2;
+  animation: navPopOut 0.3s cubic-bezier(0.2, 0.9, 0.3, 1) both;
 }
 
 @keyframes navPushIn {
-  from { transform: translateX(30%); opacity: 0.4; }
-  to   { transform: translateX(0);   opacity: 1; }
+  from { transform: translateX(100%); }
+  to   { transform: translateX(0); }
 }
 @keyframes navPushOut {
-  from { transform: translateX(0);    opacity: 1; }
-  to   { transform: translateX(-15%); opacity: 0.3; }
+  from { transform: translateX(0); }
+  to   { transform: translateX(-25%); }
 }
 @keyframes navPopIn {
-  from { transform: translateX(-15%); opacity: 0.3; }
-  to   { transform: translateX(0);    opacity: 1; }
+  from { transform: translateX(-25%); }
+  to   { transform: translateX(0); }
 }
 @keyframes navPopOut {
-  from { transform: translateX(0);   opacity: 1; }
-  to   { transform: translateX(30%); opacity: 0.4; }
+  from { transform: translateX(0); }
+  to   { transform: translateX(100%); }
 }
 
 // Spinner utility
@@ -148,4 +156,21 @@ body {
   width: 14px;
   height: 14px;
   border-width: 2px;
+}
+
+// Uniform theme-switch transition — applied temporarily via JS during toggle
+// so that ALL color-related properties animate at the same pace.
+html.theme-switching {
+  &,
+  & *,
+  & *::before,
+  & *::after {
+    transition: background-color 0.28s ease,
+                color 0.28s ease,
+                border-color 0.28s ease,
+                box-shadow 0.28s ease,
+                fill 0.28s ease,
+                stroke 0.28s ease,
+                background 0.28s ease !important;
+  }
 }

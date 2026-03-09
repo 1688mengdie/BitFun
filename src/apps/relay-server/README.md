@@ -118,13 +118,44 @@ Only desktop clients connect via WebSocket. Mobile clients use the HTTP endpoint
 
 ## Self-Hosted Deployment
 
-1. Clone the repository
-2. Navigate to `src/apps/relay-server/`
-3. Run `bash deploy.sh`
-4. Configure DNS/firewall as needed
-5. In BitFun desktop, select "Custom Server" and enter your server URL
+### Option A: Local Deploy (on the server itself)
 
-### Deployment Checklist (Recommended)
+If you have the repo cloned **on the server**:
+
+```bash
+cd src/apps/relay-server/
+bash deploy.sh
+```
+
+This builds the Docker image locally and starts the container. It will **automatically stop any previously running relay container** before restarting.
+
+### Option B: Remote Deploy (from your dev machine)
+
+Push code changes from your local dev machine to a remote server via SSH:
+
+```bash
+cd src/apps/relay-server/
+
+# First-time setup (creates /opt/bitfun-relay, copies static/)
+bash remote-deploy.sh 116.204.120.240 --first
+
+# Subsequent updates (syncs src + rebuilds)
+bash remote-deploy.sh 116.204.120.240
+```
+
+The script will:
+1. Test SSH connectivity
+2. **Stop the old container** if running
+3. Sync source code (`src/`), `Cargo.toml`, `Dockerfile`, `docker-compose.yml`
+4. Rebuild the Docker image on the server
+5. Start the new container
+6. Run a health check
+
+**Prerequisites:**
+- SSH key-based auth to the server (configured in `~/.ssh/config`)
+- Docker + Docker Compose installed on the server
+
+### Deployment Checklist
 
 1. Open required ports:
    - `9700` (relay direct access, optional if only via reverse proxy)
@@ -134,7 +165,25 @@ Only desktop clients connect via WebSocket. Mobile clients use the HTTP endpoint
 3. Configure your final URL strategy:
    - root domain (`https://relay.example.com`) or
    - path prefix (`https://relay.example.com/relay`)
-4. Fill the same URL into BitFun Desktop "Custom Server".
+4. Fill the same URL into BitFun Desktop "Custom Server"
+
+### Directory Structure
+
+```
+relay-server/
+├── src/                    # Rust source code
+├── static/                 # Mobile-web static files
+├── Cargo.toml              # Crate manifest (standalone, no workspace deps)
+├── Dockerfile              # Docker build (standalone single-crate build)
+├── docker-compose.yml      # Docker Compose config
+├── Caddyfile               # Caddy reverse proxy config (optional)
+├── deploy.sh               # Local deploy (run on the server itself)
+├── remote-deploy.sh        # Remote deploy (run from dev machine via SSH)
+└── README.md
+```
+
+Relay server is a **standalone crate** — one set of code, one Dockerfile, one docker-compose.yml.
+Whether deployed as a public relay, LAN relay, or NAT traversal relay, the build and runtime are identical.
 
 ### About `src/apps/server` vs `src/apps/relay-server`
 

@@ -333,11 +333,10 @@ export const RichTextInput = React.forwardRef<HTMLDivElement, RichTextInputProps
   }, []);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
-    // IME composition: let the IME handle certain keys
-    const isComposing = (e.nativeEvent as KeyboardEvent).isComposing;
+    const nativeIsComposing = (e.nativeEvent as KeyboardEvent).isComposing;
+    const composing = nativeIsComposing || isComposingRef.current;
     
-    // Handle tag deletion only when not composing
-    if (!isComposing && e.key === 'Backspace' && internalRef.current) {
+    if (!composing && e.key === 'Backspace' && internalRef.current) {
       const selection = window.getSelection();
       if (selection) {
         const range = selection.getRangeAt(0);
@@ -356,7 +355,10 @@ export const RichTextInput = React.forwardRef<HTMLDivElement, RichTextInputProps
       }
     }
     
-    // ChatInput checks isComposing to decide whether to send
+    if (composing && e.key === 'Enter') {
+      return;
+    }
+
     onKeyDown?.(e);
   }, [onKeyDown, onRemoveContext]);
 
@@ -532,7 +534,11 @@ export const RichTextInput = React.forwardRef<HTMLDivElement, RichTextInputProps
   }, []);
 
   const handleCompositionEnd = useCallback(() => {
-    isComposingRef.current = false;
+    // Delay clearing to handle Safari's event ordering where
+    // compositionend fires before the final keydown(Enter)
+    setTimeout(() => {
+      isComposingRef.current = false;
+    }, 0);
     handleInput();
   }, [handleInput]);
 

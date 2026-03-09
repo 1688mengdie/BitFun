@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useEffect, useState } from 'react';
+import React, { createContext, useCallback, useLayoutEffect, useState } from 'react';
 import { darkTheme } from './presets/dark';
 import { lightTheme } from './presets/light';
 
@@ -12,7 +12,7 @@ interface ThemeContextValue {
 }
 
 const STORAGE_KEY = 'bitfun-mobile-theme';
-const THEME_STYLE_ID = 'bitfun-theme-vars';
+const THEME_STYLE_ATTR = 'data-bitfun-theme';
 
 const themeMap: Record<ThemeId, Record<string, string>> = {
   dark: darkTheme,
@@ -29,83 +29,64 @@ const textColors: Record<ThemeId, string> = {
   light: '#1c1c1e',
 };
 
-let fadeTimer: ReturnType<typeof setTimeout> | undefined;
-let fadeRaf: number | undefined;
-
-/**
- * Build a complete CSS stylesheet string that defines all theme variables
- * on :root plus explicit background/color on html and body.
- * Injecting a <style> element is far more reliable across mobile WebKit
- * than calling setProperty() on each variable individually.
- */
-function buildThemeCSS(id: ThemeId): string {
-  const vars = themeMap[id];
+function buildThemeCSS(id: ThemeId, vars: Record<string, string>): string {
   const bg = themeColors[id];
   const fg = textColors[id];
   const parts: string[] = [':root {'];
-
   for (const [key, value] of Object.entries(vars)) {
     parts.push(`  ${key}: ${value};`);
   }
   parts.push(`  color-scheme: ${id};`);
   parts.push('}');
   parts.push(`html, body { background-color: ${bg}; color: ${fg}; color-scheme: ${id}; }`);
-
   return parts.join('\n');
 }
 
-function applyTheme(id: ThemeId) {
+const cssCache: Record<ThemeId, string> = {
+  dark: buildThemeCSS('dark', darkTheme),
+  light: buildThemeCSS('light', lightTheme),
+};
+
+function commitThemeDOM(id: ThemeId) {
   const root = document.documentElement;
   const body = document.body;
-  const prevTheme = root.getAttribute('data-theme');
-  const isSwitch = prevTheme && prevTheme !== id;
+  const vars = themeMap[id];
 
-  // --- 1. Inject / update <style> with all CSS variables ---
-  let styleEl = document.getElementById(THEME_STYLE_ID) as HTMLStyleElement | null;
-  if (!styleEl) {
-    styleEl = document.createElement('style');
-    styleEl.id = THEME_STYLE_ID;
-    document.head.appendChild(styleEl);
+  // 1. Inject new <style> BEFORE removing old ones to avoid a CSS-variable gap
+  //    where variables are temporarily undefined. Use a data attribute selector
+  //    instead of id to allow brief overlap of both style elements.
+  const newStyleEl = document.createElement('style');
+  newStyleEl.setAttribute(THEME_STYLE_ATTR, id);
+  newStyleEl.textContent = cssCache[id];
+  document.head.appendChild(newStyleEl);
+
+  // Remove all previous theme style elements
+  document.head.querySelectorAll(`style[${THEME_STYLE_ATTR}]`).forEach(el => {
+    if (el !== newStyleEl) el.remove();
+  });
+
+  // 2. Set every CSS variable directly on :root via setProperty().
+  //    This is the most reliable cross-browser path — it guarantees
+  //    variables resolve even if the <style> element is ignored.
+  for (const key of Object.keys(vars)) {
+    root.style.setProperty(key, vars[key]);
   }
-  styleEl.textContent = buildThemeCSS(id);
+  root.style.setProperty('color-scheme', id);
 
-  // --- 2. data-theme attribute (for any CSS selectors that depend on it) ---
+  // 3. data-theme attributes
   root.setAttribute('data-theme', id);
   root.setAttribute('data-theme-type', id);
   body.setAttribute('data-theme', id);
 
-  // --- 3. Inline style fallbacks (highest specificity, belt-and-suspenders) ---
+  // 4. Inline style fallbacks (highest specificity)
   body.style.backgroundColor = themeColors[id];
   body.style.color = textColors[id];
 
-  // --- 4. Update <meta name="theme-color"> ---
+  // 5. Update <meta name="theme-color">
   const meta = document.querySelector('meta[name="theme-color"]');
   if (meta) {
     meta.setAttribute('content', themeColors[id]);
     meta.removeAttribute('media');
-  }
-
-  // --- 5. Visual crossfade on switch (opacity only, most compatible) ---
-  if (isSwitch) {
-    if (fadeRaf != null) cancelAnimationFrame(fadeRaf);
-    clearTimeout(fadeTimer);
-
-    const app = document.querySelector('.mobile-app') as HTMLElement | null;
-    if (app) {
-      app.style.transition = 'none';
-      app.style.opacity = '0.55';
-
-      fadeRaf = requestAnimationFrame(() => {
-        fadeRaf = requestAnimationFrame(() => {
-          app.style.transition = 'opacity 0.28s ease-out';
-          app.style.opacity = '1';
-          fadeTimer = setTimeout(() => {
-            app.style.removeProperty('transition');
-            app.style.removeProperty('opacity');
-          }, 320);
-        });
-      });
-    }
   }
 }
 
@@ -124,11 +105,34 @@ export const ThemeContext = createContext<ThemeContextValue>({
   toggleTheme: () => {},
 });
 
+const TRANSITION_MS = 280;
+let switchTimer: ReturnType<typeof setTimeout> | undefined;
+
 export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [themeId, setThemeId] = useState<ThemeId>(getInitialTheme);
 
-  useEffect(() => {
-    applyTheme(themeId);
+  useLayoutEffect(() => {
+    const root = document.documentElement;
+    const prevTheme = root.getAttribute('data-theme');
+    const isSwitch = prevTheme && prevTheme !== themeId;
+
+    if (isSwitch) {
+      clearTimeout(switchTimer);
+      root.classList.add('theme-switching');
+      // Force reflow so the browser registers the transition rules
+      // BEFORE we change CSS variable values — otherwise the start and
+      // end states are set in the same frame and no animation occurs.
+      void root.offsetHeight;
+    }
+
+    commitThemeDOM(themeId);
+
+    if (isSwitch) {
+      switchTimer = setTimeout(() => {
+        root.classList.remove('theme-switching');
+      }, TRANSITION_MS + 40);
+    }
+
     try { localStorage.setItem(STORAGE_KEY, themeId); } catch { /* ignore */ }
   }, [themeId]);
 

@@ -109,6 +109,16 @@
     padding-left: 1.2rem;
   }
 
+  ul:has(> li > .file-card) {
+    list-style: none;
+    padding-left: 0;
+
+    > li {
+      margin-bottom: var(--size-gap-2);
+      &:last-child { margin-bottom: 0; }
+    }
+  }
+
   // ─── Inline code ────────────────────────────────────────────────────────────
 
   .inline-code {
