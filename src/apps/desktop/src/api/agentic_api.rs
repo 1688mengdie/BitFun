@@ -2,6 +2,7 @@
 
 use log::warn;
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::{AppHandle, State};
 
@@ -10,7 +11,6 @@ use bitfun_core::agentic::tools::image_context::get_image_context;
 use bitfun_core::agentic::coordination::{ConversationCoordinator, DialogScheduler, DialogTriggerSource};
 use bitfun_core::agentic::core::*;
 use bitfun_core::agentic::image_analysis::ImageContextData;
-use bitfun_core::infrastructure::get_workspace_path;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -18,6 +18,7 @@ pub struct CreateSessionRequest {
     pub session_id: Option<String>,
     pub session_name: String,
     pub agent_type: String,
+    pub workspace_path: String,
     pub config: Option<SessionConfigDTO>,
 }
 
@@ -48,6 +49,7 @@ pub struct StartDialogTurnRequest {
     pub session_id: String,
     pub user_input: String,
     pub agent_type: String,
+    pub workspace_path: Option<String>,
     pub turn_id: Option<String>,
     #[serde(default)]
     pub image_contexts: Option<Vec<ImageContextData>>,
@@ -111,12 +113,20 @@ pub struct CancelToolRequest {
 #[serde(rename_all = "camelCase")]
 pub struct DeleteSessionRequest {
     pub session_id: String,
+    pub workspace_path: String,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RestoreSessionRequest {
     pub session_id: String,
+    pub workspace_path: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListSessionsRequest {
+    pub workspace_path: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -148,9 +158,6 @@ pub async fn create_session(
     coordinator: State<'_, Arc<ConversationCoordinator>>,
     request: CreateSessionRequest,
 ) -> Result<CreateSessionResponse, String> {
-    let workspace_path = get_workspace_path()
-        .map(|p| p.to_string_lossy().to_string());
-
     let config = request
         .config
         .map(|c| SessionConfig {
@@ -161,10 +168,13 @@ pub async fn create_session(
             max_turns: c.max_turns.unwrap_or(200),
             enable_context_compression: c.enable_context_compression.unwrap_or(true),
             compression_threshold: c.compression_threshold.unwrap_or(0.8),
-            workspace_path: None,
+            workspace_path: Some(request.workspace_path.clone()),
             model_id: c.model_name,
         })
-        .unwrap_or_default();
+        .unwrap_or(SessionConfig {
+            workspace_path: Some(request.workspace_path.clone()),
+            ..Default::default()
+        });
 
     let session = coordinator
         .create_session_with_workspace(
@@ -172,7 +182,7 @@ pub async fn create_session(
             request.session_name.clone(),
             request.agent_type.clone(),
             config,
-            workspace_path,
+            request.workspace_path,
         )
         .await
         .map_err(|e| format!("Failed to create session: {}", e))?;
@@ -195,6 +205,7 @@ pub async fn start_dialog_turn(
         session_id,
         user_input,
         agent_type,
+        workspace_path,
         turn_id,
         image_contexts,
     } = request;
@@ -212,6 +223,7 @@ pub async fn start_dialog_turn(
                 resolved_image_contexts,
                 turn_id,
                 agent_type,
+                workspace_path,
                 DialogTriggerSource::DesktopUi,
             )
             .await
@@ -223,6 +235,7 @@ pub async fn start_dialog_turn(
                 user_input,
                 turn_id,
                 agent_type,
+                workspace_path,
                 DialogTriggerSource::DesktopUi,
             )
             .await
@@ -364,7 +377,7 @@ pub async fn delete_session(
     request: DeleteSessionRequest,
 ) -> Result<(), String> {
     coordinator
-        .delete_session(&request.session_id)
+        .delete_session(&PathBuf::from(request.workspace_path), &request.session_id)
         .await
         .map_err(|e| format!("Failed to delete session: {}", e))
 }
@@ -375,7 +388,7 @@ pub async fn restore_session(
     request: RestoreSessionRequest,
 ) -> Result<SessionResponse, String> {
     let session = coordinator
-        .restore_session(&request.session_id)
+        .restore_session(&PathBuf::from(request.workspace_path), &request.session_id)
         .await
         .map_err(|e| format!("Failed to restore session: {}", e))?;
 
@@ -385,9 +398,10 @@ pub async fn restore_session(
 #[tauri::command]
 pub async fn list_sessions(
     coordinator: State<'_, Arc<ConversationCoordinator>>,
+    request: ListSessionsRequest,
 ) -> Result<Vec<SessionResponse>, String> {
     let summaries = coordinator
-        .list_sessions()
+        .list_sessions(&PathBuf::from(request.workspace_path))
         .await
         .map_err(|e| format!("Failed to list sessions: {}", e))?;
 

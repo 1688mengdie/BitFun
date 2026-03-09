@@ -46,11 +46,18 @@ impl CoreAgentAdapter {
         if let Some(session_id) = &self.session_id {
             return Ok(session_id.clone());
         }
+
+        let workspace_path = std::env::current_dir()
+            .map(|path| path.to_string_lossy().to_string())
+            .unwrap_or_else(|_| ".".to_string());
         
         let session = self.coordinator.create_session(
             format!("CLI Session - {}", chrono::Local::now().format("%Y-%m-%d %H:%M:%S")),
             self.agent_type.clone(),
-            SessionConfig::default(),
+            SessionConfig {
+                workspace_path: Some(workspace_path),
+                ..Default::default()
+            },
         ).await?;
         
         self.session_id = Some(session.session_id.clone());
@@ -85,6 +92,7 @@ impl Agent for CoreAgentAdapter {
             message.clone(),
             None,
             self.agent_type.clone(),
+            None,
             DialogTriggerSource::Cli,
         ).await?;
         

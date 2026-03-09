@@ -4,7 +4,7 @@
  * Wraps agent/tool APIs and bridges backend streaming events into a convenient
  * client-side interface.
  */
-import { agentAPI, toolAPI } from '@/infrastructure/api';
+import { agentAPI, globalAPI, toolAPI } from '@/infrastructure/api';
 import { listen } from '@tauri-apps/api/event';
 import { createLogger } from '@/shared/utils/logger';
 
@@ -390,9 +390,15 @@ export class AgentService {
     
     let sessionId: string;
     try {
+      const workspacePath = await globalAPI.getCurrentWorkspacePath();
+      if (!workspacePath) {
+        throw new Error('Workspace path is required to create an agent task session');
+      }
+
       const response = await agentAPI.createSession({
         sessionName: `task-${Date.now()}`,
         agentType: request.agent_type,
+        workspacePath,
         config: {
           modelName: request.model_name,
           enableTools: true,
@@ -416,10 +422,16 @@ export class AgentService {
     
     
     try {
+      const workspacePath = await globalAPI.getCurrentWorkspacePath();
+      if (!workspacePath) {
+        throw new Error('Workspace path is required to start an agent task');
+      }
+
       await agentAPI.startDialogTurn({
         sessionId,
         userInput: request.prompt,
-        agentType: request.agent_type 
+        agentType: request.agent_type,
+        workspacePath,
       });
     } catch (error) {
       log.error('Failed to send message', error);

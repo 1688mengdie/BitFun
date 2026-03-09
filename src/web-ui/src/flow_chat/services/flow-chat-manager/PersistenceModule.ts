@@ -147,7 +147,7 @@ export async function saveDialogTurnToDisk(
   turnId: string
 ): Promise<void> {
   try {
-    const { conversationAPI } = await import('@/infrastructure/api');
+    const { sessionAPI } = await import('@/infrastructure/api');
 
     const session = context.flowChatStore.getState().sessions.get(sessionId);
     if (!session) {
@@ -169,7 +169,7 @@ export async function saveDialogTurnToDisk(
 
     const turnIndex = dialogTurn.backendTurnIndex ?? session.dialogTurns.indexOf(dialogTurn);
     const turnData = convertDialogTurnToBackendFormat(dialogTurn, turnIndex);
-    await conversationAPI.saveDialogTurn(turnData, workspacePath);
+    await sessionAPI.saveSessionTurn(turnData, workspacePath);
     
     await updateSessionMetadata(context, sessionId);
     
@@ -180,7 +180,7 @@ export async function saveDialogTurnToDisk(
 
 /**
  * Save all in-progress dialog turns
- * Used when closing window to save unfinished conversations
+ * Used when closing the window to persist unfinished session turns
  */
 export async function saveAllInProgressTurns(context: FlowChatContext): Promise<void> {
   const state = context.flowChatStore.getState();
@@ -320,14 +320,14 @@ export function convertDialogTurnToBackendFormat(dialogTurn: DialogTurn, turnInd
  * Update session metadata (lastActiveAt, statistics, etc.)
  * Loads existing metadata first to avoid overwriting correct historical counts
  * when the in-memory dialogTurns only has a partial view (e.g. remote-triggered turns
- * on a historical session whose full history hasn't been loaded yet).
+ * on a persisted session whose full turn history hasn't been loaded yet).
  */
 export async function updateSessionMetadata(
   context: FlowChatContext,
   sessionId: string
 ): Promise<void> {
   try {
-    const { conversationAPI } = await import('@/infrastructure/api');
+    const { sessionAPI } = await import('@/infrastructure/api');
 
     const session = context.flowChatStore.getState().sessions.get(sessionId);
     if (!session) return;
@@ -337,7 +337,7 @@ export async function updateSessionMetadata(
 
     let existingMetadata: any = null;
     try {
-      existingMetadata = await conversationAPI.loadSessionMetadata(sessionId, workspacePath);
+      existingMetadata = await sessionAPI.loadSessionMetadata(sessionId, workspacePath);
     } catch {
       // ignore
     }
@@ -369,7 +369,7 @@ export async function updateSessionMetadata(
       todos: session.todos || existingMetadata?.todos || [],
     };
 
-    await conversationAPI.saveSessionMetadata(metadata, workspacePath);
+    await sessionAPI.saveSessionMetadata(metadata, workspacePath);
   } catch (error) {
     log.warn('Failed to update session metadata', { sessionId, error });
   }
@@ -378,14 +378,14 @@ export async function updateSessionMetadata(
 /**
  * Update session activity time (used for session switching)
  */
-export async function touchSessionActivity(sessionId: string): Promise<void> {
+export async function touchSessionActivity(sessionId: string, workspacePath?: string): Promise<void> {
   try {
-    const { conversationAPI } = await import('@/infrastructure/api');
-    const workspacePath = await globalAPI.getCurrentWorkspacePath();
+    const { sessionAPI } = await import('@/infrastructure/api');
+    const resolvedWorkspacePath = workspacePath || await globalAPI.getCurrentWorkspacePath();
     
-    if (!workspacePath) return;
+    if (!resolvedWorkspacePath) return;
 
-    await conversationAPI.touchConversationSession(sessionId, workspacePath);
+    await sessionAPI.touchSessionActivity(sessionId, resolvedWorkspacePath);
   } catch (error) {
     log.debug('Failed to touch session activity', { sessionId, error });
   }

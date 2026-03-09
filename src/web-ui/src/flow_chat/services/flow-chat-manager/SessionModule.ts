@@ -82,6 +82,11 @@ export async function createChatSession(
   try {
     const sessionMode = normalizeSessionDisplayMode(mode);
     const targetWorkspace = resolveSessionWorkspace();
+    const workspacePath = targetWorkspace?.rootPath;
+
+    if (!workspacePath) {
+      throw new Error('Workspace path is required to create a session');
+    }
 
     if (targetWorkspace && workspaceManager.getState().currentWorkspace?.id !== targetWorkspace.id) {
       await workspaceManager.switchWorkspace(targetWorkspace);
@@ -103,6 +108,7 @@ export async function createChatSession(
     const response = await agentAPI.createSession({
       sessionName,
       agentType,
+      workspacePath,
       config: {
         modelName: config.modelName || 'default',
         enableTools: true,
@@ -120,7 +126,7 @@ export async function createChatSession(
       sessionName,
       maxContextTokens,
       mode,
-      targetWorkspace?.rootPath
+      workspacePath
     );
 
     return response.sessionId;
@@ -146,7 +152,7 @@ export async function switchChatSession(
     
     if (session?.isHistorical) {
       try {
-        const workspacePath = await globalAPI.getCurrentWorkspacePath();
+        const workspacePath = session.workspacePath || await globalAPI.getCurrentWorkspacePath();
         if (!workspacePath) {
           throw new Error('Cannot get workspace path');
         }
@@ -154,7 +160,7 @@ export async function switchChatSession(
         await context.flowChatStore.loadSessionHistory(sessionId, workspacePath);
         
         try {
-          await agentAPI.restoreSession(sessionId);
+          await agentAPI.restoreSession(sessionId, workspacePath);
           
           context.flowChatStore.setState(prev => {
             const newSessions = new Map(prev.sessions);
@@ -172,6 +178,7 @@ export async function switchChatSession(
               sessionId: sessionId,
               sessionName: currentSession.title || `Session ${sessionId.slice(0, 8)}`,
               agentType: currentSession.mode || 'agentic',
+              workspacePath,
               config: {
                 modelName: currentSession.config.modelName || 'default',
                 enableTools: true,
@@ -199,7 +206,7 @@ export async function switchChatSession(
     
     context.flowChatStore.switchSession(sessionId);
 
-    touchSessionActivity(sessionId).catch(error => {
+    touchSessionActivity(sessionId, session?.workspacePath).catch(error => {
       log.debug('Failed to touch session activity', { sessionId, error });
     });
   } catch (error) {
@@ -248,8 +255,13 @@ export async function ensureBackendSession(
   const needsBackendSetup = isHistoricalSession || isFirstTurn;
   
   if (needsBackendSetup) {
+    const workspacePath = session.workspacePath || await globalAPI.getCurrentWorkspacePath();
+    if (!workspacePath) {
+      throw new Error(`Workspace path is required for session: ${sessionId}`);
+    }
+
     try {
-      await agentAPI.restoreSession(sessionId);
+      await agentAPI.restoreSession(sessionId, workspacePath);
       
       if (isHistoricalSession) {
         context.flowChatStore.setState(prev => {
@@ -267,6 +279,7 @@ export async function ensureBackendSession(
         sessionId: sessionId,
         sessionName: session.title || `Session ${sessionId.slice(0, 8)}`,
         agentType: session.mode || 'agentic',
+        workspacePath,
         config: {
           modelName: session.config.modelName || 'default',
           enableTools: true,
@@ -288,11 +301,17 @@ export async function retryCreateBackendSession(
   if (!session) {
     throw new Error(`Session does not exist: ${sessionId}`);
   }
+
+  const workspacePath = session.workspacePath || await globalAPI.getCurrentWorkspacePath();
+  if (!workspacePath) {
+    throw new Error(`Workspace path is required for session: ${sessionId}`);
+  }
   
   await agentAPI.createSession({
     sessionId: sessionId,
     sessionName: session.title || `Session ${sessionId.slice(0, 8)}`,
     agentType: session.mode || 'agentic',
+    workspacePath,
     config: {
       modelName: session.config.modelName || 'default',
       enableTools: true,

@@ -37,7 +37,7 @@ impl EventSubscriber for TokenUsageSubscriber {
         {
             let output = output_tokens.unwrap_or(0);
             let cached = 0;
-            
+
             debug!(
                 "Recording token usage: model={}, session={}, turn={}, input={}, output={}, total={}, is_subagent={}",
                 model_id, session_id, turn_id, input_tokens, output, total_tokens, is_subagent

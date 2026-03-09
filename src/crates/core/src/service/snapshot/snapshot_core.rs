@@ -87,7 +87,7 @@ pub struct SnapshotCore {
 
 impl SnapshotCore {
     pub fn new(bitfun_dir: &Path, snapshot_system: FileSnapshotSystem) -> Self {
-        let sessions_dir = bitfun_dir.join("sessions").join("operations");
+        let sessions_dir = bitfun_dir.join("snapshots").join("operations");
         Self {
             sessions: HashMap::new(),
             operation_index: HashMap::new(),

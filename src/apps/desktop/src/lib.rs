@@ -27,7 +27,7 @@ use api::ai_rules_api::*;
 use api::clipboard_file_api::*;
 use api::commands::*;
 use api::config_api::*;
-use api::conversation_api::*;
+use api::session_api::*;
 use api::diff_api::*;
 use api::git_agent_api::*;
 use api::git_api::*;
@@ -453,14 +453,14 @@ pub async fn run() {
             build_ai_rules_system_prompt,
             reload_ai_rules,
             toggle_ai_rule,
-            // Conversation API
-            get_conversation_sessions,
-            load_conversation_history,
-            save_dialog_turn,
+            // Session persistence API
+            list_persisted_sessions,
+            load_session_turns,
+            save_session_turn,
             save_session_metadata,
-            delete_conversation_history,
-            touch_conversation_session,
-            load_session_metadata,
+            delete_persisted_session,
+            touch_session_activity,
+            load_persisted_session_metadata,
             // AI Memory API
             api::ai_memory_api::get_all_memories,
             api::ai_memory_api::add_memory,

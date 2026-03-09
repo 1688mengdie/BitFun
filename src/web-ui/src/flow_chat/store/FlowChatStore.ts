@@ -273,7 +273,11 @@ export class FlowChatStore {
     
     try {
       const { agentAPI } = await import('@/infrastructure/api');
-      await agentAPI.deleteSession(sessionId);
+      const workspacePath = this.state.sessions.get(sessionId)?.workspacePath;
+      if (!workspacePath) {
+        throw new Error(`Workspace path not found for session ${sessionId}`);
+      }
+      await agentAPI.deleteSession(sessionId, workspacePath);
     } catch (error) {
       log.error('Failed to delete session on backend', { sessionId, error });
     }
@@ -868,7 +872,7 @@ export class FlowChatStore {
 
     if (status === 'generated') {
       try {
-        const { conversationAPI } = await import('@/infrastructure/api');
+        const { sessionAPI } = await import('@/infrastructure/api');
         const { workspaceManager } = await import('@/infrastructure/services/business/workspaceManager');
         const session = this.state.sessions.get(sessionId);
         const workspacePath = session.workspacePath || workspaceManager.getState().currentWorkspace?.rootPath;
@@ -877,10 +881,10 @@ export class FlowChatStore {
           return;
         }
 
-        const metadata = await conversationAPI.loadSessionMetadata(sessionId, workspacePath);
+        const metadata = await sessionAPI.loadSessionMetadata(sessionId, workspacePath);
         if (metadata) {
           metadata.sessionName = title;
-          await conversationAPI.saveSessionMetadata(metadata, workspacePath);
+          await sessionAPI.saveSessionMetadata(metadata, workspacePath);
         }
       } catch (error) {
         log.error('Failed to sync session title', { sessionId, error });
@@ -986,7 +990,7 @@ export class FlowChatStore {
    */
   private async saveCancelledDialogTurn(sessionId: string, turnId: string): Promise<void> {
     try {
-      const { conversationAPI } = await import('@/infrastructure/api');
+      const { sessionAPI } = await import('@/infrastructure/api');
       const session = this.state.sessions.get(sessionId);
       if (!session) {
         log.warn('Session not found, skipping save', { sessionId, turnId });
@@ -1071,7 +1075,7 @@ export class FlowChatStore {
         status: 'cancelled' as const
       };
 
-      await conversationAPI.saveDialogTurn(turnData, workspacePath);
+      await sessionAPI.saveSessionTurn(turnData, workspacePath);
     } catch (error) {
       log.error('Failed to save cancelled dialog turn', { sessionId, turnId, error });
     }
@@ -1079,13 +1083,13 @@ export class FlowChatStore {
 
 
   /**
-   * Initialize by loading historical session list from disk (metadata only)
+   * Initialize by loading persisted session metadata from disk
    * Clears sessions from other workspaces, then loads sessions for the target workspace.
    */
   public async initializeFromDisk(workspacePath: string): Promise<void> {
     try {
-      const { conversationAPI } = await import('@/infrastructure/api');
-      const sessions = await conversationAPI.getConversationSessions(workspacePath);
+      const { sessionAPI } = await import('@/infrastructure/api');
+      const sessions = await sessionAPI.listSessions(workspacePath);
       
       const { stateMachineManager } = await import('../state-machine');
       sessions.forEach(metadata => {
@@ -1170,7 +1174,7 @@ export class FlowChatStore {
       
       await Promise.all(sessions.map(processSession));
     } catch (error) {
-      log.error('Failed to load historical sessions', error);
+      log.error('Failed to load persisted sessions', error);
     }
   }
 
@@ -1188,13 +1192,13 @@ export class FlowChatStore {
       
       try {
         const { agentAPI } = await import('@/infrastructure/api');
-        await agentAPI.restoreSession(sessionId);
+        await agentAPI.restoreSession(sessionId, workspacePath);
       } catch (error) {
         log.warn('Backend session restore failed (may be new session)', { sessionId, error });
       }
       
-      const { conversationAPI } = await import('@/infrastructure/api');
-      const turns = await conversationAPI.loadConversationHistory(
+      const { sessionAPI } = await import('@/infrastructure/api');
+      const turns = await sessionAPI.loadSessionTurns(
         sessionId,
         workspacePath,
         limit

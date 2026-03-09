@@ -546,8 +546,8 @@ async fn handle_switch_workspace(state: &mut BotChatState) -> HandleResult {
 }
 
 async fn handle_resume_session(state: &mut BotChatState, page: usize) -> HandleResult {
+    use crate::agentic::persistence::PersistenceManager;
     use crate::infrastructure::PathManager;
-    use crate::service::conversation::ConversationPersistenceManager;
 
     let ws_path = match &state.current_workspace {
         Some(p) => std::path::PathBuf::from(p),
@@ -568,8 +568,8 @@ async fn handle_resume_session(state: &mut BotChatState, page: usize) -> HandleR
         }
     };
 
-    let conv_mgr = match ConversationPersistenceManager::new(pm, ws_path.clone()).await {
-        Ok(mgr) => mgr,
+    let store = match PersistenceManager::new(pm) {
+        Ok(store) => store,
         Err(e) => {
             return HandleResult {
                 reply: format!("Failed to load sessions: {e}"),
@@ -579,7 +579,7 @@ async fn handle_resume_session(state: &mut BotChatState, page: usize) -> HandleR
         }
     };
 
-    let all_meta = match conv_mgr.get_session_list().await {
+    let all_meta = match store.list_session_metadata(&ws_path).await {
         Ok(m) => m,
         Err(e) => {
             return HandleResult {
@@ -679,13 +679,24 @@ async fn handle_new_session(state: &mut BotChatState, agent_type: &str) -> Handl
         _ => "Remote Code Session",
     };
 
+    let Some(workspace_path) = ws_path.clone() else {
+        return HandleResult {
+            reply: "Please select a workspace first.".to_string(),
+            actions: vec![],
+            forward_to_session: None,
+        };
+    };
+
     match coordinator
         .create_session_with_workspace(
             None,
             session_name.to_string(),
             agent_type.to_string(),
-            SessionConfig::default(),
-            ws_path.clone(),
+            SessionConfig {
+                workspace_path: Some(workspace_path.clone()),
+                ..Default::default()
+            },
+            workspace_path.clone(),
         )
         .await
     {
@@ -697,7 +708,7 @@ async fn handle_new_session(state: &mut BotChatState, agent_type: &str) -> Handl
             } else {
                 "coding"
             };
-            let workspace = ws_path.as_deref().unwrap_or("(unknown)");
+            let workspace = workspace_path.as_str();
             HandleResult {
                 reply: format!(
                     "Created new {} session: {}\nWorkspace: {}\n\n\
@@ -829,20 +840,20 @@ async fn select_workspace(state: &mut BotChatState, path: &str, name: &str) -> H
 }
 
 async fn count_workspace_sessions(workspace_path: &str) -> usize {
+    use crate::agentic::persistence::PersistenceManager;
     use crate::infrastructure::PathManager;
-    use crate::service::conversation::ConversationPersistenceManager;
 
     let wp = std::path::PathBuf::from(workspace_path);
     let pm = match PathManager::new() {
         Ok(pm) => std::sync::Arc::new(pm),
         Err(_) => return 0,
     };
-    let conv_mgr = match ConversationPersistenceManager::new(pm, wp).await {
-        Ok(m) => m,
+    let store = match PersistenceManager::new(pm) {
+        Ok(store) => store,
         Err(_) => return 0,
     };
-    conv_mgr
-        .get_session_list()
+    store
+        .list_session_metadata(&wp)
         .await
         .map(|v| v.len())
         .unwrap_or(0)
@@ -896,22 +907,22 @@ async fn select_session(
     }
 }
 
-/// Load the last user/assistant dialog pair from ConversationPersistenceManager,
+/// Load the last user/assistant dialog pair from the unified project session store,
 /// the same data source the desktop frontend uses.
 async fn load_last_dialog_pair_from_turns(
     workspace_path: Option<&str>,
     session_id: &str,
 ) -> Option<(String, String)> {
+    use crate::agentic::persistence::PersistenceManager;
     use crate::infrastructure::PathManager;
-    use crate::service::conversation::ConversationPersistenceManager;
 
     const MAX_USER_LEN: usize = 200;
     const MAX_AI_LEN: usize = 400;
 
     let wp = std::path::PathBuf::from(workspace_path?);
     let pm = std::sync::Arc::new(PathManager::new().ok()?);
-    let conv_mgr = ConversationPersistenceManager::new(pm, wp).await.ok()?;
-    let turns = conv_mgr.load_session_turns(session_id).await.ok()?;
+    let store = PersistenceManager::new(pm).ok()?;
+    let turns = store.load_session_turns(&wp, session_id).await.ok()?;
     let turn = turns.last()?;
 
     let user_text = strip_user_message_tags(&turn.user_message.content);

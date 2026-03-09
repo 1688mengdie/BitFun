@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { aiApi, agentAPI, snapshotAPI } from '@/infrastructure/api';
+import { aiApi, agentAPI, globalAPI, snapshotAPI } from '@/infrastructure/api';
 import { stateMachineManager } from '../state-machine';
 import { 
   FlowChatState, 
@@ -95,12 +95,17 @@ export const useFlowChat = () => {
     try {
       const sessionCount = flowChatStore.getState().sessions.size + 1;
       const sessionName = t('session.newWithIndex', { count: sessionCount });
+      const workspacePath = await globalAPI.getCurrentWorkspacePath();
+      if (!workspacePath) {
+        throw new Error('Workspace path is required to create a session');
+      }
       
       const maxContextTokens = await getModelContextWindow(config?.modelName);
       
       const response = await agentAPI.createSession({
         sessionName,
         agentType: 'agentic', // Default to agentic; can change via mode selector.
+        workspacePath,
         config: {
           modelName: config?.modelName || 'default',
           enableTools: true,
@@ -127,7 +132,9 @@ export const useFlowChat = () => {
         sessionConfig, 
         undefined,  // Terminal sessions are managed by the backend.
         sessionName,
-        maxContextTokens
+        maxContextTokens,
+        undefined,
+        workspacePath
       );
       
       return response.sessionId;

@@ -106,6 +106,7 @@ export async function sendMessage(
     context.activeTextItems.set(sessionId, new Map());
 
     const currentAgentType = agentType || 'agentic';
+    const workspacePath = updatedSession.workspacePath;
     
     let turnResponse;
     try {
@@ -114,6 +115,7 @@ export async function sendMessage(
         userInput: message,
         turnId: dialogTurnId,
         agentType: currentAgentType,
+        workspacePath,
         imageContexts: options?.imageContexts,
       });
     } catch (error: any) {
@@ -130,6 +132,7 @@ export async function sendMessage(
           userInput: message,
           turnId: dialogTurnId,
           agentType: currentAgentType,
+          workspacePath,
           imageContexts: options?.imageContexts,
         });
       } else {

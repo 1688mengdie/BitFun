@@ -1,7 +1,7 @@
  
 
 import { createLogger } from '../../../shared/utils/logger';
-import { agentAPI } from '../../api';
+import { agentAPI, globalAPI } from '../../api';
 import { i18nService } from '@/infrastructure/i18n';
 
 const logger = createLogger('AgentService');
@@ -66,9 +66,15 @@ export class AgentService {
     logger.info(`Creating new session: ${agentType}`);
 
     try {
+      const workspacePath = await globalAPI.getCurrentWorkspacePath();
+      if (!workspacePath) {
+        throw new Error('Workspace path is required to create an agent session');
+      }
+
       const response = await agentAPI.createSession({
         sessionName: `${agentType}-session-${Date.now()}`,
         agentType,
+        workspacePath,
         config: {
           modelName,
           enableTools: true,
@@ -108,6 +114,10 @@ export class AgentService {
     try {
       
       const sessionId = await this.getOrCreateSession(request.agent_type, request.model_name);
+      const workspacePath = await globalAPI.getCurrentWorkspacePath();
+      if (!workspacePath) {
+        throw new Error('Workspace path is required to start an agent task');
+      }
 
       
       const unlistenFunctions: Array<() => void> = [];
@@ -169,7 +179,8 @@ export class AgentService {
       await agentAPI.startDialogTurn({
         sessionId,
         userInput: request.prompt,
-        agentType: request.agent_type 
+        agentType: request.agent_type,
+        workspacePath,
       });
 
       

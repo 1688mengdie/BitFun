@@ -264,14 +264,25 @@ pub async fn rollback_to_turn(
             use bitfun_core::agentic::coordination::get_global_coordinator;
 
             if let Some(coordinator) = get_global_coordinator() {
-                if let Err(e) = coordinator
-                    .get_session_manager()
-                    .rollback_context_to_turn_start(&request.session_id, request.turn_index)
-                    .await
-                {
+                if let Some(workspace_path) = get_workspace_path() {
+                    if let Err(e) = coordinator
+                        .get_session_manager()
+                        .rollback_context_to_turn_start(
+                            &workspace_path,
+                            &request.session_id,
+                            request.turn_index,
+                        )
+                        .await
+                    {
+                        warn!(
+                            "Rollback agentic context failed: session_id={}, turn_index={}, error={}",
+                            request.session_id, request.turn_index, e
+                        );
+                    }
+                } else {
                     warn!(
-                        "Rollback agentic context failed: session_id={}, turn_index={}, error={}",
-                        request.session_id, request.turn_index, e
+                        "Workspace path missing, skipping agentic context rollback: session_id={}",
+                        request.session_id
                     );
                 }
             } else {
@@ -279,15 +290,19 @@ pub async fn rollback_to_turn(
             }
         }
 
-        use bitfun_core::service::conversation::persistence_manager::ConversationPersistenceManager;
+        use bitfun_core::agentic::persistence::PersistenceManager;
 
         if let Some(workspace_path) = get_workspace_path() {
             match try_get_path_manager_arc() {
                 Ok(path_manager) => {
-                    match ConversationPersistenceManager::new(path_manager, workspace_path).await {
-                        Ok(conversation_manager) => {
-                            match conversation_manager
-                                .delete_turns_from(&request.session_id, request.turn_index)
+                    match PersistenceManager::new(path_manager) {
+                        Ok(persistence_manager) => {
+                            match persistence_manager
+                                .delete_turns_from(
+                                    &workspace_path,
+                                    &request.session_id,
+                                    request.turn_index,
+                                )
                                 .await
                             {
                                 Ok(count) => {
@@ -300,7 +315,7 @@ pub async fn rollback_to_turn(
                         }
                         Err(e) => {
                             warn!(
-                                "Failed to create ConversationPersistenceManager: error={}",
+                                "Failed to create PersistenceManager: error={}",
                                 e
                             );
                         }
@@ -407,14 +422,14 @@ pub async fn get_session_turns(
     _app_handle: AppHandle,
     request: GetSessionTurnsRequest,
 ) -> Result<Vec<usize>, String> {
-    use bitfun_core::service::conversation::ConversationPersistenceManager;
+    use bitfun_core::agentic::persistence::PersistenceManager;
 
     if let Some(workspace_path) = get_workspace_path() {
         if let Ok(path_manager) = try_get_path_manager_arc() {
-            match ConversationPersistenceManager::new(path_manager, workspace_path).await {
-                Ok(conversation_manager) => {
-                    match conversation_manager
-                        .load_session_metadata(&request.session_id)
+            match PersistenceManager::new(path_manager) {
+                Ok(persistence_manager) => {
+                    match persistence_manager
+                        .load_session_metadata(&workspace_path, &request.session_id)
                         .await
                     {
                         Ok(Some(metadata)) => {
@@ -428,7 +443,7 @@ pub async fn get_session_turns(
                     }
                 }
                 Err(e) => {
-                    warn!("Failed to create ConversationPersistenceManager: error={}, falling back to snapshot", e);
+                    warn!("Failed to create PersistenceManager: error={}, falling back to snapshot", e);
                 }
             }
         }

@@ -1,4 +1,4 @@
-//! Types for conversation history persistence
+//! Types for session persistence
 
 use serde::{Deserialize, Serialize};
 
@@ -78,9 +78,9 @@ pub struct SessionMetadata {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum SessionStatus {
-    Active,    // Active
-    Archived,  // Archived
-    Completed, // Completed
+    Active,
+    Archived,
+    Completed,
 }
 
 /// Session list (metadata for all sessions)
@@ -90,7 +90,7 @@ pub struct SessionList {
     pub sessions: Vec<SessionMetadata>,
     #[serde(alias = "last_updated")]
     pub last_updated: u64,
-    pub version: String, // Data format version
+    pub version: String,
 }
 
 impl Default for SessionList {

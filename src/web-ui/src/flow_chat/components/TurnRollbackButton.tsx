@@ -30,7 +30,7 @@ export const TurnRollbackButton: React.FC<TurnRollbackButtonProps> = ({
       `This will:\n` +
       `• Restore files to the state before turn ${turnIndex + 1}\n` +
       `• Undo all file changes from turn ${turnIndex + 1} onward\n` +
-      `• Keep the conversation history (you can roll forward again anytime)`
+      `• Keep the session history (you can roll forward again anytime)`
     );
     
     if (!confirmed) return;

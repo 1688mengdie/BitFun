@@ -25,12 +25,12 @@ import { gitAPI } from './service-api/GitAPI';
 import { gitAgentAPI } from './service-api/GitAgentAPI';
 import { gitRepoHistoryAPI, type GitRepoHistory } from './service-api/GitRepoHistoryAPI';
 import { startchatAgentAPI } from './service-api/StartchatAgentAPI';
-import { conversationAPI } from './service-api/ConversationAPI';
+import { sessionAPI } from './service-api/SessionAPI';
 import { i18nAPI } from './service-api/I18nAPI';
 import { tokenUsageApi } from './tokenUsageApi';
 
 // Export API modules
-export { workspaceAPI, configAPI, aiApi, toolAPI, agentAPI, systemAPI, projectAPI, diffAPI, snapshotAPI, globalAPI, contextAPI, gitAPI, gitAgentAPI, gitRepoHistoryAPI, startchatAgentAPI, conversationAPI, i18nAPI, tokenUsageApi };
+export { workspaceAPI, configAPI, aiApi, toolAPI, agentAPI, systemAPI, projectAPI, diffAPI, snapshotAPI, globalAPI, contextAPI, gitAPI, gitAgentAPI, gitRepoHistoryAPI, startchatAgentAPI, sessionAPI, i18nAPI, tokenUsageApi };
 
 // Export types
 export type { GitRepoHistory };
@@ -52,7 +52,7 @@ export const bitfunAPI = {
   gitAgent: gitAgentAPI,
   gitRepoHistory: gitRepoHistoryAPI,
   startchatAgent: startchatAgentAPI,
-  conversation: conversationAPI,
+  session: sessionAPI,
   i18n: i18nAPI,
   tokenUsage: tokenUsageApi,
 };

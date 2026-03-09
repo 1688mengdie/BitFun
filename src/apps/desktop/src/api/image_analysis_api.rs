@@ -74,6 +74,7 @@ pub async fn send_enhanced_message(
             enhanced_message,
             Some(request.dialog_turn_id.clone()),
             request.agent_type.clone(),
+            None,
             DialogTriggerSource::DesktopApi,
         )
         .await
