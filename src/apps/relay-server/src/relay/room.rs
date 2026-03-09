@@ -203,11 +203,17 @@ impl RoomManager {
     pub fn heartbeat(&self, conn_id: ConnId) -> bool {
         if let Some(room_id) = self.conn_to_room.get(&conn_id) {
             if let Some(mut room) = self.rooms.get_mut(room_id.value()) {
-                if let Some(ref mut desktop) = room.desktop {
-                    if desktop.conn_id == conn_id {
-                        desktop.last_heartbeat = Utc::now().timestamp();
-                        return true;
+                let is_match = room
+                    .desktop
+                    .as_ref()
+                    .map_or(false, |d| d.conn_id == conn_id);
+                if is_match {
+                    let now = Utc::now().timestamp();
+                    room.last_activity = now;
+                    if let Some(ref mut desktop) = room.desktop {
+                        desktop.last_heartbeat = now;
                     }
+                    return true;
                 }
             }
         }
