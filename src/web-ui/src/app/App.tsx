@@ -45,6 +45,7 @@ function App() {
   const [splashVisible, setSplashVisible] = useState(true);
   const [splashExiting, setSplashExiting] = useState(false);
   const mountTimeRef = useRef(Date.now());
+  const mainWindowShownRef = useRef(false);
 
   // Once the workspace finishes loading, wait for the remaining min-display
   // time and then begin the exit animation.
@@ -99,94 +100,54 @@ function App() {
     };
   }, [forceShowOnboarding]);
 
-  // Single-window startup: show main window after React is ready.
-  // Key: wait for initial render to avoid showing a blank window.
-  useEffect(() => {
-    // Note: the main window is created with `visible(false)` in Rust; frontend must call show().
-    // Avoid requestAnimationFrame: on some platforms a hidden window pauses rAF,
-    // which can keep the UI from ever showing.
-    // Use a DOM-ready signal (MutationObserver) to detect initial render,
-    // with a bounded fallback timeout to avoid waiting forever.
-    let cancelled = false;
-    let observer: MutationObserver | null = null;
-    let fallbackTimer: number | null = null;
+  const showMainWindow = useCallback(async (reason: string) => {
+    if (mainWindowShownRef.current) {
+      return;
+    }
+    mainWindowShownRef.current = true;
 
-    const showWindow = async (reason: string) => {
-      if (cancelled) return;
-      cancelled = true;
-
-      if (fallbackTimer !== null) {
-        window.clearTimeout(fallbackTimer);
-        fallbackTimer = null;
-      }
-      if (observer) {
-        observer.disconnect();
-        observer = null;
-      }
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('show_main_window');
+      log.debug('Main window shown', { reason });
+    } catch (error: any) {
+      log.error('Failed to show main window', error);
 
       try {
-        const { invoke } = await import('@tauri-apps/api/core');
-        await invoke('show_main_window');
-        log.debug('Main window shown', { reason });
-      } catch (error: any) {
-        log.error('Failed to show main window', error);
-
-        try {
-          const { getCurrentWindow } = await import('@tauri-apps/api/window');
-          const mainWindow = getCurrentWindow();
-          await mainWindow.show();
-          await mainWindow.setFocus();
-          log.debug('Main window shown via fallback', { reason });
-        } catch (fallbackError) {
-          log.error('Fallback window show failed', fallbackError);
-        }
+        const { getCurrentWindow } = await import('@tauri-apps/api/window');
+        const mainWindow = getCurrentWindow();
+        await mainWindow.show();
+        await mainWindow.setFocus();
+        log.debug('Main window shown via fallback', { reason });
+      } catch (fallbackError) {
+        log.error('Fallback window show failed', fallbackError);
+        mainWindowShownRef.current = false;
       }
-    };
+    }
+  }, []);
 
-    const isDomReady = () => {
-      const root = document.getElementById('root');
-      if (!root) return false;
-
-      // This node appears once AppLayout renders (with or without a workspace).
-      if (document.querySelector('[data-testid="app-layout"]')) return true;
-
-      // Any first-paint DOM implies the UI is safe to show (e.g. ErrorBoundary screen).
-      return root.childElementCount > 0;
-    };
-
-    if (isDomReady()) {
-      // Microtask: avoid calling show during the initial commit phase.
-      Promise.resolve().then(() => {
-        void showWindow('dom-ready-immediate');
-      });
+  // Keep the native window hidden until the startup splash has fully exited.
+  // This avoids showing a blank/half-painted webview before the first stable frame.
+  useEffect(() => {
+    if (splashVisible) {
       return;
     }
 
-    const root = document.getElementById('root');
-    if (root) {
-      observer = new MutationObserver(() => {
-        if (isDomReady()) {
-          void showWindow('dom-ready-observed');
-        }
-      });
-      observer.observe(root, { childList: true, subtree: true });
-    }
+    const timer = window.setTimeout(() => {
+      void showMainWindow('startup-complete');
+    }, 50);
 
-    // Fallback: avoid hanging if observation never fires.
-    fallbackTimer = window.setTimeout(() => {
-      void showWindow('fallback-timeout');
-    }, 2000);
+    return () => window.clearTimeout(timer);
+  }, [showMainWindow, splashVisible]);
 
-    return () => {
-      cancelled = true;
-      if (fallbackTimer !== null) {
-        window.clearTimeout(fallbackTimer);
-      }
-      if (observer) {
-        observer.disconnect();
-      }
-    };
-  }, []);
+  // Safety net: if startup gets stuck, reveal the window so the user can see errors.
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void showMainWindow('startup-watchdog');
+    }, 10000);
+
+    return () => window.clearTimeout(timer);
+  }, [showMainWindow]);
 
   // Startup logs and initialization
   useEffect(() => {
