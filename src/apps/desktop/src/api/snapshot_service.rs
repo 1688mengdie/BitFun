@@ -2,12 +2,12 @@
 
 use bitfun_core::infrastructure::{get_workspace_path, try_get_path_manager_arc};
 use bitfun_core::service::snapshot::{
-    ensure_global_snapshot_manager, initialize_global_snapshot_manager, OperationType,
-    SnapshotConfig,
+    ensure_global_snapshot_manager, get_global_snapshot_manager,
+    initialize_global_snapshot_manager, OperationType, SnapshotConfig, SnapshotManager,
 };
-use log::warn;
+use log::{info, warn};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Arc};
 use tauri::{AppHandle, Emitter};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -140,13 +140,40 @@ pub async fn initialize_snapshot(
     }))
 }
 
+async fn ensure_snapshot_manager_ready() -> Result<Arc<SnapshotManager>, String> {
+    if let Some(manager) = get_global_snapshot_manager() {
+        return Ok(manager);
+    }
+
+    let workspace_path = get_workspace_path().ok_or_else(|| {
+        "Failed to get snapshot manager: no active workspace available to initialize snapshot system"
+            .to_string()
+    })?;
+
+    info!(
+        "Snapshot manager missing, initializing lazily: workspace={}",
+        workspace_path.display()
+    );
+
+    initialize_global_snapshot_manager(workspace_path.clone(), None)
+        .await
+        .map_err(|e| {
+            format!(
+                "Failed to initialize snapshot system for workspace {}: {}",
+                workspace_path.display(),
+                e
+            )
+        })?;
+
+    ensure_global_snapshot_manager().map_err(|e| format!("Failed to get snapshot manager: {}", e))
+}
+
 #[tauri::command]
 pub async fn record_file_change(
     app_handle: AppHandle,
     request: RecordFileChangeRequest,
 ) -> Result<String, String> {
-    let manager = ensure_global_snapshot_manager()
-        .map_err(|e| format!("Failed to get snapshot manager: {}", e))?;
+    let manager = ensure_snapshot_manager_ready().await?;
 
     let operation_type = match request.operation_type.as_str() {
         "Create" => OperationType::Create,
@@ -190,8 +217,7 @@ pub async fn rollback_session(
     app_handle: AppHandle,
     request: RollbackSessionRequest,
 ) -> Result<Vec<String>, String> {
-    let manager = ensure_global_snapshot_manager()
-        .map_err(|e| format!("Failed to get snapshot manager: {}", e))?;
+    let manager = ensure_snapshot_manager_ready().await?;
 
     let restored_files = manager
         .rollback_session(&request.session_id)
@@ -220,8 +246,7 @@ pub async fn rollback_to_turn(
     app_handle: AppHandle,
     request: RollbackTurnRequest,
 ) -> Result<Vec<String>, String> {
-    let manager = ensure_global_snapshot_manager()
-        .map_err(|e| format!("Failed to get snapshot manager: {}", e))?;
+    let manager = ensure_snapshot_manager_ready().await?;
 
     let restored_files = manager
         .rollback_to_turn(&request.session_id, request.turn_index)
@@ -316,8 +341,7 @@ pub async fn accept_session(
     app_handle: AppHandle,
     request: AcceptSessionRequest,
 ) -> Result<serde_json::Value, String> {
-    let manager = ensure_global_snapshot_manager()
-        .map_err(|e| format!("Failed to get snapshot manager: {}", e))?;
+    let manager = ensure_snapshot_manager_ready().await?;
 
     manager
         .accept_session(&request.session_id)
@@ -342,8 +366,7 @@ pub async fn accept_file(
     app_handle: AppHandle,
     request: AcceptFileRequest,
 ) -> Result<serde_json::Value, String> {
-    let manager = ensure_global_snapshot_manager()
-        .map_err(|e| format!("Failed to get snapshot manager: {}", e))?;
+    let manager = ensure_snapshot_manager_ready().await?;
 
     manager
         .accept_file(&request.session_id, &request.file_path)
@@ -366,8 +389,7 @@ pub async fn accept_file(
 
 #[tauri::command]
 pub async fn get_session_files(request: GetSessionFilesRequest) -> Result<Vec<String>, String> {
-    let manager = ensure_global_snapshot_manager()
-        .map_err(|e| format!("Failed to get snapshot manager: {}", e))?;
+    let manager = ensure_snapshot_manager_ready().await?;
 
     let files = manager
         .get_session_files(&request.session_id)
@@ -412,8 +434,7 @@ pub async fn get_session_turns(
         }
     }
 
-    let manager = ensure_global_snapshot_manager()
-        .map_err(|e| format!("Failed to get snapshot manager: {}", e))?;
+    let manager = ensure_snapshot_manager_ready().await?;
 
     let turns = manager
         .get_session_turns(&request.session_id)
@@ -425,8 +446,7 @@ pub async fn get_session_turns(
 
 #[tauri::command]
 pub async fn get_turn_files(request: GetTurnFilesRequest) -> Result<Vec<String>, String> {
-    let manager = ensure_global_snapshot_manager()
-        .map_err(|e| format!("Failed to get snapshot manager: {}", e))?;
+    let manager = ensure_snapshot_manager_ready().await?;
 
     let files = manager
         .get_turn_files(&request.session_id, request.turn_index)
@@ -441,8 +461,7 @@ pub async fn get_turn_files(request: GetTurnFilesRequest) -> Result<Vec<String>,
 
 #[tauri::command]
 pub async fn get_file_diff(request: GetFileDiffRequest) -> Result<serde_json::Value, String> {
-    let manager = ensure_global_snapshot_manager()
-        .map_err(|e| format!("Failed to get snapshot manager: {}", e))?;
+    let manager = ensure_snapshot_manager_ready().await?;
 
     let diff = manager
         .get_file_diff(
@@ -460,8 +479,7 @@ pub async fn get_file_diff(request: GetFileDiffRequest) -> Result<serde_json::Va
 pub async fn get_operation_diff(
     request: GetOperationDiffRequest,
 ) -> Result<serde_json::Value, String> {
-    let manager = ensure_global_snapshot_manager()
-        .map_err(|e| format!("Failed to get snapshot manager: {}", e))?;
+    let manager = ensure_snapshot_manager_ready().await?;
 
     let diff = manager
         .get_file_diff(
@@ -484,8 +502,7 @@ pub async fn get_operation_diff(
 pub async fn get_operation_summary(
     request: GetOperationSummaryRequest,
 ) -> Result<serde_json::Value, String> {
-    let manager = ensure_global_snapshot_manager()
-        .map_err(|e| format!("Failed to get snapshot manager: {}", e))?;
+    let manager = ensure_snapshot_manager_ready().await?;
 
     let summary = manager
         .get_operation_summary(&request.sessionId, &request.operationId)
@@ -509,8 +526,7 @@ pub async fn get_operation_summary(
 pub async fn get_session_stats(
     request: GetSessionStatsRequest,
 ) -> Result<serde_json::Value, String> {
-    let manager = ensure_global_snapshot_manager()
-        .map_err(|e| format!("Failed to get snapshot manager: {}", e))?;
+    let manager = ensure_snapshot_manager_ready().await?;
 
     let stats = manager
         .get_session_stats(&request.session_id)
@@ -522,8 +538,7 @@ pub async fn get_session_stats(
 
 #[tauri::command]
 pub async fn get_snapshot_system_stats() -> Result<serde_json::Value, String> {
-    let manager = ensure_global_snapshot_manager()
-        .map_err(|e| format!("Failed to get snapshot manager: {}", e))?;
+    let manager = ensure_snapshot_manager_ready().await?;
 
     let stats = manager
         .get_system_stats()
@@ -541,8 +556,7 @@ pub struct CleanupSnapshotDataRequest {
 
 #[tauri::command]
 pub async fn get_snapshot_sessions() -> Result<Vec<String>, String> {
-    let manager = ensure_global_snapshot_manager()
-        .map_err(|e| format!("Failed to get snapshot manager: {}", e))?;
+    let manager = ensure_snapshot_manager_ready().await?;
 
     manager
         .list_sessions()
@@ -554,8 +568,7 @@ pub async fn get_snapshot_sessions() -> Result<Vec<String>, String> {
 pub async fn cleanup_snapshot_data(
     request: CleanupSnapshotDataRequest,
 ) -> Result<serde_json::Value, String> {
-    let manager = ensure_global_snapshot_manager()
-        .map_err(|e| format!("Failed to get snapshot manager: {}", e))?;
+    let manager = ensure_snapshot_manager_ready().await?;
 
     manager
         .cleanup_snapshot_data(request.max_age_days)
@@ -571,8 +584,7 @@ pub async fn cleanup_snapshot_data(
 
 #[tauri::command]
 pub async fn check_git_isolation() -> Result<serde_json::Value, String> {
-    let manager = ensure_global_snapshot_manager()
-        .map_err(|e| format!("Failed to get snapshot manager: {}", e))?;
+    let manager = ensure_snapshot_manager_ready().await?;
 
     let is_isolated = manager
         .check_git_isolation()
@@ -589,8 +601,7 @@ pub async fn check_git_isolation() -> Result<serde_json::Value, String> {
 pub async fn get_file_change_history(
     request: GetFileChangeHistoryRequest,
 ) -> Result<serde_json::Value, String> {
-    let manager = ensure_global_snapshot_manager()
-        .map_err(|e| format!("Failed to get snapshot manager: {}", e))?;
+    let manager = ensure_snapshot_manager_ready().await?;
 
     let file_path = PathBuf::from(&request.file_path);
     let changes = manager
@@ -605,8 +616,7 @@ pub async fn get_file_change_history(
 pub async fn get_all_modified_files(
     _request: GetAllModifiedFilesRequest,
 ) -> Result<Vec<String>, String> {
-    let manager = ensure_global_snapshot_manager()
-        .map_err(|e| format!("Failed to get snapshot manager: {}", e))?;
+    let manager = ensure_snapshot_manager_ready().await?;
 
     let files = manager
         .get_all_modified_files()
@@ -623,8 +633,7 @@ pub async fn get_all_modified_files(
 pub async fn get_baseline_snapshot_diff(
     request: GetBaselineSnapshotDiffRequest,
 ) -> Result<serde_json::Value, String> {
-    let manager = ensure_global_snapshot_manager()
-        .map_err(|e| format!("Failed to get snapshot manager: {}", e))?;
+    let manager = ensure_snapshot_manager_ready().await?;
 
     let file_path = PathBuf::from(&request.file_path);
 

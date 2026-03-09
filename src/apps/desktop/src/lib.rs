@@ -42,6 +42,7 @@ use api::startchat_agent_api::*;
 use api::storage_commands::*;
 use api::subagent_api::*;
 use api::system_api::*;
+use api::token_usage_api::*;
 use api::tool_api::*;
 
 /// Agentic Coordinator state
@@ -78,7 +79,7 @@ pub async fn run() {
         return;
     }
 
-    let (coordinator, scheduler, event_queue, event_router, ai_client_factory) =
+    let (coordinator, scheduler, event_queue, event_router, ai_client_factory, token_usage_service) =
         match init_agentic_system().await {
             Ok(state) => state,
             Err(e) => {
@@ -92,7 +93,7 @@ pub async fn run() {
         return;
     }
 
-    let app_state = match AppState::new_async().await {
+    let app_state = match AppState::new_async(token_usage_service).await {
         Ok(state) => state,
         Err(e) => {
             log::error!("Failed to initialize AppState: {}", e);
@@ -575,6 +576,14 @@ pub async fn run() {
             i18n_get_supported_languages,
             i18n_get_config,
             i18n_set_config,
+            // Token Usage
+            record_token_usage,
+            get_model_token_stats,
+            get_all_model_token_stats,
+            get_session_token_stats,
+            query_token_usage,
+            clear_model_token_stats,
+            clear_all_token_stats,
             // Remote Connect
             api::remote_connect_api::remote_connect_get_device_info,
             api::remote_connect_api::remote_connect_get_lan_ip,
@@ -620,6 +629,7 @@ async fn init_agentic_system() -> anyhow::Result<(
     Arc<bitfun_core::agentic::events::EventQueue>,
     Arc<bitfun_core::agentic::events::EventRouter>,
     Arc<AIClientFactory>,
+    Arc<bitfun_core::service::token_usage::TokenUsageService>,
 )> {
     use bitfun_core::agentic::*;
 
@@ -687,6 +697,19 @@ async fn init_agentic_system() -> anyhow::Result<(
 
     coordination::ConversationCoordinator::set_global(coordinator.clone());
 
+    // Initialize token usage service and register subscriber
+    let token_usage_service = Arc::new(
+        bitfun_core::service::token_usage::TokenUsageService::new(path_manager.clone())
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to initialize token usage service: {}", e))?,
+    );
+    let token_usage_subscriber = Arc::new(
+        bitfun_core::service::token_usage::TokenUsageSubscriber::new(token_usage_service.clone())
+    );
+    event_router.subscribe_internal("token_usage".to_string(), token_usage_subscriber);
+    
+    log::info!("Token usage service initialized and subscriber registered");
+
     // Create the DialogScheduler and wire up the outcome notification channel
     let scheduler =
         coordination::DialogScheduler::new(coordinator.clone(), session_manager.clone());
@@ -700,6 +723,7 @@ async fn init_agentic_system() -> anyhow::Result<(
         event_queue,
         event_router,
         ai_client_factory,
+        token_usage_service,
     ))
 }
 
