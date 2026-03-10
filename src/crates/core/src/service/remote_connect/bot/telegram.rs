@@ -153,54 +153,26 @@ impl TelegramBot {
         Ok(())
     }
 
-    /// Scan `text` for `computer://` links, store them as pending downloads and
-    /// send a notification message with one inline-keyboard button per file.
-    /// The actual transfer only starts when the user clicks the button.
+    /// Scan `text` for downloadable file links (`computer://`, `file://`, and
+    /// markdown hyperlinks to local files), store them as pending downloads and
+    /// send a notification with one inline-keyboard button per file.
     async fn notify_files_ready(&self, chat_id: i64, text: &str) {
-        let paths = super::extract_computer_file_paths(text);
-        if paths.is_empty() {
-            return;
-        }
-
-        let mut actions: Vec<BotAction> = Vec::new();
-        {
+        let result = {
             let mut states = self.chat_states.write().await;
             let state = states.entry(chat_id).or_insert_with(|| {
                 let mut s = BotChatState::new(chat_id.to_string());
                 s.paired = true;
                 s
             });
-            for path in &paths {
-                if let Some((name, size)) = super::get_file_metadata(path) {
-                    let token: String = {
-                        use std::time::{SystemTime, UNIX_EPOCH};
-                        let ns = SystemTime::now()
-                            .duration_since(UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .subsec_nanos();
-                        format!("{:08x}", ns ^ (chat_id as u32))
-                    };
-                    state.pending_files.insert(token.clone(), path.clone());
-                    actions.push(BotAction::secondary(
-                        &format!("📥 {} ({})", name, super::format_file_size(size)),
-                        &format!("download_file:{token}"),
-                    ));
-                }
-            }
-        }
-
-        if actions.is_empty() {
-            return;
-        }
-
-        let intro = if actions.len() == 1 {
-            "📎 1 file ready to download:".to_string()
-        } else {
-            format!("📎 {} files ready to download:", actions.len())
+            super::prepare_file_download_actions(text, state)
         };
-
-        if let Err(e) = self.send_message_with_keyboard(chat_id, &intro, &actions).await {
-            warn!("Failed to send file notification to Telegram: {e}");
+        if let Some(result) = result {
+            if let Err(e) = self
+                .send_message_with_keyboard(chat_id, &result.reply, &result.actions)
+                .await
+            {
+                warn!("Failed to send file notification to Telegram: {e}");
+            }
         }
     }
 

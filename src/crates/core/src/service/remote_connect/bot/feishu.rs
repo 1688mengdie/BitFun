@@ -521,17 +521,11 @@ impl FeishuBot {
         Ok(())
     }
 
-    /// Scan `text` for `computer://` links, store them as pending downloads and
+    /// Scan `text` for downloadable file links (`computer://`, `file://`, and
+    /// markdown hyperlinks to local files), store them as pending downloads and
     /// send an interactive card with one download button per file.
-    /// The actual transfer only starts when the user clicks the button.
     async fn notify_files_ready(&self, chat_id: &str, text: &str) {
-        let paths = super::extract_computer_file_paths(text);
-        if paths.is_empty() {
-            return;
-        }
-
-        let mut actions: Vec<BotAction> = Vec::new();
-        {
+        let result = {
             let mut states = self.chat_states.write().await;
             let state = states
                 .entry(chat_id.to_string())
@@ -540,42 +534,12 @@ impl FeishuBot {
                     s.paired = true;
                     s
                 });
-            for path in &paths {
-                if let Some((name, size)) = super::get_file_metadata(path) {
-                    let token: String = {
-                        use std::time::{SystemTime, UNIX_EPOCH};
-                        let ns = SystemTime::now()
-                            .duration_since(UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .subsec_nanos();
-                        format!("{:08x}", ns ^ (chat_id.len() as u32))
-                    };
-                    state.pending_files.insert(token.clone(), path.clone());
-                    actions.push(BotAction::secondary(
-                        &format!("📥 {} ({})", name, super::format_file_size(size)),
-                        &format!("download_file:{token}"),
-                    ));
-                }
+            super::prepare_file_download_actions(text, state)
+        };
+        if let Some(result) = result {
+            if let Err(e) = self.send_handle_result(chat_id, &result).await {
+                warn!("Failed to send file notification to Feishu: {e}");
             }
-        }
-
-        if actions.is_empty() {
-            return;
-        }
-
-        let intro = if actions.len() == 1 {
-            "📎 1 file ready to download:".to_string()
-        } else {
-            format!("📎 {} files ready to download:", actions.len())
-        };
-
-        let result = HandleResult {
-            reply: intro,
-            actions,
-            forward_to_session: None,
-        };
-        if let Err(e) = self.send_handle_result(chat_id, &result).await {
-            warn!("Failed to send file notification to Feishu: {e}");
         }
     }
 
