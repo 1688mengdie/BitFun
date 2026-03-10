@@ -430,6 +430,190 @@ impl AIClient {
         builder
     }
 
+    fn merge_json_value(target: &mut serde_json::Value, overlay: serde_json::Value) {
+        match (target, overlay) {
+            (serde_json::Value::Object(target_map), serde_json::Value::Object(overlay_map)) => {
+                for (key, value) in overlay_map {
+                    let entry = target_map.entry(key).or_insert(serde_json::Value::Null);
+                    Self::merge_json_value(entry, value);
+                }
+            }
+            (target_slot, overlay_value) => {
+                *target_slot = overlay_value;
+            }
+        }
+    }
+
+    fn ensure_gemini_generation_config(
+        request_body: &mut serde_json::Value,
+    ) -> &mut serde_json::Map<String, serde_json::Value> {
+        if !request_body
+            .get("generationConfig")
+            .is_some_and(serde_json::Value::is_object)
+        {
+            request_body["generationConfig"] = serde_json::json!({});
+        }
+
+        request_body["generationConfig"]
+            .as_object_mut()
+            .expect("generationConfig must be an object")
+    }
+
+    fn insert_gemini_generation_field(
+        request_body: &mut serde_json::Value,
+        key: &str,
+        value: serde_json::Value,
+    ) {
+        Self::ensure_gemini_generation_config(request_body).insert(key.to_string(), value);
+    }
+
+    fn normalize_gemini_stop_sequences(value: &serde_json::Value) -> Option<serde_json::Value> {
+        match value {
+            serde_json::Value::String(sequence) => Some(serde_json::Value::Array(vec![
+                serde_json::Value::String(sequence.clone()),
+            ])),
+            serde_json::Value::Array(items) => {
+                let sequences = items
+                    .iter()
+                    .filter_map(|item| item.as_str().map(|sequence| sequence.to_string()))
+                    .map(serde_json::Value::String)
+                    .collect::<Vec<_>>();
+
+                if sequences.is_empty() {
+                    None
+                } else {
+                    Some(serde_json::Value::Array(sequences))
+                }
+            }
+            _ => None,
+        }
+    }
+
+    fn apply_gemini_response_format_translation(
+        request_body: &mut serde_json::Value,
+        response_format: &serde_json::Value,
+    ) -> bool {
+        match response_format {
+            serde_json::Value::String(kind) if matches!(kind.as_str(), "json" | "json_object") => {
+                Self::insert_gemini_generation_field(
+                    request_body,
+                    "responseMimeType",
+                    serde_json::Value::String("application/json".to_string()),
+                );
+                true
+            }
+            serde_json::Value::Object(map) => {
+                let Some(kind) = map.get("type").and_then(serde_json::Value::as_str) else {
+                    return false;
+                };
+
+                match kind {
+                    "json" | "json_object" => {
+                        Self::insert_gemini_generation_field(
+                            request_body,
+                            "responseMimeType",
+                            serde_json::Value::String("application/json".to_string()),
+                        );
+                        true
+                    }
+                    "json_schema" => {
+                        Self::insert_gemini_generation_field(
+                            request_body,
+                            "responseMimeType",
+                            serde_json::Value::String("application/json".to_string()),
+                        );
+
+                        if let Some(schema) = map
+                            .get("json_schema")
+                            .and_then(serde_json::Value::as_object)
+                            .and_then(|json_schema| json_schema.get("schema"))
+                            .or_else(|| map.get("schema"))
+                        {
+                            Self::insert_gemini_generation_field(
+                                request_body,
+                                "responseJsonSchema",
+                                GeminiMessageConverter::sanitize_schema(schema.clone()),
+                            );
+                        }
+
+                        true
+                    }
+                    _ => false,
+                }
+            }
+            _ => false,
+        }
+    }
+
+    fn translate_gemini_extra_body(
+        request_body: &mut serde_json::Value,
+        extra_obj: &mut serde_json::Map<String, serde_json::Value>,
+    ) {
+        if let Some(max_tokens) = extra_obj.remove("max_tokens") {
+            Self::insert_gemini_generation_field(request_body, "maxOutputTokens", max_tokens);
+        }
+
+        if let Some(temperature) = extra_obj.remove("temperature") {
+            Self::insert_gemini_generation_field(request_body, "temperature", temperature);
+        }
+
+        let top_p = extra_obj.remove("top_p").or_else(|| extra_obj.remove("topP"));
+        if let Some(top_p) = top_p {
+            Self::insert_gemini_generation_field(request_body, "topP", top_p);
+        }
+
+        if let Some(stop_sequences) = extra_obj
+            .get("stop")
+            .and_then(Self::normalize_gemini_stop_sequences)
+        {
+            extra_obj.remove("stop");
+            Self::insert_gemini_generation_field(
+                request_body,
+                "stopSequences",
+                stop_sequences,
+            );
+        }
+
+        if let Some(response_mime_type) = extra_obj
+            .remove("responseMimeType")
+            .or_else(|| extra_obj.remove("response_mime_type"))
+        {
+            Self::insert_gemini_generation_field(
+                request_body,
+                "responseMimeType",
+                response_mime_type,
+            );
+        }
+
+        if let Some(response_schema) = extra_obj
+            .remove("responseJsonSchema")
+            .or_else(|| extra_obj.remove("responseSchema"))
+            .or_else(|| extra_obj.remove("response_schema"))
+        {
+            Self::insert_gemini_generation_field(
+                request_body,
+                "responseJsonSchema",
+                GeminiMessageConverter::sanitize_schema(response_schema),
+            );
+        }
+
+        if let Some(response_format) = extra_obj.get("response_format").cloned() {
+            if Self::apply_gemini_response_format_translation(request_body, &response_format) {
+                extra_obj.remove("response_format");
+            }
+        }
+    }
+
+    fn unified_usage_to_gemini_usage(usage: ai_stream_handlers::UnifiedTokenUsage) -> GeminiUsage {
+        GeminiUsage {
+            prompt_token_count: usage.prompt_token_count,
+            candidates_token_count: usage.candidates_token_count,
+            total_token_count: usage.total_token_count,
+            reasoning_token_count: usage.reasoning_token_count,
+            cached_content_token_count: usage.cached_content_token_count,
+        }
+    }
+
     /// Build an OpenAI-format request body
     fn build_openai_request_body(
         &self,
@@ -663,57 +847,94 @@ impl AIClient {
         }
 
         if let Some(max_tokens) = self.config.max_tokens {
-            request_body["generationConfig"] = serde_json::json!({
-                "maxOutputTokens": max_tokens,
-            });
+            Self::insert_gemini_generation_field(
+                &mut request_body,
+                "maxOutputTokens",
+                serde_json::json!(max_tokens),
+            );
+        }
+
+        if let Some(temperature) = self.config.temperature {
+            Self::insert_gemini_generation_field(
+                &mut request_body,
+                "temperature",
+                serde_json::json!(temperature),
+            );
+        }
+
+        if let Some(top_p) = self.config.top_p {
+            Self::insert_gemini_generation_field(&mut request_body, "topP", serde_json::json!(top_p));
         }
 
         if self.config.enable_thinking_process {
-            if request_body.get("generationConfig").is_none() {
-                request_body["generationConfig"] = serde_json::json!({});
-            }
-            request_body["generationConfig"]["thinkingConfig"] = serde_json::json!({
+            Self::insert_gemini_generation_field(&mut request_body, "thinkingConfig", serde_json::json!({
                 "includeThoughts": true,
-            });
+            }));
         }
 
         if let Some(tools) = gemini_tools {
             let tool_names = tools
                 .iter()
                 .flat_map(|tool| {
-                    tool.get("functionDeclarations")
-                        .and_then(|value| value.as_array())
-                        .into_iter()
-                        .flatten()
-                        .filter_map(|declaration| {
-                            declaration
-                                .get("name")
-                                .and_then(|value| value.as_str())
-                                .map(str::to_string)
-                        })
+                    if let Some(declarations) =
+                        tool.get("functionDeclarations").and_then(|value| value.as_array())
+                    {
+                        declarations
+                            .iter()
+                            .filter_map(|declaration| {
+                                declaration
+                                    .get("name")
+                                    .and_then(|value| value.as_str())
+                                    .map(str::to_string)
+                            })
+                            .collect::<Vec<_>>()
+                    } else {
+                        tool.as_object()
+                            .into_iter()
+                            .flat_map(|map| map.keys().cloned())
+                            .collect::<Vec<_>>()
+                    }
                 })
                 .collect::<Vec<_>>();
             debug!(target: "ai::gemini_stream_request", "\ntools: {:?}", tool_names);
 
             if !tools.is_empty() {
                 request_body["tools"] = serde_json::Value::Array(tools);
-                request_body["toolConfig"] = serde_json::json!({
-                    "functionCallingConfig": {
-                        "mode": "AUTO"
-                    }
-                });
+                let has_function_declarations = request_body["tools"]
+                    .as_array()
+                    .map(|tools| {
+                        tools.iter()
+                            .any(|tool| tool.get("functionDeclarations").is_some())
+                    })
+                    .unwrap_or(false);
+
+                if has_function_declarations {
+                    request_body["toolConfig"] = serde_json::json!({
+                        "functionCallingConfig": {
+                            "mode": "AUTO"
+                        }
+                    });
+                }
             }
         }
 
         if let Some(extra) = extra_body {
-            if let Some(extra_obj) = extra.as_object() {
+            if let Some(mut extra_obj) = extra.as_object().cloned() {
+                Self::translate_gemini_extra_body(&mut request_body, &mut extra_obj);
+                let override_keys = extra_obj.keys().cloned().collect::<Vec<_>>();
+
                 for (key, value) in extra_obj {
-                    request_body[key] = value.clone();
+                    if let Some(request_obj) = request_body.as_object_mut() {
+                        let target = request_obj
+                            .entry(key)
+                            .or_insert(serde_json::Value::Null);
+                        Self::merge_json_value(target, value);
+                    }
                 }
                 debug!(
                     target: "ai::gemini_stream_request",
                     "Applied extra_body overrides: {:?}",
-                    extra_obj.keys().collect::<Vec<_>>()
+                    override_keys
                 );
             }
         }
@@ -1362,6 +1583,8 @@ impl AIClient {
         let mut full_text = String::new();
         let mut full_reasoning = String::new();
         let mut finish_reason = None;
+        let mut usage = None;
+        let mut provider_metadata: Option<serde_json::Value> = None;
 
         let mut tool_calls: Vec<ToolCall> = Vec::new();
         let mut cur_tool_call_id = String::new();
@@ -1381,6 +1604,19 @@ impl AIClient {
 
                     if let Some(finish_reason_) = chunk.finish_reason {
                         finish_reason = Some(finish_reason_);
+                    }
+
+                    if let Some(chunk_usage) = chunk.usage {
+                        usage = Some(Self::unified_usage_to_gemini_usage(chunk_usage));
+                    }
+
+                    if let Some(chunk_provider_metadata) = chunk.provider_metadata {
+                        match provider_metadata.as_mut() {
+                            Some(existing) => {
+                                Self::merge_json_value(existing, chunk_provider_metadata);
+                            }
+                            None => provider_metadata = Some(chunk_provider_metadata),
+                        }
                     }
 
                     if let Some(tool_call) = chunk.tool_call {
@@ -1451,8 +1687,9 @@ impl AIClient {
             text: full_text,
             reasoning_content,
             tool_calls: tool_calls_result,
-            usage: None,
+            usage,
             finish_reason,
+            provider_metadata,
         };
 
         Ok(response)
@@ -1611,7 +1848,8 @@ impl AIClient {
 #[cfg(test)]
 mod tests {
     use super::AIClient;
-    use crate::util::types::AIConfig;
+    use crate::infrastructure::ai::providers::gemini::GeminiMessageConverter;
+    use crate::util::types::{AIConfig, ToolDefinition};
     use serde_json::json;
 
     fn make_test_client(format: &str, custom_request_body: Option<serde_json::Value>) -> AIClient {
@@ -1624,6 +1862,8 @@ mod tests {
             format: format.to_string(),
             context_window: 128000,
             max_tokens: Some(8192),
+            temperature: None,
+            top_p: None,
             enable_thinking_process: false,
             support_preserved_thinking: false,
             custom_headers: None,
@@ -1670,5 +1910,128 @@ mod tests {
 
         assert_eq!(extra_body["tool_choice"], "auto");
         assert_eq!(extra_body["temperature"], 0.3);
+    }
+
+    #[test]
+    fn build_gemini_request_body_translates_response_format_and_merges_generation_config() {
+        let client = AIClient::new(AIConfig {
+            name: "gemini".to_string(),
+            base_url: "https://example.com".to_string(),
+            request_url: "https://example.com/models/gemini-2.5-pro:streamGenerateContent?alt=sse"
+                .to_string(),
+            api_key: "test-key".to_string(),
+            model: "gemini-2.5-pro".to_string(),
+            format: "gemini".to_string(),
+            context_window: 128000,
+            max_tokens: Some(4096),
+            temperature: Some(0.2),
+            top_p: Some(0.8),
+            enable_thinking_process: true,
+            support_preserved_thinking: true,
+            custom_headers: None,
+            custom_headers_mode: None,
+            skip_ssl_verify: false,
+            reasoning_effort: None,
+            custom_request_body: None,
+        });
+
+        let request_body = client.build_gemini_request_body(
+            None,
+            vec![json!({
+                "role": "user",
+                "parts": [{ "text": "hello" }]
+            })],
+            None,
+            Some(json!({
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "answer": { "type": "string" }
+                            },
+                            "required": ["answer"],
+                            "additionalProperties": false
+                        }
+                    }
+                },
+                "stop": ["END"],
+                "generationConfig": {
+                    "candidateCount": 1
+                }
+            })),
+        );
+
+        assert_eq!(request_body["generationConfig"]["maxOutputTokens"], 4096);
+        assert_eq!(request_body["generationConfig"]["temperature"], 0.2);
+        assert_eq!(request_body["generationConfig"]["topP"], 0.8);
+        assert_eq!(
+            request_body["generationConfig"]["thinkingConfig"]["includeThoughts"],
+            true
+        );
+        assert_eq!(
+            request_body["generationConfig"]["responseMimeType"],
+            "application/json"
+        );
+        assert_eq!(request_body["generationConfig"]["candidateCount"], 1);
+        assert_eq!(request_body["generationConfig"]["stopSequences"], json!(["END"]));
+        assert_eq!(
+            request_body["generationConfig"]["responseJsonSchema"]["required"],
+            json!(["answer"])
+        );
+        assert!(request_body["generationConfig"]["responseJsonSchema"]
+            .get("additionalProperties")
+            .is_none());
+        assert!(request_body.get("response_format").is_none());
+        assert!(request_body.get("stop").is_none());
+    }
+
+    #[test]
+    fn build_gemini_request_body_omits_function_calling_config_for_native_only_tools() {
+        let client = AIClient::new(AIConfig {
+            name: "gemini".to_string(),
+            base_url: "https://example.com".to_string(),
+            request_url: "https://example.com/models/gemini-2.5-pro:streamGenerateContent?alt=sse"
+                .to_string(),
+            api_key: "test-key".to_string(),
+            model: "gemini-2.5-pro".to_string(),
+            format: "gemini".to_string(),
+            context_window: 128000,
+            max_tokens: Some(4096),
+            temperature: None,
+            top_p: None,
+            enable_thinking_process: false,
+            support_preserved_thinking: true,
+            custom_headers: None,
+            custom_headers_mode: None,
+            skip_ssl_verify: false,
+            reasoning_effort: None,
+            custom_request_body: None,
+        });
+
+        let gemini_tools = GeminiMessageConverter::convert_tools(Some(vec![ToolDefinition {
+            name: "WebSearch".to_string(),
+            description: "Search the web".to_string(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string" }
+                }
+            }),
+        }]));
+
+        let request_body = client.build_gemini_request_body(
+            None,
+            vec![json!({
+                "role": "user",
+                "parts": [{ "text": "hello" }]
+            })],
+            gemini_tools,
+            None,
+        );
+
+        assert_eq!(request_body["tools"][0]["googleSearch"], json!({}));
+        assert!(request_body.get("toolConfig").is_none());
     }
 }

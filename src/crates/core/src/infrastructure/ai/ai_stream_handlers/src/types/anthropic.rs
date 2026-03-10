@@ -64,6 +64,7 @@ impl From<Usage> for UnifiedTokenUsage {
             prompt_token_count,
             candidates_token_count,
             total_token_count: prompt_token_count + candidates_token_count,
+            reasoning_token_count: None,
             cached_content_token_count: match (
                 value.cache_read_input_tokens,
                 value.cache_creation_input_tokens,
@@ -96,6 +97,7 @@ impl From<MessageDelta> for UnifiedResponse {
             tool_call: None,
             usage: value.usage.map(UnifiedTokenUsage::from),
             finish_reason: value.delta.stop_reason,
+            provider_metadata: None,
         }
     }
 }

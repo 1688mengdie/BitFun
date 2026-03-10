@@ -308,6 +308,7 @@ impl RoundExecutor {
                 has_more_rounds: false,
                 finish_reason: FinishReason::Complete,
                 usage: stream_result.usage.clone(),
+                provider_metadata: stream_result.provider_metadata.clone(),
             });
         }
 
@@ -525,6 +526,7 @@ impl RoundExecutor {
                 FinishReason::Complete
             },
             usage: stream_result.usage.clone(),
+            provider_metadata: stream_result.provider_metadata.clone(),
         })
     }
 

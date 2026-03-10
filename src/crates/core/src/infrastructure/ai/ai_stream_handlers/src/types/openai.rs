@@ -23,6 +23,7 @@ impl From<OpenAIUsage> for UnifiedTokenUsage {
             prompt_token_count: usage.prompt_tokens,
             candidates_token_count: usage.completion_tokens,
             total_token_count: usage.total_tokens,
+            reasoning_token_count: None,
             cached_content_token_count: usage
                 .prompt_tokens_details
                 .and_then(|prompt_tokens_details| prompt_tokens_details.cached_tokens),
@@ -176,6 +177,7 @@ impl OpenAISSEData {
                 tool_call: None,
                 usage: usage.take(),
                 finish_reason: finish_reason.take(),
+                provider_metadata: None,
             });
         }
 
@@ -193,6 +195,7 @@ impl OpenAISSEData {
                     } else {
                         None
                     },
+                    provider_metadata: None,
                 });
             }
         }
@@ -205,6 +208,7 @@ impl OpenAISSEData {
                 tool_call: None,
                 usage,
                 finish_reason,
+                provider_metadata: None,
             });
         }
 

@@ -126,26 +126,181 @@ impl GeminiMessageConverter {
 
     pub fn convert_tools(tools: Option<Vec<ToolDefinition>>) -> Option<Vec<Value>> {
         tools.and_then(|tool_defs| {
-            let declarations: Vec<Value> = tool_defs
-                .into_iter()
-                .map(|tool| {
-                    let parameters = Self::strip_unsupported_schema_fields(tool.parameters);
-                    json!({
-                        "name": tool.name,
-                        "description": tool.description,
-                        "parameters": parameters,
-                    })
-                })
-                .collect();
+            let mut native_tools = Vec::new();
+            let mut custom_tools = Vec::new();
 
-            if declarations.is_empty() {
+            for tool in tool_defs {
+                if let Some(native_tool) = Self::convert_native_tool(&tool) {
+                    native_tools.push(native_tool);
+                } else {
+                    custom_tools.push(tool);
+                }
+            }
+
+            // Gemini providers such as AIHubMix reject requests that mix built-in tools
+            // with custom function declarations. When custom tools are present, keep all
+            // tools in function-calling mode so BitFun's local tool pipeline still works.
+            let should_fallback_to_function_calling =
+                !native_tools.is_empty() && !custom_tools.is_empty();
+
+            let declarations: Vec<Value> = if should_fallback_to_function_calling {
+                custom_tools
+                    .into_iter()
+                    .chain(
+                        native_tools
+                            .iter()
+                            .cloned()
+                            .filter_map(Self::convert_native_tool_to_custom_definition),
+                    )
+                    .map(Self::convert_custom_tool)
+                    .collect()
+            } else {
+                custom_tools
+                    .into_iter()
+                    .map(Self::convert_custom_tool)
+                    .collect()
+            };
+
+            let mut result_tools = if should_fallback_to_function_calling {
+                Vec::new()
+            } else {
+                native_tools
+            };
+
+            if !declarations.is_empty() {
+                result_tools.push(json!({
+                    "functionDeclarations": declarations,
+                }));
+            }
+
+            if result_tools.is_empty() {
                 None
             } else {
-                Some(vec![json!({
-                    "functionDeclarations": declarations,
-                })])
+                Some(result_tools)
             }
         })
+    }
+
+    pub fn sanitize_schema(value: Value) -> Value {
+        Self::strip_unsupported_schema_fields(value)
+    }
+
+    fn convert_native_tool(tool: &ToolDefinition) -> Option<Value> {
+        let native_name = Self::native_tool_name(&tool.name)?;
+        let config = Self::native_tool_config(&tool.parameters);
+        Some(json!({
+            native_name: config,
+        }))
+    }
+
+    fn convert_native_tool_to_custom_definition(native_tool: Value) -> Option<ToolDefinition> {
+        let map = native_tool.as_object()?;
+        let (name, _config) = map.iter().next()?;
+
+        Some(ToolDefinition {
+            name: Self::native_tool_fallback_name(name).to_string(),
+            description: Self::native_tool_fallback_description(name).to_string(),
+            parameters: Self::native_tool_fallback_schema(name),
+        })
+    }
+
+    fn convert_custom_tool(tool: ToolDefinition) -> Value {
+        let parameters = Self::sanitize_schema(tool.parameters);
+        json!({
+            "name": tool.name,
+            "description": tool.description,
+            "parameters": parameters,
+        })
+    }
+
+    fn native_tool_name(tool_name: &str) -> Option<&'static str> {
+        match tool_name {
+            "WebSearch" | "googleSearch" | "GoogleSearch" => Some("googleSearch"),
+            "WebFetch" | "urlContext" | "UrlContext" | "URLContext" => Some("urlContext"),
+            "googleSearchRetrieval" | "GoogleSearchRetrieval" => Some("googleSearchRetrieval"),
+            "codeExecution" | "CodeExecution" => Some("codeExecution"),
+            _ => None,
+        }
+    }
+
+    fn native_tool_fallback_name(native_name: &str) -> &'static str {
+        match native_name {
+            "googleSearch" => "WebSearch",
+            "urlContext" => "WebFetch",
+            "googleSearchRetrieval" => "googleSearchRetrieval",
+            "codeExecution" => "codeExecution",
+            _ => "unknown_native_tool",
+        }
+    }
+
+    fn native_tool_fallback_description(native_name: &str) -> &'static str {
+        match native_name {
+            "googleSearch" => "Search the web for up-to-date information.",
+            "urlContext" => "Fetch content from a URL for context.",
+            "googleSearchRetrieval" => "Retrieve grounded results from Google Search.",
+            "codeExecution" => "Execute model-generated code and return the result.",
+            _ => "Gemini native tool fallback.",
+        }
+    }
+
+    fn native_tool_fallback_schema(native_name: &str) -> Value {
+        match native_name {
+            "googleSearch" | "googleSearchRetrieval" => json!({
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                    }
+                },
+                "required": ["query"]
+            }),
+            "urlContext" => json!({
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                    }
+                },
+                "required": ["url"]
+            }),
+            "codeExecution" => json!({
+                "type": "object",
+                "properties": {}
+            }),
+            _ => json!({
+                "type": "object",
+                "properties": {}
+            }),
+        }
+    }
+
+    fn native_tool_config(parameters: &Value) -> Value {
+        if Self::looks_like_schema(parameters) {
+            json!({})
+        } else {
+            match parameters {
+                Value::Object(map) if !map.is_empty() => parameters.clone(),
+                _ => json!({}),
+            }
+        }
+    }
+
+    fn looks_like_schema(parameters: &Value) -> bool {
+        let Some(map) = parameters.as_object() else {
+            return false;
+        };
+
+        map.contains_key("type")
+            || map.contains_key("properties")
+            || map.contains_key("required")
+            || map.contains_key("$schema")
+            || map.contains_key("items")
+            || map.contains_key("allOf")
+            || map.contains_key("anyOf")
+            || map.contains_key("oneOf")
+            || map.contains_key("enum")
+            || map.contains_key("nullable")
+            || map.contains_key("format")
     }
 
     fn push_content(contents: &mut Vec<Value>, role: &str, parts: Vec<Value>) {
@@ -665,5 +820,83 @@ mod tests {
             schema["properties"]["items"]["required"],
             json!(["name", "count"])
         );
+    }
+
+    #[test]
+    fn maps_web_search_to_native_google_search_tool() {
+        let tools = Some(vec![ToolDefinition {
+            name: "WebSearch".to_string(),
+            description: "Search the web".to_string(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string" }
+                },
+                "required": ["query"]
+            }),
+        }]);
+
+        let converted = GeminiMessageConverter::convert_tools(tools).expect("converted tools");
+        assert_eq!(converted.len(), 1);
+        assert_eq!(converted[0]["googleSearch"], json!({}));
+        assert!(converted[0].get("functionDeclarations").is_none());
+    }
+
+    #[test]
+    fn falls_back_to_function_declarations_when_native_and_custom_tools_mix() {
+        let tools = Some(vec![
+            ToolDefinition {
+                name: "WebSearch".to_string(),
+                description: "Search the web".to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string" }
+                    }
+                }),
+            },
+            ToolDefinition {
+                name: "get_weather".to_string(),
+                description: "Get weather".to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "city": { "type": "string" }
+                    },
+                    "required": ["city"]
+                }),
+            },
+        ]);
+
+        let converted = GeminiMessageConverter::convert_tools(tools).expect("converted tools");
+        assert_eq!(converted.len(), 1);
+        assert!(converted[0].get("googleSearch").is_none());
+        assert_eq!(
+            converted[0]["functionDeclarations"][0]["name"],
+            json!("get_weather")
+        );
+        assert_eq!(
+            converted[0]["functionDeclarations"][1]["name"],
+            json!("WebSearch")
+        );
+    }
+
+    #[test]
+    fn maps_web_fetch_to_native_url_context_tool() {
+        let tools = Some(vec![ToolDefinition {
+            name: "WebFetch".to_string(),
+            description: "Fetch a URL".to_string(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "url": { "type": "string" }
+                },
+                "required": ["url"]
+            }),
+        }]);
+
+        let converted = GeminiMessageConverter::convert_tools(tools).expect("converted tools");
+        assert_eq!(converted.len(), 1);
+        assert_eq!(converted[0]["urlContext"], json!({}));
     }
 }

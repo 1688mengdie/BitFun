@@ -58,6 +58,7 @@ impl From<ResponsesUsage> for UnifiedTokenUsage {
             prompt_token_count: usage.input_tokens,
             candidates_token_count: usage.output_tokens,
             total_token_count: usage.total_tokens,
+            reasoning_token_count: None,
             cached_content_token_count: usage
                 .input_tokens_details
                 .map(|details| details.cached_tokens),
@@ -89,6 +90,7 @@ pub fn parse_responses_output_item(item_value: Value) -> Option<UnifiedResponse>
             }),
             usage: None,
             finish_reason: None,
+            provider_metadata: None,
         }),
         "message" => {
             let text = item_value
@@ -112,6 +114,7 @@ pub fn parse_responses_output_item(item_value: Value) -> Option<UnifiedResponse>
                 tool_call: None,
                 usage: None,
                 finish_reason: None,
+                provider_metadata: None,
             })
         }
         _ => None,
