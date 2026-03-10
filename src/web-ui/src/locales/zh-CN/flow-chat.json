@@ -788,6 +788,19 @@
     "fastModel": "Fast 模型",
     "modelNotConfigured": "未配置"
   },
+  "reasoningEffort": {
+    "title": "推理深度",
+    "tooltip": "调整模型推理深度（仅 Responses API）",
+    "default": "默认",
+    "low": "Low",
+    "lowDesc": "快速响应，轻度推理",
+    "medium": "Medium",
+    "mediumDesc": "平衡速度与推理深度",
+    "high": "High",
+    "highDesc": "深度推理",
+    "xhigh": "Extra High",
+    "xhighDesc": "最大推理深度（较慢）"
+  },
   "coworkScope": {
     "title": "选择 Cowork 工作区",
     "description": "Cowork 模式需要一个工作区目录用于读写文件。你可以使用当前项目，或选择另一个目录。",

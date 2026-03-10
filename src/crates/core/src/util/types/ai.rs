@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 /// Gemini API response
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -12,6 +13,8 @@ pub struct GeminiResponse {
     pub usage: Option<GeminiUsage>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub finish_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_metadata: Option<Value>,
 }
 
 /// Gemini usage stats
@@ -23,6 +26,9 @@ pub struct GeminiUsage {
     pub candidates_token_count: u32,
     #[serde(rename = "totalTokenCount")]
     pub total_token_count: u32,
+    #[serde(rename = "reasoningTokenCount")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_token_count: Option<u32>,
     #[serde(rename = "cachedContentTokenCount")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cached_content_token_count: Option<u32>,

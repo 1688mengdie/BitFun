@@ -2,6 +2,7 @@
 
 use crate::agentic::core::Message;
 use crate::agentic::tools::pipeline::SubagentParentInfo;
+use serde_json::Value;
 use std::collections::HashMap;
 use tokio_util::sync::CancellationToken;
 
@@ -43,6 +44,8 @@ pub struct RoundResult {
     pub finish_reason: FinishReason,
     /// Token usage statistics (from model response)
     pub usage: Option<crate::util::types::ai::GeminiUsage>,
+    /// Provider-specific metadata returned by the model.
+    pub provider_metadata: Option<Value>,
 }
 
 /// Finish reason

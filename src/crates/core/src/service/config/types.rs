@@ -745,6 +745,11 @@ pub struct AIModelConfig {
     #[serde(default)]
     pub skip_ssl_verify: bool,
 
+    /// Reasoning effort level for OpenAI Responses API (o-series / GPT-5+).
+    /// Valid values: "low", "medium", "high", "xhigh". None = use API default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
+
     /// Custom request body (JSON string, used to override default request body fields).
     #[serde(default)]
     pub custom_request_body: Option<String>,
@@ -1133,6 +1138,7 @@ impl Default for AIModelConfig {
             custom_headers: None,
             custom_headers_mode: None,
             skip_ssl_verify: false,
+            reasoning_effort: None,
             custom_request_body: None,
         }
     }

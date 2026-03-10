@@ -22,6 +22,10 @@
     "formatHint": "已根据提供商自动选择，通常无需修改"
   },
   "providers": {
+    "gemini": {
+      "name": "Google Gemini",
+      "description": "Google Gemini 2.5 系列多模态模型"
+    },
     "anthropic": {
       "name": "Anthropic Claude",
       "description": "Anthropic Claude 系列模型"
@@ -100,7 +104,7 @@
     "searchApiHint": "智谱AI搜索API地址，或其他兼容的搜索API地址",
     "apiKey": "API密钥",
     "apiKeyPlaceholder": "输入您的 API Key",
-    "provider": "请求规范",
+    "provider": "请求格式",
     "providerPlaceholder": "选择请求格式",
     "contextWindow": "上下文窗口大小",
     "contextWindowHint": "模型支持的最大上下文窗口大小（用于计算token占用百分比）",
@@ -115,10 +119,15 @@
     "preserve": "保留历史思考",
     "preserveHint": "开启后将保留历史对话的思考内容"
   },
+  "reasoningEffort": {
+    "label": "推理深度",
+    "hint": "控制模型推理深度，仅适用于 Responses API（如 GPT-5）",
+    "placeholder": "使用 API 默认值"
+  },
   "details": {
     "basicInfo": "基本信息",
     "modelName": "模型名称",
-    "provider": "请求规范",
+    "provider": "请求格式",
     "apiUrl": "API地址",
     "contextWindow": "上下文窗口",
     "maxOutput": "最大输出",
@@ -149,7 +158,9 @@
   },
   "formats": {
     "openaiCompatible": "OpenAI 兼容",
-    "claudeApi": "Claude API"
+    "responsesApi": "OpenAI Responses API",
+    "claudeApi": "Claude API",
+    "geminiApi": "Gemini GenerateContent API"
   },
   "actions": {
     "save": "保存",

@@ -15,7 +15,7 @@ use crate::util::JsonChecker;
 use ai_stream_handlers::UnifiedResponse;
 use futures::StreamExt;
 use log::{debug, error, trace};
-use serde_json::json;
+use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -173,6 +173,8 @@ pub struct StreamResult {
     pub tool_calls: Vec<ToolCall>,
     /// Token usage statistics (from model response)
     pub usage: Option<GeminiUsage>,
+    /// Provider-specific metadata captured from the stream tail.
+    pub provider_metadata: Option<Value>,
     /// Whether this stream produced any user-visible output (text/thinking/tool events)
     pub has_effective_output: bool,
 }
@@ -208,6 +210,7 @@ struct StreamContext {
     full_text: String,
     tool_calls: Vec<ToolCall>,
     usage: Option<GeminiUsage>,
+    provider_metadata: Option<Value>,
 
     // Current tool call state
     tool_call_buffer: ToolCallBuffer,
@@ -239,6 +242,7 @@ impl StreamContext {
             full_text: String::new(),
             tool_calls: Vec::new(),
             usage: None,
+            provider_metadata: None,
             tool_call_buffer: ToolCallBuffer::new(),
             text_chunks_count: 0,
             thinking_chunks_count: 0,
@@ -255,6 +259,7 @@ impl StreamContext {
             full_text: self.full_text,
             tool_calls: self.tool_calls,
             usage: self.usage,
+            provider_metadata: self.provider_metadata,
             has_effective_output: self.has_effective_output,
         }
     }
@@ -280,6 +285,20 @@ pub struct StreamProcessor {
 impl StreamProcessor {
     pub fn new(event_queue: Arc<EventQueue>) -> Self {
         Self { event_queue }
+    }
+
+    fn merge_json_value(target: &mut Value, overlay: Value) {
+        match (target, overlay) {
+            (Value::Object(target_map), Value::Object(overlay_map)) => {
+                for (key, value) in overlay_map {
+                    let entry = target_map.entry(key).or_insert(Value::Null);
+                    Self::merge_json_value(entry, value);
+                }
+            }
+            (target_slot, overlay_value) => {
+                *target_slot = overlay_value;
+            }
+        }
     }
 
     // ==================== Helper Methods ====================
@@ -433,6 +452,7 @@ impl StreamProcessor {
             prompt_token_count: response_usage.prompt_token_count,
             candidates_token_count: response_usage.candidates_token_count,
             total_token_count: response_usage.total_token_count,
+            reasoning_token_count: response_usage.reasoning_token_count,
             cached_content_token_count: response_usage.cached_content_token_count,
         });
         debug!(
@@ -453,32 +473,39 @@ impl StreamProcessor {
         if let Some(tool_id) = tool_call.id {
             if !tool_id.is_empty() {
                 ctx.has_effective_output = true;
-                // Clear previous tool_call state
-                ctx.force_finish_tool_call_buffer();
+                // Some providers repeat the tool id on every delta; only treat a new id as a new tool call.
+                let is_new_tool = ctx.tool_call_buffer.tool_id != tool_id;
+                if is_new_tool {
+                    // Clear previous tool_call state
+                    ctx.force_finish_tool_call_buffer();
 
-                // Normally tool_name should not be empty
-                let tool_name = tool_call.name.unwrap_or_default();
-                debug!("Tool detected: {}", tool_name);
-                ctx.tool_call_buffer.tool_id = tool_id.clone();
-                ctx.tool_call_buffer.tool_name = tool_name.clone();
-                ctx.tool_call_buffer.json_checker.reset();
+                    // Normally tool_name should not be empty
+                    let tool_name = tool_call.name.unwrap_or_default();
+                    debug!("Tool detected: {}", tool_name);
+                    ctx.tool_call_buffer.tool_id = tool_id.clone();
+                    ctx.tool_call_buffer.tool_name = tool_name.clone();
+                    ctx.tool_call_buffer.json_checker.reset();
 
-                // Send early detection event
-                let _ = self
-                    .event_queue
-                    .enqueue(
-                        AgenticEvent::ToolEvent {
-                            session_id: ctx.session_id.clone(),
-                            turn_id: ctx.dialog_turn_id.clone(),
-                            tool_event: ToolEventData::EarlyDetected {
-                                tool_id: tool_id,
-                                tool_name: tool_name,
+                    // Send early detection event
+                    let _ = self
+                        .event_queue
+                        .enqueue(
+                            AgenticEvent::ToolEvent {
+                                session_id: ctx.session_id.clone(),
+                                turn_id: ctx.dialog_turn_id.clone(),
+                                tool_event: ToolEventData::EarlyDetected {
+                                    tool_id: tool_id,
+                                    tool_name: tool_name,
+                                },
+                                subagent_parent_info: ctx.event_subagent_parent_info.clone(),
                             },
-                            subagent_parent_info: ctx.event_subagent_parent_info.clone(),
-                        },
-                        Some(EventPriority::Normal),
-                    )
-                    .await;
+                            Some(EventPriority::Normal),
+                        )
+                        .await;
+                } else if ctx.tool_call_buffer.tool_name.is_empty() {
+                    // Best-effort: keep name if provider repeats it.
+                    ctx.tool_call_buffer.tool_name = tool_call.name.unwrap_or_default();
+                }
             }
         }
 
@@ -730,6 +757,13 @@ impl StreamProcessor {
                     // Handle usage
                     if let Some(ref response_usage) = response.usage {
                         self.handle_usage(&mut ctx, response_usage);
+                    }
+
+                    if let Some(provider_metadata) = response.provider_metadata {
+                        match ctx.provider_metadata.as_mut() {
+                            Some(existing) => Self::merge_json_value(existing, provider_metadata),
+                            None => ctx.provider_metadata = Some(provider_metadata),
+                        }
                     }
 
                     // Handle thinking_signature
