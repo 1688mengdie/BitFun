@@ -239,7 +239,6 @@ pub fn create_main_window(app_handle: &tauri::AppHandle) {
         .inner_size(1200.0, 800.0)
         .resizable(true)
         .fullscreen(false)
-        .maximized(true)
         .visible(false)
         .background_color(bg_color)
         .accept_first_mouse(true)
@@ -290,6 +289,18 @@ pub async fn show_main_window(app: tauri::AppHandle) -> Result<(), String> {
     use tauri::Manager;
 
     if let Some(main_window) = app.get_webview_window("main") {
+        #[cfg(target_os = "windows")]
+        {
+            // Work around Windows startup flicker: avoid creating the native window
+            // in maximized mode, and maximize it right before showing instead.
+            main_window.maximize().map_err(|e| {
+                error!("Failed to maximize main window: {}", e);
+                format!("Failed to maximize main window: {}", e)
+            })?;
+
+            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        }
+
         main_window.show().map_err(|e| {
             error!("Failed to show main window: {}", e);
             format!("Failed to show main window: {}", e)

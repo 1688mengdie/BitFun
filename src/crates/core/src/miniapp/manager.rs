@@ -8,14 +8,13 @@ use crate::miniapp::types::{
 };
 use crate::util::errors::BitFunResult;
 use chrono::Utc;
-use once_cell::sync::OnceCell;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
-static GLOBAL_MINIAPP_MANAGER: OnceCell<Arc<MiniAppManager>> = OnceCell::new();
+static GLOBAL_MINIAPP_MANAGER: OnceLock<Arc<MiniAppManager>> = OnceLock::new();
 
 /// Initialize the global MiniAppManager (called once at startup from Tauri app_state).
 pub fn initialize_global_miniapp_manager(manager: Arc<MiniAppManager>) {

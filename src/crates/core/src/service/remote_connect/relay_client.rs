@@ -9,7 +9,7 @@
 //! so that in-flight QR codes remain valid.
 
 use anyhow::{anyhow, Result};
-use futures_util::{SinkExt, StreamExt};
+use futures::{SinkExt, StreamExt};
 use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;

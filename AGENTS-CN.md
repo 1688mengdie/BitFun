@@ -39,10 +39,10 @@ BitFun 是 AI 代理驱动的编程环境，使用 Rust 和 TypeScript 构建，
 
 ```bash
 # 桌面端
-npm run desktop:dev              # 开发模式
+pnpm run desktop:dev             # 开发模式
 
 # E2E
-npm run e2e:test
+pnpm run e2e:test
 ```
 
 ## 关键规则

@@ -6,7 +6,7 @@ use fluent_bundle::concurrent::FluentBundle as ConcurrentFluentBundle;
 use fluent_bundle::{FluentArgs, FluentResource, FluentValue as FV};
 use log::{debug, info, warn};
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use tokio::sync::RwLock;
 use unic_langid::LanguageIdentifier;
 
@@ -238,10 +238,8 @@ impl Default for I18nService {
 }
 
 // Global singleton (optional)
-lazy_static::lazy_static! {
-    static ref GLOBAL_I18N_SERVICE: Arc<RwLock<Option<Arc<I18nService>>>> =
-        Arc::new(RwLock::new(None));
-}
+static GLOBAL_I18N_SERVICE: LazyLock<Arc<RwLock<Option<Arc<I18nService>>>>> =
+    LazyLock::new(|| Arc::new(RwLock::new(None)));
 
 /// Gets the global i18n service.
 pub async fn get_global_i18n_service() -> Option<Arc<I18nService>> {

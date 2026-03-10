@@ -441,7 +441,6 @@ fn turns_to_chat_messages(
         // Collect ordered items across all rounds, preserving interleaved order
         struct OrderedEntry {
             order_index: Option<usize>,
-            timestamp: u64,
             sequence: usize,
             round_idx: usize,
             item: ChatMessageItem,
@@ -465,7 +464,6 @@ fn turns_to_chat_messages(
                     thinking_parts.push(t.content.clone());
                     ordered.push(OrderedEntry {
                         order_index: t.order_index,
-                        timestamp: t.timestamp,
                         sequence,
                         round_idx,
                         item: ChatMessageItem {
@@ -486,7 +484,6 @@ fn turns_to_chat_messages(
                     text_parts.push(t.content.clone());
                     ordered.push(OrderedEntry {
                         order_index: t.order_index,
-                        timestamp: t.timestamp,
                         sequence,
                         round_idx,
                         item: ChatMessageItem {
@@ -529,7 +526,6 @@ fn turns_to_chat_messages(
                 tools_flat.push(tool_status.clone());
                 ordered.push(OrderedEntry {
                     order_index: t.order_index,
-                    timestamp: round.start_time,
                     sequence,
                     round_idx,
                     item: ChatMessageItem {
@@ -672,50 +668,6 @@ pub fn images_to_contexts(
             }
         })
         .collect()
-}
-
-fn build_message_with_remote_images(content: &str, images: &[ImageAttachment]) -> String {
-    use crate::agentic::tools::image_context::{
-        format_image_context_reference, store_image_context, ImageContextData,
-    };
-
-    if images.is_empty() {
-        return content.to_string();
-    }
-
-    let context_section = images
-        .iter()
-        .map(|img| {
-            let mime_type = img
-                .data_url
-                .split_once(',')
-                .and_then(|(header, _)| {
-                    header
-                        .strip_prefix("data:")
-                        .and_then(|rest| rest.split(';').next())
-                })
-                .unwrap_or("image/png")
-                .to_string();
-
-            let image_context = ImageContextData {
-                id: format!("remote_img_{}", uuid::Uuid::new_v4()),
-                image_path: None,
-                data_url: Some(img.data_url.clone()),
-                mime_type,
-                image_name: img.name.clone(),
-                file_size: 0,
-                width: None,
-                height: None,
-                source: "remote".to_string(),
-            };
-
-            store_image_context(image_context.clone());
-            format_image_context_reference(&image_context)
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    format!("{context_section}\n\n{content}")
 }
 
 // ── RemoteSessionStateTracker ──────────────────────────────────────

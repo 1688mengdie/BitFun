@@ -39,10 +39,10 @@ BitFun is an AI agent-driven programming environment built with Rust and TypeScr
 
 ```bash
 # Desktop
-npm run desktop:dev              # Dev mode
+pnpm run desktop:dev             # Dev mode
 
 # E2E
-npm run e2e:test
+pnpm run e2e:test
 ```
 
 ## Critical Rules

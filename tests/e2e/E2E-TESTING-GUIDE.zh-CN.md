@@ -116,11 +116,11 @@ BitFun 使用三级测试分类系统：
 cargo install tauri-driver --locked
 
 # 构建应用（从项目根目录）
-npm run desktop:build
+pnpm run desktop:build
 
 # 安装 E2E 测试依赖
 cd tests/e2e
-npm install
+pnpm install
 ```
 
 ### 2. 验证安装
@@ -136,16 +136,16 @@ npm install
 # 在 tests/e2e 目录下
 
 # 运行 L0 冒烟测试（最快）
-npm run test:l0
+pnpm run test:l0
 
 # 运行所有 L0 测试
-npm run test:l0:all
+pnpm run test:l0:all
 
 # 运行 L1 功能测试
-npm run test:l1
+pnpm run test:l1
 
 # 运行特定测试文件
-npm test -- --spec ./specs/l0-smoke.spec.ts
+pnpm test -- --spec ./specs/l0-smoke.spec.ts
 ```
 
 ### 4. 测试运行模式（Release vs Dev）
@@ -427,7 +427,7 @@ echo %PATH% # Windows
 **解决方案**:
 ```bash
 # 构建应用（从项目根目录）
-npm run desktop:build
+pnpm run desktop:build
 
 # 验证二进制文件存在
 # Windows
@@ -501,7 +501,7 @@ beforeEach(async () => {
 
 ```bash
 # 启用 WebDriverIO 调试日志
-npm test -- --spec ./specs/l0-smoke.spec.ts --log-level=debug
+pnpm test -- --spec ./specs/l0-smoke.spec.ts --log-level=debug
 ```
 
 ### 截图分析
@@ -518,7 +518,7 @@ npm test -- --spec ./specs/l0-smoke.spec.ts --log-level=debug
 4. **在 `page-objects/` 创建或更新 Page Objects**
 5. **按照模板编写测试**
 6. **本地运行测试**验证
-7. **在 `package.json` 添加 npm 脚本** (可选)
+7. **在 `package.json` 添加 pnpm 脚本** (可选)
 8. **更新配置**以包含新的 spec 文件
 
 ### 示例: 添加 L1 文件树测试
@@ -545,7 +545,7 @@ npm test -- --spec ./specs/l0-smoke.spec.ts --log-level=debug
      });
    });
    ```
-5. 运行: `npm test -- --spec ./specs/l1-file-tree.spec.ts`
+5. 运行: `pnpm test -- --spec ./specs/l1-file-tree.spec.ts`
 6. 更新 `config/wdio.conf_l1.ts` 以包含新的 spec
 
 ## CI/CD 集成
@@ -563,20 +563,25 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v3
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.0
       - name: Setup Node.js
         uses: actions/setup-node@v3
         with:
           node-version: '20'
+          cache: 'pnpm'
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
       - name: 安装 tauri-driver
         run: cargo install tauri-driver --locked
       - name: 构建应用
-        run: npm run desktop:build
+        run: pnpm run desktop:build
       - name: 安装测试依赖
-        run: cd tests/e2e && npm install
+        run: cd tests/e2e && pnpm install
       - name: 运行 L0 测试
-        run: cd tests/e2e && npm run test:l0:all
+        run: cd tests/e2e && pnpm run test:l0:all
         
   l1-tests:
     runs-on: windows-latest
@@ -585,9 +590,9 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - name: 构建应用
-        run: npm run desktop:build
+        run: pnpm run desktop:build
       - name: 运行 L1 测试
-        run: cd tests/e2e && npm run test:l1
+        run: cd tests/e2e && pnpm run test:l1
 ```
 
 ### 测试执行矩阵
@@ -599,23 +604,23 @@ jobs:
 | 每晚构建 | 是 | 是 | 是 |
 | 发布前 | 是 | 是 | 是 |
 
-## 可用的 npm 脚本
+## 可用的 pnpm 脚本
 
 | 脚本 | 描述 |
 |------|------|
-| `npm run test` | 使用默认配置运行所有测试 |
-| `npm run test:l0` | 仅运行 L0 冒烟测试 |
-| `npm run test:l0:all` | 运行所有 L0 测试 |
-| `npm run test:l1` | 运行所有 L1 测试 |
-| `npm run test:l0:workspace` | 运行工作区测试 |
-| `npm run test:l0:settings` | 运行设置测试 |
-| `npm run test:l0:navigation` | 运行导航测试 |
-| `npm run test:l0:tabs` | 运行标签测试 |
-| `npm run test:l0:theme` | 运行主题测试 |
-| `npm run test:l0:i18n` | 运行国际化测试 |
-| `npm run test:l0:notification` | 运行通知测试 |
-| `npm run test:l0:observe` | 运行观察测试 (60秒) |
-| `npm run clean` | 清理 reports 目录 |
+| `pnpm run test` | 使用默认配置运行所有测试 |
+| `pnpm run test:l0` | 仅运行 L0 冒烟测试 |
+| `pnpm run test:l0:all` | 运行所有 L0 测试 |
+| `pnpm run test:l1` | 运行所有 L1 测试 |
+| `pnpm run test:l0:workspace` | 运行工作区测试 |
+| `pnpm run test:l0:settings` | 运行设置测试 |
+| `pnpm run test:l0:navigation` | 运行导航测试 |
+| `pnpm run test:l0:tabs` | 运行标签测试 |
+| `pnpm run test:l0:theme` | 运行主题测试 |
+| `pnpm run test:l0:i18n` | 运行国际化测试 |
+| `pnpm run test:l0:notification` | 运行通知测试 |
+| `pnpm run test:l0:observe` | 运行观察测试 (60秒) |
+| `pnpm run clean` | 清理 reports 目录 |
 
 ## 资源
 

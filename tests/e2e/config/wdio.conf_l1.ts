@@ -142,7 +142,7 @@ export const config: Options.Testrunner = {
     if (!fs.existsSync(appPath)) {
       console.error(`Application not found at: ${appPath}`);
       console.error('Please build the application first with:');
-      console.error('npm run desktop:build');
+      console.error('pnpm run desktop:build');
       throw new Error('Application not built');
     }
     console.log(`application: ${appPath}`);
@@ -173,7 +173,7 @@ export const config: Options.Testrunner = {
         console.log('Dev server is already running on port 1422');
       } else {
         console.warn('Dev server not running on port 1422');
-        console.warn('Please start it with: npm run dev');
+        console.warn('Please start it with: pnpm run dev');
         console.warn('Continuing anyway...');
       }
     }

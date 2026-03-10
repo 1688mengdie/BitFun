@@ -1,4 +1,4 @@
-﻿**中文** | [English](README.md)
+**中文** | [English](README.md)
 
 <div align="center">
 
@@ -92,18 +92,19 @@ Cowork Agent 专为日常工作设计，遵循"先澄清、再执行、可追踪
 请确保已安装以下前置依赖：
 
 - Node.js（推荐 LTS 版本）
+- pnpm
 - Rust 工具链（通过 [rustup](https://rustup.rs/) 安装）
 - [Tauri 前置依赖](https://v2.tauri.app/start/prerequisites/)（桌面端开发需要）
 
 ```bash
 # 安装依赖
-npm install
+pnpm install
 
 # 以开发模式运行桌面端
-npm run desktop:dev
+pnpm run desktop:dev
 
 # 构建桌面端
-npm run desktop:build
+pnpm run desktop:build
 ```
 
 更多详情请参阅[贡献指南](./CONTRIBUTING_CN.md)。

@@ -77,15 +77,15 @@ Options:
 
 function getMainAppBuildCommand(mode) {
   if (mode === "fast") {
-    return "npm run desktop:build:release-fast";
+    return "pnpm run desktop:build:release-fast";
   }
-  return "npm run desktop:build:exe";
+  return "pnpm run desktop:build:exe";
 }
 
 function getInstallerBuildCommand(mode, devMode) {
-  if (devMode) return "npm run tauri:dev";
-  if (mode === "fast") return "npm run tauri:build:exe:fast";
-  return "npm run tauri:build:exe";
+  if (devMode) return "pnpm run tauri:dev";
+  if (mode === "fast") return "pnpm run tauri:build:exe:fast";
+  return "pnpm run tauri:build:exe";
 }
 
 function ensureCleanDir(dir) {

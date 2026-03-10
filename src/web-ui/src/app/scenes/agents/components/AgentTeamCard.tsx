@@ -79,14 +79,6 @@ const AgentTeamCard: React.FC<AgentTeamCardProps> = ({
             >
               <Pencil size={14} />
             </button>
-            <button
-              type="button"
-              className="agent-team-card__icon-btn"
-              onClick={openDetails}
-              aria-label={t('teamCard.actions.expand', '查看详情')}
-            >
-              <Users size={14} />
-            </button>
           </div>
         </div>
 

@@ -4,24 +4,23 @@
 
 use log::{info, warn};
 use crate::infrastructure::try_get_path_manager_arc;
-use once_cell::sync::OnceCell;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use tokio::sync::RwLock;
 
 use super::file_sync::{FileSyncConfig, LspFileSync};
 use super::{LspManager, WorkspaceLspManager};
 
 /// Global LSP manager instance.
-static GLOBAL_LSP_MANAGER: OnceCell<Arc<RwLock<LspManager>>> = OnceCell::new();
+static GLOBAL_LSP_MANAGER: OnceLock<Arc<RwLock<LspManager>>> = OnceLock::new();
 
 /// Global workspace manager mapping.
-static WORKSPACE_MANAGERS: OnceCell<Arc<RwLock<HashMap<String, Arc<WorkspaceLspManager>>>>> =
-    OnceCell::new();
+static WORKSPACE_MANAGERS: OnceLock<Arc<RwLock<HashMap<String, Arc<WorkspaceLspManager>>>>> =
+    OnceLock::new();
 
 /// Global file sync manager.
-static GLOBAL_FILE_SYNC: OnceCell<Arc<LspFileSync>> = OnceCell::new();
+static GLOBAL_FILE_SYNC: OnceLock<Arc<LspFileSync>> = OnceLock::new();
 
 /// Initializes the global LSP manager.
 pub async fn initialize_global_lsp_manager() -> anyhow::Result<()> {

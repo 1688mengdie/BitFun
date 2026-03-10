@@ -11,7 +11,7 @@ use axum::routing::get;
 use axum::Json;
 use axum::Router;
 use bitfun_core::service::mcp::server::MCPConnection;
-use futures_util::Stream;
+use futures::Stream;
 use serde_json::{json, Value};
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, Mutex, Notify};

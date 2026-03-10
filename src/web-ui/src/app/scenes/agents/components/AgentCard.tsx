@@ -1,13 +1,12 @@
 import React from 'react';
 import {
   Bot,
-  SlidersHorizontal,
   Wrench,
   Puzzle,
   Cpu,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { Badge, IconButton, Switch } from '@/component-library';
+import { Badge, Switch } from '@/component-library';
 import type { AgentWithCapabilities } from '../agentsStore';
 import { AGENT_ICON_MAP, CAPABILITY_ACCENT } from '../agentsIcons';
 import { getCardGradient } from '@/shared/utils/cardGradients';
@@ -86,14 +85,6 @@ const AgentCard: React.FC<AgentCardProps> = ({
               onChange={() => onToggleSolo(agent.id, !soloEnabled)}
               size="small"
             />
-            <IconButton
-              variant="ghost"
-              size="small"
-              tooltip={t('manage')}
-              onClick={openDetails}
-            >
-              <SlidersHorizontal size={14} />
-            </IconButton>
           </div>
         </div>
 

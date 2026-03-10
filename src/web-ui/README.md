@@ -76,20 +76,20 @@ adapter.listen("agentic://text-chunk", callback);
 cd src/web-ui
 
 # Desktop
-npm run dev
+pnpm run dev
 
 # Server/Web
-VITE_BUILD_TARGET=web npm run dev
+VITE_BUILD_TARGET=web pnpm run dev
 ```
 
 ### Build
 
 ```bash
 # Desktop
-npm run build
+pnpm run build
 
 # Server/Web
-VITE_BUILD_TARGET=web npm run build
+VITE_BUILD_TARGET=web pnpm run build
 # output: dist/
 ```
 

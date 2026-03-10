@@ -5,7 +5,7 @@
 //! long connection and routes them through the shared command router.
 
 use anyhow::{anyhow, Result};
-use futures_util::{SinkExt, StreamExt};
+use futures::{SinkExt, StreamExt};
 use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -930,7 +930,7 @@ impl FeishuBot {
     async fn handle_data_frame_for_pairing(
         &self,
         frame: &pb::Frame,
-        write: &Arc<RwLock<futures_util::stream::SplitSink<
+        write: &Arc<RwLock<futures::stream::SplitSink<
             tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
             WsMessage,
         >>>,

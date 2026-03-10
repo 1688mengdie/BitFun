@@ -790,7 +790,12 @@ impl FileTreeService {
             .git_ignore(true)
             .git_global(false)
             .git_exclude(false)
-            .threads(num_cpus::get().min(8))
+            .threads(
+                std::thread::available_parallelism()
+                    .map(|count| count.get())
+                    .unwrap_or(1)
+                    .min(8),
+            )
             .build_parallel();
 
         walker.run(|| {

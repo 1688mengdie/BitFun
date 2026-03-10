@@ -5,9 +5,8 @@
 
 use dashmap::DashMap;
 use log::{debug, info, warn};
-use once_cell::sync::Lazy;
 use serde_json::Value;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use tokio::sync::oneshot;
 
 /// User input response
@@ -79,7 +78,7 @@ impl UserInputManager {
 }
 
 /// Global singleton instance
-pub static USER_INPUT_MANAGER: Lazy<UserInputManager> = Lazy::new(|| {
+pub static USER_INPUT_MANAGER: LazyLock<UserInputManager> = LazyLock::new(|| {
     debug!("Initializing global user input manager");
     UserInputManager::new()
 });

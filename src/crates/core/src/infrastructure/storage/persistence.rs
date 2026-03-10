@@ -8,13 +8,12 @@ use crate::infrastructure::{PathManager, try_get_path_manager_arc};
 use std::path::{Path, PathBuf};
 use serde::{Serialize, Deserialize};
 use tokio::fs;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::collections::HashMap;
 use tokio::sync::Mutex;
-use once_cell::sync::Lazy;
 
 /// Global file lock map to prevent concurrent writes to the same file
-static FILE_LOCKS: Lazy<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>> = Lazy::new(|| {
+static FILE_LOCKS: LazyLock<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>> = LazyLock::new(|| {
     Mutex::new(HashMap::new())
 });
 

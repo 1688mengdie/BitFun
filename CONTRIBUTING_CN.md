@@ -13,24 +13,25 @@
 ### 环境准备
 
 - Node.js（建议 LTS 版本）
+- pnpm
 - Rust toolchain（通过 rustup 安装）
 - 桌面端开发需准备 Tauri 依赖
 
 ### 安装依赖
 
 ```bash
-npm install
+pnpm install
 ```
 
 ### 常用命令
 
 ```bash
 # Desktop
-npm run desktop:dev
-npm run desktop:build
+pnpm run desktop:dev
+pnpm run desktop:build
 
 # E2E
-npm run e2e:test
+pnpm run e2e:test
 ```
 
 > 说明：仓库提供更细粒度的脚本（例如 `dev:web`、`cli:dev`、`website:dev`），详情见 `package.json`。
@@ -127,7 +128,7 @@ UI 改动请附前后对比截图或短录屏，方便快速评审。
 cargo test --workspace
 
 # E2E
-npm run e2e:test
+pnpm run e2e:test
 ```
 
 如暂时无法运行测试，请在 PR 描述中说明原因，并提供手动验证步骤。

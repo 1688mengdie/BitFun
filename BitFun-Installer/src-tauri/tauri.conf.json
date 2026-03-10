@@ -3,9 +3,9 @@
   "productName": "BitFun Installer",
   "identifier": "com.bitfun.installer",
   "build": {
-    "beforeDevCommand": "npm run dev",
+    "beforeDevCommand": "pnpm --dir BitFun-Installer run dev",
     "devUrl": "http://localhost:1520",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "pnpm --dir BitFun-Installer run build",
     "frontendDist": "../dist"
   },
   "bundle": {

@@ -73,21 +73,19 @@ Language Select → Options → Progress → Model Setup → Theme Setup
 
 - Node.js 18+
 - Rust (latest stable)
-- pnpm (or npm)
+- pnpm
 
 ### Setup
 
 ```bash
 cd ..
-npm ci
-cd BitFun-Installer
-npm ci
+pnpm install
 ```
 
 Or from repository root:
 
 ```bash
-npm --prefix BitFun-Installer ci
+pnpm install
 ```
 
 Production installer builds call workspace desktop build scripts, so root dependencies are required.
@@ -106,7 +104,7 @@ Keep generated artifacts out of commits. This project ignores:
 Run the installer in development mode with hot reload:
 
 ```bash
-npm run tauri:dev
+pnpm run tauri:dev
 ```
 
 ### Uninstall Mode (Dev + Runtime)
@@ -137,22 +135,22 @@ Core implementation:
 Build the complete installer in release mode (default, optimized):
 
 ```bash
-npm run installer:build
+pnpm run installer:build
 ```
 
-Use this as the release entrypoint. `npm run tauri:build` does not prepare validated payload assets for production.
+Use this as the release entrypoint. `pnpm run tauri:build` does not prepare validated payload assets for production.
 Release artifacts embed payload files into the installer binary, so runtime installation does not depend on an external `payload` folder.
 
 Build the complete installer in fast mode (faster compile, less optimization):
 
 ```bash
-npm run installer:build:fast
+pnpm run installer:build:fast
 ```
 
 Build installer only (skip main app build):
 
 ```bash
-npm run installer:build:only
+pnpm run installer:build:only
 ```
 
 `installer:build:only` now requires an existing valid desktop executable in target output paths. If payload validation fails, build exits with an error.
@@ -160,7 +158,7 @@ npm run installer:build:only
 Build installer only with fast mode:
 
 ```bash
-npm run installer:build:only:fast
+pnpm run installer:build:only:fast
 ```
 
 ### Output
@@ -210,8 +208,8 @@ Add to your GitHub Actions workflow:
 - name: Build Installer
   run: |
     cd BitFun-Installer
-    npm ci
-    npm run installer:build:only
+    pnpm install
+    pnpm run installer:build:only
 
 - name: Upload Installer
   uses: actions/upload-artifact@v4

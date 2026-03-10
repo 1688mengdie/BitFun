@@ -181,14 +181,14 @@ fn generate_embedded_prompts_code(
     )?;
     writeln!(file)?;
     writeln!(file, "use std::collections::HashMap;")?;
-    writeln!(file, "use once_cell::sync::Lazy;")?;
+    writeln!(file, "use std::sync::LazyLock;")?;
     writeln!(file)?;
 
     // Embed all prompt content
     writeln!(file, "/// Embedded prompt content mapping")?;
     writeln!(
         file,
-        "pub static EMBEDDED_PROMPTS: Lazy<HashMap<&'static str, &'static str>> = Lazy::new(|| {{"
+        "pub static EMBEDDED_PROMPTS: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| {{"
     )?;
     writeln!(file, "    let mut map = HashMap::new();")?;
 
@@ -238,9 +238,9 @@ fn create_empty_embedded_prompts(_manifest_dir: &str) -> Result<(), Box<dyn std:
 
     writeln!(file, "// Empty embedded data (prompts directory not found)")?;
     writeln!(file, "use std::collections::HashMap;")?;
-    writeln!(file, "use once_cell::sync::Lazy;")?;
+    writeln!(file, "use std::sync::LazyLock;")?;
     writeln!(file)?;
-    writeln!(file, "pub static EMBEDDED_PROMPTS: Lazy<HashMap<&'static str, &'static str>> = Lazy::new(|| HashMap::new());")?;
+    writeln!(file, "pub static EMBEDDED_PROMPTS: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| HashMap::new());")?;
     writeln!(
         file,
         "pub fn get_embedded_prompt(_prompt_name: &str) -> Option<&'static str> {{ None }}"

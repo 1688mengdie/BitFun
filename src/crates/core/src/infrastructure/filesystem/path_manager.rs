@@ -409,10 +409,10 @@ impl Default for PathManager {
     }
 }
 
-use once_cell::sync::OnceCell;
+use std::sync::OnceLock;
 
 /// Global PathManager instance
-static GLOBAL_PATH_MANAGER: OnceCell<Arc<PathManager>> = OnceCell::new();
+static GLOBAL_PATH_MANAGER: OnceLock<Arc<PathManager>> = OnceLock::new();
 
 fn init_global_path_manager() -> BitFunResult<Arc<PathManager>> {
     PathManager::new().map(Arc::new)
@@ -438,7 +438,17 @@ pub fn get_path_manager_arc() -> Arc<PathManager> {
 
 /// Try to get the global PathManager instance (Arc)
 pub fn try_get_path_manager_arc() -> BitFunResult<Arc<PathManager>> {
-    GLOBAL_PATH_MANAGER
-        .get_or_try_init(init_global_path_manager)
-        .map(Arc::clone)
+    if let Some(manager) = GLOBAL_PATH_MANAGER.get() {
+        return Ok(Arc::clone(manager));
+    }
+
+    let manager = init_global_path_manager()?;
+    match GLOBAL_PATH_MANAGER.set(Arc::clone(&manager)) {
+        Ok(()) => Ok(manager),
+        Err(_) => Ok(Arc::clone(
+            GLOBAL_PATH_MANAGER
+                .get()
+                .expect("GLOBAL_PATH_MANAGER should be initialized after set failure"),
+        )),
+    }
 }
