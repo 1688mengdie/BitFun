@@ -616,6 +616,7 @@ mod tests {
             agent_type: None,
             session_id: None,
             dialog_turn_id: None,
+            workspace: None,
             safe_mode: None,
             abort_controller: None,
             read_file_timestamps: HashMap::new(),

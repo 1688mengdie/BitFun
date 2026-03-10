@@ -1,7 +1,7 @@
  
 
 import { createLogger } from '../../../shared/utils/logger';
-import { agentAPI, globalAPI } from '../../api';
+import { agentAPI } from '../../api';
 import { i18nService } from '@/infrastructure/i18n';
 
 const logger = createLogger('AgentService');
@@ -25,24 +25,29 @@ export interface AgentExecutionRequest {
   agent_type: string;
   prompt: string;
   model_name?: string;
+  workspace_path?: string;
   context?: Record<string, string>;
   verbose?: boolean;
 }
 
  
 class SessionManager {
-  private sessions = new Map<string, string>(); // agentType -> sessionId
+  private sessions = new Map<string, string>(); // workspacePath::agentType -> sessionId
 
-  getSession(agentType: string): string | undefined {
-    return this.sessions.get(agentType);
+  private buildKey(agentType: string, workspacePath: string): string {
+    return `${workspacePath}::${agentType}`;
   }
 
-  setSession(agentType: string, sessionId: string): void {
-    this.sessions.set(agentType, sessionId);
+  getSession(agentType: string, workspacePath: string): string | undefined {
+    return this.sessions.get(this.buildKey(agentType, workspacePath));
   }
 
-  deleteSession(agentType: string): void {
-    this.sessions.delete(agentType);
+  setSession(agentType: string, workspacePath: string, sessionId: string): void {
+    this.sessions.set(this.buildKey(agentType, workspacePath), sessionId);
+  }
+
+  deleteSession(agentType: string, workspacePath: string): void {
+    this.sessions.delete(this.buildKey(agentType, workspacePath));
   }
 
   clear(): void {
@@ -54,9 +59,9 @@ export class AgentService {
   private static sessionManager = new SessionManager();
 
    
-  static async getOrCreateSession(agentType: string, modelName?: string): Promise<string> {
+  static async getOrCreateSession(agentType: string, workspacePath: string, modelName?: string): Promise<string> {
     
-    const existingSessionId = this.sessionManager.getSession(agentType);
+    const existingSessionId = this.sessionManager.getSession(agentType, workspacePath);
     if (existingSessionId) {
       logger.debug(`Using existing session: ${existingSessionId}`);
       return existingSessionId;
@@ -66,11 +71,6 @@ export class AgentService {
     logger.info(`Creating new session: ${agentType}`);
 
     try {
-      const workspacePath = await globalAPI.getCurrentWorkspacePath();
-      if (!workspacePath) {
-        throw new Error('Workspace path is required to create an agent session');
-      }
-
       const response = await agentAPI.createSession({
         sessionName: `${agentType}-session-${Date.now()}`,
         agentType,
@@ -83,7 +83,7 @@ export class AgentService {
           enableContextCompression: true,
         }
       });
-      this.sessionManager.setSession(agentType, response.sessionId);
+      this.sessionManager.setSession(agentType, workspacePath, response.sessionId);
       logger.info(`Session created: ${response.sessionId}`);
       return response.sessionId;
     } catch (error) {
@@ -113,11 +113,11 @@ export class AgentService {
 
     try {
       
-      const sessionId = await this.getOrCreateSession(request.agent_type, request.model_name);
-      const workspacePath = await globalAPI.getCurrentWorkspacePath();
+      const workspacePath = request.workspace_path;
       if (!workspacePath) {
         throw new Error('Workspace path is required to start an agent task');
       }
+      const sessionId = await this.getOrCreateSession(request.agent_type, workspacePath, request.model_name);
 
       
       const unlistenFunctions: Array<() => void> = [];

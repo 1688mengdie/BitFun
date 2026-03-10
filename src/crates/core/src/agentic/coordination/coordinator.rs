@@ -14,9 +14,10 @@ use crate::agentic::execution::{ExecutionContext, ExecutionEngine};
 use crate::agentic::image_analysis::ImageContextData;
 use crate::agentic::session::SessionManager;
 use crate::agentic::tools::pipeline::{SubagentParentInfo, ToolPipeline};
+use crate::agentic::WorkspaceBinding;
 use crate::util::errors::{BitFunError, BitFunResult};
 use log::{debug, error, info, warn};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::OnceLock;
 use tokio::sync::mpsc;
@@ -90,6 +91,17 @@ pub struct ConversationCoordinator {
 }
 
 impl ConversationCoordinator {
+    fn session_workspace_binding(session: &Session) -> Option<WorkspaceBinding> {
+        Self::config_workspace_binding(&session.config)
+    }
+
+    fn config_workspace_binding(config: &SessionConfig) -> Option<WorkspaceBinding> {
+        config
+            .workspace_path
+            .as_ref()
+            .map(|workspace_path| WorkspaceBinding::new(None, PathBuf::from(workspace_path)))
+    }
+
     pub fn new(
         session_manager: Arc<SessionManager>,
         execution_engine: Arc<ExecutionEngine>,
@@ -353,10 +365,18 @@ impl ConversationCoordinator {
             .await
     }
 
-    async fn wrap_user_input(&self, agent_type: &str, user_input: String) -> BitFunResult<String> {
+    async fn wrap_user_input(
+        &self,
+        agent_type: &str,
+        user_input: String,
+        workspace: Option<&WorkspaceBinding>,
+    ) -> BitFunResult<String> {
         let agent_registry = get_agent_registry();
+        if let Some(workspace) = workspace {
+            agent_registry.load_custom_subagents(workspace.root_path()).await;
+        }
         let current_agent = agent_registry
-            .get_agent(&agent_type)
+            .get_agent(agent_type, workspace.map(|binding| binding.root_path()))
             .ok_or_else(|| BitFunError::NotFound(format!("Agent not found: {}", agent_type)))?;
         let system_reminder = current_agent.get_system_reminder(0).await?;
 
@@ -433,6 +453,7 @@ impl ConversationCoordinator {
         image_contexts: Option<Vec<ImageContextData>>,
         session_id: &str,
         image_metadata: Option<serde_json::Value>,
+        workspace: Option<WorkspaceBinding>,
     ) -> BitFunResult<(String, Option<Vec<ImageContextData>>)> {
         let images = match &image_contexts {
             Some(imgs) if !imgs.is_empty() => imgs,
@@ -474,12 +495,16 @@ impl ConversationCoordinator {
             }
         };
 
-        let workspace_path = crate::infrastructure::get_workspace_path();
+        let workspace_path = workspace.map(|binding| binding.root_path);
+        let request_workspace_path = workspace_path
+            .as_ref()
+            .map(|path| path.to_string_lossy().to_string());
         let analyzer = ImageAnalyzer::new(workspace_path, vision_client);
         let request = AnalyzeImagesRequest {
             images: images.clone(),
             user_message: Some(user_input.clone()),
             session_id: session_id.to_string(),
+            workspace_path: request_workspace_path,
         };
 
         self.emit_event(AgenticEvent::ImageAnalysisStarted {
@@ -773,17 +798,19 @@ impl ConversationCoordinator {
         // vision model to pre-analyze them, then enhance the user message with text descriptions.
         // This is the single authoritative code path for all image handling (desktop, remote, bot).
         // If no vision model is configured, the request is rejected with a user-friendly message.
+        let session_workspace = Self::session_workspace_binding(&session);
         let (user_input, image_contexts) = self
             .pre_analyze_images_if_needed(
                 user_input,
                 image_contexts,
                 &session_id,
                 user_message_metadata.clone(),
+                session_workspace.clone(),
             )
             .await?;
 
         let wrapped_user_input = self
-            .wrap_user_input(&effective_agent_type, user_input)
+            .wrap_user_input(&effective_agent_type, user_input, session_workspace.as_ref())
             .await?;
 
         // Start new dialog turn (sets state to Processing internally)
@@ -847,12 +874,16 @@ impl ConversationCoordinator {
 
         // Pass turn_index (for operation history/rollback)
         context_vars.insert("turn_index".to_string(), turn_index.to_string());
+        let session_workspace_path = session_workspace
+            .as_ref()
+            .map(|workspace| workspace.root_path_string());
 
         let execution_context = ExecutionContext {
             session_id: session_id.clone(),
             dialog_turn_id: turn_id.clone(),
             turn_index,
             agent_type: effective_agent_type.clone(),
+            workspace: session_workspace,
             context: context_vars,
             subagent_parent_info: None,
             skip_tool_confirmation: trigger_source.skip_tool_confirmation(),
@@ -906,7 +937,6 @@ impl ConversationCoordinator {
         let event_queue = self.event_queue.clone();
         let session_id_clone = session_id.clone();
         let turn_id_clone = turn_id.clone();
-        let session_workspace_path = session.config.workspace_path.clone();
         let user_input_for_workspace = wrapped_user_input.clone();
         let effective_agent_type_clone = effective_agent_type.clone();
         let user_message_metadata_clone = user_message_metadata;
@@ -916,19 +946,6 @@ impl ConversationCoordinator {
             // Note: Don't check cancellation here as cancel token hasn't been created yet
             // Cancel token is created in execute_dialog_turn -> execute_round
             // execute_dialog_turn has proper cancellation checks internally
-
-            if let Some(ref workspace_path) = session_workspace_path {
-                use crate::infrastructure::{get_workspace_path, set_workspace_path};
-
-                let current = get_workspace_path().map(|p| p.to_string_lossy().to_string());
-                if current.as_deref() != Some(workspace_path.as_str()) {
-                    info!(
-                        "Activating session workspace before dialog turn: session_id={}, workspace_path={}",
-                        session_id_clone, workspace_path
-                    );
-                    set_workspace_path(Some(std::path::PathBuf::from(workspace_path)));
-                }
-            }
 
             let _ = session_manager
                 .update_session_state(
@@ -1316,6 +1333,7 @@ impl ConversationCoordinator {
             dialog_turn_id: dialog_turn_id.clone(),
             turn_index: 0,
             agent_type: agent_type.clone(),
+            workspace: Self::session_workspace_binding(&session),
             context: context.unwrap_or_default(),
             subagent_parent_info: Some(subagent_parent_info),
             skip_tool_confirmation: false,
@@ -1396,20 +1414,27 @@ impl ConversationCoordinator {
         );
 
         // Clean up snapshot system resources
-        use crate::service::snapshot::get_global_snapshot_manager;
-        if let Some(snapshot_manager) = get_global_snapshot_manager() {
-            let snapshot_service = snapshot_manager.get_snapshot_service();
-            let snapshot_service = snapshot_service.read().await;
-            if let Err(e) = snapshot_service.accept_session(session_id).await {
-                warn!(
-                    "Failed to cleanup snapshot system resources: session={}, error={}",
-                    session_id, e
-                );
-            } else {
-                debug!(
-                    "Snapshot system resources cleaned up: session={}",
-                    session_id
-                );
+        if let Some(workspace_path) = self
+            .session_manager
+            .get_session(session_id)
+            .and_then(|session| session.config.workspace_path.map(std::path::PathBuf::from))
+        {
+            if let Ok(snapshot_manager) =
+                crate::service::snapshot::ensure_snapshot_manager_for_workspace(&workspace_path)
+            {
+                let snapshot_service = snapshot_manager.get_snapshot_service();
+                let snapshot_service = snapshot_service.read().await;
+                if let Err(e) = snapshot_service.accept_session(session_id).await {
+                    warn!(
+                        "Failed to cleanup snapshot system resources: session={}, error={}",
+                        session_id, e
+                    );
+                } else {
+                    debug!(
+                        "Snapshot system resources cleaned up: session={}",
+                        session_id
+                    );
+                }
             }
         }
 

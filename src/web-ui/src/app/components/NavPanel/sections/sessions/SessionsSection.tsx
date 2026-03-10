@@ -15,8 +15,8 @@ import type { FlowChatState, Session } from '../../../../../flow_chat/types/flow
 import { useSceneStore } from '../../../../stores/sceneStore';
 import { useApp } from '../../../../hooks/useApp';
 import type { SceneTabId } from '../../../SceneBar/types';
+import { useWorkspaceContext } from '@/infrastructure/contexts/WorkspaceContext';
 import { createLogger } from '@/shared/utils/logger';
-import { workspaceManager } from '@/infrastructure/services/business/workspaceManager';
 import './SessionsSection.scss';
 
 const MAX_VISIBLE_SESSIONS = 8;
@@ -45,6 +45,7 @@ const SessionsSection: React.FC<SessionsSectionProps> = ({
 }) => {
   const { t } = useI18n('common');
   const { switchLeftPanelTab } = useApp();
+  const { setActiveWorkspace } = useWorkspaceContext();
   const openScene = useSceneStore(s => s.openScene);
   const activeTabId = useSceneStore(s => s.activeTabId);
   const [flowChatState, setFlowChatState] = useState<FlowChatState>(() =>
@@ -54,20 +55,10 @@ const SessionsSection: React.FC<SessionsSectionProps> = ({
   const [editingTitle, setEditingTitle] = useState('');
   const [showAll, setShowAll] = useState(false);
   const editInputRef = useRef<HTMLInputElement>(null);
-  const [currentWorkspacePath, setCurrentWorkspacePath] = useState<string>(
-    () => workspaceManager.getWorkspacePath()
-  );
 
   useEffect(() => {
     const unsub = flowChatStore.subscribe(s => setFlowChatState(s));
     return () => unsub();
-  }, []);
-
-  useEffect(() => {
-    const removeListener = workspaceManager.addEventListener(() => {
-      setCurrentWorkspacePath(workspaceManager.getWorkspacePath());
-    });
-    return removeListener;
   }, []);
 
   useEffect(() => {
@@ -86,15 +77,14 @@ const SessionsSection: React.FC<SessionsSectionProps> = ({
       Array.from(flowChatState.sessions.values())
         .filter((s: Session) => {
           if (workspacePath) {
-            return s.workspacePath === workspacePath || (!s.workspacePath && isActiveWorkspace);
+            return s.workspacePath === workspacePath;
           }
-          if (!s.workspacePath || !currentWorkspacePath) return true;
-          return s.workspacePath === currentWorkspacePath;
+          return !s.workspacePath;
         })
         .sort(
           (a: Session, b: Session) => b.lastActiveAt - a.lastActiveAt
         ),
-    [flowChatState.sessions, currentWorkspacePath, isActiveWorkspace, workspacePath]
+    [flowChatState.sessions, workspacePath]
   );
 
   const sessionDisplayLimit = useMemo(() => {
@@ -129,7 +119,7 @@ const SessionsSection: React.FC<SessionsSectionProps> = ({
       if (sessionId === activeSessionId) return;
       try {
         if (workspaceId && !isActiveWorkspace) {
-          await workspaceManager.setActiveWorkspace(workspaceId);
+          await setActiveWorkspace(workspaceId);
         }
         await flowChatManager.switchChatSession(sessionId);
         window.dispatchEvent(
@@ -139,7 +129,7 @@ const SessionsSection: React.FC<SessionsSectionProps> = ({
         log.error('Failed to switch session', err);
       }
     },
-    [activeSessionId, editingSessionId, isActiveWorkspace, openScene, switchLeftPanelTab, workspaceId]
+    [activeSessionId, editingSessionId, isActiveWorkspace, openScene, setActiveWorkspace, switchLeftPanelTab, workspaceId]
   );
 
   const resolveSessionTitle = useCallback(

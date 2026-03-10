@@ -8,7 +8,6 @@ use super::manager::{
 };
 use crate::infrastructure::{PathManager, try_get_path_manager_arc};
 use crate::infrastructure::storage::{PersistenceService, StorageOptions};
-use crate::infrastructure::set_workspace_path;
 use crate::util::errors::*;
 use log::{info, warn};
 
@@ -115,7 +114,6 @@ impl WorkspaceService {
             if let Err(e) = self.save_workspace_data().await {
                 warn!("Failed to save workspace data after opening: {}", e);
             }
-            self.sync_global_workspace_path().await;
         }
 
         result
@@ -153,7 +151,6 @@ impl WorkspaceService {
             .insert(workspace.id.clone(), workspace.clone());
 
         drop(manager);
-        self.sync_global_workspace_path().await;
 
         Ok(workspace)
     }
@@ -169,7 +166,6 @@ impl WorkspaceService {
             if let Err(e) = self.save_workspace_data().await {
                 warn!("Failed to save workspace data after closing: {}", e);
             }
-            self.sync_global_workspace_path().await;
         }
 
         result
@@ -186,7 +182,6 @@ impl WorkspaceService {
             if let Err(e) = self.save_workspace_data().await {
                 warn!("Failed to save workspace data after closing: {}", e);
             }
-            self.sync_global_workspace_path().await;
         }
 
         result
@@ -203,7 +198,6 @@ impl WorkspaceService {
             if let Err(e) = self.save_workspace_data().await {
                 warn!("Failed to save workspace data after switching active workspace: {}", e);
             }
-            self.sync_global_workspace_path().await;
         }
 
         result
@@ -218,6 +212,14 @@ impl WorkspaceService {
     pub async fn get_current_workspace(&self) -> Option<WorkspaceInfo> {
         let manager = self.manager.read().await;
         manager.get_current_workspace().cloned()
+    }
+
+    /// Best-effort synchronous read for contexts that cannot `await`.
+    pub fn try_get_current_workspace_path(&self) -> Option<PathBuf> {
+        self.manager
+            .try_read()
+            .ok()
+            .and_then(|manager| manager.get_current_workspace().map(|workspace| workspace.root_path.clone()))
     }
 
     /// Returns workspace details.
@@ -300,7 +302,6 @@ impl WorkspaceService {
             if let Err(e) = self.save_workspace_data().await {
                 warn!("Failed to save workspace data after removal: {}", e);
             }
-            self.sync_global_workspace_path().await;
         }
 
         result
@@ -447,7 +448,6 @@ impl WorkspaceService {
         };
 
         if result.is_ok() {
-            self.sync_global_workspace_path().await;
         }
 
         result
@@ -584,7 +584,6 @@ impl WorkspaceService {
         }
 
         drop(manager);
-        self.sync_global_workspace_path().await;
 
         Ok(result)
     }
@@ -626,14 +625,6 @@ impl WorkspaceService {
             .map_err(|e| BitFunError::service(format!("Failed to save workspace data: {}", e)))?;
 
         Ok(())
-    }
-
-    async fn sync_global_workspace_path(&self) {
-        let path = self
-            .get_current_workspace()
-            .await
-            .map(|workspace| workspace.root_path);
-        set_workspace_path(path);
     }
 
     /// Loads workspace data from local storage.

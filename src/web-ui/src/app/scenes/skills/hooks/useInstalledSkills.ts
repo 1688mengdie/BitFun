@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { open } from '@tauri-apps/plugin-dialog';
 import { useTranslation } from 'react-i18next';
 import { configAPI } from '@/infrastructure/api';
 import type { SkillInfo, SkillLevel, SkillValidationResult } from '@/infrastructure/config/types';
-import { useCurrentWorkspace } from '@/infrastructure/hooks/useWorkspace';
+import { useCurrentWorkspace } from '@/infrastructure/contexts/WorkspaceContext';
 import { useNotification } from '@/shared/notification-system';
 import { createLogger } from '@/shared/utils/logger';
 import type { InstalledFilter } from '../skillsSceneStore';
@@ -29,20 +29,34 @@ export function useInstalledSkills({ searchQuery, activeFilter }: UseInstalledSk
   const [validationResult, setValidationResult] = useState<SkillValidationResult | null>(null);
   const [isValidating, setIsValidating] = useState(false);
   const [isAdding, setIsAdding] = useState(false);
+  const loadRequestIdRef = useRef(0);
 
   const loadSkills = useCallback(async (forceRefresh?: boolean) => {
+    const requestId = ++loadRequestIdRef.current;
+
     try {
       setLoading(true);
       setError(null);
-      const list = await configAPI.getSkillConfigs(forceRefresh);
+      const list = await configAPI.getSkillConfigs({
+        forceRefresh,
+        workspacePath: workspacePath || undefined,
+      });
+      if (requestId !== loadRequestIdRef.current) {
+        return;
+      }
       setSkills(list);
     } catch (err) {
+      if (requestId !== loadRequestIdRef.current) {
+        return;
+      }
       log.error('Failed to load skills', err);
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setLoading(false);
+      if (requestId === loadRequestIdRef.current) {
+        setLoading(false);
+      }
     }
-  }, []);
+  }, [workspacePath]);
 
   useEffect(() => {
     loadSkills();
@@ -106,7 +120,11 @@ export function useInstalledSkills({ searchQuery, activeFilter }: UseInstalledSk
     }
     try {
       setIsAdding(true);
-      await configAPI.addSkill(formPath, formLevel);
+      await configAPI.addSkill({
+        sourcePath: formPath,
+        level: formLevel,
+        workspacePath: workspacePath || undefined,
+      });
       notification.success(t('messages.addSuccess', { name: validationResult.name }));
       resetForm();
       await loadSkills(true);
@@ -121,11 +139,14 @@ export function useInstalledSkills({ searchQuery, activeFilter }: UseInstalledSk
     } finally {
       setIsAdding(false);
     }
-  }, [formLevel, formPath, hasWorkspace, loadSkills, notification, resetForm, t, validationResult]);
+  }, [formLevel, formPath, hasWorkspace, loadSkills, notification, resetForm, t, validationResult, workspacePath]);
 
   const handleDelete = useCallback(async (skill: SkillInfo) => {
     try {
-      await configAPI.deleteSkill(skill.name);
+      await configAPI.deleteSkill({
+        skillName: skill.name,
+        workspacePath: workspacePath || undefined,
+      });
       notification.success(t('messages.deleteSuccess', { name: skill.name }));
       await loadSkills(true);
       return true;
@@ -137,7 +158,7 @@ export function useInstalledSkills({ searchQuery, activeFilter }: UseInstalledSk
       );
       return false;
     }
-  }, [loadSkills, notification, t]);
+  }, [loadSkills, notification, t, workspacePath]);
 
   const normalizedQuery = searchQuery.trim().toLowerCase();
 

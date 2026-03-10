@@ -12,8 +12,9 @@ pub use events::{
     SnapshotEvent, SnapshotEventEmitter,
 };
 pub use manager::{
-    ensure_global_snapshot_manager, get_global_snapshot_manager,
-    initialize_global_snapshot_manager, SnapshotManager,
+    ensure_snapshot_manager_for_workspace, get_or_create_snapshot_manager,
+    get_snapshot_manager_for_workspace, get_snapshot_wrapped_tools,
+    initialize_snapshot_manager_for_workspace, SnapshotManager,
 };
 pub use service::{SnapshotService, SystemStats};
 pub use snapshot_core::{FileChangeEntry, FileChangeQueue, SessionStats, SnapshotCore};

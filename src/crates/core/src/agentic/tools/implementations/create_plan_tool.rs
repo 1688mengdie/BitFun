@@ -3,7 +3,7 @@
 //! Used to create and store plan files during the planning phase
 
 use crate::agentic::tools::framework::{Tool, ToolResult, ToolUseContext};
-use crate::infrastructure::{get_path_manager_arc, get_workspace_path};
+use crate::infrastructure::get_path_manager_arc;
 use crate::util::errors::{BitFunError, BitFunResult};
 use async_trait::async_trait;
 use serde::Serialize;
@@ -146,7 +146,7 @@ Additional guidelines:
     async fn call_impl(
         &self,
         input: &Value,
-        _context: &ToolUseContext,
+        context: &ToolUseContext,
     ) -> BitFunResult<Vec<ToolResult>> {
         // Parse parameters
         let name = input
@@ -184,8 +184,9 @@ Additional guidelines:
         let plan_file_name = format!("{}_{}.plan.md", name_normalized, uuid_short);
 
         // Get workspace path
-        let workspace_path =
-            get_workspace_path().ok_or(BitFunError::tool("Workspace path not set".to_string()))?;
+        let workspace_path = context
+            .workspace_root()
+            .ok_or(BitFunError::tool("Workspace path not set".to_string()))?;
 
         // Use global PathManager to get plans directory path
         let path_manager = get_path_manager_arc();

@@ -7,7 +7,7 @@
  * - ApiClient internally uses TransportAdapter, supporting multiple platforms
  */
 
-import { agentAPI } from '@/infrastructure/api';
+import { agentAPI } from '@/infrastructure/api/service-api/AgentAPI';
 import type { TextChunkEvent, ToolEvent, AgenticEvent, SessionTitleGeneratedEvent, ImageAnalysisEvent } from '@/infrastructure/api/service-api/AgentAPI';
 import { createLogger } from '@/shared/utils/logger';
 

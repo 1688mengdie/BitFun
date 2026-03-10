@@ -6,7 +6,7 @@
 
 use super::builtin::ensure_builtin_skills_installed;
 use super::types::{SkillData, SkillInfo, SkillLocation};
-use crate::infrastructure::{get_path_manager_arc, get_workspace_path};
+use crate::infrastructure::get_path_manager_arc;
 use crate::util::errors::{BitFunError, BitFunResult};
 use log::{debug, error};
 use std::collections::HashMap;
@@ -50,6 +50,83 @@ pub struct SkillRegistry {
 }
 
 impl SkillRegistry {
+    fn get_possible_paths_for_workspace(workspace_root: Option<&Path>) -> Vec<SkillDirEntry> {
+        let mut entries = Vec::new();
+
+        if let Some(workspace_path) = workspace_root {
+            for (parent, sub) in PROJECT_SKILL_SUBDIRS {
+                let p = workspace_path.join(parent).join(sub);
+                if p.exists() && p.is_dir() {
+                    entries.push(SkillDirEntry {
+                        path: p,
+                        level: SkillLocation::Project,
+                    });
+                }
+            }
+        }
+
+        let pm = get_path_manager_arc();
+        let bitfun_skills = pm.user_skills_dir();
+        if bitfun_skills.exists() && bitfun_skills.is_dir() {
+            entries.push(SkillDirEntry {
+                path: bitfun_skills,
+                level: SkillLocation::User,
+            });
+        }
+
+        if let Some(home) = dirs::home_dir() {
+            for (parent, sub) in USER_HOME_SKILL_SUBDIRS {
+                let p = home.join(parent).join(sub);
+                if p.exists() && p.is_dir() {
+                    entries.push(SkillDirEntry {
+                        path: p,
+                        level: SkillLocation::User,
+                    });
+                }
+            }
+        }
+
+        if let Some(config_dir) = dirs::config_dir() {
+            let p = config_dir.join("agents").join("skills");
+            if p.exists() && p.is_dir() {
+                entries.push(SkillDirEntry {
+                    path: p,
+                    level: SkillLocation::User,
+                });
+            }
+        }
+
+        entries
+    }
+
+    async fn scan_skill_map_for_workspace(
+        &self,
+        workspace_root: Option<&Path>,
+    ) -> HashMap<String, SkillInfo> {
+        if let Err(e) = ensure_builtin_skills_installed().await {
+            debug!("Failed to install built-in skills: {}", e);
+        }
+
+        let mut by_name: HashMap<String, SkillInfo> = HashMap::new();
+        for entry in Self::get_possible_paths_for_workspace(workspace_root) {
+            let skills = Self::scan_skills_in_dir(&entry.path, entry.level).await;
+            for info in skills {
+                by_name.entry(info.name.clone()).or_insert(info);
+            }
+        }
+        by_name
+    }
+
+    async fn find_skill_in_map(
+        &self,
+        skill_name: &str,
+        workspace_root: Option<&Path>,
+    ) -> Option<SkillInfo> {
+        self.scan_skill_map_for_workspace(workspace_root)
+            .await
+            .remove(skill_name)
+    }
+
     /// Create new registry instance
     fn new() -> Self {
         Self {
@@ -68,56 +145,7 @@ impl SkillRegistry {
     /// - Project-level: .bitfun/skills, .claude/skills, .cursor/skills, .codex/skills, .agents/skills under workspace
     /// - User-level: skills under bitfun user config, ~/.claude/skills, ~/.cursor/skills, ~/.codex/skills, ~/.config/agents/skills
     pub fn get_possible_paths() -> Vec<SkillDirEntry> {
-        let mut entries = Vec::new();
-
-        // Project-level Skill paths
-        if let Some(workspace_path) = get_workspace_path() {
-            for (parent, sub) in PROJECT_SKILL_SUBDIRS {
-                let p = workspace_path.join(parent).join(sub);
-                if p.exists() && p.is_dir() {
-                    entries.push(SkillDirEntry {
-                        path: p,
-                        level: SkillLocation::Project,
-                    });
-                }
-            }
-        }
-
-        // User-level: skills under bitfun user config
-        let pm = get_path_manager_arc();
-        let bitfun_skills = pm.user_skills_dir();
-        if bitfun_skills.exists() && bitfun_skills.is_dir() {
-            entries.push(SkillDirEntry {
-                path: bitfun_skills,
-                level: SkillLocation::User,
-            });
-        }
-
-        // User-level: ~/.claude/skills, ~/.cursor/skills, ~/.codex/skills
-        if let Some(home) = dirs::home_dir() {
-            for (parent, sub) in USER_HOME_SKILL_SUBDIRS {
-                let p = home.join(parent).join(sub);
-                if p.exists() && p.is_dir() {
-                    entries.push(SkillDirEntry {
-                        path: p,
-                        level: SkillLocation::User,
-                    });
-                }
-            }
-        }
-
-        // User-level: ~/.config/agents/skills (used by universal agent installs in skills CLI)
-        if let Some(config_dir) = dirs::config_dir() {
-            let p = config_dir.join("agents").join("skills");
-            if p.exists() && p.is_dir() {
-                entries.push(SkillDirEntry {
-                    path: p,
-                    level: SkillLocation::User,
-                });
-            }
-        }
-
-        entries
+        Self::get_possible_paths_for_workspace(None)
     }
 
     /// Scan directory to get all skill information
@@ -186,6 +214,13 @@ impl SkillRegistry {
         debug!("SkillRegistry refreshed, {} skills loaded", cache.len());
     }
 
+    pub async fn refresh_for_workspace(&self, workspace_root: Option<&Path>) {
+        let by_name = self.scan_skill_map_for_workspace(workspace_root).await;
+        let mut cache = self.cache.write().await;
+        *cache = by_name;
+        debug!("SkillRegistry refreshed for workspace, {} skills loaded", cache.len());
+    }
+
     /// Ensure cache is initialized
     async fn ensure_loaded(&self) {
         let cache = self.cache.read().await;
@@ -202,6 +237,13 @@ impl SkillRegistry {
         self.ensure_loaded().await;
         let cache = self.cache.read().await;
         cache.values().cloned().collect()
+    }
+
+    pub async fn get_all_skills_for_workspace(&self, workspace_root: Option<&Path>) -> Vec<SkillInfo> {
+        self.scan_skill_map_for_workspace(workspace_root)
+            .await
+            .into_values()
+            .collect()
     }
 
     /// Get all enabled skills (for tool description)
@@ -241,6 +283,24 @@ impl SkillRegistry {
     /// Find SKILL.md path by name
     pub async fn find_skill_path(&self, skill_name: &str) -> Option<PathBuf> {
         self.find_skill(skill_name)
+            .await
+            .map(|info| PathBuf::from(&info.path).join("SKILL.md"))
+    }
+
+    pub async fn find_skill_for_workspace(
+        &self,
+        skill_name: &str,
+        workspace_root: Option<&Path>,
+    ) -> Option<SkillInfo> {
+        self.find_skill_in_map(skill_name, workspace_root).await
+    }
+
+    pub async fn find_skill_path_for_workspace(
+        &self,
+        skill_name: &str,
+        workspace_root: Option<&Path>,
+    ) -> Option<PathBuf> {
+        self.find_skill_for_workspace(skill_name, workspace_root)
             .await
             .map(|info| PathBuf::from(&info.path).join("SKILL.md"))
     }
@@ -295,5 +355,42 @@ impl SkillRegistry {
             "Skill '{}' not found",
             skill_name
         )))
+    }
+
+    pub async fn get_enabled_skills_xml_for_workspace(
+        &self,
+        workspace_root: Option<&Path>,
+    ) -> Vec<String> {
+        self.scan_skill_map_for_workspace(workspace_root)
+            .await
+            .into_values()
+            .filter(|skill| skill.enabled)
+            .map(|skill| skill.to_xml_desc())
+            .collect()
+    }
+
+    pub async fn find_and_load_skill_for_workspace(
+        &self,
+        skill_name: &str,
+        workspace_root: Option<&Path>,
+    ) -> BitFunResult<SkillData> {
+        let skill_map = self.scan_skill_map_for_workspace(workspace_root).await;
+        let info = skill_map.get(skill_name).ok_or_else(|| {
+            BitFunError::tool(format!("Skill '{}' not found", skill_name))
+        })?;
+
+        if !info.enabled {
+            return Err(BitFunError::tool(format!(
+                "Skill '{}' is disabled",
+                skill_name
+            )));
+        }
+
+        let skill_md_path = PathBuf::from(&info.path).join("SKILL.md");
+        let content = fs::read_to_string(&skill_md_path)
+            .await
+            .map_err(|e| BitFunError::tool(format!("Failed to read skill file: {}", e)))?;
+
+        SkillData::from_markdown(info.path.clone(), &content, info.level, true)
     }
 }

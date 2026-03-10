@@ -11,7 +11,7 @@ import type { ToolCardProps } from '../types/flow-chat';
 import { BaseToolCard, ToolCardHeader } from './BaseToolCard';
 import { useSnapshotState } from '../../tools/snapshot_system/hooks/useSnapshotState';
 import { SnapshotEventBus, SNAPSHOT_EVENTS } from '../../tools/snapshot_system/core/SnapshotEventBus';
-import { useWorkspace } from '../../infrastructure/hooks/useWorkspace';
+import { useCurrentWorkspace } from '../../infrastructure/contexts/WorkspaceContext';
 import { createCodeEditorTab, createDiffEditorTab } from '../../shared/utils/tabUtils';
 import { CodePreview } from '../components/CodePreview';
 import { InlineDiffPreview } from '../components/InlineDiffPreview';
@@ -66,7 +66,7 @@ export const FileOperationToolCard: React.FC<FileOperationToolCardProps> = ({
   } = useSnapshotState(sessionId);
 
   const eventBus = SnapshotEventBus.getInstance();
-  const { currentWorkspace } = useWorkspace();
+  const { workspace: currentWorkspace } = useCurrentWorkspace();
 
   const getFilePath = useCallback((): string => {
     const params = partialParams || toolCall?.input;
@@ -284,7 +284,10 @@ export const FileOperationToolCard: React.FC<FileOperationToolCardProps> = ({
     try {
       const { snapshotAPI } = await import('../../infrastructure/api');
       
-      const diffData = await snapshotAPI.getBaselineSnapshotDiff(currentFile.filePath);
+      const diffData = await snapshotAPI.getBaselineSnapshotDiff(
+        currentFile.filePath,
+        currentWorkspace.rootPath
+      );
 
       window.dispatchEvent(new CustomEvent('expand-right-panel'));
 

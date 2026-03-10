@@ -24,6 +24,7 @@ pub mod image_analysis;
 
 // Agents module
 pub mod agents;
+pub mod workspace;
 
 mod util;
 
@@ -35,3 +36,4 @@ pub use execution::*;
 pub use image_analysis::{ImageAnalyzer, MessageEnhancer};
 pub use persistence::PersistenceManager;
 pub use session::*;
+pub use workspace::WorkspaceBinding;

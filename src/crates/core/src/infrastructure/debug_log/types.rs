@@ -4,7 +4,7 @@
 //! and writes them to the local NDJSON log file.
 
 use super::{DebugLogConfig, DebugLogEntry};
-use crate::infrastructure::get_workspace_path;
+use crate::service::workspace::get_global_workspace_service;
 use anyhow::Result;
 use log::debug;
 use std::path::PathBuf;
@@ -109,7 +109,9 @@ pub async fn handle_ingest(
     config: &DebugLogConfig,
 ) -> Result<IngestResponse> {
     let log_config =
-        if let Some(workspace_path) = get_workspace_path() {
+        if let Some(workspace_path) = get_global_workspace_service()
+            .and_then(|service| service.try_get_current_workspace_path())
+        {
             let mut cfg = config.clone();
             cfg.log_path = workspace_path.join(".bitfun").join("debug.log");
             cfg

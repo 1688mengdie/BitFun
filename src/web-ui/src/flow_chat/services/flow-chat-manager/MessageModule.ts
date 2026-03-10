@@ -4,7 +4,7 @@
  */
 
 import { FlowChatStore } from '../../store/FlowChatStore';
-import { agentAPI } from '@/infrastructure/api';
+import { agentAPI } from '@/infrastructure/api/service-api/AgentAPI';
 import { aiExperienceConfigService } from '@/infrastructure/config/services';
 import { notificationService } from '../../../shared/notification-system';
 import { stateMachineManager } from '../../state-machine';

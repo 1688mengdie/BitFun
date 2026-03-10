@@ -10,7 +10,7 @@ import { useTranslation } from 'react-i18next';
 import { useSnapshotState } from '../../../tools/snapshot_system/hooks/useSnapshotState';
 import { createDiffEditorTab } from '../../../shared/utils/tabUtils';
 import { snapshotAPI } from '../../../infrastructure/api';
-import { useWorkspace } from '../../../infrastructure/hooks/useWorkspace';
+import { useCurrentWorkspace } from '../../../infrastructure/contexts/WorkspaceContext';
 import { diffService } from '../../../tools/editor/services';
 import { createLogger } from '@/shared/utils/logger';
 import './SessionFileModificationsBar.scss';
@@ -57,8 +57,7 @@ export const SessionFileModificationsBar: React.FC<SessionFileModificationsBarPr
   const { t } = useTranslation('flow-chat');
   const { files, loading: loadingFiles } = useSnapshotState(sessionId);
 
-
-  const { currentWorkspace } = useWorkspace();
+  const { workspace: currentWorkspace } = useCurrentWorkspace();
 
   const [isExpanded, setIsExpanded] = useState(false);
   const [fileStats, setFileStats] = useState<Map<string, FileStats>>(new Map());

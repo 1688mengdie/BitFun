@@ -7,9 +7,8 @@ pub mod macos_menubar;
 pub mod theme;
 
 use bitfun_core::infrastructure::ai::AIClientFactory;
-use bitfun_core::infrastructure::{
-    get_path_manager_arc, get_workspace_path, try_get_path_manager_arc,
-};
+use bitfun_core::infrastructure::{get_path_manager_arc, try_get_path_manager_arc};
+use bitfun_core::service::workspace::get_global_workspace_service;
 use bitfun_transport::{TauriTransportAdapter, TransportAdapter};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -424,12 +423,16 @@ pub async fn run() {
             rollback_to_turn,
             accept_session,
             accept_file,
+            reject_file,
             get_session_files,
             get_session_turns,
             get_turn_files,
             get_file_diff,
             get_operation_diff,
             get_operation_summary,
+            get_session_operations,
+            accept_operation,
+            reject_operation,
             get_session_stats,
             get_snapshot_system_stats,
             get_snapshot_sessions,
@@ -907,7 +910,8 @@ fn spawn_ingest_server_with_config_listener() {
                 .await
             {
                 let debug_config = &config.ai.debug_mode_config;
-                let workspace_path = get_workspace_path()
+                let workspace_path = get_global_workspace_service()
+                    .and_then(|service| service.try_get_current_workspace_path())
                     .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
 
                 Some(bitfun_core::infrastructure::debug_log::IngestServerConfig::from_debug_mode_config(
@@ -966,7 +970,8 @@ fn spawn_ingest_server_with_config_listener() {
                         new_port,
                         new_log_path,
                     }) => {
-                        let workspace_path = get_workspace_path()
+                        let workspace_path = get_global_workspace_service()
+                            .and_then(|service| service.try_get_current_workspace_path())
                             .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
                         let full_log_path = workspace_path.join(&new_log_path);
 
@@ -981,7 +986,8 @@ fn spawn_ingest_server_with_config_listener() {
                                 .await
                             {
                                 let debug_config = &config.ai.debug_mode_config;
-                                let workspace_path = get_workspace_path()
+                                let workspace_path = get_global_workspace_service()
+                                    .and_then(|service| service.try_get_current_workspace_path())
                                     .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
                                 let full_log_path = workspace_path.join(&debug_config.log_path);
 

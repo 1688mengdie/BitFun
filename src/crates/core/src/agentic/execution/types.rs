@@ -3,6 +3,7 @@
 use crate::agentic::core::Message;
 use crate::agentic::tools::pipeline::SubagentParentInfo;
 use serde_json::Value;
+use crate::agentic::WorkspaceBinding;
 use std::collections::HashMap;
 use tokio_util::sync::CancellationToken;
 
@@ -13,6 +14,7 @@ pub struct ExecutionContext {
     pub dialog_turn_id: String,
     pub turn_index: usize,
     pub agent_type: String,
+    pub workspace: Option<WorkspaceBinding>,
     pub context: HashMap<String, String>,
     pub subagent_parent_info: Option<SubagentParentInfo>,
     pub skip_tool_confirmation: bool,
@@ -26,6 +28,7 @@ pub struct RoundContext {
     pub dialog_turn_id: String,
     pub turn_index: usize,
     pub round_number: usize,
+    pub workspace: Option<WorkspaceBinding>,
     pub messages: Vec<Message>,
     pub available_tools: Vec<String>,
     pub model_name: String,

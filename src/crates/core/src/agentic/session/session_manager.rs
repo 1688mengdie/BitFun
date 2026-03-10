@@ -13,7 +13,7 @@ use crate::infrastructure::ai::get_global_ai_client_factory;
 use crate::service::session::{
     DialogTurnData, ModelRoundData, TextItemData, TurnStatus, UserMessageData,
 };
-use crate::service::snapshot::get_global_snapshot_manager;
+use crate::service::snapshot::ensure_snapshot_manager_for_workspace;
 use crate::util::errors::{BitFunError, BitFunResult};
 use dashmap::DashMap;
 use log::{debug, error, info, warn};
@@ -338,7 +338,7 @@ impl SessionManager {
     /// Delete session (cascade delete all resources)
     pub async fn delete_session(&self, workspace_path: &Path, session_id: &str) -> BitFunResult<()> {
         // 1. Clean up snapshot system resources (including physical snapshot files)
-        if let Some(snapshot_manager) = get_global_snapshot_manager() {
+        if let Ok(snapshot_manager) = ensure_snapshot_manager_for_workspace(workspace_path) {
             let snapshot_service = snapshot_manager.get_snapshot_service();
             let snapshot_service = snapshot_service.read().await;
             if let Err(e) = snapshot_service.accept_session(session_id).await {

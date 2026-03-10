@@ -1,11 +1,13 @@
 //! Tool framework - Tool interface definition and execution context
 use super::image_context::ImageContextProviderRef;
 use super::pipeline::SubagentParentInfo;
+use crate::agentic::WorkspaceBinding;
 use crate::util::errors::BitFunResult;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
+use std::path::Path;
 use tokio_util::sync::CancellationToken;
 
 /// Tool use context
@@ -16,6 +18,7 @@ pub struct ToolUseContext {
     pub agent_type: Option<String>,
     pub session_id: Option<String>,
     pub dialog_turn_id: Option<String>,
+    pub workspace: Option<WorkspaceBinding>,
     pub safe_mode: Option<bool>,
     pub abort_controller: Option<String>,
     pub read_file_timestamps: HashMap<String, u64>,
@@ -26,6 +29,12 @@ pub struct ToolUseContext {
     pub subagent_parent_info: Option<SubagentParentInfo>,
     // Cancel tool execution more timely, especially for tools like TaskTool that need to run for a long time
     pub cancellation_token: Option<CancellationToken>,
+}
+
+impl ToolUseContext {
+    pub fn workspace_root(&self) -> Option<&Path> {
+        self.workspace.as_ref().map(|binding| binding.root_path())
+    }
 }
 
 /// Tool options
@@ -115,6 +124,14 @@ pub trait Tool: Send + Sync {
 
     /// Tool description
     async fn description(&self) -> BitFunResult<String>;
+
+    /// Tool description with execution context.
+    async fn description_with_context(
+        &self,
+        _context: Option<&ToolUseContext>,
+    ) -> BitFunResult<String> {
+        self.description().await
+    }
 
     /// Input mode definition - using JSON Schema
     fn input_schema(&self) -> Value;

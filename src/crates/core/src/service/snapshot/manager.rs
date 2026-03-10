@@ -1,6 +1,5 @@
 use crate::agentic::tools::framework::{Tool, ToolResult, ToolUseContext};
-use crate::agentic::tools::registry::{get_global_tool_registry, ToolRegistry};
-use crate::infrastructure::get_workspace_path;
+use crate::agentic::tools::registry::ToolRegistry;
 use crate::service::snapshot::service::SnapshotService;
 use crate::service::snapshot::types::{
     OperationType, SnapshotConfig, SnapshotError, SnapshotResult,
@@ -8,9 +7,9 @@ use crate::service::snapshot::types::{
 use async_trait::async_trait;
 use log::{debug, error, info, warn};
 use serde_json::Value;
-use std::collections::HashSet;
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, OnceLock, RwLock as StdRwLock};
 use tokio::sync::RwLock;
 
 /// Snapshot manager
@@ -79,10 +78,7 @@ impl SnapshotManager {
 
         for tool in &self.original_tools {
             if self.is_file_modification_tool(tool.name()) {
-                let wrapped_tool: Arc<dyn Tool> = Arc::new(WrappedTool::new(
-                    tool.clone(),
-                    self.snapshot_service.clone(),
-                ));
+                let wrapped_tool: Arc<dyn Tool> = Arc::new(WrappedTool::new(tool.clone()));
                 wrapped_tools.push(wrapped_tool);
             } else {
                 wrapped_tools.push(tool.clone());
@@ -136,6 +132,17 @@ impl SnapshotManager {
         let snapshot_service = self.snapshot_service.read().await;
         let file_path = std::path::Path::new(file_path);
         snapshot_service.accept_file(session_id, file_path).await
+    }
+
+    /// Rejects changes for a single file by restoring its pre-session state.
+    pub async fn reject_file(
+        &self,
+        session_id: &str,
+        file_path: &str,
+    ) -> SnapshotResult<Vec<PathBuf>> {
+        let snapshot_service = self.snapshot_service.read().await;
+        let file_path = std::path::Path::new(file_path);
+        snapshot_service.reject_file(session_id, file_path).await
     }
 
     /// Returns the list of files affected by a session.
@@ -203,6 +210,14 @@ impl SnapshotManager {
             "lines_added": op.diff_summary.lines_added,
             "lines_removed": op.diff_summary.lines_removed,
         }))
+    }
+
+    pub async fn get_session(
+        &self,
+        session_id: &str,
+    ) -> SnapshotResult<crate::service::snapshot::types::SessionInfo> {
+        let snapshot_service = self.snapshot_service.read().await;
+        snapshot_service.get_session(session_id).await
     }
 
     /// Returns session statistics.
@@ -319,20 +334,52 @@ impl SnapshotManager {
     }
 }
 
+fn snapshot_managers() -> &'static StdRwLock<HashMap<PathBuf, Arc<SnapshotManager>>> {
+    static SNAPSHOT_MANAGERS: OnceLock<StdRwLock<HashMap<PathBuf, Arc<SnapshotManager>>>> =
+        OnceLock::new();
+    SNAPSHOT_MANAGERS.get_or_init(|| StdRwLock::new(HashMap::new()))
+}
+
+pub fn get_snapshot_wrapped_tools() -> Vec<Arc<dyn Tool>> {
+    ToolRegistry::new()
+        .get_all_tools()
+        .into_iter()
+        .map(|tool| {
+            if WrappedTool::is_file_modification_tool_name(tool.name()) {
+                Arc::new(WrappedTool::new(tool)) as Arc<dyn Tool>
+            } else {
+                tool
+            }
+        })
+        .collect()
+}
+
 /// Wrapped tool
 ///
 /// Wraps file-modification tools with snapshot functionality.
 struct WrappedTool {
     original_tool: Arc<dyn Tool>,
-    snapshot_service: Arc<RwLock<SnapshotService>>,
 }
 
 impl WrappedTool {
-    fn new(original_tool: Arc<dyn Tool>, snapshot_service: Arc<RwLock<SnapshotService>>) -> Self {
-        Self {
-            original_tool,
-            snapshot_service,
-        }
+    fn new(original_tool: Arc<dyn Tool>) -> Self {
+        Self { original_tool }
+    }
+
+    fn is_file_modification_tool_name(tool_name: &str) -> bool {
+        [
+            "Write",
+            "Edit",
+            "Delete",
+            "write_file",
+            "edit_file",
+            "create_file",
+            "delete_file",
+            "rename_file",
+            "move_file",
+            "search_replace",
+        ]
+        .contains(&tool_name)
     }
 }
 
@@ -419,20 +466,7 @@ impl Tool for WrappedTool {
         input: &Value,
         context: &ToolUseContext,
     ) -> crate::util::errors::BitFunResult<Vec<ToolResult>> {
-        let file_modification_tools = [
-            "Write",
-            "Edit",
-            "Delete",
-            "write_file",
-            "edit_file",
-            "create_file",
-            "delete_file",
-            "rename_file",
-            "move_file",
-            "search_replace",
-        ];
-
-        if file_modification_tools.contains(&self.name()) {
+        if Self::is_file_modification_tool_name(self.name()) {
             debug!(
                 "Intercepting file modification tool: tool_name={}",
                 self.name()
@@ -474,10 +508,18 @@ impl WrappedTool {
             Err(e) => return Err(crate::util::errors::BitFunError::Tool(e.to_string())),
         };
 
-        let snapshot_workspace = {
-            let snapshot_service = self.snapshot_service.read().await;
-            snapshot_service.get_workspace_dir().to_path_buf()
-        };
+        let snapshot_workspace = context
+            .workspace_root()
+            .map(PathBuf::from)
+            .ok_or_else(|| {
+                crate::util::errors::BitFunError::Tool(
+                    "workspace is required in ToolUseContext for snapshot tracking".to_string(),
+                )
+            })?;
+
+        let snapshot_manager = get_or_create_snapshot_manager(snapshot_workspace.clone(), None)
+            .await
+            .map_err(|e| crate::util::errors::BitFunError::Tool(e.to_string()))?;
 
         let file_path = if raw_path.is_absolute() {
             raw_path.clone()
@@ -495,22 +537,6 @@ impl WrappedTool {
                 snapshot_workspace.display()
             );
 
-            if let Some(global_workspace) = get_workspace_path() {
-                let global_resolved = if raw_path.is_absolute() {
-                    raw_path.clone()
-                } else {
-                    global_workspace.join(&raw_path)
-                };
-
-                if global_resolved.exists() && global_resolved != file_path {
-                    error!(
-                        "Workspace path mismatch detected: snapshot_path={} global_path={}",
-                        file_path.display(),
-                        global_resolved.display()
-                    );
-                }
-            }
-
             return Err(crate::util::errors::BitFunError::Tool(format!(
                 "File not found: {} (Snapshot workspace: {})",
                 file_path.display(),
@@ -524,7 +550,8 @@ impl WrappedTool {
 
         let turn_index = self.extract_turn_index(context);
 
-        let snapshot_service = self.snapshot_service.read().await;
+        let snapshot_service = snapshot_manager.get_snapshot_service();
+        let snapshot_service = snapshot_service.read().await;
         let operation_id = snapshot_service
             .intercept_file_modification(
                 &session_id,
@@ -599,46 +626,50 @@ impl WrappedTool {
     }
 }
 
-/// Global snapshot manager instance
-static mut GLOBAL_SNAPSHOT_MANAGER: Option<Arc<SnapshotManager>> = None;
+pub async fn get_or_create_snapshot_manager(
+    workspace_dir: PathBuf,
+    config: Option<SnapshotConfig>,
+) -> SnapshotResult<Arc<SnapshotManager>> {
+    if let Some(existing) = get_snapshot_manager_for_workspace(&workspace_dir) {
+        return Ok(existing);
+    }
 
-/// Initializes the global snapshot manager.
-pub async fn initialize_global_snapshot_manager(
+    let manager = Arc::new(SnapshotManager::new(workspace_dir.clone(), config).await?);
+    {
+        let mut managers = snapshot_managers()
+            .write()
+            .map_err(|_| SnapshotError::ConfigError("Snapshot manager store lock poisoned".to_string()))?;
+        if let Some(existing) = managers.get(&workspace_dir) {
+            return Ok(existing.clone());
+        }
+        managers.insert(workspace_dir, manager.clone());
+    }
+
+    Ok(manager)
+}
+
+pub fn get_snapshot_manager_for_workspace(workspace_dir: &Path) -> Option<Arc<SnapshotManager>> {
+    snapshot_managers()
+        .read()
+        .ok()
+        .and_then(|managers| managers.get(workspace_dir).cloned())
+}
+
+pub fn ensure_snapshot_manager_for_workspace(workspace_dir: &Path) -> SnapshotResult<Arc<SnapshotManager>> {
+    get_snapshot_manager_for_workspace(workspace_dir).ok_or_else(|| {
+        SnapshotError::ConfigError(format!(
+            "Snapshot manager not initialized for workspace: {}",
+            workspace_dir.display()
+        ))
+    })
+}
+
+/// Initializes a snapshot manager for the provided workspace.
+pub async fn initialize_snapshot_manager_for_workspace(
     workspace_dir: PathBuf,
     config: Option<SnapshotConfig>,
 ) -> SnapshotResult<()> {
-    let manager = SnapshotManager::new(workspace_dir, config).await?;
-    let manager_arc = Arc::new(manager);
-
-    unsafe {
-        GLOBAL_SNAPSHOT_MANAGER = Some(manager_arc);
-    }
-
-    if let Some(manager) = get_global_snapshot_manager() {
-        let wrapped_tools = manager.get_wrapped_tools();
-        let registry = get_global_tool_registry();
-        let mut registry_lock = registry.write().await;
-        for tool in wrapped_tools {
-            registry_lock.register_tool(tool);
-        }
-        info!("Refreshed global tool registry for snapshot interception");
-    }
-
-    info!("Global snapshot manager initialized");
+    get_or_create_snapshot_manager(workspace_dir, config).await?;
+    info!("Snapshot manager initialized for workspace");
     Ok(())
-}
-
-/// Gets the global snapshot manager.
-#[allow(static_mut_refs)]
-pub fn get_global_snapshot_manager() -> Option<Arc<SnapshotManager>> {
-    unsafe { GLOBAL_SNAPSHOT_MANAGER.clone() }
-}
-
-/// Ensures the global snapshot manager has been initialized.
-pub fn ensure_global_snapshot_manager() -> SnapshotResult<Arc<SnapshotManager>> {
-    get_global_snapshot_manager().ok_or_else(|| {
-        SnapshotError::ConfigError(
-            "Global snapshot manager not initialized, please call initialize_global_snapshot_manager first".to_string(),
-        )
-    })
 }

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
-import { useWorkspace } from '@/infrastructure/hooks/useWorkspace';
+import { useCurrentWorkspace } from '@/infrastructure/contexts/WorkspaceContext';
 import { gitService } from '@/tools/git/services/GitService';
 import { createLogger } from '@/shared/utils/logger';
 import './ChatEmptyState.scss';
@@ -13,7 +13,7 @@ const log = createLogger('ChatEmptyState');
  */
 export const ChatEmptyState: React.FC = () => {
   const { t } = useTranslation('flow-chat');
-  const { currentWorkspace } = useWorkspace();
+  const { workspace: currentWorkspace } = useCurrentWorkspace();
   const [currentBranch, setCurrentBranch] = useState<string>('');
   const [loading, setLoading] = useState(true);
 

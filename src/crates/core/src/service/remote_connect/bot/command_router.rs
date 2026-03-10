@@ -275,17 +275,6 @@ pub async fn handle_command(
             if images.is_empty() { None } else { Some(&images) },
         );
 
-    // If the bot session has no workspace yet, silently inherit the desktop's
-    // currently-open workspace.  This avoids asking users to run
-    // /switch_workspace right after pairing when the desktop already has a
-    // project open.
-    if state.current_workspace.is_none() {
-        use crate::infrastructure::get_workspace_path;
-        if let Some(ws_path) = get_workspace_path() {
-            state.current_workspace = Some(ws_path.to_string_lossy().to_string());
-        }
-    }
-
     match cmd {
         BotCommand::Start | BotCommand::Help => {
             if state.paired {
@@ -492,10 +481,7 @@ fn parse_question_numbers(input: &str) -> Option<Vec<usize>> {
 }
 
 async fn handle_switch_workspace(state: &mut BotChatState) -> HandleResult {
-    use crate::infrastructure::get_workspace_path;
     use crate::service::workspace::get_global_workspace_service;
-
-    let current_ws = get_workspace_path().map(|p| p.to_string_lossy().to_string());
 
     let ws_service = match get_global_workspace_service() {
         Some(s) => s,
@@ -518,12 +504,7 @@ async fn handle_switch_workspace(state: &mut BotChatState) -> HandleResult {
         };
     }
 
-    // Prefer the bot session's own workspace record; fall back to the desktop
-    // global path only if the bot has not yet selected one.  Using || across
-    // both sources simultaneously can mark two different workspaces as
-    // [current] when the desktop and the bot session are on different paths.
-    let effective_current: Option<&str> =
-        state.current_workspace.as_deref().or(current_ws.as_deref());
+    let effective_current: Option<&str> = state.current_workspace.as_deref();
 
     let mut text = String::from("Select a workspace:\n\n");
     let mut options: Vec<(String, String)> = Vec::new();
@@ -806,7 +787,7 @@ async fn select_workspace(state: &mut BotChatState, path: &str, name: &str) -> H
     let path_buf = std::path::PathBuf::from(path);
     match ws_service.open_workspace(path_buf).await {
         Ok(info) => {
-            if let Err(e) = crate::service::snapshot::initialize_global_snapshot_manager(
+            if let Err(e) = crate::service::snapshot::initialize_snapshot_manager_for_workspace(
                 info.root_path.clone(),
                 None,
             )

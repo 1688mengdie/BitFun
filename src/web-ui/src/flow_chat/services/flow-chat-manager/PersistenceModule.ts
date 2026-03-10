@@ -3,12 +3,47 @@
  * Handles persistence operations for dialog turn saving and metadata management
  */
 
-import { globalAPI } from '@/infrastructure/api';
 import { createLogger } from '@/shared/utils/logger';
 import { i18nService } from '@/infrastructure/i18n';
 import type { FlowChatContext, DialogTurn } from './types';
 
 const log = createLogger('PersistenceModule');
+
+function requireWorkspacePath(sessionId: string, workspacePath?: string): string {
+  if (!workspacePath) {
+    throw new Error(`Workspace path is required for session: ${sessionId}`);
+  }
+  return workspacePath;
+}
+
+async function runSerialDialogTurnSave(
+  context: FlowChatContext,
+  sessionId: string,
+  turnId: string
+): Promise<void> {
+  const key = `${sessionId}:${turnId}`;
+  const existingTask = context.turnSaveInFlight.get(key);
+  if (existingTask) {
+    context.turnSavePending.add(key);
+    await existingTask;
+    return;
+  }
+
+  const task = (async () => {
+    try {
+      do {
+        context.turnSavePending.delete(key);
+        await performSaveDialogTurnToDisk(context, sessionId, turnId);
+      } while (context.turnSavePending.has(key));
+    } finally {
+      context.turnSaveInFlight.delete(key);
+      context.turnSavePending.delete(key);
+    }
+  })();
+
+  context.turnSaveInFlight.set(key, task);
+  await task;
+}
 
 /**
  * Calculate content hash for dialog turn (for deduplication)
@@ -119,21 +154,46 @@ export function cleanupSaveState(
     }
     context.lastSaveTimestamps.delete(key);
     context.lastSaveHashes.delete(key);
+    context.turnSavePending.delete(key);
+    context.turnSaveInFlight.delete(key);
   } else {
-    const keysToDelete: string[] = [];
+    const keysToDelete = new Set<string>();
     for (const key of context.saveDebouncers.keys()) {
       if (key.startsWith(`${sessionId}:`)) {
         const timer = context.saveDebouncers.get(key);
         if (timer) {
           clearTimeout(timer);
         }
-        keysToDelete.push(key);
+        keysToDelete.add(key);
       }
     }
+    for (const key of context.lastSaveTimestamps.keys()) {
+      if (key.startsWith(`${sessionId}:`)) {
+        keysToDelete.add(key);
+      }
+    }
+    for (const key of context.lastSaveHashes.keys()) {
+      if (key.startsWith(`${sessionId}:`)) {
+        keysToDelete.add(key);
+      }
+    }
+    for (const key of context.turnSavePending.values()) {
+      if (key.startsWith(`${sessionId}:`)) {
+        keysToDelete.add(key);
+      }
+    }
+    for (const key of context.turnSaveInFlight.keys()) {
+      if (key.startsWith(`${sessionId}:`)) {
+        keysToDelete.add(key);
+      }
+    }
+
     keysToDelete.forEach(key => {
       context.saveDebouncers.delete(key);
       context.lastSaveTimestamps.delete(key);
       context.lastSaveHashes.delete(key);
+      context.turnSavePending.delete(key);
+      context.turnSaveInFlight.delete(key);
     });
   }
 }
@@ -142,6 +202,14 @@ export function cleanupSaveState(
  * Save dialog turn to disk (FlowChat format → backend format)
  */
 export async function saveDialogTurnToDisk(
+  context: FlowChatContext,
+  sessionId: string,
+  turnId: string
+): Promise<void> {
+  await runSerialDialogTurnSave(context, sessionId, turnId);
+}
+
+async function performSaveDialogTurnToDisk(
   context: FlowChatContext,
   sessionId: string,
   turnId: string
@@ -155,11 +223,7 @@ export async function saveDialogTurnToDisk(
       return;
     }
 
-    const workspacePath = session.workspacePath || await globalAPI.getCurrentWorkspacePath();
-    if (!workspacePath) {
-      log.debug('Cannot determine workspace path, skipping save', { sessionId, turnId });
-      return;
-    }
+    const workspacePath = requireWorkspacePath(sessionId, session.workspacePath);
     
     const dialogTurn = session.dialogTurns.find(turn => turn.id === turnId);
     if (!dialogTurn) {
@@ -332,8 +396,7 @@ export async function updateSessionMetadata(
     const session = context.flowChatStore.getState().sessions.get(sessionId);
     if (!session) return;
 
-    const workspacePath = session.workspacePath || await globalAPI.getCurrentWorkspacePath();
-    if (!workspacePath) return;
+    const workspacePath = requireWorkspacePath(sessionId, session.workspacePath);
 
     let existingMetadata: any = null;
     try {
@@ -381,11 +444,7 @@ export async function updateSessionMetadata(
 export async function touchSessionActivity(sessionId: string, workspacePath?: string): Promise<void> {
   try {
     const { sessionAPI } = await import('@/infrastructure/api');
-    const resolvedWorkspacePath = workspacePath || await globalAPI.getCurrentWorkspacePath();
-    
-    if (!resolvedWorkspacePath) return;
-
-    await sessionAPI.touchSessionActivity(sessionId, resolvedWorkspacePath);
+    await sessionAPI.touchSessionActivity(sessionId, requireWorkspacePath(sessionId, workspacePath));
   } catch (error) {
     log.debug('Failed to touch session activity', { sessionId, error });
   }

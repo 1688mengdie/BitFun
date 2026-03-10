@@ -11,6 +11,7 @@ import { Select, Input, Textarea, Button, IconButton, Switch, Tooltip, Modal } f
 import { ConfigPageHeader, ConfigPageLayout, ConfigPageContent, ConfigPageSection, ConfigPageRow, ConfigCollectionItem } from './common';
 import { Tabs, TabPane } from '@/component-library';
 import { useAIRules } from '../../hooks/useAIRules';
+import { useCurrentWorkspace } from '../../contexts/WorkspaceContext';
 import {
   AIRulesAPI,
   RuleLevel,
@@ -41,6 +42,7 @@ type ScopeTab = 'user' | 'project';
 function RulesPanel() {
   const { t } = useTranslation('settings/ai-rules');
   const { t: tScope } = useTranslation('settings/ai-context');
+  const { workspacePath } = useCurrentWorkspace();
   const [showAddForm, setShowAddForm] = useState(false);
   const [editingRule, setEditingRule] = useState<AIRule | null>(null);
   const [expandedRuleKeys, setExpandedRuleKeys] = useState<Set<string>>(new Set());
@@ -84,7 +86,7 @@ function RulesPanel() {
           content: ruleData.content,
           description: ruleData.description,
           globs: ruleData.globs,
-        });
+        }, formLevel === RuleLevel.Project ? workspacePath || undefined : undefined);
         if (formLevel === RuleLevel.User) await userRules.refresh();
         else await projectRules.refresh();
       } else {
@@ -126,7 +128,11 @@ function RulesPanel() {
     try {
       setIsDeleting(true);
       const level = rule.level === 'user' ? RuleLevel.User : RuleLevel.Project;
-      await AIRulesAPI.deleteRule(level, rule.name);
+      await AIRulesAPI.deleteRule(
+        level,
+        rule.name,
+        level === RuleLevel.Project ? workspacePath || undefined : undefined,
+      );
       if (level === RuleLevel.User) await userRules.refresh();
       else await projectRules.refresh();
     } catch (error) {

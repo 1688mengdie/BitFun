@@ -10,6 +10,7 @@ use crate::util::errors::{BitFunError, BitFunResult};
 use async_trait::async_trait;
 use log::debug;
 use serde_json::{json, Value};
+use std::path::Path;
 
 // Use skills module
 use super::skills::{get_skill_registry, SkillLocation};
@@ -21,25 +22,15 @@ impl SkillTool {
     pub fn new() -> Self {
         Self
     }
-}
 
-#[async_trait]
-impl Tool for SkillTool {
-    fn name(&self) -> &str {
-        "Skill"
-    }
-
-    async fn description(&self) -> BitFunResult<String> {
-        let registry = get_skill_registry();
-        let available_skills = registry.get_enabled_skills_xml().await;
-
-        let skills_list = if available_skills.is_empty() {
+    fn render_description(&self, skills_list: String) -> String {
+        let skills_list = if skills_list.is_empty() {
             "No skills available".to_string()
         } else {
-            available_skills.join("\n")
+            skills_list
         };
 
-        Ok(format!(
+        format!(
             r#"Execute a skill within the main conversation
 
 <skills_instructions>
@@ -62,7 +53,39 @@ Important:
 {}
 </available_skills>"#,
             skills_list
-        ))
+        )
+    }
+
+    async fn build_description(&self, workspace_root: Option<&Path>) -> String {
+        let registry = get_skill_registry();
+        let available_skills = match workspace_root {
+            Some(workspace_root) => registry
+                .get_enabled_skills_xml_for_workspace(Some(workspace_root))
+                .await,
+            None => registry.get_enabled_skills_xml().await,
+        };
+
+        self.render_description(available_skills.join("\n"))
+    }
+}
+
+#[async_trait]
+impl Tool for SkillTool {
+    fn name(&self) -> &str {
+        "Skill"
+    }
+
+    async fn description(&self) -> BitFunResult<String> {
+        Ok(self.build_description(None).await)
+    }
+
+    async fn description_with_context(
+        &self,
+        context: Option<&ToolUseContext>,
+    ) -> BitFunResult<String> {
+        Ok(self
+            .build_description(context.and_then(|ctx| ctx.workspace_root()))
+            .await)
     }
 
     fn input_schema(&self) -> Value {
@@ -128,7 +151,7 @@ Important:
     async fn call_impl(
         &self,
         input: &Value,
-        _context: &ToolUseContext,
+        context: &ToolUseContext,
     ) -> BitFunResult<Vec<ToolResult>> {
         let skill_name = input
             .get("command")
@@ -139,7 +162,9 @@ Important:
 
         // Find and load skill through registry
         let registry = get_skill_registry();
-        let skill_data = registry.find_and_load_skill(skill_name).await?;
+        let skill_data = registry
+            .find_and_load_skill_for_workspace(skill_name, context.workspace_root())
+            .await?;
 
         let location_str = match skill_data.location {
             SkillLocation::User => "user",

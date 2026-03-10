@@ -1,5 +1,6 @@
 //! Tool pipeline type definitions
 
+use crate::agentic::WorkspaceBinding;
 use crate::agentic::core::{ToolCall, ToolExecutionState};
 use crate::agentic::events::SubagentParentInfo as EventSubagentParentInfo;
 use std::collections::HashMap;
@@ -52,6 +53,7 @@ pub struct ToolExecutionContext {
     pub session_id: String,
     pub dialog_turn_id: String,
     pub agent_type: String,
+    pub workspace: Option<WorkspaceBinding>,
     pub context_vars: HashMap<String, String>,
     pub subagent_parent_info: Option<SubagentParentInfo>,
     /// Allowed tools list (whitelist)

@@ -45,6 +45,8 @@ pub struct AppConfig {
     pub sidebar: SidebarConfig,
     pub right_panel: RightPanelConfig,
     pub notifications: NotificationConfig,
+    #[serde(default)]
+    pub session_config: AppSessionConfig,
     pub ai_experience: AIExperienceConfig,
 }
 
@@ -55,6 +57,15 @@ pub struct AppLoggingConfig {
     /// Runtime backend log level.
     /// Allowed values: trace, debug, info, warn, error, off.
     pub level: String,
+}
+
+/// Session-related UI preferences.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AppSessionConfig {
+    /// Default new session mode used by the frontend.
+    /// Supported values: "code", "cowork".
+    pub default_mode: String,
 }
 
 /// AI experience configuration.
@@ -876,6 +887,7 @@ impl Default for AppConfig {
                 position: "topRight".to_string(),
                 duration: 5000,
             },
+            session_config: AppSessionConfig::default(),
             ai_experience: AIExperienceConfig::default(),
         }
     }
@@ -886,6 +898,14 @@ impl Default for AppLoggingConfig {
         Self {
             // Set to Debug in early development for easier diagnostics
             level: "debug".to_string(),
+        }
+    }
+}
+
+impl Default for AppSessionConfig {
+    fn default() -> Self {
+        Self {
+            default_mode: "code".to_string(),
         }
     }
 }

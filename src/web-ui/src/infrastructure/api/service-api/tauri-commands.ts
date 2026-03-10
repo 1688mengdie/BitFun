@@ -70,11 +70,13 @@ export interface GetToolInfoRequest {
 export interface ExecuteToolRequest {
   toolName: string;
   parameters: any;
+  workspacePath?: string;
 }
 
 export interface ValidateToolInputRequest {
   toolName: string;
   input: any;
+  workspacePath?: string;
 }
 
 

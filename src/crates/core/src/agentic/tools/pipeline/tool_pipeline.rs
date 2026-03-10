@@ -665,6 +665,7 @@ impl ToolPipeline {
             agent_type: Some(task.context.agent_type.clone()),
             session_id: Some(task.context.session_id.clone()),
             dialog_turn_id: Some(task.context.dialog_turn_id.clone()),
+            workspace: task.context.workspace.clone(),
             safe_mode: None,
             abort_controller: None,
             read_file_timestamps: Default::default(),

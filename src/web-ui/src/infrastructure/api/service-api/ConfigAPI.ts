@@ -2,6 +2,42 @@
 
 import { api } from './ApiClient';
 import { createTauriCommandError } from '../errors/TauriCommandError';
+import type {
+  RuntimeLoggingInfo,
+  SkillInfo,
+  SkillLevel,
+  SkillMarketDownloadResult,
+  SkillMarketItem,
+  SkillValidationResult,
+} from '../../config/types';
+
+export interface GetSkillConfigsParams {
+  forceRefresh?: boolean;
+  workspacePath?: string;
+}
+
+export interface SetSkillEnabledParams {
+  skillName: string;
+  enabled: boolean;
+  workspacePath?: string;
+}
+
+export interface AddSkillParams {
+  sourcePath: string;
+  level: SkillLevel;
+  workspacePath?: string;
+}
+
+export interface DeleteSkillParams {
+  skillName: string;
+  workspacePath?: string;
+}
+
+export interface DownloadSkillMarketParams {
+  packageId: string;
+  level?: SkillLevel;
+  workspacePath?: string;
+}
 
 
 export class ConfigAPI {
@@ -196,20 +232,27 @@ export class ConfigAPI {
   
 
    
-  async getSkillConfigs(forceRefresh?: boolean): Promise<SkillInfo[]> {
+  async getSkillConfigs({
+    forceRefresh,
+    workspacePath,
+  }: GetSkillConfigsParams = {}): Promise<SkillInfo[]> {
     try {
-      return await api.invoke('get_skill_configs', { forceRefresh });
+      return await api.invoke('get_skill_configs', { forceRefresh, workspacePath });
     } catch (error) {
-      throw createTauriCommandError('get_skill_configs', error, { forceRefresh });
+      throw createTauriCommandError('get_skill_configs', error, { forceRefresh, workspacePath });
     }
   }
 
    
-  async setSkillEnabled(skillName: string, enabled: boolean): Promise<string> {
+  async setSkillEnabled({
+    skillName,
+    enabled,
+    workspacePath,
+  }: SetSkillEnabledParams): Promise<string> {
     try {
-      return await api.invoke('set_skill_enabled', { skillName, enabled });
+      return await api.invoke('set_skill_enabled', { skillName, enabled, workspacePath });
     } catch (error) {
-      throw createTauriCommandError('set_skill_enabled', error, { skillName, enabled });
+      throw createTauriCommandError('set_skill_enabled', error, { skillName, enabled, workspacePath });
     }
   }
 
@@ -223,20 +266,27 @@ export class ConfigAPI {
   }
 
    
-  async addSkill(sourcePath: string, level: SkillLevel): Promise<string> {
+  async addSkill({
+    sourcePath,
+    level,
+    workspacePath,
+  }: AddSkillParams): Promise<string> {
     try {
-      return await api.invoke('add_skill', { sourcePath, level });
+      return await api.invoke('add_skill', { sourcePath, level, workspacePath });
     } catch (error) {
-      throw createTauriCommandError('add_skill', error, { sourcePath, level });
+      throw createTauriCommandError('add_skill', error, { sourcePath, level, workspacePath });
     }
   }
 
    
-  async deleteSkill(skillName: string): Promise<string> {
+  async deleteSkill({
+    skillName,
+    workspacePath,
+  }: DeleteSkillParams): Promise<string> {
     try {
-      return await api.invoke('delete_skill', { skillName });
+      return await api.invoke('delete_skill', { skillName, workspacePath });
     } catch (error) {
-      throw createTauriCommandError('delete_skill', error, { skillName });
+      throw createTauriCommandError('delete_skill', error, { skillName, workspacePath });
     }
   }
 
@@ -260,26 +310,24 @@ export class ConfigAPI {
     }
   }
 
-  async downloadSkillMarket(pkg: string, level: SkillLevel = 'project'): Promise<SkillMarketDownloadResult> {
+  async downloadSkillMarket({
+    packageId,
+    level = 'project',
+    workspacePath,
+  }: DownloadSkillMarketParams): Promise<SkillMarketDownloadResult> {
     try {
       return await api.invoke('download_skill_market', {
-        request: { package: pkg, level }
+        request: { package: packageId, level, workspacePath }
       });
     } catch (error) {
-      throw createTauriCommandError('download_skill_market', error, { package: pkg, level });
+      throw createTauriCommandError('download_skill_market', error, {
+        package: packageId,
+        level,
+        workspacePath,
+      });
     }
   }
 }
-
-
-import type {
-  RuntimeLoggingInfo,
-  SkillInfo,
-  SkillLevel,
-  SkillMarketDownloadResult,
-  SkillMarketItem,
-  SkillValidationResult,
-} from '../../config/types';
 
 
 export const configAPI = new ConfigAPI();

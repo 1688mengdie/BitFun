@@ -16,7 +16,6 @@ import {
 } from '../EventBatcher';
 import { notificationService } from '../../../shared/notification-system';
 import { createLogger } from '@/shared/utils/logger';
-import { globalAPI } from '@/infrastructure/api';
 import type { ImageAnalysisEvent } from '@/infrastructure/api/service-api/AgentAPI';
 import type { FlowChatContext, DialogTurn, ModelRound, FlowToolItem } from './types';
 
@@ -202,13 +201,31 @@ export async function initializeEventListeners(
  * Handle session created event (e.g. remote mobile created a session)
  */
 function handleSessionCreated(context: FlowChatContext, event: any): void {
-  const { sessionId, sessionName, agentType, workspacePath } = event;
+  const { sessionId, sessionName, agentType } = event;
 
   const store = FlowChatStore.getInstance();
   const existing = store.getState().sessions.get(sessionId);
   if (existing) return;
 
-  store.addExternalSession(sessionId, sessionName || 'Remote Session', agentType || 'agentic', workspacePath);
+  store.addExternalSession(
+    sessionId,
+    sessionName || 'Remote Session',
+    agentType || 'agentic',
+    resolveExternalSessionWorkspacePath(context, event)
+  );
+}
+
+function resolveExternalSessionWorkspacePath(
+  context: FlowChatContext,
+  event?: Record<string, unknown> | null,
+): string | undefined {
+  const candidate =
+    (typeof event?.workspacePath === 'string' && event.workspacePath) ||
+    (typeof event?.workspace_path === 'string' && event.workspace_path) ||
+    context.currentWorkspacePath ||
+    undefined;
+
+  return candidate || undefined;
 }
 
 /**
@@ -278,18 +295,12 @@ function handleImageAnalysisStarted(context: FlowChatContext, event: ImageAnalys
   let session = store.getState().sessions.get(sessionId);
 
   if (!session) {
-    store.addExternalSession(sessionId, 'Remote Session', 'agentic');
-    globalAPI.getCurrentWorkspacePath().then(workspacePath => {
-      if (workspacePath) {
-        store.setState(prev => {
-          const s = prev.sessions.get(sessionId);
-          if (!s || s.workspacePath) return prev;
-          const newSessions = new Map(prev.sessions);
-          newSessions.set(sessionId, { ...s, workspacePath });
-          return { ...prev, sessions: newSessions };
-        });
-      }
-    }).catch(() => {});
+    store.addExternalSession(
+      sessionId,
+      'Remote Session',
+      'agentic',
+      resolveExternalSessionWorkspacePath(context, event as any)
+    );
     session = store.getState().sessions.get(sessionId);
   }
 
@@ -441,18 +452,12 @@ function handleDialogTurnStarted(context: FlowChatContext, event: any): void {
 
   if (!session) {
     log.warn('DialogTurnStarted: session not in store, creating placeholder', { sessionId, sessionsCount: state.sessions.size });
-    store.addExternalSession(sessionId, 'Remote Session', 'agentic');
-    globalAPI.getCurrentWorkspacePath().then(workspacePath => {
-      if (workspacePath) {
-        store.setState(prev => {
-          const s = prev.sessions.get(sessionId);
-          if (!s || s.workspacePath) return prev;
-          const newSessions = new Map(prev.sessions);
-          newSessions.set(sessionId, { ...s, workspacePath });
-          return { ...prev, sessions: newSessions };
-        });
-      }
-    }).catch(() => { /* ignore */ });
+    store.addExternalSession(
+      sessionId,
+      'Remote Session',
+      'agentic',
+      resolveExternalSessionWorkspacePath(context, event)
+    );
   }
 
   // Extract image display data from metadata (sent by coordinator for all platforms)

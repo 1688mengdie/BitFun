@@ -3,18 +3,22 @@
 use log::error;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::api::context_upload_api::create_image_context_provider;
 use bitfun_core::agentic::{
+    WorkspaceBinding,
     tools::framework::ToolUseContext,
     tools::{get_all_tools, get_readonly_tools},
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ToolExecutionRequest {
     pub tool_name: String,
     pub input: serde_json::Value,
+    pub workspace_path: Option<String>,
     pub context: Option<HashMap<String, String>>,
     pub safe_mode: Option<bool>,
 }
@@ -40,9 +44,11 @@ pub struct ToolExecutionResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ToolValidationRequest {
     pub tool_name: String,
     pub input: serde_json::Value,
+    pub workspace_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -75,6 +81,65 @@ pub struct ToolConfirmationResponse {
     pub tool_use_id: String,
     pub success: bool,
     pub message: String,
+}
+
+fn build_tool_context(workspace_path: Option<&str>) -> ToolUseContext {
+    ToolUseContext {
+        tool_call_id: None,
+        message_id: None,
+        agent_type: None,
+        session_id: None,
+        dialog_turn_id: None,
+        workspace: workspace_path
+            .filter(|path| !path.is_empty())
+            .map(|path| WorkspaceBinding::new(None, PathBuf::from(path))),
+        safe_mode: Some(false),
+        abort_controller: None,
+        read_file_timestamps: HashMap::new(),
+        options: None,
+        response_state: None,
+        image_context_provider: Some(Arc::new(create_image_context_provider())),
+        subagent_parent_info: None,
+        cancellation_token: None,
+    }
+}
+
+fn has_explicit_workspace_path(workspace_path: Option<&str>) -> bool {
+    workspace_path.is_some_and(|path| !path.trim().is_empty())
+}
+
+fn is_relative_path(value: Option<&serde_json::Value>) -> bool {
+    value
+        .and_then(|v| v.as_str())
+        .is_some_and(|path| !path.is_empty() && !PathBuf::from(path).is_absolute())
+}
+
+fn tool_requires_workspace_path(tool_name: &str, input: &serde_json::Value) -> bool {
+    match tool_name {
+        "Bash" => true,
+        "Glob" | "Grep" => {
+            input.get("path").is_none() || is_relative_path(input.get("path"))
+        }
+        "Read" | "Write" | "Edit" | "GetFileDiff" => {
+            is_relative_path(input.get("file_path"))
+        }
+        _ => false,
+    }
+}
+
+fn ensure_workspace_requirement(
+    tool_name: &str,
+    input: &serde_json::Value,
+    workspace_path: Option<&str>,
+) -> Result<(), String> {
+    if tool_requires_workspace_path(tool_name, input) && !has_explicit_workspace_path(workspace_path) {
+        return Err(format!(
+            "workspacePath is required to execute tool '{}' with workspace-relative input",
+            tool_name
+        ));
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -162,21 +227,13 @@ pub async fn validate_tool_input(
 
     for tool in tools {
         if tool.name() == request.tool_name {
-            let context = ToolUseContext {
-                tool_call_id: None,
-                message_id: None,
-                agent_type: None,
-                session_id: None,
-                dialog_turn_id: None,
-                safe_mode: Some(false),
-                abort_controller: None,
-                read_file_timestamps: HashMap::new(),
-                options: None,
-                response_state: None,
-                image_context_provider: Some(Arc::new(create_image_context_provider())),
-                subagent_parent_info: None,
-                cancellation_token: None,
-            };
+            ensure_workspace_requirement(
+                &request.tool_name,
+                &request.input,
+                request.workspace_path.as_deref(),
+            )?;
+
+            let context = build_tool_context(request.workspace_path.as_deref());
 
             let validation_result = tool.validate_input(&request.input, Some(&context)).await;
 
@@ -201,21 +258,13 @@ pub async fn execute_tool(request: ToolExecutionRequest) -> Result<ToolExecution
 
     for tool in tools {
         if tool.name() == request.tool_name {
-            let context = ToolUseContext {
-                tool_call_id: None,
-                message_id: None,
-                agent_type: None,
-                session_id: None,
-                dialog_turn_id: None,
-                safe_mode: Some(false),
-                abort_controller: None,
-                read_file_timestamps: HashMap::new(),
-                options: None,
-                response_state: None,
-                image_context_provider: Some(Arc::new(create_image_context_provider())),
-                subagent_parent_info: None,
-                cancellation_token: None,
-            };
+            ensure_workspace_requirement(
+                &request.tool_name,
+                &request.input,
+                request.workspace_path.as_deref(),
+            )?;
+
+            let context = build_tool_context(request.workspace_path.as_deref());
 
             let validation_result = tool.validate_input(&request.input, Some(&context)).await;
             if !validation_result.result {

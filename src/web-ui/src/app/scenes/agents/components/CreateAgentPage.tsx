@@ -5,7 +5,7 @@ import { Input, Textarea, Switch, Button } from '@/component-library';
 import { SubagentAPI } from '@/infrastructure/api/service-api/SubagentAPI';
 import type { SubagentLevel } from '@/infrastructure/api/service-api/SubagentAPI';
 import { useNotification } from '@/shared/notification-system';
-import { useCurrentWorkspace } from '@/infrastructure/hooks/useWorkspace';
+import { useCurrentWorkspace } from '@/infrastructure/contexts/WorkspaceContext';
 import { useAgentsStore } from '../agentsStore';
 import '../AgentsView.scss';
 import './CreateAgentPage.scss';
@@ -16,7 +16,7 @@ const CreateAgentPage: React.FC = () => {
   const { t } = useTranslation('scenes/agents');
   const { openHome } = useAgentsStore();
   const notification = useNotification();
-  const { hasWorkspace } = useCurrentWorkspace();
+  const { hasWorkspace, workspacePath } = useCurrentWorkspace();
 
   const [level, setLevel] = useState<SubagentLevel>('user');
   const [name, setName] = useState('');
@@ -31,6 +31,12 @@ const CreateAgentPage: React.FC = () => {
   useEffect(() => {
     SubagentAPI.listAgentToolNames().then(setToolNames).catch(() => setToolNames([]));
   }, []);
+
+  useEffect(() => {
+    if (!hasWorkspace && level === 'project') {
+      setLevel('user');
+    }
+  }, [hasWorkspace, level]);
 
   const validateName = useCallback((v: string) => {
     if (!v.trim()) return t('agentsOverview.form.nameRequired', '名称不能为空');
@@ -51,6 +57,10 @@ const CreateAgentPage: React.FC = () => {
     if (err) { setNameError(err); return; }
     if (!description.trim()) { notification.error(t('agentsOverview.form.descRequired', '描述不能为空')); return; }
     if (!prompt.trim()) { notification.error(t('agentsOverview.form.promptRequired', '系统提示词不能为空')); return; }
+    if (level === 'project' && !workspacePath) {
+      notification.error(t('agentsOverview.form.noWorkspace', '需要先打开项目'));
+      return;
+    }
     setSubmitting(true);
     try {
       await SubagentAPI.createSubagent({
@@ -60,6 +70,7 @@ const CreateAgentPage: React.FC = () => {
         prompt: prompt.trim(),
         readonly,
         tools: selectedTools.size > 0 ? Array.from(selectedTools) : undefined,
+        workspacePath: level === 'project' ? workspacePath : undefined,
       });
       notification.success(t('agentsOverview.form.createSuccess', { name: name.trim() }));
       openHome();

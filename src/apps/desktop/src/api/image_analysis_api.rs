@@ -7,8 +7,29 @@ use bitfun_core::agentic::image_analysis::{
     MessageEnhancer, SendEnhancedMessageRequest,
 };
 use log::error;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::State;
+
+fn resolve_session_workspace_path(
+    request: &AnalyzeImagesRequest,
+) -> Result<Option<PathBuf>, String> {
+    if let Some(workspace_path) = request.workspace_path.as_deref() {
+        if !workspace_path.trim().is_empty() {
+            return Ok(Some(PathBuf::from(workspace_path)));
+        }
+    }
+
+    let coordinator = bitfun_core::agentic::coordination::get_global_coordinator()
+        .ok_or_else(|| "Coordinator not initialized".to_string())?;
+
+    Ok(coordinator
+        .get_session_manager()
+        .get_session(&request.session_id)
+        .and_then(|session| session.config.workspace_path.clone())
+        .filter(|workspace_path| !workspace_path.is_empty())
+        .map(PathBuf::from))
+}
 
 #[tauri::command]
 pub async fn analyze_images(
@@ -38,7 +59,7 @@ pub async fn analyze_images(
         )
     })?;
 
-    let workspace_path = state.workspace_path.read().await.clone();
+    let workspace_path = resolve_session_workspace_path(&request)?;
 
     let ai_client = state
         .ai_client_factory

@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { Badge } from '@/component-library';
 import { agentAPI } from '@/infrastructure/api/service-api/AgentAPI';
 import { SubagentAPI } from '@/infrastructure/api/service-api/SubagentAPI';
+import { useCurrentWorkspace } from '@/infrastructure/contexts/WorkspaceContext';
 import {
   useAgentsStore,
   CAPABILITY_CATEGORIES,
@@ -158,6 +159,7 @@ const AgentCard: React.FC<AgentCardProps> = ({ agent, isMember, onAdd, onRemove 
 const AgentGallery: React.FC = () => {
   const { t } = useTranslation('scenes/agents');
   const { agentTeams, activeAgentTeamId, addMember, removeMember } = useAgentsStore();
+  const { workspacePath } = useCurrentWorkspace();
   const [agents, setAgents] = useState<AgentWithCapabilities[]>([]);
   const [query, setQuery] = useState('');
   const [activeCategories, setActiveCategories] = useState<Set<CapabilityCategory>>(new Set());
@@ -171,7 +173,7 @@ const AgentGallery: React.FC = () => {
 
     Promise.all([
       agentAPI.getAvailableModes().catch(() => []),
-      SubagentAPI.listSubagents().catch(() => []),
+      SubagentAPI.listSubagents({ workspacePath: workspacePath || undefined }).catch(() => []),
     ]).then(([modes, subagents]) => {
       if (cancelled) return;
 
@@ -201,7 +203,7 @@ const AgentGallery: React.FC = () => {
     });
 
     return () => { cancelled = true; };
-  }, []);
+  }, [workspacePath]);
 
   const toggleCategory = useCallback((cat: CapabilityCategory) => {
     setActiveCategories((prev) => {

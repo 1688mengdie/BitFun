@@ -24,6 +24,7 @@ export interface AppConfig {
   sidebar: SidebarConfig;
   right_panel: RightPanelConfig;
   notifications: NotificationConfig;
+  session_config: AppSessionConfig;
   ai_experience: AIExperienceConfig;
 }
 
@@ -31,6 +32,10 @@ export type BackendLogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'o
 
 export interface AppLoggingConfig {
   level: BackendLogLevel;
+}
+
+export interface AppSessionConfig {
+  default_mode: 'code' | 'cowork';
 }
 
 export interface SidebarConfig {
@@ -538,6 +543,8 @@ export type ConfigPath =
   | 'app.language'
   | 'app.auto_update'
   | 'app.telemetry'
+  | 'app.session_config'
+  | 'app.session_config.default_mode'
   | 'app.sidebar'
   | 'app.sidebar.width'
   | 'app.sidebar.collapsed'

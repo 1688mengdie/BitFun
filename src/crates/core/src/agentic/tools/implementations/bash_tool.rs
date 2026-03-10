@@ -3,7 +3,6 @@ use crate::agentic::tools::framework::{
 };
 use crate::infrastructure::events::event_system::get_global_event_system;
 use crate::infrastructure::events::event_system::BackendEvent::ToolExecutionProgress;
-use crate::infrastructure::get_workspace_path;
 use crate::service::config::global::get_global_config_service;
 use crate::util::errors::{BitFunError, BitFunResult};
 use crate::util::types::event::ToolExecutionProgressInfo;
@@ -108,16 +107,13 @@ impl BashTool {
 
     fn render_result(
         &self,
-        session_id: &str,
+        terminal_session_id: &str,
         output_text: &str,
         interrupted: bool,
         timed_out: bool,
         exit_code: i32,
     ) -> String {
         let mut result_string = String::new();
-
-        // Session ID
-        result_string.push_str(&format!("<session_id>{}</session_id>", session_id));
 
         // Exit code
         result_string.push_str(&format!("<exit_code>{}</exit_code>", exit_code));
@@ -147,6 +143,12 @@ impl BashTool {
                 "<status type=\"interrupted\">Command was canceled by the user. ASK THE USER what they would like to do next.</status>"
             );
         }
+
+        // Terminal session ID
+        result_string.push_str(&format!(
+            "<terminal_session_id>{}</terminal_session_id>",
+            terminal_session_id
+        ));
 
         result_string
     }
@@ -191,7 +193,7 @@ Usage notes:
   - It is very helpful if you write a clear, concise description of what this command does. For simple commands, keep it brief (5-10 words). For complex commands (piped commands, obscure flags, or anything hard to understand at a glance), add enough context to clarify what it does.
   - If the output exceeds {MAX_OUTPUT_LENGTH} characters, output will be truncated before being returned to you.
   - You can use the `run_in_background` parameter to run the command in a new dedicated background terminal session. The tool returns the background session ID immediately without waiting for the command to finish. Only use this for long-running processes (e.g., dev servers, watchers) where you don't need the output right away. You do not need to append '&' to the command. NOTE: `timeout_ms` is ignored when `run_in_background` is true.
-  - Each result includes a `<session_id>` tag identifying the terminal session. The persistent shell session ID remains constant throughout the entire conversation; background sessions each have their own unique ID.
+  - Each result includes a `<terminal_session_id>` tag identifying the terminal session. The persistent shell session ID remains constant throughout the entire conversation; background sessions each have their own unique ID.
   - The output may include the command echo and/or the shell prompt (e.g., `PS C:\path>`). Do not treat these as part of the command's actual result.
   
   - Avoid using this tool with the `find`, `grep`, `cat`, `head`, `tail`, `sed`, `awk`, or `echo` commands, unless explicitly instructed or when these commands are truly necessary for the task. Instead, always prefer using the dedicated tools for these commands:
@@ -257,7 +259,7 @@ Usage notes:
     async fn validate_input(
         &self,
         input: &Value,
-        _context: Option<&ToolUseContext>,
+        context: Option<&ToolUseContext>,
     ) -> ValidationResult {
         let command = input.get("command").and_then(|v| v.as_str());
         let run_in_background = input
@@ -285,6 +287,33 @@ Usage notes:
             return ValidationResult {
                 result: false,
                 message: Some("command is required".to_string()),
+                error_code: Some(400),
+                meta: None,
+            };
+        }
+
+        let Some(context) = context else {
+            return ValidationResult {
+                result: false,
+                message: Some("tool context is required for Bash tool".to_string()),
+                error_code: Some(400),
+                meta: None,
+            };
+        };
+
+        if context.session_id.as_deref().unwrap_or_default().is_empty() {
+            return ValidationResult {
+                result: false,
+                message: Some("session_id is required for Bash tool".to_string()),
+                error_code: Some(400),
+                meta: None,
+            };
+        }
+
+        if context.workspace_root().is_none() {
+            return ValidationResult {
+                result: false,
+                message: Some("workspace_path is required for Bash tool".to_string()),
                 error_code: Some(400),
                 meta: None,
             };
@@ -374,7 +403,11 @@ Usage notes:
         let shell_type = Self::resolve_shell().await.shell_type;
 
         let binding = terminal_api.session_manager().binding();
-        let workspace_path = get_workspace_path().map(|p| p.to_string_lossy().to_string());
+        let workspace_path = context
+            .workspace_root()
+            .ok_or_else(|| BitFunError::tool("workspace_path is required for Bash tool".to_string()))?
+            .to_string_lossy()
+            .to_string();
 
         if run_in_background {
             // For background commands, inherit CWD from an already-running primary session
@@ -385,9 +418,9 @@ Usage notes:
                     .get_session(&existing_id)
                     .await
                     .map(|s| s.cwd)
-                    .unwrap_or_else(|_| workspace_path.clone().unwrap_or_default())
+                    .unwrap_or_else(|_| workspace_path.clone())
             } else {
-                workspace_path.clone().unwrap_or_default()
+                workspace_path.clone()
             };
 
             return self
@@ -395,6 +428,7 @@ Usage notes:
                     command_str,
                     chat_session_id,
                     &initial_cwd,
+                    context,
                     shell_type,
                     &terminal_api,
                     &binding,
@@ -408,7 +442,7 @@ Usage notes:
             .get_or_create(
                 chat_session_id,
                 TerminalBindingOptions {
-                    working_directory: workspace_path.clone(),
+                    working_directory: Some(workspace_path.clone()),
                     session_id: Some(chat_session_id.to_string()),
                     session_name: Some(format!(
                         "Chat-{}",
@@ -431,7 +465,7 @@ Usage notes:
             .get_session(&primary_session_id)
             .await
             .map(|s| s.cwd)
-            .unwrap_or_else(|_| workspace_path.clone().unwrap_or_default());
+            .unwrap_or_else(|_| workspace_path.clone());
 
         // --- Foreground execution ---
 
@@ -613,6 +647,7 @@ impl BashTool {
         command_str: &str,
         chat_session_id: &str,
         initial_cwd: &str,
+        context: &ToolUseContext,
         shell_type: Option<ShellType>,
         terminal_api: &TerminalApi,
         binding: &TerminalSessionBinding,
@@ -666,7 +701,7 @@ impl BashTool {
         );
 
         // Determine output file path: <workspace>/.bitfun/terminals/<bg_session_id>.txt
-        let output_file_path = get_workspace_path().map(|ws| {
+        let output_file_path = context.workspace_root().map(|ws| {
             ws.join(".bitfun")
                 .join("terminals")
                 .join(format!("{}.txt", bg_session_id))

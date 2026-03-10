@@ -3,14 +3,12 @@
  * Handles session creation, switching, deletion, and other operations
  */
 
-import { agentAPI, globalAPI } from '@/infrastructure/api';
+import { agentAPI } from '@/infrastructure/api/service-api/AgentAPI';
 import { notificationService } from '../../../shared/notification-system';
 import { createLogger } from '@/shared/utils/logger';
 import { i18nService } from '@/infrastructure/i18n';
 import type { FlowChatContext, SessionConfig } from './types';
 import { touchSessionActivity, cleanupSaveState } from './PersistenceModule';
-import { workspaceManager } from '@/infrastructure/services/business/workspaceManager';
-import type { WorkspaceInfo } from '@/shared/types';
 
 const log = createLogger('SessionModule');
 
@@ -21,21 +19,18 @@ const normalizeSessionDisplayMode = (mode?: string): SessionDisplayMode => {
   return mode.toLowerCase() === 'cowork' ? 'cowork' : 'code';
 };
 
-const resolveSessionWorkspace = (): WorkspaceInfo | null => {
-  const state = workspaceManager.getState();
-  if (state.currentWorkspace) {
-    return state.currentWorkspace;
-  }
+const resolveSessionWorkspacePath = (context: FlowChatContext): string | null => {
+  return context.currentWorkspacePath || null;
+};
 
-  if (state.lastUsedWorkspaceId) {
-    return (
-      state.openedWorkspaces.get(state.lastUsedWorkspaceId) ||
-      state.recentWorkspaces.find(workspace => workspace.id === state.lastUsedWorkspaceId) ||
-      null
-    );
+const requireSessionWorkspacePath = (
+  workspacePath: string | undefined,
+  sessionId: string
+): string => {
+  if (!workspacePath) {
+    throw new Error(`Workspace path is required for session: ${sessionId}`);
   }
-
-  return state.recentWorkspaces[0] || Array.from(state.openedWorkspaces.values())[0] || null;
+  return workspacePath;
 };
 
 /**
@@ -81,15 +76,10 @@ export async function createChatSession(
 ): Promise<string> {
   try {
     const sessionMode = normalizeSessionDisplayMode(mode);
-    const targetWorkspace = resolveSessionWorkspace();
-    const workspacePath = targetWorkspace?.rootPath;
+    const workspacePath = resolveSessionWorkspacePath(context);
 
     if (!workspacePath) {
       throw new Error('Workspace path is required to create a session');
-    }
-
-    if (targetWorkspace && workspaceManager.getState().currentWorkspace?.id !== targetWorkspace.id) {
-      await workspaceManager.switchWorkspace(targetWorkspace);
     }
 
     const sameModeCount =
@@ -152,10 +142,7 @@ export async function switchChatSession(
     
     if (session?.isHistorical) {
       try {
-        const workspacePath = session.workspacePath || await globalAPI.getCurrentWorkspacePath();
-        if (!workspacePath) {
-          throw new Error('Cannot get workspace path');
-        }
+        const workspacePath = requireSessionWorkspacePath(session.workspacePath, sessionId);
         
         await context.flowChatStore.loadSessionHistory(sessionId, workspacePath);
         
@@ -255,10 +242,7 @@ export async function ensureBackendSession(
   const needsBackendSetup = isHistoricalSession || isFirstTurn;
   
   if (needsBackendSetup) {
-    const workspacePath = session.workspacePath || await globalAPI.getCurrentWorkspacePath();
-    if (!workspacePath) {
-      throw new Error(`Workspace path is required for session: ${sessionId}`);
-    }
+    const workspacePath = requireSessionWorkspacePath(session.workspacePath, sessionId);
 
     try {
       await agentAPI.restoreSession(sessionId, workspacePath);
@@ -302,10 +286,7 @@ export async function retryCreateBackendSession(
     throw new Error(`Session does not exist: ${sessionId}`);
   }
 
-  const workspacePath = session.workspacePath || await globalAPI.getCurrentWorkspacePath();
-  if (!workspacePath) {
-    throw new Error(`Workspace path is required for session: ${sessionId}`);
-  }
+  const workspacePath = requireSessionWorkspacePath(session.workspacePath, sessionId);
   
   await agentAPI.createSession({
     sessionId: sessionId,

@@ -11,13 +11,20 @@ use crate::service::session::{DialogTurnData, SessionMetadata, SessionStatus};
 use crate::util::errors::{BitFunError, BitFunResult};
 use log::{debug, info, warn};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use std::collections::HashMap;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::fs;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::sync::Mutex;
 
 const SESSION_SCHEMA_VERSION: u32 = 2;
+const JSON_WRITE_MAX_RETRIES: usize = 5;
+const JSON_WRITE_RETRY_BASE_DELAY_MS: u64 = 30;
+
+static JSON_FILE_WRITE_LOCKS: OnceLock<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>> = OnceLock::new();
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct StoredSessionMetadataFile {
@@ -179,25 +186,125 @@ impl PersistenceManager {
             .await
             .map_err(|e| BitFunError::io(format!("Failed to create parent directory: {}", e)))?;
 
-        let tmp_path = path.with_extension("tmp");
         let json = serde_json::to_string_pretty(value)
             .map_err(|e| BitFunError::serialization(format!("Failed to serialize JSON: {}", e)))?;
+        let lock = Self::get_file_write_lock(path).await;
+        let _lock_guard = lock.lock().await;
 
-        fs::write(&tmp_path, json)
-            .await
-            .map_err(|e| BitFunError::io(format!("Failed to write temp JSON file: {}", e)))?;
+        let json_bytes = json.into_bytes();
+        let mut last_replace_error: Option<std::io::Error> = None;
 
-        if path.exists() {
-            fs::remove_file(path)
-                .await
-                .map_err(|e| BitFunError::io(format!("Failed to replace JSON file: {}", e)))?;
+        for attempt in 0..=JSON_WRITE_MAX_RETRIES {
+            let tmp_path = Self::build_temp_json_path(path, attempt)?;
+            if let Err(e) = fs::write(&tmp_path, &json_bytes).await {
+                return Err(BitFunError::io(format!("Failed to write temp JSON file: {}", e)));
+            }
+
+            match Self::replace_file_from_temp(path, &tmp_path).await {
+                Ok(()) => return Ok(()),
+                Err(e) => {
+                    let should_retry =
+                        Self::is_retryable_write_error(&e) && attempt < JSON_WRITE_MAX_RETRIES;
+                    last_replace_error = Some(e);
+                    let _ = fs::remove_file(&tmp_path).await;
+
+                    if should_retry {
+                        tokio::time::sleep(Self::retry_delay(attempt)).await;
+                        continue;
+                    }
+
+                    break;
+                }
+            }
         }
 
-        fs::rename(&tmp_path, path)
-            .await
-            .map_err(|e| BitFunError::io(format!("Failed to finalize JSON write: {}", e)))?;
+        if let Some(error) = last_replace_error {
+            // On Windows, external scanners/file indexers may temporarily hold a non-shareable
+            // handle, making delete/rename fail with PermissionDenied. Fallback to direct write
+            // to avoid losing session persistence while keeping best-effort atomic behavior.
+            if error.kind() == ErrorKind::PermissionDenied {
+                warn!(
+                    "Atomic JSON replace permission denied for {}, fallback to direct overwrite",
+                    path.display()
+                );
+                fs::write(path, &json_bytes).await.map_err(|e| {
+                    BitFunError::io(format!("Failed fallback JSON overwrite {}: {}", path.display(), e))
+                })?;
+                return Ok(());
+            }
 
-        Ok(())
+            return Err(BitFunError::io(format!("Failed to replace JSON file: {}", error)));
+        }
+
+        Err(BitFunError::io(format!(
+            "Failed to replace JSON file {}: unknown error",
+            path.display()
+        )))
+    }
+
+    async fn get_file_write_lock(path: &Path) -> Arc<Mutex<()>> {
+        let registry = JSON_FILE_WRITE_LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
+        let mut registry_guard = registry.lock().await;
+        registry_guard
+            .entry(path.to_path_buf())
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone()
+    }
+
+    fn build_temp_json_path(path: &Path, attempt: usize) -> BitFunResult<PathBuf> {
+        let parent = path.parent().ok_or_else(|| {
+            BitFunError::io(format!("Target path has no parent directory: {}", path.display()))
+        })?;
+
+        let file_name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .unwrap_or_else(|| "data.json".to_string());
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let temp_name = format!(
+            ".{}.{}.{}.{}.tmp",
+            file_name,
+            std::process::id(),
+            nonce,
+            attempt
+        );
+        Ok(parent.join(temp_name))
+    }
+
+    async fn replace_file_from_temp(target_path: &Path, tmp_path: &Path) -> std::io::Result<()> {
+        if let Ok(()) = fs::rename(tmp_path, target_path).await {
+            return Ok(());
+        }
+
+        if target_path.exists() {
+            match fs::remove_file(target_path).await {
+                Ok(()) => {}
+                Err(e) if e.kind() == ErrorKind::NotFound => {}
+                Err(e) => return Err(e),
+            }
+        }
+
+        fs::rename(tmp_path, target_path).await
+    }
+
+    fn is_retryable_write_error(error: &std::io::Error) -> bool {
+        matches!(
+            error.kind(),
+            ErrorKind::PermissionDenied
+                | ErrorKind::WouldBlock
+                | ErrorKind::Interrupted
+                | ErrorKind::TimedOut
+                | ErrorKind::AlreadyExists
+                | ErrorKind::Other
+        )
+    }
+
+    fn retry_delay(attempt: usize) -> Duration {
+        let exp = attempt.min(6) as u32;
+        Duration::from_millis(JSON_WRITE_RETRY_BASE_DELAY_MS * (1u64 << exp))
     }
 
     fn system_time_to_unix_ms(time: SystemTime) -> u64 {

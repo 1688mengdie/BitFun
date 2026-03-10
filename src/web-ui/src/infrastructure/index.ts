@@ -13,18 +13,12 @@ export * from './api';
 
 // Contexts (explicit exports to avoid name collisions)
 export { ChatProvider, useChat } from './contexts/ChatContext';
-export { 
-  WorkspaceProvider, 
-  useWorkspaceContext,
-  // Renamed to avoid collisions with state-management exports.
-  useCurrentWorkspace as useCurrentWorkspaceFromContext 
-} from './contexts/WorkspaceContext';
+export { WorkspaceProvider, useWorkspaceContext } from './contexts/WorkspaceContext';
 
 // Configuration
 export * from './config';
 
-// Infrastructure hooks (explicit exports to avoid name collisions)
-export { useWorkspace } from './hooks/useWorkspace';
+// Infrastructure hooks
 export * from './hooks/useAIInitialization';
 
 // Infrastructure lifecycle

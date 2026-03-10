@@ -296,6 +296,22 @@ impl SnapshotService {
         Ok(())
     }
 
+    pub async fn reject_file(&self, session_id: &str, file_path: &Path) -> SnapshotResult<Vec<PathBuf>> {
+        self.ensure_initialized().await?;
+        self.validate_file_path(file_path).await?;
+
+        let mut snapshot_core = self.snapshot_core.write().await;
+        let restored_files = snapshot_core
+            .rollback_file_session(session_id, file_path)
+            .await?;
+
+        self.file_lock_manager
+            .release_lock(&file_path.to_path_buf(), session_id)
+            .await?;
+
+        Ok(restored_files)
+    }
+
     pub async fn get_session_files(&self, session_id: &str) -> SnapshotResult<Vec<PathBuf>> {
         self.ensure_initialized().await?;
         let snapshot_core = self.snapshot_core.read().await;

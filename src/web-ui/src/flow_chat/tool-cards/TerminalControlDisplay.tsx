@@ -30,17 +30,17 @@ export const TerminalControlDisplay: React.FC<ToolCardProps> = React.memo(({
     }
   };
 
-  const sessionId = useMemo(() => {
-    return toolCall?.input?.session_id as string | undefined;
-  }, [toolCall?.input?.session_id]);
+  const terminalSessionId = useMemo(() => {
+    return toolCall?.input?.terminal_session_id as string | undefined;
+  }, [toolCall?.input?.terminal_session_id]);
 
   const action = useMemo(() => {
     return (toolCall?.input?.action as string | undefined) ?? 'kill';
   }, [toolCall?.input?.action]);
 
   const renderContent = () => {
-    const idLabel = sessionId
-      ? <span className="read-file-meta"> {sessionId}</span>
+    const idLabel = terminalSessionId
+      ? <span className="read-file-meta"> {terminalSessionId}</span>
       : null;
 
     const isInterrupt = action === 'interrupt';

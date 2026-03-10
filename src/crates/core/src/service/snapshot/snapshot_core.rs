@@ -670,13 +670,42 @@ impl SnapshotCore {
         };
 
         for turn in session.turns.values_mut() {
-            turn.operations.retain(|op| op.file_path != file_path);
+            turn.operations
+                .retain(|op| !Self::operation_matches_file_path(op, file_path));
         }
         session.turns.retain(|_, t| !t.operations.is_empty());
         session.last_updated = SystemTime::now();
         self.persist_session(session_id).await?;
         self.rebuild_operation_index();
         Ok(())
+    }
+
+    pub async fn rollback_file_session(
+        &mut self,
+        session_id: &str,
+        file_path: &Path,
+    ) -> SnapshotResult<Vec<PathBuf>> {
+        let Some(session) = self.sessions.get(session_id) else {
+            return Ok(Vec::new());
+        };
+
+        let mut to_rollback: Vec<FileOperation> = session
+            .all_operations_iter()
+            .filter(|op| Self::operation_matches_file_path(op, file_path))
+            .cloned()
+            .collect();
+        to_rollback.sort_by_key(|op| (op.turn_index, op.seq_in_turn));
+        to_rollback.reverse();
+
+        let restored = self.apply_rollback_ops(&to_rollback).await?;
+        self.cleanup_file_session(session_id, file_path).await?;
+        Ok(restored)
+    }
+
+    fn operation_matches_file_path(op: &FileOperation, file_path: &Path) -> bool {
+        op.file_path == file_path
+            || op.path_before.as_deref() == Some(file_path)
+            || op.path_after.as_deref() == Some(file_path)
     }
 
     async fn apply_rollback_ops(&self, ops: &[FileOperation]) -> SnapshotResult<Vec<PathBuf>> {

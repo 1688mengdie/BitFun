@@ -91,38 +91,69 @@ export interface RuleStats {
   by_apply_type: Record<string, number>;
 }
 
+function requireWorkspacePathForProjectLevel(level: RuleLevel, workspacePath?: string): string {
+  if ((level === RuleLevel.Project || level === RuleLevel.All) && !workspacePath) {
+    throw new Error('workspacePath is required when level includes project rules.');
+  }
+  return workspacePath ?? '';
+}
+
+function requireWorkspacePath(workspacePath?: string): string {
+  if (!workspacePath) {
+    throw new Error('workspacePath is required.');
+  }
+  return workspacePath;
+}
+
 
 
 export class AIRulesAPI {
    
-  static async getRules(level: RuleLevel): Promise<AIRule[]> {
+  static async getRules(level: RuleLevel, workspacePath?: string): Promise<AIRule[]> {
+    const resolvedWorkspacePath =
+      level === RuleLevel.Project || level === RuleLevel.All
+        ? requireWorkspacePathForProjectLevel(level, workspacePath)
+        : workspacePath;
     return api.invoke<AIRule[]>('get_ai_rules', {
       request: {
         level,
+        workspacePath: resolvedWorkspacePath,
       },
     });
   }
 
    
-  static async getRule(level: RuleLevel, name: string): Promise<AIRule | null> {
+  static async getRule(level: RuleLevel, name: string, workspacePath?: string): Promise<AIRule | null> {
+    const resolvedWorkspacePath =
+      level === RuleLevel.Project || level === RuleLevel.All
+        ? requireWorkspacePathForProjectLevel(level, workspacePath)
+        : workspacePath;
     return api.invoke<AIRule | null>('get_ai_rule', {
       request: {
         level,
         name,
+        workspacePath: resolvedWorkspacePath,
       },
     });
   }
 
    
-  static async createRule(level: RuleLevel, rule: CreateRuleRequest): Promise<AIRule> {
+  static async createRule(
+    level: RuleLevel,
+    rule: CreateRuleRequest,
+    workspacePath?: string,
+  ): Promise<AIRule> {
     if (level === RuleLevel.All) {
       throw new Error('Cannot create rule with "all" level. Please specify "user" or "project".');
     }
+    const resolvedWorkspacePath =
+      level === RuleLevel.Project ? requireWorkspacePathForProjectLevel(level, workspacePath) : workspacePath;
 
     return api.invoke<AIRule>('create_ai_rule', {
       request: {
         level,
         rule,
+        workspacePath: resolvedWorkspacePath,
       },
     });
   }
@@ -131,66 +162,93 @@ export class AIRulesAPI {
   static async updateRule(
     level: RuleLevel,
     name: string,
-    rule: UpdateRuleRequest
+    rule: UpdateRuleRequest,
+    workspacePath?: string,
   ): Promise<AIRule> {
     if (level === RuleLevel.All) {
       throw new Error('Cannot update rule with "all" level. Please specify "user" or "project".');
     }
+    const resolvedWorkspacePath =
+      level === RuleLevel.Project ? requireWorkspacePathForProjectLevel(level, workspacePath) : workspacePath;
 
     return api.invoke<AIRule>('update_ai_rule', {
       request: {
         level,
         name,
         rule,
+        workspacePath: resolvedWorkspacePath,
       },
     });
   }
 
    
-  static async deleteRule(level: RuleLevel, name: string): Promise<boolean> {
+  static async deleteRule(level: RuleLevel, name: string, workspacePath?: string): Promise<boolean> {
     if (level === RuleLevel.All) {
       throw new Error('Cannot delete rule with "all" level. Please specify "user" or "project".');
     }
+    const resolvedWorkspacePath =
+      level === RuleLevel.Project ? requireWorkspacePathForProjectLevel(level, workspacePath) : workspacePath;
 
     return api.invoke<boolean>('delete_ai_rule', {
       request: {
         level,
         name,
+        workspacePath: resolvedWorkspacePath,
       },
     });
   }
 
    
-  static async getRulesStats(level: RuleLevel): Promise<RuleStats> {
+  static async getRulesStats(level: RuleLevel, workspacePath?: string): Promise<RuleStats> {
+    const resolvedWorkspacePath =
+      level === RuleLevel.Project || level === RuleLevel.All
+        ? requireWorkspacePathForProjectLevel(level, workspacePath)
+        : workspacePath;
     return api.invoke<RuleStats>('get_ai_rules_stats', {
       request: {
         level,
+        workspacePath: resolvedWorkspacePath,
       },
     });
   }
 
    
-  static async buildSystemPrompt(): Promise<string> {
-    return api.invoke<string>('build_ai_rules_system_prompt', {});
-  }
-
-   
-  static async reloadRules(level: RuleLevel): Promise<void> {
-    return api.invoke<void>('reload_ai_rules', {
-      level,
+  static async buildSystemPrompt(workspacePath: string): Promise<string> {
+    const resolvedWorkspacePath = requireWorkspacePath(workspacePath);
+    return api.invoke<string>('build_ai_rules_system_prompt', {
+      request: {
+        workspacePath: resolvedWorkspacePath,
+      },
     });
   }
 
    
-  static async toggleRule(level: RuleLevel, name: string): Promise<AIRule> {
+  static async reloadRules(level: RuleLevel, workspacePath?: string): Promise<void> {
+    const resolvedWorkspacePath =
+      level === RuleLevel.Project || level === RuleLevel.All
+        ? requireWorkspacePathForProjectLevel(level, workspacePath)
+        : workspacePath;
+    return api.invoke<void>('reload_ai_rules', {
+      request: {
+        level,
+        workspacePath: resolvedWorkspacePath,
+      },
+    });
+  }
+
+   
+  static async toggleRule(level: RuleLevel, name: string, workspacePath?: string): Promise<AIRule> {
     if (level === RuleLevel.All) {
       throw new Error('Cannot toggle rule with "all" level. Please specify "user" or "project".');
     }
+    const resolvedWorkspacePath =
+      level === RuleLevel.Project ? requireWorkspacePathForProjectLevel(level, workspacePath) : workspacePath;
 
     return api.invoke<AIRule>('toggle_ai_rule', {
       request: {
         level,
         name,
+        workspacePath: resolvedWorkspacePath,
       },
     });
   }

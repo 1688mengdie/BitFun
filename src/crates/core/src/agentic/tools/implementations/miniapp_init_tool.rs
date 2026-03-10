@@ -106,7 +106,7 @@ Returns app_id and absolute paths to each file. Use those paths with Read/Write/
     async fn call_impl(
         &self,
         input: &Value,
-        _context: &ToolUseContext,
+        context: &ToolUseContext,
     ) -> BitFunResult<Vec<ToolResult>> {
         let manager = try_get_global_miniapp_manager()
             .ok_or_else(|| BitFunError::tool("MiniAppManager not initialized".to_string()))?;
@@ -161,6 +161,7 @@ Returns app_id and absolute paths to each file. Use those paths with Read/Write/
                 source,
                 permissions,
                 None,
+                context.workspace_root(),
             )
             .await
             .map_err(|e| BitFunError::tool(format!("Failed to create MiniApp: {}", e)))?;

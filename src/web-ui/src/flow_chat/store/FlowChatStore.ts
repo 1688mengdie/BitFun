@@ -5,7 +5,7 @@
 
 import { FlowChatState, Session, DialogTurn, ModelRound, FlowItem, SessionConfig } from '../types/flow-chat';
 import { createLogger } from '@/shared/utils/logger';
-import { i18nService } from '@/infrastructure/i18n';
+import { i18nService } from '@/infrastructure/i18n/core/I18nService';
 
 const log = createLogger('FlowChatStore');
 
@@ -873,19 +873,53 @@ export class FlowChatStore {
     if (status === 'generated') {
       try {
         const { sessionAPI } = await import('@/infrastructure/api');
-        const { workspaceManager } = await import('@/infrastructure/services/business/workspaceManager');
         const session = this.state.sessions.get(sessionId);
-        const workspacePath = session.workspacePath || workspaceManager.getState().currentWorkspace?.rootPath;
+        if (!session) {
+          log.warn('Session not found, skipping title sync', { sessionId });
+          return;
+        }
+
+        const workspacePath = session.workspacePath;
         if (!workspacePath) {
           log.warn('Workspace path not available, skipping title sync', { sessionId });
           return;
         }
 
         const metadata = await sessionAPI.loadSessionMetadata(sessionId, workspacePath);
-        if (metadata) {
-          metadata.sessionName = title;
-          await sessionAPI.saveSessionMetadata(metadata, workspacePath);
-        }
+        const turnCount = session.dialogTurns.length;
+        const messageCount = session.dialogTurns.reduce((sum, turn) => {
+          return sum + 1 + turn.modelRounds.reduce((roundSum, round) => {
+            return roundSum + round.items.filter(item => item.type === 'text').length;
+          }, 0);
+        }, 0);
+        const toolCallCount = session.dialogTurns.reduce((sum, turn) => {
+          return sum + turn.modelRounds.reduce((roundSum, round) => {
+            return roundSum + round.items.filter(item => item.type === 'tool').length;
+          }, 0);
+        }, 0);
+
+        const nextMetadata = metadata
+          ? {
+              ...metadata,
+              sessionName: title,
+            }
+          : {
+              sessionId,
+              sessionName: title,
+              agentType: session.mode || 'agentic',
+              modelName: session.config.modelName || 'default',
+              createdAt: session.createdAt,
+              lastActiveAt: session.lastActiveAt || Date.now(),
+              turnCount,
+              messageCount,
+              toolCallCount,
+              status: 'active' as const,
+              tags: [],
+              todos: session.todos || [],
+              workspacePath,
+            };
+
+        await sessionAPI.saveSessionMetadata(nextMetadata, workspacePath);
       } catch (error) {
         log.error('Failed to sync session title', { sessionId, error });
       }

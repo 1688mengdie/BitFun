@@ -18,6 +18,79 @@ use std::sync::{Arc, OnceLock, RwLock};
 
 use super::encryption;
 
+fn current_workspace_path() -> Option<std::path::PathBuf> {
+    crate::service::workspace::get_global_workspace_service()
+        .and_then(|service| service.try_get_current_workspace_path())
+}
+
+async fn resolve_session_workspace_path(session_id: &str) -> Option<std::path::PathBuf> {
+    use crate::agentic::coordination::get_global_coordinator;
+    use crate::agentic::persistence::PersistenceManager;
+    use crate::infrastructure::PathManager;
+    use crate::service::workspace::get_global_workspace_service;
+
+    if let Some(coordinator) = get_global_coordinator() {
+        if let Some(workspace_path) = coordinator
+            .get_session_manager()
+            .get_session(session_id)
+            .and_then(|session| session.config.workspace_path.clone())
+            .filter(|path| !path.is_empty())
+        {
+            return Some(std::path::PathBuf::from(workspace_path));
+        }
+    }
+
+    let workspace_service = get_global_workspace_service()?;
+    let mut candidates: Vec<std::path::PathBuf> = workspace_service
+        .get_opened_workspaces()
+        .await
+        .into_iter()
+        .map(|workspace| workspace.root_path)
+        .collect();
+
+    if let Some(current_workspace) = workspace_service.get_current_workspace().await {
+        let current_root = current_workspace.root_path;
+        if !candidates.iter().any(|path| path == &current_root) {
+            candidates.push(current_root);
+        }
+    }
+
+    let Ok(path_manager) = PathManager::new() else {
+        return None;
+    };
+    let path_manager = Arc::new(path_manager);
+    let Ok(persistence_manager) = PersistenceManager::new(path_manager) else {
+        return None;
+    };
+
+    for workspace_path in candidates {
+        match persistence_manager
+            .load_session_metadata(&workspace_path, session_id)
+            .await
+        {
+            Ok(Some(metadata)) => {
+                if let Some(bound_workspace) =
+                    metadata.workspace_path.filter(|path| !path.is_empty())
+                {
+                    return Some(std::path::PathBuf::from(bound_workspace));
+                }
+                return Some(workspace_path);
+            }
+            Ok(None) => {}
+            Err(err) => {
+                debug!(
+                    "Failed to load session metadata while resolving workspace: session_id={} workspace={} error={}",
+                    session_id,
+                    workspace_path.display(),
+                    err
+                );
+            }
+        }
+    }
+
+    None
+}
+
 /// Image sent from mobile as a base64 data-URL.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImageAttachment {
@@ -583,14 +656,12 @@ fn turns_to_chat_messages(turns: &[crate::service::session::DialogTurnData]) -> 
 /// Load historical chat messages from the unified project session store.
 /// Uses the same data source as the desktop frontend.
 async fn load_chat_messages_from_conversation_persistence(
+    workspace_path: &std::path::Path,
     session_id: &str,
 ) -> (Vec<ChatMessage>, bool) {
     use crate::agentic::persistence::PersistenceManager;
-    use crate::infrastructure::{get_workspace_path, PathManager};
+    use crate::infrastructure::PathManager;
 
-    let Some(wp) = get_workspace_path() else {
-        return (vec![], false);
-    };
     let Ok(pm) = PathManager::new() else {
         return (vec![], false);
     };
@@ -598,7 +669,7 @@ async fn load_chat_messages_from_conversation_persistence(
     let Ok(store) = PersistenceManager::new(pm) else {
         return (vec![], false);
     };
-    let Ok(turns) = store.load_session_turns(&wp, session_id).await else {
+    let Ok(turns) = store.load_session_turns(workspace_path, session_id).await else {
         return (vec![], false);
     };
     (turns_to_chat_messages(&turns), false)
@@ -1361,13 +1432,9 @@ impl RemoteExecutionDispatcher {
         self.ensure_tracker(session_id);
 
         let session_mgr = coordinator.get_session_manager();
-        let binding_workspace = session_mgr
-            .get_session(session_id)
-            .and_then(|session| session.config.workspace_path.clone())
-            .or_else(|| {
-                crate::infrastructure::get_workspace_path()
-                    .map(|path| path.to_string_lossy().into_owned())
-            });
+        let binding_workspace = resolve_session_workspace_path(session_id)
+            .await
+            .map(|path| path.to_string_lossy().into_owned());
 
         let _ = match session_mgr.get_session(session_id) {
             Some(session) => Some(session),
@@ -1389,9 +1456,9 @@ impl RemoteExecutionDispatcher {
         // start.  When BashTool eventually calls get_or_create, the binding already
         // exists and the 30-second readiness wait is skipped entirely.
         {
-            use crate::infrastructure::get_workspace_path;
             use terminal_core::{TerminalApi, TerminalBindingOptions};
             let sid = session_id.to_string();
+            let binding_workspace_for_terminal = binding_workspace.clone();
             tokio::spawn(async move {
                 let Ok(api) = TerminalApi::from_singleton() else {
                     return;
@@ -1400,7 +1467,7 @@ impl RemoteExecutionDispatcher {
                 if binding.get(&sid).is_some() {
                     return;
                 }
-                let workspace = get_workspace_path().map(|p| p.to_string_lossy().into_owned());
+                let workspace = binding_workspace_for_terminal.clone();
                 let name = format!("Chat-{}", &sid[..8.min(sid.len())]);
                 match binding
                     .get_or_create(
@@ -1480,8 +1547,11 @@ impl RemoteExecutionDispatcher {
         let session = match session_mgr.get_session(session_id) {
             Some(s) => s,
             None => {
-                let workspace_path = crate::infrastructure::get_workspace_path()
-                    .ok_or_else(|| "Workspace path not available for session restore".to_string())?;
+                let workspace_path = resolve_session_workspace_path(session_id)
+                    .await
+                    .ok_or_else(|| {
+                        format!("Workspace path not available for session: {}", session_id)
+                    })?;
                 coordinator
                     .restore_session(&workspace_path, session_id)
                     .await
@@ -1601,9 +1671,9 @@ impl RemoteServer {
 
     pub async fn generate_initial_sync(&self) -> RemoteResponse {
         use crate::agentic::persistence::PersistenceManager;
-        use crate::infrastructure::{get_workspace_path, PathManager};
+        use crate::infrastructure::PathManager;
 
-        let ws_path = get_workspace_path();
+        let ws_path = current_workspace_path();
         let (has_workspace, path_str, project_name, git_branch) = if let Some(ref p) = ws_path {
             let name = p.file_name().map(|n| n.to_string_lossy().to_string());
             let branch = git2::Repository::open(p).ok().and_then(|repo| {
@@ -1713,8 +1783,13 @@ impl RemoteServer {
             };
         }
 
+        let Some(workspace_path) = resolve_session_workspace_path(session_id).await else {
+            return RemoteResponse::Error {
+                message: format!("Workspace path not available for session: {}", session_id),
+            };
+        };
         let (all_chat_msgs, _) =
-            load_chat_messages_from_conversation_persistence(session_id).await;
+            load_chat_messages_from_conversation_persistence(&workspace_path, session_id).await;
         let total_msg_count = all_chat_msgs.len();
         let skip = *known_msg_count;
         let new_messages: Vec<ChatMessage> =
@@ -1811,7 +1886,9 @@ impl RemoteServer {
             Some(p) => p,
             None => {
                 return RemoteResponse::Error {
-                    message: format!("No workspace open to resolve path: {raw_path}"),
+                    message: format!(
+                        "Remote file access requires an absolute path: {raw_path}"
+                    ),
                 }
             }
         };
@@ -1875,7 +1952,9 @@ impl RemoteServer {
             Some(p) => p,
             None => {
                 return RemoteResponse::Error {
-                    message: format!("No workspace open to resolve path: {raw_path}"),
+                    message: format!(
+                        "Remote file access requires an absolute path: {raw_path}"
+                    ),
                 }
             }
         };
@@ -1916,12 +1995,11 @@ impl RemoteServer {
     // ── Workspace commands ──────────────────────────────────────────
 
     async fn handle_workspace_command(&self, cmd: &RemoteCommand) -> RemoteResponse {
-        use crate::infrastructure::get_workspace_path;
         use crate::service::workspace::get_global_workspace_service;
 
         match cmd {
             RemoteCommand::GetWorkspaceInfo => {
-                let ws_path = get_workspace_path();
+                let ws_path = current_workspace_path();
                 let (project_name, git_branch) = if let Some(ref p) = ws_path {
                     let name = p.file_name().map(|n| n.to_string_lossy().to_string());
                     let branch = git2::Repository::open(p)
@@ -1978,7 +2056,7 @@ impl RemoteServer {
                 match ws_service.open_workspace(path_buf).await {
                     Ok(info) => {
                         if let Err(e) =
-                            crate::service::snapshot::initialize_global_snapshot_manager(
+                            crate::service::snapshot::initialize_snapshot_manager_for_workspace(
                                 info.root_path.clone(),
                                 None,
                             )
@@ -2030,113 +2108,71 @@ impl RemoteServer {
                 offset,
             } => {
                 use crate::agentic::persistence::PersistenceManager;
-                use crate::infrastructure::{get_workspace_path, PathManager};
+                use crate::infrastructure::PathManager;
 
                 let page_size = limit.unwrap_or(30).min(100);
                 let page_offset = offset.unwrap_or(0);
 
-                let effective_ws: Option<std::path::PathBuf> = workspace_path
+                let Some(workspace_path) = workspace_path
                     .as_deref()
+                    .filter(|path| !path.is_empty())
                     .map(std::path::PathBuf::from)
-                    .or_else(|| get_workspace_path());
-
-                if let Some(ref wp) = effective_ws {
-                    let ws_str = wp.to_string_lossy().to_string();
-                    let workspace_name =
-                        wp.file_name().map(|n| n.to_string_lossy().to_string());
-
-                    if let Ok(pm) = PathManager::new() {
-                        let pm = std::sync::Arc::new(pm);
-                        match PersistenceManager::new(pm) {
-                            Ok(store) => {
-                                match store.list_session_metadata(wp).await {
-                                    Ok(all_meta) => {
-                                        let total = all_meta.len();
-                                        let has_more = page_offset + page_size < total;
-                                        let sessions: Vec<SessionInfo> = all_meta
-                                            .into_iter()
-                                            .skip(page_offset)
-                                            .take(page_size)
-                                            .map(|s| {
-                                                let created =
-                                                    (s.created_at / 1000).to_string();
-                                                let updated =
-                                                    (s.last_active_at / 1000).to_string();
-                                                SessionInfo {
-                                                    session_id: s.session_id,
-                                                    name: s.session_name,
-                                                    agent_type: s.agent_type,
-                                                    created_at: created,
-                                                    updated_at: updated,
-                                                    message_count: s.turn_count,
-                                                    workspace_path: Some(ws_str.clone()),
-                                                    workspace_name: workspace_name.clone(),
-                                                }
-                                            })
-                                            .collect();
-                                        return RemoteResponse::SessionList {
-                                            sessions,
-                                            has_more,
-                                        };
-                                    }
-                                    Err(e) => {
-                                        debug!("Session list read failed for {ws_str}: {e}")
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                debug!(
-                                    "PersistenceManager init failed for {ws_str}: {e}"
-                                )
-                            }
-                        }
-                    }
-                }
-
-                let Some(workspace_path) = crate::infrastructure::get_workspace_path() else {
+                else {
                     return RemoteResponse::Error {
-                        message: "Workspace path not available".to_string(),
+                        message: "workspace_path is required for ListSessions".to_string(),
                     };
                 };
 
-                match coordinator.list_sessions(&workspace_path).await {
-                    Ok(summaries) => {
-                        let total = summaries.len();
-                        let has_more = page_offset + page_size < total;
-                        let sessions = summaries
-                            .into_iter()
-                            .skip(page_offset)
-                            .take(page_size)
-                            .map(|s| {
-                                let created = s
-                                    .created_at
-                                    .duration_since(std::time::UNIX_EPOCH)
-                                    .unwrap_or_default()
-                                    .as_secs()
-                                    .to_string();
-                                let updated = s
-                                    .last_activity_at
-                                    .duration_since(std::time::UNIX_EPOCH)
-                                    .unwrap_or_default()
-                                    .as_secs()
-                                    .to_string();
-                                SessionInfo {
-                                    session_id: s.session_id,
-                                    name: s.session_name,
-                                    agent_type: s.agent_type,
-                                    created_at: created,
-                                    updated_at: updated,
-                                    message_count: s.turn_count,
-                                    workspace_path: None,
-                                    workspace_name: None,
+                let ws_str = workspace_path.to_string_lossy().to_string();
+                let workspace_name =
+                    workspace_path.file_name().map(|n| n.to_string_lossy().to_string());
+
+                if let Ok(pm) = PathManager::new() {
+                    let pm = std::sync::Arc::new(pm);
+                    match PersistenceManager::new(pm) {
+                        Ok(store) => match store.list_session_metadata(&workspace_path).await {
+                            Ok(all_meta) => {
+                                let total = all_meta.len();
+                                let has_more = page_offset + page_size < total;
+                                let sessions: Vec<SessionInfo> = all_meta
+                                    .into_iter()
+                                    .skip(page_offset)
+                                    .take(page_size)
+                                    .map(|s| {
+                                        let created = (s.created_at / 1000).to_string();
+                                        let updated = (s.last_active_at / 1000).to_string();
+                                        SessionInfo {
+                                            session_id: s.session_id,
+                                            name: s.session_name,
+                                            agent_type: s.agent_type,
+                                            created_at: created,
+                                            updated_at: updated,
+                                            message_count: s.turn_count,
+                                            workspace_path: Some(ws_str.clone()),
+                                            workspace_name: workspace_name.clone(),
+                                        }
+                                    })
+                                    .collect();
+                                RemoteResponse::SessionList { sessions, has_more }
+                            }
+                            Err(e) => {
+                                debug!("Session list read failed for {ws_str}: {e}");
+                                RemoteResponse::Error {
+                                    message: format!("Failed to list sessions for workspace: {e}"),
                                 }
-                            })
-                            .collect();
-                        RemoteResponse::SessionList { sessions, has_more }
+                            }
+                        },
+                        Err(e) => {
+                            debug!("PersistenceManager init failed for {ws_str}: {e}");
+                            RemoteResponse::Error {
+                                message: format!("Failed to initialize session storage: {e}"),
+                            }
+                        }
                     }
-                    Err(e) => RemoteResponse::Error {
-                        message: e.to_string(),
-                    },
+                } else {
+                    RemoteResponse::Error {
+                        message: "Failed to initialize path manager".to_string(),
+                    }
                 }
             }
             RemoteCommand::CreateSession {
@@ -2144,8 +2180,6 @@ impl RemoteServer {
                 session_name: custom_name,
                 workspace_path: requested_ws_path,
             } => {
-                use crate::infrastructure::get_workspace_path;
-
                 let agent = resolve_agent_type(agent_type.as_deref());
                 let session_name = custom_name
                     .as_deref()
@@ -2154,14 +2188,10 @@ impl RemoteServer {
                         "Cowork" => "Remote Cowork Session",
                         _ => "Remote Code Session",
                     });
-                let binding_ws_path: Option<std::path::PathBuf> = requested_ws_path
+                let binding_ws_str = requested_ws_path
                     .as_deref()
-                    .map(std::path::PathBuf::from)
-                    .or_else(|| get_workspace_path());
-                let binding_ws_str =
-                    binding_ws_path
-                        .as_ref()
-                        .map(|p| p.to_string_lossy().to_string());
+                    .filter(|path| !path.is_empty())
+                    .map(ToOwned::to_owned);
 
                 debug!(
                     "Remote CreateSession: requested_ws={:?}, binding_ws={:?}",
@@ -2169,7 +2199,7 @@ impl RemoteServer {
                 );
                 let Some(binding_ws_str) = binding_ws_str else {
                     return RemoteResponse::Error {
-                        message: "Workspace path not available".to_string(),
+                        message: "workspace_path is required for CreateSession".to_string(),
                     };
                 };
 
@@ -2200,8 +2230,17 @@ impl RemoteServer {
                 limit: _,
                 before_message_id: _,
             } => {
+                let Some(workspace_path) = resolve_session_workspace_path(session_id).await else {
+                    return RemoteResponse::Error {
+                        message: format!(
+                            "Workspace path not available for session: {}",
+                            session_id
+                        ),
+                    };
+                };
                 let (chat_msgs, has_more) =
-                    load_chat_messages_from_conversation_persistence(session_id).await;
+                    load_chat_messages_from_conversation_persistence(&workspace_path, session_id)
+                        .await;
                 RemoteResponse::Messages {
                     session_id: session_id.clone(),
                     messages: chat_msgs,
@@ -2209,17 +2248,19 @@ impl RemoteServer {
                 }
             }
             RemoteCommand::DeleteSession { session_id } => {
-                get_or_init_global_dispatcher().remove_tracker(session_id);
-                let Some(workspace_path) = crate::infrastructure::get_workspace_path() else {
+                let Some(workspace_path) = resolve_session_workspace_path(session_id).await else {
                     return RemoteResponse::Error {
-                        message: "Workspace path not available".to_string(),
+                        message: format!("Workspace path not available for session: {}", session_id),
                     };
                 };
 
                 match coordinator.delete_session(&workspace_path, session_id).await {
-                    Ok(_) => RemoteResponse::SessionDeleted {
-                        session_id: session_id.clone(),
-                    },
+                    Ok(_) => {
+                        get_or_init_global_dispatcher().remove_tracker(session_id);
+                        RemoteResponse::SessionDeleted {
+                            session_id: session_id.clone(),
+                        }
+                    }
                     Err(e) => RemoteResponse::Error {
                         message: e.to_string(),
                     },

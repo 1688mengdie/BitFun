@@ -1,5 +1,4 @@
-use crate::infrastructure::get_workspace_path;
-use log::warn;
+use crate::util::errors::{BitFunError, BitFunResult};
 use std::path::Path;
 use std::path::{Component, PathBuf};
 
@@ -25,22 +24,23 @@ pub fn normalize_path(path: &str) -> String {
         .to_string()
 }
 
-pub fn resolve_path(path: &str) -> String {
+pub fn resolve_path_with_workspace(path: &str, workspace_root: Option<&Path>) -> BitFunResult<String> {
     if Path::new(path).is_absolute() {
-        normalize_path(path)
+        Ok(normalize_path(path))
     } else {
-        // Relative paths need to be resolved based on workspace path
-        match get_workspace_path() {
-            Some(workspace_path) => {
-                normalize_path(&workspace_path.join(path).to_string_lossy().to_string())
-            }
-            None => {
-                warn!(
-                    "Workspace path not set, using current directory to resolve relative path: {}",
-                    path
-                );
-                path.to_string()
-            }
-        }
+        let workspace_path = workspace_root.ok_or_else(|| {
+            BitFunError::tool(format!(
+                "workspace_path is required to resolve relative path: {}",
+                path
+            ))
+        })?;
+
+        Ok(normalize_path(
+            &workspace_path.join(path).to_string_lossy().to_string(),
+        ))
     }
+}
+
+pub fn resolve_path(path: &str) -> BitFunResult<String> {
+    resolve_path_with_workspace(path, None)
 }
