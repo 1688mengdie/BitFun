@@ -75,13 +75,16 @@ pub struct WorkspaceFileContent {
     pub size: u64,
 }
 
-/// Resolve a raw path (with or without `computer://` prefix) to an absolute
-/// `PathBuf`.  Relative paths are joined with the current workspace root.
-/// Returns `None` when a relative path is given but no workspace is open.
+/// Resolve a raw path (with or without `computer://` / `file://` prefix) to an
+/// absolute `PathBuf`.  Relative paths are joined with the current workspace
+/// root.  Returns `None` when a relative path is given but no workspace is open.
 pub fn resolve_workspace_path(raw: &str) -> Option<std::path::PathBuf> {
     use crate::infrastructure::get_workspace_path;
 
-    let stripped = raw.strip_prefix("computer://").unwrap_or(raw);
+    let stripped = raw
+        .strip_prefix("computer://")
+        .or_else(|| raw.strip_prefix("file://"))
+        .unwrap_or(raw);
 
     if stripped.starts_with('/')
         || (stripped.len() >= 3 && stripped.as_bytes()[1] == b':')
@@ -215,46 +218,204 @@ pub fn format_file_size(bytes: u64) -> String {
     }
 }
 
-// ── computer:// link extraction ────────────────────────────────────
+// ── Downloadable file link extraction ──────────────────────────────
 
-/// Extract local file paths referenced via `computer://` links in `text`.
+/// Extensions that are source-code / config files — excluded from download
+/// when referenced via absolute paths (matches mobile-web `CODE_FILE_EXTENSIONS`).
+const CODE_FILE_EXTENSIONS: &[&str] = &[
+    "js", "jsx", "ts", "tsx", "mjs", "cjs", "mts", "cts",
+    "py", "pyw", "pyi",
+    "rs", "go", "java", "kt", "kts", "scala", "groovy",
+    "c", "cpp", "cc", "cxx", "h", "hpp", "hxx", "hh",
+    "cs", "rb", "php", "swift",
+    "vue", "svelte",
+    "html", "htm", "css", "scss", "less", "sass",
+    "json", "jsonc", "yaml", "yml", "toml", "xml",
+    "md", "mdx", "rst", "txt",
+    "sh", "bash", "zsh", "fish", "ps1", "bat", "cmd",
+    "sql", "graphql", "gql", "proto",
+    "lock", "env", "ini", "cfg", "conf",
+    "cj", "ets", "editorconfig", "gitignore", "log",
+];
+
+/// Extensions that are always considered downloadable when referenced via
+/// relative paths (matches mobile-web `DOWNLOADABLE_EXTENSIONS`).
+const DOWNLOADABLE_EXTENSIONS: &[&str] = &[
+    "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx",
+    "odt", "ods", "odp", "rtf", "pages", "numbers", "key",
+    "png", "jpg", "jpeg", "gif", "bmp", "svg", "webp", "ico", "tiff", "tif",
+    "zip", "tar", "gz", "bz2", "7z", "rar", "dmg", "iso", "xz",
+    "mp3", "wav", "ogg", "flac", "aac", "m4a", "wma",
+    "mp4", "avi", "mkv", "mov", "webm", "wmv", "flv",
+    "csv", "tsv", "sqlite", "db", "parquet",
+    "epub", "mobi",
+    "apk", "ipa", "exe", "msi", "deb", "rpm",
+    "ttf", "otf", "woff", "woff2",
+];
+
+/// Check whether a bare file path (no protocol prefix) should be treated as
+/// a downloadable file based on its extension.
 ///
-/// Relative paths (e.g. `computer://artifacts/report.docx`) are resolved
-/// against `workspace_path` when provided.  Only paths that exist as regular
-/// files on disk are returned; directories and missing paths are skipped.
-/// Duplicate paths are deduplicated before returning.
-pub fn extract_computer_file_paths(text: &str) -> Vec<String> {
-    const PREFIX: &str = "computer://";
-    let mut paths: Vec<String> = Vec::new();
-    let mut search = text;
+/// - Absolute paths: blacklist code-file extensions (everything else is OK).
+/// - Relative paths: whitelist known binary / document extensions only.
+fn is_downloadable_by_extension(file_path: &str) -> bool {
+    let ext = std::path::Path::new(file_path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    if ext.is_empty() {
+        return false;
+    }
+    let is_absolute = file_path.starts_with('/')
+        || (file_path.len() >= 3 && file_path.as_bytes().get(1) == Some(&b':'));
+    if is_absolute {
+        !CODE_FILE_EXTENSIONS.contains(&ext.as_str())
+    } else {
+        DOWNLOADABLE_EXTENSIONS.contains(&ext.as_str())
+    }
+}
 
-    while let Some(idx) = search.find(PREFIX) {
-        let rest = &search[idx + PREFIX.len()..];
-
-        // Collect the path until whitespace or link-terminating punctuation.
-        let end = rest
-            .find(|c: char| c.is_whitespace() || matches!(c, '<' | '>' | '(' | ')' | '"' | '\''))
-            .unwrap_or(rest.len());
-
-        // Strip trailing punctuation that is unlikely to be part of a path.
-        let raw_suffix = rest[..end]
-            .trim_end_matches(|c: char| matches!(c, '.' | ',' | ';' | ':' | ')' | ']'));
-
-        if !raw_suffix.is_empty() {
-            // Reconstruct the full computer:// URL for resolve_workspace_path
-            let raw = format!("{PREFIX}{raw_suffix}");
-            if let Some(abs) = resolve_workspace_path(&raw) {
-                let abs_str = abs.to_string_lossy().into_owned();
-                if abs.exists() && abs.is_file() && !paths.contains(&abs_str) {
-                    paths.push(abs_str);
-                }
-            }
+/// Try to resolve `file_path` and, if it exists as a regular file, push
+/// its absolute path into `out` (deduplicating).
+fn push_if_existing_file(file_path: &str, out: &mut Vec<String>) {
+    if let Some(abs) = resolve_workspace_path(file_path) {
+        let abs_str = abs.to_string_lossy().into_owned();
+        if abs.exists() && abs.is_file() && !out.contains(&abs_str) {
+            out.push(abs_str);
         }
+    }
+}
 
-        search = &rest[end..];
+/// Extract all downloadable file paths from agent response markdown text.
+///
+/// Detects three kinds of references:
+/// 1. `computer://` links in plain text.
+/// 2. `file://` links in plain text.
+/// 3. Markdown hyperlinks `[text](href)` pointing to local files
+///    (absolute paths excluding code files, or relative paths with
+///     downloadable extensions).
+///
+/// Only paths that exist as regular files on disk are returned.
+/// Duplicate paths are deduplicated.
+pub fn extract_downloadable_file_paths(text: &str) -> Vec<String> {
+    let mut paths: Vec<String> = Vec::new();
+
+    // Phase 1 — protocol-prefixed links (`computer://` and `file://`).
+    for prefix in ["computer://", "file://"] {
+        let mut search = text;
+        while let Some(idx) = search.find(prefix) {
+            let rest = &search[idx + prefix.len()..];
+            let end = rest
+                .find(|c: char| {
+                    c.is_whitespace() || matches!(c, '<' | '>' | '(' | ')' | '"' | '\'')
+                })
+                .unwrap_or(rest.len());
+            let raw_suffix = rest[..end]
+                .trim_end_matches(|c: char| matches!(c, '.' | ',' | ';' | ':' | ')' | ']'));
+            if !raw_suffix.is_empty() {
+                let resolve_input = if prefix == "computer://" {
+                    format!("{prefix}{raw_suffix}")
+                } else {
+                    raw_suffix.to_string()
+                };
+                push_if_existing_file(&resolve_input, &mut paths);
+            }
+            search = &rest[end..];
+        }
+    }
+
+    // Phase 2 — markdown hyperlinks `[text](href)` referencing local files.
+    let bytes = text.as_bytes();
+    let len = bytes.len();
+    let mut i = 0;
+    while i + 2 < len {
+        if bytes[i] == b']' && bytes[i + 1] == b'(' {
+            let href_start = i + 2;
+            if let Some(rel_end) = text[href_start..].find(')') {
+                let href = text[href_start..href_start + rel_end].trim();
+                // Skip protocols already handled above and non-local URLs.
+                if !href.is_empty()
+                    && !href.starts_with("computer://")
+                    && !href.starts_with("file://")
+                    && !href.starts_with("http://")
+                    && !href.starts_with("https://")
+                    && !href.starts_with("mailto:")
+                    && !href.starts_with("tel:")
+                    && !href.starts_with('#')
+                    && !href.starts_with("//")
+                {
+                    if is_downloadable_by_extension(href) {
+                        push_if_existing_file(href, &mut paths);
+                    }
+                }
+                i = href_start + rel_end + 1;
+            } else {
+                i += 2;
+            }
+        } else {
+            i += 1;
+        }
     }
 
     paths
+}
+
+// ── Shared file-download action builder ───────────────────────────
+
+/// Scan `text` for downloadable file references (`computer://`, `file://`,
+/// and markdown hyperlinks to local files), register them as pending downloads
+/// in `state`, and return a ready-to-send [`HandleResult`] with one download
+/// button per file.  Returns `None` when no downloadable files are found.
+pub fn prepare_file_download_actions(
+    text: &str,
+    state: &mut command_router::BotChatState,
+) -> Option<command_router::HandleResult> {
+    use command_router::BotAction;
+
+    let file_paths = extract_downloadable_file_paths(text);
+    if file_paths.is_empty() {
+        return None;
+    }
+
+    let mut actions: Vec<BotAction> = Vec::new();
+    for path in &file_paths {
+        if let Some((name, size)) = get_file_metadata(path) {
+            let token = generate_download_token(&state.chat_id);
+            state.pending_files.insert(token.clone(), path.clone());
+            actions.push(BotAction::secondary(
+                format!("📥 {} ({})", name, format_file_size(size)),
+                format!("download_file:{token}"),
+            ));
+        }
+    }
+
+    if actions.is_empty() {
+        return None;
+    }
+
+    let intro = if actions.len() == 1 {
+        "📎 1 file ready to download:".to_string()
+    } else {
+        format!("📎 {} files ready to download:", actions.len())
+    };
+
+    Some(command_router::HandleResult {
+        reply: intro,
+        actions,
+        forward_to_session: None,
+    })
+}
+
+/// Produce a short hex token for a pending file download.
+fn generate_download_token(chat_id: &str) -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let ns = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .subsec_nanos();
+    let salt = chat_id.bytes().fold(0u32, |acc, b| acc.wrapping_add(b as u32));
+    format!("{:08x}", ns ^ salt)
 }
 
 const BOT_PERSISTENCE_FILENAME: &str = "bot_connections.json";

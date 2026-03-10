@@ -115,7 +115,7 @@ pub struct ForwardedTurnResult {
     /// Truncated text suitable for display in bot messages (≤ 4000 chars).
     pub display_text: String,
     /// Full untruncated response text from the tracker, suitable for
-    /// `computer://` link extraction.  Not affected by broadcast lag.
+    /// downloadable file link extraction.  Not affected by broadcast lag.
     pub full_text: String,
 }
 
