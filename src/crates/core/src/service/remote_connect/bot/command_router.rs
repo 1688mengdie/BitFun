@@ -1365,12 +1365,10 @@ async fn handle_chat_message(
 /// `RemoteExecutionDispatcher` (the same path used by mobile), then
 /// subscribes to the tracker's broadcast channel for real-time events.
 ///
-/// `message_sender` is called to send intermediate messages (e.g. thinking
-/// content) before the final response is returned.
 pub async fn execute_forwarded_turn(
     forward: ForwardRequest,
     interaction_handler: Option<BotInteractionHandler>,
-    message_sender: Option<BotMessageSender>,
+    _message_sender: Option<BotMessageSender>,
 ) -> ForwardedTurnResult {
     use crate::agentic::coordination::DialogTriggerSource;
     use crate::service::remote_connect::remote_server::{
@@ -1401,20 +1399,11 @@ pub async fn execute_forwarded_turn(
     }
 
     let result = tokio::time::timeout(std::time::Duration::from_secs(300), async {
-        let mut thinking = String::new();
         let mut response = String::new();
         loop {
             match event_rx.recv().await {
                 Ok(event) => match event {
-                    TrackerEvent::ThinkingChunk(t) => thinking.push_str(&t),
-                    TrackerEvent::ThinkingEnd => {
-                        if !thinking.is_empty() {
-                            if let Some(sender) = message_sender.as_ref() {
-                                sender(thinking.clone()).await;
-                            }
-                            thinking.clear();
-                        }
-                    }
+                    TrackerEvent::ThinkingChunk(_) | TrackerEvent::ThinkingEnd => {}
                     TrackerEvent::TextChunk(t) => response.push_str(&t),
                     TrackerEvent::ToolStarted {
                         tool_id,
