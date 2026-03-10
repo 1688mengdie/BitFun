@@ -6,6 +6,13 @@ use serde_json::Value;
 pub struct ResponsesStreamEvent {
     #[serde(rename = "type")]
     pub kind: String,
+    /// Output item index in the `response.output` array.
+    #[serde(default)]
+    pub output_index: Option<usize>,
+    /// Content part index within an output item (for content-part events).
+    #[allow(dead_code)]
+    #[serde(default)]
+    pub content_index: Option<usize>,
     #[serde(default)]
     pub response: Option<Value>,
     #[serde(default)]
@@ -168,5 +175,31 @@ mod tests {
             .expect("completed");
         assert_eq!(completed.id, "resp_1");
         assert_eq!(completed.usage.expect("usage").total_tokens, 14);
+    }
+
+    #[test]
+    fn parses_output_item_added_indices() {
+        let event: ResponsesStreamEvent = serde_json::from_value(json!({
+            "type": "response.output_item.added",
+            "output_index": 3,
+            "item": { "type": "function_call", "call_id": "call_1", "name": "tool", "arguments": "" }
+        }))
+        .expect("event");
+
+        assert_eq!(event.output_index, Some(3));
+        assert!(event.item.is_some());
+    }
+
+    #[test]
+    fn parses_function_call_arguments_delta_indices() {
+        let event: ResponsesStreamEvent = serde_json::from_value(json!({
+            "type": "response.function_call_arguments.delta",
+            "output_index": 1,
+            "delta": "{\"a\":"
+        }))
+        .expect("event");
+
+        assert_eq!(event.output_index, Some(1));
+        assert_eq!(event.delta.as_deref(), Some("{\"a\":"));
     }
 }

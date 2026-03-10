@@ -86,6 +86,8 @@ pub struct AIConfig {
     /// "replace" (default) or "merge" (defaults first, then custom)
     pub custom_headers_mode: Option<String>,
     pub skip_ssl_verify: bool,
+    /// Reasoning effort for OpenAI Responses API ("low", "medium", "high", "xhigh")
+    pub reasoning_effort: Option<String>,
     /// Custom JSON overriding default request body fields
     pub custom_request_body: Option<serde_json::Value>,
 }
@@ -175,6 +177,7 @@ impl TryFrom<AIModelConfig> for AIConfig {
             custom_headers: other.custom_headers,
             custom_headers_mode: other.custom_headers_mode,
             skip_ssl_verify: other.skip_ssl_verify,
+            reasoning_effort: other.reasoning_effort,
             custom_request_body,
         })
     }

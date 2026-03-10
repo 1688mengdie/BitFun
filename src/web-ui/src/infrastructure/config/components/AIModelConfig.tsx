@@ -20,6 +20,10 @@ import './AIModelConfig.scss';
 
 const log = createLogger('AIModelConfig');
 
+function isResponsesProvider(provider?: string): boolean {
+  return provider === 'response' || provider === 'responses';
+}
+
 /**
  * Compute the actual request URL from a base URL and provider format.
  * Rules:
@@ -38,7 +42,7 @@ function resolveRequestUrl(baseUrl: string, provider: string, modelName = ''): s
   if (provider === 'openai') {
     return trimmed.endsWith('chat/completions') ? trimmed : `${trimmed}/chat/completions`;
   }
-  if (provider === 'response' || provider === 'responses') {
+  if (isResponsesProvider(provider)) {
     return trimmed.endsWith('responses') ? trimmed : `${trimmed}/responses`;
   }
   if (provider === 'anthropic') {
@@ -93,6 +97,16 @@ const AIModelConfig: React.FC = () => {
       { label: 'OpenAI (responses)', value: 'responses' },
       { label: 'Anthropic (messages)', value: 'anthropic' },
       { label: 'Gemini (generateContent)', value: 'gemini' },
+    ],
+    []
+  );
+
+  const reasoningEffortOptions = useMemo(
+    () => [
+      { label: 'Low', value: 'low' },
+      { label: 'Medium', value: 'medium' },
+      { label: 'High', value: 'high' },
+      { label: 'Extra High', value: 'xhigh' },
     ],
     []
   );
@@ -262,6 +276,8 @@ const AIModelConfig: React.FC = () => {
         enable_thinking_process: editingConfig.enable_thinking_process ?? false,
         
         support_preserved_thinking: editingConfig.support_preserved_thinking ?? false,
+
+        reasoning_effort: editingConfig.reasoning_effort,
         
         custom_headers: editingConfig.custom_headers,
         
@@ -712,6 +728,11 @@ const AIModelConfig: React.FC = () => {
                 <ConfigPageRow label={t('thinking.enable')} description={t('thinking.enableHint')} align="center">
                   <Switch checked={editingConfig.enable_thinking_process ?? false} onChange={(e) => setEditingConfig(prev => ({ ...prev, enable_thinking_process: e.target.checked }))} size="small" />
                 </ConfigPageRow>
+                {isResponsesProvider(editingConfig.provider) && (
+                  <ConfigPageRow label={t('reasoningEffort.label')} description={t('reasoningEffort.hint')} align="center">
+                    <Select value={editingConfig.reasoning_effort || ''} onChange={(v) => setEditingConfig(prev => ({ ...prev, reasoning_effort: (v as string) || undefined }))} placeholder={t('reasoningEffort.placeholder')} options={reasoningEffortOptions} />
+                  </ConfigPageRow>
+                )}
               </>
             ) : (
               <>
@@ -764,7 +785,15 @@ const AIModelConfig: React.FC = () => {
                   <Input value={editingConfig.model_name || ''} onChange={(e) => setEditingConfig(prev => ({ ...prev, model_name: e.target.value, request_url: resolveRequestUrl(prev?.base_url || '', prev?.provider || 'openai', e.target.value) }))} placeholder={editingConfig.category === 'speech_recognition' ? 'glm-asr' : 'glm-4.7'} inputSize="small" />
                 </ConfigPageRow>
                 <ConfigPageRow label={t('form.provider')} align="center" wide>
-                  <Select value={editingConfig.provider || 'openai'} onChange={(value) => setEditingConfig(prev => ({ ...prev, provider: value as string }))} placeholder={t('form.providerPlaceholder')} options={requestFormatOptions} />
+                  <Select value={editingConfig.provider || 'openai'} onChange={(value) => {
+                    const provider = value as string;
+                    setEditingConfig(prev => ({
+                      ...prev,
+                      provider,
+                      request_url: resolveRequestUrl(prev?.base_url || '', provider, prev?.model_name || ''),
+                      reasoning_effort: isResponsesProvider(provider) ? (prev?.reasoning_effort || 'medium') : undefined,
+                    }));
+                  }} placeholder={t('form.providerPlaceholder')} options={requestFormatOptions} />
                 </ConfigPageRow>
                 {editingConfig.category !== 'speech_recognition' && (
                   <>
@@ -781,6 +810,11 @@ const AIModelConfig: React.FC = () => {
                 <ConfigPageRow label={t('thinking.enable')} description={t('thinking.enableHint')} align="center">
                   <Switch checked={editingConfig.enable_thinking_process ?? false} onChange={(e) => setEditingConfig(prev => ({ ...prev, enable_thinking_process: e.target.checked }))} size="small" />
                 </ConfigPageRow>
+                {isResponsesProvider(editingConfig.provider) && (
+                  <ConfigPageRow label={t('reasoningEffort.label')} description={t('reasoningEffort.hint')} align="center">
+                    <Select value={editingConfig.reasoning_effort || ''} onChange={(v) => setEditingConfig(prev => ({ ...prev, reasoning_effort: (v as string) || undefined }))} placeholder={t('reasoningEffort.placeholder')} options={reasoningEffortOptions} />
+                  </ConfigPageRow>
+                )}
                 <ConfigPageRow label={t('form.description')} multiline>
                   <Textarea value={editingConfig.description || ''} onChange={(e) => setEditingConfig(prev => ({ ...prev, description: e.target.value }))} placeholder={t('form.descriptionPlaceholder')} rows={2} />
                 </ConfigPageRow>

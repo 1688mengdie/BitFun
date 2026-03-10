@@ -8,9 +8,131 @@ use futures::StreamExt;
 use log::{error, trace};
 use reqwest::Response;
 use serde_json::Value;
+use std::collections::HashMap;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
+
+#[derive(Debug, Default, Clone)]
+struct InProgressToolCall {
+    call_id: Option<String>,
+    name: Option<String>,
+    args_so_far: String,
+    saw_any_delta: bool,
+    sent_header: bool,
+}
+
+impl InProgressToolCall {
+    fn from_item_value(item: &Value) -> Option<Self> {
+        if item.get("type").and_then(Value::as_str) != Some("function_call") {
+            return None;
+        }
+        Some(Self {
+            call_id: item
+                .get("call_id")
+                .and_then(Value::as_str)
+                .map(ToString::to_string),
+            name: item
+                .get("name")
+                .and_then(Value::as_str)
+                .map(ToString::to_string),
+            args_so_far: String::new(),
+            saw_any_delta: false,
+            sent_header: false,
+        })
+    }
+}
+
+fn emit_tool_call_item(
+    tx_event: &mpsc::UnboundedSender<Result<UnifiedResponse>>,
+    item_value: Value,
+) {
+    if let Some(unified_response) = parse_responses_output_item(item_value) {
+        if unified_response.tool_call.is_some() {
+            let _ = tx_event.send(Ok(unified_response));
+        }
+    }
+}
+
+fn cleanup_tool_call_tracking(
+    output_index: usize,
+    tool_calls_by_output_index: &mut HashMap<usize, InProgressToolCall>,
+    tool_call_index_by_id: &mut HashMap<String, usize>,
+) {
+    if let Some(tc) = tool_calls_by_output_index.remove(&output_index) {
+        if let Some(call_id) = tc.call_id {
+            tool_call_index_by_id.remove(&call_id);
+        }
+    }
+}
+
+fn handle_function_call_output_item_done(
+    tx_event: &mpsc::UnboundedSender<Result<UnifiedResponse>>,
+    event_output_index: Option<usize>,
+    item_value: Value,
+    tool_calls_by_output_index: &mut HashMap<usize, InProgressToolCall>,
+    tool_call_index_by_id: &mut HashMap<String, usize>,
+) {
+    // Resolve output_index either directly or via call_id mapping.
+    let output_index = event_output_index.or_else(|| {
+        item_value
+            .get("call_id")
+            .and_then(Value::as_str)
+            .and_then(|id| tool_call_index_by_id.get(id).copied())
+    });
+
+    let Some(output_index) = output_index else {
+        emit_tool_call_item(tx_event, item_value);
+        return;
+    };
+
+    let Some(tc) = tool_calls_by_output_index.get_mut(&output_index) else {
+        // The provider may send `output_item.done` with an output_index even when the
+        // earlier `output_item.added` event was omitted or missed. Fall back to the full item.
+        emit_tool_call_item(tx_event, item_value);
+        return;
+    };
+
+    let full_args = item_value
+        .get("arguments")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let need_fallback_full = !tc.saw_any_delta;
+    let need_tail =
+        tc.saw_any_delta && tc.args_so_far.len() < full_args.len() && full_args.starts_with(&tc.args_so_far);
+
+    if need_fallback_full || need_tail {
+        let delta = if need_fallback_full {
+            full_args.to_string()
+        } else {
+            full_args[tc.args_so_far.len()..].to_string()
+        };
+
+        if !delta.is_empty() {
+            tc.args_so_far.push_str(&delta);
+            let (id, name) = if tc.sent_header {
+                (None, None)
+            } else {
+                tc.sent_header = true;
+                (tc.call_id.clone(), tc.name.clone())
+            };
+            let _ = tx_event.send(Ok(UnifiedResponse {
+                tool_call: Some(crate::types::unified::UnifiedToolCall {
+                    id,
+                    name,
+                    arguments: Some(delta),
+                }),
+                ..Default::default()
+            }));
+        }
+    }
+
+    cleanup_tool_call_tracking(
+        output_index,
+        tool_calls_by_output_index,
+        tool_call_index_by_id,
+    );
+}
 
 fn extract_api_error_message(event_json: &Value) -> Option<String> {
     let response = event_json.get("response")?;
@@ -37,15 +159,18 @@ pub async fn handle_responses_stream(
 ) {
     let mut stream = response.bytes_stream().eventsource();
     let idle_timeout = Duration::from_secs(600);
-    let received_completion = false;
+    // Some providers close the stream after emitting the terminal event and may not send `[DONE]`.
+    let mut received_finish_reason = false;
     let mut received_text_delta = false;
+    let mut tool_calls_by_output_index: HashMap<usize, InProgressToolCall> = HashMap::new();
+    let mut tool_call_index_by_id: HashMap<String, usize> = HashMap::new();
 
     loop {
         let sse_event = timeout(idle_timeout, stream.next()).await;
         let sse = match sse_event {
             Ok(Some(Ok(sse))) => sse,
             Ok(None) => {
-                if received_completion {
+                if received_finish_reason {
                     return;
                 }
                 let error_msg = "Responses SSE stream closed before response completed";
@@ -107,6 +232,17 @@ pub async fn handle_responses_stream(
         };
 
         match event.kind.as_str() {
+            "response.output_item.added" => {
+                // Track tool calls so we can stream arguments via `response.function_call_arguments.delta`.
+                if let (Some(output_index), Some(item)) = (event.output_index, event.item.as_ref()) {
+                    if let Some(tc) = InProgressToolCall::from_item_value(item) {
+                        if let Some(ref call_id) = tc.call_id {
+                            tool_call_index_by_id.insert(call_id.clone(), output_index);
+                        }
+                        tool_calls_by_output_index.insert(output_index, tc);
+                    }
+                }
+            }
             "response.output_text.delta" => {
                 if let Some(delta) = event.delta.filter(|delta| !delta.is_empty()) {
                     received_text_delta = true;
@@ -124,27 +260,116 @@ pub async fn handle_responses_stream(
                     }));
                 }
             }
+            "response.function_call_arguments.delta" => {
+                let Some(delta) = event.delta.filter(|delta| !delta.is_empty()) else {
+                    continue;
+                };
+                let Some(output_index) = event.output_index else {
+                    continue;
+                };
+                let Some(tc) = tool_calls_by_output_index.get_mut(&output_index) else {
+                    continue;
+                };
+
+                tc.saw_any_delta = true;
+                tc.args_so_far.push_str(&delta);
+
+                // Some consumers treat `id` as a "new tool call" marker and reset buffers when it repeats.
+                // Only send id/name once per tool call; deltas that follow carry arguments only.
+                let (id, name) = if tc.sent_header {
+                    (None, None)
+                } else {
+                    tc.sent_header = true;
+                    (tc.call_id.clone(), tc.name.clone())
+                };
+
+                let _ = tx_event.send(Ok(UnifiedResponse {
+                    tool_call: Some(crate::types::unified::UnifiedToolCall {
+                        id,
+                        name,
+                        arguments: Some(delta),
+                    }),
+                    ..Default::default()
+                }));
+            }
             "response.output_item.done" => {
-                if let Some(item_value) = event.item {
-                    if let Some(mut unified_response) = parse_responses_output_item(item_value) {
-                        if received_text_delta && unified_response.text.is_some() {
-                            unified_response.text = None;
-                        }
-                        if unified_response.text.is_some() || unified_response.tool_call.is_some() {
-                            let _ = tx_event.send(Ok(unified_response));
-                        }
+                let Some(item_value) = event.item else {
+                    continue;
+                };
+
+                // For tool calls, prefer streaming deltas and only use item.done as a tail-filler / fallback.
+                if item_value.get("type").and_then(Value::as_str) == Some("function_call") {
+                    handle_function_call_output_item_done(
+                        &tx_event,
+                        event.output_index,
+                        item_value,
+                        &mut tool_calls_by_output_index,
+                        &mut tool_call_index_by_id,
+                    );
+                    continue;
+                }
+
+                if let Some(mut unified_response) = parse_responses_output_item(item_value) {
+                    if received_text_delta && unified_response.text.is_some() {
+                        unified_response.text = None;
+                    }
+                    if unified_response.text.is_some() || unified_response.tool_call.is_some() {
+                        let _ = tx_event.send(Ok(unified_response));
                     }
                 }
             }
             "response.completed" => {
+                if received_finish_reason {
+                    continue;
+                }
+                // Best-effort: use the final response object to fill any missing tool-call argument tail.
+                if let Some(response_val) = event.response.as_ref() {
+                    if let Some(output) = response_val.get("output").and_then(Value::as_array) {
+                        for (idx, item) in output.iter().enumerate() {
+                            if item.get("type").and_then(Value::as_str) != Some("function_call") {
+                                continue;
+                            }
+                            let Some(tc) = tool_calls_by_output_index.get_mut(&idx) else {
+                                continue;
+                            };
+                            let full_args = item
+                                .get("arguments")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default();
+                            if tc.args_so_far.len() < full_args.len()
+                                && full_args.starts_with(&tc.args_so_far)
+                            {
+                                let delta = full_args[tc.args_so_far.len()..].to_string();
+                            if !delta.is_empty() {
+                                tc.args_so_far.push_str(&delta);
+                                let (id, name) = if tc.sent_header {
+                                    (None, None)
+                                } else {
+                                    tc.sent_header = true;
+                                    (tc.call_id.clone(), tc.name.clone())
+                                };
+                                let _ = tx_event.send(Ok(UnifiedResponse {
+                                    tool_call: Some(crate::types::unified::UnifiedToolCall {
+                                        id,
+                                        name,
+                                        arguments: Some(delta),
+                                    }),
+                                    ..Default::default()
+                                }));
+                            }
+                        }
+                    }
+                }
+                }
                 match event.response.map(serde_json::from_value::<ResponsesCompleted>) {
                     Some(Ok(response)) => {
+                        received_finish_reason = true;
                         let _ = tx_event.send(Ok(UnifiedResponse {
                             usage: response.usage.map(Into::into),
                             finish_reason: Some("stop".to_string()),
                             ..Default::default()
                         }));
-                        return;
+                        continue;
                     }
                     Some(Err(e)) => {
                         let error_msg = format!("Failed to parse response.completed payload: {}", e);
@@ -153,23 +378,28 @@ pub async fn handle_responses_stream(
                         return;
                     }
                     None => {
+                        received_finish_reason = true;
                         let _ = tx_event.send(Ok(UnifiedResponse {
                             finish_reason: Some("stop".to_string()),
                             ..Default::default()
                         }));
-                        return;
+                        continue;
                     }
                 }
             }
             "response.done" => {
+                if received_finish_reason {
+                    continue;
+                }
                 match event.response.map(serde_json::from_value::<ResponsesDone>) {
                     Some(Ok(response)) => {
+                        received_finish_reason = true;
                         let _ = tx_event.send(Ok(UnifiedResponse {
                             usage: response.usage.map(Into::into),
                             finish_reason: Some("stop".to_string()),
                             ..Default::default()
                         }));
-                        return;
+                        continue;
                     }
                     Some(Err(e)) => {
                         let error_msg = format!("Failed to parse response.done payload: {}", e);
@@ -178,11 +408,12 @@ pub async fn handle_responses_stream(
                         return;
                     }
                     None => {
+                        received_finish_reason = true;
                         let _ = tx_event.send(Ok(UnifiedResponse {
                             finish_reason: Some("stop".to_string()),
                             ..Default::default()
                         }));
-                        return;
+                        continue;
                     }
                 }
             }
@@ -200,17 +431,38 @@ pub async fn handle_responses_stream(
                 return;
             }
             "response.incomplete" => {
-                let error_msg = event
+                // Prefer returning partial output (rust-genai behavior) instead of hard-failing the round.
+                // Still mark finish_reason so the caller can decide how to handle it.
+                if received_finish_reason {
+                    continue;
+                }
+                let reason = event
                     .response
                     .as_ref()
                     .and_then(|response| response.get("incomplete_details"))
                     .and_then(|details| details.get("reason"))
                     .and_then(Value::as_str)
-                    .map(|reason| format!("Incomplete response returned, reason: {}", reason))
-                    .unwrap_or_else(|| "Incomplete response returned".to_string());
-                error!("{}", error_msg);
-                let _ = tx_event.send(Err(anyhow!(error_msg)));
-                return;
+                    .map(|s| s.to_string());
+
+                let finish_reason = reason
+                    .as_deref()
+                    .map(|r| format!("incomplete:{r}"))
+                    .unwrap_or_else(|| "incomplete".to_string());
+
+                let usage = event
+                    .response
+                    .clone()
+                    .and_then(|v| serde_json::from_value::<ResponsesDone>(v).ok())
+                    .and_then(|r| r.usage)
+                    .map(Into::into);
+
+                received_finish_reason = true;
+                let _ = tx_event.send(Ok(UnifiedResponse {
+                    usage,
+                    finish_reason: Some(finish_reason),
+                    ..Default::default()
+                }));
+                continue;
             }
             _ => {}
         }
@@ -219,8 +471,12 @@ pub async fn handle_responses_stream(
 
 #[cfg(test)]
 mod tests {
-    use super::extract_api_error_message;
+    use super::{
+        extract_api_error_message, handle_function_call_output_item_done, InProgressToolCall,
+    };
     use serde_json::json;
+    use std::collections::HashMap;
+    use tokio::sync::mpsc;
 
     #[test]
     fn extracts_api_error_message_from_response_error() {
@@ -262,5 +518,31 @@ mod tests {
         });
 
         assert!(extract_api_error_message(&event).is_none());
+    }
+
+    #[test]
+    fn output_item_done_falls_back_when_output_index_is_untracked() {
+        let (tx_event, mut rx_event) = mpsc::unbounded_channel();
+        let mut tool_calls_by_output_index: HashMap<usize, InProgressToolCall> = HashMap::new();
+        let mut tool_call_index_by_id: HashMap<String, usize> = HashMap::new();
+
+        handle_function_call_output_item_done(
+            &tx_event,
+            Some(3),
+            json!({
+                "type": "function_call",
+                "call_id": "call_1",
+                "name": "get_weather",
+                "arguments": "{\"city\":\"Beijing\"}"
+            }),
+            &mut tool_calls_by_output_index,
+            &mut tool_call_index_by_id,
+        );
+
+        let response = rx_event.try_recv().expect("tool call event").expect("ok response");
+        let tool_call = response.tool_call.expect("tool call");
+        assert_eq!(tool_call.id.as_deref(), Some("call_1"));
+        assert_eq!(tool_call.name.as_deref(), Some("get_weather"));
+        assert_eq!(tool_call.arguments.as_deref(), Some("{\"city\":\"Beijing\"}"));
     }
 }

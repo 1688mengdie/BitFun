@@ -391,16 +391,51 @@ impl ExecutionEngine {
             current_agent.id()
         );
 
-        // 2. Get System Prompt from current Agent
+        // 2. Get AI client
+        // Get model ID from AgentRegistry
+        let model_id = agent_registry
+            .get_model_id_for_agent(&agent_type)
+            .await
+            .map_err(|e| BitFunError::AIClient(format!("Failed to get model ID: {}", e)))?;
+        info!(
+            "Agent using model: agent={}, model_id={}",
+            current_agent.name(),
+            model_id
+        );
+
+        let ai_client_factory = get_global_ai_client_factory().await.map_err(|e| {
+            BitFunError::AIClient(format!("Failed to get AI client factory: {}", e))
+        })?;
+
+        // Get AI client by model ID
+        let ai_client = ai_client_factory
+            .get_client_resolved(&model_id)
+            .await
+            .map_err(|e| {
+                BitFunError::AIClient(format!(
+                    "Failed to get AI client (model_id={}): {}",
+                    model_id, e
+                ))
+            })?;
+        // Get configuration for whether to support preserving historical thinking content
+        let enable_thinking = ai_client.config.enable_thinking_process;
+        let support_preserved_thinking = ai_client.config.support_preserved_thinking;
+        let context_window = ai_client.config.context_window as usize;
+
+        // 3. Get System Prompt from current Agent
         debug!(
-            "Building system prompt from agent: {}",
-            current_agent.name()
+            "Building system prompt from agent: {}, model={}",
+            current_agent.name(),
+            ai_client.config.model
         );
         let system_prompt = {
             let workspace_path = get_workspace_path();
             let workspace_str = workspace_path.as_ref().map(|p| p.display().to_string());
             current_agent
-                .get_system_prompt(workspace_str.as_deref())
+                .get_system_prompt_for_model(
+                    workspace_str.as_deref(),
+                    Some(ai_client.config.model.as_str()),
+                )
                 .await?
         };
         debug!("System prompt built, length: {} bytes", system_prompt.len());
@@ -436,7 +471,7 @@ impl ExecutionEngine {
                 .collect::<Vec<_>>()
         );
 
-        // 3. Get available tools list (read tool configuration for current mode from global config)
+        // 4. Get available tools list (read tool configuration for current mode from global config)
         let allowed_tools = agent_registry.get_agent_tools(&agent_type).await;
         let enable_tools = context
             .context
@@ -464,37 +499,6 @@ impl ExecutionEngine {
             })?;
         let enable_context_compression = session.config.enable_context_compression;
         let compression_threshold = session.config.compression_threshold;
-
-        // 4. Get AI client
-        // Get model ID from AgentRegistry
-        let model_id = agent_registry
-            .get_model_id_for_agent(&agent_type)
-            .await
-            .map_err(|e| BitFunError::AIClient(format!("Failed to get model ID: {}", e)))?;
-        info!(
-            "Agent using model: agent={}, model_id={}",
-            current_agent.name(),
-            model_id
-        );
-
-        let ai_client_factory = get_global_ai_client_factory().await.map_err(|e| {
-            BitFunError::AIClient(format!("Failed to get AI client factory: {}", e))
-        })?;
-
-        // Get AI client by model ID
-        let ai_client = ai_client_factory
-            .get_client_resolved(&model_id)
-            .await
-            .map_err(|e| {
-                BitFunError::AIClient(format!(
-                    "Failed to get AI client (model_id={}): {}",
-                    model_id, e
-                ))
-            })?;
-        // Get configuration for whether to support preserving historical thinking content
-        let enable_thinking = ai_client.config.enable_thinking_process;
-        let support_preserved_thinking = ai_client.config.support_preserved_thinking;
-        let context_window = ai_client.config.context_window as usize;
 
         // Detect whether the primary model supports multimodal image inputs.
         // This is used by tools like `view_image` to decide between:

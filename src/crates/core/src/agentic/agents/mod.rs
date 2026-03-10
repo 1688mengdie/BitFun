@@ -57,6 +57,11 @@ pub trait Agent: Send + Sync + 'static {
     /// Prompt template name for the agent
     fn prompt_template_name(&self) -> &str;
 
+    /// Prompt template name override for a specific model.
+    fn prompt_template_name_for_model(&self, _model_name: Option<&str>) -> Option<&str> {
+        None
+    }
+
     fn system_reminder_template_name(&self) -> Option<&str> {
         None // by default, no system reminder
     }
@@ -87,6 +92,30 @@ pub trait Agent: Send + Sync + 'static {
         } else {
             Err(BitFunError::Agent("Workspace path is required".to_string()))
         }
+    }
+
+    /// Get the system prompt for this agent with optional model-aware template selection.
+    async fn get_system_prompt_for_model(
+        &self,
+        workspace_path: Option<&str>,
+        model_name: Option<&str>,
+    ) -> BitFunResult<String> {
+        let Some(workspace_path) = workspace_path else {
+            return Err(BitFunError::Agent("Workspace path is required".to_string()));
+        };
+
+        let Some(template_name) = self.prompt_template_name_for_model(model_name) else {
+            return self.build_prompt(workspace_path).await;
+        };
+
+        let prompt_components = PromptBuilder::new(workspace_path);
+        let system_prompt_template = get_embedded_prompt(template_name).ok_or_else(|| {
+            BitFunError::Agent(format!("{} not found in embedded files", template_name))
+        })?;
+
+        prompt_components
+            .build_prompt_from_template(system_prompt_template)
+            .await
     }
 
     /// Get the system reminder for this agent, only used for modes

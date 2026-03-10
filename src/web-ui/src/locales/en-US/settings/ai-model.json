@@ -119,6 +119,11 @@
     "preserve": "Preserve Historical Thinking",
     "preserveHint": "When enabled, preserves thinking content from past conversations"
   },
+  "reasoningEffort": {
+    "label": "Reasoning Effort",
+    "hint": "Controls model reasoning depth, only for Responses API (e.g. GPT-5)",
+    "placeholder": "Use API default"
+  },
   "details": {
     "basicInfo": "Basic Information",
     "modelName": "Model Name",

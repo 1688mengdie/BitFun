@@ -453,32 +453,39 @@ impl StreamProcessor {
         if let Some(tool_id) = tool_call.id {
             if !tool_id.is_empty() {
                 ctx.has_effective_output = true;
-                // Clear previous tool_call state
-                ctx.force_finish_tool_call_buffer();
+                // Some providers repeat the tool id on every delta; only treat a new id as a new tool call.
+                let is_new_tool = ctx.tool_call_buffer.tool_id != tool_id;
+                if is_new_tool {
+                    // Clear previous tool_call state
+                    ctx.force_finish_tool_call_buffer();
 
-                // Normally tool_name should not be empty
-                let tool_name = tool_call.name.unwrap_or_default();
-                debug!("Tool detected: {}", tool_name);
-                ctx.tool_call_buffer.tool_id = tool_id.clone();
-                ctx.tool_call_buffer.tool_name = tool_name.clone();
-                ctx.tool_call_buffer.json_checker.reset();
+                    // Normally tool_name should not be empty
+                    let tool_name = tool_call.name.unwrap_or_default();
+                    debug!("Tool detected: {}", tool_name);
+                    ctx.tool_call_buffer.tool_id = tool_id.clone();
+                    ctx.tool_call_buffer.tool_name = tool_name.clone();
+                    ctx.tool_call_buffer.json_checker.reset();
 
-                // Send early detection event
-                let _ = self
-                    .event_queue
-                    .enqueue(
-                        AgenticEvent::ToolEvent {
-                            session_id: ctx.session_id.clone(),
-                            turn_id: ctx.dialog_turn_id.clone(),
-                            tool_event: ToolEventData::EarlyDetected {
-                                tool_id: tool_id,
-                                tool_name: tool_name,
+                    // Send early detection event
+                    let _ = self
+                        .event_queue
+                        .enqueue(
+                            AgenticEvent::ToolEvent {
+                                session_id: ctx.session_id.clone(),
+                                turn_id: ctx.dialog_turn_id.clone(),
+                                tool_event: ToolEventData::EarlyDetected {
+                                    tool_id: tool_id,
+                                    tool_name: tool_name,
+                                },
+                                subagent_parent_info: ctx.event_subagent_parent_info.clone(),
                             },
-                            subagent_parent_info: ctx.event_subagent_parent_info.clone(),
-                        },
-                        Some(EventPriority::Normal),
-                    )
-                    .await;
+                            Some(EventPriority::Normal),
+                        )
+                        .await;
+                } else if ctx.tool_call_buffer.tool_name.is_empty() {
+                    // Best-effort: keep name if provider repeats it.
+                    ctx.tool_call_buffer.tool_name = tool_call.name.unwrap_or_default();
+                }
             }
         }
 

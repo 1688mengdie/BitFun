@@ -35,7 +35,7 @@ pub struct AIClient {
 impl AIClient {
     const TEST_IMAGE_EXPECTED_CODE: &'static str = "BYGR";
     const TEST_IMAGE_PNG_BASE64: &'static str =
-        "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAiklEQVR4nNXZwQkAQQzDQEX995wr4giLpgBj8NMDy6XdOc2XOImTOImTOImTOImTOImTOImTOImTOImTOImTOImTOImTOImTOImTOImTOImTuDm+Bzi+B8gvIHESJ3ESJ3ESJ3ESJ3ESJ3ESJ3ESJ3ESJ3ESJ3ESJ3ESJ3ESJ3ESJ3ESJ3G+LvDXB5LJBXz4d6CTAAAAAElFTkSuQmCC";
+        "iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAIAAADTED8xAAACBklEQVR42u3ZsREAIAwDMYf9dw4txwJupI7Wua+YZEPBfO91h4ZjAgQAAgABgABAACAAEAAIAAQAAgABgABAACAAEAAIAAQAAgABgABAACAAEAAIAAQAAgABgABAACAAEAAIAAQAAgABgABAACAAEAAIAAQAAgABgABAACAAEAAIAAQAAgABIAAQAAgABAACAAGAAEAAIAAQAAgABAACAAGAAEAAIAAQAAgABAACAAGAAEAAIAAQAAgABAACAAGAAEAAIAAQAAgABAACAAGAAEAAIAAQAAgABAACAAGAAEAAIAAQAAgABIAAQAAgABAACAAEAAIAAYAAQAAgABAACAAEAAIAAYAAQAAgABAAAAAAAEDRZI3QGf7jDvEPAAIAAYAAQAAgABAACAAEAAIAAYAAQAAgABAACAAEAAIAAYAAQAAgABAACAABgABAACAAEAAIAAQAAgABgABAACAAEAAIAAQAAgABgABAACAAEAAIAAQAAgABgABAACAAEAAIAAQAAgABgABAACAAEAAIAAQAAgABgABAACAAEAAIAAQAAgABgABAAAjABAgABAACAAGAAEAAIAAQAAgABAACAAGAAEAAIAAQAAgABAACAAGAAEAAIAAQAAgABAACAAGAAEAAIAAQAAgABAACAAGAAEAAIAAQAAgABAACAAGAAEAAIAAQALwuLkoG8OSfau4AAAAASUVORK5CYII=";
 
     fn image_test_response_matches_expected(response: &str) -> bool {
         let upper = response.to_ascii_uppercase();
@@ -100,6 +100,30 @@ impl AIClient {
 
     fn is_responses_api_format(api_format: &str) -> bool {
         matches!(api_format.to_ascii_lowercase().as_str(), "response" | "responses")
+    }
+
+    fn build_test_connection_extra_body(&self) -> Option<serde_json::Value> {
+        let provider = self.config.format.to_ascii_lowercase();
+        if !matches!(provider.as_str(), "openai" | "response" | "responses") {
+            return self.config.custom_request_body.clone();
+        }
+
+        let mut extra_body = self
+            .config
+            .custom_request_body
+            .clone()
+            .unwrap_or_else(|| serde_json::json!({}));
+
+        if let Some(extra_obj) = extra_body.as_object_mut() {
+            extra_obj
+                .entry("temperature".to_string())
+                .or_insert_with(|| serde_json::json!(0));
+            extra_obj
+                .entry("tool_choice".to_string())
+                .or_insert_with(|| serde_json::json!("required"));
+        }
+
+        Some(extra_body)
     }
 
     fn is_gemini_api_format(api_format: &str) -> bool {
@@ -473,7 +497,13 @@ impl AIClient {
             debug!(target: "ai::openai_stream_request", "\ntools: {:?}", tool_names);
             if !tools.is_empty() {
                 request_body["tools"] = serde_json::Value::Array(tools);
-                request_body["tool_choice"] = serde_json::Value::String("auto".to_string());
+                // Respect `extra_body` overrides (e.g. tool_choice="required") when present.
+                let has_tool_choice = request_body
+                    .get("tool_choice")
+                    .is_some_and(|v| !v.is_null());
+                if !has_tool_choice {
+                    request_body["tool_choice"] = serde_json::Value::String("auto".to_string());
+                }
             }
         }
 
@@ -500,6 +530,13 @@ impl AIClient {
 
         if let Some(max_tokens) = self.config.max_tokens {
             request_body["max_output_tokens"] = serde_json::json!(max_tokens);
+        }
+
+        if let Some(ref effort) = self.config.reasoning_effort {
+            request_body["reasoning"] = serde_json::json!({
+                "effort": effort,
+                "summary": "auto"
+            });
         }
 
         if let Some(extra) = extra_body {
@@ -530,7 +567,13 @@ impl AIClient {
             debug!(target: "ai::responses_stream_request", "\ntools: {:?}", tool_names);
             if !tools.is_empty() {
                 request_body["tools"] = serde_json::Value::Array(tools);
-                request_body["tool_choice"] = serde_json::Value::String("auto".to_string());
+                // Respect `extra_body` overrides (e.g. tool_choice="required") when present.
+                let has_tool_choice = request_body
+                    .get("tool_choice")
+                    .is_some_and(|v| !v.is_null());
+                if !has_tool_choice {
+                    request_body["tool_choice"] = serde_json::Value::String("auto".to_string());
+                }
             }
         }
 
@@ -1343,10 +1386,20 @@ impl AIClient {
                     if let Some(tool_call) = chunk.tool_call {
                         if let Some(tool_call_id) = tool_call.id {
                             if !tool_call_id.is_empty() {
-                                cur_tool_call_id = tool_call_id;
-                                cur_tool_call_name = tool_call.name.unwrap_or_default();
-                                json_checker.reset();
-                                debug!("[send_message] Detected tool call: {}", cur_tool_call_name);
+                                // Some providers repeat the tool id on every delta. Only reset when the id changes.
+                                let is_new_tool = cur_tool_call_id != tool_call_id;
+                                if is_new_tool {
+                                    cur_tool_call_id = tool_call_id;
+                                    cur_tool_call_name = tool_call.name.unwrap_or_default();
+                                    json_checker.reset();
+                                    debug!(
+                                        "[send_message] Detected tool call: {}",
+                                        cur_tool_call_name
+                                    );
+                                } else if cur_tool_call_name.is_empty() {
+                                    // Best-effort: keep name if provider repeats it.
+                                    cur_tool_call_name = tool_call.name.unwrap_or_default();
+                                }
                             }
                         }
 
@@ -1408,7 +1461,12 @@ impl AIClient {
     pub async fn test_connection(&self) -> Result<ConnectionTestResult> {
         let start_time = std::time::Instant::now();
 
-        let test_messages = vec![Message::user("What's the weather in Beijing?".to_string())];
+        // Force a tool call to avoid false negatives: some models may answer directly when
+        // `tool_choice=auto`, even if they support tool calls.
+        let test_messages = vec![Message::user(
+            "Call the get_weather tool for city=Beijing. Do not answer with plain text."
+                .to_string(),
+        )];
         let tools = Some(vec![ToolDefinition {
             name: "get_weather".to_string(),
             description: "Get the weather of a city".to_string(),
@@ -1422,7 +1480,16 @@ impl AIClient {
             }),
         }]);
 
-        match self.send_message(test_messages, tools).await {
+        let extra_body = self.build_test_connection_extra_body();
+
+        let result = if extra_body.is_some() {
+            self.send_message_with_extra_body(test_messages, tools, extra_body)
+                .await
+        } else {
+            self.send_message(test_messages, tools).await
+        };
+
+        match result {
             Ok(response) => {
                 let response_time_ms = start_time.elapsed().as_millis() as u64;
                 if response.tool_calls.is_some() {
@@ -1437,7 +1504,9 @@ impl AIClient {
                         success: false,
                         response_time_ms,
                         model_response: Some(response.text),
-                        error_details: Some("Model does not support tool calls".to_string()),
+                        error_details: Some(
+                            "Model did not return tool calls (tool_choice=required).".to_string(),
+                        ),
                     })
                 }
             }
@@ -1536,5 +1605,70 @@ impl AIClient {
                 })
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AIClient;
+    use crate::util::types::AIConfig;
+    use serde_json::json;
+
+    fn make_test_client(format: &str, custom_request_body: Option<serde_json::Value>) -> AIClient {
+        AIClient::new(AIConfig {
+            name: "test".to_string(),
+            base_url: "https://example.com/v1".to_string(),
+            request_url: "https://example.com/v1/chat/completions".to_string(),
+            api_key: "test-key".to_string(),
+            model: "test-model".to_string(),
+            format: format.to_string(),
+            context_window: 128000,
+            max_tokens: Some(8192),
+            enable_thinking_process: false,
+            support_preserved_thinking: false,
+            custom_headers: None,
+            custom_headers_mode: None,
+            skip_ssl_verify: false,
+            reasoning_effort: None,
+            custom_request_body,
+        })
+    }
+
+    #[test]
+    fn build_test_connection_extra_body_merges_custom_body_defaults() {
+        let client = make_test_client(
+            "responses",
+            Some(json!({
+                "metadata": {
+                    "source": "test"
+                }
+            })),
+        );
+
+        let extra_body = client
+            .build_test_connection_extra_body()
+            .expect("extra body");
+
+        assert_eq!(extra_body["metadata"]["source"], "test");
+        assert_eq!(extra_body["temperature"], 0);
+        assert_eq!(extra_body["tool_choice"], "required");
+    }
+
+    #[test]
+    fn build_test_connection_extra_body_preserves_existing_tool_choice() {
+        let client = make_test_client(
+            "response",
+            Some(json!({
+                "tool_choice": "auto",
+                "temperature": 0.3
+            })),
+        );
+
+        let extra_body = client
+            .build_test_connection_extra_body()
+            .expect("extra body");
+
+        assert_eq!(extra_body["tool_choice"], "auto");
+        assert_eq!(extra_body["temperature"], 0.3);
     }
 }

@@ -794,6 +794,19 @@
     "fastModel": "Fast Model",
     "modelNotConfigured": "Not Configured"
   },
+  "reasoningEffort": {
+    "title": "Reasoning Effort",
+    "tooltip": "Adjust model reasoning depth (Responses API only)",
+    "default": "Default",
+    "low": "Low",
+    "lowDesc": "Fast responses, light reasoning",
+    "medium": "Medium",
+    "mediumDesc": "Balance speed and reasoning depth",
+    "high": "High",
+    "highDesc": "Deep reasoning",
+    "xhigh": "Extra High",
+    "xhighDesc": "Maximum reasoning depth (slower)"
+  },
   "coworkScope": {
     "title": "Choose a Cowork workspace",
     "description": "Cowork mode needs a workspace folder to read/write files. Use the current project, or choose another folder.",

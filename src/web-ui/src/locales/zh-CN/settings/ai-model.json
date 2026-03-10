@@ -119,6 +119,11 @@
     "preserve": "保留历史思考",
     "preserveHint": "开启后将保留历史对话的思考内容"
   },
+  "reasoningEffort": {
+    "label": "推理深度",
+    "hint": "控制模型推理深度，仅适用于 Responses API（如 GPT-5）",
+    "placeholder": "使用 API 默认值"
+  },
   "details": {
     "basicInfo": "基本信息",
     "modelName": "模型名称",
