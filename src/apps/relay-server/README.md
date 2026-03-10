@@ -16,17 +16,21 @@ WebSocket relay server for BitFun Remote Connect. Bridges desktop (WebSocket) an
 ### Docker (Recommended)
 
 ```bash
-# One-click deploy
+# SSH into your target server first, then clone the repo:
+git clone https://github.com/GCWing/BitFun
+cd BitFun/src/apps/relay-server
+
+# SSH into your target server first, then run:
 bash deploy.sh
 ```
+
+`deploy.sh` must be run on the target server itself. It only deploys to the current machine and does not SSH to a remote host.
 
 ### What URL should I fill in BitFun Desktop?
 
 In **Remote Connect → Self-Hosted → Server URL**, use one of:
 
 - Direct relay port: `http://<YOUR_SERVER_IP>:9700`
-- Reverse proxy on domain root: `https://relay.example.com`
-- Reverse proxy with `/relay` prefix: `https://relay.example.com/relay`
 
 `/relay` is **not mandatory**. It is only needed when your reverse proxy is configured with that path prefix.
 
@@ -118,16 +122,24 @@ Only desktop clients connect via WebSocket. Mobile clients use the HTTP endpoint
 
 ## Self-Hosted Deployment
 
-### Option A: Local Deploy (on the server itself)
+### Option A: Deploy on the Server Itself
 
 If you have the repo cloned **on the server**:
+
+```bash
+git clone https://github.com/GCWing/BitFun
+cd BitFun/src/apps/relay-server/
+bash deploy.sh
+```
+
+Or, if the repo is already present on the server:
 
 ```bash
 cd src/apps/relay-server/
 bash deploy.sh
 ```
 
-This builds the Docker image locally and starts the container. It will **automatically stop any previously running relay container** before restarting.
+This script must be executed in an SSH session on the target server. It builds the Docker image on that server and starts the container there. It will **automatically stop any previously running relay container** before restarting.
 
 ### Option B: Remote Deploy (from your dev machine)
 
@@ -163,8 +175,7 @@ The script will:
 2. Verify health endpoint:
    - `http://<server-ip>:9700/health`
 3. Configure your final URL strategy:
-   - root domain (`https://relay.example.com`) or
-   - path prefix (`https://relay.example.com/relay`)
+   - root domain (`https://relay.example.com`)
 4. Fill the same URL into BitFun Desktop "Custom Server"
 
 ### Directory Structure
@@ -177,7 +188,7 @@ relay-server/
 ├── Dockerfile              # Docker build (standalone single-crate build)
 ├── docker-compose.yml      # Docker Compose config
 ├── Caddyfile               # Caddy reverse proxy config (optional)
-├── deploy.sh               # Local deploy (run on the server itself)
+├── deploy.sh               # Deploy current machine (run on the target server itself)
 ├── remote-deploy.sh        # Remote deploy (run from dev machine via SSH)
 └── README.md
 ```

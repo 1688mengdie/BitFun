@@ -293,6 +293,7 @@ impl FeishuBot {
 
     pub async fn send_message(&self, chat_id: &str, content: &str) -> Result<()> {
         let token = self.get_access_token().await?;
+        let card = Self::build_markdown_card(content);
         let client = reqwest::Client::new();
         let resp = client
             .post("https://open.feishu.cn/open-apis/im/v1/messages")
@@ -300,18 +301,49 @@ impl FeishuBot {
             .bearer_auth(&token)
             .json(&serde_json::json!({
                 "receive_id": chat_id,
-                "msg_type": "text",
-                "content": serde_json::to_string(&serde_json::json!({"text": content}))?,
+                "msg_type": "interactive",
+                "content": serde_json::to_string(&card)?,
             }))
             .send()
             .await?;
 
-        if !resp.status().is_success() {
-            let body = resp.text().await.unwrap_or_default();
-            return Err(anyhow!("feishu send_message failed: {body}"));
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        if !status.is_success() {
+            return Err(anyhow!("feishu send_message HTTP {status}: {body}"));
+        }
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&body) {
+            if let Some(code) = parsed.get("code").and_then(|c| c.as_i64()) {
+                if code != 0 {
+                    let msg = parsed.get("msg").and_then(|m| m.as_str()).unwrap_or("unknown");
+                    warn!("Feishu send_message API error: code={code}, msg={msg}");
+                    return Err(anyhow!("feishu send_message API error: code={code}, msg={msg}"));
+                }
+            }
         }
         debug!("Feishu message sent to {chat_id}");
         Ok(())
+    }
+
+    fn build_markdown_card(content: &str) -> serde_json::Value {
+        serde_json::json!({
+            "schema": "2.0",
+            "config": {
+                "wide_screen_mode": true,
+            },
+            "body": {
+                "elements": [
+                    {
+                        "tag": "markdown",
+                        "content": content,
+                        "text_align": "left",
+                        "text_size": "normal",
+                        "margin": "0px 0px 0px 0px",
+                        "element_id": "bitfun_remote_reply_markdown",
+                    }
+                ],
+            },
+        })
     }
 
     /// Download a user-sent image from a Feishu message using the message resources API.
@@ -591,11 +623,8 @@ impl FeishuBot {
     fn build_action_card(chat_id: &str, content: &str, actions: &[BotAction]) -> serde_json::Value {
         let body = Self::card_body_text(content);
         let mut elements = vec![serde_json::json!({
-            "tag": "div",
-            "text": {
-                "tag": "lark_md",
-                "content": body,
-            }
+            "tag": "markdown",
+            "content": body,
         })];
 
         for chunk in actions.chunks(2) {
@@ -1292,11 +1321,15 @@ impl FeishuBot {
                     let msg_bot = msg_bot.clone();
                     let msg_cid = msg_cid.clone();
                     Box::pin(async move {
-                        msg_bot.send_message(&msg_cid, &text).await.ok();
+                        if let Err(err) = msg_bot.send_message(&msg_cid, &text).await {
+                            warn!("Failed to send Feishu intermediate message to {msg_cid}: {err}");
+                        }
                     })
                 });
                 let result = execute_forwarded_turn(forward, Some(handler), Some(sender)).await;
-                bot.send_message(&cid, &result.display_text).await.ok();
+                if let Err(err) = bot.send_message(&cid, &result.display_text).await {
+                    warn!("Failed to send Feishu final message to {cid}: {err}");
+                }
                 bot.notify_files_ready(&cid, &result.full_text).await;
             });
         }

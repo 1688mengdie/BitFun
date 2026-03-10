@@ -2,6 +2,9 @@
 # BitFun Relay Server — one-click deploy script.
 # Usage:  bash deploy.sh [--skip-build] [--skip-health-check]
 #
+# Run this script on the target server itself after SSH login.
+# It deploys to the current machine only; it does not SSH to a remote host.
+#
 # Prerequisites: Docker, Docker Compose
 
 set -euo pipefail
@@ -17,6 +20,10 @@ BitFun Relay Server deploy script
 
 Usage:
   bash deploy.sh [options]
+
+Run location:
+  Execute this script on the target server itself after SSH login.
+  This script only deploys to the current machine.
 
 Options:
   --skip-build         Skip docker compose build, only restart services
@@ -58,6 +65,8 @@ for arg in "$@"; do
 done
 
 echo "=== BitFun Relay Server Deploy ==="
+echo "Target: current machine"
+echo "Note: run this script on the target server after SSH login."
 check_command docker
 check_docker_compose
 
@@ -113,8 +122,6 @@ echo "Caddy proxy on ports 80/443"
 echo ""
 echo "Custom Server URL examples for BitFun Desktop:"
 echo "  - Direct relay:        http://<YOUR_SERVER_IP>:9700"
-echo "  - Reverse proxy root:  https://<YOUR_DOMAIN>"
-echo "  - Reverse proxy /relay:https://<YOUR_DOMAIN>/relay  (if you configured path prefix)"
 echo ""
 echo "Check status:  docker compose ps"
 echo "View logs:     docker compose logs -f relay-server"
