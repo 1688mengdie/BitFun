@@ -48,10 +48,27 @@ function getApplicationPath(): string {
   const appName = isWindows ? 'bitfun-desktop.exe' : 'bitfun-desktop';
   const projectRoot = path.resolve(__dirname, '..', '..', '..');
   const releasePath = path.join(projectRoot, 'target', 'release', appName);
+  const debugPath = path.join(projectRoot, 'target', 'debug', appName);
+  const forcedPath = process.env.BITFUN_E2E_APP_PATH;
+  const forcedMode = process.env.BITFUN_E2E_APP_MODE?.toLowerCase();
+
+  if (forcedPath) {
+    return forcedPath;
+  }
+
+  if (forcedMode === 'debug') {
+    return debugPath;
+  }
+
+  if (forcedMode === 'release') {
+    return releasePath;
+  }
+
   if (fs.existsSync(releasePath)) {
     return releasePath;
   }
-  return path.join(projectRoot, 'target', 'debug', appName);
+
+  return debugPath;
 }
 
 /**
