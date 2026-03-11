@@ -1,4 +1,4 @@
-use super::util::resolve_path;
+use super::util::resolve_path_with_workspace;
 use crate::agentic::tools::framework::{Tool, ToolResult, ToolUseContext};
 use crate::util::errors::{BitFunError, BitFunResult};
 use async_trait::async_trait;
@@ -72,7 +72,7 @@ Usage:
     async fn call_impl(
         &self,
         input: &Value,
-        _context: &ToolUseContext,
+        context: &ToolUseContext,
     ) -> BitFunResult<Vec<ToolResult>> {
         let file_path = input
             .get("file_path")
@@ -94,7 +94,7 @@ Usage:
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
-        let resolved_path = resolve_path(file_path);
+        let resolved_path = resolve_path_with_workspace(file_path, context.workspace_root())?;
 
         let edit_result = edit_file(&resolved_path, old_string, new_string, replace_all)?;
 

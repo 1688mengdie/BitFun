@@ -1,13 +1,12 @@
 //! Infrastructure module
 //!
-//! Provides low-level services: AI clients, storage, event system, workspace path
+//! Provides low-level services: AI clients, storage, event system
 
 pub mod ai;
 pub mod debug_log;
 pub mod events;
 pub mod filesystem;
 pub mod storage;
-pub mod workspace_path;
 
 pub use ai::AIClient;
 pub use events::BackendEventManager;
@@ -18,4 +17,3 @@ pub use filesystem::{
     PathManager, SearchMatchType,
 };
 // pub use storage::{};
-pub use workspace_path::{get_workspace_path, set_workspace_path};

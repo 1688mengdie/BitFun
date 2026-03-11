@@ -176,29 +176,22 @@ mod tests {
 }
 
 /// Get all tools
-/// - Snapshot initialized:
-/// return tools only in the snapshot manager (wrapped file tools + built-in non-file tools)
-/// **not containing** dynamically registered MCP tools.
-/// - Snapshot not initialized:
-/// return all tools in the global registry,
-/// **containing** MCP tools.
 /// If you need **always include** MCP tools, use [get_all_registered_tools]
 pub async fn get_all_tools() -> Vec<Arc<dyn Tool>> {
-    match crate::service::snapshot::ensure_global_snapshot_manager() {
-        Ok(sandbox_manager) => {
-            // Return wrapped tools in the snapshot manager
-            sandbox_manager.get_wrapped_tools()
-        }
-        Err(e) => {
-            warn!(
-                "Snapshot manager not initialized, using global registry tools: {}",
-                e
-            );
-            let registry = get_global_tool_registry();
-            let guard = registry.read().await;
-            guard.get_all_tools()
+    let registry = get_global_tool_registry();
+    let registry_lock = registry.read().await;
+    let all_tools = registry_lock.get_all_tools();
+    let wrapped_tools = crate::service::snapshot::get_snapshot_wrapped_tools();
+    let file_tool_names: std::collections::HashSet<String> =
+        wrapped_tools.iter().map(|tool| tool.name().to_string()).collect();
+
+    let mut result = wrapped_tools;
+    for tool in all_tools {
+        if !file_tool_names.contains(tool.name()) {
+            result.push(tool);
         }
     }
+    result
 }
 
 /// Get readonly tools
@@ -237,47 +230,21 @@ pub fn get_global_tool_registry() -> Arc<TokioRwLock<ToolRegistry>> {
 }
 
 /// Get all registered tools (**always include** dynamically registered MCP tools)
-/// - Snapshot initialized:
-/// return wrapped file tools + other tools in the global registry (containing MCP tools)
-/// - Snapshot not initialized: return all tools in the global registry.
 pub async fn get_all_registered_tools() -> Vec<Arc<dyn Tool>> {
-    // Try to use wrapped tools in the snapshot manager first (file operation tools don't need confirmation)
-    match crate::service::snapshot::ensure_global_snapshot_manager() {
-        Ok(sandbox_manager) => {
-            // Get all tools in the global registry
-            let registry = get_global_tool_registry();
-            let registry_lock = registry.read().await;
-            let all_tools = registry_lock.get_all_tools();
+    let registry = get_global_tool_registry();
+    let registry_lock = registry.read().await;
+    let all_tools = registry_lock.get_all_tools();
+    let wrapped_tools = crate::service::snapshot::get_snapshot_wrapped_tools();
+    let file_tool_names: std::collections::HashSet<String> =
+        wrapped_tools.iter().map(|t| t.name().to_string()).collect();
 
-            // Get wrapped core file tools in the snapshot manager
-            let wrapped_tools = sandbox_manager.get_wrapped_tools();
-
-            // Create file tool name set
-            let file_tool_names: std::collections::HashSet<String> =
-                wrapped_tools.iter().map(|t| t.name().to_string()).collect();
-
-            // Merge: use wrapped file tools + other original tools (like MCP tools)
-            let mut result = wrapped_tools;
-            for tool in all_tools {
-                if !file_tool_names.contains(tool.name()) {
-                    result.push(tool);
-                }
-            }
-
-            result
-        }
-        Err(e) => {
-            warn!(
-                "Snapshot manager not initialized, using original tools: {}",
-                e
-            );
-            // Snapshot not initialized, return original tools in the registry
-            let registry = get_global_tool_registry();
-            let registry_lock = registry.read().await;
-            let tools = registry_lock.get_all_tools();
-            tools
+    let mut result = wrapped_tools;
+    for tool in all_tools {
+        if !file_tool_names.contains(tool.name()) {
+            result.push(tool);
         }
     }
+    result
 }
 
 /// Get all registered tool names

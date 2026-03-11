@@ -7,6 +7,7 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use std::io;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -31,7 +32,7 @@ pub enum ChatExitReason {
 pub struct ChatMode {
     config: CliConfig,
     agent_name: String,
-    workspace: Option<String>,
+    workspace_path: Option<PathBuf>,
     agent: Arc<dyn Agent>,
 }
 
@@ -39,7 +40,7 @@ impl ChatMode {
     pub fn new(
         config: CliConfig, 
         agent_name: String, 
-        workspace: Option<String>,
+        workspace_path: Option<PathBuf>,
         agentic_system: &AgenticSystem,
     ) -> Self {
         // Use the real CoreAgentAdapter
@@ -47,12 +48,13 @@ impl ChatMode {
             agent_name.clone(),
             agentic_system.coordinator.clone(),
             agentic_system.event_queue.clone(),
+            workspace_path.clone(),
         )) as Arc<dyn Agent>;
         
         Self {
             config,
             agent_name,
-            workspace,
+            workspace_path,
             agent,
         }
     }
@@ -62,15 +64,20 @@ impl ChatMode {
         existing_terminal: Option<Terminal<CrosstermBackend<io::Stdout>>>,
     ) -> Result<ChatExitReason> {
         tracing::info!("Starting Chat mode, Agent: {}", self.agent_name);
-        if let Some(ws) = &self.workspace {
-            tracing::info!("Workspace: {}", ws);
+        if let Some(ws) = &self.workspace_path {
+            tracing::info!("Workspace: {}", ws.display());
         }
 
         let mut terminal = match existing_terminal {
             Some(t) => t,
             None => init_terminal()?,
         };
-        let session = Session::new(self.agent_name.clone(), self.workspace.clone());
+        let session = Session::new(
+            self.agent_name.clone(),
+            self.workspace_path
+                .as_ref()
+                .map(|path| path.to_string_lossy().to_string()),
+        );
         
         let theme = match self.config.ui.theme.as_str() {
             "light" => Theme::light(),

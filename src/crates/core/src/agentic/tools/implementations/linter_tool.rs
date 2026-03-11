@@ -12,7 +12,6 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::agentic::tools::framework::{Tool, ToolResult, ToolUseContext};
-use crate::infrastructure::get_workspace_path;
 use crate::service::lsp::get_workspace_manager;
 use crate::util::errors::{BitFunError, BitFunResult};
 
@@ -224,14 +223,14 @@ Severity levels:
     async fn call_impl(
         &self,
         input: &Value,
-        _context: &ToolUseContext,
+        context: &ToolUseContext,
     ) -> BitFunResult<Vec<ToolResult>> {
         // 1. Parse input
         let params: ReadLintsInput = serde_json::from_value(input.clone())
             .map_err(|e| BitFunError::tool(format!("Invalid input: {}", e)))?;
 
         // 2. Get workspace path
-        let workspace = get_workspace_path().ok_or_else(|| {
+        let workspace = context.workspace_root().ok_or_else(|| {
             BitFunError::tool("Workspace not set. Please open a workspace first.".to_string())
         })?;
 
@@ -254,7 +253,7 @@ Severity levels:
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
         // 5. Get workspace LSP manager
-        let workspace_manager = get_workspace_manager(workspace.clone())
+        let workspace_manager = get_workspace_manager(workspace.to_path_buf())
             .await
             .map_err(|e| {
                 BitFunError::tool(format!(

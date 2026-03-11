@@ -24,6 +24,11 @@ export interface SubagentInfo {
 
 export interface ListSubagentsOptions {
   source?: SubagentSource;
+  workspacePath?: string;
+}
+
+export interface ReloadSubagentsOptions {
+  workspacePath?: string;
 }
 
 export type SubagentLevel = 'user' | 'project';
@@ -36,6 +41,7 @@ export interface CreateSubagentPayload {
   tools?: string[];
    
   readonly?: boolean;
+  workspacePath?: string;
 }
 
 export interface UpdateSubagentConfigPayload {
@@ -55,8 +61,10 @@ export const SubagentAPI = {
   },
 
    
-  async reloadSubagents(): Promise<void> {
-    return api.invoke('reload_subagents');
+  async reloadSubagents(options: ReloadSubagentsOptions = {}): Promise<void> {
+    return api.invoke('reload_subagents', {
+      request: options,
+    });
   },
 
    

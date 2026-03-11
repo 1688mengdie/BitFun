@@ -249,4 +249,6 @@ export function clearAllBuffers(context: FlowChatContext): void {
   context.saveDebouncers.clear();
   context.lastSaveTimestamps.clear();
   context.lastSaveHashes.clear();
+  context.turnSavePending.clear();
+  context.turnSaveInFlight.clear();
 }

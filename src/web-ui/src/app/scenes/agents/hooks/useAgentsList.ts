@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { TFunction } from 'i18next';
 import { agentAPI } from '@/infrastructure/api/service-api/AgentAPI';
 import { SubagentAPI } from '@/infrastructure/api/service-api/SubagentAPI';
@@ -7,6 +7,7 @@ import type { ModeConfigItem, SkillInfo } from '@/infrastructure/config/types';
 import { useNotification } from '@/shared/notification-system';
 import type { AgentWithCapabilities } from '../agentsStore';
 import { enrichCapabilities } from '../utils';
+import { useCurrentWorkspace } from '@/infrastructure/contexts/WorkspaceContext';
 
 export type FilterLevel = 'all' | 'builtin' | 'user' | 'project';
 export type FilterType = 'all' | 'mode' | 'subagent';
@@ -31,13 +32,16 @@ export function useAgentsList({
   t,
 }: UseAgentsListOptions) {
   const notification = useNotification();
+  const { workspacePath } = useCurrentWorkspace();
   const [allAgents, setAllAgents] = useState<AgentWithCapabilities[]>([]);
   const [loading, setLoading] = useState(true);
   const [availableTools, setAvailableTools] = useState<ToolInfo[]>([]);
   const [availableSkills, setAvailableSkills] = useState<SkillInfo[]>([]);
   const [modeConfigs, setModeConfigs] = useState<Record<string, ModeConfigItem>>({});
+  const loadRequestIdRef = useRef(0);
 
   const loadAgents = useCallback(async () => {
+    const requestId = ++loadRequestIdRef.current;
     setLoading(true);
 
     const fetchTools = async (): Promise<ToolInfo[]> => {
@@ -52,11 +56,14 @@ export function useAgentsList({
     try {
       const [modes, subagents, tools, configs, skills] = await Promise.all([
         agentAPI.getAvailableModes().catch(() => []),
-        SubagentAPI.listSubagents().catch(() => []),
+        SubagentAPI.listSubagents({ workspacePath: workspacePath || undefined }).catch(() => []),
         fetchTools(),
         configAPI.getModeConfigs().catch(() => ({})),
-        configAPI.getSkillConfigs().catch(() => []),
+        configAPI.getSkillConfigs({ workspacePath: workspacePath || undefined }).catch(() => []),
       ]);
+      if (requestId !== loadRequestIdRef.current) {
+        return;
+      }
 
       const modeAgents: AgentWithCapabilities[] = modes.map((mode) =>
         enrichCapabilities({
@@ -85,9 +92,11 @@ export function useAgentsList({
       setAvailableSkills(skills.filter((skill: SkillInfo) => skill.enabled));
       setModeConfigs(configs as Record<string, ModeConfigItem>);
     } finally {
-      setLoading(false);
+      if (requestId === loadRequestIdRef.current) {
+        setLoading(false);
+      }
     }
-  }, []);
+  }, [workspacePath]);
 
   useEffect(() => {
     void loadAgents();

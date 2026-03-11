@@ -9,6 +9,7 @@ use bitfun_core::service::config::types::SubAgentConfig;
 use log::warn;
 use serde::Deserialize;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::State;
 
@@ -16,6 +17,13 @@ use tauri::State;
 #[serde(rename_all = "camelCase")]
 pub struct ListSubagentsRequest {
     pub source: Option<SubAgentSource>,
+    pub workspace_path: Option<String>,
+}
+
+fn workspace_root_from_request(workspace_path: Option<&str>) -> Option<PathBuf> {
+    workspace_path
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
 }
 
 #[tauri::command]
@@ -23,7 +31,11 @@ pub async fn list_subagents(
     state: State<'_, AppState>,
     request: ListSubagentsRequest,
 ) -> Result<Vec<AgentInfo>, String> {
-    let list = state.agent_registry.get_subagents_info().await;
+    let workspace = workspace_root_from_request(request.workspace_path.as_deref());
+    let list = state
+        .agent_registry
+        .get_subagents_info(workspace.as_deref())
+        .await;
 
     let result = match request.source {
         Some(source) => list
@@ -117,6 +129,7 @@ pub struct CreateSubagentRequest {
     pub prompt: String,
     pub tools: Option<Vec<String>>,
     pub readonly: Option<bool>,
+    pub workspace_path: Option<String>,
 }
 
 fn validate_agent_name(name: &str) -> Result<(), String> {
@@ -142,16 +155,19 @@ pub async fn create_subagent(
 ) -> Result<(), String> {
     let name = request.name.trim();
     validate_agent_name(name)?;
+    let workspace = workspace_root_from_request(request.workspace_path.as_deref());
 
     if request.level == SubagentLevel::Project {
-        let wp = state.workspace_path.read().await;
-        if wp.is_none() {
+        if workspace.is_none() {
             return Err("Project-level Agent requires opening a workspace first".to_string());
         }
     }
 
     let modes = state.agent_registry.get_modes_info().await;
-    let subagents = state.agent_registry.get_subagents_info().await;
+    let subagents = state
+        .agent_registry
+        .get_subagents_info(workspace.as_deref())
+        .await;
     let existing: std::collections::HashSet<_> = modes
         .iter()
         .map(|m| m.id.as_str().to_lowercase())
@@ -168,8 +184,7 @@ pub async fn create_subagent(
     let agents_dir = match request.level {
         SubagentLevel::User => pm.user_agents_dir(),
         SubagentLevel::Project => {
-            let wp = state.workspace_path.read().await;
-            let root = wp.as_deref().ok_or("Workspace path not available")?;
+            let root = workspace.as_deref().ok_or("Workspace path not available")?;
             pm.project_agents_dir(root)
         }
     };
@@ -224,14 +239,19 @@ pub async fn create_subagent(
     Ok(())
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReloadSubagentsRequest {
+    pub workspace_path: Option<String>,
+}
+
 #[tauri::command]
-pub async fn reload_subagents(state: State<'_, AppState>) -> Result<(), String> {
-    let workspace_root = state
-        .workspace_path
-        .read()
-        .await
-        .clone()
-        .unwrap_or_else(|| std::path::PathBuf::from("."));
+pub async fn reload_subagents(
+    state: State<'_, AppState>,
+    request: ReloadSubagentsRequest,
+) -> Result<(), String> {
+    let workspace_root = workspace_root_from_request(request.workspace_path.as_deref())
+        .ok_or_else(|| "workspacePath is required to reload project subagents".to_string())?;
     state
         .agent_registry
         .load_custom_subagents(workspace_root.as_path())

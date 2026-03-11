@@ -20,7 +20,7 @@ import {
   isLocaleSupported,
 } from '../presets';
 import { useI18nStore } from '../store/i18nStore';
-import { i18nAPI } from '@/infrastructure/api';
+import { i18nAPI } from '@/infrastructure/api/service-api/I18nAPI';
 
 
 import zhCNCommon from '../../../locales/zh-CN/common.json';

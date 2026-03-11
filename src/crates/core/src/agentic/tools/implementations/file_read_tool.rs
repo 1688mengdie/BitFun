@@ -1,4 +1,4 @@
-use super::util::resolve_path;
+use super::util::resolve_path_with_workspace;
 use crate::agentic::tools::framework::{
     Tool, ToolRenderOptions, ToolResult, ToolUseContext, ValidationResult,
 };
@@ -96,7 +96,7 @@ Usage:
     async fn validate_input(
         &self,
         input: &Value,
-        _context: Option<&ToolUseContext>,
+        context: Option<&ToolUseContext>,
     ) -> ValidationResult {
         if let Some(file_path) = input.get("file_path").and_then(|v| v.as_str()) {
             if file_path.is_empty() {
@@ -108,11 +108,26 @@ Usage:
                 };
             }
 
-            let path = Path::new(file_path);
+            let resolved_path = match resolve_path_with_workspace(
+                file_path,
+                context.and_then(|ctx| ctx.workspace_root()),
+            ) {
+                Ok(path) => path,
+                Err(err) => {
+                    return ValidationResult {
+                        result: false,
+                        message: Some(err.to_string()),
+                        error_code: Some(400),
+                        meta: None,
+                    };
+                }
+            };
+
+            let path = Path::new(&resolved_path);
             if !path.exists() {
                 return ValidationResult {
                     result: false,
-                    message: Some(format!("File does not exist: {}", file_path)),
+                    message: Some(format!("File does not exist: {}", resolved_path)),
                     error_code: Some(404),
                     meta: None,
                 };
@@ -121,7 +136,7 @@ Usage:
             if !path.is_file() {
                 return ValidationResult {
                     result: false,
-                    message: Some(format!("Path is not a file: {}", file_path)),
+                    message: Some(format!("Path is not a file: {}", resolved_path)),
                     error_code: Some(400),
                     meta: None,
                 };
@@ -158,7 +173,7 @@ Usage:
     async fn call_impl(
         &self,
         input: &Value,
-        _context: &ToolUseContext,
+        context: &ToolUseContext,
     ) -> BitFunResult<Vec<ToolResult>> {
         let file_path = input
             .get("file_path")
@@ -175,14 +190,18 @@ Usage:
             .and_then(|v| v.as_u64())
             .unwrap_or(self.default_max_lines_to_read as u64) as usize;
 
-        let resolved_path = resolve_path(file_path);
+        let resolved_path = resolve_path_with_workspace(file_path, context.workspace_root())?;
 
         let read_file_result = read_file(&resolved_path, start_line, limit, self.max_line_chars)
             .map_err(|e| BitFunError::tool(e))?;
 
         // Get matching file-specific rules
         let file_rules = match get_global_ai_rules_service().await {
-            Ok(rules_service) => rules_service.get_rules_for_file(&resolved_path).await,
+            Ok(rules_service) => {
+                rules_service
+                    .get_rules_for_file_with_workspace(&resolved_path, context.workspace_root())
+                    .await
+            }
             Err(e) => {
                 debug!("Failed to get AIRulesService: {}", e);
                 crate::service::ai_rules::FileRulesResult {

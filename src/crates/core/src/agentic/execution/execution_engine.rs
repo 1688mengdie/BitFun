@@ -14,7 +14,6 @@ use crate::agentic::image_analysis::{
 use crate::agentic::session::SessionManager;
 use crate::agentic::tools::{get_all_registered_tools, SubagentParentInfo};
 use crate::infrastructure::ai::get_global_ai_client_factory;
-use crate::infrastructure::get_workspace_path;
 use crate::service::config::get_global_config_service;
 use crate::service::config::types::{ModelCapability, ModelCategory};
 use crate::util::errors::{BitFunError, BitFunResult};
@@ -382,8 +381,11 @@ impl ExecutionEngine {
         // Things that remain constant in a dialog turn: 1.agent, 2.system prompt, 3.tools, 4.ai client
         // 1. Get current agent
         let agent_registry = get_agent_registry();
+        if let Some(workspace) = context.workspace.as_ref() {
+            agent_registry.load_custom_subagents(workspace.root_path()).await;
+        }
         let current_agent = agent_registry
-            .get_agent(&agent_type)
+            .get_agent(&agent_type, context.workspace.as_ref().map(|workspace| workspace.root_path()))
             .ok_or_else(|| BitFunError::NotFound(format!("Agent not found: {}", agent_type)))?;
         info!(
             "Current Agent: {} ({})",
@@ -394,7 +396,10 @@ impl ExecutionEngine {
         // 2. Get AI client
         // Get model ID from AgentRegistry
         let model_id = agent_registry
-            .get_model_id_for_agent(&agent_type)
+            .get_model_id_for_agent(
+                &agent_type,
+                context.workspace.as_ref().map(|workspace| workspace.root_path()),
+            )
             .await
             .map_err(|e| BitFunError::AIClient(format!("Failed to get model ID: {}", e)))?;
         info!(
@@ -429,8 +434,10 @@ impl ExecutionEngine {
             ai_client.config.model
         );
         let system_prompt = {
-            let workspace_path = get_workspace_path();
-            let workspace_str = workspace_path.as_ref().map(|p| p.display().to_string());
+            let workspace_str = context
+                .workspace
+                .as_ref()
+                .map(|workspace| workspace.root_path_string());
             current_agent
                 .get_system_prompt_for_model(
                     workspace_str.as_deref(),
@@ -472,7 +479,12 @@ impl ExecutionEngine {
         );
 
         // 4. Get available tools list (read tool configuration for current mode from global config)
-        let allowed_tools = agent_registry.get_agent_tools(&agent_type).await;
+        let allowed_tools = agent_registry
+            .get_agent_tools(
+                &agent_type,
+                context.workspace.as_ref().map(|workspace| workspace.root_path()),
+            )
+            .await;
         let enable_tools = context
             .context
             .get("enable_tools")
@@ -484,7 +496,7 @@ impl ExecutionEngine {
                 agent_type,
                 allowed_tools.len()
             );
-            self.get_available_tools_and_definitions(&allowed_tools)
+            self.get_available_tools_and_definitions(&allowed_tools, context.workspace.as_ref())
                 .await
         } else {
             (vec![], None)
@@ -499,7 +511,6 @@ impl ExecutionEngine {
             })?;
         let enable_context_compression = session.config.enable_context_compression;
         let compression_threshold = session.config.compression_threshold;
-
         // Detect whether the primary model supports multimodal image inputs.
         // This is used by tools like `view_image` to decide between:
         // - attaching image content for the primary model to analyze directly, or
@@ -672,6 +683,7 @@ impl ExecutionEngine {
                 dialog_turn_id: context.dialog_turn_id.clone(),
                 turn_index: context.turn_index,
                 round_number: round_index,
+                workspace: context.workspace.clone(),
                 messages: messages.clone(),
                 available_tools: available_tools.clone(),
                 model_name: ai_client.config.model.clone(),
@@ -687,11 +699,10 @@ impl ExecutionEngine {
                 messages.len()
             );
 
-            let workspace_path = get_workspace_path();
             let ai_messages = Self::build_ai_messages_for_send(
                 &messages,
                 &ai_client.config.format,
-                workspace_path.as_deref(),
+                context.workspace.as_ref().map(|workspace| workspace.root_path()),
                 &context.dialog_turn_id,
             )
             .await?;
@@ -902,6 +913,7 @@ impl ExecutionEngine {
     async fn get_available_tools_and_definitions(
         &self,
         mode_allowed_tools: &[String],
+        workspace: Option<&crate::agentic::WorkspaceBinding>,
     ) -> (Vec<String>, Option<Vec<ToolDefinition>>) {
         // Use get_all_registered_tools to get all tools including MCP tools
         let all_tools = get_all_registered_tools().await;
@@ -909,6 +921,22 @@ impl ExecutionEngine {
         // Filter tools: 1) Check if enabled 2) Check if mode allows
         let mut enabled_tool_names = Vec::new();
         let mut tool_definitions = Vec::new();
+        let description_context = crate::agentic::tools::framework::ToolUseContext {
+            tool_call_id: None,
+            message_id: None,
+            agent_type: None,
+            session_id: None,
+            dialog_turn_id: None,
+            workspace: workspace.cloned(),
+            safe_mode: None,
+            abort_controller: None,
+            read_file_timestamps: Default::default(),
+            options: None,
+            response_state: None,
+            image_context_provider: None,
+            subagent_parent_info: None,
+            cancellation_token: None,
+        };
         for tool in &all_tools {
             if !tool.is_enabled().await {
                 continue;
@@ -920,7 +948,7 @@ impl ExecutionEngine {
                 enabled_tool_names.push(tool_name);
 
                 let description = tool
-                    .description()
+                    .description_with_context(Some(&description_context))
                     .await
                     .unwrap_or_else(|_| format!("Tool: {}", tool.name()));
 

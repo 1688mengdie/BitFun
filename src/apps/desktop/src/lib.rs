@@ -7,9 +7,8 @@ pub mod macos_menubar;
 pub mod theme;
 
 use bitfun_core::infrastructure::ai::AIClientFactory;
-use bitfun_core::infrastructure::{
-    get_path_manager_arc, get_workspace_path, try_get_path_manager_arc,
-};
+use bitfun_core::infrastructure::{get_path_manager_arc, try_get_path_manager_arc};
+use bitfun_core::service::workspace::get_global_workspace_service;
 use bitfun_transport::{TauriTransportAdapter, TransportAdapter};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -27,7 +26,7 @@ use api::ai_rules_api::*;
 use api::clipboard_file_api::*;
 use api::commands::*;
 use api::config_api::*;
-use api::conversation_api::*;
+use api::session_api::*;
 use api::diff_api::*;
 use api::git_agent_api::*;
 use api::git_api::*;
@@ -424,12 +423,16 @@ pub async fn run() {
             rollback_to_turn,
             accept_session,
             accept_file,
+            reject_file,
             get_session_files,
             get_session_turns,
             get_turn_files,
             get_file_diff,
             get_operation_diff,
             get_operation_summary,
+            get_session_operations,
+            accept_operation,
+            reject_operation,
             get_session_stats,
             get_snapshot_system_stats,
             get_snapshot_sessions,
@@ -453,14 +456,14 @@ pub async fn run() {
             build_ai_rules_system_prompt,
             reload_ai_rules,
             toggle_ai_rule,
-            // Conversation API
-            get_conversation_sessions,
-            load_conversation_history,
-            save_dialog_turn,
+            // Session persistence API
+            list_persisted_sessions,
+            load_session_turns,
+            save_session_turn,
             save_session_metadata,
-            delete_conversation_history,
-            touch_conversation_session,
-            load_session_metadata,
+            delete_persisted_session,
+            touch_session_activity,
+            load_persisted_session_metadata,
             // AI Memory API
             api::ai_memory_api::get_all_memories,
             api::ai_memory_api::add_memory,
@@ -907,7 +910,8 @@ fn spawn_ingest_server_with_config_listener() {
                 .await
             {
                 let debug_config = &config.ai.debug_mode_config;
-                let workspace_path = get_workspace_path()
+                let workspace_path = get_global_workspace_service()
+                    .and_then(|service| service.try_get_current_workspace_path())
                     .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
 
                 Some(bitfun_core::infrastructure::debug_log::IngestServerConfig::from_debug_mode_config(
@@ -966,7 +970,8 @@ fn spawn_ingest_server_with_config_listener() {
                         new_port,
                         new_log_path,
                     }) => {
-                        let workspace_path = get_workspace_path()
+                        let workspace_path = get_global_workspace_service()
+                            .and_then(|service| service.try_get_current_workspace_path())
                             .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
                         let full_log_path = workspace_path.join(&new_log_path);
 
@@ -981,7 +986,8 @@ fn spawn_ingest_server_with_config_listener() {
                                 .await
                             {
                                 let debug_config = &config.ai.debug_mode_config;
-                                let workspace_path = get_workspace_path()
+                                let workspace_path = get_global_workspace_service()
+                                    .and_then(|service| service.try_get_current_workspace_path())
                                     .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
                                 let full_log_path = workspace_path.join(&debug_config.log_path);
 

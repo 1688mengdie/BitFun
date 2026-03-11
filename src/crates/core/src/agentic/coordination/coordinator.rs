@@ -14,8 +14,10 @@ use crate::agentic::execution::{ExecutionContext, ExecutionEngine};
 use crate::agentic::image_analysis::ImageContextData;
 use crate::agentic::session::SessionManager;
 use crate::agentic::tools::pipeline::{SubagentParentInfo, ToolPipeline};
+use crate::agentic::WorkspaceBinding;
 use crate::util::errors::{BitFunError, BitFunResult};
 use log::{debug, error, info, warn};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::OnceLock;
 use tokio::sync::mpsc;
@@ -89,6 +91,17 @@ pub struct ConversationCoordinator {
 }
 
 impl ConversationCoordinator {
+    fn session_workspace_binding(session: &Session) -> Option<WorkspaceBinding> {
+        Self::config_workspace_binding(&session.config)
+    }
+
+    fn config_workspace_binding(config: &SessionConfig) -> Option<WorkspaceBinding> {
+        config
+            .workspace_path
+            .as_ref()
+            .map(|workspace_path| WorkspaceBinding::new(None, PathBuf::from(workspace_path)))
+    }
+
     pub fn new(
         session_manager: Arc<SessionManager>,
         execution_engine: Arc<ExecutionEngine>,
@@ -119,7 +132,10 @@ impl ConversationCoordinator {
         agent_type: String,
         config: SessionConfig,
     ) -> BitFunResult<Session> {
-        self.create_session_with_workspace(None, session_name, agent_type, config, None)
+        let workspace_path = config.workspace_path.clone().ok_or_else(|| {
+            BitFunError::Validation("workspace_path is required when creating a session".to_string())
+        })?;
+        self.create_session_with_workspace(None, session_name, agent_type, config, workspace_path)
             .await
     }
 
@@ -131,7 +147,10 @@ impl ConversationCoordinator {
         agent_type: String,
         config: SessionConfig,
     ) -> BitFunResult<Session> {
-        self.create_session_with_workspace(session_id, session_name, agent_type, config, None)
+        let workspace_path = config.workspace_path.clone().ok_or_else(|| {
+            BitFunError::Validation("workspace_path is required when creating a session".to_string())
+        })?;
+        self.create_session_with_workspace(session_id, session_name, agent_type, config, workspace_path)
             .await
     }
 
@@ -144,28 +163,24 @@ impl ConversationCoordinator {
         session_name: String,
         agent_type: String,
         mut config: SessionConfig,
-        workspace_path: Option<String>,
+        workspace_path: String,
     ) -> BitFunResult<Session> {
-        let effective_workspace_path = workspace_path.or_else(|| {
-            crate::infrastructure::get_workspace_path().map(|p| p.to_string_lossy().to_string())
-        });
-
         // Persist the workspace binding inside the session config so execution can
         // consistently restore the correct workspace regardless of the entry point.
-        config.workspace_path = effective_workspace_path.clone();
+        config.workspace_path = Some(workspace_path.clone());
         let session = self
             .session_manager
             .create_session_with_id(session_id, session_name, agent_type, config)
             .await?;
 
-        self.sync_session_metadata_to_workspace(&session, effective_workspace_path.clone())
+        self.sync_session_metadata_to_workspace(&session, workspace_path.clone())
             .await;
 
         self.emit_event(AgenticEvent::SessionCreated {
             session_id: session.session_id.clone(),
             session_name: session.session_name.clone(),
             agent_type: session.agent_type.clone(),
-            workspace_path: effective_workspace_path,
+            workspace_path: Some(workspace_path),
         })
         .await;
         Ok(session)
@@ -174,16 +189,11 @@ impl ConversationCoordinator {
     async fn sync_session_metadata_to_workspace(
         &self,
         session: &Session,
-        workspace_path: Option<String>,
+        workspace_path: String,
     ) {
+        use crate::agentic::persistence::PersistenceManager;
         use crate::infrastructure::PathManager;
-        use crate::service::conversation::{
-            ConversationPersistenceManager, SessionMetadata, SessionStatus,
-        };
-
-        let Some(workspace_path) = workspace_path else {
-            return;
-        };
+        use crate::service::session::{SessionMetadata, SessionStatus};
 
         let path_manager = match PathManager::new() {
             Ok(pm) => Arc::new(pm),
@@ -193,17 +203,11 @@ impl ConversationCoordinator {
             }
         };
 
-        let conv_mgr = match ConversationPersistenceManager::new(
-            path_manager,
-            std::path::PathBuf::from(&workspace_path),
-        )
-        .await
-        {
-            Ok(mgr) => mgr,
+        let workspace_path_buf = std::path::PathBuf::from(&workspace_path);
+        let persistence_manager = match PersistenceManager::new(path_manager) {
+            Ok(manager) => manager,
             Err(e) => {
-                warn!(
-                    "Failed to initialize ConversationPersistenceManager for session metadata sync: {e}"
-                );
+                warn!("Failed to initialize PersistenceManager for session metadata sync: {e}");
                 return;
             }
         };
@@ -213,7 +217,10 @@ impl ConversationCoordinator {
             .unwrap_or_default()
             .as_millis() as u64;
 
-        let existing = match conv_mgr.load_session_metadata(&session.session_id).await {
+        let existing = match persistence_manager
+            .load_session_metadata(&workspace_path_buf, &session.session_id)
+            .await
+        {
             Ok(meta) => meta,
             Err(e) => {
                 debug!(
@@ -259,7 +266,10 @@ impl ConversationCoordinator {
             workspace_path: Some(workspace_path),
         };
 
-        if let Err(e) = conv_mgr.save_session_metadata(&metadata).await {
+        if let Err(e) = persistence_manager
+            .save_session_metadata(&workspace_path_buf, &metadata)
+            .await
+        {
             warn!(
                 "Failed to sync session metadata to workspace: session_id={}, error={}",
                 session.session_id, e
@@ -268,7 +278,7 @@ impl ConversationCoordinator {
     }
 
     /// Ensure the completed/failed/cancelled turn is persisted to the workspace
-    /// conversation storage.  If the frontend already saved a richer version
+    /// session storage. If the frontend already saved a richer version
     /// during streaming, we only update the final status; otherwise we create
     /// a minimal record with the user message so the turn is never lost.
     /// Safety-net persistence: only creates a minimal record when the frontend
@@ -284,30 +294,28 @@ impl ConversationCoordinator {
         turn_index: usize,
         user_input: &str,
         workspace_path: &str,
-        status: crate::service::conversation::TurnStatus,
+        status: crate::service::session::TurnStatus,
         user_message_metadata: Option<serde_json::Value>,
     ) {
+        use crate::agentic::persistence::PersistenceManager;
         use crate::infrastructure::PathManager;
-        use crate::service::conversation::{
-            ConversationPersistenceManager, DialogTurnData, UserMessageData,
-        };
+        use crate::service::session::{DialogTurnData, UserMessageData};
 
         let path_manager = match PathManager::new() {
             Ok(pm) => std::sync::Arc::new(pm),
             Err(_) => return,
         };
 
-        let conv_mgr = match ConversationPersistenceManager::new(
-            path_manager,
-            std::path::PathBuf::from(workspace_path),
-        )
-        .await
-        {
-            Ok(mgr) => mgr,
+        let workspace_path_buf = std::path::PathBuf::from(workspace_path);
+        let persistence_manager = match PersistenceManager::new(path_manager) {
+            Ok(manager) => manager,
             Err(_) => return,
         };
 
-        if let Ok(Some(_existing)) = conv_mgr.load_dialog_turn(session_id, turn_index).await {
+        if let Ok(Some(_existing)) = persistence_manager
+            .load_dialog_turn(&workspace_path_buf, session_id, turn_index)
+            .await
+        {
             return;
         }
 
@@ -331,7 +339,10 @@ impl ConversationCoordinator {
         turn_data.end_time = Some(now_ms);
         turn_data.duration_ms = Some(now_ms.saturating_sub(turn_data.start_time));
 
-        if let Err(e) = conv_mgr.save_dialog_turn(&turn_data).await {
+        if let Err(e) = persistence_manager
+            .save_dialog_turn(&workspace_path_buf, &turn_data)
+            .await
+        {
             warn!(
                 "Failed to finalize turn in workspace: session_id={}, turn_index={}, error={}",
                 session_id, turn_index, e
@@ -354,10 +365,18 @@ impl ConversationCoordinator {
             .await
     }
 
-    async fn wrap_user_input(&self, agent_type: &str, user_input: String) -> BitFunResult<String> {
+    async fn wrap_user_input(
+        &self,
+        agent_type: &str,
+        user_input: String,
+        workspace: Option<&WorkspaceBinding>,
+    ) -> BitFunResult<String> {
         let agent_registry = get_agent_registry();
+        if let Some(workspace) = workspace {
+            agent_registry.load_custom_subagents(workspace.root_path()).await;
+        }
         let current_agent = agent_registry
-            .get_agent(&agent_type)
+            .get_agent(agent_type, workspace.map(|binding| binding.root_path()))
             .ok_or_else(|| BitFunError::NotFound(format!("Agent not found: {}", agent_type)))?;
         let system_reminder = current_agent.get_system_reminder(0).await?;
 
@@ -386,6 +405,7 @@ impl ConversationCoordinator {
         user_input: String,
         turn_id: Option<String>,
         agent_type: String,
+        workspace_path: Option<String>,
         trigger_source: DialogTriggerSource,
     ) -> BitFunResult<()> {
         self.start_dialog_turn_internal(
@@ -394,6 +414,7 @@ impl ConversationCoordinator {
             None,
             turn_id,
             agent_type,
+            workspace_path,
             trigger_source,
         )
         .await
@@ -406,6 +427,7 @@ impl ConversationCoordinator {
         image_contexts: Vec<ImageContextData>,
         turn_id: Option<String>,
         agent_type: String,
+        workspace_path: Option<String>,
         trigger_source: DialogTriggerSource,
     ) -> BitFunResult<()> {
         self.start_dialog_turn_internal(
@@ -414,6 +436,7 @@ impl ConversationCoordinator {
             Some(image_contexts),
             turn_id,
             agent_type,
+            workspace_path,
             trigger_source,
         )
         .await
@@ -430,6 +453,7 @@ impl ConversationCoordinator {
         image_contexts: Option<Vec<ImageContextData>>,
         session_id: &str,
         image_metadata: Option<serde_json::Value>,
+        workspace: Option<WorkspaceBinding>,
     ) -> BitFunResult<(String, Option<Vec<ImageContextData>>)> {
         let images = match &image_contexts {
             Some(imgs) if !imgs.is_empty() => imgs,
@@ -471,12 +495,16 @@ impl ConversationCoordinator {
             }
         };
 
-        let workspace_path = crate::infrastructure::get_workspace_path();
+        let workspace_path = workspace.map(|binding| binding.root_path);
+        let request_workspace_path = workspace_path
+            .as_ref()
+            .map(|path| path.to_string_lossy().to_string());
         let analyzer = ImageAnalyzer::new(workspace_path, vision_client);
         let request = AnalyzeImagesRequest {
             images: images.clone(),
             user_message: Some(user_input.clone()),
             session_id: session_id.to_string(),
+            workspace_path: request_workspace_path,
         };
 
         self.emit_event(AgenticEvent::ImageAnalysisStarted {
@@ -550,6 +578,7 @@ impl ConversationCoordinator {
         image_contexts: Option<Vec<ImageContextData>>,
         turn_id: Option<String>,
         agent_type: String,
+        workspace_path: Option<String>,
         trigger_source: DialogTriggerSource,
     ) -> BitFunResult<()> {
         // Get latest session, restoring from persistence on demand so every entry
@@ -561,7 +590,15 @@ impl ConversationCoordinator {
                     "Session not found in memory, attempting restore before starting dialog: session_id={}",
                     session_id
                 );
-                self.session_manager.restore_session(&session_id).await?
+                let workspace_path = workspace_path.clone().ok_or_else(|| {
+                    BitFunError::Validation(format!(
+                        "workspace_path is required when restoring session: {}",
+                        session_id
+                    ))
+                })?;
+                self.session_manager
+                    .restore_session(Path::new(&workspace_path), &session_id)
+                    .await?
             }
         };
 
@@ -677,7 +714,26 @@ impl ConversationCoordinator {
                 "Starting session history restore: session_id={}",
                 session_id
             );
-            match self.session_manager.restore_session(&session_id).await {
+            match self
+                .session_manager
+                .restore_session(
+                    Path::new(
+                        session
+                            .config
+                            .workspace_path
+                            .as_deref()
+                            .or(workspace_path.as_deref())
+                            .ok_or_else(|| {
+                                BitFunError::Validation(format!(
+                                    "workspace_path is required when restoring session: {}",
+                                    session_id
+                                ))
+                            })?,
+                    ),
+                    &session_id,
+                )
+                .await
+            {
                 Ok(_) => {
                     let restored_messages = self
                         .session_manager
@@ -702,7 +758,7 @@ impl ConversationCoordinator {
 
         let original_user_input = user_input.clone();
 
-        // Build image metadata for ConversationPersistenceManager (before image_contexts is consumed)
+        // Build image metadata for workspace turn persistence (before image_contexts is consumed)
         // Also stores original_text so the UI can display the user's actual input
         // instead of the vision-enhanced text.
         let user_message_metadata: Option<serde_json::Value> = image_contexts
@@ -742,17 +798,19 @@ impl ConversationCoordinator {
         // vision model to pre-analyze them, then enhance the user message with text descriptions.
         // This is the single authoritative code path for all image handling (desktop, remote, bot).
         // If no vision model is configured, the request is rejected with a user-friendly message.
+        let session_workspace = Self::session_workspace_binding(&session);
         let (user_input, image_contexts) = self
             .pre_analyze_images_if_needed(
                 user_input,
                 image_contexts,
                 &session_id,
                 user_message_metadata.clone(),
+                session_workspace.clone(),
             )
             .await?;
 
         let wrapped_user_input = self
-            .wrap_user_input(&effective_agent_type, user_input)
+            .wrap_user_input(&effective_agent_type, user_input, session_workspace.as_ref())
             .await?;
 
         // Start new dialog turn (sets state to Processing internally)
@@ -765,6 +823,7 @@ impl ConversationCoordinator {
                 wrapped_user_input.clone(),
                 turn_id,
                 image_contexts,
+                user_message_metadata.clone(),
             )
             .await?;
 
@@ -815,12 +874,16 @@ impl ConversationCoordinator {
 
         // Pass turn_index (for operation history/rollback)
         context_vars.insert("turn_index".to_string(), turn_index.to_string());
+        let session_workspace_path = session_workspace
+            .as_ref()
+            .map(|workspace| workspace.root_path_string());
 
         let execution_context = ExecutionContext {
             session_id: session_id.clone(),
             dialog_turn_id: turn_id.clone(),
             turn_index,
             agent_type: effective_agent_type.clone(),
+            workspace: session_workspace,
             context: context_vars,
             subagent_parent_info: None,
             skip_tool_confirmation: trigger_source.skip_tool_confirmation(),
@@ -874,7 +937,6 @@ impl ConversationCoordinator {
         let event_queue = self.event_queue.clone();
         let session_id_clone = session_id.clone();
         let turn_id_clone = turn_id.clone();
-        let session_workspace_path = session.config.workspace_path.clone();
         let user_input_for_workspace = wrapped_user_input.clone();
         let effective_agent_type_clone = effective_agent_type.clone();
         let user_message_metadata_clone = user_message_metadata;
@@ -884,19 +946,6 @@ impl ConversationCoordinator {
             // Note: Don't check cancellation here as cancel token hasn't been created yet
             // Cancel token is created in execute_dialog_turn -> execute_round
             // execute_dialog_turn has proper cancellation checks internally
-
-            if let Some(ref workspace_path) = session_workspace_path {
-                use crate::infrastructure::{get_workspace_path, set_workspace_path};
-
-                let current = get_workspace_path().map(|p| p.to_string_lossy().to_string());
-                if current.as_deref() != Some(workspace_path.as_str()) {
-                    info!(
-                        "Activating session workspace before dialog turn: session_id={}, workspace_path={}",
-                        session_id_clone, workspace_path
-                    );
-                    set_workspace_path(Some(std::path::PathBuf::from(workspace_path)));
-                }
-            }
 
             let _ = session_manager
                 .update_session_state(
@@ -944,7 +993,7 @@ impl ConversationCoordinator {
                         let _ = tx.try_send((session_id_clone.clone(), TurnOutcome::Completed));
                     }
 
-                    Some(crate::service::conversation::TurnStatus::Completed)
+                    Some(crate::service::session::TurnStatus::Completed)
                 }
                 Err(e) => {
                     let is_cancellation = matches!(&e, BitFunError::Cancelled(_));
@@ -995,7 +1044,7 @@ impl ConversationCoordinator {
                             let _ = tx.try_send((session_id_clone.clone(), TurnOutcome::Cancelled));
                         }
 
-                        Some(crate::service::conversation::TurnStatus::Cancelled)
+                        Some(crate::service::session::TurnStatus::Cancelled)
                     } else {
                         error!("Dialog turn execution failed: {}", e);
 
@@ -1032,7 +1081,7 @@ impl ConversationCoordinator {
                             let _ = tx.try_send((session_id_clone.clone(), TurnOutcome::Failed));
                         }
 
-                        Some(crate::service::conversation::TurnStatus::Error)
+                        Some(crate::service::session::TurnStatus::Error)
                     }
                 }
             };
@@ -1126,18 +1175,18 @@ impl ConversationCoordinator {
     }
 
     /// Delete session
-    pub async fn delete_session(&self, session_id: &str) -> BitFunResult<()> {
-        self.session_manager.delete_session(session_id).await
+    pub async fn delete_session(&self, workspace_path: &Path, session_id: &str) -> BitFunResult<()> {
+        self.session_manager.delete_session(workspace_path, session_id).await
     }
 
     /// Restore session
-    pub async fn restore_session(&self, session_id: &str) -> BitFunResult<Session> {
-        self.session_manager.restore_session(session_id).await
+    pub async fn restore_session(&self, workspace_path: &Path, session_id: &str) -> BitFunResult<Session> {
+        self.session_manager.restore_session(workspace_path, session_id).await
     }
 
     /// List all sessions
-    pub async fn list_sessions(&self) -> BitFunResult<Vec<SessionSummary>> {
-        self.session_manager.list_sessions().await
+    pub async fn list_sessions(&self, workspace_path: &Path) -> BitFunResult<Vec<SessionSummary>> {
+        self.session_manager.list_sessions(workspace_path).await
     }
 
     /// Get session messages
@@ -1284,6 +1333,7 @@ impl ConversationCoordinator {
             dialog_turn_id: dialog_turn_id.clone(),
             turn_index: 0,
             agent_type: agent_type.clone(),
+            workspace: Self::session_workspace_binding(&session),
             context: context.unwrap_or_default(),
             subagent_parent_info: Some(subagent_parent_info),
             skip_tool_confirmation: false,
@@ -1364,31 +1414,54 @@ impl ConversationCoordinator {
         );
 
         // Clean up snapshot system resources
-        use crate::service::snapshot::get_global_snapshot_manager;
-        if let Some(snapshot_manager) = get_global_snapshot_manager() {
-            let snapshot_service = snapshot_manager.get_snapshot_service();
-            let snapshot_service = snapshot_service.read().await;
-            if let Err(e) = snapshot_service.accept_session(session_id).await {
-                warn!(
-                    "Failed to cleanup snapshot system resources: session={}, error={}",
-                    session_id, e
-                );
-            } else {
-                debug!(
-                    "Snapshot system resources cleaned up: session={}",
-                    session_id
-                );
+        if let Some(workspace_path) = self
+            .session_manager
+            .get_session(session_id)
+            .and_then(|session| session.config.workspace_path.map(std::path::PathBuf::from))
+        {
+            if let Ok(snapshot_manager) =
+                crate::service::snapshot::ensure_snapshot_manager_for_workspace(&workspace_path)
+            {
+                let snapshot_service = snapshot_manager.get_snapshot_service();
+                let snapshot_service = snapshot_service.read().await;
+                if let Err(e) = snapshot_service.accept_session(session_id).await {
+                    warn!(
+                        "Failed to cleanup snapshot system resources: session={}, error={}",
+                        session_id, e
+                    );
+                } else {
+                    debug!(
+                        "Snapshot system resources cleaned up: session={}",
+                        session_id
+                    );
+                }
             }
         }
 
         // Delete subagent session itself (including message history, persistence data, etc.)
-        if let Err(e) = self.session_manager.delete_session(session_id).await {
-            warn!(
-                "Failed to delete subagent session: session={}, error={}",
-                session_id, e
-            );
+        let workspace_path = self
+            .session_manager
+            .get_session(session_id)
+            .and_then(|session| session.config.workspace_path.map(std::path::PathBuf::from));
+
+        if let Some(workspace_path) = workspace_path {
+            if let Err(e) = self
+                .session_manager
+                .delete_session(&workspace_path, session_id)
+                .await
+            {
+                warn!(
+                    "Failed to delete subagent session: session={}, error={}",
+                    session_id, e
+                );
+            } else {
+                debug!("Subagent session deleted: session={}", session_id);
+            }
         } else {
-            debug!("Subagent session deleted: session={}", session_id);
+            warn!(
+                "Failed to delete subagent session because workspace_path is missing: session={}",
+                session_id
+            );
         }
 
         debug!(

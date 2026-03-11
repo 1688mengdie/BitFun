@@ -6,6 +6,7 @@ import { useState, useCallback } from 'react';
 import { snapshotAPI } from '../../infrastructure/api';
 import { createLogger } from '@/shared/utils/logger';
 import { useI18n } from '@/infrastructure/i18n';
+import { useCurrentWorkspace } from '@/infrastructure/contexts/WorkspaceContext';
 
 const log = createLogger('useSnapshot');
 
@@ -76,6 +77,7 @@ export interface UseSnapshotReturn {
 
 export const useSnapshot = (): UseSnapshotReturn => {
   const { t } = useI18n('errors');
+  const { workspacePath } = useCurrentWorkspace();
   const [sessions, setSessions] = useState<SnapshotSession[]>([]);
   const [operations, setOperations] = useState<FileOperation[]>([]);
   const [stats, setStats] = useState<SnapshotStats | null>(null);
@@ -86,27 +88,27 @@ export const useSnapshot = (): UseSnapshotReturn => {
   const loadStats = useCallback(async () => {
     try {
       setError(null);
-      const statsData = await snapshotAPI.getSnapshotStats();
+      const statsData = await snapshotAPI.getSnapshotStats(workspacePath || undefined);
       setStats(statsData);
     } catch (err) {
       log.error('Failed to load snapshot stats', err);
       setError(t('snapshot.loadStatsFailed'));
       setStats(null);
     }
-  }, [t]);
+  }, [t, workspacePath]);
 
   // Load snapshot sessions
   const loadSessions = useCallback(async () => {
     try {
       setError(null);
-      const sessionsData = await snapshotAPI.getSnapshotSessions();
+      const sessionsData = await snapshotAPI.getSnapshotSessions(workspacePath || undefined);
       setSessions(sessionsData || []);
     } catch (err) {
       log.error('Failed to load snapshot sessions', err);
       setError(t('snapshot.loadSessionsFailed'));
       setSessions([]);
     }
-  }, [t]);
+  }, [t, workspacePath]);
 
   // Load session operations
   const loadSessionOperations = useCallback(async (sessionId: string) => {
@@ -119,7 +121,7 @@ export const useSnapshot = (): UseSnapshotReturn => {
     setError(null);
     
     try {
-      const operationsData = await snapshotAPI.getSessionOperations(sessionId);
+      const operationsData = await snapshotAPI.getSessionOperations(sessionId, workspacePath || undefined);
       const operations = operationsData || [];
       setOperations(operations);
       return operations;
@@ -131,26 +133,26 @@ export const useSnapshot = (): UseSnapshotReturn => {
     } finally {
       setLoading(false);
     }
-  }, [t]);
+  }, [t, workspacePath]);
 
   // Fetch operation diff
   const getOperationDiff = useCallback(async (sessionId: string, filePath: string) => {
     try {
       setError(null);
-      const diffData = await snapshotAPI.getOperationDiff(sessionId, filePath);
+      const diffData = await snapshotAPI.getOperationDiff(sessionId, filePath, undefined, workspacePath || undefined);
       return diffData;
     } catch (err) {
       log.error('Failed to get operation diff', err);
       setError(t('snapshot.getDiffFailed'));
       throw err;
     }
-  }, [t]);
+  }, [t, workspacePath]);
 
   // Accept operation
   const acceptOperation = useCallback(async (sessionId: string, operationId: string) => {
     try {
       setError(null);
-      await snapshotAPI.acceptOperation(sessionId, operationId);
+      await snapshotAPI.acceptOperation(sessionId, operationId, workspacePath || undefined);
       
       // Reload data
       await Promise.all([
@@ -162,13 +164,13 @@ export const useSnapshot = (): UseSnapshotReturn => {
       log.error('Failed to accept operation', err);
       setError(t('snapshot.acceptOperationFailed'));
     }
-  }, [loadSessionOperations, loadStats, loadSessions, t]);
+  }, [loadSessionOperations, loadStats, loadSessions, t, workspacePath]);
 
   // Reject operation
   const rejectOperation = useCallback(async (sessionId: string, operationId: string) => {
     try {
       setError(null);
-      await snapshotAPI.rejectOperation(sessionId, operationId);
+      await snapshotAPI.rejectOperation(sessionId, operationId, workspacePath || undefined);
       
       // Reload data
       await Promise.all([
@@ -180,13 +182,13 @@ export const useSnapshot = (): UseSnapshotReturn => {
       log.error('Failed to reject operation', err);
       setError(t('snapshot.rejectOperationFailed'));
     }
-  }, [loadSessionOperations, loadStats, loadSessions, t]);
+  }, [loadSessionOperations, loadStats, loadSessions, t, workspacePath]);
 
   // Roll back the session
   const rollbackSession = useCallback(async (sessionId: string) => {
     try {
       setError(null);
-      await snapshotAPI.rollbackSession(sessionId);
+      await snapshotAPI.rollbackSession(sessionId, workspacePath || undefined);
       
       // Reload data
       await Promise.all([
@@ -198,13 +200,13 @@ export const useSnapshot = (): UseSnapshotReturn => {
       log.error('Failed to rollback session', err);
       setError(t('snapshot.rollbackSessionFailed'));
     }
-  }, [loadSessionOperations, loadStats, loadSessions, t]);
+  }, [loadSessionOperations, loadStats, loadSessions, t, workspacePath]);
 
   // Cleanup expired data
   const cleanupExpiredData = useCallback(async (maxAgeDays: number = 30) => {
     try {
       setError(null);
-      await snapshotAPI.cleanupSnapshotData(maxAgeDays);
+      await snapshotAPI.cleanupSnapshotData(maxAgeDays, workspacePath || undefined);
       
       // Reload stats
       await Promise.all([
@@ -215,7 +217,7 @@ export const useSnapshot = (): UseSnapshotReturn => {
       log.error('Failed to cleanup expired data', err);
       setError(t('snapshot.cleanupFailed'));
     }
-  }, [loadStats, loadSessions, t]);
+  }, [loadStats, loadSessions, t, workspacePath]);
 
   // Update snapshot session info (called on backend create)
   const updateSnapshotSession = useCallback((session: SnapshotSession) => {

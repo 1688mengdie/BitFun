@@ -138,11 +138,10 @@ These files are maintained by the user and should NOT be modified unless explici
         };
 
         let workspace_pathbuf = std::path::PathBuf::from(&self.workspace_path);
-        if let Err(e) = rules_service.set_workspace(workspace_pathbuf).await {
-            debug!("Failed to set workspace: {}", e);
-        }
-
-        match rules_service.build_system_prompt().await {
+        match rules_service
+            .build_system_prompt_for(Some(&workspace_pathbuf))
+            .await
+        {
             Ok(prompt) => {
                 if prompt.is_empty() {
                     None

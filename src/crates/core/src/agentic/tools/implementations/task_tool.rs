@@ -1,4 +1,4 @@
-use crate::agentic::agents::get_agent_registry;
+use crate::agentic::agents::{get_agent_registry, AgentInfo};
 use crate::agentic::coordination::get_global_coordinator;
 use crate::agentic::tools::framework::{
     Tool, ToolRenderOptions, ToolResult, ToolUseContext, ValidationResult,
@@ -8,6 +8,7 @@ use crate::agentic::tools::InputValidator;
 use crate::util::errors::{BitFunError, BitFunResult};
 use async_trait::async_trait;
 use serde_json::{json, Value};
+use std::path::Path;
 
 pub struct TaskTool;
 
@@ -16,22 +17,9 @@ impl TaskTool {
         Self
     }
 
-    async fn get_agents_types(&self) -> Vec<String> {
-        let registry = get_agent_registry();
-        let agent_infos = registry.get_subagents_info().await;
-        agent_infos
-            .into_iter()
-            .filter(|agent| agent.enabled) // Only return enabled subagents
-            .map(|agent| agent.id)
-            .collect::<Vec<String>>()
-    }
-
-    async fn get_agents_descriptions(&self) -> String {
-        let registry = get_agent_registry();
-        let agent_infos = registry.get_subagents_info().await;
-        agent_infos
-            .into_iter()
-            .filter(|agent| agent.enabled) // Only return enabled subagents
+    fn format_agent_descriptions(&self, agents: &[AgentInfo]) -> String {
+        agents
+            .iter()
             .map(|agent| {
                 format!(
                     "- {}: {} (Tools: {})",
@@ -43,22 +31,15 @@ impl TaskTool {
             .collect::<Vec<String>>()
             .join("\n")
     }
-}
 
-#[async_trait]
-impl Tool for TaskTool {
-    fn name(&self) -> &str {
-        "Task"
-    }
-
-    async fn description(&self) -> BitFunResult<String> {
-        let agent_descriptions = self.get_agents_descriptions().await;
+    fn render_description(&self, agent_descriptions: String) -> String {
         let agent_descriptions = if agent_descriptions.is_empty() {
             "- No enabled subagents found".to_string()
         } else {
             agent_descriptions
         };
-        Ok(format!(
+
+        format!(
             r#"Launch a new agent to handle complex, multi-step tasks autonomously. 
 
 The Task tool launches specialized agents (subprocesses) that autonomously handle complex tasks. Each agent type has specific capabilities and tools available to it.
@@ -122,7 +103,54 @@ Since the user is greeting, use the greeting-responder agent to respond with a f
 assistant: "I'm going to use the Task tool to launch the greeting-responder agent"
 </example>"#,
             agent_descriptions
-        ))
+        )
+    }
+
+    async fn build_description(&self, workspace_root: Option<&Path>) -> String {
+        let agents = self.get_enabled_agents(workspace_root).await;
+        let agent_descriptions = self.format_agent_descriptions(&agents);
+        self.render_description(agent_descriptions)
+    }
+
+    async fn get_enabled_agents(&self, workspace_root: Option<&Path>) -> Vec<AgentInfo> {
+        let registry = get_agent_registry();
+        if let Some(workspace_root) = workspace_root {
+            registry.load_custom_subagents(workspace_root).await;
+        }
+        registry
+            .get_subagents_info(workspace_root)
+            .await
+            .into_iter()
+            .filter(|agent| agent.enabled) // Only return enabled subagents
+            .collect()
+    }
+
+    async fn get_agents_types(&self, workspace_root: Option<&Path>) -> Vec<String> {
+        self.get_enabled_agents(workspace_root)
+            .await
+            .into_iter()
+            .map(|agent| agent.id)
+            .collect()
+    }
+}
+
+#[async_trait]
+impl Tool for TaskTool {
+    fn name(&self) -> &str {
+        "Task"
+    }
+
+    async fn description(&self) -> BitFunResult<String> {
+        Ok(self.build_description(None).await)
+    }
+
+    async fn description_with_context(
+        &self,
+        context: Option<&ToolUseContext>,
+    ) -> BitFunResult<String> {
+        Ok(self
+            .build_description(context.and_then(|ctx| ctx.workspace_root()))
+            .await)
     }
 
     fn input_schema(&self) -> Value {
@@ -222,7 +250,8 @@ assistant: "I'm going to use the Task tool to launch the greeting-responder agen
             .and_then(|v| v.as_str())
             .ok_or_else(|| BitFunError::tool("Required parameters: subagent_type, prompt, description. Missing subagent_type".to_string()))?
             .to_string();
-        let all_agent_types = self.get_agents_types().await;
+        let workspace_root = context.workspace_root();
+        let all_agent_types = self.get_agents_types(workspace_root).await;
         if !all_agent_types.contains(&subagent_type) {
             return Err(BitFunError::tool(format!(
                 "subagent_type {} is not valid, must be one of: {}",

@@ -3,12 +3,47 @@
  * Handles persistence operations for dialog turn saving and metadata management
  */
 
-import { globalAPI } from '@/infrastructure/api';
 import { createLogger } from '@/shared/utils/logger';
 import { i18nService } from '@/infrastructure/i18n';
 import type { FlowChatContext, DialogTurn } from './types';
 
 const log = createLogger('PersistenceModule');
+
+function requireWorkspacePath(sessionId: string, workspacePath?: string): string {
+  if (!workspacePath) {
+    throw new Error(`Workspace path is required for session: ${sessionId}`);
+  }
+  return workspacePath;
+}
+
+async function runSerialDialogTurnSave(
+  context: FlowChatContext,
+  sessionId: string,
+  turnId: string
+): Promise<void> {
+  const key = `${sessionId}:${turnId}`;
+  const existingTask = context.turnSaveInFlight.get(key);
+  if (existingTask) {
+    context.turnSavePending.add(key);
+    await existingTask;
+    return;
+  }
+
+  const task = (async () => {
+    try {
+      do {
+        context.turnSavePending.delete(key);
+        await performSaveDialogTurnToDisk(context, sessionId, turnId);
+      } while (context.turnSavePending.has(key));
+    } finally {
+      context.turnSaveInFlight.delete(key);
+      context.turnSavePending.delete(key);
+    }
+  })();
+
+  context.turnSaveInFlight.set(key, task);
+  await task;
+}
 
 /**
  * Calculate content hash for dialog turn (for deduplication)
@@ -119,21 +154,46 @@ export function cleanupSaveState(
     }
     context.lastSaveTimestamps.delete(key);
     context.lastSaveHashes.delete(key);
+    context.turnSavePending.delete(key);
+    context.turnSaveInFlight.delete(key);
   } else {
-    const keysToDelete: string[] = [];
+    const keysToDelete = new Set<string>();
     for (const key of context.saveDebouncers.keys()) {
       if (key.startsWith(`${sessionId}:`)) {
         const timer = context.saveDebouncers.get(key);
         if (timer) {
           clearTimeout(timer);
         }
-        keysToDelete.push(key);
+        keysToDelete.add(key);
       }
     }
+    for (const key of context.lastSaveTimestamps.keys()) {
+      if (key.startsWith(`${sessionId}:`)) {
+        keysToDelete.add(key);
+      }
+    }
+    for (const key of context.lastSaveHashes.keys()) {
+      if (key.startsWith(`${sessionId}:`)) {
+        keysToDelete.add(key);
+      }
+    }
+    for (const key of context.turnSavePending.values()) {
+      if (key.startsWith(`${sessionId}:`)) {
+        keysToDelete.add(key);
+      }
+    }
+    for (const key of context.turnSaveInFlight.keys()) {
+      if (key.startsWith(`${sessionId}:`)) {
+        keysToDelete.add(key);
+      }
+    }
+
     keysToDelete.forEach(key => {
       context.saveDebouncers.delete(key);
       context.lastSaveTimestamps.delete(key);
       context.lastSaveHashes.delete(key);
+      context.turnSavePending.delete(key);
+      context.turnSaveInFlight.delete(key);
     });
   }
 }
@@ -146,8 +206,16 @@ export async function saveDialogTurnToDisk(
   sessionId: string,
   turnId: string
 ): Promise<void> {
+  await runSerialDialogTurnSave(context, sessionId, turnId);
+}
+
+async function performSaveDialogTurnToDisk(
+  context: FlowChatContext,
+  sessionId: string,
+  turnId: string
+): Promise<void> {
   try {
-    const { conversationAPI } = await import('@/infrastructure/api');
+    const { sessionAPI } = await import('@/infrastructure/api');
 
     const session = context.flowChatStore.getState().sessions.get(sessionId);
     if (!session) {
@@ -155,11 +223,7 @@ export async function saveDialogTurnToDisk(
       return;
     }
 
-    const workspacePath = session.workspacePath || await globalAPI.getCurrentWorkspacePath();
-    if (!workspacePath) {
-      log.debug('Cannot determine workspace path, skipping save', { sessionId, turnId });
-      return;
-    }
+    const workspacePath = requireWorkspacePath(sessionId, session.workspacePath);
     
     const dialogTurn = session.dialogTurns.find(turn => turn.id === turnId);
     if (!dialogTurn) {
@@ -169,7 +233,7 @@ export async function saveDialogTurnToDisk(
 
     const turnIndex = dialogTurn.backendTurnIndex ?? session.dialogTurns.indexOf(dialogTurn);
     const turnData = convertDialogTurnToBackendFormat(dialogTurn, turnIndex);
-    await conversationAPI.saveDialogTurn(turnData, workspacePath);
+    await sessionAPI.saveSessionTurn(turnData, workspacePath);
     
     await updateSessionMetadata(context, sessionId);
     
@@ -180,7 +244,7 @@ export async function saveDialogTurnToDisk(
 
 /**
  * Save all in-progress dialog turns
- * Used when closing window to save unfinished conversations
+ * Used when closing the window to persist unfinished session turns
  */
 export async function saveAllInProgressTurns(context: FlowChatContext): Promise<void> {
   const state = context.flowChatStore.getState();
@@ -320,24 +384,23 @@ export function convertDialogTurnToBackendFormat(dialogTurn: DialogTurn, turnInd
  * Update session metadata (lastActiveAt, statistics, etc.)
  * Loads existing metadata first to avoid overwriting correct historical counts
  * when the in-memory dialogTurns only has a partial view (e.g. remote-triggered turns
- * on a historical session whose full history hasn't been loaded yet).
+ * on a persisted session whose full turn history hasn't been loaded yet).
  */
 export async function updateSessionMetadata(
   context: FlowChatContext,
   sessionId: string
 ): Promise<void> {
   try {
-    const { conversationAPI } = await import('@/infrastructure/api');
+    const { sessionAPI } = await import('@/infrastructure/api');
 
     const session = context.flowChatStore.getState().sessions.get(sessionId);
     if (!session) return;
 
-    const workspacePath = session.workspacePath || await globalAPI.getCurrentWorkspacePath();
-    if (!workspacePath) return;
+    const workspacePath = requireWorkspacePath(sessionId, session.workspacePath);
 
     let existingMetadata: any = null;
     try {
-      existingMetadata = await conversationAPI.loadSessionMetadata(sessionId, workspacePath);
+      existingMetadata = await sessionAPI.loadSessionMetadata(sessionId, workspacePath);
     } catch {
       // ignore
     }
@@ -369,7 +432,7 @@ export async function updateSessionMetadata(
       todos: session.todos || existingMetadata?.todos || [],
     };
 
-    await conversationAPI.saveSessionMetadata(metadata, workspacePath);
+    await sessionAPI.saveSessionMetadata(metadata, workspacePath);
   } catch (error) {
     log.warn('Failed to update session metadata', { sessionId, error });
   }
@@ -378,14 +441,10 @@ export async function updateSessionMetadata(
 /**
  * Update session activity time (used for session switching)
  */
-export async function touchSessionActivity(sessionId: string): Promise<void> {
+export async function touchSessionActivity(sessionId: string, workspacePath?: string): Promise<void> {
   try {
-    const { conversationAPI } = await import('@/infrastructure/api');
-    const workspacePath = await globalAPI.getCurrentWorkspacePath();
-    
-    if (!workspacePath) return;
-
-    await conversationAPI.touchConversationSession(sessionId, workspacePath);
+    const { sessionAPI } = await import('@/infrastructure/api');
+    await sessionAPI.touchSessionActivity(sessionId, requireWorkspacePath(sessionId, workspacePath));
   } catch (error) {
     log.debug('Failed to touch session activity', { sessionId, error });
   }

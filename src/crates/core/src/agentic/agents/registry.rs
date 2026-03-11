@@ -13,7 +13,7 @@ use crate::util::errors::{BitFunError, BitFunResult};
 use log::{debug, error, warn};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 use std::sync::{Arc, OnceLock};
 
@@ -145,6 +145,8 @@ pub enum AgentCategory {
 pub struct AgentRegistry {
     /// id -> agent_entry
     agents: RwLock<HashMap<String, AgentEntry>>,
+    /// workspace root -> (project subagent id -> agent_entry)
+    project_subagents: RwLock<HashMap<PathBuf, HashMap<String, AgentEntry>>>,
 }
 
 impl AgentRegistry {
@@ -166,6 +168,41 @@ impl AgentRegistry {
                 poisoned.into_inner()
             }
         }
+    }
+
+    fn read_project_subagents(
+        &self,
+    ) -> std::sync::RwLockReadGuard<'_, HashMap<PathBuf, HashMap<String, AgentEntry>>> {
+        match self.project_subagents.read() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                warn!("Agent project registry read lock poisoned, recovering");
+                poisoned.into_inner()
+            }
+        }
+    }
+
+    fn write_project_subagents(
+        &self,
+    ) -> std::sync::RwLockWriteGuard<'_, HashMap<PathBuf, HashMap<String, AgentEntry>>> {
+        match self.project_subagents.write() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                warn!("Agent project registry write lock poisoned, recovering");
+                poisoned.into_inner()
+            }
+        }
+    }
+
+    fn find_agent_entry(&self, agent_type: &str, workspace_root: Option<&Path>) -> Option<AgentEntry> {
+        if let Some(entry) = self.read_agents().get(agent_type).cloned() {
+            return Some(entry);
+        }
+
+        let workspace_root = workspace_root?;
+        self.read_project_subagents()
+            .get(workspace_root)
+            .and_then(|entries| entries.get(agent_type).cloned())
     }
 
     /// Create a new agent registry with built-in agents
@@ -229,6 +266,7 @@ impl AgentRegistry {
 
         Self {
             agents: RwLock::new(agents),
+            project_subagents: RwLock::new(HashMap::new()),
         }
     }
 
@@ -258,13 +296,18 @@ impl AgentRegistry {
     }
 
     /// Get a agent by ID (searches all categories including hidden)
-    pub fn get_agent(&self, agent_type: &str) -> Option<Arc<dyn Agent>> {
-        self.read_agents().get(agent_type).map(|e| e.agent.clone())
+    pub fn get_agent(&self, agent_type: &str, workspace_root: Option<&Path>) -> Option<Arc<dyn Agent>> {
+        self.find_agent_entry(agent_type, workspace_root)
+            .map(|entry| entry.agent)
     }
 
     /// Check if an agent exists
     pub fn check_agent_exists(&self, agent_type: &str) -> bool {
         self.read_agents().contains_key(agent_type)
+            || self
+                .read_project_subagents()
+                .values()
+                .any(|entries| entries.contains_key(agent_type))
     }
 
     /// Get a mode by ID
@@ -280,16 +323,24 @@ impl AgentRegistry {
 
     /// check if a subagent exists with specified source (used for duplicate check before adding)
     pub fn has_subagent(&self, agent_id: &str, source: SubAgentSource) -> bool {
-        self.read_agents().get(agent_id).map_or(false, |e| {
+        if self.read_agents().get(agent_id).map_or(false, |e| {
             e.category == AgentCategory::SubAgent && e.subagent_source == Some(source)
+        }) {
+            return true;
+        }
+
+        self.read_project_subagents().values().any(|entries| {
+            entries.get(agent_id).map_or(false, |entry| {
+                entry.category == AgentCategory::SubAgent && entry.subagent_source == Some(source)
+            })
         })
     }
 
     /// get agent tools from config
     /// if not set, return default tools
     /// tool configuration synchronization is implemented through tool_config_sync, here only read configuration
-    pub async fn get_agent_tools(&self, agent_type: &str) -> Vec<String> {
-        let entry = self.read_agents().get(agent_type).cloned();
+    pub async fn get_agent_tools(&self, agent_type: &str, workspace_root: Option<&Path>) -> Vec<String> {
+        let entry = self.find_agent_entry(agent_type, workspace_root);
         let Some(entry) = entry else {
             return Vec::new();
         };
@@ -344,21 +395,37 @@ impl AgentRegistry {
 
     /// check if a subagent is readonly (used for TaskTool.is_concurrency_safe etc.)
     pub fn get_subagent_is_readonly(&self, id: &str) -> Option<bool> {
-        let map = self.read_agents();
-        let entry = map.get(id)?;
-        if entry.category != AgentCategory::SubAgent {
-            return None;
+        if let Some(entry) = self.read_agents().get(id) {
+            if entry.category == AgentCategory::SubAgent {
+                return Some(entry.agent.is_readonly());
+            }
         }
-        Some(entry.agent.is_readonly())
+
+        for entries in self.read_project_subagents().values() {
+            if let Some(entry) = entries.get(id) {
+                if entry.category == AgentCategory::SubAgent {
+                    return Some(entry.agent.is_readonly());
+                }
+            }
+        }
+
+        None
     }
 
     /// get all subagent information (including source and enabled status, used for TaskTool, frontend subagent list etc.)
     /// - built-in subagent: read enabled status from global configuration ai.subagent_configs
     /// - custom subagent: read enabled and model configuration from custom_config cache
-    pub async fn get_subagents_info(&self) -> Vec<AgentInfo> {
+    pub async fn get_subagents_info(&self, workspace_root: Option<&Path>) -> Vec<AgentInfo> {
+        if let Some(workspace_root) = workspace_root {
+            let is_project_cache_loaded = self.read_project_subagents().contains_key(workspace_root);
+            if !is_project_cache_loaded {
+                self.load_custom_subagents(workspace_root).await;
+            }
+        }
+
         let subagent_configs = get_subagent_configs().await;
         let map = self.read_agents();
-        let result: Vec<AgentInfo> = map
+        let mut result: Vec<AgentInfo> = map
             .values()
             .filter(|e| e.category == AgentCategory::SubAgent)
             .map(|e| {
@@ -377,6 +444,11 @@ impl AgentRegistry {
             })
             .collect();
         drop(map);
+        if let Some(workspace_root) = workspace_root {
+            if let Some(project_entries) = self.read_project_subagents().get(workspace_root) {
+                result.extend(project_entries.values().map(|entry| AgentInfo::from_agent_entry(entry)));
+            }
+        }
         result
     }
 
@@ -388,21 +460,14 @@ impl AgentRegistry {
 
         let custom = CustomSubagentLoader::load_custom_subagents(workspace_root);
         let mut map = self.write_agents();
-        // remove all non-built-in subagents
-        map.retain(|_, e| {
-            !(e.category == AgentCategory::SubAgent
-                && e.subagent_source != Some(SubAgentSource::Builtin))
+        map.retain(|_, entry| {
+            !(entry.category == AgentCategory::SubAgent
+                && entry.subagent_source == Some(SubAgentSource::User))
         });
+        let mut project_entries = HashMap::new();
         for mut sub in custom {
             let id = sub.id().to_string();
             let source = SubAgentSource::from_custom_kind(sub.kind);
-            if map.contains_key(&id) {
-                warn!(
-                    "Custom subagent {} (source {:?}) conflicts with existing, skip",
-                    id, source
-                );
-                continue;
-            }
             // validate and correct tools and model
             Self::validate_custom_subagent(&mut sub, &valid_tools, &valid_models);
             // create CustomSubagentConfig cache configuration information
@@ -410,16 +475,40 @@ impl AgentRegistry {
                 enabled: sub.enabled,
                 model: sub.model.clone(),
             };
-            map.insert(
-                id,
-                AgentEntry {
-                    category: AgentCategory::SubAgent,
-                    subagent_source: Some(source),
-                    agent: Arc::new(sub),
-                    custom_config: Some(custom_config),
-                },
-            );
+            let entry = AgentEntry {
+                category: AgentCategory::SubAgent,
+                subagent_source: Some(source),
+                agent: Arc::new(sub),
+                custom_config: Some(custom_config),
+            };
+
+            match source {
+                SubAgentSource::User => {
+                    if map.contains_key(&id) {
+                        warn!(
+                            "Custom subagent {} (source {:?}) conflicts with existing, skip",
+                            id, source
+                        );
+                        continue;
+                    }
+                    map.insert(id, entry);
+                }
+                SubAgentSource::Project => {
+                    if map.contains_key(&id) {
+                        warn!(
+                            "Custom subagent {} (source {:?}) conflicts with existing, skip",
+                            id, source
+                        );
+                        continue;
+                    }
+                    project_entries.insert(id, entry);
+                }
+                SubAgentSource::Builtin => {}
+            }
         }
+        drop(map);
+        self.write_project_subagents()
+            .insert(workspace_root.to_path_buf(), project_entries);
     }
 
     /// get valid model ID list: ai.models id + "primary" + "fast"
@@ -478,34 +567,29 @@ impl AgentRegistry {
 
     /// clear all custom subagents (project/user source), only keep built-in subagents. called when closing workspace.
     pub fn clear_custom_subagents(&self) {
-        let mut map = self.write_agents();
-        let before = map
-            .values()
-            .filter(|e| e.category == AgentCategory::SubAgent)
-            .count();
-        map.retain(|_, e| {
-            !(e.category == AgentCategory::SubAgent
-                && e.subagent_source != Some(SubAgentSource::Builtin))
-        });
-        let after = map
-            .values()
-            .filter(|e| e.category == AgentCategory::SubAgent)
-            .count();
-        debug!(
-            "Cleared custom subagents: subagents {} -> {}",
-            before, after
-        );
+        let before = self.read_project_subagents().len();
+        self.write_project_subagents().clear();
+        debug!("Cleared project subagent caches: workspaces {}", before);
     }
 
     /// get custom subagent configuration (used for updating configuration)
     /// only custom subagent is valid, return clone of CustomSubagentConfig
     pub fn get_custom_subagent_config(&self, agent_id: &str) -> Option<CustomSubagentConfig> {
-        let map = self.read_agents();
-        let entry = map.get(agent_id)?;
-        if entry.category != AgentCategory::SubAgent {
-            return None;
+        if let Some(entry) = self.read_agents().get(agent_id) {
+            if entry.category == AgentCategory::SubAgent {
+                return entry.custom_config.clone();
+            }
         }
-        entry.custom_config.clone()
+
+        for entries in self.read_project_subagents().values() {
+            if let Some(entry) = entries.get(agent_id) {
+                if entry.category == AgentCategory::SubAgent {
+                    return entry.custom_config.clone();
+                }
+            }
+        }
+
+        None
     }
 
     /// update custom subagent configuration and save to file
@@ -517,9 +601,15 @@ impl AgentRegistry {
         model: Option<String>,
     ) -> BitFunResult<()> {
         let mut map = self.write_agents();
-        let entry = map
-            .get_mut(agent_id)
-            .ok_or_else(|| BitFunError::agent(format!("Subagent not found: {}", agent_id)))?;
+        let mut project_maps = self.write_project_subagents();
+        let entry = if let Some(entry) = map.get_mut(agent_id) {
+            entry
+        } else {
+            project_maps
+                .values_mut()
+                .find_map(|entries| entries.get_mut(agent_id))
+                .ok_or_else(|| BitFunError::agent(format!("Subagent not found: {}", agent_id)))?
+        };
 
         if entry.category != AgentCategory::SubAgent {
             return Err(BitFunError::agent(format!(
@@ -562,37 +652,61 @@ impl AgentRegistry {
     /// only allow removing entries that are SubAgent and not Builtin
     pub fn remove_subagent(&self, agent_id: &str) -> BitFunResult<Option<String>> {
         let mut map = self.write_agents();
-        let entry = map
-            .get(agent_id)
-            .ok_or_else(|| BitFunError::agent(format!("Subagent not found: {}", agent_id)))?;
-        if entry.category != AgentCategory::SubAgent {
-            return Err(BitFunError::agent(format!(
-                "Agent '{}' is not a subagent",
-                agent_id
-            )));
+        if let Some(entry) = map.get(agent_id) {
+            if entry.category != AgentCategory::SubAgent {
+                return Err(BitFunError::agent(format!(
+                    "Agent '{}' is not a subagent",
+                    agent_id
+                )));
+            }
+            if entry.subagent_source == Some(SubAgentSource::Builtin) {
+                return Err(BitFunError::agent(format!(
+                    "Cannot remove built-in subagent: {}",
+                    agent_id
+                )));
+            }
+            let path = entry
+                .agent
+                .as_any()
+                .downcast_ref::<CustomSubagent>()
+                .map(|c| c.path.clone());
+            map.remove(agent_id);
+            return Ok(path);
         }
-        if entry.subagent_source == Some(SubAgentSource::Builtin) {
-            return Err(BitFunError::agent(format!(
-                "Cannot remove built-in subagent: {}",
-                agent_id
-            )));
+        drop(map);
+
+        let mut project_maps = self.write_project_subagents();
+        for entries in project_maps.values_mut() {
+            if let Some(entry) = entries.get(agent_id) {
+                if entry.category != AgentCategory::SubAgent {
+                    return Err(BitFunError::agent(format!(
+                        "Agent '{}' is not a subagent",
+                        agent_id
+                    )));
+                }
+                let path = entry
+                    .agent
+                    .as_any()
+                    .downcast_ref::<CustomSubagent>()
+                    .map(|c| c.path.clone());
+                entries.remove(agent_id);
+                return Ok(path);
+            }
         }
-        // get path by downcast
-        let path = entry
-            .agent
-            .as_any()
-            .downcast_ref::<CustomSubagent>()
-            .map(|c| c.path.clone());
-        map.remove(agent_id);
-        Ok(path)
+
+        Err(BitFunError::agent(format!("Subagent not found: {}", agent_id)))
     }
 
     /// get model ID used by agent from agent_models[agent_type] in configuration
     /// - custom subagent: read model configuration from custom_config cache
     /// - built-in subagent/mode: read model configuration from global configuration ai.agent_models
-    pub async fn get_model_id_for_agent(&self, agent_type: &str) -> BitFunResult<String> {
+    pub async fn get_model_id_for_agent(
+        &self,
+        agent_type: &str,
+        workspace_root: Option<&Path>,
+    ) -> BitFunResult<String> {
         // check if agent exists
-        if !self.check_agent_exists(agent_type) {
+        if self.find_agent_entry(agent_type, workspace_root).is_none() {
             error!("[AgentRegistry] Agent not found: {}", agent_type);
             return Err(BitFunError::agent(format!(
                 "[AgentRegistry] Agent not found: {}",
@@ -601,7 +715,8 @@ impl AgentRegistry {
         }
 
         // check if it is a custom subagent, if so, read from cache
-        if let Some(config) = self.get_custom_subagent_config(agent_type) {
+        if let Some(entry) = self.find_agent_entry(agent_type, workspace_root) {
+            if let Some(config) = entry.custom_config {
             let model = config.model;
             if !model.is_empty() {
                 debug!(
@@ -616,6 +731,7 @@ impl AgentRegistry {
                 agent_type
             );
             return Ok("primary".to_string());
+            }
         }
 
         // built-in subagent/mode: read from global configuration

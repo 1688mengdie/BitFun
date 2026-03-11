@@ -44,6 +44,9 @@ pub struct AnalyzeImagesRequest {
     pub user_message: Option<String>,
     /// Session ID
     pub session_id: String,
+    /// Workspace path for the owning session.
+    #[serde(default, alias = "workspacePath")]
+    pub workspace_path: Option<String>,
 }
 
 /// Send enhanced message request

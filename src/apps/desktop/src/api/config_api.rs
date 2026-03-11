@@ -421,7 +421,11 @@ pub async fn get_subagent_configs(state: State<'_, AppState>) -> Result<Value, S
         .await
         .unwrap_or_default();
 
-    let all_subagents = state.agent_registry.get_subagents_info().await;
+    let workspace = state.workspace_path.read().await.clone();
+    let all_subagents = state
+        .agent_registry
+        .get_subagents_info(workspace.as_deref())
+        .await;
     let mut needs_save = false;
 
     for subagent in all_subagents {

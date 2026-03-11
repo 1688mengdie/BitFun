@@ -1,11 +1,11 @@
-use super::util::resolve_path;
+use super::util::resolve_path_with_workspace;
 use crate::agentic::tools::framework::{
     Tool, ToolRenderOptions, ToolResult, ToolUseContext, ValidationResult,
 };
 use crate::service::git::git_service::GitService;
 use crate::service::git::git_types::GitDiffParams;
 use crate::service::git::git_utils::get_repository_root;
-use crate::service::snapshot::manager::get_global_snapshot_manager;
+use crate::service::snapshot::manager::get_snapshot_manager_for_workspace;
 use crate::util::errors::{BitFunError, BitFunResult};
 use async_trait::async_trait;
 use log::{debug, warn};
@@ -52,8 +52,12 @@ impl GetFileDiffTool {
     }
 
     /// Try to get diff from baseline
-    async fn try_baseline_diff(&self, file_path: &Path) -> Option<BitFunResult<Value>> {
-        let snapshot_manager = get_global_snapshot_manager()?;
+    async fn try_baseline_diff(
+        &self,
+        file_path: &Path,
+        workspace_root: Option<&Path>,
+    ) -> Option<BitFunResult<Value>> {
+        let snapshot_manager = workspace_root.and_then(get_snapshot_manager_for_workspace)?;
 
         // Get snapshot service
         let snapshot_service = snapshot_manager.get_snapshot_service();
@@ -398,14 +402,14 @@ Usage:
     async fn call_impl(
         &self,
         input: &Value,
-        _context: &ToolUseContext,
+        context: &ToolUseContext,
     ) -> BitFunResult<Vec<ToolResult>> {
         let file_path = input
             .get("file_path")
             .and_then(|v| v.as_str())
             .ok_or_else(|| BitFunError::tool("file_path is required".to_string()))?;
 
-        let resolved_path = resolve_path(file_path);
+        let resolved_path = resolve_path_with_workspace(file_path, context.workspace_root())?;
 
         debug!(
             "GetFileDiff tool starting diff retrieval for file: {:?}",
@@ -414,7 +418,7 @@ Usage:
 
         // Priority 1: Try baseline diff
         let path = Path::new(&resolved_path);
-        if let Some(result) = self.try_baseline_diff(&path).await {
+        if let Some(result) = self.try_baseline_diff(&path, context.workspace_root()).await {
             match result {
                 Ok(data) => {
                     debug!("GetFileDiff tool using baseline diff");

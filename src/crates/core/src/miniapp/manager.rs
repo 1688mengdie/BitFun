@@ -9,7 +9,7 @@ use crate::miniapp::types::{
 use crate::util::errors::BitFunResult;
 use chrono::Utc;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use tokio::sync::RwLock;
 use uuid::Uuid;
@@ -30,8 +30,6 @@ pub fn try_get_global_miniapp_manager() -> Option<Arc<MiniAppManager>> {
 pub struct MiniAppManager {
     storage: MiniAppStorage,
     path_manager: Arc<crate::infrastructure::PathManager>,
-    /// Current workspace root (for permission policy resolution).
-    workspace_path: RwLock<Option<PathBuf>>,
     /// User-granted paths per app (for resolve_policy).
     granted_paths: RwLock<HashMap<String, Vec<PathBuf>>>,
 }
@@ -42,7 +40,6 @@ impl MiniAppManager {
         Self {
             storage,
             path_manager,
-            workspace_path: RwLock::new(None),
             granted_paths: RwLock::new(HashMap::new()),
         }
     }
@@ -98,10 +95,32 @@ impl MiniAppManager {
         )
     }
 
-    /// Set current workspace path (for permission policy resolution).
-    pub async fn set_workspace_path(&self, path: Option<PathBuf>) {
-        let mut guard = self.workspace_path.write().await;
-        *guard = path;
+    fn workspace_dir_string(workspace_root: Option<&Path>) -> String {
+        workspace_root
+            .map(|path| path.to_string_lossy().to_string())
+            .unwrap_or_default()
+    }
+
+    pub fn compile_source(
+        &self,
+        app_id: &str,
+        source: &MiniAppSource,
+        permissions: &MiniAppPermissions,
+        theme: &str,
+        workspace_root: Option<&Path>,
+    ) -> BitFunResult<String> {
+        let app_data_dir = self.path_manager.miniapp_dir(app_id);
+        let app_data_dir_str = app_data_dir.to_string_lossy().to_string();
+        let workspace_dir = Self::workspace_dir_string(workspace_root);
+
+        compile(
+            source,
+            permissions,
+            app_id,
+            &app_data_dir_str,
+            &workspace_dir,
+            theme,
+        )
     }
 
     /// List all MiniApp metadata.
@@ -137,27 +156,17 @@ impl MiniAppManager {
         source: MiniAppSource,
         permissions: MiniAppPermissions,
         ai_context: Option<MiniAppAiContext>,
+        workspace_root: Option<&Path>,
     ) -> BitFunResult<MiniApp> {
         let id = Uuid::new_v4().to_string();
         let now = Utc::now().timestamp_millis();
 
-        let app_data_dir = self.path_manager.miniapp_dir(&id);
-        let app_data_dir_str = app_data_dir.to_string_lossy().to_string();
-        let workspace_dir = self
-            .workspace_path
-            .read()
-            .await
-            .clone()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|| String::new());
-
-        let compiled_html = compile(
+        let compiled_html = self.compile_source(
+            &id,
             &source,
             &permissions,
-            &id,
-            &app_data_dir_str,
-            &workspace_dir,
             "dark",
+            workspace_root,
         )?;
         let runtime = Self::build_runtime_state(
             1,
@@ -200,6 +209,7 @@ impl MiniAppManager {
         source: Option<MiniAppSource>,
         permissions: Option<MiniAppPermissions>,
         ai_context: Option<MiniAppAiContext>,
+        workspace_root: Option<&Path>,
     ) -> BitFunResult<MiniApp> {
         let mut app = self.storage.load(app_id).await?;
         let previous_app = app.clone();
@@ -234,23 +244,12 @@ impl MiniAppManager {
         app.version += 1;
         app.updated_at = Utc::now().timestamp_millis();
 
-        let app_data_dir = self.path_manager.miniapp_dir(app_id);
-        let app_data_dir_str = app_data_dir.to_string_lossy().to_string();
-        let workspace_dir = self
-            .workspace_path
-            .read()
-            .await
-            .clone()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|| String::new());
-
-        app.compiled_html = compile(
+        app.compiled_html = self.compile_source(
+            app_id,
             &app.source,
             &app.permissions,
-            app_id,
-            &app_data_dir_str,
-            &workspace_dir,
             "dark",
+            workspace_root,
         )?;
         let deps_changed = previous_app.source.npm_dependencies != app.source.npm_dependencies;
         if source_changed || permissions_changed {
@@ -284,16 +283,19 @@ impl MiniAppManager {
     }
 
     /// Resolve permission policy for the given app (for JS Worker startup).
-    pub async fn resolve_policy_for_app(&self, app_id: &str, permissions: &MiniAppPermissions) -> serde_json::Value {
+    pub async fn resolve_policy_for_app(
+        &self,
+        app_id: &str,
+        permissions: &MiniAppPermissions,
+        workspace_root: Option<&Path>,
+    ) -> serde_json::Value {
         let app_data_dir = self.path_manager.miniapp_dir(app_id);
-        let wp = self.workspace_path.read().await;
-        let workspace_dir = wp.as_deref();
         let gp = self.granted_paths.read().await;
         let granted = gp.get(app_id).map(|v| v.as_slice()).unwrap_or(&[]);
-        resolve_policy(permissions, app_id, &app_data_dir, workspace_dir, granted)
+        resolve_policy(permissions, app_id, &app_data_dir, workspace_root, granted)
     }
 
-    /// Grant workspace access for an app (no-op; workspace is set by host).
+    /// Grant workspace access for an app (no-op; workspace context is supplied by caller).
     pub async fn grant_workspace(&self, _app_id: &str) {}
 
     /// Grant path (user-selected) for an app.
@@ -370,25 +372,19 @@ impl MiniAppManager {
     }
 
     /// Recompile app (e.g. after workspace or theme change). Updates compiled_html and saves.
-    pub async fn recompile(&self, app_id: &str, theme: &str) -> BitFunResult<MiniApp> {
+    pub async fn recompile(
+        &self,
+        app_id: &str,
+        theme: &str,
+        workspace_root: Option<&Path>,
+    ) -> BitFunResult<MiniApp> {
         let mut app = self.storage.load(app_id).await?;
-        let app_data_dir = self.path_manager.miniapp_dir(app_id);
-        let app_data_dir_str = app_data_dir.to_string_lossy().to_string();
-        let workspace_dir = self
-            .workspace_path
-            .read()
-            .await
-            .clone()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|| String::new());
-
-        app.compiled_html = compile(
+        app.compiled_html = self.compile_source(
+            app_id,
             &app.source,
             &app.permissions,
-            app_id,
-            &app_data_dir_str,
-            &workspace_dir,
             theme,
+            workspace_root,
         )?;
         app.updated_at = Utc::now().timestamp_millis();
         Self::ensure_runtime_state(&mut app);
@@ -397,30 +393,24 @@ impl MiniAppManager {
         Ok(app)
     }
 
-    pub async fn sync_from_fs(&self, app_id: &str, theme: &str) -> BitFunResult<MiniApp> {
+    pub async fn sync_from_fs(
+        &self,
+        app_id: &str,
+        theme: &str,
+        workspace_root: Option<&Path>,
+    ) -> BitFunResult<MiniApp> {
         let previous_app = self.storage.load(app_id).await?;
         let mut app = previous_app.clone();
         app.source = self.storage.load_source_only(app_id).await?;
         app.version += 1;
         app.updated_at = Utc::now().timestamp_millis();
 
-        let app_data_dir = self.path_manager.miniapp_dir(app_id);
-        let app_data_dir_str = app_data_dir.to_string_lossy().to_string();
-        let workspace_dir = self
-            .workspace_path
-            .read()
-            .await
-            .clone()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(String::new);
-
-        app.compiled_html = compile(
+        app.compiled_html = self.compile_source(
+            app_id,
             &app.source,
             &app.permissions,
-            app_id,
-            &app_data_dir_str,
-            &workspace_dir,
             theme,
+            workspace_root,
         )?;
         app.runtime = Self::build_runtime_state(
             app.version,
@@ -437,7 +427,11 @@ impl MiniAppManager {
     }
 
     /// Import a MiniApp from a directory (e.g. miniapps/git-graph). Copies meta, source, package.json, storage into a new app id and recompiles.
-    pub async fn import_from_path(&self, source_path: PathBuf) -> BitFunResult<MiniApp> {
+    pub async fn import_from_path(
+        &self,
+        source_path: PathBuf,
+        workspace_root: Option<&Path>,
+    ) -> BitFunResult<MiniApp> {
         use crate::util::errors::BitFunError;
 
         let src = source_path.as_path();
@@ -553,7 +547,7 @@ impl MiniAppManager {
             .await
             .map_err(|_e| BitFunError::io("Failed to write placeholder compiled.html"))?;
 
-        let mut app = self.recompile(&id, "dark").await?;
+        let mut app = self.recompile(&id, "dark", workspace_root).await?;
         app.runtime = Self::build_runtime_state(
             app.version,
             app.updated_at,

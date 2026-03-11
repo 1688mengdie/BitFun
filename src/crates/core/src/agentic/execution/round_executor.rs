@@ -333,6 +333,7 @@ impl RoundExecutor {
                 session_id: context.session_id.clone(),
                 dialog_turn_id: context.dialog_turn_id.clone(),
                 agent_type: context.agent_type.clone(),
+                workspace: context.workspace.clone(),
                 context_vars: context.context_vars.clone(),
                 subagent_parent_info,
                 allowed_tools: context.available_tools.clone(), // Pass allowed tools list for security validation

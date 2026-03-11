@@ -21,7 +21,6 @@ use crate::agentic::tools::framework::{
     Tool, ToolRenderOptions, ToolResult, ToolUseContext, ValidationResult,
 };
 use crate::infrastructure::ai::get_global_ai_client_factory;
-use crate::infrastructure::get_workspace_path;
 use crate::util::errors::{BitFunError, BitFunResult};
 
 #[derive(Debug, Deserialize)]
@@ -110,7 +109,7 @@ impl ViewImageTool {
         context: &ToolUseContext,
         primary_provider: &str,
     ) -> BitFunResult<(ModelImageContextData, String)> {
-        let workspace_path = get_workspace_path();
+        let workspace_path = context.workspace_root().map(|path| path.to_path_buf());
 
         if let Some(image_id) = &input_data.image_id {
             let provider = context.image_context_provider.as_ref().ok_or_else(|| {
@@ -284,7 +283,7 @@ impl ViewImageTool {
         input_data: &ViewImageInput,
         context: &ToolUseContext,
     ) -> BitFunResult<(Vec<u8>, Option<String>, String)> {
-        let workspace_path = get_workspace_path();
+        let workspace_path = context.workspace_root().map(|path| path.to_path_buf());
 
         if let Some(image_id) = &input_data.image_id {
             let provider = context.image_context_provider.as_ref().ok_or_else(|| {
@@ -416,7 +415,7 @@ Parameters:
     async fn validate_input(
         &self,
         input: &Value,
-        _context: Option<&ToolUseContext>,
+        context: Option<&ToolUseContext>,
     ) -> ValidationResult {
         let has_path = input
             .get("image_path")
@@ -442,8 +441,8 @@ Parameters:
 
         if let Some(image_path) = input.get("image_path").and_then(|v| v.as_str()) {
             if !image_path.is_empty() {
-                let workspace_path = get_workspace_path();
-                match resolve_image_path(image_path, workspace_path.as_deref()) {
+                let workspace_path = context.and_then(|ctx| ctx.workspace_root());
+                match resolve_image_path(image_path, workspace_path) {
                     Ok(path) => {
                         if !path.exists() {
                             return ValidationResult {

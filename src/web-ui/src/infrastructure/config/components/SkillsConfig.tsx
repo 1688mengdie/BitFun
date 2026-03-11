@@ -1,9 +1,9 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Plus, Trash2, RefreshCw, FolderOpen, X, Download, CheckCircle2, TrendingUp } from 'lucide-react';
 import { Switch, Select, Input, Button, Search, IconButton, ConfirmDialog, Card, CardBody, Tooltip } from '@/component-library';
 import { ConfigPageHeader, ConfigPageLayout, ConfigPageContent, ConfigPageSection, ConfigCollectionItem } from './common';
-import { useCurrentWorkspace } from '../../hooks/useWorkspace';
+import { useCurrentWorkspace } from '@/infrastructure/contexts/WorkspaceContext';
 import { useNotification } from '@/shared/notification-system';
 import { configAPI } from '../../api/service-api/ConfigAPI';
 import type { SkillInfo, SkillLevel, SkillMarketItem, SkillValidationResult } from '../types';
@@ -37,23 +37,37 @@ const SkillsConfig: React.FC = () => {
   const [marketLoading, setMarketLoading] = useState(false);
   const [marketError, setMarketError] = useState<string | null>(null);
   const [downloadingPackage, setDownloadingPackage] = useState<string | null>(null);
+  const loadRequestIdRef = useRef(0);
 
   const { workspacePath, hasWorkspace } = useCurrentWorkspace();
   const notification = useNotification();
 
   const loadSkills = useCallback(async (forceRefresh?: boolean) => {
+    const requestId = ++loadRequestIdRef.current;
+
     try {
       setLoading(true);
       setError(null);
-      const skillsList = await configAPI.getSkillConfigs(forceRefresh);
+      const skillsList = await configAPI.getSkillConfigs({
+        forceRefresh,
+        workspacePath: workspacePath || undefined,
+      });
+      if (requestId !== loadRequestIdRef.current) {
+        return;
+      }
       setSkills(skillsList);
     } catch (err) {
+      if (requestId !== loadRequestIdRef.current) {
+        return;
+      }
       log.error('Failed to load skills', err);
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setLoading(false);
+      if (requestId === loadRequestIdRef.current) {
+        setLoading(false);
+      }
     }
-  }, []);
+  }, [workspacePath]);
 
   const loadMarketSkills = useCallback(async (query?: string) => {
     try {
@@ -73,7 +87,6 @@ const SkillsConfig: React.FC = () => {
   }, []);
 
   useEffect(() => { loadSkills(); }, [loadSkills]);
-  useEffect(() => { if (hasWorkspace) loadSkills(); }, [hasWorkspace, workspacePath, loadSkills]);
   useEffect(() => { loadMarketSkills(); }, [loadMarketSkills]);
 
   const validatePath = useCallback(async (path: string) => {
@@ -105,10 +118,14 @@ const SkillsConfig: React.FC = () => {
     }
     try {
       setIsAdding(true);
-      await configAPI.addSkill(formPath, formLevel);
+      await configAPI.addSkill({
+        sourcePath: formPath,
+        level: formLevel,
+        workspacePath: workspacePath || undefined,
+      });
       notification.success(t('messages.addSuccess', { name: validationResult.name }));
       resetForm();
-      loadSkills();
+      await loadSkills(true);
     } catch (err) {
       notification.error(t('messages.addFailed', { error: err instanceof Error ? err.message : String(err) }));
     } finally {
@@ -120,9 +137,12 @@ const SkillsConfig: React.FC = () => {
     const skill = deleteConfirm.skill;
     if (!skill) return;
     try {
-      await configAPI.deleteSkill(skill.name);
+      await configAPI.deleteSkill({
+        skillName: skill.name,
+        workspacePath: workspacePath || undefined,
+      });
       notification.success(t('messages.deleteSuccess', { name: skill.name }));
-      loadSkills();
+      await loadSkills(true);
     } catch (err) {
       notification.error(t('messages.deleteFailed', { error: err instanceof Error ? err.message : String(err) }));
     } finally {
@@ -133,9 +153,13 @@ const SkillsConfig: React.FC = () => {
   const handleToggle = async (skill: SkillInfo) => {
     const newEnabled = !skill.enabled;
     try {
-      await configAPI.setSkillEnabled(skill.name, newEnabled);
+      await configAPI.setSkillEnabled({
+        skillName: skill.name,
+        enabled: newEnabled,
+        workspacePath: workspacePath || undefined,
+      });
       notification.success(t('messages.toggleSuccess', { name: skill.name, status: newEnabled ? t('messages.enabled') : t('messages.disabled') }));
-      loadSkills();
+      await loadSkills(true);
     } catch (err) {
       notification.error(t('messages.toggleFailed', { error: err instanceof Error ? err.message : String(err) }));
     }
@@ -149,7 +173,11 @@ const SkillsConfig: React.FC = () => {
 
     try {
       setDownloadingPackage(skill.installId);
-      const result = await configAPI.downloadSkillMarket(skill.installId, 'project');
+      const result = await configAPI.downloadSkillMarket({
+        packageId: skill.installId,
+        level: 'project',
+        workspacePath: workspacePath || undefined,
+      });
       const installedName = result.installedSkills[0] ?? skill.name;
       notification.success(t('messages.marketDownloadSuccess', { name: installedName }));
       await loadSkills(true);

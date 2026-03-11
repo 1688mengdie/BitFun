@@ -53,6 +53,8 @@ export class FlowChatManager {
       saveDebouncers: new Map(),
       lastSaveTimestamps: new Map(),
       lastSaveHashes: new Map(),
+      turnSaveInFlight: new Map(),
+      turnSavePending: new Set(),
       currentWorkspacePath: null
     };
     

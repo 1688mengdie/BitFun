@@ -145,7 +145,6 @@ async fn clear_active_workspace_context(state: &State<'_, AppState>, app: &AppHa
     let _ = app;
 
     *state.workspace_path.write().await = None;
-    state.miniapp_manager.set_workspace_path(None).await;
 
     if let Some(ref pool) = state.js_worker_pool {
         pool.stop_all().await;
@@ -180,12 +179,8 @@ async fn apply_active_workspace_context(
     clear_active_workspace_context(state, app).await;
 
     *state.workspace_path.write().await = Some(workspace_info.root_path.clone());
-    state
-        .miniapp_manager
-        .set_workspace_path(Some(workspace_info.root_path.clone()))
-        .await;
 
-    if let Err(e) = bitfun_core::service::snapshot::initialize_global_snapshot_manager(
+    if let Err(e) = bitfun_core::service::snapshot::initialize_snapshot_manager_for_workspace(
         workspace_info.root_path.clone(),
         None,
     )
@@ -231,7 +226,23 @@ async fn apply_active_workspace_context(
 }
 
 #[tauri::command]
-pub async fn initialize_global_state(_state: State<'_, AppState>) -> Result<String, String> {
+pub async fn initialize_global_state(
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<String, String> {
+    if let Some(workspace_info) = state.workspace_service.get_current_workspace().await {
+        apply_active_workspace_context(&state, &app, &workspace_info).await;
+
+        info!(
+            "Global state initialized with active workspace: workspace_id={}, path={}",
+            workspace_info.id,
+            workspace_info.root_path.display()
+        );
+    } else {
+        clear_active_workspace_context(&state, &app).await;
+        info!("Global state initialized without active workspace");
+    }
+
     Ok("Global state initialized successfully".to_string())
 }
 

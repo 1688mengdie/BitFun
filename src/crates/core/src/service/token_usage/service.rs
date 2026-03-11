@@ -85,7 +85,7 @@ impl TokenUsageService {
     /// Load model statistics from disk
     async fn load_model_stats(&self) -> Result<()> {
         let path = self.get_model_stats_path();
-        
+
         if !path.exists() {
             debug!("No existing model stats file found");
             return Ok(());
@@ -98,7 +98,7 @@ impl TokenUsageService {
                 return Ok(());
             }
         };
-        
+
         let stats: HashMap<String, ModelTokenStats> = match serde_json::from_str(&content) {
             Ok(s) => s,
             Err(e) => {
@@ -106,7 +106,10 @@ impl TokenUsageService {
                 // Backup the corrupted file for debugging
                 let backup_path = path.with_extension("json.bak");
                 if let Err(backup_err) = fs::rename(&path, &backup_path).await {
-                    warn!("Failed to backup corrupted model stats file: {}", backup_err);
+                    warn!(
+                        "Failed to backup corrupted model stats file: {}",
+                        backup_err
+                    );
                 }
                 return Ok(());
             }
@@ -123,10 +126,10 @@ impl TokenUsageService {
     async fn save_model_stats(&self) -> Result<()> {
         let path = self.get_model_stats_path();
         let model_stats = self.model_stats.read().await;
-        
+
         let content = serde_json::to_string_pretty(&*model_stats)
             .context("Failed to serialize model stats")?;
-        
+
         fs::write(&path, content)
             .await
             .context("Failed to write model stats file")?;
@@ -181,7 +184,7 @@ impl TokenUsageService {
     /// Update model statistics
     async fn update_model_stats(&self, record: &TokenUsageRecord) -> Result<()> {
         let mut model_stats = self.model_stats.write().await;
-        
+
         let stats = model_stats
             .entry(record.model_id.clone())
             .or_insert_with(|| ModelTokenStats {
@@ -216,7 +219,7 @@ impl TokenUsageService {
     /// Update session cache
     async fn update_session_cache(&self, record: &TokenUsageRecord) -> Result<()> {
         let mut session_cache = self.session_cache.write().await;
-        
+
         let stats = session_cache
             .entry(record.session_id.clone())
             .or_insert_with(|| SessionTokenStats {
@@ -244,7 +247,7 @@ impl TokenUsageService {
     /// Persist record to disk
     async fn persist_record(&self, record: &TokenUsageRecord) -> Result<()> {
         let path = self.get_records_path(record.timestamp);
-        
+
         // Load existing records for the day
         let mut batch = if path.exists() {
             let content = fs::read_to_string(&path).await?;
@@ -334,13 +337,13 @@ impl TokenUsageService {
     /// Query token usage records
     pub async fn query_records(&self, query: TokenUsageQuery) -> Result<Vec<TokenUsageRecord>> {
         let (start_date, end_date) = self.get_date_range(&query.time_range);
-        
+
         let mut all_records = Vec::new();
         let mut current_date = start_date;
 
         while current_date <= end_date {
             let path = self.get_records_path(current_date);
-            
+
             if path.exists() {
                 let content = fs::read_to_string(&path).await?;
                 if let Ok(batch) = serde_json::from_str::<RecordsBatch>(&content) {
@@ -377,7 +380,7 @@ impl TokenUsageService {
         // Apply pagination
         let offset = query.offset.unwrap_or(0);
         let limit = query.limit.unwrap_or(usize::MAX);
-        
+
         Ok(filtered.into_iter().skip(offset).take(limit).collect())
     }
 
@@ -386,7 +389,7 @@ impl TokenUsageService {
         let now = Utc::now();
         // Fallback: use Unix epoch as start if date calculation fails
         let epoch = DateTime::UNIX_EPOCH;
-        
+
         match time_range {
             TimeRange::Today => {
                 let start = now
@@ -414,9 +417,7 @@ impl TokenUsageService {
                     .unwrap_or(epoch);
                 (start, now)
             }
-            TimeRange::All => {
-                (epoch, now)
-            }
+            TimeRange::All => (epoch, now),
             TimeRange::Custom { start, end } => (*start, *end),
         }
     }
@@ -424,12 +425,12 @@ impl TokenUsageService {
     /// Get summary statistics
     pub async fn get_summary(&self, query: TokenUsageQuery) -> Result<TokenUsageSummary> {
         let records = self.query_records(query).await?;
-        
+
         let mut total_input = 0u64;
         let mut total_output = 0u64;
         let mut total_cached = 0u64;
         let mut total_tokens = 0u64;
-        
+
         let mut by_model: HashMap<String, ModelTokenStats> = HashMap::new();
         let mut by_session: HashMap<String, SessionTokenStats> = HashMap::new();
 
@@ -440,13 +441,14 @@ impl TokenUsageService {
             total_tokens += record.total_tokens as u64;
 
             // Aggregate by model
-            let model_stats = by_model
-                .entry(record.model_id.clone())
-                .or_insert_with(|| ModelTokenStats {
-                    model_id: record.model_id.clone(),
-                    ..Default::default()
-                });
-            
+            let model_stats =
+                by_model
+                    .entry(record.model_id.clone())
+                    .or_insert_with(|| ModelTokenStats {
+                        model_id: record.model_id.clone(),
+                        ..Default::default()
+                    });
+
             model_stats.total_input += record.input_tokens as u64;
             model_stats.total_output += record.output_tokens as u64;
             model_stats.total_cached += record.cached_tokens as u64;
@@ -475,13 +477,13 @@ impl TokenUsageService {
                     created_at: record.timestamp,
                     last_updated: record.timestamp,
                 });
-            
+
             session_stats.total_input += record.input_tokens;
             session_stats.total_output += record.output_tokens;
             session_stats.total_cached += record.cached_tokens;
             session_stats.total_tokens += record.total_tokens;
             session_stats.request_count += 1;
-            
+
             if record.timestamp < session_stats.created_at {
                 session_stats.created_at = record.timestamp;
             }
@@ -513,7 +515,7 @@ impl TokenUsageService {
         drop(model_stats);
 
         self.save_model_stats().await?;
-        
+
         info!("Cleared statistics for model: {}", model_id);
         Ok(())
     }

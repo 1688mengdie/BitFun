@@ -3,8 +3,9 @@
 //! Adapts bitfun-core's Agentic system to CLI's Agent interface
 
 use anyhow::Result;
-use tokio::sync::mpsc;
 use std::sync::Arc;
+use std::path::PathBuf;
+use tokio::sync::mpsc;
 
 use super::{Agent, AgentEvent, AgentResponse};
 use crate::session::{ToolCall, ToolCallStatus};
@@ -19,6 +20,7 @@ pub struct CoreAgentAdapter {
     agent_type: String,
     coordinator: Arc<ConversationCoordinator>,
     event_queue: Arc<EventQueue>,
+    workspace_path: Option<PathBuf>,
     session_id: Option<String>,
 }
 
@@ -27,6 +29,7 @@ impl CoreAgentAdapter {
         agent_type: String, 
         coordinator: Arc<ConversationCoordinator>,
         event_queue: Arc<EventQueue>,
+        workspace_path: Option<PathBuf>,
     ) -> Self {
         let name = match agent_type.as_str() {
             "agentic" => "Fang",
@@ -38,6 +41,7 @@ impl CoreAgentAdapter {
             agent_type: agent_type.clone(),
             coordinator,
             event_queue,
+            workspace_path,
             session_id: None,
         }
     }
@@ -46,11 +50,20 @@ impl CoreAgentAdapter {
         if let Some(session_id) = &self.session_id {
             return Ok(session_id.clone());
         }
+
+        let workspace_path = self
+            .workspace_path
+            .clone()
+            .or_else(|| std::env::current_dir().ok())
+            .map(|path| path.to_string_lossy().to_string());
         
         let session = self.coordinator.create_session(
             format!("CLI Session - {}", chrono::Local::now().format("%Y-%m-%d %H:%M:%S")),
             self.agent_type.clone(),
-            SessionConfig::default(),
+            SessionConfig {
+                workspace_path,
+                ..Default::default()
+            },
         ).await?;
         
         self.session_id = Some(session.session_id.clone());
@@ -72,6 +85,7 @@ impl Agent for CoreAgentAdapter {
             agent_type: self.agent_type.clone(),
             coordinator: self.coordinator.clone(),
             event_queue: self.event_queue.clone(),
+            workspace_path: self.workspace_path.clone(),
             session_id: self.session_id.clone(),
         };
         
@@ -85,6 +99,7 @@ impl Agent for CoreAgentAdapter {
             message.clone(),
             None,
             self.agent_type.clone(),
+            None,
             DialogTriggerSource::Cli,
         ).await?;
         

@@ -1,10 +1,9 @@
+use super::util::resolve_path_with_workspace;
 use crate::agentic::tools::framework::{
     Tool, ToolRenderOptions, ToolResult, ToolUseContext, ValidationResult,
 };
-use crate::infrastructure::get_workspace_path;
 use crate::util::errors::{BitFunError, BitFunResult};
 use async_trait::async_trait;
-use log::warn;
 use serde_json::{json, Value};
 use std::path::Path;
 use tokio::fs;
@@ -68,25 +67,39 @@ Usage:
     async fn validate_input(
         &self,
         input: &Value,
-        _context: Option<&ToolUseContext>,
+        context: Option<&ToolUseContext>,
     ) -> ValidationResult {
-        if input
+        let file_path = match input
             .get("file_path")
             .and_then(|v| v.as_str())
-            .map_or(true, |s| s.is_empty())
         {
-            return ValidationResult {
-                result: false,
-                message: Some("file_path is required and cannot be empty".to_string()),
-                error_code: Some(400),
-                meta: None,
-            };
-        }
+            Some(path) if !path.is_empty() => path,
+            _ => {
+                return ValidationResult {
+                    result: false,
+                    message: Some("file_path is required and cannot be empty".to_string()),
+                    error_code: Some(400),
+                    meta: None,
+                };
+            }
+        };
 
         if input.get("content").is_none() {
             return ValidationResult {
                 result: false,
                 message: Some("content is required".to_string()),
+                error_code: Some(400),
+                meta: None,
+            };
+        }
+
+        if let Err(err) = resolve_path_with_workspace(
+            file_path,
+            context.and_then(|ctx| ctx.workspace_root()),
+        ) {
+            return ValidationResult {
+                result: false,
+                message: Some(err.to_string()),
                 error_code: Some(400),
                 meta: None,
             };
@@ -120,27 +133,14 @@ Usage:
     async fn call_impl(
         &self,
         input: &Value,
-        _context: &ToolUseContext,
+        context: &ToolUseContext,
     ) -> BitFunResult<Vec<ToolResult>> {
         let file_path = input
             .get("file_path")
             .and_then(|v| v.as_str())
             .ok_or_else(|| BitFunError::tool("file_path is required".to_string()))?;
 
-        // Ensure relative paths are relative to workspace
-        let resolved_path = if Path::new(file_path).is_absolute() {
-            file_path.to_string()
-        } else {
-            match get_workspace_path() {
-                Some(workspace_path) => {
-                    workspace_path.join(file_path).to_string_lossy().to_string()
-                }
-                None => {
-                    warn!("Workspace path not set, using current directory to resolve relative path: {}", file_path);
-                    file_path.to_string()
-                }
-            }
-        };
+        let resolved_path = resolve_path_with_workspace(file_path, context.workspace_root())?;
 
         let content = input
             .get("content")

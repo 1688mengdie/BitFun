@@ -9,6 +9,7 @@ import { miniAppAPI } from '@/infrastructure/api/service-api/MiniAppAPI';
 import { api } from '@/infrastructure/api/service-api/ApiClient';
 import type { MiniApp } from '@/infrastructure/api/service-api/MiniAppAPI';
 import { useTheme } from '@/infrastructure/theme/hooks/useTheme';
+import { useCurrentWorkspace } from '@/infrastructure/contexts/WorkspaceContext';
 import { createLogger } from '@/shared/utils/logger';
 import { IconButton, Button } from '@/component-library';
 import { useSceneManager } from '@/app/hooks/useSceneManager';
@@ -26,6 +27,7 @@ const MiniAppScene: React.FC<MiniAppSceneProps> = ({ appId }) => {
   const openApp = useToolboxStore((s) => s.openApp);
   const closeApp = useToolboxStore((s) => s.closeApp);
   const { themeType } = useTheme();
+  const { workspacePath } = useCurrentWorkspace();
   const { closeScene } = useSceneManager();
 
   const [app, setApp] = useState<MiniApp | null>(null);
@@ -45,7 +47,7 @@ const MiniAppScene: React.FC<MiniAppSceneProps> = ({ appId }) => {
     setError(null);
     try {
       const theme = themeType ?? 'dark';
-      const loaded = await miniAppAPI.getMiniApp(id, theme);
+      const loaded = await miniAppAPI.getMiniApp(id, theme, workspacePath || undefined);
       setApp(loaded);
     } catch (err) {
       log.error('Failed to load app', err);
@@ -59,7 +61,7 @@ const MiniAppScene: React.FC<MiniAppSceneProps> = ({ appId }) => {
     if (appId) {
       load(appId);
     }
-  }, [appId, themeType]);
+  }, [appId, themeType, workspacePath]);
 
   useEffect(() => {
     const tabId = `miniapp:${appId}`;

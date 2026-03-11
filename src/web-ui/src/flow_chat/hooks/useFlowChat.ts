@@ -17,6 +17,7 @@ import type { UnlistenFn } from '@tauri-apps/api/event';
 import { aiExperienceConfigService } from '@/infrastructure/config/services';
 import { configManager } from '@/infrastructure/config/services/ConfigManager';
 import { useI18n } from '@/infrastructure/i18n';
+import { useCurrentWorkspace } from '@/infrastructure/contexts/WorkspaceContext';
 import { generateTempTitle } from '../utils/titleUtils';
 import { createLogger } from '@/shared/utils/logger';
 
@@ -58,6 +59,7 @@ async function getModelContextWindow(modelName?: string): Promise<number> {
 
 export const useFlowChat = () => {
   const { t } = useI18n('flow-chat');
+  const { workspacePath } = useCurrentWorkspace();
   const [state, setState] = useState<FlowChatState>(flowChatStore.getState());
   const processingLock = useRef<boolean>(false);
 
@@ -95,12 +97,16 @@ export const useFlowChat = () => {
     try {
       const sessionCount = flowChatStore.getState().sessions.size + 1;
       const sessionName = t('session.newWithIndex', { count: sessionCount });
+      if (!workspacePath) {
+        throw new Error('Workspace path is required to create a session');
+      }
       
       const maxContextTokens = await getModelContextWindow(config?.modelName);
       
       const response = await agentAPI.createSession({
         sessionName,
         agentType: 'agentic', // Default to agentic; can change via mode selector.
+        workspacePath,
         config: {
           modelName: config?.modelName || 'default',
           enableTools: true,
@@ -127,7 +133,9 @@ export const useFlowChat = () => {
         sessionConfig, 
         undefined,  // Terminal sessions are managed by the backend.
         sessionName,
-        maxContextTokens
+        maxContextTokens,
+        undefined,
+        workspacePath
       );
       
       return response.sessionId;
@@ -155,13 +163,21 @@ export const useFlowChat = () => {
 
       const sessionCount = flowChatStore.getState().sessions.size + 1;
       const sessionName = t('session.newWithIndex', { count: sessionCount });
-      flowChatStore.createSession(sessionId, sessionConfig, undefined, sessionName);
+      flowChatStore.createSession(
+        sessionId,
+        sessionConfig,
+        undefined,
+        sessionName,
+        undefined,
+        undefined,
+        workspacePath
+      );
       
       log.warn('Using fallback mode without Terminal');
 
       return sessionId;
     }
-  }, []);
+  }, [t, workspacePath]);
 
   const switchSession = useCallback(async (sessionId: string) => {
     try {
@@ -407,12 +423,13 @@ export const useFlowChat = () => {
     modifiedFiles: string[]
   ) => {
     try {
-      await snapshotAPI.recordTurnSnapshot(sessionId, turnIndex, modifiedFiles);
+      const workspacePath = state.sessions.get(sessionId)?.workspacePath;
+      await snapshotAPI.recordTurnSnapshot(sessionId, turnIndex, modifiedFiles, workspacePath);
       log.debug('Turn snapshot recorded', { sessionId, turnIndex, fileCount: modifiedFiles.length });
     } catch (error) {
       log.error('Failed to record turn snapshot', { sessionId, turnIndex, error });
     }
-  }, []);
+  }, [state.sessions]);
 
   const actions: FlowChatActions = {
     sendMessage,

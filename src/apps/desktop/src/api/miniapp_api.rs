@@ -26,6 +26,8 @@ pub struct CreateMiniAppRequest {
     #[serde(default)]
     pub permissions: MiniAppPermissions,
     pub ai_context: Option<MiniAppAiContext>,
+    #[serde(default)]
+    pub workspace_path: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -95,6 +97,53 @@ pub struct UpdateMiniAppRequest {
     pub source: Option<MiniAppSourceDto>,
     pub permissions: Option<MiniAppPermissions>,
     pub ai_context: Option<MiniAppAiContext>,
+    #[serde(default)]
+    pub workspace_path: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetMiniAppRequest {
+    pub app_id: String,
+    pub theme: Option<String>,
+    #[serde(default)]
+    pub workspace_path: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MiniAppWorkerCallRequest {
+    pub app_id: String,
+    pub method: String,
+    pub params: Value,
+    #[serde(default)]
+    pub workspace_path: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MiniAppRecompileRequest {
+    pub app_id: String,
+    pub theme: Option<String>,
+    #[serde(default)]
+    pub workspace_path: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MiniAppImportFromPathRequest {
+    pub path: String,
+    #[serde(default)]
+    pub workspace_path: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MiniAppSyncFromFsRequest {
+    pub app_id: String,
+    pub theme: Option<String>,
+    #[serde(default)]
+    pub workspace_path: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -135,6 +184,13 @@ async fn emit_miniapp_event(event_name: &str, payload: Value) {
         payload,
     })
     .await;
+}
+
+fn workspace_root_from_input(workspace_path: Option<&str>) -> Option<PathBuf> {
+    workspace_path
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
 }
 
 async fn maybe_stop_worker(state: &State<'_, AppState>, app: &MiniApp) {
@@ -206,33 +262,22 @@ pub async fn list_miniapps(state: State<'_, AppState>) -> Result<Vec<MiniAppMeta
 #[tauri::command]
 pub async fn get_miniapp(
     state: State<'_, AppState>,
-    app_id: String,
-    theme: Option<String>,
+    request: GetMiniAppRequest,
 ) -> Result<MiniApp, String> {
     let mut app = state
         .miniapp_manager
-        .get(&app_id)
+        .get(&request.app_id)
         .await
         .map_err(|e| e.to_string())?;
 
-    let workspace_dir = state
-        .workspace_path
-        .read()
-        .await
-        .as_ref()
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_default();
-    let path_manager = state.miniapp_manager.path_manager();
-    let app_data_dir = path_manager.miniapp_dir(&app_id);
-    let app_data_dir_str = app_data_dir.to_string_lossy().to_string();
-    let theme_type = theme.as_deref().unwrap_or("dark");
-    match bitfun_core::miniapp::compiler::compile(
+    let theme_type = request.theme.as_deref().unwrap_or("dark");
+    let workspace_root = workspace_root_from_input(request.workspace_path.as_deref());
+    match state.miniapp_manager.compile_source(
+        &request.app_id,
         &app.source,
         &app.permissions,
-        &app_id,
-        &app_data_dir_str,
-        &workspace_dir,
         theme_type,
+        workspace_root.as_deref(),
     ) {
         Ok(html) => app.compiled_html = html,
         Err(e) => log::warn!("get_miniapp: recompile failed, using cached: {}", e),
@@ -246,6 +291,7 @@ pub async fn create_miniapp(
     request: CreateMiniAppRequest,
 ) -> Result<MiniApp, String> {
     let source: MiniAppSource = request.source.into();
+    let workspace_root = workspace_root_from_input(request.workspace_path.as_deref());
     let app = state
         .miniapp_manager
         .create(
@@ -257,6 +303,7 @@ pub async fn create_miniapp(
             source,
             request.permissions,
             request.ai_context,
+            workspace_root.as_deref(),
         )
         .await
         .map_err(|e| e.to_string())?;
@@ -270,6 +317,7 @@ pub async fn update_miniapp(
     app_id: String,
     request: UpdateMiniAppRequest,
 ) -> Result<MiniApp, String> {
+    let workspace_root = workspace_root_from_input(request.workspace_path.as_deref());
     let app = state
         .miniapp_manager
         .update(
@@ -282,6 +330,7 @@ pub async fn update_miniapp(
             request.source.map(Into::into),
             request.permissions,
             request.ai_context,
+            workspace_root.as_deref(),
         )
         .await
         .map_err(|e| e.to_string())?;
@@ -413,42 +462,41 @@ pub async fn miniapp_runtime_status(state: State<'_, AppState>) -> Result<Runtim
 #[tauri::command]
 pub async fn miniapp_worker_call(
     state: State<'_, AppState>,
-    app_id: String,
-    method: String,
-    params: Value,
+    request: MiniAppWorkerCallRequest,
 ) -> Result<Value, String> {
     let pool = state
         .js_worker_pool
         .as_ref()
         .ok_or_else(|| "JS Worker pool not initialized".to_string())?;
-    let was_running = pool.is_running(&app_id).await;
+    let was_running = pool.is_running(&request.app_id).await;
     let mut app = state
         .miniapp_manager
-        .get(&app_id)
+        .get(&request.app_id)
         .await
         .map_err(|e| e.to_string())?;
-    let deps_installed = ensure_worker_dependencies(&state, &app_id, &mut app).await?;
+    let deps_installed = ensure_worker_dependencies(&state, &request.app_id, &mut app).await?;
+    let workspace_root = workspace_root_from_input(request.workspace_path.as_deref());
     let policy = state
         .miniapp_manager
-        .resolve_policy_for_app(&app_id, &app.permissions)
+        .resolve_policy_for_app(&request.app_id, &app.permissions, workspace_root.as_deref())
         .await;
     let policy_json = serde_json::to_string(&policy).map_err(|e| e.to_string())?;
     let worker_revision = state.miniapp_manager.build_worker_revision(&app, &policy_json);
     let should_emit_restart = !was_running || deps_installed || app.runtime.worker_restart_required;
     let result = pool.call(
-        &app_id,
+        &request.app_id,
         &worker_revision,
         &policy_json,
         app.permissions.node.as_ref(),
-        &method,
-        params,
+        &request.method,
+        request.params,
     )
     .await
     .map_err(|e| e.to_string())?;
     if should_emit_restart {
         let app = state
             .miniapp_manager
-            .clear_worker_restart_required(&app_id)
+            .clear_worker_restart_required(&request.app_id)
             .await
             .map_err(|e| e.to_string())?;
         emit_miniapp_event(
@@ -514,13 +562,13 @@ pub async fn miniapp_install_deps(
 #[tauri::command]
 pub async fn miniapp_recompile(
     state: State<'_, AppState>,
-    app_id: String,
-    theme: Option<String>,
+    request: MiniAppRecompileRequest,
 ) -> Result<RecompileResult, String> {
-    let theme_type = theme.as_deref().unwrap_or("dark");
+    let theme_type = request.theme.as_deref().unwrap_or("dark");
+    let workspace_root = workspace_root_from_input(request.workspace_path.as_deref());
     let app = state
         .miniapp_manager
-        .recompile(&app_id, theme_type)
+        .recompile(&request.app_id, theme_type, workspace_root.as_deref())
         .await
         .map_err(|e| e.to_string())?;
     emit_miniapp_event("miniapp-recompiled", miniapp_payload(&app, "recompile")).await;
@@ -545,12 +593,13 @@ pub async fn miniapp_dialog_message(
 #[tauri::command]
 pub async fn miniapp_import_from_path(
     state: State<'_, AppState>,
-    path: String,
+    request: MiniAppImportFromPathRequest,
 ) -> Result<MiniApp, String> {
-    let path_buf = PathBuf::from(&path);
+    let path_buf = PathBuf::from(&request.path);
+    let workspace_root = workspace_root_from_input(request.workspace_path.as_deref());
     let app = state
         .miniapp_manager
-        .import_from_path(path_buf)
+        .import_from_path(path_buf, workspace_root.as_deref())
         .await
         .map_err(|e| e.to_string())?;
     maybe_stop_worker(&state, &app).await;
@@ -561,13 +610,13 @@ pub async fn miniapp_import_from_path(
 #[tauri::command]
 pub async fn miniapp_sync_from_fs(
     state: State<'_, AppState>,
-    app_id: String,
-    theme: Option<String>,
+    request: MiniAppSyncFromFsRequest,
 ) -> Result<MiniApp, String> {
-    let theme_type = theme.as_deref().unwrap_or("dark");
+    let theme_type = request.theme.as_deref().unwrap_or("dark");
+    let workspace_root = workspace_root_from_input(request.workspace_path.as_deref());
     let app = state
         .miniapp_manager
-        .sync_from_fs(&app_id, theme_type)
+        .sync_from_fs(&request.app_id, theme_type, workspace_root.as_deref())
         .await
         .map_err(|e| e.to_string())?;
     maybe_stop_worker(&state, &app).await;

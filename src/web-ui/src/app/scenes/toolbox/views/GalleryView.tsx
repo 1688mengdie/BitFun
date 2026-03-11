@@ -29,6 +29,7 @@ import {
 } from '@/app/components';
 import type { SceneTabId } from '@/app/components/SceneBar/types';
 import { getMiniAppIconGradient, renderMiniAppIcon } from '../utils/miniAppIcons';
+import { useCurrentWorkspace } from '@/infrastructure/contexts/WorkspaceContext';
 import './GalleryView.scss';
 
 const log = createLogger('GalleryView');
@@ -40,6 +41,7 @@ const GalleryView: React.FC = () => {
   const setApps = useToolboxStore((s) => s.setApps);
   const setLoading = useToolboxStore((s) => s.setLoading);
   const markWorkerStopped = useToolboxStore((s) => s.markWorkerStopped);
+  const { workspacePath } = useCurrentWorkspace();
   const { openScene, activateScene, closeScene, openTabs } = useSceneManager();
 
   const [search, setSearch] = useState('');
@@ -147,7 +149,7 @@ const GalleryView: React.FC = () => {
       if (!path) return;
 
       setLoading(true);
-      const app = await miniAppAPI.importFromPath(path);
+      const app = await miniAppAPI.importFromPath(path, workspacePath || undefined);
       setApps([app, ...apps]);
       handleOpenApp(app.id);
     } catch (error) {

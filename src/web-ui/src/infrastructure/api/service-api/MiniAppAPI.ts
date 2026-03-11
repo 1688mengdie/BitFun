@@ -112,27 +112,29 @@ export class MiniAppAPI {
     }
   }
 
-  async getMiniApp(appId: string, theme?: string): Promise<MiniApp> {
+  async getMiniApp(appId: string, theme?: string, workspacePath?: string): Promise<MiniApp> {
     try {
-      return await api.invoke('get_miniapp', { appId, theme: theme ?? undefined });
+      return await api.invoke('get_miniapp', {
+        request: { appId, theme: theme ?? undefined, workspacePath }
+      });
     } catch (error) {
-      throw createTauriCommandError('get_miniapp', error, { appId });
+      throw createTauriCommandError('get_miniapp', error, { appId, workspacePath });
     }
   }
 
-  async createMiniApp(req: CreateMiniAppRequest): Promise<MiniApp> {
+  async createMiniApp(req: CreateMiniAppRequest, workspacePath?: string): Promise<MiniApp> {
     try {
-      return await api.invoke('create_miniapp', { request: req });
+      return await api.invoke('create_miniapp', { request: { ...req, workspacePath } });
     } catch (error) {
-      throw createTauriCommandError('create_miniapp', error);
+      throw createTauriCommandError('create_miniapp', error, { workspacePath });
     }
   }
 
-  async updateMiniApp(appId: string, req: UpdateMiniAppRequest): Promise<MiniApp> {
+  async updateMiniApp(appId: string, req: UpdateMiniAppRequest, workspacePath?: string): Promise<MiniApp> {
     try {
-      return await api.invoke('update_miniapp', { appId, request: req });
+      return await api.invoke('update_miniapp', { appId, request: { ...req, workspacePath } });
     } catch (error) {
-      throw createTauriCommandError('update_miniapp', error);
+      throw createTauriCommandError('update_miniapp', error, { appId, workspacePath });
     }
   }
 
@@ -172,11 +174,14 @@ export class MiniAppAPI {
     appId: string,
     method: string,
     params: Record<string, unknown>,
+    workspacePath?: string,
   ): Promise<unknown> {
     try {
-      return await api.invoke('miniapp_worker_call', { appId, method, params });
+      return await api.invoke('miniapp_worker_call', {
+        request: { appId, method, params, workspacePath }
+      });
     } catch (error) {
-      throw createTauriCommandError('miniapp_worker_call', error);
+      throw createTauriCommandError('miniapp_worker_call', error, { appId, method, workspacePath });
     }
   }
 
@@ -204,27 +209,33 @@ export class MiniAppAPI {
     }
   }
 
-  async recompile(appId: string, theme?: string): Promise<RecompileResult> {
+  async recompile(appId: string, theme?: string, workspacePath?: string): Promise<RecompileResult> {
     try {
-      return await api.invoke('miniapp_recompile', { appId, theme: theme ?? undefined });
+      return await api.invoke('miniapp_recompile', {
+        request: { appId, theme: theme ?? undefined, workspacePath }
+      });
     } catch (error) {
-      throw createTauriCommandError('miniapp_recompile', error);
+      throw createTauriCommandError('miniapp_recompile', error, { appId, workspacePath });
     }
   }
 
-  async importFromPath(path: string): Promise<MiniApp> {
+  async importFromPath(path: string, workspacePath?: string): Promise<MiniApp> {
     try {
-      return await api.invoke('miniapp_import_from_path', { path });
+      return await api.invoke('miniapp_import_from_path', {
+        request: { path, workspacePath }
+      });
     } catch (error) {
-      throw createTauriCommandError('miniapp_import_from_path', error);
+      throw createTauriCommandError('miniapp_import_from_path', error, { path, workspacePath });
     }
   }
 
-  async syncFromFs(appId: string, theme?: string): Promise<MiniApp> {
+  async syncFromFs(appId: string, theme?: string, workspacePath?: string): Promise<MiniApp> {
     try {
-      return await api.invoke('miniapp_sync_from_fs', { appId, theme: theme ?? undefined });
+      return await api.invoke('miniapp_sync_from_fs', {
+        request: { appId, theme: theme ?? undefined, workspacePath }
+      });
     } catch (error) {
-      throw createTauriCommandError('miniapp_sync_from_fs', error, { appId });
+      throw createTauriCommandError('miniapp_sync_from_fs', error, { appId, workspacePath });
     }
   }
 }

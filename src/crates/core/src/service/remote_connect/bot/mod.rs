@@ -76,11 +76,11 @@ pub struct WorkspaceFileContent {
 }
 
 /// Resolve a raw path (with or without `computer://` / `file://` prefix) to an
-/// absolute `PathBuf`.  Relative paths are joined with the current workspace
-/// root.  Returns `None` when a relative path is given but no workspace is open.
+/// absolute `PathBuf`.
+///
+/// Remote Connect intentionally rejects relative paths here to avoid silently
+/// binding file reads/downloads to whichever workspace happens to be current.
 pub fn resolve_workspace_path(raw: &str) -> Option<std::path::PathBuf> {
-    use crate::infrastructure::get_workspace_path;
-
     let stripped = raw
         .strip_prefix("computer://")
         .or_else(|| raw.strip_prefix("file://"))
@@ -90,8 +90,6 @@ pub fn resolve_workspace_path(raw: &str) -> Option<std::path::PathBuf> {
         || (stripped.len() >= 3 && stripped.as_bytes()[1] == b':')
     {
         Some(std::path::PathBuf::from(stripped))
-    } else if let Some(ws) = get_workspace_path() {
-        Some(ws.join(stripped))
     } else {
         None
     }
@@ -134,7 +132,7 @@ pub fn detect_mime_type(path: &std::path::Path) -> &'static str {
     }
 }
 
-/// Read a workspace file, resolving `computer://` prefixes and relative paths.
+/// Read a workspace file, resolving `computer://` prefixes.
 ///
 /// `max_size` is the caller-specific byte limit (e.g. 50 MB for Telegram,
 /// 30 MB for Feishu, 10 MB for mobile relay).
@@ -145,8 +143,9 @@ pub async fn read_workspace_file(
     raw_path: &str,
     max_size: u64,
 ) -> anyhow::Result<WorkspaceFileContent> {
-    let abs_path = resolve_workspace_path(raw_path)
-        .ok_or_else(|| anyhow::anyhow!("No workspace open to resolve path: {raw_path}"))?;
+    let abs_path = resolve_workspace_path(raw_path).ok_or_else(|| {
+        anyhow::anyhow!("Remote file access requires an absolute path: {raw_path}")
+    })?;
 
     if !abs_path.exists() {
         return Err(anyhow::anyhow!("File not found: {}", abs_path.display()));
@@ -238,26 +237,11 @@ const CODE_FILE_EXTENSIONS: &[&str] = &[
     "cj", "ets", "editorconfig", "gitignore", "log",
 ];
 
-/// Extensions that are always considered downloadable when referenced via
-/// relative paths (matches mobile-web `DOWNLOADABLE_EXTENSIONS`).
-const DOWNLOADABLE_EXTENSIONS: &[&str] = &[
-    "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx",
-    "odt", "ods", "odp", "rtf", "pages", "numbers", "key",
-    "png", "jpg", "jpeg", "gif", "bmp", "svg", "webp", "ico", "tiff", "tif",
-    "zip", "tar", "gz", "bz2", "7z", "rar", "dmg", "iso", "xz",
-    "mp3", "wav", "ogg", "flac", "aac", "m4a", "wma",
-    "mp4", "avi", "mkv", "mov", "webm", "wmv", "flv",
-    "csv", "tsv", "sqlite", "db", "parquet",
-    "epub", "mobi",
-    "apk", "ipa", "exe", "msi", "deb", "rpm",
-    "ttf", "otf", "woff", "woff2",
-];
-
 /// Check whether a bare file path (no protocol prefix) should be treated as
 /// a downloadable file based on its extension.
 ///
-/// - Absolute paths: blacklist code-file extensions (everything else is OK).
-/// - Relative paths: whitelist known binary / document extensions only.
+/// Only absolute local file paths are accepted in multi-workspace mode.
+/// Code/config source files are filtered out even when absolute.
 fn is_downloadable_by_extension(file_path: &str) -> bool {
     let ext = std::path::Path::new(file_path)
         .extension()
@@ -272,8 +256,34 @@ fn is_downloadable_by_extension(file_path: &str) -> bool {
     if is_absolute {
         !CODE_FILE_EXTENSIONS.contains(&ext.as_str())
     } else {
-        DOWNLOADABLE_EXTENSIONS.contains(&ext.as_str())
+        false
     }
+}
+
+/// Only absolute file paths are returned. Directories, missing paths, and
+/// workspace-relative links are skipped. Duplicate paths are deduplicated
+/// before returning.
+pub fn extract_computer_file_paths(text: &str) -> Vec<String> {
+    const PREFIX: &str = "computer://";
+    let mut paths: Vec<String> = Vec::new();
+    let mut search = text;
+
+    while let Some(idx) = search.find(PREFIX) {
+        let rest = &search[idx + PREFIX.len()..];
+        let end = rest
+            .find(|c: char| {
+                c.is_whitespace() || matches!(c, '<' | '>' | '(' | ')' | '"' | '\'')
+            })
+            .unwrap_or(rest.len());
+        let raw_suffix = rest[..end]
+            .trim_end_matches(|c: char| matches!(c, '.' | ',' | ';' | ':' | ')' | ']'));
+        if !raw_suffix.is_empty() {
+            push_if_existing_file(&format!("{PREFIX}{raw_suffix}"), &mut paths);
+        }
+        search = &rest[end..];
+    }
+
+    paths
 }
 
 /// Try to resolve `file_path` and, if it exists as a regular file, push
@@ -292,9 +302,8 @@ fn push_if_existing_file(file_path: &str, out: &mut Vec<String>) {
 /// Detects three kinds of references:
 /// 1. `computer://` links in plain text.
 /// 2. `file://` links in plain text.
-/// 3. Markdown hyperlinks `[text](href)` pointing to local files
-///    (absolute paths excluding code files, or relative paths with
-///     downloadable extensions).
+/// 3. Markdown hyperlinks `[text](href)` pointing to absolute local files
+///    (excluding code/config source files).
 ///
 /// Only paths that exist as regular files on disk are returned.
 /// Duplicate paths are deduplicated.

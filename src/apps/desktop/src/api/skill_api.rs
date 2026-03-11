@@ -6,6 +6,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::OnceLock;
 use tauri::State;
@@ -17,7 +18,7 @@ use crate::api::app_state::AppState;
 use bitfun_core::agentic::tools::implementations::skills::{
     SkillData, SkillLocation, SkillRegistry,
 };
-use bitfun_core::infrastructure::{get_path_manager_arc, get_workspace_path};
+use bitfun_core::infrastructure::get_path_manager_arc;
 use bitfun_core::service::runtime::RuntimeManager;
 use bitfun_core::util::process_manager;
 
@@ -59,6 +60,7 @@ pub struct SkillMarketSearchRequest {
 pub struct SkillMarketDownloadRequest {
     pub package: String,
     pub level: Option<SkillLocation>,
+    pub workspace_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -100,18 +102,28 @@ struct SkillSearchApiItem {
     installs: u64,
 }
 
+fn workspace_root_from_input(workspace_path: Option<&str>) -> Option<PathBuf> {
+    workspace_path
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+}
+
 #[tauri::command]
 pub async fn get_skill_configs(
     _state: State<'_, AppState>,
     force_refresh: Option<bool>,
+    workspace_path: Option<String>,
 ) -> Result<Value, String> {
     let registry = SkillRegistry::global();
+    let workspace_root = workspace_root_from_input(workspace_path.as_deref());
 
     if force_refresh.unwrap_or(false) {
-        registry.refresh().await;
+        registry.refresh_for_workspace(workspace_root.as_deref()).await;
     }
 
-    let all_skills = registry.get_all_skills().await;
+    let all_skills = registry
+        .get_all_skills_for_workspace(workspace_root.as_deref())
+        .await;
 
     serde_json::to_value(all_skills)
         .map_err(|e| format!("Failed to serialize skill configs: {}", e))
@@ -122,11 +134,13 @@ pub async fn set_skill_enabled(
     _state: State<'_, AppState>,
     skill_name: String,
     enabled: bool,
+    workspace_path: Option<String>,
 ) -> Result<String, String> {
     let registry = SkillRegistry::global();
+    let workspace_root = workspace_root_from_input(workspace_path.as_deref());
 
     let skill_md_path = registry
-        .find_skill_path(&skill_name)
+        .find_skill_path_for_workspace(&skill_name, workspace_root.as_deref())
         .await
         .ok_or_else(|| format!("Skill '{}' not found", skill_name))?;
 
@@ -138,7 +152,7 @@ pub async fn set_skill_enabled(
     )
     .map_err(|e| format!("Failed to save skill config: {}", e))?;
 
-    registry.update_skill_enabled(&skill_name, enabled).await;
+    registry.refresh_for_workspace(workspace_root.as_deref()).await;
 
     Ok(format!(
         "Skill '{}' configuration saved successfully",
@@ -211,9 +225,8 @@ pub async fn add_skill(
     _state: State<'_, AppState>,
     source_path: String,
     level: String,
+    workspace_path: Option<String>,
 ) -> Result<String, String> {
-    use std::path::Path;
-
     let validation = validate_skill_path(source_path.clone()).await?;
     if !validation.valid {
         return Err(validation.error.unwrap_or("Invalid skill path".to_string()));
@@ -226,8 +239,8 @@ pub async fn add_skill(
     let source = Path::new(&source_path);
 
     let target_dir = if level == "project" {
-        if let Some(workspace_path) = get_workspace_path() {
-            workspace_path.join(".bitfun").join("skills")
+        if let Some(workspace_root) = workspace_root_from_input(workspace_path.as_deref()) {
+            workspace_root.join(".bitfun").join("skills")
         } else {
             return Err("No workspace open, cannot add project-level Skill".to_string());
         }
@@ -262,7 +275,9 @@ pub async fn add_skill(
         return Err(format!("Failed to copy skill folder: {}", e));
     }
 
-    SkillRegistry::global().refresh().await;
+    SkillRegistry::global()
+        .refresh_for_workspace(workspace_root_from_input(workspace_path.as_deref()).as_deref())
+        .await;
 
     info!(
         "Skill added: name={}, level={}, path={}",
@@ -296,11 +311,13 @@ async fn copy_dir_all(src: &std::path::Path, dst: &std::path::Path) -> std::io::
 pub async fn delete_skill(
     _state: State<'_, AppState>,
     skill_name: String,
+    workspace_path: Option<String>,
 ) -> Result<String, String> {
     let registry = SkillRegistry::global();
+    let workspace_root = workspace_root_from_input(workspace_path.as_deref());
 
     let skill_info = registry
-        .find_skill(&skill_name)
+        .find_skill_for_workspace(&skill_name, workspace_root.as_deref())
         .await
         .ok_or_else(|| format!("Skill '{}' not found", skill_name))?;
 
@@ -312,7 +329,7 @@ pub async fn delete_skill(
         }
     }
 
-    registry.remove_skill(&skill_name).await;
+    registry.refresh_for_workspace(workspace_root.as_deref()).await;
 
     info!(
         "Skill deleted: name={}, path={}",
@@ -363,7 +380,7 @@ pub async fn download_skill_market(
     let level = request.level.unwrap_or(SkillLocation::Project);
     let workspace_path = if level == SkillLocation::Project {
         Some(
-            get_workspace_path()
+            workspace_root_from_input(request.workspace_path.as_deref())
                 .ok_or_else(|| "No workspace open, cannot add project-level Skill".to_string())?,
         )
     } else {
@@ -372,7 +389,7 @@ pub async fn download_skill_market(
 
     let registry = SkillRegistry::global();
     let before_names: HashSet<String> = registry
-        .get_all_skills()
+        .get_all_skills_for_workspace(workspace_path.as_deref())
         .await
         .into_iter()
         .map(|skill| skill.name)
@@ -437,9 +454,9 @@ pub async fn download_skill_market(
         ));
     }
 
-    registry.refresh().await;
+    registry.refresh_for_workspace(workspace_path.as_deref()).await;
     let mut installed_skills: Vec<String> = registry
-        .get_all_skills()
+        .get_all_skills_for_workspace(workspace_path.as_deref())
         .await
         .into_iter()
         .map(|skill| skill.name)

@@ -1,4 +1,4 @@
-use super::util::resolve_path;
+use super::util::resolve_path_with_workspace;
 use crate::agentic::tools::framework::{Tool, ToolResult, ToolUseContext};
 use crate::util::errors::{BitFunError, BitFunResult};
 use async_trait::async_trait;
@@ -14,7 +14,11 @@ impl GrepTool {
         Self
     }
 
-    fn build_grep_options(&self, input: &Value) -> BitFunResult<GrepOptions> {
+    fn build_grep_options(
+        &self,
+        input: &Value,
+        context: &ToolUseContext,
+    ) -> BitFunResult<GrepOptions> {
         // Parse input parameters
         let pattern = input
             .get("pattern")
@@ -24,7 +28,7 @@ impl GrepTool {
         let search_path = input.get("path").and_then(|v| v.as_str()).unwrap_or(".");
 
         // Parse path: ensure relative paths are relative to workspace
-        let resolved_path = resolve_path(search_path);
+        let resolved_path = resolve_path_with_workspace(search_path, context.workspace_root())?;
 
         let case_insensitive = input.get("-i").and_then(|v| v.as_bool()).unwrap_or(false);
 
@@ -233,7 +237,7 @@ Usage:
         input: &Value,
         context: &ToolUseContext,
     ) -> BitFunResult<Vec<ToolResult>> {
-        let grep_options = self.build_grep_options(input)?;
+        let grep_options = self.build_grep_options(input, context)?;
         let pattern = grep_options.pattern.clone();
         let path = grep_options.path.clone();
         let output_mode = grep_options.output_mode.to_string();

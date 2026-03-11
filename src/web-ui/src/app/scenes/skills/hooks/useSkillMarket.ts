@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { configAPI } from '@/infrastructure/api';
 import type { SkillMarketItem } from '@/infrastructure/config/types';
-import { useCurrentWorkspace } from '@/infrastructure/hooks/useWorkspace';
+import { useCurrentWorkspace } from '@/infrastructure/contexts/WorkspaceContext';
 import { useNotification } from '@/shared/notification-system';
 import { createLogger } from '@/shared/utils/logger';
 
@@ -24,7 +24,7 @@ export function useSkillMarket({
 }: UseSkillMarketOptions) {
   const { t } = useTranslation('scenes/skills');
   const notification = useNotification();
-  const { hasWorkspace } = useCurrentWorkspace();
+  const { hasWorkspace, workspacePath } = useCurrentWorkspace();
 
   const [marketSkills, setMarketSkills] = useState<SkillMarketItem[]>([]);
   const [marketLoading, setMarketLoading] = useState(true);
@@ -134,7 +134,11 @@ export function useSkillMarket({
     }
     try {
       setDownloadingPackage(skill.installId);
-      const result = await configAPI.downloadSkillMarket(skill.installId, 'project');
+      const result = await configAPI.downloadSkillMarket({
+        packageId: skill.installId,
+        level: 'project',
+        workspacePath: workspacePath || undefined,
+      });
       const installedName = result.installedSkills[0] ?? skill.name;
       notification.success(t('messages.marketDownloadSuccess', { name: installedName }));
       await onInstalledChanged?.();
@@ -147,7 +151,7 @@ export function useSkillMarket({
     } finally {
       setDownloadingPackage(null);
     }
-  }, [hasWorkspace, notification, onInstalledChanged, t]);
+  }, [hasWorkspace, notification, onInstalledChanged, t, workspacePath]);
 
   return {
     marketSkills: paginatedSkills,

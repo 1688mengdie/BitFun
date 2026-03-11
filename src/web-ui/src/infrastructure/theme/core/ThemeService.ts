@@ -81,10 +81,12 @@ export class ThemeService {
    
   private async loadUserThemes(): Promise<void> {
     try {
-      
-      const themes = await configAPI.getConfig('themes.custom', { 
-        skipRetryOnNotFound: true 
-      }) as ThemeConfig[] | undefined;
+      // Read the whole themes section so missing optional `custom` does not surface
+      // as an expected backend error during startup.
+      const themesConfig = await configAPI.getConfig('themes', {
+        skipRetryOnNotFound: true,
+      }) as { custom?: ThemeConfig[] } | undefined;
+      const themes = themesConfig?.custom;
       
       if (Array.isArray(themes) && themes.length > 0) {
         themes.forEach(theme => {

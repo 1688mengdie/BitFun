@@ -190,29 +190,54 @@ impl AIRulesService {
         Ok(self.project_rules.read().await.clone())
     }
 
+    /// Returns all project-level rules for the specified workspace.
+    pub async fn get_project_rules_for_workspace(
+        &self,
+        workspace: &Path,
+    ) -> BitFunResult<Vec<AIRule>> {
+        self.load_project_rules_for_workspace(workspace).await
+    }
+
     /// Returns a single project-level rule.
     pub async fn get_project_rule(&self, name: &str) -> BitFunResult<Option<AIRule>> {
         let rules = self.project_rules.read().await;
         Ok(rules.iter().find(|r| r.name == name).cloned())
     }
 
+    /// Returns a single project-level rule for the specified workspace.
+    pub async fn get_project_rule_for_workspace(
+        &self,
+        workspace: &Path,
+        name: &str,
+    ) -> BitFunResult<Option<AIRule>> {
+        let rules = self.load_project_rules_for_workspace(workspace).await?;
+        Ok(rules.into_iter().find(|r| r.name == name))
+    }
+
     /// Creates a project-level rule.
     pub async fn create_project_rule(&self, request: CreateRuleRequest) -> BitFunResult<AIRule> {
-        let workspace_path = self
-            .workspace_path
-            .read()
+        let workspace_path = self.require_workspace_path().await?;
+        self.create_project_rule_for_workspace(&workspace_path, request)
             .await
-            .clone()
-            .ok_or_else(|| BitFunError::service("No workspace set".to_string()))?;
+    }
 
-        let rules_dir = self.path_manager.project_rules_dir(&workspace_path);
+    /// Creates a project-level rule for the specified workspace.
+    pub async fn create_project_rule_for_workspace(
+        &self,
+        workspace: &Path,
+        request: CreateRuleRequest,
+    ) -> BitFunResult<AIRule> {
+        let rules_dir = self.path_manager.project_rules_dir(workspace);
         let rule_name = request.name.clone();
         self.create_rule_internal(&rules_dir, RuleLevel::Project, request)
             .await?;
-        self.reload_project_rules().await?;
+        let rules = self.load_project_rules_for_workspace(workspace).await?;
+        self.sync_project_rules_cache_if_current(workspace, &rules)
+            .await;
 
-        self.get_project_rule(&rule_name)
-            .await?
+        rules
+            .into_iter()
+            .find(|rule| rule.name == rule_name)
             .ok_or_else(|| BitFunError::service("Failed to create rule".to_string()))
     }
 
@@ -223,8 +248,20 @@ impl AIRulesService {
         name: &str,
         request: UpdateRuleRequest,
     ) -> BitFunResult<AIRule> {
+        let workspace_path = self.require_workspace_path().await?;
+        self.update_project_rule_for_workspace(&workspace_path, name, request)
+            .await
+    }
+
+    /// Updates a project-level rule for the specified workspace.
+    pub async fn update_project_rule_for_workspace(
+        &self,
+        workspace: &Path,
+        name: &str,
+        request: UpdateRuleRequest,
+    ) -> BitFunResult<AIRule> {
         let rule = self
-            .get_project_rule(name)
+            .get_project_rule_for_workspace(workspace, name)
             .await?
             .ok_or_else(|| BitFunError::service(format!("Rule '{}' not found", name)))?;
 
@@ -235,19 +272,34 @@ impl AIRulesService {
 
         self.update_rule_internal(rules_dir, name, request.clone())
             .await?;
-        self.reload_project_rules().await?;
+        let rules = self.load_project_rules_for_workspace(workspace).await?;
+        self.sync_project_rules_cache_if_current(workspace, &rules)
+            .await;
 
         let new_name = request.name.as_deref().unwrap_or(name);
-        self.get_project_rule(new_name)
-            .await?
+        rules
+            .into_iter()
+            .find(|rule| rule.name == new_name)
             .ok_or_else(|| BitFunError::service("Failed to update rule".to_string()))
     }
 
     /// Deletes a project-level rule.
     /// Supports rules from both the BitFun and Cursor directories.
     pub async fn delete_project_rule(&self, name: &str) -> BitFunResult<bool> {
+        let workspace_path = self.require_workspace_path().await?;
+        self.delete_project_rule_for_workspace(&workspace_path, name)
+            .await
+    }
+
+    /// Deletes a project-level rule for the specified workspace.
+    /// Supports rules from both the BitFun and Cursor directories.
+    pub async fn delete_project_rule_for_workspace(
+        &self,
+        workspace: &Path,
+        name: &str,
+    ) -> BitFunResult<bool> {
         let rule = self
-            .get_project_rule(name)
+            .get_project_rule_for_workspace(workspace, name)
             .await?
             .ok_or_else(|| BitFunError::service(format!("Rule '{}' not found", name)))?;
 
@@ -257,7 +309,9 @@ impl AIRulesService {
             .ok_or_else(|| BitFunError::service("Invalid rule file path".to_string()))?;
 
         let result = self.delete_rule_internal(rules_dir, name).await?;
-        self.reload_project_rules().await?;
+        let rules = self.load_project_rules_for_workspace(workspace).await?;
+        self.sync_project_rules_cache_if_current(workspace, &rules)
+            .await;
         Ok(result)
     }
 
@@ -267,45 +321,20 @@ impl AIRulesService {
         let workspace_path = self.workspace_path.read().await.clone();
 
         if let Some(workspace) = workspace_path {
-            let mut all_rules = Vec::new();
-            let mut loaded_names = std::collections::HashSet::new();
-
-            let bitfun_rules_dir = self.path_manager.project_rules_dir(&workspace);
-            let bitfun_rules = self
-                .load_rules_from_dir(&bitfun_rules_dir, RuleLevel::Project)
-                .await?;
-
-            for rule in bitfun_rules {
-                loaded_names.insert(rule.name.clone());
-                all_rules.push(rule);
-            }
-
-            let cursor_rules_dir = workspace.join(".cursor").join("rules");
-            if cursor_rules_dir.exists() {
-                let cursor_rules = self
-                    .load_rules_from_dir(&cursor_rules_dir, RuleLevel::Project)
-                    .await?;
-
-                for rule in cursor_rules {
-                    if !loaded_names.contains(&rule.name) {
-                        loaded_names.insert(rule.name.clone());
-                        all_rules.push(rule);
-                    } else {
-                        debug!(
-                            "Skipping Cursor rule '{}' (already loaded from BitFun)",
-                            rule.name
-                        );
-                    }
-                }
-            }
-
-            all_rules.sort_by(|a, b| a.name.cmp(&b.name));
-
+            let all_rules = self.load_project_rules_for_workspace(&workspace).await?;
             *self.project_rules.write().await = all_rules;
         } else {
             self.project_rules.write().await.clear();
         }
 
+        Ok(())
+    }
+
+    /// Reloads project-level rules for the specified workspace.
+    pub async fn reload_project_rules_for_workspace(&self, workspace: &Path) -> BitFunResult<()> {
+        let rules = self.load_project_rules_for_workspace(workspace).await?;
+        self.sync_project_rules_cache_if_current(workspace, &rules)
+            .await;
         Ok(())
     }
 
@@ -315,13 +344,55 @@ impl AIRulesService {
         Ok(Self::calculate_stats(&rules))
     }
 
-    /// Builds the system prompt.
-    pub async fn build_system_prompt(&self) -> BitFunResult<String> {
-        let user_rules = self.user_rules.read().await;
-        let project_rules = self.project_rules.read().await;
+    /// Returns project-level rule statistics for the specified workspace.
+    pub async fn get_project_rules_stats_for_workspace(
+        &self,
+        workspace: &Path,
+    ) -> BitFunResult<RuleStats> {
+        let rules = self.load_project_rules_for_workspace(workspace).await?;
+        Ok(Self::calculate_stats(&rules))
+    }
 
+    async fn load_project_rules_for_workspace(&self, workspace: &Path) -> BitFunResult<Vec<AIRule>> {
+        let mut all_rules = Vec::new();
+        let mut loaded_names = std::collections::HashSet::new();
+
+        let bitfun_rules_dir = self.path_manager.project_rules_dir(workspace);
+        let bitfun_rules = self
+            .load_rules_from_dir(&bitfun_rules_dir, RuleLevel::Project)
+            .await?;
+
+        for rule in bitfun_rules {
+            loaded_names.insert(rule.name.clone());
+            all_rules.push(rule);
+        }
+
+        let cursor_rules_dir = workspace.join(".cursor").join("rules");
+        if cursor_rules_dir.exists() {
+            let cursor_rules = self
+                .load_rules_from_dir(&cursor_rules_dir, RuleLevel::Project)
+                .await?;
+
+            for rule in cursor_rules {
+                if !loaded_names.contains(&rule.name) {
+                    loaded_names.insert(rule.name.clone());
+                    all_rules.push(rule);
+                } else {
+                    debug!(
+                        "Skipping Cursor rule '{}' (already loaded from BitFun)",
+                        rule.name
+                    );
+                }
+            }
+        }
+
+        all_rules.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(all_rules)
+    }
+
+    fn format_system_prompt(&self, user_rules: &[AIRule], project_rules: &[AIRule]) -> String {
         if user_rules.is_empty() && project_rules.is_empty() {
-            return Ok(String::new());
+            return String::new();
         }
 
         let apply_intelligently_rules: Vec<_> = project_rules
@@ -340,7 +411,7 @@ impl AIRulesService {
             && apply_intelligently_rules.is_empty()
             && enabled_user_rules.is_empty()
         {
-            return Ok(String::new());
+            return String::new();
         }
 
         let mut prompt = r#"# Rules
@@ -382,14 +453,25 @@ The rules section has a number of possible rules/memories/context that you shoul
         }
 
         prompt.push_str("</rules>\n\n");
-
-        Ok(prompt)
+        prompt
     }
 
-    /// Gets matching "Apply to Specific Files" rules for a given file path.
-    /// Returns the matched count and formatted content.
-    pub async fn get_rules_for_file(&self, file_path: &str) -> FileRulesResult {
-        let workspace_path = match self.workspace_path.read().await.clone() {
+    pub async fn build_system_prompt_for(&self, workspace_root: Option<&Path>) -> BitFunResult<String> {
+        let user_rules = self.user_rules.read().await.clone();
+        let project_rules = match workspace_root {
+            Some(workspace_root) => self.load_project_rules_for_workspace(workspace_root).await?,
+            None => Vec::new(),
+        };
+
+        Ok(self.format_system_prompt(&user_rules, &project_rules))
+    }
+
+    pub async fn get_rules_for_file_with_workspace(
+        &self,
+        file_path: &str,
+        workspace_root: Option<&Path>,
+    ) -> FileRulesResult {
+        let workspace_path = match workspace_root {
             Some(path) => path,
             None => {
                 debug!("No workspace path set, skipping file-specific rules");
@@ -400,12 +482,21 @@ The rules section has a number of possible rules/memories/context that you shoul
             }
         };
 
-        let project_rules = self.project_rules.read().await;
+        let project_rules = match self.load_project_rules_for_workspace(workspace_path).await {
+            Ok(rules) => rules,
+            Err(e) => {
+                warn!("Failed to load project rules for file '{}': {}", file_path, e);
+                return FileRulesResult {
+                    matched_count: 0,
+                    formatted_content: None,
+                };
+            }
+        };
 
         let file_path_obj = Path::new(file_path);
         let relative_path = if file_path_obj.is_absolute() {
             file_path_obj
-                .strip_prefix(&workspace_path)
+                .strip_prefix(workspace_path)
                 .map(|p| p.to_string_lossy().to_string())
                 .unwrap_or_else(|_| file_path.to_string())
         } else {
@@ -420,7 +511,7 @@ The rules section has a number of possible rules/memories/context that you shoul
 
         let mut matching_rules: Vec<String> = Vec::new();
 
-        for rule in project_rules.iter() {
+        for rule in &project_rules {
             if rule.apply_type != RuleApplyType::ApplyToSpecificFiles || !rule.enabled {
                 continue;
             }
@@ -452,6 +543,21 @@ The rules section has a number of possible rules/memories/context that you shoul
                 formatted_content: Some(formatted),
             }
         }
+    }
+
+    /// Builds the system prompt.
+    pub async fn build_system_prompt(&self) -> BitFunResult<String> {
+        let user_rules = self.user_rules.read().await.clone();
+        let project_rules = self.project_rules.read().await.clone();
+        Ok(self.format_system_prompt(&user_rules, &project_rules))
+    }
+
+    /// Gets matching "Apply to Specific Files" rules for a given file path.
+    /// Returns the matched count and formatted content.
+    pub async fn get_rules_for_file(&self, file_path: &str) -> FileRulesResult {
+        let workspace_path = self.workspace_path.read().await.clone();
+        self.get_rules_for_file_with_workspace(file_path, workspace_path.as_deref())
+            .await
     }
 
     /// Checks whether a file matches the given glob patterns.
@@ -746,13 +852,25 @@ The rules section has a number of possible rules/memories/context that you shoul
 
     /// Toggles the enabled state of a project-level rule.
     pub async fn toggle_project_rule(&self, name: &str) -> BitFunResult<AIRule> {
+        let workspace_path = self.require_workspace_path().await?;
+        self.toggle_project_rule_for_workspace(&workspace_path, name)
+            .await
+    }
+
+    /// Toggles the enabled state of a project-level rule for the specified workspace.
+    pub async fn toggle_project_rule_for_workspace(
+        &self,
+        workspace: &Path,
+        name: &str,
+    ) -> BitFunResult<AIRule> {
         let rule = self
-            .get_project_rule(name)
+            .get_project_rule_for_workspace(workspace, name)
             .await?
             .ok_or_else(|| BitFunError::service(format!("Rule '{}' not found", name)))?;
 
         let new_enabled = !rule.enabled;
-        self.update_project_rule(
+        self.update_project_rule_for_workspace(
+            workspace,
             name,
             UpdateRuleRequest {
                 name: None,
@@ -764,5 +882,20 @@ The rules section has a number of possible rules/memories/context that you shoul
             },
         )
         .await
+    }
+
+    async fn require_workspace_path(&self) -> BitFunResult<PathBuf> {
+        self.workspace_path
+            .read()
+            .await
+            .clone()
+            .ok_or_else(|| BitFunError::service("No workspace set".to_string()))
+    }
+
+    async fn sync_project_rules_cache_if_current(&self, workspace: &Path, rules: &[AIRule]) {
+        let current_workspace = self.workspace_path.read().await.clone();
+        if current_workspace.as_deref() == Some(workspace) {
+            *self.project_rules.write().await = rules.to_vec();
+        }
     }
 }

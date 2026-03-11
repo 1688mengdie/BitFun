@@ -131,6 +131,14 @@ enum ConfigAction {
     Reset,
 }
 
+fn resolve_workspace_path(workspace: Option<&str>) -> Option<std::path::PathBuf> {
+    match workspace {
+        Some(".") => std::env::current_dir().ok(),
+        Some(path) => Some(std::path::PathBuf::from(path)),
+        None => None,
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -218,20 +226,9 @@ async fn main() -> Result<()> {
             } else {
                 println!("Initializing system, please wait...");
             }
-            
-            if let Some(ref ws) = workspace {
-                use std::path::PathBuf;
-                use bitfun_core::infrastructure::set_workspace_path;
-                
-                let workspace_path = if ws == "." {
-                    std::env::current_dir().ok()
-                } else {
-                    Some(PathBuf::from(ws))
-                };
-                
-                set_workspace_path(workspace_path.clone());
-                tracing::info!("Workspace path set: {:?}", workspace_path);
-            }
+
+            let workspace_path = resolve_workspace_path(workspace.as_deref());
+            tracing::info!("CLI workspace: {:?}", workspace_path);
             
             bitfun_core::service::config::initialize_global_config()
                 .await
@@ -272,7 +269,7 @@ async fn main() -> Result<()> {
                 std::thread::sleep(std::time::Duration::from_millis(500));
             }
             
-            let mut chat_mode = ChatMode::new(config, agent, workspace, &agentic_system);
+            let mut chat_mode = ChatMode::new(config, agent, workspace_path, &agentic_system);
             let chat_result = chat_mode.run(startup_terminal);
 
             if let Some(ref svc) = config_service {
@@ -285,22 +282,9 @@ async fn main() -> Result<()> {
         }
         
         Some(Commands::Exec { message, agent, workspace, json: _, output_patch, confirm }) => {
-            let workspace_path_resolved = if let Some(ref ws) = workspace {
-                use std::path::PathBuf;
-                if ws == "." {
-                    std::env::current_dir().ok()
-                } else {
-                    Some(PathBuf::from(ws))
-                }
-            } else {
-                std::env::current_dir().ok()
-            };
-            
-            if let Some(ref ws_path) = workspace_path_resolved {
-                use bitfun_core::infrastructure::set_workspace_path;
-                set_workspace_path(Some(ws_path.clone()));
-                tracing::info!("Workspace path set: {:?}", ws_path);
-            }
+            let workspace_path_resolved =
+                resolve_workspace_path(workspace.as_deref()).or_else(|| std::env::current_dir().ok());
+            tracing::info!("CLI workspace: {:?}", workspace_path_resolved);
             
             bitfun_core::service::config::initialize_global_config()
                 .await
@@ -398,20 +382,9 @@ async fn main() -> Result<()> {
                 }
                 
                 ui::render_loading(&mut terminal, "Initializing system, please wait...")?;
-                
-                if let Some(ref ws) = workspace {
-                    use std::path::PathBuf;
-                    use bitfun_core::infrastructure::set_workspace_path;
-                    
-                    let workspace_path = if ws == "." {
-                        std::env::current_dir().ok()
-                    } else {
-                        Some(PathBuf::from(ws))
-                    };
-                    
-                    set_workspace_path(workspace_path.clone());
-                    tracing::info!("Workspace path set: {:?}", workspace_path);
-                }
+
+                let workspace_path = resolve_workspace_path(workspace.as_deref());
+                tracing::info!("CLI workspace: {:?}", workspace_path);
                 
                 bitfun_core::service::config::initialize_global_config()
                     .await
@@ -446,7 +419,8 @@ async fn main() -> Result<()> {
                 ui::render_loading(&mut terminal, "System initialized, starting chat interface...")?;
                 
                 let agent = config.behavior.default_agent.clone();
-                let mut chat_mode = ChatMode::new(config.clone(), agent, workspace, &agentic_system);
+                let mut chat_mode =
+                    ChatMode::new(config.clone(), agent, workspace_path, &agentic_system);
                 let exit_reason = chat_mode.run(Some(terminal));
 
                 if let Some(ref svc) = config_service {

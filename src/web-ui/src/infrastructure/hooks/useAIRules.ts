@@ -9,6 +9,7 @@ import {
   type CreateRuleRequest,
   type UpdateRuleRequest,
 } from '../api/service-api/AIRulesAPI';
+import { useCurrentWorkspace } from '../contexts/WorkspaceContext';
 import { createLogger } from '@/shared/utils/logger';
 import { useI18n } from '@/infrastructure/i18n';
 
@@ -36,17 +37,19 @@ export interface UseAIRulesReturn {
  
 export function useAIRules(level: RuleLevel): UseAIRulesReturn {
   const { t } = useI18n('errors');
+  const { workspacePath } = useCurrentWorkspace();
   const [rules, setRules] = useState<AIRule[]>([]);
   const [stats, setStats] = useState<RuleStats | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const scopedWorkspacePath = level === RuleLevel.Project ? workspacePath || undefined : undefined;
 
   
   const loadRules = useCallback(async () => {
     try {
       setIsLoading(true);
       setError(null);
-      const data = await AIRulesAPI.getRules(level);
+      const data = await AIRulesAPI.getRules(level, scopedWorkspacePath);
       setRules(data);
     } catch (err) {
       setError(err instanceof Error ? err.message : t('aiRules.loadFailed'));
@@ -54,24 +57,24 @@ export function useAIRules(level: RuleLevel): UseAIRulesReturn {
     } finally {
       setIsLoading(false);
     }
-  }, [level, t]);
+  }, [level, scopedWorkspacePath, t]);
 
   
   const loadStats = useCallback(async () => {
     try {
-      const data = await AIRulesAPI.getRulesStats(level);
+      const data = await AIRulesAPI.getRulesStats(level, scopedWorkspacePath);
       setStats(data);
     } catch (err) {
       log.error('Failed to load stats', err);
     }
-  }, [level]);
+  }, [level, scopedWorkspacePath]);
 
   
   const createRule = useCallback(
     async (request: CreateRuleRequest) => {
       try {
         setError(null);
-        const newRule = await AIRulesAPI.createRule(level, request);
+        const newRule = await AIRulesAPI.createRule(level, request, scopedWorkspacePath);
         await loadRules();
         await loadStats();
         return newRule;
@@ -81,7 +84,7 @@ export function useAIRules(level: RuleLevel): UseAIRulesReturn {
         throw err;
       }
     },
-    [level, loadRules, loadStats, t]
+    [level, loadRules, loadStats, scopedWorkspacePath, t]
   );
 
   
@@ -89,7 +92,7 @@ export function useAIRules(level: RuleLevel): UseAIRulesReturn {
     async (name: string, request: UpdateRuleRequest) => {
       try {
         setError(null);
-        const updated = await AIRulesAPI.updateRule(level, name, request);
+        const updated = await AIRulesAPI.updateRule(level, name, request, scopedWorkspacePath);
         await loadRules();
         await loadStats();
         return updated;
@@ -99,7 +102,7 @@ export function useAIRules(level: RuleLevel): UseAIRulesReturn {
         throw err;
       }
     },
-    [level, loadRules, loadStats, t]
+    [level, loadRules, loadStats, scopedWorkspacePath, t]
   );
 
   
@@ -107,7 +110,7 @@ export function useAIRules(level: RuleLevel): UseAIRulesReturn {
     async (name: string) => {
       try {
         setError(null);
-        const success = await AIRulesAPI.deleteRule(level, name);
+        const success = await AIRulesAPI.deleteRule(level, name, scopedWorkspacePath);
         if (success) {
           await loadRules();
           await loadStats();
@@ -119,7 +122,7 @@ export function useAIRules(level: RuleLevel): UseAIRulesReturn {
         throw err;
       }
     },
-    [level, loadRules, loadStats, t]
+    [level, loadRules, loadStats, scopedWorkspacePath, t]
   );
 
   
@@ -127,7 +130,7 @@ export function useAIRules(level: RuleLevel): UseAIRulesReturn {
     async (name: string) => {
       try {
         setError(null);
-        const updated = await AIRulesAPI.toggleRule(level, name);
+        const updated = await AIRulesAPI.toggleRule(level, name, scopedWorkspacePath);
         await loadRules();
         await loadStats();
         return updated;
@@ -137,17 +140,17 @@ export function useAIRules(level: RuleLevel): UseAIRulesReturn {
         throw err;
       }
     },
-    [level, loadRules, loadStats, t]
+    [level, loadRules, loadStats, scopedWorkspacePath, t]
   );
 
   
   const refresh = useCallback(async () => {
     
-    await AIRulesAPI.reloadRules(level);
+    await AIRulesAPI.reloadRules(level, scopedWorkspacePath);
     
     await loadRules();
     await loadStats();
-  }, [level, loadRules, loadStats]);
+  }, [level, loadRules, loadStats, scopedWorkspacePath]);
 
   
   useEffect(() => {

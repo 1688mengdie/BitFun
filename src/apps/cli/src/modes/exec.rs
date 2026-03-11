@@ -33,6 +33,7 @@ impl ExecMode {
             agent_type,
             agentic_system.coordinator.clone(),
             agentic_system.event_queue.clone(),
+            workspace_path.clone(),
         )) as Arc<dyn Agent>;
         
         Self {

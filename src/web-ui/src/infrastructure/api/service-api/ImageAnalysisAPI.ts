@@ -27,6 +27,7 @@ export interface AnalyzeImagesRequest {
   images: ImageContextData[];
   user_message?: string;
   session_id: string;
+  workspace_path?: string;
 }
 
 export interface SendEnhancedMessageRequest {

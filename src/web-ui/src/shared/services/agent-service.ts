@@ -4,11 +4,15 @@
  * Wraps agent/tool APIs and bridges backend streaming events into a convenient
  * client-side interface.
  */
-import { agentAPI, toolAPI } from '@/infrastructure/api';
+import { agentAPI } from '@/infrastructure/api/service-api/AgentAPI';
+import { toolAPI } from '@/infrastructure/api/service-api/ToolAPI';
 import { listen } from '@tauri-apps/api/event';
 import { createLogger } from '@/shared/utils/logger';
 
 const log = createLogger('AgentService');
+const hasTauriRuntime = (): boolean =>
+  typeof window !== 'undefined' &&
+  ('__TAURI_INTERNALS__' in window || '__TAURI__' in window);
 import type {
   AgentExecutionRequest,
   AgentExecutionResponse,
@@ -45,7 +49,9 @@ export class AgentService {
   private unlistenFunctions: Array<() => void> = []; 
 
   private constructor() {
-    this.setupEventListeners();
+    void this.setupEventListeners().catch(error => {
+      log.warn('Failed to setup event listeners during startup', error);
+    });
     
     
     if (import.meta.hot) {
@@ -77,9 +83,11 @@ export class AgentService {
   }
 
   private async setupEventListeners() {
-    
-    
-    
+    if (!hasTauriRuntime()) {
+      log.warn('Tauri runtime not available, skipping agent event listeners');
+      return;
+    }
+
     const unlisten1 = await listen<AgentTaskUpdateEvent>('agent_task_update', (event) => {
       const taskEvent = event.payload;
       const listener = this.taskListeners.get(taskEvent.task_id);
@@ -390,9 +398,15 @@ export class AgentService {
     
     let sessionId: string;
     try {
+      const workspacePath = request.workspace_path;
+      if (!workspacePath) {
+        throw new Error('Workspace path is required to create an agent task session');
+      }
+
       const response = await agentAPI.createSession({
         sessionName: `task-${Date.now()}`,
         agentType: request.agent_type,
+        workspacePath,
         config: {
           modelName: request.model_name,
           enableTools: true,
@@ -416,10 +430,16 @@ export class AgentService {
     
     
     try {
+      const workspacePath = request.workspace_path;
+      if (!workspacePath) {
+        throw new Error('Workspace path is required to start an agent task');
+      }
+
       await agentAPI.startDialogTurn({
         sessionId,
         userInput: request.prompt,
-        agentType: request.agent_type 
+        agentType: request.agent_type,
+        workspacePath,
       });
     } catch (error) {
       log.error('Failed to send message', error);
@@ -470,7 +490,8 @@ export class AgentService {
     
     const validationRequest = {
       toolName: (request as any).tool_name || (request as any).toolName,
-      input: request.input || (request as any).parameters
+      input: request.input || (request as any).parameters,
+      workspacePath: (request as any).workspace_path || (request as any).workspacePath,
     };
     return toolAPI.validateToolInput(validationRequest);
   }
@@ -480,7 +501,8 @@ export class AgentService {
     
     const executeRequest = {
       toolName: (request as any).tool_name || (request as any).toolName,
-      parameters: request.input || {}
+      parameters: request.input || {},
+      workspacePath: (request as any).workspace_path || (request as any).workspacePath,
     };
     return toolAPI.executeTool(executeRequest);
   }
@@ -499,6 +521,7 @@ export class AgentService {
     agentType: string = 'general-purpose',
     options: {
       modelName?: string;
+      workspacePath?: string;
       context?: Record<string, string>;
       safeMode?: boolean;
       verbose?: boolean;
@@ -509,6 +532,7 @@ export class AgentService {
       prompt,
       description,
       model_name: options.modelName,
+      workspace_path: options.workspacePath,
       context: options.context,
       safe_mode: options.safeMode,
       verbose: options.verbose,
@@ -525,6 +549,7 @@ export class AgentService {
     agentType: string = 'general-purpose',
     options: {
       modelName?: string;
+      workspacePath?: string;
       context?: Record<string, string>;
       safeMode?: boolean;
       verbose?: boolean;
@@ -535,6 +560,7 @@ export class AgentService {
       prompt,
       description,
       model_name: options.modelName,
+      workspace_path: options.workspacePath,
       context: options.context,
       safe_mode: options.safeMode,
       verbose: options.verbose,
@@ -558,6 +584,7 @@ export class AgentService {
     agentType: string = 'general-purpose',
     options: {
       modelName?: string;
+      workspacePath?: string;
       context?: Record<string, string>;
       safeMode?: boolean;
       verbose?: boolean;
@@ -568,6 +595,7 @@ export class AgentService {
       prompt,
       description,
       model_name: options.modelName,
+      workspace_path: options.workspacePath,
       context: options.context,
       safe_mode: options.safeMode,
       verbose: options.verbose,

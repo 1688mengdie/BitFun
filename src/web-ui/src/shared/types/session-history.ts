@@ -1,5 +1,5 @@
 /**
- * Conversation/session history types.
+ * Session persistence types.
  *
  * Used by session lists and persistence metadata in the frontend.
  */
@@ -9,7 +9,7 @@ export interface SessionMetadata {
   sessionName: string;
   agentType: string;
   modelName: string;
-  createdAt: number; // Unix timestamp (ms)
+  createdAt: number;
   lastActiveAt: number;
   turnCount: number;
   messageCount: number;
@@ -18,7 +18,8 @@ export interface SessionMetadata {
   snapshotSessionId?: string;
   tags: string[];
   customMetadata?: Record<string, any>;
-  todos?: any[]; 
+  todos?: any[];
+  workspacePath?: string;
 }
 
 export type SessionStatus = 'active' | 'archived' | 'completed';
@@ -28,10 +29,6 @@ export interface SessionList {
   lastUpdated: number;
   version: string;
 }
-
-// ============================================================================
-
-// ============================================================================
 
 export interface DialogTurnData {
   turnId: string;

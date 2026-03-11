@@ -31,7 +31,7 @@ Actions:
   2. Close the persistent shell used by BashTool - if BashTool output appears clearly abnormal (e.g., garbled output, stuck prompts, corrupted shell state), use this to forcefully close the persistent shell. The next BashTool invocation will automatically create a fresh shell session.
 - "interrupt": Cancel the currently running process without closing the session.
 
-The session_id is returned inside <session_id>...</session_id> tags in BashTool results."#
+The terminal_session_id is returned inside <terminal_session_id>...</terminal_session_id> tags in BashTool results."#
             .to_string())
     }
 
@@ -39,7 +39,7 @@ The session_id is returned inside <session_id>...</session_id> tags in BashTool 
         json!({
             "type": "object",
             "properties": {
-                "session_id": {
+                "terminal_session_id": {
                     "type": "string",
                     "description": "The ID of the terminal session to control."
                 },
@@ -49,7 +49,7 @@ The session_id is returned inside <session_id>...</session_id> tags in BashTool 
                     "description": "The action to perform: 'kill' closes the session permanently; 'interrupt' cancels the running process."
                 }
             },
-            "required": ["session_id", "action"],
+            "required": ["terminal_session_id", "action"],
             "additionalProperties": false
         })
     }
@@ -71,10 +71,14 @@ The session_id is returned inside <session_id>...</session_id> tags in BashTool 
         input: &Value,
         _context: Option<&ToolUseContext>,
     ) -> ValidationResult {
-        if input.get("session_id").and_then(|v| v.as_str()).is_none() {
+        if input
+            .get("terminal_session_id")
+            .and_then(|v| v.as_str())
+            .is_none()
+        {
             return ValidationResult {
                 result: false,
-                message: Some("session_id is required".to_string()),
+                message: Some("terminal_session_id is required".to_string()),
                 error_code: Some(400),
                 meta: None,
             };
@@ -99,8 +103,8 @@ The session_id is returned inside <session_id>...</session_id> tags in BashTool 
     }
 
     fn render_tool_use_message(&self, input: &Value, _options: &ToolRenderOptions) -> String {
-        let session_id = input
-            .get("session_id")
+        let terminal_session_id = input
+            .get("terminal_session_id")
             .and_then(|v| v.as_str())
             .unwrap_or("unknown");
         let action = input
@@ -108,9 +112,9 @@ The session_id is returned inside <session_id>...</session_id> tags in BashTool 
             .and_then(|v| v.as_str())
             .unwrap_or("unknown");
         match action {
-            "kill" => format!("Kill terminal session: {}", session_id),
-            "interrupt" => format!("Interrupt terminal session: {}", session_id),
-            _ => format!("Control terminal session: {}", session_id),
+            "kill" => format!("Kill terminal session: {}", terminal_session_id),
+            "interrupt" => format!("Interrupt terminal session: {}", terminal_session_id),
+            _ => format!("Control terminal session: {}", terminal_session_id),
         }
     }
 
@@ -119,10 +123,10 @@ The session_id is returned inside <session_id>...</session_id> tags in BashTool 
         input: &Value,
         _context: &ToolUseContext,
     ) -> BitFunResult<Vec<ToolResult>> {
-        let session_id = input
-            .get("session_id")
+        let terminal_session_id = input
+            .get("terminal_session_id")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| BitFunError::tool("session_id is required".to_string()))?;
+            .ok_or_else(|| BitFunError::tool("terminal_session_id is required".to_string()))?;
 
         let action = input
             .get("action")
@@ -134,11 +138,14 @@ The session_id is returned inside <session_id>...</session_id> tags in BashTool 
 
         match action {
             "interrupt" => {
-                debug!("TerminalControl: sending SIGINT to session {}", session_id);
+                debug!(
+                    "TerminalControl: sending SIGINT to session {}",
+                    terminal_session_id
+                );
 
                 terminal_api
                     .signal(SignalRequest {
-                        session_id: session_id.to_string(),
+                        session_id: terminal_session_id.to_string(),
                         signal: "SIGINT".to_string(),
                     })
                     .await
@@ -149,39 +156,40 @@ The session_id is returned inside <session_id>...</session_id> tags in BashTool 
                 Ok(vec![ToolResult::Result {
                     data: json!({
                         "success": true,
-                        "session_id": session_id,
+                        "terminal_session_id": terminal_session_id,
                         "action": "interrupt",
                     }),
                     result_for_assistant: Some(format!(
                         "Sent interrupt (SIGINT) to terminal session '{}'.",
-                        session_id
+                        terminal_session_id
                     )),
                 }])
             }
 
             "kill" => {
                 // Determine if this is a primary (persistent) session by checking the binding.
-                // For primary sessions, owner_id == terminal_session_id, so binding.get(session_id)
-                // returns Some(session_id) when the session is primary.
+                // For primary sessions, owner_id == terminal_session_id, so
+                // binding.get(terminal_session_id) returns Some(terminal_session_id)
+                // when the session is primary.
                 let binding = terminal_api.session_manager().binding();
                 let is_primary = binding
-                    .get(session_id)
-                    .map(|bound_id| bound_id == session_id)
+                    .get(terminal_session_id)
+                    .map(|bound_id| bound_id == terminal_session_id)
                     .unwrap_or(false);
 
                 debug!(
                     "TerminalControl: killing session {}, is_primary={}",
-                    session_id, is_primary
+                    terminal_session_id, is_primary
                 );
 
                 if is_primary {
-                    binding.remove(session_id).await.map_err(|e| {
+                    binding.remove(terminal_session_id).await.map_err(|e| {
                         BitFunError::tool(format!("Failed to close terminal session: {}", e))
                     })?;
                 } else {
                     terminal_api
                         .close_session(CloseSessionRequest {
-                            session_id: session_id.to_string(),
+                            session_id: terminal_session_id.to_string(),
                             immediate: Some(true),
                         })
                         .await
@@ -193,19 +201,19 @@ The session_id is returned inside <session_id>...</session_id> tags in BashTool 
                 let result_for_assistant = if is_primary {
                     format!(
                         "Terminal session '{}' has been killed. The next Bash tool call will automatically create a new persistent shell session.",
-                        session_id
+                        terminal_session_id
                     )
                 } else {
                     format!(
                         "Background terminal session '{}' has been killed.",
-                        session_id
+                        terminal_session_id
                     )
                 };
 
                 Ok(vec![ToolResult::Result {
                     data: json!({
                         "success": true,
-                        "session_id": session_id,
+                        "terminal_session_id": terminal_session_id,
                         "action": "kill",
                     }),
                     result_for_assistant: Some(result_for_assistant),

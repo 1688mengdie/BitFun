@@ -24,6 +24,10 @@ export interface FlowChatContext {
   lastSaveTimestamps: Map<string, number>;
   /** Last save content hashes: key = "sessionId:turnId" */
   lastSaveHashes: Map<string, string>;
+  /** In-flight save tasks: key = "sessionId:turnId" */
+  turnSaveInFlight: Map<string, Promise<void>>;
+  /** Pending save marks for coalesced serial execution */
+  turnSavePending: Set<string>;
   currentWorkspacePath: string | null;
 }
 

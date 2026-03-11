@@ -7,6 +7,7 @@ import { useLayoutEffect, useRef, useEffect, RefObject } from 'react';
 import { miniAppAPI } from '@/infrastructure/api/service-api/MiniAppAPI';
 import { open as dialogOpen, save as dialogSave, message as dialogMessage } from '@tauri-apps/plugin-dialog';
 import type { MiniApp } from '@/infrastructure/api/service-api/MiniAppAPI';
+import { useCurrentWorkspace } from '@/infrastructure/contexts/WorkspaceContext';
 import { useTheme } from '@/infrastructure/theme/hooks/useTheme';
 import { buildMiniAppThemeVars } from '../utils/buildMiniAppThemeVars';
 
@@ -21,9 +22,12 @@ export function useMiniAppBridge(
   iframeRef: RefObject<HTMLIFrameElement>,
   app: MiniApp,
 ) {
+  const { workspacePath } = useCurrentWorkspace();
   const { theme: currentTheme } = useTheme();
   const themeRef = useRef(currentTheme);
   themeRef.current = currentTheme;
+  const workspacePathRef = useRef(workspacePath);
+  workspacePathRef.current = workspacePath;
 
   const appIdRef = useRef(app.id);
   useLayoutEffect(() => {
@@ -63,6 +67,7 @@ export function useMiniAppBridge(
             appId,
             (params.method as string) ?? '',
             (params.params as Record<string, unknown>) ?? {},
+            workspacePathRef.current || undefined,
           );
           reply(result);
           return;

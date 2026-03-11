@@ -1,5 +1,4 @@
 use crate::agentic::tools::framework::{Tool, ToolResult, ToolUseContext};
-use crate::infrastructure::get_workspace_path;
 use crate::util::errors::{BitFunError, BitFunResult};
 use async_trait::async_trait;
 use globset::GlobBuilder;
@@ -185,34 +184,32 @@ impl Tool for GlobTool {
     async fn call_impl(
         &self,
         input: &Value,
-        _context: &ToolUseContext,
+        context: &ToolUseContext,
     ) -> BitFunResult<Vec<ToolResult>> {
         let pattern = input
             .get("pattern")
             .and_then(|v| v.as_str())
             .ok_or_else(|| BitFunError::tool("pattern is required".to_string()))?;
 
-        // Parse search path: prefer user-specified path, otherwise use workspace path
-        let workspace_path = get_workspace_path();
-
         let resolved_path = match input.get("path").and_then(|v| v.as_str()) {
-            Some(user_path) if Path::new(user_path).is_absolute() => {
-                // User-specified absolute path
-                PathBuf::from(user_path)
-            }
+            Some(user_path) if Path::new(user_path).is_absolute() => PathBuf::from(user_path),
             Some(user_path) => {
-                // User-specified relative path, resolve based on workspace
-                workspace_path
-                    .map(|wp| wp.join(user_path))
-                    .unwrap_or_else(|| {
-                        warn!("Workspace path not set, using relative path: {}", user_path);
-                        PathBuf::from(user_path)
-                    })
+                let workspace_root = context.workspace_root().ok_or_else(|| {
+                    BitFunError::tool(format!(
+                        "workspace_path is required to resolve relative search path: {}",
+                        user_path
+                    ))
+                })?;
+                workspace_root.join(user_path)
             }
-            None => {
-                // No path specified, use workspace path or current directory
-                workspace_path.unwrap_or_else(|| PathBuf::from("."))
-            }
+            None => context
+                .workspace_root()
+                .map(PathBuf::from)
+                .ok_or_else(|| {
+                    BitFunError::tool(
+                        "workspace_path is required when Glob path is omitted".to_string(),
+                    )
+                })?,
         };
 
         let limit = input

@@ -5,7 +5,6 @@
 use crate::agentic::tools::framework::{
     Tool, ToolRenderOptions, ToolResult, ToolUseContext, ValidationResult,
 };
-use crate::infrastructure::get_workspace_path;
 use crate::service::git::{
     execute_git_command, GitAddParams, GitCommitParams, GitDiffParams, GitLogParams, GitPullParams,
     GitPushParams, GitService,
@@ -66,11 +65,15 @@ impl GitTool {
     }
 
     /// Get workspace path
-    fn get_repo_path(working_directory: Option<&str>) -> BitFunResult<String> {
+    fn get_repo_path(
+        working_directory: Option<&str>,
+        context: &ToolUseContext,
+    ) -> BitFunResult<String> {
         if let Some(dir) = working_directory {
             Ok(dir.to_string())
         } else {
-            get_workspace_path()
+            context
+                .workspace_root()
                 .map(|p| p.to_string_lossy().to_string())
                 .ok_or_else(|| BitFunError::tool("No workspace path available".to_string()))
         }
@@ -805,7 +808,7 @@ When creating commits, use this format for the commit message:
     async fn call_impl(
         &self,
         input: &Value,
-        _context: &ToolUseContext,
+        context: &ToolUseContext,
     ) -> BitFunResult<Vec<ToolResult>> {
         let operation = input
             .get("operation")
@@ -817,7 +820,7 @@ When creating commits, use this format for the commit message:
         let working_directory = input.get("working_directory").and_then(|v| v.as_str());
 
         // Get repository path
-        let repo_path = Self::get_repo_path(working_directory)?;
+        let repo_path = Self::get_repo_path(working_directory, context)?;
 
         debug!(
             "Git tool executing operation: {} in repository: {}, args: {}",
