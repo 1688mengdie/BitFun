@@ -28,6 +28,7 @@ pub use terminal_core as terminal;
 // Re-export main components.
 pub use ai_memory::{AIMemory, AIMemoryManager, MemoryType};
 pub use ai_rules::AIRulesService;
+pub use bootstrap::reset_workspace_persona_files_to_default;
 pub use config::{ConfigManager, ConfigProvider, ConfigService};
 pub use diff::{
     DiffConfig, DiffHunk, DiffLine, DiffLineType, DiffOptions, DiffResult, DiffService,

@@ -6,7 +6,7 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Pencil, Trash2, Check, X, Code2, Users } from 'lucide-react';
+import { Pencil, Trash2, Check, X, Bot, Code2, Users } from 'lucide-react';
 import { IconButton, Input, Tooltip } from '@/component-library';
 import { useI18n } from '@/infrastructure/i18n';
 import { flowChatStore } from '../../../../../flow_chat/store/FlowChatStore';
@@ -26,8 +26,13 @@ const INACTIVE_WORKSPACE_EXPANDED_SESSIONS = 7;
 const log = createLogger('SessionsSection');
 const AGENT_SCENE: SceneTabId = 'session';
 
+type SessionMode = 'code' | 'cowork' | 'claw';
+
 const resolveSessionMode = (session: Session): SessionMode => {
-  return session.mode?.toLowerCase() === 'cowork' ? 'cowork' : 'code';
+  const normalizedMode = session.mode?.toLowerCase();
+  if (normalizedMode === 'cowork') return 'cowork';
+  if (normalizedMode === 'claw') return 'claw';
+  return 'code';
 };
 
 const getTitle = (session: Session): string =>
@@ -37,6 +42,7 @@ interface SessionsSectionProps {
   workspaceId?: string;
   workspacePath?: string;
   isActiveWorkspace?: boolean;
+  showCreateActions?: boolean;
 }
 
 const SessionsSection: React.FC<SessionsSectionProps> = ({
@@ -143,7 +149,9 @@ const SessionsSection: React.FC<SessionsSectionProps> = ({
       const label =
         mode === 'cowork'
           ? t('nav.sessions.newCoworkSession')
-          : t('nav.sessions.newCodeSession');
+          : mode === 'claw'
+            ? t('nav.sessions.newClawSession')
+            : t('nav.sessions.newCodeSession');
       return `${label} ${matched[1]}`;
     },
     [t]
@@ -211,7 +219,12 @@ const SessionsSection: React.FC<SessionsSectionProps> = ({
           const isEditing = editingSessionId === session.sessionId;
           const sessionModeKey = resolveSessionMode(session);
           const sessionTitle = resolveSessionTitle(session);
-          const SessionIcon = sessionModeKey === 'cowork' ? Users : Code2;
+          const SessionIcon =
+            sessionModeKey === 'cowork'
+              ? Users
+              : sessionModeKey === 'claw'
+                ? Bot
+                : Code2;
           const row = (
             <div
               className={[
@@ -225,7 +238,14 @@ const SessionsSection: React.FC<SessionsSectionProps> = ({
             >
               <SessionIcon
                 size={12}
-                className={`bitfun-nav-panel__inline-item-icon ${sessionModeKey === 'cowork' ? 'is-cowork' : 'is-code'}`}
+                className={[
+                  'bitfun-nav-panel__inline-item-icon',
+                  sessionModeKey === 'cowork'
+                    ? 'is-cowork'
+                    : sessionModeKey === 'claw'
+                      ? 'is-claw'
+                      : 'is-code',
+                ].join(' ')}
               />
 
               {isEditing ? (

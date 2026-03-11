@@ -516,6 +516,10 @@ impl PersistenceManager {
     }
 
     pub async fn list_session_metadata(&self, workspace_path: &Path) -> BitFunResult<Vec<SessionMetadata>> {
+        if !workspace_path.exists() {
+            return Ok(Vec::new());
+        }
+
         let index_path = self.index_path(workspace_path);
         if let Some(index) = self.read_json_optional::<StoredSessionIndex>(&index_path).await? {
             return Ok(index.sessions);
@@ -706,6 +710,9 @@ impl PersistenceManager {
 
     /// Save session
     pub async fn save_session(&self, workspace_path: &Path, session: &Session) -> BitFunResult<()> {
+        if !workspace_path.exists() {
+            return Ok(());
+        }
         self.ensure_session_dir(workspace_path, &session.session_id).await?;
 
         let existing_metadata = self

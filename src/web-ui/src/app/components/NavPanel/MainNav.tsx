@@ -13,7 +13,7 @@
 
 import React, { useCallback, useState, useMemo, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { Plus, FolderOpen, FolderPlus, History, Check, Code2, Users } from 'lucide-react';
+import { Plus, FolderOpen, FolderPlus, History, Check, Bot, Code2, Users } from 'lucide-react';
 import { useApp } from '../../hooks/useApp';
 import { useSceneManager } from '../../hooks/useSceneManager';
 import { useNavSceneStore } from '../../stores/navSceneStore';
@@ -29,11 +29,13 @@ import ToolboxEntry from './components/ToolboxEntry';
 import WorkspaceListSection from './sections/workspaces/WorkspaceListSection';
 import { useSceneStore } from '../../stores/sceneStore';
 import { useMyAgentStore } from '../../scenes/my-agent/myAgentStore';
+import { flowChatStore } from '@/flow_chat/store/FlowChatStore';
 import { flowChatManager } from '@/flow_chat/services/FlowChatManager';
 import { configManager } from '@/infrastructure/config/services/ConfigManager';
 import { workspaceManager } from '@/infrastructure/services/business/workspaceManager';
 import { useWorkspaceContext } from '@/infrastructure/contexts/WorkspaceContext';
 import { createLogger } from '@/shared/utils/logger';
+import { WorkspaceKind } from '@/shared/types';
 
 const DEFAULT_MODE_CONFIG_KEY = 'app.session_config.default_mode';
 import './NavPanel.scss';
@@ -77,8 +79,16 @@ const MainNav: React.FC<MainNavProps> = ({
   const openNavScene = useNavSceneStore(s => s.openNavScene);
   const activeTabId = useSceneStore(s => s.activeTabId);
   const setMyAgentView = useMyAgentStore(s => s.setActiveView);
+  const setSelectedAssistantWorkspaceId = useMyAgentStore((s) => s.setSelectedAssistantWorkspaceId);
   const { t } = useI18n('common');
-  const { currentWorkspace, recentWorkspaces, switchWorkspace } = useWorkspaceContext();
+  const {
+    currentWorkspace,
+    recentWorkspaces,
+    openedWorkspacesList,
+    assistantWorkspacesList,
+    switchWorkspace,
+    setActiveWorkspace,
+  } = useWorkspaceContext();
 
   const activeTab = state.layout.leftPanelActiveTab;
   const activeMiniAppId = useMemo(
@@ -135,6 +145,7 @@ const MainNav: React.FC<MainNavProps> = ({
     (sectionId: string, fallbackLabel: string | null) => {
       if (!fallbackLabel) return null;
       const keyMap: Record<string, string> = {
+        assistants: 'nav.workspaces.groups.assistants',
         workspace: 'nav.sections.workspace',
         'my-agent': 'nav.sections.myAgent',
         toolbox: 'scenes.toolbox',
@@ -181,6 +192,11 @@ const MainNav: React.FC<MainNavProps> = ({
   }, [closeWorkspaceMenu, openWorkspaceMenu, workspaceMenuOpen]);
 
   const setSessionMode = useSessionModeStore(s => s.setMode);
+  const isAssistantWorkspaceActive = currentWorkspace?.workspaceKind === WorkspaceKind.Assistant;
+  const defaultAssistantWorkspace = useMemo(
+    () => assistantWorkspacesList.find(workspace => !workspace.assistantId) ?? assistantWorkspacesList[0] ?? null,
+    [assistantWorkspacesList]
+  );
 
   const [defaultSessionMode, setDefaultSessionMode] = useState<'code' | 'cowork'>('code');
 
@@ -196,6 +212,12 @@ const MainNav: React.FC<MainNavProps> = ({
     });
     return () => unwatch();
   }, []);
+
+  useEffect(() => {
+    openedWorkspacesList.forEach(workspace => {
+      void flowChatStore.initializeFromDisk(workspace.rootPath);
+    });
+  }, [openedWorkspacesList]);
 
   const closeModeDropdown = useCallback(() => {
     setModeDropdownClosing(true);
@@ -235,6 +257,15 @@ const MainNav: React.FC<MainNavProps> = ({
     }
   }, [closeModeDropdown, setSessionMode]);
 
+  const handleCreateAssistantWorkspace = useCallback(async () => {
+    closeModeDropdown();
+    try {
+      await workspaceManager.createAssistantWorkspace();
+    } catch (err) {
+      log.error('Failed to create assistant workspace', err);
+    }
+  }, [closeModeDropdown]);
+
   const handleItemClick = useCallback(
     (tab: PanelType, item: NavItemConfig) => {
       if (item.behavior === 'scene' && item.sceneId) {
@@ -255,12 +286,16 @@ const MainNav: React.FC<MainNavProps> = ({
     try {
       await flowChatManager.createChatSession(
         { modelName: 'claude-sonnet-4.5' },
-        defaultSessionMode === 'cowork' ? 'Cowork' : 'agentic'
+        isAssistantWorkspaceActive
+          ? 'Claw'
+          : defaultSessionMode === 'cowork'
+            ? 'Cowork'
+            : 'agentic'
       );
     } catch (err) {
       log.error('Failed to create session', err);
     }
-  }, [openScene, switchLeftPanelTab, defaultSessionMode]);
+  }, [openScene, switchLeftPanelTab, defaultSessionMode, isAssistantWorkspaceActive]);
 
   const handleOpenProject = useCallback(async () => {
     try {
@@ -338,10 +373,33 @@ const MainNav: React.FC<MainNavProps> = ({
   }, [closeModeDropdown, modeDropdownOpen]);
 
   const handleOpenProfile = useCallback(() => {
+    const targetAssistantWorkspace =
+      isAssistantWorkspaceActive && currentWorkspace?.workspaceKind === WorkspaceKind.Assistant
+        ? currentWorkspace
+        : defaultAssistantWorkspace;
+
+    if (targetAssistantWorkspace?.id) {
+      setSelectedAssistantWorkspaceId(targetAssistantWorkspace.id);
+    }
+
+    if (!isAssistantWorkspaceActive && targetAssistantWorkspace) {
+      void setActiveWorkspace(targetAssistantWorkspace.id).catch(error => {
+        log.warn('Failed to activate default assistant workspace', { error });
+      });
+    }
     setMyAgentView('profile');
     switchLeftPanelTab('profile');
     openScene('my-agent');
-  }, [openScene, setMyAgentView, switchLeftPanelTab]);
+  }, [
+    currentWorkspace,
+    defaultAssistantWorkspace,
+    isAssistantWorkspaceActive,
+    openScene,
+    setActiveWorkspace,
+    setMyAgentView,
+    setSelectedAssistantWorkspaceId,
+    switchLeftPanelTab,
+  ]);
 
   let flatCounter = 0;
 
@@ -407,7 +465,11 @@ const MainNav: React.FC<MainNavProps> = ({
     document.body
   ) : null;
 
-  const ModeIcon = defaultSessionMode === 'cowork' ? Users : Code2;
+  const ModeIcon = isAssistantWorkspaceActive
+    ? Bot
+    : defaultSessionMode === 'cowork'
+      ? Users
+      : Code2;
 
   const modeDropdownPortal = modeDropdownOpen ? createPortal(
     <div
@@ -416,26 +478,40 @@ const MainNav: React.FC<MainNavProps> = ({
       role="menu"
       style={{ top: modeDropdownPos.top, left: modeDropdownPos.left }}
     >
-      <button
-        type="button"
-        className={`bitfun-nav-panel__mode-dropdown-item${defaultSessionMode === 'code' ? ' is-active' : ''}`}
-        role="menuitem"
-        onClick={() => { void handleSetDefaultMode('code'); }}
-      >
-        <Code2 size={13} className="bitfun-nav-panel__mode-dropdown-item-icon is-code" />
-        <span className="bitfun-nav-panel__mode-dropdown-item-label">{t('nav.sessions.codeSessionMode')}</span>
-        {defaultSessionMode === 'code' && <Check size={12} className="bitfun-nav-panel__mode-dropdown-item-check" />}
-      </button>
-      <button
-        type="button"
-        className={`bitfun-nav-panel__mode-dropdown-item${defaultSessionMode === 'cowork' ? ' is-active' : ''}`}
-        role="menuitem"
-        onClick={() => { void handleSetDefaultMode('cowork'); }}
-      >
-        <Users size={13} className="bitfun-nav-panel__mode-dropdown-item-icon is-cowork" />
-        <span className="bitfun-nav-panel__mode-dropdown-item-label">{t('nav.sessions.coworkSessionMode')}</span>
-        {defaultSessionMode === 'cowork' && <Check size={12} className="bitfun-nav-panel__mode-dropdown-item-check" />}
-      </button>
+      {isAssistantWorkspaceActive ? (
+        <button
+          type="button"
+          className="bitfun-nav-panel__mode-dropdown-item"
+          role="menuitem"
+          onClick={() => { void handleCreateAssistantWorkspace(); }}
+        >
+          <Bot size={13} className="bitfun-nav-panel__mode-dropdown-item-icon is-claw" />
+          <span className="bitfun-nav-panel__mode-dropdown-item-label">{t('nav.workspaces.actions.newAssistant')}</span>
+        </button>
+      ) : (
+        <>
+          <button
+            type="button"
+            className={`bitfun-nav-panel__mode-dropdown-item${defaultSessionMode === 'code' ? ' is-active' : ''}`}
+            role="menuitem"
+            onClick={() => { void handleSetDefaultMode('code'); }}
+          >
+            <Code2 size={13} className="bitfun-nav-panel__mode-dropdown-item-icon is-code" />
+            <span className="bitfun-nav-panel__mode-dropdown-item-label">{t('nav.sessions.codeSessionMode')}</span>
+            {defaultSessionMode === 'code' && <Check size={12} className="bitfun-nav-panel__mode-dropdown-item-check" />}
+          </button>
+          <button
+            type="button"
+            className={`bitfun-nav-panel__mode-dropdown-item${defaultSessionMode === 'cowork' ? ' is-active' : ''}`}
+            role="menuitem"
+            onClick={() => { void handleSetDefaultMode('cowork'); }}
+          >
+            <Users size={13} className="bitfun-nav-panel__mode-dropdown-item-icon is-cowork" />
+            <span className="bitfun-nav-panel__mode-dropdown-item-label">{t('nav.sessions.coworkSessionMode')}</span>
+            {defaultSessionMode === 'cowork' && <Check size={12} className="bitfun-nav-panel__mode-dropdown-item-check" />}
+          </button>
+        </>
+      )}
     </div>,
     document.body
   ) : null;
@@ -458,7 +534,13 @@ const MainNav: React.FC<MainNavProps> = ({
             type="button"
             className="bitfun-nav-panel__workspace-create-main"
             onClick={handleCreateSession}
-            title={defaultSessionMode === 'cowork' ? t('nav.sessions.newCoworkSession') : t('nav.sessions.newCodeSession')}
+            title={
+              isAssistantWorkspaceActive
+                ? t('nav.sessions.newClawSession')
+                : defaultSessionMode === 'cowork'
+                  ? t('nav.sessions.newCoworkSession')
+                  : t('nav.sessions.newCodeSession')
+            }
           >
             <Plus size={14} />
             <span>{t('nav.sessions.newSession')}</span>
@@ -468,7 +550,13 @@ const MainNav: React.FC<MainNavProps> = ({
             type="button"
             className={`bitfun-nav-panel__workspace-create-mode${modeDropdownOpen ? ' is-active' : ''}`}
             onClick={toggleModeDropdown}
-            title={defaultSessionMode === 'cowork' ? t('nav.sessions.newCoworkSessionDefault') : t('nav.sessions.newCodeSessionDefault')}
+            title={
+              isAssistantWorkspaceActive
+                ? t('nav.workspaces.actions.newAssistant')
+                : defaultSessionMode === 'cowork'
+                  ? t('nav.sessions.newCoworkSessionDefault')
+                  : t('nav.sessions.newCodeSessionDefault')
+            }
             aria-expanded={modeDropdownOpen}
             aria-haspopup="listbox"
           >
@@ -496,7 +584,19 @@ const MainNav: React.FC<MainNavProps> = ({
                   isOpen={isSectionOpen}
                   onToggle={() => toggleSection(section.id)}
                   onSceneOpen={sectionSceneId ? () => openScene(sectionSceneId) : undefined}
-                  actions={section.id === 'workspace' ? (
+                  actions={section.id === 'assistants' ? (
+                    <div className="bitfun-nav-panel__workspace-action-wrap">
+                      <button
+                        type="button"
+                        className="bitfun-nav-panel__section-action"
+                        aria-label={t('nav.workspaces.actions.newAssistant')}
+                        title={t('nav.workspaces.actions.newAssistant')}
+                        onClick={() => { void handleCreateAssistantWorkspace(); }}
+                      >
+                        <Plus size={13} />
+                      </button>
+                    </div>
+                  ) : section.id === 'workspace' ? (
                     <div className="bitfun-nav-panel__workspace-action-wrap">
                       <button
                         ref={workspaceMenuButtonRef}
@@ -517,7 +617,8 @@ const MainNav: React.FC<MainNavProps> = ({
               <div className={`bitfun-nav-panel__collapsible${showItems ? '' : ' is-collapsed'}`}>
                 <div className="bitfun-nav-panel__collapsible-inner">
                   <div className="bitfun-nav-panel__items">
-                    {section.id === 'workspace' && <WorkspaceListSection />}
+                    {section.id === 'assistants' && <WorkspaceListSection variant="assistants" />}
+                    {section.id === 'workspace' && <WorkspaceListSection variant="projects" />}
                     {section.items.map(item => {
                       const currentFlatIdx = flatCounter++;
                       const { tab } = item;
@@ -542,7 +643,15 @@ const MainNav: React.FC<MainNavProps> = ({
                             isActive={isActive}
                             onClick={() => handleItemClick(tab, item)}
                             actionIcon={tab === 'sessions' ? Plus : undefined}
-                            actionTitle={tab === 'sessions' ? (defaultSessionMode === 'cowork' ? t('nav.sessions.newCoworkSession') : t('nav.sessions.newCodeSession')) : undefined}
+                            actionTitle={
+                              tab === 'sessions'
+                                ? isAssistantWorkspaceActive
+                                  ? t('nav.sessions.newClawSession')
+                                  : defaultSessionMode === 'cowork'
+                                    ? t('nav.sessions.newCoworkSession')
+                                    : t('nav.sessions.newCodeSession')
+                                : undefined
+                            }
                             onActionClick={tab === 'sessions' ? handleCreateSession : undefined}
                           />
                         </div>

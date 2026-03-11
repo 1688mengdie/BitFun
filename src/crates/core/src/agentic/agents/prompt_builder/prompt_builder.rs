@@ -1,8 +1,8 @@
 //! System prompts module providing main dialogue and agent dialogue prompts
 use crate::agentic::util::get_formatted_files_list;
 use crate::infrastructure::try_get_path_manager_arc;
-use crate::service::ai_memory::AIMemoryManager;
 use crate::service::agent_memory::build_workspace_agent_memory_prompt;
+use crate::service::ai_memory::AIMemoryManager;
 use crate::service::ai_rules::get_global_ai_rules_service;
 use crate::service::bootstrap::build_workspace_persona_prompt;
 use crate::service::config::global::GlobalConfigManager;
@@ -21,6 +21,7 @@ const PLACEHOLDER_RULES: &str = "{RULES}";
 const PLACEHOLDER_MEMORIES: &str = "{MEMORIES}";
 const PLACEHOLDER_LANGUAGE_PREFERENCE: &str = "{LANGUAGE_PREFERENCE}";
 const PLACEHOLDER_AGENT_MEMORY: &str = "{AGENT_MEMORY}";
+const PLACEHOLDER_CLAW_WORKSPACE: &str = "{CLAW_WORKSPACE}";
 const PLACEHOLDER_VISUAL_MODE: &str = "{VISUAL_MODE}";
 
 pub struct PromptBuilder {
@@ -215,15 +216,28 @@ Prefer MermaidInteractive tool when available, otherwise output Mermaid code blo
         Ok(format!("# Language Preference\nYou MUST respond in {} regardless of the user's input language. This is the system language setting and should be followed unless the user explicitly specifies a different language. This is crucial for smooth communication and user experience\n", language))
     }
 
+    /// Get Claw-specific workspace boundary instruction
+    fn get_claw_workspace_instruction(&self) -> String {
+        format!(
+            "# Workspace
+Your dedicated operating space is `{}`.
+Prefer doing work inside this workspace and keep it well organized with clear structure, sensible filenames, and minimal clutter.
+Do not read from, modify, create, move, or delete files outside this workspace unless the user has explicitly granted permission for that external action.
+",
+            self.workspace_path
+        )
+    }
+
     /// Build prompt from template, automatically fill content based on placeholders
     ///
     /// Supported placeholders:
-    /// - `{PERSONA}` - Workspace persona files (BOOTSTRAP.md, SOUL.md, USER.md, IDENTITY.MD)
+    /// - `{PERSONA}` - Workspace persona files (BOOTSTRAP.md, SOUL.md, USER.md, IDENTITY.md)
     /// - `{LANGUAGE_PREFERENCE}` - User language preference (read from global config)
     /// - `{ENV_INFO}` - Environment information
     /// - `{PROJECT_LAYOUT}` - Project file layout
     /// - `{PROJECT_CONTEXT_FILES}` - Project context files (AGENTS.md, CLAUDE.md, etc.)
     /// - `{AGENT_MEMORY}` - Agent memory instructions + auto-loaded memory index
+    /// - `{CLAW_WORKSPACE}` - Claw-specific workspace ownership and boundary rules
     /// - `{RULES}` - AI rules
     /// - `{MEMORIES}` - AI memories
     /// - `{VISUAL_MODE}` - Visual mode instruction (Mermaid diagrams, read from global config)
@@ -253,6 +267,12 @@ Prefer MermaidInteractive tool when available, otherwise output Mermaid code blo
         if result.contains(PLACEHOLDER_LANGUAGE_PREFERENCE) {
             let language_preference = self.get_language_preference().await?;
             result = result.replace(PLACEHOLDER_LANGUAGE_PREFERENCE, &language_preference);
+        }
+
+        // Replace {CLAW_WORKSPACE}
+        if result.contains(PLACEHOLDER_CLAW_WORKSPACE) {
+            let claw_workspace = self.get_claw_workspace_instruction();
+            result = result.replace(PLACEHOLDER_CLAW_WORKSPACE, &claw_workspace);
         }
 
         // Replace {ENV_INFO}

@@ -32,6 +32,7 @@ pub struct AppState {
     pub ai_client_factory: Arc<AIClientFactory>,
     pub tool_registry: Arc<Vec<Arc<dyn tools::framework::Tool>>>,
     pub workspace_service: Arc<workspace::WorkspaceService>,
+    pub workspace_identity_watch_service: Arc<workspace::WorkspaceIdentityWatchService>,
     pub workspace_path: Arc<RwLock<Option<std::path::PathBuf>>>,
     pub config_service: Arc<config::ConfigService>,
     pub filesystem_service: Arc<filesystem::FileSystemService>,
@@ -65,6 +66,8 @@ impl AppState {
         };
 
         let workspace_service = Arc::new(workspace::WorkspaceService::new().await?);
+        let workspace_identity_watch_service =
+            Arc::new(workspace::WorkspaceIdentityWatchService::new(workspace_service.clone()));
         workspace::set_global_workspace_service(workspace_service.clone());
         let filesystem_service = Arc::new(filesystem::FileSystemServiceFactory::create_default());
 
@@ -138,6 +141,7 @@ impl AppState {
             ai_client_factory,
             tool_registry,
             workspace_service,
+            workspace_identity_watch_service,
             workspace_path: Arc::new(RwLock::new(initial_workspace_path)),
             config_service,
             filesystem_service,

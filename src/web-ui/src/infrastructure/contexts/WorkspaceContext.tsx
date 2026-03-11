@@ -2,17 +2,34 @@
 
 import React, { createContext, useContext, useEffect, useState, useCallback, useRef, ReactNode, useMemo } from 'react';
 import { workspaceManager, WorkspaceState, WorkspaceEvent } from '../services/business/workspaceManager';
-import { WorkspaceInfo } from '../../shared/types';
+import { WorkspaceInfo, WorkspaceKind } from '../../shared/types';
 import { createLogger } from '@/shared/utils/logger';
 
 const log = createLogger('WorkspaceProvider');
 
+const getWorkspaceDisplayName = (workspace: WorkspaceInfo | null): string => {
+  if (!workspace) {
+    return '';
+  }
+
+  if (workspace.workspaceKind === WorkspaceKind.Assistant) {
+    return workspace.identity?.name?.trim() || workspace.name;
+  }
+
+  return workspace.name;
+};
+
 interface WorkspaceContextValue extends WorkspaceState {
   activeWorkspace: WorkspaceInfo | null;
   openedWorkspacesList: WorkspaceInfo[];
+  normalWorkspacesList: WorkspaceInfo[];
+  assistantWorkspacesList: WorkspaceInfo[];
   openWorkspace: (path: string) => Promise<WorkspaceInfo>;
+  createAssistantWorkspace: () => Promise<WorkspaceInfo>;
   closeWorkspace: () => Promise<void>;
   closeWorkspaceById: (workspaceId: string) => Promise<void>;
+  deleteAssistantWorkspace: (workspaceId: string) => Promise<void>;
+  resetAssistantWorkspace: (workspaceId: string) => Promise<WorkspaceInfo>;
   switchWorkspace: (workspace: WorkspaceInfo) => Promise<WorkspaceInfo>;
   setActiveWorkspace: (workspaceId: string) => Promise<WorkspaceInfo>;
   scanWorkspaceInfo: () => Promise<WorkspaceInfo | null>;
@@ -50,22 +67,9 @@ export const WorkspaceProvider: React.FC<WorkspaceProviderProps> = ({ children }
 
   useEffect(() => {
     const removeListener = workspaceManager.addEventListener((_event: WorkspaceEvent) => {
-      const newState = workspaceManager.getState();
-
-      setState(prevState => {
-        const prevOpenedIds = Array.from(prevState.openedWorkspaces.keys()).join('|');
-        const nextOpenedIds = Array.from(newState.openedWorkspaces.keys()).join('|');
-        const isChanged =
-          prevState.currentWorkspace?.id !== newState.currentWorkspace?.id ||
-          prevState.activeWorkspaceId !== newState.activeWorkspaceId ||
-          prevState.lastUsedWorkspaceId !== newState.lastUsedWorkspaceId ||
-          prevState.loading !== newState.loading ||
-          prevState.error !== newState.error ||
-          prevState.recentWorkspaces.length !== newState.recentWorkspaces.length ||
-          prevOpenedIds !== nextOpenedIds;
-
-        return isChanged ? newState : prevState;
-      });
+      // Workspace metadata such as identity/name can change without affecting ids or list lengths.
+      // Always sync the latest manager state so React consumers re-render for these updates.
+      setState(workspaceManager.getState());
     });
 
     return () => {
@@ -98,12 +102,24 @@ export const WorkspaceProvider: React.FC<WorkspaceProviderProps> = ({ children }
     return await workspaceManager.openWorkspace(path);
   }, []);
 
+  const createAssistantWorkspace = useCallback(async (): Promise<WorkspaceInfo> => {
+    return await workspaceManager.createAssistantWorkspace();
+  }, []);
+
   const closeWorkspace = useCallback(async (): Promise<void> => {
     return await workspaceManager.closeWorkspace();
   }, []);
 
   const closeWorkspaceById = useCallback(async (workspaceId: string): Promise<void> => {
     return await workspaceManager.closeWorkspaceById(workspaceId);
+  }, []);
+
+  const deleteAssistantWorkspace = useCallback(async (workspaceId: string): Promise<void> => {
+    return await workspaceManager.deleteAssistantWorkspace(workspaceId);
+  }, []);
+
+  const resetAssistantWorkspace = useCallback(async (workspaceId: string): Promise<WorkspaceInfo> => {
+    return await workspaceManager.resetAssistantWorkspace(workspaceId);
   }, []);
 
   const switchWorkspace = useCallback(async (workspace: WorkspaceInfo): Promise<WorkspaceInfo> => {
@@ -127,17 +143,36 @@ export const WorkspaceProvider: React.FC<WorkspaceProviderProps> = ({ children }
     () => Array.from(state.openedWorkspaces.values()),
     [state.openedWorkspaces]
   );
+  const normalWorkspacesList = useMemo(
+    () =>
+      openedWorkspacesList.filter(
+        workspace => workspace.workspaceKind !== WorkspaceKind.Assistant
+      ),
+    [openedWorkspacesList]
+  );
+  const assistantWorkspacesList = useMemo(
+    () =>
+      openedWorkspacesList.filter(
+        workspace => workspace.workspaceKind === WorkspaceKind.Assistant
+      ),
+    [openedWorkspacesList]
+  );
   const hasWorkspace = !!activeWorkspace;
-  const workspaceName = activeWorkspace?.name || '';
+  const workspaceName = getWorkspaceDisplayName(activeWorkspace);
   const workspacePath = activeWorkspace?.rootPath || '';
 
   const contextValue: WorkspaceContextValue = {
     ...state,
     activeWorkspace,
     openedWorkspacesList,
+    normalWorkspacesList,
+    assistantWorkspacesList,
     openWorkspace,
+    createAssistantWorkspace,
     closeWorkspace,
     closeWorkspaceById,
+    deleteAssistantWorkspace,
+    resetAssistantWorkspace,
     switchWorkspace,
     setActiveWorkspace,
     scanWorkspaceInfo,

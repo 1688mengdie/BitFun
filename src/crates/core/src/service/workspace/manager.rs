@@ -1,6 +1,6 @@
 //! Workspace manager.
 
-use crate::util::errors::*;
+use crate::util::{errors::*, FrontMatterMarkdown};
 use log::warn;
 
 use serde::{Deserialize, Serialize};
@@ -31,6 +31,121 @@ pub enum WorkspaceStatus {
     Archived,
 }
 
+/// Workspace lifecycle kind.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "lowercase")]
+pub enum WorkspaceKind {
+    #[default]
+    Normal,
+    Assistant,
+}
+
+pub(crate) const IDENTITY_FILE_NAME: &str = "IDENTITY.md";
+
+/// Parsed agent identity fields from `IDENTITY.md` frontmatter.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceIdentity {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub creature: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vibe: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub emoji: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+struct WorkspaceIdentityFrontmatter {
+    name: Option<String>,
+    creature: Option<String>,
+    vibe: Option<String>,
+    emoji: Option<String>,
+}
+
+impl WorkspaceIdentity {
+    pub(crate) async fn load_from_workspace_root(workspace_root: &Path) -> Result<Option<Self>, String> {
+        let identity_path = workspace_root.join(IDENTITY_FILE_NAME);
+        if !identity_path.exists() {
+            return Ok(None);
+        }
+
+        let content = fs::read_to_string(&identity_path)
+            .await
+            .map_err(|e| format!("Failed to read identity file '{}': {}", identity_path.display(), e))?;
+
+        let identity = Self::from_markdown(&content)?;
+        if identity.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(identity))
+        }
+    }
+
+    fn from_markdown(content: &str) -> Result<Self, String> {
+        let (metadata, _) = FrontMatterMarkdown::load_str(content)?;
+        let frontmatter: WorkspaceIdentityFrontmatter = serde_yaml::from_value(metadata)
+            .map_err(|e| format!("Failed to parse identity frontmatter: {}", e))?;
+
+        Ok(Self {
+            name: normalize_identity_field(frontmatter.name),
+            creature: normalize_identity_field(frontmatter.creature),
+            vibe: normalize_identity_field(frontmatter.vibe),
+            emoji: normalize_identity_field(frontmatter.emoji),
+        })
+    }
+
+    fn is_empty(&self) -> bool {
+        self.name.is_none()
+            && self.creature.is_none()
+            && self.vibe.is_none()
+            && self.emoji.is_none()
+    }
+
+    pub(crate) fn collect_changed_fields(
+        previous: Option<&WorkspaceIdentity>,
+        current: Option<&WorkspaceIdentity>,
+    ) -> Vec<String> {
+        let previous_name = previous.and_then(|identity| identity.name.as_deref());
+        let current_name = current.and_then(|identity| identity.name.as_deref());
+        let previous_creature = previous.and_then(|identity| identity.creature.as_deref());
+        let current_creature = current.and_then(|identity| identity.creature.as_deref());
+        let previous_vibe = previous.and_then(|identity| identity.vibe.as_deref());
+        let current_vibe = current.and_then(|identity| identity.vibe.as_deref());
+        let previous_emoji = previous.and_then(|identity| identity.emoji.as_deref());
+        let current_emoji = current.and_then(|identity| identity.emoji.as_deref());
+
+        let mut changed_fields = Vec::new();
+        if previous_name != current_name {
+            changed_fields.push("name".to_string());
+        }
+        if previous_creature != current_creature {
+            changed_fields.push("creature".to_string());
+        }
+        if previous_vibe != current_vibe {
+            changed_fields.push("vibe".to_string());
+        }
+        if previous_emoji != current_emoji {
+            changed_fields.push("emoji".to_string());
+        }
+
+        changed_fields
+    }
+}
+
+fn normalize_identity_field(value: Option<String>) -> Option<String> {
+    value.and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
+}
+
 /// Workspace metadata.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkspaceInfo {
@@ -40,6 +155,10 @@ pub struct WorkspaceInfo {
     pub root_path: PathBuf,
     #[serde(rename = "workspaceType")]
     pub workspace_type: WorkspaceType,
+    #[serde(rename = "workspaceKind", default)]
+    pub workspace_kind: WorkspaceKind,
+    #[serde(rename = "assistantId", default, skip_serializing_if = "Option::is_none")]
+    pub assistant_id: Option<String>,
     pub status: WorkspaceStatus,
     pub languages: Vec<String>,
     #[serde(rename = "openedAt")]
@@ -49,6 +168,8 @@ pub struct WorkspaceInfo {
     pub description: Option<String>,
     pub tags: Vec<String>,
     pub statistics: Option<WorkspaceStatistics>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity: Option<WorkspaceIdentity>,
     pub metadata: HashMap<String, serde_json::Value>,
 }
 
@@ -102,23 +223,55 @@ impl Default for ScanOptions {
     }
 }
 
+/// Options for opening a workspace.
+#[derive(Debug, Clone)]
+pub struct WorkspaceOpenOptions {
+    pub scan_options: ScanOptions,
+    pub auto_set_current: bool,
+    pub add_to_recent: bool,
+    pub workspace_kind: WorkspaceKind,
+    pub assistant_id: Option<String>,
+    pub display_name: Option<String>,
+}
+
+impl Default for WorkspaceOpenOptions {
+    fn default() -> Self {
+        Self {
+            scan_options: ScanOptions::default(),
+            auto_set_current: true,
+            add_to_recent: true,
+            workspace_kind: WorkspaceKind::Normal,
+            assistant_id: None,
+            display_name: None,
+        }
+    }
+}
+
 impl WorkspaceInfo {
     /// Creates a new workspace record.
-    pub async fn new(root_path: PathBuf, options: ScanOptions) -> BitFunResult<Self> {
-        let name = root_path
+    pub async fn new(root_path: PathBuf, options: WorkspaceOpenOptions) -> BitFunResult<Self> {
+        let default_name = root_path
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("Unknown")
             .to_string();
+        let workspace_kind = options.workspace_kind.clone();
+        let assistant_id = if workspace_kind == WorkspaceKind::Assistant {
+            options.assistant_id.clone()
+        } else {
+            None
+        };
 
         let now = chrono::Utc::now();
         let id = uuid::Uuid::new_v4().to_string();
 
         let mut workspace = Self {
             id,
-            name,
+            name: options.display_name.clone().unwrap_or(default_name),
             root_path: root_path.clone(),
             workspace_type: WorkspaceType::Other,
+            workspace_kind,
+            assistant_id,
             status: WorkspaceStatus::Loading,
             languages: Vec::new(),
             opened_at: now,
@@ -126,17 +279,46 @@ impl WorkspaceInfo {
             description: None,
             tags: Vec::new(),
             statistics: None,
+            identity: None,
             metadata: HashMap::new(),
         };
 
         workspace.detect_workspace_type().await;
+        workspace.load_identity().await;
 
-        if options.calculate_statistics {
-            workspace.scan_workspace(options).await?;
+        if options.scan_options.calculate_statistics {
+            workspace.scan_workspace(options.scan_options).await?;
         }
 
-        workspace.status = WorkspaceStatus::Active;
+        workspace.status = if options.auto_set_current {
+            WorkspaceStatus::Active
+        } else {
+            WorkspaceStatus::Inactive
+        };
         Ok(workspace)
+    }
+
+    async fn load_identity(&mut self) {
+        let identity = match WorkspaceIdentity::load_from_workspace_root(&self.root_path).await {
+            Ok(identity) => identity,
+            Err(error) => {
+                warn!(
+                    "Failed to load workspace identity: path={} error={}",
+                    self.root_path.join(IDENTITY_FILE_NAME).display(),
+                    error
+                );
+                self.identity = None;
+                return;
+            }
+        };
+
+        if self.workspace_kind == WorkspaceKind::Assistant {
+            if let Some(name) = identity.as_ref().and_then(|identity| identity.name.as_ref()) {
+                self.name = name.clone();
+            }
+        }
+
+        self.identity = identity;
     }
 
     /// Detects the workspace type.
@@ -373,6 +555,8 @@ impl WorkspaceInfo {
             name: self.name.clone(),
             root_path: self.root_path.clone(),
             workspace_type: self.workspace_type.clone(),
+            workspace_kind: self.workspace_kind.clone(),
+            assistant_id: self.assistant_id.clone(),
             status: self.status.clone(),
             languages: self.languages.clone(),
             last_accessed: self.last_accessed,
@@ -391,6 +575,10 @@ pub struct WorkspaceSummary {
     pub root_path: PathBuf,
     #[serde(rename = "workspaceType")]
     pub workspace_type: WorkspaceType,
+    #[serde(rename = "workspaceKind")]
+    pub workspace_kind: WorkspaceKind,
+    #[serde(rename = "assistantId", skip_serializing_if = "Option::is_none")]
+    pub assistant_id: Option<String>,
     pub status: WorkspaceStatus,
     pub languages: Vec<String>,
     #[serde(rename = "lastAccessed")]
@@ -406,6 +594,7 @@ pub struct WorkspaceManager {
     opened_workspace_ids: Vec<String>,
     current_workspace_id: Option<String>,
     recent_workspaces: Vec<String>,
+    recent_assistant_workspaces: Vec<String>,
     max_recent_workspaces: usize,
 }
 
@@ -435,12 +624,23 @@ impl WorkspaceManager {
             opened_workspace_ids: Vec::new(),
             current_workspace_id: None,
             recent_workspaces: Vec::new(),
+            recent_assistant_workspaces: Vec::new(),
             max_recent_workspaces: config.max_recent_workspaces,
         }
     }
 
     /// Opens a workspace.
     pub async fn open_workspace(&mut self, path: PathBuf) -> BitFunResult<WorkspaceInfo> {
+        self.open_workspace_with_options(path, WorkspaceOpenOptions::default())
+            .await
+    }
+
+    /// Opens a workspace with custom options.
+    pub async fn open_workspace_with_options(
+        &mut self,
+        path: PathBuf,
+        options: WorkspaceOpenOptions,
+    ) -> BitFunResult<WorkspaceInfo> {
         if !path.exists() {
             return Err(BitFunError::service(format!(
                 "Workspace path does not exist: {:?}",
@@ -462,8 +662,27 @@ impl WorkspaceManager {
             .map(|w| w.id.clone());
 
         if let Some(workspace_id) = existing_workspace_id {
+            if let Some(workspace) = self.workspaces.get_mut(&workspace_id) {
+                workspace.workspace_kind = options.workspace_kind.clone();
+                workspace.assistant_id = if options.workspace_kind == WorkspaceKind::Assistant {
+                    options.assistant_id.clone()
+                } else {
+                    None
+                };
+                if let Some(display_name) = &options.display_name {
+                    workspace.name = display_name.clone();
+                }
+                workspace.load_identity().await;
+            }
             self.ensure_workspace_open(&workspace_id);
-            self.set_current_workspace(workspace_id.clone())?;
+            if options.auto_set_current {
+                self.set_current_workspace_with_recent_policy(
+                    workspace_id.clone(),
+                    options.add_to_recent,
+                )?;
+            } else {
+                self.touch_workspace_access(&workspace_id, options.add_to_recent);
+            }
             return self.workspaces.get(&workspace_id).cloned().ok_or_else(|| {
                 BitFunError::service(format!(
                     "Workspace '{}' disappeared after selecting it",
@@ -472,13 +691,17 @@ impl WorkspaceManager {
             });
         }
 
-        let workspace = WorkspaceInfo::new(path, ScanOptions::default()).await?;
+        let workspace = WorkspaceInfo::new(path, options.clone()).await?;
         let workspace_id = workspace.id.clone();
 
         self.workspaces
             .insert(workspace_id.clone(), workspace.clone());
         self.ensure_workspace_open(&workspace_id);
-        self.set_current_workspace(workspace_id.clone())?;
+        if options.auto_set_current {
+            self.set_current_workspace_with_recent_policy(workspace_id.clone(), options.add_to_recent)?;
+        } else {
+            self.touch_workspace_access(&workspace_id, options.add_to_recent);
+        }
 
         Ok(workspace)
     }
@@ -500,6 +723,11 @@ impl WorkspaceManager {
                 workspace_id
             )));
         }
+        let closed_workspace_kind = self
+            .workspaces
+            .get(workspace_id)
+            .map(|workspace| workspace.workspace_kind.clone())
+            .unwrap_or_default();
 
         self.opened_workspace_ids.retain(|id| id != workspace_id);
 
@@ -510,7 +738,9 @@ impl WorkspaceManager {
         if self.current_workspace_id.as_deref() == Some(workspace_id) {
             self.current_workspace_id = None;
 
-            if let Some(next_workspace_id) = self.opened_workspace_ids.first().cloned() {
+            if let Some(next_workspace_id) =
+                self.find_next_workspace_id_after_close(&closed_workspace_kind)
+            {
                 self.set_current_workspace(next_workspace_id)?;
             }
         }
@@ -532,6 +762,14 @@ impl WorkspaceManager {
 
     /// Sets the current workspace.
     pub fn set_current_workspace(&mut self, workspace_id: String) -> BitFunResult<()> {
+        self.set_current_workspace_with_recent_policy(workspace_id, true)
+    }
+
+    fn set_current_workspace_with_recent_policy(
+        &mut self,
+        workspace_id: String,
+        add_to_recent: bool,
+    ) -> BitFunResult<()> {
         if !self.workspaces.contains_key(&workspace_id) {
             return Err(BitFunError::service(format!(
                 "Workspace not found: {}",
@@ -556,7 +794,9 @@ impl WorkspaceManager {
 
         self.current_workspace_id = Some(workspace_id.clone());
 
-        self.update_recent_workspaces(workspace_id);
+        if add_to_recent {
+            self.update_recent_workspaces(workspace_id);
+        }
 
         Ok(())
     }
@@ -596,6 +836,14 @@ impl WorkspaceManager {
             .collect()
     }
 
+    /// Returns recently accessed assistant workspace records.
+    pub fn get_recent_assistant_workspace_infos(&self) -> Vec<&WorkspaceInfo> {
+        self.recent_assistant_workspaces
+            .iter()
+            .filter_map(|id| self.workspaces.get(id))
+            .collect()
+    }
+
     /// Searches workspaces.
     pub fn search_workspaces(&self, query: &str) -> Vec<WorkspaceSummary> {
         let query_lower = query.to_lowercase();
@@ -629,7 +877,10 @@ impl WorkspaceManager {
                 self.current_workspace_id = None;
             }
 
+            self.opened_workspace_ids.retain(|id| id != workspace_id);
             self.recent_workspaces.retain(|id| id != workspace_id);
+            self.recent_assistant_workspaces
+                .retain(|id| id != workspace_id);
 
             Ok(())
         } else {
@@ -661,14 +912,53 @@ impl WorkspaceManager {
     /// Updates the recent-workspaces list.
     fn update_recent_workspaces(&mut self, workspace_id: String) {
         self.recent_workspaces.retain(|id| id != &workspace_id);
+        self.recent_assistant_workspaces
+            .retain(|id| id != &workspace_id);
 
-        self.recent_workspaces.insert(0, workspace_id);
+        let is_assistant = self
+            .workspaces
+            .get(&workspace_id)
+            .map(|workspace| workspace.workspace_kind == WorkspaceKind::Assistant)
+            .unwrap_or(false);
+        let target_list = if is_assistant {
+            &mut self.recent_assistant_workspaces
+        } else {
+            &mut self.recent_workspaces
+        };
+        target_list.insert(0, workspace_id);
 
-        if self.recent_workspaces.len() > self.max_recent_workspaces {
-            self.recent_workspaces.truncate(self.max_recent_workspaces);
+        if target_list.len() > self.max_recent_workspaces {
+            target_list.truncate(self.max_recent_workspaces);
         }
     }
 
+    fn touch_workspace_access(&mut self, workspace_id: &str, add_to_recent: bool) {
+        if let Some(workspace) = self.workspaces.get_mut(workspace_id) {
+            workspace.touch();
+            if self.current_workspace_id.as_deref() != Some(workspace_id) {
+                workspace.status = WorkspaceStatus::Inactive;
+            }
+        }
+
+        if add_to_recent {
+            self.update_recent_workspaces(workspace_id.to_string());
+        }
+    }
+
+    fn find_next_workspace_id_after_close(&self, preferred_kind: &WorkspaceKind) -> Option<String> {
+        self.opened_workspace_ids
+            .iter()
+            .find(|id| {
+                self.workspaces
+                    .get(id.as_str())
+                    .map(|workspace| &workspace.workspace_kind == preferred_kind)
+                    .unwrap_or(false)
+            })
+            .cloned()
+            .or_else(|| self.opened_workspace_ids.first().cloned())
+    }
+
+    /// Ensures a workspace stays in the opened list.
     fn ensure_workspace_open(&mut self, workspace_id: &str) {
         self.opened_workspace_ids.retain(|id| id != workspace_id);
         self.opened_workspace_ids.insert(0, workspace_id.to_string());
@@ -737,7 +1027,33 @@ impl WorkspaceManager {
 
     /// Sets the recent-workspaces list.
     pub fn set_recent_workspaces(&mut self, recent: Vec<String>) {
-        self.recent_workspaces = recent;
+        self.recent_workspaces = recent
+            .into_iter()
+            .filter(|id| {
+                self.workspaces
+                    .get(id)
+                    .map(|workspace| workspace.workspace_kind == WorkspaceKind::Normal)
+                    .unwrap_or(false)
+            })
+            .collect();
+    }
+
+    /// Returns a reference to the recent assistant-workspaces list.
+    pub fn get_recent_assistant_workspaces(&self) -> &Vec<String> {
+        &self.recent_assistant_workspaces
+    }
+
+    /// Sets the recent assistant-workspaces list.
+    pub fn set_recent_assistant_workspaces(&mut self, recent: Vec<String>) {
+        self.recent_assistant_workspaces = recent
+            .into_iter()
+            .filter(|id| {
+                self.workspaces
+                    .get(id)
+                    .map(|workspace| workspace.workspace_kind == WorkspaceKind::Assistant)
+                    .unwrap_or(false)
+            })
+            .collect();
     }
 }
 

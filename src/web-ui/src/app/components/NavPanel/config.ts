@@ -20,6 +20,12 @@ export const NAV_SECTIONS: NavSection[] = [
     items: [],
   },
   {
+    id: 'assistants',
+    label: 'Assistants',
+    collapsible: false,
+    items: [],
+  },
+  {
     id: 'workspace',
     label: 'Workspace',
     collapsible: false,

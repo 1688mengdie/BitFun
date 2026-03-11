@@ -15,6 +15,7 @@ use crate::agentic::image_analysis::ImageContextData;
 use crate::agentic::session::SessionManager;
 use crate::agentic::tools::pipeline::{SubagentParentInfo, ToolPipeline};
 use crate::agentic::WorkspaceBinding;
+use crate::service::workspace::get_global_workspace_service;
 use crate::util::errors::{BitFunError, BitFunResult};
 use log::{debug, error, info, warn};
 use std::path::{Path, PathBuf};
@@ -102,6 +103,41 @@ impl ConversationCoordinator {
             .map(|workspace_path| WorkspaceBinding::new(None, PathBuf::from(workspace_path)))
     }
 
+    async fn normalize_agent_type_for_workspace_path(
+        agent_type: &str,
+        workspace_path: &str,
+    ) -> String {
+        let normalized_agent_type = if agent_type.trim().is_empty() {
+            "agentic".to_string()
+        } else {
+            agent_type.trim().to_string()
+        };
+
+        let Some(workspace_service) = get_global_workspace_service() else {
+            return normalized_agent_type;
+        };
+
+        let workspace_path_buf = PathBuf::from(workspace_path);
+        if workspace_service.is_assistant_workspace_path(&workspace_path_buf)
+            || workspace_service
+                .get_workspace_by_path(&workspace_path_buf)
+                .await
+                .map(|workspace| workspace.workspace_kind == crate::service::workspace::WorkspaceKind::Assistant)
+                .unwrap_or(false)
+        {
+            if normalized_agent_type != "Claw" {
+                info!(
+                    "Normalize agent type to Claw for assistant workspace: workspace_path={}, requested_agent_type={}",
+                    workspace_path,
+                    normalized_agent_type
+                );
+            }
+            return "Claw".to_string();
+        }
+
+        normalized_agent_type
+    }
+
     pub fn new(
         session_manager: Arc<SessionManager>,
         execution_engine: Arc<ExecutionEngine>,
@@ -168,6 +204,8 @@ impl ConversationCoordinator {
         // Persist the workspace binding inside the session config so execution can
         // consistently restore the correct workspace regardless of the entry point.
         config.workspace_path = Some(workspace_path.clone());
+        let agent_type =
+            Self::normalize_agent_type_for_workspace_path(&agent_type, &workspace_path).await;
         let session = self
             .session_manager
             .create_session_with_id(session_id, session_name, agent_type, config)
@@ -603,13 +641,21 @@ impl ConversationCoordinator {
         };
 
         let requested_agent_type = agent_type.trim().to_string();
-
-        let effective_agent_type = if !requested_agent_type.is_empty() {
+        let workspace_path_for_policy = workspace_path
+            .clone()
+            .or_else(|| session.config.workspace_path.clone());
+        let provisional_agent_type = if !requested_agent_type.is_empty() {
             requested_agent_type.clone()
         } else if !session.agent_type.is_empty() {
             session.agent_type.clone()
         } else {
             "agentic".to_string()
+        };
+        let effective_agent_type = if let Some(ref workspace_path) = workspace_path_for_policy {
+            Self::normalize_agent_type_for_workspace_path(&provisional_agent_type, workspace_path)
+                .await
+        } else {
+            provisional_agent_type
         };
 
         debug!(

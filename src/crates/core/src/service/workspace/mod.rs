@@ -4,6 +4,7 @@
 
 pub mod context_generator;
 pub mod factory;
+pub mod identity_watch;
 pub mod manager;
 pub mod provider;
 pub mod service;
@@ -15,14 +16,17 @@ pub use context_generator::{
     WorkspaceStatistics as ContextWorkspaceStatistics,
 };
 pub use factory::WorkspaceFactory;
+pub use identity_watch::WorkspaceIdentityWatchService;
 pub use manager::{
-    GitInfo, ScanOptions, WorkspaceInfo, WorkspaceManager, WorkspaceManagerConfig,
-    WorkspaceManagerStatistics, WorkspaceStatistics, WorkspaceStatus, WorkspaceSummary,
-    WorkspaceType,
+    GitInfo, ScanOptions, WorkspaceIdentity, WorkspaceInfo, WorkspaceManager,
+    WorkspaceManagerConfig,
+    WorkspaceManagerStatistics, WorkspaceKind, WorkspaceOpenOptions, WorkspaceStatistics,
+    WorkspaceStatus, WorkspaceSummary, WorkspaceType,
 };
 pub use provider::{WorkspaceCleanupResult, WorkspaceProvider, WorkspaceSystemSummary};
 pub use service::{
     get_global_workspace_service, set_global_workspace_service, BatchImportResult,
     BatchRemoveResult, WorkspaceCreateOptions, WorkspaceExport, WorkspaceHealthStatus,
-    WorkspaceImportResult, WorkspaceInfoUpdates, WorkspaceQuickSummary, WorkspaceService,
+    WorkspaceIdentityChangedEvent, WorkspaceImportResult, WorkspaceInfoUpdates,
+    WorkspaceQuickSummary, WorkspaceService,
 };

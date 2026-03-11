@@ -335,6 +335,36 @@ export class FlowChatStore {
     });
   }
 
+  public removeSessionsByWorkspace(workspacePath: string): string[] {
+    const removedSessionIds = Array.from(this.state.sessions.values())
+      .filter(session => session.workspacePath === workspacePath)
+      .map(session => session.sessionId);
+
+    if (removedSessionIds.length === 0) {
+      return [];
+    }
+
+    const removedSessionIdSet = new Set(removedSessionIds);
+
+    this.setState(prev => {
+      const newSessions = new Map(prev.sessions);
+      removedSessionIdSet.forEach(sessionId => {
+        newSessions.delete(sessionId);
+      });
+
+      return {
+        ...prev,
+        sessions: newSessions,
+        activeSessionId:
+          prev.activeSessionId && removedSessionIdSet.has(prev.activeSessionId)
+            ? null
+            : prev.activeSessionId
+      };
+    });
+
+    return removedSessionIds;
+  }
+
   public getActiveSession(): Session | null {
     if (!this.state.activeSessionId) {
       return null;

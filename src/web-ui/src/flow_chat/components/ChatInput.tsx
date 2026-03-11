@@ -21,6 +21,7 @@ import type { FileContext, DirectoryContext } from '../../shared/types/context';
 import type { PromptTemplate } from '../../shared/types/prompt-template';
 import { SmartRecommendations } from './smart-recommendations';
 import { useCurrentWorkspace } from '@/infrastructure/contexts/WorkspaceContext';
+import { WorkspaceKind } from '@/shared/types';
 import { createImageContextFromFile, createImageContextFromClipboard } from '../utils/imageUtils';
 import { notificationService } from '@/shared/notification-system';
 import { TemplatePickerPanel } from './TemplatePickerPanel';
@@ -83,15 +84,21 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const { transition, setQueuedInput } = useSessionStateMachineActions(currentSessionId);
   const stateMachine = useSessionStateMachine(currentSessionId);
 
-  const { workspacePath } = useCurrentWorkspace();
+  const { workspace, workspacePath } = useCurrentWorkspace();
   
   const [tokenUsage, setTokenUsage] = React.useState({ current: 0, max: 128128 });
-  const canSwitchModes = modeState.current !== 'Cowork';
+  const isAssistantWorkspace = workspace?.workspaceKind === WorkspaceKind.Assistant;
+  const canSwitchModes = !isAssistantWorkspace && modeState.current !== 'Cowork';
 
   // Session-level mode policy: Cowork sessions are fixed; code sessions should not switch into Cowork.
   const switchableModes = useMemo(
-    () => modeState.available.filter(mode => mode.enabled && mode.id !== 'Cowork'),
-    [modeState.available]
+    () =>
+      modeState.available.filter(mode =>
+        mode.enabled &&
+        mode.id !== 'Cowork' &&
+        (isAssistantWorkspace || mode.id !== 'Claw')
+      ),
+    [isAssistantWorkspace, modeState.available]
   );
   
   const setChatInputActive = useChatInputState(state => state.setActive);
@@ -431,6 +438,14 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       }
     }
   }, [currentSessionId]);
+
+  React.useEffect(() => {
+    if (!isAssistantWorkspace || modeState.current === 'Claw') {
+      return;
+    }
+
+    dispatchMode({ type: 'SET_CURRENT_MODE', payload: 'Claw' });
+  }, [isAssistantWorkspace, modeState.current]);
 
   React.useEffect(() => {
     const queuedInput = stateMachine?.context?.queuedInput;

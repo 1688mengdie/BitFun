@@ -49,6 +49,11 @@ export enum WorkspaceType {
   Other = 'other',
 }
 
+export enum WorkspaceKind {
+  Normal = 'normal',
+  Assistant = 'assistant',
+}
+
 
 export interface ProjectStatistics {
   totalFiles: number;
@@ -59,18 +64,28 @@ export interface ProjectStatistics {
   lastUpdated: string;
 }
 
+export interface WorkspaceIdentity {
+  name?: string;
+  creature?: string;
+  vibe?: string;
+  emoji?: string;
+}
+
 
 export interface WorkspaceInfo {
   id: string;
   name: string;
   rootPath: string;
   workspaceType: WorkspaceType;
+  workspaceKind: WorkspaceKind;
+  assistantId?: string | null;
   languages: string[];
   openedAt: string;
   lastAccessed: string;
   description?: string;
   tags: string[];
   statistics?: ProjectStatistics;
+  identity?: WorkspaceIdentity | null;
 }
 
 
@@ -124,6 +139,9 @@ export interface GlobalStateAPI {
 
   
   openWorkspace(path: string): Promise<WorkspaceInfo>;
+  createAssistantWorkspace(): Promise<WorkspaceInfo>;
+  deleteAssistantWorkspace(workspaceId: string): Promise<void>;
+  resetAssistantWorkspace(workspaceId: string): Promise<WorkspaceInfo>;
   closeWorkspace(workspaceId: string): Promise<void>;
   setActiveWorkspace(workspaceId: string): Promise<WorkspaceInfo>;
   getCurrentWorkspace(): Promise<WorkspaceInfo | null>;
@@ -245,6 +263,18 @@ export function createGlobalStateAPI(): GlobalStateAPI {
       }
       
       return mapWorkspaceInfo(await globalAPI.openWorkspace(path));
+    },
+
+    async createAssistantWorkspace(): Promise<WorkspaceInfo> {
+      return await globalAPI.createAssistantWorkspace();
+    },
+
+    async deleteAssistantWorkspace(workspaceId: string): Promise<void> {
+      return await globalAPI.deleteAssistantWorkspace(workspaceId);
+    },
+
+    async resetAssistantWorkspace(workspaceId: string): Promise<WorkspaceInfo> {
+      return await globalAPI.resetAssistantWorkspace(workspaceId);
     },
 
     async closeWorkspace(workspaceId: string): Promise<void> {
