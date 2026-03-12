@@ -17,11 +17,26 @@ export interface AppStatus {
   errorMessage?: string;
 }
 
+export interface ProjectStatistics {
+  totalFiles: number;
+  totalLines: number;
+  totalSize: number;
+  filesByLanguage: Record<string, number>;
+  filesByExtension: Record<string, number>;
+  lastUpdated: string;
+}
+
 export interface WorkspaceInfo {
+  id: string;
   name: string;
   rootPath: string;
-  type: string;
-  filesCount: number;
+  workspaceType: string;
+  languages: string[];
+  openedAt: string;
+  lastAccessed: string;
+  description?: string | null;
+  tags: string[];
+  statistics?: ProjectStatistics | null;
 }
 
 export interface UpdateAppStatusRequest {
