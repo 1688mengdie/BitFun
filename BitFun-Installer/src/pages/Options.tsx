@@ -8,13 +8,20 @@ interface OptionsProps {
   options: InstallOptions;
   setOptions: React.Dispatch<React.SetStateAction<InstallOptions>>;
   diskSpace: DiskSpaceInfo | null;
+  error: string | null;
   refreshDiskSpace: (path: string) => Promise<void>;
   onBack: () => void;
   onInstall: () => void;
 }
 
 export function Options({
-  options, setOptions, diskSpace, refreshDiskSpace, onBack, onInstall,
+  options,
+  setOptions,
+  diskSpace,
+  error,
+  refreshDiskSpace,
+  onBack,
+  onInstall,
 }: OptionsProps) {
   const { t } = useTranslation();
 
@@ -23,8 +30,14 @@ export function Options({
   }, [options.installPath, refreshDiskSpace]);
 
   const handleBrowse = async () => {
-    const selected = await open({ directory: true, defaultPath: options.installPath, title: t('options.pathLabel') });
-    if (selected && typeof selected === 'string') setOptions((p) => ({ ...p, installPath: selected }));
+    const selected = await open({
+      directory: true,
+      defaultPath: options.installPath,
+      title: t('options.pathLabel'),
+    });
+    if (selected && typeof selected === 'string') {
+      setOptions((prev) => ({ ...prev, installPath: selected }));
+    }
   };
 
   const formatBytes = (bytes: number): string => {
@@ -36,40 +49,93 @@ export function Options({
   };
 
   const update = (key: keyof InstallOptions, value: boolean) => {
-    setOptions((p) => ({ ...p, [key]: value }));
+    setOptions((prev) => ({ ...prev, [key]: value }));
   };
 
   return (
-    <div style={{
-      flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center',
-      padding: '22px 42px 24px', maxWidth: 560, margin: '0 auto', width: '100%',
-      animation: 'fadeIn 0.4s ease-out',
-    }}>
+    <div
+      style={{
+        flex: 1,
+        display: 'flex',
+        flexDirection: 'column',
+        justifyContent: 'center',
+        padding: '22px 42px 24px',
+        maxWidth: 560,
+        margin: '0 auto',
+        width: '100%',
+        animation: 'fadeIn 0.4s ease-out',
+      }}
+    >
       <div style={{ marginBottom: 8, fontSize: 12, color: 'var(--color-text-muted)' }}>
         {t('options.subtitle')}
       </div>
       <div style={{ marginBottom: 20 }}>
         <div className="section-label">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
             <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
           </svg>
           {t('options.pathLabel')}
         </div>
         <div className="input-group">
           <input
-            className="input" type="text" value={options.installPath}
-            onChange={(e) => setOptions((p) => ({ ...p, installPath: e.target.value }))}
+            className="input"
+            type="text"
+            value={options.installPath}
+            onChange={(e) => setOptions((prev) => ({ ...prev, installPath: e.target.value }))}
             placeholder={t('options.pathPlaceholder')}
           />
-          <button className="btn" onClick={handleBrowse} style={{ padding: '10px 14px', flexShrink: 0 }}>
+          <button
+            className="btn"
+            onClick={handleBrowse}
+            style={{ padding: '10px 14px', flexShrink: 0 }}
+          >
             {t('options.browse')}
           </button>
         </div>
         {diskSpace && (
-          <div style={{ display: 'flex', gap: 16, marginTop: 8, fontSize: 11, color: 'var(--color-text-muted)', opacity: 0.7 }}>
+          <div
+            style={{
+              display: 'flex',
+              gap: 16,
+              marginTop: 8,
+              fontSize: 11,
+              color: 'var(--color-text-muted)',
+              opacity: 0.7,
+            }}
+          >
             <span>{t('options.required')}: {formatBytes(diskSpace.required)}</span>
-            <span>{t('options.available')}: {diskSpace.available < Number.MAX_SAFE_INTEGER ? formatBytes(diskSpace.available) : '—'}</span>
-            {!diskSpace.sufficient && <span style={{ color: 'var(--color-error)' }}>{t('options.insufficientSpace')}</span>}
+            <span>
+              {t('options.available')}:{' '}
+              {diskSpace.available < Number.MAX_SAFE_INTEGER ? formatBytes(diskSpace.available) : '-'}
+            </span>
+            {!diskSpace.sufficient && (
+              <span style={{ color: 'var(--color-error)' }}>{t('options.insufficientSpace')}</span>
+            )}
+          </div>
+        )}
+        {error && (
+          <div
+            style={{
+              marginTop: 10,
+              padding: '10px 12px',
+              borderRadius: 10,
+              border: '1px solid color-mix(in srgb, var(--color-error) 55%, transparent)',
+              background: 'color-mix(in srgb, var(--color-error) 10%, transparent)',
+              color: 'var(--color-text-primary)',
+              fontSize: 12,
+              lineHeight: 1.5,
+            }}
+          >
+            {error}
           </div>
         )}
       </div>
@@ -77,24 +143,71 @@ export function Options({
       <div>
         <div className="section-label">{t('options.optionsLabel')}</div>
         <div className="checkbox-group stagger-children">
-          <Checkbox checked={options.desktopShortcut} onChange={(v) => update('desktopShortcut', v)} label={t('options.desktopShortcut')} />
-          <Checkbox checked={options.startMenu} onChange={(v) => update('startMenu', v)} label={t('options.startMenu')} />
-          <Checkbox checked={options.contextMenu} onChange={(v) => update('contextMenu', v)} label={t('options.contextMenu')} />
-          <Checkbox checked={options.addToPath} onChange={(v) => update('addToPath', v)} label={t('options.addToPath')} />
+          <Checkbox
+            checked={options.desktopShortcut}
+            onChange={(value) => update('desktopShortcut', value)}
+            label={t('options.desktopShortcut')}
+          />
+          <Checkbox
+            checked={options.startMenu}
+            onChange={(value) => update('startMenu', value)}
+            label={t('options.startMenu')}
+          />
+          <Checkbox
+            checked={options.contextMenu}
+            onChange={(value) => update('contextMenu', value)}
+            label={t('options.contextMenu')}
+          />
+          <Checkbox
+            checked={options.addToPath}
+            onChange={(value) => update('addToPath', value)}
+            label={t('options.addToPath')}
+          />
         </div>
       </div>
 
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: 20, marginTop: 'auto' }}>
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          paddingTop: 20,
+          marginTop: 'auto',
+        }}
+      >
         <button className="btn btn-ghost" onClick={onBack}>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6" /></svg>
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <polyline points="15 18 9 12 15 6" />
+          </svg>
           {t('options.changeLanguage')}
         </button>
         <button
-          className="btn btn-primary" onClick={onInstall}
+          className="btn btn-primary"
+          onClick={onInstall}
           disabled={!options.installPath || (diskSpace !== null && !diskSpace.sufficient)}
         >
           {t('options.install')}
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6" /></svg>
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <polyline points="9 18 15 12 9 6" />
+          </svg>
         </button>
       </div>
     </div>

@@ -7,6 +7,10 @@ export interface LaunchContext {
   appLanguage?: 'zh-CN' | 'en-US' | null;
 }
 
+export interface InstallPathValidation {
+  installPath: string;
+}
+
 export type ThemeId =
   | 'bitfun-dark'
   | 'bitfun-light'
