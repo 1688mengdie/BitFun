@@ -10,6 +10,7 @@ import type {
   ModelConfig,
   ConnectionTestResult,
   LaunchContext,
+  InstallPathValidation,
 } from '../types/installer';
 import { DEFAULT_OPTIONS } from '../types/installer';
 
@@ -123,6 +124,12 @@ export function useInstaller(): UseInstallerReturn {
     return () => { unlisten.then((fn) => fn()); };
   }, []);
 
+  useEffect(() => {
+    if (step === 'options' && error) {
+      setError(null);
+    }
+  }, [error, options.installPath, step]);
+
   const goTo = useCallback((s: InstallStep) => setStep(s), []);
 
   const next = useCallback(() => {
@@ -185,13 +192,22 @@ export function useInstaller(): UseInstallerReturn {
     }
 
     try {
-      await invoke<boolean>('validate_install_path', { path: options.installPath });
+      const validated = await invoke<InstallPathValidation>('validate_install_path', {
+        path: options.installPath,
+      });
+      const effectiveOptions = {
+        ...options,
+        installPath: validated.installPath,
+      };
+      if (validated.installPath !== options.installPath) {
+        setOptions((prev) => ({ ...prev, installPath: validated.installPath }));
+      }
       setIsInstalling(true);
       setInstallationCompleted(false);
       setCanConfirmProgress(false);
       setStep('progress');
       setProgress({ step: 'prepare', percent: 0, message: '' });
-      await invoke('start_installation', { options });
+      await invoke('start_installation', { options: effectiveOptions });
       setInstallationCompleted(true);
       setStep('model');
     } catch (err: any) {

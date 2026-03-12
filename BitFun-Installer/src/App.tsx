@@ -47,6 +47,7 @@ function App() {
             options={installer.options}
             setOptions={installer.setOptions}
             diskSpace={installer.diskSpace}
+            error={installer.error}
             refreshDiskSpace={installer.refreshDiskSpace}
             onBack={installer.back}
             onInstall={installer.install}

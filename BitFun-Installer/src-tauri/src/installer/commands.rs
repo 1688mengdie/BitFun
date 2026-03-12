@@ -51,6 +51,12 @@ pub struct LaunchContext {
     pub app_language: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallPathValidation {
+    pub install_path: String,
+}
+
 /// Get the default installation path.
 #[tauri::command]
 pub fn get_default_install_path() -> String {
@@ -177,17 +183,18 @@ pub fn get_launch_context() -> LaunchContext {
 
 /// Validate the installation path.
 #[tauri::command]
-pub fn validate_install_path(path: String) -> Result<bool, String> {
-    let path = PathBuf::from(&path);
-    validate_install_target(&path)?;
-    Ok(true)
+pub fn validate_install_path(path: String) -> Result<InstallPathValidation, String> {
+    let requested_path = PathBuf::from(&path);
+    let install_path = prepare_install_target(&requested_path)?;
+    Ok(InstallPathValidation {
+        install_path: install_path.to_string_lossy().to_string(),
+    })
 }
 
 /// Main installation command. Emits progress events to the frontend.
 #[tauri::command]
 pub async fn start_installation(window: Window, options: InstallOptions) -> Result<(), String> {
-    let install_path = PathBuf::from(&options.install_path);
-    validate_install_target(&install_path)?;
+    let install_path = prepare_install_target(Path::new(&options.install_path))?;
     let install_dir_was_absent = !install_path.exists();
     #[cfg(target_os = "windows")]
     let mut windows_state = WindowsInstallState::default();
@@ -951,25 +958,27 @@ fn find_existing_ancestor(path: &Path) -> PathBuf {
     current
 }
 
-fn validate_install_target(path: &Path) -> Result<(), String> {
-    if !path.is_absolute() {
+fn prepare_install_target(requested_path: &Path) -> Result<PathBuf, String> {
+    if !requested_path.is_absolute() {
         return Err("Installation path must be absolute".into());
     }
 
-    if path.parent().is_none() {
+    if requested_path.parent().is_none() {
         return Err("Refusing to install into a filesystem root directory".into());
     }
 
     #[cfg(target_os = "windows")]
-    reject_sensitive_windows_install_path(path)?;
+    let install_path = resolve_windows_install_target(requested_path)?;
+    #[cfg(not(target_os = "windows"))]
+    let install_path = requested_path.to_path_buf();
 
-    if path.exists() {
-        if !path.is_dir() {
+    if install_path.exists() {
+        if !install_path.is_dir() {
             return Err("Path exists but is not a directory".into());
         }
-        if directory_has_entries(path)?
-            && !path.join(INSTALL_MANIFEST_FILE).exists()
-            && !path.join("BitFun.exe").exists()
+        if directory_has_entries(&install_path)?
+            && !install_path.join(INSTALL_MANIFEST_FILE).exists()
+            && !install_path.join("BitFun.exe").exists()
         {
             return Err(
                 "Installation directory must be empty or already contain a BitFun installation"
@@ -978,18 +987,18 @@ fn validate_install_target(path: &Path) -> Result<(), String> {
         }
     }
 
-    let writable_dir = if path.exists() {
-        path.to_path_buf()
+    let writable_dir = if install_path.exists() {
+        install_path.clone()
     } else {
-        find_existing_ancestor(path)
+        find_existing_ancestor(&install_path)
     };
     let test_file = writable_dir.join(".bitfun_install_test");
     match std::fs::write(&test_file, "test") {
         Ok(_) => {
             let _ = std::fs::remove_file(&test_file);
-            Ok(())
+            Ok(install_path)
         }
-        Err(_) if path.exists() => Err("Directory is not writable".into()),
+        Err(_) if install_path.exists() => Err("Directory is not writable".into()),
         Err(_) => Err("Cannot write to the parent directory".into()),
     }
 }
@@ -1001,7 +1010,11 @@ fn directory_has_entries(path: &Path) -> Result<bool, String> {
 }
 
 #[cfg(target_os = "windows")]
-fn reject_sensitive_windows_install_path(path: &Path) -> Result<(), String> {
+fn resolve_windows_install_target(requested_path: &Path) -> Result<PathBuf, String> {
+    if requested_path.exists() && !requested_path.is_dir() {
+        return Err("Path exists but is not a directory".into());
+    }
+
     let sensitive_dirs = [
         dirs::home_dir(),
         dirs::desktop_dir(),
@@ -1014,16 +1027,23 @@ fn reject_sensitive_windows_install_path(path: &Path) -> Result<(), String> {
         dirs::config_dir(),
     ];
 
-    for sensitive_dir in sensitive_dirs.into_iter().flatten() {
-        if windows_path_eq_case_insensitive(path, &sensitive_dir) {
-            return Err(format!(
-                "Refusing to install directly into sensitive directory: {}",
-                sensitive_dir.display()
-            ));
-        }
+    if sensitive_dirs
+        .into_iter()
+        .flatten()
+        .any(|sensitive_dir| windows_path_eq_case_insensitive(requested_path, &sensitive_dir))
+    {
+        return Ok(requested_path.join("BitFun"));
     }
 
-    Ok(())
+    if requested_path.exists()
+        && directory_has_entries(requested_path)?
+        && !requested_path.join(INSTALL_MANIFEST_FILE).exists()
+        && !requested_path.join("BitFun.exe").exists()
+    {
+        return Ok(requested_path.join("BitFun"));
+    }
+
+    Ok(requested_path.to_path_buf())
 }
 
 fn ensure_app_config_path() -> Result<PathBuf, String> {
