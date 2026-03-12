@@ -165,26 +165,40 @@ function createDefaultUserSettings(): UserSettings {
   };
 }
 
+function mapWorkspaceType(workspaceType: APIWorkspaceInfo['workspaceType']): WorkspaceType {
+  switch (workspaceType) {
+    case WorkspaceType.SingleProject:
+      return WorkspaceType.SingleProject;
+    case WorkspaceType.MultiProject:
+      return WorkspaceType.MultiProject;
+    case WorkspaceType.Documentation:
+      return WorkspaceType.Documentation;
+    default:
+      return WorkspaceType.Other;
+  }
+}
+
 function mapWorkspaceInfo(workspace: APIWorkspaceInfo): WorkspaceInfo {
-  const now = new Date().toISOString();
   return {
-    id: workspace.rootPath,
+    id: workspace.id,
     name: workspace.name,
     rootPath: workspace.rootPath,
-    workspaceType: WorkspaceType.Other,
-    languages: [],
-    openedAt: now,
-    lastAccessed: now,
-    description: workspace.type,
-    tags: [],
-    statistics: {
-      totalFiles: workspace.filesCount,
-      totalLines: 0,
-      totalSize: 0,
-      filesByLanguage: {},
-      filesByExtension: {},
-      lastUpdated: now,
-    },
+    workspaceType: mapWorkspaceType(workspace.workspaceType),
+    languages: workspace.languages,
+    openedAt: workspace.openedAt,
+    lastAccessed: workspace.lastAccessed,
+    description: workspace.description ?? undefined,
+    tags: workspace.tags,
+    statistics: workspace.statistics
+      ? {
+          totalFiles: workspace.statistics.totalFiles,
+          totalLines: workspace.statistics.totalLines,
+          totalSize: workspace.statistics.totalSize,
+          filesByLanguage: workspace.statistics.filesByLanguage,
+          filesByExtension: workspace.statistics.filesByExtension,
+          lastUpdated: workspace.statistics.lastUpdated,
+        }
+      : undefined,
   };
 }
 

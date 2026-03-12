@@ -434,11 +434,12 @@ const FlexiblePanel: React.FC<ExtendedFlexiblePanelProps> = memo(({
         const filePath = editorData.filePath || '';
         const fileName = editorData.fileName || content.title;
         const editorLanguage = editorData.language;
+        const editorWorkspacePath = editorData.workspacePath || workspacePath;
         
         return (
           <CodeEditor
             filePath={filePath}
-            workspacePath={workspacePath}
+            workspacePath={editorWorkspacePath}
             fileName={fileName}
             language={editorLanguage}
             readOnly={editorData.readOnly || false}

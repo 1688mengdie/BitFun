@@ -272,7 +272,7 @@ export class RemoteSessionManager {
    * transferring its content.  Used to render file cards before the user
    * confirms a download.
    */
-  async getFileInfo(path: string): Promise<{
+  async getFileInfo(path: string, sessionId?: string): Promise<{
     name: string;
     size: number;
     mimeType: string;
@@ -282,7 +282,7 @@ export class RemoteSessionManager {
       name: string;
       size: number;
       mime_type: string;
-    }>({ cmd: 'get_file_info', path });
+    }>({ cmd: 'get_file_info', path, session_id: sessionId ?? undefined });
     return {
       name: resp.name,
       size: resp.size,
@@ -299,6 +299,7 @@ export class RemoteSessionManager {
    */
   async readFile(
     path: string,
+    sessionId?: string,
     onProgress?: (downloaded: number, total: number) => void,
   ): Promise<{
     name: string;
@@ -325,7 +326,13 @@ export class RemoteSessionManager {
         chunk_size: number;
         total_size: number;
         mime_type: string;
-      }>({ cmd: 'read_file_chunk', path, offset, limit: CHUNK_SIZE });
+      }>({
+        cmd: 'read_file_chunk',
+        path,
+        session_id: sessionId ?? undefined,
+        offset,
+        limit: CHUNK_SIZE,
+      });
 
       chunks.push(resp.chunk_base64);
       fileName = resp.name;
