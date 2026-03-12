@@ -1544,8 +1544,8 @@ const ChatPage: React.FC<ChatPageProps> = ({ sessionMgr, sessionId, sessionName,
 
   /** Fetch metadata for a workspace file before the user confirms the download. */
   const handleGetFileInfo = useCallback(
-    (filePath: string) => sessionMgr.getFileInfo(filePath),
-    [sessionMgr],
+    (filePath: string) => sessionMgr.getFileInfo(filePath, sessionId),
+    [sessionId, sessionMgr],
   );
 
   /** Download a workspace file referenced by a `computer://` link. */
@@ -1554,7 +1554,11 @@ const ChatPage: React.FC<ChatPageProps> = ({ sessionMgr, sessionId, sessionName,
     onProgress?: (downloaded: number, total: number) => void,
   ) => {
     try {
-      const { name, contentBase64, mimeType } = await sessionMgr.readFile(filePath, onProgress);
+      const { name, contentBase64, mimeType } = await sessionMgr.readFile(
+        filePath,
+        sessionId,
+        onProgress,
+      );
       const byteCharacters = atob(contentBase64);
       const byteNumbers = new Uint8Array(byteCharacters.length);
       for (let i = 0; i < byteCharacters.length; i++) {
@@ -1574,7 +1578,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ sessionMgr, sessionId, sessionName,
       const msg = err instanceof Error ? err.message : String(err);
       setError(msg);
     }
-  }, [sessionMgr, setError]);
+  }, [sessionId, sessionMgr, setError]);
 
   useEffect(() => {
     if (!isStreaming) return;
