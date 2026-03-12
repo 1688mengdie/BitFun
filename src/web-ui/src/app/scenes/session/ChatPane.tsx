@@ -57,6 +57,8 @@ const ChatPaneInner: React.FC<ChatPaneProps> = ({
     const { fileTabManager } = await import('@/shared/services/FileTabManager');
     fileTabManager.openFile({
       filePath: absoluteFilePath,
+      fileName,
+      workspacePath,
       jumpToRange: lineRange,
       mode: 'agent'
     });
