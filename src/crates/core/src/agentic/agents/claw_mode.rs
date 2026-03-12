@@ -25,6 +25,7 @@ impl ClawMode {
                 "Skill".to_string(),
                 "Git".to_string(),
                 "TerminalControl".to_string(),
+                "SessionControl".to_string(),
             ],
         }
     }

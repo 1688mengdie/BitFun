@@ -205,97 +205,41 @@ impl ToolPipeline {
         if tool_calls.is_empty() {
             return Ok(vec![]);
         }
-        
+
         info!("Executing tools: count={}", tool_calls.len());
-        
-        // Check should_end_turn tool count, if more than one, mark as error
-        let end_turn_tool_ids: Vec<String> = {
-            let end_turn_tools: Vec<&ToolCall> = tool_calls.iter()
-                .filter(|tc| tc.should_end_turn)
-                .collect();
-            
-            if end_turn_tools.len() > 1 {
-                warn!(
-                    "Multiple should_end_turn tools detected: count={}, tools={:?}",
-                    end_turn_tools.len(),
-                    end_turn_tools.iter().map(|tc| &tc.tool_name).collect::<Vec<_>>()
-                );
-                end_turn_tools.iter().map(|tc| tc.tool_id.clone()).collect()
-            } else {
-                vec![]
-            }
-        };
-        
-        // Separate tools that need to be errors and tools that are normally executed
-        let (error_tool_calls, normal_tool_calls): (Vec<ToolCall>, Vec<ToolCall>) = 
-            tool_calls.into_iter().partition(|tc| end_turn_tool_ids.contains(&tc.tool_id));
-        
-        // Check if all tools that are normally executed are concurrency safe
+
+        // Check if all requested tools are concurrency safe
         let all_concurrency_safe = {
             let registry = self.tool_registry.read().await;
-            normal_tool_calls.iter().all(|tc| {
+            tool_calls.iter().all(|tc| {
                 registry.get_tool(&tc.tool_name)
                     .map(|tool| tool.is_concurrency_safe(Some(&tc.arguments)))
                     .unwrap_or(false) // If the tool does not exist, it is considered unsafe
             })
         };
-        
-        // Generate error results for tools that need to be errors
-        if !error_tool_calls.is_empty() {
-            error!("Multiple should_end_turn tools detected: {:?}", error_tool_calls.iter().map(|tc| tc.tool_name.clone()).collect::<Vec<_>>());
-        }
-        let mut error_results: Vec<ToolExecutionResult> = error_tool_calls.into_iter().map(|tc| {
-            let error_msg = format!("Tool '{}' will end the current dialog turn. Such tools must be called separately.", tc.tool_name);
-            
-            ToolExecutionResult {
-                tool_id: tc.tool_id.clone(),
-                tool_name: tc.tool_name.clone(),
-                result: ModelToolResult {
-                    tool_id: tc.tool_id.clone(),
-                    tool_name: tc.tool_name.clone(),
-                    result: serde_json::json!({
-                        "error": error_msg,
-                        "message": error_msg
-                    }),
-                    result_for_assistant: Some(error_msg),
-                    is_error: true,
-                    duration_ms: Some(0),
-                },
-                execution_time_ms: 0,
-            }
-        }).collect();
-        
-        // If there are no tools that are normally executed, return error results directly
-        if normal_tool_calls.is_empty() {
-            return Ok(error_results);
-        }
-        
-        // Create tasks (only for tools that are normally executed)
+
+        // Create tasks for all tool calls
         let mut tasks = Vec::new();
-        for tool_call in normal_tool_calls {
+        for tool_call in tool_calls {
             let task = ToolTask::new(tool_call, context.clone(), options.clone());
             let tool_id = self.state_manager.create_task(task).await;
             tasks.push(tool_id);
         }
-        
+
         // Execute tasks: only when allow_parallel is true and all tools are concurrency safe
         let should_parallel = options.allow_parallel && all_concurrency_safe;
         if !all_concurrency_safe && options.allow_parallel {
             debug!("Non-concurrency-safe tools detected, switching to sequential execution");
         }
-        
-        let normal_results = if should_parallel {
+
+        let results = if should_parallel {
             self.execute_parallel(tasks).await
         } else {
             self.execute_sequential(tasks).await
         };
-        
-        match normal_results {
-            Ok(mut results) => {
-                // Merge error results and normal execution results
-                error_results.append(&mut results);
-                Ok(error_results)
-            }
+
+        match results {
+            Ok(results) => Ok(results),
             Err(e) => {
                 error!("Tool execution failed: error={}", e);
                 Err(e)

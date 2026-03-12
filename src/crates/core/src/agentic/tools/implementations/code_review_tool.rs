@@ -201,10 +201,6 @@ impl Tool for CodeReviewTool {
         true
     }
 
-    fn should_end_turn(&self) -> bool {
-        false
-    }
-
     fn is_concurrency_safe(&self, _input: Option<&Value>) -> bool {
         true
     }

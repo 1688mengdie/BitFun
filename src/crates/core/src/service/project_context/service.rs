@@ -281,6 +281,7 @@ impl ProjectContextService {
                 "GenerateDoc".to_string(),
                 prompt,
                 subagent_parent_info.clone(),
+                Some(workspace.to_string_lossy().into_owned()),
                 None,
                 Some(&cancel_token),
             )

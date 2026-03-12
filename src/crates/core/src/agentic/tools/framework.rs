@@ -177,11 +177,6 @@ pub trait Tool: Send + Sync {
         false
     }
 
-    /// Whether to end conversation turn after calling (CreatePlan)
-    fn should_end_turn(&self) -> bool {
-        false
-    }
-
     /// Validate input
     async fn validate_input(
         &self,

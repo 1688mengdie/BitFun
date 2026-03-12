@@ -23,14 +23,16 @@ const pendingImageAnalysisTurns = new Map<string, string>();
 import { 
   debouncedSaveDialogTurn, 
   immediateSaveDialogTurn, 
-  saveDialogTurnToDisk 
+  saveDialogTurnToDisk,
+  cleanupSaveState,
 } from './PersistenceModule';
 import { 
   processNormalTextChunkInternal, 
   processThinkingChunkInternal,
   processToolParamsPartialInternal,
   processToolProgressInternal,
-  completeActiveTextItems
+  completeActiveTextItems,
+  cleanupSessionBuffers
 } from './TextChunkModule';
 import { 
   processToolEvent, 
@@ -145,7 +147,7 @@ export async function initializeEventListeners(
       handleSessionCreated(context, event);
     },
     onSessionDeleted: (event) => {
-      handleSessionDeleted(event);
+      handleSessionDeleted(context, event);
     },
     onSessionStateChanged: (event) => {
       handleSessionStateChanged(event);
@@ -242,7 +244,7 @@ function handleSessionTitleGenerated(event: any): void {
 /**
  * Handle session deleted event (backend already deleted; only remove from store)
  */
-function handleSessionDeleted(event: any): void {
+function handleSessionDeleted(context: FlowChatContext, event: any): void {
   const { sessionId } = event;
   
   const store = FlowChatStore.getInstance();
@@ -250,7 +252,12 @@ function handleSessionDeleted(event: any): void {
   if (!existing) return;
 
   log.info('Remote session deleted', { sessionId });
-  store.clearSession(sessionId);
+  pendingImageAnalysisTurns.delete(sessionId);
+  stateMachineManager.delete(sessionId);
+  context.processingManager.clearSessionStatus(sessionId);
+  cleanupSaveState(context, sessionId);
+  cleanupSessionBuffers(context, sessionId);
+  store.removeSession(sessionId);
 }
 
 /**

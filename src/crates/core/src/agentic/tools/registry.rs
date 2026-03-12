@@ -90,6 +90,7 @@ impl ToolRegistry {
         self.register_tool(Arc::new(DeleteFileTool::new()));
         self.register_tool(Arc::new(BashTool::new()));
         self.register_tool(Arc::new(TerminalControlTool::new()));
+        self.register_tool(Arc::new(SessionControlTool::new()));
 
         // TodoWrite tool
         self.register_tool(Arc::new(TodoWriteTool::new()));
@@ -256,12 +257,3 @@ pub async fn get_all_registered_tool_names() -> Vec<String> {
         .collect()
 }
 
-/// Get all should_end_turn tool names
-pub async fn get_all_end_turn_tool_names() -> Vec<String> {
-    let all_tools = get_all_registered_tools().await;
-    all_tools
-        .into_iter()
-        .filter(|tool| tool.should_end_turn())
-        .map(|tool| tool.name().to_string())
-        .collect()
-}

@@ -434,27 +434,6 @@ impl RoundExecutor {
             tool_results.len()
         );
 
-        // Detect tool calls that should end the dialog turn (requires should_end_turn and execution result has no error)
-        // When there is only 1 should_end_turn tool → Execute normally, end turn on success
-        // When there are multiple should_end_turn tools → These tools are marked as errors in pipeline → Because is_error=true, won't trigger end turn → Model can re-call correctly in next round after receiving error message
-        let has_end_turn_tool = {
-            stream_result.tool_calls.iter().any(|tool_call| {
-                // Check if tool should_end_turn
-                if !tool_call.should_end_turn {
-                    return false;
-                }
-
-                // Check if this tool's execution result has no error
-                let result_not_error = tool_results
-                    .iter()
-                    .find(|r| r.tool_id == tool_call.tool_id)
-                    .map(|r| !r.is_error)
-                    .unwrap_or(false);
-
-                result_not_error
-            })
-        };
-
         // Create tool result messages (also need to set turn_id and round_id)
         let dialog_turn_id = context.dialog_turn_id.clone();
         let round_id_clone = round_id.clone();
@@ -504,13 +483,12 @@ impl RoundExecutor {
             );
         }
 
-        let has_more_rounds = !has_end_turn_tool && !tool_result_messages.is_empty();
+        let has_more_rounds = !tool_result_messages.is_empty();
 
         debug!(
-            "Returning RoundResult: has_more_rounds={}, tool_result_messages={}, has_end_turn_tool={}",
+            "Returning RoundResult: has_more_rounds={}, tool_result_messages={}",
             has_more_rounds,
-            tool_result_messages.len(),
-            has_end_turn_tool
+            tool_result_messages.len()
         );
 
         // Note: Do not cleanup cancellation token here, as there may be subsequent model rounds

@@ -291,7 +291,11 @@ export class FlowChatStore {
     } catch (error) {
       log.error('Failed to delete session on backend', { sessionId, error });
     }
-    
+
+    this.removeSession(sessionId);
+  }
+
+  public removeSession(sessionId: string): void {
     this.setState(prev => {
       const newSessions = new Map(prev.sessions);
       newSessions.delete(sessionId);
