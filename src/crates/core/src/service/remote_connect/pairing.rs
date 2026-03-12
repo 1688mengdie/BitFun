@@ -50,6 +50,10 @@ pub struct PairingResponse {
     pub challenge_echo: String,
     pub device_id: String,
     pub device_name: String,
+    #[serde(default)]
+    pub mobile_install_id: Option<String>,
+    #[serde(default)]
+    pub user_id: Option<String>,
 }
 
 /// Manages the pairing state machine.
@@ -162,11 +166,15 @@ impl PairingProtocol {
     pub fn answer_challenge(
         challenge: &PairingChallenge,
         device_identity: &DeviceIdentity,
+        mobile_install_id: Option<String>,
+        user_id: Option<String>,
     ) -> PairingResponse {
         PairingResponse {
             challenge_echo: challenge.challenge.clone(),
             device_id: device_identity.device_id.clone(),
             device_name: device_identity.device_name.clone(),
+            mobile_install_id,
+            user_id,
         }
     }
 
@@ -249,7 +257,12 @@ mod tests {
         assert_eq!(protocol.state().await, PairingState::Verifying);
 
         // Mobile answers the challenge
-        let response = PairingProtocol::answer_challenge(&challenge, &mobile_device);
+        let response = PairingProtocol::answer_challenge(
+            &challenge,
+            &mobile_device,
+            Some("install-id-1".into()),
+            Some("alice".into()),
+        );
 
         // Step 3: Desktop verifies
         let ok = protocol.verify_response(&response).await.unwrap();

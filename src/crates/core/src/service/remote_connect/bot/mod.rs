@@ -39,10 +39,22 @@ pub struct SavedBotConnection {
     pub connected_at: i64,
 }
 
+/// Persisted remote-connect form values shown in the desktop dialog.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RemoteConnectFormState {
+    pub custom_server_url: String,
+    pub telegram_bot_token: String,
+    pub feishu_app_id: String,
+    pub feishu_app_secret: String,
+}
+
 /// All persisted bot connections (one per bot type at most).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct BotPersistenceData {
+    #[serde(default)]
     pub connections: Vec<SavedBotConnection>,
+    #[serde(default)]
+    pub form_state: RemoteConnectFormState,
 }
 
 impl BotPersistenceData {
@@ -508,10 +520,15 @@ fn generate_download_token(chat_id: &str) -> String {
     format!("{:08x}", ns ^ salt)
 }
 
-const BOT_PERSISTENCE_FILENAME: &str = "bot_connections.json";
+const REMOTE_CONNECT_PERSISTENCE_FILENAME: &str = "remote_connect_persistence.json";
+const LEGACY_BOT_PERSISTENCE_FILENAME: &str = "bot_connections.json";
 
 pub fn bot_persistence_path() -> Option<std::path::PathBuf> {
-    dirs::home_dir().map(|home| home.join(".bitfun").join(BOT_PERSISTENCE_FILENAME))
+    dirs::home_dir().map(|home| home.join(".bitfun").join(REMOTE_CONNECT_PERSISTENCE_FILENAME))
+}
+
+fn legacy_bot_persistence_path() -> Option<std::path::PathBuf> {
+    dirs::home_dir().map(|home| home.join(".bitfun").join(LEGACY_BOT_PERSISTENCE_FILENAME))
 }
 
 pub fn load_bot_persistence() -> BotPersistenceData {
@@ -520,7 +537,15 @@ pub fn load_bot_persistence() -> BotPersistenceData {
     };
     match std::fs::read_to_string(&path) {
         Ok(data) => serde_json::from_str(&data).unwrap_or_default(),
-        Err(_) => BotPersistenceData::default(),
+        Err(_) => {
+            let Some(legacy_path) = legacy_bot_persistence_path() else {
+                return BotPersistenceData::default();
+            };
+            match std::fs::read_to_string(&legacy_path) {
+                Ok(data) => serde_json::from_str(&data).unwrap_or_default(),
+                Err(_) => BotPersistenceData::default(),
+            }
+        }
     }
 }
 

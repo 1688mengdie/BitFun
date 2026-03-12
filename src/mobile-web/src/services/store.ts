@@ -6,7 +6,7 @@ import type {
   ActiveTurnSnapshot,
 } from './RemoteSessionManager';
 
-export type ConnectionStatus = 'pairing' | 'paired' | 'error';
+export type ConnectionStatus = 'idle' | 'pairing' | 'paired' | 'error';
 
 interface MobileStore {
   connectionStatus: ConnectionStatus;
@@ -14,6 +14,9 @@ interface MobileStore {
 
   currentWorkspace: WorkspaceInfo | null;
   setCurrentWorkspace: (w: WorkspaceInfo | null) => void;
+
+  authenticatedUserId: string | null;
+  setAuthenticatedUserId: (userId: string | null) => void;
 
   sessions: SessionInfo[];
   setSessions: (s: SessionInfo[]) => void;
@@ -36,11 +39,14 @@ interface MobileStore {
 }
 
 export const useMobileStore = create<MobileStore>((set, get) => ({
-  connectionStatus: 'pairing',
+  connectionStatus: 'idle',
   setConnectionStatus: (connectionStatus) => set({ connectionStatus }),
 
   currentWorkspace: null,
   setCurrentWorkspace: (currentWorkspace) => set({ currentWorkspace }),
+
+  authenticatedUserId: null,
+  setAuthenticatedUserId: (authenticatedUserId) => set({ authenticatedUserId }),
 
   sessions: [],
   setSessions: (sessions) => set({ sessions }),

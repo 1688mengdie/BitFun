@@ -250,6 +250,8 @@ pub enum RemoteResponse {
         git_branch: Option<String>,
         sessions: Vec<SessionInfo>,
         has_more_sessions: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        authenticated_user_id: Option<String>,
     },
     /// Incremental poll response.
     SessionPoll {
@@ -1695,7 +1697,10 @@ impl RemoteServer {
         get_or_init_global_dispatcher().ensure_tracker(session_id)
     }
 
-    pub async fn generate_initial_sync(&self) -> RemoteResponse {
+    pub async fn generate_initial_sync(
+        &self,
+        authenticated_user_id: Option<String>,
+    ) -> RemoteResponse {
         use crate::agentic::persistence::PersistenceManager;
         use crate::infrastructure::PathManager;
 
@@ -1757,6 +1762,7 @@ impl RemoteServer {
             git_branch,
             sessions,
             has_more_sessions: has_more,
+            authenticated_user_id,
         }
     }
 
