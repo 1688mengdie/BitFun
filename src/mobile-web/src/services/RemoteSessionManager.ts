@@ -97,6 +97,7 @@ export interface InitialSyncData {
   git_branch?: string;
   sessions: SessionInfo[];
   has_more_sessions: boolean;
+  authenticated_user_id?: string;
 }
 
 export class RemoteSessionManager {

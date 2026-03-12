@@ -1,9 +1,14 @@
 //! Unified process management to avoid Windows child process leaks
 
-use log::warn;
 use std::process::Command;
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::LazyLock;
 use tokio::process::Command as TokioCommand;
+
+#[cfg(windows)]
+use log::warn;
+
+#[cfg(windows)]
+use std::sync::{Arc, Mutex};
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -79,25 +84,31 @@ impl ProcessManager {
 
 /// Create synchronous Command (Windows automatically adds CREATE_NO_WINDOW)
 pub fn create_command<S: AsRef<std::ffi::OsStr>>(program: S) -> Command {
-    let mut cmd = Command::new(program.as_ref());
+    let cmd = Command::new(program.as_ref());
 
     #[cfg(windows)]
     {
+        let mut cmd = cmd;
         cmd.creation_flags(CREATE_NO_WINDOW);
+        return cmd;
     }
 
+    #[cfg(not(windows))]
     cmd
 }
 
 /// Create Tokio async Command (Windows automatically adds CREATE_NO_WINDOW)
 pub fn create_tokio_command<S: AsRef<std::ffi::OsStr>>(program: S) -> TokioCommand {
-    let mut cmd = TokioCommand::new(program.as_ref());
+    let cmd = TokioCommand::new(program.as_ref());
 
     #[cfg(windows)]
     {
+        let mut cmd = cmd;
         cmd.creation_flags(CREATE_NO_WINDOW);
+        return cmd;
     }
 
+    #[cfg(not(windows))]
     cmd
 }
 

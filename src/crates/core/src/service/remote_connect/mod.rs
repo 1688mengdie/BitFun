@@ -60,8 +60,8 @@ impl Default for RemoteConnectConfig {
     fn default() -> Self {
         Self {
             lan_port: 9700,
-            bitfun_server_url: "http://remote.openbitfun.com/relay".to_string(),
-            web_app_url: "http://remote.openbitfun.com/relay".to_string(),
+            bitfun_server_url: "https://remote.openbitfun.com/relay".to_string(),
+            web_app_url: "https://remote.openbitfun.com/relay".to_string(),
             custom_server_url: None,
             bot_feishu: None,
             bot_telegram: None,
@@ -93,6 +93,12 @@ impl BotHandle {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct TrustedMobileIdentity {
+    mobile_install_id: String,
+    user_id: String,
+}
+
 /// Unified Remote Connect service that orchestrates all connection methods.
 pub struct RemoteConnectService {
     config: RemoteConnectConfig,
@@ -112,6 +118,8 @@ pub struct RemoteConnectService {
     /// Independent bot connection state — not tied to PairingProtocol.
     /// Stores the peer description (e.g. "Telegram(7096812005)") when a bot is active.
     bot_connected_info: Arc<RwLock<Option<String>>>,
+    /// Trusted mobile identity for the current relay lifecycle only.
+    trusted_mobile_identity: Arc<RwLock<Option<TrustedMobileIdentity>>>,
 }
 
 impl RemoteConnectService {
@@ -133,11 +141,76 @@ impl RemoteConnectService {
             telegram_bot: Arc::new(RwLock::new(None)),
             feishu_bot: Arc::new(RwLock::new(None)),
             bot_connected_info: Arc::new(RwLock::new(None)),
+            trusted_mobile_identity: Arc::new(RwLock::new(None)),
         })
     }
 
     pub fn device_identity(&self) -> &DeviceIdentity {
         &self.device_identity
+    }
+
+    async fn validate_mobile_identity(
+        trusted_mobile_identity: &Arc<RwLock<Option<TrustedMobileIdentity>>>,
+        response: &pairing::PairingResponse,
+    ) -> std::result::Result<TrustedMobileIdentity, String> {
+        let mobile_install_id = response
+            .mobile_install_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| "Missing mobile installation ID".to_string())?;
+        let user_id = response
+            .user_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| "Missing user ID".to_string())?;
+
+        let submitted = TrustedMobileIdentity {
+            mobile_install_id: mobile_install_id.to_string(),
+            user_id: user_id.to_string(),
+        };
+
+        let trusted = trusted_mobile_identity.read().await.clone();
+        match trusted {
+            Some(existing) if existing.mobile_install_id == submitted.mobile_install_id => {
+                if existing.user_id != submitted.user_id {
+                    Err("This mobile device must continue using the previously confirmed user ID".to_string())
+                } else {
+                    Ok(submitted)
+                }
+            }
+            Some(existing) if existing.user_id != submitted.user_id => Err(
+                "This remote URL is already protected. Enter the previously confirmed user ID to continue.".to_string(),
+            ),
+            _ => Ok(submitted),
+        }
+    }
+
+    async fn persist_mobile_identity(
+        trusted_mobile_identity: &Arc<RwLock<Option<TrustedMobileIdentity>>>,
+        identity: TrustedMobileIdentity,
+    ) {
+        *trusted_mobile_identity.write().await = Some(identity);
+    }
+
+    async fn send_pairing_error_response(
+        relay_arc: &Arc<RwLock<Option<RelayClient>>>,
+        correlation_id: &str,
+        shared_secret: &[u8; 32],
+        message: String,
+    ) {
+        let server = RemoteServer::new(*shared_secret);
+        if let Ok((enc, nonce)) = server.encrypt_response(
+            &remote_server::RemoteResponse::Error { message },
+            None,
+        ) {
+            if let Some(ref client) = *relay_arc.read().await {
+                let _ = client
+                    .send_relay_response(correlation_id, &enc, &nonce)
+                    .await;
+            }
+        }
     }
 
     pub fn update_bot_config(&mut self, bot_config: bot::BotConfig) {
@@ -312,6 +385,7 @@ impl RemoteConnectService {
         let pairing_arc = self.pairing.clone();
         let relay_arc = self.relay_client.clone();
         let server_arc = self.remote_server.clone();
+        let trusted_mobile_identity_arc = self.trusted_mobile_identity.clone();
         tokio::spawn(async move {
             while let Some(event) = event_rx.recv().await {
                 match event {
@@ -322,10 +396,6 @@ impl RemoteConnectService {
                         device_name: _,
                     } => {
                         info!("PairRequest from {device_id}");
-                        // Allow re-pairing: clear existing server so the
-                        // subsequent challenge-echo enters the pairing
-                        // verification branch instead of the command branch.
-                        *server_arc.write().await = None;
                         let mut p = pairing_arc.write().await;
                         match p.on_peer_joined(&public_key).await {
                             Ok(challenge) => {
@@ -355,13 +425,13 @@ impl RemoteConnectService {
                         encrypted_data,
                         nonce,
                     } => {
-                        let is_paired = server_arc.read().await.is_some();
-
-                        if is_paired {
+                        let mut handled_as_active_command = false;
+                        {
                             let server_guard = server_arc.read().await;
                             if let Some(ref server) = *server_guard {
                                 match server.decrypt_command(&encrypted_data, &nonce) {
                                     Ok((cmd, request_id)) => {
+                                        handled_as_active_command = true;
                                         debug!("Remote command: {cmd:?}");
                                         let response = server.dispatch(&cmd).await;
                                         match server
@@ -385,56 +455,108 @@ impl RemoteConnectService {
                                             }
                                         }
                                     }
-                                    Err(e) => debug!("Ignoring undecryptable command (likely stale mobile session): {e}"),
+                                    Err(e) => {
+                                        debug!(
+                                            "Active session could not decrypt command, falling back to pairing verification: {e}"
+                                        );
+                                    }
                                 }
                             }
-                        } else {
-                            let p = pairing_arc.read().await;
-                            if let Some(secret) = p.shared_secret() {
-                                if let Ok(json) = encryption::decrypt_from_base64(
-                                    secret,
-                                    &encrypted_data,
-                                    &nonce,
-                                ) {
-                                    if let Ok(response) =
-                                        serde_json::from_str::<pairing::PairingResponse>(&json)
-                                    {
-                                        drop(p);
-                                        let mut pw = pairing_arc.write().await;
-                                        match pw.verify_response(&response).await {
-                                            Ok(true) => {
-                                                info!("Pairing verified successfully");
-                                                if let Some(s) = pw.shared_secret() {
-                                                    let server = RemoteServer::new(*s);
+                        }
+                        if handled_as_active_command {
+                            continue;
+                        }
 
-                                                    let initial_sync =
-                                                        server.generate_initial_sync().await;
-                                                    if let Ok((enc, resp_nonce)) = server
-                                                        .encrypt_response(&initial_sync, None)
+                        let p = pairing_arc.read().await;
+                        if let Some(secret) = p.shared_secret() {
+                            let shared_secret = *secret;
+                            if let Ok(json) = encryption::decrypt_from_base64(
+                                &shared_secret,
+                                &encrypted_data,
+                                &nonce,
+                            ) {
+                                if let Ok(response) =
+                                    serde_json::from_str::<pairing::PairingResponse>(&json)
+                                {
+                                    let submitted_identity =
+                                        match RemoteConnectService::validate_mobile_identity(
+                                            &trusted_mobile_identity_arc,
+                                            &response,
+                                        )
+                                        .await
+                                        {
+                                            Ok(identity) => identity,
+                                            Err(message) => {
+                                                drop(p);
+                                                RemoteConnectService::send_pairing_error_response(
+                                                    &relay_arc,
+                                                    &correlation_id,
+                                                    &shared_secret,
+                                                    message,
+                                                )
+                                                .await;
+                                                continue;
+                                            }
+                                        };
+                                    drop(p);
+                                    let mut pw = pairing_arc.write().await;
+                                    match pw.verify_response(&response).await {
+                                        Ok(true) => {
+                                            info!("Pairing verified successfully");
+                                            RemoteConnectService::persist_mobile_identity(
+                                                &trusted_mobile_identity_arc,
+                                                submitted_identity.clone(),
+                                            )
+                                            .await;
+                                            if let Some(s) = pw.shared_secret() {
+                                                let server = RemoteServer::new(*s);
+
+                                                let initial_sync = server
+                                                    .generate_initial_sync(Some(
+                                                        submitted_identity.user_id.clone(),
+                                                    ))
+                                                    .await;
+                                                if let Ok((enc, resp_nonce)) =
+                                                    server.encrypt_response(&initial_sync, None)
+                                                {
+                                                    if let Some(ref client) =
+                                                        *relay_arc.read().await
                                                     {
-                                                        if let Some(ref client) =
-                                                            *relay_arc.read().await
-                                                        {
-                                                            info!("Sending initial sync to mobile after pairing");
-                                                            let _ = client
-                                                                .send_relay_response(
-                                                                    &correlation_id,
-                                                                    &enc,
-                                                                    &resp_nonce,
-                                                                )
-                                                                .await;
-                                                        }
+                                                        info!(
+                                                            "Sending initial sync to mobile after pairing"
+                                                        );
+                                                        let _ = client
+                                                            .send_relay_response(
+                                                                &correlation_id,
+                                                                &enc,
+                                                                &resp_nonce,
+                                                            )
+                                                            .await;
                                                     }
-
-                                                    *server_arc.write().await = Some(server);
                                                 }
+
+                                                *server_arc.write().await = Some(server);
                                             }
-                                            Ok(false) => {
-                                                error!("Pairing verification failed");
-                                            }
-                                            Err(e) => {
-                                                error!("Pairing verification error: {e}");
-                                            }
+                                        }
+                                        Ok(false) => {
+                                            error!("Pairing verification failed");
+                                            RemoteConnectService::send_pairing_error_response(
+                                                &relay_arc,
+                                                &correlation_id,
+                                                &shared_secret,
+                                                "Pairing verification failed".to_string(),
+                                            )
+                                            .await;
+                                        }
+                                        Err(e) => {
+                                            error!("Pairing verification error: {e}");
+                                            RemoteConnectService::send_pairing_error_response(
+                                                &relay_arc,
+                                                &correlation_id,
+                                                &shared_secret,
+                                                format!("Pairing verification error: {e}"),
+                                            )
+                                            .await;
                                         }
                                     }
                                 }
@@ -710,6 +832,7 @@ impl RemoteConnectService {
         *self.embedded_relay.write().await = None;
 
         self.pairing.write().await.reset().await;
+        *self.trusted_mobile_identity.write().await = None;
         info!("Relay connections stopped (bots unaffected)");
     }
 
@@ -769,6 +892,14 @@ impl RemoteConnectService {
     pub async fn bot_connected_info(&self) -> Option<String> {
         self.bot_connected_info.read().await.clone()
     }
+
+    pub async fn trusted_mobile_user_id(&self) -> Option<String> {
+        self.trusted_mobile_identity
+            .read()
+            .await
+            .as_ref()
+            .map(|identity| identity.user_id.clone())
+    }
 }
 
 // ── Upload mobile-web to relay server ──────────────────────────────
@@ -787,6 +918,8 @@ struct CollectedFile {
     content: Vec<u8>,
     hash: String,
 }
+
+const MAX_UPLOAD_BATCH_BASE64_BYTES: usize = 256 * 1024;
 
 async fn upload_mobile_web(relay_url: &str, room_id: &str, web_dir: &str) -> Result<()> {
     let base = std::path::Path::new(web_dir);
@@ -843,7 +976,6 @@ async fn upload_mobile_web(relay_url: &str, room_id: &str, web_dir: &str) -> Res
 
             let existing = body["existing_count"].as_u64().unwrap_or(0);
             let total = body["total_count"].as_u64().unwrap_or(0);
-
             if needed.is_empty() {
                 info!(
                     "All {total} files already exist on relay server, no upload needed"
@@ -888,23 +1020,24 @@ async fn upload_needed_files(
     let needed_set: std::collections::HashSet<&str> =
         needed.iter().map(|s| s.as_str()).collect();
 
-    let mut files_payload: HashMap<String, serde_json::Value> = HashMap::new();
+    let mut files_payload: Vec<(String, serde_json::Value, usize)> = Vec::new();
     for f in all_files {
         if needed_set.contains(f.rel_path.as_str()) {
-            files_payload.insert(
+            let encoded = B64.encode(&f.content);
+            let encoded_len = encoded.len();
+            files_payload.push((
                 f.rel_path.clone(),
                 serde_json::json!({
-                    "content": B64.encode(&f.content),
+                    "content": encoded,
                     "hash": f.hash,
                 }),
-            );
+                encoded_len,
+            ));
         }
     }
 
     let url = format!("{relay_base}/api/rooms/{room_id}/upload-web-files");
-    let total_b64_bytes: usize = files_payload.values().map(|v| {
-        v["content"].as_str().map_or(0, |s| s.len())
-    }).sum();
+    let total_b64_bytes: usize = files_payload.iter().map(|(_, _, len)| *len).sum();
 
     info!(
         "Uploading {} needed files ({} bytes base64) to {url}",
@@ -912,20 +1045,40 @@ async fn upload_needed_files(
         total_b64_bytes
     );
 
-    let resp = client
-        .post(&url)
-        .json(&serde_json::json!({ "files": files_payload }))
-        .timeout(std::time::Duration::from_secs(30))
-        .send()
-        .await
-        .map_err(|e| anyhow::anyhow!("upload-web-files: {e}"))?;
+    let mut current_batch: HashMap<String, serde_json::Value> = HashMap::new();
+    let mut current_batch_b64_bytes = 0usize;
+    let mut batch_index = 0usize;
+    for (path, entry, entry_len) in files_payload {
+        let should_flush = !current_batch.is_empty()
+            && current_batch_b64_bytes + entry_len > MAX_UPLOAD_BATCH_BASE64_BYTES;
+        if should_flush {
+            upload_web_files_batch(
+                client,
+                &url,
+                room_id,
+                batch_index,
+                &current_batch,
+                current_batch_b64_bytes,
+            )
+            .await?;
+            batch_index += 1;
+            current_batch = HashMap::new();
+            current_batch_b64_bytes = 0;
+        }
+        current_batch.insert(path, entry);
+        current_batch_b64_bytes += entry_len;
+    }
 
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        return Err(anyhow::anyhow!(
-            "upload-web-files failed: HTTP {status} — {body}"
-        ));
+    if !current_batch.is_empty() {
+        upload_web_files_batch(
+            client,
+            &url,
+            room_id,
+            batch_index,
+            &current_batch,
+            current_batch_b64_bytes,
+        )
+        .await?;
     }
 
     Ok(())
@@ -941,9 +1094,11 @@ async fn upload_all_files(
     use base64::{engine::general_purpose::STANDARD as B64, Engine};
     use std::collections::HashMap;
 
-    let mut files: HashMap<String, String> = HashMap::new();
+    let mut files: Vec<(String, String, usize)> = Vec::new();
     for f in all_files {
-        files.insert(f.rel_path.clone(), B64.encode(&f.content));
+        let encoded = B64.encode(&f.content);
+        let encoded_len = encoded.len();
+        files.push((f.rel_path.clone(), encoded, encoded_len));
     }
 
     let url = format!("{relay_base}/api/rooms/{room_id}/upload-web");
@@ -951,25 +1106,97 @@ async fn upload_all_files(
     info!(
         "Full upload: {} files ({} bytes base64) to {url}",
         files.len(),
-        files.values().map(|v| v.len()).sum::<usize>()
+        files.iter().map(|(_, _, len)| *len).sum::<usize>()
     );
 
+    let mut current_batch: HashMap<String, String> = HashMap::new();
+    let mut current_batch_b64_bytes = 0usize;
+    let mut batch_index = 0usize;
+    for (path, encoded, encoded_len) in files {
+        let should_flush = !current_batch.is_empty()
+            && current_batch_b64_bytes + encoded_len > MAX_UPLOAD_BATCH_BASE64_BYTES;
+        if should_flush {
+            upload_web_legacy_batch(
+                client,
+                &url,
+                room_id,
+                batch_index,
+                &current_batch,
+                current_batch_b64_bytes,
+            )
+            .await?;
+            batch_index += 1;
+            current_batch = HashMap::new();
+            current_batch_b64_bytes = 0;
+        }
+        current_batch.insert(path, encoded);
+        current_batch_b64_bytes += encoded_len;
+    }
+
+    if !current_batch.is_empty() {
+        upload_web_legacy_batch(
+            client,
+            &url,
+            room_id,
+            batch_index,
+            &current_batch,
+            current_batch_b64_bytes,
+        )
+        .await?;
+    }
+
+    Ok(())
+}
+
+async fn upload_web_files_batch(
+    client: &reqwest::Client,
+    url: &str,
+    _room_id: &str,
+    batch_index: usize,
+    files_payload: &std::collections::HashMap<String, serde_json::Value>,
+    _total_b64_bytes: usize,
+) -> Result<()> {
     let resp = client
-        .post(&url)
-        .json(&serde_json::json!({ "files": files }))
+        .post(url)
+        .json(&serde_json::json!({ "files": files_payload }))
         .timeout(std::time::Duration::from_secs(30))
         .send()
         .await
-        .map_err(|e| anyhow::anyhow!("upload mobile-web: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("upload-web-files batch {batch_index}: {e}"))?;
 
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
         return Err(anyhow::anyhow!(
-            "upload mobile-web failed: HTTP {status} — {body}"
+            "upload-web-files batch {batch_index} failed: HTTP {status} — {body}"
         ));
     }
+    Ok(())
+}
 
+async fn upload_web_legacy_batch(
+    client: &reqwest::Client,
+    url: &str,
+    _room_id: &str,
+    batch_index: usize,
+    files_payload: &std::collections::HashMap<String, String>,
+    _total_b64_bytes: usize,
+) -> Result<()> {
+    let resp = client
+        .post(url)
+        .json(&serde_json::json!({ "files": files_payload }))
+        .timeout(std::time::Duration::from_secs(30))
+        .send()
+        .await
+        .map_err(|e| anyhow::anyhow!("upload mobile-web batch {batch_index}: {e}"))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(anyhow::anyhow!(
+            "upload mobile-web batch {batch_index} failed: HTTP {status} — {body}"
+        ));
+    }
     Ok(())
 }
 

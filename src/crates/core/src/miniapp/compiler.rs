@@ -162,7 +162,6 @@ fn inject_into_head(html: &str, content: &str) -> BitFunResult<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::miniapp::types::MiniAppSource;
 
     #[test]
     fn test_inject_into_head() {

@@ -83,7 +83,15 @@ const ThemeToggleIcon: React.FC<{ isDark: boolean }> = ({ isDark }) => (
 );
 
 const SessionListPage: React.FC<SessionListPageProps> = ({ sessionMgr, onSelectSession, onOpenWorkspace }) => {
-  const { sessions, setSessions, appendSessions, setError, currentWorkspace, setCurrentWorkspace } = useMobileStore();
+  const {
+    sessions,
+    setSessions,
+    appendSessions,
+    setError,
+    currentWorkspace,
+    setCurrentWorkspace,
+    authenticatedUserId,
+  } = useMobileStore();
   const { isDark, toggleTheme } = useTheme();
   const [creating, setCreating] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -254,6 +262,13 @@ const SessionListPage: React.FC<SessionListPageProps> = ({ sessionMgr, onSelectS
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/></svg>
         </span>
       </div>
+
+      {authenticatedUserId && (
+        <div className="session-list__identity-bar">
+          <span className="session-list__identity-label">User ID</span>
+          <span className="session-list__identity-value">{authenticatedUserId}</span>
+        </div>
+      )}
 
       <div
         className="session-list__items"

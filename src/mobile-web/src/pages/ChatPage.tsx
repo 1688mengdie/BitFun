@@ -947,15 +947,43 @@ const ToolCard: React.FC<{
 
 const READ_LIKE_TOOLS = new Set(['Read', 'Grep', 'Glob', 'SemanticSearch']);
 
+function getToolSummaryLabel(toolName: string): string {
+  const toolKey = toolName.toLowerCase().replace(/[\s-]/g, '_');
+  return TOOL_TYPE_MAP[toolKey] || TOOL_TYPE_MAP[toolName] || toolName;
+}
+
+function buildGroupedToolSummary(tools: RemoteToolStatus[]): string {
+  const counts = new Map<string, { label: string; count: number }>();
+  const order: string[] = [];
+
+  for (const tool of tools) {
+    const label = getToolSummaryLabel(tool.name);
+    const key = label.toLowerCase();
+    const existing = counts.get(key);
+    if (existing) {
+      existing.count += 1;
+      continue;
+    }
+    counts.set(key, { label, count: 1 });
+    order.push(key);
+  }
+
+  return order
+    .map((key) => {
+      const entry = counts.get(key)!;
+      return `${entry.label} ${entry.count}`;
+    })
+    .join(', ');
+}
+
 const ReadFilesToggle: React.FC<{ tools: RemoteToolStatus[] }> = ({ tools }) => {
   const [open, setOpen] = useState(false);
   if (tools.length === 0) return null;
 
   const doneCount = tools.filter(t => t.status === 'completed').length;
   const allDone = doneCount === tools.length;
-  const label = allDone
-    ? `Read ${tools.length} file${tools.length === 1 ? '' : 's'}`
-    : `Reading ${tools.length} file${tools.length === 1 ? '' : 's'} (${doneCount} done)`;
+  const summary = buildGroupedToolSummary(tools);
+  const label = allDone ? summary : `${summary} (${doneCount} done)`;
 
   return (
     <div className={`chat-thinking ${allDone ? '' : 'chat-thinking--streaming'}`}>

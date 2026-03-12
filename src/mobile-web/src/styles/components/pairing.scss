@@ -54,6 +54,51 @@
   text-align: center;
 }
 
+.pairing-page__form {
+  width: min(100%, 320px);
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-gap-3);
+}
+
+.pairing-page__field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pairing-page__field-label {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.pairing-page__input {
+  width: 100%;
+  min-height: 44px;
+  padding: 0 14px;
+  border: 1px solid var(--border-base);
+  border-radius: var(--size-radius-base);
+  background: var(--color-bg-elevated);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-base);
+  outline: none;
+
+  &:focus {
+    border-color: var(--color-accent-400);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent-400) 18%, transparent);
+  }
+}
+
+.pairing-page__note {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  line-height: 1.5;
+  color: var(--color-text-muted);
+  text-align: left;
+}
+
 .pairing-page__spinner-wrap {
   height: 32px;
   display: flex;
@@ -85,5 +130,10 @@
 
   &:active {
     background: var(--btn-hover-bg);
+  }
+
+  &:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
   }
 }
