@@ -146,13 +146,14 @@ export function useInstaller(): UseInstallerReturn {
 
   const install = useCallback(async () => {
     setError(null);
-    setIsInstalling(true);
-    setInstallationCompleted(false);
-    setCanConfirmProgress(false);
-    setStep('progress');
-    setProgress({ step: 'prepare', percent: 0, message: '' });
 
     if (MOCK_INSTALL_FOR_DEBUG) {
+      setIsInstalling(true);
+      setInstallationCompleted(false);
+      setCanConfirmProgress(false);
+      setStep('progress');
+      setProgress({ step: 'prepare', percent: 0, message: '' });
+
       const durationMs = 5000;
       const startedAt = Date.now();
 
@@ -184,6 +185,12 @@ export function useInstaller(): UseInstallerReturn {
     }
 
     try {
+      await invoke<boolean>('validate_install_path', { path: options.installPath });
+      setIsInstalling(true);
+      setInstallationCompleted(false);
+      setCanConfirmProgress(false);
+      setStep('progress');
+      setProgress({ step: 'prepare', percent: 0, message: '' });
       await invoke('start_installation', { options });
       setInstallationCompleted(true);
       setStep('model');
