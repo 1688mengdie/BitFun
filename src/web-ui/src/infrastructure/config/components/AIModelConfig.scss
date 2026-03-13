@@ -1040,14 +1040,14 @@
     .select--multiple {
       .select__tag {
         background: var(--element-bg-subtle);
-        border-color: var(--border-base);
+        border: none;
         color: var(--color-text-secondary);
         max-width: none;
       }
 
       .select__tag:hover {
         background: var(--element-bg-medium);
-        border-color: var(--border-strong);
+        border-color: transparent;
       }
 
       .select__tag-label {
@@ -1153,6 +1153,11 @@
     .select__trigger,
     .bitfun-number-input__container {
       min-height: 32px;
+      border-color: color-mix(
+        in srgb,
+        var(--border-base, rgba(255, 255, 255, 0.14)) 72%,
+        transparent
+      );
     }
 
     .select__value,
@@ -1193,6 +1198,25 @@
     .bitfun-number-input__input {
       text-align: left;
       font-size: 12px;
+    }
+
+    .bitfun-ai-model-config__selected-model-category-select {
+      .select__dropdown {
+        left: 0;
+        right: auto;
+        width: max-content;
+        min-width: max(100%, 176px);
+        max-width: min(240px, calc(100vw - 64px));
+      }
+
+      .select__option-text {
+        min-width: max-content;
+      }
+
+      .select__option-label {
+        overflow: visible;
+        text-overflow: clip;
+      }
     }
 
     &--switch {

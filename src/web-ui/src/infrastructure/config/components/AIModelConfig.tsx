@@ -185,6 +185,26 @@ const AIModelConfig: React.FC = () => {
     [t]
   );
 
+  const categoryOptions = useMemo<SelectOption[]>(
+    () => [
+      { label: t('category.general_chat'), value: 'general_chat' },
+      { label: t('category.multimodal'), value: 'multimodal' },
+      { label: t('category.image_generation'), value: 'image_generation' },
+      { label: t('category.speech_recognition'), value: 'speech_recognition' },
+    ],
+    [t]
+  );
+
+  const categoryCompactLabels = useMemo<Record<ModelCategory, string>>(
+    () => ({
+      general_chat: t('categoryIcons.general_chat'),
+      multimodal: t('categoryIcons.multimodal'),
+      image_generation: t('categoryIcons.image_generation'),
+      speech_recognition: t('categoryIcons.speech_recognition'),
+    }),
+    [t]
+  );
+
   
   useEffect(() => {
     loadConfig();
@@ -1039,13 +1059,22 @@ const AIModelConfig: React.FC = () => {
                   <Select
                     value={draft.category}
                     onChange={(value) => updateModelDraft(draft.modelName, { category: value as ModelCategory })}
-                    options={[
-                      { label: t('category.general_chat'), value: 'general_chat' },
-                      { label: t('category.multimodal'), value: 'multimodal' },
-                      { label: t('category.image_generation'), value: 'image_generation' },
-                      { label: t('category.speech_recognition'), value: 'speech_recognition' },
-                    ]}
+                    options={categoryOptions}
                     size="small"
+                    className="bitfun-ai-model-config__selected-model-category-select"
+                    renderValue={(option) => {
+                      if (!option || Array.isArray(option)) {
+                        return null;
+                      }
+
+                      const compactLabel = categoryCompactLabels[option.value as ModelCategory] ?? option.label;
+
+                      return (
+                        <span className="select__value">
+                          <span className="select__value-label">{compactLabel}</span>
+                        </span>
+                      );
+                    }}
                   />
                 </div>
                 <div className="bitfun-ai-model-config__selected-model-field">
