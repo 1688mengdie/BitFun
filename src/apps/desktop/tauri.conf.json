@@ -3,7 +3,7 @@
   "productName": "BitFun",
   "identifier": "com.bitfun.desktop",
   "build": {
-    "beforeDevCommand": "pnpm run dev:web",
+    "beforeDevCommand": "pnpm run type-check:web && pnpm run dev:web",
     "devUrl": "http://localhost:1422",
     "beforeBuildCommand": "pnpm run build:web && pnpm run prepare:mobile-web",
     "frontendDist": "../../../dist"
