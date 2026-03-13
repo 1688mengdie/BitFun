@@ -74,28 +74,28 @@ export const WelcomePanel: React.FC<WelcomePanelProps> = ({
     if (!gitState) return null;
     const parts: { key: string; label: string; suffix: string }[] = [];
     if (gitState.unstagedFiles > 0)
-      parts.push({ key: 'unstaged', label: `${gitState.unstagedFiles} 个文件`, suffix: '等待暂存' });
+      parts.push({ key: 'unstaged', label: t('welcome.gitUnstaged', { count: gitState.unstagedFiles }), suffix: t('welcome.waitingToStage') });
     if (gitState.stagedFiles > 0)
-      parts.push({ key: 'staged', label: `${gitState.stagedFiles} 个文件`, suffix: '已暂存待提交' });
+      parts.push({ key: 'staged', label: t('welcome.gitStaged', { count: gitState.stagedFiles }), suffix: t('welcome.stagedReady') });
     if (gitState.unpushedCommits > 0)
-      parts.push({ key: 'unpushed', label: `${gitState.unpushedCommits} 个提交`, suffix: '待推送' });
+      parts.push({ key: 'unpushed', label: t('welcome.gitUnpushed', { count: gitState.unpushedCommits }), suffix: t('welcome.toPush') });
     if (parts.length === 0) return null;
     return (
       <>
-        目前有{' '}
+        {t('welcome.currentlyHas')}
         {parts.map(({ key, label, suffix }, i) => (
           <React.Fragment key={key}>
-            {i > 0 && '，'}
+            {i > 0 && t('welcome.commaSeparator')}
             <button type="button" className="welcome-panel__inline-btn" onClick={handleGitClick}>
               {label}
             </button>
             {' '}{suffix}
           </React.Fragment>
         ))}
-        。
+        {t('welcome.period')}
       </>
     );
-  }, [gitState, handleGitClick]);
+  }, [gitState, handleGitClick, t]);
 
   const loadGitState = useCallback(async (workspacePath: string) => {
     try {
@@ -179,20 +179,20 @@ export const WelcomePanel: React.FC<WelcomePanelProps> = ({
           <p className="welcome-panel__narrative-text">
             {!hasWorkspace ? (
               <>
-                还没有选择项目，
+                {t('welcome.noWorkspaceHint')}
                 <button
                   type="button"
                   className="welcome-panel__inline-btn"
                   onClick={() => { void handleOpenOtherFolder(); }}
                   disabled={isSelectingWorkspace}
                 >
-                  打开一个
+                  {t('welcome.openOne')}
                 </button>
-                {' '}开始吧。
+                {' '}{t('welcome.toStart')}
               </>
             ) : (
               <>
-                我们正在
+                {isCoworkSession ? t('welcome.workingInCowork') : t('welcome.workingIn')}{' '}
                 <span className="welcome-panel__context-row">
                   <span className="welcome-panel__workspace-anchor" ref={workspaceDropdownRef}>
                     <button
@@ -250,15 +250,15 @@ export const WelcomePanel: React.FC<WelcomePanelProps> = ({
                 </span>
                 {!isCoworkSession && gitState ? (
                   <>
-                    工作。
+                    {t('welcome.project')}
                     <br />
                     {isGitClean
-                      ? <span className="welcome-panel__narrative-clean">一切干净，可以放手大干了 ✦</span>
+                      ? <span className="welcome-panel__narrative-clean">{t('welcome.gitClean')}</span>
                       : buildGitNarrative()
                     }
                   </>
                 ) : (
-                  <>项目里工作。</>
+                  <>{t('welcome.projectCowork')}</>
                 )}
               </>
             )}
