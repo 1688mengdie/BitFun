@@ -6,17 +6,23 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Pencil, Trash2, Check, X, Bot, Code2, Users } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import { Pencil, Trash2, Check, X, Bot, Code2, Users, MoreHorizontal } from 'lucide-react';
 import { IconButton, Input, Tooltip } from '@/component-library';
 import { useI18n } from '@/infrastructure/i18n';
 import { flowChatStore } from '../../../../../flow_chat/store/FlowChatStore';
 import { flowChatManager } from '../../../../../flow_chat/services/FlowChatManager';
 import type { FlowChatState, Session } from '../../../../../flow_chat/types/flow-chat';
 import { useSceneStore } from '../../../../stores/sceneStore';
-import { useApp } from '../../../../hooks/useApp';
 import type { SceneTabId } from '../../../SceneBar/types';
 import { useWorkspaceContext } from '@/infrastructure/contexts/WorkspaceContext';
 import { createLogger } from '@/shared/utils/logger';
+import { useAgentCanvasStore } from '@/app/components/panels/content-canvas/stores';
+import {
+  openBtwSessionInAuxPane,
+  openMainSession,
+  selectActiveBtwSessionTab,
+} from '@/flow_chat/services/openBtwSession';
 import './SessionsSection.scss';
 
 const MAX_VISIBLE_SESSIONS = 8;
@@ -50,17 +56,22 @@ const SessionsSection: React.FC<SessionsSectionProps> = ({
   isActiveWorkspace = true,
 }) => {
   const { t } = useI18n('common');
-  const { switchLeftPanelTab } = useApp();
   const { setActiveWorkspace } = useWorkspaceContext();
-  const openScene = useSceneStore(s => s.openScene);
   const activeTabId = useSceneStore(s => s.activeTabId);
+  const activeBtwSessionTab = useAgentCanvasStore(state => selectActiveBtwSessionTab(state as any));
+  const activeBtwSessionData = activeBtwSessionTab?.content.data as
+    | { childSessionId: string; parentSessionId: string; workspacePath?: string }
+    | undefined;
   const [flowChatState, setFlowChatState] = useState<FlowChatState>(() =>
     flowChatStore.getState()
   );
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState('');
   const [showAll, setShowAll] = useState(false);
+  const [openMenuSessionId, setOpenMenuSessionId] = useState<string | null>(null);
+  const [sessionMenuPosition, setSessionMenuPosition] = useState<{ top: number; left: number } | null>(null);
   const editInputRef = useRef<HTMLInputElement>(null);
+  const sessionMenuPopoverRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const unsub = flowChatStore.subscribe(s => setFlowChatState(s));
@@ -77,6 +88,18 @@ const SessionsSection: React.FC<SessionsSectionProps> = ({
   useEffect(() => {
     setShowAll(false);
   }, [workspaceId, workspacePath, isActiveWorkspace]);
+
+  useEffect(() => {
+    if (!openMenuSessionId) return;
+    const handleOutside = (event: MouseEvent) => {
+      if (!sessionMenuPopoverRef.current?.contains(event.target as Node)) {
+        setOpenMenuSessionId(null);
+        setSessionMenuPosition(null);
+      }
+    };
+    document.addEventListener('mousedown', handleOutside);
+    return () => document.removeEventListener('mousedown', handleOutside);
+  }, [openMenuSessionId]);
 
   const sessions = useMemo(
     () =>
@@ -154,14 +177,40 @@ const SessionsSection: React.FC<SessionsSectionProps> = ({
   const handleSwitch = useCallback(
     async (sessionId: string) => {
       if (editingSessionId) return;
-      openScene('session');
-      switchLeftPanelTab('sessions');
-      if (sessionId === activeSessionId) return;
       try {
-        if (workspaceId && !isActiveWorkspace) {
-          await setActiveWorkspace(workspaceId);
+        const session = flowChatStore.getState().sessions.get(sessionId);
+        const parentSessionId = session?.btwOrigin?.parentSessionId || session?.parentSessionId;
+        const activateWorkspace = workspaceId && !isActiveWorkspace
+          ? async (targetWorkspaceId: string) => {
+            await setActiveWorkspace(targetWorkspaceId);
+          }
+          : undefined;
+
+        if (session?.sessionKind === 'btw' && parentSessionId) {
+          await openMainSession(parentSessionId, {
+            workspaceId,
+            activateWorkspace,
+          });
+          openBtwSessionInAuxPane({
+            childSessionId: sessionId,
+            parentSessionId,
+            workspacePath: session.workspacePath,
+          });
+          return;
         }
-        await flowChatManager.switchChatSession(sessionId);
+
+        if (sessionId === activeSessionId) {
+          await openMainSession(sessionId, {
+            workspaceId,
+            activateWorkspace,
+          });
+          return;
+        }
+
+        await openMainSession(sessionId, {
+          workspaceId,
+          activateWorkspace,
+        });
         window.dispatchEvent(
           new CustomEvent('flowchat:switch-session', { detail: { sessionId } })
         );
@@ -169,7 +218,7 @@ const SessionsSection: React.FC<SessionsSectionProps> = ({
         log.error('Failed to switch session', err);
       }
     },
-    [activeSessionId, editingSessionId, isActiveWorkspace, openScene, setActiveWorkspace, switchLeftPanelTab, workspaceId]
+    [activeSessionId, editingSessionId, isActiveWorkspace, setActiveWorkspace, workspaceId]
   );
 
   const resolveSessionTitle = useCallback(
@@ -188,6 +237,28 @@ const SessionsSection: React.FC<SessionsSectionProps> = ({
       return `${label} ${matched[1]}`;
     },
     [t]
+  );
+
+  const handleMenuOpen = useCallback(
+    (e: React.MouseEvent, sessionId: string) => {
+      e.stopPropagation();
+      if (openMenuSessionId === sessionId) {
+        setOpenMenuSessionId(null);
+        setSessionMenuPosition(null);
+        return;
+      }
+      const btn = e.currentTarget as HTMLElement;
+      const rect = btn.getBoundingClientRect();
+      const viewportPadding = 8;
+      const estimatedWidth = 160;
+      const maxLeft = window.innerWidth - estimatedWidth - viewportPadding;
+      setSessionMenuPosition({
+        top: Math.max(viewportPadding, rect.bottom + 4),
+        left: Math.max(viewportPadding, Math.min(rect.left, maxLeft)),
+      });
+      setOpenMenuSessionId(sessionId);
+    },
+    [openMenuSessionId]
   );
 
   const handleDelete = useCallback(
@@ -250,20 +321,37 @@ const SessionsSection: React.FC<SessionsSectionProps> = ({
       ) : (
         visibleItems.map(({ session, level }) => {
           const isEditing = editingSessionId === session.sessionId;
+          const isBtwChild = level === 1 && session.sessionKind === 'btw';
           const sessionModeKey = resolveSessionModeType(session);
           const sessionTitle = resolveSessionTitle(session);
+          const parentSessionId = session.btwOrigin?.parentSessionId || session.parentSessionId;
+          const parentSession = parentSessionId ? flowChatState.sessions.get(parentSessionId) : undefined;
+          const parentTitle = parentSession ? resolveSessionTitle(parentSession) : '';
+          const parentTurnIndex = session.btwOrigin?.parentTurnIndex;
+          const tooltipContent = isBtwChild ? (
+            <div className="bitfun-nav-panel__inline-item-tooltip">
+              <div className="bitfun-nav-panel__inline-item-tooltip-title">{sessionTitle}</div>
+              <div className="bitfun-nav-panel__inline-item-tooltip-meta">
+                {`来自 ${parentTitle || '父会话'}${parentTurnIndex ? ` · 第 ${parentTurnIndex} 轮` : ''}`}
+              </div>
+            </div>
+          ) : sessionTitle;
           const SessionIcon =
             sessionModeKey === 'cowork'
               ? Users
               : sessionModeKey === 'claw'
                 ? Bot
                 : Code2;
+          const isRowActive = activeBtwSessionData?.childSessionId
+            ? session.sessionId === activeBtwSessionData.childSessionId
+            : activeTabId === AGENT_SCENE && session.sessionId === activeSessionId;
           const row = (
             <div
               className={[
                 'bitfun-nav-panel__inline-item',
                 level === 1 && 'is-child',
-                activeTabId === AGENT_SCENE && session.sessionId === activeSessionId && 'is-active',
+                isBtwChild && 'is-btw-child',
+                isRowActive && 'is-active',
                 isEditing && 'is-editing',
               ]
                 .filter(Boolean)
@@ -317,35 +405,53 @@ const SessionsSection: React.FC<SessionsSectionProps> = ({
                 </div>
               ) : (
                 <>
-                  <span className="bitfun-nav-panel__inline-item-label">{sessionTitle}</span>
+                  <span className="bitfun-nav-panel__inline-item-main">
+                    <span className="bitfun-nav-panel__inline-item-label">{sessionTitle}</span>
+                    {isBtwChild ? (
+                      <span className="bitfun-nav-panel__inline-item-btw-badge">btw</span>
+                    ) : null}
+                  </span>
                   <div className="bitfun-nav-panel__inline-item-actions">
-                    <IconButton
-                      variant="default"
-                      size="xs"
-                      className="bitfun-nav-panel__inline-item-action-btn"
-                      onClick={e => handleStartEdit(e, session)}
-                      tooltip={t('nav.sessions.rename')}
-                      tooltipPlacement="top"
+                    <button
+                      type="button"
+                      className={`bitfun-nav-panel__inline-item-action-btn${openMenuSessionId === session.sessionId ? ' is-open' : ''}`}
+                      onClick={e => handleMenuOpen(e, session.sessionId)}
                     >
-                      <Pencil size={11} />
-                    </IconButton>
-                    <IconButton
-                      variant="danger"
-                      size="xs"
-                      className="bitfun-nav-panel__inline-item-action-btn delete"
-                      onClick={e => handleDelete(e, session.sessionId)}
-                      tooltip={t('nav.sessions.delete')}
-                      tooltipPlacement="top"
-                    >
-                      <Trash2 size={11} />
-                    </IconButton>
+                      <MoreHorizontal size={12} />
+                    </button>
                   </div>
+                  {openMenuSessionId === session.sessionId && sessionMenuPosition && createPortal(
+                    <div
+                      ref={sessionMenuPopoverRef}
+                      className="bitfun-nav-panel__inline-item-menu-popover"
+                      role="menu"
+                      style={{ top: `${sessionMenuPosition.top}px`, left: `${sessionMenuPosition.left}px` }}
+                    >
+                      <button
+                        type="button"
+                        className="bitfun-nav-panel__inline-item-menu-item"
+                        onClick={e => { setOpenMenuSessionId(null); handleStartEdit(e, session); }}
+                      >
+                        <Pencil size={13} />
+                        <span>{t('nav.sessions.rename')}</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="bitfun-nav-panel__inline-item-menu-item is-danger"
+                        onClick={e => { setOpenMenuSessionId(null); void handleDelete(e, session.sessionId); }}
+                      >
+                        <Trash2 size={13} />
+                        <span>{t('nav.sessions.delete')}</span>
+                      </button>
+                    </div>,
+                    document.body
+                  )}
                 </>
               )}
             </div>
           );
-          return isEditing ? row : (
-            <Tooltip key={session.sessionId} content={sessionTitle} placement="right" followCursor>
+          return isEditing || openMenuSessionId !== null ? row : (
+            <Tooltip key={session.sessionId} content={tooltipContent} placement="right" followCursor>
               {row}
             </Tooltip>
           );

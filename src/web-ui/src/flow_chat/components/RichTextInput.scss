@@ -43,6 +43,15 @@
   
 }
 
+// Improve placeholder contrast in light theme.
+:root[data-theme="light"] .rich-text-input,
+:root[data-theme-type="light"] .rich-text-input,
+.light .rich-text-input {
+  &:empty::before {
+    color: var(--color-text-secondary, #6b7280);
+  }
+}
+
 // Placeholder styles
 
 .rich-text-placeholder {

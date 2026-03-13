@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import './Tooltip.scss';
 
 export type TooltipPlacement = 'top' | 'bottom' | 'left' | 'right';
+const DEFAULT_TOOLTIP_DELAY = 450;
 
 export interface TooltipProps {
   content: React.ReactNode;
@@ -135,7 +136,7 @@ export const Tooltip: React.FC<TooltipProps> = ({
   placement = 'top',
   followCursor = false,
   trigger = 'hover',
-  delay = 200,
+  delay = DEFAULT_TOOLTIP_DELAY,
   disabled = false,
   className = '',
 }) => {
@@ -147,6 +148,7 @@ export const Tooltip: React.FC<TooltipProps> = ({
   const triggerRef = useRef<HTMLElement>(null);
   const tooltipRef = useRef<HTMLDivElement>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const latestMousePositionRef = useRef<{ x: number; y: number } | null>(null);
 
   const gap = 8;
   const viewportPadding = 8;
@@ -189,10 +191,17 @@ export const Tooltip: React.FC<TooltipProps> = ({
 
   const showTooltip = (e?: React.MouseEvent) => {
     if (disabled) return;
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+    }
     if (followCursor && e) {
-      setMousePosition({ x: e.clientX, y: e.clientY });
+      latestMousePositionRef.current = { x: e.clientX, y: e.clientY };
     }
     timeoutRef.current = setTimeout(() => {
+      timeoutRef.current = null;
+      if (followCursor) {
+        setMousePosition(latestMousePositionRef.current);
+      }
       setPositionReady(false);
       setVisible(true);
     }, delay);
@@ -201,16 +210,20 @@ export const Tooltip: React.FC<TooltipProps> = ({
   const hideTooltip = () => {
     if (timeoutRef.current) {
       clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
     }
     setVisible(false);
     setPositionReady(false);
-    if (followCursor) setMousePosition(null);
+    if (followCursor) {
+      latestMousePositionRef.current = null;
+      setMousePosition(null);
+    }
   };
 
   const handleMouseMove = useCallback(
     (e: React.MouseEvent) => {
-      if (followCursor && visible) {
-        setMousePosition({ x: e.clientX, y: e.clientY });
+      if (followCursor && !visible) {
+        latestMousePositionRef.current = { x: e.clientX, y: e.clientY };
       }
       const childProps = children.props as Record<string, unknown>;
       if (typeof childProps.onMouseMove === 'function') {
@@ -243,13 +256,12 @@ export const Tooltip: React.FC<TooltipProps> = ({
   }, [visible, followCursor, calculatePosition]);
 
   useEffect(() => {
-    if (!followCursor || !visible) return;
-    const onMouseMove = (e: MouseEvent) => {
-      setMousePosition({ x: e.clientX, y: e.clientY });
+    return () => {
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+      }
     };
-    window.addEventListener('mousemove', onMouseMove);
-    return () => window.removeEventListener('mousemove', onMouseMove);
-  }, [followCursor, visible]);
+  }, []);
 
   const childProps = children.props as Record<string, unknown>;
 

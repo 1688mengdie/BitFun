@@ -4,7 +4,7 @@
  */
 
 import { createContext, useContext } from 'react';
-import type { FlowChatConfig } from '../../types/flow-chat';
+import type { FlowChatConfig, Session } from '../../types/flow-chat';
 import type { LineRange } from '@/component-library';
 
 export interface FlowChatContextValue {
@@ -20,6 +20,7 @@ export interface FlowChatContextValue {
 
   // Session info
   sessionId?: string;
+  activeSessionOverride?: Session | null;
 
   // Config
   config?: FlowChatConfig;

@@ -606,7 +606,7 @@ const MainNav: React.FC<MainNavProps> = ({
                         aria-expanded={workspaceMenuOpen}
                         onClick={toggleWorkspaceMenu}
                       >
-                        <FolderOpen size={13} />
+                        <Plus size={13} />
                       </button>
                     </div>
                   ) : undefined}

@@ -9,9 +9,9 @@ import { CornerDownRight } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { ToolCardProps } from '../types/flow-chat';
 import { CompactToolCard, CompactToolCardHeader } from './CompactToolCard';
-import { flowChatManager } from '../services/FlowChatManager';
+import { openBtwSessionInAuxPane, openMainSession } from '../services/openBtwSession';
 
-export const BtwMarkerCard: React.FC<ToolCardProps> = React.memo(({ toolItem }) => {
+export const BtwMarkerCard: React.FC<ToolCardProps> = React.memo(({ toolItem, sessionId }) => {
   const { t } = useTranslation('flow-chat');
 
   const input = (toolItem.toolCall?.input || {}) as any;
@@ -28,9 +28,18 @@ export const BtwMarkerCard: React.FC<ToolCardProps> = React.memo(({ toolItem }) 
       status="completed"
       isExpanded={false}
       clickable={clickable}
-      onClick={() => {
+      onClick={async () => {
         if (!childSessionId) return;
-        void flowChatManager.switchChatSession(childSessionId);
+        const parentSessionId = typeof input?.parentSessionId === 'string' && input.parentSessionId
+          ? input.parentSessionId
+          : sessionId;
+        if (!parentSessionId) return;
+
+        await openMainSession(parentSessionId);
+        openBtwSessionInAuxPane({
+          childSessionId,
+          parentSessionId,
+        });
       }}
       header={
         <CompactToolCardHeader

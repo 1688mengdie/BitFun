@@ -505,6 +505,10 @@
   background: rgba(255, 255, 255, 0.04);
 }
 
+.table-wrapper td {
+  background: transparent;
+}
+
 
 .markdown-renderer a {
   color: var(--primary-color);
@@ -691,6 +695,43 @@
 
   .code-block-wrapper code[style] {
     background: #f6f8fa !important;
+  }
+
+  .table-wrapper {
+    background: #ffffff;
+    border: 1px solid rgba(15, 23, 42, 0.12);
+    box-shadow: 0 4px 14px rgba(15, 23, 42, 0.06);
+  }
+
+  .table-wrapper th,
+  .table-wrapper td {
+    border-bottom-color: rgba(15, 23, 42, 0.1);
+  }
+
+  .table-wrapper th + th,
+  .table-wrapper td + td {
+    border-left: 1px solid rgba(15, 23, 42, 0.08);
+  }
+
+  .table-wrapper th {
+    background: #f3f6fb;
+    color: #0f172a;
+  }
+
+  .table-wrapper td {
+    color: var(--color-text-primary, #1f2937);
+  }
+
+  .table-wrapper tbody tr {
+    background: #ffffff;
+  }
+
+  .table-wrapper tbody tr:nth-child(2n) {
+    background: #f8fafc;
+  }
+
+  .table-wrapper tbody tr:hover {
+    background: #eef4ff;
   }
 }
 

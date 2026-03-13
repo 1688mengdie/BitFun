@@ -310,18 +310,20 @@ const WorkspaceItem: React.FC<WorkspaceItemProps> = ({ workspace, isActive, isSi
               <Plus size={13} />
               <span className="bitfun-nav-panel__workspace-item-menu-label">{t('nav.workspaces.actions.newSession')}</span>
             </button>
-            <button
-              type="button"
-              className="bitfun-nav-panel__workspace-item-menu-item"
-              onClick={() => {
-                setMenuOpen(false);
-                setWorktreeModalOpen(true);
-              }}
-              disabled={!isRepository}
-            >
-              <GitBranch size={13} />
-              <span className="bitfun-nav-panel__workspace-item-menu-label">{t('nav.workspaces.actions.newWorktree')}</span>
-            </button>
+            {workspace.workspaceKind !== WorkspaceKind.Assistant && (
+              <button
+                type="button"
+                className="bitfun-nav-panel__workspace-item-menu-item"
+                onClick={() => {
+                  setMenuOpen(false);
+                  setWorktreeModalOpen(true);
+                }}
+                disabled={!isRepository}
+              >
+                <GitBranch size={13} />
+                <span className="bitfun-nav-panel__workspace-item-menu-label">{t('nav.workspaces.actions.newWorktree')}</span>
+              </button>
+            )}
             <button type="button" className="bitfun-nav-panel__workspace-item-menu-item" onClick={() => { void handleReveal(); }}>
               <FolderSearch size={13} />
               <span className="bitfun-nav-panel__workspace-item-menu-label">{t('nav.workspaces.actions.reveal')}</span>

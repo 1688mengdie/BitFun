@@ -3,7 +3,7 @@
  * Core component for the right panel, aggregating submodules.
  */
 
-import React, { useCallback, useMemo } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef } from 'react';
 import { EditorArea } from './editor-area';
 import { AnchorZone } from './anchor-zone';
 import { MissionControl } from './mission-control';
@@ -11,6 +11,7 @@ import { EmptyState } from './empty-state';
 import { useCanvasStore } from './stores';
 import { useTabLifecycle, useKeyboardShortcuts, usePanelTabCoordinator } from './hooks';
 import type { AnchorPosition } from './types';
+import { openMainSession, selectActiveBtwSessionTab } from '@/flow_chat/services/openBtwSession';
 import './ContentCanvas.scss';
 export interface ContentCanvasProps {
   /** Workspace path */
@@ -38,6 +39,11 @@ export const ContentCanvas: React.FC<ContentCanvasProps> = ({
     closeMissionControl,
     openMissionControl,
   } = useCanvasStore();
+  const activeBtwSessionTab = useCanvasStore(state => selectActiveBtwSessionTab(state as any));
+  const activeBtwSessionData = activeBtwSessionTab?.content.data as
+    | { childSessionId: string; parentSessionId: string; workspacePath?: string }
+    | undefined;
+  const lastSyncedBtwTabIdRef = useRef<string | null>(null);
   // Initialize hooks
   const { handleCloseWithDirtyCheck, handleCloseAllWithDirtyCheck } = useTabLifecycle({ mode });
   useKeyboardShortcuts({ enabled: true, handleCloseWithDirtyCheck });
@@ -46,6 +52,20 @@ export const ContentCanvas: React.FC<ContentCanvasProps> = ({
     autoCollapseOnEmpty: true,
     autoExpandOnTabOpen: true,
   });
+
+  useEffect(() => {
+    if (mode !== 'agent' || !activeBtwSessionTab?.id || !activeBtwSessionData?.parentSessionId) {
+      lastSyncedBtwTabIdRef.current = null;
+      return;
+    }
+
+    if (lastSyncedBtwTabIdRef.current === activeBtwSessionTab.id) {
+      return;
+    }
+
+    lastSyncedBtwTabIdRef.current = activeBtwSessionTab.id;
+    void openMainSession(activeBtwSessionData.parentSessionId);
+  }, [activeBtwSessionData?.parentSessionId, activeBtwSessionTab?.id, mode]);
 
   // Check if primary group has visible tabs
   const hasPrimaryVisibleTabs = useMemo(() => {
