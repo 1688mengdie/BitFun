@@ -298,6 +298,7 @@ export class FlowChatManager {
         id: markerId,
         input: {
           requestId,
+          parentSessionId,
           childSessionId,
           title,
         },

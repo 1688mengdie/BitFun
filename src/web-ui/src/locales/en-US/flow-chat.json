@@ -193,6 +193,12 @@
     "templateHint": "Press <kbd>Tab</kbd> for next placeholder, <kbd>Shift+Tab</kbd> for previous, <kbd>Esc</kbd> to exit",
     "templateProgress": "{{current}} / {{total}}",
     "wip": "WIP",
+    "sendTarget": "Send to",
+    "conversationTarget": "Conversation target",
+    "targetMain": "Main",
+    "targetBtw": "Side",
+    "sendingToMain": "Main session: {{title}}",
+    "sendingToBtw": "Side session: {{title}}",
     "modeDescriptions": {
       "agentic": "Full-featured AI assistant with access to all tools for comprehensive software development tasks",
       "Claw": "Personal assistant mode for dedicated assistant workspaces and everyday task support",
@@ -257,6 +263,7 @@
   },
   "btw": {
     "title": "Side question",
+    "shortLabel": "Side",
     "hint": "Not saved · Uses current chat context · No tools",
     "placeholder": "Ask a quick question…",
     "ask": "Ask",
@@ -270,13 +277,18 @@
     "back": "Back",
     "backToParent": "Back to parent session",
     "empty": "Please provide a question after /btw",
+    "nestedDisabled": "A side question cannot start another side question",
     "error": "Failed",
     "close": "Close",
     "noSession": "No active session for /btw"
   },
   "flowChatHeader": {
     "previousTurn": "Previous turn",
-    "nextTurn": "Next turn"
+    "nextTurn": "Next turn",
+    "turnBadge": "Turn {{current}}",
+    "btwBackTooltipWithTurn": "Go back to the source session: {{title}} (Turn {{turn}})",
+    "btwBackTooltipWithoutTurn": "Go back to the source session: {{title}}",
+    "btwCreateTooltip": "Start a quick side question"
   },
   "sessionFilesBadge": {
     "files": "files",

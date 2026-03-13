@@ -31,6 +31,9 @@ interface ModelSelectorProps {
 
 interface ModelInfo {
   id: string;
+  /** User-defined configuration name (AIModelConfig.name). */
+  configName: string;
+  /** Actual model identifier (AIModelConfig.model_name). */
   modelName: string;
   providerName: string;
   provider: string;
@@ -147,6 +150,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     if (modelId === 'auto') {
       return {
         id: 'auto',
+        configName: t('modelSelector.autoModel'),
         modelName: t('modelSelector.autoModel'),
         providerName: t('modelSelector.autoModelDesc'),
         provider: 'auto',
@@ -161,7 +165,8 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
       if (!model) return null;
 
       return {
-        id: modelId, // Keep 'primary' or 'fast'
+        id: modelId,
+        configName: modelId === 'primary' ? t('modelSelector.primaryModel') : t('modelSelector.fastModel'),
         modelName: model.model_name,
         providerName: getProviderDisplayName(model),
         provider: model.provider,
@@ -176,6 +181,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
 
     return {
       id: model.id || '',
+      configName: model.name,
       modelName: model.model_name,
       providerName: getProviderDisplayName(model),
       provider: model.provider,
@@ -195,6 +201,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
       })
       .map(m => ({
         id: m.id || '',
+        configName: m.name,
         modelName: m.model_name,
         providerName: getProviderDisplayName(m),
         provider: m.provider,
@@ -241,7 +248,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
       ref={dropdownRef}
       className={`bitfun-model-selector ${className}`}
     >
-      <Tooltip content={currentModel ? `${t('modelSelector.model')}: ${currentModel.modelName}` : t('modelSelector.modelNotConfigured')}>
+      <Tooltip content={currentModel ? `${currentModel.modelName} · ${buildModelMetaText(currentModel)}` : t('modelSelector.modelNotConfigured')}>
         <button
           className={`bitfun-model-selector__trigger ${dropdownOpen ? 'bitfun-model-selector__trigger--open' : ''}`}
           onClick={() => setDropdownOpen(!dropdownOpen)}
@@ -249,7 +256,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
         >
           <Cpu size={10} className="bitfun-model-selector__icon" />
           <span className="bitfun-model-selector__name">
-            {currentModel ? currentModel.modelName : t('modelSelector.modelNotConfigured')}
+            {currentModel ? currentModel.configName : t('modelSelector.modelNotConfigured')}
           </span>
           {currentModel?.enableThinking && (
             <Sparkles size={9} className="bitfun-model-selector__thinking-icon" />
@@ -272,94 +279,63 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
             </span>
           </div>
 
-          <div
-            className={`bitfun-model-selector__option bitfun-model-selector__option--special ${currentModelId === 'auto' ? 'bitfun-model-selector__option--selected' : ''}`}
-            onClick={() => handleSelectModel('auto')}
-          >
-            <div className="bitfun-model-selector__option-main">
-              <div className="bitfun-model-selector__option-content">
-                <span className="bitfun-model-selector__option-name">{t('modelSelector.autoModelDesc')}</span>
-                <span className="bitfun-model-selector__option-desc">{t('modelSelector.autoModel')}</span>
+          <Tooltip content={t('modelSelector.autoModelDesc')} placement="right">
+            <div
+              className={`bitfun-model-selector__option bitfun-model-selector__option--special ${currentModelId === 'auto' ? 'bitfun-model-selector__option--selected' : ''}`}
+              onClick={() => handleSelectModel('auto')}
+            >
+              <div className="bitfun-model-selector__option-main">
+                <span className="bitfun-model-selector__option-name">{t('modelSelector.autoModel')}</span>
               </div>
+              {currentModelId === 'auto' && (
+                <Check size={14} className="bitfun-model-selector__option-check" />
+              )}
             </div>
-            {currentModelId === 'auto' && (
-              <Check size={14} className="bitfun-model-selector__option-check" />
-            )}
-          </div>
+          </Tooltip>
 
-          <div
-            className={`bitfun-model-selector__option bitfun-model-selector__option--special ${currentModelId === 'primary' ? 'bitfun-model-selector__option--selected' : ''}`}
-            onClick={() => handleSelectModel('primary')}
-          >
-            <div className="bitfun-model-selector__option-main">
-              <div className="bitfun-model-selector__option-content">
-                <span className="bitfun-model-selector__option-name">{t('modelSelector.primaryModel')}</span>
-                {(() => {
-                  const model = allModels.find(m => m.id === defaultModels.primary);
-                  if (!model) {
-                    return (
-                      <span className="bitfun-model-selector__option-desc">
-                        {t('modelSelector.modelNotConfigured')}
-                      </span>
-                    );
-                  }
+          {(() => {
+            const primaryModel = allModels.find(m => m.id === defaultModels.primary);
+            const primaryTooltip = primaryModel
+              ? `${primaryModel.name}（${primaryModel.model_name}）· ${buildModelMetaText({ providerName: getProviderDisplayName(primaryModel), contextWindow: primaryModel.context_window, reasoningEffort: primaryModel.reasoning_effort })}`
+              : t('modelSelector.modelNotConfigured');
+            return (
+              <Tooltip content={primaryTooltip} placement="right">
+                <div
+                  className={`bitfun-model-selector__option bitfun-model-selector__option--special ${currentModelId === 'primary' ? 'bitfun-model-selector__option--selected' : ''}`}
+                  onClick={() => handleSelectModel('primary')}
+                >
+                  <div className="bitfun-model-selector__option-main">
+                    <span className="bitfun-model-selector__option-name">{t('modelSelector.primaryModel')}</span>
+                  </div>
+                  {currentModelId === 'primary' && (
+                    <Check size={14} className="bitfun-model-selector__option-check" />
+                  )}
+                </div>
+              </Tooltip>
+            );
+          })()}
 
-                  return (
-                    <div className="bitfun-model-selector__option-meta">
-                      <span className="bitfun-model-selector__option-desc">{model.model_name}</span>
-                      <span className="bitfun-model-selector__option-subdesc">
-                        {buildModelMetaText({
-                          providerName: getProviderDisplayName(model),
-                          contextWindow: model.context_window,
-                          reasoningEffort: model.reasoning_effort,
-                        })}
-                      </span>
-                    </div>
-                  );
-                })()}
-              </div>
-            </div>
-            {currentModelId === 'primary' && (
-              <Check size={14} className="bitfun-model-selector__option-check" />
-            )}
-          </div>
-
-          <div
-            className={`bitfun-model-selector__option bitfun-model-selector__option--special ${currentModelId === 'fast' ? 'bitfun-model-selector__option--selected' : ''}`}
-            onClick={() => handleSelectModel('fast')}
-          >
-            <div className="bitfun-model-selector__option-main">
-              <div className="bitfun-model-selector__option-content">
-                <span className="bitfun-model-selector__option-name">{t('modelSelector.fastModel')}</span>
-                {(() => {
-                  const model = allModels.find(m => m.id === defaultModels.fast);
-                  if (!model) {
-                    return (
-                      <span className="bitfun-model-selector__option-desc">
-                        {t('modelSelector.modelNotConfigured')}
-                      </span>
-                    );
-                  }
-
-                  return (
-                    <div className="bitfun-model-selector__option-meta">
-                      <span className="bitfun-model-selector__option-desc">{model.model_name}</span>
-                      <span className="bitfun-model-selector__option-subdesc">
-                        {buildModelMetaText({
-                          providerName: getProviderDisplayName(model),
-                          contextWindow: model.context_window,
-                          reasoningEffort: model.reasoning_effort,
-                        })}
-                      </span>
-                    </div>
-                  );
-                })()}
-              </div>
-            </div>
-            {currentModelId === 'fast' && (
-              <Check size={14} className="bitfun-model-selector__option-check" />
-            )}
-          </div>
+          {(() => {
+            const fastModel = allModels.find(m => m.id === defaultModels.fast);
+            const fastTooltip = fastModel
+              ? `${fastModel.name}（${fastModel.model_name}）· ${buildModelMetaText({ providerName: getProviderDisplayName(fastModel), contextWindow: fastModel.context_window, reasoningEffort: fastModel.reasoning_effort })}`
+              : t('modelSelector.modelNotConfigured');
+            return (
+              <Tooltip content={fastTooltip} placement="right">
+                <div
+                  className={`bitfun-model-selector__option bitfun-model-selector__option--special ${currentModelId === 'fast' ? 'bitfun-model-selector__option--selected' : ''}`}
+                  onClick={() => handleSelectModel('fast')}
+                >
+                  <div className="bitfun-model-selector__option-main">
+                    <span className="bitfun-model-selector__option-name">{t('modelSelector.fastModel')}</span>
+                  </div>
+                  {currentModelId === 'fast' && (
+                    <Check size={14} className="bitfun-model-selector__option-check" />
+                  )}
+                </div>
+              </Tooltip>
+            );
+          })()}
 
           <div className="bitfun-model-selector__divider" />
 
@@ -368,26 +344,24 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
               const isSelected = currentModelId === model.id;
 
               return (
-                <div
-                  key={model.id}
-                  className={`bitfun-model-selector__option ${isSelected ? 'bitfun-model-selector__option--selected' : ''}`}
-                  onClick={() => handleSelectModel(model.id)}
-                >
-                  <div className="bitfun-model-selector__option-main">
-                    <span className="bitfun-model-selector__option-name">
-                      {model.modelName}
-                      {model.enableThinking && (
-                        <Sparkles size={10} className="bitfun-model-selector__option-thinking" />
-                      )}
-                    </span>
-                    <span className="bitfun-model-selector__option-desc">
-                      {buildModelMetaText(model)}
-                    </span>
+                <Tooltip key={model.id} content={`${model.modelName} · ${buildModelMetaText(model)}`} placement="right">
+                  <div
+                    className={`bitfun-model-selector__option ${isSelected ? 'bitfun-model-selector__option--selected' : ''}`}
+                    onClick={() => handleSelectModel(model.id)}
+                  >
+                    <div className="bitfun-model-selector__option-main">
+                      <span className="bitfun-model-selector__option-name">
+                        {model.configName}
+                        {model.enableThinking && (
+                          <Sparkles size={10} className="bitfun-model-selector__option-thinking" />
+                        )}
+                      </span>
+                    </div>
+                    {isSelected && (
+                      <Check size={14} className="bitfun-model-selector__option-check" />
+                    )}
                   </div>
-                  {isSelected && (
-                    <Check size={14} className="bitfun-model-selector__option-check" />
-                  )}
-                </div>
+                </Tooltip>
               );
             })}
           </div>

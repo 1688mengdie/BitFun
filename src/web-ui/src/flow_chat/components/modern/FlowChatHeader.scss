@@ -47,16 +47,49 @@
     -webkit-mask-image: linear-gradient(to bottom, black 0%, transparent 100%);
   }
 
-  &__turn-info {
-    font-size: $font-size-sm;
-    font-weight: $font-weight-medium;
-    color: var(--color-text-secondary);
-    white-space: nowrap;
+  &__btw-back {
+    flex: 0 0 auto;
+
+    &:not(:disabled):hover {
+      background: color-mix(in srgb, var(--element-bg-soft) 82%, transparent);
+    }
+  }
+
+  &__btw-create {
+    flex: 0 0 auto;
+
+    &:not(:disabled):hover {
+      background: color-mix(in srgb, var(--element-bg-soft) 82%, transparent);
+    }
   }
 
   // ==================== Center message ====================
   &__message {
     flex: 1;
+    min-width: 0;
+    padding: 0 $size-gap-3;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: $size-gap-2;
+    overflow: hidden;
+  }
+
+  &__turn-badge {
+    display: inline-flex;
+    align-items: center;
+    flex: 0 0 auto;
+    max-width: 100%;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--element-bg-soft) 82%, transparent);
+    color: var(--color-text-secondary);
+    font-size: $font-size-xs;
+    line-height: 1;
+    white-space: nowrap;
+  }
+
+  &__message-text {
     min-width: 0;
     font-size: $font-size-sm;
     color: var(--color-text-primary);
@@ -64,7 +97,6 @@
     overflow: hidden;
     text-overflow: ellipsis;
     text-align: center;
-    padding: 0 $size-gap-3;
   }
 
   // ==================== Actions ====================

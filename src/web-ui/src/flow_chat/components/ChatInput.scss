@@ -95,6 +95,7 @@
     .bitfun-chat-input__template-hint,
     .bitfun-chat-input__cowork-examples,
     .bitfun-chat-input__recommendations,
+    .bitfun-chat-input__target-switcher,
     .bitfun-chat-input__actions-left,
     .bitfun-chat-input__mode-selector,
     .bitfun-chat-input__queued-indicator {
@@ -360,6 +361,70 @@
     
     & > * {
       pointer-events: auto;
+    }
+  }
+
+  &__target-switcher {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding-bottom: 7px;
+    margin-bottom: 1px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    animation: bitfun-chat-input-fade-in 0.18s ease-out;
+  }
+
+  &__target-switcher-label {
+    font-size: 10px;
+    color: var(--color-text-muted);
+    font-weight: 400;
+    padding: 2px 8px 2px 0;
+    margin-right: 4px;
+    flex-shrink: 0;
+    letter-spacing: 0.02em;
+    opacity: 0.72;
+  }
+
+  &__target-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border: none;
+    background: transparent;
+    color: var(--color-text-muted);
+    font-size: 11px;
+    font-weight: 400;
+    border-radius: 5px;
+    cursor: pointer;
+    transition: color 0.15s ease, background 0.15s ease;
+    white-space: nowrap;
+    outline: none;
+
+    &:hover:not(#{&}--active) {
+      color: var(--color-text-secondary);
+      background: rgba(255, 255, 255, 0.04);
+    }
+
+    &--active {
+      color: rgba(155, 190, 255, 0.95);
+      font-weight: 500;
+      background: rgba(80, 130, 255, 0.09);
+    }
+  }
+
+  &__target-tab-name {
+    max-width: 110px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 10px;
+    font-weight: 400;
+    opacity: 0.65;
+
+    &::before {
+      content: '·';
+      margin-right: 2px;
     }
   }
   
@@ -1233,48 +1298,3 @@
   }
 }
 
-.bitfun-chat-input__btw-origin {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 8px 10px;
-  margin: 0 0 8px 0;
-  border: 1px solid var(--border-subtle);
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--color-bg-elevated) 72%, transparent);
-  color: var(--color-text-secondary);
-}
-
-.bitfun-chat-input__btw-origin-text {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 8px;
-  min-width: 0;
-}
-
-.bitfun-chat-input__btw-origin-label {
-  font-size: 12px;
-  color: var(--color-text-muted);
-  white-space: nowrap;
-}
-
-.bitfun-chat-input__btw-origin-parent {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--color-text-primary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 360px;
-}
-
-.bitfun-chat-input__btw-origin-turn {
-  font-size: 12px;
-  color: var(--color-text-muted);
-  white-space: nowrap;
-}
-
-.bitfun-chat-input__btw-origin-back {
-  flex: 0 0 auto;
-}

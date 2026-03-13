@@ -92,25 +92,45 @@
     }
 
     &.is-child {
-      height: 24px;
+      min-height: 24px;
       font-size: 12px;
-      padding-left: calc(#{$size-gap-1} + 14px);
+      padding-left: calc(#{$size-gap-1} + 18px);
       position: relative;
 
       &::before {
         content: '';
         position: absolute;
         left: 10px;
+        top: 0;
+        width: 1px;
+        height: 50%;
+        background: color-mix(in srgb, var(--border-subtle) 88%, transparent);
+        opacity: 0.95;
+      }
+
+      &::after {
+        content: '';
+        position: absolute;
+        left: 10px;
         top: 50%;
-        width: 10px;
+        width: 12px;
         height: 1px;
-        background: var(--border-subtle);
-        opacity: 0.9;
+        background: color-mix(in srgb, var(--border-subtle) 92%, transparent);
+        opacity: 0.95;
         transform: translateY(-50%);
       }
 
       .bitfun-nav-panel__inline-item-icon {
-        opacity: 0.55;
+        opacity: 0.72;
+      }
+    }
+
+    &.is-btw-child {
+      background: color-mix(in srgb, var(--element-bg-soft) 38%, transparent);
+
+      &:hover,
+      &.is-active {
+        background: color-mix(in srgb, var(--element-bg-soft) 74%, transparent);
       }
     }
   }
@@ -136,11 +156,58 @@
     }
   }
 
+  &__inline-item-main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
   &__inline-item-label {
     flex: 1;
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  &__inline-item-btw-badge {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    height: 12px;
+    padding: 0 4px;
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 85%, transparent);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--element-bg-soft) 42%, transparent);
+    color: var(--color-text-muted);
+    font-size: 9px;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    opacity: 0.78;
+  }
+
+  &__inline-item-tooltip {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    max-width: 260px;
+  }
+
+  &__inline-item-tooltip-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--color-text-primary);
+    line-height: 1.4;
+    word-break: break-word;
+  }
+
+  &__inline-item-tooltip-meta {
+    font-size: 11px;
+    color: var(--color-text-secondary);
+    line-height: 1.4;
+    word-break: break-word;
   }
 
   &__inline-item-actions {
@@ -170,12 +237,60 @@
     transition: color $motion-fast $easing-standard,
                 background $motion-fast $easing-standard;
 
-    &:hover {
+    &:hover,
+    &.is-open {
       color: var(--color-text-primary);
       background: color-mix(in srgb, var(--color-text-primary) 10%, transparent);
     }
+  }
 
-    &.delete:hover {
+  &__inline-item-menu-popover {
+    position: fixed;
+    width: max-content;
+    min-width: 140px;
+    max-width: min(220px, calc(100vw - 24px));
+    padding: $size-gap-1 0;
+    border-radius: $size-radius-base;
+    background: var(--color-bg-elevated, #1e1e22);
+    border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+    z-index: 10000;
+    transform-origin: top left;
+    animation: bitfun-footer-menu-in $motion-fast $easing-decelerate forwards;
+  }
+
+  &__inline-item-menu-item {
+    display: flex;
+    align-items: center;
+    gap: $size-gap-2;
+    width: 100%;
+    min-height: 28px;
+    padding: 0 $size-gap-2;
+    border: none;
+    background: transparent;
+    color: var(--color-text-secondary);
+    font-size: $font-size-sm;
+    font-weight: 400;
+    cursor: pointer;
+    text-align: left;
+    white-space: nowrap;
+    transition: color $motion-fast $easing-standard,
+                background $motion-fast $easing-standard;
+
+    svg {
+      flex-shrink: 0;
+      opacity: 0.7;
+      transition: opacity $motion-fast $easing-standard;
+    }
+
+    &:hover:not(:disabled) {
+      color: var(--color-text-primary);
+      background: var(--element-bg-soft);
+
+      svg { opacity: 1; }
+    }
+
+    &.is-danger:hover:not(:disabled) {
       color: var(--color-error, #ef4444);
       background: color-mix(in srgb, var(--color-error, #ef4444) 10%, transparent);
     }

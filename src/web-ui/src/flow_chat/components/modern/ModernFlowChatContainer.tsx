@@ -15,7 +15,7 @@ import { startAutoSync } from '../../services/storeSync';
 import { useModernFlowChatStore } from '../../store/modernFlowChatStore';
 import { globalEventBus } from '../../../infrastructure/event-bus';
 import { getElementText, copyTextToClipboard } from '../../../shared/utils/textSelection';
-import type { FlowChatConfig, FlowToolItem, DialogTurn, ModelRound, FlowItem } from '../../types/flow-chat';
+import type { FlowChatConfig, FlowToolItem, DialogTurn, ModelRound, FlowItem, Session } from '../../types/flow-chat';
 import { notificationService } from '../../../shared/notification-system';
 import { agentAPI } from '@/infrastructure/api';
 import { fileTabManager } from '@/shared/services/FileTabManager';
@@ -54,6 +54,9 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
   const visibleTurnInfo = useVisibleTurnInfo();
   const virtualListRef = useRef<VirtualMessageListRef>(null);
   const { workspacePath } = useWorkspaceContext();
+  const isBtwSession = activeSession?.sessionKind === 'btw';
+  const [btwOrigin, setBtwOrigin] = useState<Session['btwOrigin'] | null>(null);
+  const [btwParentTitle, setBtwParentTitle] = useState('');
   
   // Explore group collapse state (key: groupId, true = user-expanded).
   const [exploreGroupStates, setExploreGroupStates] = useState<Map<string, boolean>>(new Map());
@@ -95,6 +98,36 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
       unsubscribe();
     };
   }, []);
+
+  useEffect(() => {
+    const syncBtwState = (state = flowChatStore.getState()) => {
+      const currentSessionId = activeSession?.sessionId;
+      if (!currentSessionId) {
+        setBtwOrigin(null);
+        setBtwParentTitle('');
+        return;
+      }
+
+      const session = state.sessions.get(currentSessionId);
+      if (!session) {
+        setBtwOrigin(null);
+        setBtwParentTitle('');
+        return;
+      }
+
+      const nextOrigin = (session.btwOrigin ||
+        (session.sessionKind === 'btw' && session.parentSessionId ? { parentSessionId: session.parentSessionId } : null)) as Session['btwOrigin'] | null;
+      const parentId = nextOrigin?.parentSessionId || session.parentSessionId;
+      const parent = parentId ? state.sessions.get(parentId) : undefined;
+
+      setBtwOrigin(nextOrigin);
+      setBtwParentTitle(parent?.title || '');
+    };
+
+    syncBtwState();
+    const unsubscribe = flowChatStore.subscribe(syncBtwState);
+    return unsubscribe;
+  }, [activeSession?.sessionId]);
   
   useEffect(() => {
     const unlisten = agentAPI.onSessionTitleGenerated((event) => {
@@ -420,6 +453,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     onToolConfirm: handleToolConfirm,
     onToolReject: handleToolReject,
     sessionId: activeSession?.sessionId,
+    activeSessionOverride: activeSession,
     config: {
       enableMarkdown: true,
       autoScroll: true,
@@ -447,16 +481,26 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     handleExpandAllInTurn,
     handleCollapseGroup,
   ]);
+
+  const handleCreateBtwSession = useCallback(() => {
+    if (!activeSession?.sessionId) return;
+    window.dispatchEvent(new CustomEvent('fill-chat-input', {
+      detail: { message: '/btw ' }
+    }));
+  }, [activeSession?.sessionId]);
   
   return (
     <FlowChatContext.Provider value={contextValue}>
       <div className={`modern-flowchat-container ${className}`}>
         <FlowChatHeader
-          currentTurnIndex={visibleTurnInfo?.turnIndex ?? 0}
+          currentTurn={visibleTurnInfo?.turnIndex ?? 0}
           totalTurns={visibleTurnInfo?.totalTurns ?? 0}
           currentUserMessage={visibleTurnInfo?.userMessage ?? ''}
           visible={virtualItems.length > 0}
           sessionId={activeSession?.sessionId}
+          btwOrigin={btwOrigin}
+          btwParentTitle={btwParentTitle}
+          onCreateBtwSession={activeSession?.sessionId && !isBtwSession ? handleCreateBtwSession : undefined}
         />
 
         <div className="modern-flowchat-container__messages">

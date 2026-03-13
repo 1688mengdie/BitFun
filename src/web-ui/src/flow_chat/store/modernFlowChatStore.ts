@@ -119,7 +119,7 @@ let cachedVirtualItems: VirtualItem[] = [];
  * 
  * Explore group merging: consecutive explore-only rounds merged into single explore-group VirtualItem
  */
-function sessionToVirtualItems(session: Session | null): VirtualItem[] {
+export function sessionToVirtualItems(session: Session | null): VirtualItem[] {
   if (!session) {
     if (cachedSession !== null) {
       cachedSession = null;

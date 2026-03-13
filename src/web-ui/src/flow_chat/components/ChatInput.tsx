@@ -16,7 +16,7 @@ import { SessionExecutionEvent } from '../state-machine/types';
 import TokenUsageIndicator from './TokenUsageIndicator';
 import { ModelSelector } from './ModelSelector';
 import { FlowChatStore } from '../store/FlowChatStore';
-import type { FlowChatState, Session } from '../types/flow-chat';
+import type { FlowChatState } from '../types/flow-chat';
 import type { FileContext, DirectoryContext } from '../../shared/types/context';
 import type { PromptTemplate } from '../../shared/types/prompt-template';
 import { SmartRecommendations } from './smart-recommendations';
@@ -39,6 +39,8 @@ import { useInputHistoryStore } from '../store/inputHistoryStore';
 import { startBtwThread } from '../services/BtwThreadService';
 import { createLogger } from '@/shared/utils/logger';
 import { Tooltip, IconButton } from '@/component-library';
+import { useAgentCanvasStore } from '@/app/components/panels/content-canvas/stores';
+import { openBtwSessionInAuxPane, selectActiveBtwSessionTab } from '../services/openBtwSession';
 import './ChatInput.scss';
 
 const log = createLogger('ChatInput');
@@ -48,6 +50,22 @@ export interface ChatInputProps {
   className?: string;
   onSendMessage?: (message: string) => void;
 }
+
+type SlashActionItem = {
+  kind: 'action';
+  id: string;
+  command: string;
+  label: string;
+};
+
+type SlashModeItem = {
+  kind: 'mode';
+  id: string;
+  name: string;
+};
+
+type SlashPickerItem = SlashActionItem | SlashModeItem;
+type ChatInputTarget = 'main' | 'btw';
 
 export const ChatInput: React.FC<ChatInputProps> = ({
   className = '',
@@ -67,6 +85,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   // History navigation state
   const [historyIndex, setHistoryIndex] = useState(-1);
   const [savedDraft, setSavedDraft] = useState('');
+  const [inputTarget, setInputTarget] = useState<ChatInputTarget>('main');
   const { addMessage: addToHistory, getSessionHistory } = useInputHistoryStore();
   
   const contexts = useContextStore(state => state.contexts);
@@ -80,13 +99,31 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   );
   
   const activeSessionState = useActiveSessionState();
+  const activeBtwSessionTab = useAgentCanvasStore(state => selectActiveBtwSessionTab(state as any));
+  const [flowChatState, setFlowChatState] = useState<FlowChatState>(() => FlowChatStore.getInstance().getState());
   const currentSessionId = activeSessionState.sessionId;
+  const currentSession = currentSessionId ? flowChatState.sessions.get(currentSessionId) : undefined;
+  const activeBtwSessionData = activeBtwSessionTab?.content.data as
+    | { childSessionId: string; parentSessionId: string; workspacePath?: string }
+    | undefined;
+  const activeBtwSessionId = activeBtwSessionData?.childSessionId;
+  const effectiveTargetSessionId =
+    inputTarget === 'btw' && activeBtwSessionId ? activeBtwSessionId : currentSessionId;
+  const effectiveTargetSession = effectiveTargetSessionId
+    ? flowChatState.sessions.get(effectiveTargetSessionId)
+    : undefined;
+  const isBtwSession = effectiveTargetSession?.sessionKind === 'btw';
+  const showTargetSwitcher = !!activeBtwSessionId;
+  const currentSessionTitle = currentSession?.title?.trim() || t('session.untitled');
+  const activeBtwSessionTitle = activeBtwSessionId
+    ? flowChatState.sessions.get(activeBtwSessionId)?.title?.trim() || t('btw.threadLabel')
+    : '';
   
   // Get input history for current session (after currentSessionId is defined)
-  const inputHistory = currentSessionId ? getSessionHistory(currentSessionId) : [];
-  const derivedState = useSessionDerivedState(currentSessionId);
-  const { transition, setQueuedInput } = useSessionStateMachineActions(currentSessionId);
-  const stateMachine = useSessionStateMachine(currentSessionId);
+  const inputHistory = effectiveTargetSessionId ? getSessionHistory(effectiveTargetSessionId) : [];
+  const derivedState = useSessionDerivedState(effectiveTargetSessionId);
+  const { transition, setQueuedInput } = useSessionStateMachineActions(effectiveTargetSessionId);
+  const stateMachine = useSessionStateMachine(effectiveTargetSessionId);
 
   const { workspace, workspacePath } = useCurrentWorkspace();
   
@@ -108,10 +145,17 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const setChatInputActive = useChatInputState(state => state.setActive);
   const setChatInputExpanded = useChatInputState(state => state.setExpanded);
 
-  // /btw now creates a child session ("side thread") and adds a lightweight marker on the parent session.
-  const [btwOrigin, setBtwOrigin] = React.useState<Session['btwOrigin'] | null>(null);
-  const [btwParentTitle, setBtwParentTitle] = React.useState<string>('');
-  
+  useEffect(() => {
+    const unsubscribe = FlowChatStore.getInstance().subscribe(setFlowChatState);
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (!showTargetSwitcher || !activeBtwSessionId) {
+      setInputTarget('main');
+    }
+  }, [activeBtwSessionId, showTargetSwitcher]);
+
   useEffect(() => {
     setChatInputActive(inputState.isActive);
   }, [inputState.isActive, setChatInputActive]);
@@ -123,10 +167,10 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   // Reset history index when switching sessions
   useEffect(() => {
     setHistoryIndex(-1);
-  }, [currentSessionId]);
+  }, [effectiveTargetSessionId]);
   
   const { sendMessage } = useMessageSender({
-    currentSessionId: currentSessionId || undefined,
+    currentSessionId: effectiveTargetSessionId || undefined,
     contexts,
     onClearContexts: clearContexts,
     onSuccess: onSendMessage,
@@ -140,7 +184,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         }
       }
     },
-    currentAgentType: modeState.current,
+    currentAgentType: effectiveTargetSession?.mode || modeState.current,
   });
   
   const {
@@ -179,7 +223,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   
   const [slashCommandState, setSlashCommandState] = useState<{
     isActive: boolean;
-    kind: 'modes' | 'actions';
+    kind: 'modes' | 'actions' | 'all';
     query: string;
     selectedIndex: number;
   }>({
@@ -193,45 +237,30 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     const store = FlowChatStore.getInstance();
     
     const unsubscribe = store.subscribe((state: FlowChatState) => {
-      if (currentSessionId) {
-        const session = state.sessions.get(currentSessionId);
+      if (effectiveTargetSessionId) {
+        const session = state.sessions.get(effectiveTargetSessionId);
         if (session) {
           setTokenUsage({
             current: session.currentTokenUsage?.totalTokens || 0,
             max: session.maxContextTokens || 128128
           });
-          const nextOrigin = (session.btwOrigin ||
-            (session.sessionKind === 'btw' && session.parentSessionId ? { parentSessionId: session.parentSessionId } : null)) as any;
-          setBtwOrigin(nextOrigin);
-          const parentId = nextOrigin?.parentSessionId || session.parentSessionId;
-          const parent = parentId ? state.sessions.get(parentId) : undefined;
-          setBtwParentTitle(parent?.title || '');
         }
       }
     });
 
-    if (currentSessionId) {
+    if (effectiveTargetSessionId) {
       const state = store.getState();
-      const session = state.sessions.get(currentSessionId);
+      const session = state.sessions.get(effectiveTargetSessionId);
       if (session) {
         setTokenUsage({
           current: session.currentTokenUsage?.totalTokens || 0,
           max: session.maxContextTokens || 128128
         });
-        const nextOrigin = (session.btwOrigin ||
-          (session.sessionKind === 'btw' && session.parentSessionId ? { parentSessionId: session.parentSessionId } : null)) as any;
-        setBtwOrigin(nextOrigin);
-        const parentId = nextOrigin?.parentSessionId || session.parentSessionId;
-        const parent = parentId ? state.sessions.get(parentId) : undefined;
-        setBtwParentTitle(parent?.title || '');
-      } else {
-        setBtwOrigin(null);
-        setBtwParentTitle('');
       }
     }
 
     return () => unsubscribe();
-  }, [currentSessionId]);
+  }, [effectiveTargetSessionId]);
 
   React.useEffect(() => {
     const initializeTemplateService = async () => {
@@ -452,14 +481,14 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   }, []);
 
   React.useEffect(() => {
-    if (!currentSessionId) return;
+    if (!effectiveTargetSessionId) return;
     
     const store = FlowChatStore.getInstance();
     const state = store.getState();
-    const session = state.sessions.get(currentSessionId);
+    const session = state.sessions.get(effectiveTargetSessionId);
     
     if (session?.mode) {
-      log.debug('Session ID changed, syncing mode', { sessionId: currentSessionId, mode: session.mode });
+      log.debug('Session ID changed, syncing mode', { sessionId: effectiveTargetSessionId, mode: session.mode });
       dispatchMode({ type: 'SET_CURRENT_MODE', payload: session.mode });
       try {
         sessionStorage.setItem('bitfun:flowchat:lastMode', session.mode);
@@ -467,7 +496,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         // ignore
       }
     }
-  }, [currentSessionId]);
+  }, [effectiveTargetSessionId]);
 
   React.useEffect(() => {
     if (!isAssistantWorkspace || modeState.current === 'Claw') {
@@ -479,7 +508,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 
   React.useEffect(() => {
     const queuedInput = stateMachine?.context?.queuedInput;
-    if (queuedInput && currentSessionId) {
+    if (queuedInput && effectiveTargetSessionId) {
       log.debug('Detected queuedInput, restoring message to input', { queuedInput });
       dispatchInput({ type: 'ACTIVATE' });
       dispatchInput({ type: 'SET_VALUE', payload: queuedInput });
@@ -490,7 +519,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         richTextInputRef.current.focus();
       }
     }
-  }, [stateMachine?.context?.queuedInput, currentSessionId, setQueuedInput, stateMachine?.context]);
+  }, [stateMachine?.context?.queuedInput, effectiveTargetSessionId, setQueuedInput, stateMachine?.context]);
 
   React.useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -555,13 +584,13 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   }, [addContext, currentImageCount]);
 
   React.useEffect(() => {
-    if (!currentSessionId || !workspacePath) {
+    if (!effectiveTargetSessionId || !workspacePath) {
       return;
     }
 
     const store = FlowChatStore.getInstance();
     const state = store.getState();
-    const session = state.sessions.get(currentSessionId);
+    const session = state.sessions.get(effectiveTargetSessionId);
 
     if (!session || session.dialogTurns.length === 0) {
       return;
@@ -594,13 +623,13 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         log.debug('File modifications detected, updating recommendation context', { modifiedFiles });
         setRecommendationContext({
           workspacePath,
-          sessionId: currentSessionId,
+          sessionId: effectiveTargetSessionId,
           turnIndex: session.dialogTurns.length - 1,
           modifiedFiles: [...new Set(modifiedFiles)]
         });
       }
     }
-  }, [currentSessionId, workspacePath, derivedState?.isProcessing]);
+  }, [effectiveTargetSessionId, workspacePath, derivedState?.isProcessing]);
   
   const handleInputChange = useCallback((text: string, activeContexts: import('../../shared/types/context').ContextItem[]) => {
     if (!inputState.isActive && text.length > 0) {
@@ -652,7 +681,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       if (!isBtwCommand) {
         setSlashCommandState({
           isActive: true,
-          kind: 'modes',
+          kind: 'all',
           query,
           selectedIndex: 0,
         });
@@ -676,6 +705,10 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       notificationService.error(t('btw.noSession', { defaultValue: 'No active session for /btw' }));
       return;
     }
+    if (isBtwSession) {
+      notificationService.warning(t('btw.nestedDisabled', { defaultValue: 'Side questions cannot create another side question' }));
+      return;
+    }
 
     const message = inputState.value.trim();
     const question = message.replace(/^\/btw\b/i, '').trim();
@@ -691,17 +724,24 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     }
 
     try {
-      await startBtwThread({
+      const { childSessionId } = await startBtwThread({
         parentSessionId: currentSessionId,
         workspacePath,
         question,
         modelId: 'fast',
         maxContextMessages: 60,
       });
+      openBtwSessionInAuxPane({
+        childSessionId,
+        parentSessionId: currentSessionId,
+        workspacePath,
+        expand: true,
+      });
+      setInputTarget('btw');
     } catch (e) {
       log.error('Failed to start /btw thread', { e });
     }
-  }, [currentSessionId, derivedState, inputState.value, setQueuedInput, t, workspacePath]);
+  }, [currentSessionId, derivedState, inputState.value, isBtwSession, setQueuedInput, t, workspacePath]);
   
   const handleSendOrCancel = useCallback(async () => {
     if (!derivedState) return;
@@ -728,8 +768,8 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     }
     
     // Add to history before clearing (session-scoped)
-    if (currentSessionId) {
-      addToHistory(currentSessionId, message);
+    if (effectiveTargetSessionId) {
+      addToHistory(effectiveTargetSessionId, message);
     }
     setHistoryIndex(-1);
     setSavedDraft('');
@@ -743,7 +783,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       log.error('Failed to send message', { error });
       dispatchInput({ type: 'SET_VALUE', payload: message });
     }
-  }, [inputState.value, derivedState, transition, sendMessage, addToHistory, setQueuedInput, submitBtwFromInput]);
+  }, [inputState.value, derivedState, transition, sendMessage, addToHistory, effectiveTargetSessionId, setQueuedInput, submitBtwFromInput]);
   
   const getFilteredModes = useCallback(() => {
     if (!canSwitchModes) {
@@ -770,10 +810,10 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       // ignore
     }
 
-    if (currentSessionId) {
-      FlowChatStore.getInstance().updateSessionMode(currentSessionId, modeId);
+    if (effectiveTargetSessionId) {
+      FlowChatStore.getInstance().updateSessionMode(effectiveTargetSessionId, modeId);
     }
-  }, [currentSessionId]);
+  }, [effectiveTargetSessionId]);
 
   const requestModeChange = useCallback((modeId: string) => {
     if (!canSwitchModes) {
@@ -808,9 +848,13 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   }, [requestModeChange]);
 
   const getFilteredActions = useCallback(() => {
+    if (isBtwSession) {
+      return [];
+    }
     // For now we only support one action: /btw.
-    const items = [
+    const items: SlashActionItem[] = [
       {
+        kind: 'action',
         id: 'btw',
         command: '/btw',
         label: t('btw.title', { defaultValue: 'Side question' }),
@@ -824,9 +868,20 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       const cmd = i.command.slice(1).toLowerCase();
       return cmd.includes(q) || i.label.toLowerCase().includes(q);
     });
-  }, [slashCommandState.query, t]);
+  }, [isBtwSession, slashCommandState.query, t]);
+
+  const getSlashPickerItems = useCallback((): SlashPickerItem[] => {
+    const actions = getFilteredActions();
+    const modes: SlashModeItem[] = getFilteredModes().map(mode => ({
+      kind: 'mode',
+      id: mode.id,
+      name: mode.name,
+    }));
+    return [...actions, ...modes];
+  }, [getFilteredActions, getFilteredModes]);
 
   const selectSlashCommandAction = useCallback((actionId: string) => {
+    if (isBtwSession) return;
     if (actionId !== 'btw') return;
 
     const raw = inputState.value || '';
@@ -850,7 +905,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     dispatchInput({ type: 'SET_VALUE', payload: next });
     setSlashCommandState({ isActive: false, kind: 'modes', query: '', selectedIndex: 0 });
     window.setTimeout(() => richTextInputRef.current?.focus(), 0);
-  }, [inputState.value]);
+  }, [inputState.value, isBtwSession]);
   
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     // Local /btw shortcut (Ctrl/Cmd+Alt+B) should work even when ChatInput is focused.
@@ -860,6 +915,10 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 
       if (!currentSessionId) {
         notificationService.error(t('btw.noSession', { defaultValue: 'No active session for /btw' }));
+        return;
+      }
+      if (isBtwSession) {
+        notificationService.warning(t('btw.nestedDisabled', { defaultValue: 'Side questions cannot create another side question' }));
         return;
       }
 
@@ -873,7 +932,12 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 
     if (slashCommandState.isActive) {
       if (!(slashCommandState.kind === 'modes' && !canSwitchModes)) {
-        const items = slashCommandState.kind === 'modes' ? getFilteredModes() : getFilteredActions();
+        const items =
+          slashCommandState.kind === 'modes'
+            ? getFilteredModes()
+            : slashCommandState.kind === 'actions'
+              ? getFilteredActions()
+              : getSlashPickerItems();
         const maxIndex = Math.max(0, items.length - 1);
         
         if (e.key === 'ArrowDown') {
@@ -900,9 +964,16 @@ export const ChatInput: React.FC<ChatInputProps> = ({
             if (slashCommandState.kind === 'modes') {
               const mode = items[slashCommandState.selectedIndex] as any;
               selectSlashCommandMode(mode.id);
-            } else {
+            } else if (slashCommandState.kind === 'actions') {
               const action = items[slashCommandState.selectedIndex] as any;
               selectSlashCommandAction(action.id);
+            } else {
+              const item = items[slashCommandState.selectedIndex] as SlashPickerItem;
+              if (item.kind === 'mode') {
+                selectSlashCommandMode(item.id);
+              } else {
+                selectSlashCommandAction(item.id);
+              }
             }
           }
           return;
@@ -914,7 +985,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
           setSlashCommandState({ isActive: false, kind: 'modes', query: '', selectedIndex: 0 });
 
           // For mode switching picker, "/" is just a trigger and should be cleared on cancel.
-          if (kind === 'modes') {
+          if (kind !== 'actions') {
             dispatchInput({ type: 'CLEAR_VALUE' });
           }
           return;
@@ -926,9 +997,16 @@ export const ChatInput: React.FC<ChatInputProps> = ({
             if (slashCommandState.kind === 'modes') {
               const mode = items[slashCommandState.selectedIndex] as any;
               selectSlashCommandMode(mode.id);
-            } else {
+            } else if (slashCommandState.kind === 'actions') {
               const action = items[slashCommandState.selectedIndex] as any;
               selectSlashCommandAction(action.id);
+            } else {
+              const item = items[slashCommandState.selectedIndex] as SlashPickerItem;
+              if (item.kind === 'mode') {
+                selectSlashCommandMode(item.id);
+              } else {
+                selectSlashCommandAction(item.id);
+              }
             }
           }
           return;
@@ -955,6 +1033,13 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       }
     }
     
+    // Tab key: toggle send target when the btw session switcher is visible
+    if (showTargetSwitcher && e.key === 'Tab' && !e.shiftKey && !slashCommandState.isActive && !templateState.fillState?.isActive) {
+      e.preventDefault();
+      setInputTarget(prev => prev === 'main' ? 'btw' : 'main');
+      return;
+    }
+
     // History navigation with up/down arrows
     // Only handle when not in slash command mode and not composing
     if (!slashCommandState.isActive && inputHistory.length > 0) {
@@ -1064,7 +1149,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       e.preventDefault();
       transition(SessionExecutionEvent.USER_CANCEL);
     }
-  }, [handleSendOrCancel, submitBtwFromInput, derivedState, transition, templateState.fillState, moveToNextPlaceholder, moveToPrevPlaceholder, exitTemplateMode, slashCommandState, getFilteredModes, getFilteredActions, selectSlashCommandMode, selectSlashCommandAction, canSwitchModes, historyIndex, inputHistory, savedDraft, inputState.value, currentSessionId, t]);
+  }, [handleSendOrCancel, submitBtwFromInput, derivedState, transition, templateState.fillState, moveToNextPlaceholder, moveToPrevPlaceholder, exitTemplateMode, slashCommandState, getFilteredModes, getFilteredActions, getSlashPickerItems, selectSlashCommandMode, selectSlashCommandAction, canSwitchModes, historyIndex, inputHistory, savedDraft, inputState.value, currentSessionId, isBtwSession, showTargetSwitcher, setInputTarget, t]);
 
   const handleImeCompositionStart = useCallback(() => {
     isImeComposingRef.current = true;
@@ -1274,44 +1359,6 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         )}
 
         <div className="bitfun-chat-input__container">
-          {!!btwOrigin?.parentSessionId && (
-            <div className="bitfun-chat-input__btw-origin" data-testid="btw-origin-banner">
-              <div className="bitfun-chat-input__btw-origin-text">
-                <span className="bitfun-chat-input__btw-origin-label">
-                  {t('btw.origin', { defaultValue: 'Asked from' })}
-                </span>
-                <span className="bitfun-chat-input__btw-origin-parent">
-                  {btwParentTitle || t('btw.parent', { defaultValue: 'parent session' })}
-                </span>
-                {btwOrigin?.parentTurnIndex ? (
-                  <span className="bitfun-chat-input__btw-origin-turn">
-                    {t('btw.turnLabel', { index: btwOrigin.parentTurnIndex, defaultValue: `turn ${btwOrigin.parentTurnIndex}` })}
-                  </span>
-                ) : null}
-              </div>
-              <IconButton
-                className="bitfun-chat-input__btw-origin-back"
-                variant="ghost"
-                size="xs"
-                onClick={() => {
-                  const parentId = btwOrigin?.parentSessionId;
-                  if (!parentId) return;
-                  const requestId = btwOrigin?.requestId;
-                  const itemId = requestId ? `btw_marker_${requestId}` : undefined;
-                  globalEventBus.emit('flowchat:focus-item', {
-                    sessionId: parentId,
-                    turnIndex: btwOrigin?.parentTurnIndex,
-                    itemId,
-                  }, 'ChatInput');
-                }}
-                tooltip={t('btw.backToParent', { defaultValue: 'Back to parent session' })}
-                disabled={!btwOrigin?.parentSessionId}
-              >
-                {t('btw.back', { defaultValue: 'Back' })}
-              </IconButton>
-            </div>
-          )}
-
           {templateState.fillState?.isActive && (
 <div className="bitfun-chat-input__template-hint">
                 <span className="bitfun-chat-input__template-hint-text" dangerouslySetInnerHTML={{ __html: t('chatInput.templateHint') }} />
@@ -1322,6 +1369,33 @@ export const ChatInput: React.FC<ChatInputProps> = ({
           )}
           
           <div className={`bitfun-chat-input__box ${inputState.isExpanded ? 'bitfun-chat-input__box--expanded' : ''}`}>
+            {showTargetSwitcher && (
+              <div className="bitfun-chat-input__target-switcher" data-testid="chat-input-target-switcher">
+                <span className="bitfun-chat-input__target-switcher-label">{t('chatInput.conversationTarget')}</span>
+                <button
+                  type="button"
+                  tabIndex={-1}
+                  className={`bitfun-chat-input__target-tab ${inputTarget === 'main' ? 'bitfun-chat-input__target-tab--active' : ''}`}
+                  onClick={() => setInputTarget('main')}
+                >
+                  {t('chatInput.targetMain')}
+                  {inputTarget === 'main' && currentSessionTitle && (
+                    <span className="bitfun-chat-input__target-tab-name">{currentSessionTitle}</span>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  tabIndex={-1}
+                  className={`bitfun-chat-input__target-tab ${inputTarget === 'btw' ? 'bitfun-chat-input__target-tab--active' : ''}`}
+                  onClick={() => setInputTarget('btw')}
+                >
+                  {t('chatInput.targetBtw')}
+                  {inputTarget === 'btw' && activeBtwSessionTitle && (
+                    <span className="bitfun-chat-input__target-tab-name">{activeBtwSessionTitle}</span>
+                  )}
+                </button>
+              </div>
+            )}
             <div className="bitfun-chat-input__input-area">
               <RichTextInput
                 ref={richTextInputRef}
@@ -1377,6 +1451,42 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                             >
                               <span className="bitfun-chat-input__slash-command-name">{action.command}</span>
                               <span className="bitfun-chat-input__slash-command-label">{action.label}</span>
+                            </div>
+                          ))
+                        ) : (
+                          <div className="bitfun-chat-input__slash-command-empty">
+                            {t('chatInput.noMatchingCommand', { defaultValue: 'No matching command' })}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                }
+
+                if (slashCommandState.kind === 'all') {
+                  const items = getSlashPickerItems();
+                  return (
+                    <div className="bitfun-chat-input__slash-command-picker">
+                      <div className="bitfun-chat-input__slash-command-header">
+                        <span>{t('chatInput.quickAction', { defaultValue: 'Commands' })}</span>
+                        <span className="bitfun-chat-input__slash-command-hint">{t('chatInput.selectHint')}</span>
+                      </div>
+                      <div className="bitfun-chat-input__slash-command-list">
+                        {items.length > 0 ? (
+                          items.map((item, index) => (
+                            <div
+                              key={`${item.kind}-${item.id}`}
+                              className={`bitfun-chat-input__slash-command-item ${index === slashCommandState.selectedIndex ? 'bitfun-chat-input__slash-command-item--selected' : ''} ${item.kind === 'mode' && item.id === modeState.current ? 'bitfun-chat-input__slash-command-item--active' : ''}`}
+                              onClick={() => item.kind === 'mode' ? selectSlashCommandMode(item.id) : selectSlashCommandAction(item.id)}
+                              onMouseEnter={() => setSlashCommandState(prev => ({ ...prev, selectedIndex: index }))}
+                            >
+                              <span className="bitfun-chat-input__slash-command-name">
+                                {item.kind === 'mode' ? `/${item.id}` : item.command}
+                              </span>
+                              <span className="bitfun-chat-input__slash-command-label">
+                                {item.kind === 'mode' ? item.name : item.label}
+                              </span>
+                              {item.kind === 'mode' && item.id === modeState.current && <span className="bitfun-chat-input__slash-command-current">{t('chatInput.current')}</span>}
                             </div>
                           ))
                         ) : (
@@ -1462,7 +1572,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
               <div className="bitfun-chat-input__actions-left">
                 <ModelSelector
                   currentMode={modeState.current}
-                  sessionId={currentSessionId || undefined}
+                  sessionId={effectiveTargetSessionId || undefined}
                 />
                 
                 {tokenUsage.current > 0 && (

@@ -5,7 +5,7 @@
 
 import React, { useEffect, useCallback, useMemo, useState, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { XCircle, GitBranch, FileText, ChevronDown, ChevronUp, FileEdit, FilePlus, Trash2 } from 'lucide-react';
+import { XCircle, GitBranch, FileText, ChevronDown, ChevronUp, FileEdit, FilePlus, Trash2, Loader2, Clock, Check } from 'lucide-react';
 import { CubeLoading } from '../../component-library';
 import type { ToolCardProps } from '../types/flow-chat';
 import { BaseToolCard, ToolCardHeader } from './BaseToolCard';
@@ -16,7 +16,9 @@ import { createCodeEditorTab, createDiffEditorTab } from '../../shared/utils/tab
 import { CodePreview } from '../components/CodePreview';
 import { InlineDiffPreview } from '../components/InlineDiffPreview';
 import { Tooltip } from '@/component-library';
+import { diffLines } from 'diff';
 import { createLogger } from '@/shared/utils/logger';
+import { CompactToolCard, CompactToolCardHeader } from './CompactToolCard';
 import './FileOperationToolCard.scss';
 
 const log = createLogger('FileOperationToolCard');
@@ -35,10 +37,11 @@ export const FileOperationToolCard: React.FC<FileOperationToolCardProps> = ({
   const { toolCall, toolResult, status, isParamsStreaming, partialParams } = toolItem;
   
   const [isErrorExpanded, setIsErrorExpanded] = useState(false);
-  const [isPreviewExpanded, setIsPreviewExpanded] = useState(false);
+  const [isPreviewExpanded, setIsPreviewExpanded] = useState(isParamsStreaming);
   const [operationDiffStats, setOperationDiffStats] = useState<{ additions: number; deletions: number } | null>(null);
   
   const prevIsParamsStreamingRef = useRef(isParamsStreaming);
+  const userCollapsedRef = useRef(false);
   
   useEffect(() => {
     const prevIsParamsStreaming = prevIsParamsStreamingRef.current;
@@ -47,6 +50,7 @@ export const FileOperationToolCard: React.FC<FileOperationToolCardProps> = ({
       prevIsParamsStreamingRef.current = isParamsStreaming;
       
       if (isParamsStreaming) {
+        userCollapsedRef.current = false;
         setIsPreviewExpanded(true);
       } else {
         setIsPreviewExpanded(false);
@@ -131,9 +135,30 @@ export const FileOperationToolCard: React.FC<FileOperationToolCardProps> = ({
     }
   }, [error, clearError, currentFilePath]);
 
+  const localDiffStats = useMemo(() => {
+    if (status !== 'completed' || isFailed) return null;
+    if (toolItem.toolName === 'Write' && contentPreview) {
+      const lines = contentPreview.split('\n');
+      const count = lines[lines.length - 1] === '' ? lines.length - 1 : lines.length;
+      return { additions: count, deletions: 0 };
+    }
+    if (toolItem.toolName === 'Edit' && (oldStringContent || newStringContent)) {
+      const changes = diffLines(oldStringContent, newStringContent);
+      let additions = 0;
+      let deletions = 0;
+      for (const change of changes) {
+        const lineCount = change.count ?? 0;
+        if (change.added) additions += lineCount;
+        else if (change.removed) deletions += lineCount;
+      }
+      return { additions, deletions };
+    }
+    return null;
+  }, [toolItem.toolName, contentPreview, oldStringContent, newStringContent, status, isFailed]);
+
   const currentFileDiffStats = useMemo(() => {
-    return operationDiffStats ?? { additions: 0, deletions: 0 };
-  }, [operationDiffStats]);
+    return operationDiffStats ?? localDiffStats ?? { additions: 0, deletions: 0 };
+  }, [operationDiffStats, localDiffStats]);
 
   useEffect(() => {
     if (!sessionId || !toolCall?.id || status !== 'completed' || isFailed) return;
@@ -341,28 +366,27 @@ export const FileOperationToolCard: React.FC<FileOperationToolCardProps> = ({
             <span className="delete-label">{t('toolCards.file.deletedLabel')}</span>
           )}
           
-          {!isDeleteTool && !isParamsStreaming && !isFailed && !isLoading && (currentFileDiffStats.additions > 0 || currentFileDiffStats.deletions > 0) && (
-            <span className="file-diff-stats">
-              {currentFileDiffStats.additions > 0 && (
-                <span className="additions">+{currentFileDiffStats.additions}</span>
-              )}
-              {currentFileDiffStats.deletions > 0 && (
-                <span className="deletions">-{currentFileDiffStats.deletions}</span>
-              )}
-            </span>
-          )}
-          
-          {!isFailed && (oldStringContent || newStringContent || contentPreview) && (
+          {!isDeleteTool && !isParamsStreaming && !isFailed && !isLoading && (
+            (currentFileDiffStats.additions > 0 || currentFileDiffStats.deletions > 0 || oldStringContent || newStringContent || contentPreview)
+          ) && (
             <Tooltip content={isPreviewExpanded ? t('toolCards.file.collapsePreview') : t('toolCards.file.expandPreview')} placement="top">
               <button
-                className="preview-toggle-btn"
+                className="diff-preview-group"
                 onClick={(e) => {
                   e.stopPropagation();
                   window.dispatchEvent(new CustomEvent('tool-card-toggle'));
-                  setIsPreviewExpanded(!isPreviewExpanded);
+                  const next = !isPreviewExpanded;
+                  userCollapsedRef.current = !next;
+                  setIsPreviewExpanded(next);
                 }}
               >
-                {isPreviewExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                {currentFileDiffStats.additions > 0 && (
+                  <span className="additions">+{currentFileDiffStats.additions}</span>
+                )}
+                {currentFileDiffStats.deletions > 0 && (
+                  <span className="deletions">-{currentFileDiffStats.deletions}</span>
+                )}
+                {isPreviewExpanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
               </button>
             </Tooltip>
           )}
@@ -502,6 +526,55 @@ export const FileOperationToolCard: React.FC<FileOperationToolCardProps> = ({
   );
 
   const isDeleteTool = toolItem.toolName === 'Delete';
+
+  const getDeleteStatusIcon = () => {
+    switch (status) {
+      case 'running':
+      case 'streaming':
+      case 'preparing':
+        return <Loader2 className="animate-spin" size={12} />;
+      case 'completed':
+        return <Check size={12} className="icon-check-done" />;
+      case 'pending':
+      case 'confirmed':
+      case 'pending_confirmation':
+      case 'analyzing':
+      default:
+        return <Clock size={12} />;
+    }
+  };
+
+  const renderDeleteContent = () => {
+    const baseLabel = `${t('toolCards.file.delete')}: ${fileName}`;
+
+    if (status === 'completed') {
+      return baseLabel;
+    }
+
+    if (status === 'error') {
+      return `${t('toolCards.file.delete')}${t('toolCards.file.failed')}: ${fileName}`;
+    }
+
+    return baseLabel;
+  };
+
+  if (isDeleteTool) {
+    return (
+      <CompactToolCard
+        status={status}
+        isExpanded={false}
+        className="read-file-card delete-file-card"
+        clickable={false}
+        header={
+          <CompactToolCardHeader
+            statusIcon={getDeleteStatusIcon()}
+            content={renderDeleteContent()}
+            extra={status === 'completed' ? t('toolCards.file.deletedLabel') : undefined}
+          />
+        }
+      />
+    );
+  }
 
   return (
     <BaseToolCard

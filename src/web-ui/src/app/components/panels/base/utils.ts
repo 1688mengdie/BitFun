@@ -14,7 +14,8 @@ import {
   Settings,
   ClipboardList,
   Image,
-  Network
+  Network,
+  MessageSquareQuote
 } from 'lucide-react';
 import { PanelContentType, PanelContentConfig } from './types';
 
@@ -192,6 +193,14 @@ export const PANEL_CONTENT_CONFIGS: Record<PanelContentType, PanelContentConfig>
     type: 'plan-viewer',
     displayName: 'Plan Viewer',
     icon: ClipboardList,
+    supportsCopy: false,
+    supportsDownload: false,
+    showHeader: false
+  },
+  'btw-session': {
+    type: 'btw-session',
+    displayName: 'Side Session',
+    icon: MessageSquareQuote,
     supportsCopy: false,
     supportsDownload: false,
     showHeader: false

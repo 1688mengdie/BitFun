@@ -27,8 +27,9 @@ interface UserMessageItemProps {
 export const UserMessageItem = React.memo<UserMessageItemProps>(
   ({ message, turnId }) => {
     const { t } = useTranslation('flow-chat');
-    const { config, sessionId } = useFlowChatContext();
-    const activeSession = useActiveSession();
+    const { config, sessionId, activeSessionOverride } = useFlowChatContext();
+    const activeSessionFromStore = useActiveSession();
+    const activeSession = activeSessionOverride ?? activeSessionFromStore;
     const [copied, setCopied] = useState(false);
     const [expanded, setExpanded] = useState(false);
     const [hasOverflow, setHasOverflow] = useState(false);
