@@ -61,7 +61,7 @@ Usage:
     }
 
     fn needs_permissions(&self, _input: Option<&Value>) -> bool {
-        true
+        false
     }
 
     async fn validate_input(
