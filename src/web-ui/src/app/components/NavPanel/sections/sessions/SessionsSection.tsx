@@ -26,7 +26,7 @@ const INACTIVE_WORKSPACE_EXPANDED_SESSIONS = 7;
 const log = createLogger('SessionsSection');
 const AGENT_SCENE: SceneTabId = 'session';
 
-const resolveSessionMode = (session: Session): SessionMode => {
+const resolveSessionModeType = (session: Session): SessionMode => {
   return session.mode?.toLowerCase() === 'cowork' ? 'cowork' : 'code';
 };
 
@@ -139,7 +139,7 @@ const SessionsSection: React.FC<SessionsSectionProps> = ({
       const matched = rawTitle.match(/^(?:新建会话|New Session)\s*(\d+)$/i);
       if (!matched) return rawTitle;
 
-      const mode = resolveSessionMode(session);
+      const mode = resolveSessionModeType(session);
       const label =
         mode === 'cowork'
           ? t('nav.sessions.newCoworkSession')
@@ -209,7 +209,7 @@ const SessionsSection: React.FC<SessionsSectionProps> = ({
       ) : (
         visibleSessions.map(session => {
           const isEditing = editingSessionId === session.sessionId;
-          const sessionModeKey = resolveSessionMode(session);
+          const sessionModeKey = resolveSessionModeType(session);
           const sessionTitle = resolveSessionTitle(session);
           const SessionIcon = sessionModeKey === 'cowork' ? Users : Code2;
           const row = (

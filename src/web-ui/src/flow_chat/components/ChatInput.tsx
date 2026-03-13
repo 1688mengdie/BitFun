@@ -65,7 +65,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   // History navigation state
   const [historyIndex, setHistoryIndex] = useState(-1);
   const [savedDraft, setSavedDraft] = useState('');
-  const { messages: inputHistory, addMessage: addToHistory } = useInputHistoryStore();
+  const { addMessage: addToHistory, getSessionHistory } = useInputHistoryStore();
   
   const contexts = useContextStore(state => state.contexts);
   const addContext = useContextStore(state => state.addContext);
@@ -79,6 +79,9 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   
   const activeSessionState = useActiveSessionState();
   const currentSessionId = activeSessionState.sessionId;
+  
+  // Get input history for current session (after currentSessionId is defined)
+  const inputHistory = currentSessionId ? getSessionHistory(currentSessionId) : [];
   const derivedState = useSessionDerivedState(currentSessionId);
   const { transition, setQueuedInput } = useSessionStateMachineActions(currentSessionId);
   const stateMachine = useSessionStateMachine(currentSessionId);
@@ -104,6 +107,11 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   useEffect(() => {
     setChatInputExpanded(inputState.isExpanded);
   }, [inputState.isExpanded, setChatInputExpanded]);
+  
+  // Reset history index when switching sessions
+  useEffect(() => {
+    setHistoryIndex(-1);
+  }, [currentSessionId]);
   
   const { sendMessage } = useMessageSender({
     currentSessionId: currentSessionId || undefined,
@@ -611,8 +619,10 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     
     const message = inputState.value.trim();
     
-    // Add to history before clearing
-    addToHistory(message);
+    // Add to history before clearing (session-scoped)
+    if (currentSessionId) {
+      addToHistory(currentSessionId, message);
+    }
     setHistoryIndex(-1);
     setSavedDraft('');
     
