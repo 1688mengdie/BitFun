@@ -17,9 +17,16 @@ permissions:
 jobs:
   # ── Rust: build check ─────────────────────────────────────────────
   rust-build-check:
-    name: Rust Build Check
-    runs-on: ubuntu-latest
+    name: Rust Build Check (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     needs: frontend-build
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-15
+          - windows-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -30,9 +37,12 @@ jobs:
           path: dist
 
       - name: Create mobile-web dist directory (workaround for Tauri)
-        run: mkdir -p mobile-web/dist
+        shell: bash
+        run: mkdir -p src/mobile-web/dist
 
       - name: Install Linux system dependencies (Tauri)
+        if: runner.os == 'Linux'
+        shell: bash
         run: |
           sudo apt-get update
           if apt-cache show libwebkit2gtk-4.1-dev >/dev/null 2>&1; then
@@ -60,10 +70,10 @@ jobs:
 
       - uses: swatinem/rust-cache@v2
         with:
-          shared-key: "ci-check"
+          shared-key: "ci-check-${{ runner.os }}"
 
       - name: Check compilation
-        run: cargo check --workspace --exclude bitfun-desktop
+        run: cargo check --workspace --exclude bitfun-cli
 
   # ── Frontend: build ────────────────────────────────────────────────
   frontend-build:

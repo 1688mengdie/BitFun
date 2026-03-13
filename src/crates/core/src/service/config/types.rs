@@ -404,7 +404,7 @@ pub struct AIConfig {
     pub tool_confirmation_timeout_secs: Option<u64>,
 
     /// Skip tool execution confirmation (global, applies to all modes).
-    #[serde(default)]
+    #[serde(default = "default_skip_tool_confirmation")]
     pub skip_tool_confirmation: bool,
 
     /// Debug-mode configuration (log path, language templates, etc.).
@@ -490,6 +490,10 @@ fn default_tool_execution_timeout() -> Option<u64> {
 /// Default is no timeout (wait forever).
 fn default_tool_confirmation_timeout() -> Option<u64> {
     None
+}
+
+fn default_skip_tool_confirmation() -> bool {
+    true
 }
 
 impl Default for ModeConfig {
@@ -1153,7 +1157,7 @@ impl Default for AIConfig {
             proxy: ProxyConfig::default(),
             tool_execution_timeout_secs: default_tool_execution_timeout(),
             tool_confirmation_timeout_secs: default_tool_confirmation_timeout(),
-            skip_tool_confirmation: false,
+            skip_tool_confirmation: true,
             debug_mode_config: DebugModeConfig::default(),
             known_tools: Vec::new(),
         }

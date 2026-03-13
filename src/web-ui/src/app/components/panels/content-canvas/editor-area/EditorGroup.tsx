@@ -98,10 +98,11 @@ export const EditorGroup: React.FC<EditorGroupProps> = ({
   
   // Tabs to render (active + cached)
   const tabsToRender = useMemo(() => {
-    return group.tabs.filter(t => 
+    const result = group.tabs.filter(t => 
       !t.isHidden && 
       (t.id === group.activeTabId || cachedTabsRef.current.has(t.id))
     );
+    return result;
   }, [group.tabs, group.activeTabId]);
 
   const handleContentChange = useCallback((content: PanelContent | null) => {

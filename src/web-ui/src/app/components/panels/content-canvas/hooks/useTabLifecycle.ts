@@ -252,7 +252,7 @@ export const useTabLifecycle = (options: UseTabLifecycleOptions = {}): UseTabLif
         const existing = findTabByMetadata({ duplicateCheckKey });
         if (existing) {
           const hasJumpInfo = data?.jumpToRange || data?.jumpToLine || data?.jumpToColumn;
-          
+
           if (replaceExisting || hasJumpInfo) {
             // Update content
             updateTabContent(existing.tab.id, existing.groupId, content);
@@ -269,7 +269,7 @@ export const useTabLifecycle = (options: UseTabLifecycleOptions = {}): UseTabLif
       
       // Determine target group: use specified group when split enabled, otherwise active group
       const groupId = (enableSplitView && targetGroup) ? targetGroup : (targetGroup || activeGroupId);
-      
+
       // Open all tabs in active state by default (no preview replacement)
       addTab(content, 'active', groupId);
       
