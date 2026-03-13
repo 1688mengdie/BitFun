@@ -2,15 +2,20 @@
 
 use crate::api::app_state::AppState;
 use crate::api::dto::WorkspaceInfoDto;
+use bitfun_core::service::workspace::{ScanOptions, WorkspaceInfo, WorkspaceKind, WorkspaceOpenOptions};
 use bitfun_core::infrastructure::{file_watcher, FileOperationOptions, SearchMatchType};
 use log::{debug, error, info, warn};
 use serde::Deserialize;
+use std::path::Path;
 use tauri::{AppHandle, State};
 
 #[derive(Debug, Deserialize)]
 pub struct OpenWorkspaceRequest {
     pub path: String,
 }
+
+#[derive(Debug, Deserialize, Default)]
+pub struct CreateAssistantWorkspaceRequest {}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -27,6 +32,18 @@ pub struct CloseWorkspaceRequest {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SetActiveWorkspaceRequest {
+    pub workspace_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteAssistantWorkspaceRequest {
+    pub workspace_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResetAssistantWorkspaceRequest {
     pub workspace_id: String,
 }
 
@@ -62,6 +79,12 @@ pub struct WriteFileContentRequest {
     #[serde(rename = "filePath")]
     pub file_path: String,
     pub content: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResetWorkspacePersonaFilesRequest {
+    pub workspace_path: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -310,20 +333,15 @@ pub async fn test_ai_config_connection(
     request: TestAIConfigConnectionRequest,
 ) -> Result<bitfun_core::util::types::ConnectionTestResult, String> {
     let model_name = request.config.name.clone();
-    let supports_image_input = request
-        .config
-        .capabilities
-        .iter()
-        .any(|cap| {
-            matches!(
-                cap,
-                bitfun_core::service::config::types::ModelCapability::ImageUnderstanding
-            )
-        })
-        || matches!(
-            request.config.category,
-            bitfun_core::service::config::types::ModelCategory::Multimodal
-        );
+    let supports_image_input = request.config.capabilities.iter().any(|cap| {
+        matches!(
+            cap,
+            bitfun_core::service::config::types::ModelCapability::ImageUnderstanding
+        )
+    }) || matches!(
+        request.config.category,
+        bitfun_core::service::config::types::ModelCategory::Multimodal
+    );
 
     let ai_config = match request.config.try_into() {
         Ok(config) => config,
@@ -374,9 +392,7 @@ pub async fn test_ai_config_connection(
                         let merged = bitfun_core::util::types::ConnectionTestResult {
                             success: true,
                             response_time_ms,
-                            model_response: image_result
-                                .model_response
-                                .or(result.model_response),
+                            model_response: image_result.model_response.or(result.model_response),
                             error_details: None,
                         };
                         info!(
@@ -578,6 +594,14 @@ pub async fn open_workspace(
         Ok(workspace_info) => {
             apply_active_workspace_context(&state, &app, &workspace_info).await;
 
+            if let Err(e) = state
+                .workspace_identity_watch_service
+                .sync_watched_workspaces()
+                .await
+            {
+                warn!("Failed to sync workspace identity watchers after open: {}", e);
+            }
+
             info!(
                 "Workspace opened: name={}, path={}",
                 workspace_info.name,
@@ -590,6 +614,233 @@ pub async fn open_workspace(
             Err(format!("Failed to open workspace: {}", e))
         }
     }
+}
+
+#[tauri::command]
+pub async fn create_assistant_workspace(
+    state: State<'_, AppState>,
+    _request: CreateAssistantWorkspaceRequest,
+) -> Result<WorkspaceInfoDto, String> {
+    match state.workspace_service.create_assistant_workspace(None).await {
+        Ok(workspace_info) => {
+            if let Err(e) = state
+                .workspace_identity_watch_service
+                .sync_watched_workspaces()
+                .await
+            {
+                warn!(
+                    "Failed to sync workspace identity watchers after assistant workspace creation: {}",
+                    e
+                );
+            }
+
+            info!(
+                "Assistant workspace created: workspace_id={}, path={}",
+                workspace_info.id,
+                workspace_info.root_path.display()
+            );
+            Ok(WorkspaceInfoDto::from_workspace_info(&workspace_info))
+        }
+        Err(e) => {
+            error!("Failed to create assistant workspace: {}", e);
+            Err(format!("Failed to create assistant workspace: {}", e))
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn delete_assistant_workspace(
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+    request: DeleteAssistantWorkspaceRequest,
+) -> Result<(), String> {
+    let workspace_info = state
+        .workspace_service
+        .get_workspace(&request.workspace_id)
+        .await
+        .ok_or_else(|| format!("Assistant workspace not found: {}", request.workspace_id))?;
+
+    if workspace_info.workspace_kind != WorkspaceKind::Assistant {
+        return Err(format!(
+            "Workspace is not an assistant workspace: {}",
+            request.workspace_id
+        ));
+    }
+
+    let assistant_id = workspace_info.assistant_id.clone().ok_or_else(|| {
+        "Default assistant workspace cannot be deleted".to_string()
+    })?;
+
+    if !state
+        .workspace_service
+        .is_assistant_workspace_path(&workspace_info.root_path)
+    {
+        return Err(format!(
+            "Workspace path is not a managed assistant workspace: {}",
+            workspace_info.root_path.display()
+        ));
+    }
+
+    let is_active_workspace = state
+        .workspace_service
+        .get_current_workspace()
+        .await
+        .map(|workspace| workspace.id == request.workspace_id)
+        .unwrap_or(false);
+
+    if is_active_workspace {
+        state
+            .workspace_service
+            .close_workspace(&request.workspace_id)
+            .await
+            .map_err(|e| format!("Failed to close assistant workspace before deletion: {}", e))?;
+    }
+
+    let workspace_path = workspace_info.root_path.to_string_lossy().to_string();
+
+    state
+        .filesystem_service
+        .delete_directory(&workspace_path, true)
+        .await
+        .map_err(|e| format!("Failed to delete assistant workspace files: {}", e))?;
+
+    state
+        .workspace_service
+        .remove_workspace(&request.workspace_id)
+        .await
+        .map_err(|e| format!("Failed to remove assistant workspace state: {}", e))?;
+
+    if let Some(current_workspace) = state.workspace_service.get_current_workspace().await {
+        apply_active_workspace_context(&state, &app, &current_workspace).await;
+    } else {
+        clear_active_workspace_context(&state, &app).await;
+    }
+
+    if let Err(e) = state
+        .workspace_identity_watch_service
+        .sync_watched_workspaces()
+        .await
+    {
+        warn!(
+            "Failed to sync workspace identity watchers after assistant workspace deletion: {}",
+            e
+        );
+    }
+
+    info!(
+        "Assistant workspace deleted: workspace_id={}, assistant_id={}, path={}",
+        request.workspace_id,
+        assistant_id,
+        workspace_info.root_path.display()
+    );
+
+    Ok(())
+}
+
+async fn clear_directory_contents(directory: &Path) -> Result<(), String> {
+    tokio::fs::create_dir_all(directory)
+        .await
+        .map_err(|e| format!("Failed to create workspace directory '{}': {}", directory.display(), e))?;
+
+    let mut entries = tokio::fs::read_dir(directory)
+        .await
+        .map_err(|e| format!("Failed to read workspace directory '{}': {}", directory.display(), e))?;
+
+    while let Some(entry) = entries
+        .next_entry()
+        .await
+        .map_err(|e| format!("Failed to iterate workspace directory '{}': {}", directory.display(), e))?
+    {
+        let entry_path = entry.path();
+        let file_type = entry.file_type().await.map_err(|e| {
+            format!(
+                "Failed to inspect workspace entry '{}': {}",
+                entry_path.display(),
+                e
+            )
+        })?;
+
+        if file_type.is_dir() {
+            tokio::fs::remove_dir_all(&entry_path).await.map_err(|e| {
+                format!(
+                    "Failed to remove workspace directory '{}': {}",
+                    entry_path.display(),
+                    e
+                )
+            })?;
+        } else {
+            tokio::fs::remove_file(&entry_path).await.map_err(|e| {
+                format!(
+                    "Failed to remove workspace file '{}': {}",
+                    entry_path.display(),
+                    e
+                )
+            })?;
+        }
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn reset_assistant_workspace(
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+    request: ResetAssistantWorkspaceRequest,
+) -> Result<WorkspaceInfoDto, String> {
+    let workspace_info = state
+        .workspace_service
+        .get_workspace(&request.workspace_id)
+        .await
+        .ok_or_else(|| format!("Assistant workspace not found: {}", request.workspace_id))?;
+
+    if workspace_info.workspace_kind != WorkspaceKind::Assistant {
+        return Err(format!(
+            "Workspace is not an assistant workspace: {}",
+            request.workspace_id
+        ));
+    }
+
+    if !state
+        .workspace_service
+        .is_assistant_workspace_path(&workspace_info.root_path)
+    {
+        return Err(format!(
+            "Workspace path is not a managed assistant workspace: {}",
+            workspace_info.root_path.display()
+        ));
+    }
+
+    clear_directory_contents(&workspace_info.root_path).await?;
+
+    bitfun_core::service::reset_workspace_persona_files_to_default(&workspace_info.root_path)
+        .await
+        .map_err(|e| format!("Failed to restore assistant workspace persona files: {}", e))?;
+
+    let updated_workspace = state
+        .workspace_service
+        .rescan_workspace(&request.workspace_id)
+        .await
+        .map_err(|e| format!("Failed to rescan assistant workspace after reset: {}", e))?;
+
+    if state
+        .workspace_service
+        .get_current_workspace()
+        .await
+        .map(|workspace| workspace.id == request.workspace_id)
+        .unwrap_or(false)
+    {
+        apply_active_workspace_context(&state, &app, &updated_workspace).await;
+    }
+
+    info!(
+        "Assistant workspace reset: workspace_id={}, assistant_id={:?}, path={}",
+        request.workspace_id,
+        workspace_info.assistant_id,
+        workspace_info.root_path.display()
+    );
+
+    Ok(WorkspaceInfoDto::from_workspace_info(&updated_workspace))
 }
 
 #[tauri::command]
@@ -696,25 +947,36 @@ pub async fn get_opened_workspaces(
 pub async fn scan_workspace_info(
     state: State<'_, AppState>,
     request: ScanWorkspaceInfoRequest,
-) -> Result<serde_json::Value, String> {
-    let path = std::path::Path::new(&request.workspace_path);
-    let name = path.file_name().unwrap_or_default().to_string_lossy();
+) -> Result<Option<WorkspaceInfoDto>, String> {
+    let workspace_path = std::path::PathBuf::from(&request.workspace_path);
 
-    let files_count = match state
-        .filesystem_service
-        .build_file_tree(&request.workspace_path)
+    if let Some(existing_workspace) = state
+        .workspace_service
+        .get_workspace_by_path(&workspace_path)
         .await
     {
-        Ok(nodes) => nodes.len(),
-        Err(_) => 0,
-    };
+        return state
+            .workspace_service
+            .rescan_workspace(&existing_workspace.id)
+            .await
+            .map(|workspace| Some(WorkspaceInfoDto::from_workspace_info(&workspace)))
+            .map_err(|e| format!("Failed to rescan workspace: {}", e));
+    }
 
-    Ok(serde_json::json!({
-        "path": request.workspace_path,
-        "name": name,
-        "type": "workspace",
-        "files_count": files_count
-    }))
+    WorkspaceInfo::new(
+        workspace_path,
+        WorkspaceOpenOptions {
+            scan_options: ScanOptions::default(),
+            auto_set_current: false,
+            add_to_recent: false,
+            workspace_kind: WorkspaceKind::Normal,
+            assistant_id: None,
+            display_name: None,
+        },
+    )
+    .await
+    .map(|workspace| Some(WorkspaceInfoDto::from_workspace_info(&workspace)))
+    .map_err(|e| format!("Failed to scan workspace info: {}", e))
 }
 
 #[tauri::command]
@@ -920,6 +1182,41 @@ pub async fn write_file_content(
             Err(format!("Failed to write file {}, error: {}", full_path, e))
         }
     }
+}
+
+#[tauri::command]
+pub async fn reset_workspace_persona_files(
+    state: State<'_, AppState>,
+    request: ResetWorkspacePersonaFilesRequest,
+) -> Result<(), String> {
+    let workspace_path = std::path::PathBuf::from(&request.workspace_path);
+
+    if !state
+        .workspace_service
+        .is_assistant_workspace_path(&workspace_path)
+    {
+        return Err(format!(
+            "Workspace is not a managed assistant workspace: {}",
+            request.workspace_path
+        ));
+    }
+
+    bitfun_core::service::reset_workspace_persona_files_to_default(&workspace_path)
+        .await
+        .map_err(|e| {
+            error!(
+                "Failed to reset workspace persona files: path={} error={}",
+                request.workspace_path, e
+            );
+            format!("Failed to reset workspace persona files: {}", e)
+        })?;
+
+    info!(
+        "Workspace persona files reset to defaults: path={}",
+        request.workspace_path
+    );
+
+    Ok(())
 }
 
 #[tauri::command]

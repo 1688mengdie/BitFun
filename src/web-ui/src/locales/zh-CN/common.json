@@ -148,6 +148,7 @@
       "newSession": "新建会话",
       "newCodeSession": "新建 Code 会话",
       "newCoworkSession": "新建 Cowork 会话",
+      "newClawSession": "新建 Claw 会话",
       "defaultModeIndicator": "（默认模式）",
       "newCodeSessionDefault": "新建 Code 会话（默认模式）",
       "newCoworkSessionDefault": "新建 Cowork 会话（默认模式）",
@@ -165,19 +166,44 @@
     },
     "workspaces": {
       "empty": "暂无已打开工作区",
+      "emptyProjects": "暂无普通工作区",
+      "emptyAssistants": "暂无个人助理",
+      "primaryAssistant": "主助理",
       "closeFailed": "关闭工作区失败",
+      "createAssistantFailed": "新建个人助理失败",
+      "deleteAssistantFailed": "删除个人助理失败",
+      "assistantDeleted": "已删除个人助理",
+      "resetWorkspaceFailed": "重置工作区失败",
+      "workspaceReset": "已重置工作区",
       "revealFailed": "打开工作区目录失败",
       "createSessionFailed": "新建会话失败",
       "worktreeCreated": "已创建 worktree",
       "worktreeCreateFailed": "创建 worktree 失败：{{error}}",
       "expandSessions": "展开会话列表",
       "collapseSessions": "收起会话列表",
+      "groups": {
+        "projects": "普通工作区",
+        "assistants": "个人助理"
+      },
       "actions": {
         "more": "更多操作",
         "newSession": "新建会话",
+        "newAssistant": "新建个人助理",
+        "deleteAssistant": "删除个人助理",
+        "resetWorkspace": "重置工作区",
         "newWorktree": "新建 worktree",
         "reveal": "在资源管理器中打开",
         "close": "关闭工作区"
+      },
+      "deleteAssistantDialog": {
+        "title": "删除 {{name}}？",
+        "message": "此操作会永久删除该个人助理的工作区目录，以及其中的所有文件。",
+        "pathLabel": "工作区路径"
+      },
+      "resetWorkspaceDialog": {
+        "title": "重置 {{name}}？",
+        "message": "此操作会清空该工作区目录下的所有内容，并恢复默认 persona 文件；不会删除工作区目录本身。",
+        "pathLabel": "工作区路径"
       }
     },
     "agents": {
@@ -642,6 +668,8 @@
     "newCodeSessionDesc": "适合日常编码、问答与调试",
     "newCoworkSession": "新建 Cowork 会话",
     "newCoworkSessionDesc": "适合协助日常工作",
+    "newClawSession": "新建 Claw 会话",
+    "newClawSessionDesc": "个人助理专属会话，使用独立助理工作区",
     "comingSoon": "即将推出",
     "recentWorkspaces": "切换工作区",
     "openOtherProject": "打开",

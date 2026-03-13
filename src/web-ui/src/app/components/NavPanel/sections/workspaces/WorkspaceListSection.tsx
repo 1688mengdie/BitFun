@@ -1,28 +1,37 @@
-import React, { useEffect } from 'react';
+import React from 'react';
 import { useI18n } from '@/infrastructure/i18n';
 import { useWorkspaceContext } from '@/infrastructure/contexts/WorkspaceContext';
-import { flowChatStore } from '@/flow_chat/store/FlowChatStore';
 import WorkspaceItem from './WorkspaceItem';
 import './WorkspaceListSection.scss';
 
-const WorkspaceListSection: React.FC = () => {
-  const { t } = useI18n('common');
-  const { openedWorkspacesList, activeWorkspaceId } = useWorkspaceContext();
+interface WorkspaceListSectionProps {
+  variant: 'assistants' | 'projects';
+}
 
-  useEffect(() => {
-    openedWorkspacesList.forEach(workspace => {
-      void flowChatStore.initializeFromDisk(workspace.rootPath);
-    });
-  }, [openedWorkspacesList]);
+const WorkspaceListSection: React.FC<WorkspaceListSectionProps> = ({ variant }) => {
+  const { t } = useI18n('common');
+  const {
+    openedWorkspacesList,
+    normalWorkspacesList,
+    assistantWorkspacesList,
+    activeWorkspaceId,
+  } = useWorkspaceContext();
+
+  const workspaces = variant === 'assistants'
+    ? assistantWorkspacesList
+    : normalWorkspacesList;
+  const emptyLabel = variant === 'assistants'
+    ? t('nav.workspaces.emptyAssistants')
+    : t('nav.workspaces.emptyProjects');
 
   return (
     <div className="bitfun-nav-panel__workspace-list">
-      {openedWorkspacesList.length === 0 ? (
+      {workspaces.length === 0 ? (
         <div className="bitfun-nav-panel__workspace-list-empty">
-          {t('nav.workspaces.empty')}
+          {emptyLabel}
         </div>
       ) : (
-        openedWorkspacesList.map(workspace => (
+        workspaces.map(workspace => (
           <WorkspaceItem
             key={workspace.id}
             workspace={workspace}
@@ -31,7 +40,6 @@ const WorkspaceListSection: React.FC = () => {
           />
         ))
       )}
-
     </div>
   );
 };

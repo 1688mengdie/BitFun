@@ -1,5 +1,5 @@
 use super::manager::{
-    ScanOptions, WorkspaceInfo, WorkspaceStatistics, WorkspaceSummary, WorkspaceType,
+    WorkspaceInfo, WorkspaceOpenOptions, WorkspaceStatistics, WorkspaceSummary, WorkspaceType,
 };
 use super::service::{
     BatchImportResult, WorkspaceCreateOptions, WorkspaceHealthStatus, WorkspaceService,
@@ -141,7 +141,7 @@ impl WorkspaceProvider {
             return Err(BitFunError::service("Path does not exist".to_string()));
         }
 
-        let temp_workspace = WorkspaceInfo::new(path_buf, ScanOptions::default()).await?;
+        let temp_workspace = WorkspaceInfo::new(path_buf, WorkspaceOpenOptions::default()).await?;
         Ok(temp_workspace.workspace_type)
     }
 

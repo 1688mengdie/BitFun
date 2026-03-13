@@ -206,7 +206,7 @@ impl PluginLoader {
         if !server_path.exists() {
             #[cfg(windows)]
             {
-                let mut server_path = server_path;
+                let mut server_path = server_path.clone();
                 let extensions = vec![".exe", ".bat", ".cmd"];
                 let mut found = false;
 

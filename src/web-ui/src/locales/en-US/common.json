@@ -148,6 +148,7 @@
       "newSession": "New session",
       "newCodeSession": "New Code session",
       "newCoworkSession": "New Cowork session",
+      "newClawSession": "New Claw session",
       "defaultModeIndicator": " (default)",
       "newCodeSessionDefault": "New Code session (default)",
       "newCoworkSessionDefault": "New Cowork session (default)",
@@ -165,19 +166,44 @@
     },
     "workspaces": {
       "empty": "No opened workspaces yet",
+      "emptyProjects": "No project workspaces",
+      "emptyAssistants": "No personal assistants",
+      "primaryAssistant": "Primary",
       "closeFailed": "Failed to close workspace",
+      "createAssistantFailed": "Failed to create personal assistant",
+      "deleteAssistantFailed": "Failed to delete personal assistant",
+      "assistantDeleted": "Personal assistant deleted",
+      "resetWorkspaceFailed": "Failed to reset workspace",
+      "workspaceReset": "Workspace reset",
       "revealFailed": "Failed to reveal workspace folder",
       "createSessionFailed": "Failed to create session",
       "worktreeCreated": "Worktree created",
       "worktreeCreateFailed": "Failed to create worktree: {{error}}",
       "expandSessions": "Expand sessions",
       "collapseSessions": "Collapse sessions",
+      "groups": {
+        "projects": "Projects",
+        "assistants": "Personal Assistants"
+      },
       "actions": {
         "more": "More actions",
         "newSession": "New session",
+        "newAssistant": "New personal assistant",
+        "deleteAssistant": "Delete personal assistant",
+        "resetWorkspace": "Reset workspace",
         "newWorktree": "New worktree",
         "reveal": "Reveal in explorer",
         "close": "Close workspace"
+      },
+      "deleteAssistantDialog": {
+        "title": "Delete {{name}}?",
+        "message": "This will permanently delete the personal assistant workspace folder and all files inside it.",
+        "pathLabel": "Workspace path"
+      },
+      "resetWorkspaceDialog": {
+        "title": "Reset {{name}}?",
+        "message": "This will clear everything inside the workspace directory and restore the default persona files without deleting the workspace directory itself.",
+        "pathLabel": "Workspace path"
       }
     },
     "agents": {
@@ -642,6 +668,8 @@
     "newCodeSessionDesc": "For everyday coding, Q&A and debugging",
     "newCoworkSession": "New Cowork Session",
     "newCoworkSessionDesc": "Suitable for assisting with everyday work",
+    "newClawSession": "New Claw Session",
+    "newClawSessionDesc": "Personal assistant session with a dedicated assistant workspace",
     "comingSoon": "Coming Soon",
     "recentWorkspaces": "Switch Workspace",
     "openOtherProject": "Open",

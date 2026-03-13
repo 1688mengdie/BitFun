@@ -11,6 +11,8 @@ export interface WorkspaceInfo {
   name: string;
   rootPath: string;
   workspaceType: string;
+  workspaceKind: string;
+  assistantId?: string | null;
   languages: string[];
   openedAt: string;
   lastAccessed: string;
@@ -23,6 +25,12 @@ export interface WorkspaceInfo {
     filesByLanguage: Record<string, number>;
     filesByExtension: Record<string, number>;
     lastUpdated: string;
+  } | null;
+  identity?: {
+    name?: string | null;
+    creature?: string | null;
+    vibe?: string | null;
+    emoji?: string | null;
   } | null;
 }
 

@@ -28,6 +28,26 @@
     "radarTitle":     "Click to expand · Click dimension labels to navigate"
   },
 
+  "identity": {
+    "emoji": "Emoji Marker",
+    "emojiPlaceholder": "Set emoji marker",
+    "creature": "Role Type",
+    "creaturePlaceholderShort": "Set role type",
+    "vibe": "Style Vibe",
+    "vibePlaceholderShort": "Set style vibe",
+    "resetTooltip": "Reset assistant persona",
+    "resetConfirmTitle": "Reset assistant persona",
+    "resetConfirmMessage": "This will restore BOOTSTRAP.md, SOUL.md, USER.md, and IDENTITY.md to their default templates and overwrite the current contents. Continue?",
+    "resetConfirmAction": "Reset",
+    "resetCancel": "Cancel",
+    "resetSuccess": "Assistant persona reset",
+    "resetFailed": "Failed to reset assistant persona"
+  },
+
+  "home": {
+    "descHint": "Click to edit the IDENTITY.md body."
+  },
+
   "sections": {
     "brain":        "Brain",
     "capabilities": "Capabilities",

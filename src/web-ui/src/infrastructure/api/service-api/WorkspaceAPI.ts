@@ -90,6 +90,16 @@ export class WorkspaceAPI {
     }
   }
 
+  async resetWorkspacePersonaFiles(workspacePath: string): Promise<void> {
+    try {
+      await api.invoke('reset_workspace_persona_files', {
+        request: { workspacePath }
+      });
+    } catch (error) {
+      throw createTauriCommandError('reset_workspace_persona_files', error, { workspacePath });
+    }
+  }
+
    
   async createFile(path: string): Promise<void> {
     try {

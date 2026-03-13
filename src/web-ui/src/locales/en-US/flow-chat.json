@@ -40,9 +40,11 @@
     "new": "New Session",
     "newCode": "New Code session",
     "newCowork": "New Cowork session",
+    "newClaw": "New Claw session",
     "newWithIndex": "New Session {{count}}",
     "newCodeWithIndex": "New Code Session {{count}}",
     "newCoworkWithIndex": "New Cowork Session {{count}}",
+    "newClawWithIndex": "New Claw Session {{count}}",
     "title": "Session",
     "chatWithAgent": "Chat with {{name}}",
     "rename": "Rename Session",
@@ -191,12 +193,14 @@
     "wip": "WIP",
     "modeDescriptions": {
       "agentic": "Full-featured AI assistant with access to all tools for comprehensive software development tasks",
+      "Claw": "Personal assistant mode for dedicated assistant workspaces and everyday task support",
       "Plan": "Plan first, execute later — clarify requirements and create an implementation plan before coding",
       "debug": "Evidence-driven systematic debugging: form hypotheses, gather runtime evidence, and fix with confidence",
       "Cowork": "Collaborative mode: clarify first, track progress lightly, verify outcomes anytime"
     },
     "modeNames": {
       "agentic": "Agentic",
+      "Claw": "Claw",
       "Plan": "Plan",
       "debug": "Debug",
       "Cowork": "Cowork"

@@ -18,6 +18,10 @@ pub struct SessionMetadata {
     #[serde(alias = "agent_type")]
     pub agent_type: String,
 
+    /// Creator identity for future permission checks
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "created_by")]
+    pub created_by: Option<String>,
+
     /// Model name
     #[serde(alias = "model_name")]
     pub model_name: String,
@@ -341,6 +345,7 @@ impl SessionMetadata {
             session_id,
             session_name,
             agent_type,
+            created_by: None,
             model_name,
             created_at: now,
             last_active_at: now,

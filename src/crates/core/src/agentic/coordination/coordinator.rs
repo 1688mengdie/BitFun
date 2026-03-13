@@ -15,6 +15,7 @@ use crate::agentic::image_analysis::ImageContextData;
 use crate::agentic::session::SessionManager;
 use crate::agentic::tools::pipeline::{SubagentParentInfo, ToolPipeline};
 use crate::agentic::WorkspaceBinding;
+use crate::service::workspace::get_global_workspace_service;
 use crate::util::errors::{BitFunError, BitFunResult};
 use log::{debug, error, info, warn};
 use std::path::{Path, PathBuf};
@@ -25,13 +26,11 @@ use tokio_util::sync::CancellationToken;
 
 /// Subagent execution result
 ///
-/// Contains the text response and optional tool arguments after subagent execution
+/// Contains the text response after subagent execution
 #[derive(Debug, Clone)]
 pub struct SubagentResult {
     /// AI text response
     pub text: String,
-    /// Tool call arguments for ending the conversation
-    pub tool_arguments: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -102,6 +101,41 @@ impl ConversationCoordinator {
             .map(|workspace_path| WorkspaceBinding::new(None, PathBuf::from(workspace_path)))
     }
 
+    async fn normalize_agent_type_for_workspace_path(
+        agent_type: &str,
+        workspace_path: &str,
+    ) -> String {
+        let normalized_agent_type = if agent_type.trim().is_empty() {
+            "agentic".to_string()
+        } else {
+            agent_type.trim().to_string()
+        };
+
+        let Some(workspace_service) = get_global_workspace_service() else {
+            return normalized_agent_type;
+        };
+
+        let workspace_path_buf = PathBuf::from(workspace_path);
+        if workspace_service.is_assistant_workspace_path(&workspace_path_buf)
+            || workspace_service
+                .get_workspace_by_path(&workspace_path_buf)
+                .await
+                .map(|workspace| workspace.workspace_kind == crate::service::workspace::WorkspaceKind::Assistant)
+                .unwrap_or(false)
+        {
+            if normalized_agent_type != "Claw" {
+                info!(
+                    "Normalize agent type to Claw for assistant workspace: workspace_path={}, requested_agent_type={}",
+                    workspace_path,
+                    normalized_agent_type
+                );
+            }
+            return "Claw".to_string();
+        }
+
+        normalized_agent_type
+    }
+
     pub fn new(
         session_manager: Arc<SessionManager>,
         execution_engine: Arc<ExecutionEngine>,
@@ -135,8 +169,15 @@ impl ConversationCoordinator {
         let workspace_path = config.workspace_path.clone().ok_or_else(|| {
             BitFunError::Validation("workspace_path is required when creating a session".to_string())
         })?;
-        self.create_session_with_workspace(None, session_name, agent_type, config, workspace_path)
-            .await
+        self.create_session_with_workspace_and_creator(
+            None,
+            session_name,
+            agent_type,
+            config,
+            workspace_path,
+            None,
+        )
+        .await
     }
 
     /// Create a new session with optional session ID
@@ -150,8 +191,15 @@ impl ConversationCoordinator {
         let workspace_path = config.workspace_path.clone().ok_or_else(|| {
             BitFunError::Validation("workspace_path is required when creating a session".to_string())
         })?;
-        self.create_session_with_workspace(session_id, session_name, agent_type, config, workspace_path)
-            .await
+        self.create_session_with_workspace_and_creator(
+            session_id,
+            session_name,
+            agent_type,
+            config,
+            workspace_path,
+            None,
+        )
+        .await
     }
 
     /// Create a new session with optional session ID and workspace binding.
@@ -162,15 +210,44 @@ impl ConversationCoordinator {
         session_id: Option<String>,
         session_name: String,
         agent_type: String,
+        config: SessionConfig,
+        workspace_path: String,
+    ) -> BitFunResult<Session> {
+        self.create_session_with_workspace_and_creator(
+            session_id,
+            session_name,
+            agent_type,
+            config,
+            workspace_path,
+            None,
+        )
+        .await
+    }
+
+    /// Create a new session with explicit creator identity.
+    pub async fn create_session_with_workspace_and_creator(
+        &self,
+        session_id: Option<String>,
+        session_name: String,
+        agent_type: String,
         mut config: SessionConfig,
         workspace_path: String,
+        created_by: Option<String>,
     ) -> BitFunResult<Session> {
         // Persist the workspace binding inside the session config so execution can
         // consistently restore the correct workspace regardless of the entry point.
         config.workspace_path = Some(workspace_path.clone());
+        let agent_type =
+            Self::normalize_agent_type_for_workspace_path(&agent_type, &workspace_path).await;
         let session = self
             .session_manager
-            .create_session_with_id(session_id, session_name, agent_type, config)
+            .create_session_with_id_and_creator(
+                session_id,
+                session_name,
+                agent_type,
+                config,
+                created_by,
+            )
             .await?;
 
         self.sync_session_metadata_to_workspace(&session, workspace_path.clone())
@@ -235,6 +312,10 @@ impl ConversationCoordinator {
             session_id: session.session_id.clone(),
             session_name: session.session_name.clone(),
             agent_type: session.agent_type.clone(),
+            created_by: session
+                .created_by
+                .clone()
+                .or_else(|| existing.as_ref().and_then(|m| m.created_by.clone())),
             model_name: existing
                 .as_ref()
                 .map(|m| m.model_name.clone())
@@ -359,9 +440,16 @@ impl ConversationCoordinator {
         session_name: String,
         agent_type: String,
         config: SessionConfig,
+        creator_session_id: Option<&str>,
     ) -> BitFunResult<Session> {
         self.session_manager
-            .create_session_with_id(None, session_name, agent_type, config)
+            .create_session_with_id_and_creator(
+                None,
+                session_name,
+                agent_type,
+                config,
+                creator_session_id.map(|session_id| format!("session-{}", session_id)),
+            )
             .await
     }
 
@@ -603,13 +691,21 @@ impl ConversationCoordinator {
         };
 
         let requested_agent_type = agent_type.trim().to_string();
-
-        let effective_agent_type = if !requested_agent_type.is_empty() {
+        let workspace_path_for_policy = workspace_path
+            .clone()
+            .or_else(|| session.config.workspace_path.clone());
+        let provisional_agent_type = if !requested_agent_type.is_empty() {
             requested_agent_type.clone()
         } else if !session.agent_type.is_empty() {
             session.agent_type.clone()
         } else {
             "agentic".to_string()
+        };
+        let effective_agent_type = if let Some(ref workspace_path) = workspace_path_for_policy {
+            Self::normalize_agent_type_for_workspace_path(&provisional_agent_type, workspace_path)
+                .await
+        } else {
+            provisional_agent_type
         };
 
         debug!(
@@ -1176,7 +1272,12 @@ impl ConversationCoordinator {
 
     /// Delete session
     pub async fn delete_session(&self, workspace_path: &Path, session_id: &str) -> BitFunResult<()> {
-        self.session_manager.delete_session(workspace_path, session_id).await
+        self.session_manager.delete_session(workspace_path, session_id).await?;
+        self.emit_event(AgenticEvent::SessionDeleted {
+            session_id: session_id.to_string(),
+        })
+        .await;
+        Ok(())
     }
 
     /// Restore session
@@ -1255,12 +1356,13 @@ impl ConversationCoordinator {
     /// - context: Additional context
     /// - cancel_token: Optional cancel token (for async cancellation)
     ///
-    /// Returns SubagentResult with text response and optional tool arguments
+    /// Returns SubagentResult with the final text response
     pub async fn execute_subagent(
         &self,
         agent_type: String,
         task_description: String,
         subagent_parent_info: SubagentParentInfo,
+        workspace_path: Option<String>,
         context: Option<std::collections::HashMap<String, String>>,
         cancel_token: Option<&CancellationToken>,
     ) -> BitFunResult<SubagentResult> {
@@ -1278,11 +1380,19 @@ impl ConversationCoordinator {
         // Use create_subagent_session (not create_session) so that no SessionCreated
         // event is emitted to the transport layer — subagent sessions are internal
         // implementation details and must not appear in the UI session list.
+        let workspace_path = workspace_path.ok_or_else(|| {
+            BitFunError::Validation(
+                "workspace_path is required when creating a subagent session".to_string(),
+            )
+        })?;
+        let mut subagent_config = SessionConfig::default();
+        subagent_config.workspace_path = Some(workspace_path);
         let session = self
             .create_subagent_session(
                 format!("Subagent: {}", task_description),
                 agent_type.clone(),
-                Default::default(),
+                subagent_config,
+                Some(&subagent_parent_info.session_id),
             )
             .await?;
 
@@ -1348,20 +1458,12 @@ impl ConversationCoordinator {
 
         // cleanup_guard automatically cleans up token on scope exit (via Drop trait)
 
-        // Extract text response and tool arguments
-        let (response_text, tool_arguments) = match result {
+        // Extract text response
+        let response_text = match result {
             Ok(exec_result) => match exec_result.final_message.content {
-                MessageContent::Mixed {
-                    text, tool_calls, ..
-                } => (text, {
-                    // Find first should_end_turn tool arguments, tool_pipeline guarantees only one
-                    tool_calls
-                        .into_iter()
-                        .find(|tc| tc.should_end_turn)
-                        .map(|tc| tc.arguments)
-                }),
-                MessageContent::Text(text) => (text, None),
-                _ => (String::new(), None),
+                MessageContent::Mixed { text, .. } => text,
+                MessageContent::Text(text) => text,
+                _ => String::new(),
             },
             Err(e) => {
                 error!(
@@ -1398,10 +1500,7 @@ impl ConversationCoordinator {
             );
         }
 
-        Ok(SubagentResult {
-            text: response_text,
-            tool_arguments,
-        })
+        Ok(SubagentResult { text: response_text })
     }
 
     /// Clean up subagent session resources

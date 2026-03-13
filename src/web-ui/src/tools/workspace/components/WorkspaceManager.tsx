@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
-import { FolderOpen, Clock, FileText, Code, Folder } from 'lucide-react';
+import { FolderOpen, Clock, FileText, Code, Folder, Bot } from 'lucide-react';
 import { useWorkspaceContext } from '../../../infrastructure/contexts/WorkspaceContext';
-import { WorkspaceInfo, WorkspaceType } from '../../../shared/types';
+import { WorkspaceInfo, WorkspaceKind, WorkspaceType } from '../../../shared/types';
 import { Modal } from '@/component-library';
 import { i18nService } from '@/infrastructure/i18n';
 import { createLogger } from '@/shared/utils/logger';
@@ -27,6 +27,7 @@ const WorkspaceManager: React.FC<WorkspaceManagerProps> = ({
   const {
     currentWorkspace,
     recentWorkspaces,
+    assistantWorkspacesList,
     loading,
     error,
     switchWorkspace,
@@ -35,6 +36,33 @@ const WorkspaceManager: React.FC<WorkspaceManagerProps> = ({
   } = useWorkspaceContext();
 
   const [scanning, setScanning] = useState(false);
+
+  const getWorkspaceDisplayName = (workspace: WorkspaceInfo) => {
+    const emoji = workspace.identity?.emoji?.trim();
+    return emoji ? `${emoji} ${workspace.name}` : workspace.name;
+  };
+
+  const renderIdentityDetails = (workspace: WorkspaceInfo) => {
+    const entries = [
+      workspace.identity?.creature ? { label: 'Creature', value: workspace.identity.creature } : null,
+      workspace.identity?.vibe ? { label: 'Vibe', value: workspace.identity.vibe } : null,
+    ].filter(Boolean) as Array<{ label: string; value: string }>;
+
+    if (entries.length === 0) {
+      return null;
+    }
+
+    return (
+      <div className="workspace-identity">
+        {entries.map(entry => (
+          <span key={entry.label} className="workspace-identity__item">
+            <span className="workspace-identity__label">{entry.label}</span>
+            <span className="workspace-identity__value">{entry.value}</span>
+          </span>
+        ))}
+      </div>
+    );
+  };
 
   const handleWorkspaceSelect = async (workspace: WorkspaceInfo) => {
     try {
@@ -65,7 +93,12 @@ const WorkspaceManager: React.FC<WorkspaceManagerProps> = ({
     }
   };
 
-  const getWorkspaceIcon = (type: WorkspaceType) => {
+  const getWorkspaceIcon = (workspace: WorkspaceInfo) => {
+    if (workspace.workspaceKind === WorkspaceKind.Assistant) {
+      return <Bot size={16} />;
+    }
+
+    const type = workspace.workspaceType;
     switch (type) {
       case WorkspaceType.SingleProject:
         return <Code size={16} />;
@@ -92,6 +125,10 @@ const WorkspaceManager: React.FC<WorkspaceManagerProps> = ({
     }
   };
 
+  const otherAssistantWorkspaces = assistantWorkspacesList.filter(
+    workspace => workspace.id !== currentWorkspace?.id
+  );
+
   return (
     <Modal
       isOpen={isVisible}
@@ -112,10 +149,10 @@ const WorkspaceManager: React.FC<WorkspaceManagerProps> = ({
             <div className="workspace-card current">
               <div className="workspace-header">
                 <div className="workspace-icon">
-                  {getWorkspaceIcon(currentWorkspace.workspaceType)}
+                  {getWorkspaceIcon(currentWorkspace)}
                 </div>
                 <div className="workspace-info">
-                  <div className="workspace-name">{currentWorkspace.name}</div>
+                  <div className="workspace-name">{getWorkspaceDisplayName(currentWorkspace)}</div>
                   <div className="workspace-path">{currentWorkspace.rootPath}</div>
                   <div className="workspace-meta">
                     <span className="workspace-type">{currentWorkspace.workspaceType}</span>
@@ -126,6 +163,7 @@ const WorkspaceManager: React.FC<WorkspaceManagerProps> = ({
                       </span>
                     )}
                   </div>
+                  {renderIdentityDetails(currentWorkspace)}
                 </div>
               </div>
               
@@ -183,10 +221,10 @@ const WorkspaceManager: React.FC<WorkspaceManagerProps> = ({
                 >
                   <div className="workspace-header">
                     <div className="workspace-icon">
-                      {getWorkspaceIcon(workspace.workspaceType)}
+                      {getWorkspaceIcon(workspace)}
                     </div>
                     <div className="workspace-info">
-                      <div className="workspace-name">{workspace.name}</div>
+                      <div className="workspace-name">{getWorkspaceDisplayName(workspace)}</div>
                       <div className="workspace-path">{workspace.rootPath}</div>
                       <div className="workspace-meta">
                         <span className="workspace-type">{workspace.workspaceType}</span>
@@ -197,6 +235,7 @@ const WorkspaceManager: React.FC<WorkspaceManagerProps> = ({
                           </span>
                         )}
                       </div>
+                      {renderIdentityDetails(workspace)}
                     </div>
                   </div>
                 </div>
@@ -205,6 +244,45 @@ const WorkspaceManager: React.FC<WorkspaceManagerProps> = ({
           ) : (
             <div className="no-recent">
               <p>No recent workspaces</p>
+            </div>
+          )}
+        </div>
+
+        <div className="recent-workspaces-section">
+          <h3>Personal Assistants</h3>
+          {otherAssistantWorkspaces.length > 0 ? (
+            <div className="workspace-list">
+              {otherAssistantWorkspaces.map((workspace) => (
+                <div
+                  key={workspace.id}
+                  className="workspace-card recent"
+                  onClick={() => handleWorkspaceSelect(workspace)}
+                >
+                  <div className="workspace-header">
+                    <div className="workspace-icon">
+                      <Bot size={16} />
+                    </div>
+                    <div className="workspace-info">
+                      <div className="workspace-name">{getWorkspaceDisplayName(workspace)}</div>
+                      <div className="workspace-path">{workspace.rootPath}</div>
+                      <div className="workspace-meta">
+                        <span className="workspace-type">assistant</span>
+                        {workspace.lastAccessed && (
+                          <span className="workspace-time">
+                            <Clock size={12} />
+                            {formatDate(workspace.lastAccessed)}
+                          </span>
+                        )}
+                      </div>
+                      {renderIdentityDetails(workspace)}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="no-recent">
+              <p>No personal assistants</p>
             </div>
           )}
         </div>

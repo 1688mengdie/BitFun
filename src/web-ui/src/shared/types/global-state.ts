@@ -49,6 +49,11 @@ export enum WorkspaceType {
   Other = 'other',
 }
 
+export enum WorkspaceKind {
+  Normal = 'normal',
+  Assistant = 'assistant',
+}
+
 
 export interface ProjectStatistics {
   totalFiles: number;
@@ -59,18 +64,28 @@ export interface ProjectStatistics {
   lastUpdated: string;
 }
 
+export interface WorkspaceIdentity {
+  name?: string;
+  creature?: string;
+  vibe?: string;
+  emoji?: string;
+}
+
 
 export interface WorkspaceInfo {
   id: string;
   name: string;
   rootPath: string;
   workspaceType: WorkspaceType;
+  workspaceKind: WorkspaceKind;
+  assistantId?: string | null;
   languages: string[];
   openedAt: string;
   lastAccessed: string;
   description?: string;
   tags: string[];
   statistics?: ProjectStatistics;
+  identity?: WorkspaceIdentity | null;
 }
 
 
@@ -124,6 +139,9 @@ export interface GlobalStateAPI {
 
   
   openWorkspace(path: string): Promise<WorkspaceInfo>;
+  createAssistantWorkspace(): Promise<WorkspaceInfo>;
+  deleteAssistantWorkspace(workspaceId: string): Promise<void>;
+  resetAssistantWorkspace(workspaceId: string): Promise<WorkspaceInfo>;
   closeWorkspace(workspaceId: string): Promise<void>;
   setActiveWorkspace(workspaceId: string): Promise<WorkspaceInfo>;
   getCurrentWorkspace(): Promise<WorkspaceInfo | null>;
@@ -178,12 +196,38 @@ function mapWorkspaceType(workspaceType: APIWorkspaceInfo['workspaceType']): Wor
   }
 }
 
+function mapWorkspaceKind(workspaceKind: APIWorkspaceInfo['workspaceKind']): WorkspaceKind {
+  switch (workspaceKind) {
+    case WorkspaceKind.Assistant:
+      return WorkspaceKind.Assistant;
+    default:
+      return WorkspaceKind.Normal;
+  }
+}
+
+function mapWorkspaceIdentity(
+  identity: APIWorkspaceInfo['identity']
+): WorkspaceIdentity | null | undefined {
+  if (!identity) {
+    return identity;
+  }
+
+  return {
+    name: identity.name ?? undefined,
+    creature: identity.creature ?? undefined,
+    vibe: identity.vibe ?? undefined,
+    emoji: identity.emoji ?? undefined,
+  };
+}
+
 function mapWorkspaceInfo(workspace: APIWorkspaceInfo): WorkspaceInfo {
   return {
     id: workspace.id,
     name: workspace.name,
     rootPath: workspace.rootPath,
     workspaceType: mapWorkspaceType(workspace.workspaceType),
+    workspaceKind: mapWorkspaceKind(workspace.workspaceKind),
+    assistantId: workspace.assistantId ?? undefined,
     languages: workspace.languages,
     openedAt: workspace.openedAt,
     lastAccessed: workspace.lastAccessed,
@@ -199,6 +243,7 @@ function mapWorkspaceInfo(workspace: APIWorkspaceInfo): WorkspaceInfo {
           lastUpdated: workspace.statistics.lastUpdated,
         }
       : undefined,
+    identity: mapWorkspaceIdentity(workspace.identity),
   };
 }
 
@@ -245,6 +290,18 @@ export function createGlobalStateAPI(): GlobalStateAPI {
       }
       
       return mapWorkspaceInfo(await globalAPI.openWorkspace(path));
+    },
+
+    async createAssistantWorkspace(): Promise<WorkspaceInfo> {
+      return mapWorkspaceInfo(await globalAPI.createAssistantWorkspace());
+    },
+
+    async deleteAssistantWorkspace(workspaceId: string): Promise<void> {
+      return await globalAPI.deleteAssistantWorkspace(workspaceId);
+    },
+
+    async resetAssistantWorkspace(workspaceId: string): Promise<WorkspaceInfo> {
+      return mapWorkspaceInfo(await globalAPI.resetAssistantWorkspace(workspaceId));
     },
 
     async closeWorkspace(workspaceId: string): Promise<void> {

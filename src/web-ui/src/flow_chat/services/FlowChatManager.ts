@@ -21,6 +21,8 @@ import {
   createChatSession as createChatSessionModule,
   switchChatSession as switchChatSessionModule,
   deleteChatSession as deleteChatSessionModule,
+  cleanupSaveState,
+  cleanupSessionBuffers,
   sendMessage as sendMessageModule,
   cancelCurrentTask as cancelCurrentTaskModule,
   initializeEventListeners,
@@ -146,6 +148,37 @@ export class FlowChatManager {
 
   async deleteChatSession(sessionId: string): Promise<void> {
     return deleteChatSessionModule(this.context, sessionId);
+  }
+
+  async resetWorkspaceSessions(
+    workspacePath: string,
+    options?: { reinitialize?: boolean; preferredMode?: string }
+  ): Promise<void> {
+    const removedSessionIds = this.context.flowChatStore.removeSessionsByWorkspace(workspacePath);
+
+    removedSessionIds.forEach(sessionId => {
+      stateMachineManager.delete(sessionId);
+      this.context.processingManager.clearSessionStatus(sessionId);
+      cleanupSaveState(this.context, sessionId);
+      cleanupSessionBuffers(this.context, sessionId);
+    });
+
+    if (!options?.reinitialize) {
+      return;
+    }
+
+    const hasHistoricalSessions = await this.initialize(workspacePath, options.preferredMode);
+    const state = this.context.flowChatStore.getState();
+    const activeSession = state.activeSessionId
+      ? state.sessions.get(state.activeSessionId) ?? null
+      : null;
+    const hasActiveWorkspaceSession =
+      !!activeSession &&
+      (activeSession.workspacePath || workspacePath) === workspacePath;
+
+    if (!hasHistoricalSessions || !hasActiveWorkspaceSession) {
+      await this.createChatSession({}, options.preferredMode);
+    }
   }
 
   async sendMessage(

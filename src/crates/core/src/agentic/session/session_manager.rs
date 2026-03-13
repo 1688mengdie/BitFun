@@ -172,7 +172,7 @@ impl SessionManager {
         agent_type: String,
         config: SessionConfig,
     ) -> BitFunResult<Session> {
-        self.create_session_with_id(None, session_name, agent_type, config)
+        self.create_session_with_id_and_creator(None, session_name, agent_type, config, None)
             .await
     }
 
@@ -183,6 +183,19 @@ impl SessionManager {
         session_name: String,
         agent_type: String,
         config: SessionConfig,
+    ) -> BitFunResult<Session> {
+        self.create_session_with_id_and_creator(session_id, session_name, agent_type, config, None)
+            .await
+    }
+
+    /// Create a new session (supports specifying session ID and creator identity)
+    pub async fn create_session_with_id_and_creator(
+        &self,
+        session_id: Option<String>,
+        session_name: String,
+        agent_type: String,
+        config: SessionConfig,
+        created_by: Option<String>,
     ) -> BitFunResult<Session> {
         let workspace_path = Self::session_workspace_from_config(&config).ok_or_else(|| {
             BitFunError::Validation("Session workspace_path is required".to_string())
@@ -196,11 +209,12 @@ impl SessionManager {
             )));
         }
 
-        let session = if let Some(id) = session_id {
+        let mut session = if let Some(id) = session_id {
             Session::new_with_id(id, session_name, agent_type.clone(), config)
         } else {
             Session::new(session_name, agent_type.clone(), config)
         };
+        session.created_by = created_by;
         let session_id = session.session_id.clone();
 
         // 1. Add to memory
@@ -559,6 +573,7 @@ impl SessionManager {
                         session_id: session.session_id.clone(),
                         session_name: session.session_name.clone(),
                         agent_type: session.agent_type.clone(),
+                        created_by: session.created_by.clone(),
                         turn_count: session.dialog_turn_ids.len(),
                         created_at: session.created_at,
                         last_activity_at: session.last_activity_at,

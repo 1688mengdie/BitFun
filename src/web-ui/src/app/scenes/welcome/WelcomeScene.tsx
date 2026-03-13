@@ -8,7 +8,7 @@
 
 import React, { useState, useCallback, useMemo } from 'react';
 import {
-  MessageSquare, Users, GitBranch,
+  Bot, MessageSquare, Users, GitBranch,
   FolderOpen, Clock, FolderPlus,
 } from 'lucide-react';
 import { useWorkspaceContext } from '@/infrastructure/contexts/WorkspaceContext';
@@ -19,7 +19,7 @@ import { FlowChatManager } from '@/flow_chat/services/FlowChatManager';
 import { Tooltip } from '@/component-library';
 import { createLogger } from '@/shared/utils/logger';
 import type { SceneTabId } from '@/app/components/SceneBar/types';
-import type { WorkspaceInfo } from '@/shared/types';
+import { WorkspaceKind, type WorkspaceInfo } from '@/shared/types';
 import './WelcomeScene.scss';
 
 const log = createLogger('WelcomeScene');
@@ -33,6 +33,11 @@ const WelcomeScene: React.FC = () => {
   const openScene = useSceneStore(s => s.openScene);
   const { isRepository, currentBranch } = useGitBasicInfo(workspacePath || '');
   const [isSelecting, setIsSelecting] = useState(false);
+  const isAssistantWorkspace = currentWorkspace?.workspaceKind === WorkspaceKind.Assistant;
+  const workspaceDisplayName =
+    isAssistantWorkspace
+      ? currentWorkspace?.identity?.name?.trim() || currentWorkspace?.name
+      : currentWorkspace?.name;
 
   const otherWorkspaces = useMemo(
     () => recentWorkspaces
@@ -92,6 +97,19 @@ const WelcomeScene: React.FC = () => {
     }
   }, [hasWorkspace, openScene, handleOpenFolder]);
 
+  const handleNewClawSession = useCallback(async () => {
+    try {
+      if (!hasWorkspace) {
+        return;
+      }
+      const flowChatManager = FlowChatManager.getInstance();
+      await flowChatManager.createChatSession({}, 'Claw');
+      openScene('session' as SceneTabId);
+    } catch (e) {
+      log.error('Failed to create claw session', e);
+    }
+  }, [hasWorkspace, openScene]);
+
   const handleNewProject = useCallback(() => {
     window.dispatchEvent(new Event('nav:new-project'));
   }, []);
@@ -135,7 +153,7 @@ const WelcomeScene: React.FC = () => {
               <div className="welcome-scene__greeting-text">
                 <p className="welcome-scene__greeting-label">{t('welcomeScene.welcomeBack')}</p>
                 <div className="welcome-scene__title-row">
-                  <h1 className="welcome-scene__workspace-title">{currentWorkspace?.name}</h1>
+                  <h1 className="welcome-scene__workspace-title">{workspaceDisplayName}</h1>
                   {isRepository && currentBranch && (
                     <span className="welcome-scene__meta-tag">
                       <GitBranch size={11} />
@@ -151,23 +169,35 @@ const WelcomeScene: React.FC = () => {
 
           {/* Session actions */}
           <div className="welcome-scene__sessions">
-            <button className="welcome-scene__session-btn" onClick={handleNewCodeSession}>
-              <MessageSquare size={16} />
-              <div className="welcome-scene__session-btn-text">
-                <span className="welcome-scene__session-btn-label">{t('welcomeScene.newCodeSession')}</span>
-                <span className="welcome-scene__session-btn-desc">{t('welcomeScene.newCodeSessionDesc')}</span>
-              </div>
-            </button>
+            {isAssistantWorkspace ? (
+              <button className="welcome-scene__session-btn" onClick={handleNewClawSession}>
+                <Bot size={16} />
+                <div className="welcome-scene__session-btn-text">
+                  <span className="welcome-scene__session-btn-label">{t('welcomeScene.newClawSession')}</span>
+                  <span className="welcome-scene__session-btn-desc">{t('welcomeScene.newClawSessionDesc')}</span>
+                </div>
+              </button>
+            ) : (
+              <>
+                <button className="welcome-scene__session-btn" onClick={handleNewCodeSession}>
+                  <MessageSquare size={16} />
+                  <div className="welcome-scene__session-btn-text">
+                    <span className="welcome-scene__session-btn-label">{t('welcomeScene.newCodeSession')}</span>
+                    <span className="welcome-scene__session-btn-desc">{t('welcomeScene.newCodeSessionDesc')}</span>
+                  </div>
+                </button>
 
-            <button className="welcome-scene__session-btn" onClick={handleNewCoworkSession}>
-              <Users size={16} />
-              <div className="welcome-scene__session-btn-text">
-                <span className="welcome-scene__session-btn-label">
-                  {t('welcomeScene.newCoworkSession')}
-                </span>
-                <span className="welcome-scene__session-btn-desc">{t('welcomeScene.newCoworkSessionDesc')}</span>
-              </div>
-            </button>
+                <button className="welcome-scene__session-btn" onClick={handleNewCoworkSession}>
+                  <Users size={16} />
+                  <div className="welcome-scene__session-btn-text">
+                    <span className="welcome-scene__session-btn-label">
+                      {t('welcomeScene.newCoworkSession')}
+                    </span>
+                    <span className="welcome-scene__session-btn-desc">{t('welcomeScene.newCoworkSessionDesc')}</span>
+                  </div>
+                </button>
+              </>
+            )}
           </div>
 
           {/* Switch workspace section */}

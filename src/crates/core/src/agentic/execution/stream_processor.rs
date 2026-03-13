@@ -7,7 +7,6 @@ use crate::agentic::events::{
     AgenticEvent, EventPriority, EventQueue, SubagentParentInfo as EventSubagentParentInfo,
     ToolEventData,
 };
-use crate::agentic::tools::registry::get_all_end_turn_tool_names;
 use crate::agentic::tools::SubagentParentInfo;
 use crate::util::errors::BitFunError;
 use crate::util::types::ai::GeminiUsage;
@@ -16,7 +15,6 @@ use ai_stream_handlers::UnifiedResponse;
 use futures::StreamExt;
 use log::{debug, error, trace};
 use serde_json::{json, Value};
-use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -114,7 +112,6 @@ struct ToolCallBuffer {
     tool_id: String,
     tool_name: String,
     json_checker: JsonChecker,
-    end_turn_tools: Option<HashSet<String>>,
 }
 
 impl ToolCallBuffer {
@@ -123,12 +120,7 @@ impl ToolCallBuffer {
             tool_id: String::new(),
             tool_name: String::new(),
             json_checker: JsonChecker::new(),
-            end_turn_tools: None,
         }
-    }
-
-    pub fn set_end_turn_tools(&mut self, end_turn_tools: HashSet<String>) {
-        self.end_turn_tools = Some(end_turn_tools);
     }
 
     fn reset(&mut self) {
@@ -148,17 +140,11 @@ impl ToolCallBuffer {
     fn to_tool_call(&self) -> ToolCall {
         let arguments = serde_json::from_str(&self.json_checker.get_buffer());
         let is_error = arguments.is_err();
-        let should_end_turn = self
-            .end_turn_tools
-            .as_ref()
-            .map(|tools| tools.contains(&self.tool_name))
-            .unwrap_or(false);
         ToolCall {
             tool_id: self.tool_id.clone(),
             tool_name: self.tool_name.clone(),
             arguments: arguments.unwrap_or(json!({})),
             is_error,
-            should_end_turn,
         }
     }
 }
@@ -220,7 +206,6 @@ struct StreamContext {
     thinking_chunks_count: usize,
     thinking_completed_sent: bool,
     has_effective_output: bool,
-    encountered_end_turn_tool: bool,
 }
 
 impl StreamContext {
@@ -248,7 +233,6 @@ impl StreamContext {
             thinking_chunks_count: 0,
             thinking_completed_sent: false,
             has_effective_output: false,
-            encountered_end_turn_tool: false,
         }
     }
 
@@ -539,13 +523,6 @@ impl StreamProcessor {
         // Check if JSON is complete
         if ctx.tool_call_buffer.is_valid() {
             let tool_call = ctx.tool_call_buffer.to_tool_call();
-            if tool_call.should_end_turn {
-                debug!(
-                    "End-turn tool fully detected during streaming: {} ({})",
-                    tool_call.tool_name, tool_call.tool_id
-                );
-                ctx.encountered_end_turn_tool = true;
-            }
             ctx.tool_calls.push(tool_call);
 
             // Clear buffer
@@ -674,9 +651,6 @@ impl StreamProcessor {
         let chunk_timeout = std::time::Duration::from_secs(600);
         let mut ctx =
             StreamContext::new(session_id, dialog_turn_id, round_id, subagent_parent_info);
-        let end_turn_tools = get_all_end_turn_tool_names().await.into_iter().collect();
-        ctx.tool_call_buffer.set_end_turn_tools(end_turn_tools);
-
         // Start SSE log collector (if raw_sse_rx is provided)
         let sse_collector = if let Some(mut rx) = raw_sse_rx {
             let collector = Arc::new(tokio::sync::Mutex::new(SseLogCollector::new(
@@ -800,13 +774,6 @@ impl StreamProcessor {
                         self.handle_tool_call_chunk(&mut ctx, tool_call).await;
                         if let Some(err) = self.check_cancellation(&mut ctx, cancellation_token, "processing tool call").await {
                             return err;
-                        }
-                        if ctx.encountered_end_turn_tool {
-                            debug!(
-                                "Stopping stream after end-turn tool detection: session_id={}, turn_id={}",
-                                ctx.session_id, ctx.dialog_turn_id
-                            );
-                            break;
                         }
                     }
                 }
