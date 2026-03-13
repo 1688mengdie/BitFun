@@ -21,6 +21,7 @@ import type { FileContext, DirectoryContext } from '../../shared/types/context';
 import type { PromptTemplate } from '../../shared/types/prompt-template';
 import { SmartRecommendations } from './smart-recommendations';
 import { useCurrentWorkspace } from '@/infrastructure/contexts/WorkspaceContext';
+import { WorkspaceKind } from '@/shared/types';
 import { createImageContextFromFile, createImageContextFromClipboard } from '../utils/imageUtils';
 import { notificationService } from '@/shared/notification-system';
 import { TemplatePickerPanel } from './TemplatePickerPanel';
@@ -86,15 +87,21 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const { transition, setQueuedInput } = useSessionStateMachineActions(currentSessionId);
   const stateMachine = useSessionStateMachine(currentSessionId);
 
-  const { workspacePath } = useCurrentWorkspace();
+  const { workspace, workspacePath } = useCurrentWorkspace();
   
   const [tokenUsage, setTokenUsage] = React.useState({ current: 0, max: 128128 });
-  const canSwitchModes = modeState.current !== 'Cowork';
+  const isAssistantWorkspace = workspace?.workspaceKind === WorkspaceKind.Assistant;
+  const canSwitchModes = !isAssistantWorkspace && modeState.current !== 'Cowork';
 
   // Session-level mode policy: Cowork sessions are fixed; code sessions should not switch into Cowork.
   const switchableModes = useMemo(
-    () => modeState.available.filter(mode => mode.enabled && mode.id !== 'Cowork'),
-    [modeState.available]
+    () =>
+      modeState.available.filter(mode =>
+        mode.enabled &&
+        mode.id !== 'Cowork' &&
+        (isAssistantWorkspace || mode.id !== 'Claw')
+      ),
+    [isAssistantWorkspace, modeState.available]
   );
   
   const setChatInputActive = useChatInputState(state => state.setActive);
@@ -439,6 +446,14 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       }
     }
   }, [currentSessionId]);
+
+  React.useEffect(() => {
+    if (!isAssistantWorkspace || modeState.current === 'Claw') {
+      return;
+    }
+
+    dispatchMode({ type: 'SET_CURRENT_MODE', payload: 'Claw' });
+  }, [isAssistantWorkspace, modeState.current]);
 
   React.useEffect(() => {
     const queuedInput = stateMachine?.context?.queuedInput;
@@ -1220,7 +1235,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                       {t(`chatInput.modeNames.${modeState.current}`, { defaultValue: '' }) || modeState.available.find(m => m.id === modeState.current)?.name || modeState.current}
                     </IconButton>
                   {modeState.dropdownOpen && (() => {
-                    const modeOrder = ['agentic', 'Plan', 'debug'];
+                    const modeOrder = ['agentic', 'Claw', 'Plan', 'debug'];
                     
                     const sortedModes = [...switchableModes].sort((a, b) => {
                       const aIndex = modeOrder.indexOf(a.id);
@@ -1244,7 +1259,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                           }}
                         >
                           <span className="bitfun-chat-input__mode-option-name">{modeName}</span>
-                          {!['agentic', 'Plan', 'debug'].includes(modeOption.id) && <span className="bitfun-chat-input__mode-option-badge bitfun-chat-input__mode-option-badge--wip">{t('chatInput.wip')}</span>}
+                          {!modeOrder.includes(modeOption.id) && <span className="bitfun-chat-input__mode-option-badge bitfun-chat-input__mode-option-badge--wip">{t('chatInput.wip')}</span>}
                         </div>
                       </Tooltip>
                       );

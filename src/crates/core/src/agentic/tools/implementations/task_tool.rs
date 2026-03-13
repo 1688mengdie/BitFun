@@ -59,7 +59,8 @@ When NOT to use the Task tool:
 Usage notes:
 - Always include a short description (3-5 words) summarizing what the agent will do
 - Provide clear, detailed prompt so the agent can work autonomously and return exactly the information you need.
-- The 'workspace_path' parameter is required for the Explore and FileFinder agent.
+- If 'workspace_path' is omitted, the task inherits the current workspace by default.
+- The 'workspace_path' parameter must still be provided explicitly for the Explore and FileFinder agent.
 - Launch multiple agents concurrently whenever possible, to maximize performance; to do that, use a single message with multiple tool calls
 - When the agent is done, it will return a single message back to you.
 - The agent's outputs should generally be trusted
@@ -171,7 +172,7 @@ impl Tool for TaskTool {
                 },
                 "workspace_path": {
                     "type": "string",
-                    "description": "The absolute path of the workspace for this task. Required for Explore/FileFinder agent."
+                    "description": "The absolute path of the workspace for this task. If omitted, inherits the current workspace. Explore/FileFinder must provide it explicitly."
                 }
             },
             "required": [
@@ -260,12 +261,15 @@ impl Tool for TaskTool {
             )));
         }
 
-        let workspace_path = input
+        let requested_workspace_path = input
             .get("workspace_path")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
+        let current_workspace_path = context
+            .workspace_root()
+            .map(|path| path.to_string_lossy().into_owned());
         if subagent_type == "Explore" || subagent_type == "FileFinder" {
-            let workspace_path = workspace_path.ok_or_else(|| {
+            let workspace_path = requested_workspace_path.as_deref().ok_or_else(|| {
                 BitFunError::tool(
                     "workspace_path is required for Explore/FileFinder agent".to_string(),
                 )
@@ -296,6 +300,15 @@ impl Tool for TaskTool {
                 "\n\nThe workspace you need to explore: {workspace_path}"
             ));
         }
+        let effective_workspace_path = requested_workspace_path
+            .clone()
+            .or(current_workspace_path)
+            .ok_or_else(|| {
+                BitFunError::tool(
+                    "workspace_path is required when the current workspace is unavailable"
+                        .to_string(),
+                )
+            })?;
 
         let session_id = if let Some(session_id) = &context.session_id {
             session_id.clone()
@@ -337,6 +350,7 @@ impl Tool for TaskTool {
                     session_id,
                     dialog_turn_id,
                 },
+                Some(effective_workspace_path),
                 None,
                 context.cancellation_token.as_ref(),
             )

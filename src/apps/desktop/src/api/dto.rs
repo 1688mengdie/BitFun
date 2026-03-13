@@ -12,6 +12,13 @@ pub enum WorkspaceTypeDto {
     Other,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum WorkspaceKindDto {
+    Normal,
+    Assistant,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectStatisticsDto {
@@ -25,17 +32,29 @@ pub struct ProjectStatisticsDto {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct WorkspaceIdentityDto {
+    pub name: Option<String>,
+    pub creature: Option<String>,
+    pub vibe: Option<String>,
+    pub emoji: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WorkspaceInfoDto {
     pub id: String,
     pub name: String,
     pub root_path: String,
     pub workspace_type: WorkspaceTypeDto,
+    pub workspace_kind: WorkspaceKindDto,
+    pub assistant_id: Option<String>,
     pub languages: Vec<String>,
     pub opened_at: String,
     pub last_accessed: String,
     pub description: Option<String>,
     pub tags: Vec<String>,
     pub statistics: Option<ProjectStatisticsDto>,
+    pub identity: Option<WorkspaceIdentityDto>,
 }
 
 impl WorkspaceInfoDto {
@@ -47,6 +66,8 @@ impl WorkspaceInfoDto {
             name: info.name.clone(),
             root_path: info.root_path.to_string_lossy().to_string(),
             workspace_type: WorkspaceTypeDto::from_workspace_type(&info.workspace_type),
+            workspace_kind: WorkspaceKindDto::from_workspace_kind(&info.workspace_kind),
+            assistant_id: info.assistant_id.clone(),
             languages: info.languages.clone(),
             opened_at: info.opened_at.to_rfc3339(),
             last_accessed: info.last_accessed.to_rfc3339(),
@@ -56,6 +77,20 @@ impl WorkspaceInfoDto {
                 .statistics
                 .as_ref()
                 .map(ProjectStatisticsDto::from_workspace_statistics),
+            identity: info.identity.as_ref().map(WorkspaceIdentityDto::from_workspace_identity),
+        }
+    }
+}
+
+impl WorkspaceIdentityDto {
+    pub fn from_workspace_identity(
+        identity: &bitfun_core::service::workspace::manager::WorkspaceIdentity,
+    ) -> Self {
+        Self {
+            name: identity.name.clone(),
+            creature: identity.creature.clone(),
+            vibe: identity.vibe.clone(),
+            emoji: identity.emoji.clone(),
         }
     }
 }
@@ -74,6 +109,18 @@ impl WorkspaceTypeDto {
             | WorkspaceType::WebProject
             | WorkspaceType::MobileProject => WorkspaceTypeDto::SingleProject,
             WorkspaceType::Other => WorkspaceTypeDto::Other,
+        }
+    }
+}
+
+impl WorkspaceKindDto {
+    pub fn from_workspace_kind(
+        workspace_kind: &bitfun_core::service::workspace::manager::WorkspaceKind,
+    ) -> Self {
+        use bitfun_core::service::workspace::manager::WorkspaceKind;
+        match workspace_kind {
+            WorkspaceKind::Normal => WorkspaceKindDto::Normal,
+            WorkspaceKind::Assistant => WorkspaceKindDto::Assistant,
         }
     }
 }

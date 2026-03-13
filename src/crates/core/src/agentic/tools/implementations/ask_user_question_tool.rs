@@ -251,10 +251,6 @@ Usage notes:
         true
     }
 
-    fn should_end_turn(&self) -> bool {
-        false
-    }
-
     async fn call_impl(
         &self,
         input: &Value,

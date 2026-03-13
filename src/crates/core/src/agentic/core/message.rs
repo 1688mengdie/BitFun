@@ -492,9 +492,6 @@ pub struct ToolCall {
     pub arguments: serde_json::Value,
     /// Record whether tool parameters are valid
     pub is_error: bool,
-    /// Record whether tool is a should_end_turn tool, to avoid frequent tool_registry calls
-    #[serde(skip)]
-    pub should_end_turn: bool,
 }
 
 impl ToolCall {

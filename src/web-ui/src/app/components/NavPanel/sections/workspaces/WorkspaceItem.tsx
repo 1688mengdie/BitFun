@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Folder, FolderOpen, MoreHorizontal, GitBranch, FolderSearch, Plus, ChevronDown } from 'lucide-react';
-import { Tooltip } from '@/component-library';
+import { Folder, FolderOpen, MoreHorizontal, GitBranch, FolderSearch, Plus, ChevronDown, Bot, Trash2, RotateCcw } from 'lucide-react';
+import { ConfirmDialog, Tooltip } from '@/component-library';
 import { useI18n } from '@/infrastructure/i18n';
 import { useWorkspaceContext } from '@/infrastructure/contexts/WorkspaceContext';
 import { useNavSceneStore } from '@/app/stores/navSceneStore';
@@ -12,7 +12,7 @@ import { notificationService } from '@/shared/notification-system';
 import { flowChatManager } from '@/flow_chat/services/FlowChatManager';
 import { BranchSelectModal, type BranchSelectResult } from '../../../panels/BranchSelectModal';
 import SessionsSection from '../sessions/SessionsSection';
-import type { WorkspaceInfo } from '@/shared/types';
+import { WorkspaceKind, type WorkspaceInfo } from '@/shared/types';
 
 interface WorkspaceItemProps {
   workspace: WorkspaceInfo;
@@ -22,17 +22,31 @@ interface WorkspaceItemProps {
 
 const WorkspaceItem: React.FC<WorkspaceItemProps> = ({ workspace, isActive, isSingle = false }) => {
   const { t } = useI18n('common');
-  const { setActiveWorkspace, closeWorkspaceById } = useWorkspaceContext();
+  const { setActiveWorkspace, closeWorkspaceById, deleteAssistantWorkspace, resetAssistantWorkspace } = useWorkspaceContext();
   const { switchLeftPanelTab } = useApp();
   const openNavScene = useNavSceneStore(s => s.openNavScene);
   const { isRepository, currentBranch } = useGitBasicInfo(workspace.rootPath);
   const [menuOpen, setMenuOpen] = useState(false);
   const [worktreeModalOpen, setWorktreeModalOpen] = useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [resetDialogOpen, setResetDialogOpen] = useState(false);
+  const [isDeletingAssistant, setIsDeletingAssistant] = useState(false);
+  const [isResettingWorkspace, setIsResettingWorkspace] = useState(false);
   const [sessionsCollapsed, setSessionsCollapsed] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const menuAnchorRef = useRef<HTMLDivElement>(null);
   const menuPopoverRef = useRef<HTMLDivElement>(null);
   const [menuPosition, setMenuPosition] = useState<{ top: number; left: number } | null>(null);
+  const isNamedAssistantWorkspace =
+    workspace.workspaceKind === WorkspaceKind.Assistant &&
+    Boolean(workspace.assistantId);
+  const isDefaultAssistantWorkspace =
+    workspace.workspaceKind === WorkspaceKind.Assistant &&
+    !workspace.assistantId;
+  const workspaceDisplayName =
+    workspace.workspaceKind === WorkspaceKind.Assistant
+      ? workspace.identity?.name?.trim() || workspace.name
+      : workspace.name;
 
   const updateMenuPosition = useCallback(() => {
     const anchor = menuAnchorRef.current;
@@ -108,6 +122,58 @@ const WorkspaceItem: React.FC<WorkspaceItemProps> = ({ workspace, isActive, isSi
     }
   }, [closeWorkspaceById, t, workspace.id]);
 
+  const handleRequestDeleteAssistant = useCallback(() => {
+    setMenuOpen(false);
+    setDeleteDialogOpen(true);
+  }, []);
+
+  const handleRequestResetWorkspace = useCallback(() => {
+    setMenuOpen(false);
+    setResetDialogOpen(true);
+  }, []);
+
+  const handleConfirmDeleteAssistant = useCallback(async () => {
+    if (!isNamedAssistantWorkspace || isDeletingAssistant) {
+      return;
+    }
+
+    setIsDeletingAssistant(true);
+    try {
+      await deleteAssistantWorkspace(workspace.id);
+      notificationService.success(t('nav.workspaces.assistantDeleted'), { duration: 2500 });
+    } catch (error) {
+      notificationService.error(
+        error instanceof Error ? error.message : t('nav.workspaces.deleteAssistantFailed'),
+        { duration: 4000 }
+      );
+    } finally {
+      setIsDeletingAssistant(false);
+    }
+  }, [deleteAssistantWorkspace, isDeletingAssistant, isNamedAssistantWorkspace, t, workspace.id]);
+
+  const handleConfirmResetWorkspace = useCallback(async () => {
+    if (!isDefaultAssistantWorkspace || isResettingWorkspace) {
+      return;
+    }
+
+    setIsResettingWorkspace(true);
+    try {
+      await resetAssistantWorkspace(workspace.id);
+      await flowChatManager.resetWorkspaceSessions(workspace.rootPath, {
+        reinitialize: isActive,
+        preferredMode: 'Claw',
+      });
+      notificationService.success(t('nav.workspaces.workspaceReset'), { duration: 2500 });
+    } catch (error) {
+      notificationService.error(
+        error instanceof Error ? error.message : t('nav.workspaces.resetWorkspaceFailed'),
+        { duration: 4000 }
+      );
+    } finally {
+      setIsResettingWorkspace(false);
+    }
+  }, [isActive, isDefaultAssistantWorkspace, isResettingWorkspace, resetAssistantWorkspace, t, workspace.id, workspace.rootPath]);
+
   const handleReveal = useCallback(async () => {
     setMenuOpen(false);
     try {
@@ -124,14 +190,17 @@ const WorkspaceItem: React.FC<WorkspaceItemProps> = ({ workspace, isActive, isSi
     setMenuOpen(false);
     try {
       await handleActivate();
-      await flowChatManager.createChatSession({});
+      await flowChatManager.createChatSession(
+        {},
+        workspace.workspaceKind === WorkspaceKind.Assistant ? 'Claw' : undefined
+      );
     } catch (error) {
       notificationService.error(
         error instanceof Error ? error.message : t('nav.workspaces.createSessionFailed'),
         { duration: 4000 }
       );
     }
-  }, [handleActivate, t]);
+  }, [handleActivate, t, workspace.workspaceKind]);
 
   const handleCreateWorktree = useCallback(async (result: BranchSelectResult) => {
     try {
@@ -178,7 +247,7 @@ const WorkspaceItem: React.FC<WorkspaceItemProps> = ({ workspace, isActive, isSi
         >
           <span className="bitfun-nav-panel__workspace-item-icon" aria-hidden="true">
             <span className="bitfun-nav-panel__workspace-item-icon-default">
-              <FolderOpen size={14} />
+              {workspace.workspaceKind === WorkspaceKind.Assistant ? <Bot size={14} /> : <FolderOpen size={14} />}
             </span>
             <span className={`bitfun-nav-panel__workspace-item-icon-toggle${sessionsCollapsed ? ' is-collapsed' : ''}`}>
               <ChevronDown size={14} />
@@ -190,7 +259,17 @@ const WorkspaceItem: React.FC<WorkspaceItemProps> = ({ workspace, isActive, isSi
           className="bitfun-nav-panel__workspace-item-name-btn"
           onClick={() => { void handleCardNameClick(); }}
         >
-          <span className="bitfun-nav-panel__workspace-item-label">{workspace.name}</span>
+          <span className="bitfun-nav-panel__workspace-item-title">
+            <span className="bitfun-nav-panel__workspace-item-label">{workspaceDisplayName}</span>
+            {isDefaultAssistantWorkspace ? (
+              <span
+                className="bitfun-nav-panel__workspace-item-badge"
+                title={t('nav.workspaces.primaryAssistant')}
+              >
+                {t('nav.workspaces.primaryAssistant')}
+              </span>
+            ) : null}
+          </span>
           {currentBranch ? (
             <span className="bitfun-nav-panel__workspace-item-branch">
               <GitBranch size={11} />
@@ -247,6 +326,28 @@ const WorkspaceItem: React.FC<WorkspaceItemProps> = ({ workspace, isActive, isSi
               <FolderSearch size={13} />
               <span className="bitfun-nav-panel__workspace-item-menu-label">{t('nav.workspaces.actions.reveal')}</span>
             </button>
+            {isDefaultAssistantWorkspace && (
+              <button
+                type="button"
+                className="bitfun-nav-panel__workspace-item-menu-item is-danger"
+                onClick={handleRequestResetWorkspace}
+                disabled={isResettingWorkspace}
+              >
+                <RotateCcw size={13} />
+                <span className="bitfun-nav-panel__workspace-item-menu-label">{t('nav.workspaces.actions.resetWorkspace')}</span>
+              </button>
+            )}
+            {isNamedAssistantWorkspace && (
+              <button
+                type="button"
+                className="bitfun-nav-panel__workspace-item-menu-item is-danger"
+                onClick={handleRequestDeleteAssistant}
+                disabled={isDeletingAssistant}
+              >
+                <Trash2 size={13} />
+                <span className="bitfun-nav-panel__workspace-item-menu-label">{t('nav.workspaces.actions.deleteAssistant')}</span>
+              </button>
+            )}
             <button type="button" className="bitfun-nav-panel__workspace-item-menu-item is-danger" onClick={() => { void handleCloseWorkspace(); }}>
               <FolderOpen size={13} />
               <span className="bitfun-nav-panel__workspace-item-menu-label">{t('nav.workspaces.actions.close')}</span>
@@ -270,6 +371,29 @@ const WorkspaceItem: React.FC<WorkspaceItemProps> = ({ workspace, isActive, isSi
         onSelect={(result) => { void handleCreateWorktree(result); }}
         repositoryPath={workspace.rootPath}
         title={t('nav.workspaces.actions.newWorktree')}
+      />
+
+      <ConfirmDialog
+        isOpen={deleteDialogOpen}
+        onClose={() => setDeleteDialogOpen(false)}
+        onConfirm={() => { void handleConfirmDeleteAssistant(); }}
+        title={t('nav.workspaces.deleteAssistantDialog.title', { name: workspaceDisplayName })}
+        message={t('nav.workspaces.deleteAssistantDialog.message')}
+        confirmText={t('nav.workspaces.actions.deleteAssistant')}
+        cancelText={t('actions.cancel')}
+        confirmDanger
+        preview={`${t('nav.workspaces.deleteAssistantDialog.pathLabel')}\n${workspace.rootPath}`}
+      />
+      <ConfirmDialog
+        isOpen={resetDialogOpen}
+        onClose={() => setResetDialogOpen(false)}
+        onConfirm={() => { void handleConfirmResetWorkspace(); }}
+        title={t('nav.workspaces.resetWorkspaceDialog.title', { name: workspaceDisplayName })}
+        message={t('nav.workspaces.resetWorkspaceDialog.message')}
+        confirmText={t('nav.workspaces.actions.resetWorkspace')}
+        cancelText={t('actions.cancel')}
+        confirmDanger
+        preview={`${t('nav.workspaces.resetWorkspaceDialog.pathLabel')}\n${workspace.rootPath}`}
       />
     </div>
   );

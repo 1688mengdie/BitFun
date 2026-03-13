@@ -32,13 +32,21 @@ export class RelayHttpClient {
    * 1. POST /pair with our public key → receive encrypted challenge
    * 2. POST /command with encrypted challenge_echo → receive initial_sync
    */
-  async pair(desktopPubKeyB64: string): Promise<any> {
+  async pair(
+    desktopPubKeyB64: string,
+    identity: {
+      userId: string;
+      mobileInstallId: string;
+    },
+  ): Promise<any> {
     this.keyPair = await generateKeyPair();
     const desktopPub = fromB64(desktopPubKeyB64);
     this.sharedKey = await deriveSharedKey(this.keyPair, desktopPub);
 
-    const deviceId = `mobile-${Date.now().toString(36)}`;
+    const deviceId = identity.mobileInstallId;
     const deviceName = this.getMobileDeviceName();
+    const userId = identity.userId.trim();
+    const mobileInstallId = identity.mobileInstallId.trim();
 
     // Step 1: POST /pair → encrypted challenge
     const pairResp = await fetch(
@@ -71,6 +79,8 @@ export class RelayHttpClient {
       challenge_echo: challenge.challenge,
       device_id: deviceId,
       device_name: deviceName,
+      mobile_install_id: mobileInstallId,
+      user_id: userId,
     });
     const { data: encData, nonce: encNonce } = await encrypt(
       this.sharedKey,
@@ -96,7 +106,11 @@ export class RelayHttpClient {
       cmdData.encrypted_data,
       cmdData.nonce,
     );
-    return JSON.parse(initialSyncJson);
+    const parsed = JSON.parse(initialSyncJson);
+    if (parsed?.resp === 'error') {
+      throw new Error(parsed?.message || 'Pairing rejected');
+    }
+    return parsed;
   }
 
   /**

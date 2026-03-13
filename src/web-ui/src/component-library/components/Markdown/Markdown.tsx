@@ -56,6 +56,55 @@ class MarkdownErrorBoundary extends Component<
 }
 const FILE_LINK_PREFIX = 'file://';
 const WORKSPACE_FOLDER_PLACEHOLDER = '{{workspaceFolder}}';
+const EDITOR_OPENABLE_EXTENSIONS = new Set([
+  'js', 'jsx', 'ts', 'tsx', 'mjs', 'cjs', 'mts', 'cts',
+  'py', 'pyw', 'pyi',
+  'rs', 'go', 'java', 'kt', 'kts', 'scala', 'groovy',
+  'c', 'cpp', 'cc', 'cxx', 'h', 'hpp', 'hxx', 'hh',
+  'cs', 'rb', 'php', 'swift', 'dart', 'lua', 'r', 'jl',
+  'vue', 'svelte',
+  'html', 'htm', 'css', 'scss', 'less', 'sass',
+  'json', 'jsonc', 'yaml', 'yml', 'toml', 'xml',
+  'md', 'mdx', 'rst', 'txt', 'csv', 'tsv',
+  'sh', 'bash', 'zsh', 'fish', 'ps1', 'bat', 'cmd',
+  'sql', 'graphql', 'gql', 'proto',
+  'ini', 'cfg', 'conf', 'env', 'lock',
+  'gitignore', 'gitattributes', 'editorconfig',
+  'log', 'dockerfile', 'makefile', 'mk', 'gradle',
+  'properties', 'plist', 'tex', 'mermaid', 'svg',
+]);
+const EDITOR_OPENABLE_BASENAMES = new Set([
+  'dockerfile',
+  'makefile',
+  'cmakelists.txt',
+  '.gitignore',
+  '.gitattributes',
+  '.editorconfig',
+  '.npmrc',
+  '.nvmrc',
+  '.prettierrc',
+  '.prettierignore',
+  '.eslintrc',
+  '.eslintignore',
+  '.stylelintrc',
+  '.stylelintignore',
+  '.babelrc',
+  '.env',
+  '.env.local',
+  '.env.development',
+  '.env.production',
+  '.env.test',
+  'gemfile',
+  'rakefile',
+  'podfile',
+  'brewfile',
+  'justfile',
+  'procfile',
+  'license',
+  'readme',
+  'readme.md',
+  'readme.txt',
+]);
 
 function remarkAutolinkComputerFileLinks() {
   return (tree: any) => {
@@ -145,6 +194,26 @@ function normalizeFileLikeHref(rawHref: string): string {
   } catch {
     return filePath;
   }
+}
+
+function isEditorOpenableFilePath(filePath: string): boolean {
+  const normalizedPath = filePath.trim().replace(/[?#].*$/, '');
+  const fileName = normalizedPath.split(/[\\/]/).pop()?.toLowerCase() || '';
+
+  if (!fileName) {
+    return false;
+  }
+
+  if (EDITOR_OPENABLE_BASENAMES.has(fileName)) {
+    return true;
+  }
+
+  const dotIdx = fileName.lastIndexOf('.');
+  if (dotIdx <= 0) {
+    return false;
+  }
+
+  return EDITOR_OPENABLE_EXTENSIONS.has(fileName.slice(dotIdx + 1));
 }
 
 const CopyButton: React.FC<{ code: string }> = ({ code }) => {
@@ -390,6 +459,7 @@ export const Markdown = React.memo<MarkdownProps>(({
         fileName = filePath.split(/[\\/]/).pop() || filePath;
 
         const isFolder = filePath.endsWith('/');
+        const shouldRevealInExplorer = isComputerLink || !isEditorOpenableFilePath(filePath);
         if (!isFolder) {
           return (
             <button
@@ -397,7 +467,7 @@ export const Markdown = React.memo<MarkdownProps>(({
               onClick={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
-                if (isComputerLink) {
+                if (shouldRevealInExplorer) {
                   void handleRevealInExplorer(filePath);
                   return;
                 }

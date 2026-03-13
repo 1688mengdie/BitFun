@@ -35,12 +35,20 @@ export interface RemoteConnectStatus {
   pairing_state: string;
   active_method: string | null;
   peer_device_name: string | null;
+  peer_user_id: string | null;
   bot_connected: string | null;
 }
 
 export interface LanNetworkInfo {
   local_ip: string;
   gateway_ip: string | null;
+}
+
+export interface RemoteConnectFormState {
+  custom_server_url: string;
+  telegram_bot_token: string;
+  feishu_app_id: string;
+  feishu_app_secret: string;
 }
 
 class RemoteConnectAPIService {
@@ -107,6 +115,24 @@ class RemoteConnectAPIService {
       return await this.adapter.request<RemoteConnectStatus>('remote_connect_status');
     } catch (e) {
       log.error('getStatus failed', e);
+      throw e;
+    }
+  }
+
+  async getFormState(): Promise<RemoteConnectFormState> {
+    try {
+      return await this.adapter.request<RemoteConnectFormState>('remote_connect_get_form_state');
+    } catch (e) {
+      log.error('getFormState failed', e);
+      throw e;
+    }
+  }
+
+  async setFormState(formState: RemoteConnectFormState): Promise<void> {
+    try {
+      await this.adapter.request<void>('remote_connect_set_form_state', { request: formState });
+    } catch (e) {
+      log.error('setFormState failed', e);
       throw e;
     }
   }

@@ -206,6 +206,100 @@ $gutter: clamp(40px, 6vw, 80px);
       }
     }
 
+    &__reset-btn {
+      margin-left: 2px;
+      color: var(--color-text-disabled);
+
+      &:hover {
+        color: var(--color-danger-500);
+        background: color-mix(in srgb, var(--color-danger-500) 8%, transparent);
+      }
+    }
+
+    &__meta-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      min-height: 24px;
+    }
+
+    &__meta-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 24px;
+      padding: 0 8px;
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--element-bg-soft) 88%, transparent);
+      border: 1px solid color-mix(in srgb, var(--border-subtle) 72%, transparent);
+      color: var(--color-text-muted);
+      font-size: 11px;
+      cursor: pointer;
+      transition: border-color $motion-fast $easing-standard,
+        background $motion-fast $easing-standard,
+        color $motion-fast $easing-standard;
+
+      &.is-emoji {
+        padding: 0 10px;
+        font-size: 14px;
+        color: var(--color-text-primary);
+      }
+
+      &.is-empty {
+        color: var(--color-text-disabled);
+      }
+
+      &.is-editing {
+        padding: 0;
+        background: transparent;
+        border-color: color-mix(in srgb, var(--color-accent-500) 35%, var(--border-subtle));
+      }
+
+      &:hover {
+        border-color: var(--border-medium);
+        color: var(--color-text-secondary);
+      }
+    }
+
+    &__meta-label {
+      color: var(--color-text-disabled);
+    }
+
+    &__meta-value {
+      color: inherit;
+    }
+
+    &__meta-input {
+      min-width: 110px;
+
+      .bitfun-input-container {
+        height: 24px;
+        border-radius: 999px;
+        background: var(--element-bg-subtle);
+        border: 1px solid var(--border-base);
+        padding: 0 9px;
+      }
+
+      .bitfun-input {
+        font-size: 11px;
+        color: var(--color-text-primary);
+      }
+
+      &.is-emoji {
+        min-width: 64px;
+
+        .bitfun-input-container {
+          padding: 0 10px;
+        }
+
+        .bitfun-input {
+          text-align: center;
+          font-size: 14px;
+        }
+      }
+    }
+
     &__desc {
       margin: 0;
       font-size: $font-size-sm;
@@ -239,17 +333,30 @@ $gutter: clamp(40px, 6vw, 80px);
 
     &__desc-input {
       width: 100%;
-      .bitfun-input-container {
-        border-radius: 6px;
+      .bitfun-textarea__wrapper {
+        border-radius: 8px;
         background: var(--element-bg-subtle);
         border: 1px solid var(--border-base);
-        padding: 0 10px;
       }
-      .bitfun-input {
+      .bitfun-textarea__field {
         font-size: $font-size-sm;
         color: var(--color-text-primary);
         font-family: inherit;
+        line-height: 1.7;
+        min-height: 140px;
+        padding: 12px 14px;
       }
+    }
+
+    &__desc-markdown {
+      font-size: $font-size-sm;
+      color: var(--color-text-muted);
+      line-height: 1.8;
+      word-break: break-word;
+      white-space: pre-wrap;
+      overflow: hidden;
+      max-height: 132px;
+      mask-image: linear-gradient(to bottom, black 0%, black 78%, transparent 100%);
     }
 
     // ── Hint text ─────────────────────────────────────────
@@ -302,35 +409,6 @@ $gutter: clamp(40px, 6vw, 80px);
       color: var(--color-text-disabled);
       padding-left: 6px;
       border-left: 1px solid var(--border-subtle);
-    }
-
-    // ── WIP badge ────────────────────────────────────────
-    &__wip {
-      display: inline-flex;
-      align-items: center;
-      gap: 5px;
-      height: 20px;
-      padding: 0 8px;
-      border-radius: 999px;
-      border: 1px solid color-mix(in srgb, #f59e0b 35%, transparent);
-      background: color-mix(in srgb, #f59e0b 8%, transparent);
-      color: #d97706;
-      font-size: 11px;
-      font-weight: $font-weight-medium;
-      letter-spacing: 0.4px;
-      cursor: default;
-      user-select: none;
-      flex-shrink: 0;
-      animation: bp-wip-in 0.4s $easing-standard 0.15s both;
-    }
-
-    &__wip-dot {
-      width: 5px;
-      height: 5px;
-      border-radius: 50%;
-      background: #f59e0b;
-      flex-shrink: 0;
-      animation: bp-wip-pulse 2.4s ease-in-out infinite;
     }
 
     // ── Inline enter link ─────────────────────────────────
@@ -449,18 +527,29 @@ $gutter: clamp(40px, 6vw, 80px);
       flex-wrap: wrap;
     }
 
+    &__meta-row {
+      margin-top: 4px;
+    }
+
+    &__meta-pill {
+      cursor: default;
+
+      &:hover {
+        border-color: color-mix(in srgb, var(--border-subtle) 72%, transparent);
+        color: inherit;
+      }
+    }
+
     &__name {
       margin: 0;
       font-size: 15px;
       font-weight: $font-weight-semibold;
       color: var(--color-text-primary);
       letter-spacing: -0.2px;
-      cursor: pointer;
+      cursor: default;
       display: inline-flex;
       align-items: center;
       gap: 5px;
-      transition: color $motion-fast $easing-standard;
-      &:hover { color: var(--color-accent-400); }
     }
 
     &__name-edit {
@@ -482,6 +571,12 @@ $gutter: clamp(40px, 6vw, 80px);
       letter-spacing: 0.5px;
       text-transform: uppercase;
       flex-shrink: 0;
+
+      &.is-error {
+        color: var(--color-danger-500);
+        background: color-mix(in srgb, var(--color-danger-500) 10%, var(--element-bg-soft));
+        border-color: color-mix(in srgb, var(--color-danger-500) 20%, transparent);
+      }
     }
 
     &__desc {
@@ -770,6 +865,34 @@ $gutter: clamp(40px, 6vw, 80px);
       align-items: center;
       gap: 2px;
       flex-shrink: 0;
+    }
+  }
+
+  &-identity-form {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  &-identity-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+
+  &-identity-body-input {
+    .bitfun-textarea__wrapper {
+      border-radius: 10px;
+      background: var(--element-bg-subtle);
+      border: 1px solid var(--border-base);
+    }
+
+    .bitfun-textarea__field {
+      min-height: 220px;
+      padding: 12px 14px;
+      font-family: var(--font-family-mono, 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace);
+      font-size: 12px;
+      line-height: 1.7;
     }
   }
 

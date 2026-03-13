@@ -7,20 +7,54 @@ import { agentAPI } from '@/infrastructure/api/service-api/AgentAPI';
 import { notificationService } from '../../../shared/notification-system';
 import { createLogger } from '@/shared/utils/logger';
 import { i18nService } from '@/infrastructure/i18n';
+import { workspaceManager } from '@/infrastructure/services/business/workspaceManager';
+import { WorkspaceKind, type WorkspaceInfo } from '@/shared/types';
 import type { FlowChatContext, SessionConfig } from './types';
 import { touchSessionActivity, cleanupSaveState } from './PersistenceModule';
 
 const log = createLogger('SessionModule');
 
-type SessionDisplayMode = 'code' | 'cowork';
+type SessionDisplayMode = 'code' | 'cowork' | 'claw';
 
-const normalizeSessionDisplayMode = (mode?: string): SessionDisplayMode => {
+const isAssistantWorkspace = (workspace?: WorkspaceInfo | null): boolean => {
+  return workspace?.workspaceKind === WorkspaceKind.Assistant;
+};
+
+const normalizeSessionDisplayMode = (
+  mode?: string,
+  workspace?: WorkspaceInfo | null
+): SessionDisplayMode => {
+  if (isAssistantWorkspace(workspace)) return 'claw';
   if (!mode) return 'code';
-  return mode.toLowerCase() === 'cowork' ? 'cowork' : 'code';
+  const normalizedMode = mode.toLowerCase();
+  if (normalizedMode === 'cowork') return 'cowork';
+  if (normalizedMode === 'claw') return 'claw';
+  return 'code';
 };
 
 const resolveSessionWorkspacePath = (context: FlowChatContext): string | null => {
   return context.currentWorkspacePath || null;
+};
+
+const resolveSessionWorkspace = (context: FlowChatContext): WorkspaceInfo | null => {
+  const workspacePath = resolveSessionWorkspacePath(context);
+  if (!workspacePath) return null;
+
+  const state = workspaceManager.getState();
+  const matchedWorkspace = Array.from(state.openedWorkspaces.values()).find(
+    workspace => workspace.rootPath === workspacePath
+  );
+  return matchedWorkspace || state.currentWorkspace;
+};
+
+const resolveAgentType = (
+  requestedMode: string | undefined,
+  workspace: WorkspaceInfo | null
+): string => {
+  if (isAssistantWorkspace(workspace)) {
+    return 'Claw';
+  }
+  return requestedMode || 'agentic';
 };
 
 const requireSessionWorkspacePath = (
@@ -75,12 +109,14 @@ export async function createChatSession(
   mode?: string
 ): Promise<string> {
   try {
-    const sessionMode = normalizeSessionDisplayMode(mode);
     const workspacePath = resolveSessionWorkspacePath(context);
+    const workspace = resolveSessionWorkspace(context);
 
     if (!workspacePath) {
       throw new Error('Workspace path is required to create a session');
     }
+    const agentType = resolveAgentType(mode, workspace);
+    const sessionMode = normalizeSessionDisplayMode(agentType, workspace);
 
     const sameModeCount =
       Array.from(context.flowChatStore.getState().sessions.values()).filter(
@@ -89,11 +125,11 @@ export async function createChatSession(
     const sessionName =
       sessionMode === 'cowork'
         ? i18nService.t('flow-chat:session.newCoworkWithIndex', { count: sameModeCount })
-        : i18nService.t('flow-chat:session.newCodeWithIndex', { count: sameModeCount });
+        : sessionMode === 'claw'
+          ? i18nService.t('flow-chat:session.newClawWithIndex', { count: sameModeCount })
+          : i18nService.t('flow-chat:session.newCodeWithIndex', { count: sameModeCount });
     
     const maxContextTokens = await getModelMaxTokens(config.modelName);
-    
-    const agentType = mode || 'agentic';
 
     const response = await agentAPI.createSession({
       sessionName,
@@ -115,7 +151,7 @@ export async function createChatSession(
       undefined,
       sessionName,
       maxContextTokens,
-      mode,
+      agentType,
       workspacePath
     );
 

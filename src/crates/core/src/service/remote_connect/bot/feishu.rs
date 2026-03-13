@@ -15,8 +15,8 @@ use tokio_tungstenite::tungstenite::Message as WsMessage;
 
 use super::command_router::{
     execute_forwarded_turn, handle_command, main_menu_actions, paired_success_message,
-    parse_command, BotAction, BotActionStyle, BotChatState, BotInteractiveRequest,
-    BotInteractionHandler, BotMessageSender, HandleResult, WELCOME_MESSAGE,
+    parse_command, BotAction, BotActionStyle, BotChatState, BotInteractionHandler,
+    BotInteractiveRequest, BotMessageSender, HandleResult, WELCOME_MESSAGE,
 };
 use super::{load_bot_persistence, save_bot_persistence, BotConfig, SavedBotConnection};
 
@@ -55,13 +55,19 @@ mod pb {
         let mut result: u64 = 0;
         let mut shift = 0u32;
         loop {
-            if *pos >= data.len() { return None; }
+            if *pos >= data.len() {
+                return None;
+            }
             let byte = data[*pos];
             *pos += 1;
             result |= ((byte & 0x7F) as u64) << shift;
-            if byte & 0x80 == 0 { return Some(result); }
+            if byte & 0x80 == 0 {
+                return Some(result);
+            }
             shift += 7;
-            if shift >= 64 { return None; }
+            if shift >= 64 {
+                return None;
+            }
         }
     }
 
@@ -70,16 +76,22 @@ mod pb {
         loop {
             let mut byte = (val & 0x7F) as u8;
             val >>= 7;
-            if val != 0 { byte |= 0x80; }
+            if val != 0 {
+                byte |= 0x80;
+            }
             buf.push(byte);
-            if val == 0 { break; }
+            if val == 0 {
+                break;
+            }
         }
         buf
     }
 
     fn read_len<'a>(data: &'a [u8], pos: &mut usize) -> Option<&'a [u8]> {
         let len = decode_varint(data, pos)? as usize;
-        if *pos + len > data.len() { return None; }
+        if *pos + len > data.len() {
+            return None;
+        }
         let slice = &data[*pos..*pos + len];
         *pos += len;
         Some(slice)
@@ -93,8 +105,12 @@ mod pb {
             match (tag >> 3, tag & 7) {
                 (1, 2) => key = String::from_utf8_lossy(read_len(data, &mut pos)?).into(),
                 (2, 2) => val = String::from_utf8_lossy(read_len(data, &mut pos)?).into(),
-                (_, 0) => { decode_varint(data, &mut pos)?; }
-                (_, 2) => { read_len(data, &mut pos)?; }
+                (_, 0) => {
+                    decode_varint(data, &mut pos)?;
+                }
+                (_, 2) => {
+                    read_len(data, &mut pos)?;
+                }
                 _ => return None,
             }
         }
@@ -116,14 +132,26 @@ mod pb {
                         f.headers.push(h);
                     }
                 }
-                (6, 2) => f.payload_encoding = String::from_utf8_lossy(read_len(data, &mut pos)?).into(),
-                (7, 2) => f.payload_type = String::from_utf8_lossy(read_len(data, &mut pos)?).into(),
+                (6, 2) => {
+                    f.payload_encoding = String::from_utf8_lossy(read_len(data, &mut pos)?).into()
+                }
+                (7, 2) => {
+                    f.payload_type = String::from_utf8_lossy(read_len(data, &mut pos)?).into()
+                }
                 (8, 2) => f.payload = read_len(data, &mut pos)?.to_vec(),
                 (9, 2) => f.log_id_new = String::from_utf8_lossy(read_len(data, &mut pos)?).into(),
-                (_, 0) => { decode_varint(data, &mut pos)?; }
-                (_, 2) => { read_len(data, &mut pos)?; }
-                (_, 5) => { pos += 4; } // fixed32
-                (_, 1) => { pos += 8; } // fixed64
+                (_, 0) => {
+                    decode_varint(data, &mut pos)?;
+                }
+                (_, 2) => {
+                    read_len(data, &mut pos)?;
+                }
+                (_, 5) => {
+                    pos += 4;
+                } // fixed32
+                (_, 1) => {
+                    pos += 8;
+                } // fixed64
                 _ => return None,
             }
         }
@@ -175,7 +203,10 @@ mod pb {
 
     impl Frame {
         pub fn get_header(&self, key: &str) -> Option<&str> {
-            self.headers.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str())
+            self.headers
+                .iter()
+                .find(|(k, _)| k == key)
+                .map(|(_, v)| v.as_str())
         }
 
         pub fn new_ping(service_id: i32) -> Self {
@@ -196,7 +227,8 @@ mod pb {
                 service: original.service,
                 method: original.method,
                 headers,
-                payload: serde_json::to_vec(&serde_json::json!({"code": status_code})).unwrap_or_default(),
+                payload: serde_json::to_vec(&serde_json::json!({"code": status_code}))
+                    .unwrap_or_default(),
                 log_id_new: original.log_id_new.clone(),
                 ..Default::default()
             }
@@ -274,8 +306,12 @@ impl FeishuBot {
             .map_err(|e| anyhow!("feishu token request: {e}"))?;
 
         let token_resp_text = resp.text().await.unwrap_or_default();
-        let body: serde_json::Value = serde_json::from_str(&token_resp_text)
-            .map_err(|e| anyhow!("feishu token response parse error: {e}, body: {}", &token_resp_text[..token_resp_text.len().min(200)]))?;
+        let body: serde_json::Value = serde_json::from_str(&token_resp_text).map_err(|e| {
+            anyhow!(
+                "feishu token response parse error: {e}, body: {}",
+                &token_resp_text[..token_resp_text.len().min(200)]
+            )
+        })?;
         let access_token = body["tenant_access_token"]
             .as_str()
             .ok_or_else(|| anyhow!("missing tenant_access_token in response"))?
@@ -315,9 +351,14 @@ impl FeishuBot {
         if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&body) {
             if let Some(code) = parsed.get("code").and_then(|c| c.as_i64()) {
                 if code != 0 {
-                    let msg = parsed.get("msg").and_then(|m| m.as_str()).unwrap_or("unknown");
+                    let msg = parsed
+                        .get("msg")
+                        .and_then(|m| m.as_str())
+                        .unwrap_or("unknown");
                     warn!("Feishu send_message API error: code={code}, msg={msg}");
-                    return Err(anyhow!("feishu send_message API error: code={code}, msg={msg}"));
+                    return Err(anyhow!(
+                        "feishu send_message API error: code={code}, msg={msg}"
+                    ));
                 }
             }
         }
@@ -367,14 +408,14 @@ impl FeishuBot {
             .bearer_auth(&token)
             .send()
             .await
-            .map_err(|e| {
-                anyhow!("feishu download image: {e}")
-            })?;
+            .map_err(|e| anyhow!("feishu download image: {e}"))?;
 
         let status = resp.status();
         if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();
-            return Err(anyhow!("feishu image download failed: HTTP {status} — {body}"));
+            return Err(anyhow!(
+                "feishu image download failed: HTTP {status} — {body}"
+            ));
         }
 
         let content_type = resp
@@ -470,7 +511,8 @@ impl FeishuBot {
         if result.actions.is_empty() {
             self.send_message(chat_id, &result.reply).await
         } else {
-            self.send_action_card(chat_id, &result.reply, &result.actions).await
+            self.send_action_card(chat_id, &result.reply, &result.actions)
+                .await
         }
     }
 
@@ -481,7 +523,7 @@ impl FeishuBot {
         let token = self.get_access_token().await?;
 
         const MAX_SIZE: u64 = 30 * 1024 * 1024; // Unified 30 MB cap (Feishu API hard limit)
-        let content = super::read_workspace_file(file_path, MAX_SIZE).await?;
+        let content = super::read_workspace_file(file_path, MAX_SIZE, None).await?;
 
         // Feishu uses its own file_type enum rather than MIME types.
         let ext = std::path::Path::new(&content.name)
@@ -559,14 +601,17 @@ impl FeishuBot {
     async fn notify_files_ready(&self, chat_id: &str, text: &str) {
         let result = {
             let mut states = self.chat_states.write().await;
-            let state = states
-                .entry(chat_id.to_string())
-                .or_insert_with(|| {
-                    let mut s = BotChatState::new(chat_id.to_string());
-                    s.paired = true;
-                    s
-                });
-            super::prepare_file_download_actions(text, state)
+            let state = states.entry(chat_id.to_string()).or_insert_with(|| {
+                let mut s = BotChatState::new(chat_id.to_string());
+                s.paired = true;
+                s
+            });
+            let workspace_root = state.current_workspace.clone();
+            super::prepare_file_download_actions(
+                text,
+                state,
+                workspace_root.as_deref().map(std::path::Path::new),
+            )
         };
         if let Some(result) = result {
             if let Err(e) = self.send_handle_result(chat_id, &result).await {
@@ -680,7 +725,9 @@ impl FeishuBot {
                 continue;
             }
             if trimmed.contains("/cancel_task ") {
-                lines.push("If needed, use the Cancel Task button below to stop this request.".to_string());
+                lines.push(
+                    "If needed, use the Cancel Task button below to stop this request.".to_string(),
+                );
                 continue;
             }
             lines.push(Self::replace_command_tokens(line));
@@ -750,8 +797,12 @@ impl FeishuBot {
             .map_err(|e| anyhow!("feishu ws endpoint request: {e}"))?;
 
         let ws_resp_text = resp.text().await.unwrap_or_default();
-        let body: serde_json::Value = serde_json::from_str(&ws_resp_text)
-            .map_err(|e| anyhow!("feishu ws endpoint parse error: {e}, body: {}", &ws_resp_text[..ws_resp_text.len().min(300)]))?;
+        let body: serde_json::Value = serde_json::from_str(&ws_resp_text).map_err(|e| {
+            anyhow!(
+                "feishu ws endpoint parse error: {e}, body: {}",
+                &ws_resp_text[..ws_resp_text.len().min(300)]
+            )
+        })?;
         let code = body["code"].as_i64().unwrap_or(-1);
         if code != 0 {
             let msg = body["msg"].as_str().unwrap_or("unknown error");
@@ -801,13 +852,27 @@ impl FeishuBot {
         match msg_type {
             "text" => {
                 let text = content["text"].as_str()?.trim().to_string();
-                if text.is_empty() { return None; }
-                Some(ParsedMessage { chat_id, message_id, text, image_keys: vec![] })
+                if text.is_empty() {
+                    return None;
+                }
+                Some(ParsedMessage {
+                    chat_id,
+                    message_id,
+                    text,
+                    image_keys: vec![],
+                })
             }
             "post" => {
                 let (text, image_keys) = Self::extract_from_post(&content);
-                if text.is_empty() && image_keys.is_empty() { return None; }
-                Some(ParsedMessage { chat_id, message_id, text, image_keys })
+                if text.is_empty() && image_keys.is_empty() {
+                    return None;
+                }
+                Some(ParsedMessage {
+                    chat_id,
+                    message_id,
+                    text,
+                    image_keys,
+                })
             }
             "image" => {
                 let image_key = content["image_key"].as_str()?.to_string();
@@ -825,7 +890,9 @@ impl FeishuBot {
     /// Backward-compatible wrapper: returns (chat_id, text) only for text/post with text content.
     fn parse_message_event(event: &serde_json::Value) -> Option<(String, String)> {
         let parsed = Self::parse_message_event_full(event)?;
-        if parsed.text.is_empty() { return None; }
+        if parsed.text.is_empty() {
+            return None;
+        }
         Some((parsed.chat_id, parsed.text))
     }
 
@@ -895,7 +962,8 @@ impl FeishuBot {
             .pointer("/event/action/value/chat_id")
             .and_then(|v| v.as_str())
             .or_else(|| {
-                event.pointer("/event/context/open_chat_id")
+                event
+                    .pointer("/event/context/open_chat_id")
                     .and_then(|v| v.as_str())
             })?
             .to_string();
@@ -915,7 +983,9 @@ impl FeishuBot {
 
     /// Extract chat_id from any im.message.receive_v1 event (regardless of msg_type).
     fn extract_message_chat_id(event: &serde_json::Value) -> Option<String> {
-        let event_type = event.pointer("/header/event_type").and_then(|v| v.as_str())?;
+        let event_type = event
+            .pointer("/header/event_type")
+            .and_then(|v| v.as_str())?;
         if event_type != "im.message.receive_v1" {
             return None;
         }
@@ -930,10 +1000,16 @@ impl FeishuBot {
     async fn handle_data_frame_for_pairing(
         &self,
         frame: &pb::Frame,
-        write: &Arc<RwLock<futures::stream::SplitSink<
-            tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
-            WsMessage,
-        >>>,
+        write: &Arc<
+            RwLock<
+                futures::stream::SplitSink<
+                    tokio_tungstenite::WebSocketStream<
+                        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+                    >,
+                    WsMessage,
+                >,
+            >,
+        >,
     ) -> Option<String> {
         let msg_type = frame.get_header("type").unwrap_or("");
         if msg_type != "event" {
@@ -944,7 +1020,11 @@ impl FeishuBot {
 
         // Send ack response for this frame
         let resp_frame = pb::Frame::new_response(frame, 200);
-        let _ = write.write().await.send(WsMessage::Binary(pb::encode_frame(&resp_frame))).await;
+        let _ = write
+            .write()
+            .await
+            .send(WsMessage::Binary(pb::encode_frame(&resp_frame)))
+            .await;
 
         if let Some((chat_id, msg_text)) = Self::parse_message_event(&event) {
             let trimmed = msg_text.trim();
@@ -971,18 +1051,28 @@ impl FeishuBot {
 
                     return Some(chat_id);
                 } else {
-                    self.send_message(&chat_id, "Invalid or expired pairing code. Please try again.")
-                        .await.ok();
+                    self.send_message(
+                        &chat_id,
+                        "Invalid or expired pairing code. Please try again.",
+                    )
+                    .await
+                    .ok();
                 }
             } else {
-                self.send_message(&chat_id, "Please enter the 6-digit pairing code from BitFun Desktop.")
-                    .await.ok();
+                self.send_message(
+                    &chat_id,
+                    "Please enter the 6-digit pairing code from BitFun Desktop.",
+                )
+                .await
+                .ok();
             }
         } else if let Some(chat_id) = Self::extract_message_chat_id(&event) {
             self.send_message(
                 &chat_id,
                 "Only text messages are supported. Please send the 6-digit pairing code as text.",
-            ).await.ok();
+            )
+            .await
+            .ok();
         }
         None
     }
@@ -1081,10 +1171,7 @@ impl FeishuBot {
     /// Main message loop that runs after pairing is complete.
     /// Connects to Feishu WebSocket (binary protobuf protocol) and routes
     /// incoming messages through the command router.
-    pub async fn run_message_loop(
-        self: Arc<Self>,
-        stop_rx: tokio::sync::watch::Receiver<bool>,
-    ) {
+    pub async fn run_message_loop(self: Arc<Self>, stop_rx: tokio::sync::watch::Receiver<bool>) {
         info!("Feishu bot message loop started");
         let mut stop = stop_rx;
 
@@ -1240,13 +1327,11 @@ impl FeishuBot {
         images: Vec<super::super::remote_server::ImageAttachment>,
     ) {
         let mut states = self.chat_states.write().await;
-        let state = states
-            .entry(chat_id.to_string())
-            .or_insert_with(|| {
-                let mut s = BotChatState::new(chat_id.to_string());
-                s.paired = true;
-                s
-            });
+        let state = states.entry(chat_id.to_string()).or_insert_with(|| {
+            let mut s = BotChatState::new(chat_id.to_string());
+            s.paired = true;
+            s
+        });
 
         if !state.paired {
             let trimmed = text.trim();
@@ -1306,15 +1391,16 @@ impl FeishuBot {
             tokio::spawn(async move {
                 let interaction_bot = bot.clone();
                 let interaction_chat_id = cid.clone();
-                let handler: BotInteractionHandler = std::sync::Arc::new(move |interaction: BotInteractiveRequest| {
-                    let interaction_bot = interaction_bot.clone();
-                    let interaction_chat_id = interaction_chat_id.clone();
-                    Box::pin(async move {
-                        interaction_bot
-                            .deliver_interaction(&interaction_chat_id, interaction)
-                            .await;
-                    })
-                });
+                let handler: BotInteractionHandler =
+                    std::sync::Arc::new(move |interaction: BotInteractiveRequest| {
+                        let interaction_bot = interaction_bot.clone();
+                        let interaction_chat_id = interaction_chat_id.clone();
+                        Box::pin(async move {
+                            interaction_bot
+                                .deliver_interaction(&interaction_chat_id, interaction)
+                                .await;
+                        })
+                    });
                 let msg_bot = bot.clone();
                 let msg_cid = cid.clone();
                 let sender: BotMessageSender = std::sync::Arc::new(move |text: String| {
@@ -1337,13 +1423,11 @@ impl FeishuBot {
 
     async fn deliver_interaction(&self, chat_id: &str, interaction: BotInteractiveRequest) {
         let mut states = self.chat_states.write().await;
-        let state = states
-            .entry(chat_id.to_string())
-            .or_insert_with(|| {
-                let mut s = BotChatState::new(chat_id.to_string());
-                s.paired = true;
-                s
-            });
+        let state = states.entry(chat_id.to_string()).or_insert_with(|| {
+            let mut s = BotChatState::new(chat_id.to_string());
+            s.paired = true;
+            s
+        });
         state.pending_action = Some(interaction.pending_action.clone());
         self.persist_chat_state(chat_id, state).await;
         drop(states);
@@ -1390,7 +1474,10 @@ mod tests {
         });
 
         let parsed = FeishuBot::parse_ws_event(&event);
-        assert_eq!(parsed, Some(("oc_test_chat".to_string(), "/help".to_string())));
+        assert_eq!(
+            parsed,
+            Some(("oc_test_chat".to_string(), "/help".to_string()))
+        );
     }
 
     #[test]

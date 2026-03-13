@@ -404,6 +404,10 @@ impl PersistenceManager {
             session_id: session.session_id.clone(),
             session_name: session.session_name.clone(),
             agent_type: session.agent_type.clone(),
+            created_by: session
+                .created_by
+                .clone()
+                .or_else(|| existing.and_then(|value| value.created_by.clone())),
             model_name,
             created_at,
             last_active_at,
@@ -516,6 +520,10 @@ impl PersistenceManager {
     }
 
     pub async fn list_session_metadata(&self, workspace_path: &Path) -> BitFunResult<Vec<SessionMetadata>> {
+        if !workspace_path.exists() {
+            return Ok(Vec::new());
+        }
+
         let index_path = self.index_path(workspace_path);
         if let Some(index) = self.read_json_optional::<StoredSessionIndex>(&index_path).await? {
             return Ok(index.sessions);
@@ -706,6 +714,9 @@ impl PersistenceManager {
 
     /// Save session
     pub async fn save_session(&self, workspace_path: &Path, session: &Session) -> BitFunResult<()> {
+        if !workspace_path.exists() {
+            return Ok(());
+        }
         self.ensure_session_dir(workspace_path, &session.session_id).await?;
 
         let existing_metadata = self
@@ -762,6 +773,7 @@ impl PersistenceManager {
             session_id: metadata.session_id.clone(),
             session_name: metadata.session_name.clone(),
             agent_type: metadata.agent_type.clone(),
+            created_by: metadata.created_by.clone(),
             snapshot_session_id: stored_state
                 .and_then(|value| value.snapshot_session_id)
                 .or(metadata.snapshot_session_id.clone()),
@@ -831,6 +843,7 @@ impl PersistenceManager {
                 session_id: metadata.session_id,
                 session_name: metadata.session_name,
                 agent_type: metadata.agent_type,
+                created_by: metadata.created_by,
                 turn_count: metadata.turn_count,
                 created_at: Self::unix_ms_to_system_time(metadata.created_at),
                 last_activity_at: Self::unix_ms_to_system_time(metadata.last_active_at),

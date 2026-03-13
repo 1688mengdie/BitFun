@@ -291,7 +291,11 @@ export class FlowChatStore {
     } catch (error) {
       log.error('Failed to delete session on backend', { sessionId, error });
     }
-    
+
+    this.removeSession(sessionId);
+  }
+
+  public removeSession(sessionId: string): void {
     this.setState(prev => {
       const newSessions = new Map(prev.sessions);
       newSessions.delete(sessionId);
@@ -333,6 +337,36 @@ export class FlowChatStore {
         sessions: newSessions
       };
     });
+  }
+
+  public removeSessionsByWorkspace(workspacePath: string): string[] {
+    const removedSessionIds = Array.from(this.state.sessions.values())
+      .filter(session => session.workspacePath === workspacePath)
+      .map(session => session.sessionId);
+
+    if (removedSessionIds.length === 0) {
+      return [];
+    }
+
+    const removedSessionIdSet = new Set(removedSessionIds);
+
+    this.setState(prev => {
+      const newSessions = new Map(prev.sessions);
+      removedSessionIdSet.forEach(sessionId => {
+        newSessions.delete(sessionId);
+      });
+
+      return {
+        ...prev,
+        sessions: newSessions,
+        activeSessionId:
+          prev.activeSessionId && removedSessionIdSet.has(prev.activeSessionId)
+            ? null
+            : prev.activeSessionId
+      };
+    });
+
+    return removedSessionIds;
   }
 
   public getActiveSession(): Session | null {
@@ -1175,7 +1209,7 @@ export class FlowChatStore {
             return prev;
           }
           
-          const VALID_AGENT_TYPES = ['agentic', 'debug', 'Plan', 'Cowork'];
+          const VALID_AGENT_TYPES = ['agentic', 'debug', 'Plan', 'Cowork', 'Claw'];
           const rawAgentType = metadata.agentType || 'agentic';
           const validatedAgentType = VALID_AGENT_TYPES.includes(rawAgentType) ? rawAgentType : 'agentic';
           

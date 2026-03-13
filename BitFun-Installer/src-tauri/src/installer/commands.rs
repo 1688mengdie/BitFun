@@ -3,10 +3,10 @@
 use super::extract::{self, ESTIMATED_INSTALL_SIZE};
 use super::types::{ConnectionTestResult, DiskSpaceInfo, InstallOptions, InstallProgress, ModelConfig};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_TYPE};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::fs::File;
-use std::io::Cursor;
+use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tauri::{Emitter, Manager, Window};
@@ -23,8 +23,25 @@ struct WindowsInstallState {
 
 const MIN_WINDOWS_APP_EXE_BYTES: u64 = 5 * 1024 * 1024;
 const PAYLOAD_MANIFEST_FILE: &str = "payload-manifest.json";
+const INSTALL_MANIFEST_FILE: &str = ".bitfun-install-manifest.json";
 const EMBEDDED_PAYLOAD_ZIP: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/embedded_payload.zip"));
+
+#[derive(Debug, Clone, Deserialize)]
+struct PayloadManifest {
+    files: Vec<PayloadManifestFile>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct PayloadManifestFile {
+    path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct InstalledManifest {
+    version: u32,
+    files: Vec<String>,
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -32,6 +49,12 @@ pub struct LaunchContext {
     pub mode: String,
     pub uninstall_path: Option<String>,
     pub app_language: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallPathValidation {
+    pub install_path: String,
 }
 
 /// Get the default installation path.
@@ -160,46 +183,18 @@ pub fn get_launch_context() -> LaunchContext {
 
 /// Validate the installation path.
 #[tauri::command]
-pub fn validate_install_path(path: String) -> Result<bool, String> {
-    let path = PathBuf::from(&path);
-
-    // Check if the path is absolute
-    if !path.is_absolute() {
-        return Err("Installation path must be absolute".into());
-    }
-
-    // Check if we can create the directory
-    if path.exists() {
-        if !path.is_dir() {
-            return Err("Path exists but is not a directory".into());
-        }
-        // Directory exists - check if it's writable
-        let test_file = path.join(".bitfun_install_test");
-        match std::fs::write(&test_file, "test") {
-            Ok(_) => {
-                let _ = std::fs::remove_file(&test_file);
-                Ok(true)
-            }
-            Err(_) => Err("Directory is not writable".into()),
-        }
-    } else {
-        // Try to find the nearest existing ancestor
-        let ancestor = find_existing_ancestor(&path);
-        let test_file = ancestor.join(".bitfun_install_test");
-        match std::fs::write(&test_file, "test") {
-            Ok(_) => {
-                let _ = std::fs::remove_file(&test_file);
-                Ok(true)
-            }
-            Err(_) => Err("Cannot write to the parent directory".into()),
-        }
-    }
+pub fn validate_install_path(path: String) -> Result<InstallPathValidation, String> {
+    let requested_path = PathBuf::from(&path);
+    let install_path = prepare_install_target(&requested_path)?;
+    Ok(InstallPathValidation {
+        install_path: install_path.to_string_lossy().to_string(),
+    })
 }
 
 /// Main installation command. Emits progress events to the frontend.
 #[tauri::command]
 pub async fn start_installation(window: Window, options: InstallOptions) -> Result<(), String> {
-    let install_path = PathBuf::from(&options.install_path);
+    let install_path = prepare_install_target(Path::new(&options.install_path))?;
     let install_dir_was_absent = !install_path.exists();
     #[cfg(target_os = "windows")]
     let mut windows_state = WindowsInstallState::default();
@@ -216,10 +211,19 @@ pub async fn start_installation(window: Window, options: InstallOptions) -> Resu
         let mut extracted = false;
         let mut used_debug_placeholder = false;
         let mut checked_locations: Vec<String> = Vec::new();
+        let mut installed_files: Vec<String> = Vec::new();
 
         if embedded_payload_available() {
             checked_locations.push("embedded payload zip".to_string());
             preflight_validate_payload_zip_bytes(EMBEDDED_PAYLOAD_ZIP, "embedded payload zip")?;
+            installed_files = read_payload_manifest_from_zip_bytes(
+                EMBEDDED_PAYLOAD_ZIP,
+                "embedded payload zip",
+            )?
+            .files
+            .into_iter()
+            .map(|entry| entry.path)
+            .collect();
             extract::extract_zip_bytes_with_filter(
                 EMBEDDED_PAYLOAD_ZIP,
                 &install_path,
@@ -245,6 +249,14 @@ pub async fn start_installation(window: Window, options: InstallOptions) -> Resu
                         continue;
                     }
                     preflight_validate_payload_zip_file(&candidate.path, &candidate.label)?;
+                    installed_files = read_payload_manifest_from_zip_file(
+                        &candidate.path,
+                        &candidate.label,
+                    )?
+                    .files
+                    .into_iter()
+                    .map(|entry| entry.path)
+                    .collect();
                     extract::extract_zip_with_filter(
                         &candidate.path,
                         &install_path,
@@ -261,6 +273,11 @@ pub async fn start_installation(window: Window, options: InstallOptions) -> Resu
                     continue;
                 }
                 preflight_validate_payload_dir(&candidate.path, &candidate.label)?;
+                installed_files = read_payload_manifest_from_dir(&candidate.path, &candidate.label)?
+                    .files
+                    .into_iter()
+                    .map(|entry| entry.path)
+                    .collect();
                 extract::copy_directory_with_filter(
                     &candidate.path,
                     &install_path,
@@ -282,6 +299,7 @@ pub async fn start_installation(window: Window, options: InstallOptions) -> Resu
                     std::fs::write(&placeholder, "placeholder")
                         .map_err(|e| format!("Failed to write placeholder: {}", e))?;
                 }
+                installed_files.push("BitFun.exe".to_string());
                 used_debug_placeholder = true;
             } else {
                 return Err(format!(
@@ -312,6 +330,7 @@ pub async fn start_installation(window: Window, options: InstallOptions) -> Resu
                 uninstaller_path.display(),
                 install_path.display()
             );
+            installed_files.push("uninstall.exe".to_string());
 
             emit_progress(&window, "registry", 60, "Registering application...");
             registry::register_uninstall_entry(
@@ -359,6 +378,8 @@ pub async fn start_installation(window: Window, options: InstallOptions) -> Resu
             }
         }
 
+        write_installed_manifest(&install_path, installed_files)?;
+
         // Step 4: Save first-launch language preference for BitFun app.
         emit_progress(&window, "config", 92, "Applying startup preferences...");
         apply_first_launch_language(&options.app_language)
@@ -383,6 +404,7 @@ pub async fn start_installation(window: Window, options: InstallOptions) -> Resu
 #[tauri::command]
 pub async fn uninstall(install_path: String) -> Result<(), String> {
     let install_path = PathBuf::from(&install_path);
+    let uninstall_targets = collect_uninstall_targets(&install_path)?;
 
     #[cfg(target_os = "windows")]
     {
@@ -424,29 +446,25 @@ pub async fn uninstall(install_path: String) -> Result<(), String> {
             running_from_install_dir
         ));
 
-        if running_uninstall_binary || running_from_install_dir {
-            if install_path.exists() {
-                schedule_windows_self_uninstall_cleanup(&install_path)?;
-            } else {
-                append_uninstall_runtime_log(&format!(
-                    "install path does not exist, skip cleanup schedule: {}",
-                    install_path.display()
-                ));
-            }
-            return Ok(());
+        let current_exe_path = current_exe.as_deref();
+        remove_installed_targets(&install_path, &uninstall_targets, current_exe_path)?;
+
+        if (running_uninstall_binary || running_from_install_dir)
+            && current_exe_path
+                .map(|exe| windows_path_eq_case_insensitive(exe, &install_path.join("uninstall.exe")))
+                .unwrap_or(false)
+        {
+            schedule_windows_self_uninstall_cleanup(current_exe_path.unwrap())?;
         }
     }
 
-    if install_path.exists() {
-        std::fs::remove_dir_all(&install_path)
-            .map_err(|e| format!("Failed to remove files: {}", e))?;
-    }
-
+    #[cfg(not(target_os = "windows"))]
+    remove_installed_targets(&install_path, &uninstall_targets, None)?;
     Ok(())
 }
 
 #[cfg(target_os = "windows")]
-fn schedule_windows_self_uninstall_cleanup(install_path: &Path) -> Result<(), String> {
+fn schedule_windows_self_uninstall_cleanup(uninstall_exe_path: &Path) -> Result<(), String> {
     use std::os::windows::process::CommandExt;
 
     const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -465,19 +483,18 @@ if "%TARGET%"=="" exit /b 2
 if "%LOG%"=="" set "LOG=%TEMP%\bitfun-uninstall-cleanup.log"
 echo [%DATE% %TIME%] cleanup start > "%LOG%"
 cd /d "%TEMP%"
-taskkill /f /im BitFun.exe >> "%LOG%" 2>&1
-set "DONE=0"
 for /L %%i in (1,1,30) do (
-  rmdir /s /q "%TARGET%" >> "%LOG%" 2>&1
   if not exist "%TARGET%" (
     echo [%DATE% %TIME%] cleanup success on try %%i >> "%LOG%"
-    set "DONE=1"
-    goto :cleanup_done
+    exit /b 0
+  )
+  del /f /q "%TARGET%" >> "%LOG%" 2>&1
+  if not exist "%TARGET%" (
+    echo [%DATE% %TIME%] cleanup success on try %%i >> "%LOG%"
+    exit /b 0
   )
   timeout /t 1 /nobreak >nul
 )
-:cleanup_done
-if "%DONE%"=="1" exit /b 0
 echo [%DATE% %TIME%] cleanup failed after retries >> "%LOG%"
 exit /b 1
 "#
@@ -489,7 +506,7 @@ exit /b 1
     append_uninstall_runtime_log(&format!(
         "scheduled cleanup script='{}', target='{}', cleanup_log='{}'",
         script_path.display(),
-        install_path.display(),
+        uninstall_exe_path.display(),
         log_path.display()
     ));
 
@@ -497,7 +514,7 @@ exit /b 1
         .arg("/C")
         .arg("call")
         .arg(&script_path)
-        .arg(install_path)
+        .arg(uninstall_exe_path)
         .arg(&log_path)
         .current_dir(&temp_dir)
         .creation_flags(CREATE_NO_WINDOW)
@@ -941,6 +958,94 @@ fn find_existing_ancestor(path: &Path) -> PathBuf {
     current
 }
 
+fn prepare_install_target(requested_path: &Path) -> Result<PathBuf, String> {
+    if !requested_path.is_absolute() {
+        return Err("Installation path must be absolute".into());
+    }
+
+    if requested_path.parent().is_none() {
+        return Err("Refusing to install into a filesystem root directory".into());
+    }
+
+    #[cfg(target_os = "windows")]
+    let install_path = resolve_windows_install_target(requested_path)?;
+    #[cfg(not(target_os = "windows"))]
+    let install_path = requested_path.to_path_buf();
+
+    if install_path.exists() {
+        if !install_path.is_dir() {
+            return Err("Path exists but is not a directory".into());
+        }
+        if directory_has_entries(&install_path)?
+            && !install_path.join(INSTALL_MANIFEST_FILE).exists()
+            && !install_path.join("BitFun.exe").exists()
+        {
+            return Err(
+                "Installation directory must be empty or already contain a BitFun installation"
+                    .into(),
+            );
+        }
+    }
+
+    let writable_dir = if install_path.exists() {
+        install_path.clone()
+    } else {
+        find_existing_ancestor(&install_path)
+    };
+    let test_file = writable_dir.join(".bitfun_install_test");
+    match std::fs::write(&test_file, "test") {
+        Ok(_) => {
+            let _ = std::fs::remove_file(&test_file);
+            Ok(install_path)
+        }
+        Err(_) if install_path.exists() => Err("Directory is not writable".into()),
+        Err(_) => Err("Cannot write to the parent directory".into()),
+    }
+}
+
+fn directory_has_entries(path: &Path) -> Result<bool, String> {
+    let mut entries = std::fs::read_dir(path)
+        .map_err(|e| format!("Failed to inspect installation directory: {}", e))?;
+    Ok(entries.next().transpose().map_err(|e| e.to_string())?.is_some())
+}
+
+#[cfg(target_os = "windows")]
+fn resolve_windows_install_target(requested_path: &Path) -> Result<PathBuf, String> {
+    if requested_path.exists() && !requested_path.is_dir() {
+        return Err("Path exists but is not a directory".into());
+    }
+
+    let sensitive_dirs = [
+        dirs::home_dir(),
+        dirs::desktop_dir(),
+        dirs::document_dir(),
+        dirs::download_dir(),
+        dirs::picture_dir(),
+        dirs::audio_dir(),
+        dirs::video_dir(),
+        dirs::data_local_dir(),
+        dirs::config_dir(),
+    ];
+
+    if sensitive_dirs
+        .into_iter()
+        .flatten()
+        .any(|sensitive_dir| windows_path_eq_case_insensitive(requested_path, &sensitive_dir))
+    {
+        return Ok(requested_path.join("BitFun"));
+    }
+
+    if requested_path.exists()
+        && directory_has_entries(requested_path)?
+        && !requested_path.join(INSTALL_MANIFEST_FILE).exists()
+        && !requested_path.join("BitFun.exe").exists()
+    {
+        return Ok(requested_path.join("BitFun"));
+    }
+
+    Ok(requested_path.to_path_buf())
+}
+
 fn ensure_app_config_path() -> Result<PathBuf, String> {
     let config_root = dirs::config_dir()
         .ok_or_else(|| "Failed to get user config directory".to_string())?
@@ -1209,6 +1314,68 @@ fn validate_payload_exe_size(size: u64, source_label: &str) -> Result<(), String
     Ok(())
 }
 
+fn read_payload_manifest_from_zip_bytes(
+    zip_bytes: &[u8],
+    source_label: &str,
+) -> Result<PayloadManifest, String> {
+    let reader = Cursor::new(zip_bytes);
+    let mut archive = zip::ZipArchive::new(reader)
+        .map_err(|e| format!("Invalid zip from {source_label}: {e}"))?;
+    read_payload_manifest_from_zip_archive(&mut archive, source_label)
+}
+
+fn read_payload_manifest_from_zip_file(
+    path: &Path,
+    source_label: &str,
+) -> Result<PayloadManifest, String> {
+    let file = File::open(path)
+        .map_err(|e| format!("Failed to open payload zip ({source_label}): {e}"))?;
+    let mut archive = zip::ZipArchive::new(file)
+        .map_err(|e| format!("Invalid payload zip ({source_label}): {e}"))?;
+    read_payload_manifest_from_zip_archive(&mut archive, source_label)
+}
+
+fn read_payload_manifest_from_zip_archive<R: std::io::Read + std::io::Seek>(
+    archive: &mut zip::ZipArchive<R>,
+    source_label: &str,
+) -> Result<PayloadManifest, String> {
+    for i in 0..archive.len() {
+        let mut file = archive
+            .by_index(i)
+            .map_err(|e| format!("Failed to read payload entry ({source_label}): {e}"))?;
+        let file_name = zip_entry_file_name(file.name());
+        if !file_name.eq_ignore_ascii_case(PAYLOAD_MANIFEST_FILE) {
+            continue;
+        }
+        let mut raw = String::new();
+        file.read_to_string(&mut raw)
+            .map_err(|e| format!("Failed to read payload manifest ({source_label}): {e}"))?;
+        return parse_payload_manifest(&raw, source_label);
+    }
+
+    Err(format!(
+        "Payload manifest is missing from {source_label}. Refusing unsafe install."
+    ))
+}
+
+fn read_payload_manifest_from_dir(path: &Path, source_label: &str) -> Result<PayloadManifest, String> {
+    let manifest_path = path.join(PAYLOAD_MANIFEST_FILE);
+    let raw = std::fs::read_to_string(&manifest_path).map_err(|e| {
+        format!(
+            "Failed to read payload manifest from {} ({}): {}",
+            source_label,
+            manifest_path.display(),
+            e
+        )
+    })?;
+    parse_payload_manifest(&raw, source_label)
+}
+
+fn parse_payload_manifest(raw: &str, source_label: &str) -> Result<PayloadManifest, String> {
+    serde_json::from_str(raw)
+        .map_err(|e| format!("Invalid payload manifest from {source_label}: {}", e))
+}
+
 fn zip_entry_file_name(entry_name: &str) -> &str {
     entry_name
         .rsplit(&['/', '\\'][..])
@@ -1228,6 +1395,135 @@ fn should_install_payload_path(relative_path: &Path) -> bool {
     !is_payload_manifest_path(relative_path)
 }
 
+fn write_installed_manifest(install_path: &Path, files: Vec<String>) -> Result<(), String> {
+    let mut normalized: Vec<String> = files
+        .into_iter()
+        .map(|entry| sanitize_manifest_relative_path(&entry))
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .map(path_buf_to_manifest_string)
+        .collect();
+    normalized.sort();
+    normalized.dedup();
+
+    let manifest = InstalledManifest {
+        version: 1,
+        files: normalized,
+    };
+    let path = install_path.join(INSTALL_MANIFEST_FILE);
+    let body = serde_json::to_string_pretty(&manifest)
+        .map_err(|e| format!("Failed to serialize install manifest: {}", e))?;
+    std::fs::write(&path, body)
+        .map_err(|e| format!("Failed to write install manifest: {}", e))
+}
+
+fn read_installed_manifest(install_path: &Path) -> Result<Option<InstalledManifest>, String> {
+    let path = install_path.join(INSTALL_MANIFEST_FILE);
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let raw = std::fs::read_to_string(&path)
+        .map_err(|e| format!("Failed to read install manifest: {}", e))?;
+    let manifest = serde_json::from_str::<InstalledManifest>(&raw)
+        .map_err(|e| format!("Invalid install manifest: {}", e))?;
+    Ok(Some(manifest))
+}
+
+fn collect_uninstall_targets(install_path: &Path) -> Result<Vec<PathBuf>, String> {
+    let mut relative_paths = match read_installed_manifest(install_path)? {
+        Some(manifest) => manifest.files,
+        None => vec!["BitFun.exe".to_string(), "uninstall.exe".to_string()],
+    };
+    relative_paths.push(INSTALL_MANIFEST_FILE.to_string());
+
+    let mut targets: Vec<PathBuf> = relative_paths
+        .into_iter()
+        .map(|entry| sanitize_manifest_relative_path(&entry))
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .map(|entry| install_path.join(entry))
+        .collect();
+    targets.sort();
+    targets.dedup();
+    Ok(targets)
+}
+
+fn remove_installed_targets(
+    install_path: &Path,
+    targets: &[PathBuf],
+    skip_file: Option<&Path>,
+) -> Result<(), String> {
+    for path in targets {
+        if skip_file
+            .map(|skip| paths_equal_for_platform(path, skip))
+            .unwrap_or(false)
+        {
+            continue;
+        }
+
+        if !path.exists() {
+            continue;
+        }
+
+        if path.is_file() {
+            std::fs::remove_file(path)
+                .map_err(|e| format!("Failed to remove installed file {}: {}", path.display(), e))?;
+        }
+    }
+
+    for dir in collect_parent_directories(install_path, targets) {
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    Ok(())
+}
+
+fn collect_parent_directories(root: &Path, paths: &[PathBuf]) -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    for path in paths {
+        let mut current = path.parent().map(|p| p.to_path_buf());
+        while let Some(dir) = current {
+            if paths_equal_for_platform(&dir, root) {
+                break;
+            }
+            if dirs.iter().any(|existing| existing == &dir) {
+                break;
+            }
+            dirs.push(dir.clone());
+            current = dir.parent().map(|p| p.to_path_buf());
+        }
+    }
+
+    dirs.sort_by(|a, b| {
+        b.components()
+            .count()
+            .cmp(&a.components().count())
+            .then_with(|| a.cmp(b))
+    });
+    dirs
+}
+
+fn sanitize_manifest_relative_path(raw: &str) -> Result<PathBuf, String> {
+    let path = PathBuf::from(raw);
+    if path.is_absolute() {
+        return Err(format!("Manifest entry must be relative: {}", raw));
+    }
+
+    if path
+        .components()
+        .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return Err(format!("Manifest entry escapes install directory: {}", raw));
+    }
+
+    Ok(path)
+}
+
+fn path_buf_to_manifest_string(path: PathBuf) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
 fn verify_installed_payload(install_path: &Path) -> Result<(), String> {
     let app_exe = install_path.join("BitFun.exe");
     let app_meta = std::fs::metadata(&app_exe)
@@ -1240,6 +1536,18 @@ fn verify_installed_payload(install_path: &Path) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+fn paths_equal_for_platform(a: &Path, b: &Path) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        windows_path_eq_case_insensitive(a, b)
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        a == b
+    }
 }
 
 #[cfg(target_os = "windows")]

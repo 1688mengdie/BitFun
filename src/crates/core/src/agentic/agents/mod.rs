@@ -7,6 +7,7 @@ mod prompt_builder;
 mod registry;
 // Modes
 mod agentic_mode;
+mod claw_mode;
 mod cowork_mode;
 mod debug_mode;
 mod plan_mode;
@@ -17,18 +18,18 @@ mod file_finder_agent;
 mod code_review_agent;
 mod generate_doc_agent;
 
+use crate::util::errors::{BitFunError, BitFunResult};
 pub use agentic_mode::AgenticMode;
+use async_trait::async_trait;
+pub use claw_mode::ClawMode;
 pub use code_review_agent::CodeReviewAgent;
 pub use cowork_mode::CoworkMode;
+pub use custom_subagents::{CustomSubagent, CustomSubagentKind};
 pub use debug_mode::DebugMode;
 pub use explore_agent::ExploreAgent;
 pub use file_finder_agent::FileFinderAgent;
 pub use generate_doc_agent::GenerateDocAgent;
 pub use plan_mode::PlanMode;
-
-use crate::util::errors::{BitFunError, BitFunResult};
-use async_trait::async_trait;
-pub use custom_subagents::{CustomSubagent, CustomSubagentKind};
 pub use prompt_builder::PromptBuilder;
 pub use registry::{
     get_agent_registry, AgentCategory, AgentInfo, AgentRegistry, CustomSubagentConfig,

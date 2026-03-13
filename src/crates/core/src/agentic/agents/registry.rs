@@ -1,6 +1,6 @@
 use super::{
-    Agent, AgenticMode, CodeReviewAgent, CoworkMode, DebugMode, ExploreAgent, FileFinderAgent,
-    GenerateDocAgent, PlanMode,
+    Agent, AgenticMode, ClawMode, CodeReviewAgent, CoworkMode, DebugMode, ExploreAgent,
+    FileFinderAgent, GenerateDocAgent, PlanMode,
 };
 use crate::agentic::agents::custom_subagents::{
     CustomSubagent, CustomSubagentKind, CustomSubagentLoader,
@@ -236,6 +236,7 @@ impl AgentRegistry {
             Arc::new(CoworkMode::new()),
             Arc::new(DebugMode::new()),
             Arc::new(PlanMode::new()),
+            Arc::new(ClawMode::new()),
         ];
         for mode in modes {
             register(&mut agents, mode, AgentCategory::Mode, None);

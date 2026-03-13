@@ -111,6 +111,35 @@
   }
 }
 
+.session-list__identity-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: var(--size-gap-3) var(--size-gap-4) 0;
+  padding: 10px 14px;
+  border: 1px solid var(--border-subtle);
+  @include squircle(16px);
+  background: var(--color-bg-elevated);
+  box-shadow: var(--shadow-sm);
+}
+
+.session-list__identity-label {
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.session-list__identity-value {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .session-list__workspace-icon {
   flex-shrink: 0;
   display: inline-flex;

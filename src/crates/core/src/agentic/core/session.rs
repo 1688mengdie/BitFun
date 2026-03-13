@@ -11,6 +11,8 @@ pub struct Session {
     pub session_id: String,
     pub session_name: String,
     pub agent_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "created_by", alias = "createdBy")]
+    pub created_by: Option<String>,
 
     /// Associated resources
     #[serde(skip_serializing_if = "Option::is_none", alias = "sandbox_session_id", alias = "sandboxSessionId")]
@@ -66,6 +68,7 @@ impl Session {
             session_id: Uuid::new_v4().to_string(),
             session_name,
             agent_type,
+            created_by: None,
             snapshot_session_id: None,
             dialog_turn_ids: vec![],
             state: SessionState::Idle,
@@ -88,6 +91,7 @@ impl Session {
             session_id,
             session_name,
             agent_type,
+            created_by: None,
             snapshot_session_id: None,
             dialog_turn_ids: vec![],
             state: SessionState::Idle,
@@ -142,6 +146,8 @@ pub struct SessionSummary {
     pub session_id: String,
     pub session_name: String,
     pub agent_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "created_by", alias = "createdBy")]
+    pub created_by: Option<String>,
     pub turn_count: usize,
     pub created_at: SystemTime,
     pub last_activity_at: SystemTime,

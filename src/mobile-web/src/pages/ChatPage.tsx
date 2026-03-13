@@ -88,6 +88,8 @@ const CopyButton: React.FC<{ code: string }> = ({ code }) => {
 };
 
 const COMPUTER_LINK_PREFIX = 'computer://';
+const FILE_LINK_PREFIX = 'file://';
+const WORKSPACE_FOLDER_PLACEHOLDER = '{{workspaceFolder}}';
 
 const CODE_FILE_EXTENSIONS = new Set([
   'js', 'jsx', 'ts', 'tsx', 'mjs', 'cjs', 'mts', 'cts',
@@ -120,9 +122,40 @@ const DOWNLOADABLE_EXTENSIONS = new Set([
   'ttf', 'otf', 'woff', 'woff2',
 ]);
 
+function normalizeFileLikeHref(rawHref: string): string {
+  let filePath = rawHref;
+
+  if (rawHref.startsWith(COMPUTER_LINK_PREFIX)) {
+    filePath = rawHref.slice(COMPUTER_LINK_PREFIX.length);
+  } else if (rawHref.startsWith(FILE_LINK_PREFIX)) {
+    filePath = rawHref.slice(FILE_LINK_PREFIX.length);
+  } else if (rawHref.startsWith('file:')) {
+    filePath = rawHref.slice('file:'.length);
+  }
+
+  if (filePath.startsWith(WORKSPACE_FOLDER_PLACEHOLDER)) {
+    filePath = filePath.slice(WORKSPACE_FOLDER_PLACEHOLDER.length);
+    if (filePath.startsWith('/')) {
+      filePath = filePath.slice(1);
+    }
+  }
+
+  // Normalize URI-like Windows absolute paths such as `/C:/Users/...`.
+  if (/^\/[A-Za-z]:[\\/]/.test(filePath)) {
+    filePath = filePath.slice(1);
+  }
+
+  try {
+    return decodeURIComponent(filePath);
+  } catch {
+    return filePath;
+  }
+}
+
 /**
- * Detect local file links: absolute paths, file:// URLs, and relative paths
- * pointing to downloadable files. Returns the file path or null.
+ * Detect local file links: absolute paths, file:// URLs, computer:// URLs, and
+ * relative paths pointing to downloadable files. Returns the normalized file
+ * path or null.
  *
  * - Absolute paths (`/Users/.../file.pdf`): use CODE_FILE_EXTENSIONS blacklist
  * - Relative paths (`report.pptx`, `./output.pdf`): use DOWNLOADABLE_EXTENSIONS whitelist
@@ -131,12 +164,16 @@ function isLocalFileLink(href: string): string | null {
   if (!href || href === '/') return null;
 
   let filePath: string;
-  if (href.startsWith('file://')) {
-    filePath = href.slice(7);
+  if (
+    href.startsWith(COMPUTER_LINK_PREFIX) ||
+    href.startsWith(FILE_LINK_PREFIX) ||
+    href.startsWith('file:')
+  ) {
+    filePath = normalizeFileLikeHref(href);
   } else if (href.includes('://') || href.startsWith('#') || href.startsWith('//')) {
     return null;
   } else {
-    filePath = href;
+    filePath = normalizeFileLikeHref(href);
   }
 
   if (filePath.startsWith('/')) {
@@ -376,7 +413,7 @@ const MarkdownContent: React.FC<MarkdownContentProps> = ({ content, onFileDownlo
         typeof href === 'string' && href.startsWith(COMPUTER_LINK_PREFIX);
 
       if (isComputerLink && onGetFileInfo && onFileDownload) {
-        const filePath = href.slice(COMPUTER_LINK_PREFIX.length);
+        const filePath = normalizeFileLikeHref(href);
         return (
           <FileCard
             path={filePath}
@@ -387,7 +424,7 @@ const MarkdownContent: React.FC<MarkdownContentProps> = ({ content, onFileDownlo
       }
       // Fallback: plain clickable link when only onFileDownload is available.
       if (isComputerLink && onFileDownload) {
-        const filePath = href.slice(COMPUTER_LINK_PREFIX.length);
+        const filePath = normalizeFileLikeHref(href);
         return (
           <button
             className="file-link"
@@ -910,15 +947,43 @@ const ToolCard: React.FC<{
 
 const READ_LIKE_TOOLS = new Set(['Read', 'Grep', 'Glob', 'SemanticSearch']);
 
+function getToolSummaryLabel(toolName: string): string {
+  const toolKey = toolName.toLowerCase().replace(/[\s-]/g, '_');
+  return TOOL_TYPE_MAP[toolKey] || TOOL_TYPE_MAP[toolName] || toolName;
+}
+
+function buildGroupedToolSummary(tools: RemoteToolStatus[]): string {
+  const counts = new Map<string, { label: string; count: number }>();
+  const order: string[] = [];
+
+  for (const tool of tools) {
+    const label = getToolSummaryLabel(tool.name);
+    const key = label.toLowerCase();
+    const existing = counts.get(key);
+    if (existing) {
+      existing.count += 1;
+      continue;
+    }
+    counts.set(key, { label, count: 1 });
+    order.push(key);
+  }
+
+  return order
+    .map((key) => {
+      const entry = counts.get(key)!;
+      return `${entry.label} ${entry.count}`;
+    })
+    .join(', ');
+}
+
 const ReadFilesToggle: React.FC<{ tools: RemoteToolStatus[] }> = ({ tools }) => {
   const [open, setOpen] = useState(false);
   if (tools.length === 0) return null;
 
   const doneCount = tools.filter(t => t.status === 'completed').length;
   const allDone = doneCount === tools.length;
-  const label = allDone
-    ? `Read ${tools.length} file${tools.length === 1 ? '' : 's'}`
-    : `Reading ${tools.length} file${tools.length === 1 ? '' : 's'} (${doneCount} done)`;
+  const summary = buildGroupedToolSummary(tools);
+  const label = allDone ? summary : `${summary} (${doneCount} done)`;
 
   return (
     <div className={`chat-thinking ${allDone ? '' : 'chat-thinking--streaming'}`}>
@@ -1544,8 +1609,8 @@ const ChatPage: React.FC<ChatPageProps> = ({ sessionMgr, sessionId, sessionName,
 
   /** Fetch metadata for a workspace file before the user confirms the download. */
   const handleGetFileInfo = useCallback(
-    (filePath: string) => sessionMgr.getFileInfo(filePath),
-    [sessionMgr],
+    (filePath: string) => sessionMgr.getFileInfo(filePath, sessionId),
+    [sessionId, sessionMgr],
   );
 
   /** Download a workspace file referenced by a `computer://` link. */
@@ -1554,7 +1619,11 @@ const ChatPage: React.FC<ChatPageProps> = ({ sessionMgr, sessionId, sessionName,
     onProgress?: (downloaded: number, total: number) => void,
   ) => {
     try {
-      const { name, contentBase64, mimeType } = await sessionMgr.readFile(filePath, onProgress);
+      const { name, contentBase64, mimeType } = await sessionMgr.readFile(
+        filePath,
+        sessionId,
+        onProgress,
+      );
       const byteCharacters = atob(contentBase64);
       const byteNumbers = new Uint8Array(byteCharacters.length);
       for (let i = 0; i < byteCharacters.length; i++) {
@@ -1574,7 +1643,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ sessionMgr, sessionId, sessionName,
       const msg = err instanceof Error ? err.message : String(err);
       setError(msg);
     }
-  }, [sessionMgr, setError]);
+  }, [sessionId, sessionMgr, setError]);
 
   useEffect(() => {
     if (!isStreaming) return;

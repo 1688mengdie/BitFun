@@ -8,7 +8,16 @@ import {
   ListChecks, RotateCcw, Puzzle,
   Brain, Zap, Sliders,
 } from 'lucide-react';
-import { Input, Search, Select, Switch, type SelectOption } from '@/component-library';
+import {
+  ConfirmDialog,
+  Input,
+  Search,
+  Select,
+  Switch,
+  Textarea,
+  Tooltip,
+  type SelectOption,
+} from '@/component-library';
 import { AIRulesAPI, RuleLevel, type AIRule } from '@/infrastructure/api/service-api/AIRulesAPI';
 import { getAllMemories, toggleMemory, type AIMemory } from '@/infrastructure/api/aiMemoryApi';
 import { promptTemplateService } from '@/infrastructure/services/PromptTemplateService';
@@ -18,12 +27,13 @@ import { configAPI } from '@/infrastructure/api/service-api/ConfigAPI';
 import { configManager } from '@/infrastructure/config/services/ConfigManager';
 import type {
   ModeConfigItem, SkillInfo, AIModelConfig,
-  DefaultModelsConfig, AIExperienceConfig,
+  AIExperienceConfig,
 } from '@/infrastructure/config/types';
 import { useSettingsStore } from '@/app/scenes/settings/settingsStore';
 import type { ConfigTab } from '@/app/scenes/settings/settingsConfig';
 import { quickActions } from '@/shared/services/ide-control';
 import { getCardGradient } from '@/shared/utils/cardGradients';
+import { useAgentIdentityDocument } from '@/app/scenes/my-agent/useAgentIdentityDocument';
 import { PersonaRadar } from './PersonaRadar';
 import { notificationService } from '@/shared/notification-system';
 import { createLogger } from '@/shared/utils/logger';
@@ -39,8 +49,7 @@ function navToSettings(tab: ConfigTab) {
 interface ToolInfo { name: string; description: string; is_readonly: boolean; }
 
 const C = 'bp';
-const IDENTITY_KEY = 'bf_agent_identity';
-const DEFAULT_NAME = 'BitFun Agent';
+const DEFAULT_AGENT_NAME = 'BitFun Agent';
 const CHIP_LIMIT = 12;
 const TOOL_LIST_LIMIT = 10;
 const SKILL_GRID_LIMIT = 4;
@@ -294,22 +303,20 @@ const ModelPill: React.FC<ModelPillProps> = ({
 };
 const PersonaView: React.FC<{ workspacePath: string }> = ({ workspacePath }) => {
   const { t } = useTranslation('scenes/profile');
-
-  // Initialize identity from localStorage immediately (lazy initializer avoids flash)
-  const [identity, setIdentity] = useState<{ name: string; desc: string }>(() => {
-    try {
-      const s = localStorage.getItem(IDENTITY_KEY);
-      if (s) return JSON.parse(s) as { name: string; desc: string };
-    } catch { /* ignore */ }
-    return { name: DEFAULT_NAME, desc: '' };
-  });
-  const [editingField, setEditingField] = useState<'name' | 'desc' | null>(null);
+  const {
+    document: identityDocument,
+    updateField: updateIdentityField,
+    resetPersonaFiles,
+  } = useAgentIdentityDocument(workspacePath);
+  const [editingField, setEditingField] = useState<
+    'name' | 'body' | 'emoji' | 'creature' | 'vibe' | null
+  >(null);
   const [editValue, setEditValue] = useState('');
   const nameInputRef = useRef<HTMLInputElement>(null);
-  const descInputRef = useRef<HTMLInputElement>(null);
+  const metaInputRef = useRef<HTMLInputElement>(null);
+  const bodyTextareaRef = useRef<HTMLTextAreaElement>(null);
 
   const [models, setModels] = useState<AIModelConfig[]>([]);
-  const [, setDefaultModels] = useState<DefaultModelsConfig | null>(null);
   const [funcAgentModels, setFuncAgentModels] = useState<Record<string, string>>({});
   const [rules, setRules] = useState<AIRule[]>([]);
   const [memories, setMemories] = useState<AIMemory[]>([]);
@@ -345,6 +352,7 @@ const PersonaView: React.FC<{ workspacePath: string }> = ({ workspacePath }) => 
 
   // home ↔ detail view transition
   const [detailMode, setDetailMode] = useState(false);
+  const [isResetIdentityDialogOpen, setIsResetIdentityDialogOpen] = useState(false);
 
   // section refs for radar-click scroll navigation
   const rulesRef     = useRef<HTMLDivElement>(null);
@@ -394,7 +402,7 @@ const PersonaView: React.FC<{ workspacePath: string }> = ({ workspacePath }) => 
   const loadCaps = useCallback(async () => {
     try {
       const { invoke } = await import('@tauri-apps/api/core');
-      const [tools, mcps, sks, modeConf, allModels, defModels, funcModels, exp] = await Promise.all([
+      const [tools, mcps, sks, modeConf, allModels, funcModels, exp] = await Promise.all([
         invoke<ToolInfo[]>('get_all_tools_info').catch(() => [] as ToolInfo[]),
         MCPAPI.getServers().catch(() => [] as MCPServerInfo[]),
         configAPI.getSkillConfigs({
@@ -402,7 +410,6 @@ const PersonaView: React.FC<{ workspacePath: string }> = ({ workspacePath }) => 
         }).catch(() => [] as SkillInfo[]),
         configAPI.getModeConfig('agentic').catch(() => null as ModeConfigItem | null),
         (configManager.getConfig<AIModelConfig[]>('ai.models') as Promise<AIModelConfig[]>).catch(() => [] as AIModelConfig[]),
-        (configManager.getConfig<DefaultModelsConfig>('ai.default_models') as Promise<DefaultModelsConfig | null>).catch(() => null),
         (configManager.getConfig<Record<string, string>>('ai.func_agent_models') as Promise<Record<string, string>>).catch(() => ({} as Record<string, string>)),
         configAPI.getConfig('app.ai_experience').catch(() => null) as Promise<AIExperienceConfig | null>,
       ]);
@@ -411,30 +418,93 @@ const PersonaView: React.FC<{ workspacePath: string }> = ({ workspacePath }) => 
       setSkills(sks);
       setAgenticConfig(modeConf);
       setModels(allModels ?? []);
-      setDefaultModels(defModels);
       setFuncAgentModels(funcModels ?? {});
       if (exp) setAiExp(exp);
     } catch (e) { log.error('capabilities', e); }
   }, [workspacePath]);
   useEffect(() => { loadCaps(); }, [loadCaps]);
 
-  const startEdit = (field: 'name' | 'desc') => {
+  const identityName = identityDocument.name || DEFAULT_AGENT_NAME;
+  const identityBodyFallback = t('defaultDesc', {
+    defaultValue: '用 IDENTITY.md 的正文补充你的设定、风格、边界和偏好。',
+  });
+  const identityMetaItems = useMemo(
+    () => [
+      {
+        key: 'emoji' as const,
+        label: t('identity.emoji'),
+        value: identityDocument.emoji,
+        placeholder: t('identity.emojiPlaceholder'),
+      },
+      {
+        key: 'creature' as const,
+        label: t('identity.creature'),
+        value: identityDocument.creature,
+        placeholder: t('identity.creaturePlaceholderShort'),
+      },
+      {
+        key: 'vibe' as const,
+        label: t('identity.vibe'),
+        value: identityDocument.vibe,
+        placeholder: t('identity.vibePlaceholderShort'),
+      },
+    ] as const,
+    [identityDocument.creature, identityDocument.emoji, identityDocument.vibe, t]
+  );
+
+  const startEdit = (field: 'name' | 'body' | 'emoji' | 'creature' | 'vibe') => {
     setEditingField(field);
-    setEditValue(field === 'name' ? identity.name : (identity.desc || t('defaultDesc')));
-    setTimeout(() => (field === 'name' ? nameInputRef : descInputRef).current?.focus(), 10);
+    const nextValue =
+      field === 'name'
+        ? identityDocument.name
+        : field === 'body'
+          ? identityDocument.body
+          : identityDocument[field];
+
+    setEditValue(nextValue);
+    setTimeout(() => {
+      if (field === 'name') {
+        nameInputRef.current?.focus();
+        return;
+      }
+
+      if (field === 'body') {
+        bodyTextareaRef.current?.focus();
+        return;
+      }
+
+      metaInputRef.current?.focus();
+    }, 10);
   };
   const commitEdit = useCallback(() => {
     if (!editingField) return;
-    const fallback = editingField === 'name' ? DEFAULT_NAME : t('defaultDesc');
-    const updated = { ...identity, [editingField === 'name' ? 'name' : 'desc']: editValue.trim() || fallback };
-    setIdentity(updated);
-    localStorage.setItem(IDENTITY_KEY, JSON.stringify(updated));
+    if (editingField === 'name') {
+      updateIdentityField('name', editValue.trim());
+    } else if (editingField === 'body') {
+      updateIdentityField('body', editValue.replace(/\r\n/g, '\n'));
+    } else {
+      updateIdentityField(editingField, editValue.trim());
+    }
     setEditingField(null);
-  }, [editingField, editValue, identity, t]);
-  const onEditKey = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') commitEdit();
+  }, [editValue, editingField, updateIdentityField]);
+  const onEditKey = (e: React.KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    if (editingField !== 'body' && e.key === 'Enter') commitEdit();
     if (e.key === 'Escape') setEditingField(null);
   };
+
+  const handleConfirmResetIdentity = useCallback(async () => {
+    setEditingField(null);
+    setEditValue('');
+
+    try {
+      await resetPersonaFiles();
+      notificationService.success(t('identity.resetSuccess'));
+    } catch (error) {
+      notificationService.error(
+        error instanceof Error ? error.message : t('identity.resetFailed')
+      );
+    }
+  }, [resetPersonaFiles, t]);
 
   const openRadar  = useCallback(() => setRadarOpen(true), []);
   const closeRadar = useCallback(() => {
@@ -930,46 +1000,97 @@ const PersonaView: React.FC<{ workspacePath: string }> = ({ workspacePath }) => 
                 inputSize="small"
               />
             ) : (
-              <h1
-                className={`${C}-home__name`}
-                onClick={() => startEdit('name')}
-                title={t('hero.editNameTitle')}
-              >
-                {identity.name}
-                <Pencil size={12} className={`${C}-home__name-edit`} strokeWidth={1.5} />
-              </h1>
+              <>
+                <h1
+                  className={`${C}-home__name`}
+                  onClick={() => startEdit('name')}
+                  title={t('hero.editNameTitle')}
+                >
+                  {identityName}
+                  <Pencil size={12} className={`${C}-home__name-edit`} strokeWidth={1.5} />
+                </h1>
+                <Tooltip content={t('identity.resetTooltip')} placement="top" followCursor>
+                  <button
+                    type="button"
+                    className={`${C}-icon-btn ${C}-home__reset-btn`}
+                    onClick={() => setIsResetIdentityDialogOpen(true)}
+                    aria-label={t('identity.resetTooltip')}
+                  >
+                    <RotateCcw size={13} strokeWidth={1.8} />
+                  </button>
+                </Tooltip>
+              </>
             )}
-            <div className={`${C}-home__wip`} title="功能开发中，敬请期待">
-              <span className={`${C}-home__wip-dot`} />
-              WIP · 建设中
-            </div>
+          </div>
+
+          <div className={`${C}-home__meta-row`}>
+            {identityMetaItems.map((item) => {
+              const isEditingMeta = editingField === item.key;
+              const displayValue = item.value || item.placeholder;
+              return (
+                <span
+                  key={item.key}
+                  className={`${C}-home__meta-pill ${item.key === 'emoji' ? 'is-emoji' : ''} ${!item.value ? 'is-empty' : ''} ${isEditingMeta ? 'is-editing' : ''}`}
+                  title={`${item.label}: ${item.value || item.placeholder}`}
+                  onClick={() => !isEditingMeta && startEdit(item.key)}
+                >
+                  {isEditingMeta ? (
+                    <Input
+                      ref={metaInputRef}
+                      className={`${C}-home__meta-input ${item.key === 'emoji' ? 'is-emoji' : ''}`}
+                      value={editValue}
+                      onChange={(event) => setEditValue(event.target.value)}
+                      onBlur={commitEdit}
+                      onKeyDown={onEditKey}
+                      placeholder={item.placeholder}
+                      inputSize="small"
+                    />
+                  ) : (
+                    <>
+                      {item.key !== 'emoji' && <span className={`${C}-home__meta-label`}>{item.label}</span>}
+                      <span className={`${C}-home__meta-value`}>{displayValue}</span>
+                    </>
+                  )}
+                </span>
+              );
+            })}
           </div>
 
           {/* Description + Radar side by side */}
           <div className={`${C}-home__body-row`}>
-            <div className={`${C}-home__desc-block`} onClick={() => !editingField && startEdit('desc')}>
-              {editingField === 'desc' ? (
-                <Input
-                  ref={descInputRef}
+            <div className={`${C}-home__desc-block`} onClick={() => !editingField && startEdit('body')}>
+              {editingField === 'body' ? (
+                <Textarea
+                  ref={bodyTextareaRef}
                   className={`${C}-home__desc-input`}
                   value={editValue}
                   onChange={e => setEditValue(e.target.value)}
                   onBlur={commitEdit}
                   onKeyDown={onEditKey}
-                  placeholder={t('hero.descPlaceholder')}
-                  inputSize="small"
+                  placeholder={identityBodyFallback}
+                  autoResize
+                  rows={7}
                 />
               ) : (
-                <p
-                  className={`${C}-home__desc`}
-                  title={t('hero.editDescTitle')}
-                >
-                  {identity.desc || t('defaultDesc')}
-                </p>
+                identityDocument.body ? (
+                  <div
+                    className={`${C}-home__desc-markdown`}
+                    title={t('hero.editDescTitle')}
+                  >
+                    {identityDocument.body}
+                  </div>
+                ) : (
+                  <p
+                    className={`${C}-home__desc`}
+                    title={t('hero.editDescTitle')}
+                  >
+                    {identityBodyFallback}
+                  </p>
+                )
               )}
               {!editingField && (
                 <p className={`${C}-home__desc-block-hint`}>
-                  {t('home.descHint', { defaultValue: '点击编辑，描述你的大熊猫 Agent 风格与偏好' })}
+                  {t('home.descHint')}
                 </p>
               )}
             </div>
@@ -1020,14 +1141,25 @@ const PersonaView: React.FC<{ workspacePath: string }> = ({ workspacePath }) => 
           </div>
           <div className={`${C}-hero__info`}>
             <div className={`${C}-hero__name-row`}>
-              <h2 className={`${C}-hero__name`} onClick={() => startEdit('name')} title={t('hero.editNameTitle')}>
-                {identity.name}
-                <Pencil size={10} className={`${C}-hero__name-edit`} strokeWidth={1.6} />
+              <h2 className={`${C}-hero__name`}>
+                {identityName}
               </h2>
             </div>
-            <p className={`${C}-hero__desc`} onClick={() => startEdit('desc')} title={t('hero.editDescTitle')}>
-              {identity.desc || t('defaultDesc')}
-            </p>
+            <div className={`${C}-home__meta-row ${C}-hero__meta-row`}>
+              {identityMetaItems.map((item) => {
+                const displayValue = item.value || item.placeholder;
+                return (
+                  <span
+                    key={`hero-${item.key}`}
+                    className={`${C}-home__meta-pill ${C}-hero__meta-pill ${item.key === 'emoji' ? 'is-emoji' : ''} ${!item.value ? 'is-empty' : ''}`}
+                    title={`${item.label}: ${displayValue}`}
+                  >
+                    {item.key !== 'emoji' && <span className={`${C}-home__meta-label`}>{item.label}</span>}
+                    <span className={`${C}-home__meta-value`}>{displayValue}</span>
+                  </span>
+                );
+              })}
+            </div>
           </div>
         </div>
         <div className={`${C}-hero__radar`} title={t('hero.radarTitle')}>
@@ -1381,6 +1513,18 @@ const PersonaView: React.FC<{ workspacePath: string }> = ({ workspacePath }) => 
         </div>,
         document.body,
       )}
+
+      <ConfirmDialog
+        isOpen={isResetIdentityDialogOpen}
+        onClose={() => setIsResetIdentityDialogOpen(false)}
+        onConfirm={() => { void handleConfirmResetIdentity(); }}
+        title={t('identity.resetConfirmTitle')}
+        message={t('identity.resetConfirmMessage')}
+        type="warning"
+        confirmDanger
+        confirmText={t('identity.resetConfirmAction')}
+        cancelText={t('identity.resetCancel')}
+      />
     </div>
   );
 };

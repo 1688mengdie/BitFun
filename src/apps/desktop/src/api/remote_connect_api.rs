@@ -1,8 +1,8 @@
 //! Tauri commands for Remote Connect.
 
 use bitfun_core::service::remote_connect::{
-    bot::BotConfig, lan, ConnectionMethod, ConnectionResult, PairingState, RemoteConnectConfig,
-    RemoteConnectService,
+    bot::{self, BotConfig}, lan, ConnectionMethod, ConnectionResult, PairingState,
+    RemoteConnectConfig, RemoteConnectService,
 };
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -201,6 +201,7 @@ pub struct RemoteConnectStatusResponse {
     pub pairing_state: PairingState,
     pub active_method: Option<String>,
     pub peer_device_name: Option<String>,
+    pub peer_user_id: Option<String>,
     /// Independent bot connection info — e.g. "Telegram(7096812005)".
     /// Present when a bot is active, regardless of relay pairing state.
     pub bot_connected: Option<String>,
@@ -415,7 +416,6 @@ pub async fn remote_connect_stop_bot() -> Result<(), String> {
         service.stop_bots().await;
     }
     // Remove persistence so the bot is not auto-restored
-    use bitfun_core::service::remote_connect::bot;
     let mut data = bot::load_bot_persistence();
     data.connections.clear();
     bot::save_bot_persistence(&data);
@@ -432,6 +432,7 @@ pub async fn remote_connect_status() -> Result<RemoteConnectStatusResponse, Stri
     let state = service.pairing_state().await;
     let method = service.active_method().await;
     let peer = service.peer_device_name().await;
+    let peer_user_id = service.trusted_mobile_user_id().await;
     let bot_connected = service.bot_connected_info().await;
 
     Ok(RemoteConnectStatusResponse {
@@ -439,8 +440,24 @@ pub async fn remote_connect_status() -> Result<RemoteConnectStatusResponse, Stri
         pairing_state: state,
         active_method: method.map(|m| format!("{m:?}")),
         peer_device_name: peer,
+        peer_user_id,
         bot_connected,
     })
+}
+
+#[tauri::command]
+pub async fn remote_connect_get_form_state() -> Result<bot::RemoteConnectFormState, String> {
+    Ok(bot::load_bot_persistence().form_state)
+}
+
+#[tauri::command]
+pub async fn remote_connect_set_form_state(
+    request: bot::RemoteConnectFormState,
+) -> Result<(), String> {
+    let mut data = bot::load_bot_persistence();
+    data.form_state = request;
+    bot::save_bot_persistence(&data);
+    Ok(())
 }
 
 #[tauri::command]

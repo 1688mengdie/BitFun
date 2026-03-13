@@ -201,11 +201,12 @@ impl PluginLoader {
 
         let command = command.replace('/', std::path::MAIN_SEPARATOR_STR);
 
-        let mut server_path = plugin_dir.join(&command);
+        let server_path = plugin_dir.join(&command);
 
         if !server_path.exists() {
             #[cfg(windows)]
             {
+                let mut server_path = server_path.clone();
                 let extensions = vec![".exe", ".bat", ".cmd"];
                 let mut found = false;
 

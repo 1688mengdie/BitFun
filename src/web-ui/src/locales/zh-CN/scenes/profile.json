@@ -28,6 +28,26 @@
     "radarTitle":     "点击图形放大 · 点击维度文字可跳转"
   },
 
+  "identity": {
+    "emoji": "表情标识",
+    "emojiPlaceholder": "设置表情标识",
+    "creature": "角色类型",
+    "creaturePlaceholderShort": "设置角色类型",
+    "vibe": "气质风格",
+    "vibePlaceholderShort": "设置气质风格",
+    "resetTooltip": "重置助手人设",
+    "resetConfirmTitle": "重置助手人设",
+    "resetConfirmMessage": "这会将 BOOTSTRAP.md、SOUL.md、USER.md 和 IDENTITY.md 恢复为默认模板，并覆盖当前内容。确定继续吗？",
+    "resetConfirmAction": "确认重置",
+    "resetCancel": "取消",
+    "resetSuccess": "已重置助手人设",
+    "resetFailed": "重置助手人设失败"
+  },
+
+  "home": {
+    "descHint": "点击编辑 IDENTITY.md 正文。"
+  },
+
   "sections": {
     "brain":        "大脑",
     "capabilities": "能力",

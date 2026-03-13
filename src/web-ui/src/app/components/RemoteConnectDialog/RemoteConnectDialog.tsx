@@ -25,12 +25,13 @@ import './RemoteConnectDialog.scss';
 // ── Types ────────────────────────────────────────────────────────────
 
 type ActiveGroup = 'network' | 'bot';
-type NetworkTab = 'lan' | 'ngrok' | 'custom_server';
+type NetworkTab = 'lan' | 'ngrok' | 'bitfun_server' | 'custom_server';
 type BotTab = 'telegram' | 'feishu';
 
 const NETWORK_TABS: { id: NetworkTab; labelKey: string }[] = [
   { id: 'lan', labelKey: 'remoteConnect.tabLan' },
   { id: 'ngrok', labelKey: 'remoteConnect.tabNgrok' },
+  { id: 'bitfun_server', labelKey: 'remoteConnect.tabBitfunServer' },
   { id: 'custom_server', labelKey: 'remoteConnect.tabCustomServer' },
 ];
 
@@ -50,6 +51,7 @@ const methodToNetworkTab = (method: string | null | undefined): NetworkTab | nul
   if (!method) return null;
   if (method.startsWith('Lan')) return 'lan';
   if (method.startsWith('Ngrok')) return 'ngrok';
+  if (method.startsWith('BitfunServer')) return 'bitfun_server';
   if (method.startsWith('CustomServer')) return 'custom_server';
   return null;
 };
@@ -189,6 +191,27 @@ export const RemoteConnectDialog: React.FC<RemoteConnectDialogProps> = ({
     };
   }, [isOpen, activeGroup, networkTab]);
 
+  useEffect(() => {
+    if (!isOpen) return;
+    let cancelled = false;
+    const loadFormState = async () => {
+      try {
+        const formState = await remoteConnectAPI.getFormState();
+        if (cancelled) return;
+        setCustomUrl(formState.custom_server_url ?? '');
+        setTgToken(formState.telegram_bot_token ?? '');
+        setFeishuAppId(formState.feishu_app_id ?? '');
+        setFeishuAppSecret(formState.feishu_app_secret ?? '');
+      } catch {
+        // Ignore form-state restore failures and keep in-memory defaults.
+      }
+    };
+    void loadFormState();
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen]);
+
   // ── Connection handlers ──────────────────────────────────────────
 
   const handleConnect = useCallback(async () => {
@@ -197,6 +220,13 @@ export const RemoteConnectDialog: React.FC<RemoteConnectDialogProps> = ({
     setConnectionResult(null);
 
     try {
+      await remoteConnectAPI.setFormState({
+        custom_server_url: customUrl,
+        telegram_bot_token: tgToken,
+        feishu_app_id: feishuAppId,
+        feishu_app_secret: feishuAppSecret,
+      });
+
       let method: string;
       let serverUrl: string | undefined;
 
@@ -213,7 +243,6 @@ export const RemoteConnectDialog: React.FC<RemoteConnectDialogProps> = ({
         method = networkTab;
         if (networkTab === 'custom_server') serverUrl = customUrl || undefined;
       }
-
       const result = await remoteConnectAPI.startConnection(method, serverUrl);
       setConnectionResult(result);
       startPolling(activeGroup === 'bot' ? 'bot' : 'relay');
@@ -269,6 +298,12 @@ export const RemoteConnectDialog: React.FC<RemoteConnectDialogProps> = ({
     void systemAPI.openExternal(FEISHU_SETUP_GUIDE_URLS[currentLanguage]);
   }, [currentLanguage]);
 
+  const renderInfoCard = (children: React.ReactNode) => (
+    <div className="bitfun-remote-connect__info-card">
+      {children}
+    </div>
+  );
+
   // ── Sub-tab disabled logic ───────────────────────────────────────
 
   const isNetworkSubDisabled = (tabId: NetworkTab): boolean => {
@@ -298,12 +333,21 @@ export const RemoteConnectDialog: React.FC<RemoteConnectDialogProps> = ({
     );
   };
 
-  const renderConnectedView = (peerName: string, onDisconnect: () => void) => (
+  const renderConnectedView = (
+    peerName: string,
+    onDisconnect: () => void,
+    userId?: string | null,
+  ) => (
     <div className="bitfun-remote-connect__connected">
       <div className="bitfun-remote-connect__status">
         <Badge variant="success">{t('remoteConnect.stateConnected')}</Badge>
         <span className="bitfun-remote-connect__peer-name">{peerName}</span>
       </div>
+      {userId && (
+        <p className="bitfun-remote-connect__hint">
+          {t('remoteConnect.connectedUserId')}: {userId}
+        </p>
+      )}
       <p className="bitfun-remote-connect__hint">{t('remoteConnect.connectedHint')}</p>
       <button type="button" className="bitfun-remote-connect__btn bitfun-remote-connect__btn--disconnect" onClick={onDisconnect}>
         {t('remoteConnect.disconnect')}
@@ -379,6 +423,7 @@ export const RemoteConnectDialog: React.FC<RemoteConnectDialogProps> = ({
           {renderConnectedView(
             status?.peer_device_name ?? t('remoteConnect.stateConnected'),
             handleDisconnectRelay,
+            status?.peer_user_id,
           )}
         </>
       );
@@ -388,55 +433,63 @@ export const RemoteConnectDialog: React.FC<RemoteConnectDialogProps> = ({
     }
     return (
       <div className="bitfun-remote-connect__body">
-        {networkTab === 'lan' && lanNetworkInfo?.localIp && (
-          <p className="bitfun-remote-connect__hint">
-            {t('remoteConnect.currentIp')}: {lanNetworkInfo.localIp}
-          </p>
+        {renderInfoCard(
+          <>
+            {networkTab === 'lan' && (lanNetworkInfo?.localIp || lanNetworkInfo?.gatewayIp) && (
+              <div className="bitfun-remote-connect__info-meta-group">
+                {lanNetworkInfo?.localIp && (
+                  <p className="bitfun-remote-connect__info-meta">
+                    {t('remoteConnect.currentIp')}: {lanNetworkInfo.localIp}
+                  </p>
+                )}
+                {lanNetworkInfo?.gatewayIp && (
+                  <p className="bitfun-remote-connect__info-meta">
+                    {t('remoteConnect.gatewayIp')}: {lanNetworkInfo.gatewayIp}
+                  </p>
+                )}
+              </div>
+            )}
+            <p className="bitfun-remote-connect__info-text">
+              {networkTab === 'custom_server' ? (
+                <>
+                  {t('remoteConnect.desc_custom_server_prefix')}
+                  <span
+                    className="bitfun-remote-connect__description-link"
+                    role="link"
+                    tabIndex={0}
+                    onClick={handleOpenRelayReadme}
+                    onKeyDown={(e) => { if (e.key === 'Enter') handleOpenRelayReadme(); }}
+                  >
+                    {t('remoteConnect.desc_custom_server_link')}
+                  </span>
+                  {t('remoteConnect.desc_custom_server_suffix')}
+                </>
+              ) : networkTab === 'ngrok' ? (
+                <>
+                  {t('remoteConnect.desc_ngrok_prefix')}
+                  <span
+                    className="bitfun-remote-connect__description-link"
+                    role="link"
+                    tabIndex={0}
+                    onClick={handleOpenNgrokSetup}
+                    onKeyDown={(e) => { if (e.key === 'Enter') handleOpenNgrokSetup(); }}
+                  >
+                    {t('remoteConnect.desc_ngrok_link')}
+                  </span>
+                  {t('remoteConnect.desc_ngrok_suffix')}
+                </>
+              ) : (
+                t(`remoteConnect.desc_${networkTab}`)
+              )}
+            </p>
+          </>,
         )}
-        {networkTab === 'lan' && lanNetworkInfo?.gatewayIp && (
-          <p className="bitfun-remote-connect__hint">
-            {t('remoteConnect.gatewayIp')}: {lanNetworkInfo.gatewayIp}
-          </p>
-        )}
-        <p className="bitfun-remote-connect__description">
-          {networkTab === 'custom_server' ? (
-            <>
-              {t('remoteConnect.desc_custom_server_prefix')}
-              <span
-                className="bitfun-remote-connect__description-link"
-                role="link"
-                tabIndex={0}
-                onClick={handleOpenRelayReadme}
-                onKeyDown={(e) => { if (e.key === 'Enter') handleOpenRelayReadme(); }}
-              >
-                {t('remoteConnect.desc_custom_server_link')}
-              </span>
-              {t('remoteConnect.desc_custom_server_suffix')}
-            </>
-          ) : networkTab === 'ngrok' ? (
-            <>
-              {t('remoteConnect.desc_ngrok_prefix')}
-              <span
-                className="bitfun-remote-connect__description-link"
-                role="link"
-                tabIndex={0}
-                onClick={handleOpenNgrokSetup}
-                onKeyDown={(e) => { if (e.key === 'Enter') handleOpenNgrokSetup(); }}
-              >
-                {t('remoteConnect.desc_ngrok_link')}
-              </span>
-              {t('remoteConnect.desc_ngrok_suffix')}
-            </>
-          ) : (
-            t(`remoteConnect.desc_${networkTab}`)
-          )}
-        </p>
         {networkTab === 'custom_server' && (
           <Input
-            className="bitfun-remote-connect__field"
-            label={t('remoteConnect.serverUrl')}
+            className="bitfun-remote-connect__field bitfun-remote-connect__field--inline"
             type="url"
             placeholder="https://relay.example.com:9700"
+            prefix={<span className="bitfun-remote-connect__field-prefix">{t('remoteConnect.serverUrl')}</span>}
             value={customUrl}
             onChange={(e) => setCustomUrl(e.target.value)}
           />
@@ -466,52 +519,58 @@ export const RemoteConnectDialog: React.FC<RemoteConnectDialogProps> = ({
       <div className="bitfun-remote-connect__body">
         {botTab === 'telegram' ? (
           <div className="bitfun-remote-connect__bot-guide">
-            <div className="bitfun-remote-connect__steps">
-              <p className="bitfun-remote-connect__step">1. {t('remoteConnect.botTgStep1')}</p>
-              <p className="bitfun-remote-connect__step">2. {t('remoteConnect.botTgStep2')}</p>
-              <p className="bitfun-remote-connect__step">3. {t('remoteConnect.botTgStep3')}</p>
-            </div>
+            {renderInfoCard(
+              <div className="bitfun-remote-connect__steps">
+                <p className="bitfun-remote-connect__step">1. {t('remoteConnect.botTgStep1')}</p>
+                <p className="bitfun-remote-connect__step">2. {t('remoteConnect.botTgStep2')}</p>
+                <p className="bitfun-remote-connect__step">3. {t('remoteConnect.botTgStep3')}</p>
+              </div>,
+            )}
             <Input
-              className="bitfun-remote-connect__field"
-              label="Bot Token"
+              className="bitfun-remote-connect__field bitfun-remote-connect__field--inline"
               type="text"
-              placeholder="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"
+              placeholder="123456:xxxxxxxxxxxxxxxxxxxxxxxx"
+              prefix={<span className="bitfun-remote-connect__field-prefix">Bot Token</span>}
               value={tgToken}
               onChange={(e) => setTgToken(e.target.value)}
             />
           </div>
         ) : (
           <div className="bitfun-remote-connect__bot-guide">
-            <p className="bitfun-remote-connect__description">
-              {t('remoteConnect.botFeishuDocPrefix')}
-              <span
-                className="bitfun-remote-connect__description-link"
-                role="link"
-                tabIndex={0}
-                onClick={handleOpenFeishuGuide}
-                onKeyDown={(e) => { if (e.key === 'Enter') handleOpenFeishuGuide(); }}
-              >
-                {t('remoteConnect.botFeishuDocLink')}
-              </span>
-              {t('remoteConnect.botFeishuDocSuffix')}
-            </p>
-            <div className="bitfun-remote-connect__steps">
-              <p className="bitfun-remote-connect__step">
-                1. {t('remoteConnect.botFeishuStep1Prefix')}
-                <span
-                  className="bitfun-remote-connect__step-link"
-                  role="link"
-                  tabIndex={0}
-                  onClick={() => systemAPI.openExternal('https://open.feishu.cn/app')}
-                  onKeyDown={(e) => { if (e.key === 'Enter') systemAPI.openExternal('https://open.feishu.cn/app'); }}
-                >
-                  {t('remoteConnect.botFeishuOpenPlatform')}
-                </span>
-                {t('remoteConnect.botFeishuStep1Suffix')}
-              </p>
-              <p className="bitfun-remote-connect__step">2. {t('remoteConnect.botFeishuStep2')}</p>
-              <p className="bitfun-remote-connect__step">3. {t('remoteConnect.botFeishuStep3')}</p>
-            </div>
+            {renderInfoCard(
+              <>
+                <p className="bitfun-remote-connect__info-text">
+                  {t('remoteConnect.botFeishuDocPrefix')}
+                  <span
+                    className="bitfun-remote-connect__description-link"
+                    role="link"
+                    tabIndex={0}
+                    onClick={handleOpenFeishuGuide}
+                    onKeyDown={(e) => { if (e.key === 'Enter') handleOpenFeishuGuide(); }}
+                  >
+                    {t('remoteConnect.botFeishuDocLink')}
+                  </span>
+                  {t('remoteConnect.botFeishuDocSuffix')}
+                </p>
+                <div className="bitfun-remote-connect__steps">
+                  <p className="bitfun-remote-connect__step">
+                    1. {t('remoteConnect.botFeishuStep1Prefix')}
+                    <span
+                      className="bitfun-remote-connect__step-link"
+                      role="link"
+                      tabIndex={0}
+                      onClick={() => systemAPI.openExternal('https://open.feishu.cn/app')}
+                      onKeyDown={(e) => { if (e.key === 'Enter') systemAPI.openExternal('https://open.feishu.cn/app'); }}
+                    >
+                      {t('remoteConnect.botFeishuOpenPlatform')}
+                    </span>
+                    {t('remoteConnect.botFeishuStep1Suffix')}
+                  </p>
+                  <p className="bitfun-remote-connect__step">2. {t('remoteConnect.botFeishuStep2')}</p>
+                  <p className="bitfun-remote-connect__step">3. {t('remoteConnect.botFeishuStep3')}</p>
+                </div>
+              </>,
+            )}
             <Input
               className="bitfun-remote-connect__field bitfun-remote-connect__field--inline"
               type="text"

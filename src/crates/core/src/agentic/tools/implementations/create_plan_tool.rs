@@ -76,6 +76,7 @@ UPDATING THE PLAN:
 
 Additional guidelines:
 - Avoid asking clarifying questions in the plan itself. Ask them before calling this tool. Present these to the user using the AskUserQuestion tool.
+- After calling this tool, you should end the conversation turn. Briefly tell the user where the plan file is. Do NOT repeat the plan content again.
 - Todos help break down complex plans into manageable, trackable tasks
 - Focus on high-level meaningful decisions rather than low-level implementation details
 - A good plan is glanceable, not a wall of text."###
@@ -135,11 +136,6 @@ Additional guidelines:
     }
 
     fn is_concurrency_safe(&self, _input: Option<&Value>) -> bool {
-        true
-    }
-
-    fn should_end_turn(&self) -> bool {
-        // End conversation turn after creating plan file to avoid being verbose
         true
     }
 
@@ -229,7 +225,7 @@ Additional guidelines:
         };
 
         let result_for_assistant = format!(
-            "Plan file created at: {}\nYou can read the plan contents from this file. To update the plan, use your file editing tools directly on this file.",
+            "Plan file created at: {}\nYour next reply MUST include this exact plan file path and then end the conversation turn. Do not continue with more planning details or additional questions.",
             plan_file_path_str
         );
 

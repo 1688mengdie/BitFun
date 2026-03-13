@@ -12,9 +12,9 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use super::command_router::{
-    execute_forwarded_turn, handle_command, paired_success_message, parse_command,
-    BotAction, BotChatState, BotInteractiveRequest, BotInteractionHandler, BotMessageSender,
-    HandleResult, WELCOME_MESSAGE,
+    execute_forwarded_turn, handle_command, paired_success_message, parse_command, BotAction,
+    BotChatState, BotInteractionHandler, BotInteractiveRequest, BotMessageSender, HandleResult,
+    WELCOME_MESSAGE,
 };
 use super::{load_bot_persistence, save_bot_persistence, BotConfig, SavedBotConnection};
 use crate::service::remote_connect::remote_server::ImageAttachment;
@@ -128,7 +128,7 @@ impl TelegramBot {
     /// Skips files larger than 50 MB (Telegram Bot API hard limit).
     async fn send_file_as_document(&self, chat_id: i64, file_path: &str) -> Result<()> {
         const MAX_SIZE: u64 = 30 * 1024 * 1024; // Unified 30 MB cap (Feishu API hard limit)
-        let content = super::read_workspace_file(file_path, MAX_SIZE).await?;
+        let content = super::read_workspace_file(file_path, MAX_SIZE, None).await?;
 
         let part = reqwest::multipart::Part::bytes(content.bytes)
             .file_name(content.name.clone())
@@ -164,7 +164,12 @@ impl TelegramBot {
                 s.paired = true;
                 s
             });
-            super::prepare_file_download_actions(text, state)
+            let workspace_root = state.current_workspace.clone();
+            super::prepare_file_download_actions(
+                text,
+                state,
+                workspace_root.as_deref().map(std::path::Path::new),
+            )
         };
         if let Some(result) = result {
             if let Err(e) = self
@@ -241,7 +246,9 @@ impl TelegramBot {
         if result.actions.is_empty() {
             self.send_message(chat_id, &text).await.ok();
         } else {
-            if let Err(e) = self.send_message_with_keyboard(chat_id, &text, &result.actions).await
+            if let Err(e) = self
+                .send_message_with_keyboard(chat_id, &text, &result.actions)
+                .await
             {
                 warn!("Failed to send Telegram keyboard message: {e}; falling back to plain text");
                 self.send_message(chat_id, &result.reply).await.ok();
@@ -366,7 +373,10 @@ impl TelegramBot {
             .unwrap_or("photo.jpg")
             .to_string();
 
-        debug!("Telegram photo downloaded: file_id={file_id}, size={}B", bytes.len());
+        debug!(
+            "Telegram photo downloaded: file_id={file_id}, size={}B",
+            bytes.len()
+        );
         Ok(ImageAttachment { name, data_url })
     }
 
@@ -405,9 +415,7 @@ impl TelegramBot {
             // Inline keyboard button press – treat callback_data as a message.
             if let Some(cq) = update.get("callback_query") {
                 let cq_id = cq["id"].as_str().unwrap_or("").to_string();
-                let chat_id = cq
-                    .pointer("/message/chat/id")
-                    .and_then(|v| v.as_i64());
+                let chat_id = cq.pointer("/message/chat/id").and_then(|v| v.as_i64());
                 let data = cq["data"].as_str().map(|s| s.trim().to_string());
 
                 if let (Some(chat_id), Some(data)) = (chat_id, data) {
@@ -418,10 +426,7 @@ impl TelegramBot {
                 continue;
             }
 
-            let Some(chat_id) = update
-                .pointer("/message/chat/id")
-                .and_then(|v| v.as_i64())
-            else {
+            let Some(chat_id) = update.pointer("/message/chat/id").and_then(|v| v.as_i64()) else {
                 continue;
             };
 
@@ -502,7 +507,10 @@ impl TelegramBot {
 
                                 let mut state = BotChatState::new(chat_id.to_string());
                                 state.paired = true;
-                                self.chat_states.write().await.insert(chat_id, state.clone());
+                                self.chat_states
+                                    .write()
+                                    .await
+                                    .insert(chat_id, state.clone());
                                 self.persist_chat_state(chat_id, &state).await;
 
                                 return Ok(chat_id);
@@ -576,13 +584,11 @@ impl TelegramBot {
         images: Vec<ImageAttachment>,
     ) {
         let mut states = self.chat_states.write().await;
-        let state = states
-            .entry(chat_id)
-            .or_insert_with(|| {
-                let mut s = BotChatState::new(chat_id.to_string());
-                s.paired = true;
-                s
-            });
+        let state = states.entry(chat_id).or_insert_with(|| {
+            let mut s = BotChatState::new(chat_id.to_string());
+            s.paired = true;
+            s
+        });
 
         if !state.paired {
             let trimmed = text.trim();
@@ -641,7 +647,9 @@ impl TelegramBot {
                     std::sync::Arc::new(move |interaction: BotInteractiveRequest| {
                         let interaction_bot = interaction_bot.clone();
                         Box::pin(async move {
-                            interaction_bot.deliver_interaction(chat_id, interaction).await;
+                            interaction_bot
+                                .deliver_interaction(chat_id, interaction)
+                                .await;
                         })
                     });
                 let msg_bot = bot.clone();
@@ -660,13 +668,11 @@ impl TelegramBot {
 
     async fn deliver_interaction(&self, chat_id: i64, interaction: BotInteractiveRequest) {
         let mut states = self.chat_states.write().await;
-        let state = states
-            .entry(chat_id)
-            .or_insert_with(|| {
-                let mut s = BotChatState::new(chat_id.to_string());
-                s.paired = true;
-                s
-            });
+        let state = states.entry(chat_id).or_insert_with(|| {
+            let mut s = BotChatState::new(chat_id.to_string());
+            s.paired = true;
+            s
+        });
         state.pending_action = Some(interaction.pending_action.clone());
         self.persist_chat_state(chat_id, state).await;
         drop(states);

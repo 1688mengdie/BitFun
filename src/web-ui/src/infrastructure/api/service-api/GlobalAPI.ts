@@ -3,7 +3,6 @@
 import { api } from './ApiClient';
 import { createTauriCommandError } from '../errors/TauriCommandError';
 
-
 export interface ApplicationState {
   status: AppStatus;
   workspace?: WorkspaceInfo;
@@ -17,11 +16,36 @@ export interface AppStatus {
   errorMessage?: string;
 }
 
+export interface ProjectStatistics {
+  totalFiles: number;
+  totalLines: number;
+  totalSize: number;
+  filesByLanguage: Record<string, number>;
+  filesByExtension: Record<string, number>;
+  lastUpdated: string;
+}
+
+export interface WorkspaceIdentity {
+  name?: string | null;
+  creature?: string | null;
+  vibe?: string | null;
+  emoji?: string | null;
+}
+
 export interface WorkspaceInfo {
+  id: string;
   name: string;
   rootPath: string;
-  type: string;
-  filesCount: number;
+  workspaceType: string;
+  workspaceKind: string;
+  assistantId?: string | null;
+  languages: string[];
+  openedAt: string;
+  lastAccessed: string;
+  description?: string | null;
+  tags: string[];
+  statistics?: ProjectStatistics | null;
+  identity?: WorkspaceIdentity | null;
 }
 
 export interface UpdateAppStatusRequest {
@@ -32,11 +56,21 @@ export interface OpenWorkspaceRequest {
   path: string;
 }
 
+export interface CreateAssistantWorkspaceRequest {}
+
 export interface CloseWorkspaceRequest {
   workspaceId: string;
 }
 
 export interface SetActiveWorkspaceRequest {
+  workspaceId: string;
+}
+
+export interface DeleteAssistantWorkspaceRequest {
+  workspaceId: string;
+}
+
+export interface ResetAssistantWorkspaceRequest {
   workspaceId: string;
 }
 
@@ -89,6 +123,16 @@ export class GlobalAPI {
     }
   }
 
+  async createAssistantWorkspace(): Promise<WorkspaceInfo> {
+    try {
+      return await api.invoke('create_assistant_workspace', {
+        request: {},
+      });
+    } catch (error) {
+      throw createTauriCommandError('create_assistant_workspace', error);
+    }
+  }
+
    
   async closeWorkspace(workspaceId: string): Promise<void> {
     try {
@@ -107,6 +151,26 @@ export class GlobalAPI {
       });
     } catch (error) {
       throw createTauriCommandError('set_active_workspace', error, { workspaceId });
+    }
+  }
+
+  async deleteAssistantWorkspace(workspaceId: string): Promise<void> {
+    try {
+      await api.invoke('delete_assistant_workspace', {
+        request: { workspaceId }
+      });
+    } catch (error) {
+      throw createTauriCommandError('delete_assistant_workspace', error, { workspaceId });
+    }
+  }
+
+  async resetAssistantWorkspace(workspaceId: string): Promise<WorkspaceInfo> {
+    try {
+      return await api.invoke('reset_assistant_workspace', {
+        request: { workspaceId }
+      });
+    } catch (error) {
+      throw createTauriCommandError('reset_assistant_workspace', error, { workspaceId });
     }
   }
 

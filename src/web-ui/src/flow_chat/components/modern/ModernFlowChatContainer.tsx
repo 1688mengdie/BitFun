@@ -17,7 +17,7 @@ import { getElementText, copyTextToClipboard } from '../../../shared/utils/textS
 import type { FlowChatConfig, FlowToolItem, DialogTurn, ModelRound, FlowItem } from '../../types/flow-chat';
 import { notificationService } from '../../../shared/notification-system';
 import { agentAPI } from '@/infrastructure/api';
-import { ideControl } from '@/shared/services/ide-control';
+import { fileTabManager } from '@/shared/services/FileTabManager';
 import type { LineRange } from '@/component-library';
 import { useWorkspaceContext } from '@/infrastructure/contexts/WorkspaceContext';
 import path from 'path-browserify';
@@ -278,14 +278,13 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     }
 
     try {
-      if (lineRange) {
-        await ideControl.navigation.goToRange(
-          absoluteFilePath,
-          lineRange
-        );
-      } else {
-        await ideControl.navigation.goToFile(absoluteFilePath);
-      }
+      fileTabManager.openFile({
+        filePath: absoluteFilePath,
+        fileName,
+        workspacePath,
+        jumpToRange: lineRange,
+        mode: 'agent',
+      });
     } catch (error) {
       log.error('File navigation failed', error);
       notificationService.error(`Unable to open file: ${absoluteFilePath}`);

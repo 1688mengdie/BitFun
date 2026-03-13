@@ -91,6 +91,16 @@ async fn resolve_session_workspace_path(session_id: &str) -> Option<std::path::P
     None
 }
 
+async fn resolve_file_workspace_root(session_id: Option<&str>) -> Option<std::path::PathBuf> {
+    if let Some(session_id) = session_id {
+        if let Some(workspace_path) = resolve_session_workspace_path(session_id).await {
+            return Some(workspace_path);
+        }
+    }
+
+    current_workspace_path()
+}
+
 /// Image sent from mobile as a base64 data-URL.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImageAttachment {
@@ -161,11 +171,12 @@ pub enum RemoteCommand {
     },
     /// Read a workspace file and return its base64-encoded content.
     ///
-    /// `path` may be an absolute path or a path relative to the current
-    /// workspace root (e.g. `artifacts/report.docx`).  Files larger than
-    /// 10 MB are rejected with an `Error` response.
+    /// `path` may be an absolute path or a path relative to the active
+    /// workspace root. When `session_id` is present, relative paths are
+    /// resolved against that session's bound workspace first.
     ReadFile {
         path: String,
+        session_id: Option<String>,
     },
     /// Read a chunk of a workspace file.  `offset` is the byte offset into the
     /// raw file and `limit` is the maximum number of raw bytes to return.
@@ -173,6 +184,7 @@ pub enum RemoteCommand {
     /// the client knows when it has all the data.
     ReadFileChunk {
         path: String,
+        session_id: Option<String>,
         offset: u64,
         limit: u64,
     },
@@ -181,6 +193,7 @@ pub enum RemoteCommand {
     /// cards before the user confirms the download.
     GetFileInfo {
         path: String,
+        session_id: Option<String>,
     },
     Ping,
 }
@@ -237,6 +250,8 @@ pub enum RemoteResponse {
         git_branch: Option<String>,
         sessions: Vec<SessionInfo>,
         has_more_sessions: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        authenticated_user_id: Option<String>,
     },
     /// Incremental poll response.
     SessionPoll {
@@ -571,13 +586,11 @@ fn turns_to_chat_messages(turns: &[crate::service::session::DialogTurnData]) -> 
                 if t.is_subagent_item.unwrap_or(false) {
                     continue;
                 }
-                let status_str = t.status.as_deref().unwrap_or(
-                    if t.tool_result.is_some() {
-                        "completed"
-                    } else {
-                        "running"
-                    },
-                );
+                let status_str = t.status.as_deref().unwrap_or(if t.tool_result.is_some() {
+                    "completed"
+                } else {
+                    "running"
+                });
                 let tool_status = RemoteToolStatus {
                     id: t.id.clone(),
                     name: t.tool_name.clone(),
@@ -639,7 +652,11 @@ fn turns_to_chat_messages(turns: &[crate::service::session::DialogTurnData]) -> 
             content: text_parts.join("\n\n"),
             timestamp: (ts / 1000).to_string(),
             metadata: None,
-            tools: if tools_flat.is_empty() { None } else { Some(tools_flat) },
+            tools: if tools_flat.is_empty() {
+                None
+            } else {
+                Some(tools_flat)
+            },
             thinking: if thinking_parts.is_empty() {
                 None
             } else {
@@ -829,11 +846,23 @@ impl RemoteSessionStateTracker {
             status: s.turn_status.clone(),
             // When items exist they already contain the text/thinking content.
             // Skip the duplicate top-level fields to halve the payload.
-            text: if has_items { String::new() } else { s.accumulated_text.clone() },
-            thinking: if has_items { String::new() } else { s.accumulated_thinking.clone() },
+            text: if has_items {
+                String::new()
+            } else {
+                s.accumulated_text.clone()
+            },
+            thinking: if has_items {
+                String::new()
+            } else {
+                s.accumulated_thinking.clone()
+            },
             tools: s.active_tools.clone(),
             round_index: s.round_index,
-            items: if has_items { Some(s.active_items.clone()) } else { None },
+            items: if has_items {
+                Some(s.active_items.clone())
+            } else {
+                None
+            },
         })
     }
 
@@ -863,10 +892,7 @@ impl RemoteSessionStateTracker {
     pub fn is_turn_finished(&self) -> bool {
         let s = self.state.read().unwrap();
         s.turn_id.is_some()
-            && matches!(
-                s.turn_status.as_str(),
-                "completed" | "failed" | "cancelled"
-            )
+            && matches!(s.turn_status.as_str(), "completed" | "failed" | "cancelled")
     }
 
     /// Seed initial turn state when the tracker is created after the
@@ -986,11 +1012,9 @@ impl RemoteSessionStateTracker {
 
         if let Some(item) = state.active_items.iter_mut().rev().find(|i| {
             i.item_type == "tool"
-                && i.tool
-                    .as_ref()
-                    .map_or(false, |t| {
-                        t.id == resolved_id || (allow_name_fallback && t.name == tool_name)
-                    })
+                && i.tool.as_ref().map_or(false, |t| {
+                    t.id == resolved_id || (allow_name_fallback && t.name == tool_name)
+                })
         }) {
             if let Some(tool) = item.tool.as_mut() {
                 tool.status = status.to_string();
@@ -1010,9 +1034,18 @@ impl RemoteSessionStateTracker {
         let is_direct = event.session_id() == Some(self.target_session_id.as_str());
         let is_subagent = if !is_direct {
             match event {
-                AE::TextChunk { subagent_parent_info, .. }
-                | AE::ThinkingChunk { subagent_parent_info, .. }
-                | AE::ToolEvent { subagent_parent_info, .. } => subagent_parent_info
+                AE::TextChunk {
+                    subagent_parent_info,
+                    ..
+                }
+                | AE::ThinkingChunk {
+                    subagent_parent_info,
+                    ..
+                }
+                | AE::ToolEvent {
+                    subagent_parent_info,
+                    ..
+                } => subagent_parent_info
                     .as_ref()
                     .map_or(false, |p| p.session_id == self.target_session_id),
                 _ => false,
@@ -1032,7 +1065,8 @@ impl RemoteSessionStateTracker {
                 if !is_subagent {
                     s.accumulated_text.push_str(text);
                 }
-                let extend_idx = Self::find_mergeable_item(&s.active_items, "text", &subagent_marker);
+                let extend_idx =
+                    Self::find_mergeable_item(&s.active_items, "text", &subagent_marker);
                 if let Some(idx) = extend_idx {
                     let item = &mut s.active_items[idx];
                     let c = item.content.get_or_insert_with(String::new);
@@ -1059,7 +1093,8 @@ impl RemoteSessionStateTracker {
                 if !is_subagent {
                     s.accumulated_thinking.push_str(&clean);
                 }
-                let extend_idx = Self::find_mergeable_item(&s.active_items, "thinking", &subagent_marker);
+                let extend_idx =
+                    Self::find_mergeable_item(&s.active_items, "thinking", &subagent_marker);
                 if let Some(idx) = extend_idx {
                     let item = &mut s.active_items[idx];
                     let c = item.content.get_or_insert_with(String::new);
@@ -1077,15 +1112,14 @@ impl RemoteSessionStateTracker {
                 if content == "<thinking_end>" {
                     let _ = self.event_tx.send(TrackerEvent::ThinkingEnd);
                 } else {
-                    let _ = self.event_tx.send(TrackerEvent::ThinkingChunk(content.clone()));
+                    let _ = self
+                        .event_tx
+                        .send(TrackerEvent::ThinkingChunk(content.clone()));
                 }
             }
             AE::ToolEvent { tool_event, .. } => {
                 if let Ok(val) = serde_json::to_value(tool_event) {
-                    let event_type = val
-                        .get("event_type")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
+                    let event_type = val.get("event_type").and_then(|v| v.as_str()).unwrap_or("");
                     let tool_id = val
                         .get("tool_id")
                         .and_then(|v| v.as_str())
@@ -1113,9 +1147,7 @@ impl RemoteSessionStateTracker {
                         }
                         "ConfirmationNeeded" => {
                             let params = val.get("params").cloned();
-                            let input_preview = params
-                                .as_ref()
-                                .and_then(|v| make_slim_params(v));
+                            let input_preview = params.as_ref().and_then(|v| make_slim_params(v));
                             Self::upsert_active_tool(
                                 &mut s,
                                 &tool_id,
@@ -1128,9 +1160,7 @@ impl RemoteSessionStateTracker {
                         }
                         "Started" => {
                             let params = val.get("params").cloned();
-                            let input_preview = params
-                                .as_ref()
-                                .and_then(|v| make_slim_params(v));
+                            let input_preview = params.as_ref().and_then(|v| make_slim_params(v));
                             let tool_input = if tool_name == "AskUserQuestion"
                                 || tool_name == "Task"
                                 || tool_name == "TodoWrite"
@@ -1177,12 +1207,9 @@ impl RemoteSessionStateTracker {
                             );
                         }
                         "Completed" | "Succeeded" => {
-                            let duration = val
-                                .get("duration_ms")
-                                .and_then(|v| v.as_u64());
+                            let duration = val.get("duration_ms").and_then(|v| v.as_u64());
                             if let Some(t) = s.active_tools.iter_mut().rev().find(|t| {
-                                (t.id == tool_id
-                                    || (allow_name_fallback && t.name == tool_name))
+                                (t.id == tool_id || (allow_name_fallback && t.name == tool_name))
                                     && t.status == "running"
                             }) {
                                 t.status = "completed".to_string();
@@ -1204,8 +1231,7 @@ impl RemoteSessionStateTracker {
                         }
                         "Failed" => {
                             if let Some(t) = s.active_tools.iter_mut().rev().find(|t| {
-                                (t.id == tool_id
-                                    || (allow_name_fallback && t.name == tool_name))
+                                (t.id == tool_id || (allow_name_fallback && t.name == tool_name))
                                     && t.status == "running"
                             }) {
                                 t.status = "failed".to_string();
@@ -1225,8 +1251,7 @@ impl RemoteSessionStateTracker {
                         }
                         "Cancelled" => {
                             if let Some(t) = s.active_tools.iter_mut().rev().find(|t| {
-                                (t.id == tool_id
-                                    || (allow_name_fallback && t.name == tool_name))
+                                (t.id == tool_id || (allow_name_fallback && t.name == tool_name))
                                     && matches!(
                                         t.status.as_str(),
                                         "running" | "pending_confirmation" | "confirmed"
@@ -1478,10 +1503,7 @@ impl RemoteExecutionDispatcher {
                             session_name: Some(name),
                             env: Some({
                                 let mut m = std::collections::HashMap::new();
-                                m.insert(
-                                    "BITFUN_NONINTERACTIVE".to_string(),
-                                    "1".to_string(),
-                                );
+                                m.insert("BITFUN_NONINTERACTIVE".to_string(), "1".to_string());
                                 m
                             }),
                             ..Default::default()
@@ -1649,19 +1671,25 @@ impl RemoteServer {
             | RemoteCommand::ConfirmTool { .. }
             | RemoteCommand::RejectTool { .. }
             | RemoteCommand::CancelTool { .. }
-            | RemoteCommand::AnswerQuestion { .. } => {
-                self.handle_execution_command(cmd).await
-            }
+            | RemoteCommand::AnswerQuestion { .. } => self.handle_execution_command(cmd).await,
 
             RemoteCommand::PollSession { .. } => self.handle_poll_command(cmd).await,
 
-            RemoteCommand::ReadFile { path } => self.handle_read_file(path).await,
+            RemoteCommand::ReadFile { path, session_id } => {
+                self.handle_read_file(path, session_id.as_deref()).await
+            }
             RemoteCommand::ReadFileChunk {
                 path,
+                session_id,
                 offset,
                 limit,
-            } => self.handle_read_file_chunk(path, *offset, *limit).await,
-            RemoteCommand::GetFileInfo { path } => self.handle_get_file_info(path).await,
+            } => {
+                self.handle_read_file_chunk(path, session_id.as_deref(), *offset, *limit)
+                    .await
+            }
+            RemoteCommand::GetFileInfo { path, session_id } => {
+                self.handle_get_file_info(path, session_id.as_deref()).await
+            }
         }
     }
 
@@ -1669,7 +1697,10 @@ impl RemoteServer {
         get_or_init_global_dispatcher().ensure_tracker(session_id)
     }
 
-    pub async fn generate_initial_sync(&self) -> RemoteResponse {
+    pub async fn generate_initial_sync(
+        &self,
+        authenticated_user_id: Option<String>,
+    ) -> RemoteResponse {
         use crate::agentic::persistence::PersistenceManager;
         use crate::infrastructure::PathManager;
 
@@ -1731,6 +1762,7 @@ impl RemoteServer {
             git_branch,
             sessions,
             has_more_sessions: has_more,
+            authenticated_user_id,
         }
     }
 
@@ -1792,8 +1824,7 @@ impl RemoteServer {
             load_chat_messages_from_conversation_persistence(&workspace_path, session_id).await;
         let total_msg_count = all_chat_msgs.len();
         let skip = *known_msg_count;
-        let new_messages: Vec<ChatMessage> =
-            all_chat_msgs.into_iter().skip(skip).collect();
+        let new_messages: Vec<ChatMessage> = all_chat_msgs.into_iter().skip(skip).collect();
 
         let turn_finished = tracker.is_turn_finished();
         let has_assistant_msg = new_messages.iter().any(|m| m.role == "assistant");
@@ -1845,13 +1876,14 @@ impl RemoteServer {
 
     /// Read a workspace file and return its base64-encoded content.
     ///
-    /// Relative paths are resolved against the current workspace root.
-    /// Rejects files larger than 10 MB.
-    async fn handle_read_file(&self, raw_path: &str) -> RemoteResponse {
+    /// Relative paths are resolved against the session workspace when possible,
+    /// otherwise the current workspace root. Rejects files larger than 30 MB.
+    async fn handle_read_file(&self, raw_path: &str, session_id: Option<&str>) -> RemoteResponse {
         use crate::service::remote_connect::bot::{read_workspace_file, WorkspaceFileContent};
 
         const MAX_SIZE: u64 = 30 * 1024 * 1024; // Unified 30 MB cap (Feishu API hard limit)
-        match read_workspace_file(raw_path, MAX_SIZE).await {
+        let workspace_root = resolve_file_workspace_root(session_id).await;
+        match read_workspace_file(raw_path, MAX_SIZE, workspace_root.as_deref()).await {
             Ok(WorkspaceFileContent {
                 name,
                 bytes,
@@ -1859,8 +1891,7 @@ impl RemoteServer {
                 size,
             }) => {
                 use base64::Engine as _;
-                let content_base64 =
-                    base64::engine::general_purpose::STANDARD.encode(&bytes);
+                let content_base64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
                 RemoteResponse::FileContent {
                     name,
                     content_base64,
@@ -1877,18 +1908,18 @@ impl RemoteServer {
     async fn handle_read_file_chunk(
         &self,
         raw_path: &str,
+        session_id: Option<&str>,
         offset: u64,
         limit: u64,
     ) -> RemoteResponse {
         use crate::service::remote_connect::bot::{detect_mime_type, resolve_workspace_path};
 
-        let abs = match resolve_workspace_path(raw_path) {
+        let workspace_root = resolve_file_workspace_root(session_id).await;
+        let abs = match resolve_workspace_path(raw_path, workspace_root.as_deref()) {
             Some(p) => p,
             None => {
                 return RemoteResponse::Error {
-                    message: format!(
-                        "Remote file access requires an absolute path: {raw_path}"
-                    ),
+                    message: format!("Remote file path could not be resolved: {raw_path}"),
                 }
             }
         };
@@ -1945,16 +1976,19 @@ impl RemoteServer {
         }
     }
 
-    async fn handle_get_file_info(&self, raw_path: &str) -> RemoteResponse {
+    async fn handle_get_file_info(
+        &self,
+        raw_path: &str,
+        session_id: Option<&str>,
+    ) -> RemoteResponse {
         use crate::service::remote_connect::bot::{detect_mime_type, resolve_workspace_path};
 
-        let abs = match resolve_workspace_path(raw_path) {
+        let workspace_root = resolve_file_workspace_root(session_id).await;
+        let abs = match resolve_workspace_path(raw_path, workspace_root.as_deref()) {
             Some(p) => p,
             None => {
                 return RemoteResponse::Error {
-                    message: format!(
-                        "Remote file access requires an absolute path: {raw_path}"
-                    ),
+                    message: format!("Remote file path could not be resolved: {raw_path}"),
                 }
             }
         };
@@ -2002,13 +2036,11 @@ impl RemoteServer {
                 let ws_path = current_workspace_path();
                 let (project_name, git_branch) = if let Some(ref p) = ws_path {
                     let name = p.file_name().map(|n| n.to_string_lossy().to_string());
-                    let branch = git2::Repository::open(p)
-                        .ok()
-                        .and_then(|repo| {
-                            repo.head()
-                                .ok()
-                                .and_then(|h| h.shorthand().map(String::from))
-                        });
+                    let branch = git2::Repository::open(p).ok().and_then(|repo| {
+                        repo.head()
+                            .ok()
+                            .and_then(|h| h.shorthand().map(String::from))
+                    });
                     (name, branch)
                 } else {
                     (None, None)
@@ -2062,9 +2094,7 @@ impl RemoteServer {
                             )
                             .await
                         {
-                            error!(
-                                "Failed to initialize snapshot after remote workspace set: {e}"
-                            );
+                            error!("Failed to initialize snapshot after remote workspace set: {e}");
                         }
                         RemoteResponse::WorkspaceUpdated {
                             success: true,
@@ -2124,8 +2154,9 @@ impl RemoteServer {
                 };
 
                 let ws_str = workspace_path.to_string_lossy().to_string();
-                let workspace_name =
-                    workspace_path.file_name().map(|n| n.to_string_lossy().to_string());
+                let workspace_name = workspace_path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string());
 
                 if let Ok(pm) = PathManager::new() {
                     let pm = std::sync::Arc::new(pm);
@@ -2181,13 +2212,14 @@ impl RemoteServer {
                 workspace_path: requested_ws_path,
             } => {
                 let agent = resolve_agent_type(agent_type.as_deref());
-                let session_name = custom_name
-                    .as_deref()
-                    .filter(|n| !n.is_empty())
-                    .unwrap_or(match agent {
-                        "Cowork" => "Remote Cowork Session",
-                        _ => "Remote Code Session",
-                    });
+                let session_name =
+                    custom_name
+                        .as_deref()
+                        .filter(|n| !n.is_empty())
+                        .unwrap_or(match agent {
+                            "Cowork" => "Remote Cowork Session",
+                            _ => "Remote Code Session",
+                        });
                 let binding_ws_str = requested_ws_path
                     .as_deref()
                     .filter(|path| !path.is_empty())
@@ -2250,11 +2282,17 @@ impl RemoteServer {
             RemoteCommand::DeleteSession { session_id } => {
                 let Some(workspace_path) = resolve_session_workspace_path(session_id).await else {
                     return RemoteResponse::Error {
-                        message: format!("Workspace path not available for session: {}", session_id),
+                        message: format!(
+                            "Workspace path not available for session: {}",
+                            session_id
+                        ),
                     };
                 };
 
-                match coordinator.delete_session(&workspace_path, session_id).await {
+                match coordinator
+                    .delete_session(&workspace_path, session_id)
+                    .await
+                {
                     Ok(_) => {
                         get_or_init_global_dispatcher().remove_tracker(session_id);
                         RemoteResponse::SessionDeleted {
@@ -2288,9 +2326,9 @@ impl RemoteServer {
                 image_contexts,
             } => {
                 // Unified: prefer image_contexts (new format), fall back to legacy images
-                let resolved_contexts = image_contexts.clone().unwrap_or_else(|| {
-                    images_to_contexts(images.as_ref())
-                });
+                let resolved_contexts = image_contexts
+                    .clone()
+                    .unwrap_or_else(|| images_to_contexts(images.as_ref()));
                 info!(
                     "Remote send_message: session={session_id}, agent_type={}, image_contexts={}",
                     requested_agent_type.as_deref().unwrap_or("agentic"),
@@ -2317,17 +2355,12 @@ impl RemoteServer {
             RemoteCommand::CancelTask {
                 session_id,
                 turn_id,
-            } => {
-                match dispatcher
-                    .cancel_task(session_id, turn_id.as_deref())
-                    .await
-                {
-                    Ok(()) => RemoteResponse::TaskCancelled {
-                        session_id: session_id.clone(),
-                    },
-                    Err(e) => RemoteResponse::Error { message: e },
-                }
-            }
+            } => match dispatcher.cancel_task(session_id, turn_id.as_deref()).await {
+                Ok(()) => RemoteResponse::TaskCancelled {
+                    session_id: session_id.clone(),
+                },
+                Err(e) => RemoteResponse::Error { message: e },
+            },
             RemoteCommand::ConfirmTool {
                 tool_id,
                 updated_input,
@@ -2340,7 +2373,10 @@ impl RemoteServer {
                         };
                     }
                 };
-                match coordinator.confirm_tool(tool_id, updated_input.clone()).await {
+                match coordinator
+                    .confirm_tool(tool_id, updated_input.clone())
+                    .await
+                {
                     Ok(_) => RemoteResponse::InteractionAccepted {
                         action: "confirm_tool".to_string(),
                         target_id: tool_id.clone(),
@@ -2407,7 +2443,6 @@ impl RemoteServer {
             },
         }
     }
-
 }
 
 #[cfg(test)]

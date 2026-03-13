@@ -10,19 +10,14 @@ pub mod telegram;
 
 use serde::{Deserialize, Serialize};
 
-pub use command_router::{BotChatState, HandleResult, ForwardRequest, ForwardedTurnResult};
+pub use command_router::{BotChatState, ForwardRequest, ForwardedTurnResult, HandleResult};
 
 /// Configuration for a bot-based connection.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "bot_type", rename_all = "snake_case")]
 pub enum BotConfig {
-    Feishu {
-        app_id: String,
-        app_secret: String,
-    },
-    Telegram {
-        bot_token: String,
-    },
+    Feishu { app_id: String, app_secret: String },
+    Telegram { bot_token: String },
 }
 
 /// Pairing state for bot-based connections.
@@ -44,10 +39,22 @@ pub struct SavedBotConnection {
     pub connected_at: i64,
 }
 
+/// Persisted remote-connect form values shown in the desktop dialog.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RemoteConnectFormState {
+    pub custom_server_url: String,
+    pub telegram_bot_token: String,
+    pub feishu_app_id: String,
+    pub feishu_app_secret: String,
+}
+
 /// All persisted bot connections (one per bot type at most).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct BotPersistenceData {
+    #[serde(default)]
     pub connections: Vec<SavedBotConnection>,
+    #[serde(default)]
+    pub form_state: RemoteConnectFormState,
 }
 
 impl BotPersistenceData {
@@ -75,21 +82,39 @@ pub struct WorkspaceFileContent {
     pub size: u64,
 }
 
+fn strip_workspace_path_prefix(raw: &str) -> &str {
+    raw.strip_prefix("computer://")
+        .or_else(|| raw.strip_prefix("file://"))
+        .unwrap_or(raw)
+}
+
+fn is_absolute_workspace_path(path: &str) -> bool {
+    path.starts_with('/') || (path.len() >= 3 && path.as_bytes()[1] == b':')
+}
+
 /// Resolve a raw path (with or without `computer://` / `file://` prefix) to an
 /// absolute `PathBuf`.
 ///
-/// Remote Connect intentionally rejects relative paths here to avoid silently
-/// binding file reads/downloads to whichever workspace happens to be current.
-pub fn resolve_workspace_path(raw: &str) -> Option<std::path::PathBuf> {
-    let stripped = raw
-        .strip_prefix("computer://")
-        .or_else(|| raw.strip_prefix("file://"))
-        .unwrap_or(raw);
+/// Absolute paths are passed through directly. Relative paths are resolved
+/// against `workspace_root` when provided, and paths escaping that root are
+/// rejected.
+pub fn resolve_workspace_path(
+    raw: &str,
+    workspace_root: Option<&std::path::Path>,
+) -> Option<std::path::PathBuf> {
+    let stripped = strip_workspace_path_prefix(raw);
 
-    if stripped.starts_with('/')
-        || (stripped.len() >= 3 && stripped.as_bytes()[1] == b':')
-    {
-        Some(std::path::PathBuf::from(stripped))
+    if is_absolute_workspace_path(stripped) {
+        return Some(std::path::PathBuf::from(stripped));
+    }
+
+    let workspace_root = workspace_root?;
+    let canonical_root = std::fs::canonicalize(workspace_root).ok()?;
+    let candidate = canonical_root.join(stripped);
+    let canonical_candidate = std::fs::canonicalize(candidate).ok()?;
+
+    if canonical_candidate.starts_with(&canonical_root) {
+        Some(canonical_candidate)
     } else {
         None
     }
@@ -109,8 +134,8 @@ pub fn detect_mime_type(path: &std::path::Path) -> &'static str {
         "html" | "htm" => "text/html",
         "css" => "text/css",
         "js" | "mjs" => "text/javascript",
-        "ts" | "tsx" | "jsx" | "rs" | "py" | "go" | "java" | "c" | "cpp" | "h" | "sh"
-        | "toml" | "yaml" | "yml" => "text/plain",
+        "ts" | "tsx" | "jsx" | "rs" | "py" | "go" | "java" | "c" | "cpp" | "h" | "sh" | "toml"
+        | "yaml" | "yml" => "text/plain",
         "json" => "application/json",
         "xml" => "application/xml",
         "csv" => "text/csv",
@@ -123,9 +148,7 @@ pub fn detect_mime_type(path: &std::path::Path) -> &'static str {
         "zip" => "application/zip",
         "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        "pptx" => {
-            "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-        }
+        "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
         "mp4" => "video/mp4",
         "opus" => "audio/opus",
         _ => "application/octet-stream",
@@ -142,10 +165,10 @@ pub fn detect_mime_type(path: &std::path::Path) -> &'static str {
 pub async fn read_workspace_file(
     raw_path: &str,
     max_size: u64,
+    workspace_root: Option<&std::path::Path>,
 ) -> anyhow::Result<WorkspaceFileContent> {
-    let abs_path = resolve_workspace_path(raw_path).ok_or_else(|| {
-        anyhow::anyhow!("Remote file access requires an absolute path: {raw_path}")
-    })?;
+    let abs_path = resolve_workspace_path(raw_path, workspace_root)
+        .ok_or_else(|| anyhow::anyhow!("Remote file path could not be resolved: {raw_path}"))?;
 
     if !abs_path.exists() {
         return Err(anyhow::anyhow!("File not found: {}", abs_path.display()));
@@ -192,8 +215,11 @@ pub async fn read_workspace_file(
 /// Get file metadata (name and size in bytes) without reading the full content.
 /// Returns `None` if the path cannot be resolved, does not exist, or is not a
 /// regular file.
-pub fn get_file_metadata(raw_path: &str) -> Option<(String, u64)> {
-    let abs = resolve_workspace_path(raw_path)?;
+pub fn get_file_metadata(
+    raw_path: &str,
+    workspace_root: Option<&std::path::Path>,
+) -> Option<(String, u64)> {
+    let abs = resolve_workspace_path(raw_path, workspace_root)?;
     if !abs.is_file() {
         return None;
     }
@@ -222,19 +248,75 @@ pub fn format_file_size(bytes: u64) -> String {
 /// Extensions that are source-code / config files — excluded from download
 /// when referenced via absolute paths (matches mobile-web `CODE_FILE_EXTENSIONS`).
 const CODE_FILE_EXTENSIONS: &[&str] = &[
-    "js", "jsx", "ts", "tsx", "mjs", "cjs", "mts", "cts",
-    "py", "pyw", "pyi",
-    "rs", "go", "java", "kt", "kts", "scala", "groovy",
-    "c", "cpp", "cc", "cxx", "h", "hpp", "hxx", "hh",
-    "cs", "rb", "php", "swift",
-    "vue", "svelte",
-    "html", "htm", "css", "scss", "less", "sass",
-    "json", "jsonc", "yaml", "yml", "toml", "xml",
-    "md", "mdx", "rst", "txt",
-    "sh", "bash", "zsh", "fish", "ps1", "bat", "cmd",
-    "sql", "graphql", "gql", "proto",
-    "lock", "env", "ini", "cfg", "conf",
-    "cj", "ets", "editorconfig", "gitignore", "log",
+    "js",
+    "jsx",
+    "ts",
+    "tsx",
+    "mjs",
+    "cjs",
+    "mts",
+    "cts",
+    "py",
+    "pyw",
+    "pyi",
+    "rs",
+    "go",
+    "java",
+    "kt",
+    "kts",
+    "scala",
+    "groovy",
+    "c",
+    "cpp",
+    "cc",
+    "cxx",
+    "h",
+    "hpp",
+    "hxx",
+    "hh",
+    "cs",
+    "rb",
+    "php",
+    "swift",
+    "vue",
+    "svelte",
+    "html",
+    "htm",
+    "css",
+    "scss",
+    "less",
+    "sass",
+    "json",
+    "jsonc",
+    "yaml",
+    "yml",
+    "toml",
+    "xml",
+    "md",
+    "mdx",
+    "rst",
+    "txt",
+    "sh",
+    "bash",
+    "zsh",
+    "fish",
+    "ps1",
+    "bat",
+    "cmd",
+    "sql",
+    "graphql",
+    "gql",
+    "proto",
+    "lock",
+    "env",
+    "ini",
+    "cfg",
+    "conf",
+    "cj",
+    "ets",
+    "editorconfig",
+    "gitignore",
+    "log",
 ];
 
 /// Check whether a bare file path (no protocol prefix) should be treated as
@@ -260,10 +342,13 @@ fn is_downloadable_by_extension(file_path: &str) -> bool {
     }
 }
 
-/// Only absolute file paths are returned. Directories, missing paths, and
-/// workspace-relative links are skipped. Duplicate paths are deduplicated
+/// Only file paths that can be resolved to existing files are returned.
+/// Directories and missing paths are skipped. Duplicate paths are deduplicated
 /// before returning.
-pub fn extract_computer_file_paths(text: &str) -> Vec<String> {
+pub fn extract_computer_file_paths(
+    text: &str,
+    workspace_root: Option<&std::path::Path>,
+) -> Vec<String> {
     const PREFIX: &str = "computer://";
     let mut paths: Vec<String> = Vec::new();
     let mut search = text;
@@ -271,14 +356,12 @@ pub fn extract_computer_file_paths(text: &str) -> Vec<String> {
     while let Some(idx) = search.find(PREFIX) {
         let rest = &search[idx + PREFIX.len()..];
         let end = rest
-            .find(|c: char| {
-                c.is_whitespace() || matches!(c, '<' | '>' | '(' | ')' | '"' | '\'')
-            })
+            .find(|c: char| c.is_whitespace() || matches!(c, '<' | '>' | '(' | ')' | '"' | '\''))
             .unwrap_or(rest.len());
-        let raw_suffix = rest[..end]
-            .trim_end_matches(|c: char| matches!(c, '.' | ',' | ';' | ':' | ')' | ']'));
+        let raw_suffix =
+            rest[..end].trim_end_matches(|c: char| matches!(c, '.' | ',' | ';' | ':' | ')' | ']'));
         if !raw_suffix.is_empty() {
-            push_if_existing_file(&format!("{PREFIX}{raw_suffix}"), &mut paths);
+            push_if_existing_file(&format!("{PREFIX}{raw_suffix}"), &mut paths, workspace_root);
         }
         search = &rest[end..];
     }
@@ -288,8 +371,12 @@ pub fn extract_computer_file_paths(text: &str) -> Vec<String> {
 
 /// Try to resolve `file_path` and, if it exists as a regular file, push
 /// its absolute path into `out` (deduplicating).
-fn push_if_existing_file(file_path: &str, out: &mut Vec<String>) {
-    if let Some(abs) = resolve_workspace_path(file_path) {
+fn push_if_existing_file(
+    file_path: &str,
+    out: &mut Vec<String>,
+    workspace_root: Option<&std::path::Path>,
+) {
+    if let Some(abs) = resolve_workspace_path(file_path, workspace_root) {
         let abs_str = abs.to_string_lossy().into_owned();
         if abs.exists() && abs.is_file() && !out.contains(&abs_str) {
             out.push(abs_str);
@@ -307,7 +394,10 @@ fn push_if_existing_file(file_path: &str, out: &mut Vec<String>) {
 ///
 /// Only paths that exist as regular files on disk are returned.
 /// Duplicate paths are deduplicated.
-pub fn extract_downloadable_file_paths(text: &str) -> Vec<String> {
+pub fn extract_downloadable_file_paths(
+    text: &str,
+    workspace_root: Option<&std::path::Path>,
+) -> Vec<String> {
     let mut paths: Vec<String> = Vec::new();
 
     // Phase 1 — protocol-prefixed links (`computer://` and `file://`).
@@ -328,7 +418,7 @@ pub fn extract_downloadable_file_paths(text: &str) -> Vec<String> {
                 } else {
                     raw_suffix.to_string()
                 };
-                push_if_existing_file(&resolve_input, &mut paths);
+                push_if_existing_file(&resolve_input, &mut paths, workspace_root);
             }
             search = &rest[end..];
         }
@@ -355,7 +445,7 @@ pub fn extract_downloadable_file_paths(text: &str) -> Vec<String> {
                     && !href.starts_with("//")
                 {
                     if is_downloadable_by_extension(href) {
-                        push_if_existing_file(href, &mut paths);
+                        push_if_existing_file(href, &mut paths, workspace_root);
                     }
                 }
                 i = href_start + rel_end + 1;
@@ -379,17 +469,18 @@ pub fn extract_downloadable_file_paths(text: &str) -> Vec<String> {
 pub fn prepare_file_download_actions(
     text: &str,
     state: &mut command_router::BotChatState,
+    workspace_root: Option<&std::path::Path>,
 ) -> Option<command_router::HandleResult> {
     use command_router::BotAction;
 
-    let file_paths = extract_downloadable_file_paths(text);
+    let file_paths = extract_downloadable_file_paths(text, workspace_root);
     if file_paths.is_empty() {
         return None;
     }
 
     let mut actions: Vec<BotAction> = Vec::new();
     for path in &file_paths {
-        if let Some((name, size)) = get_file_metadata(path) {
+        if let Some((name, size)) = get_file_metadata(path, workspace_root) {
             let token = generate_download_token(&state.chat_id);
             state.pending_files.insert(token.clone(), path.clone());
             actions.push(BotAction::secondary(
@@ -423,14 +514,21 @@ fn generate_download_token(chat_id: &str) -> String {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .subsec_nanos();
-    let salt = chat_id.bytes().fold(0u32, |acc, b| acc.wrapping_add(b as u32));
+    let salt = chat_id
+        .bytes()
+        .fold(0u32, |acc, b| acc.wrapping_add(b as u32));
     format!("{:08x}", ns ^ salt)
 }
 
-const BOT_PERSISTENCE_FILENAME: &str = "bot_connections.json";
+const REMOTE_CONNECT_PERSISTENCE_FILENAME: &str = "remote_connect_persistence.json";
+const LEGACY_BOT_PERSISTENCE_FILENAME: &str = "bot_connections.json";
 
 pub fn bot_persistence_path() -> Option<std::path::PathBuf> {
-    dirs::home_dir().map(|home| home.join(".bitfun").join(BOT_PERSISTENCE_FILENAME))
+    dirs::home_dir().map(|home| home.join(".bitfun").join(REMOTE_CONNECT_PERSISTENCE_FILENAME))
+}
+
+fn legacy_bot_persistence_path() -> Option<std::path::PathBuf> {
+    dirs::home_dir().map(|home| home.join(".bitfun").join(LEGACY_BOT_PERSISTENCE_FILENAME))
 }
 
 pub fn load_bot_persistence() -> BotPersistenceData {
@@ -439,12 +537,22 @@ pub fn load_bot_persistence() -> BotPersistenceData {
     };
     match std::fs::read_to_string(&path) {
         Ok(data) => serde_json::from_str(&data).unwrap_or_default(),
-        Err(_) => BotPersistenceData::default(),
+        Err(_) => {
+            let Some(legacy_path) = legacy_bot_persistence_path() else {
+                return BotPersistenceData::default();
+            };
+            match std::fs::read_to_string(&legacy_path) {
+                Ok(data) => serde_json::from_str(&data).unwrap_or_default(),
+                Err(_) => BotPersistenceData::default(),
+            }
+        }
     }
 }
 
 pub fn save_bot_persistence(data: &BotPersistenceData) {
-    let Some(path) = bot_persistence_path() else { return };
+    let Some(path) = bot_persistence_path() else {
+        return;
+    };
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
@@ -452,5 +560,63 @@ pub fn save_bot_persistence(data: &BotPersistenceData) {
         if let Err(e) = std::fs::write(&path, json) {
             log::error!("Failed to save bot persistence: {e}");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{extract_downloadable_file_paths, resolve_workspace_path};
+
+    fn make_temp_workspace() -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
+        let base = std::env::temp_dir().join(format!(
+            "bitfun-remote-connect-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let workspace = base.join("workspace");
+        let artifacts = workspace.join("artifacts");
+        let report = artifacts.join("report.pptx");
+        std::fs::create_dir_all(&artifacts).unwrap();
+        std::fs::write(&report, b"ppt").unwrap();
+        (base, workspace, report)
+    }
+
+    #[test]
+    fn resolves_relative_paths_within_workspace_root() {
+        let (base, workspace, report) = make_temp_workspace();
+
+        let resolved =
+            resolve_workspace_path("computer://artifacts/report.pptx", Some(&workspace)).unwrap();
+
+        assert_eq!(resolved, std::fs::canonicalize(report).unwrap());
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn rejects_relative_paths_that_escape_workspace_root() {
+        let (base, workspace, _report) = make_temp_workspace();
+        let secret = base.join("secret.txt");
+        std::fs::write(&secret, b"secret").unwrap();
+
+        let resolved = resolve_workspace_path("computer://../secret.txt", Some(&workspace));
+
+        assert!(resolved.is_none());
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn extracts_relative_computer_links_when_workspace_root_is_known() {
+        let (base, workspace, _report) = make_temp_workspace();
+        let text = "Download [deck](computer://artifacts/report.pptx)";
+
+        let paths = extract_downloadable_file_paths(text, Some(&workspace));
+
+        assert_eq!(paths.len(), 1);
+        assert!(std::path::Path::new(&paths[0]).is_absolute());
+        assert!(paths[0].ends_with("artifacts/report.pptx"));
+        assert!(std::path::Path::new(&paths[0]).exists());
+        let _ = std::fs::remove_dir_all(base);
     }
 }

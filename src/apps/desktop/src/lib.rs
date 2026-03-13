@@ -332,6 +332,7 @@ pub async fn run() {
             update_app_status,
             read_file_content,
             write_file_content,
+            reset_workspace_persona_files,
             check_path_exists,
             get_file_metadata,
             rename_file,
@@ -546,6 +547,9 @@ pub async fn run() {
             get_recent_workspaces,
             get_opened_workspaces,
             open_workspace,
+            create_assistant_workspace,
+            delete_assistant_workspace,
+            reset_assistant_workspace,
             close_workspace,
             set_active_workspace,
             get_current_workspace,
@@ -596,6 +600,8 @@ pub async fn run() {
             api::remote_connect_api::remote_connect_stop,
             api::remote_connect_api::remote_connect_stop_bot,
             api::remote_connect_api::remote_connect_status,
+            api::remote_connect_api::remote_connect_get_form_state,
+            api::remote_connect_api::remote_connect_set_form_state,
             api::remote_connect_api::remote_connect_configure_custom_server,
             api::remote_connect_api::remote_connect_configure_bot,
             // MiniApp API
@@ -817,10 +823,21 @@ fn init_services(app_handle: tauri::AppHandle, default_log_level: log::LevelFilt
     tokio::spawn(async move {
         let transport = Arc::new(TauriTransportAdapter::new(app_handle.clone()));
         let emitter = create_event_emitter(transport);
+        let workspace_identity_watch_service = {
+            let app_state: tauri::State<'_, api::app_state::AppState> = app_handle.state();
+            app_state.workspace_identity_watch_service.clone()
+        };
 
         service::snapshot::initialize_snapshot_event_emitter(emitter.clone());
 
         infrastructure::initialize_file_watcher(emitter.clone());
+
+        if let Err(e) = workspace_identity_watch_service
+            .set_event_emitter(emitter.clone())
+            .await
+        {
+            log::error!("Failed to initialize workspace identity watch service: {}", e);
+        }
 
         if let Err(e) = service::lsp::initialize_global_lsp_manager().await {
             log::error!("Failed to initialize LSP manager: {}", e);
