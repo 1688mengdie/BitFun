@@ -10,7 +10,7 @@
  *     SceneViewport (flex:1 — active scene content)
  */
 
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import { useCurrentWorkspace } from '../../infrastructure/contexts/WorkspaceContext';
 import { NavBar } from '../components/NavBar';
 import NavPanel from '../components/NavPanel/NavPanel';

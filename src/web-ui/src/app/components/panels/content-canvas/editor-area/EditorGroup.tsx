@@ -8,8 +8,6 @@ import { useTranslation } from 'react-i18next';
 import { TabBar } from '../tab-bar';
 import { DropZone } from './DropZone';
 import FlexiblePanel from '../../base/FlexiblePanel';
-import { createLogger } from '@/shared/utils/logger';
-const _dbgLog = createLogger('EditorGroup');
 import type { 
   EditorGroupId, 
   EditorGroupState, 
