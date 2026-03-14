@@ -41,6 +41,7 @@ import { createLogger } from '@/shared/utils/logger';
 import { Tooltip, IconButton } from '@/component-library';
 import { useAgentCanvasStore } from '@/app/components/panels/content-canvas/stores';
 import { openBtwSessionInAuxPane, selectActiveBtwSessionTab } from '../services/openBtwSession';
+import { resolveSessionRelationship } from '../utils/sessionMetadata';
 import './ChatInput.scss';
 
 const log = createLogger('ChatInput');
@@ -106,13 +107,15 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const activeBtwSessionData = activeBtwSessionTab?.content.data as
     | { childSessionId: string; parentSessionId: string; workspacePath?: string }
     | undefined;
-  const activeBtwSessionId = activeBtwSessionData?.childSessionId;
+  const activeBtwSessionId = activeBtwSessionData?.parentSessionId === currentSessionId
+    ? activeBtwSessionData.childSessionId
+    : undefined;
   const effectiveTargetSessionId =
     inputTarget === 'btw' && activeBtwSessionId ? activeBtwSessionId : currentSessionId;
   const effectiveTargetSession = effectiveTargetSessionId
     ? flowChatState.sessions.get(effectiveTargetSessionId)
     : undefined;
-  const isBtwSession = effectiveTargetSession?.sessionKind === 'btw';
+  const isBtwSession = resolveSessionRelationship(effectiveTargetSession).isBtw;
   const showTargetSwitcher = !!activeBtwSessionId;
   const currentSessionTitle = currentSession?.title?.trim() || t('session.untitled');
   const activeBtwSessionTitle = activeBtwSessionId
@@ -1256,6 +1259,35 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       }, 50);
     }
   }, [inputState.isActive]);
+
+  // Global space-to-activate: when collapsed and no editable element is focused
+  useEffect(() => {
+    if (inputState.isActive) return;
+
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== ' ') return;
+
+      const target = e.target as HTMLElement;
+      const isEditable =
+        target.tagName === 'INPUT' ||
+        target.tagName === 'TEXTAREA' ||
+        target.isContentEditable ||
+        target.closest('[contenteditable="true"]') !== null;
+
+      if (isEditable) return;
+
+      e.preventDefault();
+      dispatchInput({ type: 'ACTIVATE' });
+      setTimeout(() => {
+        if (richTextInputRef.current) {
+          richTextInputRef.current.focus();
+        }
+      }, 50);
+    };
+
+    document.addEventListener('keydown', handleGlobalKeyDown);
+    return () => document.removeEventListener('keydown', handleGlobalKeyDown);
+  }, [inputState.isActive]);
   
   const containerRef = useRef<HTMLDivElement>(null);
   
@@ -1559,6 +1591,15 @@ export const ChatInput: React.FC<ChatInputProps> = ({
             )}
             </div>
             
+            {!inputState.isActive && (
+              <span className="bitfun-chat-input__space-hint">
+                <span className="bitfun-chat-input__space-key" aria-hidden="true">Space</span>
+                <span className="bitfun-chat-input__space-hint-text">
+                  {t('input.spaceToActivate')}
+                </span>
+              </span>
+            )}
+
             <IconButton
               className="bitfun-chat-input__expand-button"
               variant="ghost"

@@ -126,11 +126,9 @@
     }
 
     &.is-btw-child {
-      background: color-mix(in srgb, var(--element-bg-soft) 38%, transparent);
-
       &:hover,
       &.is-active {
-        background: color-mix(in srgb, var(--element-bg-soft) 74%, transparent);
+        background: var(--element-bg-soft);
       }
     }
   }

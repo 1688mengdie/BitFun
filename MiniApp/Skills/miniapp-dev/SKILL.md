@@ -1,6 +1,6 @@
 ---
 name: miniapp-dev
-description: Develops and maintains the BitFun MiniApp system (Zero-Dialect Runtime). Use when working on miniapp modules, toolbox scene, bridge scripts, agent tool (InitMiniApp), permission policy, or any code under src/crates/core/src/miniapp/ or src/web-ui/src/app/scenes/toolbox/. Also use when the user mentions MiniApp, toolbox, bridge, or zero-dialect.
+description: Develops and maintains the BitFun MiniApp system (Zero-Dialect Runtime). Use when working on miniapp modules, Mini Apps gallery, bridge scripts, agent tool (InitMiniApp), permission policy, or any code under src/crates/core/src/miniapp/ or src/web-ui/src/app/scenes/miniapps/. Also use when the user mentions MiniApp, miniapps, bridge, or zero-dialect.
 ---
 
 # BitFun MiniApp V2 开发指南
@@ -52,14 +52,16 @@ src/crates/core/src/agentic/tools/implementations/
 ### 前端
 
 ```
-src/web-ui/src/app/scenes/toolbox/
-├── ToolboxScene.tsx / .scss
-├── toolboxStore.ts
-├── views/ GalleryView, AppRunnerView
+src/web-ui/src/app/scenes/miniapps/
+├── MiniAppGalleryScene.tsx / .scss
+├── MiniAppScene.tsx / .scss
+├── miniAppStore.ts
+├── views/ MiniAppGalleryView
 ├── components/ MiniAppCard, MiniAppRunner (iframe 带 data-app-id)
-└── hooks/
-    ├── useMiniAppBridge.ts   # 仅处理 worker.call → workerCall() + dialog.open/save/message
-    └── useMiniAppList.ts
+├── hooks/
+│   ├── useMiniAppBridge.ts        # worker.call → workerCall() + dialog.open/save/message
+│   └── useMiniAppCatalogSync.ts   # 列表与运行态同步
+└── utils/ miniAppIcons.tsx, buildMiniAppThemeVars.ts
 
 src/web-ui/src/infrastructure/api/service-api/MiniAppAPI.ts  # runtimeStatus, workerCall, workerStop, installDeps, recompile
 src/web-ui/src/flow_chat/tool-cards/MiniAppToolDisplay.tsx   # InitMiniAppDisplay
@@ -213,7 +215,7 @@ body {
 
 ### 前端事件
 
-后端 `miniapp-created` / `miniapp-updated` / `miniapp-deleted`，前端 `useMiniAppList` 监听刷新。
+后端 `miniapp-created` / `miniapp-updated` / `miniapp-deleted` / `miniapp-worker-*`，前端 `useMiniAppCatalogSync` 统一监听并刷新 store。
 
 ## 场景注册检查清单
 

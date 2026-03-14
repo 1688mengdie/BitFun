@@ -68,7 +68,7 @@
     .bitfun-chat-input__box {
       min-height: 42px;
       max-height: 42px;
-      padding: 0 16px 0 22px;
+      padding: 0 18px;
       border-radius: 999px;
       background: var(--color-bg-tertiary);
       border: none;
@@ -98,30 +98,44 @@
     .bitfun-chat-input__target-switcher,
     .bitfun-chat-input__actions-left,
     .bitfun-chat-input__mode-selector,
-    .bitfun-chat-input__queued-indicator {
+    .bitfun-chat-input__queued-indicator,
+    .bitfun-chat-input__actions-right {
       display: none !important;
     }
     
     .bitfun-chat-input__input-area {
-      flex: 1;
-      min-height: auto;
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      width: calc(100% - 36px);
+      min-height: 24px;
       max-height: 24px;
       display: flex;
       align-items: center;
+      justify-content: center;
+      transform: translate(-50%, -50%);
+      pointer-events: none;
       
       .rich-text-input {
         min-height: 24px !important;
         max-height: 24px !important;
+        max-width: min(100%, calc(100% - 132px));
         font-size: 14px;
         line-height: 24px;
         overflow: hidden;
         padding: 0 !important;
+        margin: 0 auto;
+        text-align: center;
+        width: 100%;
         
         &:empty::before {
+          display: block;
           color: var(--color-text-primary);
           opacity: 0.6;
           font-size: 14px;
           line-height: 24px;
+          text-align: center;
+          width: 100%;
         }
       }
     }
@@ -132,33 +146,56 @@
       padding: 0;
       margin: 0;
     }
-    
-    .bitfun-chat-input__actions-right {
+
+    .bitfun-chat-input__space-hint {
+      display: flex;
+      position: absolute;
+      top: 50%;
+      right: 16px;
+      align-items: center;
       gap: 6px;
-      
-      .bitfun-chat-input__action-button {
-        opacity: 0.4;
-        width: 24px;
-        height: 24px;
-        
-        &:hover {
-          opacity: 1;
-        }
-      }
-      
-      .bitfun-chat-input__send-button {
-        width: 24px;
-        height: 24px;
-        
-        &:not(:disabled) {
-          opacity: 1;
-        }
-        
-        &:disabled {
-          opacity: 0.3;
-        }
-      }
+      flex-shrink: 0;
+      font-size: 11px;
+      color: var(--color-text-muted);
+      opacity: 0.5;
+      white-space: nowrap;
+      pointer-events: none;
+      letter-spacing: 0.01em;
+      transform: translateY(-50%);
+      transform-origin: center center;
+      animation: bitfun-space-hint-pop 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) 0.32s both;
     }
+
+    &:hover .bitfun-chat-input__space-hint {
+      opacity: 0.75;
+    }
+  }
+
+  &__space-hint {
+    display: none;
+  }
+
+  &__space-key {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 32px;
+    height: 18px;
+    padding: 0 7px;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--color-text-secondary);
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  }
+
+  &__space-hint-text {
+    display: inline-flex;
+    align-items: center;
   }
   
   &--active {
@@ -1295,6 +1332,17 @@
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+@keyframes bitfun-space-hint-pop {
+  0% {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+  100% {
+    opacity: 0.5;
+    transform: scale(1);
   }
 }
 

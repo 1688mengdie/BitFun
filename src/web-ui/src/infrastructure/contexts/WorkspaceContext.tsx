@@ -32,6 +32,12 @@ interface WorkspaceContextValue extends WorkspaceState {
   resetAssistantWorkspace: (workspaceId: string) => Promise<WorkspaceInfo>;
   switchWorkspace: (workspace: WorkspaceInfo) => Promise<WorkspaceInfo>;
   setActiveWorkspace: (workspaceId: string) => Promise<WorkspaceInfo>;
+  reorderOpenedWorkspacesInSection: (
+    section: 'assistants' | 'projects',
+    sourceWorkspaceId: string,
+    targetWorkspaceId: string,
+    position: 'before' | 'after'
+  ) => Promise<void>;
   scanWorkspaceInfo: () => Promise<WorkspaceInfo | null>;
   refreshRecentWorkspaces: () => Promise<void>;
   hasWorkspace: boolean;
@@ -130,6 +136,20 @@ export const WorkspaceProvider: React.FC<WorkspaceProviderProps> = ({ children }
     return await workspaceManager.setActiveWorkspace(workspaceId);
   }, []);
 
+  const reorderOpenedWorkspacesInSection = useCallback(async (
+    section: 'assistants' | 'projects',
+    sourceWorkspaceId: string,
+    targetWorkspaceId: string,
+    position: 'before' | 'after'
+  ): Promise<void> => {
+    return await workspaceManager.reorderOpenedWorkspacesInSection(
+      section,
+      sourceWorkspaceId,
+      targetWorkspaceId,
+      position
+    );
+  }, []);
+
   const scanWorkspaceInfo = useCallback(async (): Promise<WorkspaceInfo | null> => {
     return await workspaceManager.scanWorkspaceInfo();
   }, []);
@@ -175,6 +195,7 @@ export const WorkspaceProvider: React.FC<WorkspaceProviderProps> = ({ children }
     resetAssistantWorkspace,
     switchWorkspace,
     setActiveWorkspace,
+    reorderOpenedWorkspacesInSection,
     scanWorkspaceInfo,
     refreshRecentWorkspaces,
     hasWorkspace,

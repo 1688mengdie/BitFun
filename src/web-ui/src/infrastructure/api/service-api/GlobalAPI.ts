@@ -66,6 +66,10 @@ export interface SetActiveWorkspaceRequest {
   workspaceId: string;
 }
 
+export interface ReorderOpenedWorkspacesRequest {
+  workspaceIds: string[];
+}
+
 export interface DeleteAssistantWorkspaceRequest {
   workspaceId: string;
 }
@@ -151,6 +155,16 @@ export class GlobalAPI {
       });
     } catch (error) {
       throw createTauriCommandError('set_active_workspace', error, { workspaceId });
+    }
+  }
+
+  async reorderOpenedWorkspaces(workspaceIds: string[]): Promise<void> {
+    try {
+      await api.invoke('reorder_opened_workspaces', {
+        request: { workspaceIds }
+      });
+    } catch (error) {
+      throw createTauriCommandError('reorder_opened_workspaces', error, { workspaceIds });
     }
   }
 

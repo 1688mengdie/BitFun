@@ -9,7 +9,6 @@
  */
 
 import React, { Suspense, lazy } from 'react';
-import { MessageSquare, Terminal, GitBranch, Settings, FileCode2, UserCircle2, Boxes } from 'lucide-react';
 import type { SceneTabId } from '../components/SceneBar/types';
 import { useSceneManager } from '../hooks/useSceneManager';
 import { useI18n } from '@/infrastructure/i18n/hooks/useI18n';
@@ -23,11 +22,11 @@ const FileViewerScene = lazy(() => import('./file-viewer/FileViewerScene'));
 const ProfileScene    = lazy(() => import('./profile/ProfileScene'));
 const AgentsScene       = lazy(() => import('./agents/AgentsScene'));
 const SkillsScene     = lazy(() => import('./skills/SkillsScene'));
-const ToolboxScene    = lazy(() => import('./toolbox/ToolboxScene'));
+const MiniAppGalleryScene = lazy(() => import('./miniapps/MiniAppGalleryScene'));
 const MyAgentScene    = lazy(() => import('./my-agent/MyAgentScene'));
 const ShellScene      = lazy(() => import('./shell/ShellScene'));
 const WelcomeScene    = lazy(() => import('./welcome/WelcomeScene'));
-const MiniAppScene    = lazy(() => import('./toolbox/MiniAppScene'));
+const MiniAppScene    = lazy(() => import('./miniapps/MiniAppScene'));
 
 interface SceneViewportProps {
   workspacePath?: string;
@@ -35,39 +34,14 @@ interface SceneViewportProps {
 }
 
 const SceneViewport: React.FC<SceneViewportProps> = ({ workspacePath, isEntering = false }) => {
-  const { openTabs, activeTabId, openScene } = useSceneManager();
+  const { openTabs, activeTabId } = useSceneManager();
   const { t } = useI18n('common');
 
-  // All tabs closed — show quick-launch empty state
+  // All tabs closed — show empty state
   if (openTabs.length === 0) {
     return (
       <div className="bitfun-scene-viewport bitfun-scene-viewport--empty">
-        <div className="bitfun-scene-viewport__empty-state">
-          <p className="bitfun-scene-viewport__empty-hint">{t('welcomeScene.emptyHint')}</p>
-          <div className="bitfun-scene-viewport__empty-actions">
-            {[
-              { id: 'session'      as SceneTabId, Icon: MessageSquare, labelKey: 'scenes.aiAgent'       },
-              { id: 'shell'        as SceneTabId, Icon: Terminal,      labelKey: 'scenes.shell'         },
-              { id: 'git'          as SceneTabId, Icon: GitBranch,     labelKey: 'scenes.git'           },
-              { id: 'settings'     as SceneTabId, Icon: Settings,      labelKey: 'scenes.settings'      },
-              { id: 'file-viewer'  as SceneTabId, Icon: FileCode2,     labelKey: 'scenes.fileViewer'    },
-              { id: 'my-agent'     as SceneTabId, Icon: UserCircle2,   labelKey: 'scenes.myAgent'       },
-              { id: 'toolbox'      as SceneTabId, Icon: Boxes,         labelKey: 'scenes.toolbox'       },
-            ].map(({ id, Icon, labelKey }) => {
-              const label = t(labelKey);
-              return (
-                <button
-                  key={id}
-                  className="bitfun-scene-viewport__empty-btn"
-                  onClick={() => openScene(id)}
-                >
-                  <Icon size={16} />
-                  <span>{label}</span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
+        <p className="bitfun-scene-viewport__empty-hint">{t('welcomeScene.emptyHint')}</p>
       </div>
     );
   }
@@ -112,8 +86,8 @@ function renderScene(id: SceneTabId, workspacePath?: string, isEntering?: boolea
       return <AgentsScene />;
     case 'skills':
       return <SkillsScene />;
-    case 'toolbox':
-      return <ToolboxScene />;
+    case 'miniapps':
+      return <MiniAppGalleryScene />;
     case 'my-agent':
       return <MyAgentScene workspacePath={workspacePath} />;
     case 'shell':

@@ -249,9 +249,12 @@ export async function deleteChatSession(
   sessionId: string
 ): Promise<void> {
   try {
+    const removedSessionIds = context.flowChatStore.getCascadeSessionIds(sessionId);
     await context.flowChatStore.deleteSession(sessionId);
-    context.processingManager.clearSessionStatus(sessionId);
-    cleanupSaveState(context, sessionId);
+    removedSessionIds.forEach(id => {
+      context.processingManager.clearSessionStatus(id);
+      cleanupSaveState(context, id);
+    });
   } catch (error) {
     log.error('Failed to delete chat session', { sessionId, error });
     notificationService.error('Failed to delete session', {

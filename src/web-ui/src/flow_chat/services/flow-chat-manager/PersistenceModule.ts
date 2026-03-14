@@ -4,8 +4,8 @@
  */
 
 import { createLogger } from '@/shared/utils/logger';
-import { i18nService } from '@/infrastructure/i18n';
 import type { FlowChatContext, DialogTurn } from './types';
+import { buildSessionMetadata } from '../../utils/sessionMetadata';
 
 const log = createLogger('PersistenceModule');
 
@@ -261,7 +261,11 @@ export async function saveAllInProgressTurns(context: FlowChatContext): Promise<
         context.saveDebouncers.delete(key);
       }
       
-      if (lastTurn.status === 'processing' || lastTurn.status === 'pending') {
+      if (
+        lastTurn.status === 'processing' ||
+        lastTurn.status === 'pending' ||
+        lastTurn.status === 'image_analyzing'
+      ) {
         context.flowChatStore.updateDialogTurn(sessionId, lastTurn.id, turn => ({
           ...turn,
           status: 'cancelled' as const,
@@ -405,32 +409,7 @@ export async function updateSessionMetadata(
       // ignore
     }
 
-    const inMemoryTurnCount = session.dialogTurns.length;
-    const inMemoryMessageCount = session.dialogTurns.reduce((sum, turn) => {
-      return sum + 1 + turn.modelRounds.reduce((roundSum, round) => {
-        return roundSum + round.items.filter(item => item.type === 'text').length;
-      }, 0);
-    }, 0);
-    const inMemoryToolCallCount = session.dialogTurns.reduce((sum, turn) => {
-      return sum + turn.modelRounds.reduce((roundSum, round) => {
-        return roundSum + round.items.filter(item => item.type === 'tool').length;
-      }, 0);
-    }, 0);
-
-    const metadata: any = {
-      sessionId: session.sessionId,
-      sessionName: session.title || existingMetadata?.sessionName || i18nService.t('flow-chat:session.new'),
-      agentType: session.mode || existingMetadata?.agentType || 'agentic',
-      modelName: session.config.modelName || existingMetadata?.modelName || 'auto',
-      createdAt: existingMetadata?.createdAt || session.createdAt,
-      lastActiveAt: Date.now(),
-      turnCount: Math.max(inMemoryTurnCount, existingMetadata?.turnCount ?? 0),
-      messageCount: Math.max(inMemoryMessageCount, existingMetadata?.messageCount ?? 0),
-      toolCallCount: Math.max(inMemoryToolCallCount, existingMetadata?.toolCallCount ?? 0),
-      status: 'active',
-      tags: existingMetadata?.tags || [],
-      todos: session.todos || existingMetadata?.todos || [],
-    };
+    const metadata = buildSessionMetadata(session, existingMetadata);
 
     await sessionAPI.saveSessionMetadata(metadata, workspacePath);
   } catch (error) {

@@ -10,6 +10,7 @@ import { WebLinksAddon } from '@xterm/addon-web-links';
 import { WebglAddon } from '@xterm/addon-webgl';
 import { TerminalResizeDebouncer } from '../utils';
 import { systemAPI } from '@/infrastructure/api/service-api/SystemAPI';
+import { themeService } from '@/infrastructure/theme/core/ThemeService';
 import { createLogger } from '@/shared/utils/logger';
 import '@xterm/xterm/css/xterm.css';
 import './Terminal.scss';
@@ -120,6 +121,61 @@ export interface TerminalRef {
   getSize: () => { cols: number; rows: number } | null;
 }
 
+/**
+ * Build an xterm.js theme object from the current ThemeService state synchronously.
+ * Calling this at XTerm construction time prevents the initial black-background flash
+ * that occurs when the theme is applied asynchronously via useEffect.
+ */
+function buildXtermTheme(): TerminalOptions['theme'] {
+  const theme = themeService.getCurrentTheme();
+  const isDark = theme.type === 'dark';
+
+  const ansiColors = isDark ? {
+    black:         '#000000',
+    red:           '#cd3131',
+    green:         '#0dbc79',
+    yellow:        '#e5e510',
+    blue:          '#2472c8',
+    magenta:       '#bc3fbc',
+    cyan:          '#11a8cd',
+    white:         '#e5e5e5',
+    brightBlack:   '#666666',
+    brightRed:     '#f14c4c',
+    brightGreen:   '#23d18b',
+    brightYellow:  '#f5f543',
+    brightBlue:    '#3b8eea',
+    brightMagenta: '#d670d6',
+    brightCyan:    '#29b8db',
+    brightWhite:   '#ffffff',
+  } : {
+    black:         '#000000',
+    red:           '#c91b00',
+    green:         '#007a3d',
+    yellow:        '#b58900',
+    blue:          '#0037da',
+    magenta:       '#881798',
+    cyan:          '#0e7490',
+    white:         '#586e75',
+    brightBlack:   '#555555',
+    brightRed:     '#e74856',
+    brightGreen:   '#16a34a',
+    brightYellow:  '#a16207',
+    brightBlue:    '#0078d4',
+    brightMagenta: '#b4009e',
+    brightCyan:    '#0891b2',
+    brightWhite:   '#1e293b',
+  };
+
+  return {
+    background: theme.colors.background.scene,
+    foreground: theme.colors.text.primary,
+    cursor: theme.colors.text.primary,
+    cursorAccent: theme.colors.background.secondary,
+    selectionBackground: isDark ? 'rgba(255, 255, 255, 0.3)' : 'rgba(59, 130, 246, 0.3)',
+    ...ansiColors,
+  };
+}
+
 const DEFAULT_OPTIONS: TerminalOptions = {
   fontSize: 14,
   fontFamily: "'Fira Code', 'Noto Sans SC', Consolas, 'Courier New', monospace",
@@ -127,29 +183,6 @@ const DEFAULT_OPTIONS: TerminalOptions = {
   cursorStyle: 'block',
   cursorBlink: true,
   scrollback: 10000,
-  theme: {
-    background: '#1e1e1e',
-    foreground: '#d4d4d4',
-    cursor: '#d4d4d4',
-    cursorAccent: '#1e1e1e',
-    selectionBackground: 'rgba(255, 255, 255, 0.3)',
-    black: '#000000',
-    red: '#cd3131',
-    green: '#0dbc79',
-    yellow: '#e5e510',
-    blue: '#2472c8',
-    magenta: '#bc3fbc',
-    cyan: '#11a8cd',
-    white: '#e5e5e5',
-    brightBlack: '#666666',
-    brightRed: '#f14c4c',
-    brightGreen: '#23d18b',
-    brightYellow: '#f5f543',
-    brightBlue: '#3b8eea',
-    brightMagenta: '#d670d6',
-    brightCyan: '#29b8db',
-    brightWhite: '#ffffff',
-  },
 };
 
 const Terminal = forwardRef<TerminalRef, TerminalProps>(({
@@ -178,12 +211,14 @@ const Terminal = forwardRef<TerminalRef, TerminalProps>(({
   const lastBackendSizeRef = useRef<{ cols: number; rows: number } | null>(null);
   const [isReady, setIsReady] = useState(false);
 
-  // Merge options.
+  // Merge options. Theme is resolved from ThemeService at render time so that the
+  // initial XTerm instance is created with the correct background color and avoids
+  // the black-background flash that occurs when a light theme is active.
   const mergedOptions = {
     ...DEFAULT_OPTIONS,
     ...options,
     theme: {
-      ...DEFAULT_OPTIONS.theme,
+      ...buildXtermTheme(),
       ...options.theme,
     },
   };
@@ -555,7 +590,7 @@ const Terminal = forwardRef<TerminalRef, TerminalProps>(({
     if (!terminal || !isReady) return;
 
     const updateXtermTheme = () => {
-      import('@/infrastructure/theme/core/ThemeService').then(({ themeService }) => {
+      (() => {
         const theme = themeService.getCurrentTheme();
         const isDark = theme.type === 'dark';
 
@@ -621,18 +656,15 @@ const Terminal = forwardRef<TerminalRef, TerminalProps>(({
         terminal.options.fontWeightBold = isDark ? 'bold' : '700';
 
         forceRefresh(terminal);
-      });
+      })();
     };
 
     updateXtermTheme();
 
-    import('@/infrastructure/theme/core/ThemeService').then(({ themeService }) => {
-      const unsubscribe = themeService.on('theme:after-change', updateXtermTheme);
-
-      return () => {
-        unsubscribe?.();
-      };
-    });
+    const unsubscribe = themeService.on('theme:after-change', updateXtermTheme);
+    return () => {
+      unsubscribe?.();
+    };
   }, [isReady, forceRefresh]);
 
   return (

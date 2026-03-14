@@ -3,8 +3,10 @@
 import { i18nService } from '@/infrastructure/i18n';
 import { fileTabManager } from '@/shared/services/FileTabManager';
 import type { FileTabOptions } from '@/shared/services/FileTabManager';
+import { enqueuePendingTab } from '@/shared/services/pendingTabQueue';
 import { resolveAndFocusOpenTarget } from '@/shared/services/sceneOpenTargetResolver';
 import type { OpenSource } from '@/shared/services/sceneOpenTargetResolver';
+import { TAB_EVENTS } from '@/app/components/panels/content-canvas/types';
 export type TabTargetMode = 'agent' | 'project' | 'git';
 
 export interface TabCreationOptions {
@@ -17,6 +19,19 @@ export interface TabCreationOptions {
   replaceExisting?: boolean;
   /** Target canvas: agent (AuxPane), project (FileViewer), git (Git scene diff area) */
   mode?: TabTargetMode;
+}
+
+interface CreateTerminalTabOptions {
+  sceneJustOpened?: boolean;
+}
+
+function isRightPanelCollapsed(): boolean {
+  try {
+    const layoutState = (window as any).__BITFUN_LAYOUT_STATE__;
+    return layoutState?.rightPanelCollapsed ?? false;
+  } catch {
+    return false;
+  }
 }
 
  
@@ -242,25 +257,49 @@ export function createConfigCenterTab(
 export function createTerminalTab(
   sessionId: string,
   sessionName: string,
-  mode: 'agent' | 'project' = 'agent'
+  mode: 'agent' | 'project' = 'agent',
+  options: CreateTerminalTabOptions = {}
 ): void {
   const title = sessionName.length > 20 
     ? `${sessionName.slice(0, 20)}...` 
     : sessionName;
-  
-  createTab({
+
+  const detail = {
     type: 'terminal',
     title: `${title}`,
     data: { sessionId, sessionName },
-    metadata: { 
+    metadata: {
       isTerminal: true,
       sessionId,
-      duplicateCheckKey: `terminal-${sessionId}`
+      duplicateCheckKey: `terminal-${sessionId}`,
     },
     checkDuplicate: true,
     duplicateCheckKey: `terminal-${sessionId}`,
     replaceExisting: false,
-    mode
+  };
+
+  if (mode === 'agent') {
+    window.dispatchEvent(new CustomEvent(TAB_EVENTS.EXPAND_RIGHT_PANEL));
+
+    if (options.sceneJustOpened) {
+      enqueuePendingTab('agent', detail);
+      return;
+    }
+
+    if (isRightPanelCollapsed()) {
+      window.setTimeout(() => {
+        window.dispatchEvent(new CustomEvent(TAB_EVENTS.AGENT_CREATE_TAB, { detail }));
+      }, 300);
+      return;
+    }
+
+    window.dispatchEvent(new CustomEvent(TAB_EVENTS.AGENT_CREATE_TAB, { detail }));
+    return;
+  }
+
+  createTab({
+    ...detail,
+    mode,
   });
 }
 

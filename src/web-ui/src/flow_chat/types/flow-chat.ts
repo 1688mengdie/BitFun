@@ -3,6 +3,8 @@
  * Supports mixed streaming output.
  */
 
+import type { SessionKind } from '@/shared/types/session-history';
+
 // Base type for streaming items.
 export interface FlowItem {
   id: string;
@@ -163,6 +165,7 @@ export interface Session {
   config: SessionConfig;
   createdAt: number;
   lastActiveAt: number;
+  lastFinishedAt?: number;
   updatedAt?: number;
   
   // Persist the last error; real-time errors come from context.errorMessage.
@@ -190,7 +193,7 @@ export interface Session {
   parentSessionId?: string;
 
   /** Session kind for UI grouping. */
-  sessionKind?: 'normal' | 'btw';
+  sessionKind: SessionKind;
 
   /**
    * Lightweight markers for /btw threads created from this session.

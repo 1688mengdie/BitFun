@@ -556,6 +556,7 @@ pub async fn run() {
             reset_assistant_workspace,
             close_workspace,
             set_active_workspace,
+            reorder_opened_workspaces,
             get_current_workspace,
             scan_workspace_info,
             api::prompt_template_api::get_prompt_template_config,

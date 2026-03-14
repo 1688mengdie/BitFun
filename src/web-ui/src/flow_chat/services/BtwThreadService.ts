@@ -6,6 +6,7 @@ import { flowChatStore } from '../store/FlowChatStore';
 import { stateMachineManager } from '../state-machine';
 import { flowChatManager } from './FlowChatManager';
 import type { DialogTurn, ModelRound, FlowTextItem } from '../types/flow-chat';
+import { buildSessionMetadata } from '../utils/sessionMetadata';
 
 const log = createLogger('BtwThreadService');
 
@@ -196,26 +197,14 @@ export async function startBtwThread(params: {
   // Persist child session metadata (parent linkage) to disk.
   const meta = await loadSessionMetadataWithRetry(childSessionId, workspacePath);
   if (meta) {
-    const customMetadata = { ...(meta.customMetadata || {}) };
-    customMetadata.kind = 'btw';
-    customMetadata.parentSessionId = parentSessionId;
-    customMetadata.parentRequestId = requestId;
-    customMetadata.parentDialogTurnId = parentDialogTurnId ?? null;
-    customMetadata.parentTurnIndex = parentTurnIndex ?? null;
+    const childSession = flowChatStore.getState().sessions.get(childSessionId);
 
-    const tags = Array.isArray(meta.tags) ? meta.tags : [];
-    const nextTags = tags.includes('btw') ? tags : [...tags, 'btw'];
-
-    await sessionAPI.saveSessionMetadata(
-      {
-        ...meta,
-        sessionName: childSessionName,
-        tags: nextTags,
-        customMetadata,
-        lastActiveAt: Date.now(),
-      },
-      workspacePath
-    );
+    if (childSession) {
+      await sessionAPI.saveSessionMetadata(
+        buildSessionMetadata(childSession, meta),
+        workspacePath
+      );
+    }
   }
 
   let answerAcc = '';
@@ -252,9 +241,10 @@ export async function startBtwThread(params: {
       const fullText = (evt.fullText && evt.fullText.length >= answerAcc.length) ? evt.fullText : answerAcc;
       answerAcc = fullText;
 
+      const completedAt = Date.now();
+
       // Finalize child session live.
       flowChatStore.updateDialogTurn(childSessionId, childTurnId, (turn) => {
-        const completedAt = Date.now();
         const updatedRounds = turn.modelRounds.map(r => {
           if (r.id !== childRoundId) return r;
           const updatedItems = r.items.map(it => {
@@ -277,6 +267,7 @@ export async function startBtwThread(params: {
           endTime: completedAt,
         };
       });
+      flowChatStore.markSessionFinished(childSessionId, completedAt);
 
       flowChatStore.updateBtwThreadMarker(parentSessionId, requestId, { status: 'done' });
 
@@ -330,6 +321,18 @@ export async function startBtwThread(params: {
 
       try {
         await sessionAPI.saveSessionTurn(turnData, workspacePath);
+
+        const childSession = flowChatStore.getState().sessions.get(childSessionId);
+        if (childSession) {
+          const meta = await loadSessionMetadataWithRetry(childSessionId, workspacePath, {
+            retries: 3,
+            delayMs: 80,
+          });
+          await sessionAPI.saveSessionMetadata(
+            buildSessionMetadata(childSession, meta ?? undefined),
+            workspacePath
+          );
+        }
       } catch (e) {
         log.error('Failed to persist btw child turn', { childSessionId, e });
       }

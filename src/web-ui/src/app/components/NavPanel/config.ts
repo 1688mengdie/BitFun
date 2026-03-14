@@ -13,13 +13,6 @@ import type { NavSection } from './types';
 
 export const NAV_SECTIONS: NavSection[] = [
   {
-    id: 'toolbox',
-    label: 'Toolbox',
-    collapsible: false,
-    sceneId: 'toolbox',
-    items: [],
-  },
-  {
     id: 'assistants',
     label: 'Assistants',
     collapsible: false,

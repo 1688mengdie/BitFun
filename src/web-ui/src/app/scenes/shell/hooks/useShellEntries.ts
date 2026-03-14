@@ -2,13 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getTerminalService } from '@/tools/terminal';
 import type { TerminalService } from '@/tools/terminal';
 import type { SessionResponse, TerminalEvent } from '@/tools/terminal/types/session';
-import { useTerminalSceneStore } from '@/app/stores/terminalSceneStore';
-import { useSceneStore } from '@/app/stores/sceneStore';
-import type { SceneTabId } from '@/app/components/SceneBar/types';
 import { useCurrentWorkspace } from '@/infrastructure/contexts/WorkspaceContext';
 import { configManager } from '@/infrastructure/config/services/ConfigManager';
 import type { TerminalConfig } from '@/infrastructure/config/types';
 import { createLogger } from '@/shared/utils/logger';
+import { openShellSessionTarget } from '@/shared/services/openShellSessionTarget';
 
 const log = createLogger('useShellEntries');
 
@@ -32,6 +30,7 @@ export interface ShellEntry {
   isRunning: boolean;
   isHub: boolean;
   worktreePath?: string;
+  cwd?: string;
   startupCommand?: string;
 }
 
@@ -113,8 +112,12 @@ function dispatchTerminalRenamed(sessionId: string, newName: string) {
   window.dispatchEvent(new CustomEvent('terminal-session-renamed', { detail: { sessionId, newName } }));
 }
 
+function isSessionRunning(session: SessionResponse): boolean {
+  const normalizedStatus = String(session.status).toLowerCase();
+  return !['exited', 'stopped', 'error', 'terminating'].includes(normalizedStatus);
+}
+
 export function useShellEntries(): UseShellEntriesReturn {
-  const setActiveSession = useTerminalSceneStore((s) => s.setActiveSession);
   const { workspacePath } = useCurrentWorkspace();
 
   const [sessions, setSessions] = useState<SessionResponse[]>([]);
@@ -124,7 +127,14 @@ export function useShellEntries(): UseShellEntriesReturn {
 
   const serviceRef = useRef<TerminalService | null>(null);
 
-  const runningIds = useMemo(() => new Set(sessions.map((session) => session.id)), [sessions]);
+  const sessionMap = useMemo(
+    () => new Map(sessions.map((session) => [session.id, session])),
+    [sessions],
+  );
+  const runningIds = useMemo(
+    () => new Set(sessions.filter(isSessionRunning).map((session) => session.id)),
+    [sessions],
+  );
 
   const configuredIds = useMemo(() => {
     const ids = new Set<string>();
@@ -189,6 +199,7 @@ export function useShellEntries(): UseShellEntriesReturn {
       name: terminal.name,
       isRunning: runningIds.has(terminal.sessionId),
       isHub: true,
+      cwd: sessionMap.get(terminal.sessionId)?.cwd,
       startupCommand: terminal.startupCommand,
     }));
 
@@ -197,12 +208,13 @@ export function useShellEntries(): UseShellEntriesReturn {
       .map((session) => ({
         sessionId: session.id,
         name: session.name,
-        isRunning: true,
+        isRunning: isSessionRunning(session),
         isHub: false,
+        cwd: session.cwd,
       }));
 
     return [...hubEntries, ...adHocEntries];
-  }, [configuredIds, hubConfig.terminals, runningIds, sessions]);
+  }, [configuredIds, hubConfig.terminals, runningIds, sessionMap, sessions]);
 
   const hubMainEntries = useMemo(
     () => mainEntries.filter((entry) => entry.isHub),
@@ -224,12 +236,13 @@ export function useShellEntries(): UseShellEntriesReturn {
         isRunning: runningIds.has(terminal.sessionId),
         isHub: true,
         worktreePath,
+        cwd: sessionMap.get(terminal.sessionId)?.cwd,
         startupCommand: terminal.startupCommand,
       }));
     });
 
     return result;
-  }, [hubConfig.worktrees, runningIds]);
+  }, [hubConfig.worktrees, runningIds, sessionMap]);
 
   const updateHubConfig = useCallback((updater: (prev: HubConfig) => HubConfig) => {
     if (!workspacePath) {
@@ -256,35 +269,31 @@ export function useShellEntries(): UseShellEntriesReturn {
     }
   }, [refreshSessions, workspacePath]);
 
-  const openInShellScene = useCallback((sessionId: string) => {
-    const { openScene, openTabs, activeTabId } = useSceneStore.getState();
-    // #region agent log
-    console.error('[DBG-366fda][H-C] openInShellScene called', {sessionId, activeTabId, openTabIds: openTabs.map(t=>t.id)});
-    // #endregion
-    openScene('shell' as SceneTabId);
-    const afterState = useSceneStore.getState();
-    // #region agent log
-    console.error('[DBG-366fda][H-C] after openScene(shell)', {newActiveTabId: afterState.activeTabId, openTabIds: afterState.openTabs.map(t=>t.id)});
-    // #endregion
-    setActiveSession(sessionId);
-  }, [setActiveSession]);
+  const openShellSession = useCallback((sessionId: string, sessionName: string) => {
+    openShellSessionTarget({ sessionId, sessionName });
+  }, []);
 
 
   const startTerminal = useCallback(async (entry: ShellEntry): Promise<boolean> => {
     const service = serviceRef.current;
+    const existingSession = sessionMap.get(entry.sessionId);
     // #region agent log
-    console.error('[DBG-366fda][H-B] startTerminal called', {entrySessionId:entry.sessionId,entryName:entry.name,isHub:entry.isHub,isRunning:entry.isRunning,startupCommand:entry.startupCommand,workspacePath,hasService:!!service});
+    console.error('[DBG-366fda][H-B] startTerminal called', {entrySessionId:entry.sessionId,entryName:entry.name,isHub:entry.isHub,isRunning:entry.isRunning,startupCommand:entry.startupCommand,workspacePath,hasService:!!service,existingStatus:existingSession?.status});
     // #endregion
     if (!service) {
       return false;
     }
 
     try {
+      if (existingSession && !isSessionRunning(existingSession)) {
+        await service.closeSession(entry.sessionId);
+      }
+
       const shellType = await getDefaultShellType();
 
       const createdSession = await service.createSession({
         sessionId: entry.sessionId,
-        workingDirectory: entry.worktreePath ?? workspacePath,
+        workingDirectory: entry.worktreePath ?? entry.cwd ?? workspacePath,
         name: entry.name,
         shellType,
       });
@@ -310,13 +319,13 @@ export function useShellEntries(): UseShellEntriesReturn {
       log.error('Failed to start terminal', error);
       return false;
     }
-  }, [refreshSessions, workspacePath]);
+  }, [refreshSessions, sessionMap, workspacePath]);
 
   const openTerminal = useCallback(async (entry: ShellEntry) => {
     // #region agent log
     console.error('[DBG-366fda][H-A] openTerminal called', {entrySessionId:entry.sessionId,isHub:entry.isHub,isRunning:entry.isRunning,startupCommand:entry.startupCommand});
     // #endregion
-    if (!entry.isRunning && entry.isHub) {
+    if (!entry.isRunning) {
       const started = await startTerminal(entry);
       // #region agent log
       console.error('[DBG-366fda][H-A] startTerminal result', {started,entrySessionId:entry.sessionId});
@@ -326,8 +335,8 @@ export function useShellEntries(): UseShellEntriesReturn {
       }
     }
 
-    openInShellScene(entry.sessionId);
-  }, [openInShellScene, startTerminal]);
+    openShellSession(entry.sessionId, entry.name);
+  }, [openShellSession, startTerminal]);
 
   const createAdHocTerminal = useCallback(async () => {
     const service = serviceRef.current;
@@ -344,12 +353,12 @@ export function useShellEntries(): UseShellEntriesReturn {
         shellType,
       });
 
-      setSessions((prev) => [...prev, session]);
-      openInShellScene(session.id);
+      await refreshSessions();
+      openShellSession(session.id, session.name);
     } catch (error) {
       log.error('Failed to create ad-hoc terminal', error);
     }
-  }, [adHocEntries.length, openInShellScene, workspacePath]);
+  }, [adHocEntries.length, openShellSession, refreshSessions, workspacePath]);
 
   const createHubTerminal = useCallback(async (worktreePath?: string) => {
     const service = serviceRef.current;
@@ -362,24 +371,6 @@ export function useShellEntries(): UseShellEntriesReturn {
       name: `Terminal ${Date.now() % 1000}`,
     };
 
-    updateHubConfig((prev) => {
-      if (worktreePath) {
-        const terminals = prev.worktrees[worktreePath] || [];
-        return {
-          ...prev,
-          worktrees: {
-            ...prev.worktrees,
-            [worktreePath]: [...terminals, newEntry],
-          },
-        };
-      }
-
-      return {
-        ...prev,
-        terminals: [...prev.terminals, newEntry],
-      };
-    });
-
     try {
       const shellType = await getDefaultShellType();
       await service.createSession({
@@ -389,12 +380,30 @@ export function useShellEntries(): UseShellEntriesReturn {
         shellType,
       });
 
+      updateHubConfig((prev) => {
+        if (worktreePath) {
+          const terminals = prev.worktrees[worktreePath] || [];
+          return {
+            ...prev,
+            worktrees: {
+              ...prev.worktrees,
+              [worktreePath]: [...terminals, newEntry],
+            },
+          };
+        }
+
+        return {
+          ...prev,
+          terminals: [...prev.terminals, newEntry],
+        };
+      });
+
       await refreshSessions();
-      openInShellScene(newEntry.sessionId);
+      openShellSession(newEntry.sessionId, newEntry.name);
     } catch (error) {
       log.error('Failed to create hub terminal', error);
     }
-  }, [openInShellScene, refreshSessions, updateHubConfig, workspacePath]);
+  }, [openShellSession, refreshSessions, updateHubConfig, workspacePath]);
 
   const promoteToHub = useCallback((entry: ShellEntry) => {
     if (!workspacePath || entry.isHub) {

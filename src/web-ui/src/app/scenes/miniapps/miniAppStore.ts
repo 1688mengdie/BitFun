@@ -1,10 +1,10 @@
 /**
- * Toolbox scene store — apps list + lifecycle (launched app IDs).
+ * Mini App scene store — app catalog + lifecycle state.
  */
 import { create } from 'zustand';
 import type { MiniAppMeta } from '@/infrastructure/api/service-api/MiniAppAPI';
 
-interface ToolboxState {
+interface MiniAppState {
   apps: MiniAppMeta[];
   loading: boolean;
   /** App IDs whose scenes are currently open in the viewport. */
@@ -21,7 +21,7 @@ interface ToolboxState {
   markWorkerStopped: (id: string) => void;
 }
 
-export const useToolboxStore = create<ToolboxState>((set) => ({
+export const useMiniAppStore = create<MiniAppState>((set) => ({
   apps: [],
   loading: false,
   openedAppIds: [],
@@ -39,20 +39,20 @@ export const useToolboxStore = create<ToolboxState>((set) => ({
   setLoading: (loading) => set({ loading }),
 
   openApp: (id) =>
-    set((s) =>
-      s.openedAppIds.includes(id) ? s : { openedAppIds: [...s.openedAppIds, id] }
+    set((state) =>
+      state.openedAppIds.includes(id) ? state : { openedAppIds: [...state.openedAppIds, id] }
     ),
   closeApp: (id) =>
-    set((s) => ({
-      openedAppIds: s.openedAppIds.filter((x) => x !== id),
+    set((state) => ({
+      openedAppIds: state.openedAppIds.filter((value) => value !== id),
     })),
   setRunningWorkerIds: (ids) => set({ runningWorkerIds: Array.from(new Set(ids)) }),
   markWorkerRunning: (id) =>
-    set((s) =>
-      s.runningWorkerIds.includes(id) ? s : { runningWorkerIds: [...s.runningWorkerIds, id] }
+    set((state) =>
+      state.runningWorkerIds.includes(id) ? state : { runningWorkerIds: [...state.runningWorkerIds, id] }
     ),
   markWorkerStopped: (id) =>
-    set((s) => ({
-      runningWorkerIds: s.runningWorkerIds.filter((x) => x !== id),
+    set((state) => ({
+      runningWorkerIds: state.runningWorkerIds.filter((value) => value !== id),
     })),
 }));

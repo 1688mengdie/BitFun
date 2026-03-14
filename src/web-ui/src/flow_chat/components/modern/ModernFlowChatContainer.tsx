@@ -24,6 +24,7 @@ import { useWorkspaceContext } from '@/infrastructure/contexts/WorkspaceContext'
 import path from 'path-browserify';
 import { createLogger } from '@/shared/utils/logger';
 import { flowChatManager } from '../../services/FlowChatManager';
+import { resolveSessionRelationship } from '../../utils/sessionMetadata';
 import './ModernFlowChatContainer.scss';
 
 const log = createLogger('ModernFlowChatContainer');
@@ -54,7 +55,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
   const visibleTurnInfo = useVisibleTurnInfo();
   const virtualListRef = useRef<VirtualMessageListRef>(null);
   const { workspacePath } = useWorkspaceContext();
-  const isBtwSession = activeSession?.sessionKind === 'btw';
+  const isBtwSession = resolveSessionRelationship(activeSession).isBtw;
   const [btwOrigin, setBtwOrigin] = useState<Session['btwOrigin'] | null>(null);
   const [btwParentTitle, setBtwParentTitle] = useState('');
   
@@ -115,9 +116,9 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
         return;
       }
 
-      const nextOrigin = (session.btwOrigin ||
-        (session.sessionKind === 'btw' && session.parentSessionId ? { parentSessionId: session.parentSessionId } : null)) as Session['btwOrigin'] | null;
-      const parentId = nextOrigin?.parentSessionId || session.parentSessionId;
+      const relationship = resolveSessionRelationship(session);
+      const nextOrigin = relationship.origin || null;
+      const parentId = relationship.parentSessionId;
       const parent = parentId ? state.sessions.get(parentId) : undefined;
 
       setBtwOrigin(nextOrigin);
@@ -508,6 +509,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
             <WelcomePanel
               key={activeSession?.sessionId ?? 'welcome'}
               sessionMode={activeSession?.mode}
+              workspacePath={activeSession?.workspacePath}
               onQuickAction={(command) => {
                 window.dispatchEvent(new CustomEvent('fill-chat-input', {
                   detail: { message: command }

@@ -18,6 +18,17 @@ export interface TooltipProps {
   className?: string;
 }
 
+const assignRef = <T,>(ref: React.Ref<T> | undefined, value: T | null): void => {
+  if (!ref) return;
+
+  if (typeof ref === 'function') {
+    ref(value);
+    return;
+  }
+
+  (ref as React.MutableRefObject<T | null>).current = value;
+};
+
 const getOppositePlacement = (placement: TooltipPlacement): TooltipPlacement => {
   const opposites: Record<TooltipPlacement, TooltipPlacement> = {
     top: 'bottom',
@@ -145,7 +156,7 @@ export const Tooltip: React.FC<TooltipProps> = ({
   const [positionReady, setPositionReady] = useState(false);
   const [actualPlacement, setActualPlacement] = useState<TooltipPlacement>(placement);
   const [mousePosition, setMousePosition] = useState<{ x: number; y: number } | null>(null);
-  const triggerRef = useRef<HTMLElement>(null);
+  const triggerRef = useRef<HTMLElement | null>(null);
   const tooltipRef = useRef<HTMLDivElement>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const latestMousePositionRef = useRef<{ x: number; y: number } | null>(null);
@@ -264,6 +275,12 @@ export const Tooltip: React.FC<TooltipProps> = ({
   }, []);
 
   const childProps = children.props as Record<string, unknown>;
+  const childRef = (children as React.ReactElement & { ref?: React.Ref<HTMLElement> }).ref;
+
+  const handleTriggerRef = useCallback((node: HTMLElement | null) => {
+    triggerRef.current = node;
+    assignRef(childRef, node);
+  }, [childRef]);
 
   const handleMouseEnter = (e: React.MouseEvent) => {
     if (trigger === 'hover') showTooltip(e);
@@ -304,7 +321,7 @@ export const Tooltip: React.FC<TooltipProps> = ({
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const triggerElement = React.cloneElement(children as React.ReactElement<any>, {
-    ref: triggerRef,
+    ref: handleTriggerRef,
     onMouseEnter: handleMouseEnter,
     onMouseLeave: handleMouseLeave,
     onMouseMove: followCursor ? handleMouseMove : (children.props as Record<string, unknown>).onMouseMove,

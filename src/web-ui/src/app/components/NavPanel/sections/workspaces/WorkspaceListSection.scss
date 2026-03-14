@@ -6,6 +6,12 @@
     flex-direction: column;
     gap: $size-gap-2;
     padding: 4px 0 0;
+
+    &.is-dragging {
+      .bitfun-nav-panel__workspace-item {
+        cursor: grabbing;
+      }
+    }
   }
 
   &__workspace-group {
@@ -76,6 +82,14 @@
     transition: background $motion-fast $easing-standard,
                 border-color $motion-fast $easing-standard;
 
+    &.is-dragging {
+      opacity: 0.42;
+
+      .bitfun-nav-panel__workspace-item-card {
+        cursor: grabbing;
+      }
+    }
+
     &.is-active {
       background: color-mix(in srgb, var(--element-bg-soft) 75%, transparent);
       border-color: transparent;
@@ -141,6 +155,10 @@
     color: var(--color-text-secondary);
     transition: color $motion-fast $easing-standard,
                 background $motion-fast $easing-standard;
+
+    &[draggable='true'] {
+      cursor: grab;
+    }
 
     &:hover {
       color: var(--color-text-primary);
@@ -211,7 +229,7 @@
     width: 14px;
     height: 14px;
     flex-shrink: 0;
-    color: var(--color-primary);
+    color: var(--color-accent-500);
     opacity: 0.85;
   }
 
@@ -427,5 +445,32 @@
     .bitfun-nav-panel__inline-empty {
       padding-left: $size-gap-1;
     }
+  }
+
+  &__workspace-drop-target {
+    border-radius: $size-radius-base;
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+
+    &.is-drag-active {
+      .bitfun-nav-panel__workspace-item {
+        box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border-subtle) 80%, transparent);
+      }
+    }
+
+    &.is-drop-target {
+      .bitfun-nav-panel__workspace-item {
+        border-color: color-mix(in srgb, var(--color-accent-500) 18%, transparent);
+      }
+    }
+  }
+
+  &__workspace-drop-line {
+    height: 2px;
+    margin: 3px 12px;
+    background: var(--color-accent-500);
+    border-radius: 999px;
+    pointer-events: none;
   }
 }

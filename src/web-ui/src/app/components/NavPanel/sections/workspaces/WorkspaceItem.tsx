@@ -18,9 +18,21 @@ interface WorkspaceItemProps {
   workspace: WorkspaceInfo;
   isActive: boolean;
   isSingle?: boolean;
+  draggable?: boolean;
+  isDragging?: boolean;
+  onDragStart?: React.DragEventHandler<HTMLDivElement>;
+  onDragEnd?: React.DragEventHandler<HTMLDivElement>;
 }
 
-const WorkspaceItem: React.FC<WorkspaceItemProps> = ({ workspace, isActive, isSingle = false }) => {
+const WorkspaceItem: React.FC<WorkspaceItemProps> = ({
+  workspace,
+  isActive,
+  isSingle = false,
+  draggable = false,
+  isDragging = false,
+  onDragStart,
+  onDragEnd,
+}) => {
   const { t } = useI18n('common');
   const { setActiveWorkspace, closeWorkspaceById, deleteAssistantWorkspace, resetAssistantWorkspace } = useWorkspaceContext();
   const { switchLeftPanelTab } = useApp();
@@ -233,11 +245,18 @@ const WorkspaceItem: React.FC<WorkspaceItemProps> = ({ workspace, isActive, isSi
     <div className={[
       'bitfun-nav-panel__workspace-item',
       isActive && 'is-active',
+      isDragging && 'is-dragging',
       menuOpen && 'is-menu-open',
       sessionsCollapsed && 'is-sessions-collapsed',
       isSingle && 'is-single',
-    ].filter(Boolean).join(' ')}>
-      <div className="bitfun-nav-panel__workspace-item-card">
+    ].filter(Boolean).join(' ')}
+    aria-grabbed={draggable ? isDragging : undefined}>
+      <div
+        className="bitfun-nav-panel__workspace-item-card"
+        draggable={draggable}
+        onDragStart={onDragStart}
+        onDragEnd={onDragEnd}
+      >
         <button
           type="button"
           className="bitfun-nav-panel__workspace-item-collapse-btn"

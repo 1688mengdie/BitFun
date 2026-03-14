@@ -70,11 +70,11 @@ miniapps/git-graph/
 
 3. **Install dependencies**: inside the MiniApp's app directory, run:
    - `bun install` or `npm install` (matching the runtime BitFun detected)
-   - Or use the "Install Dependencies" action in Toolbox (calls `miniapp_install_deps`)
+   - Or use the "Install Dependencies" action in the Mini Apps gallery (calls `miniapp_install_deps`)
 
 4. **Compile**: to regenerate `compiled.html`, call `miniapp_recompile` or let BitFun compile automatically when the MiniApp is opened.
 
-5. Open the MiniApp in the Toolbox scene, pick a repository, and the Git Graph will appear.
+5. Open the MiniApp in the Mini Apps gallery, pick a repository, and the Git Graph will appear.
 
 ### Permissions
 
@@ -159,11 +159,11 @@ miniapps/git-graph/
 
 3. **安装依赖**：在 MiniApp 的 app 目录下执行：
    - `bun install` 或 `npm install`（与 BitFun 检测到的运行时一致）
-   - 或在 Toolbox 中对该 MiniApp 执行「安装依赖」操作（调用 `miniapp_install_deps`）
+   - 或在 Mini Apps 画廊中对该 MiniApp 执行「安装依赖」操作（调用 `miniapp_install_deps`）
 
 4. **编译**：若需重新生成 `compiled.html`，可调用 `miniapp_recompile` 或由 BitFun 在打开该 MiniApp 时自动编译。
 
-5. 在 Toolbox 场景中打开该 MiniApp，选择仓库后即可查看 Git Graph。
+5. 在 Mini Apps 画廊中打开该 MiniApp，选择仓库后即可查看 Git Graph。
 
 ### 权限说明
 
