@@ -12,6 +12,7 @@ import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import { open } from '@tauri-apps/plugin-dialog';
 import { useWorkspaceContext } from '../../infrastructure/contexts/WorkspaceContext';
 import { useWindowControls } from '../hooks/useWindowControls';
+import { useAssistantBootstrap } from '../hooks/useAssistantBootstrap';
 import { useApp } from '../hooks/useApp';
 import { useSceneStore } from '../stores/sceneStore';
 
@@ -55,6 +56,7 @@ const AppLayout: React.FC<AppLayoutProps> = ({ className = '' }) => {
   const { currentWorkspace, hasWorkspace, openWorkspace, recentWorkspaces, loading } = useWorkspaceContext();
 
   const { isToolbarMode } = useToolbarModeContext();
+  const { ensureForWorkspace: ensureAssistantBootstrapForWorkspace } = useAssistantBootstrap();
 
   const { handleMinimize, handleMaximize, handleClose, isMaximized } =
     useWindowControls({ isToolbarMode });
@@ -187,6 +189,11 @@ const AppLayout: React.FC<AppLayoutProps> = ({ className = '' }) => {
           sessionId = await flowChatManager.createChatSession({}, initialSessionMode);
         }
 
+        const activeSessionId = sessionId || flowChatStore.getState().activeSessionId;
+        if (currentWorkspace.workspaceKind === WorkspaceKind.Assistant && activeSessionId) {
+          ensureAssistantBootstrapForWorkspace(currentWorkspace, activeSessionId);
+        }
+
         const pendingDescription = sessionStorage.getItem('pendingProjectDescription');
         if (pendingDescription && pendingDescription.trim()) {
           sessionStorage.removeItem('pendingProjectDescription');
@@ -236,7 +243,13 @@ const AppLayout: React.FC<AppLayoutProps> = ({ className = '' }) => {
     };
 
     initializeFlowChat();
-  }, [currentWorkspace?.rootPath, t]);
+  }, [
+    currentWorkspace?.id,
+    currentWorkspace?.rootPath,
+    currentWorkspace?.workspaceKind,
+    ensureAssistantBootstrapForWorkspace,
+    t,
+  ]);
 
   // Save in-progress conversations on window close
   React.useEffect(() => {

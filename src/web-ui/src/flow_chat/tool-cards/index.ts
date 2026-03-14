@@ -33,6 +33,8 @@ import { TerminalToolCard } from './TerminalToolCard';
 import { TerminalControlDisplay } from './TerminalControlDisplay';
 import { InitMiniAppDisplay } from './MiniAppToolDisplay';
 import { BtwMarkerCard } from './BtwMarkerCard';
+import { SessionControlToolCard } from './SessionControlToolCard';
+import { SessionMessageToolCard } from './SessionMessageToolCard';
 
 // Tool card config map - uses backend tool names
 export const TOOL_CARD_CONFIGS: Record<string, ToolCardConfig> = {
@@ -298,6 +300,28 @@ export const TOOL_CARD_CONFIGS: Record<string, ToolCardConfig> = {
     primaryColor: '#ef4444'
   },
 
+  'SessionControl': {
+    toolName: 'SessionControl',
+    displayName: 'Session Control',
+    icon: 'SC',
+    requiresConfirmation: false,
+    resultDisplayType: 'summary',
+    description: 'Create, delete, or list sessions',
+    displayMode: 'compact',
+    primaryColor: '#3b82f6'
+  },
+
+  'SessionMessage': {
+    toolName: 'SessionMessage',
+    displayName: 'Session Message',
+    icon: 'SM',
+    requiresConfirmation: false,
+    resultDisplayType: 'summary',
+    description: 'Send a message to another session',
+    displayMode: 'compact',
+    primaryColor: '#8b5cf6'
+  },
+
   // Bash terminal tool
   'Bash': {
     toolName: 'Bash',
@@ -380,6 +404,10 @@ export const TOOL_CARD_COMPONENTS = {
 
   // TerminalControl tool
   'TerminalControl': TerminalControlDisplay,
+
+  // Session tools
+  'SessionControl': SessionControlToolCard,
+  'SessionMessage': SessionMessageToolCard,
 
   // Bash tool
   'Bash': TerminalToolCard,

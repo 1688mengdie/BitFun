@@ -13,6 +13,7 @@ import type { FlowChatContext, SessionConfig } from './types';
 import { touchSessionActivity, cleanupSaveState } from './PersistenceModule';
 
 const log = createLogger('SessionModule');
+const pendingSessionCreations = new Map<string, Promise<string>>();
 
 type SessionDisplayMode = 'code' | 'cowork' | 'claw';
 
@@ -117,6 +118,12 @@ export async function createChatSession(
     }
     const agentType = resolveAgentType(mode, workspace);
     const sessionMode = normalizeSessionDisplayMode(agentType, workspace);
+    const creationKey = workspacePath;
+
+    const pendingCreation = pendingSessionCreations.get(creationKey);
+    if (pendingCreation) {
+      return pendingCreation;
+    }
 
     const sameModeCount =
       Array.from(context.flowChatStore.getState().sessions.values()).filter(
@@ -131,31 +138,42 @@ export async function createChatSession(
     
     const maxContextTokens = await getModelMaxTokens(config.modelName);
 
-    const response = await agentAPI.createSession({
-      sessionName,
-      agentType,
-      workspacePath,
-      config: {
-        modelName: config.modelName || 'auto',
-        enableTools: true,
-        safeMode: true,
-        autoCompact: true,
-        maxContextTokens: maxContextTokens,
-        enableContextCompression: true,
-      }
-    });
-    
-    context.flowChatStore.createSession(
-      response.sessionId, 
-      config, 
-      undefined,
-      sessionName,
-      maxContextTokens,
-      agentType,
-      workspacePath
-    );
+    const createPromise = (async () => {
+      const response = await agentAPI.createSession({
+        sessionName,
+        agentType,
+        workspacePath,
+        config: {
+          modelName: config.modelName || 'auto',
+          enableTools: true,
+          safeMode: true,
+          autoCompact: true,
+          maxContextTokens: maxContextTokens,
+          enableContextCompression: true,
+        }
+      });
 
-    return response.sessionId;
+      context.flowChatStore.createSession(
+        response.sessionId, 
+        config, 
+        undefined,
+        sessionName,
+        maxContextTokens,
+        agentType,
+        workspacePath
+      );
+
+      return response.sessionId;
+    })();
+
+    pendingSessionCreations.set(creationKey, createPromise);
+    try {
+      return await createPromise;
+    } finally {
+      if (pendingSessionCreations.get(creationKey) === createPromise) {
+        pendingSessionCreations.delete(creationKey);
+      }
+    }
   } catch (error) {
     log.error('Failed to create chat session', { config, error });
     

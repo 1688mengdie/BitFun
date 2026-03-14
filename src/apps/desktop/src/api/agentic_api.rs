@@ -8,7 +8,8 @@ use tauri::{AppHandle, State};
 
 use crate::api::app_state::AppState;
 use bitfun_core::agentic::coordination::{
-    ConversationCoordinator, DialogScheduler, DialogTriggerSource,
+    AssistantBootstrapBlockReason, AssistantBootstrapEnsureOutcome, AssistantBootstrapSkipReason,
+    ConversationCoordinator, DialogScheduler, DialogSubmissionPolicy, DialogTriggerSource,
 };
 use bitfun_core::agentic::core::*;
 use bitfun_core::agentic::image_analysis::ImageContextData;
@@ -63,6 +64,23 @@ pub struct StartDialogTurnRequest {
 pub struct StartDialogTurnResponse {
     pub success: bool,
     pub message: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnsureAssistantBootstrapRequest {
+    pub session_id: String,
+    pub workspace_path: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnsureAssistantBootstrapResponse {
+    pub status: String,
+    pub reason: String,
+    pub session_id: String,
+    pub turn_id: Option<String>,
+    pub detail: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -229,7 +247,7 @@ pub async fn start_dialog_turn(
                 turn_id,
                 agent_type,
                 workspace_path,
-                DialogTriggerSource::DesktopUi,
+                DialogSubmissionPolicy::for_source(DialogTriggerSource::DesktopUi),
             )
             .await
             .map_err(|e| format!("Failed to start dialog turn: {}", e))?;
@@ -242,7 +260,8 @@ pub async fn start_dialog_turn(
                 turn_id,
                 agent_type,
                 workspace_path,
-                DialogTriggerSource::DesktopUi,
+                DialogSubmissionPolicy::for_source(DialogTriggerSource::DesktopUi),
+                None,
             )
             .await
             .map_err(|e| format!("Failed to start dialog turn: {}", e))?;
@@ -252,6 +271,19 @@ pub async fn start_dialog_turn(
         success: true,
         message: "Dialog turn started".to_string(),
     })
+}
+
+#[tauri::command]
+pub async fn ensure_assistant_bootstrap(
+    coordinator: State<'_, Arc<ConversationCoordinator>>,
+    request: EnsureAssistantBootstrapRequest,
+) -> Result<EnsureAssistantBootstrapResponse, String> {
+    let outcome = coordinator
+        .ensure_assistant_bootstrap(request.session_id, request.workspace_path)
+        .await
+        .map_err(|e| format!("Failed to ensure assistant bootstrap: {}", e))?;
+
+    Ok(assistant_bootstrap_outcome_to_response(outcome))
 }
 
 fn is_blank_text(value: Option<&String>) -> bool {
@@ -515,6 +547,57 @@ pub struct ModeInfoDTO {
     pub tool_count: usize,
     pub default_tools: Vec<String>,
     pub enabled: bool,
+}
+
+fn assistant_bootstrap_outcome_to_response(
+    outcome: AssistantBootstrapEnsureOutcome,
+) -> EnsureAssistantBootstrapResponse {
+    match outcome {
+        AssistantBootstrapEnsureOutcome::Started {
+            session_id,
+            turn_id,
+        } => EnsureAssistantBootstrapResponse {
+            status: "started".to_string(),
+            reason: "bootstrap_started".to_string(),
+            session_id,
+            turn_id: Some(turn_id),
+            detail: None,
+        },
+        AssistantBootstrapEnsureOutcome::Skipped { session_id, reason } => {
+            EnsureAssistantBootstrapResponse {
+                status: "skipped".to_string(),
+                reason: assistant_bootstrap_skip_reason_to_str(reason).to_string(),
+                session_id,
+                turn_id: None,
+                detail: None,
+            }
+        }
+        AssistantBootstrapEnsureOutcome::Blocked {
+            session_id,
+            reason,
+            detail,
+        } => EnsureAssistantBootstrapResponse {
+            status: "blocked".to_string(),
+            reason: assistant_bootstrap_block_reason_to_str(reason).to_string(),
+            session_id,
+            turn_id: None,
+            detail: Some(detail),
+        },
+    }
+}
+
+fn assistant_bootstrap_skip_reason_to_str(reason: AssistantBootstrapSkipReason) -> &'static str {
+    match reason {
+        AssistantBootstrapSkipReason::BootstrapNotRequired => "bootstrap_not_required",
+        AssistantBootstrapSkipReason::SessionHasExistingTurns => "session_has_existing_turns",
+        AssistantBootstrapSkipReason::SessionNotIdle => "session_not_idle",
+    }
+}
+
+fn assistant_bootstrap_block_reason_to_str(reason: AssistantBootstrapBlockReason) -> &'static str {
+    match reason {
+        AssistantBootstrapBlockReason::ModelUnavailable => "model_unavailable",
+    }
 }
 
 fn session_to_response(session: Session) -> SessionResponse {

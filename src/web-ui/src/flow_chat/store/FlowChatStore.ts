@@ -1566,6 +1566,21 @@ export class FlowChatStore {
   }
 
   /**
+   * Strip agent-internal XML wrapper tags from persisted user inputs.
+   */
+  private cleanRemoteUserInput(raw: string): string {
+    const s = raw.trim();
+    const userQueryMatch = s.match(/<user_query>\s*([\s\S]*?)\s*<\/user_query>/);
+    if (userQueryMatch) {
+      return userQueryMatch[1].trim();
+    }
+
+    return s
+      .replace(/<system(?:_|-)reminder>[\s\S]*?<\/system(?:_|-)reminder>/g, '')
+      .trim();
+  }
+
+  /**
    * Convert DialogTurnData to FlowChat DialogTurn format
    */
   private convertToDialogTurns(turns: any[]): DialogTurn[] {
@@ -1583,7 +1598,8 @@ export class FlowChatStore {
           }))
         : undefined;
 
-      const displayContent = metadata?.original_text || turn.userMessage.content;
+      const displayContent =
+        metadata?.original_text || this.cleanRemoteUserInput(turn.userMessage.content);
 
 
 

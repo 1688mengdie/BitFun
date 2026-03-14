@@ -693,23 +693,14 @@ async fn load_chat_messages_from_conversation_persistence(
 }
 
 fn strip_user_input_tags(content: &str) -> String {
-    let s = content.trim();
-    if s.starts_with("<user_query>") {
-        if let Some(end) = s.find("</user_query>") {
-            let inner = s["<user_query>".len()..end].trim();
-            return inner.to_string();
-        }
-    }
-    if let Some(pos) = s.find("<system_reminder>") {
-        return s[..pos].trim().to_string();
-    }
+    let s = crate::agentic::core::strip_prompt_markup(content);
     // Extract original question from enhancer-wrapped content
     if s.starts_with("User uploaded") {
         if let Some(pos) = s.find("User's question:\n") {
             return s[pos + "User's question:\n".len()..].trim().to_string();
         }
     }
-    s.to_string()
+    s
 }
 
 fn resolve_agent_type(mobile_type: Option<&str>) -> &'static str {
@@ -1446,7 +1437,7 @@ impl RemoteExecutionDispatcher {
         content: String,
         agent_type: Option<&str>,
         image_contexts: Vec<crate::agentic::image_analysis::ImageContextData>,
-        trigger_source: crate::agentic::coordination::DialogTriggerSource,
+        submission_policy: crate::agentic::coordination::DialogSubmissionPolicy,
         turn_id: Option<String>,
     ) -> std::result::Result<(String, String), String> {
         use crate::agentic::coordination::get_global_coordinator;
@@ -1533,7 +1524,7 @@ impl RemoteExecutionDispatcher {
                     Some(turn_id.clone()),
                     resolved_agent_type,
                     binding_workspace.clone(),
-                    trigger_source,
+                    submission_policy,
                 )
                 .await
                 .map_err(|e| e.to_string())?;
@@ -1547,7 +1538,7 @@ impl RemoteExecutionDispatcher {
                     Some(turn_id.clone()),
                     resolved_agent_type,
                     binding_workspace,
-                    trigger_source,
+                    submission_policy,
                 )
                 .await
                 .map_err(|e| e.to_string())?;
@@ -2315,7 +2306,9 @@ impl RemoteServer {
     // ── Execution commands ──────────────────────────────────────────
 
     async fn handle_execution_command(&self, cmd: &RemoteCommand) -> RemoteResponse {
-        use crate::agentic::coordination::{get_global_coordinator, DialogTriggerSource};
+        use crate::agentic::coordination::{
+            get_global_coordinator, DialogSubmissionPolicy, DialogTriggerSource,
+        };
 
         let dispatcher = get_or_init_global_dispatcher();
 
@@ -2342,7 +2335,7 @@ impl RemoteServer {
                         content.clone(),
                         requested_agent_type.as_deref(),
                         resolved_contexts,
-                        DialogTriggerSource::RemoteRelay,
+                        DialogSubmissionPolicy::for_source(DialogTriggerSource::RemoteRelay),
                         None,
                     )
                     .await

@@ -47,7 +47,8 @@
     "updating": "Updating...",
     "installing": "Installing...",
     "connecting": "Connecting...",
-    "syncing": "Syncing..."
+    "syncing": "Syncing...",
+    "assistantBootstrapWaitingForModelConfiguration": "Assistant bootstrap is waiting for AI model configuration."
   },
   "confirm": {
     "deleteFile": "Are you sure you want to delete this file?",

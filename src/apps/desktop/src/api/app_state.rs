@@ -1,7 +1,7 @@
 //! Application state management
 
-use bitfun_core::agentic::{agents, tools};
 use bitfun_core::agentic::side_question::SideQuestionRuntime;
+use bitfun_core::agentic::{agents, tools};
 use bitfun_core::infrastructure::ai::{AIClient, AIClientFactory};
 use bitfun_core::miniapp::{initialize_global_miniapp_manager, JsWorkerPool, MiniAppManager};
 use bitfun_core::service::{ai_rules, config, filesystem, mcp, token_usage, workspace};

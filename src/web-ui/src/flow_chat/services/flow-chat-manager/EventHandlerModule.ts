@@ -409,21 +409,18 @@ function handleImageAnalysisCompleted(_context: FlowChatContext, event: ImageAna
 
 /**
  * Strip agent-internal XML wrapper tags from user input before displaying.
- * Handles: <user_query>...</user_query> and trailing <system_reminder>...</system_reminder>
+ * Handles both normal and forwarded-agent envelopes.
  */
 function cleanRemoteUserInput(raw: string): string {
-  let s = raw.trim();
-  if (s.startsWith('<user_query>')) {
-    const endIdx = s.indexOf('</user_query>');
-    if (endIdx !== -1) {
-      s = s.slice('<user_query>'.length, endIdx).trim();
-    }
+  const s = raw.trim();
+  const userQueryMatch = s.match(/<user_query>\s*([\s\S]*?)\s*<\/user_query>/);
+  if (userQueryMatch) {
+    return userQueryMatch[1].trim();
   }
-  const reminderIdx = s.indexOf('<system_reminder>');
-  if (reminderIdx !== -1) {
-    s = s.slice(0, reminderIdx).trim();
-  }
-  return s;
+
+  return s
+    .replace(/<system(?:_|-)reminder>[\s\S]*?<\/system(?:_|-)reminder>/g, '')
+    .trim();
 }
 
 function handleDialogTurnStarted(context: FlowChatContext, event: any): void {
