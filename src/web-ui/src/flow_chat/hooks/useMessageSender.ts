@@ -12,9 +12,30 @@ import { useCallback } from 'react';
 import { FlowChatManager } from '../services/FlowChatManager';
 import { notificationService } from '@/shared/notification-system';
 import type { ContextItem, ImageContext } from '@/shared/types/context';
+import type { AIModelConfig, DefaultModelsConfig } from '@/infrastructure/config/types';
 import { createLogger } from '@/shared/utils/logger';
 
 const log = createLogger('FlowChat');
+
+function normalizeModelSelection(
+  modelId: string | undefined,
+  models: AIModelConfig[],
+  defaultModels: DefaultModelsConfig,
+): string {
+  const value = modelId?.trim();
+  if (!value || value === 'auto') return 'auto';
+
+  if (value === 'primary' || value === 'fast') {
+    const resolvedDefaultId = value === 'primary' ? defaultModels.primary : defaultModels.fast;
+    const matchedModel = models.find(model => model.id === resolvedDefaultId);
+    return matchedModel ? value : 'auto';
+  }
+
+  const matchedModel = models.find(model =>
+    model.id === value || model.name === value || model.model_name === value,
+  );
+  return matchedModel ? value : 'auto';
+}
 
 interface UseMessageSenderProps {
   /** Current session ID */
@@ -77,9 +98,13 @@ export function useMessageSender(props: UseMessageSenderProps): UseMessageSender
 
       if (!sessionId) {
         const { configManager } = await import('@/infrastructure/config/services/ConfigManager');
-        const agentModels = await configManager.getConfig<Record<string, string>>('ai.agent_models') || {};
+        const [agentModels, allModels, defaultModels] = await Promise.all([
+          configManager.getConfig<Record<string, string>>('ai.agent_models') || {},
+          configManager.getConfig<AIModelConfig[]>('ai.models') || [],
+          configManager.getConfig<DefaultModelsConfig>('ai.default_models') || {},
+        ]);
         const agentType = currentAgentType || 'agentic';
-        const modelId = agentModels[agentType] || 'auto';
+        const modelId = normalizeModelSelection(agentModels[agentType], allModels, defaultModels);
 
         sessionId = await flowChatManager.createChatSession({
           modelName: modelId || undefined

@@ -136,9 +136,13 @@ impl ExecutionEngine {
         ai_config: &crate::service::config::types::AIConfig,
         model_id: &str,
     ) -> String {
+        let trimmed = model_id.trim();
+        if trimmed.is_empty() || trimmed == "auto" || trimmed == "default" {
+            return "auto".to_string();
+        }
         ai_config
-            .resolve_model_selection(model_id)
-            .unwrap_or_else(|| model_id.to_string())
+            .resolve_model_selection(trimmed)
+            .unwrap_or_else(|| "auto".to_string())
     }
 
     fn resolve_locked_auto_model_id(
@@ -167,23 +171,32 @@ impl ExecutionEngine {
         turn_index: usize,
     ) -> BitFunResult<String> {
         let agent_registry = get_agent_registry();
-        let configured_model_id = agent_registry
+        let fallback_model_id = agent_registry
             .get_model_id_for_agent(agent_type, workspace.map(|binding| binding.root_path()))
             .await
             .map_err(|e| BitFunError::AIClient(format!("Failed to get model ID: {}", e)))?;
+        let config_service = get_global_config_service().await.map_err(|e| {
+            BitFunError::AIClient(format!(
+                "Failed to get config service for model resolution: {}",
+                e
+            ))
+        })?;
+        let ai_config: crate::service::config::types::AIConfig = config_service
+            .get_config(Some("ai"))
+            .await
+            .unwrap_or_default();
+        let configured_model_id = session
+            .config
+            .model_id
+            .as_ref()
+            .map(|model_id| model_id.trim())
+            .filter(|model_id| !model_id.is_empty())
+            .map(str::to_string)
+            .unwrap_or(fallback_model_id);
+        let resolved_configured_model_id =
+            Self::resolve_configured_model_id(&ai_config, &configured_model_id);
 
-        let model_id = if configured_model_id == "auto" {
-            let config_service = get_global_config_service().await.map_err(|e| {
-                BitFunError::AIClient(format!(
-                    "Failed to get config service for auto model resolution: {}",
-                    e
-                ))
-            })?;
-            let ai_config: crate::service::config::types::AIConfig = config_service
-                .get_config(Some("ai"))
-                .await
-                .unwrap_or_default();
-
+        let model_id = if configured_model_id == "auto" || resolved_configured_model_id == "auto" {
             let locked_model_id =
                 Self::resolve_locked_auto_model_id(&ai_config, session.config.model_id.as_ref());
             let raw_locked_model_id = session.config.model_id.clone();
@@ -230,7 +243,7 @@ impl ExecutionEngine {
                 }
             }
         } else {
-            configured_model_id
+            resolved_configured_model_id
         };
 
         Ok(model_id)

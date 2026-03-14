@@ -101,6 +101,131 @@ async fn resolve_file_workspace_root(session_id: Option<&str>) -> Option<std::pa
     current_workspace_path()
 }
 
+async fn resolve_session_model_id(session_id: &str) -> Option<String> {
+    use crate::agentic::coordination::get_global_coordinator;
+
+    let coordinator = get_global_coordinator()?;
+    let session_manager = coordinator.get_session_manager();
+
+    let normalize = |model_id: Option<String>| match model_id {
+        Some(value) => {
+            let trimmed = value.trim();
+            if trimmed.is_empty() || trimmed == "default" {
+                Some("auto".to_string())
+            } else {
+                Some(trimmed.to_string())
+            }
+        }
+        None => Some("auto".to_string()),
+    };
+
+    if let Some(session) = session_manager.get_session(session_id) {
+        return normalize(session.config.model_id.clone());
+    }
+
+    let workspace_path = resolve_session_workspace_path(session_id).await?;
+    coordinator
+        .restore_session(&workspace_path, session_id)
+        .await
+        .ok()
+        .and_then(|session| normalize(session.config.model_id.clone()))
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RemoteModelConfig {
+    pub id: String,
+    pub name: String,
+    pub provider: String,
+    pub base_url: String,
+    pub model_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<u32>,
+    pub enabled: bool,
+    pub capabilities: Vec<String>,
+    pub enable_thinking_process: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RemoteModelCatalog {
+    pub version: u64,
+    pub models: Vec<RemoteModelConfig>,
+    pub default_models: crate::service::config::types::DefaultModelsConfig,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_model_id: Option<String>,
+}
+
+async fn load_remote_model_catalog(
+    session_id: Option<&str>,
+) -> std::result::Result<RemoteModelCatalog, String> {
+    use crate::service::config::{
+        get_global_config_service,
+        types::{AIConfig, GlobalConfig},
+    };
+
+    let config_service = get_global_config_service()
+        .await
+        .map_err(|e| format!("Config service not available: {e}"))?;
+    let global_config: GlobalConfig = config_service
+        .get_config(None)
+        .await
+        .map_err(|e| format!("Failed to load global config: {e}"))?;
+    let ai_config: AIConfig = global_config.ai;
+
+    let models: Vec<RemoteModelConfig> = ai_config
+        .models
+        .into_iter()
+        .map(|model| RemoteModelConfig {
+            id: model.id,
+            name: model.name,
+            provider: model.provider,
+            base_url: model.base_url,
+            model_name: model.model_name,
+            context_window: model.context_window,
+            enabled: model.enabled,
+            capabilities: model
+                .capabilities
+                .into_iter()
+                .map(|capability| match capability {
+                    crate::service::config::types::ModelCapability::TextChat => "text_chat",
+                    crate::service::config::types::ModelCapability::ImageUnderstanding => {
+                        "image_understanding"
+                    }
+                    crate::service::config::types::ModelCapability::ImageGeneration => {
+                        "image_generation"
+                    }
+                    crate::service::config::types::ModelCapability::Embedding => "embedding",
+                    crate::service::config::types::ModelCapability::Search => "search",
+                    crate::service::config::types::ModelCapability::CodeSpecialized => {
+                        "code_specialized"
+                    }
+                    crate::service::config::types::ModelCapability::FunctionCalling => {
+                        "function_calling"
+                    }
+                    crate::service::config::types::ModelCapability::SpeechRecognition => {
+                        "speech_recognition"
+                    }
+                }.to_string())
+                .collect(),
+            enable_thinking_process: model.enable_thinking_process,
+            reasoning_effort: model.reasoning_effort,
+        })
+        .collect();
+
+    let session_model_id = if let Some(session_id) = session_id {
+        resolve_session_model_id(session_id).await
+    } else {
+        None
+    };
+    Ok(RemoteModelCatalog {
+        version: global_config.last_modified.timestamp_millis().max(0) as u64,
+        models,
+        default_models: ai_config.default_models,
+        session_model_id,
+    })
+}
+
 /// Image sent from mobile as a base64 data-URL.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImageAttachment {
@@ -126,6 +251,13 @@ pub enum RemoteCommand {
         agent_type: Option<String>,
         session_name: Option<String>,
         workspace_path: Option<String>,
+    },
+    GetModelCatalog {
+        session_id: Option<String>,
+    },
+    SetSessionModel {
+        session_id: String,
+        model_id: String,
     },
     GetSessionMessages {
         session_id: String,
@@ -168,6 +300,7 @@ pub enum RemoteCommand {
         session_id: String,
         since_version: u64,
         known_msg_count: usize,
+        known_model_catalog_version: Option<u64>,
     },
     /// Read a workspace file and return its base64-encoded content.
     ///
@@ -224,6 +357,13 @@ pub enum RemoteResponse {
     SessionCreated {
         session_id: String,
     },
+    ModelCatalog {
+        catalog: RemoteModelCatalog,
+    },
+    SessionModelUpdated {
+        session_id: String,
+        model_id: String,
+    },
     Messages {
         session_id: String,
         messages: Vec<ChatMessage>,
@@ -267,6 +407,8 @@ pub enum RemoteResponse {
         total_msg_count: Option<usize>,
         #[serde(skip_serializing_if = "Option::is_none")]
         active_turn: Option<ActiveTurnSnapshot>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        model_catalog: Option<RemoteModelCatalog>,
     },
     AnswerAccepted,
     InteractionAccepted {
@@ -1656,6 +1798,8 @@ impl RemoteServer {
 
             RemoteCommand::ListSessions { .. }
             | RemoteCommand::CreateSession { .. }
+            | RemoteCommand::GetModelCatalog { .. }
+            | RemoteCommand::SetSessionModel { .. }
             | RemoteCommand::GetSessionMessages { .. }
             | RemoteCommand::DeleteSession { .. } => self.handle_session_command(cmd).await,
 
@@ -1766,6 +1910,7 @@ impl RemoteServer {
             session_id,
             since_version,
             known_msg_count,
+            known_model_catalog_version,
         } = cmd
         else {
             return RemoteResponse::Error {
@@ -1775,8 +1920,16 @@ impl RemoteServer {
 
         let tracker = self.ensure_tracker(session_id);
         let current_version = tracker.version();
+        let current_model_catalog = load_remote_model_catalog(Some(session_id)).await.ok();
+        let current_model_catalog_version = current_model_catalog
+            .as_ref()
+            .map(|catalog| catalog.version)
+            .unwrap_or(0);
+        let requested_model_catalog_version = known_model_catalog_version.unwrap_or(0);
+        let should_send_model_catalog =
+            requested_model_catalog_version != current_model_catalog_version;
 
-        if *since_version == current_version && *since_version > 0 {
+        if *since_version == current_version && *since_version > 0 && !should_send_model_catalog {
             return RemoteResponse::SessionPoll {
                 version: current_version,
                 changed: false,
@@ -1785,6 +1938,7 @@ impl RemoteServer {
                 new_messages: None,
                 total_msg_count: None,
                 active_turn: None,
+                model_catalog: None,
             };
         }
 
@@ -1805,6 +1959,11 @@ impl RemoteServer {
                 new_messages: None,
                 total_msg_count: None,
                 active_turn,
+                model_catalog: if should_send_model_catalog {
+                    current_model_catalog
+                } else {
+                    None
+                },
             };
         }
 
@@ -1862,6 +2021,11 @@ impl RemoteServer {
             new_messages: send_msgs,
             total_msg_count: send_total,
             active_turn,
+            model_catalog: if should_send_model_catalog {
+                current_model_catalog
+            } else {
+                None
+            },
         }
     }
 
@@ -2245,6 +2409,85 @@ impl RemoteServer {
                         let session_id = session.session_id.clone();
                         RemoteResponse::SessionCreated { session_id }
                     }
+                    Err(e) => RemoteResponse::Error {
+                        message: e.to_string(),
+                    },
+                }
+            }
+            RemoteCommand::GetModelCatalog { session_id } => {
+                match load_remote_model_catalog(session_id.as_deref()).await {
+                    Ok(catalog) => RemoteResponse::ModelCatalog { catalog },
+                    Err(message) => RemoteResponse::Error { message },
+                }
+            }
+            RemoteCommand::SetSessionModel {
+                session_id,
+                model_id,
+            } => {
+                use crate::service::config::{get_global_config_service, types::AIConfig};
+
+                let requested_model_id = model_id.trim();
+                if requested_model_id.is_empty() {
+                    return RemoteResponse::Error {
+                        message: "model_id is required".to_string(),
+                    };
+                }
+
+                let normalized_model_id = if matches!(requested_model_id, "auto" | "default" | "primary" | "fast") {
+                    if requested_model_id == "default" {
+                        "auto".to_string()
+                    } else {
+                        requested_model_id.to_string()
+                    }
+                } else {
+                    let Ok(config_service) = get_global_config_service().await else {
+                        return RemoteResponse::Error {
+                            message: "Config service not available".to_string(),
+                        };
+                    };
+                    let ai_config: AIConfig = match config_service.get_config(Some("ai")).await {
+                        Ok(config) => config,
+                        Err(e) => {
+                            return RemoteResponse::Error {
+                                message: format!("Failed to load AI config: {e}"),
+                            }
+                        }
+                    };
+                    match ai_config.resolve_model_reference(requested_model_id) {
+                        Some(resolved) => resolved,
+                        None => {
+                            return RemoteResponse::Error {
+                                message: format!("Unknown model selection: {requested_model_id}"),
+                            }
+                        }
+                    }
+                };
+
+                if coordinator.get_session_manager().get_session(session_id).is_none() {
+                    let Some(workspace_path) = resolve_session_workspace_path(session_id).await else {
+                        return RemoteResponse::Error {
+                            message: format!(
+                                "Workspace path not available for session: {}",
+                                session_id
+                            ),
+                        };
+                    };
+                    if let Err(e) = coordinator.restore_session(&workspace_path, session_id).await {
+                        return RemoteResponse::Error {
+                            message: format!("Failed to restore session: {e}"),
+                        };
+                    }
+                }
+
+                match coordinator
+                    .get_session_manager()
+                    .update_session_model_id(session_id, &normalized_model_id)
+                    .await
+                {
+                    Ok(()) => RemoteResponse::SessionModelUpdated {
+                        session_id: session_id.clone(),
+                        model_id: normalized_model_id,
+                    },
                     Err(e) => RemoteResponse::Error {
                         message: e.to_string(),
                     },
