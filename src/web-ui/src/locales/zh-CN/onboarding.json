@@ -130,7 +130,7 @@
       "placeholder": "示例：glm-4.7",
       "selectPlaceholder": "选择模型...",
       "searchPlaceholder": "搜索或输入自定义模型名称...",
-      "inputPlaceholder": "输入模型名称...",
+      "inputPlaceholder": "输入自定义模型名称...",
       "customHint": "使用自定义模型名称"
     },
     "format": {

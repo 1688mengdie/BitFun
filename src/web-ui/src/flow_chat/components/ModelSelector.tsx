@@ -52,7 +52,7 @@ const formatContextWindow = (contextWindow?: number): string | null => {
   return `${Math.round(contextWindow / 1000)}k`;
 };
 
-const buildModelMetaText = (model: Pick<ModelInfo, 'providerName' | 'contextWindow' | 'reasoningEffort'>): string => {
+const buildModelMetaText = (model: Pick<ModelInfo, 'providerName' | 'contextWindow'>): string => {
   const parts = [model.providerName];
   const contextWindow = formatContextWindow(model.contextWindow);
 
@@ -60,11 +60,42 @@ const buildModelMetaText = (model: Pick<ModelInfo, 'providerName' | 'contextWind
     parts.push(contextWindow);
   }
 
-  if (model.reasoningEffort) {
-    parts.push(model.reasoningEffort);
+  return parts.join(' · ');
+};
+
+const buildResolvedModelTooltipText = (
+  modelName: string | undefined,
+  model: Pick<ModelInfo, 'providerName' | 'contextWindow'> | null | undefined,
+  fallback: string
+): string => {
+  if (!model) return fallback;
+
+  const parts = [];
+  if (modelName) {
+    parts.push(modelName);
   }
 
-  return parts.join(' · ');
+  const metaText = buildModelMetaText(model);
+  if (metaText) {
+    parts.push(metaText);
+  }
+
+  return parts.join(' · ') || fallback;
+};
+
+const getModelDisplayLabel = (model: ModelInfo | null, fallback: string): string => {
+  if (!model) return fallback;
+  if (isSpecialModel(model.id)) return model.configName;
+  return model.modelName || model.configName || fallback;
+};
+
+const getModelTooltipText = (model: ModelInfo | null, fallback: string): string => {
+  if (!model) return fallback;
+  if (model.id === 'auto') return model.providerName;
+  if (isSpecialModel(model.id)) {
+    return buildResolvedModelTooltipText(model.modelName, model, fallback);
+  }
+  return buildModelMetaText(model);
 };
 
 export const ModelSelector: React.FC<ModelSelectorProps> = ({
@@ -248,7 +279,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
       ref={dropdownRef}
       className={`bitfun-model-selector ${className}`}
     >
-      <Tooltip content={currentModel ? `${currentModel.modelName} · ${buildModelMetaText(currentModel)}` : t('modelSelector.modelNotConfigured')}>
+      <Tooltip content={getModelTooltipText(currentModel, t('modelSelector.modelNotConfigured'))}>
         <button
           className={`bitfun-model-selector__trigger ${dropdownOpen ? 'bitfun-model-selector__trigger--open' : ''}`}
           onClick={() => setDropdownOpen(!dropdownOpen)}
@@ -256,7 +287,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
         >
           <Cpu size={10} className="bitfun-model-selector__icon" />
           <span className="bitfun-model-selector__name">
-            {currentModel ? currentModel.configName : t('modelSelector.modelNotConfigured')}
+            {getModelDisplayLabel(currentModel, t('modelSelector.modelNotConfigured'))}
           </span>
           {currentModel?.enableThinking && (
             <Sparkles size={9} className="bitfun-model-selector__thinking-icon" />
@@ -296,7 +327,10 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
           {(() => {
             const primaryModel = allModels.find(m => m.id === defaultModels.primary);
             const primaryTooltip = primaryModel
-              ? `${primaryModel.name}（${primaryModel.model_name}）· ${buildModelMetaText({ providerName: getProviderDisplayName(primaryModel), contextWindow: primaryModel.context_window, reasoningEffort: primaryModel.reasoning_effort })}`
+              ? buildResolvedModelTooltipText(primaryModel.model_name, {
+                providerName: getProviderDisplayName(primaryModel),
+                contextWindow: primaryModel.context_window
+              }, t('modelSelector.modelNotConfigured'))
               : t('modelSelector.modelNotConfigured');
             return (
               <Tooltip content={primaryTooltip} placement="right">
@@ -318,7 +352,10 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
           {(() => {
             const fastModel = allModels.find(m => m.id === defaultModels.fast);
             const fastTooltip = fastModel
-              ? `${fastModel.name}（${fastModel.model_name}）· ${buildModelMetaText({ providerName: getProviderDisplayName(fastModel), contextWindow: fastModel.context_window, reasoningEffort: fastModel.reasoning_effort })}`
+              ? buildResolvedModelTooltipText(fastModel.model_name, {
+                providerName: getProviderDisplayName(fastModel),
+                contextWindow: fastModel.context_window
+              }, t('modelSelector.modelNotConfigured'))
               : t('modelSelector.modelNotConfigured');
             return (
               <Tooltip content={fastTooltip} placement="right">
@@ -344,14 +381,14 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
               const isSelected = currentModelId === model.id;
 
               return (
-                <Tooltip key={model.id} content={`${model.modelName} · ${buildModelMetaText(model)}`} placement="right">
+                <Tooltip key={model.id} content={buildModelMetaText(model)} placement="right">
                   <div
                     className={`bitfun-model-selector__option ${isSelected ? 'bitfun-model-selector__option--selected' : ''}`}
                     onClick={() => handleSelectModel(model.id)}
                   >
                     <div className="bitfun-model-selector__option-main">
                       <span className="bitfun-model-selector__option-name">
-                        {model.configName}
+                        {model.modelName}
                         {model.enableThinking && (
                           <Sparkles size={10} className="bitfun-model-selector__option-thinking" />
                         )}

@@ -23,6 +23,7 @@ export interface NumberInputProps {
   className?: string;
   label?: string;
   draggable?: boolean;
+  disableWheel?: boolean;
 }
 
 export const NumberInput = forwardRef<HTMLInputElement, NumberInputProps>(
@@ -42,6 +43,7 @@ export const NumberInput = forwardRef<HTMLInputElement, NumberInputProps>(
       className = '',
       label,
       draggable = false,
+      disableWheel = false,
     },
     ref
   ) => {
@@ -162,7 +164,7 @@ export const NumberInput = forwardRef<HTMLInputElement, NumberInputProps>(
 
     const handleWheel = useCallback(
       (e: React.WheelEvent) => {
-        if (disabled || !isHovered) return;
+        if (disabled || disableWheel || !isHovered) return;
         e.preventDefault();
         if (e.deltaY < 0) {
           increment();
@@ -170,7 +172,7 @@ export const NumberInput = forwardRef<HTMLInputElement, NumberInputProps>(
           decrement();
         }
       },
-      [disabled, isHovered, increment, decrement]
+      [disabled, disableWheel, isHovered, increment, decrement]
     );
 
     const containerClassName = [

@@ -1045,6 +1045,17 @@
     }
 
     .select--multiple {
+      .select__trigger {
+        flex-wrap: nowrap;
+        overflow: hidden;
+      }
+
+      .select__tags {
+        flex-wrap: nowrap;
+        min-width: 0;
+        overflow: hidden;
+      }
+
       .select__tag {
         background: var(--element-bg-subtle);
         border: none;
@@ -1069,6 +1080,56 @@
       .select__tag-remove:hover {
         background: var(--element-bg-base);
         color: var(--color-text-primary);
+      }
+    }
+  }
+
+  &__model-picker-value {
+    display: flex;
+    align-items: center;
+    gap: $size-gap-2;
+    min-width: 0;
+    width: 100%;
+    color: var(--color-text-primary);
+  }
+
+  &__model-picker-value-text {
+    min-width: 0;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__model-picker-value-more {
+    flex-shrink: 0;
+    color: var(--color-text-secondary);
+    white-space: nowrap;
+  }
+
+  &__model-picker-select {
+    &--has-value {
+      .select__arrow {
+        width: 12px;
+        height: 12px;
+        color: var(--color-text-muted);
+        transform: none;
+
+        &::before {
+          content: '+';
+          font-size: 16px;
+          line-height: 1;
+          font-weight: 400;
+        }
+
+        svg {
+          display: none;
+        }
+
+        &.select__arrow--open {
+          transform: none;
+          color: var(--color-text-muted);
+        }
       }
     }
   }
@@ -1106,7 +1167,7 @@
     width: 100%;
     min-height: 35px;
     padding: 0 12px;
-    border: 1px dashed var(--border-base);
+    border: none;
     border-radius: $size-radius-sm;
     color: var(--color-text-muted);
     font-size: 13px;
@@ -1119,7 +1180,7 @@
     flex-direction: column;
     gap: $size-gap-2;
     padding: $size-gap-3;
-    border: 1px solid var(--border-base);
+    border: none;
     border-radius: $size-radius-sm;
     background: var(--element-bg-subtle);
   }
@@ -1250,6 +1311,13 @@
   &__resolved-url-input {
     .bitfun-input-container {
       background: var(--element-bg-subtle, rgba(255, 255, 255, 0.05));
+      border: none;
+      box-shadow: none;
+    }
+
+    .bitfun-input-container:hover,
+    .bitfun-input-container:focus-within {
+      border: none;
     }
 
     .bitfun-input {
