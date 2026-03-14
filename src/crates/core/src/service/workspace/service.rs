@@ -14,6 +14,7 @@ use crate::util::errors::*;
 use log::{info, warn};
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::fs;
@@ -295,6 +296,50 @@ impl WorkspaceService {
         }
 
         result
+    }
+
+    /// Reorders the opened workspaces without changing active or recent state.
+    pub async fn reorder_opened_workspaces(&self, workspace_ids: Vec<String>) -> BitFunResult<()> {
+        let current_ids = {
+            let manager = self.manager.read().await;
+            manager.get_opened_workspace_ids().clone()
+        };
+
+        if workspace_ids.len() != current_ids.len() {
+            return Err(BitFunError::service(format!(
+                "Opened workspace count mismatch: expected {}, got {}",
+                current_ids.len(),
+                workspace_ids.len()
+            )));
+        }
+
+        let requested_ids = workspace_ids.iter().cloned().collect::<HashSet<_>>();
+        if requested_ids.len() != workspace_ids.len() {
+            return Err(BitFunError::service(
+                "Opened workspace order contains duplicate ids".to_string(),
+            ));
+        }
+
+        let current_id_set = current_ids.iter().cloned().collect::<HashSet<_>>();
+        if requested_ids != current_id_set {
+            return Err(BitFunError::service(
+                "Opened workspace order must contain exactly the currently opened workspace ids"
+                    .to_string(),
+            ));
+        }
+
+        {
+            let mut manager = self.manager.write().await;
+            manager.set_opened_workspace_ids(workspace_ids.clone());
+        }
+
+        if let Err(error) = self.save_workspace_data().await {
+            let mut manager = self.manager.write().await;
+            manager.set_opened_workspace_ids(current_ids);
+            return Err(error);
+        }
+
+        Ok(())
     }
 
     /// Switches to the specified workspace.

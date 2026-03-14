@@ -4,6 +4,17 @@
  * Used by session lists and persistence metadata in the frontend.
  */
 
+export type SessionKind = 'normal' | 'btw';
+
+export interface SessionCustomMetadata extends Record<string, unknown> {
+  kind?: SessionKind;
+  parentSessionId?: string | null;
+  parentRequestId?: string | null;
+  parentDialogTurnId?: string | null;
+  parentTurnIndex?: number | null;
+  lastFinishedAt?: number | null;
+}
+
 export interface SessionMetadata {
   sessionId: string;
   sessionName: string;
@@ -17,7 +28,7 @@ export interface SessionMetadata {
   status: SessionStatus;
   snapshotSessionId?: string;
   tags: string[];
-  customMetadata?: Record<string, any>;
+  customMetadata?: SessionCustomMetadata;
   todos?: any[];
   workspacePath?: string;
 }

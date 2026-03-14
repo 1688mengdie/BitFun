@@ -25,6 +25,7 @@ import {
   immediateSaveDialogTurn, 
   saveDialogTurnToDisk,
   cleanupSaveState,
+  updateSessionMetadata,
 } from './PersistenceModule';
 import { 
   processNormalTextChunkInternal, 
@@ -248,15 +249,17 @@ function handleSessionDeleted(context: FlowChatContext, event: any): void {
   const { sessionId } = event;
   
   const store = FlowChatStore.getInstance();
-  const existing = store.getState().sessions.get(sessionId);
-  if (!existing) return;
+  const removedSessionIds = store.getCascadeSessionIds(sessionId);
+  if (removedSessionIds.length === 0) return;
 
   log.info('Remote session deleted', { sessionId });
-  pendingImageAnalysisTurns.delete(sessionId);
-  stateMachineManager.delete(sessionId);
-  context.processingManager.clearSessionStatus(sessionId);
-  cleanupSaveState(context, sessionId);
-  cleanupSessionBuffers(context, sessionId);
+  removedSessionIds.forEach(id => {
+    pendingImageAnalysisTurns.delete(id);
+    stateMachineManager.delete(id);
+    context.processingManager.clearSessionStatus(id);
+    cleanupSaveState(context, id);
+    cleanupSessionBuffers(context, id);
+  });
   store.removeSession(sessionId);
 }
 
@@ -958,6 +961,8 @@ function handleDialogTurnComplete(
     sessionContentBuffer.clear();
   }
 
+  context.flowChatStore.markSessionFinished(sessionId);
+
   context.flowChatStore.updateDialogTurn(sessionId, turnId, turn => {
     const updatedModelRounds = turn.modelRounds.map((round) => {
       if (round.isStreaming) {
@@ -1026,6 +1031,8 @@ function handleDialogTurnFailed(context: FlowChatContext, event: any): void {
   if (sessionContentBuffer) {
     sessionContentBuffer.clear();
   }
+
+  context.flowChatStore.markSessionFinished(sessionId);
   
   const dialogTurn = session.dialogTurns.find(turn => turn.id === turnId);
   const hasSuccessfulModelRounds = dialogTurn && dialogTurn.modelRounds.length > 0;
@@ -1066,6 +1073,9 @@ function handleDialogTurnFailed(context: FlowChatContext, event: any): void {
     }
     
     context.flowChatStore.deleteDialogTurn(sessionId, turnId);
+    updateSessionMetadata(context, sessionId).catch(err => {
+      log.warn('Failed to update failed session metadata', { sessionId, error: err });
+    });
   }
   
   const currentState = stateMachineManager.getCurrentState(sessionId);
@@ -1115,6 +1125,8 @@ function handleDialogTurnCancelled(
   if (sessionContentBuffer) {
     sessionContentBuffer.clear();
   }
+
+  context.flowChatStore.markSessionFinished(sessionId);
   
   context.flowChatStore.updateDialogTurn(sessionId, turnId, turn => {
     const updatedModelRounds = turn.modelRounds.map((round) => {

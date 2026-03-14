@@ -11,14 +11,17 @@
   color: var(--color-text-primary);
 
   &--empty {
+    align-items: center;
+    justify-content: center;
+
     .btw-session-panel__empty-state {
-      flex: 1;
       display: flex;
       align-items: center;
       justify-content: center;
-      gap: 8px;
+      padding: 0 16px;
       color: var(--color-text-muted);
       font-size: 13px;
+      text-align: center;
     }
   }
 

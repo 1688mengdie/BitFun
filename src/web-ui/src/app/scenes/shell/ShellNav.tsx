@@ -1,5 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
+  Check,
   ChevronDown,
   ChevronRight,
   GitBranch,
@@ -22,7 +24,8 @@ import type { MenuItem } from '@/shared/context-menu-system/types/menu.types';
 import { useSceneStore } from '@/app/stores/sceneStore';
 import { useTerminalSceneStore } from '@/app/stores/terminalSceneStore';
 import type { GitWorktreeInfo } from '@/infrastructure/api/service-api/GitAPI';
-import { useCurrentWorkspace } from '@/infrastructure/contexts/WorkspaceContext';
+import { useWorkspaceContext } from '@/infrastructure/contexts/WorkspaceContext';
+import { WorkspaceKind } from '@/shared/types';
 import { useShellStore } from './shellStore';
 import { useShellEntries, useWorktrees, type ShellEntry } from './hooks';
 import './ShellNav.scss';
@@ -33,7 +36,7 @@ const ShellNav: React.FC = () => {
   // #endregion
   const { t } = useI18n('common');
   const { t: tTerminal } = useI18n('panels/terminal');
-  const { workspaceName } = useCurrentWorkspace();
+  const { activeWorkspace, openedWorkspacesList, workspaceName, setActiveWorkspace } = useWorkspaceContext();
   const navView = useShellStore((s) => s.navView);
   const setNavView = useShellStore((s) => s.setNavView);
   const expandedWorktrees = useShellStore((s) => s.expandedWorktrees);
@@ -73,8 +76,12 @@ const ShellNav: React.FC = () => {
   } = useWorktrees();
 
   const [menuOpen, setMenuOpen] = useState(false);
+  const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false);
   const [branchModalOpen, setBranchModalOpen] = useState(false);
+  const [workspaceMenuPosition, setWorkspaceMenuPosition] = useState<{ top: number; left: number } | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
+  const workspaceMenuRef = useRef<HTMLDivElement | null>(null);
+  const workspaceTriggerRef = useRef<HTMLButtonElement | null>(null);
 
   const visibleMainEntries = navView === 'hub' ? hubMainEntries : mainEntries;
   const visibleWorktrees = useMemo(
@@ -88,21 +95,28 @@ const ShellNav: React.FC = () => {
   const hasVisibleContent = visibleMainEntries.length > 0 || visibleWorktrees.length > 0;
 
   useEffect(() => {
-    if (!menuOpen) {
+    if (!menuOpen && !workspaceMenuOpen) {
       return;
     }
 
     const handleMouseDown = (event: MouseEvent) => {
       const target = event.target as Node | null;
-      if (target && menuRef.current?.contains(target)) {
+      if (
+        target &&
+        (menuRef.current?.contains(target) ||
+          workspaceMenuRef.current?.contains(target) ||
+          workspaceTriggerRef.current?.contains(target))
+      ) {
         return;
       }
       setMenuOpen(false);
+      setWorkspaceMenuOpen(false);
     };
 
     const handleEscape = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         setMenuOpen(false);
+        setWorkspaceMenuOpen(false);
       }
     };
 
@@ -112,7 +126,56 @@ const ShellNav: React.FC = () => {
       document.removeEventListener('mousedown', handleMouseDown);
       document.removeEventListener('keydown', handleEscape);
     };
-  }, [menuOpen]);
+  }, [menuOpen, workspaceMenuOpen]);
+
+  const hasMultipleWorkspaces = openedWorkspacesList.length > 1;
+
+  useEffect(() => {
+    if (!hasMultipleWorkspaces && workspaceMenuOpen) {
+      setWorkspaceMenuOpen(false);
+    }
+  }, [hasMultipleWorkspaces, workspaceMenuOpen]);
+
+  const updateWorkspaceMenuPosition = useCallback(() => {
+    const trigger = workspaceTriggerRef.current;
+    if (!trigger) {
+      return;
+    }
+
+    const rect = trigger.getBoundingClientRect();
+    const viewportPadding = 8;
+    const estimatedWidth = 220;
+    const maxLeft = window.innerWidth - estimatedWidth - viewportPadding;
+
+    setWorkspaceMenuPosition({
+      top: Math.max(viewportPadding, rect.bottom + 6),
+      left: Math.max(viewportPadding, Math.min(rect.left, maxLeft)),
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!workspaceMenuOpen) {
+      return;
+    }
+
+    updateWorkspaceMenuPosition();
+
+    const handleViewportChange = () => updateWorkspaceMenuPosition();
+    window.addEventListener('resize', handleViewportChange);
+    window.addEventListener('scroll', handleViewportChange, true);
+    return () => {
+      window.removeEventListener('resize', handleViewportChange);
+      window.removeEventListener('scroll', handleViewportChange, true);
+    };
+  }, [updateWorkspaceMenuPosition, workspaceMenuOpen]);
+
+  const getWorkspaceDisplayName = useCallback(
+    (workspace: (typeof openedWorkspacesList)[number]) =>
+      workspace.workspaceKind === WorkspaceKind.Assistant
+        ? workspace.identity?.name?.trim() || workspace.name
+        : workspace.name,
+    [],
+  );
 
   const handleRefresh = useCallback(async () => {
     await Promise.all([refreshEntries(), refreshWorktrees()]);
@@ -127,6 +190,28 @@ const ShellNav: React.FC = () => {
     setMenuOpen(false);
     await createHubTerminal();
   }, [createHubTerminal]);
+
+  const handleToggleCreateMenu = useCallback(() => {
+    setWorkspaceMenuOpen(false);
+    setMenuOpen((prev) => !prev);
+  }, []);
+
+  const handleToggleWorkspaceMenu = useCallback(() => {
+    if (!hasMultipleWorkspaces) {
+      return;
+    }
+
+    setMenuOpen(false);
+    setWorkspaceMenuOpen((prev) => !prev);
+  }, [hasMultipleWorkspaces]);
+
+  const handleSelectWorkspace = useCallback(async (workspaceId: string) => {
+    setWorkspaceMenuOpen(false);
+    if (workspaceId === activeWorkspace?.id) {
+      return;
+    }
+    await setActiveWorkspace(workspaceId);
+  }, [activeWorkspace?.id, setActiveWorkspace]);
 
   const handleOpenBranchModal = useCallback(() => {
     setMenuOpen(false);
@@ -304,22 +389,73 @@ const ShellNav: React.FC = () => {
         <div className="bitfun-shell-nav__title-group">
           <span className="bitfun-shell-nav__title">{t('nav.shell.title')}</span>
           {workspaceName ? (
-            <span className="bitfun-shell-nav__workspace-badge" title={workspaceName}>
-              {workspaceName}
-            </span>
+            <div className="bitfun-shell-nav__workspace-switcher">
+              <button
+                ref={workspaceTriggerRef}
+                type="button"
+                className={`bitfun-shell-nav__workspace-trigger${workspaceMenuOpen ? ' is-active' : ''}${hasMultipleWorkspaces ? ' is-switchable' : ''}`}
+                onClick={handleToggleWorkspaceMenu}
+                aria-haspopup={hasMultipleWorkspaces ? 'menu' : undefined}
+                aria-expanded={hasMultipleWorkspaces ? workspaceMenuOpen : undefined}
+                title={hasMultipleWorkspaces ? t('header.switchWorkspace') : workspaceName}
+              >
+                <span className="bitfun-shell-nav__workspace-separator">/</span>
+                <span className="bitfun-shell-nav__workspace-name">{workspaceName}</span>
+                {hasMultipleWorkspaces ? (
+                  <ChevronDown size={12} className="bitfun-shell-nav__workspace-trigger-icon" />
+                ) : null}
+              </button>
+
+              {workspaceMenuOpen && hasMultipleWorkspaces ? (
+                workspaceMenuPosition ? createPortal(
+                  <div
+                    ref={workspaceMenuRef}
+                    className="bitfun-shell-nav__workspace-menu"
+                    role="menu"
+                    aria-label={t('header.switchWorkspace')}
+                    style={{
+                      top: `${workspaceMenuPosition.top}px`,
+                      left: `${workspaceMenuPosition.left}px`,
+                    }}
+                  >
+                    {openedWorkspacesList.map((workspace) => {
+                      const isActive = workspace.id === activeWorkspace?.id;
+                      const label = getWorkspaceDisplayName(workspace);
+
+                      return (
+                        <button
+                          key={workspace.id}
+                          type="button"
+                          role="menuitemradio"
+                          aria-checked={isActive}
+                          className={`bitfun-shell-nav__workspace-menu-item${isActive ? ' is-active' : ''}`}
+                          onClick={() => { void handleSelectWorkspace(workspace.id); }}
+                          title={workspace.rootPath}
+                        >
+                          <span className="bitfun-shell-nav__workspace-menu-check" aria-hidden="true">
+                            {isActive ? <Check size={12} /> : null}
+                          </span>
+                          <span className="bitfun-shell-nav__workspace-menu-text">{label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>,
+                  document.body,
+                ) : null
+              ) : null}
+            </div>
           ) : null}
         </div>
         <div className="bitfun-shell-nav__header-actions" ref={menuRef}>
           <button
             type="button"
             className={`bitfun-shell-nav__menu-trigger${menuOpen ? ' is-active' : ''}`}
-            onClick={() => setMenuOpen((prev) => !prev)}
+            onClick={handleToggleCreateMenu}
             aria-haspopup="menu"
             aria-expanded={menuOpen}
             title={t('actions.new')}
           >
             <Plus size={14} />
-            <ChevronDown size={12} />
           </button>
 
           {menuOpen ? (

@@ -121,7 +121,8 @@
     "selectPromptTemplate": "选择提示词模板 (Ctrl+Shift+P)",
     "willSendAfterStop": "将在停止后发送",
     "openWorkspaceFolder": "打开工作区文件夹",
-    "openWorkspaceFolderFailed": "打开工作区文件夹失败：{{error}}"
+    "openWorkspaceFolderFailed": "打开工作区文件夹失败：{{error}}",
+    "spaceToActivate": "空格激活"
   },
   "context": {
     "title": "上下文",
@@ -271,6 +272,7 @@
     "cancel": "停止",
     "openThread": "打开子会话",
     "threadLabel": "子会话",
+    "emptyThreadLabel": "暂未打开{{label}}",
     "origin": "来自",
     "parent": "父会话",
     "turnLabel": "第 {{index}} 轮",
@@ -794,6 +796,12 @@
     "subtitleEveningCowork": "收尾、复盘、或是为明天做准备——都行",
     "subtitleNightCowork": "夜深了，适合规划和沉淀，有什么想梳理的？",
     "aiPartnerCowork": "心流伙伴",
+    "aiPartnerClaw": "我是你的助理",
+    "subtitleMorningClaw": "今天有什么需要帮忙的？",
+    "subtitleAfternoonClaw": "有什么需要帮忙的？",
+    "subtitleEveningClaw": "有什么需要帮忙的？",
+    "subtitleNightClaw": "夜深了，有什么还放不下的？",
+    "narrativeClaw": "整理思路、起草文字、搜集信息，或者只是随便聊聊——有什么需要，直接告诉我。",
     "featureIntro": "",
     "featureIntroCowork": "",
     "lastTimeYouWere": "上次您正在处理：",

@@ -121,7 +121,8 @@
     "selectPromptTemplate": "Select prompt template (Ctrl+Shift+P)",
     "willSendAfterStop": "Will send after stop",
     "openWorkspaceFolder": "Open workspace folder",
-    "openWorkspaceFolderFailed": "Failed to open workspace folder: {{error}}"
+    "openWorkspaceFolderFailed": "Failed to open workspace folder: {{error}}",
+    "spaceToActivate": "Space to type"
   },
   "context": {
     "title": "Context",
@@ -271,6 +272,7 @@
     "cancel": "Stop",
     "openThread": "Open thread",
     "threadLabel": "Side thread",
+    "emptyThreadLabel": "No {{label}} open",
     "origin": "Asked from",
     "parent": "parent session",
     "turnLabel": "turn {{index}}",
@@ -800,6 +802,12 @@
     "subtitleEveningCowork": "Wrap up, reflect, or set the stage for tomorrow — all good here",
     "subtitleNightCowork": "Late nights are great for planning and clearing your head",
     "aiPartnerCowork": "Flow Partner",
+    "aiPartnerClaw": "I'm your assistant",
+    "subtitleMorningClaw": "What can I help you with today?",
+    "subtitleAfternoonClaw": "What can I help you with?",
+    "subtitleEveningClaw": "What can I help you with?",
+    "subtitleNightClaw": "Still up? What's on your mind?",
+    "narrativeClaw": "Brainstorm, draft, research, or just think out loud — whatever you need, just tell me.",
     "featureIntro": "",
     "featureIntroCowork": "",
     "lastTimeYouWere": "Last time you were working on:",

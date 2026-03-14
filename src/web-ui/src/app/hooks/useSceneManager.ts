@@ -8,7 +8,7 @@
 import { SCENE_TAB_REGISTRY, getMiniAppSceneDef } from '../scenes/registry';
 import type { SceneTabDef, SceneTabId } from '../components/SceneBar/types';
 import { useSceneStore } from '../stores/sceneStore';
-import { useToolboxStore } from '../scenes/toolbox/toolboxStore';
+import { useMiniAppStore } from '../scenes/miniapps/miniAppStore';
 
 export interface UseSceneManagerReturn {
   openTabs: ReturnType<typeof useSceneStore.getState>['openTabs'];
@@ -21,7 +21,7 @@ export interface UseSceneManagerReturn {
 
 export function useSceneManager(): UseSceneManagerReturn {
   const { openTabs, activeTabId, activateScene, openScene, closeScene } = useSceneStore();
-  const apps = useToolboxStore((s) => s.apps);
+  const apps = useMiniAppStore((s) => s.apps);
 
   const miniAppDefs: SceneTabDef[] = openTabs
     .filter((t) => typeof t.id === 'string' && t.id.startsWith('miniapp:'))

@@ -40,7 +40,7 @@ export const InitMiniAppDisplay: React.FC<ToolCardProps> = ({ toolItem }) => {
             {path && <span className="miniapp-tool-display__meta">path: {path}</span>}
             <button
               className="miniapp-tool-display__open-btn"
-              onClick={() => openScene('toolbox')}
+              onClick={() => openScene(`miniapp:${appId}`)}
               title="Open in Mini App"
             >
               <ExternalLink size={12} />

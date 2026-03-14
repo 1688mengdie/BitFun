@@ -16,6 +16,13 @@ import {
 } from '../types/flow-chat';
 import { createLogger } from '@/shared/utils/logger';
 import { i18nService } from '@/infrastructure/i18n/core/I18nService';
+import type { SessionKind } from '@/shared/types/session-history';
+import {
+  buildSessionMetadata,
+  deriveLastFinishedAtFromMetadata,
+  deriveSessionRelationshipFromMetadata,
+  normalizeSessionRelationship,
+} from '../utils/sessionMetadata';
 
 const log = createLogger('FlowChatStore');
 
@@ -109,6 +116,50 @@ export class FlowChatStore {
     this.notifyListeners();
   }
 
+  private collectCascadeSessionIds(
+    rootSessionId: string,
+    sessions: Map<string, Session>
+  ): string[] {
+    if (!sessions.has(rootSessionId)) {
+      return [];
+    }
+
+    const childSessionIdsByParent = new Map<string, string[]>();
+    sessions.forEach(session => {
+      const parentSessionId = session.parentSessionId;
+      if (!parentSessionId) {
+        return;
+      }
+
+      const existing = childSessionIdsByParent.get(parentSessionId) || [];
+      existing.push(session.sessionId);
+      childSessionIdsByParent.set(parentSessionId, existing);
+    });
+
+    const visited = new Set<string>();
+    const orderedSessionIds: string[] = [];
+
+    const visit = (sessionId: string): void => {
+      if (visited.has(sessionId)) {
+        return;
+      }
+
+      visited.add(sessionId);
+      const childSessionIds = childSessionIdsByParent.get(sessionId) || [];
+      childSessionIds.forEach(childSessionId => {
+        visit(childSessionId);
+      });
+      orderedSessionIds.push(sessionId);
+    };
+
+    visit(rootSessionId);
+    return orderedSessionIds;
+  }
+
+  public getCascadeSessionIds(sessionId: string): string[] {
+    return this.collectCascadeSessionIds(sessionId, this.state.sessions);
+  }
+
   public subscribe(listener: (state: FlowChatState) => void): () => void {
     this.listeners.add(listener);
     return () => {
@@ -130,6 +181,7 @@ export class FlowChatStore {
     });
     
     this.setState(prev => {
+      const relationship = normalizeSessionRelationship({ sessionKind: 'normal' });
       const session: Session = {
         sessionId,
         title: title || i18nService.t('flow-chat:session.new'),
@@ -139,11 +191,15 @@ export class FlowChatStore {
         config,
         createdAt: Date.now(),
         lastActiveAt: Date.now(),
+        lastFinishedAt: undefined,
         error: null,
         maxContextTokens: maxContextTokens || 128128,
         mode: mode || 'agentic',
         workspacePath,
+        parentSessionId: relationship.parentSessionId,
+        sessionKind: relationship.sessionKind,
         btwThreads: [],
+        btwOrigin: relationship.btwOrigin,
       };
 
       const newSessions = new Map(prev.sessions);
@@ -166,7 +222,7 @@ export class FlowChatStore {
     title: string,
     mode: string,
     workspacePath?: string,
-    meta?: { parentSessionId?: string; sessionKind?: 'normal' | 'btw'; btwOrigin?: Session['btwOrigin'] }
+    meta?: { parentSessionId?: string; sessionKind?: SessionKind; btwOrigin?: Session['btwOrigin'] }
   ): void {
     import('../state-machine').then(({ stateMachineManager }) => {
       stateMachineManager.getOrCreate(sessionId);
@@ -177,6 +233,7 @@ export class FlowChatStore {
         return prev;
       }
 
+      const relationship = normalizeSessionRelationship(meta);
       const session: Session = {
         sessionId,
         title: title || i18nService.t('flow-chat:session.new'),
@@ -186,15 +243,16 @@ export class FlowChatStore {
         config: { maxContextTokens: 128128, autoCompact: true, enableTools: true } as any,
         createdAt: Date.now(),
         lastActiveAt: Date.now(),
+        lastFinishedAt: undefined,
         error: null,
         maxContextTokens: 128128,
         mode: mode || 'agentic',
         isHistorical: false,
         workspacePath,
-        parentSessionId: meta?.parentSessionId,
-        sessionKind: meta?.sessionKind,
+        parentSessionId: relationship.parentSessionId,
+        sessionKind: relationship.sessionKind,
         btwThreads: [],
-        btwOrigin: meta?.btwOrigin,
+        btwOrigin: relationship.btwOrigin,
       };
 
       const newSessions = new Map(prev.sessions);
@@ -270,16 +328,22 @@ export class FlowChatStore {
    */
   public updateSessionRelationship(
     sessionId: string,
-    updates: { parentSessionId?: string; sessionKind?: 'normal' | 'btw' }
+    updates: { parentSessionId?: string; sessionKind?: SessionKind }
   ): void {
     this.setState(prev => {
       const session = prev.sessions.get(sessionId);
       if (!session) return prev;
 
+      const relationship = normalizeSessionRelationship({
+        sessionKind: updates.sessionKind ?? session.sessionKind,
+        parentSessionId: updates.parentSessionId ?? session.parentSessionId,
+        btwOrigin: session.btwOrigin,
+      });
       const next: Session = {
         ...session,
-        parentSessionId: updates.parentSessionId ?? session.parentSessionId,
-        sessionKind: updates.sessionKind ?? session.sessionKind,
+        parentSessionId: relationship.parentSessionId,
+        sessionKind: relationship.sessionKind,
+        btwOrigin: relationship.btwOrigin,
       };
 
       const newSessions = new Map(prev.sessions);
@@ -294,9 +358,16 @@ export class FlowChatStore {
       const session = prev.sessions.get(sessionId);
       if (!session) return prev;
 
+      const relationship = normalizeSessionRelationship({
+        sessionKind: 'btw',
+        parentSessionId: origin?.parentSessionId ?? session.parentSessionId,
+        btwOrigin: { ...(session.btwOrigin || {}), ...(origin || {}) },
+      });
       const next: Session = {
         ...session,
-        btwOrigin: { ...(session.btwOrigin || {}), ...(origin || {}) },
+        parentSessionId: relationship.parentSessionId,
+        sessionKind: relationship.sessionKind,
+        btwOrigin: relationship.btwOrigin,
       };
 
       const newSessions = new Map(prev.sessions);
@@ -403,16 +474,37 @@ export class FlowChatStore {
   }
 
   public async deleteSession(sessionId: string): Promise<void> {
+    const sessionIdsToDelete = this.getCascadeSessionIds(sessionId);
+    if (sessionIdsToDelete.length === 0) {
+      return;
+    }
+
     const { stateMachineManager } = await import('../state-machine');
-    stateMachineManager.delete(sessionId);
-    
+    sessionIdsToDelete.forEach(id => {
+      stateMachineManager.delete(id);
+    });
+
     try {
       const { agentAPI } = await import('@/infrastructure/api');
-      const workspacePath = this.state.sessions.get(sessionId)?.workspacePath;
-      if (!workspacePath) {
-        throw new Error(`Workspace path not found for session ${sessionId}`);
-      }
-      await agentAPI.deleteSession(sessionId, workspacePath);
+      const deleteResults = await Promise.allSettled(
+        sessionIdsToDelete.map(async id => {
+          const workspacePath = this.state.sessions.get(id)?.workspacePath;
+          if (!workspacePath) {
+            throw new Error(`Workspace path not found for session ${id}`);
+          }
+
+          await agentAPI.deleteSession(id, workspacePath);
+        })
+      );
+
+      deleteResults.forEach((result, index) => {
+        if (result.status === 'rejected') {
+          log.error('Failed to delete session on backend', {
+            sessionId: sessionIdsToDelete[index],
+            error: result.reason,
+          });
+        }
+      });
     } catch (error) {
       log.error('Failed to delete session on backend', { sessionId, error });
     }
@@ -420,13 +512,57 @@ export class FlowChatStore {
     this.removeSession(sessionId);
   }
 
-  public removeSession(sessionId: string): void {
+  public removeSession(sessionId: string): string[] {
+    const removedSessionIds = this.getCascadeSessionIds(sessionId);
+    if (removedSessionIds.length === 0) {
+      return [];
+    }
+
     this.setState(prev => {
+      const removedSessionIdSet = new Set(removedSessionIds);
       const newSessions = new Map(prev.sessions);
-      newSessions.delete(sessionId);
+      const removedSessions = removedSessionIds
+        .map(id => prev.sessions.get(id))
+        .filter((session): session is Session => Boolean(session));
+
+      removedSessionIds.forEach(id => {
+        newSessions.delete(id);
+      });
+
+      removedSessions.forEach(session => {
+        const parentSessionId = session.btwOrigin?.parentSessionId ?? session.parentSessionId;
+        if (!parentSessionId || removedSessionIdSet.has(parentSessionId)) {
+          return;
+        }
+
+        const parentSession = newSessions.get(parentSessionId);
+        if (!parentSession?.btwThreads?.length) {
+          return;
+        }
+
+        const requestId = session.btwOrigin?.requestId;
+        const nextThreads = parentSession.btwThreads.filter(thread => {
+          if (thread.childSessionId === session.sessionId) {
+            return false;
+          }
+
+          if (requestId && thread.requestId === requestId) {
+            return false;
+          }
+
+          return true;
+        });
+
+        if (nextThreads.length !== parentSession.btwThreads.length) {
+          newSessions.set(parentSessionId, {
+            ...parentSession,
+            btwThreads: nextThreads,
+          });
+        }
+      });
 
       let newActiveSessionId = prev.activeSessionId;
-      if (prev.activeSessionId === sessionId) {
+      if (prev.activeSessionId && removedSessionIdSet.has(prev.activeSessionId)) {
         const remainingSessions = Array.from(newSessions.keys());
         newActiveSessionId = remainingSessions.length > 0 ? remainingSessions[0] : null;
       }
@@ -437,6 +573,8 @@ export class FlowChatStore {
         activeSessionId: newActiveSessionId
       };
     });
+
+    return removedSessionIds;
   }
 
   public clearSession(sessionId?: string): void {
@@ -1011,6 +1149,26 @@ export class FlowChatStore {
     });
   }
 
+  public markSessionFinished(sessionId: string, timestamp: number = Date.now()): void {
+    this.setState(prev => {
+      const session = prev.sessions.get(sessionId);
+      if (!session) return prev;
+
+      const updatedSession: Session = {
+        ...session,
+        lastFinishedAt: timestamp,
+      };
+
+      const newSessions = new Map(prev.sessions);
+      newSessions.set(sessionId, updatedSession);
+
+      return {
+        ...prev,
+        sessions: newSessions,
+      };
+    });
+  }
+
   public async updateSessionTitle(
     sessionId: string, 
     title: string, 
@@ -1052,38 +1210,7 @@ export class FlowChatStore {
         }
 
         const metadata = await sessionAPI.loadSessionMetadata(sessionId, workspacePath);
-        const turnCount = session.dialogTurns.length;
-        const messageCount = session.dialogTurns.reduce((sum, turn) => {
-          return sum + 1 + turn.modelRounds.reduce((roundSum, round) => {
-            return roundSum + round.items.filter(item => item.type === 'text').length;
-          }, 0);
-        }, 0);
-        const toolCallCount = session.dialogTurns.reduce((sum, turn) => {
-          return sum + turn.modelRounds.reduce((roundSum, round) => {
-            return roundSum + round.items.filter(item => item.type === 'tool').length;
-          }, 0);
-        }, 0);
-
-        const nextMetadata = metadata
-          ? {
-              ...metadata,
-              sessionName: title,
-            }
-          : {
-              sessionId,
-              sessionName: title,
-              agentType: session.mode || 'agentic',
-              modelName: session.config.modelName || 'default',
-              createdAt: session.createdAt,
-              lastActiveAt: session.lastActiveAt || Date.now(),
-              turnCount,
-              messageCount,
-              toolCallCount,
-              status: 'active' as const,
-              tags: [],
-              todos: session.todos || [],
-              workspacePath,
-            };
+        const nextMetadata = buildSessionMetadata(session, metadata);
 
         await sessionAPI.saveSessionMetadata(nextMetadata, workspacePath);
       } catch (error) {
@@ -1329,27 +1456,8 @@ export class FlowChatStore {
           log.warn('Failed to get model context window size, using default', { sessionId: metadata.sessionId, error });
         }
         
-        const parentSessionId = (metadata?.customMetadata?.parentSessionId ||
-          metadata?.custom_metadata?.parent_session_id ||
-          metadata?.custom_metadata?.parentSessionId) as string | undefined;
-        const sessionKind = (metadata?.customMetadata?.kind || metadata?.customMetadata?.sessionKind) as
-          | 'normal'
-          | 'btw'
-          | undefined;
-        const parentDialogTurnId = (metadata?.customMetadata?.parentDialogTurnId ||
-          metadata?.custom_metadata?.parent_dialog_turn_id ||
-          metadata?.custom_metadata?.parentDialogTurnId) as string | undefined;
-        const parentTurnIndexRaw = (metadata?.customMetadata?.parentTurnIndex ||
-          metadata?.custom_metadata?.parent_turn_index ||
-          metadata?.custom_metadata?.parentTurnIndex) as number | string | null | undefined;
-        const parentTurnIndex = typeof parentTurnIndexRaw === 'number'
-          ? parentTurnIndexRaw
-          : (typeof parentTurnIndexRaw === 'string' && parentTurnIndexRaw.trim()
-            ? Number(parentTurnIndexRaw)
-            : undefined);
-        const parentRequestId = (metadata?.customMetadata?.parentRequestId ||
-          metadata?.custom_metadata?.parent_request_id ||
-          metadata?.custom_metadata?.parentRequestId) as string | undefined;
+        const relationship = deriveSessionRelationshipFromMetadata(metadata);
+        const lastFinishedAt = deriveLastFinishedAtFromMetadata(metadata);
 
         this.setState(prev => {
           if (prev.sessions.has(metadata.sessionId)) {
@@ -1376,23 +1484,17 @@ export class FlowChatStore {
             },
             createdAt: metadata.createdAt,
             lastActiveAt: metadata.lastActiveAt,
+            lastFinishedAt,
             error: null,
             isHistorical: true,
             todos: (metadata as any).todos || [],
             maxContextTokens,
             mode: validatedAgentType,
             workspacePath: (metadata as any).workspacePath || workspacePath,
-            parentSessionId: typeof parentSessionId === 'string' && parentSessionId.trim() ? parentSessionId : undefined,
-            sessionKind: sessionKind,
+            parentSessionId: relationship.parentSessionId,
+            sessionKind: relationship.sessionKind,
             btwThreads: [],
-            btwOrigin: sessionKind === 'btw'
-              ? {
-                  requestId: typeof parentRequestId === 'string' && parentRequestId.trim() ? parentRequestId : undefined,
-                  parentSessionId: typeof parentSessionId === 'string' && parentSessionId.trim() ? parentSessionId : undefined,
-                  parentDialogTurnId: typeof parentDialogTurnId === 'string' && parentDialogTurnId.trim() ? parentDialogTurnId : undefined,
-                  parentTurnIndex: Number.isFinite(parentTurnIndex as number) ? (parentTurnIndex as number) : undefined,
-                }
-              : undefined,
+            btwOrigin: relationship.btwOrigin,
           };
           
           const newSessions = new Map(prev.sessions);

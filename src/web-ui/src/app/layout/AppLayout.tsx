@@ -9,6 +9,7 @@
  */
 
 import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
+import { open } from '@tauri-apps/plugin-dialog';
 import { useWorkspaceContext } from '../../infrastructure/contexts/WorkspaceContext';
 import { useWindowControls } from '../hooks/useWindowControls';
 import { useApp } from '../hooks/useApp';
@@ -84,6 +85,21 @@ const AppLayout: React.FC<AppLayoutProps> = ({ className = '' }) => {
   const [showNewProjectDialog, setShowNewProjectDialog] = useState(false);
   const [showAboutDialog, setShowAboutDialog] = useState(false);
   const [showWorkspaceStatus, setShowWorkspaceStatus] = useState(false);
+  const handleOpenProject = useCallback(async () => {
+    try {
+      const selected = await open({
+        directory: true,
+        multiple: false,
+        title: t('header.selectProjectDirectory'),
+      });
+
+      if (selected && typeof selected === 'string') {
+        await openWorkspace(selected);
+      }
+    } catch (error) {
+      log.error('Failed to open project', error);
+    }
+  }, [openWorkspace, t]);
   const handleNewProject = useCallback(() => setShowNewProjectDialog(true), []);
   const handleShowAbout  = useCallback(() => setShowAboutDialog(true), []);
 
@@ -101,12 +117,15 @@ const AppLayout: React.FC<AppLayoutProps> = ({ className = '' }) => {
 
   // Listen for nav-panel events dispatched by the workspace area
   useEffect(() => {
+    const onOpenProject = () => { void handleOpenProject(); };
     const onNewProject = () => handleNewProject();
+    window.addEventListener('nav:open-project', onOpenProject);
     window.addEventListener('nav:new-project', onNewProject);
     return () => {
+      window.removeEventListener('nav:open-project', onOpenProject);
       window.removeEventListener('nav:new-project', onNewProject);
     };
-  }, [handleNewProject]);
+  }, [handleNewProject, handleOpenProject]);
 
   // macOS native menubar events (previously in TitleBar)
   const isMacOS = useMemo(() => {

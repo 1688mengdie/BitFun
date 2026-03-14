@@ -11,7 +11,6 @@ import {
   Trash2,
 } from 'lucide-react';
 import { open } from '@tauri-apps/plugin-dialog';
-import { useToolboxStore } from '../toolboxStore';
 import { useSceneManager } from '@/app/hooks/useSceneManager';
 import MiniAppCard from '../components/MiniAppCard';
 import type { MiniAppMeta } from '@/infrastructure/api/service-api/MiniAppAPI';
@@ -30,17 +29,18 @@ import {
 import type { SceneTabId } from '@/app/components/SceneBar/types';
 import { getMiniAppIconGradient, renderMiniAppIcon } from '../utils/miniAppIcons';
 import { useCurrentWorkspace } from '@/infrastructure/contexts/WorkspaceContext';
-import './GalleryView.scss';
+import { useMiniAppStore } from '../miniAppStore';
+import './MiniAppGalleryView.scss';
 
-const log = createLogger('GalleryView');
+const log = createLogger('MiniAppGalleryView');
 
-const GalleryView: React.FC = () => {
-  const apps = useToolboxStore((s) => s.apps);
-  const loading = useToolboxStore((s) => s.loading);
-  const runningWorkerIds = useToolboxStore((s) => s.runningWorkerIds);
-  const setApps = useToolboxStore((s) => s.setApps);
-  const setLoading = useToolboxStore((s) => s.setLoading);
-  const markWorkerStopped = useToolboxStore((s) => s.markWorkerStopped);
+const MiniAppGalleryView: React.FC = () => {
+  const apps = useMiniAppStore((state) => state.apps);
+  const loading = useMiniAppStore((state) => state.loading);
+  const runningWorkerIds = useMiniAppStore((state) => state.runningWorkerIds);
+  const setApps = useMiniAppStore((state) => state.setApps);
+  const setLoading = useMiniAppStore((state) => state.setLoading);
+  const markWorkerStopped = useMiniAppStore((state) => state.markWorkerStopped);
   const { workspacePath } = useCurrentWorkspace();
   const { openScene, activateScene, closeScene, openTabs } = useSceneManager();
 
@@ -61,25 +61,26 @@ const GalleryView: React.FC = () => {
   );
 
   const categories = useMemo(() => {
-    const cats = Array.from(new Set(apps.map((a) => a.category).filter(Boolean)));
-    return ['all', ...cats];
+    const values = Array.from(new Set(apps.map((app) => app.category).filter(Boolean)));
+    return ['all', ...values];
   }, [apps]);
 
   const filtered = useMemo(() => {
-    return apps.filter((a) => {
+    return apps.filter((app) => {
       const keyword = search.toLowerCase();
       const matchSearch =
         !search ||
-        a.name.toLowerCase().includes(keyword) ||
-        a.description.toLowerCase().includes(keyword) ||
-        a.tags.some((t) => t.toLowerCase().includes(keyword));
-      const matchCategory = categoryFilter === 'all' || a.category === categoryFilter;
+        app.name.toLowerCase().includes(keyword) ||
+        app.description.toLowerCase().includes(keyword) ||
+        app.tags.some((tag) => tag.toLowerCase().includes(keyword));
+      const matchCategory = categoryFilter === 'all' || app.category === categoryFilter;
       return matchSearch && matchCategory;
     });
   }, [apps, search, categoryFilter]);
 
   const handleOpenApp = useCallback(
     (appId: string) => {
+      setSelectedApp(null);
       const tabId: SceneTabId = `miniapp:${appId}`;
       if (openTabIds.has(tabId)) {
         activateScene(tabId);
@@ -117,7 +118,10 @@ const GalleryView: React.FC = () => {
     setPendingDeleteId(null);
     try {
       await miniAppAPI.deleteMiniApp(appId);
-      setApps(apps.filter((a) => a.id !== appId));
+      if (selectedApp?.id === appId) {
+        setSelectedApp(null);
+      }
+      setApps(apps.filter((app) => app.id !== appId));
       markWorkerStopped(appId);
       const tabId: SceneTabId = `miniapp:${appId}`;
       if (openTabIds.has(tabId)) {
@@ -143,7 +147,7 @@ const GalleryView: React.FC = () => {
       const selected = await open({
         directory: true,
         multiple: false,
-                title: '选择小应用目录（需包含 meta.json 与 source/）',
+        title: '选择小应用目录（需包含 meta.json 与 source/）',
       });
       const path = Array.isArray(selected) ? selected[0] : selected;
       if (!path) return;
@@ -197,7 +201,7 @@ const GalleryView: React.FC = () => {
   };
 
   return (
-    <GalleryLayout className="toolbox-gallery">
+    <GalleryLayout className="miniapp-gallery">
       <GalleryPageHeader
         title="小应用"
         subtitle="即时生成的小应用，打开就能用，也能继续迭代。"
@@ -262,19 +266,19 @@ const GalleryView: React.FC = () => {
             <>
               {categories.length > 1 ? (
                 <div className="gallery-chip-row">
-                  {categories.map((cat) => (
+                  {categories.map((category) => (
                     <button
-                      key={cat}
+                      key={category}
                       type="button"
                       className={[
                         'gallery-cat-chip',
-                        categoryFilter === cat && 'gallery-cat-chip--active',
+                        categoryFilter === category && 'gallery-cat-chip--active',
                       ]
                         .filter(Boolean)
                         .join(' ')}
-                      onClick={() => setCategoryFilter(cat)}
+                      onClick={() => setCategoryFilter(category)}
                     >
-                      {cat === 'all' ? '全部' : cat}
+                      {category === 'all' ? '全部' : category}
                     </button>
                   ))}
                 </div>
@@ -316,9 +320,9 @@ const GalleryView: React.FC = () => {
         ) : null}
       >
         {selectedApp?.tags.length ? (
-          <div className="toolbox-gallery__detail-tags">
+          <div className="miniapp-gallery__detail-tags">
             {selectedApp.tags.map((tag) => (
-              <span key={tag} className="toolbox-gallery__detail-tag">
+              <span key={tag} className="miniapp-gallery__detail-tag">
                 <Tag size={11} />
                 {tag}
               </span>
@@ -331,7 +335,7 @@ const GalleryView: React.FC = () => {
         isOpen={pendingDeleteId !== null}
         onClose={() => setPendingDeleteId(null)}
         onConfirm={handleDeleteConfirm}
-        title={`删除 "${apps.find((a) => a.id === pendingDeleteId)?.name ?? ''}"？`}
+        title={`删除 "${apps.find((app) => app.id === pendingDeleteId)?.name ?? ''}"？`}
         message="此操作不可撤销，应用及其所有数据将被永久删除。"
         type="warning"
         confirmDanger
@@ -342,4 +346,4 @@ const GalleryView: React.FC = () => {
   );
 };
 
-export default GalleryView;
+export default MiniAppGalleryView;

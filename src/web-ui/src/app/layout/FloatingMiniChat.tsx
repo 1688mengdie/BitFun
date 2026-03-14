@@ -22,12 +22,10 @@ import { flowChatStore } from '../../flow_chat/store/FlowChatStore';
 import { syncSessionToModernStore } from '../../flow_chat/services/storeSync';
 import { useToolbarModeContext } from '../../flow_chat/components/toolbar-mode/ToolbarModeContext';
 import type { FlowChatState } from '../../flow_chat/types/flow-chat';
+import { compareSessionsForDisplay } from '../../flow_chat/utils/sessionOrdering';
 import { ModernFlowChatContainer } from '../../flow_chat/components/modern/ModernFlowChatContainer';
 import { Tooltip, Input } from '@/component-library';
 import './FloatingMiniChat.scss';
-
-const getSessionTimestamp = (updatedAt?: number, lastActiveAt?: number) =>
-  updatedAt ?? lastActiveAt ?? 0;
 
 export const FloatingMiniChat: React.FC = () => {
   const { t } = useTranslation('flow-chat');
@@ -58,7 +56,7 @@ export const FloatingMiniChat: React.FC = () => {
 
   const sessions = useMemo(() => {
     return Array.from(flowChatState.sessions.values())
-      .sort((a, b) => getSessionTimestamp(b.updatedAt, b.lastActiveAt) - getSessionTimestamp(a.updatedAt, a.lastActiveAt))
+      .sort(compareSessionsForDisplay)
       .slice(0, 10);
   }, [flowChatState]);
 

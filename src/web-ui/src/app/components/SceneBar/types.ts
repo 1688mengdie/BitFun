@@ -15,7 +15,7 @@ export type SceneTabId =
   | 'profile'
   | 'agents'
   | 'skills'
-  | 'toolbox'
+  | 'miniapps'
   | 'my-agent'
   | 'shell'
   | `miniapp:${string}`;

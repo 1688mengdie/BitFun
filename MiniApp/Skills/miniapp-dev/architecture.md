@@ -7,8 +7,8 @@ AI 对话 → GenerateMiniApp Tool → MiniAppManager::create()
   → storage.rs 持久化 source + meta.json
   → compiler.rs 生成 compiled_html（注入 Bridge）
   → emit miniapp-created 事件
-  → 前端 useMiniAppList 监听 → 刷新 GalleryView
-  → 用户点击「打开」→ AppRunnerView → MiniAppRunner
+  → 前端 useMiniAppCatalogSync 监听 → 刷新 MiniAppGalleryView
+  → 用户点击「打开」→ MiniAppScene → MiniAppRunner
   → <iframe srcDoc={compiled_html}>
   → Bridge Script 拦截 require/fetch → postMessage
   → useMiniAppBridge 路由 → Tauri Commands → Rust 服务
@@ -129,23 +129,26 @@ struct MiniAppFsRequest {
 
 ## 前端状态管理
 
-### toolboxStore (Zustand)
+### miniAppStore (Zustand)
 ```typescript
 {
-  activeView: 'gallery' | 'runner',  // 当前视图
-  currentAppId: string | null,       // runner 视图中的 app
   apps: MiniAppMeta[],               // 画廊列表
   loading: boolean,
-  openApp(id),                       // 切换到 runner
-  backToGallery(),                   // 返回画廊
+  openedAppIds: string[],            // 当前已打开的 MiniApp scene
+  runningWorkerIds: string[],        // 当前运行中的 worker
+  openApp(id),
+  closeApp(id),
+  setRunningWorkerIds(ids),
+  markWorkerRunning(id),
+  markWorkerStopped(id),
 }
 ```
 
 ### 事件驱动刷新
-`useMiniAppList` hook:
-- 组件挂载时加载列表
-- 监听 `miniapp-created`, `miniapp-updated`, `miniapp-deleted` 事件
-- 事件触发时自动重新加载列表
+`useMiniAppCatalogSync` hook:
+- 组件挂载时加载列表和运行中的 worker
+- 监听 `miniapp-created`, `miniapp-updated`, `miniapp-deleted`, `miniapp-worker-restarted`, `miniapp-worker-stopped`
+- 事件触发时统一刷新 store，导航入口与画廊共享同一份状态
 
 ## 工具卡片集成
 
@@ -160,4 +163,4 @@ TOOL_CARD_CONFIGS.set('ListMiniApps', { icon: List, displayName: '列出 MiniApp
 卡片支持:
 - 流式显示工具调用状态
 - 完成后显示应用名/ID/数量
-- "在工具箱中打开" 按钮（调用 `sceneManager.openScene('toolbox')`）
+- "Open in Mini App" 按钮直达 `sceneManager.openScene(\`miniapp:${appId}\`)`

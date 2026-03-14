@@ -1,6 +1,6 @@
 @use '../../../../component-library/styles/tokens' as *;
 
-.toolbox-gallery {
+.miniapp-gallery {
   .gallery-page-header__actions {
     > :first-child {
       width: 180px;
@@ -27,7 +27,7 @@
 }
 
 @media (max-width: 720px) {
-  .toolbox-gallery {
+  .miniapp-gallery {
     .gallery-page-header__actions {
       > :first-child {
         width: 100%;

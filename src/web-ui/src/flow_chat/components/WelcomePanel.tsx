@@ -13,6 +13,7 @@ import { createLogger } from '@/shared/utils/logger';
 import { useWorkspaceContext } from '@/infrastructure/contexts/WorkspaceContext';
 import type { WorkspaceInfo } from '@/shared/types';
 import CoworkExampleCards from './CoworkExampleCards';
+import { useAgentIdentityDocument } from '@/app/scenes/my-agent/useAgentIdentityDocument';
 import './WelcomePanel.css';
 
 const log = createLogger('WelcomePanel');
@@ -21,12 +22,14 @@ interface WelcomePanelProps {
   onQuickAction?: (command: string) => void;
   className?: string;
   sessionMode?: string;
+  workspacePath?: string;
 }
 
 export const WelcomePanel: React.FC<WelcomePanelProps> = ({
   onQuickAction,
   className = '',
   sessionMode,
+  workspacePath = '',
 }) => {
   const { t } = useTranslation('flow-chat');
   const [gitState, setGitState] = useState<GitWorkState | null>(null);
@@ -42,19 +45,26 @@ export const WelcomePanel: React.FC<WelcomePanelProps> = ({
     openWorkspace,
     switchWorkspace,
   } = useWorkspaceContext();
-  const isCoworkSession = (sessionMode || '').toLowerCase() === 'cowork';
+  const sessionModeLower = (sessionMode || '').toLowerCase();
+  const isCoworkSession = sessionModeLower === 'cowork';
+  const isClawSession = sessionModeLower === 'claw';
+  // code sessions use mode='agentic'; cowork sessions use mode='cowork'
+  const showPanda = sessionModeLower !== 'code' && sessionModeLower !== 'agentic' && sessionModeLower !== 'cowork';
+
+  const { document: identityDoc } = useAgentIdentityDocument(isClawSession ? workspacePath : '');
+  const assistantName = isClawSession ? (identityDoc.name || '') : '';
 
   const greeting = useMemo(() => {
     const hour = new Date().getHours();
-    const s = isCoworkSession ? 'Cowork' : '';
+    const s = isCoworkSession ? 'Cowork' : isClawSession ? 'Claw' : '';
     if (hour >= 5 && hour < 12) return { title: t('welcome.greetingMorning'), subtitle: t(`welcome.subtitleMorning${s}`) };
     if (hour >= 12 && hour < 18) return { title: t('welcome.greetingAfternoon'), subtitle: t(`welcome.subtitleAfternoon${s}`) };
     if (hour >= 18 && hour < 23) return { title: t('welcome.greetingEvening'), subtitle: t(`welcome.subtitleEvening${s}`) };
     return { title: t('welcome.greetingNight'), subtitle: t(`welcome.subtitleNight${s}`) };
-  }, [t, isCoworkSession]);
+  }, [t, isCoworkSession, isClawSession]);
 
   const tagline = greeting.subtitle;
-  const aiPartnerKey = isCoworkSession ? 'welcome.aiPartnerCowork' : 'welcome.aiPartner';
+  const aiPartnerKey = isCoworkSession ? 'welcome.aiPartnerCowork' : isClawSession ? 'welcome.aiPartnerClaw' : 'welcome.aiPartner';
 
   const otherWorkspaces = useMemo(
     () => openedWorkspacesList.filter(ws => ws.id !== currentWorkspace?.id),
@@ -117,9 +127,9 @@ export const WelcomePanel: React.FC<WelcomePanelProps> = ({
   }, []);
 
   useEffect(() => {
-    if (isCoworkSession || !currentWorkspace?.rootPath) { setGitState(null); return; }
+    if (isCoworkSession || isClawSession || !currentWorkspace?.rootPath) { setGitState(null); return; }
     void loadGitState(currentWorkspace.rootPath);
-  }, [currentWorkspace?.rootPath, isCoworkSession, loadGitState]);
+  }, [currentWorkspace?.rootPath, isCoworkSession, isClawSession, loadGitState]);
 
   useEffect(() => {
     if (!workspaceDropdownOpen) return;
@@ -161,12 +171,16 @@ export const WelcomePanel: React.FC<WelcomePanelProps> = ({
         {/* Greeting */}
         <div className="welcome-panel__greeting">
           <div className="welcome-panel__greeting-inner">
-            <div className="welcome-panel__panda" aria-hidden="true">
-              <img src="/panda_full_1.png" className="welcome-panel__panda-frame welcome-panel__panda-frame--1" alt="" />
-              <img src="/panda_full_2.png" className="welcome-panel__panda-frame welcome-panel__panda-frame--2" alt="" />
-            </div>
+            {showPanda && (
+              <div className="welcome-panel__panda" aria-hidden="true">
+                <img src="/panda_full_1.png" className="welcome-panel__panda-frame welcome-panel__panda-frame--1" alt="" />
+                <img src="/panda_full_2.png" className="welcome-panel__panda-frame welcome-panel__panda-frame--2" alt="" />
+              </div>
+            )}
             <div className="welcome-panel__greeting-text">
-              <h1 className="welcome-panel__heading">{greeting.title}，{t(aiPartnerKey)}</h1>
+              <h1 className="welcome-panel__heading">
+                {greeting.title}，{t(aiPartnerKey)}{isClawSession && assistantName ? `，${assistantName}` : ''}
+              </h1>
               <p className="welcome-panel__tagline">{tagline}</p>
             </div>
           </div>
@@ -177,7 +191,9 @@ export const WelcomePanel: React.FC<WelcomePanelProps> = ({
         {/* Narrative: workspace + git in natural language */}
         <div className="welcome-panel__narrative">
           <p className="welcome-panel__narrative-text">
-            {!hasWorkspace ? (
+            {isClawSession ? (
+              t('welcome.narrativeClaw')
+            ) : !hasWorkspace ? (
               <>
                 {t('welcome.noWorkspaceHint')}
                 <button

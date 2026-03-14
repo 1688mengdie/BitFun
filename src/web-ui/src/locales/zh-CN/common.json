@@ -89,16 +89,7 @@
       "persona": "智能体档案 — 身份、规则、记忆、知识与能力",
       "agents": "它能调用哪些 Agent 与 Agent Team",
       "skills": "它懂什么专项知识 — 技能知识文件",
-      "tools": "它能用什么工具 — 内置工具与 MCP 服务",
-      "toolbox": "边聊边生成，马上可用"
-    },
-    "toolbox": {
-      "openGallery": "打开小应用",
-      "newMiniApp": "新建小应用",
-      "noApps": "即时生成的小应用，打开就能用，也能继续迭代。",
-      "runningApps": "运行中",
-      "myApps": "已打开",
-      "stop": "停止"
+      "tools": "它能用什么工具 — 内置工具与 MCP 服务"
     },
     "sections": {
       "workspace": "工作区",
@@ -175,6 +166,9 @@
       "assistantDeleted": "已删除个人助理",
       "resetWorkspaceFailed": "重置工作区失败",
       "workspaceReset": "已重置工作区",
+      "reorderFailed": "调整工作区顺序失败",
+      "dropBefore": "松开后插入到此项前",
+      "dropAfter": "松开后插入到此项后",
       "revealFailed": "打开工作区目录失败",
       "createSessionFailed": "新建会话失败",
       "worktreeCreated": "已创建 worktree",
@@ -655,7 +649,7 @@
     "capabilities": "能力配置",
     "agents": "智能体",
     "skills": "技能",
-    "toolbox": "小应用",
+    "miniApps": "小应用",
     "myAgent": "我的智能体",
     "shell": "Shell"
   },
@@ -675,7 +669,7 @@
     "openOtherProject": "打开",
     "newProject": "新建",
     "noOtherWorkspaces": "暂无其他工作区",
-    "emptyHint": "打开一个场景开始工作",
+    "emptyHint": "选一个场景，开始今天的创作吧",
     "firstTime": {
       "title": "欢迎使用 BitFun",
       "subtitle": "你的 AI 编程伙伴，让创意瞬间成为现实",
