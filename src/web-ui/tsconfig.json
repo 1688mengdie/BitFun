@@ -36,6 +36,10 @@
   },
   "include": ["src"],
   "exclude": [
+    "src/**/*.test.ts",
+    "src/**/*.test.tsx",
+    "src/**/*.spec.ts",
+    "src/**/*.spec.tsx",
     "src/**/*.example.tsx",
     "src/component-library/preview/**",
     "src/component-library/components/registry.tsx",
