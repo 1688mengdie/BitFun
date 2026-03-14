@@ -4,7 +4,7 @@
  */
 
 import React, { useRef, useCallback, useEffect, useReducer, useState, useMemo } from 'react';
-import { useTranslation } from 'react-i18next';
+import { Trans, useTranslation } from 'react-i18next';
 import { ArrowUp, Image, Network, ChevronsUp, ChevronsDown, RotateCcw, FileText } from 'lucide-react';
 import { ContextDropZone, useContextStore } from '../../shared/context-system';
 import { useActiveSessionState } from '../hooks/useActiveSessionState';
@@ -1436,13 +1436,25 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                 onKeyDown={handleKeyDown}
                 onCompositionStart={handleImeCompositionStart}
                 onCompositionEnd={handleImeCompositionEnd}
-                placeholder={t('input.placeholder')}
+                placeholder={inputState.isActive ? t('input.placeholder') : ''}
                 disabled={false}
                 contexts={contexts}
                 onRemoveContext={removeContext}
                 onMentionStateChange={setMentionState}
                 data-testid="chat-input-textarea"
               />
+
+              {!inputState.isActive && (
+                <span className="bitfun-chat-input__space-hint">
+                  <Trans
+                    i18nKey="input.spaceToActivate"
+                    t={t}
+                    components={{
+                      space: <span className="bitfun-chat-input__space-key" />,
+                    }}
+                  />
+                </span>
+              )}
               
               <FileMentionPicker
                 isOpen={mentionState.isActive}
@@ -1591,15 +1603,6 @@ export const ChatInput: React.FC<ChatInputProps> = ({
             )}
             </div>
             
-            {!inputState.isActive && (
-              <span className="bitfun-chat-input__space-hint">
-                <span className="bitfun-chat-input__space-key" aria-hidden="true">Space</span>
-                <span className="bitfun-chat-input__space-hint-text">
-                  {t('input.spaceToActivate')}
-                </span>
-              </span>
-            )}
-
             <IconButton
               className="bitfun-chat-input__expand-button"
               variant="ghost"

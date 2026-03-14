@@ -726,7 +726,11 @@ impl WorkspaceService {
             manager.cleanup_invalid_workspaces().await
         };
 
-        if result.is_ok() {}
+        if result.is_ok() {
+            if let Err(e) = self.save_workspace_data().await {
+                warn!("Failed to save workspace data after cleanup: {}", e);
+            }
+        }
 
         result
     }

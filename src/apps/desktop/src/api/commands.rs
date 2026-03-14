@@ -1009,6 +1009,40 @@ pub async fn get_recent_workspaces(
 }
 
 #[tauri::command]
+pub async fn cleanup_invalid_workspaces(
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<usize, String> {
+    match state.workspace_service.cleanup_invalid_workspaces().await {
+        Ok(removed_count) => {
+            if let Some(workspace_info) = state.workspace_service.get_current_workspace().await {
+                apply_active_workspace_context(&state, &app, &workspace_info).await;
+            } else {
+                clear_active_workspace_context(&state, &app).await;
+            }
+
+            if let Err(e) = state
+                .workspace_identity_watch_service
+                .sync_watched_workspaces()
+                .await
+            {
+                warn!(
+                    "Failed to sync workspace identity watchers after workspace cleanup: {}",
+                    e
+                );
+            }
+
+            info!("Invalid workspaces cleaned up: removed_count={}", removed_count);
+            Ok(removed_count)
+        }
+        Err(e) => {
+            error!("Failed to cleanup invalid workspaces: {}", e);
+            Err(format!("Failed to cleanup invalid workspaces: {}", e))
+        }
+    }
+}
+
+#[tauri::command]
 pub async fn get_opened_workspaces(
     state: State<'_, AppState>,
 ) -> Result<Vec<WorkspaceInfoDto>, String> {

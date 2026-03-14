@@ -143,20 +143,52 @@ $gutter: clamp(40px, 6vw, 80px);
       flex: 1;
       min-width: 0;
       max-width: 520px;
-      min-height: 180px;
+      min-height: 400px;
       display: flex;
       flex-direction: column;
       justify-content: flex-start;
       gap: 0;
-      padding: 18px 20px;
+      padding: 0;
       border-radius: 12px;
       border: 1px dashed var(--border-subtle);
       background: transparent;
-      cursor: default;
+      cursor: text;
+      overflow: hidden;
       transition: border-color $motion-fast $easing-standard;
 
-      &:hover {
+      &:hover,
+      &:focus-within {
         border-color: var(--border-medium);
+      }
+
+      // 嵌入 IR Markdown 编辑器的样式覆盖
+      .m-editor {
+        background: transparent;
+        border-radius: 0;
+      }
+
+      .m-editor-ir {
+        padding: 16px 20px;
+        background: transparent;
+
+        &-placeholder {
+          padding: 2px 0;
+          font-size: $font-size-sm;
+          color: var(--color-text-disabled);
+          line-height: 1.8;
+        }
+      }
+
+      .m-editor-ir-block-preview {
+        font-size: $font-size-sm;
+        line-height: 1.8;
+        color: var(--color-text-secondary);
+      }
+
+      .m-editor-ir-block-textarea {
+        font-size: $font-size-sm;
+        line-height: 1.8;
+        font-family: $font-family-mono;
       }
     }
 

@@ -658,12 +658,43 @@
     "welcomeBack": "欢迎回到",
     "welcomeTabTitle": "欢迎使用",
     "quickStart": "开始",
+    "heroBadge": "BitFun Workspace",
+    "heroTitle": "真实工作台，而不只是一个聊天框",
+    "heroDescription": "有个性，有记忆，帮你做事的 AI 助理。会话流、Agent 团队与小应用围绕同一个工作流协同展开，AI 在做事，不只是回答。",
     "newCodeSession": "新建 Code 会话",
-    "newCodeSessionDesc": "适合日常编码、问答与调试",
+    "newCodeSessionDesc": "开始代码任务、调试问题，或打开一个项目进入开发状态",
     "newCoworkSession": "新建 Cowork 会话",
-    "newCoworkSessionDesc": "适合协助日常工作",
+    "newCoworkSessionDesc": "适合整理需求、推进任务、起草内容和日常协作",
     "newClawSession": "新建 Claw 会话",
-    "newClawSessionDesc": "个人助理专属会话，使用独立助理工作区",
+    "newClawSessionDesc": "进入个人助理工作区，延续上下文与偏好持续协作",
+    "assistantEntryLabel": "个人助理",
+    "assistantEntryTitle": "除了项目工作流，你也可以直接使用 BitFun 助理",
+    "assistantEntryDescription": "不用先选项目。进入助理工作区后，可以直接聊天、整理思路、起草文字，或让助理持续跟进你的任务。",
+    "assistantEntryAction": "进入助理模式",
+    "assistantHint": "除了 Code 和 Cowork，你也可以直接进入助理模式，处理项目之外的整理、起草和日常协作。",
+    "workspaceSectionTitle": "项目与工作区",
+    "workspaceSectionHint": "打开项目开始 Code 或 Cowork，也可以切换到最近使用的工作区。",
+    "noRecentWorkspaces": "暂无最近工作区",
+    "messages": {
+      "message1": "欢迎回来，继续把想法变成现实。",
+      "message2": "嗨，今天也来整点好玩的。",
+      "message3": "你的创作搭子已上线，随时开工。",
+      "message4": "欢迎使用 BitFun，开始做点有意思的事。"
+    },
+    "features": {
+      "workspace": {
+        "title": "AI 在做事",
+        "description": "思考链、终端命令、代码差异与任务规划都会实时出现，过程透明，不只是回答。"
+      },
+      "team": {
+        "title": "你的 AI 团队",
+        "description": "为不同场景配置 Code、Cowork 和更多 Agent，让它们分工协作，完成复杂任务。"
+      },
+      "assistant": {
+        "title": "助理会持续成长",
+        "description": "助理工作区会保留上下文和个人偏好，适合整理思路、起草内容和日常协作。"
+      }
+    },
     "comingSoon": "即将推出",
     "recentWorkspaces": "切换工作区",
     "openOtherProject": "打开",

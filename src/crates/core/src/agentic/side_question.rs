@@ -14,6 +14,7 @@ use crate::util::types::message::Message as AIMessage;
 use futures::StreamExt;
 use log::{debug, warn};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 use tokio_util::sync::CancellationToken;
@@ -280,6 +281,9 @@ Rules:\n\
         let (tx, rx) = mpsc::unbounded_channel();
         let request_id = request.request_id.clone();
         let session_id = request.session_id.clone();
+        let question = request.question.clone();
+        let persist_target = request.persist_target.clone();
+        let coordinator = self.coordinator.clone();
         let runtime = self.runtime.clone();
 
         tokio::spawn(async move {
@@ -346,6 +350,27 @@ Rules:\n\
                 );
             }
 
+            if let Some(target) = persist_target {
+                if let Err(error) = coordinator
+                    .persist_btw_turn(
+                        &target.workspace_path,
+                        &target.child_session_id,
+                        &request_id,
+                        &question,
+                        full_text.trim(),
+                        &target.parent_session_id,
+                        target.parent_dialog_turn_id.as_deref(),
+                        target.parent_turn_index,
+                    )
+                    .await
+                {
+                    warn!(
+                        "Failed to persist side-question turn: child_session_id={}, request_id={}, error={}",
+                        target.child_session_id, request_id, error
+                    );
+                }
+            }
+
             let _ = tx.send(SideQuestionStreamEvent::Completed {
                 request_id,
                 session_id,
@@ -365,6 +390,16 @@ pub struct SideQuestionStreamRequest {
     pub question: String,
     pub model_id: Option<String>,
     pub max_context_messages: Option<usize>,
+    pub persist_target: Option<SideQuestionPersistTarget>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SideQuestionPersistTarget {
+    pub child_session_id: String,
+    pub workspace_path: PathBuf,
+    pub parent_session_id: String,
+    pub parent_dialog_turn_id: Option<String>,
+    pub parent_turn_index: Option<usize>,
 }
 
 #[derive(Debug, Clone)]

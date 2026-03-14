@@ -337,6 +337,7 @@ class WorkspaceManager {
 
       const initResult = await globalStateAPI.initializeGlobalState();
       log.debug('Backend initialization completed', { result: initResult });
+      await globalStateAPI.cleanupInvalidWorkspaces();
 
       const [recentWorkspaces, openedWorkspaces, currentWorkspace] = await Promise.all([
         globalStateAPI.getRecentWorkspaces(),
@@ -714,6 +715,37 @@ class WorkspaceManager {
       log.debug('Recent workspaces refreshed', { count: recentWorkspaces.length });
     } catch (error) {
       log.error('Failed to refresh recent workspaces', { error });
+    }
+  }
+
+  public async cleanupInvalidWorkspaces(): Promise<number> {
+    try {
+      const removedCount = await globalStateAPI.cleanupInvalidWorkspaces();
+
+      if (removedCount === 0) {
+        return 0;
+      }
+
+      const [currentWorkspace, recentWorkspaces, openedWorkspaces] = await Promise.all([
+        globalStateAPI.getCurrentWorkspace(),
+        globalStateAPI.getRecentWorkspaces(),
+        globalStateAPI.getOpenedWorkspaces(),
+      ]);
+
+      this.updateWorkspaceState(
+        currentWorkspace,
+        recentWorkspaces,
+        openedWorkspaces,
+        false,
+        null
+      );
+      this.emit({ type: 'workspace:active-changed', workspace: currentWorkspace });
+
+      log.info('Invalid workspaces cleaned up', { removedCount });
+      return removedCount;
+    } catch (error) {
+      log.error('Failed to cleanup invalid workspaces', { error });
+      throw error;
     }
   }
 

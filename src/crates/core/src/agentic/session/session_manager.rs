@@ -17,6 +17,7 @@ use crate::service::snapshot::ensure_snapshot_manager_for_workspace;
 use crate::util::errors::{BitFunError, BitFunResult};
 use dashmap::DashMap;
 use log::{debug, error, info, warn};
+use serde_json::json;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -910,6 +911,95 @@ impl SessionManager {
             "Dialog turn marked as failed: turn_id={}, turn_index={}, error={}",
             turn_id, turn.turn_index, error
         );
+
+        Ok(())
+    }
+
+    /// Persist a completed `/btw` side-question turn into an existing child session.
+    pub async fn persist_btw_turn(
+        &self,
+        workspace_path: &Path,
+        child_session_id: &str,
+        request_id: &str,
+        question: &str,
+        full_text: &str,
+        parent_session_id: &str,
+        parent_dialog_turn_id: Option<&str>,
+        parent_turn_index: Option<usize>,
+    ) -> BitFunResult<()> {
+        let session = self
+            .sessions
+            .get(child_session_id)
+            .ok_or_else(|| BitFunError::NotFound(format!("Session not found: {}", child_session_id)))?;
+
+        let turn_id = format!("btw-turn-{}", request_id);
+        let user_message_id = format!("btw-user-{}", request_id);
+        let round_id = format!("btw-round-{}", request_id);
+        let text_id = format!("btw-text-{}", request_id);
+        let now = SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+
+        let mut turn = DialogTurnData::new(
+            turn_id.clone(),
+            0,
+            child_session_id.to_string(),
+            UserMessageData {
+                id: user_message_id,
+                content: question.to_string(),
+                timestamp: now,
+                metadata: Some(json!({
+                    "kind": "btw",
+                    "parentSessionId": parent_session_id,
+                    "parentRequestId": request_id,
+                    "parentDialogTurnId": parent_dialog_turn_id,
+                    "parentTurnIndex": parent_turn_index,
+                })),
+            },
+        );
+        turn.timestamp = now;
+        turn.start_time = now;
+        turn.end_time = Some(now);
+        turn.duration_ms = Some(0);
+        turn.status = TurnStatus::Completed;
+        turn.model_rounds = vec![ModelRoundData {
+            id: round_id,
+            turn_id: turn_id.clone(),
+            round_index: 0,
+            timestamp: now,
+            text_items: vec![TextItemData {
+                id: text_id,
+                content: full_text.to_string(),
+                is_streaming: false,
+                timestamp: now,
+                is_markdown: true,
+                order_index: None,
+                is_subagent_item: None,
+                parent_task_tool_id: None,
+                subagent_session_id: None,
+                status: Some("completed".to_string()),
+            }],
+            tool_items: vec![],
+            thinking_items: vec![],
+            start_time: now,
+            end_time: Some(now),
+            status: "completed".to_string(),
+        }];
+
+        drop(session);
+
+        self.persistence_manager
+            .save_dialog_turn(workspace_path, &turn)
+            .await?;
+
+        if let Some(mut session) = self.sessions.get_mut(child_session_id) {
+            if !session.dialog_turn_ids.iter().any(|existing| existing == &turn_id) {
+                session.dialog_turn_ids.push(turn_id);
+            }
+            session.updated_at = SystemTime::now();
+            session.last_activity_at = SystemTime::now();
+        }
 
         Ok(())
     }

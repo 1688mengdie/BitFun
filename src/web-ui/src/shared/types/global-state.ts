@@ -148,6 +148,7 @@ export interface GlobalStateAPI {
   getCurrentWorkspace(): Promise<WorkspaceInfo | null>;
   getOpenedWorkspaces(): Promise<WorkspaceInfo[]>;
   getRecentWorkspaces(): Promise<WorkspaceInfo[]>;
+  cleanupInvalidWorkspaces(): Promise<number>;
   scanWorkspaceInfo(workspacePath: string): Promise<WorkspaceInfo | null>;
   
   
@@ -330,6 +331,10 @@ export function createGlobalStateAPI(): GlobalStateAPI {
       const workspaces = (await globalAPI.getRecentWorkspaces()).map(mapWorkspaceInfo);
       logger.debug('getRecentWorkspaces returned', workspaces);
       return workspaces;
+    },
+
+    async cleanupInvalidWorkspaces(): Promise<number> {
+      return await globalAPI.cleanupInvalidWorkspaces();
     },
 
     async scanWorkspaceInfo(workspacePath: string): Promise<WorkspaceInfo | null> {

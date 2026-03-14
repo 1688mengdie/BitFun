@@ -658,12 +658,43 @@
     "welcomeBack": "Welcome back to",
     "welcomeTabTitle": "Welcome",
     "quickStart": "Start",
+    "heroBadge": "BitFun Workspace",
+    "heroTitle": "A real workspace, not just a chat box",
+    "heroDescription": "An AI assistant with personality, memory, and real execution power. Sessions, agent teams, and mini apps all work around the same workflow, so AI is doing work, not just replying.",
     "newCodeSession": "New Code Session",
-    "newCodeSessionDesc": "For everyday coding, Q&A and debugging",
+    "newCodeSessionDesc": "Start coding, debug issues, or open a project and jump straight into building",
     "newCoworkSession": "New Cowork Session",
-    "newCoworkSessionDesc": "Suitable for assisting with everyday work",
+    "newCoworkSessionDesc": "Great for clarifying requests, moving tasks forward, drafting content, and everyday collaboration",
     "newClawSession": "New Claw Session",
-    "newClawSessionDesc": "Personal assistant session with a dedicated assistant workspace",
+    "newClawSessionDesc": "Enter your personal assistant workspace and keep context and preferences over time",
+    "assistantEntryLabel": "Personal Assistant",
+    "assistantEntryTitle": "BitFun can be your assistant too, not only your project workspace",
+    "assistantEntryDescription": "You do not need to pick a project first. Enter the assistant workspace to chat, organize thoughts, draft writing, or let the assistant keep moving your tasks forward.",
+    "assistantEntryAction": "Enter Assistant Mode",
+    "assistantHint": "Besides Code and Cowork, you can also jump straight into assistant mode for thinking, drafting, and everyday collaboration outside project work.",
+    "workspaceSectionTitle": "Projects and Workspaces",
+    "workspaceSectionHint": "Open a project to start Code or Cowork, or switch to one of your recent workspaces.",
+    "noRecentWorkspaces": "No recent workspaces yet",
+    "messages": {
+      "message1": "Welcome back. Let's turn another idea into something real.",
+      "message2": "Hi. Feels like a good day to build something fun.",
+      "message3": "Your creative partner is online and ready to work.",
+      "message4": "Welcome to BitFun. Let's make something interesting."
+    },
+    "features": {
+      "workspace": {
+        "title": "AI in action",
+        "description": "Thinking chains, terminal commands, code diffs, and planning all show up live so the process stays transparent."
+      },
+      "team": {
+        "title": "Your AI team",
+        "description": "Set up Code, Cowork, and other agents for different jobs, then let them collaborate on more complex tasks."
+      },
+      "assistant": {
+        "title": "An assistant that keeps growing",
+        "description": "The assistant workspace keeps context and personal preferences, making it fit for thinking, writing, and everyday collaboration."
+      }
+    },
     "comingSoon": "Coming Soon",
     "recentWorkspaces": "Switch Workspace",
     "openOtherProject": "Open",

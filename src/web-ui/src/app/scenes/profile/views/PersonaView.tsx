@@ -14,7 +14,6 @@ import {
   Search,
   Select,
   Switch,
-  Textarea,
   Tooltip,
   type SelectOption,
 } from '@/component-library';
@@ -37,6 +36,7 @@ import { useAgentIdentityDocument } from '@/app/scenes/my-agent/useAgentIdentity
 import { PersonaRadar } from './PersonaRadar';
 import { notificationService } from '@/shared/notification-system';
 import { createLogger } from '@/shared/utils/logger';
+import { MEditor } from '@/tools/editor/meditor';
 import './PersonaView.scss';
 
 const log = createLogger('PersonaView');
@@ -309,12 +309,11 @@ const PersonaView: React.FC<{ workspacePath: string }> = ({ workspacePath }) => 
     resetPersonaFiles,
   } = useAgentIdentityDocument(workspacePath);
   const [editingField, setEditingField] = useState<
-    'name' | 'body' | 'emoji' | 'creature' | 'vibe' | null
+    'name' | 'emoji' | 'creature' | 'vibe' | null
   >(null);
   const [editValue, setEditValue] = useState('');
   const nameInputRef = useRef<HTMLInputElement>(null);
   const metaInputRef = useRef<HTMLInputElement>(null);
-  const bodyTextareaRef = useRef<HTMLTextAreaElement>(null);
 
   const [models, setModels] = useState<AIModelConfig[]>([]);
   const [funcAgentModels, setFuncAgentModels] = useState<Record<string, string>>({});
@@ -452,24 +451,17 @@ const PersonaView: React.FC<{ workspacePath: string }> = ({ workspacePath }) => 
     [identityDocument.creature, identityDocument.emoji, identityDocument.vibe, t]
   );
 
-  const startEdit = (field: 'name' | 'body' | 'emoji' | 'creature' | 'vibe') => {
+  const startEdit = (field: 'name' | 'emoji' | 'creature' | 'vibe') => {
     setEditingField(field);
     const nextValue =
       field === 'name'
         ? identityDocument.name
-        : field === 'body'
-          ? identityDocument.body
-          : identityDocument[field];
+        : identityDocument[field];
 
     setEditValue(nextValue);
     setTimeout(() => {
       if (field === 'name') {
         nameInputRef.current?.focus();
-        return;
-      }
-
-      if (field === 'body') {
-        bodyTextareaRef.current?.focus();
         return;
       }
 
@@ -480,17 +472,23 @@ const PersonaView: React.FC<{ workspacePath: string }> = ({ workspacePath }) => 
     if (!editingField) return;
     if (editingField === 'name') {
       updateIdentityField('name', editValue.trim());
-    } else if (editingField === 'body') {
-      updateIdentityField('body', editValue.replace(/\r\n/g, '\n'));
     } else {
       updateIdentityField(editingField, editValue.trim());
     }
     setEditingField(null);
   }, [editValue, editingField, updateIdentityField]);
   const onEditKey = (e: React.KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-    if (editingField !== 'body' && e.key === 'Enter') commitEdit();
+    if (e.key === 'Enter') commitEdit();
     if (e.key === 'Escape') setEditingField(null);
   };
+
+  const bodyUpdateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const handleBodyChange = useCallback((newBody: string) => {
+    if (bodyUpdateTimerRef.current) clearTimeout(bodyUpdateTimerRef.current);
+    bodyUpdateTimerRef.current = setTimeout(() => {
+      updateIdentityField('body', newBody);
+    }, 600);
+  }, [updateIdentityField]);
 
   const handleConfirmResetIdentity = useCallback(async () => {
     setEditingField(null);
@@ -1056,43 +1054,19 @@ const PersonaView: React.FC<{ workspacePath: string }> = ({ workspacePath }) => 
             })}
           </div>
 
-          {/* Description + Radar side by side */}
+          {/* Description — IR Markdown editor */}
           <div className={`${C}-home__body-row`}>
-            <div className={`${C}-home__desc-block`} onClick={() => !editingField && startEdit('body')}>
-              {editingField === 'body' ? (
-                <Textarea
-                  ref={bodyTextareaRef}
-                  className={`${C}-home__desc-input`}
-                  value={editValue}
-                  onChange={e => setEditValue(e.target.value)}
-                  onBlur={commitEdit}
-                  onKeyDown={onEditKey}
-                  placeholder={identityBodyFallback}
-                  autoResize
-                  rows={7}
-                />
-              ) : (
-                identityDocument.body ? (
-                  <div
-                    className={`${C}-home__desc-markdown`}
-                    title={t('hero.editDescTitle')}
-                  >
-                    {identityDocument.body}
-                  </div>
-                ) : (
-                  <p
-                    className={`${C}-home__desc`}
-                    title={t('hero.editDescTitle')}
-                  >
-                    {identityBodyFallback}
-                  </p>
-                )
-              )}
-              {!editingField && (
-                <p className={`${C}-home__desc-block-hint`}>
-                  {t('home.descHint')}
-                </p>
-              )}
+            <div className={`${C}-home__desc-block`}>
+              <MEditor
+                value={identityDocument.body ?? ''}
+                onChange={handleBodyChange}
+                mode="ir"
+                theme="dark"
+                toolbar={false}
+                height="400px"
+                width="100%"
+                placeholder={identityBodyFallback}
+              />
             </div>
           </div>
 

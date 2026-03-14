@@ -210,6 +210,14 @@ export class GlobalAPI {
     }
   }
 
+  async cleanupInvalidWorkspaces(): Promise<number> {
+    try {
+      return await api.invoke('cleanup_invalid_workspaces');
+    } catch (error) {
+      throw createTauriCommandError('cleanup_invalid_workspaces', error);
+    }
+  }
+
   async getOpenedWorkspaces(): Promise<WorkspaceInfo[]> {
     try {
       return await api.invoke('get_opened_workspaces', {

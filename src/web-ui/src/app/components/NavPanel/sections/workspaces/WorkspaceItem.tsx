@@ -369,10 +369,12 @@ const WorkspaceItem: React.FC<WorkspaceItemProps> = ({
                 <span className="bitfun-nav-panel__workspace-item-menu-label">{t('nav.workspaces.actions.deleteAssistant')}</span>
               </button>
             )}
-            <button type="button" className="bitfun-nav-panel__workspace-item-menu-item is-danger" onClick={() => { void handleCloseWorkspace(); }}>
-              <FolderOpen size={13} />
-              <span className="bitfun-nav-panel__workspace-item-menu-label">{t('nav.workspaces.actions.close')}</span>
-            </button>
+            {workspace.workspaceKind !== WorkspaceKind.Assistant && (
+              <button type="button" className="bitfun-nav-panel__workspace-item-menu-item is-danger" onClick={() => { void handleCloseWorkspace(); }}>
+                <FolderOpen size={13} />
+                <span className="bitfun-nav-panel__workspace-item-menu-label">{t('nav.workspaces.actions.close')}</span>
+              </button>
+            )}
           </div>,
           document.body
         )}
@@ -403,7 +405,6 @@ const WorkspaceItem: React.FC<WorkspaceItemProps> = ({
         confirmText={t('nav.workspaces.actions.deleteAssistant')}
         cancelText={t('actions.cancel')}
         confirmDanger
-        preview={`${t('nav.workspaces.deleteAssistantDialog.pathLabel')}\n${workspace.rootPath}`}
       />
       <ConfirmDialog
         isOpen={resetDialogOpen}

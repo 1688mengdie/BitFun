@@ -646,9 +646,16 @@ $_section-header-height: 24px;
     transition: color $motion-fast $easing-standard,
                 background $motion-fast $easing-standard;
 
-    &:hover {
+    &:hover:not(:disabled):not(.is-disabled) {
       color: var(--color-text-primary);
       background: var(--element-bg-soft);
+    }
+
+    &.is-disabled,
+    &:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+      color: var(--color-text-muted);
     }
 
     svg {
