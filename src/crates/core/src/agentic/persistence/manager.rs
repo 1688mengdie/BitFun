@@ -25,6 +25,7 @@ const JSON_WRITE_MAX_RETRIES: usize = 5;
 const JSON_WRITE_RETRY_BASE_DELAY_MS: u64 = 30;
 
 static JSON_FILE_WRITE_LOCKS: OnceLock<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>> = OnceLock::new();
+static SESSION_INDEX_LOCKS: OnceLock<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>> = OnceLock::new();
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct StoredSessionMetadataFile {
@@ -285,6 +286,16 @@ impl PersistenceManager {
             .clone()
     }
 
+    async fn get_session_index_lock(&self, workspace_path: &Path) -> Arc<Mutex<()>> {
+        let index_path = self.index_path(workspace_path);
+        let registry = SESSION_INDEX_LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
+        let mut registry_guard = registry.lock().await;
+        registry_guard
+            .entry(index_path)
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone()
+    }
+
     fn build_temp_json_path(path: &Path, attempt: usize) -> BitFunResult<PathBuf> {
         let parent = path.parent().ok_or_else(|| {
             BitFunError::io(format!(
@@ -468,7 +479,7 @@ impl PersistenceManager {
         }
     }
 
-    async fn rebuild_index(&self, workspace_path: &Path) -> BitFunResult<Vec<SessionMetadata>> {
+    async fn rebuild_index_locked(&self, workspace_path: &Path) -> BitFunResult<Vec<SessionMetadata>> {
         let sessions_root = self.ensure_project_sessions_dir(workspace_path).await?;
         let mut metadata_list = Vec::new();
         let mut entries = fs::read_dir(&sessions_root)
@@ -515,7 +526,7 @@ impl PersistenceManager {
         Ok(metadata_list)
     }
 
-    async fn upsert_index_entry(
+    async fn upsert_index_entry_locked(
         &self,
         workspace_path: &Path,
         metadata: &SessionMetadata,
@@ -548,7 +559,7 @@ impl PersistenceManager {
         self.write_json_atomic(&index_path, &index).await
     }
 
-    async fn remove_index_entry(
+    async fn remove_index_entry_locked(
         &self,
         workspace_path: &Path,
         session_id: &str,
@@ -568,6 +579,32 @@ impl PersistenceManager {
         self.write_json_atomic(&index_path, &index).await
     }
 
+    async fn rebuild_index(&self, workspace_path: &Path) -> BitFunResult<Vec<SessionMetadata>> {
+        let lock = self.get_session_index_lock(workspace_path).await;
+        let _guard = lock.lock().await;
+        self.rebuild_index_locked(workspace_path).await
+    }
+
+    async fn upsert_index_entry(
+        &self,
+        workspace_path: &Path,
+        metadata: &SessionMetadata,
+    ) -> BitFunResult<()> {
+        let lock = self.get_session_index_lock(workspace_path).await;
+        let _guard = lock.lock().await;
+        self.upsert_index_entry_locked(workspace_path, metadata).await
+    }
+
+    async fn remove_index_entry(
+        &self,
+        workspace_path: &Path,
+        session_id: &str,
+    ) -> BitFunResult<()> {
+        let lock = self.get_session_index_lock(workspace_path).await;
+        let _guard = lock.lock().await;
+        self.remove_index_entry_locked(workspace_path, session_id).await
+    }
+
     pub async fn list_session_metadata(
         &self,
         workspace_path: &Path,
@@ -576,15 +613,28 @@ impl PersistenceManager {
             return Ok(Vec::new());
         }
 
+        let lock = self.get_session_index_lock(workspace_path).await;
+        let _guard = lock.lock().await;
         let index_path = self.index_path(workspace_path);
         if let Some(index) = self
             .read_json_optional::<StoredSessionIndex>(&index_path)
             .await?
         {
+            let has_stale_entry = index
+                .sessions
+                .iter()
+                .any(|metadata| !self.metadata_path(workspace_path, &metadata.session_id).exists());
+            if has_stale_entry {
+                warn!(
+                    "Session index contains stale entries, rebuilding: {}",
+                    index_path.display()
+                );
+                return self.rebuild_index_locked(workspace_path).await;
+            }
             return Ok(index.sessions);
         }
 
-        self.rebuild_index(workspace_path).await
+        self.rebuild_index_locked(workspace_path).await
     }
 
     pub async fn save_session_metadata(
@@ -944,6 +994,16 @@ impl PersistenceManager {
         workspace_path: &Path,
         turn: &DialogTurnData,
     ) -> BitFunResult<()> {
+        let mut metadata = self
+            .load_session_metadata(workspace_path, &turn.session_id)
+            .await?
+            .ok_or_else(|| {
+                BitFunError::NotFound(format!(
+                    "Session metadata not found: {}",
+                    turn.session_id
+                ))
+            })?;
+
         self.ensure_turns_dir(workspace_path, &turn.session_id)
             .await?;
 
@@ -956,18 +1016,6 @@ impl PersistenceManager {
             &file,
         )
         .await?;
-
-        let mut metadata = self
-            .load_session_metadata(workspace_path, &turn.session_id)
-            .await?
-            .unwrap_or_else(|| {
-                SessionMetadata::new(
-                    turn.session_id.clone(),
-                    "New Session".to_string(),
-                    "agentic".to_string(),
-                    "default".to_string(),
-                )
-            });
 
         let turns = self
             .load_session_turns(workspace_path, &turn.session_id)

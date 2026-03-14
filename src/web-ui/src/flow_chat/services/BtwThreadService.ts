@@ -273,76 +273,6 @@ export async function startBtwThread(params: {
 
       cleanup();
 
-      // Persist the /btw dialog into the child session as turn-0000.
-      const now = Date.now();
-      const turnData: import('@/shared/types/session-history').DialogTurnData = {
-        turnId: `btw-turn-${requestId}`,
-        turnIndex: 0,
-        sessionId: childSessionId,
-        timestamp: now,
-        userMessage: {
-          id: `btw-user-${requestId}`,
-          content: question,
-          timestamp: now,
-          metadata: {
-            kind: 'btw',
-            parentSessionId,
-            parentRequestId: requestId,
-            parentDialogTurnId: parentDialogTurnId ?? null,
-            parentTurnIndex: parentTurnIndex ?? null,
-          },
-        },
-        modelRounds: [
-          {
-            id: `btw-round-${requestId}`,
-            turnId: `btw-turn-${requestId}`,
-            roundIndex: 0,
-            timestamp: now,
-            startTime: now,
-            endTime: now,
-            status: 'completed',
-            textItems: [
-              {
-                id: `btw-text-${requestId}`,
-                content: fullText,
-                isStreaming: false,
-                timestamp: now,
-              } as any,
-            ],
-            toolItems: [],
-            thinkingItems: [],
-          } as any,
-        ],
-        startTime: now,
-        endTime: now,
-        durationMs: 0,
-        status: 'completed',
-      };
-
-      try {
-        await sessionAPI.saveSessionTurn(turnData, workspacePath);
-
-        const childSession = flowChatStore.getState().sessions.get(childSessionId);
-        if (childSession) {
-          const meta = await loadSessionMetadataWithRetry(childSessionId, workspacePath, {
-            retries: 3,
-            delayMs: 80,
-          });
-          await sessionAPI.saveSessionMetadata(
-            buildSessionMetadata(childSession, meta ?? undefined),
-            workspacePath
-          );
-        }
-      } catch (e) {
-        log.error('Failed to persist btw child turn', { childSessionId, e });
-      }
-
-      // Sync backend session state with persisted turns to avoid turn-index collisions on follow-ups.
-      try {
-        await agentAPI.restoreSession(childSessionId, workspacePath);
-      } catch (e) {
-        log.warn('Failed to restore btw child session after persistence', { childSessionId, e });
-      }
     }
   );
 
@@ -377,9 +307,13 @@ export async function startBtwThread(params: {
     await btwAPI.askStream({
       requestId,
       sessionId: parentSessionId,
+      childSessionId,
+      workspacePath,
       question,
       modelId: params.modelId ?? 'fast',
       maxContextMessages: params.maxContextMessages ?? 60,
+      parentDialogTurnId,
+      parentTurnIndex,
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);

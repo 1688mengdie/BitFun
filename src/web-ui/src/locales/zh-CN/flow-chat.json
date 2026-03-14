@@ -122,7 +122,7 @@
     "willSendAfterStop": "将在停止后发送",
     "openWorkspaceFolder": "打开工作区文件夹",
     "openWorkspaceFolderFailed": "打开工作区文件夹失败：{{error}}",
-    "spaceToActivate": "空格激活"
+    "spaceToActivate": "按<space>空格键</space>说说你想做什么"
   },
   "context": {
     "title": "上下文",

@@ -16,6 +16,10 @@ export interface BtwAskResponse {
 
 export interface BtwAskStreamRequest extends BtwAskRequest {
   requestId: string;
+  childSessionId?: string;
+  workspacePath?: string;
+  parentDialogTurnId?: string;
+  parentTurnIndex?: number;
 }
 
 export interface BtwAskStreamResponse {

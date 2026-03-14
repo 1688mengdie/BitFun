@@ -175,7 +175,13 @@ const MainNav: React.FC<MainNavProps> = ({
     }, 150);
   }, []);
 
-  const openWorkspaceMenu = useCallback(() => {
+  const openWorkspaceMenu = useCallback(async () => {
+    try {
+      await workspaceManager.cleanupInvalidWorkspaces();
+    } catch (error) {
+      log.warn('Failed to cleanup invalid workspaces before opening workspace menu', { error });
+    }
+
     const rect = workspaceMenuButtonRef.current?.getBoundingClientRect();
     if (!rect) return;
     setWorkspaceMenuPos({
@@ -191,7 +197,7 @@ const MainNav: React.FC<MainNavProps> = ({
       closeWorkspaceMenu();
       return;
     }
-    openWorkspaceMenu();
+    void openWorkspaceMenu();
   }, [closeWorkspaceMenu, openWorkspaceMenu, workspaceMenuOpen]);
 
   const setSessionMode = useSessionModeStore(s => s.setMode);

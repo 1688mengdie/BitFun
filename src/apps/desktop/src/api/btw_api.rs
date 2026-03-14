@@ -1,7 +1,7 @@
 //! BTW (side question) API
 //!
 //! Desktop adapter for the core side-question service:
-//! - Reads current session context (no new dialog turn, no persistence writes)
+//! - Reads current session context without mutating the parent session
 //! - Streams answer via `btw://...` events
 //! - Supports cancellation by request id
 
@@ -14,8 +14,10 @@ use crate::api::app_state::AppState;
 
 use bitfun_core::agentic::coordination::ConversationCoordinator;
 use bitfun_core::agentic::side_question::{
-    SideQuestionService, SideQuestionStreamEvent, SideQuestionStreamRequest,
+    SideQuestionPersistTarget, SideQuestionService, SideQuestionStreamEvent,
+    SideQuestionStreamRequest,
 };
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -44,6 +46,10 @@ pub struct BtwAskStreamRequest {
     pub model_id: Option<String>,
     /// Limit how many context messages are included (from the end).
     pub max_context_messages: Option<usize>,
+    pub child_session_id: Option<String>,
+    pub workspace_path: Option<String>,
+    pub parent_dialog_turn_id: Option<String>,
+    pub parent_turn_index: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -135,6 +141,20 @@ pub async fn btw_ask_stream(
             question: request.question.clone(),
             model_id: request.model_id.clone(),
             max_context_messages: request.max_context_messages,
+            persist_target: match (&request.child_session_id, &request.workspace_path) {
+                (Some(child_session_id), Some(workspace_path))
+                    if !child_session_id.trim().is_empty() && !workspace_path.trim().is_empty() =>
+                {
+                    Some(SideQuestionPersistTarget {
+                        child_session_id: child_session_id.clone(),
+                        workspace_path: PathBuf::from(workspace_path),
+                        parent_session_id: request.session_id.clone(),
+                        parent_dialog_turn_id: request.parent_dialog_turn_id.clone(),
+                        parent_turn_index: request.parent_turn_index,
+                    })
+                }
+                _ => None,
+            },
         })
         .await
         .map_err(|e| e.to_string())?;

@@ -8,18 +8,15 @@
 
 import React, { useState, useCallback, useMemo } from 'react';
 import {
-  Bot, MessageSquare, Users, GitBranch,
   FolderOpen, Clock, FolderPlus,
 } from 'lucide-react';
 import { useWorkspaceContext } from '@/infrastructure/contexts/WorkspaceContext';
 import { useSceneStore } from '@/app/stores/sceneStore';
 import { useI18n } from '@/infrastructure/i18n';
-import { useGitBasicInfo } from '@/tools/git/hooks/useGitState';
-import { FlowChatManager } from '@/flow_chat/services/FlowChatManager';
 import { Tooltip } from '@/component-library';
 import { createLogger } from '@/shared/utils/logger';
 import type { SceneTabId } from '@/app/components/SceneBar/types';
-import { WorkspaceKind, type WorkspaceInfo } from '@/shared/types';
+import type { WorkspaceInfo } from '@/shared/types';
 import './WelcomeScene.scss';
 
 const log = createLogger('WelcomeScene');
@@ -28,25 +25,33 @@ const WelcomeScene: React.FC = () => {
   const { t } = useI18n('common');
   const {
     hasWorkspace, currentWorkspace, recentWorkspaces,
-    workspacePath, openWorkspace, switchWorkspace,
+    openWorkspace, switchWorkspace,
   } = useWorkspaceContext();
   const openScene = useSceneStore(s => s.openScene);
-  const { isRepository, currentBranch } = useGitBasicInfo(workspacePath || '');
   const [isSelecting, setIsSelecting] = useState(false);
-  const isAssistantWorkspace = currentWorkspace?.workspaceKind === WorkspaceKind.Assistant;
-  const workspaceDisplayName =
-    isAssistantWorkspace
-      ? currentWorkspace?.identity?.name?.trim() || currentWorkspace?.name
-      : currentWorkspace?.name;
+  const [welcomeMessageIndex] = useState(
+    () => Math.floor(Math.random() * 4),
+  );
+  const welcomeMessages = useMemo(
+    () => [
+      t('welcomeScene.messages.message1'),
+      t('welcomeScene.messages.message2'),
+      t('welcomeScene.messages.message3'),
+      t('welcomeScene.messages.message4'),
+    ],
+    [t],
+  );
+  const welcomeMessage = welcomeMessages[welcomeMessageIndex % welcomeMessages.length];
 
-  const otherWorkspaces = useMemo(
-    () => recentWorkspaces
-      .filter(ws => ws.id !== currentWorkspace?.id)
-      .slice(0, 5),
-    [recentWorkspaces, currentWorkspace?.id],
+  const displayRecentWorkspaces = useMemo(
+    () => (hasWorkspace
+      ? recentWorkspaces.filter(ws => ws.id !== currentWorkspace?.id)
+      : recentWorkspaces
+    ).slice(0, 5),
+    [hasWorkspace, recentWorkspaces, currentWorkspace?.id],
   );
 
-  const handleOpenFolder = useCallback(async (preferredMode?: string) => {
+  const handleOpenFolder = useCallback(async () => {
     try {
       setIsSelecting(true);
       const { open } = await import('@tauri-apps/plugin-dialog');
@@ -56,9 +61,6 @@ const WelcomeScene: React.FC = () => {
         title: t('startup.selectWorkspaceDirectory'),
       });
       if (selected && typeof selected === 'string') {
-        if (preferredMode) {
-          sessionStorage.setItem('bitfun:flowchat:preferredMode', preferredMode);
-        }
         await openWorkspace(selected);
         openScene('session' as SceneTabId);
       }
@@ -68,47 +70,6 @@ const WelcomeScene: React.FC = () => {
       setIsSelecting(false);
     }
   }, [openWorkspace, openScene, t]);
-
-  const handleNewCodeSession = useCallback(async () => {
-    try {
-      if (hasWorkspace) {
-        const flowChatManager = FlowChatManager.getInstance();
-        await flowChatManager.createChatSession({});
-        openScene('session' as SceneTabId);
-        return;
-      }
-      await handleOpenFolder();
-    } catch (e) {
-      log.error('Failed to create code session', e);
-    }
-  }, [hasWorkspace, openScene, handleOpenFolder]);
-
-  const handleNewCoworkSession = useCallback(async () => {
-    try {
-      if (hasWorkspace) {
-        const flowChatManager = FlowChatManager.getInstance();
-        await flowChatManager.createChatSession({}, 'Cowork');
-        openScene('session' as SceneTabId);
-        return;
-      }
-      await handleOpenFolder('Cowork');
-    } catch (e) {
-      log.error('Failed to create cowork session', e);
-    }
-  }, [hasWorkspace, openScene, handleOpenFolder]);
-
-  const handleNewClawSession = useCallback(async () => {
-    try {
-      if (!hasWorkspace) {
-        return;
-      }
-      const flowChatManager = FlowChatManager.getInstance();
-      await flowChatManager.createChatSession({}, 'Claw');
-      openScene('session' as SceneTabId);
-    } catch (e) {
-      log.error('Failed to create claw session', e);
-    }
-  }, [hasWorkspace, openScene]);
 
   const handleNewProject = useCallback(() => {
     window.dispatchEvent(new Event('nav:new-project'));
@@ -138,160 +99,21 @@ const WelcomeScene: React.FC = () => {
     }
   }, [t]);
 
-  if (hasWorkspace) {
-    return (
-      <div className="welcome-scene">
-        <div className="welcome-scene__content">
-
-          {/* Greeting */}
-          <div className="welcome-scene__greeting">
-            <div className="welcome-scene__greeting-inner">
-              <div className="welcome-scene__panda" aria-hidden="true">
-                <img src="/panda_full_1.png" className="welcome-scene__panda-frame welcome-scene__panda-frame--1" alt="" />
-                <img src="/panda_full_2.png" className="welcome-scene__panda-frame welcome-scene__panda-frame--2" alt="" />
-              </div>
-              <div className="welcome-scene__greeting-text">
-                <p className="welcome-scene__greeting-label">{t('welcomeScene.welcomeBack')}</p>
-                <div className="welcome-scene__title-row">
-                  <h1 className="welcome-scene__workspace-title">{workspaceDisplayName}</h1>
-                  {isRepository && currentBranch && (
-                    <span className="welcome-scene__meta-tag">
-                      <GitBranch size={11} />
-                      <span>{currentBranch}</span>
-                    </span>
-                  )}
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div className="welcome-scene__divider" />
-
-          {/* Session actions */}
-          <div className="welcome-scene__sessions">
-            {isAssistantWorkspace ? (
-              <button className="welcome-scene__session-btn" onClick={handleNewClawSession}>
-                <Bot size={16} />
-                <div className="welcome-scene__session-btn-text">
-                  <span className="welcome-scene__session-btn-label">{t('welcomeScene.newClawSession')}</span>
-                  <span className="welcome-scene__session-btn-desc">{t('welcomeScene.newClawSessionDesc')}</span>
-                </div>
-              </button>
-            ) : (
-              <>
-                <button className="welcome-scene__session-btn" onClick={handleNewCodeSession}>
-                  <MessageSquare size={16} />
-                  <div className="welcome-scene__session-btn-text">
-                    <span className="welcome-scene__session-btn-label">{t('welcomeScene.newCodeSession')}</span>
-                    <span className="welcome-scene__session-btn-desc">{t('welcomeScene.newCodeSessionDesc')}</span>
-                  </div>
-                </button>
-
-                <button className="welcome-scene__session-btn" onClick={handleNewCoworkSession}>
-                  <Users size={16} />
-                  <div className="welcome-scene__session-btn-text">
-                    <span className="welcome-scene__session-btn-label">
-                      {t('welcomeScene.newCoworkSession')}
-                    </span>
-                    <span className="welcome-scene__session-btn-desc">{t('welcomeScene.newCoworkSessionDesc')}</span>
-                  </div>
-                </button>
-              </>
-            )}
-          </div>
-
-          {/* Switch workspace section */}
-          <div className="welcome-scene__switch">
-            <div className="welcome-scene__switch-header">
-              <span className="welcome-scene__section-label">
-                <Clock size={12} />
-                {t('welcomeScene.recentWorkspaces')}
-              </span>
-              <div className="welcome-scene__switch-actions">
-                <button
-                  className="welcome-scene__link-btn"
-                  onClick={() => void handleOpenFolder()}
-                  disabled={isSelecting}
-                >
-                  <FolderOpen size={12} />
-                  {t('welcomeScene.openOtherProject')}
-                </button>
-                <button className="welcome-scene__link-btn" onClick={handleNewProject}>
-                  <FolderPlus size={12} />
-                  {t('welcomeScene.newProject')}
-                </button>
-              </div>
-            </div>
-
-            {otherWorkspaces.length > 0 ? (
-              <div className="welcome-scene__recent-list">
-                {otherWorkspaces.map(ws => (
-                  <Tooltip key={ws.id} content={ws.rootPath} placement="right" followCursor>
-                    <button
-                      className="welcome-scene__recent-item"
-                      onClick={() => { void handleSwitchWorkspace(ws); }}
-                    >
-                      <FolderOpen size={13} />
-                      <span className="welcome-scene__recent-name">{ws.name}</span>
-                      <span className="welcome-scene__recent-time">{formatDate(ws.lastAccessed)}</span>
-                    </button>
-                  </Tooltip>
-                ))}
-              </div>
-            ) : (
-              <p className="welcome-scene__no-recent">{t('welcomeScene.noOtherWorkspaces')}</p>
-            )}
-          </div>
-
-        </div>
-      </div>
-    );
-  }
-
   return (
-    <div className="welcome-scene welcome-scene--first-time">
+    <div className="welcome-scene">
       <div className="welcome-scene__content">
-
-        {/* Logo + greeting */}
         <div className="welcome-scene__greeting">
-          <div className="welcome-scene__logo">
-            <img src="/Logo-ICON.png" alt="BitFun" className="welcome-scene__logo-img" />
-          </div>
-          <h1 className="welcome-scene__workspace-title">{t('welcomeScene.firstTime.title')}</h1>
-          <p className="welcome-scene__greeting-label">{t('welcomeScene.firstTime.subtitle')}</p>
+          <h1 className="welcome-scene__title">{t('welcomeScene.firstTime.title')}</h1>
+          <p className="welcome-scene__greeting-label">{welcomeMessage}</p>
         </div>
 
         <div className="welcome-scene__divider" />
 
-        {/* Session actions */}
-        <div className="welcome-scene__sessions">
-          <button className="welcome-scene__session-btn" onClick={handleNewCodeSession}>
-            <MessageSquare size={16} />
-            <div className="welcome-scene__session-btn-text">
-              <span className="welcome-scene__session-btn-label">{t('welcomeScene.newCodeSession')}</span>
-              <span className="welcome-scene__session-btn-desc">{t('welcomeScene.newCodeSessionDesc')}</span>
-            </div>
-          </button>
-
-          <button className="welcome-scene__session-btn" onClick={handleNewCoworkSession}>
-            <Users size={16} />
-            <div className="welcome-scene__session-btn-text">
-              <span className="welcome-scene__session-btn-label">
-                {t('welcomeScene.newCoworkSession')}
-              </span>
-              <span className="welcome-scene__session-btn-desc">
-                {t('welcomeScene.newCoworkSessionDesc')}
-              </span>
-            </div>
-          </button>
-        </div>
-
-        {/* Workspace section: hint + open/new actions */}
-        <div className="welcome-scene__switch">
+        <section className="welcome-scene__switch">
           <div className="welcome-scene__switch-header">
             <span className="welcome-scene__section-label">
-              <FolderOpen size={12} />
-              {t('welcomeScene.firstTime.noWorkspaceHint')}
+              <Clock size={12} />
+              {t('welcomeScene.recentWorkspaces')}
             </span>
             <div className="welcome-scene__switch-actions">
               <button
@@ -300,18 +122,18 @@ const WelcomeScene: React.FC = () => {
                 disabled={isSelecting}
               >
                 <FolderOpen size={12} />
-                {t('welcomeScene.firstTime.openProject')}
+                {t('welcomeScene.openOtherProject')}
               </button>
               <button className="welcome-scene__link-btn" onClick={handleNewProject}>
                 <FolderPlus size={12} />
-                {t('welcomeScene.firstTime.newProject')}
+                {t('welcomeScene.newProject')}
               </button>
             </div>
           </div>
 
-          {recentWorkspaces.length > 0 && (
+          {displayRecentWorkspaces.length > 0 ? (
             <div className="welcome-scene__recent-list">
-              {recentWorkspaces.slice(0, 5).map(ws => (
+              {displayRecentWorkspaces.map(ws => (
                 <Tooltip key={ws.id} content={ws.rootPath} placement="right" followCursor>
                   <button
                     className="welcome-scene__recent-item"
@@ -324,8 +146,10 @@ const WelcomeScene: React.FC = () => {
                 </Tooltip>
               ))}
             </div>
+          ) : (
+            <p className="welcome-scene__no-recent">{t('welcomeScene.noRecentWorkspaces')}</p>
           )}
-        </div>
+        </section>
 
       </div>
     </div>
