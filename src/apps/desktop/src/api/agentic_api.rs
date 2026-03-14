@@ -8,7 +8,7 @@ use tauri::{AppHandle, State};
 
 use crate::api::app_state::AppState;
 use bitfun_core::agentic::coordination::{
-    ConversationCoordinator, DialogScheduler, DialogTriggerSource,
+    ConversationCoordinator, DialogScheduler, DialogSubmissionPolicy, DialogTriggerSource,
 };
 use bitfun_core::agentic::core::*;
 use bitfun_core::agentic::image_analysis::ImageContextData;
@@ -229,7 +229,7 @@ pub async fn start_dialog_turn(
                 turn_id,
                 agent_type,
                 workspace_path,
-                DialogTriggerSource::DesktopUi,
+                DialogSubmissionPolicy::for_source(DialogTriggerSource::DesktopUi),
             )
             .await
             .map_err(|e| format!("Failed to start dialog turn: {}", e))?;
@@ -242,7 +242,8 @@ pub async fn start_dialog_turn(
                 turn_id,
                 agent_type,
                 workspace_path,
-                DialogTriggerSource::DesktopUi,
+                DialogSubmissionPolicy::for_source(DialogTriggerSource::DesktopUi),
+                None,
             )
             .await
             .map_err(|e| format!("Failed to start dialog turn: {}", e))?;

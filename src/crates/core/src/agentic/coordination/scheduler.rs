@@ -5,35 +5,114 @@
 //!
 //! Acts as the primary entry point for all user-facing message submissions,
 //! wrapping ConversationCoordinator with:
-//! - Per-session FIFO queue (max 20 messages)
-//! - 1-second debounce after session becomes idle (resets on each new incoming message)
-//! - Automatic message merging when queue has multiple entries
-//! - Queue cleared on cancel or error
+//! - Per-session priority queue (max 20 messages)
+//! - Higher-priority messages dispatched before lower-priority ones
+//! - FIFO ordering within the same priority level
+//! - Queue cleared on unrecoverable failure
 
-use super::coordinator::{ConversationCoordinator, DialogTriggerSource, TurnOutcome};
-use crate::agentic::core::SessionState;
+use super::coordinator::{ConversationCoordinator, DialogTriggerSource};
+use super::turn_outcome::{TurnOutcome, TurnOutcomeQueueAction, TurnOutcomeStatus};
+use crate::agentic::core::{PromptEnvelope, SessionState};
 use crate::agentic::session::SessionManager;
 use dashmap::DashMap;
 use log::{debug, info, warn};
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::SystemTime;
 use tokio::sync::mpsc;
-use tokio::task::AbortHandle;
-use tokio::time::Duration;
 
 const MAX_QUEUE_DEPTH: usize = 20;
-const DEBOUNCE_DELAY: Duration = Duration::from_secs(1);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum DialogQueuePriority {
+    Low = 0,
+    Normal = 1,
+    High = 2,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DialogSubmissionPolicy {
+    pub trigger_source: DialogTriggerSource,
+    pub queue_priority: DialogQueuePriority,
+    pub skip_tool_confirmation: bool,
+}
+
+impl DialogSubmissionPolicy {
+    pub const fn new(
+        trigger_source: DialogTriggerSource,
+        queue_priority: DialogQueuePriority,
+        skip_tool_confirmation: bool,
+    ) -> Self {
+        Self {
+            trigger_source,
+            queue_priority,
+            skip_tool_confirmation,
+        }
+    }
+
+    pub const fn for_source(trigger_source: DialogTriggerSource) -> Self {
+        let (queue_priority, skip_tool_confirmation) = match trigger_source {
+            DialogTriggerSource::AgentSession => (DialogQueuePriority::Low, true),
+            DialogTriggerSource::DesktopUi
+            | DialogTriggerSource::DesktopApi
+            | DialogTriggerSource::Cli => (DialogQueuePriority::Normal, false),
+            DialogTriggerSource::RemoteRelay | DialogTriggerSource::Bot => {
+                (DialogQueuePriority::Normal, true)
+            }
+        };
+        Self::new(trigger_source, queue_priority, skip_tool_confirmation)
+    }
+
+    pub const fn with_queue_priority(mut self, queue_priority: DialogQueuePriority) -> Self {
+        self.queue_priority = queue_priority;
+        self
+    }
+
+    pub const fn with_skip_tool_confirmation(mut self, skip_tool_confirmation: bool) -> Self {
+        self.skip_tool_confirmation = skip_tool_confirmation;
+        self
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct AgentSessionReplyRoute {
+    pub source_session_id: String,
+    pub source_workspace_path: String,
+}
+
+#[derive(Debug, Clone)]
+struct ActiveTurn {
+    workspace_path: Option<String>,
+    policy: DialogSubmissionPolicy,
+    reply_route: Option<AgentSessionReplyRoute>,
+}
+
+impl ActiveTurn {
+    fn from_queued_turn(turn: &QueuedTurn) -> Self {
+        Self {
+            workspace_path: turn.workspace_path.clone(),
+            policy: turn.policy,
+            reply_route: turn.reply_route.clone(),
+        }
+    }
+
+    fn is_agent_session_request(&self) -> bool {
+        self.policy.trigger_source == DialogTriggerSource::AgentSession
+            && self.reply_route.is_some()
+    }
+}
 
 /// A message waiting to be dispatched to the coordinator
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct QueuedTurn {
     pub user_input: String,
     pub original_user_input: Option<String>,
     pub turn_id: Option<String>,
     pub agent_type: String,
     pub workspace_path: Option<String>,
-    pub trigger_source: DialogTriggerSource,
+    pub policy: DialogSubmissionPolicy,
+    pub reply_route: Option<AgentSessionReplyRoute>,
     #[allow(dead_code)]
     pub enqueued_at: SystemTime,
 }
@@ -46,10 +125,10 @@ pub struct QueuedTurn {
 pub struct DialogScheduler {
     coordinator: Arc<ConversationCoordinator>,
     session_manager: Arc<SessionManager>,
-    /// Per-session FIFO message queues
-    queues: Arc<DashMap<String, std::collections::VecDeque<QueuedTurn>>>,
-    /// Per-session pending debounce task handles (present = debounce window active)
-    debounce_handles: Arc<DashMap<String, AbortHandle>>,
+    /// Per-session priority message queues
+    queues: Arc<DashMap<String, VecDeque<QueuedTurn>>>,
+    /// Currently active turn metadata keyed by target session ID
+    active_turns: Arc<DashMap<String, ActiveTurn>>,
     /// Cloneable sender given to ConversationCoordinator for turn outcome notifications
     outcome_tx: mpsc::Sender<(String, TurnOutcome)>,
 }
@@ -70,7 +149,7 @@ impl DialogScheduler {
             coordinator,
             session_manager,
             queues: Arc::new(DashMap::new()),
-            debounce_handles: Arc::new(DashMap::new()),
+            active_turns: Arc::new(DashMap::new()),
             outcome_tx,
         });
 
@@ -89,8 +168,8 @@ impl DialogScheduler {
 
     /// Submit a user message for a session.
     ///
-    /// - Session idle, no debounce window active → dispatched immediately.
-    /// - Session idle, debounce window active (collecting messages) → queued, timer reset.
+    /// - Session idle, queue empty → dispatched immediately.
+    /// - Session idle, queue non-empty → enqueued then highest-priority queued message dispatched.
     /// - Session processing → queued (up to MAX_QUEUE_DEPTH).
     /// - Session error → queue cleared, dispatched immediately.
     ///
@@ -103,90 +182,49 @@ impl DialogScheduler {
         turn_id: Option<String>,
         agent_type: String,
         workspace_path: Option<String>,
-        trigger_source: DialogTriggerSource,
+        policy: DialogSubmissionPolicy,
+        reply_route: Option<AgentSessionReplyRoute>,
     ) -> Result<(), String> {
+        let queued_turn = QueuedTurn {
+            user_input,
+            original_user_input,
+            turn_id,
+            agent_type,
+            workspace_path,
+            policy,
+            reply_route,
+            enqueued_at: SystemTime::now(),
+        };
         let state = self
             .session_manager
             .get_session(&session_id)
             .map(|s| s.state.clone());
 
         match state {
-            None => self
-                .coordinator
-                .start_dialog_turn(
-                    session_id,
-                    user_input,
-                    original_user_input,
-                    turn_id,
-                    agent_type,
-                    workspace_path,
-                    trigger_source,
-                )
-                .await
-                .map_err(|e| e.to_string()),
+            None => self.start_turn(&session_id, &queued_turn).await,
 
             Some(SessionState::Error { .. }) => {
-                self.clear_queue_and_debounce(&session_id);
-                self.coordinator
-                    .start_dialog_turn(
-                        session_id,
-                        user_input,
-                        original_user_input,
-                        turn_id,
-                        agent_type,
-                        workspace_path,
-                        trigger_source,
-                    )
-                    .await
-                    .map_err(|e| e.to_string())
+                self.clear_queue(&session_id);
+                self.start_turn(&session_id, &queued_turn).await
             }
 
             Some(SessionState::Idle) => {
-                let in_debounce = self.debounce_handles.contains_key(&session_id);
                 let queue_non_empty = self
                     .queues
                     .get(&session_id)
                     .map(|q| !q.is_empty())
                     .unwrap_or(false);
 
-                if in_debounce || queue_non_empty {
-                    self.enqueue(
-                        &session_id,
-                        user_input,
-                        original_user_input,
-                        turn_id,
-                        agent_type,
-                        workspace_path,
-                        trigger_source,
-                    )?;
-                    self.schedule_debounce(session_id);
-                    Ok(())
+                if queue_non_empty {
+                    self.enqueue(&session_id, queued_turn)?;
+                    self.dispatch_next_if_idle(&session_id).await
                 } else {
-                    self.coordinator
-                        .start_dialog_turn(
-                            session_id,
-                            user_input,
-                            original_user_input,
-                            turn_id,
-                            agent_type,
-                            workspace_path,
-                            trigger_source,
-                        )
-                        .await
-                        .map_err(|e| e.to_string())
+                    self.start_turn(&session_id, &queued_turn).await
                 }
             }
 
             Some(SessionState::Processing { .. }) => {
-                self.enqueue(
-                    &session_id,
-                    user_input,
-                    original_user_input,
-                    turn_id,
-                    agent_type,
-                    workspace_path,
-                    trigger_source,
-                )?;
+                self.enqueue(&session_id, queued_turn)?;
                 Ok(())
             }
         }
@@ -199,16 +237,7 @@ impl DialogScheduler {
 
     // ── Private helpers ──────────────────────────────────────────────────────
 
-    fn enqueue(
-        &self,
-        session_id: &str,
-        user_input: String,
-        original_user_input: Option<String>,
-        turn_id: Option<String>,
-        agent_type: String,
-        workspace_path: Option<String>,
-        trigger_source: DialogTriggerSource,
-    ) -> Result<(), String> {
+    fn enqueue(&self, session_id: &str, queued_turn: QueuedTurn) -> Result<(), String> {
         let queue_len = self.queues.get(session_id).map(|q| q.len()).unwrap_or(0);
 
         if queue_len >= MAX_QUEUE_DEPTH {
@@ -225,28 +254,29 @@ impl DialogScheduler {
         self.queues
             .entry(session_id.to_string())
             .or_default()
-            .push_back(QueuedTurn {
-                user_input,
-                original_user_input,
-                turn_id,
-                agent_type,
-                workspace_path,
-                trigger_source,
-                enqueued_at: SystemTime::now(),
-            });
+            .push_back(queued_turn.clone());
+        if let Some(mut queue) = self.queues.get_mut(session_id) {
+            if let Some(reordered_turn) = queue.pop_back() {
+                let insert_at = queue.iter().position(|existing| {
+                    existing.policy.queue_priority < reordered_turn.policy.queue_priority
+                });
+                if let Some(index) = insert_at {
+                    queue.insert(index, reordered_turn);
+                } else {
+                    queue.push_back(reordered_turn);
+                }
+            }
+        }
 
         let new_len = self.queues.get(session_id).map(|q| q.len()).unwrap_or(0);
         debug!(
-            "Message queued: session_id={}, queue_depth={}",
-            session_id, new_len
+            "Message queued: session_id={}, queue_depth={}, priority={:?}",
+            session_id, new_len, queued_turn.policy.queue_priority
         );
         Ok(())
     }
 
-    fn clear_queue_and_debounce(&self, session_id: &str) {
-        if let Some((_, handle)) = self.debounce_handles.remove(session_id) {
-            handle.abort();
-        }
+    fn clear_queue(&self, session_id: &str) {
         if let Some(mut queue) = self.queues.get_mut(session_id) {
             let count = queue.len();
             queue.clear();
@@ -259,173 +289,162 @@ impl DialogScheduler {
         }
     }
 
-    /// Start (or restart) the 1-second debounce timer for a session.
-    /// When the timer fires, all queued messages are merged and dispatched.
-    fn schedule_debounce(&self, session_id: String) {
-        // Cancel the existing timer (if any)
-        if let Some((_, old)) = self.debounce_handles.remove(&session_id) {
-            old.abort();
+    fn dequeue_next(&self, session_id: &str) -> Option<QueuedTurn> {
+        self.queues
+            .get_mut(session_id)
+            .and_then(|mut q| q.pop_front())
+    }
+
+    fn requeue_front(&self, session_id: &str, turn: QueuedTurn) {
+        self.queues
+            .entry(session_id.to_string())
+            .or_default()
+            .push_front(turn);
+    }
+
+    async fn start_turn(&self, session_id: &str, queued_turn: &QueuedTurn) -> Result<(), String> {
+        self.coordinator
+            .start_dialog_turn(
+                session_id.to_string(),
+                queued_turn.user_input.clone(),
+                queued_turn.original_user_input.clone(),
+                queued_turn.turn_id.clone(),
+                queued_turn.agent_type.clone(),
+                queued_turn.workspace_path.clone(),
+                queued_turn.policy,
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+
+        self.active_turns.insert(
+            session_id.to_string(),
+            ActiveTurn::from_queued_turn(queued_turn),
+        );
+        Ok(())
+    }
+
+    async fn forward_agent_session_reply(
+        &self,
+        responder_session_id: &str,
+        active_turn: &ActiveTurn,
+        outcome: &TurnOutcome,
+    ) {
+        if !active_turn.is_agent_session_request() {
+            return;
         }
 
-        let queues = Arc::clone(&self.queues);
-        let coordinator = Arc::clone(&self.coordinator);
-        let debounce_handles = Arc::clone(&self.debounce_handles);
-        let session_id_clone = session_id.clone();
+        let Some(reply_route) = active_turn.reply_route.as_ref() else {
+            return;
+        };
 
-        let join_handle = tokio::spawn(async move {
-            tokio::time::sleep(DEBOUNCE_DELAY).await;
+        let responder_workspace = active_turn
+            .workspace_path
+            .as_deref()
+            .unwrap_or("<unknown workspace>");
+        let reply_user_input = outcome.reply_text();
+        let reply_message =
+            Self::format_agent_session_reply(responder_session_id, responder_workspace, outcome);
 
-            // Remove our own handle - we are now executing
-            debounce_handles.remove(&session_id_clone);
-
-            // Drain all queued messages
-            let messages: Vec<QueuedTurn> = {
-                let mut entry = queues.entry(session_id_clone.clone()).or_default();
-                entry.drain(..).collect()
-            };
-
-            if messages.is_empty() {
-                return;
-            }
-
-            info!(
-                "Dispatching {} queued message(s) after debounce: session_id={}",
-                messages.len(),
-                session_id_clone
+        if let Err(error) = self
+            .submit(
+                reply_route.source_session_id.clone(),
+                reply_message,
+                Some(reply_user_input),
+                None,
+                String::new(),
+                Some(reply_route.source_workspace_path.clone()),
+                DialogSubmissionPolicy::for_source(DialogTriggerSource::AgentSession),
+                None,
+            )
+            .await
+        {
+            warn!(
+                "Failed to forward agent-session reply: responder_session_id={}, source_session_id={}, error={}",
+                responder_session_id, reply_route.source_session_id, error
             );
+        }
+    }
 
-            let (
-                merged_input,
-                original_user_input,
-                turn_id,
-                agent_type,
-                workspace_path,
-                trigger_source,
-            ) = merge_messages(messages);
+    fn format_agent_session_reply(
+        responder_session_id: &str,
+        responder_workspace: &str,
+        outcome: &TurnOutcome,
+    ) -> String {
+        let mut envelope = PromptEnvelope::new();
+        let status = outcome.status();
+        let reply_text = outcome.reply_text();
+        envelope.push_system_reminder(format!(
+            "This message is an automated reply to a previous SessionMessage call, not a human user message.\n\
+From session: {responder_session_id}\n\
+From workspace: {responder_workspace}\n\
+Status: {status}"
+        ));
+        envelope.push_user_query(reply_text);
+        envelope.render()
+    }
 
-            if let Err(e) = coordinator
-                .start_dialog_turn(
-                    session_id_clone.clone(),
-                    merged_input,
-                    original_user_input,
-                    turn_id,
-                    agent_type,
-                    workspace_path,
-                    trigger_source,
-                )
-                .await
-            {
-                warn!(
-                    "Failed to dispatch queued messages: session_id={}, error={}",
-                    session_id_clone, e
-                );
-            }
-        });
+    async fn dispatch_next_if_idle(&self, session_id: &str) -> Result<(), String> {
+        let state = self
+            .session_manager
+            .get_session(session_id)
+            .map(|s| s.state.clone());
+        if matches!(state, Some(SessionState::Processing { .. })) {
+            return Ok(());
+        }
 
-        // Store abort handle; drop the JoinHandle (task is detached but remains abortable)
-        self.debounce_handles
-            .insert(session_id, join_handle.abort_handle());
+        let Some(next_turn) = self.dequeue_next(session_id) else {
+            return Ok(());
+        };
+
+        let remaining = self.queues.get(session_id).map(|q| q.len()).unwrap_or(0);
+        info!(
+            "Dispatching queued message: session_id={}, priority={:?}, remaining_queue_depth={}",
+            session_id, next_turn.policy.queue_priority, remaining
+        );
+
+        if let Err(err) = self.start_turn(session_id, &next_turn).await {
+            self.requeue_front(session_id, next_turn);
+            return Err(err);
+        }
+
+        Ok(())
     }
 
     /// Background loop that receives turn outcome notifications from the coordinator.
     async fn run_outcome_handler(&self, mut outcome_rx: mpsc::Receiver<(String, TurnOutcome)>) {
         while let Some((session_id, outcome)) = outcome_rx.recv().await {
-            match outcome {
-                TurnOutcome::Completed => {
-                    let has_queued = self
-                        .queues
-                        .get(&session_id)
-                        .map(|q| !q.is_empty())
-                        .unwrap_or(false);
+            let active_turn = self.active_turns.remove(&session_id).map(|(_, turn)| turn);
+            if let Some(active_turn) = active_turn.as_ref() {
+                self.forward_agent_session_reply(&session_id, active_turn, &outcome)
+                    .await;
+            }
 
-                    if has_queued {
+            let status = outcome.status();
+            match outcome.queue_action() {
+                TurnOutcomeQueueAction::DispatchNext => {
+                    if status == TurnOutcomeStatus::Cancelled {
                         debug!(
-                            "Turn completed, queue non-empty, starting debounce: session_id={}",
+                            "Turn cancelled, dispatching next queued message if present: session_id={}",
                             session_id
                         );
-                        self.schedule_debounce(session_id);
+                    }
+
+                    if let Err(e) = self.dispatch_next_if_idle(&session_id).await {
+                        warn!(
+                            "Failed to dispatch next queued message after {}: session_id={}, error={}",
+                            status,
+                            session_id,
+                            e
+                        );
                     }
                 }
-                TurnOutcome::Cancelled => {
-                    debug!("Turn cancelled, clearing queue: session_id={}", session_id);
-                    self.clear_queue_and_debounce(&session_id);
-                }
-                TurnOutcome::Failed => {
-                    debug!("Turn failed, clearing queue: session_id={}", session_id);
-                    self.clear_queue_and_debounce(&session_id);
+                TurnOutcomeQueueAction::ClearQueue => {
+                    debug!("Turn {}, clearing queue: session_id={}", status, session_id);
+                    self.clear_queue(&session_id);
                 }
             }
         }
     }
-}
-
-/// Merge multiple queued turns into a single user input string.
-///
-/// Single message → returned as-is (no wrapping).
-/// Multiple messages → formatted as:
-/// ```text
-/// [Queued messages while agent was busy]
-///
-/// ---
-/// Queued #1
-/// <first message>
-///
-/// ---
-/// Queued #2
-/// <second message>
-/// ```
-fn merge_messages(
-    messages: Vec<QueuedTurn>,
-) -> (
-    String,
-    Option<String>,
-    Option<String>,
-    String,
-    Option<String>,
-    DialogTriggerSource,
-) {
-    if messages.len() == 1 {
-        let m = messages.into_iter().next().unwrap();
-        return (
-            m.user_input,
-            m.original_user_input,
-            m.turn_id,
-            m.agent_type,
-            m.workspace_path,
-            m.trigger_source,
-        );
-    }
-
-    let agent_type = messages
-        .last()
-        .map(|m| m.agent_type.clone())
-        .unwrap_or_else(|| "agentic".to_string());
-    let workspace_path = messages.last().and_then(|m| m.workspace_path.clone());
-    let trigger_source = messages
-        .last()
-        .map(|m| m.trigger_source)
-        .unwrap_or(DialogTriggerSource::DesktopUi);
-    let original_user_input = messages.last().and_then(|m| m.original_user_input.clone());
-
-    let entries: Vec<String> = messages
-        .iter()
-        .enumerate()
-        .map(|(i, m)| format!("---\nQueued #{}\n{}", i + 1, m.user_input))
-        .collect();
-
-    let merged = format!(
-        "[Queued messages while agent was busy]\n\n{}",
-        entries.join("\n\n")
-    );
-
-    (
-        merged,
-        original_user_input,
-        None,
-        agent_type,
-        workspace_path,
-        trigger_source,
-    )
 }
 
 // ── Global instance ──────────────────────────────────────────────────────────

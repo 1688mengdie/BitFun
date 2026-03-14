@@ -2,7 +2,9 @@
 //!
 //! Responsible for managing session context compression
 
-use crate::agentic::core::{Message, MessageHelper, MessageRole};
+use crate::agentic::core::{
+    render_system_reminder, Message, MessageHelper, MessageRole, MessageSemanticKind,
+};
 use crate::agentic::persistence::PersistenceManager;
 use crate::infrastructure::ai::{get_global_ai_client_factory, AIClient};
 use crate::util::errors::{BitFunError, BitFunResult};
@@ -247,10 +249,13 @@ impl CompressionManager {
                 .await?;
             trace!("Compression summary: {}", summary);
 
-            compressed_messages.push(Message::user(format!(
-                "<system-reminder>\nPrevious conversation is summarized below:\n{}\n</system-reminder>",
-                summary
-            )));
+            compressed_messages.push(
+                Message::user(render_system_reminder(&format!(
+                    "Previous conversation is summarized below:\n{}",
+                    summary
+                )))
+                .with_semantic_kind(MessageSemanticKind::InternalReminder),
+            );
         }
 
         if !turns_to_keep.is_empty() {
@@ -264,10 +269,13 @@ impl CompressionManager {
             }
             // Append last todo
             if let Some(last_todo) = last_todo {
-                compressed_messages.push(Message::user(format!(
-                    "<system-reminder>\nBelow is the most recent to-do list. Continue working on these tasks:\n{}\n</system-reminder>",
-                    last_todo
-                )));
+                compressed_messages.push(
+                    Message::user(render_system_reminder(&format!(
+                        "Below is the most recent to-do list. Continue working on these tasks:\n{}",
+                        last_todo
+                    )))
+                    .with_semantic_kind(MessageSemanticKind::InternalReminder),
+                );
             }
         }
 

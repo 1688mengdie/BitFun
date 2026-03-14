@@ -9,7 +9,9 @@ use tokio::sync::mpsc;
 
 use super::{Agent, AgentEvent, AgentResponse};
 use crate::session::{ToolCall, ToolCallStatus};
-use bitfun_core::agentic::coordination::{ConversationCoordinator, DialogTriggerSource};
+use bitfun_core::agentic::coordination::{
+    ConversationCoordinator, DialogSubmissionPolicy, DialogTriggerSource,
+};
 use bitfun_core::agentic::core::SessionConfig;
 use bitfun_core::agentic::events::EventQueue;
 use bitfun_events::{AgenticEvent as CoreEvent, ToolEventData};
@@ -99,18 +101,15 @@ impl Agent for CoreAgentAdapter {
         tracing::info!("Processing message: {}", message);
 
         let _ = event_tx.send(AgentEvent::Thinking);
-
-        self.coordinator
-            .start_dialog_turn(
-                session_id.clone(),
-                message.clone(),
-                None,
-                None,
-                self.agent_type.clone(),
-                None,
-                DialogTriggerSource::Cli,
-            )
-            .await?;
+        self.coordinator.start_dialog_turn(
+            session_id.clone(),
+            message.clone(),
+            None,
+            None,
+            self.agent_type.clone(),
+            None,
+            DialogSubmissionPolicy::for_source(DialogTriggerSource::Cli),
+        ).await?;
 
         let mut accumulated_text = String::new();
         let mut tool_map: std::collections::HashMap<String, ToolCall> =

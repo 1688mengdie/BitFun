@@ -2,10 +2,11 @@
 //!
 //! Top-level component that integrates all subsystems and provides a unified interface
 
+use super::{scheduler::DialogSubmissionPolicy, turn_outcome::TurnOutcome};
 use crate::agentic::agents::get_agent_registry;
 use crate::agentic::core::{
-    Message, MessageContent, ProcessingPhase, Session, SessionConfig, SessionState, SessionSummary,
-    TurnStats,
+    has_prompt_markup, Message, MessageContent, ProcessingPhase, PromptEnvelope, Session,
+    SessionConfig, SessionState, SessionSummary, TurnStats,
 };
 use crate::agentic::events::{
     AgenticEvent, EventPriority, EventQueue, EventRouter, EventSubscriber,
@@ -15,7 +16,6 @@ use crate::agentic::image_analysis::ImageContextData;
 use crate::agentic::session::SessionManager;
 use crate::agentic::tools::pipeline::{SubagentParentInfo, ToolPipeline};
 use crate::agentic::WorkspaceBinding;
-use crate::service::workspace::get_global_workspace_service;
 use crate::util::errors::{BitFunError, BitFunResult};
 use log::{debug, error, info, warn};
 use std::path::{Path, PathBuf};
@@ -33,19 +33,14 @@ pub struct SubagentResult {
     pub text: String,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DialogTriggerSource {
     DesktopUi,
     DesktopApi,
+    AgentSession,
     RemoteRelay,
     Bot,
     Cli,
-}
-
-impl DialogTriggerSource {
-    fn skip_tool_confirmation(self) -> bool {
-        matches!(self, Self::RemoteRelay | Self::Bot)
-    }
 }
 
 /// Cancel token cleanup guard
@@ -65,17 +60,6 @@ impl Drop for CancelTokenGuard {
             execution_engine.cleanup_cancel_token(&dialog_turn_id).await;
         });
     }
-}
-
-/// Outcome of a completed dialog turn, used to notify DialogScheduler
-#[derive(Debug, Clone)]
-pub enum TurnOutcome {
-    /// Turn completed normally
-    Completed,
-    /// Turn was cancelled by user
-    Cancelled,
-    /// Turn failed with an error
-    Failed,
 }
 
 /// Conversation coordinator
@@ -101,41 +85,12 @@ impl ConversationCoordinator {
             .map(|workspace_path| WorkspaceBinding::new(None, PathBuf::from(workspace_path)))
     }
 
-    async fn normalize_agent_type_for_workspace_path(
-        agent_type: &str,
-        workspace_path: &str,
-    ) -> String {
-        let normalized_agent_type = if agent_type.trim().is_empty() {
+    fn normalize_agent_type(agent_type: &str) -> String {
+        if agent_type.trim().is_empty() {
             "agentic".to_string()
         } else {
             agent_type.trim().to_string()
-        };
-
-        let Some(workspace_service) = get_global_workspace_service() else {
-            return normalized_agent_type;
-        };
-
-        let workspace_path_buf = PathBuf::from(workspace_path);
-        if workspace_service.is_assistant_workspace_path(&workspace_path_buf)
-            || workspace_service
-                .get_workspace_by_path(&workspace_path_buf)
-                .await
-                .map(|workspace| {
-                    workspace.workspace_kind == crate::service::workspace::WorkspaceKind::Assistant
-                })
-                .unwrap_or(false)
-        {
-            if normalized_agent_type != "Claw" {
-                info!(
-                    "Normalize agent type to Claw for assistant workspace: workspace_path={}, requested_agent_type={}",
-                    workspace_path,
-                    normalized_agent_type
-                );
-            }
-            return "Claw".to_string();
         }
-
-        normalized_agent_type
     }
 
     pub fn new(
@@ -243,8 +198,7 @@ impl ConversationCoordinator {
         // Persist the workspace binding inside the session config so execution can
         // consistently restore the correct workspace regardless of the entry point.
         config.workspace_path = Some(workspace_path.clone());
-        let agent_type =
-            Self::normalize_agent_type_for_workspace_path(&agent_type, &workspace_path).await;
+        let agent_type = Self::normalize_agent_type(&agent_type);
         let session = self
             .session_manager
             .create_session_with_id_and_creator(
@@ -472,25 +426,28 @@ impl ConversationCoordinator {
             .ok_or_else(|| BitFunError::NotFound(format!("Agent not found: {}", agent_type)))?;
         let system_reminder = current_agent.get_system_reminder(0).await?;
 
-        let mut wrapped_user_input = if agent_type == "agentic" {
-            // Only this mode uses user_query tag
-            format!("<user_query>\n{}\n</user_query>\n", user_input)
-        } else {
+        let mut wrapped_user_input = if has_prompt_markup(&user_input) {
             user_input
+        } else {
+            let mut envelope = PromptEnvelope::new();
+            envelope.push_user_query(user_input);
+            envelope.render()
         };
         if !system_reminder.is_empty() {
-            wrapped_user_input.push_str(&format!(
-                "<system_reminder>\n{}\n</system_reminder>",
-                system_reminder
-            ));
+            let mut envelope = PromptEnvelope::new();
+            envelope.push_system_reminder(system_reminder);
+            if !wrapped_user_input.is_empty() {
+                wrapped_user_input.push('\n');
+            }
+            wrapped_user_input.push_str(&envelope.render());
         }
         Ok(wrapped_user_input)
     }
 
     /// Start a new dialog turn
     /// Note: Events are sent to frontend via EventLoop, no Stream returned.
-    /// Channel-specific interaction policy is decided here from `trigger_source`
-    /// so adapters only declare where the message came from.
+    /// Submission behavior is controlled by `submission_policy`, which provides
+    /// default per-source behavior while still allowing selective overrides.
     pub async fn start_dialog_turn(
         &self,
         session_id: String,
@@ -499,7 +456,7 @@ impl ConversationCoordinator {
         turn_id: Option<String>,
         agent_type: String,
         workspace_path: Option<String>,
-        trigger_source: DialogTriggerSource,
+        submission_policy: DialogSubmissionPolicy,
     ) -> BitFunResult<()> {
         self.start_dialog_turn_internal(
             session_id,
@@ -509,7 +466,7 @@ impl ConversationCoordinator {
             turn_id,
             agent_type,
             workspace_path,
-            trigger_source,
+            submission_policy,
         )
         .await
     }
@@ -523,7 +480,7 @@ impl ConversationCoordinator {
         turn_id: Option<String>,
         agent_type: String,
         workspace_path: Option<String>,
-        trigger_source: DialogTriggerSource,
+        submission_policy: DialogSubmissionPolicy,
     ) -> BitFunResult<()> {
         self.start_dialog_turn_internal(
             session_id,
@@ -533,7 +490,7 @@ impl ConversationCoordinator {
             turn_id,
             agent_type,
             workspace_path,
-            trigger_source,
+            submission_policy,
         )
         .await
     }
@@ -676,7 +633,7 @@ impl ConversationCoordinator {
         turn_id: Option<String>,
         agent_type: String,
         workspace_path: Option<String>,
-        trigger_source: DialogTriggerSource,
+        submission_policy: DialogSubmissionPolicy,
     ) -> BitFunResult<()> {
         // Get latest session, restoring from persistence on demand so every entry
         // point can use the same start_dialog_turn flow.
@@ -700,9 +657,6 @@ impl ConversationCoordinator {
         };
 
         let requested_agent_type = agent_type.trim().to_string();
-        let workspace_path_for_policy = workspace_path
-            .clone()
-            .or_else(|| session.config.workspace_path.clone());
         let provisional_agent_type = if !requested_agent_type.is_empty() {
             requested_agent_type.clone()
         } else if !session.agent_type.is_empty() {
@@ -710,15 +664,10 @@ impl ConversationCoordinator {
         } else {
             "agentic".to_string()
         };
-        let effective_agent_type = if let Some(ref workspace_path) = workspace_path_for_policy {
-            Self::normalize_agent_type_for_workspace_path(&provisional_agent_type, workspace_path)
-                .await
-        } else {
-            provisional_agent_type
-        };
+        let effective_agent_type = Self::normalize_agent_type(&provisional_agent_type);
 
         debug!(
-            "Resolved dialog turn agent type: session_id={}, turn_id={}, requested_agent_type={}, session_agent_type={}, effective_agent_type={}, trigger_source={:?}",
+            "Resolved dialog turn agent type: session_id={}, turn_id={}, requested_agent_type={}, session_agent_type={}, effective_agent_type={}, trigger_source={:?}, queue_priority={:?}, skip_tool_confirmation={}",
             session_id,
             turn_id.as_deref().unwrap_or(""),
             if requested_agent_type.is_empty() {
@@ -732,7 +681,9 @@ impl ConversationCoordinator {
                 session.agent_type.as_str()
             },
             effective_agent_type,
-            trigger_source
+            submission_policy.trigger_source,
+            submission_policy.queue_priority,
+            submission_policy.skip_tool_confirmation
         );
 
         if session.agent_type != effective_agent_type {
@@ -866,7 +817,7 @@ impl ConversationCoordinator {
         // Build image metadata for workspace turn persistence (before image_contexts is consumed)
         // Also stores original_text so the UI can display the user's actual input
         // instead of the vision-enhanced text.
-        let user_message_metadata: Option<serde_json::Value> = image_contexts
+        let mut user_message_metadata: Option<serde_json::Value> = image_contexts
             .as_ref()
             .filter(|imgs| !imgs.is_empty())
             .map(|imgs| {
@@ -922,6 +873,19 @@ impl ConversationCoordinator {
             )
             .await?;
 
+        if original_user_input != wrapped_user_input {
+            let mut metadata = user_message_metadata
+                .take()
+                .unwrap_or_else(|| serde_json::json!({}));
+            if let Some(obj) = metadata.as_object_mut() {
+                obj.insert(
+                    "original_text".to_string(),
+                    serde_json::json!(original_user_input.clone()),
+                );
+            }
+            user_message_metadata = Some(metadata);
+        }
+
         // Start new dialog turn (sets state to Processing internally)
         let turn_index = self.session_manager.get_turn_count(&session_id);
         // Pass frontend turnId, generate if not provided
@@ -938,13 +902,12 @@ impl ConversationCoordinator {
 
         // Send dialog turn started event with original input and image metadata
         // so all frontends (desktop, mobile, bot) can display correctly.
-        let has_images = user_message_metadata.is_some();
         self.emit_event(AgenticEvent::DialogTurnStarted {
             session_id: session_id.clone(),
             turn_id: turn_id.clone(),
             turn_index,
             user_input: wrapped_user_input.clone(),
-            original_user_input: if has_images {
+            original_user_input: if original_user_input != wrapped_user_input {
                 Some(original_user_input.clone())
             } else {
                 None
@@ -999,7 +962,7 @@ impl ConversationCoordinator {
             workspace: session_workspace,
             context: context_vars,
             subagent_parent_info: None,
-            skip_tool_confirmation: trigger_source.skip_tool_confirmation(),
+            skip_tool_confirmation: submission_policy.skip_tool_confirmation,
         };
 
         // Auto-generate session title on first message
@@ -1075,6 +1038,11 @@ impl ConversationCoordinator {
                 .await
             {
                 Ok(execution_result) => {
+                    let final_response = match &execution_result.final_message.content {
+                        MessageContent::Text(text) => text.clone(),
+                        MessageContent::Mixed { text, .. } => text.clone(),
+                        _ => String::new(),
+                    };
                     info!(
                         "Dialog turn completed: session={}, turn={}, rounds={}",
                         session_id_clone, turn_id_clone, execution_result.total_rounds
@@ -1084,11 +1052,7 @@ impl ConversationCoordinator {
                         .complete_dialog_turn(
                             &session_id_clone,
                             &turn_id_clone,
-                            match &execution_result.final_message.content {
-                                MessageContent::Text(text) => text.clone(),
-                                MessageContent::Mixed { text, .. } => text.clone(),
-                                _ => String::new(),
-                            },
+                            final_response.clone(),
                             TurnStats {
                                 total_rounds: execution_result.total_rounds,
                                 total_tools: 0, // TODO: get from execution_result
@@ -1103,7 +1067,13 @@ impl ConversationCoordinator {
                         .await;
 
                     if let Some(tx) = &scheduler_notify_tx {
-                        let _ = tx.try_send((session_id_clone.clone(), TurnOutcome::Completed));
+                        let _ = tx.try_send((
+                            session_id_clone.clone(),
+                            TurnOutcome::Completed {
+                                turn_id: turn_id_clone.clone(),
+                                final_response,
+                            },
+                        ));
                     }
 
                     Some(crate::service::session::TurnStatus::Completed)
@@ -1154,12 +1124,18 @@ impl ConversationCoordinator {
                             .await;
 
                         if let Some(tx) = &scheduler_notify_tx {
-                            let _ = tx.try_send((session_id_clone.clone(), TurnOutcome::Cancelled));
+                            let _ = tx.try_send((
+                                session_id_clone.clone(),
+                                TurnOutcome::Cancelled {
+                                    turn_id: turn_id_clone.clone(),
+                                },
+                            ));
                         }
 
                         Some(crate::service::session::TurnStatus::Cancelled)
                     } else {
-                        error!("Dialog turn execution failed: {}", e);
+                        let error_text = e.to_string();
+                        error!("Dialog turn execution failed: {}", error_text);
 
                         let recoverable =
                             !matches!(&e, BitFunError::AIClient(_) | BitFunError::Timeout(_));
@@ -1169,7 +1145,7 @@ impl ConversationCoordinator {
                                 AgenticEvent::DialogTurnFailed {
                                     session_id: session_id_clone.clone(),
                                     turn_id: turn_id_clone.clone(),
-                                    error: e.to_string(),
+                                    error: error_text.clone(),
                                     subagent_parent_info: None,
                                 },
                                 Some(EventPriority::Critical),
@@ -1177,21 +1153,27 @@ impl ConversationCoordinator {
                             .await;
 
                         let _ = session_manager
-                            .fail_dialog_turn(&session_id_clone, &turn_id_clone, e.to_string())
+                            .fail_dialog_turn(&session_id_clone, &turn_id_clone, error_text.clone())
                             .await;
 
                         let _ = session_manager
                             .update_session_state(
                                 &session_id_clone,
                                 SessionState::Error {
-                                    error: e.to_string(),
+                                    error: error_text.clone(),
                                     recoverable,
                                 },
                             )
                             .await;
 
                         if let Some(tx) = &scheduler_notify_tx {
-                            let _ = tx.try_send((session_id_clone.clone(), TurnOutcome::Failed));
+                            let _ = tx.try_send((
+                                session_id_clone.clone(),
+                                TurnOutcome::Failed {
+                                    turn_id: turn_id_clone.clone(),
+                                    error: error_text,
+                                },
+                            ));
                         }
 
                         Some(crate::service::session::TurnStatus::Error)

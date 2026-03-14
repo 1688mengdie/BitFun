@@ -3,8 +3,8 @@
 //! Responsible for session CRUD, lifecycle management, and resource association
 
 use crate::agentic::core::{
-    CompressionState, DialogTurn, Message, ProcessingPhase, Session, SessionConfig, SessionState,
-    SessionSummary, TurnStats,
+    CompressionState, DialogTurn, Message, MessageSemanticKind, ProcessingPhase, Session,
+    SessionConfig, SessionState, SessionSummary, TurnStats,
 };
 use crate::agentic::image_analysis::ImageContextData;
 use crate::agentic::persistence::PersistenceManager;
@@ -119,7 +119,11 @@ impl SessionManager {
             } else {
                 Message::user(turn.user_message.content.clone())
             };
-            messages.push(user_message.with_turn_id(turn.turn_id.clone()));
+            messages.push(
+                user_message
+                    .with_turn_id(turn.turn_id.clone())
+                    .with_semantic_kind(MessageSemanticKind::ActualUserInput),
+            );
 
             let assistant_text = turn
                 .model_rounds
@@ -681,9 +685,13 @@ impl SessionManager {
         // 2. Add user message to history and compression managers
         let user_message =
             if let Some(images) = image_contexts.as_ref().filter(|v| !v.is_empty()).cloned() {
-                Message::user_multimodal(user_input.clone(), images).with_turn_id(turn_id.clone())
+                Message::user_multimodal(user_input.clone(), images)
+                    .with_turn_id(turn_id.clone())
+                    .with_semantic_kind(MessageSemanticKind::ActualUserInput)
             } else {
-                Message::user(user_input.clone()).with_turn_id(turn_id.clone())
+                Message::user(user_input.clone())
+                    .with_turn_id(turn_id.clone())
+                    .with_semantic_kind(MessageSemanticKind::ActualUserInput)
             };
         self.history_manager
             .add_message(session_id, user_message.clone())

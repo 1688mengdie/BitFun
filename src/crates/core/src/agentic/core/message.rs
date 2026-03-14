@@ -1,3 +1,4 @@
+use super::prompt_markup::is_system_reminder_only;
 use crate::agentic::image_analysis::ImageContextData;
 use crate::util::types::{Message as AIMessage, ToolCall as AIToolCall};
 use crate::util::TokenCounter;
@@ -57,6 +58,15 @@ pub struct MessageMetadata {
     /// Anthropic extended thinking signature (for passing back in multi-turn conversations)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking_signature: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub semantic_kind: Option<MessageSemanticKind>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MessageSemanticKind {
+    ActualUserInput,
+    InternalReminder,
 }
 
 impl From<Message> for AIMessage {
@@ -319,17 +329,20 @@ impl Message {
         }
     }
 
-    /// Check if message is a user message (role is user and not <system-reminder>)
+    /// Check if message should be treated as an actual user-turn boundary.
     pub fn is_actual_user_message(&self) -> bool {
         if self.role != MessageRole::User {
             return false;
+        }
+        if let Some(semantic_kind) = self.metadata.semantic_kind {
+            return semantic_kind == MessageSemanticKind::ActualUserInput;
         }
         let text = match &self.content {
             MessageContent::Text(text) => Some(text.as_str()),
             MessageContent::Multimodal { text, .. } => Some(text.as_str()),
             _ => None,
         };
-        if text.is_some_and(|t| t.starts_with("<system-reminder>")) {
+        if text.is_some_and(is_system_reminder_only) {
             return false;
         }
         true
@@ -344,6 +357,11 @@ impl Message {
     /// Set message's round_id (to identify which model round the message belongs to)
     pub fn with_round_id(mut self, round_id: String) -> Self {
         self.metadata.round_id = Some(round_id);
+        self
+    }
+
+    pub fn with_semantic_kind(mut self, semantic_kind: MessageSemanticKind) -> Self {
+        self.metadata.semantic_kind = Some(semantic_kind);
         self
     }
 
