@@ -29,7 +29,7 @@
     "selectModel": "选择模型",
     "multiSelectHint": "支持多选；选中后可分别设置每个模型的上下文窗口、最大输出 Tokens 和思考开关",
     "searchOrInputModel": "搜索或输入模型名称...",
-    "inputModelName": "输入模型名称...",
+    "inputModelName": "输入自定义模型名称...",
     "useCustomModel": "按 Enter 使用",
     "addCustomModel": "添加自定义模型",
     "noModelsSelected": "请先选择模型",

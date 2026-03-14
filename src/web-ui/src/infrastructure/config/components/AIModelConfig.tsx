@@ -1025,6 +1025,24 @@ const AIModelConfig: React.FC = () => {
               ? t('providerSelection.noPresetModels')
               : null;
     const selectedModelValues = selectedModelDrafts.map(draft => draft.modelName);
+    const renderModelPickerValue = (option?: SelectOption | SelectOption[]) => {
+      const selectedOptions = Array.isArray(option) ? option : option ? [option] : [];
+
+      if (selectedOptions.length === 0) {
+        return <span className="select__placeholder">{t('providerSelection.selectModel')}</span>;
+      }
+      const summaryText = selectedOptions
+        .map(item => String(item.label))
+        .join(', ');
+
+      return (
+        <span className="select__value bitfun-ai-model-config__model-picker-value">
+          <span className="select__value-label bitfun-ai-model-config__model-picker-value-text">
+            {summaryText}
+          </span>
+        </span>
+      );
+    };
     const apiKeyVisibilityLabel = showApiKey ? tComponents('hide') : tComponents('show');
     const apiKeySuffix = (
       <button
@@ -1097,6 +1115,7 @@ const AIModelConfig: React.FC = () => {
                     max={2000000}
                     step={1000}
                     size="small"
+                    disableWheel
                   />
                 </div>
                 <div className="bitfun-ai-model-config__selected-model-field">
@@ -1108,6 +1127,7 @@ const AIModelConfig: React.FC = () => {
                     max={1000000}
                     step={1000}
                     size="small"
+                    disableWheel
                   />
                 </div>
                 <div className="bitfun-ai-model-config__selected-model-field">
@@ -1235,6 +1255,8 @@ const AIModelConfig: React.FC = () => {
                         searchPlaceholder={t('providerSelection.inputModelName')}
                         size="small"
                         onOpenChange={handleModelSelectionOpenChange}
+                        renderValue={renderModelPickerValue}
+                        className={selectedModelValues.length > 0 ? 'bitfun-ai-model-config__model-picker-select bitfun-ai-model-config__model-picker-select--has-value' : 'bitfun-ai-model-config__model-picker-select'}
                       />
                     </div>
                     <div className="bitfun-ai-model-config__manual-model-entry">
