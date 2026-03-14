@@ -98,6 +98,16 @@ const getModelTooltipText = (model: ModelInfo | null, fallback: string): string 
   return buildModelMetaText(model);
 };
 
+const buildAutoModelInfo = (
+  t: (key: string) => string,
+): ModelInfo => ({
+  id: 'auto',
+  configName: t('modelSelector.autoModel'),
+  modelName: t('modelSelector.autoModel'),
+  providerName: t('modelSelector.autoModelDesc'),
+  provider: 'auto',
+});
+
 export const ModelSelector: React.FC<ModelSelectorProps> = ({
   currentMode,
   className = '',
@@ -172,28 +182,30 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   }, [dropdownOpen]);
   
   const getCurrentModelId = useCallback((): string => {
-    return agentModels[currentMode] || 'auto';
-  }, [currentMode, agentModels]);
+    const configuredModelId = agentModels[currentMode] || 'auto';
+    if (configuredModelId === 'auto') return 'auto';
+    if (configuredModelId === 'primary' || configuredModelId === 'fast') {
+      const actualModelId = defaultModels[configuredModelId];
+      const model = allModels.find(m => m.id === actualModelId);
+      return model ? configuredModelId : 'auto';
+    }
+    const model = allModels.find(m => m.id === configuredModelId);
+    return model ? configuredModelId : 'auto';
+  }, [allModels, currentMode, agentModels, defaultModels]);
 
   const currentModel = useMemo((): ModelInfo | null => {
     const modelId = getCurrentModelId();
 
     if (modelId === 'auto') {
-      return {
-        id: 'auto',
-        configName: t('modelSelector.autoModel'),
-        modelName: t('modelSelector.autoModel'),
-        providerName: t('modelSelector.autoModelDesc'),
-        provider: 'auto',
-      };
+      return buildAutoModelInfo(t);
     }
 
     if (isSpecialModel(modelId)) {
       const actualModelId = defaultModels[modelId];
-      if (!actualModelId) return null;
+      if (!actualModelId) return buildAutoModelInfo(t);
 
       const model = allModels.find(m => m.id === actualModelId);
-      if (!model) return null;
+      if (!model) return buildAutoModelInfo(t);
 
       return {
         id: modelId,
@@ -208,7 +220,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     }
 
     const model = allModels.find(m => m.id === modelId);
-    if (!model) return null;
+    if (!model) return buildAutoModelInfo(t);
 
     return {
       id: model.id || '',
@@ -279,7 +291,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
       ref={dropdownRef}
       className={`bitfun-model-selector ${className}`}
     >
-      <Tooltip content={getModelTooltipText(currentModel, t('modelSelector.modelNotConfigured'))}>
+      <Tooltip content={getModelTooltipText(currentModel, t('modelSelector.autoModelDesc'))}>
         <button
           className={`bitfun-model-selector__trigger ${dropdownOpen ? 'bitfun-model-selector__trigger--open' : ''}`}
           onClick={() => setDropdownOpen(!dropdownOpen)}
@@ -287,7 +299,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
         >
           <Cpu size={10} className="bitfun-model-selector__icon" />
           <span className="bitfun-model-selector__name">
-            {getModelDisplayLabel(currentModel, t('modelSelector.modelNotConfigured'))}
+            {getModelDisplayLabel(currentModel, t('modelSelector.autoModel'))}
           </span>
           {currentModel?.enableThinking && (
             <Sparkles size={9} className="bitfun-model-selector__thinking-icon" />
@@ -330,8 +342,8 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
               ? buildResolvedModelTooltipText(primaryModel.model_name, {
                 providerName: getProviderDisplayName(primaryModel),
                 contextWindow: primaryModel.context_window
-              }, t('modelSelector.modelNotConfigured'))
-              : t('modelSelector.modelNotConfigured');
+              }, t('modelSelector.autoModelDesc'))
+              : t('modelSelector.autoModelDesc');
             return (
               <Tooltip content={primaryTooltip} placement="right">
                 <div
@@ -355,8 +367,8 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
               ? buildResolvedModelTooltipText(fastModel.model_name, {
                 providerName: getProviderDisplayName(fastModel),
                 contextWindow: fastModel.context_window
-              }, t('modelSelector.modelNotConfigured'))
-              : t('modelSelector.modelNotConfigured');
+              }, t('modelSelector.autoModelDesc'))
+              : t('modelSelector.autoModelDesc');
             return (
               <Tooltip content={fastTooltip} placement="right">
                 <div

@@ -34,6 +34,31 @@ export interface SessionInfo {
   workspace_name?: string;
 }
 
+export interface RemoteModelConfig {
+  id: string;
+  name: string;
+  provider: string;
+  base_url: string;
+  model_name: string;
+  context_window?: number;
+  enabled: boolean;
+  capabilities: string[];
+  enable_thinking_process: boolean;
+  reasoning_effort?: string;
+}
+
+export interface RemoteDefaultModels {
+  primary?: string | null;
+  fast?: string | null;
+}
+
+export interface RemoteModelCatalog {
+  version: number;
+  models: RemoteModelConfig[];
+  default_models: RemoteDefaultModels;
+  session_model_id?: string | null;
+}
+
 export interface ChatMessageItem {
   type: 'text' | 'tool' | 'thinking';
   content?: string;
@@ -88,6 +113,7 @@ export interface PollResponse {
   new_messages?: ChatMessage[];
   total_msg_count?: number;
   active_turn?: ActiveTurnSnapshot | null;
+  model_catalog?: RemoteModelCatalog;
 }
 
 export interface InitialSyncData {
@@ -205,6 +231,30 @@ export class RemoteSessionManager {
     };
   }
 
+  async getModelCatalog(sessionId?: string): Promise<RemoteModelCatalog> {
+    const resp = await this.request<{
+      resp: string;
+      catalog: RemoteModelCatalog;
+    }>({
+      cmd: 'get_model_catalog',
+      session_id: sessionId ?? undefined,
+    });
+    return resp.catalog;
+  }
+
+  async setSessionModel(sessionId: string, modelId: string): Promise<string> {
+    const resp = await this.request<{
+      resp: string;
+      session_id: string;
+      model_id: string;
+    }>({
+      cmd: 'set_session_model',
+      session_id: sessionId,
+      model_id: modelId,
+    });
+    return resp.model_id;
+  }
+
   async sendMessage(
     sessionId: string,
     content: string,
@@ -255,12 +305,14 @@ export class RemoteSessionManager {
     sessionId: string,
     sinceVersion: number,
     knownMsgCount: number,
+    knownModelCatalogVersion = 0,
   ): Promise<PollResponse> {
     return this.request<PollResponse>({
       cmd: 'poll_session',
       session_id: sessionId,
       since_version: sinceVersion,
       known_msg_count: knownMsgCount,
+      known_model_catalog_version: knownModelCatalogVersion,
     });
   }
 
@@ -367,15 +419,18 @@ export class SessionPoller {
   private polling = false;
   private stopped = false;
   private hasActiveTurn = false;
+  private knownModelCatalogVersion = 0;
 
   constructor(
     sessionMgr: RemoteSessionManager,
     sessionId: string,
     onUpdate: (state: PollResponse) => void,
+    initialModelCatalogVersion = 0,
   ) {
     this.sessionMgr = sessionMgr;
     this.sessionId = sessionId;
     this.onUpdate = onUpdate;
+    this.knownModelCatalogVersion = initialModelCatalogVersion;
   }
 
   start(initialMsgCount = 0) {
@@ -397,6 +452,10 @@ export class SessionPoller {
   resetCursors() {
     this.sinceVersion = 0;
     this.knownMsgCount = 0;
+  }
+
+  setKnownModelCatalogVersion(version: number) {
+    this.knownModelCatalogVersion = version;
   }
 
   /** Call after sending a message to immediately switch to fast polling. */
@@ -438,6 +497,7 @@ export class SessionPoller {
         this.sessionId,
         this.sinceVersion,
         this.knownMsgCount,
+        this.knownModelCatalogVersion,
       );
       // Only update hasActiveTurn from responses that carry actual data.
       // When changed=false the backend omits active_turn, so we must
@@ -449,6 +509,9 @@ export class SessionPoller {
         this.sinceVersion = resp.version;
         if (resp.total_msg_count != null) {
           this.knownMsgCount = resp.total_msg_count;
+        }
+        if (resp.model_catalog?.version != null) {
+          this.knownModelCatalogVersion = resp.model_catalog.version;
         }
         this.onUpdate(resp);
       }

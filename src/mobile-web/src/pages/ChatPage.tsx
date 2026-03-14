@@ -12,6 +12,8 @@ import {
   type RemoteToolStatus,
   type ChatMessage,
   type ChatMessageItem,
+  type RemoteModelCatalog,
+  type RemoteModelConfig,
 } from '../services/RemoteSessionManager';
 import { useMobileStore } from '../services/store';
 import { useTheme } from '../theme';
@@ -91,6 +93,7 @@ const CopyButton: React.FC<{ code: string }> = ({ code }) => {
 const COMPUTER_LINK_PREFIX = 'computer://';
 const FILE_LINK_PREFIX = 'file://';
 const WORKSPACE_FOLDER_PLACEHOLDER = '{{workspaceFolder}}';
+const MOBILE_LAST_SELECTED_MODEL_ID_KEY = 'bitfun.mobile.last_selected_model_id';
 
 const CODE_FILE_EXTENSIONS = new Set([
   'js', 'jsx', 'ts', 'tsx', 'mjs', 'cjs', 'mts', 'cts',
@@ -1567,6 +1570,332 @@ const ThemeToggleIcon: React.FC<{ isDark: boolean }> = ({ isDark }) => (
   </svg>
 );
 
+const SparklesIcon: React.FC<{ className?: string; size?: number }> = ({ className, size = 10 }) => (
+  <svg
+    className={className}
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.937A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .962 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.582a.5.5 0 0 1 0 .962L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.962 0z" />
+    <path d="M20 3v4" />
+    <path d="M22 5h-4" />
+    <path d="M4 17v2" />
+    <path d="M5 18H3" />
+  </svg>
+);
+
+type ModelSelectionValue = 'auto' | 'primary' | 'fast' | string;
+
+function formatProviderName(provider: string): string {
+  const normalized = provider.trim();
+  if (!normalized) return 'Unknown';
+  return normalized.charAt(0).toUpperCase() + normalized.slice(1);
+}
+
+function getModelProviderLabel(model: RemoteModelConfig): string {
+  const configuredName = model.name?.trim();
+  if (configuredName) return configuredName;
+  return formatProviderName(model.provider);
+}
+
+function formatContextWindow(contextWindow?: number): string | null {
+  if (!contextWindow) return null;
+  return `${Math.round(contextWindow / 1000)}k`;
+}
+
+function isChatCapableModel(model: RemoteModelConfig): boolean {
+  return model.enabled && Array.isArray(model.capabilities) && model.capabilities.includes('text_chat');
+}
+
+function normalizeSelectedModelId(
+  selectedModelId: string | null | undefined,
+  catalog: RemoteModelCatalog | null,
+): string {
+  const value = selectedModelId?.trim();
+  if (!value || value === 'auto' || value === 'default') return 'auto';
+  if (value === 'primary' || value === 'fast') {
+    const defaultId = value === 'primary'
+      ? catalog?.default_models?.primary
+      : catalog?.default_models?.fast;
+    return defaultId && resolveModelSelection(defaultId, catalog) ? value : 'auto';
+  }
+  return resolveModelSelection(value, catalog) ? value : 'auto';
+}
+
+function loadLastSelectedModelId(): string | null {
+  if (typeof window === 'undefined') return null;
+  const value = window.localStorage.getItem(MOBILE_LAST_SELECTED_MODEL_ID_KEY)?.trim();
+  return value || null;
+}
+
+function persistLastSelectedModelId(modelId: string): void {
+  if (typeof window === 'undefined') return;
+  const value = modelId.trim();
+  if (!value) {
+    window.localStorage.removeItem(MOBILE_LAST_SELECTED_MODEL_ID_KEY);
+    return;
+  }
+  window.localStorage.setItem(MOBILE_LAST_SELECTED_MODEL_ID_KEY, value);
+}
+
+function resolvePreferredModelSelection(
+  preferredModelId: string | null,
+  catalog: RemoteModelCatalog | null,
+): { modelId: string | null; fellBackToAuto: boolean } {
+  const value = preferredModelId?.trim();
+  if (!value) {
+    return { modelId: null, fellBackToAuto: false };
+  }
+
+  const normalizedModelId = normalizeSelectedModelId(value, catalog);
+  const fellBackToAuto = normalizedModelId === 'auto' && value !== 'auto' && value !== 'default';
+  return {
+    modelId: normalizedModelId,
+    fellBackToAuto,
+  };
+}
+
+function resolveModelSelection(
+  modelId: string,
+  catalog: RemoteModelCatalog | null,
+): RemoteModelConfig | null {
+  if (!catalog) return null;
+  return catalog.models.find(model => model.id === modelId) || null;
+}
+
+function buildModelProviderMeta(model: RemoteModelConfig | null): string | null {
+  if (!model) return null;
+  const parts = [getModelProviderLabel(model)];
+  const context = formatContextWindow(model.context_window);
+  if (context) parts.push(context);
+  return parts.join(' · ');
+}
+
+function getModelDisplayName(model: RemoteModelConfig | null): string {
+  if (!model) return '';
+  return model.model_name || model.name || '';
+}
+
+function getSelectedModelInfo(
+  selectedModelId: string,
+  catalog: RemoteModelCatalog | null,
+  t: (key: string, params?: Record<string, string | number>) => string,
+): {
+  label: string;
+  meta: string | null;
+  enableThinking: boolean;
+  reasoningEffort?: string;
+} {
+  if (selectedModelId === 'auto') {
+    return {
+      label: t('chat.modelAuto'),
+      meta: t('chat.modelAutoDesc'),
+      enableThinking: false,
+    };
+  }
+
+  if (selectedModelId === 'primary' || selectedModelId === 'fast') {
+    const defaultId = selectedModelId === 'primary'
+      ? catalog?.default_models?.primary
+      : catalog?.default_models?.fast;
+    const resolved = defaultId ? resolveModelSelection(defaultId, catalog) : null;
+    return {
+      label: resolved
+        ? (selectedModelId === 'primary' ? t('chat.modelPrimary') : t('chat.modelFast'))
+        : t('chat.modelAuto'),
+      meta: buildModelProviderMeta(resolved) || t('chat.modelAutoDesc'),
+      enableThinking: !!resolved?.enable_thinking_process,
+      reasoningEffort: resolved?.reasoning_effort,
+    };
+  }
+
+  const resolved = resolveModelSelection(selectedModelId, catalog);
+  if (!resolved) {
+    return {
+      label: t('chat.modelAuto'),
+      meta: t('chat.modelAutoDesc'),
+      enableThinking: false,
+    };
+  }
+
+  return {
+    label: getModelDisplayName(resolved),
+    meta: buildModelProviderMeta(resolved),
+    enableThinking: resolved.enable_thinking_process,
+    reasoningEffort: resolved.reasoning_effort,
+  };
+}
+
+const ModelSelectorPill: React.FC<{
+  catalog: RemoteModelCatalog | null;
+  selectedModelId: string;
+  disabled?: boolean;
+  onSelect: (modelId: string) => void | Promise<void>;
+}> = ({ catalog, selectedModelId, disabled, onSelect }) => {
+  const { t } = useI18n();
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const normalizedSelectedModelId = useMemo(
+    () => normalizeSelectedModelId(selectedModelId, catalog),
+    [catalog, selectedModelId],
+  );
+
+  const availableModels = useMemo(
+    () => (catalog?.models || []).filter(isChatCapableModel),
+    [catalog],
+  );
+  const resolvedPrimaryModel = useMemo(
+    () => resolveModelSelection(catalog?.default_models?.primary || '', catalog),
+    [catalog],
+  );
+  const resolvedFastModel = useMemo(
+    () => resolveModelSelection(catalog?.default_models?.fast || '', catalog),
+    [catalog],
+  );
+  const selectedInfo = useMemo(
+    () => getSelectedModelInfo(normalizedSelectedModelId, catalog, t),
+    [catalog, normalizedSelectedModelId, t],
+  );
+
+  useEffect(() => {
+    if (!open) return;
+    const handleOutside = (event: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleOutside);
+    return () => document.removeEventListener('mousedown', handleOutside);
+  }, [open]);
+
+  if (!catalog) return null;
+
+  const handleSelect = async (modelId: string) => {
+    await onSelect(modelId);
+    setOpen(false);
+  };
+
+  return (
+    <div className="chat-model-selector" ref={rootRef}>
+      <button
+        className={`chat-model-selector__trigger${open ? ' chat-model-selector__trigger--open' : ''}`}
+        type="button"
+        onClick={() => setOpen(prev => !prev)}
+        disabled={disabled}
+        aria-label={t('chat.modelSelection')}
+      >
+        <span className="chat-model-selector__icon" aria-hidden="true">
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none">
+            <rect x="4" y="4" width="6" height="6" rx="1.5" stroke="currentColor" strokeWidth="1.7" />
+            <rect x="14" y="4" width="6" height="6" rx="1.5" stroke="currentColor" strokeWidth="1.7" />
+            <rect x="9" y="14" width="6" height="6" rx="1.5" stroke="currentColor" strokeWidth="1.7" />
+            <path d="M10 7h4M12 10v4" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+          </svg>
+        </span>
+        <span className="chat-model-selector__name">
+          <span className="chat-model-selector__name-text">{selectedInfo.label}</span>
+          {selectedInfo.enableThinking && (
+            <SparklesIcon className="chat-model-selector__thinking" size={9} />
+          )}
+        </span>
+        {selectedInfo.reasoningEffort && (
+          <span className="chat-model-selector__effort">{selectedInfo.reasoningEffort}</span>
+        )}
+        <span className="chat-model-selector__chevron" aria-hidden="true">
+          <svg width="10" height="10" viewBox="0 0 16 16" fill="none">
+            <path d="M4 6L8 10L12 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </span>
+      </button>
+
+      {open && (
+        <div className="chat-model-selector__dropdown">
+          <div className="chat-model-selector__header">{t('chat.modelSelection')}</div>
+          <button
+            className={`chat-model-selector__option${normalizedSelectedModelId === 'auto' ? ' is-selected' : ''}`}
+            type="button"
+            onClick={() => void handleSelect('auto')}
+          >
+            <span className="chat-model-selector__option-main">
+              <span className="chat-model-selector__option-name">{t('chat.modelAuto')}</span>
+              <span className="chat-model-selector__option-meta">{t('chat.modelAutoDesc')}</span>
+            </span>
+          </button>
+          <button
+            className={`chat-model-selector__option${normalizedSelectedModelId === 'primary' ? ' is-selected' : ''}`}
+            type="button"
+            onClick={() => void handleSelect('primary')}
+          >
+            <span className="chat-model-selector__option-main">
+              <span className="chat-model-selector__option-name">{t('chat.modelPrimary')}</span>
+              <span className="chat-model-selector__option-meta chat-model-selector__option-meta--stacked">
+                <span className="chat-model-selector__option-meta-line">
+                  {getModelDisplayName(resolvedPrimaryModel) || t('chat.modelAuto')}
+                </span>
+                <span className="chat-model-selector__option-meta-line">
+                  {buildModelProviderMeta(resolvedPrimaryModel) || t('chat.modelAutoDesc')}
+                </span>
+              </span>
+            </span>
+          </button>
+          <button
+            className={`chat-model-selector__option${normalizedSelectedModelId === 'fast' ? ' is-selected' : ''}`}
+            type="button"
+            onClick={() => void handleSelect('fast')}
+          >
+            <span className="chat-model-selector__option-main">
+              <span className="chat-model-selector__option-name">{t('chat.modelFast')}</span>
+              <span className="chat-model-selector__option-meta chat-model-selector__option-meta--stacked">
+                <span className="chat-model-selector__option-meta-line">
+                  {getModelDisplayName(resolvedFastModel) || t('chat.modelAuto')}
+                </span>
+                <span className="chat-model-selector__option-meta-line">
+                  {buildModelProviderMeta(resolvedFastModel) || t('chat.modelAutoDesc')}
+                </span>
+              </span>
+            </span>
+          </button>
+          <div className="chat-model-selector__divider" />
+          <div className="chat-model-selector__list">
+            {availableModels.map(model => {
+              const isSelected = normalizedSelectedModelId === model.id;
+              return (
+                <button
+                  key={model.id}
+                  className={`chat-model-selector__option${isSelected ? ' is-selected' : ''}`}
+                  type="button"
+                  onClick={() => void handleSelect(model.id)}
+                >
+                  <span className="chat-model-selector__option-main">
+                    <span className="chat-model-selector__option-name">
+                      <span className="chat-model-selector__option-name-text">
+                        {getModelDisplayName(model)}
+                      </span>
+                      {model.enable_thinking_process && (
+                        <SparklesIcon className="chat-model-selector__option-thinking" size={10} />
+                      )}
+                    </span>
+                    <span className="chat-model-selector__option-meta">
+                      {buildModelProviderMeta(model) || formatProviderName(model.provider)}
+                    </span>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 // ─── Agent Mode ─────────────────────────────────────────────────────────────
 
 type AgentMode = 'agentic' | 'Plan' | 'debug';
@@ -1597,6 +1926,9 @@ const ChatPage: React.FC<ChatPageProps> = ({ sessionMgr, sessionId, sessionName,
   const [input, setInput] = useState('');
   const [agentMode, setAgentMode] = useState<AgentMode>('agentic');
   const [liveTitle, setLiveTitle] = useState(sessionName);
+  const [modelCatalog, setModelCatalog] = useState<RemoteModelCatalog | null>(null);
+  const [selectedModelId, setSelectedModelId] = useState<string>('auto');
+  const [modelUpdating, setModelUpdating] = useState(false);
   const [pendingImages, setPendingImages] = useState<{ name: string; dataUrl: string }[]>([]);
   const [imageAnalyzing, setImageAnalyzing] = useState(false);
   const [optimisticMsg, setOptimisticMsg] = useState<{
@@ -1610,6 +1942,9 @@ const ChatPage: React.FC<ChatPageProps> = ({ sessionMgr, sessionId, sessionName,
 
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
+  const isLoadingMoreRef = useRef(false);
+  const hasMoreRef = useRef(true);
+  const modelSelectionInitializedRef = useRef(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const [expandedMsgIds, setExpandedMsgIds] = useState<Set<string>>(new Set());
@@ -1664,6 +1999,50 @@ const ChatPage: React.FC<ChatPageProps> = ({ sessionMgr, sessionId, sessionName,
     }
   }, [sessionId, sessionMgr, setError]);
 
+  const loadModelCatalog = useCallback(async () => {
+    try {
+      const catalog = await sessionMgr.getModelCatalog(sessionId);
+      setModelCatalog(catalog);
+      if (!modelSelectionInitializedRef.current) {
+        const preferredSelection = resolvePreferredModelSelection(loadLastSelectedModelId(), catalog);
+        const sessionModelId = normalizeSelectedModelId(catalog.session_model_id || 'auto', catalog);
+        const nextModelId = preferredSelection.modelId || sessionModelId;
+
+        if (preferredSelection.modelId && preferredSelection.modelId !== sessionModelId) {
+          const normalizedModelId = await sessionMgr.setSessionModel(sessionId, preferredSelection.modelId);
+          setSelectedModelId(normalizedModelId || 'auto');
+          if (preferredSelection.fellBackToAuto && (!normalizedModelId || normalizedModelId === 'auto')) {
+            persistLastSelectedModelId('auto');
+          }
+        } else {
+          setSelectedModelId(nextModelId || 'auto');
+          if (preferredSelection.fellBackToAuto && nextModelId === 'auto') {
+            persistLastSelectedModelId('auto');
+          }
+        }
+        modelSelectionInitializedRef.current = true;
+      }
+      return catalog;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      return null;
+    }
+  }, [sessionId, sessionMgr, setError]);
+
+  const handleSelectModel = useCallback(async (modelId: string) => {
+    if (modelUpdating || isStreaming || imageAnalyzing) return;
+    setModelUpdating(true);
+    try {
+      const normalizedModelId = await sessionMgr.setSessionModel(sessionId, modelId);
+      setSelectedModelId(normalizedModelId || 'auto');
+      persistLastSelectedModelId(normalizedModelId || 'auto');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setModelUpdating(false);
+    }
+  }, [imageAnalyzing, isStreaming, modelUpdating, sessionId, sessionMgr, setError]);
+
   useEffect(() => {
     if (!isStreaming) return;
     const timer = setInterval(() => setNow(Date.now()), 500);
@@ -1677,8 +2056,9 @@ const ChatPage: React.FC<ChatPageProps> = ({ sessionMgr, sessionId, sessionName,
   }, [error, setError]);
 
   const loadMessages = useCallback(async (beforeId?: string) => {
-    if (isLoadingMore || (!hasMore && beforeId)) return;
+    if (isLoadingMoreRef.current || (!hasMoreRef.current && beforeId)) return;
     try {
+      isLoadingMoreRef.current = true;
       setIsLoadingMore(true);
       const resp = await sessionMgr.getSessionMessages(sessionId, 50, beforeId);
       if (beforeId) {
@@ -1688,12 +2068,14 @@ const ChatPage: React.FC<ChatPageProps> = ({ sessionMgr, sessionId, sessionName,
         setMessages(sessionId, resp.messages);
       }
       setHasMore(resp.has_more);
+      hasMoreRef.current = resp.has_more;
     } catch (e: any) {
       setError(e.message);
     } finally {
+      isLoadingMoreRef.current = false;
       setIsLoadingMore(false);
     }
-  }, [sessionMgr, sessionId, setMessages, setError, getMessages, isLoadingMore, hasMore]);
+  }, [sessionMgr, sessionId, setMessages, setError, getMessages]);
 
   const isNearBottomRef = useRef(true);
   const BOTTOM_THRESHOLD = 80;
@@ -1715,9 +2097,19 @@ const ChatPage: React.FC<ChatPageProps> = ({ sessionMgr, sessionId, sessionName,
   const initialScrollDone = useRef(false);
   const pendingInitialScroll = useRef(false);
   useEffect(() => {
+    modelSelectionInitializedRef.current = false;
+    hasMoreRef.current = true;
+    isLoadingMoreRef.current = false;
+    setHasMore(true);
+    setIsLoadingMore(false);
+    setModelCatalog(null);
+    setSelectedModelId('auto');
+  }, [sessionId]);
+
+  useEffect(() => {
     initialScrollDone.current = false;
     pendingInitialScroll.current = false;
-    loadMessages().then(() => {
+    Promise.all([loadMessages(), loadModelCatalog()]).then(([_, initialCatalog]) => {
       const initialMsgCount = useMobileStore.getState().getMessages(sessionId).length;
       pendingInitialScroll.current = true;
 
@@ -1742,8 +2134,11 @@ const ChatPage: React.FC<ChatPageProps> = ({ sessionMgr, sessionId, sessionName,
           setLiveTitle(resp.title);
           updateSessionName(sessionId, resp.title);
         }
+        if (resp.model_catalog) {
+          setModelCatalog(resp.model_catalog);
+        }
         setActiveTurn(resp.active_turn ?? null);
-      });
+      }, initialCatalog?.version || 0);
 
       poller.start(initialMsgCount);
       pollerRef.current = poller;
@@ -1754,7 +2149,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ sessionMgr, sessionId, sessionName,
       pollerRef.current = null;
       setActiveTurn(null);
     };
-  }, [sessionId, sessionMgr]);
+  }, [sessionId, sessionMgr, loadMessages, loadModelCatalog, appendNewMessages, setActiveTurn, updateSessionName]);
 
   const prevMsgCountRef = useRef(0);
 
@@ -2258,6 +2653,14 @@ const ChatPage: React.FC<ChatPageProps> = ({ sessionMgr, sessionId, sessionName,
           {/* Actions bar */}
           <div className="chat-page__input-actions">
             <div className="chat-page__input-actions-left">
+                {inputExpanded && (
+                  <ModelSelectorPill
+                    catalog={modelCatalog}
+                    selectedModelId={selectedModelId}
+                    disabled={isStreaming || imageAnalyzing || modelUpdating}
+                    onSelect={handleSelectModel}
+                  />
+                )}
               {inputExpanded && pendingImages.length > 0 && (
                 <div className="chat-page__image-preview-row">
                   {pendingImages.map((img, idx) => (

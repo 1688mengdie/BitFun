@@ -156,6 +156,8 @@ const AIModelConfig: React.FC = () => {
   const [hasAttemptedRemoteFetch, setHasAttemptedRemoteFetch] = useState(false);
   const [selectedModelDrafts, setSelectedModelDrafts] = useState<SelectedModelDraft[]>([]);
   const [manualModelInput, setManualModelInput] = useState('');
+  const lastRemoteFetchSignatureRef = React.useRef<string | null>(null);
+  const activeRemoteFetchSignatureRef = React.useRef<string | null>(null);
 
   const requestFormatOptions = useMemo(
     () => [
@@ -288,6 +290,8 @@ const AIModelConfig: React.FC = () => {
     setIsFetchingRemoteModels(false);
     setRemoteModelsError(null);
     setHasAttemptedRemoteFetch(false);
+    lastRemoteFetchSignatureRef.current = null;
+    activeRemoteFetchSignatureRef.current = null;
   };
 
   const syncSelectedModelDrafts = (
@@ -416,6 +420,17 @@ const AIModelConfig: React.FC = () => {
     };
   };
 
+  const buildModelDiscoverySignature = (config: AIModelConfigType): string => JSON.stringify({
+    provider: config.provider,
+    base_url: config.base_url,
+    api_key: config.api_key,
+    model_name: config.model_name,
+    skip_ssl_verify: config.skip_ssl_verify ?? false,
+    custom_headers_mode: config.custom_headers_mode || null,
+    custom_headers: config.custom_headers || null,
+    custom_request_body: config.custom_request_body || null,
+  });
+
   const fetchRemoteModels = async (config: Partial<AIModelConfigType> | null) => {
     if (!config) return;
 
@@ -427,9 +442,19 @@ const AIModelConfig: React.FC = () => {
       return;
     }
 
+    const requestSignature = buildModelDiscoverySignature(discoveryConfig);
+    if (activeRemoteFetchSignatureRef.current === requestSignature) {
+      return;
+    }
+    if (lastRemoteFetchSignatureRef.current === requestSignature) {
+      return;
+    }
+
     setIsFetchingRemoteModels(true);
     setRemoteModelsError(null);
     setHasAttemptedRemoteFetch(true);
+    lastRemoteFetchSignatureRef.current = requestSignature;
+    activeRemoteFetchSignatureRef.current = requestSignature;
 
     try {
       const remoteModels = await aiApi.listModelsByConfig(discoveryConfig);
@@ -451,12 +476,16 @@ const AIModelConfig: React.FC = () => {
       setRemoteModelsError(t('providerSelection.fetchFailedFallback'));
     } finally {
       setIsFetchingRemoteModels(false);
+      if (activeRemoteFetchSignatureRef.current === requestSignature) {
+        activeRemoteFetchSignatureRef.current = null;
+      }
     }
   };
 
   const handleModelSelectionOpenChange = (isOpen: boolean) => {
     if (!isOpen || !editingConfig || isFetchingRemoteModels) return;
     if (!editingConfig.api_key?.trim()) return;
+    if (hasAttemptedRemoteFetch) return;
     if (remoteModelOptions.length > 0) return;
     void fetchRemoteModels(editingConfig);
   };
