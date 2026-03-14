@@ -3,6 +3,7 @@ import {
   agentAPI,
   type EnsureAssistantBootstrapResponse,
 } from '@/infrastructure/api/service-api/AgentAPI';
+import { useI18n } from '@/infrastructure/i18n';
 import { notificationService } from '@/shared/notification-system';
 import { createLogger } from '@/shared/utils/logger';
 import { WorkspaceKind, type WorkspaceInfo } from '@/shared/types';
@@ -19,6 +20,7 @@ interface ActiveBootstrapAttempt extends BootstrapRequest {
 }
 
 export function useAssistantBootstrap() {
+  const { t } = useI18n('notifications');
   const activeAttemptRef = useRef<ActiveBootstrapAttempt | null>(null);
   const pendingRequestRef = useRef<BootstrapRequest | null>(null);
   const latestWorkspacePathRef = useRef<string | null>(null);
@@ -96,10 +98,9 @@ export function useAssistantBootstrap() {
             !blockedNoticeShownRef.current.has(request.workspacePath)
           ) {
             blockedNoticeShownRef.current.add(request.workspacePath);
-            notificationService.info(
-              'Assistant bootstrap is waiting for AI model configuration.',
-              { duration: 5000 }
-            );
+            notificationService.info(t('info.assistantBootstrapWaitingForModelConfiguration'), {
+              duration: 5000,
+            });
           }
           log.info('Assistant bootstrap blocked', {
             workspacePath: request.workspacePath,
@@ -122,7 +123,7 @@ export function useAssistantBootstrap() {
           return;
       }
     },
-    []
+    [t]
   );
 
   const requestBootstrap = useCallback(
