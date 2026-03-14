@@ -473,8 +473,10 @@ impl RoundExecutor {
             .collect();
 
         if !injected_images.is_empty() {
-            let reminder_text =
-                render_system_reminder(&format!("Attached {} image(s) from view_image tool.", injected_images.len()));
+            let reminder_text = render_system_reminder(&format!(
+                "Attached {} image(s) from view_image tool.",
+                injected_images.len()
+            ));
             tool_result_messages.push(
                 Message::user_multimodal(reminder_text, injected_images)
                     .with_semantic_kind(MessageSemanticKind::InternalReminder)

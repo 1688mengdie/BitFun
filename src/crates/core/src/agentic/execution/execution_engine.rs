@@ -5,7 +5,7 @@
 use super::round_executor::RoundExecutor;
 use super::types::{ExecutionContext, ExecutionResult, RoundContext};
 use crate::agentic::agents::get_agent_registry;
-use crate::agentic::core::{Message, MessageContent, MessageHelper};
+use crate::agentic::core::{Message, MessageContent, MessageHelper, Session};
 use crate::agentic::events::{AgenticEvent, EventPriority, EventQueue};
 use crate::agentic::image_analysis::{
     build_multimodal_message_with_images, process_image_contexts_for_provider, ImageContextData,
@@ -13,6 +13,7 @@ use crate::agentic::image_analysis::{
 };
 use crate::agentic::session::SessionManager;
 use crate::agentic::tools::{get_all_registered_tools, SubagentParentInfo};
+use crate::agentic::WorkspaceBinding;
 use crate::infrastructure::ai::get_global_ai_client_factory;
 use crate::service::config::get_global_config_service;
 use crate::service::config::types::{ModelCapability, ModelCategory};
@@ -155,6 +156,84 @@ impl ExecutionEngine {
 
     fn should_use_fast_auto_model(turn_index: usize, original_user_input: &str) -> bool {
         turn_index == 0 && original_user_input.chars().count() <= 10
+    }
+
+    pub(crate) async fn resolve_model_id_for_turn(
+        &self,
+        session: &Session,
+        agent_type: &str,
+        workspace: Option<&WorkspaceBinding>,
+        original_user_input: &str,
+        turn_index: usize,
+    ) -> BitFunResult<String> {
+        let agent_registry = get_agent_registry();
+        let configured_model_id = agent_registry
+            .get_model_id_for_agent(agent_type, workspace.map(|binding| binding.root_path()))
+            .await
+            .map_err(|e| BitFunError::AIClient(format!("Failed to get model ID: {}", e)))?;
+
+        let model_id = if configured_model_id == "auto" {
+            let config_service = get_global_config_service().await.map_err(|e| {
+                BitFunError::AIClient(format!(
+                    "Failed to get config service for auto model resolution: {}",
+                    e
+                ))
+            })?;
+            let ai_config: crate::service::config::types::AIConfig = config_service
+                .get_config(Some("ai"))
+                .await
+                .unwrap_or_default();
+
+            let locked_model_id =
+                Self::resolve_locked_auto_model_id(&ai_config, session.config.model_id.as_ref());
+            let raw_locked_model_id = session.config.model_id.clone();
+
+            if let Some(locked_model_id) = locked_model_id {
+                locked_model_id
+            } else {
+                if let Some(raw_locked_model_id) = raw_locked_model_id.as_ref() {
+                    let trimmed = raw_locked_model_id.trim();
+                    if !trimmed.is_empty() && trimmed != "auto" && trimmed != "default" {
+                        warn!(
+                            "Ignoring invalid locked auto model for session: session_id={}, model_id={}",
+                            session.session_id, trimmed
+                        );
+                    }
+                }
+
+                let use_fast_model =
+                    Self::should_use_fast_auto_model(turn_index, original_user_input);
+                let fallback_model = if use_fast_model { "fast" } else { "primary" };
+                let resolved_model_id = ai_config.resolve_model_selection(fallback_model);
+
+                if let Some(resolved_model_id) = resolved_model_id {
+                    self.session_manager
+                        .update_session_model_id(&session.session_id, &resolved_model_id)
+                        .await?;
+
+                    info!(
+                        "Auto model resolved: session_id={}, turn_index={}, user_input_chars={}, strategy={}, resolved_model_id={}",
+                        session.session_id,
+                        turn_index,
+                        original_user_input.chars().count(),
+                        fallback_model,
+                        resolved_model_id
+                    );
+
+                    resolved_model_id
+                } else {
+                    warn!(
+                        "Auto model strategy unresolved, keeping symbolic selector: session_id={}, strategy={}",
+                        session.session_id, fallback_model
+                    );
+                    fallback_model.to_string()
+                }
+            }
+        } else {
+            configured_model_id
+        };
+
+        Ok(model_id)
     }
 
     async fn build_ai_messages_for_send(
@@ -435,86 +514,23 @@ impl ExecutionEngine {
             })?;
 
         // 2. Get AI client
-        // Get model ID from AgentRegistry
-        let configured_model_id = agent_registry
-            .get_model_id_for_agent(
+        let original_user_input = context
+            .context
+            .get("original_user_input")
+            .cloned()
+            .unwrap_or_default();
+        let model_id = self
+            .resolve_model_id_for_turn(
+                &session,
                 &agent_type,
-                context
-                    .workspace
-                    .as_ref()
-                    .map(|workspace| workspace.root_path()),
+                context.workspace.as_ref(),
+                &original_user_input,
+                context.turn_index,
             )
-            .await
-            .map_err(|e| BitFunError::AIClient(format!("Failed to get model ID: {}", e)))?;
-        let model_id = if configured_model_id == "auto" {
-            let config_service = get_global_config_service().await.map_err(|e| {
-                BitFunError::AIClient(format!(
-                    "Failed to get config service for auto model resolution: {}",
-                    e
-                ))
-            })?;
-            let ai_config: crate::service::config::types::AIConfig = config_service
-                .get_config(Some("ai"))
-                .await
-                .unwrap_or_default();
-
-            let locked_model_id =
-                Self::resolve_locked_auto_model_id(&ai_config, session.config.model_id.as_ref());
-            let raw_locked_model_id = session.config.model_id.clone();
-
-            if let Some(locked_model_id) = locked_model_id {
-                locked_model_id
-            } else {
-                if let Some(raw_locked_model_id) = raw_locked_model_id.as_ref() {
-                    let trimmed = raw_locked_model_id.trim();
-                    if !trimmed.is_empty() && trimmed != "auto" && trimmed != "default" {
-                        warn!(
-                            "Ignoring invalid locked auto model for session: session_id={}, model_id={}",
-                            context.session_id, trimmed
-                        );
-                    }
-                }
-
-                let original_user_input = context
-                    .context
-                    .get("original_user_input")
-                    .cloned()
-                    .unwrap_or_default();
-                let use_fast_model =
-                    Self::should_use_fast_auto_model(context.turn_index, &original_user_input);
-                let fallback_model = if use_fast_model { "fast" } else { "primary" };
-                let resolved_model_id = ai_config.resolve_model_selection(fallback_model);
-
-                if let Some(resolved_model_id) = resolved_model_id {
-                    self.session_manager
-                        .update_session_model_id(&context.session_id, &resolved_model_id)
-                        .await?;
-
-                    info!(
-                        "Auto model resolved: session_id={}, turn_index={}, user_input_chars={}, strategy={}, resolved_model_id={}",
-                        context.session_id,
-                        context.turn_index,
-                        original_user_input.chars().count(),
-                        fallback_model,
-                        resolved_model_id
-                    );
-
-                    resolved_model_id
-                } else {
-                    warn!(
-                        "Auto model strategy unresolved, keeping symbolic selector: session_id={}, strategy={}",
-                        context.session_id, fallback_model
-                    );
-                    fallback_model.to_string()
-                }
-            }
-        } else {
-            configured_model_id.clone()
-        };
+            .await?;
         info!(
-            "Agent using model: agent={}, configured_model_id={}, resolved_model_id={}",
+            "Agent using model: agent={}, resolved_model_id={}",
             current_agent.name(),
-            configured_model_id,
             model_id
         );
 

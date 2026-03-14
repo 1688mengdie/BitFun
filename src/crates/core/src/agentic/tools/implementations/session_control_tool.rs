@@ -51,8 +51,7 @@ impl SessionControlTool {
                 .map(|path| path.to_string_lossy().to_string())
                 .ok_or_else(|| {
                     BitFunError::tool(
-                        "SessionControl requires workspace input or a source workspace"
-                            .to_string(),
+                        "SessionControl requires workspace input or a source workspace".to_string(),
                     )
                 })?,
         };

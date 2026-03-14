@@ -296,6 +296,7 @@ pub async fn run() {
             theme::show_main_window,
             api::agentic_api::create_session,
             api::agentic_api::start_dialog_turn,
+            api::agentic_api::ensure_assistant_bootstrap,
             api::agentic_api::cancel_dialog_turn,
             api::agentic_api::delete_session,
             api::agentic_api::restore_session,

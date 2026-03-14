@@ -8,7 +8,7 @@ pub mod infrastructure; // Infrastructure layer - AI clients, storage, logging, 
 pub mod miniapp;
 pub mod service; // Service layer - Workspace, Config, FileSystem, Terminal, Git
 pub mod util; // Utility layer - General types, errors, helper functions // MiniApp - AI-generated instant apps (Zero-Dialect Runtime)
-                                                                         // Re-export debug_log from infrastructure for backward compatibility
+              // Re-export debug_log from infrastructure for backward compatibility
 pub use infrastructure::debug_log as debug;
 
 // Export main types

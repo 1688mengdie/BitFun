@@ -165,8 +165,8 @@ impl SideQuestionService {
         let mut context_messages = session_manager.get_context_messages(session_id).await?;
 
         if context_messages.len() > max_context_messages {
-            context_messages =
-                context_messages.split_off(context_messages.len().saturating_sub(max_context_messages));
+            context_messages = context_messages
+                .split_off(context_messages.len().saturating_sub(max_context_messages));
         }
 
         Ok(context_messages)
@@ -189,7 +189,9 @@ Rules:\n\
         max_context_messages: Option<usize>,
     ) -> BitFunResult<String> {
         if session_id.trim().is_empty() {
-            return Err(BitFunError::Validation("session_id is required".to_string()));
+            return Err(BitFunError::Validation(
+                "session_id is required".to_string(),
+            ));
         }
         if question.trim().is_empty() {
             return Err(BitFunError::Validation("question is required".to_string()));
@@ -235,10 +237,14 @@ Rules:\n\
         request: SideQuestionStreamRequest,
     ) -> BitFunResult<mpsc::UnboundedReceiver<SideQuestionStreamEvent>> {
         if request.request_id.trim().is_empty() {
-            return Err(BitFunError::Validation("request_id is required".to_string()));
+            return Err(BitFunError::Validation(
+                "request_id is required".to_string(),
+            ));
         }
         if request.session_id.trim().is_empty() {
-            return Err(BitFunError::Validation("session_id is required".to_string()));
+            return Err(BitFunError::Validation(
+                "session_id is required".to_string(),
+            ));
         }
         if request.question.trim().is_empty() {
             return Err(BitFunError::Validation("question is required".to_string()));
@@ -334,7 +340,10 @@ Rules:\n\
             }
 
             if full_text.trim().is_empty() {
-                warn!("Side question stream completed with empty output: request_id={}", request_id);
+                warn!(
+                    "Side question stream completed with empty output: request_id={}",
+                    request_id
+                );
             }
 
             let _ = tx.send(SideQuestionStreamEvent::Completed {

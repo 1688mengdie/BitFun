@@ -101,15 +101,17 @@ impl Agent for CoreAgentAdapter {
         tracing::info!("Processing message: {}", message);
 
         let _ = event_tx.send(AgentEvent::Thinking);
-        self.coordinator.start_dialog_turn(
-            session_id.clone(),
-            message.clone(),
-            None,
-            None,
-            self.agent_type.clone(),
-            None,
-            DialogSubmissionPolicy::for_source(DialogTriggerSource::Cli),
-        ).await?;
+        self.coordinator
+            .start_dialog_turn(
+                session_id.clone(),
+                message.clone(),
+                None,
+                None,
+                self.agent_type.clone(),
+                None,
+                DialogSubmissionPolicy::for_source(DialogTriggerSource::Cli),
+            )
+            .await?;
 
         let mut accumulated_text = String::new();
         let mut tool_map: std::collections::HashMap<String, ToolCall> =
