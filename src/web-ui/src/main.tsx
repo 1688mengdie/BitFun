@@ -118,6 +118,19 @@ function registerGlobalErrorHandlers() {
 
 registerGlobalErrorHandlers();
 
+// Disable Tab-key focus traversal globally.
+// Tab still works inside Monaco Editor and xterm terminal where it has semantic meaning.
+document.addEventListener(
+  'keydown',
+  (e: KeyboardEvent) => {
+    if (e.key !== 'Tab') return;
+    const target = e.target as Element | null;
+    if (target?.closest('.monaco-editor, .xterm')) return;
+    e.preventDefault();
+  },
+  true
+);
+
 // Configure Monaco Editor loader - use local files (offline-ready).
 const isDev = import.meta.env.DEV;
 const monacoPath = getMonacoPath();

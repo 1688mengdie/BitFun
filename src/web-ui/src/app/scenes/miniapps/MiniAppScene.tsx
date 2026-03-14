@@ -4,7 +4,6 @@
  */
 import React, { useEffect, useState } from 'react';
 import { RefreshCw, Loader2, AlertTriangle } from 'lucide-react';
-import { useToolboxStore } from './toolboxStore';
 import { miniAppAPI } from '@/infrastructure/api/service-api/MiniAppAPI';
 import { api } from '@/infrastructure/api/service-api/ApiClient';
 import type { MiniApp } from '@/infrastructure/api/service-api/MiniAppAPI';
@@ -14,6 +13,7 @@ import { createLogger } from '@/shared/utils/logger';
 import { IconButton, Button } from '@/component-library';
 import { useSceneManager } from '@/app/hooks/useSceneManager';
 import type { SceneTabId } from '@/app/components/SceneBar/types';
+import { useMiniAppStore } from './miniAppStore';
 import './MiniAppScene.scss';
 
 const log = createLogger('MiniAppScene');
@@ -25,8 +25,8 @@ interface MiniAppSceneProps {
 }
 
 const MiniAppScene: React.FC<MiniAppSceneProps> = ({ appId }) => {
-  const openApp = useToolboxStore((s) => s.openApp);
-  const closeApp = useToolboxStore((s) => s.closeApp);
+  const openApp = useMiniAppStore((state) => state.openApp);
+  const closeApp = useMiniAppStore((state) => state.closeApp);
   const { themeType } = useTheme();
   const { workspacePath } = useCurrentWorkspace();
   const { closeScene } = useSceneManager();
@@ -60,7 +60,7 @@ const MiniAppScene: React.FC<MiniAppSceneProps> = ({ appId }) => {
 
   useEffect(() => {
     if (appId) {
-      load(appId);
+      void load(appId);
     }
   }, [appId, themeType, workspacePath]);
 
@@ -70,25 +70,25 @@ const MiniAppScene: React.FC<MiniAppSceneProps> = ({ appId }) => {
 
     const unlistenUpdated = api.listen<{ id?: string }>('miniapp-updated', (payload) => {
       if (shouldHandle(payload)) {
-        setKey((k) => k + 1);
+        setKey((value) => value + 1);
         void load(appId);
       }
     });
     const unlistenRecompiled = api.listen<{ id?: string }>('miniapp-recompiled', (payload) => {
       if (shouldHandle(payload)) {
-        setKey((k) => k + 1);
+        setKey((value) => value + 1);
         void load(appId);
       }
     });
     const unlistenRolledBack = api.listen<{ id?: string }>('miniapp-rolled-back', (payload) => {
       if (shouldHandle(payload)) {
-        setKey((k) => k + 1);
+        setKey((value) => value + 1);
         void load(appId);
       }
     });
     const unlistenRestarted = api.listen<{ id?: string }>('miniapp-worker-restarted', (payload) => {
       if (shouldHandle(payload)) {
-        setKey((k) => k + 1);
+        setKey((value) => value + 1);
         void load(appId);
       }
     });
@@ -109,8 +109,8 @@ const MiniAppScene: React.FC<MiniAppSceneProps> = ({ appId }) => {
 
   const handleReload = () => {
     if (appId) {
-      setKey((k) => k + 1);
-      load(appId);
+      setKey((value) => value + 1);
+      void load(appId);
     }
   };
 
@@ -121,7 +121,7 @@ const MiniAppScene: React.FC<MiniAppSceneProps> = ({ appId }) => {
           {app ? (
             <span className="miniapp-scene__title">{app.name}</span>
           ) : (
-            <span className="miniapp-scene__title miniapp-scene__title--loading">MiniApp</span>
+            <span className="miniapp-scene__title miniapp-scene__title--loading">Mini App</span>
           )}
         </div>
         <div className="miniapp-scene__header-actions">
@@ -151,7 +151,7 @@ const MiniAppScene: React.FC<MiniAppSceneProps> = ({ appId }) => {
           <div className="miniapp-scene__error">
             <AlertTriangle size={32} strokeWidth={1.5} />
             <p>加载失败：{error}</p>
-            <Button variant="secondary" size="small" onClick={() => load(appId)}>
+            <Button variant="secondary" size="small" onClick={() => void load(appId)}>
               重试
             </Button>
           </div>

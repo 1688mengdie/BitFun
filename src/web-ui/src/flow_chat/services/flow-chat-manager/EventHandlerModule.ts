@@ -25,6 +25,7 @@ import {
   immediateSaveDialogTurn, 
   saveDialogTurnToDisk,
   cleanupSaveState,
+  updateSessionMetadata,
 } from './PersistenceModule';
 import { 
   processNormalTextChunkInternal, 
@@ -248,15 +249,17 @@ function handleSessionDeleted(context: FlowChatContext, event: any): void {
   const { sessionId } = event;
   
   const store = FlowChatStore.getInstance();
-  const existing = store.getState().sessions.get(sessionId);
-  if (!existing) return;
+  const removedSessionIds = store.getCascadeSessionIds(sessionId);
+  if (removedSessionIds.length === 0) return;
 
   log.info('Remote session deleted', { sessionId });
-  pendingImageAnalysisTurns.delete(sessionId);
-  stateMachineManager.delete(sessionId);
-  context.processingManager.clearSessionStatus(sessionId);
-  cleanupSaveState(context, sessionId);
-  cleanupSessionBuffers(context, sessionId);
+  removedSessionIds.forEach(id => {
+    pendingImageAnalysisTurns.delete(id);
+    stateMachineManager.delete(id);
+    context.processingManager.clearSessionStatus(id);
+    cleanupSaveState(context, id);
+    cleanupSessionBuffers(context, id);
+  });
   store.removeSession(sessionId);
 }
 
@@ -406,21 +409,18 @@ function handleImageAnalysisCompleted(_context: FlowChatContext, event: ImageAna
 
 /**
  * Strip agent-internal XML wrapper tags from user input before displaying.
- * Handles: <user_query>...</user_query> and trailing <system_reminder>...</system_reminder>
+ * Handles both normal and forwarded-agent envelopes.
  */
 function cleanRemoteUserInput(raw: string): string {
-  let s = raw.trim();
-  if (s.startsWith('<user_query>')) {
-    const endIdx = s.indexOf('</user_query>');
-    if (endIdx !== -1) {
-      s = s.slice('<user_query>'.length, endIdx).trim();
-    }
+  const s = raw.trim();
+  const userQueryMatch = s.match(/<user_query>\s*([\s\S]*?)\s*<\/user_query>/);
+  if (userQueryMatch) {
+    return userQueryMatch[1].trim();
   }
-  const reminderIdx = s.indexOf('<system_reminder>');
-  if (reminderIdx !== -1) {
-    s = s.slice(0, reminderIdx).trim();
-  }
-  return s;
+
+  return s
+    .replace(/<system(?:_|-)reminder>[\s\S]*?<\/system(?:_|-)reminder>/g, '')
+    .trim();
 }
 
 function handleDialogTurnStarted(context: FlowChatContext, event: any): void {
@@ -958,6 +958,8 @@ function handleDialogTurnComplete(
     sessionContentBuffer.clear();
   }
 
+  context.flowChatStore.markSessionFinished(sessionId);
+
   context.flowChatStore.updateDialogTurn(sessionId, turnId, turn => {
     const updatedModelRounds = turn.modelRounds.map((round) => {
       if (round.isStreaming) {
@@ -1026,6 +1028,8 @@ function handleDialogTurnFailed(context: FlowChatContext, event: any): void {
   if (sessionContentBuffer) {
     sessionContentBuffer.clear();
   }
+
+  context.flowChatStore.markSessionFinished(sessionId);
   
   const dialogTurn = session.dialogTurns.find(turn => turn.id === turnId);
   const hasSuccessfulModelRounds = dialogTurn && dialogTurn.modelRounds.length > 0;
@@ -1066,6 +1070,9 @@ function handleDialogTurnFailed(context: FlowChatContext, event: any): void {
     }
     
     context.flowChatStore.deleteDialogTurn(sessionId, turnId);
+    updateSessionMetadata(context, sessionId).catch(err => {
+      log.warn('Failed to update failed session metadata', { sessionId, error: err });
+    });
   }
   
   const currentState = stateMachineManager.getCurrentState(sessionId);
@@ -1115,6 +1122,8 @@ function handleDialogTurnCancelled(
   if (sessionContentBuffer) {
     sessionContentBuffer.clear();
   }
+
+  context.flowChatStore.markSessionFinished(sessionId);
   
   context.flowChatStore.updateDialogTurn(sessionId, turnId, turn => {
     const updatedModelRounds = turn.modelRounds.map((round) => {

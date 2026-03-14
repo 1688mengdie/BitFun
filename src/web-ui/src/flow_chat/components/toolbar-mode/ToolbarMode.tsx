@@ -27,6 +27,7 @@ import { useToolbarModeContext } from './ToolbarModeContext';
 import { flowChatStore } from '../../store/FlowChatStore';
 import { syncSessionToModernStore } from '../../services/storeSync';
 import { FlowChatState } from '../../types/flow-chat';
+import { compareSessionsForDisplay } from '../../utils/sessionOrdering';
 import { createLogger } from '@/shared/utils/logger';
 
 const log = createLogger('ToolbarMode');
@@ -36,8 +37,6 @@ import { configManager } from '@/infrastructure/config/services/ConfigManager';
 import './ToolbarMode.scss';
 
 const DEFAULT_MODE_CONFIG_KEY = 'app.session_config.default_mode';
-const getSessionTimestamp = (updatedAt?: number, lastActiveAt?: number) =>
-  updatedAt ?? lastActiveAt ?? 0;
 
 // Window size config (physical pixels, accounts for Windows DPI scaling).
 const TOOLBAR_WIDTH = 600;
@@ -91,7 +90,7 @@ export const ToolbarMode: React.FC = () => {
   
   const sessions = useMemo(() => {
     return Array.from(flowChatState.sessions.values())
-      .sort((a, b) => getSessionTimestamp(b.updatedAt, b.lastActiveAt) - getSessionTimestamp(a.updatedAt, a.lastActiveAt))
+      .sort(compareSessionsForDisplay)
       .slice(0, 10); // Limit to 10.
   }, [flowChatState]);
   

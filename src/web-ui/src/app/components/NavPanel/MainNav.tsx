@@ -14,6 +14,7 @@
 import React, { useCallback, useState, useMemo, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { Plus, FolderOpen, FolderPlus, History, Check, Bot, Code2, Users } from 'lucide-react';
+import { Tooltip } from '@/component-library';
 import { useApp } from '../../hooks/useApp';
 import { useSceneManager } from '../../hooks/useSceneManager';
 import { useNavSceneStore } from '../../stores/navSceneStore';
@@ -25,10 +26,11 @@ import type { NavItem as NavItemConfig } from './types';
 import type { SceneTabId } from '../SceneBar/types';
 import NavItem from './components/NavItem';
 import SectionHeader from './components/SectionHeader';
-import ToolboxEntry from './components/ToolboxEntry';
+import MiniAppEntry from './components/MiniAppEntry';
 import WorkspaceListSection from './sections/workspaces/WorkspaceListSection';
 import { useSceneStore } from '../../stores/sceneStore';
 import { useMyAgentStore } from '../../scenes/my-agent/myAgentStore';
+import { useMiniAppCatalogSync } from '../../scenes/miniapps/hooks/useMiniAppCatalogSync';
 import { flowChatStore } from '@/flow_chat/store/FlowChatStore';
 import { flowChatManager } from '@/flow_chat/services/FlowChatManager';
 import { configManager } from '@/infrastructure/config/services/ConfigManager';
@@ -74,6 +76,7 @@ const MainNav: React.FC<MainNavProps> = ({
   isDeparting = false,
   anchorNavSceneId = null,
 }) => {
+  useMiniAppCatalogSync();
   const { state, switchLeftPanelTab } = useApp();
   const { openScene } = useSceneManager();
   const openNavScene = useNavSceneStore(s => s.openNavScene);
@@ -148,7 +151,7 @@ const MainNav: React.FC<MainNavProps> = ({
         assistants: 'nav.workspaces.groups.assistants',
         workspace: 'nav.sections.workspace',
         'my-agent': 'nav.sections.myAgent',
-        toolbox: 'scenes.toolbox',
+        miniapps: 'scenes.miniApps',
       };
       const key = keyMap[sectionId];
       return key ? t(key) || fallbackLabel : fallbackLabel;
@@ -300,7 +303,11 @@ const MainNav: React.FC<MainNavProps> = ({
   const handleOpenProject = useCallback(async () => {
     try {
       const { open } = await import('@tauri-apps/plugin-dialog');
-      const selected = await open({ directory: true, multiple: false, title: t('header.selectProjectDirectory') });
+      const selected = await open({
+        directory: true,
+        multiple: false,
+        title: t('header.selectProjectDirectory'),
+      });
       if (selected && typeof selected === 'string') {
         await workspaceManager.openWorkspace(selected);
       }
@@ -317,11 +324,7 @@ const MainNav: React.FC<MainNavProps> = ({
     const targetWorkspace = recentWorkspaces.find(item => item.id === workspaceId);
     if (!targetWorkspace) return;
     closeWorkspaceMenu();
-    try {
-      await switchWorkspace(targetWorkspace);
-    } catch (err) {
-      log.error('Failed to switch workspace', err);
-    }
+    await switchWorkspace(targetWorkspace);
   }, [closeWorkspaceMenu, recentWorkspaces, switchWorkspace]);
 
   useEffect(() => {
@@ -470,6 +473,19 @@ const MainNav: React.FC<MainNavProps> = ({
     : defaultSessionMode === 'cowork'
       ? Users
       : Code2;
+  const personaTooltip = t('nav.items.persona');
+  const createSessionTooltip = isAssistantWorkspaceActive
+    ? t('nav.sessions.newClawSession')
+    : defaultSessionMode === 'cowork'
+      ? t('nav.sessions.newCoworkSession')
+      : t('nav.sessions.newCodeSession');
+  const createModeTooltip = isAssistantWorkspaceActive
+    ? t('nav.workspaces.actions.newAssistant')
+    : defaultSessionMode === 'cowork'
+      ? t('nav.sessions.newCoworkSessionDefault')
+      : t('nav.sessions.newCodeSessionDefault');
+  const createAssistantTooltip = t('nav.workspaces.actions.newAssistant');
+  const openProjectTooltip = t('header.openProject');
 
   const modeDropdownPortal = modeDropdownOpen ? createPortal(
     <div
@@ -519,53 +535,46 @@ const MainNav: React.FC<MainNavProps> = ({
   return (
     <>
       <div className="bitfun-nav-panel__workspace-toolbar">
-        <button
-          type="button"
-          className="bitfun-nav-panel__workspace-bot"
-          onClick={handleOpenProfile}
-          aria-label={t('nav.items.persona')}
-          title={t('nav.items.persona')}
-        >
-          <img className="bitfun-nav-panel__workspace-bot-logo" src="/Logo-ICON.png" alt="" />
-        </button>
+        <Tooltip content={personaTooltip} placement="right" followCursor>
+          <button
+            type="button"
+            className="bitfun-nav-panel__workspace-bot"
+            onClick={handleOpenProfile}
+            aria-label={personaTooltip}
+          >
+            <img className="bitfun-nav-panel__workspace-bot-logo" src="/Logo-ICON.png" alt="" />
+          </button>
+        </Tooltip>
         <div className="bitfun-nav-panel__workspace-create-group">
-          <button
-            type="button"
-            className="bitfun-nav-panel__workspace-create-main"
-            onClick={handleCreateSession}
-            title={
-              isAssistantWorkspaceActive
-                ? t('nav.sessions.newClawSession')
-                : defaultSessionMode === 'cowork'
-                  ? t('nav.sessions.newCoworkSession')
-                  : t('nav.sessions.newCodeSession')
-            }
-          >
-            <Plus size={14} />
-            <span>{t('nav.sessions.newSession')}</span>
-          </button>
-          <button
-            ref={modeDropdownButtonRef}
-            type="button"
-            className={`bitfun-nav-panel__workspace-create-mode${modeDropdownOpen ? ' is-active' : ''}`}
-            onClick={toggleModeDropdown}
-            title={
-              isAssistantWorkspaceActive
-                ? t('nav.workspaces.actions.newAssistant')
-                : defaultSessionMode === 'cowork'
-                  ? t('nav.sessions.newCoworkSessionDefault')
-                  : t('nav.sessions.newCodeSessionDefault')
-            }
-            aria-expanded={modeDropdownOpen}
-            aria-haspopup="listbox"
-          >
-            <ModeIcon size={13} />
-          </button>
+          <Tooltip content={createSessionTooltip} placement="right" followCursor>
+            <button
+              type="button"
+              className="bitfun-nav-panel__workspace-create-main"
+              onClick={handleCreateSession}
+              aria-label={createSessionTooltip}
+            >
+              <Plus size={14} />
+              <span>{t('nav.sessions.newSession')}</span>
+            </button>
+          </Tooltip>
+          <Tooltip content={createModeTooltip} placement="right" followCursor disabled={modeDropdownOpen}>
+            <button
+              ref={modeDropdownButtonRef}
+              type="button"
+              className={`bitfun-nav-panel__workspace-create-mode${modeDropdownOpen ? ' is-active' : ''}`}
+              onClick={toggleModeDropdown}
+              aria-label={createModeTooltip}
+              aria-expanded={modeDropdownOpen}
+              aria-haspopup="listbox"
+            >
+              <ModeIcon size={13} />
+            </button>
+          </Tooltip>
         </div>
       </div>
 
       <div className="bitfun-nav-panel__sections">
-        {NAV_SECTIONS.filter(section => section.id !== 'toolbox').map(section => {
+        {NAV_SECTIONS.map(section => {
           const isSectionOpen = expandedSections.has(section.id);
           const isCollapsible = !!section.collapsible;
           const showItems     = !isCollapsible || isSectionOpen;
@@ -585,29 +594,31 @@ const MainNav: React.FC<MainNavProps> = ({
                   onSceneOpen={sectionSceneId ? () => openScene(sectionSceneId) : undefined}
                   actions={section.id === 'assistants' ? (
                     <div className="bitfun-nav-panel__workspace-action-wrap">
-                      <button
-                        type="button"
-                        className="bitfun-nav-panel__section-action"
-                        aria-label={t('nav.workspaces.actions.newAssistant')}
-                        title={t('nav.workspaces.actions.newAssistant')}
-                        onClick={() => { void handleCreateAssistantWorkspace(); }}
-                      >
-                        <Plus size={13} />
-                      </button>
+                      <Tooltip content={createAssistantTooltip} placement="right" followCursor>
+                        <button
+                          type="button"
+                          className="bitfun-nav-panel__section-action"
+                          aria-label={createAssistantTooltip}
+                          onClick={() => { void handleCreateAssistantWorkspace(); }}
+                        >
+                          <Plus size={13} />
+                        </button>
+                      </Tooltip>
                     </div>
                   ) : section.id === 'workspace' ? (
                     <div className="bitfun-nav-panel__workspace-action-wrap">
-                      <button
-                        ref={workspaceMenuButtonRef}
-                        type="button"
-                        className={`bitfun-nav-panel__section-action${workspaceMenuOpen ? ' is-active' : ''}`}
-                        aria-label={t('header.openProject')}
-                        title={t('header.openProject')}
-                        aria-expanded={workspaceMenuOpen}
-                        onClick={toggleWorkspaceMenu}
-                      >
-                        <Plus size={13} />
-                      </button>
+                      <Tooltip content={openProjectTooltip} placement="right" followCursor disabled={workspaceMenuOpen}>
+                        <button
+                          ref={workspaceMenuButtonRef}
+                          type="button"
+                          className={`bitfun-nav-panel__section-action${workspaceMenuOpen ? ' is-active' : ''}`}
+                          aria-label={openProjectTooltip}
+                          aria-expanded={workspaceMenuOpen}
+                          onClick={toggleWorkspaceMenu}
+                        >
+                          <Plus size={13} />
+                        </button>
+                      </Tooltip>
                     </div>
                   ) : undefined}
                 />
@@ -622,9 +633,7 @@ const MainNav: React.FC<MainNavProps> = ({
                       const currentFlatIdx = flatCounter++;
                       const { tab } = item;
                       const dir = getDepartDir(currentFlatIdx);
-                      const isActive = tab === 'toolbox'
-                        ? activeTabId === 'toolbox'
-                        : item.navSceneId
+                      const isActive = item.navSceneId
                         ? false
                         : item.sceneId
                           ? item.sceneId === activeTabId
@@ -664,11 +673,11 @@ const MainNav: React.FC<MainNavProps> = ({
         })}
       </div>
 
-      <div className="bitfun-nav-panel__toolbox-footer">
-        <ToolboxEntry
-          isActive={activeTabId === 'toolbox' || !!activeMiniAppId}
+      <div className="bitfun-nav-panel__miniapp-footer">
+        <MiniAppEntry
+          isActive={activeTabId === 'miniapps' || !!activeMiniAppId}
           activeMiniAppId={activeMiniAppId}
-          onOpenToolbox={() => openScene('toolbox')}
+          onOpenMiniApps={() => openScene('miniapps')}
           onOpenMiniApp={(appId) => openScene(`miniapp:${appId}`)}
         />
       </div>

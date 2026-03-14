@@ -33,7 +33,6 @@
     outline-offset: 2px;
   }
 
-  // Running: green border, no background
   &--running {
     box-shadow: 0 0 0 1.5px rgba(52, 211, 153, 0.5);
 
@@ -43,8 +42,6 @@
         0 3px 12px rgba(0, 0, 0, 0.14);
     }
   }
-
-  // ── Left: icon block ──────────────────────────────────────
 
   &__icon-area {
     width: 64px;

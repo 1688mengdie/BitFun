@@ -401,16 +401,16 @@ $_section-header-height: 24px;
     color: var(--color-text-primary);
   }
 
-  &__toolbox-footer {
+  &__miniapp-footer {
     flex-shrink: 0;
     padding: $size-gap-1 $size-gap-2 $size-gap-2;
   }
 
-  &__toolbox-entry-wrap {
+  &__miniapp-entry-wrap {
     margin: 0;
   }
 
-  &__toolbox-entry {
+  &__miniapp-entry {
     width: 100%;
     min-height: 42px;
     display: flex;
@@ -457,7 +457,7 @@ $_section-header-height: 24px;
     }
   }
 
-  &__toolbox-entry-main {
+  &__miniapp-entry-main {
     min-width: 0;
     display: flex;
     align-items: center;
@@ -465,7 +465,7 @@ $_section-header-height: 24px;
     flex: 1;
   }
 
-  &__toolbox-entry-icon {
+  &__miniapp-entry-icon {
     flex-shrink: 0;
     display: inline-flex;
     align-items: center;
@@ -474,20 +474,20 @@ $_section-header-height: 24px;
     opacity: 0.72;
     transition: opacity $motion-fast $easing-standard;
 
-    .bitfun-nav-panel__toolbox-entry:hover &,
-    .bitfun-nav-panel__toolbox-entry.is-active & {
+    .bitfun-nav-panel__miniapp-entry:hover &,
+    .bitfun-nav-panel__miniapp-entry.is-active & {
       opacity: 1;
     }
   }
 
-  &__toolbox-entry-copy {
+  &__miniapp-entry-copy {
     min-width: 0;
     display: flex;
     align-items: baseline;
     gap: 8px;
   }
 
-  &__toolbox-entry-title {
+  &__miniapp-entry-title {
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -498,13 +498,13 @@ $_section-header-height: 24px;
     opacity: 0.72;
     transition: opacity $motion-fast $easing-standard;
 
-    .bitfun-nav-panel__toolbox-entry:hover &,
-    .bitfun-nav-panel__toolbox-entry.is-active & {
+    .bitfun-nav-panel__miniapp-entry:hover &,
+    .bitfun-nav-panel__miniapp-entry.is-active & {
       opacity: 1;
     }
   }
 
-  &__toolbox-entry-apps {
+  &__miniapp-entry-apps {
     display: flex;
     align-items: center;
     justify-content: flex-end;
@@ -512,7 +512,7 @@ $_section-header-height: 24px;
     min-width: 0;
   }
 
-  &__toolbox-app-bubble {
+  &__miniapp-bubble {
     width: 26px;
     height: 26px;
     border-radius: 999px;

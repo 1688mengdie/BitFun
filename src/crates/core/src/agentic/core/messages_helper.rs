@@ -41,7 +41,7 @@ impl MessageHelper {
                     }
                 })
             } else {
-                // Find the index of the last user message (role is user and not <system-reminder>) from back to front
+                // Find the last actual user-turn boundary from back to front.
                 let last_user_message_index =
                     messages.iter().rposition(|m| m.is_actual_user_message());
                 if let Some(last_user_message_index) = last_user_message_index {

@@ -2,10 +2,11 @@
 //!
 //! Top-level component that integrates all subsystems and provides a unified interface
 
+use super::{scheduler::DialogSubmissionPolicy, turn_outcome::TurnOutcome};
 use crate::agentic::agents::get_agent_registry;
 use crate::agentic::core::{
-    Message, MessageContent, ProcessingPhase, Session, SessionConfig, SessionState, SessionSummary,
-    TurnStats,
+    has_prompt_markup, Message, MessageContent, ProcessingPhase, PromptEnvelope, Session,
+    SessionConfig, SessionState, SessionSummary, TurnStats,
 };
 use crate::agentic::events::{
     AgenticEvent, EventPriority, EventQueue, EventRouter, EventSubscriber,
@@ -15,7 +16,7 @@ use crate::agentic::image_analysis::ImageContextData;
 use crate::agentic::session::SessionManager;
 use crate::agentic::tools::pipeline::{SubagentParentInfo, ToolPipeline};
 use crate::agentic::WorkspaceBinding;
-use crate::service::workspace::get_global_workspace_service;
+use crate::service::bootstrap::is_workspace_bootstrap_pending;
 use crate::util::errors::{BitFunError, BitFunResult};
 use log::{debug, error, info, warn};
 use std::path::{Path, PathBuf};
@@ -33,20 +34,46 @@ pub struct SubagentResult {
     pub text: String,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DialogTriggerSource {
     DesktopUi,
     DesktopApi,
+    AgentSession,
     RemoteRelay,
     Bot,
     Cli,
 }
 
-impl DialogTriggerSource {
-    fn skip_tool_confirmation(self) -> bool {
-        matches!(self, Self::RemoteRelay | Self::Bot)
-    }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AssistantBootstrapSkipReason {
+    BootstrapNotRequired,
+    SessionHasExistingTurns,
+    SessionNotIdle,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AssistantBootstrapBlockReason {
+    ModelUnavailable,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AssistantBootstrapEnsureOutcome {
+    Started {
+        session_id: String,
+        turn_id: String,
+    },
+    Skipped {
+        session_id: String,
+        reason: AssistantBootstrapSkipReason,
+    },
+    Blocked {
+        session_id: String,
+        reason: AssistantBootstrapBlockReason,
+        detail: String,
+    },
+}
+
+const ASSISTANT_BOOTSTRAP_AGENT_TYPE: &str = "Claw";
 
 /// Cancel token cleanup guard
 ///
@@ -65,17 +92,6 @@ impl Drop for CancelTokenGuard {
             execution_engine.cleanup_cancel_token(&dialog_turn_id).await;
         });
     }
-}
-
-/// Outcome of a completed dialog turn, used to notify DialogScheduler
-#[derive(Debug, Clone)]
-pub enum TurnOutcome {
-    /// Turn completed normally
-    Completed,
-    /// Turn was cancelled by user
-    Cancelled,
-    /// Turn failed with an error
-    Failed,
 }
 
 /// Conversation coordinator
@@ -101,41 +117,39 @@ impl ConversationCoordinator {
             .map(|workspace_path| WorkspaceBinding::new(None, PathBuf::from(workspace_path)))
     }
 
-    async fn normalize_agent_type_for_workspace_path(
-        agent_type: &str,
-        workspace_path: &str,
-    ) -> String {
-        let normalized_agent_type = if agent_type.trim().is_empty() {
+    fn normalize_agent_type(agent_type: &str) -> String {
+        if agent_type.trim().is_empty() {
             "agentic".to_string()
         } else {
             agent_type.trim().to_string()
-        };
-
-        let Some(workspace_service) = get_global_workspace_service() else {
-            return normalized_agent_type;
-        };
-
-        let workspace_path_buf = PathBuf::from(workspace_path);
-        if workspace_service.is_assistant_workspace_path(&workspace_path_buf)
-            || workspace_service
-                .get_workspace_by_path(&workspace_path_buf)
-                .await
-                .map(|workspace| {
-                    workspace.workspace_kind == crate::service::workspace::WorkspaceKind::Assistant
-                })
-                .unwrap_or(false)
-        {
-            if normalized_agent_type != "Claw" {
-                info!(
-                    "Normalize agent type to Claw for assistant workspace: workspace_path={}, requested_agent_type={}",
-                    workspace_path,
-                    normalized_agent_type
-                );
-            }
-            return "Claw".to_string();
         }
+    }
 
-        normalized_agent_type
+    fn ensure_user_message_metadata_object(
+        metadata: Option<serde_json::Value>,
+    ) -> serde_json::Value {
+        match metadata {
+            Some(value) if value.is_object() => value,
+            Some(value) => serde_json::json!({ "raw_metadata": value }),
+            None => serde_json::json!({}),
+        }
+    }
+
+    fn assistant_bootstrap_kickoff_query(is_chinese: bool) -> &'static str {
+        if is_chinese {
+            "请开始初始化"
+        } else {
+            "Please start bootstrap"
+        }
+    }
+
+    fn assistant_bootstrap_system_reminder(kickoff_query: &str, expected_reply_language: &str) -> String {
+        format!(
+            "This is an automatic bootstrap kickoff generated by the system because this assistant workspace still contains BOOTSTRAP.md. \
+Treat the user message `{kickoff_query}` only as a start signal, begin bootstrap immediately, and finish it in this session. \
+Use {expected_reply_language} for all user-facing replies during bootstrap unless the user later asks to switch languages. \
+Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complete."
+        )
     }
 
     pub fn new(
@@ -243,8 +257,7 @@ impl ConversationCoordinator {
         // Persist the workspace binding inside the session config so execution can
         // consistently restore the correct workspace regardless of the entry point.
         config.workspace_path = Some(workspace_path.clone());
-        let agent_type =
-            Self::normalize_agent_type_for_workspace_path(&agent_type, &workspace_path).await;
+        let agent_type = Self::normalize_agent_type(&agent_type);
         let session = self
             .session_manager
             .create_session_with_id_and_creator(
@@ -472,25 +485,136 @@ impl ConversationCoordinator {
             .ok_or_else(|| BitFunError::NotFound(format!("Agent not found: {}", agent_type)))?;
         let system_reminder = current_agent.get_system_reminder(0).await?;
 
-        let mut wrapped_user_input = if agent_type == "agentic" {
-            // Only this mode uses user_query tag
-            format!("<user_query>\n{}\n</user_query>\n", user_input)
-        } else {
+        let mut wrapped_user_input = if has_prompt_markup(&user_input) {
             user_input
+        } else {
+            let mut envelope = PromptEnvelope::new();
+            envelope.push_user_query(user_input);
+            envelope.render()
         };
         if !system_reminder.is_empty() {
-            wrapped_user_input.push_str(&format!(
-                "<system_reminder>\n{}\n</system_reminder>",
-                system_reminder
-            ));
+            let mut envelope = PromptEnvelope::new();
+            envelope.push_system_reminder(system_reminder);
+            if !wrapped_user_input.is_empty() {
+                wrapped_user_input.push('\n');
+            }
+            wrapped_user_input.push_str(&envelope.render());
         }
         Ok(wrapped_user_input)
     }
 
+    pub async fn ensure_assistant_bootstrap(
+        &self,
+        session_id: String,
+        workspace_path: String,
+    ) -> BitFunResult<AssistantBootstrapEnsureOutcome> {
+        let workspace_root = PathBuf::from(&workspace_path);
+        if !is_workspace_bootstrap_pending(&workspace_root) {
+            return Ok(AssistantBootstrapEnsureOutcome::Skipped {
+                session_id,
+                reason: AssistantBootstrapSkipReason::BootstrapNotRequired,
+            });
+        }
+
+        let session = match self.session_manager.get_session(&session_id) {
+            Some(session) => session,
+            None => {
+                self.session_manager
+                    .restore_session(&workspace_root, &session_id)
+                    .await?
+            }
+        };
+
+        if self.session_manager.get_turn_count(&session_id) > 0 {
+            return Ok(AssistantBootstrapEnsureOutcome::Skipped {
+                session_id,
+                reason: AssistantBootstrapSkipReason::SessionHasExistingTurns,
+            });
+        }
+
+        if !matches!(session.state, SessionState::Idle) {
+            return Ok(AssistantBootstrapEnsureOutcome::Skipped {
+                session_id,
+                reason: AssistantBootstrapSkipReason::SessionNotIdle,
+            });
+        }
+
+        let is_chinese = Self::is_chinese_locale().await;
+        let kickoff_query = Self::assistant_bootstrap_kickoff_query(is_chinese);
+        let expected_reply_language = if is_chinese { "Chinese" } else { "English" };
+        let workspace_binding = WorkspaceBinding::new(None, workspace_root.clone());
+        let model_id = self
+            .execution_engine
+            .resolve_model_id_for_turn(
+                &session,
+                ASSISTANT_BOOTSTRAP_AGENT_TYPE,
+                Some(&workspace_binding),
+                kickoff_query,
+                0,
+            )
+            .await?;
+
+        let ai_client_factory =
+            match crate::infrastructure::ai::get_global_ai_client_factory().await {
+                Ok(factory) => factory,
+                Err(error) => {
+                    return Ok(AssistantBootstrapEnsureOutcome::Blocked {
+                        session_id,
+                        reason: AssistantBootstrapBlockReason::ModelUnavailable,
+                        detail: format!("Failed to get AI client factory: {error}"),
+                    });
+                }
+            };
+
+        if let Err(error) = ai_client_factory.get_client_resolved(&model_id).await {
+            return Ok(AssistantBootstrapEnsureOutcome::Blocked {
+                session_id,
+                reason: AssistantBootstrapBlockReason::ModelUnavailable,
+                detail: format!("Failed to get AI client (model_id={model_id}): {error}"),
+            });
+        }
+
+        let mut envelope = PromptEnvelope::new();
+        envelope.push_system_reminder(Self::assistant_bootstrap_system_reminder(
+            kickoff_query,
+            expected_reply_language,
+        ));
+        envelope.push_user_query(kickoff_query.to_string());
+
+        let turn_id = format!("assistant-bootstrap-{}", uuid::Uuid::new_v4());
+        let metadata = serde_json::json!({
+            "assistant_bootstrap": {
+                "trigger": "lazy_auto",
+                "system_generated": true,
+                "workspace_path": workspace_path,
+            }
+        });
+
+        self.start_dialog_turn_internal(
+            session_id.clone(),
+            envelope.render(),
+            Some(kickoff_query.to_string()),
+            None,
+            Some(turn_id.clone()),
+            ASSISTANT_BOOTSTRAP_AGENT_TYPE.to_string(),
+            Some(workspace_root.to_string_lossy().to_string()),
+            DialogSubmissionPolicy::for_source(DialogTriggerSource::DesktopApi)
+                .with_skip_tool_confirmation(true),
+            Some(metadata),
+            true,
+        )
+        .await?;
+
+        Ok(AssistantBootstrapEnsureOutcome::Started {
+            session_id,
+            turn_id,
+        })
+    }
+
     /// Start a new dialog turn
     /// Note: Events are sent to frontend via EventLoop, no Stream returned.
-    /// Channel-specific interaction policy is decided here from `trigger_source`
-    /// so adapters only declare where the message came from.
+    /// Submission behavior is controlled by `submission_policy`, which provides
+    /// default per-source behavior while still allowing selective overrides.
     pub async fn start_dialog_turn(
         &self,
         session_id: String,
@@ -499,7 +623,7 @@ impl ConversationCoordinator {
         turn_id: Option<String>,
         agent_type: String,
         workspace_path: Option<String>,
-        trigger_source: DialogTriggerSource,
+        submission_policy: DialogSubmissionPolicy,
     ) -> BitFunResult<()> {
         self.start_dialog_turn_internal(
             session_id,
@@ -509,7 +633,9 @@ impl ConversationCoordinator {
             turn_id,
             agent_type,
             workspace_path,
-            trigger_source,
+            submission_policy,
+            None,
+            false,
         )
         .await
     }
@@ -523,7 +649,7 @@ impl ConversationCoordinator {
         turn_id: Option<String>,
         agent_type: String,
         workspace_path: Option<String>,
-        trigger_source: DialogTriggerSource,
+        submission_policy: DialogSubmissionPolicy,
     ) -> BitFunResult<()> {
         self.start_dialog_turn_internal(
             session_id,
@@ -533,7 +659,9 @@ impl ConversationCoordinator {
             turn_id,
             agent_type,
             workspace_path,
-            trigger_source,
+            submission_policy,
+            None,
+            false,
         )
         .await
     }
@@ -676,7 +804,9 @@ impl ConversationCoordinator {
         turn_id: Option<String>,
         agent_type: String,
         workspace_path: Option<String>,
-        trigger_source: DialogTriggerSource,
+        submission_policy: DialogSubmissionPolicy,
+        extra_user_message_metadata: Option<serde_json::Value>,
+        suppress_session_title_generation: bool,
     ) -> BitFunResult<()> {
         // Get latest session, restoring from persistence on demand so every entry
         // point can use the same start_dialog_turn flow.
@@ -700,9 +830,6 @@ impl ConversationCoordinator {
         };
 
         let requested_agent_type = agent_type.trim().to_string();
-        let workspace_path_for_policy = workspace_path
-            .clone()
-            .or_else(|| session.config.workspace_path.clone());
         let provisional_agent_type = if !requested_agent_type.is_empty() {
             requested_agent_type.clone()
         } else if !session.agent_type.is_empty() {
@@ -710,15 +837,10 @@ impl ConversationCoordinator {
         } else {
             "agentic".to_string()
         };
-        let effective_agent_type = if let Some(ref workspace_path) = workspace_path_for_policy {
-            Self::normalize_agent_type_for_workspace_path(&provisional_agent_type, workspace_path)
-                .await
-        } else {
-            provisional_agent_type
-        };
+        let effective_agent_type = Self::normalize_agent_type(&provisional_agent_type);
 
         debug!(
-            "Resolved dialog turn agent type: session_id={}, turn_id={}, requested_agent_type={}, session_agent_type={}, effective_agent_type={}, trigger_source={:?}",
+            "Resolved dialog turn agent type: session_id={}, turn_id={}, requested_agent_type={}, session_agent_type={}, effective_agent_type={}, trigger_source={:?}, queue_priority={:?}, skip_tool_confirmation={}",
             session_id,
             turn_id.as_deref().unwrap_or(""),
             if requested_agent_type.is_empty() {
@@ -732,7 +854,9 @@ impl ConversationCoordinator {
                 session.agent_type.as_str()
             },
             effective_agent_type,
-            trigger_source
+            submission_policy.trigger_source,
+            submission_policy.queue_priority,
+            submission_policy.skip_tool_confirmation
         );
 
         if session.agent_type != effective_agent_type {
@@ -863,41 +987,47 @@ impl ConversationCoordinator {
 
         let original_user_input = original_user_input.unwrap_or_else(|| user_input.clone());
 
+        let mut user_message_metadata = extra_user_message_metadata;
+
         // Build image metadata for workspace turn persistence (before image_contexts is consumed)
         // Also stores original_text so the UI can display the user's actual input
         // instead of the vision-enhanced text.
-        let user_message_metadata: Option<serde_json::Value> = image_contexts
-            .as_ref()
-            .filter(|imgs| !imgs.is_empty())
-            .map(|imgs| {
-                let image_meta: Vec<serde_json::Value> = imgs
-                    .iter()
-                    .map(|img| {
-                        let name = img
-                            .metadata
-                            .as_ref()
-                            .and_then(|m| m.get("name"))
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("image.png");
-                        let mut meta = serde_json::json!({
-                            "id": &img.id,
-                            "name": name,
-                            "mime_type": &img.mime_type,
-                        });
-                        if let Some(url) = &img.data_url {
-                            meta["data_url"] = serde_json::json!(url);
-                        }
-                        if let Some(path) = &img.image_path {
-                            meta["image_path"] = serde_json::json!(path);
-                        }
-                        meta
-                    })
-                    .collect();
-                serde_json::json!({
-                    "images": image_meta,
-                    "original_text": &original_user_input,
+        if let Some(imgs) = image_contexts.as_ref().filter(|imgs| !imgs.is_empty()) {
+            let image_meta: Vec<serde_json::Value> = imgs
+                .iter()
+                .map(|img| {
+                    let name = img
+                        .metadata
+                        .as_ref()
+                        .and_then(|m| m.get("name"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("image.png");
+                    let mut meta = serde_json::json!({
+                        "id": &img.id,
+                        "name": name,
+                        "mime_type": &img.mime_type,
+                    });
+                    if let Some(url) = &img.data_url {
+                        meta["data_url"] = serde_json::json!(url);
+                    }
+                    if let Some(path) = &img.image_path {
+                        meta["image_path"] = serde_json::json!(path);
+                    }
+                    meta
                 })
-            });
+                .collect();
+
+            let mut metadata =
+                Self::ensure_user_message_metadata_object(user_message_metadata.take());
+            if let Some(obj) = metadata.as_object_mut() {
+                obj.insert("images".to_string(), serde_json::json!(image_meta));
+                obj.insert(
+                    "original_text".to_string(),
+                    serde_json::json!(original_user_input.clone()),
+                );
+            }
+            user_message_metadata = Some(metadata);
+        }
 
         // Auto vision pre-analysis: when images are present, try to use the configured
         // vision model to pre-analyze them, then enhance the user message with text descriptions.
@@ -922,6 +1052,18 @@ impl ConversationCoordinator {
             )
             .await?;
 
+        if original_user_input != wrapped_user_input {
+            let mut metadata =
+                Self::ensure_user_message_metadata_object(user_message_metadata.take());
+            if let Some(obj) = metadata.as_object_mut() {
+                obj.insert(
+                    "original_text".to_string(),
+                    serde_json::json!(original_user_input.clone()),
+                );
+            }
+            user_message_metadata = Some(metadata);
+        }
+
         // Start new dialog turn (sets state to Processing internally)
         let turn_index = self.session_manager.get_turn_count(&session_id);
         // Pass frontend turnId, generate if not provided
@@ -938,13 +1080,12 @@ impl ConversationCoordinator {
 
         // Send dialog turn started event with original input and image metadata
         // so all frontends (desktop, mobile, bot) can display correctly.
-        let has_images = user_message_metadata.is_some();
         self.emit_event(AgenticEvent::DialogTurnStarted {
             session_id: session_id.clone(),
             turn_id: turn_id.clone(),
             turn_index,
             user_input: wrapped_user_input.clone(),
-            original_user_input: if has_images {
+            original_user_input: if original_user_input != wrapped_user_input {
                 Some(original_user_input.clone())
             } else {
                 None
@@ -999,11 +1140,11 @@ impl ConversationCoordinator {
             workspace: session_workspace,
             context: context_vars,
             subagent_parent_info: None,
-            skip_tool_confirmation: trigger_source.skip_tool_confirmation(),
+            skip_tool_confirmation: submission_policy.skip_tool_confirmation,
         };
 
         // Auto-generate session title on first message
-        if turn_index == 0 {
+        if turn_index == 0 && !suppress_session_title_generation {
             let sm = self.session_manager.clone();
             let eq = self.event_queue.clone();
             let sid = session_id.clone();
@@ -1075,6 +1216,11 @@ impl ConversationCoordinator {
                 .await
             {
                 Ok(execution_result) => {
+                    let final_response = match &execution_result.final_message.content {
+                        MessageContent::Text(text) => text.clone(),
+                        MessageContent::Mixed { text, .. } => text.clone(),
+                        _ => String::new(),
+                    };
                     info!(
                         "Dialog turn completed: session={}, turn={}, rounds={}",
                         session_id_clone, turn_id_clone, execution_result.total_rounds
@@ -1084,11 +1230,7 @@ impl ConversationCoordinator {
                         .complete_dialog_turn(
                             &session_id_clone,
                             &turn_id_clone,
-                            match &execution_result.final_message.content {
-                                MessageContent::Text(text) => text.clone(),
-                                MessageContent::Mixed { text, .. } => text.clone(),
-                                _ => String::new(),
-                            },
+                            final_response.clone(),
                             TurnStats {
                                 total_rounds: execution_result.total_rounds,
                                 total_tools: 0, // TODO: get from execution_result
@@ -1103,7 +1245,13 @@ impl ConversationCoordinator {
                         .await;
 
                     if let Some(tx) = &scheduler_notify_tx {
-                        let _ = tx.try_send((session_id_clone.clone(), TurnOutcome::Completed));
+                        let _ = tx.try_send((
+                            session_id_clone.clone(),
+                            TurnOutcome::Completed {
+                                turn_id: turn_id_clone.clone(),
+                                final_response,
+                            },
+                        ));
                     }
 
                     Some(crate::service::session::TurnStatus::Completed)
@@ -1154,12 +1302,18 @@ impl ConversationCoordinator {
                             .await;
 
                         if let Some(tx) = &scheduler_notify_tx {
-                            let _ = tx.try_send((session_id_clone.clone(), TurnOutcome::Cancelled));
+                            let _ = tx.try_send((
+                                session_id_clone.clone(),
+                                TurnOutcome::Cancelled {
+                                    turn_id: turn_id_clone.clone(),
+                                },
+                            ));
                         }
 
                         Some(crate::service::session::TurnStatus::Cancelled)
                     } else {
-                        error!("Dialog turn execution failed: {}", e);
+                        let error_text = e.to_string();
+                        error!("Dialog turn execution failed: {}", error_text);
 
                         let recoverable =
                             !matches!(&e, BitFunError::AIClient(_) | BitFunError::Timeout(_));
@@ -1169,7 +1323,7 @@ impl ConversationCoordinator {
                                 AgenticEvent::DialogTurnFailed {
                                     session_id: session_id_clone.clone(),
                                     turn_id: turn_id_clone.clone(),
-                                    error: e.to_string(),
+                                    error: error_text.clone(),
                                     subagent_parent_info: None,
                                 },
                                 Some(EventPriority::Critical),
@@ -1177,21 +1331,27 @@ impl ConversationCoordinator {
                             .await;
 
                         let _ = session_manager
-                            .fail_dialog_turn(&session_id_clone, &turn_id_clone, e.to_string())
+                            .fail_dialog_turn(&session_id_clone, &turn_id_clone, error_text.clone())
                             .await;
 
                         let _ = session_manager
                             .update_session_state(
                                 &session_id_clone,
                                 SessionState::Error {
-                                    error: e.to_string(),
+                                    error: error_text.clone(),
                                     recoverable,
                                 },
                             )
                             .await;
 
                         if let Some(tx) = &scheduler_notify_tx {
-                            let _ = tx.try_send((session_id_clone.clone(), TurnOutcome::Failed));
+                            let _ = tx.try_send((
+                                session_id_clone.clone(),
+                                TurnOutcome::Failed {
+                                    turn_id: turn_id_clone.clone(),
+                                    error: error_text,
+                                },
+                            ));
                         }
 
                         Some(crate::service::session::TurnStatus::Error)

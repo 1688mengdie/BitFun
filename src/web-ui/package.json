@@ -10,11 +10,12 @@
     "build:desktop": "vite build --mode desktop",
     "build:web": "vite build --mode web",
     "preview": "vite preview",
-    "type-check": "tsc --noEmit"
+    "type-check": "tsc --noEmit",
+    "test": "vitest",
+    "test:run": "vitest run"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.6.0",
-    "monaco-editor": "^0.52.2",
     "@tauri-apps/api": "^2.10.1",
     "@tauri-apps/plugin-dialog": "^2.6.0",
     "@tauri-apps/plugin-fs": "^2.0.0",
@@ -32,6 +33,7 @@
     "katex": "^0.16.25",
     "lucide-react": "^0.541.0",
     "mermaid": "^11.10.1",
+    "monaco-editor": "^0.52.2",
     "partial-json": "^0.1.7",
     "path-browserify": "^1.0.1",
     "prismjs": "^1.30.0",
@@ -64,6 +66,7 @@
     "@vitejs/plugin-react": "^4.6.0",
     "sass": "^1.93.2",
     "typescript": "~5.8.3",
-    "vite": "^7.0.4"
+    "vite": "^7.0.4",
+    "vitest": "^4.1.0"
   }
 }

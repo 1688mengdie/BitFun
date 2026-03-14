@@ -23,6 +23,8 @@ import {
   openMainSession,
   selectActiveBtwSessionTab,
 } from '@/flow_chat/services/openBtwSession';
+import { resolveSessionRelationship } from '@/flow_chat/utils/sessionMetadata';
+import { compareSessionsForDisplay } from '@/flow_chat/utils/sessionOrdering';
 import './SessionsSection.scss';
 
 const MAX_VISIBLE_SESSIONS = 8;
@@ -110,9 +112,7 @@ const SessionsSection: React.FC<SessionsSectionProps> = ({
           }
           return !s.workspacePath;
         })
-        .sort(
-          (a: Session, b: Session) => b.lastActiveAt - a.lastActiveAt
-        ),
+        .sort(compareSessionsForDisplay),
     [flowChatState.sessions, workspacePath]
   );
 
@@ -123,7 +123,7 @@ const SessionsSection: React.FC<SessionsSectionProps> = ({
     const knownIds = new Set(sessions.map(s => s.sessionId));
 
     for (const s of sessions) {
-      const pid = s.parentSessionId;
+      const pid = resolveSessionRelationship(s).parentSessionId;
       if (pid && typeof pid === 'string' && pid.trim() && knownIds.has(pid)) {
         const list = childMap.get(pid) || [];
         list.push(s);
@@ -133,13 +133,12 @@ const SessionsSection: React.FC<SessionsSectionProps> = ({
       }
     }
 
-    // Stable ordering: children follow parent, sorted by activity.
     for (const [pid, list] of childMap) {
-      childMap.set(pid, [...list].sort((a, b) => b.lastActiveAt - a.lastActiveAt));
+      childMap.set(pid, [...list].sort(compareSessionsForDisplay));
     }
 
     return {
-      topLevelSessions: [...parents].sort((a, b) => b.lastActiveAt - a.lastActiveAt),
+      topLevelSessions: [...parents].sort(compareSessionsForDisplay),
       childrenByParent: childMap,
     };
   }, [sessions]);
@@ -179,14 +178,15 @@ const SessionsSection: React.FC<SessionsSectionProps> = ({
       if (editingSessionId) return;
       try {
         const session = flowChatStore.getState().sessions.get(sessionId);
-        const parentSessionId = session?.btwOrigin?.parentSessionId || session?.parentSessionId;
+        const relationship = resolveSessionRelationship(session);
+        const parentSessionId = relationship.parentSessionId;
         const activateWorkspace = workspaceId && !isActiveWorkspace
           ? async (targetWorkspaceId: string) => {
             await setActiveWorkspace(targetWorkspaceId);
           }
           : undefined;
 
-        if (session?.sessionKind === 'btw' && parentSessionId) {
+        if (relationship.canOpenInAuxPane && parentSessionId && session) {
           await openMainSession(parentSessionId, {
             workspaceId,
             activateWorkspace,
@@ -321,13 +321,14 @@ const SessionsSection: React.FC<SessionsSectionProps> = ({
       ) : (
         visibleItems.map(({ session, level }) => {
           const isEditing = editingSessionId === session.sessionId;
-          const isBtwChild = level === 1 && session.sessionKind === 'btw';
+          const relationship = resolveSessionRelationship(session);
+          const isBtwChild = level === 1 && relationship.isBtw;
           const sessionModeKey = resolveSessionModeType(session);
           const sessionTitle = resolveSessionTitle(session);
-          const parentSessionId = session.btwOrigin?.parentSessionId || session.parentSessionId;
+          const parentSessionId = relationship.parentSessionId;
           const parentSession = parentSessionId ? flowChatState.sessions.get(parentSessionId) : undefined;
           const parentTitle = parentSession ? resolveSessionTitle(parentSession) : '';
-          const parentTurnIndex = session.btwOrigin?.parentTurnIndex;
+          const parentTurnIndex = relationship.origin?.parentTurnIndex;
           const tooltipContent = isBtwChild ? (
             <div className="bitfun-nav-panel__inline-item-tooltip">
               <div className="bitfun-nav-panel__inline-item-tooltip-title">{sessionTitle}</div>

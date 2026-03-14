@@ -144,6 +144,7 @@ export interface GlobalStateAPI {
   resetAssistantWorkspace(workspaceId: string): Promise<WorkspaceInfo>;
   closeWorkspace(workspaceId: string): Promise<void>;
   setActiveWorkspace(workspaceId: string): Promise<WorkspaceInfo>;
+  reorderOpenedWorkspaces(workspaceIds: string[]): Promise<void>;
   getCurrentWorkspace(): Promise<WorkspaceInfo | null>;
   getOpenedWorkspaces(): Promise<WorkspaceInfo[]>;
   getRecentWorkspaces(): Promise<WorkspaceInfo[]>;
@@ -310,6 +311,10 @@ export function createGlobalStateAPI(): GlobalStateAPI {
 
     async setActiveWorkspace(workspaceId: string): Promise<WorkspaceInfo> {
       return mapWorkspaceInfo(await globalAPI.setActiveWorkspace(workspaceId));
+    },
+
+    async reorderOpenedWorkspaces(workspaceIds: string[]): Promise<void> {
+      return await globalAPI.reorderOpenedWorkspaces(workspaceIds);
     },
 
     async getCurrentWorkspace(): Promise<WorkspaceInfo | null> {

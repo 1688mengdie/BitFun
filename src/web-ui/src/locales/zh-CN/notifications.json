@@ -47,7 +47,8 @@
     "updating": "正在更新...",
     "installing": "正在安装...",
     "connecting": "正在连接...",
-    "syncing": "正在同步..."
+    "syncing": "正在同步...",
+    "assistantBootstrapWaitingForModelConfiguration": "Assistant 引导正在等待 AI 模型配置。"
   },
   "confirm": {
     "deleteFile": "确定要删除此文件吗？",

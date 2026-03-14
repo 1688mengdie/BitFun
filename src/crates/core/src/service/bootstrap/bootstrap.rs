@@ -59,6 +59,10 @@ pub(crate) async fn initialize_workspace_persona_files(workspace_root: &Path) ->
     Ok(())
 }
 
+pub(crate) fn is_workspace_bootstrap_pending(workspace_root: &Path) -> bool {
+    workspace_root.join(BOOTSTRAP_FILE_NAME).exists()
+}
+
 pub(crate) async fn ensure_workspace_persona_files_for_prompt(
     workspace_root: &Path,
 ) -> BitFunResult<()> {

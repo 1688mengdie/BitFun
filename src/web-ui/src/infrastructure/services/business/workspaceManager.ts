@@ -36,6 +36,9 @@ export interface WorkspaceState {
   error: string | null;
 }
 
+export type WorkspaceSection = 'assistants' | 'projects';
+export type WorkspaceReorderPosition = 'before' | 'after';
+
 class WorkspaceManager {
   private static instance: WorkspaceManager | null = null;
   private state: WorkspaceState;
@@ -117,6 +120,95 @@ class WorkspaceManager {
 
   private buildOpenedWorkspaceMap(workspaces: WorkspaceInfo[]): Map<string, WorkspaceInfo> {
     return new Map(workspaces.map(workspace => [workspace.id, workspace]));
+  }
+
+  private getOpenedWorkspacesList(): WorkspaceInfo[] {
+    return Array.from(this.state.openedWorkspaces.values());
+  }
+
+  private isWorkspaceInSection(workspace: WorkspaceInfo, section: WorkspaceSection): boolean {
+    return section === 'assistants'
+      ? workspace.workspaceKind === 'assistant'
+      : workspace.workspaceKind !== 'assistant';
+  }
+
+  private preserveOpenedWorkspaceOrder(workspaces: WorkspaceInfo[]): WorkspaceInfo[] {
+    const currentOrder = Array.from(this.state.openedWorkspaces.keys());
+    const nextWorkspaceMap = this.buildOpenedWorkspaceMap(workspaces);
+    const orderedWorkspaces = currentOrder
+      .map(workspaceId => nextWorkspaceMap.get(workspaceId))
+      .filter((workspace): workspace is WorkspaceInfo => Boolean(workspace));
+
+    const existingIds = new Set(orderedWorkspaces.map(workspace => workspace.id));
+
+    for (const workspace of workspaces) {
+      if (!existingIds.has(workspace.id)) {
+        orderedWorkspaces.push(workspace);
+      }
+    }
+
+    return orderedWorkspaces;
+  }
+
+  private buildReorderedOpenedWorkspaceIds(
+    section: WorkspaceSection,
+    sourceWorkspaceId: string,
+    targetWorkspaceId: string,
+    position: WorkspaceReorderPosition
+  ): string[] | null {
+    if (sourceWorkspaceId === targetWorkspaceId) {
+      return null;
+    }
+
+    const openedWorkspaces = this.getOpenedWorkspacesList();
+    const workspaceMap = this.buildOpenedWorkspaceMap(openedWorkspaces);
+    const sourceWorkspace = workspaceMap.get(sourceWorkspaceId);
+    const targetWorkspace = workspaceMap.get(targetWorkspaceId);
+
+    if (!sourceWorkspace || !targetWorkspace) {
+      return null;
+    }
+
+    if (
+      !this.isWorkspaceInSection(sourceWorkspace, section) ||
+      !this.isWorkspaceInSection(targetWorkspace, section)
+    ) {
+      return null;
+    }
+
+    const sectionWorkspaceIds = openedWorkspaces
+      .filter(workspace => this.isWorkspaceInSection(workspace, section))
+      .map(workspace => workspace.id);
+    const sourceIndex = sectionWorkspaceIds.indexOf(sourceWorkspaceId);
+    const targetIndex = sectionWorkspaceIds.indexOf(targetWorkspaceId);
+
+    if (sourceIndex === -1 || targetIndex === -1) {
+      return null;
+    }
+
+    const reorderedSectionWorkspaceIds = [...sectionWorkspaceIds];
+    reorderedSectionWorkspaceIds.splice(sourceIndex, 1);
+
+    const insertionBaseIndex = sourceIndex < targetIndex ? targetIndex - 1 : targetIndex;
+    const insertionIndex = position === 'after'
+      ? insertionBaseIndex + 1
+      : insertionBaseIndex;
+
+    reorderedSectionWorkspaceIds.splice(insertionIndex, 0, sourceWorkspaceId);
+
+    const reorderedOpenedWorkspaceIds: string[] = [];
+    let sectionCursor = 0;
+
+    for (const workspace of openedWorkspaces) {
+      if (this.isWorkspaceInSection(workspace, section)) {
+        reorderedOpenedWorkspaceIds.push(reorderedSectionWorkspaceIds[sectionCursor]);
+        sectionCursor += 1;
+      } else {
+        reorderedOpenedWorkspaceIds.push(workspace.id);
+      }
+    }
+
+    return reorderedOpenedWorkspaceIds;
   }
 
   private resolveLastUsedWorkspaceId(
@@ -466,11 +558,12 @@ class WorkspaceManager {
         globalStateAPI.getRecentWorkspaces(),
         globalStateAPI.getOpenedWorkspaces(),
       ]);
+      const orderedOpenedWorkspaces = this.preserveOpenedWorkspaceOrder(openedWorkspaces);
 
       this.updateWorkspaceState(
         workspace,
         recentWorkspaces,
-        openedWorkspaces,
+        orderedOpenedWorkspaces,
         false,
         null,
         { type: 'workspace:switched', workspace }
@@ -482,6 +575,78 @@ class WorkspaceManager {
       log.error('Failed to set active workspace', { workspaceId, error });
       const errorMessage = error instanceof Error ? error.message : String(error);
       this.updateState({ loading: false, error: errorMessage }, { type: 'workspace:error', error: errorMessage });
+      throw error;
+    }
+  }
+
+  public async reorderOpenedWorkspacesInSection(
+    section: WorkspaceSection,
+    sourceWorkspaceId: string,
+    targetWorkspaceId: string,
+    position: WorkspaceReorderPosition
+  ): Promise<void> {
+    const previousCurrentWorkspace = this.state.currentWorkspace;
+    const previousRecentWorkspaces = this.state.recentWorkspaces;
+    const previousOpenedWorkspaces = this.getOpenedWorkspacesList();
+    const reorderedOpenedWorkspaceIds = this.buildReorderedOpenedWorkspaceIds(
+      section,
+      sourceWorkspaceId,
+      targetWorkspaceId,
+      position
+    );
+
+    if (!reorderedOpenedWorkspaceIds) {
+      return;
+    }
+
+    const currentOpenedWorkspaceIds = previousOpenedWorkspaces.map(workspace => workspace.id);
+    const hasOrderChanged = reorderedOpenedWorkspaceIds.some(
+      (workspaceId, index) => workspaceId !== currentOpenedWorkspaceIds[index]
+    );
+
+    if (!hasOrderChanged) {
+      return;
+    }
+
+    const workspaceMap = this.buildOpenedWorkspaceMap(previousOpenedWorkspaces);
+    const reorderedOpenedWorkspaces = reorderedOpenedWorkspaceIds
+      .map(workspaceId => workspaceMap.get(workspaceId))
+      .filter((workspace): workspace is WorkspaceInfo => Boolean(workspace));
+    const reorderedEventWorkspace = previousCurrentWorkspace
+      ?? workspaceMap.get(sourceWorkspaceId)
+      ?? reorderedOpenedWorkspaces[0]
+      ?? previousOpenedWorkspaces[0];
+
+    if (!reorderedEventWorkspace) {
+      return;
+    }
+
+    this.updateWorkspaceState(
+      previousCurrentWorkspace,
+      previousRecentWorkspaces,
+      reorderedOpenedWorkspaces,
+      false,
+      null,
+      { type: 'workspace:updated', workspace: reorderedEventWorkspace }
+    );
+
+    try {
+      await globalStateAPI.reorderOpenedWorkspaces(reorderedOpenedWorkspaceIds);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const rollbackEventWorkspace = previousCurrentWorkspace
+        ?? workspaceMap.get(sourceWorkspaceId)
+        ?? previousOpenedWorkspaces[0]
+        ?? reorderedEventWorkspace;
+      this.updateWorkspaceState(
+        previousCurrentWorkspace,
+        previousRecentWorkspaces,
+        previousOpenedWorkspaces,
+        false,
+        errorMessage,
+        { type: 'workspace:updated', workspace: rollbackEventWorkspace }
+      );
+      this.emit({ type: 'workspace:error', error: errorMessage });
       throw error;
     }
   }

@@ -1293,32 +1293,9 @@ async fn load_last_dialog_pair_from_turns(
     ))
 }
 
-/// Strip XML wrapper tags injected by wrap_user_input before storing the message:
-///   <user_query>\n{content}\n</user_query>\n<system_reminder>...</system_reminder>
+/// Strip prompt markup injected before storing the message.
 fn strip_user_message_tags(raw: &str) -> String {
-    let text = raw.trim();
-
-    // Extract content inside <user_query>...</user_query> if present.
-    let inner = if let Some(start) = text.find("<user_query>") {
-        let after_open = &text[start + "<user_query>".len()..];
-        if let Some(end) = after_open.find("</user_query>") {
-            after_open[..end].trim()
-        } else {
-            // Malformed — use everything after the opening tag.
-            after_open.trim()
-        }
-    } else {
-        text
-    };
-
-    // Drop any trailing <system_reminder> block.
-    let result = if let Some(reminder_pos) = inner.find("<system_reminder>") {
-        inner[..reminder_pos].trim()
-    } else {
-        inner.trim()
-    };
-
-    result.to_string()
+    crate::agentic::core::strip_prompt_markup(raw)
 }
 
 fn truncate_text(text: &str, max_chars: usize) -> String {
@@ -1801,7 +1778,7 @@ pub async fn execute_forwarded_turn(
     interaction_handler: Option<BotInteractionHandler>,
     _message_sender: Option<BotMessageSender>,
 ) -> ForwardedTurnResult {
-    use crate::agentic::coordination::DialogTriggerSource;
+    use crate::agentic::coordination::{DialogSubmissionPolicy, DialogTriggerSource};
     use crate::service::remote_connect::remote_server::{
         get_or_init_global_dispatcher, TrackerEvent,
     };
@@ -1818,8 +1795,8 @@ pub async fn execute_forwarded_turn(
             forward.content,
             Some(&forward.agent_type),
             forward.image_contexts,
-            DialogTriggerSource::Bot,
-            Some(forward.turn_id.clone()),
+            DialogSubmissionPolicy::for_source(DialogTriggerSource::Bot),
+            Some(forward.turn_id),
         )
         .await
     {

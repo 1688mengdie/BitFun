@@ -67,8 +67,7 @@ export const TerminalToolCard: React.FC<TerminalToolCardProps> = ({
   onConfirm,
   onReject,
   onExpand,
-  terminalSessionId: propTerminalSessionId,
-  sessionId
+  terminalSessionId: propTerminalSessionId
 }) => {
   const { t } = useTranslation('flow-chat');
   const toolCall = toolItem.toolCall;
@@ -90,12 +89,8 @@ export const TerminalToolCard: React.FC<TerminalToolCardProps> = ({
       return propTerminalSessionId;
     }
     
-    if (sessionId && !sessionId.startsWith('FlowChat-')) {
-      return sessionId;
-    }
-    
     return undefined;
-  }, [toolResult, propTerminalSessionId, sessionId]);
+  }, [toolResult, propTerminalSessionId]);
 
   const showConfirmButtons = status === 'pending_confirmation';
   const showInterruptButton = status === 'running';
@@ -269,12 +264,7 @@ export const TerminalToolCard: React.FC<TerminalToolCardProps> = ({
     }
 
     const terminalName = `Chat-${terminalSessionId.slice(0, 8)}`;
-
-    window.dispatchEvent(new CustomEvent('expand-right-panel'));
-
-    setTimeout(() => {
-      createTerminalTab(terminalSessionId, terminalName);
-    }, 250);
+    createTerminalTab(terminalSessionId, terminalName);
   }, [terminalSessionId]);
 
   const output = toolResult?.result?.output || '';

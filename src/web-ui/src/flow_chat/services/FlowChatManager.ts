@@ -13,6 +13,7 @@ import { AgentService } from '../../shared/services/agent-service';
 import { stateMachineManager } from '../state-machine';
 import { EventBatcher } from './EventBatcher';
 import { createLogger } from '@/shared/utils/logger';
+import { compareSessionsForDisplay } from '../utils/sessionOrdering';
 
 import type { FlowChatContext, SessionConfig, DialogTurn } from './flow-chat-manager/types';
 import type { FlowToolItem, FlowTextItem, ModelRound } from '../types/flow-chat';
@@ -86,7 +87,7 @@ export class FlowChatManager {
         (activeSession.workspacePath || workspacePath) === workspacePath;
 
       if (hasHistoricalSessions && !activeSessionBelongsToWorkspace) {
-        const sortedWorkspaceSessions = [...workspaceSessions].sort((a, b) => b.lastActiveAt - a.lastActiveAt);
+        const sortedWorkspaceSessions = [...workspaceSessions].sort(compareSessionsForDisplay);
         const latestSession = (preferredMode
           ? sortedWorkspaceSessions.find(session => session.mode === preferredMode)
           : undefined) || sortedWorkspaceSessions[0];

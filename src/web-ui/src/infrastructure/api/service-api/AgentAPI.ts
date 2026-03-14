@@ -63,6 +63,28 @@ export interface SessionInfo {
   createdAt: number;
 }
 
+export interface EnsureAssistantBootstrapRequest {
+  sessionId: string;
+  workspacePath: string;
+}
+
+export type EnsureAssistantBootstrapStatus = 'started' | 'skipped' | 'blocked';
+
+export type EnsureAssistantBootstrapReason =
+  | 'bootstrap_started'
+  | 'bootstrap_not_required'
+  | 'session_has_existing_turns'
+  | 'session_not_idle'
+  | 'model_unavailable';
+
+export interface EnsureAssistantBootstrapResponse {
+  status: EnsureAssistantBootstrapStatus;
+  reason: EnsureAssistantBootstrapReason;
+  sessionId: string;
+  turnId?: string;
+  detail?: string;
+}
+
  
 export interface Message {
   id: string;
@@ -157,6 +179,18 @@ export class AgentAPI {
       return await api.invoke<{ success: boolean; message: string }>('start_dialog_turn', { request });
     } catch (error) {
       throw createTauriCommandError('start_dialog_turn', error, request);
+    }
+  }
+
+  async ensureAssistantBootstrap(
+    request: EnsureAssistantBootstrapRequest
+  ): Promise<EnsureAssistantBootstrapResponse> {
+    try {
+      return await api.invoke<EnsureAssistantBootstrapResponse>('ensure_assistant_bootstrap', {
+        request
+      });
+    } catch (error) {
+      throw createTauriCommandError('ensure_assistant_bootstrap', error, request);
     }
   }
 

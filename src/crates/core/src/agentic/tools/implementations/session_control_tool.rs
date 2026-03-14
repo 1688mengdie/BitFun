@@ -39,8 +39,22 @@ impl SessionControlTool {
         Ok(())
     }
 
-    fn resolve_workspace(&self, workspace: &str, context: &ToolUseContext) -> BitFunResult<String> {
-        let resolved = resolve_path_with_workspace(workspace, context.workspace_root())?;
+    fn resolve_workspace(
+        &self,
+        workspace: Option<&str>,
+        context: &ToolUseContext,
+    ) -> BitFunResult<String> {
+        let resolved = match workspace.filter(|value| !value.trim().is_empty()) {
+            Some(workspace) => resolve_path_with_workspace(workspace, context.workspace_root())?,
+            None => context
+                .workspace_root()
+                .map(|path| path.to_string_lossy().to_string())
+                .ok_or_else(|| {
+                    BitFunError::tool(
+                        "SessionControl requires workspace input or a source workspace".to_string(),
+                    )
+                })?,
+        };
         let path = Path::new(&resolved);
         if !path.exists() {
             return Err(BitFunError::tool(format!(
@@ -113,11 +127,32 @@ enum SessionControlAction {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+enum SessionControlAgentType {
+    #[serde(rename = "agentic", alias = "Agentic", alias = "AGENTIC")]
+    Agentic,
+    #[serde(rename = "Plan", alias = "plan", alias = "PLAN")]
+    Plan,
+    #[serde(rename = "Cowork", alias = "cowork", alias = "COWORK")]
+    Cowork,
+}
+
+impl SessionControlAgentType {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::Agentic => "agentic",
+            Self::Plan => "Plan",
+            Self::Cowork => "Cowork",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
 struct SessionControlInput {
     action: SessionControlAction,
-    workspace: String,
+    workspace: Option<String>,
     session_id: Option<String>,
     session_name: Option<String>,
+    agent_type: Option<SessionControlAgentType>,
 }
 
 #[async_trait]
@@ -128,12 +163,19 @@ impl Tool for SessionControlTool {
 
     async fn description(&self) -> BitFunResult<String> {
         Ok(
-            r#"Manage persisted workspace-scoped agent conversation sessions.
+            r#"Manage persisted workspace-scoped agent sessions.
 
 Actions:
-- "create": Create a new session. You may optionally provide session_name.
+- "create": Create a new session. You may optionally provide session_name and agent_type.
 - "delete": Delete an existing session by session_id.
-- "list": List all sessions."#
+- "list": List all sessions.
+
+Optional inputs:
+- "workspace": Workspace path. Can be absolute or relative to the current workspace. If omitted, uses your current workspace.
+- "agent_type": Only used by create. Defaults to "agentic".
+  - "agentic": Coding-focused agent for implementation, debugging, and code changes.
+  - "Plan": Planning agent for clarifying requirements and producing an implementation plan before coding.
+  - "Cowork": Collaborative agent for office-style work such as research, documentation, presentations, etc."#
                 .to_string(),
         )
     }
@@ -158,9 +200,14 @@ Actions:
                 "session_name": {
                     "type": "string",
                     "description": "Optional display name when creating a session."
+                },
+                "agent_type": {
+                    "type": "string",
+                    "enum": ["agentic", "Plan", "Cowork"],
+                    "description": "Optional agent type when creating a session. Defaults to agentic."
                 }
             },
-            "required": ["action", "workspace"],
+            "required": ["action"],
             "additionalProperties": false
         })
     }
@@ -190,10 +237,19 @@ Actions:
             }
         };
 
-        if parsed.workspace.trim().is_empty() {
+        if parsed
+            .workspace
+            .as_deref()
+            .map(|value| value.trim().is_empty())
+            .unwrap_or(true)
+            && context.and_then(|value| value.workspace_root()).is_none()
+        {
             return ValidationResult {
                 result: false,
-                message: Some("workspace is required".to_string()),
+                message: Some(
+                    "SessionControl requires workspace input or a source workspace in tool context"
+                        .to_string(),
+                ),
                 error_code: Some(400),
                 meta: None,
             };
@@ -224,6 +280,14 @@ Actions:
                 }
             }
             SessionControlAction::Delete => {
+                if parsed.agent_type.is_some() {
+                    return ValidationResult {
+                        result: false,
+                        message: Some("agent_type is only allowed for create".to_string()),
+                        error_code: Some(400),
+                        meta: None,
+                    };
+                }
                 let Some(session_id) = parsed.session_id.as_deref() else {
                     return ValidationResult {
                         result: false,
@@ -241,7 +305,16 @@ Actions:
                     };
                 }
             }
-            SessionControlAction::List => {}
+            SessionControlAction::List => {
+                if parsed.agent_type.is_some() {
+                    return ValidationResult {
+                        result: false,
+                        message: Some("agent_type is only allowed for create".to_string()),
+                        error_code: Some(400),
+                        meta: None,
+                    };
+                }
+            }
         }
 
         ValidationResult::default()
@@ -255,7 +328,7 @@ Actions:
         let workspace = input
             .get("workspace")
             .and_then(|value| value.as_str())
-            .unwrap_or("unknown");
+            .unwrap_or("current workspace");
         let session_id = input
             .get("session_id")
             .and_then(|value| value.as_str())
@@ -276,7 +349,7 @@ Actions:
     ) -> BitFunResult<Vec<ToolResult>> {
         let params: SessionControlInput = serde_json::from_value(input.clone())
             .map_err(|e| BitFunError::tool(format!("Invalid input: {}", e)))?;
-        let workspace = self.resolve_workspace(&params.workspace, context)?;
+        let workspace = self.resolve_workspace(params.workspace.as_deref(), context)?;
         let workspace_path = Path::new(&workspace);
         let coordinator = get_global_coordinator()
             .ok_or_else(|| BitFunError::tool("coordinator not initialized".to_string()))?;
@@ -288,7 +361,11 @@ Actions:
                     .clone()
                     .filter(|value| !value.trim().is_empty())
                     .unwrap_or_else(Self::default_session_name);
-                let agent_type = "agentic".to_string();
+                let agent_type = params
+                    .agent_type
+                    .as_ref()
+                    .map(|agent_type| agent_type.as_str().to_string())
+                    .unwrap_or_else(|| "agentic".to_string());
                 let created_by = self.creator_session_marker(context)?;
 
                 let session = coordinator
@@ -306,9 +383,10 @@ Actions:
                     .await?;
                 let created_session_id = session.session_id.clone();
                 let created_session_name = session.session_name.clone();
+                let created_agent_type = session.agent_type.clone();
                 let result_for_assistant = format!(
-                    "Created session '{}' in workspace '{}'",
-                    created_session_id, workspace
+                    "Created session '{}' in workspace '{}' using agent type '{}'.",
+                    created_session_id, workspace, created_agent_type
                 );
 
                 Ok(vec![ToolResult::Result {
@@ -319,6 +397,7 @@ Actions:
                         "session": {
                             "session_id": created_session_id,
                             "session_name": created_session_name,
+                            "agent_type": created_agent_type,
                         }
                     }),
                     result_for_assistant: Some(result_for_assistant),

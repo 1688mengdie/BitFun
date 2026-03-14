@@ -4,7 +4,7 @@
 
 use super::stream_processor::StreamProcessor;
 use super::types::{FinishReason, RoundContext, RoundResult};
-use crate::agentic::core::Message;
+use crate::agentic::core::{render_system_reminder, Message, MessageSemanticKind};
 use crate::agentic::events::{AgenticEvent, EventPriority, EventQueue};
 use crate::agentic::image_analysis::ImageContextData as ModelImageContextData;
 use crate::agentic::tools::pipeline::{ToolExecutionContext, ToolExecutionOptions, ToolPipeline};
@@ -473,12 +473,13 @@ impl RoundExecutor {
             .collect();
 
         if !injected_images.is_empty() {
-            let reminder_text = format!(
-                "<system-reminder>\nAttached {} image(s) from view_image tool.\n</system-reminder>",
+            let reminder_text = render_system_reminder(&format!(
+                "Attached {} image(s) from view_image tool.",
                 injected_images.len()
-            );
+            ));
             tool_result_messages.push(
                 Message::user_multimodal(reminder_text, injected_images)
+                    .with_semantic_kind(MessageSemanticKind::InternalReminder)
                     .with_turn_id(dialog_turn_id.clone())
                     .with_round_id(round_id_clone.clone()),
             );

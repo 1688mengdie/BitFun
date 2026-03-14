@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import path from 'path-browserify';
-import { MessageSquareQuote, Link2, CornerUpLeft } from 'lucide-react';
+import { Link2, CornerUpLeft } from 'lucide-react';
 import { FlowChatContext } from '../modern/FlowChatContext';
 import { VirtualItemRenderer } from '../modern/VirtualItemRenderer';
 import { ProcessingIndicator } from '../modern/ProcessingIndicator';
@@ -225,8 +225,9 @@ export const BtwSessionPanel: React.FC<BtwSessionPanelProps> = ({
   if (!childSessionId || !childSession) {
     return (
       <div className="btw-session-panel btw-session-panel--empty">
-        <MessageSquareQuote size={18} />
-        <span>{t('btw.threadLabel')}</span>
+        <div className="btw-session-panel__empty-state">
+          {t('btw.emptyThreadLabel', { label: t('btw.threadLabel') })}
+        </div>
       </div>
     );
   }

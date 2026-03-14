@@ -50,6 +50,12 @@ pub struct ResetAssistantWorkspaceRequest {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReorderOpenedWorkspacesRequest {
+    pub workspace_ids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct TestAIConfigConnectionRequest {
     pub config: bitfun_core::service::config::types::AIModelConfig,
 }
@@ -649,6 +655,7 @@ pub async fn open_workspace(
 #[tauri::command]
 pub async fn create_assistant_workspace(
     state: State<'_, AppState>,
+    app: tauri::AppHandle,
     _request: CreateAssistantWorkspaceRequest,
 ) -> Result<WorkspaceInfoDto, String> {
     match state
@@ -657,6 +664,8 @@ pub async fn create_assistant_workspace(
         .await
     {
         Ok(workspace_info) => {
+            apply_active_workspace_context(&state, &app, &workspace_info).await;
+
             if let Err(e) = state
                 .workspace_identity_watch_service
                 .sync_watched_workspaces()
@@ -947,6 +956,30 @@ pub async fn set_active_workspace(
         Err(e) => {
             error!("Failed to set active workspace: {}", e);
             Err(format!("Failed to set active workspace: {}", e))
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn reorder_opened_workspaces(
+    state: State<'_, AppState>,
+    request: ReorderOpenedWorkspacesRequest,
+) -> Result<(), String> {
+    match state
+        .workspace_service
+        .reorder_opened_workspaces(request.workspace_ids.clone())
+        .await
+    {
+        Ok(_) => {
+            info!(
+                "Opened workspaces reordered: count={}",
+                request.workspace_ids.len()
+            );
+            Ok(())
+        }
+        Err(e) => {
+            error!("Failed to reorder opened workspaces: {}", e);
+            Err(format!("Failed to reorder opened workspaces: {}", e))
         }
     }
 }
