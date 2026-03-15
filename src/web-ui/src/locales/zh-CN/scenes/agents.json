@@ -15,6 +15,7 @@
     "refresh": "刷新"
   },
   "nav": {
+    "coreAgents": "核心智能体",
     "agents": "Agent",
     "teams": "Agent Team"
   },
@@ -114,6 +115,12 @@
     "strategyCollab": "协作",
     "strategySeq": "顺序",
     "strategyFree": "自由"
+  },
+  "coreAgentsZone": {
+    "title": "核心智能体",
+    "subtitle": "平台内置的核心 Agent 模式，覆盖主流 AI 工作流，开箱即用。",
+    "empty": "暂未检测到核心智能体",
+    "roleLabel": "主要应用 · "
   },
   "agentsZone": {
     "title": "Agent 总览",

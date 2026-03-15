@@ -162,6 +162,22 @@
     font-size: $font-size-sm;
     color: var(--color-text-secondary);
   }
+
+  &__modal-form {
+    display: flex;
+    flex-direction: column;
+    gap: $size-gap-4;
+    padding: $size-gap-5 $size-gap-5 $size-gap-4;
+  }
+
+  &__modal-form-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: $size-gap-2;
+    margin-top: $size-gap-1;
+    padding-top: $size-gap-3;
+    border-top: 1px solid var(--border-subtle);
+  }
 }
 
 @media (max-width: 720px) {

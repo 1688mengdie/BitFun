@@ -15,6 +15,7 @@
     "refresh": "Refresh"
   },
   "nav": {
+    "coreAgents": "Core Agents",
     "agents": "Agent",
     "teams": "Agent Team"
   },
@@ -114,6 +115,12 @@
     "strategyCollab": "Collaborative",
     "strategySeq": "Sequential",
     "strategyFree": "Free"
+  },
+  "coreAgentsZone": {
+    "title": "Core Agents",
+    "subtitle": "Built-in core agent modes covering mainstream AI workflows, ready to use out of the box.",
+    "empty": "No core agents detected",
+    "roleLabel": "Primary Use · "
   },
   "agentsZone": {
     "title": "Agents Overview",

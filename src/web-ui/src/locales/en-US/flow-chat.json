@@ -122,7 +122,7 @@
     "willSendAfterStop": "Will send after stop",
     "openWorkspaceFolder": "Open workspace folder",
     "openWorkspaceFolderFailed": "Failed to open workspace folder: {{error}}",
-    "spaceToActivate": "Press <space>Space</space> to tell me what you'd like to do"
+    "spaceToActivate": "Press <space>Space</space> to type"
   },
   "context": {
     "title": "Context",

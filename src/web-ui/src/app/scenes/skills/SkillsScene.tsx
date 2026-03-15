@@ -15,10 +15,9 @@ import {
   Store,
   Trash2,
   TrendingUp,
-  X,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { Badge, Button, ConfirmDialog, Input, Search, Select } from '@/component-library';
+import { Badge, Button, ConfirmDialog, Input, Modal, Search, Select } from '@/component-library';
 import {
   GalleryDetailModal,
   GalleryEmpty,
@@ -244,116 +243,6 @@ const SkillsScene: React.FC = () => {
             </>
           )}
         >
-          {isAddFormOpen ? (
-            <div className="bitfun-collection-form bitfun-skills-scene__form-card">
-              <div className="bitfun-collection-form__header">
-                <h3>{t('form.title')}</h3>
-                <button
-                  type="button"
-                  className="gallery-plain-icon-btn"
-                  onClick={() => {
-                    installed.resetForm();
-                    setAddFormOpen(false);
-                  }}
-                  aria-label={t('form.closeTooltip')}
-                >
-                  <X size={14} />
-                </button>
-              </div>
-              <div className="bitfun-collection-form__body">
-                <Select
-                  label={t('form.level.label')}
-                  options={[
-                    { label: t('form.level.user'), value: 'user' },
-                    {
-                      label: `${t('form.level.project')}${installed.hasWorkspace ? '' : t('form.level.projectDisabled')}`,
-                      value: 'project',
-                      disabled: !installed.hasWorkspace,
-                    },
-                  ]}
-                  value={installed.formLevel}
-                  onChange={(value) => installed.setFormLevel(value as SkillLevel)}
-                  size="medium"
-                />
-
-                {installed.formLevel === 'project' && installed.hasWorkspace ? (
-                  <div className="bitfun-skills-scene__form-hint">
-                    {t('form.level.currentWorkspace', { path: installed.workspacePath })}
-                  </div>
-                ) : null}
-
-                <div className="bitfun-skills-scene__path-input">
-                  <Input
-                    label={t('form.path.label')}
-                    placeholder={t('form.path.placeholder')}
-                    value={installed.formPath}
-                    onChange={(e) => installed.setFormPath(e.target.value)}
-                    variant="outlined"
-                  />
-                  <button
-                    type="button"
-                    className="gallery-action-btn"
-                    onClick={installed.handleBrowse}
-                    aria-label={t('form.path.browseTooltip')}
-                  >
-                    <FolderOpen size={15} />
-                  </button>
-                </div>
-                <div className="bitfun-skills-scene__path-hint">
-                  {t('form.path.hint')}
-                </div>
-
-                {installed.isValidating ? (
-                  <div className="bitfun-skills-scene__validating">{t('form.validating')}</div>
-                ) : null}
-
-                {installed.validationResult ? (
-                  <div
-                    className={[
-                      'bitfun-skills-scene__validation',
-                      installed.validationResult.valid ? 'is-valid' : 'is-invalid',
-                    ].filter(Boolean).join(' ')}
-                  >
-                    {installed.validationResult.valid ? (
-                      <>
-                        <div className="bitfun-skills-scene__validation-name">
-                          {installed.validationResult.name}
-                        </div>
-                        <div className="bitfun-skills-scene__validation-desc">
-                          {installed.validationResult.description}
-                        </div>
-                      </>
-                    ) : (
-                      <div className="bitfun-skills-scene__validation-error">
-                        {installed.validationResult.error}
-                      </div>
-                    )}
-                  </div>
-                ) : null}
-              </div>
-              <div className="bitfun-collection-form__footer">
-                <Button
-                  variant="secondary"
-                  size="small"
-                  onClick={() => {
-                    installed.resetForm();
-                    setAddFormOpen(false);
-                  }}
-                >
-                  {t('form.actions.cancel')}
-                </Button>
-                <Button
-                  variant="primary"
-                  size="small"
-                  onClick={handleAddSkill}
-                  disabled={!installed.validationResult?.valid || installed.isAdding}
-                >
-                  {installed.isAdding ? t('form.actions.adding') : t('form.actions.add')}
-                </Button>
-              </div>
-            </div>
-          ) : null}
-
           {installed.loading ? <GallerySkeleton /> : null}
 
           {!installed.loading && installed.error ? (
@@ -547,6 +436,109 @@ const SkillsScene: React.FC = () => {
           </div>
         ) : null}
       </GalleryDetailModal>
+
+      <Modal
+        isOpen={isAddFormOpen}
+        onClose={() => {
+          installed.resetForm();
+          setAddFormOpen(false);
+        }}
+        title={t('form.title')}
+        size="small"
+      >
+        <div className="bitfun-skills-scene__modal-form">
+          <Select
+            label={t('form.level.label')}
+            options={[
+              { label: t('form.level.user'), value: 'user' },
+              {
+                label: `${t('form.level.project')}${installed.hasWorkspace ? '' : t('form.level.projectDisabled')}`,
+                value: 'project',
+                disabled: !installed.hasWorkspace,
+              },
+            ]}
+            value={installed.formLevel}
+            onChange={(value) => installed.setFormLevel(value as SkillLevel)}
+            size="medium"
+          />
+
+          {installed.formLevel === 'project' && installed.hasWorkspace ? (
+            <div className="bitfun-skills-scene__form-hint">
+              {t('form.level.currentWorkspace', { path: installed.workspacePath })}
+            </div>
+          ) : null}
+
+          <div className="bitfun-skills-scene__path-input">
+            <Input
+              label={t('form.path.label')}
+              placeholder={t('form.path.placeholder')}
+              value={installed.formPath}
+              onChange={(e) => installed.setFormPath(e.target.value)}
+              variant="outlined"
+            />
+            <button
+              type="button"
+              className="gallery-action-btn"
+              onClick={installed.handleBrowse}
+              aria-label={t('form.path.browseTooltip')}
+            >
+              <FolderOpen size={15} />
+            </button>
+          </div>
+          <div className="bitfun-skills-scene__path-hint">
+            {t('form.path.hint')}
+          </div>
+
+          {installed.isValidating ? (
+            <div className="bitfun-skills-scene__validating">{t('form.validating')}</div>
+          ) : null}
+
+          {installed.validationResult ? (
+            <div
+              className={[
+                'bitfun-skills-scene__validation',
+                installed.validationResult.valid ? 'is-valid' : 'is-invalid',
+              ].filter(Boolean).join(' ')}
+            >
+              {installed.validationResult.valid ? (
+                <>
+                  <div className="bitfun-skills-scene__validation-name">
+                    {installed.validationResult.name}
+                  </div>
+                  <div className="bitfun-skills-scene__validation-desc">
+                    {installed.validationResult.description}
+                  </div>
+                </>
+              ) : (
+                <div className="bitfun-skills-scene__validation-error">
+                  {installed.validationResult.error}
+                </div>
+              )}
+            </div>
+          ) : null}
+
+          <div className="bitfun-skills-scene__modal-form-actions">
+            <Button
+              variant="secondary"
+              size="small"
+              onClick={() => {
+                installed.resetForm();
+                setAddFormOpen(false);
+              }}
+            >
+              {t('form.actions.cancel')}
+            </Button>
+            <Button
+              variant="primary"
+              size="small"
+              onClick={handleAddSkill}
+              disabled={!installed.validationResult?.valid || installed.isAdding}
+            >
+              {installed.isAdding ? t('form.actions.adding') : t('form.actions.add')}
+            </Button>
+          </div>
+        </div>
+      </Modal>
 
       <ConfirmDialog
         isOpen={Boolean(deleteTarget)}
