@@ -201,18 +201,20 @@ const WorkspaceItem: React.FC<WorkspaceItemProps> = ({
   const handleCreateSession = useCallback(async () => {
     setMenuOpen(false);
     try {
-      await handleActivate();
       await flowChatManager.createChatSession(
-        {},
+        {
+          workspacePath: workspace.rootPath,
+        },
         workspace.workspaceKind === WorkspaceKind.Assistant ? 'Claw' : undefined
       );
+      await setActiveWorkspace(workspace.id);
     } catch (error) {
       notificationService.error(
         error instanceof Error ? error.message : t('nav.workspaces.createSessionFailed'),
         { duration: 4000 }
       );
     }
-  }, [handleActivate, t, workspace.workspaceKind]);
+  }, [setActiveWorkspace, t, workspace.id, workspace.rootPath, workspace.workspaceKind]);
 
   const handleCreateWorktree = useCallback(async (result: BranchSelectResult) => {
     try {

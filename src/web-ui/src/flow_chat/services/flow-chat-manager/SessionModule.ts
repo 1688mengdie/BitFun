@@ -33,12 +33,22 @@ const normalizeSessionDisplayMode = (
   return 'code';
 };
 
-const resolveSessionWorkspacePath = (context: FlowChatContext): string | null => {
+const resolveSessionWorkspacePath = (
+  context: FlowChatContext,
+  config?: SessionConfig
+): string | null => {
+  const explicitWorkspacePath = config?.workspacePath?.trim();
+  if (explicitWorkspacePath) {
+    return explicitWorkspacePath;
+  }
   return context.currentWorkspacePath || null;
 };
 
-const resolveSessionWorkspace = (context: FlowChatContext): WorkspaceInfo | null => {
-  const workspacePath = resolveSessionWorkspacePath(context);
+const resolveSessionWorkspace = (
+  context: FlowChatContext,
+  config?: SessionConfig
+): WorkspaceInfo | null => {
+  const workspacePath = resolveSessionWorkspacePath(context, config);
   if (!workspacePath) return null;
 
   const state = workspaceManager.getState();
@@ -110,8 +120,8 @@ export async function createChatSession(
   mode?: string
 ): Promise<string> {
   try {
-    const workspacePath = resolveSessionWorkspacePath(context);
-    const workspace = resolveSessionWorkspace(context);
+    const workspacePath = resolveSessionWorkspacePath(context, config);
+    const workspace = resolveSessionWorkspace(context, config);
 
     if (!workspacePath) {
       throw new Error('Workspace path is required to create a session');
