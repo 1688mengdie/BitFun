@@ -96,6 +96,14 @@
       "myAgent": "My Agent",
       "shell": "Shell"
     },
+    "displayModes": {
+      "pro": "Pro Mode",
+      "assistant": "Assistant Mode",
+      "switchToPro": "Click to switch to Pro mode",
+      "switchToAssistant": "Click to switch to Assistant mode",
+      "proDesc": "Best for focused, one-shot tasks with a clear goal.",
+      "assistantDesc": "Best for ongoing work with context and personal preferences."
+    },
     "myAgent": {
       "title": "My Agent",
       "categories": {
@@ -213,6 +221,9 @@
     "tools": {
       "builtinTools": "Built-in Tools",
       "mcpServices": "MCP Services"
+    },
+    "actions": {
+      "openMyAgent": "My Agent"
     },
     "moreOptions": "More options",
     "notifications": "Notifications"

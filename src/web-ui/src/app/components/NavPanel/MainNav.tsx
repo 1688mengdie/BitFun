@@ -13,7 +13,7 @@
 
 import React, { useCallback, useState, useMemo, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { Plus, FolderOpen, FolderPlus, History, Check, Bot, Code2, Users } from 'lucide-react';
+import { Plus, FolderOpen, FolderPlus, History, Check, Bot } from 'lucide-react';
 import { Tooltip } from '@/component-library';
 import { useApp } from '../../hooks/useApp';
 import { useSceneManager } from '../../hooks/useSceneManager';
@@ -32,6 +32,7 @@ import { useSceneStore } from '../../stores/sceneStore';
 import { useMyAgentStore } from '../../scenes/my-agent/myAgentStore';
 import { useMiniAppCatalogSync } from '../../scenes/miniapps/hooks/useMiniAppCatalogSync';
 import { flowChatStore } from '@/flow_chat/store/FlowChatStore';
+import { compareSessionsForDisplay } from '@/flow_chat/utils/sessionOrdering';
 import { flowChatManager } from '@/flow_chat/services/FlowChatManager';
 import { configManager } from '@/infrastructure/config/services/ConfigManager';
 import { workspaceManager } from '@/infrastructure/services/business/workspaceManager';
@@ -40,11 +41,13 @@ import { createLogger } from '@/shared/utils/logger';
 import { WorkspaceKind } from '@/shared/types';
 
 const DEFAULT_MODE_CONFIG_KEY = 'app.session_config.default_mode';
+const NAV_DISPLAY_MODE_STORAGE_KEY = 'bitfun.nav.displayMode';
 import './NavPanel.scss';
 
 const log = createLogger('MainNav');
 
 type DepartDir = 'up' | 'anchor' | 'down' | null;
+type NavDisplayMode = 'pro' | 'assistant';
 
 /**
  * Build a flat ordered list of (sectionId, itemTab) tuples so we can
@@ -65,6 +68,13 @@ const FLAT_ITEMS = buildFlatItemOrder();
 function getAnchorIndex(anchorId: SceneTabId | null): number {
   if (!anchorId) return -1;
   return FLAT_ITEMS.findIndex(i => i.navSceneId === anchorId);
+}
+
+function getInitialNavDisplayMode(): NavDisplayMode {
+  if (typeof window === 'undefined') return 'pro';
+  return window.localStorage.getItem(NAV_DISPLAY_MODE_STORAGE_KEY) === 'assistant'
+    ? 'assistant'
+    : 'pro';
 }
 
 interface MainNavProps {
@@ -138,11 +148,6 @@ const MainNav: React.FC<MainNavProps> = ({
   const [workspaceMenuClosing, setWorkspaceMenuClosing] = useState(false);
   const [workspaceMenuPos, setWorkspaceMenuPos] = useState({ top: 0, left: 0 });
 
-  const modeDropdownButtonRef = useRef<HTMLButtonElement | null>(null);
-  const modeDropdownRef = useRef<HTMLDivElement | null>(null);
-  const [modeDropdownOpen, setModeDropdownOpen] = useState(false);
-  const [modeDropdownClosing, setModeDropdownClosing] = useState(false);
-  const [modeDropdownPos, setModeDropdownPos] = useState({ top: 0, left: 0 });
 
   const getSectionLabel = useCallback(
     (sectionId: string, fallbackLabel: string | null) => {
@@ -208,18 +213,39 @@ const MainNav: React.FC<MainNavProps> = ({
   );
 
   const [defaultSessionMode, setDefaultSessionMode] = useState<'code' | 'cowork'>('code');
+  const [navDisplayMode, setNavDisplayMode] = useState<NavDisplayMode>(getInitialNavDisplayMode);
+  const [isModeSwitching, setIsModeSwitching] = useState(false);
+  const [modeLogoSrc, setModeLogoSrc] = useState('/panda_1.png');
+  const [modeLogoHoverSrc, setModeLogoHoverSrc] = useState('/panda_2.png');
+  const modeSwitchTimerRef = useRef<number | null>(null);
+  const modeSwitchSwapTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     configManager.getConfig<'code' | 'cowork'>(DEFAULT_MODE_CONFIG_KEY).then(mode => {
-      if (mode === 'code' || mode === 'cowork') setDefaultSessionMode(mode);
+      if (mode === 'code' || mode === 'cowork') {
+        setDefaultSessionMode(mode);
+        setSessionMode(mode);
+      }
     }).catch(() => {});
 
     const unwatch = configManager.watch(DEFAULT_MODE_CONFIG_KEY, () => {
       configManager.getConfig<'code' | 'cowork'>(DEFAULT_MODE_CONFIG_KEY).then(mode => {
-        if (mode === 'code' || mode === 'cowork') setDefaultSessionMode(mode);
+        if (mode === 'code' || mode === 'cowork') {
+          setDefaultSessionMode(mode);
+          setSessionMode(mode);
+        }
       }).catch(() => {});
     });
     return () => unwatch();
+  }, [setSessionMode]);
+
+  useEffect(() => () => {
+    if (modeSwitchTimerRef.current !== null) {
+      window.clearTimeout(modeSwitchTimerRef.current);
+    }
+    if (modeSwitchSwapTimerRef.current !== null) {
+      window.clearTimeout(modeSwitchSwapTimerRef.current);
+    }
   }, []);
 
   useEffect(() => {
@@ -228,52 +254,16 @@ const MainNav: React.FC<MainNavProps> = ({
     });
   }, [openedWorkspacesList]);
 
-  const closeModeDropdown = useCallback(() => {
-    setModeDropdownClosing(true);
-    window.setTimeout(() => {
-      setModeDropdownOpen(false);
-      setModeDropdownClosing(false);
-    }, 150);
-  }, []);
 
-  const openModeDropdown = useCallback(() => {
-    const rect = modeDropdownButtonRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    setModeDropdownPos({
-      top: rect.bottom + 4,
-      left: rect.left,
-    });
-    setModeDropdownOpen(true);
-    setModeDropdownClosing(false);
-  }, []);
 
-  const toggleModeDropdown = useCallback(() => {
-    if (modeDropdownOpen) {
-      closeModeDropdown();
-      return;
-    }
-    openModeDropdown();
-  }, [closeModeDropdown, openModeDropdown, modeDropdownOpen]);
-
-  const handleSetDefaultMode = useCallback(async (mode: 'code' | 'cowork') => {
-    closeModeDropdown();
-    setDefaultSessionMode(mode);
-    setSessionMode(mode);
-    try {
-      await configManager.setConfig(DEFAULT_MODE_CONFIG_KEY, mode);
-    } catch (err) {
-      log.error('Failed to save default session mode', err);
-    }
-  }, [closeModeDropdown, setSessionMode]);
 
   const handleCreateAssistantWorkspace = useCallback(async () => {
-    closeModeDropdown();
     try {
       await workspaceManager.createAssistantWorkspace();
     } catch (err) {
       log.error('Failed to create assistant workspace', err);
     }
-  }, [closeModeDropdown]);
+  }, []);
 
   const handleItemClick = useCallback(
     (tab: PanelType, item: NavItemConfig) => {
@@ -289,22 +279,57 @@ const MainNav: React.FC<MainNavProps> = ({
     [switchLeftPanelTab, openScene, openNavScene]
   );
 
-  const handleCreateSession = useCallback(async () => {
+  const handleCreateSession = useCallback(async (mode?: 'agentic' | 'Cowork' | 'Claw') => {
     openScene('session');
     switchLeftPanelTab('sessions');
     try {
       await flowChatManager.createChatSession(
         {},
-        isAssistantWorkspaceActive
+        mode ?? (
+          isAssistantWorkspaceActive
           ? 'Claw'
           : defaultSessionMode === 'cowork'
             ? 'Cowork'
             : 'agentic'
+        )
       );
     } catch (err) {
       log.error('Failed to create session', err);
     }
   }, [openScene, switchLeftPanelTab, defaultSessionMode, isAssistantWorkspaceActive]);
+
+  const handleCreateCodeSession = useCallback(() => {
+    setSessionMode('code');
+    void handleCreateSession('agentic');
+  }, [handleCreateSession, setSessionMode]);
+
+  const handleCreateCoworkSession = useCallback(() => {
+    setSessionMode('cowork');
+    void handleCreateSession('Cowork');
+  }, [handleCreateSession, setSessionMode]);
+
+  const handleCreateAssistantSession = useCallback(async () => {
+    const targetAssistantWorkspace =
+      isAssistantWorkspaceActive && currentWorkspace?.workspaceKind === WorkspaceKind.Assistant
+        ? currentWorkspace
+        : defaultAssistantWorkspace;
+
+    if (targetAssistantWorkspace && !isAssistantWorkspaceActive) {
+      try {
+        await setActiveWorkspace(targetAssistantWorkspace.id);
+      } catch (error) {
+        log.warn('Failed to activate assistant workspace before creating session', { error });
+      }
+    }
+
+    await handleCreateSession('Claw');
+  }, [
+    currentWorkspace,
+    defaultAssistantWorkspace,
+    handleCreateSession,
+    isAssistantWorkspaceActive,
+    setActiveWorkspace,
+  ]);
 
   const handleOpenProject = useCallback(async () => {
     try {
@@ -358,28 +383,6 @@ const MainNav: React.FC<MainNavProps> = ({
     };
   }, [closeWorkspaceMenu, workspaceMenuOpen]);
 
-  useEffect(() => {
-    if (!modeDropdownOpen) return;
-
-    const handleClickOutside = (event: MouseEvent) => {
-      const target = event.target as Node | null;
-      if (!target) return;
-      if (modeDropdownButtonRef.current?.contains(target)) return;
-      if (modeDropdownRef.current?.contains(target)) return;
-      closeModeDropdown();
-    };
-
-    const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') closeModeDropdown();
-    };
-
-    document.addEventListener('mousedown', handleClickOutside);
-    document.addEventListener('keydown', handleEscape);
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-      document.removeEventListener('keydown', handleEscape);
-    };
-  }, [closeModeDropdown, modeDropdownOpen]);
 
   const handleOpenProfile = useCallback(() => {
     const targetAssistantWorkspace =
@@ -409,6 +412,119 @@ const MainNav: React.FC<MainNavProps> = ({
     setSelectedAssistantWorkspaceId,
     switchLeftPanelTab,
   ]);
+
+  const handleOpenProModeSession = useCallback(async () => {
+    // 找到项目工作区（非 assistant 类型）
+    const projectWorkspaces = openedWorkspacesList.filter(
+      w => w.workspaceKind !== WorkspaceKind.Assistant
+    );
+
+    const targetWorkspace =
+      currentWorkspace?.workspaceKind !== WorkspaceKind.Assistant
+        ? currentWorkspace
+        : projectWorkspaces[0] ?? null;
+
+    // 若当前激活的是 assistant workspace，先切回项目工作区
+    if (targetWorkspace && currentWorkspace?.id !== targetWorkspace.id) {
+      await setActiveWorkspace(targetWorkspace.id).catch(() => {});
+    }
+
+    const workspacePath = targetWorkspace?.rootPath;
+    const state = flowChatStore.getState();
+
+    if (workspacePath) {
+      const workspaceSessions = Array.from(state.sessions.values())
+        .filter(s =>
+          (s.workspacePath || workspacePath) === workspacePath &&
+          !s.parentSessionId
+        )
+        .sort(compareSessionsForDisplay);
+
+      if (workspaceSessions.length > 0) {
+        const firstSession = workspaceSessions[0];
+        if (firstSession.isHistorical) {
+          await flowChatStore.loadSessionHistory(firstSession.sessionId, workspacePath);
+        }
+        flowChatStore.switchSession(firstSession.sessionId);
+        openScene('session');
+        switchLeftPanelTab('sessions');
+        return;
+      }
+    }
+
+    // 没有已有会话，显式传入 workspacePath 创建 Code 会话，避免被 assistant workspace 覆盖
+    openScene('session');
+    switchLeftPanelTab('sessions');
+    await flowChatManager.createChatSession({ workspacePath: workspacePath || undefined }, 'agentic');
+  }, [currentWorkspace, openedWorkspacesList, openScene, setActiveWorkspace, switchLeftPanelTab]);
+
+  const handleOpenAssistantModeSession = useCallback(async () => {
+    const targetAssistantWorkspace =
+      isAssistantWorkspaceActive && currentWorkspace?.workspaceKind === WorkspaceKind.Assistant
+        ? currentWorkspace
+        : defaultAssistantWorkspace;
+
+    if (targetAssistantWorkspace && !isAssistantWorkspaceActive) {
+      await setActiveWorkspace(targetAssistantWorkspace.id).catch(() => {});
+    }
+
+    const workspacePath = targetAssistantWorkspace?.rootPath;
+    const state = flowChatStore.getState();
+
+    if (workspacePath) {
+      const workspaceSessions = Array.from(state.sessions.values())
+        .filter(s =>
+          (s.workspacePath || workspacePath) === workspacePath &&
+          !s.parentSessionId
+        )
+        .sort(compareSessionsForDisplay);
+
+      if (workspaceSessions.length > 0) {
+        const firstSession = workspaceSessions[0];
+        if (firstSession.isHistorical) {
+          await flowChatStore.loadSessionHistory(firstSession.sessionId, workspacePath);
+        }
+        flowChatStore.switchSession(firstSession.sessionId);
+        openScene('session');
+        switchLeftPanelTab('sessions');
+        return;
+      }
+    }
+
+    // 没有已有会话，新建 Claw 会话
+    await handleCreateSession('Claw');
+  }, [currentWorkspace, defaultAssistantWorkspace, handleCreateSession, isAssistantWorkspaceActive, openScene, setActiveWorkspace, switchLeftPanelTab]);
+
+  const handleToggleNavDisplayMode = useCallback(() => {
+    // 防止动画进行中重复触发
+    if (modeSwitchTimerRef.current !== null) return;
+
+    setIsModeSwitching(true);
+
+    // 点击时同步计算目标模式，避免 timeout 闭包中读取到过期值
+    const nextMode: NavDisplayMode = navDisplayMode === 'pro' ? 'assistant' : 'pro';
+
+    // 200ms（clip-path 收缩到最小圆点）：只切换 nav 显示状态，不触发任何场景/会话操作
+    if (modeSwitchSwapTimerRef.current !== null) {
+      window.clearTimeout(modeSwitchSwapTimerRef.current);
+    }
+    modeSwitchSwapTimerRef.current = window.setTimeout(() => {
+      setNavDisplayMode(nextMode);
+      window.localStorage.setItem(NAV_DISPLAY_MODE_STORAGE_KEY, nextMode);
+      modeSwitchSwapTimerRef.current = null;
+    }, 200);
+
+    // 480ms（动画完全结束）：再切场景和会话，避免 tab 文字在动画期间闪动
+    modeSwitchTimerRef.current = window.setTimeout(() => {
+      setIsModeSwitching(false);
+      modeSwitchTimerRef.current = null;
+      if (nextMode === 'assistant') {
+        void handleOpenAssistantModeSession();
+      } else {
+        void handleOpenProModeSession();
+      }
+    }, 480);
+  }, [navDisplayMode, handleOpenAssistantModeSession, handleOpenProModeSession]);
 
   let flatCounter = 0;
 
@@ -474,113 +590,123 @@ const MainNav: React.FC<MainNavProps> = ({
     document.body
   ) : null;
 
-  const ModeIcon = isAssistantWorkspaceActive
-    ? Bot
-    : defaultSessionMode === 'cowork'
-      ? Users
-      : Code2;
   const personaTooltip = t('nav.items.persona');
-  const createSessionTooltip = isAssistantWorkspaceActive
-    ? t('nav.sessions.newClawSession')
-    : defaultSessionMode === 'cowork'
-      ? t('nav.sessions.newCoworkSession')
-      : t('nav.sessions.newCodeSession');
-  const createModeTooltip = isAssistantWorkspaceActive
-    ? t('nav.workspaces.actions.newAssistant')
-    : defaultSessionMode === 'cowork'
-      ? t('nav.sessions.newCoworkSessionDefault')
-      : t('nav.sessions.newCodeSessionDefault');
+  const createSessionTooltip = t('nav.sessions.newClawSession');
   const createAssistantTooltip = t('nav.workspaces.actions.newAssistant');
   const openProjectTooltip = t('header.openProject');
+  const createCodeTooltip = t('nav.sessions.newCodeSession');
+  const createCoworkTooltip = t('nav.sessions.newCoworkSession');
+  const isAssistantNavMode = navDisplayMode === 'assistant';
+  const navModeLabel = isAssistantNavMode
+    ? t('nav.displayModes.assistant')
+    : t('nav.displayModes.pro');
+  const navModeHint = isAssistantNavMode
+    ? t('nav.displayModes.switchToPro')
+    : t('nav.displayModes.switchToAssistant');
+  const navModeDesc = isAssistantNavMode
+    ? t('nav.displayModes.assistantDesc')
+    : t('nav.displayModes.proDesc');
+  const navSections = useMemo(
+    () => NAV_SECTIONS.filter(section => isAssistantNavMode ? section.id === 'assistants' : section.id === 'workspace'),
+    [isAssistantNavMode]
+  );
+  const myAgentEntryLabel = t('nav.actions.openMyAgent');
 
-  const modeDropdownPortal = modeDropdownOpen ? createPortal(
-    <div
-      ref={modeDropdownRef}
-      className={`bitfun-nav-panel__mode-dropdown${modeDropdownClosing ? ' is-closing' : ''}`}
-      role="menu"
-      style={{ top: modeDropdownPos.top, left: modeDropdownPos.left }}
-    >
-      {isAssistantWorkspaceActive ? (
-        <button
-          type="button"
-          className="bitfun-nav-panel__mode-dropdown-item"
-          role="menuitem"
-          onClick={() => { void handleCreateAssistantWorkspace(); }}
-        >
-          <Bot size={13} className="bitfun-nav-panel__mode-dropdown-item-icon is-claw" />
-          <span className="bitfun-nav-panel__mode-dropdown-item-label">{t('nav.workspaces.actions.newAssistant')}</span>
-        </button>
-      ) : (
-        <>
-          <button
-            type="button"
-            className={`bitfun-nav-panel__mode-dropdown-item${defaultSessionMode === 'code' ? ' is-active' : ''}`}
-            role="menuitem"
-            onClick={() => { void handleSetDefaultMode('code'); }}
-          >
-            <Code2 size={13} className="bitfun-nav-panel__mode-dropdown-item-icon is-code" />
-            <span className="bitfun-nav-panel__mode-dropdown-item-label">{t('nav.sessions.codeSessionMode')}</span>
-            {defaultSessionMode === 'code' && <Check size={12} className="bitfun-nav-panel__mode-dropdown-item-check" />}
-          </button>
-          <button
-            type="button"
-            className={`bitfun-nav-panel__mode-dropdown-item${defaultSessionMode === 'cowork' ? ' is-active' : ''}`}
-            role="menuitem"
-            onClick={() => { void handleSetDefaultMode('cowork'); }}
-          >
-            <Users size={13} className="bitfun-nav-panel__mode-dropdown-item-icon is-cowork" />
-            <span className="bitfun-nav-panel__mode-dropdown-item-label">{t('nav.sessions.coworkSessionMode')}</span>
-            {defaultSessionMode === 'cowork' && <Check size={12} className="bitfun-nav-panel__mode-dropdown-item-check" />}
-          </button>
-        </>
-      )}
-    </div>,
-    document.body
-  ) : null;
 
   return (
     <>
       <div className="bitfun-nav-panel__workspace-toolbar">
-        <Tooltip content={personaTooltip} placement="right" followCursor>
+        <Tooltip content={navModeHint} placement="right" followCursor>
           <button
             type="button"
-            className="bitfun-nav-panel__workspace-bot"
-            onClick={handleOpenProfile}
-            aria-label={personaTooltip}
+            className={[
+              'bitfun-nav-panel__mode-switch',
+              isAssistantNavMode && 'is-assistant',
+              isModeSwitching && 'is-switching',
+            ].filter(Boolean).join(' ')}
+            onClick={handleToggleNavDisplayMode}
+            aria-label={navModeHint}
+            aria-pressed={isAssistantNavMode}
           >
-            <img className="bitfun-nav-panel__workspace-bot-logo" src="/Logo-ICON.png" alt="" />
+            <span className="bitfun-nav-panel__mode-switch-logo" aria-hidden="true">
+              {isAssistantNavMode ? (
+                <>
+                  <img
+                    className="bitfun-nav-panel__mode-switch-logo-image bitfun-nav-panel__mode-switch-logo-image--default"
+                    src={modeLogoSrc}
+                    alt=""
+                    onError={() => setModeLogoSrc('/Logo-ICON.png')}
+                  />
+                  <img
+                    className="bitfun-nav-panel__mode-switch-logo-image bitfun-nav-panel__mode-switch-logo-image--hover"
+                    src={modeLogoHoverSrc}
+                    alt=""
+                    onError={() => setModeLogoHoverSrc('/Logo-ICON.png')}
+                  />
+                </>
+              ) : (
+                <img
+                  className="bitfun-nav-panel__mode-switch-logo-image bitfun-nav-panel__mode-switch-logo-image--static"
+                  src="/Logo-ICON.png"
+                  alt=""
+                />
+              )}
+            </span>
+            <span className="bitfun-nav-panel__mode-switch-copy">
+              <span className="bitfun-nav-panel__mode-switch-label">{navModeLabel}</span>
+              <span className="bitfun-nav-panel__mode-switch-sub">
+                <span className="bitfun-nav-panel__mode-switch-desc">
+                  <span className="bitfun-nav-panel__mode-switch-desc-main">{navModeDesc}</span>
+                </span>
+                <span className="bitfun-nav-panel__mode-switch-hint">{navModeHint}</span>
+              </span>
+            </span>
           </button>
         </Tooltip>
         <div className="bitfun-nav-panel__workspace-create-group">
-          <Tooltip content={createSessionTooltip} placement="right" followCursor>
-            <button
-              type="button"
-              className="bitfun-nav-panel__workspace-create-main"
-              onClick={handleCreateSession}
-              aria-label={createSessionTooltip}
-            >
-              <Plus size={14} />
-              <span>{t('nav.sessions.newSession')}</span>
-            </button>
-          </Tooltip>
-          <Tooltip content={createModeTooltip} placement="right" followCursor disabled={modeDropdownOpen}>
-            <button
-              ref={modeDropdownButtonRef}
-              type="button"
-              className={`bitfun-nav-panel__workspace-create-mode${modeDropdownOpen ? ' is-active' : ''}`}
-              onClick={toggleModeDropdown}
-              aria-label={createModeTooltip}
-              aria-expanded={modeDropdownOpen}
-              aria-haspopup="listbox"
-            >
-              <ModeIcon size={13} />
-            </button>
-          </Tooltip>
+          {isAssistantNavMode ? (
+            <Tooltip content={createSessionTooltip} placement="right" followCursor>
+              <button
+                type="button"
+                className="bitfun-nav-panel__workspace-create-main bitfun-nav-panel__workspace-create-main--single"
+                onClick={() => { void handleCreateAssistantSession(); }}
+                aria-label={createSessionTooltip}
+              >
+                <Plus size={14} />
+                <span>{t('nav.sessions.newSession')}</span>
+              </button>
+            </Tooltip>
+          ) : (
+            <>
+              <Tooltip content={createCodeTooltip} placement="right" followCursor>
+                <button
+                  type="button"
+                  className="bitfun-nav-panel__workspace-create-main bitfun-nav-panel__workspace-create-main--split-left"
+                  onClick={handleCreateCodeSession}
+                  aria-label={createCodeTooltip}
+                >
+                  <Plus size={14} />
+                  <span>{t('nav.sessions.modeCode')}</span>
+                </button>
+              </Tooltip>
+              <Tooltip content={createCoworkTooltip} placement="right" followCursor>
+                <button
+                  type="button"
+                  className="bitfun-nav-panel__workspace-create-main bitfun-nav-panel__workspace-create-main--split-right"
+                  onClick={handleCreateCoworkSession}
+                  aria-label={createCoworkTooltip}
+                >
+                  <Plus size={14} />
+                  <span>{t('nav.sessions.modeCowork')}</span>
+                </button>
+              </Tooltip>
+            </>
+          )}
         </div>
       </div>
 
-      <div className="bitfun-nav-panel__sections">
-        {NAV_SECTIONS.map(section => {
+      <div className={`bitfun-nav-panel__sections${isModeSwitching ? ' is-mode-switching' : ''}`}>
+        {navSections.map(section => {
           const isSectionOpen = expandedSections.has(section.id);
           const isCollapsible = !!section.collapsible;
           const showItems     = !isCollapsible || isSectionOpen;
@@ -679,6 +805,22 @@ const MainNav: React.FC<MainNavProps> = ({
         })}
       </div>
 
+      {isAssistantNavMode && (
+        <div className="bitfun-nav-panel__assistant-footer">
+          <Tooltip content={personaTooltip} placement="right" followCursor>
+            <button
+              type="button"
+              className={`bitfun-nav-panel__assistant-entry${activeTabId === 'my-agent' ? ' is-active' : ''}`}
+              onClick={handleOpenProfile}
+              aria-label={myAgentEntryLabel}
+            >
+              <Bot size={16} className="bitfun-nav-panel__assistant-entry-icon" />
+              <span className="bitfun-nav-panel__assistant-entry-label">{myAgentEntryLabel}</span>
+            </button>
+          </Tooltip>
+        </div>
+      )}
+
       <div className="bitfun-nav-panel__miniapp-footer">
         <MiniAppEntry
           isActive={activeTabId === 'miniapps' || !!activeMiniAppId}
@@ -689,7 +831,6 @@ const MainNav: React.FC<MainNavProps> = ({
       </div>
 
       {workspaceMenuPortal}
-      {modeDropdownPortal}
     </>
   );
 };
