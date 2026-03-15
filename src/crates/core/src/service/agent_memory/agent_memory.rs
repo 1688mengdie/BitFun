@@ -99,7 +99,7 @@ async fn list_memory_file_groups(memory_dir: &Path) -> BitFunResult<(Vec<String>
 
 fn format_system_time_for_prompt(time: SystemTime) -> String {
     let datetime: chrono::DateTime<chrono::Local> = time.into();
-    datetime.to_rfc3339_opts(chrono::SecondsFormat::Secs, false)
+    datetime.format("%Y-%m-%dT%H:%M:%S").to_string()
 }
 
 fn normalize_message_preview(content: &str) -> String {

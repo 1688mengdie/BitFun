@@ -73,7 +73,7 @@ impl PromptBuilder {
 - Current Working Directory: {}
 - Operating System: {} ({})
 - Architecture: {}
-- Current Date (YYYY-MM-DD): {}
+- Current Date: {}
 </environment_details>
 
 "#,
