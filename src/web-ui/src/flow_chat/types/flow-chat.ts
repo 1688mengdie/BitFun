@@ -227,6 +227,7 @@ export interface SessionConfig {
   modelName?: string;
   agentType?: string;
   context?: Record<string, string>;
+  workspacePath?: string;
 }
 
 export interface QueuedMessage {

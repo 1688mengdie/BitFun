@@ -1631,28 +1631,6 @@ export const ChatInput: React.FC<ChatInputProps> = ({
             </IconButton>
             <div className="bitfun-chat-input__actions">
               <div className="bitfun-chat-input__actions-left">
-                <ModelSelector
-                  currentMode={modeState.current}
-                  sessionId={effectiveTargetSessionId || undefined}
-                />
-                
-                {tokenUsage.current > 0 && (
-                  <TokenUsageIndicator
-                    currentTokens={tokenUsage.current}
-                    maxTokens={tokenUsage.max}
-                  />
-                )}
-              </div>
-              <div className="bitfun-chat-input__actions-right">
-                {isCollapsedProcessing && (
-                  <>
-                    <span className="bitfun-chat-input__capsule-divider" />
-                    <span className="bitfun-chat-input__cancel-shortcut">
-                      <span className="bitfun-chat-input__space-key">Esc</span>
-                      <span>{t('input.cancelShortcut')}</span>
-                    </span>
-                  </>
-                )}
                 {canSwitchModes && (
                   <div 
                     className="bitfun-chat-input__mode-selector"
@@ -1705,6 +1683,29 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                     );
                   })()}
                   </div>
+                )}
+
+                <ModelSelector
+                  currentMode={modeState.current}
+                  sessionId={effectiveTargetSessionId || undefined}
+                />
+                
+                {tokenUsage.current > 0 && (
+                  <TokenUsageIndicator
+                    currentTokens={tokenUsage.current}
+                    maxTokens={tokenUsage.max}
+                  />
+                )}
+              </div>
+              <div className="bitfun-chat-input__actions-right">
+                {isCollapsedProcessing && (
+                  <>
+                    <span className="bitfun-chat-input__capsule-divider" />
+                    <span className="bitfun-chat-input__cancel-shortcut">
+                      <span className="bitfun-chat-input__space-key">Esc</span>
+                      <span>{t('input.cancelShortcut')}</span>
+                    </span>
+                  </>
                 )}
                 
                 <IconButton

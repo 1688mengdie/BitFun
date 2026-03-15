@@ -96,6 +96,14 @@
       "myAgent": "我的智能体",
       "shell": "Shell"
     },
+    "displayModes": {
+      "pro": "专业模式",
+      "assistant": "助理模式",
+      "switchToPro": "点击切换到专业模式",
+      "switchToAssistant": "点击切换到助理模式",
+      "proDesc": "适合目标明确、一次完成的即时任务。",
+      "assistantDesc": "适合持续推进、需要延续上下文和个人偏好的任务。"
+    },
     "myAgent": {
       "title": "我的智能体",
       "categories": {
@@ -213,6 +221,9 @@
     "tools": {
       "builtinTools": "内置工具",
       "mcpServices": "MCP 服务"
+    },
+    "actions": {
+      "openMyAgent": "我的智能体"
     },
     "moreOptions": "更多选项",
     "notifications": "通知"
