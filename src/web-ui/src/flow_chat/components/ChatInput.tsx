@@ -741,8 +741,11 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         expand: true,
       });
       setInputTarget('btw');
+      dispatchInput({ type: 'DEACTIVATE' });
     } catch (e) {
       log.error('Failed to start /btw thread', { e });
+      dispatchInput({ type: 'ACTIVATE' });
+      dispatchInput({ type: 'SET_VALUE', payload: message });
     }
   }, [currentSessionId, derivedState, inputState.value, isBtwSession, setQueuedInput, t, workspacePath]);
   
@@ -782,8 +785,10 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     try {
       await sendMessage(message);
       dispatchInput({ type: 'CLEAR_VALUE' });
+      dispatchInput({ type: 'DEACTIVATE' });
     } catch (error) {
       log.error('Failed to send message', { error });
+      dispatchInput({ type: 'ACTIVATE' });
       dispatchInput({ type: 'SET_VALUE', payload: message });
     }
   }, [inputState.value, derivedState, transition, sendMessage, addToHistory, effectiveTargetSessionId, setQueuedInput, submitBtwFromInput]);
@@ -1265,8 +1270,6 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     if (inputState.isActive) return;
 
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
-      if (e.key !== ' ') return;
-
       const target = e.target as HTMLElement;
       const isEditable =
         target.tagName === 'INPUT' ||
@@ -1274,6 +1277,14 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         target.isContentEditable ||
         target.closest('[contenteditable="true"]') !== null;
 
+      if (e.key === 'Escape' && derivedState?.canCancel) {
+        if (isEditable) return;
+        e.preventDefault();
+        void transition(SessionExecutionEvent.USER_CANCEL);
+        return;
+      }
+
+      if (e.key !== ' ') return;
       if (isEditable) return;
 
       e.preventDefault();
@@ -1287,7 +1298,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 
     document.addEventListener('keydown', handleGlobalKeyDown);
     return () => document.removeEventListener('keydown', handleGlobalKeyDown);
-  }, [inputState.isActive]);
+  }, [derivedState?.canCancel, inputState.isActive, transition]);
   
   const containerRef = useRef<HTMLDivElement>(null);
   
@@ -1318,7 +1329,11 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     if (sendButtonMode === 'cancel') {
       return (
         <Tooltip content={t('input.stopGeneration')}>
-          <div className="bitfun-chat-input__send-button bitfun-chat-input__send-button--breathing" onClick={handleSendOrCancel}>
+          <div
+            className="bitfun-chat-input__send-button bitfun-chat-input__send-button--breathing"
+            onClick={handleSendOrCancel}
+            data-testid="chat-input-cancel-btn"
+          >
             <div className="bitfun-chat-input__breathing-circle" />
             {hasQueuedInput && <span className="bitfun-chat-input__queued-badge">1</span>}
           </div>
@@ -1352,6 +1367,8 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       </IconButton>
     );
   };
+
+  const isCollapsedProcessing = !inputState.isActive && !!derivedState?.isProcessing;
 
   return (
     <>
@@ -1627,6 +1644,15 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                 )}
               </div>
               <div className="bitfun-chat-input__actions-right">
+                {isCollapsedProcessing && (
+                  <>
+                    <span className="bitfun-chat-input__capsule-divider" />
+                    <span className="bitfun-chat-input__cancel-shortcut">
+                      <span className="bitfun-chat-input__space-key">Esc</span>
+                      <span>{t('input.cancelShortcut')}</span>
+                    </span>
+                  </>
+                )}
                 {canSwitchModes && (
                   <div 
                     className="bitfun-chat-input__mode-selector"
