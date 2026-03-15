@@ -192,6 +192,43 @@
       margin: 0;
     }
 
+    &.bitfun-chat-input--processing {
+      .bitfun-chat-input__input-area {
+        left: 18px;
+        right: 118px;
+        width: auto;
+        transform: translateY(-50%);
+        justify-content: flex-start;
+      }
+
+      .rich-text-input {
+        display: none;
+      }
+
+      .bitfun-chat-input__actions {
+        position: absolute;
+        top: 50%;
+        right: 14px;
+        transform: translateY(-50%);
+        z-index: 2;
+      }
+
+      .bitfun-chat-input__actions-right {
+        display: flex !important;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .bitfun-chat-input__space-hint {
+        justify-content: flex-start;
+        width: 100%;
+      }
+
+      .bitfun-chat-input__action-button {
+        display: none !important;
+      }
+    }
+
     &:hover .bitfun-chat-input__space-hint {
       opacity: 0.9;
     }
@@ -211,6 +248,35 @@
     background: transparent;
     border: none;
     box-shadow: none;
+  }
+
+  &__cancel-shortcut {
+    display: inline-flex;
+    align-items: center;
+    flex-shrink: 0;
+    gap: 4px;
+    font-size: 13px;
+    line-height: 24px;
+    color: var(--color-text-muted);
+    opacity: 0.72;
+    white-space: nowrap;
+    pointer-events: none;
+  }
+
+  &__capsule-divider {
+    width: 1px;
+    height: 14px;
+    flex-shrink: 0;
+    background: color-mix(in srgb, var(--color-text-muted) 28%, transparent);
+    pointer-events: none;
+  }
+
+  :root[data-theme="light"] &,
+  :root[data-theme-type="light"] &,
+  .light & {
+    .bitfun-chat-input__capsule-divider {
+      background: rgba(15, 23, 42, 0.2);
+    }
   }
   
   &--active {
@@ -1067,6 +1133,26 @@
     border-radius: 50%;
     background: rgba(234, 179, 8, 0.6); // yellow-500 with opacity
     animation: breathing-pulse 2.5s ease-in-out infinite;
+  }
+
+  &__queued-badge {
+    position: absolute;
+    top: -4px;
+    right: -4px;
+    min-width: 11px;
+    height: 11px;
+    padding: 0 3px;
+    border-radius: 999px;
+    background: #ef4444;
+    color: white;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 8px;
+    font-weight: 700;
+    line-height: 1;
+    box-shadow: 0 0 0 1px rgba(18, 18, 28, 0.85);
+    pointer-events: none;
   }
 }
 

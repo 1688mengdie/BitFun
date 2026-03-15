@@ -106,6 +106,8 @@
     "sendShortcut": "Send (⏎)",
     "stop": "Stop",
     "stopGeneration": "Stop Generation (Esc)",
+    "processingCapsule": "Processing",
+    "cancelShortcut": "Cancel",
     "clear": "Clear",
     "attach": "Attach File",
     "collapseInput": "Collapse input",
