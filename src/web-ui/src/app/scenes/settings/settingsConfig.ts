@@ -53,7 +53,7 @@ export const SETTINGS_CATEGORIES: ConfigCategoryDef[] = [
     nameKey: 'configCenter.categories.devkit',
     tabs: [
       { id: 'editor',  labelKey: 'configCenter.tabs.editor'  },
-      { id: 'lsp',     labelKey: 'configCenter.tabs.lsp'     },
+      // { id: 'lsp',     labelKey: 'configCenter.tabs.lsp'     },
       { id: 'debug',   labelKey: 'configCenter.tabs.debug'   },
       { id: 'terminal',labelKey: 'configCenter.tabs.terminal'},
       { id: 'logging', labelKey: 'configCenter.tabs.logging' },

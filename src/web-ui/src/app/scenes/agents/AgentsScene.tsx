@@ -22,6 +22,7 @@ import {
   GalleryZone,
 } from '@/app/components';
 import AgentCard from './components/AgentCard';
+import CoreAgentCard, { type CoreAgentMeta } from './components/CoreAgentCard';
 import AgentTeamCard from './components/AgentTeamCard';
 import AgentTeamTabBar from './components/AgentTeamTabBar';
 import AgentGallery from './components/AgentGallery';
@@ -43,6 +44,14 @@ import './AgentsView.scss';
 import './AgentsScene.scss';
 
 const EXAMPLE_TEAM_IDS = new Set(MOCK_AGENT_TEAMS.map((team) => team.id));
+
+const CORE_AGENT_IDS = new Set(['Claw', 'agentic', 'Cowork']);
+
+const CORE_AGENT_META: Record<string, CoreAgentMeta> = {
+  Claw:    { role: '个人助理',       accentColor: '#f59e0b', accentBg: 'rgba(245,158,11,0.10)' },
+  agentic: { role: '编码专业智能体', accentColor: '#6366f1', accentBg: 'rgba(99,102,241,0.10)' },
+  Cowork:  { role: '办公智能体',     accentColor: '#14b8a6', accentBg: 'rgba(20,184,166,0.10)' },
+};
 
 const AgentTeamEditorView: React.FC = () => {
   const { t } = useTranslation('scenes/agents');
@@ -120,6 +129,8 @@ const AgentsHomeView: React.FC = () => {
     const query = searchQuery.toLowerCase();
     return team.name.toLowerCase().includes(query) || team.description.toLowerCase().includes(query);
   }), [agentTeams, searchQuery]);
+
+  const coreAgents = useMemo(() => allAgents.filter((agent) => CORE_AGENT_IDS.has(agent.id)), [allAgents]);
 
   const handleCreateTeam = useCallback(() => {
     const id = `agent-team-${Date.now()}`;
@@ -217,6 +228,13 @@ const AgentsHomeView: React.FC = () => {
             <button
               type="button"
               className="gallery-anchor-btn"
+              onClick={() => scrollToZone('core-agents-zone')}
+            >
+              {t('nav.coreAgents')}
+            </button>
+            <button
+              type="button"
+              className="gallery-anchor-btn"
               onClick={() => scrollToZone('agents-zone')}
             >
               {t('nav.agents')}
@@ -267,6 +285,37 @@ const AgentsHomeView: React.FC = () => {
       />
 
       <div className="gallery-zones">
+        <GalleryZone
+          id="core-agents-zone"
+          title={t('coreAgentsZone.title')}
+          subtitle={t('coreAgentsZone.subtitle')}
+          tools={(
+            <span className="gallery-zone-count">{coreAgents.length}</span>
+          )}
+        >
+          {loading ? (
+            <GallerySkeleton count={3} cardHeight={160} className="core-agent-skeleton" />
+          ) : coreAgents.length === 0 ? (
+            <GalleryEmpty
+              icon={<Cpu size={32} strokeWidth={1.5} />}
+              message={t('coreAgentsZone.empty')}
+            />
+          ) : (
+            <div className="core-agents-grid">
+              {coreAgents.map((agent, index) => (
+                <CoreAgentCard
+                  key={agent.id}
+                  agent={agent}
+                  index={index}
+                  meta={CORE_AGENT_META[agent.id] ?? { role: agent.name, accentColor: '#6366f1', accentBg: 'rgba(99,102,241,0.10)' }}
+                  skillCount={agent.agentKind === 'mode' ? (getModeConfig(agent.id)?.available_skills?.length ?? 0) : 0}
+                  onOpenDetails={openAgentDetails}
+                />
+              ))}
+            </div>
+          )}
+        </GalleryZone>
+
         <GalleryZone
           id="agents-zone"
           title={t('agentsZone.title')}
