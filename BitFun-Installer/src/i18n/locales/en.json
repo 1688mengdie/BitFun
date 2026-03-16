@@ -100,6 +100,14 @@
       "volcengine": {
         "name": "Volcano Engine",
         "description": "ByteDance Volcano Engine Doubao large language models"
+      },
+      "openbitfun": {
+        "name": "OpenBitFun",
+        "description": "OpenBitFun Model Service"
+      },
+      "gemini": {
+        "name": "Google Gemini",
+        "description": "Google Gemini 2.5 series multimodal models"
       }
     },
     "modelNameSelectPlaceholder": "Select a model...",
