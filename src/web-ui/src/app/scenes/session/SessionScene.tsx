@@ -177,14 +177,19 @@ const SessionScene: React.FC<SessionSceneProps> = ({
     return () => window.removeEventListener('expand-right-panel-immediate', handler as EventListener);
   }, [state.layout.rightPanelCollapsed]);
 
-  // Responsive resize
+  // Responsive resize — also validate on mount to clamp widths restored from
+  // localStorage that may exceed the current (non-maximized) window size.
   useEffect(() => {
-    const onResize = () => {
+    const validate = () => {
       const valid = calculateValidRightWidth(currentRightWidth);
       if (valid !== currentRightWidth) updateRightPanelWidth(valid);
     };
-    window.addEventListener('resize', onResize);
-    return () => window.removeEventListener('resize', onResize);
+    const rafId = requestAnimationFrame(validate);
+    window.addEventListener('resize', validate);
+    return () => {
+      cancelAnimationFrame(rafId);
+      window.removeEventListener('resize', validate);
+    };
   }, [currentRightWidth, calculateValidRightWidth, updateRightPanelWidth]);
 
   // Cleanup animation frames

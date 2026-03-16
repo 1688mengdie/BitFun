@@ -7,13 +7,13 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, Globe, RefreshCw, MousePointer2 } from 'lucide-react';
+import { AlertTriangle, ChevronLeft, ChevronRight, Globe, RefreshCw, MousePointer2 } from 'lucide-react';
 import { IconButton } from '@/component-library';
 import { createLogger } from '@/shared/utils/logger';
 import { useSceneStore } from '@/app/stores/sceneStore';
 import { useContextStore } from '@/shared/context-system';
 import type { WebElementContext } from '@/shared/types/context';
-import { createInspectorScript, CANCEL_INSPECTOR_SCRIPT } from './browserInspectorScript';
+import { createInspectorScript, CANCEL_INSPECTOR_SCRIPT, BLANK_TARGET_INTERCEPT_SCRIPT } from './browserInspectorScript';
 import './BrowserPanel.scss';
 
 const log = createLogger('BrowserPanel');
@@ -125,6 +125,7 @@ const BrowserPanel: React.FC<BrowserPanelProps> = ({ isActive, initialUrl }) => 
   const resizeFrameRef = useRef<number | null>(null);
   const webviewLabelRef = useRef<string>('');
   const inspectorUnlistenRef = useRef<(() => void) | null>(null);
+  const urlPollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const [inputValue, setInputValue] = useState(startUrl);
   const [currentUrl, setCurrentUrl] = useState(startUrl);
@@ -241,12 +242,34 @@ const BrowserPanel: React.FC<BrowserPanelProps> = ({ isActive, initialUrl }) => 
     }
 
     try {
+      if (urlPollTimerRef.current) {
+        clearInterval(urlPollTimerRef.current);
+        urlPollTimerRef.current = null;
+      }
+
       const handle = await recreateWebview(nextUrl);
       await syncWebviewBounds(handle);
       if (shouldShowWebview) {
         await handle.show();
         await handle.setFocus();
       }
+
+      const label = webviewLabelRef.current;
+      await evalWebview(label, BLANK_TARGET_INTERCEPT_SCRIPT);
+
+      const { invoke } = await import('@tauri-apps/api/core');
+      urlPollTimerRef.current = setInterval(() => {
+        invoke<string>('browser_get_url', { request: { label } })
+          .then((url) => {
+            if (url && url !== currentUrlRef.current) {
+              currentUrlRef.current = url;
+              setInputValue(url);
+              setCurrentUrl(url);
+              evalWebview(label, BLANK_TARGET_INTERCEPT_SCRIPT).catch(() => {});
+            }
+          })
+          .catch(() => {});
+      }, 500);
     } catch (loadError) {
       const message = formatUnknownError(loadError);
       log.error('Load browser panel url failed', loadError);
@@ -277,6 +300,7 @@ const BrowserPanel: React.FC<BrowserPanelProps> = ({ isActive, initialUrl }) => 
       void (async () => {
         const { getCurrentWindow } = await import('@tauri-apps/api/window');
         await webviewRef.current?.reparent(getCurrentWindow());
+        await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
         await syncWebviewBounds();
       })()
         .then(() => webviewRef.current?.show())
@@ -322,6 +346,10 @@ const BrowserPanel: React.FC<BrowserPanelProps> = ({ isActive, initialUrl }) => 
 
   // Cleanup on unmount
   useEffect(() => () => {
+    if (urlPollTimerRef.current) {
+      clearInterval(urlPollTimerRef.current);
+      urlPollTimerRef.current = null;
+    }
     if (inspectorUnlistenRef.current) {
       inspectorUnlistenRef.current();
       inspectorUnlistenRef.current = null;
@@ -381,9 +409,20 @@ const BrowserPanel: React.FC<BrowserPanelProps> = ({ isActive, initialUrl }) => 
     void loadUrl(inputValue);
   }, [inputValue, loadUrl]);
 
+  const handleGoBack = useCallback(() => {
+    if (!isTauri || !webviewLabelRef.current) return;
+    void evalWebview(webviewLabelRef.current, 'history.back()').catch(() => {});
+  }, [isTauri]);
+
+  const handleGoForward = useCallback(() => {
+    if (!isTauri || !webviewLabelRef.current) return;
+    void evalWebview(webviewLabelRef.current, 'history.forward()').catch(() => {});
+  }, [isTauri]);
+
   const handleRefresh = useCallback(() => {
-    void loadUrl(currentUrl);
-  }, [currentUrl, loadUrl]);
+    if (!isTauri || !webviewLabelRef.current) return;
+    void evalWebview(webviewLabelRef.current, 'location.reload()').catch(() => {});
+  }, [isTauri]);
 
   const handleInspector = useCallback(async () => {
     if (!isTauri || !webviewRef.current) return;
@@ -459,16 +498,24 @@ const BrowserPanel: React.FC<BrowserPanelProps> = ({ isActive, initialUrl }) => 
   return (
     <div className="browser-panel">
       <form className="browser-panel__toolbar" onSubmit={handleSubmit}>
-        <div className="browser-panel__address">
-          <Globe size={16} />
-          <input
-            type="text"
-            value={inputValue}
-            onChange={(e) => setInputValue(e.target.value)}
-            placeholder="输入网址，例如 https://example.com"
-            spellCheck={false}
-          />
-        </div>
+        <IconButton
+          type="button"
+          variant="ghost"
+          size="small"
+          onClick={handleGoBack}
+          aria-label="后退"
+        >
+          <ChevronLeft size={14} />
+        </IconButton>
+        <IconButton
+          type="button"
+          variant="ghost"
+          size="small"
+          onClick={handleGoForward}
+          aria-label="前进"
+        >
+          <ChevronRight size={14} />
+        </IconButton>
         <IconButton
           type="button"
           variant="ghost"
@@ -479,6 +526,16 @@ const BrowserPanel: React.FC<BrowserPanelProps> = ({ isActive, initialUrl }) => 
         >
           <RefreshCw size={14} className={isLoading ? 'browser-panel__spinning' : undefined} />
         </IconButton>
+        <div className="browser-panel__address">
+          <Globe size={16} />
+          <input
+            type="text"
+            value={inputValue}
+            onChange={(e) => setInputValue(e.target.value)}
+            placeholder="输入网址，例如 https://example.com"
+            spellCheck={false}
+          />
+        </div>
         {isTauri && (
           <IconButton
             type="button"
