@@ -276,11 +276,36 @@
   &__search {
     padding: 6px 8px;
     border-bottom: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+    position: relative;
+    display: flex;
+    align-items: center;
+  }
+
+  &__search-clear {
+    position: absolute;
+    right: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    color: var(--color-text-muted, #a0a0a0);
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+    transition: all var(--motion-fast, 0.15s) var(--easing-standard, cubic-bezier(0.4, 0, 0.2, 1));
+    flex-shrink: 0;
+
+    &:hover {
+      background: var(--color-error-bg, rgba(199, 112, 112, 0.1));
+      color: var(--color-error, #c77070);
+    }
   }
 
   &__search-input {
     width: 100%;
-    padding: 6px 10px;
+    padding: 6px 28px 6px 10px;
     background: var(--element-bg-subtle, rgba(255, 255, 255, 0.05));
     border: none;
     border-radius: 3px;

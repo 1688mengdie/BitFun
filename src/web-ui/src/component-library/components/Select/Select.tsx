@@ -158,15 +158,16 @@ export const Select: React.FC<SelectProps> = ({
       
       if (autoClose && newValue.length > 0) {
         setIsOpen(false);
+        setSearchQuery('');
       }
     } else {
       newValue = option.value;
       setSelectedValue(newValue);
       onChange?.(newValue);
       setIsOpen(false);
+      setSearchQuery('');
     }
     
-    setSearchQuery('');
     setHighlightedIndex(-1);
   }, [selectedValue, multiple, onChange, autoClose]);
 
@@ -498,6 +499,19 @@ export const Select: React.FC<SelectProps> = ({
                   }
                 }}
               />
+              {searchQuery && (
+                <span
+                  className="select__search-clear"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setSearchQuery('');
+                    setHighlightedIndex(-1);
+                    searchInputRef.current?.focus();
+                  }}
+                >
+                  ×
+                </span>
+              )}
             </div>
           )}
           

@@ -13,8 +13,19 @@ fn append_endpoint(base_url: &str, endpoint: &str) -> String {
     format!("{}/{}", base.trim_end_matches('/'), endpoint)
 }
 
+fn gemini_base_url(url: &str) -> &str {
+    let mut u = url;
+    if let Some(pos) = u.find("/v1beta") {
+        u = &u[..pos];
+    }
+    if let Some(pos) = u.find("/models/") {
+        u = &u[..pos];
+    }
+    u.trim_end_matches('/')
+}
+
 fn resolve_gemini_request_url(base_url: &str, model_name: &str) -> String {
-    let trimmed = base_url.trim().trim_end_matches('/').to_string();
+    let trimmed = base_url.trim().trim_end_matches('/');
     if trimmed.is_empty() {
         return String::new();
     }
@@ -23,29 +34,16 @@ fn resolve_gemini_request_url(base_url: &str, model_name: &str) -> String {
         return stripped.trim_end_matches('/').to_string();
     }
 
-    let stream_endpoint = ":streamGenerateContent?alt=sse";
-    if trimmed.contains(":generateContent") {
-        return trimmed.replace(":generateContent", stream_endpoint);
-    }
-    if trimmed.contains(":streamGenerateContent") {
-        if trimmed.contains("alt=sse") {
-            return trimmed;
-        }
-        if trimmed.contains('?') {
-            return format!("{}&alt=sse", trimmed);
-        }
-        return format!("{}?alt=sse", trimmed);
-    }
-    if trimmed.contains("/models/") {
-        return format!("{}{}", trimmed, stream_endpoint);
-    }
-
     let model = model_name.trim();
     if model.is_empty() {
-        return trimmed;
+        return trimmed.to_string();
     }
 
-    append_endpoint(&trimmed, &format!("models/{}{}", model, stream_endpoint))
+    let base = gemini_base_url(trimmed);
+    format!(
+        "{}/v1beta/models/{}:streamGenerateContent?alt=sse",
+        base, model
+    )
 }
 
 fn resolve_request_url(base_url: &str, provider: &str, model_name: &str) -> String {
@@ -131,7 +129,7 @@ mod tests {
     }
 
     #[test]
-    fn resolves_gemini_request_url() {
+    fn resolves_gemini_request_url_with_v1beta() {
         assert_eq!(
             resolve_request_url(
                 "https://generativelanguage.googleapis.com/v1beta",
@@ -139,6 +137,18 @@ mod tests {
                 "gemini-2.5-pro"
             ),
             "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:streamGenerateContent?alt=sse"
+        );
+    }
+
+    #[test]
+    fn resolves_gemini_request_url_bare_host() {
+        assert_eq!(
+            resolve_request_url(
+                "https://api.openbitfun.com",
+                "gemini",
+                "gemini-2.5-pro"
+            ),
+            "https://api.openbitfun.com/v1beta/models/gemini-2.5-pro:streamGenerateContent?alt=sse"
         );
     }
 }

@@ -59,13 +59,21 @@
     "advancedShow": "Show advanced settings",
     "advancedHide": "Hide advanced settings",
     "providers": {
+      "openbitfun": {
+        "name": "OpenBitFun",
+        "description": "OpenBitFun Model Platform"
+      },
+      "gemini": {
+        "name": "Google Gemini",
+        "description": "Google Gemini series models"
+      },
       "anthropic": {
         "name": "Anthropic Claude",
         "description": "Anthropic Claude series models"
       },
       "minimax": {
         "name": "MiniMax",
-        "description": "MiniMax M2 series large language models",
+        "description": "MiniMax series models",
         "urlOptions": {
           "default": "Anthropic Format - Default",
           "openai": "OpenAI Compatible Format"
@@ -73,11 +81,11 @@
       },
       "moonshot": {
         "name": "Moonshot AI",
-        "description": "Moonshot Kimi K2 series models"
+        "description": "Moonshot Kimi series models"
       },
       "deepseek": {
         "name": "DeepSeek",
-        "description": "DeepSeek V3 and R1 reasoning models"
+        "description": "DeepSeek series models"
       },
       "zhipu": {
         "name": "Zhipu AI",
@@ -90,7 +98,7 @@
       },
       "qwen": {
         "name": "Qwen",
-        "description": "Alibaba Cloud Qwen3 series models",
+        "description": "Alibaba Cloud Bailian Model Platform",
         "urlOptions": {
           "default": "OpenAI Format - Default",
           "codingPlan": "OpenAI Format - Coding Plan",
@@ -99,15 +107,15 @@
       },
       "volcengine": {
         "name": "Volcano Engine",
-        "description": "ByteDance Volcano Engine Doubao large language models"
+        "description": "ByteDance Volcano Engine Model Platform"
       },
-      "openbitfun": {
-        "name": "OpenBitFun",
-        "description": "OpenBitFun Model Service"
-      },
-      "gemini": {
-        "name": "Google Gemini",
-        "description": "Google Gemini 2.5 series multimodal models"
+      "siliconflow": {
+        "name": "SiliconFlow",
+        "description": "SiliconFlow Model Platform",
+        "urlOptions": {
+          "default": "OpenAI Format - Default",
+          "anthropic": "Anthropic Format"
+        }
       }
     },
     "modelNameSelectPlaceholder": "Select a model...",

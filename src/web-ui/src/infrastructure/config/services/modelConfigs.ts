@@ -69,9 +69,9 @@ export const PROVIDER_TEMPLATES: Record<string, ProviderTemplate> = {
   gemini: {
     id: 'gemini',
     name: t('settings/ai-model:providers.gemini.name'),
-    baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+    baseUrl: 'https://generativelanguage.googleapis.com',
     format: 'gemini',
-    models: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite'],
+    models: ['gemini-3.1-pro-preview', 'gemini-3.1-flash-lite-preview'],
     requiresApiKey: true,
     description: t('settings/ai-model:providers.gemini.description'),
     helpUrl: 'https://aistudio.google.com/app/apikey'
@@ -82,7 +82,7 @@ export const PROVIDER_TEMPLATES: Record<string, ProviderTemplate> = {
     name: t('settings/ai-model:providers.anthropic.name'),
     baseUrl: 'https://api.anthropic.com',
     format: 'anthropic',
-    models: ['claude-opus-4-6', 'claude-sonnet-4-5-20250929', 'claude-opus-4-5-20251101', 'claude-haiku-4-5-20251001'],
+    models: ['claude-opus-4-6', 'claude-sonnet-4-6'],
     requiresApiKey: true,
     description: t('settings/ai-model:providers.anthropic.description'),
     helpUrl: 'https://console.anthropic.com/'
@@ -93,7 +93,7 @@ export const PROVIDER_TEMPLATES: Record<string, ProviderTemplate> = {
     name: t('settings/ai-model:providers.minimax.name'),
     baseUrl: 'https://api.minimaxi.com/anthropic',
     format: 'anthropic',
-    models: ['MiniMax-M2.5', 'MiniMax-M2.1', 'MiniMax-M2.1-lightning', 'MiniMax-M2'],
+    models: ['MiniMax-M2.5', 'MiniMax-M2.1'],
     requiresApiKey: true,
     description: t('settings/ai-model:providers.minimax.description'),
     helpUrl: 'https://platform.minimax.io/',
@@ -117,7 +117,7 @@ export const PROVIDER_TEMPLATES: Record<string, ProviderTemplate> = {
   deepseek: {
     id: 'deepseek',
     name: t('settings/ai-model:providers.deepseek.name'),
-    baseUrl: 'https://api.deepseek.com',
+    baseUrl: 'https://api.deepseek.com/v1',
     format: 'openai',
     models: ['deepseek-chat', 'deepseek-reasoner'],
     requiresApiKey: true,
@@ -137,7 +137,7 @@ export const PROVIDER_TEMPLATES: Record<string, ProviderTemplate> = {
     baseUrlOptions: [
       { url: 'https://open.bigmodel.cn/api/paas/v4', format: 'openai', note: 'default' },
       { url: 'https://open.bigmodel.cn/api/anthropic', format: 'anthropic', note: 'Coding Plan' },
-      { url: 'https://open.bigmodel.cn/api/coding/paas', format: 'openai', note: 'Coding Plan' },
+      { url: 'https://open.bigmodel.cn/api/coding/paas/v4', format: 'openai', note: 'Coding Plan' },
     ]
   },
 
@@ -146,7 +146,7 @@ export const PROVIDER_TEMPLATES: Record<string, ProviderTemplate> = {
     name: t('settings/ai-model:providers.qwen.name'),
     baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
     format: 'openai',
-    models: ['qwen3.5-plus', 'glm-5', 'kimi-k2.5', 'MiniMax-M2.5', 'qwen3-max', 'qwen3-coder-plus', 'qwen3-coder-flash'],
+    models: ['Qwen3.5-Plus', 'Qwen3.5-Flash'],
     requiresApiKey: true,
     description: t('settings/ai-model:providers.qwen.description'),
     helpUrl: 'https://dashscope.console.aliyun.com/apiKey',
@@ -162,10 +162,25 @@ export const PROVIDER_TEMPLATES: Record<string, ProviderTemplate> = {
     name: t('settings/ai-model:providers.volcengine.name'),
     baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
     format: 'openai',
-    models: ['doubao-seed-1-8-251228', 'glm-4-7-251222', 'doubao-seed-code-preview-251028'],
+    models: ['doubao-seed-2-0-code-preview-260215', 'doubao-seed-2-0-pro-260215'],
     requiresApiKey: true,
     description: t('settings/ai-model:providers.volcengine.description'),
     helpUrl: 'https://console.volcengine.com/ark/'
+  },
+
+  siliconflow: {
+    id: 'siliconflow',
+    name: t('settings/ai-model:providers.siliconflow.name'),
+    baseUrl: 'https://api.siliconflow.cn/v1',
+    format: 'openai',
+    models: [],
+    requiresApiKey: true,
+    description: t('settings/ai-model:providers.siliconflow.description'),
+    helpUrl: 'https://cloud.siliconflow.cn/account/ak',
+    baseUrlOptions: [
+      { url: 'https://api.siliconflow.cn/v1', format: 'openai', note: 'default' },
+      { url: 'https://api.siliconflow.cn/v1/messages', format: 'anthropic', note: 'Anthropic' },
+    ]
   }
 };
 

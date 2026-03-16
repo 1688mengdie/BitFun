@@ -83,16 +83,11 @@ function getCapabilitiesByCategory(category: ModelCategory): ModelCapability[] {
 }
 
 /**
- * Compute the actual request URL from a base URL and provider format.
- * Rules:
- *   - Ends with '#'  → strip '#', use as-is (force override)
- *   - openai         → append '/chat/completions' unless already present
- *   - responses      → append '/responses' unless already present
- *   - anthropic      → append '/v1/messages' unless already present
- *   - gemini         → append '/models/{model}:streamGenerateContent?alt=sse'
- *   - other          → use base_url as-is
+ * Compute the stored request URL from a base URL and provider format.
+ * For gemini, stores the bare base (no /v1beta/models/... suffix) —
+ * the backend dynamically appends /v1beta/models/{model}:streamGenerateContent?alt=sse.
  */
-function resolveRequestUrl(baseUrl: string, provider: string, modelName = ''): string {
+function resolveRequestUrl(baseUrl: string, provider: string, _modelName = ''): string {
   const trimmed = baseUrl.trim().replace(/\/+$/, '');
   if (trimmed.endsWith('#')) {
     return trimmed.slice(0, -1).replace(/\/+$/, '');
@@ -107,19 +102,28 @@ function resolveRequestUrl(baseUrl: string, provider: string, modelName = ''): s
     return trimmed.endsWith('v1/messages') ? trimmed : `${trimmed}/v1/messages`;
   }
   if (provider === 'gemini') {
-    if (!modelName.trim()) return trimmed;
-    if (trimmed.includes(':generateContent')) {
-      return trimmed.replace(':generateContent', ':streamGenerateContent?alt=sse');
-    }
-    if (trimmed.includes(':streamGenerateContent')) {
-      return trimmed.includes('alt=sse') ? trimmed : `${trimmed}${trimmed.includes('?') ? '&' : '?'}alt=sse`;
-    }
-    if (trimmed.includes('/models/')) {
-      return `${trimmed}:streamGenerateContent?alt=sse`;
-    }
-    return `${trimmed}/models/${modelName}:streamGenerateContent?alt=sse`;
+    return geminiBaseUrl(trimmed);
   }
   return trimmed;
+}
+
+/** Strip /v1beta/models/... or /models/... suffix from a gemini URL to get the bare host+path root. */
+function geminiBaseUrl(url: string): string {
+  return url
+    .replace(/\/v1beta(?:\/models(?:\/[^/?#]*(?::(?:stream)?[Gg]enerateContent)?(?:\?[^]*)?)?)?$/, '')
+    .replace(/\/models(?:\/[^/?#]*(?::(?:stream)?[Gg]enerateContent)?(?:\?[^]*)?)?$/, '')
+    .replace(/\/+$/, '');
+}
+
+/**
+ * Build a human-readable preview URL for display in the UI.
+ * For gemini: always shows {base}/v1beta/models/...
+ */
+function previewRequestUrl(baseUrl: string, provider: string): string {
+  if (provider === 'gemini') {
+    return `${geminiBaseUrl(baseUrl.trim().replace(/\/+$/, ''))}/v1beta/models/...`;
+  }
+  return resolveRequestUrl(baseUrl, provider);
 }
 
 const AIModelConfig: React.FC = () => {
@@ -1201,54 +1205,53 @@ const AIModelConfig: React.FC = () => {
                   />
                 </ConfigPageRow>
                 <ConfigPageRow label={t('form.baseUrl')} align="center" wide>
-                  {currentTemplate?.baseUrlOptions && currentTemplate.baseUrlOptions.length > 0 ? (
-                    <Select
-                      value={editingConfig.base_url || currentTemplate.baseUrl}
-                      onChange={(value) => {
-                        const selectedOption = currentTemplate.baseUrlOptions!.find(opt => opt.url === value);
-                        const newProvider = selectedOption?.format || editingConfig.provider || 'openai';
-                        resetRemoteModelDiscovery();
-                        setEditingConfig(prev => ({
-                          ...prev,
-                          base_url: value as string,
-                          request_url: resolveRequestUrl(value as string, newProvider, editingConfig.model_name || ''),
-                          provider: newProvider
-                        }));
-                      }}
-                      placeholder={t('form.baseUrl')}
-                      options={currentTemplate.baseUrlOptions.map(opt => ({ label: opt.url, value: opt.url, description: `${opt.format.toUpperCase()} · ${opt.note}` }))}
-                      size="small"
-                    />
-                  ) : (
-                    <div className="bitfun-ai-model-config__control-stack">
-                      <Input
-                        type="url"
-                        value={editingConfig.base_url || ''}
-                        onChange={(e) => {
+                  <div className="bitfun-ai-model-config__control-stack">
+                    {currentTemplate?.baseUrlOptions && currentTemplate.baseUrlOptions.length > 0 && (
+                      <Select
+                        value={currentTemplate.baseUrlOptions.some(opt => opt.url === editingConfig.base_url) ? editingConfig.base_url : ''}
+                        onChange={(value) => {
+                          const selectedOption = currentTemplate.baseUrlOptions!.find(opt => opt.url === value);
+                          const newProvider = selectedOption?.format || editingConfig.provider || 'openai';
                           resetRemoteModelDiscovery();
                           setEditingConfig(prev => ({
                             ...prev,
-                            base_url: e.target.value,
-                            request_url: resolveRequestUrl(e.target.value, prev?.provider || 'openai', prev?.model_name || '')
+                            base_url: value as string,
+                            request_url: resolveRequestUrl(value as string, newProvider, editingConfig.model_name || ''),
+                            provider: newProvider
                           }));
                         }}
-                        onFocus={(e) => e.target.select()}
-                        placeholder={currentTemplate?.baseUrl}
-                        inputSize="small"
+                        placeholder={t('form.baseUrl')}
+                        options={currentTemplate.baseUrlOptions.map(opt => ({ label: opt.url, value: opt.url, description: `${opt.format.toUpperCase()} · ${opt.note}` }))}
+                        size="small"
                       />
-                      {editingConfig.base_url && (
-                        <div className="bitfun-ai-model-config__resolved-url">
-                          <Input
-                            value={resolveRequestUrl(editingConfig.base_url, editingConfig.provider || 'openai', editingConfig.model_name || '')}
-                            readOnly
-                            onFocus={(e) => e.target.select()}
-                            inputSize="small"
-                            className="bitfun-ai-model-config__resolved-url-input"
-                          />
-                        </div>
-                      )}
-                    </div>
-                  )}
+                    )}
+                    <Input
+                      type="url"
+                      value={editingConfig.base_url || ''}
+                      onChange={(e) => {
+                        resetRemoteModelDiscovery();
+                        setEditingConfig(prev => ({
+                          ...prev,
+                          base_url: e.target.value,
+                          request_url: resolveRequestUrl(e.target.value, prev?.provider || 'openai', prev?.model_name || '')
+                        }));
+                      }}
+                      onFocus={(e) => e.target.select()}
+                      placeholder={currentTemplate?.baseUrl}
+                      inputSize="small"
+                    />
+                    {editingConfig.base_url && (
+                      <div className="bitfun-ai-model-config__resolved-url">
+                        <Input
+                          value={previewRequestUrl(editingConfig.base_url, editingConfig.provider || 'openai')}
+                          readOnly
+                          onFocus={(e) => e.target.select()}
+                          inputSize="small"
+                          className="bitfun-ai-model-config__resolved-url-input"
+                        />
+                      </div>
+                    )}
+                  </div>
                 </ConfigPageRow>
                 <ConfigPageRow label={t('form.provider')} align="center" wide>
                   <Select
@@ -1346,7 +1349,7 @@ const AIModelConfig: React.FC = () => {
                         {editingConfig.base_url && (
                           <div className="bitfun-ai-model-config__resolved-url">
                             <Input
-                              value={resolveRequestUrl(editingConfig.base_url, editingConfig.provider || 'openai', editingConfig.model_name || '')}
+                              value={previewRequestUrl(editingConfig.base_url, editingConfig.provider || 'openai')}
                               readOnly
                               onFocus={(e) => e.target.select()}
                               inputSize="small"

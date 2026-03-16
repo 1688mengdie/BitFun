@@ -56,6 +56,30 @@ struct AnthropicModelEntry {
     display_name: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct GeminiModelsResponse {
+    #[serde(default)]
+    models: Vec<GeminiModelEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GeminiModelEntry {
+    name: String,
+    #[serde(default)]
+    display_name: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_null_as_default")]
+    supported_generation_methods: Vec<String>,
+}
+
+fn deserialize_null_as_default<'de, D, T>(deserializer: D) -> std::result::Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Default + serde::Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer).map(|v| v.unwrap_or_default())
+}
+
 impl AIClient {
     const TEST_IMAGE_EXPECTED_CODE: &'static str = "BYGR";
     const TEST_IMAGE_PNG_BASE64: &'static str =
@@ -261,6 +285,48 @@ impl AIClient {
                 .map(|model| RemoteModelInfo {
                     id: model.id,
                     display_name: model.display_name,
+                })
+                .collect(),
+        ))
+    }
+
+    fn resolve_gemini_models_url(&self) -> String {
+        let base = Self::normalize_base_url_for_discovery(&self.config.base_url);
+        let base = Self::gemini_base_url(&base);
+        format!("{}/v1beta/models", base)
+    }
+
+    async fn list_gemini_models(&self) -> Result<Vec<RemoteModelInfo>> {
+        let url = self.resolve_gemini_models_url();
+        debug!("Gemini models list URL: {}", url);
+
+        let response = self
+            .apply_gemini_headers(self.client.get(&url))
+            .send()
+            .await?
+            .error_for_status()?;
+
+        let payload: GeminiModelsResponse = response.json().await?;
+        Ok(Self::dedupe_remote_models(
+            payload
+                .models
+                .into_iter()
+                .filter(|m| {
+                    m.supported_generation_methods.is_empty()
+                        || m.supported_generation_methods
+                            .iter()
+                            .any(|method| method == "generateContent")
+                })
+                .map(|model| {
+                    let id = model
+                        .name
+                        .strip_prefix("models/")
+                        .unwrap_or(&model.name)
+                        .to_string();
+                    RemoteModelInfo {
+                        id,
+                        display_name: model.display_name,
+                    }
                 })
                 .collect(),
         ))
@@ -565,7 +631,11 @@ impl AIClient {
 
         builder = builder
             .header("Content-Type", "application/json")
-            .header("x-goog-api-key", &self.config.api_key);
+            .header("x-goog-api-key", &self.config.api_key)
+            .header(
+                "Authorization",
+                format!("Bearer {}", self.config.api_key),
+            );
 
         if has_custom_headers && is_merge_mode {
             builder = self.apply_custom_headers(builder);
@@ -1107,26 +1177,25 @@ impl AIClient {
             return String::new();
         }
 
-        let mut url = trimmed
-            .replace(":generateContent", ":streamGenerateContent")
-            .replace(":streamGenerateContent?alt=sse", ":streamGenerateContent");
+        let base = Self::gemini_base_url(trimmed);
+        let encoded_model = urlencoding::encode(model_name.trim());
+        format!(
+            "{}/v1beta/models/{}:streamGenerateContent?alt=sse",
+            base, encoded_model
+        )
+    }
 
-        if !url.contains(":streamGenerateContent") {
-            if url.contains("/models/") {
-                url = format!("{}:streamGenerateContent", url);
-            } else {
-                let encoded_model = urlencoding::encode(model_name);
-                url = format!("{}/models/{}:streamGenerateContent", url, encoded_model);
-            }
+    /// Strip /v1beta, /models/... and similar suffixes from a gemini URL,
+    /// returning only the bare host root (e.g. https://generativelanguage.googleapis.com).
+    fn gemini_base_url(url: &str) -> &str {
+        let mut u = url;
+        if let Some(pos) = u.find("/v1beta") {
+            u = &u[..pos];
         }
-
-        if url.contains("alt=sse") {
-            url
-        } else if url.contains('?') {
-            format!("{}&alt=sse", url)
-        } else {
-            format!("{}?alt=sse", url)
+        if let Some(pos) = u.find("/models/") {
+            u = &u[..pos];
         }
+        u.trim_end_matches('/')
     }
 
     fn extract_openai_tool_name(tool: &serde_json::Value) -> String {
@@ -2008,6 +2077,7 @@ impl AIClient {
         match self.get_api_format().to_ascii_lowercase().as_str() {
             "openai" | "response" | "responses" => self.list_openai_models().await,
             "anthropic" => self.list_anthropic_models().await,
+            format if Self::is_gemini_api_format(format) => self.list_gemini_models().await,
             unsupported => Err(anyhow!(
                 "Listing models is not supported for API format: {}",
                 unsupported

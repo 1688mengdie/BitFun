@@ -11,7 +11,7 @@ export const PROVIDER_URL_CATALOG: ProviderUrlCatalogItem[] = [
   },
   {
     id: 'gemini',
-    baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+    baseUrl: 'https://generativelanguage.googleapis.com',
   },
   {
     id: 'anthropic',
@@ -31,7 +31,7 @@ export const PROVIDER_URL_CATALOG: ProviderUrlCatalogItem[] = [
   },
   {
     id: 'deepseek',
-    baseUrl: 'https://api.deepseek.com',
+    baseUrl: 'https://api.deepseek.com/v1',
   },
   {
     id: 'zhipu',
@@ -39,7 +39,7 @@ export const PROVIDER_URL_CATALOG: ProviderUrlCatalogItem[] = [
     baseUrlOptions: [
       'https://open.bigmodel.cn/api/paas/v4',
       'https://open.bigmodel.cn/api/anthropic',
-      'https://open.bigmodel.cn/api/coding/paas',
+      'https://open.bigmodel.cn/api/coding/paas/v4',
     ],
   },
   {
@@ -55,6 +55,14 @@ export const PROVIDER_URL_CATALOG: ProviderUrlCatalogItem[] = [
     id: 'volcengine',
     baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
   },
+  {
+    id: 'siliconflow',
+    baseUrl: 'https://api.siliconflow.cn/v1',
+    baseUrlOptions: [
+      'https://api.siliconflow.cn/v1',
+      'https://api.siliconflow.cn/v1/messages',
+    ],
+  },
 ];
 
 export function normalizeProviderBaseUrl(url: string): string {
@@ -69,6 +77,8 @@ export function normalizeProviderBaseUrl(url: string): string {
   if (geminiModelEndpointMatch?.[1]) {
     normalized = geminiModelEndpointMatch[1].replace(/\/+$/, '');
   }
+
+  normalized = normalized.replace(/\/v1beta$/i, '');
 
   return normalized;
 }
