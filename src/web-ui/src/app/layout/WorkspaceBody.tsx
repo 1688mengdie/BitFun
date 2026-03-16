@@ -105,15 +105,18 @@ const WorkspaceBody: React.FC<WorkspaceBodyProps> = ({
       >
         <NavBar onExpandNav={toggleLeftPanel} onMaximize={onMaximize} />
         <NavPanel className="bitfun-workspace-body__nav-panel" />
-        {!isNavCollapsed && (
-          <div
-            className="bitfun-workspace-body__nav-divider"
-            onMouseDown={handleNavCollapseDragStart}
-            role="separator"
-            aria-hidden="true"
-          />
-        )}
       </div>
+
+      {/* Resize divider — placed at workspace-body level to avoid overflow:hidden clipping */}
+      {!isNavCollapsed && (
+        <div
+          className="bitfun-workspace-body__nav-divider"
+          style={{ '--nav-width': `${navWidth}px` } as React.CSSProperties}
+          onMouseDown={handleNavCollapseDragStart}
+          role="separator"
+          aria-hidden="true"
+        />
+      )}
 
       {/* Right: scene tab bar + scene content */}
       <div className="bitfun-workspace-body__scene-area">

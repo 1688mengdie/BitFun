@@ -71,11 +71,11 @@ $_nav-collapsed-width: 80px;
 .bitfun-workspace-body__nav-divider {
   position: absolute;
   top: 0;
-  right: -4px;
+  left: calc(#{$size-gap-2} + var(--nav-width, #{$_nav-width}));
   width: 8px;
   height: 100%;
   cursor: ew-resize;
-  z-index: 2;
+  z-index: 10;
 
   &::after {
     content: '';
