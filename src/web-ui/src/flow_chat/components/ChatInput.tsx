@@ -428,6 +428,9 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         setTimeout(() => {
           if (richTextInputRef.current && (richTextInputRef.current as any).insertTag) {
             const el = richTextInputRef.current;
+            if (!el.textContent?.trim() && !el.querySelector('[data-context-id]')) {
+              el.innerHTML = '';
+            }
             el.focus();
             const sel = window.getSelection();
             if (sel) {
