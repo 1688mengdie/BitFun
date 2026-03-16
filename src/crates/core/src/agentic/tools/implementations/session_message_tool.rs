@@ -1,4 +1,4 @@
-use super::util::resolve_path_with_workspace;
+use super::util::normalize_path;
 use crate::agentic::coordination::{
     get_global_coordinator, get_global_scheduler, AgentSessionReplyRoute, DialogSubmissionPolicy,
     DialogTriggerSource,
@@ -42,22 +42,22 @@ impl SessionMessageTool {
         Ok(())
     }
 
-    fn resolve_workspace(
-        &self,
-        workspace: Option<&str>,
-        context: &ToolUseContext,
-    ) -> BitFunResult<String> {
-        let resolved = match workspace.filter(|value| !value.trim().is_empty()) {
-            Some(workspace) => resolve_path_with_workspace(workspace, context.workspace_root())?,
-            None => context
-                .workspace_root()
-                .map(|path| path.to_string_lossy().to_string())
-                .ok_or_else(|| {
-                    BitFunError::tool(
-                        "SessionMessage requires workspace input or a source workspace".to_string(),
-                    )
-                })?,
-        };
+    fn resolve_workspace(&self, workspace: &str) -> BitFunResult<String> {
+        let workspace = workspace.trim();
+        if workspace.is_empty() {
+            return Err(BitFunError::tool(
+                "workspace is required and cannot be empty".to_string(),
+            ));
+        }
+
+        let path = Path::new(workspace);
+        if !path.is_absolute() {
+            return Err(BitFunError::tool(
+                "workspace must be an absolute path".to_string(),
+            ));
+        }
+
+        let resolved = normalize_path(workspace);
         let path = Path::new(&resolved);
         if !path.exists() {
             return Err(BitFunError::tool(format!(
@@ -138,7 +138,7 @@ impl SessionMessageAgentType {
 
 #[derive(Debug, Clone, Deserialize)]
 struct SessionMessageInput {
-    workspace: Option<String>,
+    workspace: String,
     session_id: String,
     message: String,
     agent_type: Option<SessionMessageAgentType>,
@@ -154,7 +154,7 @@ impl Tool for SessionMessageTool {
         Ok(
             r#"Asynchronously send a message to another agent session. When the target session finishes, its result is automatically sent back to you as a follow-up message.
             
-You can optionally set agent_type to choose how the target session handles the request:
+You must provide the target workspace as an absolute path, and you can optionally set agent_type to choose how the target session handles the request:
 - "agentic": Coding-focused agent for implementation, debugging, and code changes.
 - "Plan": Planning agent for clarifying requirements and producing an implementation plan before coding.
 - "Cowork": Collaborative agent for office-style work such as research, documentation, presentations, etc.
@@ -170,7 +170,7 @@ When overriding an existing session's agent_type, only switching between "agenti
             "properties": {
                 "workspace": {
                     "type": "string",
-                    "description": "Target workspace path. Can be absolute or relative to the current workspace. Defaults to the current workspace."
+                    "description": "Required absolute target workspace path."
                 },
                 "session_id": {
                     "type": "string",
@@ -186,7 +186,7 @@ When overriding an existing session's agent_type, only switching between "agenti
                     "description": "Optional target agent type. Defaults to the target session's current agent type."
                 }
             },
-            "required": ["session_id", "message"],
+            "required": ["workspace", "session_id", "message"],
             "additionalProperties": false
         })
     }
@@ -234,6 +234,24 @@ When overriding an existing session's agent_type, only switching between "agenti
             };
         }
 
+        if parsed.workspace.trim().is_empty() {
+            return ValidationResult {
+                result: false,
+                message: Some("workspace is required and cannot be empty".to_string()),
+                error_code: Some(400),
+                meta: None,
+            };
+        }
+
+        if !Path::new(parsed.workspace.trim()).is_absolute() {
+            return ValidationResult {
+                result: false,
+                message: Some("workspace must be an absolute path".to_string()),
+                error_code: Some(400),
+                meta: None,
+            };
+        }
+
         let Some(context) = context else {
             return ValidationResult::default();
         };
@@ -260,24 +278,6 @@ When overriding an existing session's agent_type, only switching between "agenti
             };
         }
 
-        if parsed
-            .workspace
-            .as_deref()
-            .map(|value| value.trim().is_empty())
-            .unwrap_or(true)
-            && context.workspace_root().is_none()
-        {
-            return ValidationResult {
-                result: false,
-                message: Some(
-                    "SessionMessage requires workspace input or a source workspace in tool context"
-                        .to_string(),
-                ),
-                error_code: Some(400),
-                meta: None,
-            };
-        }
-
         ValidationResult::default()
     }
 
@@ -285,7 +285,7 @@ When overriding an existing session's agent_type, only switching between "agenti
         let workspace = input
             .get("workspace")
             .and_then(|value| value.as_str())
-            .unwrap_or("current workspace");
+            .unwrap_or("unknown workspace");
         let session_id = input
             .get("session_id")
             .and_then(|value| value.as_str())
@@ -301,7 +301,7 @@ When overriding an existing session's agent_type, only switching between "agenti
     ) -> BitFunResult<Vec<ToolResult>> {
         let params: SessionMessageInput = serde_json::from_value(input.clone())
             .map_err(|e| BitFunError::tool(format!("Invalid input: {}", e)))?;
-        let workspace = self.resolve_workspace(params.workspace.as_deref(), context)?;
+        let workspace = self.resolve_workspace(&params.workspace)?;
         let workspace_path = Path::new(&workspace);
         let source_session_id = self.sender_session_id(context)?.to_string();
         let target_session_id = params.session_id.clone();
@@ -325,8 +325,8 @@ When overriding an existing session's agent_type, only switching between "agenti
             .find(|session| session.session_id == target_session_id.as_str())
             .ok_or_else(|| {
                 BitFunError::NotFound(format!(
-                    "Session not found in workspace: {}",
-                    target_session_id
+                    "Session '{}' not found in workspace '{}'",
+                    target_session_id, workspace
                 ))
             })?;
 
