@@ -92,6 +92,7 @@ impl ToolRegistry {
         self.register_tool(Arc::new(TerminalControlTool::new()));
         self.register_tool(Arc::new(SessionControlTool::new()));
         self.register_tool(Arc::new(SessionMessageTool::new()));
+        self.register_tool(Arc::new(SessionHistoryTool::new()));
 
         // TodoWrite tool
         self.register_tool(Arc::new(TodoWriteTool::new()));

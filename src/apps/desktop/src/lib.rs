@@ -468,6 +468,7 @@ pub async fn run() {
             load_session_turns,
             save_session_turn,
             save_session_metadata,
+            export_session_transcript,
             delete_persisted_session,
             touch_session_activity,
             load_persisted_session_metadata,
