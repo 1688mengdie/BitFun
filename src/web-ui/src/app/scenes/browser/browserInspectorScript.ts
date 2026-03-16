@@ -217,3 +217,25 @@ export function createInspectorScript(webviewLabel: string): string {
 /** Script to cancel an active inspector session without triggering a selection. */
 export const CANCEL_INSPECTOR_SCRIPT =
   `if (window.__bitfun_inspector_cancel) { window.__bitfun_inspector_cancel(); }`;
+
+/**
+ * Script injected into the webview to intercept `target="_blank"` link clicks
+ * and navigate in-place instead (Tauri webviews cannot open new windows).
+ * Re-injected after every page load since full navigations destroy JS state.
+ */
+export const BLANK_TARGET_INTERCEPT_SCRIPT = `(function(){
+  if(window.__bitfun_blank_intercept){return;}
+  window.__bitfun_blank_intercept=true;
+  document.addEventListener('click',function(e){
+    var el=e.target;
+    while(el&&el.tagName!=='A'){el=el.parentElement;}
+    if(!el)return;
+    var t=(el.getAttribute('target')||'').toLowerCase();
+    if(t==='_blank'){
+      e.preventDefault();
+      e.stopPropagation();
+      var href=el.href;
+      if(href){location.href=href;}
+    }
+  },true);
+})()`;

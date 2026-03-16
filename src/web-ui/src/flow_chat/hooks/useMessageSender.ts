@@ -183,6 +183,7 @@ export function useMessageSender(props: UseMessageSenderProps): UseMessageSender
                 `[Web Element: <${ctx.tagName}${attrStr ? ' ' + attrStr : ''}>]`,
                 `CSS Path: ${ctx.path}`,
               ];
+              if (ctx.sourceUrl) lines.push(`Source URL: ${ctx.sourceUrl}`);
               if (ctx.textContent) lines.push(`Text Content: ${ctx.textContent}`);
               if (ctx.outerHTML) lines.push(`Outer HTML:\n\`\`\`html\n${ctx.outerHTML}\n\`\`\``);
               return lines.join('\n');
