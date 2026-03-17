@@ -133,30 +133,6 @@ pub async fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        .on_menu_event(|app, event| {
-            #[cfg(target_os = "macos")]
-            {
-                let event_name = if event.id() == "bitfun.open_project" {
-                    Some("bitfun_menu_open_project")
-                } else if event.id() == "bitfun.new_project" {
-                    Some("bitfun_menu_new_project")
-                } else if event.id() == "bitfun.about" {
-                    Some("bitfun_menu_about")
-                } else {
-                    None
-                };
-
-                if let Some(event_name) = event_name {
-                    // App-wide emit: delivers to frontend listeners even if window is not ready or label changed
-                    let _ = app.emit(event_name, ());
-                }
-            }
-
-            #[cfg(not(target_os = "macos"))]
-            {
-                let _ = (app, event);
-            }
-        })
         .manage(app_state)
         .manage(coordinator_state)
         .manage(scheduler_state)
@@ -165,6 +141,25 @@ pub async fn run() {
         .manage(scheduler)
         .manage(terminal_state)
         .setup(move |app| {
+            #[cfg(target_os = "macos")]
+            {
+                app.on_menu_event(|app, event| {
+                    let event_name = if event.id() == "bitfun.open_project" {
+                        Some("bitfun_menu_open_project")
+                    } else if event.id() == "bitfun.new_project" {
+                        Some("bitfun_menu_new_project")
+                    } else if event.id() == "bitfun.about" {
+                        Some("bitfun_menu_about")
+                    } else {
+                        None
+                    };
+
+                    if let Some(event_name) = event_name {
+                        let _ = app.emit(event_name, ());
+                    }
+                });
+            }
+
             logging::register_runtime_log_state(startup_log_level, session_log_dir.clone());
 
             // Register bundled mobile-web resource path for remote connect.
