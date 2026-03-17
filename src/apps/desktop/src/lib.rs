@@ -307,8 +307,6 @@ pub async fn run() {
             api::btw_api::btw_ask,
             api::btw_api::btw_ask_stream,
             api::btw_api::btw_cancel,
-            api::image_analysis_api::analyze_images,
-            api::image_analysis_api::send_enhanced_message,
             api::context_upload_api::upload_image_contexts,
             get_all_tools_info,
             get_readonly_tools_info,

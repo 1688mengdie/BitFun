@@ -16,7 +16,6 @@ pub mod dto;
 pub mod git_agent_api;
 pub mod git_api;
 pub mod i18n_api;
-pub mod image_analysis_api;
 pub mod lsp_api;
 pub mod lsp_workspace_api;
 pub mod mcp_api;
