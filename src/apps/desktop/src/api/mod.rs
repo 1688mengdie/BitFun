@@ -2,14 +2,15 @@
 
 pub mod agentic_api;
 pub mod ai_memory_api;
-pub mod browser_api;
 pub mod ai_rules_api;
 pub mod app_state;
+pub mod browser_api;
 pub mod btw_api;
 pub mod clipboard_file_api;
 pub mod commands;
 pub mod config_api;
 pub mod context_upload_api;
+pub mod cron_api;
 pub mod diff_api;
 pub mod dto;
 pub mod git_agent_api;

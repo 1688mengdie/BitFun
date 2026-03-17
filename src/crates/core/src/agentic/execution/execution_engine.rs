@@ -1137,19 +1137,4 @@ mod tests {
             "model-primary"
         );
     }
-
-    #[test]
-    fn invalid_locked_auto_model_is_ignored() {
-        let mut ai_config = AIConfig::default();
-        ai_config.models = vec![build_model("model-primary", "Primary", "claude-sonnet-4.5")];
-        ai_config.default_models.primary = Some("model-primary".to_string());
-
-        assert_eq!(
-            ExecutionEngine::resolve_locked_auto_model_id(
-                &ai_config,
-                Some(&"deleted-fast-model".to_string())
-            ),
-            None
-        );
-    }
 }

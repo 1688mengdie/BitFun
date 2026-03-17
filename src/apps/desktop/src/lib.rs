@@ -26,6 +26,7 @@ use api::ai_rules_api::*;
 use api::clipboard_file_api::*;
 use api::commands::*;
 use api::config_api::*;
+use api::cron_api::*;
 use api::diff_api::*;
 use api::git_agent_api::*;
 use api::git_api::*;
@@ -468,6 +469,7 @@ pub async fn run() {
             load_session_turns,
             save_session_turn,
             save_session_metadata,
+            export_session_transcript,
             delete_persisted_session,
             touch_session_activity,
             load_persisted_session_metadata,
@@ -562,6 +564,10 @@ pub async fn run() {
             reorder_opened_workspaces,
             get_current_workspace,
             scan_workspace_info,
+            list_cron_jobs,
+            create_cron_job,
+            update_cron_job,
+            delete_cron_job,
             api::prompt_template_api::get_prompt_template_config,
             api::prompt_template_api::save_prompt_template_config,
             api::prompt_template_api::export_prompt_templates,
@@ -742,6 +748,18 @@ async fn init_agentic_system() -> anyhow::Result<(
     coordinator.set_scheduler_notifier(scheduler.outcome_sender());
     coordination::set_global_scheduler(scheduler.clone());
 
+    let cron_service =
+        bitfun_core::service::cron::CronService::new(path_manager.clone(), scheduler.clone())
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to initialize cron service: {}", e))?;
+    bitfun_core::service::cron::set_global_cron_service(cron_service.clone());
+    let cron_subscriber = Arc::new(bitfun_core::service::cron::CronEventSubscriber::new(
+        cron_service.clone(),
+    ));
+    event_router.subscribe_internal("cron_jobs".to_string(), cron_subscriber);
+    cron_service.start();
+
+    log::info!("Cron service initialized and subscriber registered");
     log::info!("Agentic system initialized");
     Ok((
         coordinator,

@@ -39,6 +39,7 @@ pub enum DialogTriggerSource {
     DesktopUi,
     DesktopApi,
     AgentSession,
+    ScheduledJob,
     RemoteRelay,
     Bot,
     Cli,
