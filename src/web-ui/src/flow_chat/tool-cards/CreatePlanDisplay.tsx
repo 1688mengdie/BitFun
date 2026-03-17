@@ -15,7 +15,7 @@ import { workspaceAPI } from '@/infrastructure/api/service-api/WorkspaceAPI';
 import { fileSystemService } from '@/tools/file-system/services/FileSystemService';
 import { planBuildStateService } from '@/shared/services/PlanBuildStateService';
 import yaml from 'yaml';
-import { Tooltip } from '@/component-library';
+import { Tooltip, CubeLoading } from '@/component-library';
 import { createLogger } from '@/shared/utils/logger';
 import './CreatePlanDisplay.scss';
 
@@ -321,6 +321,9 @@ ${JSON.stringify(simpleTodos, null, 2)}
             </div>
             <span className="file-name">{planFileName}</span>
           </div>
+          {isLoading && (
+            <CubeLoading size="small" className="create-plan-loading" />
+          )}
         </div>
       </Tooltip>
 
