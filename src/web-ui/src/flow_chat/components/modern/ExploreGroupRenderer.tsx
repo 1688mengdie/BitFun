@@ -3,7 +3,7 @@
  * Renders merged explore-only rounds as a collapsible region.
  */
 
-import React, { useRef, useMemo, useCallback, useEffect } from 'react';
+import React, { useRef, useMemo, useCallback, useEffect, useLayoutEffect, useState } from 'react';
 import { ChevronRight } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { FlowItem, FlowToolItem, FlowTextItem, FlowThinkingItem } from '../../types/flow-chat';
@@ -11,6 +11,7 @@ import type { ExploreGroupData } from '../../store/modernFlowChatStore';
 import { FlowTextBlock } from '../FlowTextBlock';
 import { FlowToolCard } from '../FlowToolCard';
 import { ModelThinkingDisplay } from '../../tool-cards/ModelThinkingDisplay';
+import { useToolCardHeightContract } from '../../tool-cards/useToolCardHeightContract';
 import { useFlowChatContext } from './FlowChatContext';
 import './ExploreRegion.scss';
 
@@ -40,27 +41,58 @@ export const ExploreGroupRenderer: React.FC<ExploreGroupRendererProps> = ({
     isFollowedByCritical,
     isLastGroupInTurn
   } = data;
+  const previousGroupIdRef = useRef(groupId);
   
-  // Track auto-collapse once to prevent flicker.
-  const hasAutoCollapsed = useRef(false);
-  // Reset collapse state when the merged group changes.
-  const prevGroupId = useRef(groupId);
-  
-  if (prevGroupId.current !== groupId) {
-    prevGroupId.current = groupId;
-    hasAutoCollapsed.current = false;
-  }
-  
-  // Auto-collapse once critical content follows, without waiting for streaming to end.
-  if (isFollowedByCritical && !hasAutoCollapsed.current) {
-    hasAutoCollapsed.current = true;
-  }
-  
-  const shouldAutoCollapse = hasAutoCollapsed.current;
+  const [hasAutoCollapsed, setHasAutoCollapsed] = useState(isFollowedByCritical);
+  const {
+    cardRootRef,
+    applyExpandedState,
+    dispatchToolCardToggle,
+  } = useToolCardHeightContract({
+    toolId: groupId,
+    toolName: 'explore-group',
+    getCardHeight: () => (
+      containerRef.current?.scrollHeight
+      ?? containerRef.current?.getBoundingClientRect().height
+      ?? null
+    ),
+  });
   
   const userExpanded = exploreGroupStates?.get(groupId) ?? false;
+  const shouldAutoCollapse = hasAutoCollapsed;
   
   const isCollapsed = shouldAutoCollapse && !userExpanded;
+
+  useLayoutEffect(() => {
+    if (previousGroupIdRef.current !== groupId) {
+      previousGroupIdRef.current = groupId;
+      setHasAutoCollapsed(isFollowedByCritical);
+      return;
+    }
+
+    if (!isFollowedByCritical || hasAutoCollapsed) {
+      return;
+    }
+
+    if (!userExpanded) {
+      applyExpandedState(true, false, () => {
+        setHasAutoCollapsed(true);
+      }, {
+        reason: 'auto',
+      });
+      return;
+    }
+
+    setHasAutoCollapsed(true);
+    dispatchToolCardToggle();
+  }, [
+    applyExpandedState,
+    dispatchToolCardToggle,
+    groupId,
+    hasAutoCollapsed,
+    isFollowedByCritical,
+    userExpanded,
+  ]);
   
   // Auto-scroll to bottom during streaming.
   useEffect(() => {
@@ -96,17 +128,17 @@ export const ExploreGroupRenderer: React.FC<ExploreGroupRendererProps> = ({
   }, [stats, allItems.length, t]);
   
   const handleToggle = useCallback(() => {
-    // Notify VirtualMessageList to avoid auto-scrolling on user action.
-    window.dispatchEvent(new CustomEvent('tool-card-toggle'));
-    
     if (isCollapsed) {
-      // Expand only the clicked group.
-      onExploreGroupToggle?.(groupId);
-    } else {
-      // Collapse only the current group.
-      onCollapseGroup?.(groupId);
+      applyExpandedState(false, true, () => {
+        onExploreGroupToggle?.(groupId);
+      });
+      return;
     }
-  }, [isCollapsed, groupId, onExploreGroupToggle, onCollapseGroup]);
+
+    applyExpandedState(true, false, () => {
+      onCollapseGroup?.(groupId);
+    });
+  }, [applyExpandedState, groupId, isCollapsed, onCollapseGroup, onExploreGroupToggle]);
 
   // Build class list.
   const className = [
@@ -119,7 +151,11 @@ export const ExploreGroupRenderer: React.FC<ExploreGroupRendererProps> = ({
   // Non-collapsible: just render content without header (streaming, no auto-collapse yet).
   if (!shouldAutoCollapse) {
     return (
-      <div className={className}>
+      <div
+        ref={cardRootRef}
+        data-tool-card-id={groupId}
+        className={className}
+      >
         <div ref={containerRef} className="explore-region__content">
           {allItems.map((item, idx) => (
             <ExploreItemRenderer
@@ -136,7 +172,11 @@ export const ExploreGroupRenderer: React.FC<ExploreGroupRendererProps> = ({
 
   // Collapsible: unified header + animated content wrapper.
   return (
-    <div className={className}>
+    <div
+      ref={cardRootRef}
+      data-tool-card-id={groupId}
+      className={className}
+    >
       <div className="explore-region__header" onClick={handleToggle}>
         <ChevronRight size={14} className="explore-region__icon" />
         <span className="explore-region__summary">{displaySummary}</span>

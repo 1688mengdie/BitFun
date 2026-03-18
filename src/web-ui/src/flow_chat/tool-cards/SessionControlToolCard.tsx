@@ -3,6 +3,7 @@ import { Check, Clock, Loader2, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { ToolCardProps } from '../types/flow-chat';
 import { CompactToolCard, CompactToolCardHeader } from './CompactToolCard';
+import { useToolCardHeightContract } from './useToolCardHeightContract';
 
 interface SessionSummary {
   session_id?: string;
@@ -44,6 +45,11 @@ export const SessionControlToolCard: React.FC<ToolCardProps> = React.memo(({
   const { t } = useTranslation('flow-chat');
   const { toolCall, toolResult, status } = toolItem;
   const [isExpanded, setIsExpanded] = useState(false);
+  const toolId = toolItem.id ?? toolCall?.id;
+  const { cardRootRef, applyExpandedState } = useToolCardHeightContract({
+    toolId,
+    toolName: toolItem.toolName,
+  });
 
   const inputData = useMemo(
     () => parseData<SessionControlInput>(toolCall?.input) ?? {},
@@ -212,25 +218,27 @@ export const SessionControlToolCard: React.FC<ToolCardProps> = React.memo(({
   ) : null;
 
   return (
-    <CompactToolCard
-      status={status}
-      isExpanded={isExpanded}
-      onClick={() => {
-        if (hasDetails) {
-          setIsExpanded(prev => !prev);
-        }
-      }}
-      className="session-control-card"
-      clickable={hasDetails}
-      header={(
-        <CompactToolCardHeader
-          statusIcon={getStatusIcon()}
-          action={`${t('toolCards.sessionControl.title')}:`}
-          content={renderContent()}
-          extra={action === 'list' && status === 'completed' ? `${sessionCount}` : undefined}
-        />
-      )}
-      expandedContent={expandedContent}
-    />
+    <div ref={cardRootRef} data-tool-card-id={toolId ?? ''}>
+      <CompactToolCard
+        status={status}
+        isExpanded={isExpanded}
+        onClick={() => {
+          if (hasDetails) {
+            applyExpandedState(isExpanded, !isExpanded, setIsExpanded);
+          }
+        }}
+        className="session-control-card"
+        clickable={hasDetails}
+        header={(
+          <CompactToolCardHeader
+            statusIcon={getStatusIcon()}
+            action={`${t('toolCards.sessionControl.title')}:`}
+            content={renderContent()}
+            extra={action === 'list' && status === 'completed' ? `${sessionCount}` : undefined}
+          />
+        )}
+        expandedContent={expandedContent}
+      />
+    </div>
   );
 });

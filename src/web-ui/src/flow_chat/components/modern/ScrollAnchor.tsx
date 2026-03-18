@@ -4,13 +4,12 @@
  */
 
 import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
-import { VirtuosoHandle } from 'react-virtuoso';
 import { useVirtualItems } from '../../store/modernFlowChatStore';
 import { i18nService } from '@/infrastructure/i18n';
 import './ScrollAnchor.scss';
 
 interface ScrollAnchorProps {
-  virtuosoRef: React.RefObject<VirtuosoHandle | null>;
+  onAnchorNavigate: (turnId: string) => void;
   scrollerRef?: React.RefObject<HTMLElement | null>;
 }
 
@@ -26,7 +25,7 @@ interface AnchorPoint {
 
 
 export const ScrollAnchor: React.FC<ScrollAnchorProps> = ({
-  virtuosoRef,
+  onAnchorNavigate,
   scrollerRef,
 }) => {
   const virtualItems = useVirtualItems();
@@ -104,23 +103,10 @@ export const ScrollAnchor: React.FC<ScrollAnchorProps> = ({
   }, [virtualItems]);
 
   const handleAnchorClick = useCallback((anchor: AnchorPoint) => {
-    if (!virtuosoRef.current) return;
-
-    if (anchor.index === 0) {
-      virtuosoRef.current.scrollTo({
-        top: 0,
-        behavior: 'smooth',
-      });
-    } else {
-      virtuosoRef.current.scrollToIndex({
-        index: anchor.index,
-        behavior: 'smooth',
-        align: 'center',
-      });
-    }
+    onAnchorNavigate(anchor.turnId);
 
     setHoveredAnchor(null);
-  }, [virtuosoRef]);
+  }, [onAnchorNavigate]);
 
   const handleAnchorMouseEnter = useCallback((anchor: AnchorPoint, event: React.MouseEvent) => {
     setHoveredAnchor(anchor);

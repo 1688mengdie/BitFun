@@ -294,6 +294,8 @@
     "noSession": "No active session for /btw"
   },
   "flowChatHeader": {
+    "turnList": "Turn list",
+    "untitledTurn": "Untitled turn",
     "previousTurn": "Previous turn",
     "nextTurn": "Next turn",
     "turnBadge": "Turn {{current}}",

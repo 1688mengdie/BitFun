@@ -3,11 +3,12 @@
  * Used for tool types without specific customization
  */
 
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useCallback } from 'react';
 import { Loader2, XCircle, Clock, Check, ChevronDown, ChevronRight } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { ToolCardProps } from '../types/flow-chat';
 import { CompactToolCard, CompactToolCardHeader } from './CompactToolCard';
+import { useToolCardHeightContract } from './useToolCardHeightContract';
 import './DefaultToolCard.scss';
 
 const MAX_PREVIEW_CHARS = 4000;
@@ -89,6 +90,11 @@ export const DefaultToolCard: React.FC<ToolCardProps> = ({
   const { t } = useTranslation('flow-chat');
   const { toolCall, toolResult, status, requiresConfirmation, userConfirmed } = toolItem;
   const [isExpanded, setIsExpanded] = useState(false);
+  const toolId = toolItem.id ?? toolCall?.id;
+  const { cardRootRef, applyExpandedState } = useToolCardHeightContract({
+    toolId,
+    toolName: config.toolName,
+  });
 
   const filteredInput = useMemo(() => sanitizeToolInput(toolCall?.input), [toolCall?.input]);
   const hasInput = useMemo(() => hasVisibleValue(filteredInput), [filteredInput]);
@@ -119,16 +125,14 @@ export const DefaultToolCard: React.FC<ToolCardProps> = ({
     onReject?.();
   };
 
-  const handleToggleExpand = () => {
+  const handleToggleExpand = useCallback(() => {
     if (!canExpand) return;
 
     const nextExpanded = !isExpanded;
-    setIsExpanded(nextExpanded);
-
-    if (nextExpanded) {
-      onExpand?.();
-    }
-  };
+    applyExpandedState(isExpanded, nextExpanded, setIsExpanded, {
+      onExpand,
+    });
+  }, [applyExpandedState, canExpand, isExpanded, onExpand]);
 
   const getStatusIcon = () => {
     switch (status) {
@@ -217,29 +221,30 @@ export const DefaultToolCard: React.FC<ToolCardProps> = ({
     status !== 'error';
 
   return (
-    <CompactToolCard
-      status={status}
-      isExpanded={isExpanded}
-      onClick={handleToggleExpand}
-      className={`default-tool-card ${showConfirmationHighlight ? 'requires-confirmation' : ''}`}
-      clickable={canExpand}
-      header={
-        <CompactToolCardHeader
-          statusIcon={getStatusIcon()}
-          action={config.displayName}
-          content={getSummaryText()}
-          extra={config.icon ? <span className="default-tool-card__icon-badge">{config.icon}</span> : undefined}
-          rightIcon={canExpand ? (isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />) : undefined}
-        />
-      }
-      expandedContent={canExpand ? (
-        <div className="default-tool-card__expanded">
-          <div className="default-tool-card__meta">
-            <span className="default-tool-card__meta-label">{config.toolName}</span>
-            {config.description && (
-              <span className="default-tool-card__meta-description">{config.description}</span>
-            )}
-          </div>
+    <div ref={cardRootRef} data-tool-card-id={toolId ?? ''}>
+      <CompactToolCard
+        status={status}
+        isExpanded={isExpanded}
+        onClick={handleToggleExpand}
+        className={`default-tool-card ${showConfirmationHighlight ? 'requires-confirmation' : ''}`}
+        clickable={canExpand}
+        header={
+          <CompactToolCardHeader
+            statusIcon={getStatusIcon()}
+            action={config.displayName}
+            content={getSummaryText()}
+            extra={config.icon ? <span className="default-tool-card__icon-badge">{config.icon}</span> : undefined}
+            rightIcon={canExpand ? (isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />) : undefined}
+          />
+        }
+        expandedContent={canExpand ? (
+          <div className="default-tool-card__expanded">
+            <div className="default-tool-card__meta">
+              <span className="default-tool-card__meta-label">{config.toolName}</span>
+              {config.description && (
+                <span className="default-tool-card__meta-description">{config.description}</span>
+              )}
+            </div>
 
           {hasInput && (
             <div className="default-tool-card__section">
@@ -279,9 +284,10 @@ export const DefaultToolCard: React.FC<ToolCardProps> = ({
               )}
             </div>
           )}
-        </div>
-      ) : undefined}
-    />
+          </div>
+        ) : undefined}
+      />
+    </div>
   );
 };
 

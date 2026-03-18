@@ -11,6 +11,7 @@ import { Tooltip } from '@/component-library';
 import type { ToolCardProps } from '../types/flow-chat';
 import { BaseToolCard, ToolCardHeader } from './BaseToolCard';
 import { createLogger } from '@/shared/utils/logger';
+import { useToolCardHeightContract } from './useToolCardHeightContract';
 import './CodeReviewToolCard.scss';
 
 const log = createLogger('CodeReviewToolCard');
@@ -52,6 +53,11 @@ export const CodeReviewToolCard: React.FC<ToolCardProps> = React.memo(({
   const { t } = useTranslation('flow-chat');
   const { toolResult, status } = toolItem;
   const [isExpanded, setIsExpanded] = useState(false);
+  const toolId = toolItem.id ?? toolItem.toolCall?.id;
+  const { cardRootRef, applyExpandedState } = useToolCardHeightContract({
+    toolId,
+    toolName: toolItem.toolName,
+  });
 
   const getStatusIcon = () => {
     switch (status) {
@@ -139,6 +145,10 @@ export const CodeReviewToolCard: React.FC<ToolCardProps> = React.memo(({
   const hasIssues = issueStats && issueStats.total > 0;
   const hasData = reviewData !== null;
 
+  const toggleExpanded = useCallback(() => {
+    applyExpandedState(isExpanded, !isExpanded, setIsExpanded);
+  }, [applyExpandedState, isExpanded]);
+
   const handleCardClick = useCallback((e: React.MouseEvent) => {
     const target = e.target as HTMLElement;
     if (target.closest('.preview-toggle-btn')) {
@@ -146,16 +156,14 @@ export const CodeReviewToolCard: React.FC<ToolCardProps> = React.memo(({
     }
 
     if (hasData) {
-      window.dispatchEvent(new CustomEvent('tool-card-toggle'));
-      setIsExpanded(prev => !prev);
+      toggleExpanded();
     }
-  }, [hasData]);
+  }, [hasData, toggleExpanded]);
 
   const handleToggleExpand = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
-    window.dispatchEvent(new CustomEvent('tool-card-toggle'));
-    setIsExpanded(prev => !prev);
-  }, []);
+    toggleExpanded();
+  }, [toggleExpanded]);
 
   const renderContent = () => {
     if (status === 'completed' && reviewData) {
@@ -351,13 +359,15 @@ export const CodeReviewToolCard: React.FC<ToolCardProps> = React.memo(({
   const normalizedStatus = status === 'analyzing' ? 'running' : status;
 
   return (
-    <BaseToolCard
-      status={normalizedStatus as 'pending' | 'preparing' | 'streaming' | 'running' | 'completed' | 'error' | 'cancelled'}
-      isExpanded={isExpanded}
-      onClick={handleCardClick}
-      className="code-review-card"
-      header={renderHeader()}
-      expandedContent={expandedContent ?? undefined}
-    />
+    <div ref={cardRootRef} data-tool-card-id={toolId ?? ''}>
+      <BaseToolCard
+        status={normalizedStatus as 'pending' | 'preparing' | 'streaming' | 'running' | 'completed' | 'error' | 'cancelled'}
+        isExpanded={isExpanded}
+        onClick={handleCardClick}
+        className="code-review-card"
+        header={renderHeader()}
+        expandedContent={expandedContent ?? undefined}
+      />
+    </div>
   );
 });

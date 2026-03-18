@@ -16,7 +16,21 @@
 
   .explore-region__content {
     position: relative;
-    padding: 4px 0;
+    // Match the pre-grouped model-round layout. A non-collapsible explore group
+    // should not push the first summary line downward when the round is
+    // re-wrapped from `model-round` into `explore-group`.
+    padding: 0;
+
+    // In the plain model-round layout, the first/last flow item margins can
+    // collapse with the parent. Once wrapped by explore-group, that collapse no
+    // longer happens consistently, which leaves a residual 4px vertical drift.
+    > :first-child {
+      margin-top: 0;
+    }
+
+    > :last-child {
+      margin-bottom: 0;
+    }
 
     &::-webkit-scrollbar {
       width: 4px;

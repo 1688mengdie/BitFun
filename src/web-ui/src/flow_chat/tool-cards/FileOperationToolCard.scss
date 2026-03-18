@@ -212,12 +212,7 @@
     border: none !important;
     
     .code-preview {
-      max-height: 300px;
       overflow: hidden;
-      
-      .code-preview__content {
-        max-height: 300px;
-      }
       
       pre {
         margin: 0 !important;
@@ -227,12 +222,6 @@
     }
     
     .inline-diff-preview {
-      max-height: 300px;
-      
-      .inline-diff-preview__content {
-        max-height: 300px;
-      }
-      
       .diff-line__content {
         pre, code, span {
           border: none !important;

@@ -294,6 +294,8 @@
     "noSession": "当前没有可用于 /btw 的会话"
   },
   "flowChatHeader": {
+    "turnList": "轮次列表",
+    "untitledTurn": "未命名轮次",
     "previousTurn": "上一轮对话",
     "nextTurn": "下一轮对话",
     "turnBadge": "第 {{current}} 轮",

@@ -10,6 +10,7 @@ import type { ToolCardProps } from '../types/flow-chat';
 import { BaseToolCard, ToolCardHeader } from './BaseToolCard';
 import { InlineDiffPreview } from '../components/InlineDiffPreview';
 import { createLogger } from '@/shared/utils/logger';
+import { useToolCardHeightContract } from './useToolCardHeightContract';
 import './GetFileDiffDisplay.scss';
 
 const log = createLogger('GetFileDiffDisplay');
@@ -36,6 +37,11 @@ export const GetFileDiffDisplay: React.FC<ToolCardProps> = React.memo(({
   const { t } = useTranslation('flow-chat');
   const { toolCall, toolResult, status } = toolItem;
   const [isExpanded, setIsExpanded] = useState(false);
+  const toolId = toolItem.id ?? toolCall?.id;
+  const { cardRootRef, applyExpandedState } = useToolCardHeightContract({
+    toolId,
+    toolName: toolItem.toolName,
+  });
 
   const resultData = useMemo((): GetFileDiffResult | null => {
     if (!toolResult?.result) return null;
@@ -105,6 +111,10 @@ export const GetFileDiffDisplay: React.FC<ToolCardProps> = React.memo(({
     return resultData && (resultData.original_content || resultData.modified_content || resultData.diff_content);
   }, [resultData]);
 
+  const toggleExpanded = useCallback(() => {
+    applyExpandedState(isExpanded, !isExpanded, setIsExpanded);
+  }, [applyExpandedState, isExpanded]);
+
   const handleCardClick = useCallback((e: React.MouseEvent) => {
     const target = e.target as HTMLElement;
     if (target.closest('.expand-toggle-btn')) {
@@ -112,9 +122,9 @@ export const GetFileDiffDisplay: React.FC<ToolCardProps> = React.memo(({
     }
     
     if (hasDiffContent && status === 'completed') {
-      setIsExpanded(!isExpanded);
+      toggleExpanded();
     }
-  }, [hasDiffContent, status, isExpanded]);
+  }, [hasDiffContent, status, toggleExpanded]);
 
   const renderToolIcon = () => {
     return <GitCompare size={16} />;
@@ -166,7 +176,7 @@ export const GetFileDiffDisplay: React.FC<ToolCardProps> = React.memo(({
               className="expand-toggle-btn"
               onClick={(e) => {
                 e.stopPropagation();
-                setIsExpanded(!isExpanded);
+                toggleExpanded();
               }}
             >
               {isExpanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
@@ -235,15 +245,17 @@ export const GetFileDiffDisplay: React.FC<ToolCardProps> = React.memo(({
   );
 
   return (
-    <BaseToolCard
-      status={status}
-      isExpanded={isExpanded}
-      onClick={handleCardClick}
-      className="get-file-diff-card"
-      header={renderHeader()}
-      expandedContent={renderExpandedContent()}
-      errorContent={isFailed ? renderErrorContent() : null}
-      isFailed={isFailed}
-    />
+    <div ref={cardRootRef} data-tool-card-id={toolId ?? ''}>
+      <BaseToolCard
+        status={status}
+        isExpanded={isExpanded}
+        onClick={handleCardClick}
+        className="get-file-diff-card"
+        header={renderHeader()}
+        expandedContent={renderExpandedContent()}
+        errorContent={isFailed ? renderErrorContent() : null}
+        isFailed={isFailed}
+      />
+    </div>
   );
 });

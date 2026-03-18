@@ -17,6 +17,7 @@ import { planBuildStateService } from '@/shared/services/PlanBuildStateService';
 import yaml from 'yaml';
 import { Tooltip, CubeLoading } from '@/component-library';
 import { createLogger } from '@/shared/utils/logger';
+import { useToolCardHeightContract } from './useToolCardHeightContract';
 import './CreatePlanDisplay.scss';
 
 const log = createLogger('PlanDisplay');
@@ -78,6 +79,11 @@ export const PlanDisplay: React.FC<PlanDisplayProps> = ({
   });
   
   const [isTodosExpanded, setIsTodosExpanded] = useState(false);
+  const toolCardId = cacheKey ?? planFilePath;
+  const { cardRootRef, applyExpandedState } = useToolCardHeightContract({
+    toolId: toolCardId,
+    toolName: 'CreatePlan',
+  });
 
   const hasAutoLoaded = useRef(false);
 
@@ -295,6 +301,10 @@ ${JSON.stringify(simpleTodos, null, 2)}
     }
   }, [planFilePath, buildStatus, effectiveCacheKey, initialName, initialOverview, initialTodos]);
 
+  const handleToggleTodos = useCallback(() => {
+    applyExpandedState(isTodosExpanded, !isTodosExpanded, setIsTodosExpanded);
+  }, [applyExpandedState, isTodosExpanded]);
+
   const isLoading = status === 'preparing' || status === 'streaming' || status === 'running';
 
   if (!planData) {
@@ -309,7 +319,11 @@ ${JSON.stringify(simpleTodos, null, 2)}
   }
 
   return (
-    <div className={`create-plan-display status-${status}`}>
+    <div
+      ref={cardRootRef}
+      data-tool-card-id={toolCardId ?? ''}
+      className={`create-plan-display status-${status}`}
+    >
       <Tooltip content={t('toolCards.plan.clickToOpenPlan')}>
         <div 
           className="create-plan-header create-plan-header--clickable"
@@ -336,7 +350,7 @@ ${JSON.stringify(simpleTodos, null, 2)}
         <div className={`create-plan-todos ${isTodosExpanded ? 'create-plan-todos--expanded' : ''}`}>
           <div 
             className="todos-header"
-            onClick={() => setIsTodosExpanded(!isTodosExpanded)}
+            onClick={handleToggleTodos}
           >
             <span className="todos-count">{t('toolCards.plan.remainingTodos', { count: remainingTodos })}</span>
             <button className="todos-toggle-btn" type="button">
