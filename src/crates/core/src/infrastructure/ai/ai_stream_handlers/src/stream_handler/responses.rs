@@ -1,3 +1,4 @@
+use super::stream_stats::StreamStats;
 use crate::types::responses::{
     parse_responses_output_item, ResponsesCompleted, ResponsesDone, ResponsesStreamEvent,
 };
@@ -45,10 +46,12 @@ impl InProgressToolCall {
 
 fn emit_tool_call_item(
     tx_event: &mpsc::UnboundedSender<Result<UnifiedResponse>>,
+    stats: &mut StreamStats,
     item_value: Value,
 ) {
     if let Some(unified_response) = parse_responses_output_item(item_value) {
         if unified_response.tool_call.is_some() {
+            stats.record_unified_response(&unified_response);
             let _ = tx_event.send(Ok(unified_response));
         }
     }
@@ -68,6 +71,7 @@ fn cleanup_tool_call_tracking(
 
 fn handle_function_call_output_item_done(
     tx_event: &mpsc::UnboundedSender<Result<UnifiedResponse>>,
+    stats: &mut StreamStats,
     event_output_index: Option<usize>,
     item_value: Value,
     tool_calls_by_output_index: &mut HashMap<usize, InProgressToolCall>,
@@ -82,14 +86,14 @@ fn handle_function_call_output_item_done(
     });
 
     let Some(output_index) = output_index else {
-        emit_tool_call_item(tx_event, item_value);
+        emit_tool_call_item(tx_event, stats, item_value);
         return;
     };
 
     let Some(tc) = tool_calls_by_output_index.get_mut(&output_index) else {
         // The provider may send `output_item.done` with an output_index even when the
         // earlier `output_item.added` event was omitted or missed. Fall back to the full item.
-        emit_tool_call_item(tx_event, item_value);
+        emit_tool_call_item(tx_event, stats, item_value);
         return;
     };
 
@@ -117,14 +121,16 @@ fn handle_function_call_output_item_done(
                 tc.sent_header = true;
                 (tc.call_id.clone(), tc.name.clone())
             };
-            let _ = tx_event.send(Ok(UnifiedResponse {
+            let unified_response = UnifiedResponse {
                 tool_call: Some(crate::types::unified::UnifiedToolCall {
                     id,
                     name,
                     arguments: Some(delta),
                 }),
                 ..Default::default()
-            }));
+            };
+            stats.record_unified_response(&unified_response);
+            let _ = tx_event.send(Ok(unified_response));
         }
     }
 
@@ -165,6 +171,7 @@ pub async fn handle_responses_stream(
     let mut received_text_delta = false;
     let mut tool_calls_by_output_index: HashMap<usize, InProgressToolCall> = HashMap::new();
     let mut tool_call_index_by_id: HashMap<String, usize> = HashMap::new();
+    let mut stats = StreamStats::new("Responses");
 
     loop {
         let sse_event = timeout(idle_timeout, stream.next()).await;
@@ -172,15 +179,18 @@ pub async fn handle_responses_stream(
             Ok(Some(Ok(sse))) => sse,
             Ok(None) => {
                 if received_finish_reason {
+                    stats.log_summary("stream_closed_after_finish_reason");
                     return;
                 }
                 let error_msg = "Responses SSE stream closed before response completed";
+                stats.log_summary("stream_closed_before_completion");
                 error!("{}", error_msg);
                 let _ = tx_event.send(Err(anyhow!(error_msg)));
                 return;
             }
             Ok(Some(Err(e))) => {
                 let error_msg = format!("Responses SSE stream error: {}", e);
+                stats.log_summary("sse_stream_error");
                 error!("{}", error_msg);
                 let _ = tx_event.send(Err(anyhow!(error_msg)));
                 return;
@@ -190,6 +200,7 @@ pub async fn handle_responses_stream(
                     "Responses SSE stream timeout after {}s",
                     idle_timeout.as_secs()
                 );
+                stats.log_summary("sse_stream_timeout");
                 error!("{}", error_msg);
                 let _ = tx_event.send(Err(anyhow!(error_msg)));
                 return;
@@ -197,11 +208,14 @@ pub async fn handle_responses_stream(
         };
 
         let raw = sse.data;
+        stats.record_sse_event("data");
         trace!("Responses SSE: {:?}", raw);
         if let Some(ref tx) = tx_raw_sse {
             let _ = tx.send(raw.clone());
         }
         if raw == "[DONE]" {
+            stats.increment("marker:done");
+            stats.log_summary("done_marker_received");
             return;
         }
 
@@ -209,6 +223,8 @@ pub async fn handle_responses_stream(
             Ok(json) => json,
             Err(e) => {
                 let error_msg = format!("Responses SSE parsing error: {}, data: {}", e, &raw);
+                stats.increment("error:sse_parsing");
+                stats.log_summary("sse_parsing_error");
                 error!("{}", error_msg);
                 let _ = tx_event.send(Err(anyhow!(error_msg)));
                 return;
@@ -220,6 +236,8 @@ pub async fn handle_responses_stream(
                 "Responses SSE API error: {}, data: {}",
                 api_error_message, raw
             );
+            stats.increment("error:api");
+            stats.log_summary("sse_api_error");
             error!("{}", error_msg);
             let _ = tx_event.send(Err(anyhow!(error_msg)));
             return;
@@ -229,11 +247,14 @@ pub async fn handle_responses_stream(
             Ok(event) => event,
             Err(e) => {
                 let error_msg = format!("Responses SSE schema error: {}, data: {}", e, &raw);
+                stats.increment("error:schema");
+                stats.log_summary("sse_schema_error");
                 error!("{}", error_msg);
                 let _ = tx_event.send(Err(anyhow!(error_msg)));
                 return;
             }
         };
+        stats.increment(format!("event:{}", event.kind));
 
         match event.kind.as_str() {
             "response.output_item.added" => {
@@ -251,18 +272,22 @@ pub async fn handle_responses_stream(
             "response.output_text.delta" => {
                 if let Some(delta) = event.delta.filter(|delta| !delta.is_empty()) {
                     received_text_delta = true;
-                    let _ = tx_event.send(Ok(UnifiedResponse {
+                    let unified_response = UnifiedResponse {
                         text: Some(delta),
                         ..Default::default()
-                    }));
+                    };
+                    stats.record_unified_response(&unified_response);
+                    let _ = tx_event.send(Ok(unified_response));
                 }
             }
             "response.reasoning_text.delta" | "response.reasoning_summary_text.delta" => {
                 if let Some(delta) = event.delta.filter(|delta| !delta.is_empty()) {
-                    let _ = tx_event.send(Ok(UnifiedResponse {
+                    let unified_response = UnifiedResponse {
                         reasoning_content: Some(delta),
                         ..Default::default()
-                    }));
+                    };
+                    stats.record_unified_response(&unified_response);
+                    let _ = tx_event.send(Ok(unified_response));
                 }
             }
             "response.function_call_arguments.delta" => {
@@ -288,14 +313,16 @@ pub async fn handle_responses_stream(
                     (tc.call_id.clone(), tc.name.clone())
                 };
 
-                let _ = tx_event.send(Ok(UnifiedResponse {
+                let unified_response = UnifiedResponse {
                     tool_call: Some(crate::types::unified::UnifiedToolCall {
                         id,
                         name,
                         arguments: Some(delta),
                     }),
                     ..Default::default()
-                }));
+                };
+                stats.record_unified_response(&unified_response);
+                let _ = tx_event.send(Ok(unified_response));
             }
             "response.output_item.done" => {
                 let Some(item_value) = event.item else {
@@ -306,6 +333,7 @@ pub async fn handle_responses_stream(
                 if item_value.get("type").and_then(Value::as_str) == Some("function_call") {
                     handle_function_call_output_item_done(
                         &tx_event,
+                        &mut stats,
                         event.output_index,
                         item_value,
                         &mut tool_calls_by_output_index,
@@ -319,6 +347,7 @@ pub async fn handle_responses_stream(
                         unified_response.text = None;
                     }
                     if unified_response.text.is_some() || unified_response.tool_call.is_some() {
+                        stats.record_unified_response(&unified_response);
                         let _ = tx_event.send(Ok(unified_response));
                     }
                 }
@@ -353,14 +382,16 @@ pub async fn handle_responses_stream(
                                         tc.sent_header = true;
                                         (tc.call_id.clone(), tc.name.clone())
                                     };
-                                    let _ = tx_event.send(Ok(UnifiedResponse {
+                                    let unified_response = UnifiedResponse {
                                         tool_call: Some(crate::types::unified::UnifiedToolCall {
                                             id,
                                             name,
                                             arguments: Some(delta),
                                         }),
                                         ..Default::default()
-                                    }));
+                                    };
+                                    stats.record_unified_response(&unified_response);
+                                    let _ = tx_event.send(Ok(unified_response));
                                 }
                             }
                         }
@@ -372,26 +403,32 @@ pub async fn handle_responses_stream(
                 {
                     Some(Ok(response)) => {
                         received_finish_reason = true;
-                        let _ = tx_event.send(Ok(UnifiedResponse {
+                        let unified_response = UnifiedResponse {
                             usage: response.usage.map(Into::into),
                             finish_reason: Some("stop".to_string()),
                             ..Default::default()
-                        }));
+                        };
+                        stats.record_unified_response(&unified_response);
+                        let _ = tx_event.send(Ok(unified_response));
                         continue;
                     }
                     Some(Err(e)) => {
                         let error_msg =
                             format!("Failed to parse response.completed payload: {}", e);
+                        stats.increment("error:completed_payload");
+                        stats.log_summary("response_completed_parse_error");
                         error!("{}", error_msg);
                         let _ = tx_event.send(Err(anyhow!(error_msg)));
                         return;
                     }
                     None => {
                         received_finish_reason = true;
-                        let _ = tx_event.send(Ok(UnifiedResponse {
+                        let unified_response = UnifiedResponse {
                             finish_reason: Some("stop".to_string()),
                             ..Default::default()
-                        }));
+                        };
+                        stats.record_unified_response(&unified_response);
+                        let _ = tx_event.send(Ok(unified_response));
                         continue;
                     }
                 }
@@ -403,25 +440,31 @@ pub async fn handle_responses_stream(
                 match event.response.map(serde_json::from_value::<ResponsesDone>) {
                     Some(Ok(response)) => {
                         received_finish_reason = true;
-                        let _ = tx_event.send(Ok(UnifiedResponse {
+                        let unified_response = UnifiedResponse {
                             usage: response.usage.map(Into::into),
                             finish_reason: Some("stop".to_string()),
                             ..Default::default()
-                        }));
+                        };
+                        stats.record_unified_response(&unified_response);
+                        let _ = tx_event.send(Ok(unified_response));
                         continue;
                     }
                     Some(Err(e)) => {
                         let error_msg = format!("Failed to parse response.done payload: {}", e);
+                        stats.increment("error:done_payload");
+                        stats.log_summary("response_done_parse_error");
                         error!("{}", error_msg);
                         let _ = tx_event.send(Err(anyhow!(error_msg)));
                         return;
                     }
                     None => {
                         received_finish_reason = true;
-                        let _ = tx_event.send(Ok(UnifiedResponse {
+                        let unified_response = UnifiedResponse {
                             finish_reason: Some("stop".to_string()),
                             ..Default::default()
-                        }));
+                        };
+                        stats.record_unified_response(&unified_response);
+                        let _ = tx_event.send(Ok(unified_response));
                         continue;
                     }
                 }
@@ -435,6 +478,8 @@ pub async fn handle_responses_stream(
                     .and_then(Value::as_str)
                     .unwrap_or("Responses API returned response.failed")
                     .to_string();
+                stats.increment("error:failed");
+                stats.log_summary("response_failed");
                 error!("{}", error_msg);
                 let _ = tx_event.send(Err(anyhow!(error_msg)));
                 return;
@@ -466,11 +511,13 @@ pub async fn handle_responses_stream(
                     .map(Into::into);
 
                 received_finish_reason = true;
-                let _ = tx_event.send(Ok(UnifiedResponse {
+                let unified_response = UnifiedResponse {
                     usage,
                     finish_reason: Some(finish_reason),
                     ..Default::default()
-                }));
+                };
+                stats.record_unified_response(&unified_response);
+                let _ = tx_event.send(Ok(unified_response));
                 continue;
             }
             _ => {}
@@ -481,6 +528,7 @@ pub async fn handle_responses_stream(
 #[cfg(test)]
 mod tests {
     use super::{
+        super::stream_stats::StreamStats,
         extract_api_error_message, handle_function_call_output_item_done, InProgressToolCall,
     };
     use serde_json::json;
@@ -534,9 +582,11 @@ mod tests {
         let (tx_event, mut rx_event) = mpsc::unbounded_channel();
         let mut tool_calls_by_output_index: HashMap<usize, InProgressToolCall> = HashMap::new();
         let mut tool_call_index_by_id: HashMap<String, usize> = HashMap::new();
+        let mut stats = StreamStats::new("Responses");
 
         handle_function_call_output_item_done(
             &tx_event,
+            &mut stats,
             Some(3),
             json!({
                 "type": "function_call",

@@ -1,3 +1,4 @@
+use super::stream_stats::StreamStats;
 use crate::types::openai::OpenAISSEData;
 use crate::types::unified::UnifiedResponse;
 use anyhow::{anyhow, Result};
@@ -43,6 +44,7 @@ pub async fn handle_openai_stream(
 ) {
     let mut stream = response.bytes_stream().eventsource();
     let idle_timeout = Duration::from_secs(600);
+    let mut stats = StreamStats::new("OpenAI");
     // Track whether a chunk with `finish_reason` was received.
     // Some providers (e.g. MiniMax) close the stream after the final chunk
     // without sending `[DONE]`, so we treat `Ok(None)` as a normal termination
@@ -55,21 +57,25 @@ pub async fn handle_openai_stream(
             Ok(Some(Ok(sse))) => sse,
             Ok(None) => {
                 if received_finish_reason {
+                    stats.log_summary("stream_closed_after_finish_reason");
                     return;
                 }
                 let error_msg = "SSE stream closed before response completed";
+                stats.log_summary("stream_closed_before_completion");
                 error!("{}", error_msg);
                 let _ = tx_event.send(Err(anyhow!(error_msg)));
                 return;
             }
             Ok(Some(Err(e))) => {
                 let error_msg = format!("SSE stream error: {}", e);
+                stats.log_summary("sse_stream_error");
                 error!("{}", error_msg);
                 let _ = tx_event.send(Err(anyhow!(error_msg)));
                 return;
             }
             Err(_) => {
                 let error_msg = format!("SSE stream timeout after {}s", idle_timeout.as_secs());
+                stats.log_summary("sse_stream_timeout");
                 error!("{}", error_msg);
                 let _ = tx_event.send(Err(anyhow!(error_msg)));
                 return;
@@ -77,11 +83,14 @@ pub async fn handle_openai_stream(
         };
 
         let raw = sse.data;
+        stats.record_sse_event("data");
         trace!("OpenAI SSE: {:?}", raw);
         if let Some(ref tx) = tx_raw_sse {
             let _ = tx.send(raw.clone());
         }
         if raw == "[DONE]" {
+            stats.increment("marker:done");
+            stats.log_summary("done_marker_received");
             return;
         }
 
@@ -89,6 +98,8 @@ pub async fn handle_openai_stream(
             Ok(json) => json,
             Err(e) => {
                 let error_msg = format!("SSE parsing error: {}, data: {}", e, &raw);
+                stats.increment("error:sse_parsing");
+                stats.log_summary("sse_parsing_error");
                 error!("{}", error_msg);
                 let _ = tx_event.send(Err(anyhow!(error_msg)));
                 return;
@@ -97,12 +108,15 @@ pub async fn handle_openai_stream(
 
         if let Some(api_error_message) = extract_sse_api_error_message(&event_json) {
             let error_msg = format!("SSE API error: {}, data: {}", api_error_message, raw);
+            stats.increment("error:api");
+            stats.log_summary("sse_api_error");
             error!("{}", error_msg);
             let _ = tx_event.send(Err(anyhow!(error_msg)));
             return;
         }
 
         if !is_valid_chat_completion_chunk_weak(&event_json) {
+            stats.increment("skip:non_standard_event");
             warn!(
                 "Skipping non-standard OpenAI SSE event; object={}",
                 event_json
@@ -113,10 +127,13 @@ pub async fn handle_openai_stream(
             continue;
         }
 
+        stats.increment("chunk:chat_completion");
         let sse_data: OpenAISSEData = match serde_json::from_value(event_json) {
             Ok(event) => event,
             Err(e) => {
                 let error_msg = format!("SSE data schema error: {}, data: {}", e, &raw);
+                stats.increment("error:schema");
+                stats.log_summary("sse_data_schema_error");
                 error!("{}", error_msg);
                 let _ = tx_event.send(Err(anyhow!(error_msg)));
                 return;
@@ -125,6 +142,7 @@ pub async fn handle_openai_stream(
 
         let tool_call_count = sse_data.first_choice_tool_call_count();
         if tool_call_count > 1 {
+            stats.increment("chunk:multi_tool_call");
             warn!(
                 "OpenAI SSE chunk contains {} tool calls in the first choice; splitting and sending sequentially",
                 tool_call_count
@@ -136,6 +154,7 @@ pub async fn handle_openai_stream(
         trace!("OpenAI unified responses: {:?}", unified_responses);
         if unified_responses.is_empty() {
             if has_empty_choices {
+                stats.increment("skip:empty_choices_no_usage");
                 warn!(
                     "Ignoring OpenAI SSE chunk with empty choices and no usage payload: {}",
                     raw
@@ -146,6 +165,8 @@ pub async fn handle_openai_stream(
             // Defensive fallback: this should be unreachable if OpenAISSEData::into_unified_responses
             // keeps returning at least one event for all non-empty-choices chunks.
             let error_msg = format!("OpenAI SSE chunk produced no unified events, data: {}", raw);
+            stats.increment("error:no_unified_events");
+            stats.log_summary("no_unified_events");
             error!("{}", error_msg);
             let _ = tx_event.send(Err(anyhow!(error_msg)));
             return;
@@ -155,6 +176,7 @@ pub async fn handle_openai_stream(
             if unified_response.finish_reason.is_some() {
                 received_finish_reason = true;
             }
+            stats.record_unified_response(&unified_response);
             let _ = tx_event.send(Ok(unified_response));
         }
     }

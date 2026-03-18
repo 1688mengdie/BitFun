@@ -1,3 +1,4 @@
+use super::stream_stats::StreamStats;
 use crate::types::gemini::GeminiSSEData;
 use crate::types::unified::UnifiedResponse;
 use anyhow::{anyhow, Result};
@@ -79,6 +80,7 @@ pub async fn handle_gemini_stream(
     let idle_timeout = Duration::from_secs(600);
     let mut received_finish_reason = false;
     let mut tool_call_state = GeminiToolCallState::new();
+    let mut stats = StreamStats::new("Gemini");
 
     loop {
         let sse_event = timeout(idle_timeout, stream.next()).await;
@@ -86,15 +88,18 @@ pub async fn handle_gemini_stream(
             Ok(Some(Ok(sse))) => sse,
             Ok(None) => {
                 if received_finish_reason {
+                    stats.log_summary("stream_closed_after_finish_reason");
                     return;
                 }
                 let error_msg = "Gemini SSE stream closed before response completed";
+                stats.log_summary("stream_closed_before_completion");
                 error!("{}", error_msg);
                 let _ = tx_event.send(Err(anyhow!(error_msg)));
                 return;
             }
             Ok(Some(Err(e))) => {
                 let error_msg = format!("Gemini SSE stream error: {}", e);
+                stats.log_summary("sse_stream_error");
                 error!("{}", error_msg);
                 let _ = tx_event.send(Err(anyhow!(error_msg)));
                 return;
@@ -104,6 +109,7 @@ pub async fn handle_gemini_stream(
                     "Gemini SSE stream timeout after {}s",
                     idle_timeout.as_secs()
                 );
+                stats.log_summary("sse_stream_timeout");
                 error!("{}", error_msg);
                 let _ = tx_event.send(Err(anyhow!(error_msg)));
                 return;
@@ -111,6 +117,7 @@ pub async fn handle_gemini_stream(
         };
 
         let raw = sse.data;
+        stats.record_sse_event("data");
         trace!("Gemini SSE: {:?}", raw);
 
         if let Some(ref tx) = tx_raw_sse {
@@ -118,6 +125,8 @@ pub async fn handle_gemini_stream(
         }
 
         if raw == "[DONE]" {
+            stats.increment("marker:done");
+            stats.log_summary("done_marker_received");
             return;
         }
 
@@ -125,6 +134,8 @@ pub async fn handle_gemini_stream(
             Ok(json) => json,
             Err(e) => {
                 let error_msg = format!("Gemini SSE parsing error: {}, data: {}", e, raw);
+                stats.increment("error:sse_parsing");
+                stats.log_summary("sse_parsing_error");
                 error!("{}", error_msg);
                 let _ = tx_event.send(Err(anyhow!(error_msg)));
                 return;
@@ -133,6 +144,8 @@ pub async fn handle_gemini_stream(
 
         if let Some(message) = extract_api_error_message(&event_json) {
             let error_msg = format!("Gemini SSE API error: {}, data: {}", message, raw);
+            stats.increment("error:api");
+            stats.log_summary("sse_api_error");
             error!("{}", error_msg);
             let _ = tx_event.send(Err(anyhow!(error_msg)));
             return;
@@ -142,6 +155,8 @@ pub async fn handle_gemini_stream(
             Ok(data) => data,
             Err(e) => {
                 let error_msg = format!("Gemini SSE data schema error: {}, data: {}", e, raw);
+                stats.increment("error:schema");
+                stats.log_summary("sse_data_schema_error");
                 error!("{}", error_msg);
                 let _ = tx_event.send(Err(anyhow!(error_msg)));
                 return;
@@ -149,6 +164,9 @@ pub async fn handle_gemini_stream(
         };
 
         let mut unified_responses = sse_data.into_unified_responses();
+        if unified_responses.is_empty() {
+            stats.increment("skip:empty_unified_responses");
+        }
         for unified_response in &mut unified_responses {
             if let Some(tool_call) = unified_response.tool_call.as_mut() {
                 tool_call_state.assign_id(tool_call);
@@ -163,6 +181,7 @@ pub async fn handle_gemini_stream(
         }
 
         for unified_response in unified_responses {
+            stats.record_unified_response(&unified_response);
             let _ = tx_event.send(Ok(unified_response));
         }
     }

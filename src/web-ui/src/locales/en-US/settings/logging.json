@@ -6,7 +6,7 @@
     "path": "Startup Log Path"
   },
   "level": {
-    "description": "Controls backend log verbosity in real time. Changes apply immediately."
+    "description": "Controls log verbosity in real time. Changes apply immediately."
   },
   "levels": {
     "trace": "Trace",

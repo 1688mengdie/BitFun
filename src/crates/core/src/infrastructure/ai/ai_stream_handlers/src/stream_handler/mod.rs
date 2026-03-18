@@ -1,3 +1,4 @@
+mod stream_stats;
 mod anthropic;
 mod gemini;
 mod openai;

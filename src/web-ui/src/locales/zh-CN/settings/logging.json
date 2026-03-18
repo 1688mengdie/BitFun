@@ -6,7 +6,7 @@
     "path": "本次启动日志路径"
   },
   "level": {
-    "description": "实时控制后端日志输出级别，修改后立即生效。"
+    "description": "实时控制日志输出级别，修改后立即生效。"
   },
   "levels": {
     "trace": "Trace",

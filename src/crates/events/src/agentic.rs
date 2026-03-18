@@ -166,6 +166,8 @@ pub enum AgenticEvent {
         turn_id: String,
         round_id: String,
         content: String,
+        #[serde(default)]
+        is_end: bool,
         subagent_parent_info: Option<SubagentParentInfo>,
     },
 

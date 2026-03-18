@@ -16,8 +16,6 @@ export {
 export {
   processNormalTextChunkInternal,
   processThinkingChunkInternal,
-  processToolParamsPartialInternal,
-  processToolProgressInternal,
   completeActiveTextItems,
   cleanupSessionBuffers,
   clearAllBuffers
@@ -25,6 +23,8 @@ export {
 
 export {
   processToolEvent,
+  processToolParamsPartialInternal,
+  processToolProgressInternal,
   handleToolExecutionProgress
 } from './ToolEventModule';
 

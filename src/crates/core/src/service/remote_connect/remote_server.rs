@@ -1219,9 +1219,8 @@ impl RemoteSessionStateTracker {
                 self.bump_version();
                 let _ = self.event_tx.send(TrackerEvent::TextChunk(text.clone()));
             }
-            AE::ThinkingChunk { content, .. } => {
+            AE::ThinkingChunk { content, is_end, .. } => {
                 let clean = content
-                    .replace("<thinking_end>", "")
                     .replace("</thinking>", "")
                     .replace("<thinking>", "");
                 let subagent_marker = if is_subagent { Some(true) } else { None };
@@ -1245,9 +1244,9 @@ impl RemoteSessionStateTracker {
                 }
                 drop(s);
                 self.bump_version();
-                if content == "<thinking_end>" {
+                if *is_end {
                     let _ = self.event_tx.send(TrackerEvent::ThinkingEnd);
-                } else {
+                } else if !content.is_empty() {
                     let _ = self
                         .event_tx
                         .send(TrackerEvent::ThinkingChunk(content.clone()));

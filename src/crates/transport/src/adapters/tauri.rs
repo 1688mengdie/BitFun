@@ -155,6 +155,7 @@ impl TransportAdapter for TauriTransportAdapter {
                 turn_id,
                 round_id,
                 content,
+                is_end,
                 subagent_parent_info,
             } => {
                 self.app_handle.emit(
@@ -165,6 +166,7 @@ impl TransportAdapter for TauriTransportAdapter {
                         "roundId": round_id,
                         "text": content,
                         "contentType": "thinking",
+                        "isThinkingEnd": is_end,
                         "subagentParentInfo": subagent_parent_info,
                     }),
                 )?;
