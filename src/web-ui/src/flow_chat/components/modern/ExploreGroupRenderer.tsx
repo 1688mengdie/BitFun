@@ -212,11 +212,6 @@ const ExploreItemRenderer = React.memo<ExploreItemRendererProps>(({ item, isLast
     
     case 'thinking': {
       const thinkingItem = item as FlowThinkingItem;
-      // Hide completed thinking inside explore groups — it adds no value
-      // when collapsed (the explore group summary already shows thinking count).
-      if (thinkingItem.status === 'completed' && !isLastItem) {
-        return null;
-      }
       return (
         <ModelThinkingDisplay thinkingItem={thinkingItem} isLastItem={isLastItem} />
       );
