@@ -2,7 +2,7 @@
 
 # BitFun E2E 测试指南
 
-使用 WebDriverIO + tauri-driver 进行 BitFun 项目的端到端测试完整指南。
+使用 WebDriverIO + BitFun 内嵌 WebDriver 进行 BitFun 项目的端到端测试完整指南。
 
 ## 目录
 
@@ -112,15 +112,13 @@ BitFun 使用三级测试分类系统：
 安装必需的依赖：
 
 ```bash
-# 安装 tauri-driver
-cargo install tauri-driver --locked
-
-# 构建应用（从项目根目录）
-pnpm run desktop:build
-
 # 安装 E2E 测试依赖
 cd tests/e2e
 pnpm install
+
+# 构建应用（从项目根目录）
+cd ../..
+cargo build -p bitfun-desktop
 ```
 
 ### 2. 验证安装
@@ -403,21 +401,19 @@ it('当工作区打开时应测试功能', async function () {
 
 ### 常见问题
 
-#### 1. tauri-driver 找不到
+#### 1. 内嵌 WebDriver 无法连接
 
-**症状**: `Error: spawn tauri-driver ENOENT`
+**症状**: 对 `http://127.0.0.1:4445` 的 `/status` 或创建 session 请求失败
 
 **解决方案**:
 ```bash
-# 安装或更新 tauri-driver
-cargo install tauri-driver --locked
+# 构建 debug 桌面应用
+cargo build -p bitfun-desktop
 
-# 验证安装
-tauri-driver --version
+# 用 debug 模式运行测试，BitFun 会在进程内启动 WebDriver
+BITFUN_E2E_APP_MODE=debug pnpm --dir tests/e2e run test:l0:protocol
 
-# 确保 ~/.cargo/bin 在 PATH 中
-echo $PATH  # macOS/Linux
-echo %PATH% # Windows
+# 确认应用进程可以监听 127.0.0.1:4445
 ```
 
 #### 2. 应用未构建
@@ -574,14 +570,12 @@ jobs:
           cache: 'pnpm'
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
-      - name: 安装 tauri-driver
-        run: cargo install tauri-driver --locked
       - name: 构建应用
-        run: pnpm run desktop:build
+        run: cargo build -p bitfun-desktop
       - name: 安装测试依赖
         run: cd tests/e2e && pnpm install
       - name: 运行 L0 测试
-        run: cd tests/e2e && pnpm run test:l0:all
+        run: cd tests/e2e && BITFUN_E2E_APP_MODE=debug pnpm run test:l0:all
         
   l1-tests:
     runs-on: windows-latest

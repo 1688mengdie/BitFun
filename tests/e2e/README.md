@@ -2,7 +2,7 @@
 
 # BitFun E2E Tests
 
-E2E test framework using WebDriverIO + tauri-driver.
+E2E test framework using WebDriverIO + the embedded BitFun WebDriver.
 
 > For complete documentation, see [E2E-TESTING-GUIDE.md](E2E-TESTING-GUIDE.md)
 
@@ -11,9 +11,6 @@ E2E test framework using WebDriverIO + tauri-driver.
 ### 1. Install Dependencies
 
 ```bash
-# Install tauri-driver
-cargo install tauri-driver --locked
-
 # Build the app
 pnpm run desktop:build
 
@@ -58,11 +55,9 @@ tests/e2e/
 
 ## Troubleshooting
 
-### tauri-driver not found
+### Embedded WebDriver not ready
 
-```bash
-cargo install tauri-driver --locked
-```
+The test runner starts BitFun directly and waits for the embedded WebDriver service on `127.0.0.1:4445`.
 
 ### App not built
 

@@ -2,7 +2,7 @@
 
 # BitFun E2E Testing Guide
 
-Complete guide for E2E testing in BitFun project using WebDriverIO + tauri-driver.
+Complete guide for E2E testing in BitFun project using WebDriverIO + BitFun embedded WebDriver.
 
 ## Table of Contents
 
@@ -112,15 +112,13 @@ BitFun uses a 3-tier test classification system:
 Install required dependencies:
 
 ```bash
-# Install tauri-driver
-cargo install tauri-driver --locked
-
-# Build the application (from project root)
-pnpm run desktop:build
-
 # Install E2E test dependencies
 cd tests/e2e
 pnpm install
+
+# Build the application (from project root)
+cd ../..
+cargo build -p bitfun-desktop
 ```
 
 ### 2. Verify Installation
@@ -403,21 +401,19 @@ it('should test feature when workspace is open', async function () {
 
 ### Common Issues
 
-#### 1. tauri-driver not found
+#### 1. Embedded WebDriver not reachable
 
-**Symptom**: `Error: spawn tauri-driver ENOENT`
+**Symptom**: session creation or `/status` checks fail against `http://127.0.0.1:4445`
 
 **Solution**:
 ```bash
-# Install or update tauri-driver
-cargo install tauri-driver --locked
+# Build the debug desktop app
+cargo build -p bitfun-desktop
 
-# Verify installation
-tauri-driver --version
+# Run tests in debug mode so the embedded driver starts inside BitFun
+BITFUN_E2E_APP_MODE=debug pnpm --dir tests/e2e run test:l0:protocol
 
-# Ensure ~/.cargo/bin is in PATH
-echo $PATH  # macOS/Linux
-echo %PATH% # Windows
+# Verify the app process is allowed to bind 127.0.0.1:4445
 ```
 
 #### 2. App not built
@@ -574,14 +570,12 @@ jobs:
           cache: 'pnpm'
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
-      - name: Install tauri-driver
-        run: cargo install tauri-driver --locked
       - name: Build app
-        run: pnpm run desktop:build
+        run: cargo build -p bitfun-desktop
       - name: Install test dependencies
         run: cd tests/e2e && pnpm install
       - name: Run L0 tests
-        run: cd tests/e2e && pnpm run test:l0:all
+        run: cd tests/e2e && BITFUN_E2E_APP_MODE=debug pnpm run test:l0:all
         
   l1-tests:
     runs-on: windows-latest

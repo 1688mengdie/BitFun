@@ -1,11 +1,12 @@
 {
   "name": "bitfun-e2e-tests",
   "version": "1.0.0",
-  "description": "E2E tests for BitFun using WebDriverIO and tauri-driver",
+  "description": "E2E tests for BitFun using WebDriverIO and the embedded BitFun WebDriver",
   "type": "module",
   "scripts": {
     "test": "wdio run ./config/wdio.conf.ts",
     "test:l0": "wdio run ./config/wdio.conf.ts --spec \"./specs/l0-smoke.spec.ts\"",
+    "test:l0:protocol": "wdio run ./config/wdio.conf.ts --spec \"./specs/l0-webdriver-protocol.spec.ts\"",
     "test:l0:all": "wdio run ./config/wdio.conf_l0.ts",
     "test:l0:workspace": "wdio run ./config/wdio.conf.ts --spec \"./specs/l0-open-workspace.spec.ts\"",
     "test:l0:observe": "wdio run ./config/wdio.conf.ts --spec \"./specs/l0-observe.spec.ts\"",

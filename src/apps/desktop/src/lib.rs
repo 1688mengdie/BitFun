@@ -207,6 +207,7 @@ pub async fn run() {
 
             let app_handle = app.handle().clone();
             theme::create_main_window(&app_handle);
+            bitfun_webdriver::maybe_start(app_handle.clone());
 
             #[cfg(target_os = "macos")]
             {
