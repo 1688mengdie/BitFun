@@ -14,6 +14,7 @@ import { IconButton, Button } from '@/component-library';
 import { useSceneManager } from '@/app/hooks/useSceneManager';
 import type { SceneTabId } from '@/app/components/SceneBar/types';
 import { useMiniAppStore } from './miniAppStore';
+import { useI18n } from '@/infrastructure/i18n';
 import './MiniAppScene.scss';
 
 const log = createLogger('MiniAppScene');
@@ -30,6 +31,7 @@ const MiniAppScene: React.FC<MiniAppSceneProps> = ({ appId }) => {
   const { themeType } = useTheme();
   const { workspacePath } = useCurrentWorkspace();
   const { closeScene } = useSceneManager();
+  const { t } = useI18n('scenes/miniapp');
 
   const [app, setApp] = useState<MiniApp | null>(null);
   const [loading, setLoading] = useState(false);
@@ -130,7 +132,7 @@ const MiniAppScene: React.FC<MiniAppSceneProps> = ({ appId }) => {
             size="small"
             onClick={handleReload}
             disabled={loading}
-            tooltip="重新加载"
+            tooltip={t('scene.reload')}
           >
             {loading ? (
               <Loader2 size={14} className="miniapp-scene__spinning" />
@@ -144,15 +146,15 @@ const MiniAppScene: React.FC<MiniAppSceneProps> = ({ appId }) => {
         {loading && !app && (
           <div className="miniapp-scene__loading">
             <Loader2 size={28} className="miniapp-scene__spinning" strokeWidth={1.5} />
-            <span>加载中…</span>
+            <span>{t('scene.loading')}</span>
           </div>
         )}
         {error && (
           <div className="miniapp-scene__error">
             <AlertTriangle size={32} strokeWidth={1.5} />
-            <p>加载失败：{error}</p>
+            <p>{t('scene.loadFailed', { error })}</p>
             <Button variant="secondary" size="small" onClick={() => void load(appId)}>
-              重试
+              {t('scene.retry')}
             </Button>
           </div>
         )}
