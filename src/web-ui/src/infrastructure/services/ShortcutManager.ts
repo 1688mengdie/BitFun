@@ -1,6 +1,6 @@
  
 
-import { ShortcutConfig } from '@/shared/types/prompt-template';
+import type { ShortcutConfig } from '@/shared/types/shortcut';
 import { createLogger } from '@/shared/utils/logger';
 
 const log = createLogger('ShortcutManager');

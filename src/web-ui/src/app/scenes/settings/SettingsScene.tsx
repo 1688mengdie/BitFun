@@ -20,8 +20,6 @@ const LoggingConfig        = lazy(() => import('../../../infrastructure/config/c
 const TerminalConfig       = lazy(() => import('../../../infrastructure/config/components/TerminalConfig'));
 const EditorConfig         = lazy(() => import('../../../infrastructure/config/components/EditorConfig'));
 const ThemeConfigComponent = lazy(() => import('../../../infrastructure/config/components/ThemeConfig').then(m => ({ default: m.ThemeConfig })));
-const PromptTemplateConfig = lazy(() => import('../../../infrastructure/config/components/PromptTemplateConfig'));
-
 const SettingsScene: React.FC = () => {
   const activeTab = useSettingsStore(s => s.activeTab);
 
@@ -32,7 +30,6 @@ const SettingsScene: React.FC = () => {
     case 'models':           Content = AIModelConfig;        break;
     case 'session-config':   Content = SessionConfig;        break;
     case 'ai-context':       Content = AIRulesMemoryConfig; break;
-    case 'prompt-templates': Content = PromptTemplateConfig; break;
     case 'mcp-tools':        Content = McpToolsConfig;      break;
     case 'lsp':              Content = LspConfig;            break;
     case 'debug':            Content = DebugConfig;          break;

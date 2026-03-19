@@ -19,8 +19,6 @@ import {
 } from '@/component-library';
 import { AIRulesAPI, RuleLevel, type AIRule } from '@/infrastructure/api/service-api/AIRulesAPI';
 import { getAllMemories, toggleMemory, type AIMemory } from '@/infrastructure/api/aiMemoryApi';
-import { promptTemplateService } from '@/infrastructure/services/PromptTemplateService';
-import type { PromptTemplate } from '@/shared/types/prompt-template';
 import { MCPAPI, type MCPServerInfo } from '@/infrastructure/api/service-api/MCPAPI';
 import { configAPI } from '@/infrastructure/api/service-api/ConfigAPI';
 import { configManager } from '@/infrastructure/config/services/ConfigManager';
@@ -323,7 +321,6 @@ const PersonaView: React.FC<{ workspacePath: string }> = ({ workspacePath }) => 
   const [agenticConfig, setAgenticConfig] = useState<ModeConfigItem | null>(null);
   const [mcpServers, setMcpServers] = useState<MCPServerInfo[]>([]);
   const [skills, setSkills] = useState<SkillInfo[]>([]);
-  const [templates, setTemplates] = useState<PromptTemplate[]>([]);
   const [aiExp, setAiExp] = useState<Partial<AIExperienceConfig>>({
     enable_visual_mode: false,
     enable_session_title_generation: true,
@@ -358,7 +355,6 @@ const PersonaView: React.FC<{ workspacePath: string }> = ({ workspacePath }) => 
   const memoryRef    = useRef<HTMLDivElement>(null);
   const toolsRef     = useRef<HTMLDivElement>(null);
   const skillsRef    = useRef<HTMLDivElement>(null);
-  const templatesRef = useRef<HTMLDivElement>(null);
   const prefsRef     = useRef<HTMLDivElement>(null);
 
   // detail section ref (kept for internal scroll-to section)
@@ -387,16 +383,6 @@ const PersonaView: React.FC<{ workspacePath: string }> = ({ workspacePath }) => 
       } catch (e) { log.error('rules/memory', e); }
     })();
   }, [workspacePath]);
-
-  useEffect(() => {
-    const init = async () => {
-      try { await promptTemplateService.initialize(); } finally {
-        setTemplates(promptTemplateService.getAllTemplates());
-      }
-    };
-    init();
-    return promptTemplateService.subscribe(() => setTemplates(promptTemplateService.getAllTemplates()));
-  }, []);
 
   const loadCaps = useCallback(async () => {
     try {
@@ -539,7 +525,7 @@ const PersonaView: React.FC<{ workspacePath: string }> = ({ workspacePath }) => 
       [t('radar.dims.memory')]:       memoryRef,
       [t('radar.dims.autonomy')]:     toolsRef,
       [t('radar.dims.adaptability')]: skillsRef,
-      [t('radar.dims.creativity')]:   templatesRef,
+      [t('radar.dims.creativity')]:   prefsRef,
       [t('radar.dims.expression')]:   prefsRef,
     };
     if (zone) setActiveZone(zone);
@@ -868,9 +854,6 @@ const PersonaView: React.FC<{ workspacePath: string }> = ({ workspacePath }) => 
   const sortSkills = useMemo(() =>
     [...skills].sort((a, b) => a.enabled !== b.enabled ? (a.enabled ? -1 : 1) : a.name.localeCompare(b.name)),
     [skills]);
-  const sortTemplates = useMemo(() =>
-    [...templates].sort((a, b) => a.isFavorite !== b.isFavorite ? (a.isFavorite ? -1 : 1) : b.usageCount - a.usageCount),
-    [templates]);
   const userRulesList = useMemo(
     () => sortRules.filter(rule => rule.level === RuleLevel.User),
     [sortRules],
@@ -908,17 +891,16 @@ const PersonaView: React.FC<{ workspacePath: string }> = ({ workspacePath }) => 
   const memEn    = useMemo(() => memories.filter(m => m.enabled).length, [memories]);
   const rulesEn  = useMemo(() => rules.filter(r => r.enabled), [rules]);
   const avgImp   = useMemo(() => memEn > 0 ? memories.filter(m => m.enabled).reduce((s, m) => s + m.importance, 0) / memEn : 0, [memories, memEn]);
-  const favCount = useMemo(() => templates.filter(t => t.isFavorite).length, [templates]);
   const radarDims = useMemo(() => [
-    { label: t('radar.dims.creativity'),   value: Math.min(10, templates.length * 0.6 + skillEn.length * 0.5) },
+    { label: t('radar.dims.creativity'),   value: Math.min(10, skillEn.length * 0.9 + mcpServers.length * 0.35) },
     { label: t('radar.dims.rigor'),        value: Math.min(10, rulesEn.length * 1.5) },
     { label: t('radar.dims.autonomy'),     value: agenticConfig?.enabled
       ? Math.min(10, 4 + (agenticConfig.available_tools?.length ?? 0) * 0.25 + mcpServers.length * 0.5)
       : Math.min(10, enabledTools * 0.3 + healthyMcp * 0.8) },
     { label: t('radar.dims.memory'),       value: Math.min(10, memEn * 0.7 + avgImp * 0.3) },
-    { label: t('radar.dims.expression'),   value: Math.min(10, templates.length * 0.5 + favCount * 1.2) },
+    { label: t('radar.dims.expression'),   value: Math.min(10, skillEn.length * 0.8 + enabledSkls * 0.4) },
     { label: t('radar.dims.adaptability'), value: Math.min(10, skillEn.length * 1.2 + mcpServers.length * 0.8) },
-  ], [templates, skillEn, rulesEn, agenticConfig, mcpServers, enabledTools, healthyMcp, memEn, avgImp, favCount, t]);
+  ], [skillEn, rulesEn, agenticConfig, mcpServers, enabledTools, healthyMcp, memEn, avgImp, enabledSkls, t]);
 
   // model slot current IDs (with fallbacks)
   const slotIds: Record<ModelSlotKey, string> = useMemo(() => ({
@@ -1372,23 +1354,6 @@ const PersonaView: React.FC<{ workspacePath: string }> = ({ workspacePath }) => 
           {/* Interaction */}
           <div className={`${C}-zone-panel ${activeZone === 'interaction' ? 'is-active' : ''}`} ref={interactionPanelRef}>
           <div className={`${C}-zone-inner`}>
-            <div ref={templatesRef} className={`${C}-card`}>
-              <div className={`${C}-card__head`}>
-                <span className={`${C}-card__label`}>{t('cards.templates')}</span>
-                <span className={`${C}-card__kpi`}>{t('kpi.templateCount', { count: templates.length })}</span>
-                <button type="button" className={`${C}-link`} onClick={() => navToSettings('prompt-templates')}>
-                  {t('actions.manage')} <ChevronRight size={11} />
-                </button>
-              </div>
-              <div className={`${C}-chip-row`}>
-                {sortTemplates.slice(0, 14).map(tmpl => (
-                  <span key={tmpl.id} className={`${C}-tpl-chip ${tmpl.isFavorite ? 'is-fav' : ''}`}>
-                    {tmpl.isFavorite && '★ '}{tmpl.name}
-                  </span>
-                ))}
-                {templates.length === 0 && <span className={`${C}-empty-hint`}>{t('empty.templates')}</span>}
-              </div>
-            </div>
             <div ref={prefsRef} className={`${C}-card`}>
               <div className={`${C}-card__head`}>
                 <span className={`${C}-card__label`}>{t('cards.preferences')}</span>

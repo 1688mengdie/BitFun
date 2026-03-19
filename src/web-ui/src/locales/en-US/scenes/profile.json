@@ -60,7 +60,6 @@
     "memory":      "Memory",
     "toolsMcp":    "Tools & MCP",
     "skills":      "Skills",
-    "templates":   "Prompt Templates",
     "preferences": "Preferences"
   },
 
@@ -77,7 +76,6 @@
     "rules":        "User {{user}} · Project {{project}} · {{enabled}} active",
     "memory":       "{{count}} active",
     "skills":       "{{count}} active",
-    "templateCount": "{{count}}",
     "toolStats":    "{{enabled}}/{{total}} built-in",
     "toolStatsMcp": "{{enabled}}/{{total}} built-in · MCP {{mcpHealthy}}/{{mcpTotal}}"
   },
@@ -86,8 +84,7 @@
     "rules":     "No rules configured",
     "memory":    "No memories",
     "tools":     "No tools available",
-    "skills":    "No skills",
-    "templates": "No templates"
+    "skills":    "No skills"
   },
 
   "notifications": {

@@ -108,7 +108,8 @@
   },
   "actions": {
     "reset": "重置为默认",
-    "save": "保存设置"
+    "save": "保存设置",
+    "saveDesc": "重置编辑器配置为默认值"
   },
   "messages": {
     "loading": "加载中...",

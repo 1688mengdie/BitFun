@@ -60,7 +60,6 @@
     "memory":      "记忆",
     "toolsMcp":    "工具与MCP",
     "skills":      "技能",
-    "templates":   "提示模板",
     "preferences": "偏好"
   },
 
@@ -77,7 +76,6 @@
     "rules":        "用户 {{user}} · 项目 {{project}} · {{enabled}} 启用",
     "memory":       "{{count}} 条启用",
     "skills":       "{{count}} 个启用",
-    "templateCount": "{{count}} 个",
     "toolStats":    "{{enabled}}/{{total}} 内置",
     "toolStatsMcp": "{{enabled}}/{{total}} 内置 · MCP {{mcpHealthy}}/{{mcpTotal}}"
   },
@@ -86,8 +84,7 @@
     "rules":     "暂无守则",
     "memory":    "暂无记忆",
     "tools":     "暂无工具信息",
-    "skills":    "暂无技能",
-    "templates": "暂无模板"
+    "skills":    "暂无技能"
   },
 
   "notifications": {

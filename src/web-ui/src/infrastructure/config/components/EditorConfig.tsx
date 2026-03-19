@@ -3,7 +3,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { NumberInput, Select, Button, Switch, ConfigPageLoading, ConfigPageMessage } from '@/component-library';
-import { RotateCcw } from 'lucide-react';
 import { configManager } from '../services/ConfigManager';
 import { globalEventBus } from '@/infrastructure/event-bus';
 import { DEFAULT_EDITOR_CONFIG, type EditorConfig as EditorConfigType, type EditorConfigPartial } from '@/tools/editor/config';
@@ -570,7 +569,7 @@ const EditorConfig: React.FC<EditorConfigProps> = () => {
 
         <ConfigPageSection
           title={t('actions.save')}
-          description={t('messages.saving')}
+          description={t('actions.saveDesc')}
         >
           <ConfigPageRow label={t('actions.reset')} description={t('messages.confirmReset')} align="center">
             <div className="bitfun-editor-config__actions">
@@ -580,7 +579,6 @@ const EditorConfig: React.FC<EditorConfigProps> = () => {
                 onClick={resetConfig}
                 disabled={isSaving}
               >
-                <RotateCcw size={14} />
                 {t('actions.reset')}
               </Button>
               {isSaving && (

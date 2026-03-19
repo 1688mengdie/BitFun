@@ -52,7 +52,6 @@ import zhCNSettingsTerminal from '../../../locales/zh-CN/settings/terminal.json'
 import zhCNSettingsDebug from '../../../locales/zh-CN/settings/debug.json';
 import zhCNSettingsLogging from '../../../locales/zh-CN/settings/logging.json';
 import zhCNSettingsEditor from '../../../locales/zh-CN/settings/editor.json';
-import zhCNSettingsPromptTemplates from '../../../locales/zh-CN/settings/prompt-templates.json';
 import zhCNSettingsSkills from '../../../locales/zh-CN/settings/skills.json';
 import zhCNSettingsAiRules from '../../../locales/zh-CN/settings/ai-rules.json';
 import zhCNSettingsAiMemory from '../../../locales/zh-CN/settings/ai-memory.json';
@@ -92,7 +91,6 @@ import enUSSettingsTerminal from '../../../locales/en-US/settings/terminal.json'
 import enUSSettingsDebug from '../../../locales/en-US/settings/debug.json';
 import enUSSettingsLogging from '../../../locales/en-US/settings/logging.json';
 import enUSSettingsEditor from '../../../locales/en-US/settings/editor.json';
-import enUSSettingsPromptTemplates from '../../../locales/en-US/settings/prompt-templates.json';
 import enUSSettingsSkills from '../../../locales/en-US/settings/skills.json';
 import enUSSettingsAiRules from '../../../locales/en-US/settings/ai-rules.json';
 import enUSSettingsAiMemory from '../../../locales/en-US/settings/ai-memory.json';
@@ -139,7 +137,6 @@ const resources = {
     'settings/debug': zhCNSettingsDebug,
     'settings/logging': zhCNSettingsLogging,
     'settings/editor': zhCNSettingsEditor,
-    'settings/prompt-templates': zhCNSettingsPromptTemplates,
     'settings/skills': zhCNSettingsSkills,
     'settings/ai-rules': zhCNSettingsAiRules,
     'settings/ai-memory': zhCNSettingsAiMemory,
@@ -180,7 +177,6 @@ const resources = {
     'settings/debug': enUSSettingsDebug,
     'settings/logging': enUSSettingsLogging,
     'settings/editor': enUSSettingsEditor,
-    'settings/prompt-templates': enUSSettingsPromptTemplates,
     'settings/skills': enUSSettingsSkills,
     'settings/ai-rules': enUSSettingsAiRules,
     'settings/ai-memory': enUSSettingsAiMemory,
@@ -243,7 +239,6 @@ export class I18nService {
           'settings/debug',
           'settings/logging',
           'settings/editor',
-          'settings/prompt-templates',
           'settings/skills',
           'settings/ai-rules',
           'settings/ai-memory',
