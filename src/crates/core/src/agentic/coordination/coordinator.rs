@@ -23,6 +23,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::OnceLock;
 use tokio::sync::mpsc;
+use tokio::time::{sleep, Duration, Instant};
 use tokio_util::sync::CancellationToken;
 
 /// Subagent execution result
@@ -1340,6 +1341,41 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         });
 
         Ok(())
+    }
+
+    pub async fn cancel_active_turn_for_session(
+        &self,
+        session_id: &str,
+        wait_timeout: Duration,
+    ) -> BitFunResult<Option<String>> {
+        let Some(session) = self.session_manager.get_session(session_id) else {
+            return Ok(None);
+        };
+
+        let SessionState::Processing {
+            current_turn_id, ..
+        } = session.state
+        else {
+            return Ok(None);
+        };
+
+        self.cancel_dialog_turn(session_id, &current_turn_id).await?;
+
+        let deadline = Instant::now() + wait_timeout;
+        while self.execution_engine.has_active_turn(&current_turn_id) {
+            if Instant::now() >= deadline {
+                warn!(
+                    "Timed out waiting for active turn cancellation: session_id={}, dialog_turn_id={}, timeout_ms={}",
+                    session_id,
+                    current_turn_id,
+                    wait_timeout.as_millis()
+                );
+                break;
+            }
+            sleep(Duration::from_millis(50)).await;
+        }
+
+        Ok(Some(current_turn_id))
     }
 
     /// Delete session

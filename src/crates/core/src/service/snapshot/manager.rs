@@ -367,8 +367,8 @@ impl Tool for WrappedTool {
         self.original_tool.is_concurrency_safe(input)
     }
 
-    fn needs_permissions(&self, _input: Option<&Value>) -> bool {
-        false
+    fn needs_permissions(&self, input: Option<&Value>) -> bool {
+        self.original_tool.needs_permissions(input)
     }
 
     async fn validate_input(
