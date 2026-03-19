@@ -57,7 +57,7 @@ fn resolve_request_url(base_url: &str, provider: &str, model_name: &str) -> Stri
     }
 
     match provider.trim().to_ascii_lowercase().as_str() {
-        "openai" => append_endpoint(&trimmed, "chat/completions"),
+        "openai" | "nvidia" | "openrouter" => append_endpoint(&trimmed, "chat/completions"),
         "response" | "responses" => append_endpoint(&trimmed, "responses"),
         "anthropic" => append_endpoint(&trimmed, "v1/messages"),
         "gemini" | "google" => resolve_gemini_request_url(&trimmed, model_name),
@@ -149,6 +149,22 @@ mod tests {
                 "gemini-2.5-pro"
             ),
             "https://api.openbitfun.com/v1beta/models/gemini-2.5-pro:streamGenerateContent?alt=sse"
+        );
+    }
+
+    #[test]
+    fn resolves_nvidia_request_url() {
+        assert_eq!(
+            resolve_request_url("https://integrate.api.nvidia.com/v1", "nvidia", ""),
+            "https://integrate.api.nvidia.com/v1/chat/completions"
+        );
+    }
+
+    #[test]
+    fn resolves_openrouter_request_url() {
+        assert_eq!(
+            resolve_request_url("https://openrouter.ai/api/v1", "openrouter", ""),
+            "https://openrouter.ai/api/v1/chat/completions"
         );
     }
 }

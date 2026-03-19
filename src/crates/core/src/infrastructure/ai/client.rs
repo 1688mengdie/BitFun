@@ -158,7 +158,10 @@ impl AIClient {
 
     fn build_test_connection_extra_body(&self) -> Option<serde_json::Value> {
         let provider = self.config.format.to_ascii_lowercase();
-        if !matches!(provider.as_str(), "openai" | "response" | "responses") {
+        if !matches!(
+            provider.as_str(),
+            "openai" | "response" | "responses" | "nvidia" | "openrouter"
+        ) {
             return self.config.custom_request_body.clone();
         }
 

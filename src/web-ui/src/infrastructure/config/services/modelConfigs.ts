@@ -181,6 +181,28 @@ export const PROVIDER_TEMPLATES: Record<string, ProviderTemplate> = {
       { url: 'https://api.siliconflow.cn/v1', format: 'openai', note: 'default' },
       { url: 'https://api.siliconflow.cn/v1/messages', format: 'anthropic', note: 'Anthropic' },
     ]
+  },
+
+  nvidia: {
+    id: 'nvidia',
+    name: t('settings/ai-model:providers.nvidia.name'),
+    baseUrl: 'https://integrate.api.nvidia.com/v1',
+    format: 'openai',
+    models: [],
+    requiresApiKey: true,
+    description: t('settings/ai-model:providers.nvidia.description'),
+    helpUrl: 'https://build.nvidia.com/settings/api-keys'
+  },
+
+  openrouter: {
+    id: 'openrouter',
+    name: t('settings/ai-model:providers.openrouter.name'),
+    baseUrl: 'https://openrouter.ai/api/v1',
+    format: 'openai',
+    models: [],
+    requiresApiKey: true,
+    description: t('settings/ai-model:providers.openrouter.description'),
+    helpUrl: 'https://openrouter.ai/keys'
   }
 };
 

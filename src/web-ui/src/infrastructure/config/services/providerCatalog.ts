@@ -63,6 +63,14 @@ export const PROVIDER_URL_CATALOG: ProviderUrlCatalogItem[] = [
       'https://api.siliconflow.cn/v1/messages',
     ],
   },
+  {
+    id: 'nvidia',
+    baseUrl: 'https://integrate.api.nvidia.com/v1',
+  },
+  {
+    id: 'openrouter',
+    baseUrl: 'https://openrouter.ai/api/v1',
+  },
 ];
 
 export function normalizeProviderBaseUrl(url: string): string {

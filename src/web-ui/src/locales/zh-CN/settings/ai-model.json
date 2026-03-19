@@ -86,6 +86,14 @@
         "default": "OpenAI格式-默认",
         "anthropic": "Anthropic格式"
       }
+    },
+    "nvidia": {
+      "name": "NVIDIA",
+      "description": "NVIDIA NIM 大模型平台"
+    },
+    "openrouter": {
+      "name": "OpenRouter",
+      "description": "OpenRouter 大模型平台"
     }
   },
   "tabs": {

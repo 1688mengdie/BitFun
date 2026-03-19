@@ -25,6 +25,8 @@ export const PROVIDER_DISPLAY_ORDER: string[] = [
   'deepseek',
   'volcengine',
   'siliconflow',
+  'nvidia',
+  'openrouter',
   'minimax',
   'moonshot',
   'anthropic',
@@ -160,6 +162,24 @@ export const PROVIDER_TEMPLATES: Record<string, ProviderTemplate> = {
         noteKey: 'model.providers.siliconflow.urlOptions.anthropic',
       },
     ],
+  },
+  nvidia: {
+    id: 'nvidia',
+    nameKey: 'model.providers.nvidia.name',
+    descriptionKey: 'model.providers.nvidia.description',
+    baseUrl: 'https://integrate.api.nvidia.com/v1',
+    format: 'openai',
+    models: [],
+    helpUrl: 'https://build.nvidia.com/settings/api-keys',
+  },
+  openrouter: {
+    id: 'openrouter',
+    nameKey: 'model.providers.openrouter.name',
+    descriptionKey: 'model.providers.openrouter.description',
+    baseUrl: 'https://openrouter.ai/api/v1',
+    format: 'openai',
+    models: [],
+    helpUrl: 'https://openrouter.ai/keys',
   },
 };
 

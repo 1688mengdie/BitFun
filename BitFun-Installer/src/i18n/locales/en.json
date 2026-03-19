@@ -116,6 +116,14 @@
           "default": "OpenAI Format - Default",
           "anthropic": "Anthropic Format"
         }
+      },
+      "nvidia": {
+        "name": "NVIDIA",
+        "description": "NVIDIA NIM Model Platform"
+      },
+      "openrouter": {
+        "name": "OpenRouter",
+        "description": "OpenRouter Model Platform"
       }
     },
     "modelNameSelectPlaceholder": "Select a model...",
