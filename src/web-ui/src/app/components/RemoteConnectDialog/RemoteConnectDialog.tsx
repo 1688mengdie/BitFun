@@ -524,16 +524,14 @@ export const RemoteConnectDialog: React.FC<RemoteConnectDialogProps> = ({
             <button
               type="button"
               className={`bitfun-remote-connect__mode-btn ${!botVerboseMode ? 'is-active' : ''}`}
-              onClick={handleToggleBotVerboseMode}
-              disabled={!botVerboseMode}
+              onClick={botVerboseMode ? handleToggleBotVerboseMode : undefined}
             >
               {t('remoteConnect.botConciseMode')}
             </button>
             <button
               type="button"
               className={`bitfun-remote-connect__mode-btn ${botVerboseMode ? 'is-active' : ''}`}
-              onClick={handleToggleBotVerboseMode}
-              disabled={botVerboseMode}
+              onClick={!botVerboseMode ? handleToggleBotVerboseMode : undefined}
             >
               {t('remoteConnect.botVerboseMode')}
             </button>

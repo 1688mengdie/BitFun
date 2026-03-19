@@ -460,41 +460,38 @@
 .bitfun-remote-connect__mode-selector {
   display: inline-flex;
   align-items: center;
-  gap: 0;
   padding: 3px;
-  background: var(--element-bg-subtle);
-  border: 1px solid var(--border-subtle);
-  border-radius: 8px;
+  background: $element-bg-base;
+  border: 1px solid $border-subtle;
+  border-radius: 20px;
 }
 
 .bitfun-remote-connect__mode-btn {
-  padding: 6px 14px;
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--color-text-muted);
+  padding: 5px 14px;
+  font-size: $font-size-xs;
+  font-weight: $font-weight-medium;
+  color: $color-text-muted;
   background: transparent;
   border: none;
-  border-radius: 6px;
+  border-radius: 17px;
   cursor: pointer;
-  transition: all 0.15s ease;
-  white-space: nowrap;
+  transition: all $motion-fast $easing-standard;
 
-  &:hover:not(:disabled) {
-    color: var(--color-text-secondary);
-  }
-
-  &:disabled {
-    cursor: default;
+  &:hover:not(.is-active) {
+    color: $color-text-primary;
+    background: $element-bg-subtle;
   }
 
   &.is-active {
-    background: var(--color-accent-600, #2563eb);
     color: #fff;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+    background: $color-success;
+    font-weight: $font-weight-semibold;
+    box-shadow: 0 1px 4px rgba(110, 184, 140, 0.35);
+    cursor: default;
   }
 
   &:focus-visible {
-    outline: 2px solid color-mix(in srgb, var(--color-accent-500, #3b82f6) 55%, transparent);
+    outline: 2px solid rgba($color-success, 0.5);
     outline-offset: 1px;
   }
 }
