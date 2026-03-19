@@ -1,33 +1,73 @@
 @use '../../../component-library/styles/tokens.scss' as *;
 
+// ============ Animation System (minimal) ============
+
+@keyframes insights-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes insights-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes insights-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+// Reduced motion support
+@media (prefers-reduced-motion: reduce) {
+  .insights-scene,
+  .insights-scene * {
+    animation: none !important;
+    transition-duration: 0.15s !important;
+  }
+}
+
+// ============ Scene Container ============
+
 .insights-scene {
   display: flex;
   flex-direction: column;
   height: 100%;
   overflow: hidden;
+  animation: insights-fade-in 0.25s ease-out;
+
+  // Max width constraint
+  max-width: 900px;
+  margin: 0 auto;
+  width: 100%;
 
   &__header {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: $size-gap-5 $size-gap-6 0;
+    padding: $size-gap-4 $size-gap-4 0;
     flex-shrink: 0;
   }
 
   &__header-left {
     display: flex;
     align-items: center;
-    gap: $size-gap-3;
+    gap: $size-gap-2;
 
     h2 {
-      font-size: $font-size-xl;
+      font-size: $font-size-lg;
       font-weight: $font-weight-semibold;
       color: var(--color-text-primary);
       margin: 0;
     }
 
     svg {
-      color: var(--color-text-muted);
+      color: $color-accent-500;
     }
   }
 
@@ -35,8 +75,8 @@
     display: flex;
     align-items: center;
     gap: $size-gap-2;
-    margin: $size-gap-3 $size-gap-6 0;
-    padding: $size-gap-3 $size-gap-4;
+    margin: $size-gap-3 $size-gap-4 0;
+    padding: $size-gap-2 $size-gap-3;
     background: $color-error-bg;
     border: 1px solid $color-error-border;
     border-radius: $size-radius-base;
@@ -50,30 +90,28 @@
       border: none;
       color: inherit;
       cursor: pointer;
-      font-size: $font-size-xl;
+      font-size: $font-size-lg;
       line-height: 1;
-      padding: 0 $size-gap-1;
-      opacity: $opacity-disabled;
+      padding: 0;
+      opacity: 0.7;
+
       &:hover { opacity: 1; }
     }
   }
 
   &__generate {
-    padding: $size-gap-5 $size-gap-6 0;
+    padding: $size-gap-4 $size-gap-4 0;
     flex-shrink: 0;
   }
 
   &__generate-label,
   &__history-label {
-    font-size: 11px;
+    font-size: $font-size-xs;
     font-weight: $font-weight-semibold;
     text-transform: uppercase;
     color: var(--color-text-muted);
-    margin-bottom: $size-gap-3;
+    margin-bottom: $size-gap-2;
     letter-spacing: 0.5px;
-    display: flex;
-    align-items: center;
-    gap: $size-gap-3;
   }
 
   &__history-hint {
@@ -83,32 +121,33 @@
     color: var(--color-text-muted);
     opacity: 0.7;
     letter-spacing: 0;
+    margin-left: $size-gap-2;
   }
 
   &__generate-row {
     display: flex;
     align-items: center;
     gap: $size-gap-3;
+    flex-wrap: wrap;
   }
 
   &__day-selector {
     display: flex;
-    gap: 0;
     border: 1px solid $border-base;
     border-radius: $size-radius-base;
     overflow: hidden;
   }
 
   &__day-btn {
-    padding: $size-gap-2 $size-gap-4;
+    padding: $size-gap-1 $size-gap-3;
     border: none;
     background: transparent;
     color: var(--color-text-muted);
     font-size: $font-size-xs;
     font-weight: $font-weight-medium;
     cursor: pointer;
-    transition: all $motion-fast $easing-standard;
     border-right: 1px solid $border-base;
+    transition: background 0.15s, color 0.15s;
 
     &:last-child { border-right: none; }
 
@@ -118,7 +157,7 @@
     }
 
     &.is-active {
-      background: $color-accent-200;
+      background: $color-accent-100;
       color: $color-accent-500;
       font-weight: $font-weight-semibold;
     }
@@ -127,31 +166,36 @@
   &__generate-btn {
     display: flex;
     align-items: center;
-    gap: $size-gap-2;
-    padding: $size-gap-2 $size-gap-5;
+    gap: $size-gap-1;
+    padding: $size-gap-1 $size-gap-4;
     border: 1px solid $color-accent-600;
     border-radius: $size-radius-base;
-    background: $color-accent-200;
+    background: $color-accent-100;
     color: $color-accent-500;
     font-size: $font-size-sm;
-    font-weight: $font-weight-semibold;
+    font-weight: $font-weight-medium;
     cursor: pointer;
-    transition: all $motion-fast $easing-standard;
+    transition: background 0.15s;
 
     &:hover {
-      background: $color-accent-300;
+      background: $color-accent-200;
     }
 
     &:active {
-      background: $color-accent-400;
+      background: $color-accent-300;
+    }
+
+    &:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
     }
   }
 
   &__cancel-btn {
     display: flex;
     align-items: center;
-    gap: $size-gap-2;
-    padding: $size-gap-2 $size-gap-5;
+    gap: $size-gap-1;
+    padding: $size-gap-1 $size-gap-4;
     border: 1px solid $color-error-border;
     border-radius: $size-radius-base;
     background: $color-error-bg;
@@ -159,16 +203,12 @@
     font-size: $font-size-sm;
     font-weight: $font-weight-medium;
     cursor: pointer;
-    transition: all $motion-fast $easing-standard;
+    transition: background 0.15s, border-color 0.15s;
 
     &:hover {
       background: rgba(199, 112, 112, 0.18);
       border-color: $color-error;
     }
-  }
-
-  &__spinner {
-    animation: insights-spin 1s linear infinite;
   }
 
   &__progress-info {
@@ -177,8 +217,9 @@
     gap: $size-gap-2;
     font-size: $font-size-xs;
     color: var(--color-text-muted);
-    animation: insights-fade-in $motion-base $easing-standard;
     min-width: 0;
+    flex: 1;
+    min-width: 200px;
   }
 
   &__progress-count {
@@ -194,7 +235,7 @@
   }
 
   &__history {
-    padding: $size-gap-5 $size-gap-6;
+    padding: $size-gap-4;
     flex: 1;
     overflow-y: auto;
     min-height: 0;
@@ -207,9 +248,13 @@
     color: var(--color-text-muted);
   }
 
+  &__spinner {
+    animation: insights-spin 1s linear infinite;
+  }
+
   &__empty {
     text-align: center;
-    padding: $size-gap-8 0;
+    padding: $size-gap-6 0;
     color: var(--color-text-muted);
     font-size: $font-size-sm;
   }
@@ -228,7 +273,7 @@
   display: flex;
   flex-direction: column;
   gap: $size-gap-2;
-  padding: $size-gap-3 $size-gap-4;
+  padding: $size-gap-3;
   cursor: pointer;
   text-align: left;
   width: 100%;
@@ -269,7 +314,7 @@
     font-size: 11px;
     color: var(--color-text-muted);
     background: $element-bg-subtle;
-    padding: 1px $size-gap-2;
+    padding: 2px $size-gap-2;
     border-radius: $size-radius-sm;
   }
 
@@ -301,22 +346,22 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: $size-gap-3 $size-gap-6;
+  padding: $size-gap-2 $size-gap-4;
   border-bottom: 1px solid $border-subtle;
   flex-shrink: 0;
 
   &__back {
     display: flex;
     align-items: center;
-    gap: $size-gap-2;
-    padding: $size-gap-1 $size-gap-3;
+    gap: $size-gap-1;
+    padding: $size-gap-1 $size-gap-2;
     border: none;
     border-radius: $size-radius-sm;
     background: transparent;
     color: var(--color-text-secondary);
     font-size: $font-size-sm;
     cursor: pointer;
-    transition: all $motion-fast $easing-standard;
+    transition: background 0.15s, color 0.15s;
 
     &:hover {
       background: $element-bg-soft;
@@ -341,7 +386,7 @@
     color: var(--color-text-secondary);
     font-size: $font-size-xs;
     cursor: pointer;
-    transition: all $motion-fast $easing-standard;
+    transition: background 0.15s, color 0.15s;
 
     &:hover:not(:disabled) {
       background: $element-bg-soft;
@@ -359,7 +404,7 @@
   display: flex;
   align-items: center;
   gap: $size-gap-4;
-  padding: $size-gap-3 $size-gap-6;
+  padding: $size-gap-2 $size-gap-4;
   font-size: $font-size-xs;
   color: var(--color-text-muted);
   border-bottom: 1px solid $border-subtle;
@@ -376,7 +421,7 @@
 .insights-report-body {
   flex: 1;
   overflow-y: auto;
-  padding: $size-gap-5 $size-gap-6;
+  padding: $size-gap-4;
   min-height: 0;
 
   &::-webkit-scrollbar { width: 6px; }
@@ -389,6 +434,7 @@
 
 .insights-scene--report {
   overflow: hidden;
+  max-width: 100%;
 }
 
 // ============ At a Glance ============
@@ -397,20 +443,20 @@
   background: $color-accent-100;
   border: 1px solid $border-accent-soft;
   border-radius: $size-radius-lg;
-  padding: $size-gap-4 $size-gap-5;
-  margin-bottom: $size-gap-5;
+  padding: $size-gap-3;
+  margin-bottom: $size-gap-4;
 
   &__title {
     font-size: $font-size-sm;
-    font-weight: $font-weight-bold;
+    font-weight: $font-weight-semibold;
     color: $color-accent-500;
-    margin-bottom: $size-gap-3;
+    margin-bottom: $size-gap-2;
   }
 
   &__sections {
     display: flex;
     flex-direction: column;
-    gap: $size-gap-3;
+    gap: $size-gap-2;
   }
 
   &__item {
@@ -428,26 +474,27 @@
 
 .insights-interaction {
   @include card-base;
-  padding: $size-gap-4;
+  padding: $size-gap-3;
+  margin-bottom: $size-gap-4;
 
   &__narrative {
     font-size: $font-size-sm;
     color: var(--color-text-secondary);
-    line-height: 1.7;
-    margin: 0 0 $size-gap-3;
+    line-height: 1.6;
+    margin: 0 0 $size-gap-2;
   }
 
   &__patterns {
     display: flex;
     flex-direction: column;
-    gap: $size-gap-2;
+    gap: $size-gap-1;
   }
 
   &__pattern {
     background: $color-success-bg;
     border: 1px solid $color-success-border;
     border-radius: $size-radius-sm;
-    padding: $size-gap-2 $size-gap-3;
+    padding: $size-gap-1 $size-gap-2;
     font-size: $font-size-xs;
     color: $color-success;
   }
@@ -458,10 +505,10 @@
 .insights-stats-row {
   display: flex;
   gap: $size-gap-3;
-  padding: $size-gap-4 0;
+  padding: $size-gap-3 0;
   border-top: 1px solid $border-subtle;
   border-bottom: 1px solid $border-subtle;
-  margin-bottom: $size-gap-5;
+  margin-bottom: $size-gap-4;
   flex-wrap: wrap;
 }
 
@@ -470,7 +517,7 @@
   flex-direction: column;
   align-items: center;
   flex: 1;
-  min-width: 80px;
+  min-width: 70px;
 
   &__icon {
     color: var(--color-text-muted);
@@ -478,7 +525,7 @@
   }
 
   &__value {
-    font-size: $font-size-2xl;
+    font-size: $font-size-xl;
     font-weight: $font-weight-bold;
     color: var(--color-text-primary);
   }
@@ -487,6 +534,7 @@
     font-size: 10px;
     color: var(--color-text-muted);
     text-transform: uppercase;
+    text-align: center;
   }
 }
 
@@ -495,18 +543,20 @@
 .insights-charts-row {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: $size-gap-4;
-  margin-top: $size-gap-4;
-  margin-bottom: $size-gap-5;
+  gap: $size-gap-3;
+  margin-bottom: $size-gap-4;
 
   &--full {
+    grid-template-columns: 1fr;
+  }
+
+  @media (max-width: 600px) {
     grid-template-columns: 1fr;
   }
 }
 
 .insights-chart-card {
   @include card-base;
-  background: var(--color-bg-primary, $element-bg-subtle);
   padding: $size-gap-3;
 
   &__title {
@@ -514,7 +564,8 @@
     font-weight: $font-weight-semibold;
     color: var(--color-text-muted);
     text-transform: uppercase;
-    margin-bottom: $size-gap-3;
+    margin-bottom: $size-gap-2;
+    letter-spacing: 0.3px;
   }
 }
 
@@ -524,8 +575,8 @@
   margin-bottom: $size-gap-1;
 
   &__label {
-    width: 100px;
-    font-size: 10px;
+    width: 90px;
+    font-size: 11px;
     color: var(--color-text-secondary);
     flex-shrink: 0;
     overflow: hidden;
@@ -535,21 +586,22 @@
 
   &__track {
     flex: 1;
-    height: 5px;
+    height: 6px;
     background: $element-bg-subtle;
     border-radius: 3px;
     margin: 0 $size-gap-2;
+    overflow: hidden;
   }
 
   &__fill {
     height: 100%;
     border-radius: 3px;
-    transition: width $motion-base $easing-standard;
+    transition: width 0.4s ease-out;
   }
 
   &__value {
-    width: 28px;
-    font-size: 10px;
+    width: 32px;
+    font-size: 11px;
     font-weight: $font-weight-medium;
     color: var(--color-text-muted);
     text-align: right;
@@ -559,13 +611,13 @@
 // ============ Section common ============
 
 .insights-section {
-  margin-bottom: $size-gap-6;
+  margin-bottom: $size-gap-4;
 
   h3 {
     font-size: $font-size-base;
     font-weight: $font-weight-semibold;
     color: var(--color-text-primary);
-    margin-bottom: $size-gap-3;
+    margin-bottom: $size-gap-2;
   }
 
   h4 {
@@ -573,7 +625,7 @@
     font-weight: $font-weight-semibold;
     color: var(--color-text-secondary);
     margin-bottom: $size-gap-2;
-    margin-top: $size-gap-4;
+    margin-top: $size-gap-3;
   }
 }
 
@@ -587,17 +639,17 @@
 
 .insights-area-card {
   @include card-base;
-  padding: $size-gap-3;
+  padding: $size-gap-2;
 
   &__header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: $size-gap-2;
+    margin-bottom: $size-gap-1;
   }
 
   &__name {
-    font-weight: $font-weight-semibold;
+    font-weight: $font-weight-medium;
     font-size: $font-size-sm;
     color: var(--color-text-primary);
   }
@@ -606,13 +658,13 @@
     font-size: 11px;
     color: var(--color-text-muted);
     background: $element-bg-subtle;
-    padding: 2px $size-gap-2;
+    padding: 1px $size-gap-2;
     border-radius: $size-radius-sm;
   }
 
   &__desc {
     font-size: $font-size-xs;
-    color: var(--color-text-secondary);
+    color: var(--color-text-muted);
     line-height: $line-height-base;
     margin: 0;
   }
@@ -630,10 +682,10 @@
   background: $color-success-bg;
   border: 1px solid $color-success-border;
   border-radius: $size-radius-base;
-  padding: $size-gap-3;
+  padding: $size-gap-2;
 
   &__title {
-    font-weight: $font-weight-semibold;
+    font-weight: $font-weight-medium;
     font-size: $font-size-sm;
     color: $color-success;
     margin-bottom: $size-gap-1;
@@ -661,17 +713,17 @@
 .insights-friction {
   display: flex;
   flex-direction: column;
-  gap: $size-gap-3;
+  gap: $size-gap-2;
 }
 
 .insights-friction-card {
   background: $color-error-bg;
   border: 1px solid $color-error-border;
   border-radius: $size-radius-base;
-  padding: $size-gap-3;
+  padding: $size-gap-2;
 
   &__title {
-    font-weight: $font-weight-semibold;
+    font-weight: $font-weight-medium;
     font-size: $font-size-sm;
     color: $color-error;
     margin-bottom: $size-gap-1;
@@ -681,13 +733,13 @@
     font-size: $font-size-xs;
     color: $color-error;
     opacity: 0.85;
-    margin: 0 0 $size-gap-2;
+    margin: 0 0 $size-gap-1;
   }
 
   &__examples {
-    margin: 0 0 $size-gap-2 $size-gap-4;
+    margin: 0 0 $size-gap-1 $size-gap-4;
     font-size: 11px;
-    color: var(--color-text-secondary);
+    color: var(--color-text-muted);
 
     li { margin-bottom: 2px; }
   }
@@ -696,7 +748,7 @@
     background: $element-bg-subtle;
     border: 1px solid $color-error-border;
     border-radius: $size-radius-sm;
-    padding: $size-gap-2 $size-gap-3;
+    padding: $size-gap-1 $size-gap-2;
     font-size: $font-size-xs;
     color: $color-error;
   }
@@ -708,8 +760,8 @@
   background: $color-info-bg;
   border: 1px solid $color-info-border;
   border-radius: $size-radius-base;
-  padding: $size-gap-3;
-  margin-bottom: $size-gap-3;
+  padding: $size-gap-2;
+  margin-bottom: $size-gap-2;
 }
 
 .insights-md-item {
@@ -735,17 +787,21 @@
 
 .insights-feature-card,
 .insights-pattern-card {
+  background: $color-success-bg;
+  border: 1px solid $color-success-border;
   border-radius: $size-radius-base;
-  padding: $size-gap-3;
-  margin-bottom: $size-gap-2;
+  padding: $size-gap-2;
+  margin-bottom: $size-gap-1;
+}
+
+.insights-pattern-card {
+  background: $color-info-bg;
+  border-color: $color-info-border;
 }
 
 .insights-feature-card {
-  background: $color-success-bg;
-  border: 1px solid $color-success-border;
-
   &__title {
-    font-weight: $font-weight-semibold;
+    font-weight: $font-weight-medium;
     font-size: $font-size-sm;
     color: var(--color-text-primary);
     margin-bottom: $size-gap-1;
@@ -753,23 +809,20 @@
 
   &__desc {
     font-size: $font-size-xs;
-    color: var(--color-text-secondary);
+    color: var(--color-text-muted);
     margin: 0 0 $size-gap-1;
   }
 
   &__benefit {
     font-size: 11px;
-    color: var(--color-text-secondary);
+    color: var(--color-text-muted);
     margin: 0;
   }
 }
 
 .insights-pattern-card {
-  background: $color-info-bg;
-  border: 1px solid $color-info-border;
-
   &__title {
-    font-weight: $font-weight-semibold;
+    font-weight: $font-weight-medium;
     font-size: $font-size-sm;
     color: var(--color-text-primary);
     margin-bottom: $size-gap-1;
@@ -777,7 +830,7 @@
 
   &__desc {
     font-size: $font-size-xs;
-    color: var(--color-text-secondary);
+    color: var(--color-text-muted);
     margin: 0;
   }
 }
@@ -804,7 +857,7 @@
   &__code {
     flex: 1;
     background: $element-bg-subtle;
-    padding: $size-gap-2 $size-gap-3;
+    padding: $size-gap-2;
     border-radius: $size-radius-sm;
     font-size: 11px;
     font-family: $font-family-mono;
@@ -818,17 +871,20 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 24px;
-    height: 24px;
+    width: 28px;
+    height: 28px;
     border: none;
     border-radius: $size-radius-sm;
     background: $element-bg-soft;
-    color: var(--color-text-secondary);
+    color: var(--color-text-muted);
     cursor: pointer;
     flex-shrink: 0;
-    transition: all $motion-fast $easing-standard;
+    transition: background 0.15s, color 0.15s;
 
-    &:hover { background: $element-bg-medium; }
+    &:hover {
+      background: $element-bg-medium;
+      color: var(--color-text-primary);
+    }
   }
 }
 
@@ -837,27 +893,27 @@
 .insights-horizon {
   display: flex;
   flex-direction: column;
-  gap: $size-gap-3;
+  gap: $size-gap-2;
 }
 
 .insights-horizon-card {
   background: $color-purple-200;
   border: 1px solid $border-purple;
   border-radius: $size-radius-base;
-  padding: $size-gap-3;
+  padding: $size-gap-2;
 
   &__title {
-    font-weight: $font-weight-semibold;
+    font-weight: $font-weight-medium;
     font-size: $font-size-sm;
     color: $color-purple-500;
-    margin-bottom: $size-gap-2;
+    margin-bottom: $size-gap-1;
   }
 
   &__desc {
     font-size: $font-size-xs;
     color: var(--color-text-secondary);
     line-height: $line-height-base;
-    margin: 0 0 $size-gap-2;
+    margin: 0 0 $size-gap-1;
   }
 
   &__steps {
@@ -875,38 +931,20 @@
   background: $color-warning-bg;
   border: 1px solid $color-warning-border;
   border-radius: $size-radius-lg;
-  padding: $size-gap-5;
-  margin-top: $size-gap-6;
+  padding: $size-gap-4;
+  margin-top: $size-gap-4;
   text-align: center;
 
   &__headline {
-    font-size: $font-size-lg;
+    font-size: $font-size-base;
     font-weight: $font-weight-semibold;
     color: $color-warning;
-    margin-bottom: $size-gap-2;
+    margin-bottom: $size-gap-1;
   }
 
   &__message {
     font-size: $font-size-sm;
     color: var(--color-text-secondary);
     margin: 0;
-  }
-}
-
-// ============ Animations ============
-
-@keyframes insights-spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
-}
-
-@keyframes insights-fade-in {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .insights-scene__spinner {
-    animation: none;
   }
 }

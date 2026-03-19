@@ -13,7 +13,7 @@
 
 import React, { useCallback, useState, useMemo, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { Plus, FolderOpen, FolderPlus, History, Check, Bot, Clock3 } from 'lucide-react';
+import { Plus, FolderOpen, FolderPlus, History, Check, Clock3 } from 'lucide-react';
 import { Badge, Tooltip } from '@/component-library';
 import { useApp } from '../../hooks/useApp';
 import { useSceneManager } from '../../hooks/useSceneManager';
@@ -875,21 +875,18 @@ const MainNav: React.FC<MainNavProps> = ({
         })}
       </div>
 
-      {isAssistantNavMode && (
-        <div className="bitfun-nav-panel__assistant-footer">
-          <Tooltip content={personaTooltip} placement="right" followCursor>
-            <button
-              type="button"
-              className={`bitfun-nav-panel__assistant-entry${activeTabId === 'my-agent' ? ' is-active' : ''}`}
-              onClick={handleOpenProfile}
-              aria-label={myAgentEntryLabel}
-            >
-              <Bot size={16} className="bitfun-nav-panel__assistant-entry-icon" />
-              <span className="bitfun-nav-panel__assistant-entry-label">{myAgentEntryLabel}</span>
-            </button>
-          </Tooltip>
-        </div>
-      )}
+      <div className="bitfun-nav-panel__assistant-footer">
+        <Tooltip content={personaTooltip} placement="right" followCursor>
+          <button
+            type="button"
+            className={`bitfun-nav-panel__assistant-entry${activeTabId === 'my-agent' ? ' is-active' : ''}`}
+            onClick={handleOpenProfile}
+            aria-label={myAgentEntryLabel}
+          >
+            <span className="bitfun-nav-panel__assistant-entry-label">{myAgentEntryLabel}</span>
+          </button>
+        </Tooltip>
+      </div>
 
       <div className="bitfun-nav-panel__miniapp-footer">
         <MiniAppEntry

@@ -7,7 +7,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Pencil, Trash2, Check, X, Bot, Code2, Users, MoreHorizontal } from 'lucide-react';
+import { Pencil, Trash2, Check, X, Bot, Code2, Users, MoreHorizontal, Loader2 } from 'lucide-react';
 import { IconButton, Input, Tooltip } from '@/component-library';
 import { useI18n } from '@/infrastructure/i18n';
 import { flowChatStore } from '../../../../../flow_chat/store/FlowChatStore';
@@ -25,6 +25,8 @@ import {
 } from '@/flow_chat/services/openBtwSession';
 import { resolveSessionRelationship } from '@/flow_chat/utils/sessionMetadata';
 import { compareSessionsForDisplay } from '@/flow_chat/utils/sessionOrdering';
+import { stateMachineManager } from '@/flow_chat/state-machine';
+import { SessionExecutionState } from '@/flow_chat/state-machine/types';
 import './SessionsSection.scss';
 
 const MAX_VISIBLE_SESSIONS = 8;
@@ -72,8 +74,29 @@ const SessionsSection: React.FC<SessionsSectionProps> = ({
   const [showAll, setShowAll] = useState(false);
   const [openMenuSessionId, setOpenMenuSessionId] = useState<string | null>(null);
   const [sessionMenuPosition, setSessionMenuPosition] = useState<{ top: number; left: number } | null>(null);
+  const [runningSessionIds, setRunningSessionIds] = useState<Set<string>>(new Set());
   const editInputRef = useRef<HTMLInputElement>(null);
   const sessionMenuPopoverRef = useRef<HTMLDivElement>(null);
+
+  // Subscribe to state machine changes for running status
+  useEffect(() => {
+    const updateRunningSessions = () => {
+      const running = new Set<string>();
+      for (const session of flowChatState.sessions.values()) {
+        const machine = stateMachineManager.get(session.sessionId);
+        if (machine && machine.getCurrentState() === SessionExecutionState.PROCESSING) {
+          running.add(session.sessionId);
+        }
+      }
+      setRunningSessionIds(running);
+    };
+
+    updateRunningSessions();
+    const unsubscribe = stateMachineManager.subscribeGlobal(() => {
+      updateRunningSessions();
+    });
+    return () => unsubscribe();
+  }, [flowChatState.sessions]);
 
   useEffect(() => {
     const unsub = flowChatStore.subscribe(s => setFlowChatState(s));
@@ -343,6 +366,7 @@ const SessionsSection: React.FC<SessionsSectionProps> = ({
               : sessionModeKey === 'claw'
                 ? Bot
                 : Code2;
+          const isRunning = runningSessionIds.has(session.sessionId);
           const isRowActive = activeBtwSessionData?.childSessionId
             ? session.sessionId === activeBtwSessionData.childSessionId
             : activeTabId === AGENT_SCENE && session.sessionId === activeSessionId;
@@ -359,17 +383,27 @@ const SessionsSection: React.FC<SessionsSectionProps> = ({
                 .join(' ')}
               onClick={() => handleSwitch(session.sessionId)}
             >
-              <SessionIcon
-                size={12}
-                className={[
-                  'bitfun-nav-panel__inline-item-icon',
-                  sessionModeKey === 'cowork'
-                    ? 'is-cowork'
-                    : sessionModeKey === 'claw'
-                      ? 'is-claw'
-                      : 'is-code',
-                ].join(' ')}
-              />
+              {isRunning ? (
+                <Loader2
+                  size={12}
+                  className={[
+                    'bitfun-nav-panel__inline-item-icon',
+                    'is-running',
+                  ].join(' ')}
+                />
+              ) : (
+                <SessionIcon
+                  size={12}
+                  className={[
+                    'bitfun-nav-panel__inline-item-icon',
+                    sessionModeKey === 'cowork'
+                      ? 'is-cowork'
+                      : sessionModeKey === 'claw'
+                        ? 'is-claw'
+                        : 'is-code',
+                  ].join(' ')}
+                />
+              )}
 
               {isEditing ? (
                 <div className="bitfun-nav-panel__inline-item-edit" onClick={e => e.stopPropagation()}>

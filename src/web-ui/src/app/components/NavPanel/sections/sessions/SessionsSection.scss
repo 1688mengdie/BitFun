@@ -148,6 +148,11 @@
       color: color-mix(in srgb, var(--color-accent-500) 70%, var(--color-text-muted));
     }
 
+    &.is-running {
+      color: var(--color-primary);
+      animation: bitfun-nav-session-spin 1s linear infinite;
+    }
+
     .bitfun-nav-panel__inline-item:hover &,
     .bitfun-nav-panel__inline-item.is-active & {
       opacity: 1;
@@ -450,11 +455,26 @@
   }
 }
 
+// Session running spin animation
+@keyframes bitfun-nav-session-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .bitfun-nav-panel {
     &__inline-item,
     &__inline-action {
       transition: none;
     }
+  }
+
+  .bitfun-nav-panel__inline-item-icon.is-running {
+    animation: none;
+    opacity: 0.8;
   }
 }

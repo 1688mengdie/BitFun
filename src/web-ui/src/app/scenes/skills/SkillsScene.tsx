@@ -261,7 +261,7 @@ const SkillsScene: React.FC = () => {
           ) : null}
 
           {!installed.loading && !installed.error && installed.filteredSkills.length > 0 ? (
-            <GalleryGrid>
+            <GalleryGrid minCardWidth={360}>
               {installed.filteredSkills.map(renderInstalledCard)}
             </GalleryGrid>
           ) : null}
@@ -304,7 +304,7 @@ const SkillsScene: React.FC = () => {
           ) : null}
 
           {!market.marketLoading && !market.marketError && market.marketSkills.length > 0 ? (
-            <GalleryGrid>
+            <GalleryGrid minCardWidth={360}>
               {market.marketSkills.map(renderMarketCard)}
             </GalleryGrid>
           ) : null}

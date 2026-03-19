@@ -1,5 +1,4 @@
 import React, { useMemo } from 'react';
-import { Boxes } from 'lucide-react';
 import { Badge, Tooltip } from '@/component-library';
 import { useI18n } from '@/infrastructure/i18n/hooks/useI18n';
 import { useMiniAppStore } from '@/app/scenes/miniapps/miniAppStore';
@@ -65,12 +64,9 @@ const MiniAppEntry: React.FC<MiniAppEntryProps> = ({
         aria-label={t('scenes.miniApps')}
       >
         <span className="bitfun-nav-panel__miniapp-entry-main">
-          <span className="bitfun-nav-panel__miniapp-entry-icon" aria-hidden="true">
-            <Boxes size={18} />
-          </span>
           <span className="bitfun-nav-panel__miniapp-entry-copy">
             <span className="bitfun-nav-panel__miniapp-entry-title">{t('scenes.miniApps')}</span>
-            <Badge variant="neutral">Beta</Badge>
+            <Badge variant="neutral" className="bitfun-nav-panel__miniapp-badge">Beta</Badge>
           </span>
         </span>
 

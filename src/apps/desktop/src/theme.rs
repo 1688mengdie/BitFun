@@ -254,6 +254,11 @@ pub fn create_main_window(app_handle: &tauri::AppHandle) {
             .hidden_title(true);
     }
 
+    #[cfg(target_os = "windows")]
+    {
+        builder = builder.decorations(false);
+    }
+
     match builder.build() {
         Ok(window) => {
             #[cfg(debug_assertions)]

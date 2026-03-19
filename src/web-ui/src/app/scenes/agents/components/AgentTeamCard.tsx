@@ -47,6 +47,7 @@ const AgentTeamCard: React.FC<AgentTeamCardProps> = ({
       style={{
         '--card-index': index,
         '--agent-team-card-accent': accent,
+        '--agent-team-card-gradient': `linear-gradient(135deg, ${accent}40 0%, ${accent}15 100%)`,
       } as React.CSSProperties}
       onClick={openDetails}
       role="button"
@@ -54,21 +55,15 @@ const AgentTeamCard: React.FC<AgentTeamCardProps> = ({
       onKeyDown={(e) => e.key === 'Enter' && openDetails()}
       aria-label={team.name}
     >
-      <div className="agent-team-card__icon-area">
-        <div className="agent-team-card__icon">
-          <Icon size={24} strokeWidth={1.7} />
-        </div>
-      </div>
-
-      <div className="agent-team-card__body">
-        <div className="agent-team-card__header">
-          <div className="agent-team-card__header-main">
-            <div className="agent-team-card__title-row">
-              <span className="agent-team-card__name">{team.name}</span>
-            </div>
-            <p className="agent-team-card__desc">{team.description?.trim() || '—'}</p>
+      {/* Header: icon + name */}
+      <div className="agent-team-card__header">
+        <div className="agent-team-card__icon-area">
+          <div className="agent-team-card__icon">
+            <Icon size={20} strokeWidth={1.6} />
           </div>
-
+        </div>
+        <div className="agent-team-card__header-info">
+          <span className="agent-team-card__name">{team.name}</span>
           <div className="agent-team-card__actions" onClick={(e) => e.stopPropagation()}>
             <button
               type="button"
@@ -81,6 +76,11 @@ const AgentTeamCard: React.FC<AgentTeamCardProps> = ({
             </button>
           </div>
         </div>
+      </div>
+
+      {/* Body: description + meta */}
+      <div className="agent-team-card__body">
+        <p className="agent-team-card__desc">{team.description?.trim() || '—'}</p>
 
         <div className="agent-team-card__meta">
           <div className="agent-team-card__avatars">
@@ -117,13 +117,17 @@ const AgentTeamCard: React.FC<AgentTeamCardProps> = ({
               ))}
             </div>
           ) : null}
-          <div className="agent-team-card__state-badges">
-            {isExample ? <Badge variant="neutral">{t('teamCard.badges.example', '示例')}</Badge> : null}
-            <Badge variant="neutral">{strategyLabel}</Badge>
-            {team.shareContext ? (
-              <Badge variant="success">{t('teamCard.badges.sharedContext', '共享上下文')}</Badge>
-            ) : null}
-          </div>
+        </div>
+      </div>
+
+      {/* Footer: badges */}
+      <div className="agent-team-card__footer">
+        <div className="agent-team-card__state-badges">
+          {isExample ? <Badge variant="neutral">{t('teamCard.badges.example', '示例')}</Badge> : null}
+          <Badge variant="neutral">{strategyLabel}</Badge>
+          {team.shareContext ? (
+            <Badge variant="success">{t('teamCard.badges.sharedContext', '共享上下文')}</Badge>
+          ) : null}
         </div>
       </div>
     </div>
