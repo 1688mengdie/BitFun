@@ -47,6 +47,7 @@ const CoreAgentCard: React.FC<CoreAgentCardProps> = ({
         '--card-index': index,
         '--core-accent': meta.accentColor,
         '--core-accent-bg': meta.accentBg,
+        '--core-card-gradient': `linear-gradient(135deg, ${meta.accentColor}40 0%, ${meta.accentColor}15 100%)`,
       } as React.CSSProperties}
       onClick={openDetails}
       role="button"

@@ -1,6 +1,6 @@
 import React from 'react';
 import { Package, Puzzle } from 'lucide-react';
-import { getCardGradient } from '@/shared/utils/cardGradients';
+import { getCardGradient, getCardColorRgb } from '@/shared/utils/cardGradients';
 import './SkillCard.scss';
 
 type SkillCardActionTone = 'primary' | 'danger' | 'success' | 'muted';
@@ -47,6 +47,7 @@ const SkillCard: React.FC<SkillCardProps> = ({
       style={{
         '--card-index': index,
         '--skill-card-gradient': getCardGradient(accentSeed ?? name),
+        '--skill-card-color-rgb': getCardColorRgb(accentSeed ?? name),
       } as React.CSSProperties}
       onClick={openDetails}
       role="button"
@@ -54,46 +55,48 @@ const SkillCard: React.FC<SkillCardProps> = ({
       onKeyDown={(e) => e.key === 'Enter' && openDetails()}
       aria-label={name}
     >
-      <div className="skill-card__icon-area">
-        <div className="skill-card__icon">
-          <Icon size={26} strokeWidth={1.6} />
+      {/* Header: icon + badges */}
+      <div className="skill-card__header">
+        <div className="skill-card__icon-area">
+          <div className="skill-card__icon">
+            <Icon size={20} strokeWidth={1.6} />
+          </div>
         </div>
+        {badges && <div className="skill-card__badges">{badges}</div>}
       </div>
 
+      {/* Body: name + description + meta */}
       <div className="skill-card__body">
-        <div className="skill-card__header">
-          <div className="skill-card__header-text">
-            <span className="skill-card__name">{name}</span>
-            {badges}
-          </div>
-          {actions.length > 0 && (
-            <div className="skill-card__actions" onClick={(e) => e.stopPropagation()}>
-              {actions.map((action) => (
-                <button
-                  key={action.id}
-                  type="button"
-                  className={[
-                    'skill-card__action-btn',
-                    action.tone && `skill-card__action-btn--${action.tone}`,
-                  ].filter(Boolean).join(' ')}
-                  onClick={action.onClick}
-                  disabled={action.disabled}
-                  aria-label={action.ariaLabel}
-                  title={action.title ?? action.ariaLabel}
-                >
-                  {action.icon}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-
+        <span className="skill-card__name">{name}</span>
         {description?.trim() && (
           <p className="skill-card__desc">{description.trim()}</p>
         )}
-
         {meta && <div className="skill-card__meta">{meta}</div>}
       </div>
+
+      {/* Footer: action buttons */}
+      {actions.length > 0 && (
+        <div className="skill-card__footer">
+          <div className="skill-card__actions" onClick={(e) => e.stopPropagation()}>
+            {actions.map((action) => (
+              <button
+                key={action.id}
+                type="button"
+                className={[
+                  'skill-card__action-btn',
+                  action.tone && `skill-card__action-btn--${action.tone}`,
+                ].filter(Boolean).join(' ')}
+                onClick={action.onClick}
+                disabled={action.disabled}
+                aria-label={action.ariaLabel}
+                title={action.title ?? action.ariaLabel}
+              >
+                {action.icon}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 };

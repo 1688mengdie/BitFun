@@ -186,7 +186,7 @@ const MiniAppGalleryView: React.FC = () => {
     }
 
     return (
-      <GalleryGrid>
+      <GalleryGrid minCardWidth={360}>
         {filtered.map((app, index) => (
           <MiniAppCard
             key={app.id}
@@ -241,7 +241,7 @@ const MiniAppGalleryView: React.FC = () => {
           tools={runningApps.length > 0 ? <span className="gallery-zone-badge">{runningApps.length}</span> : null}
         >
           {runningApps.length > 0 ? (
-            <GalleryGrid>
+            <GalleryGrid minCardWidth={360}>
               {runningApps.map((app, index) => (
                 <MiniAppCard
                   key={app.id}

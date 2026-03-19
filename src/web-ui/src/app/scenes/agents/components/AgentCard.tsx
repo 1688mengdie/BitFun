@@ -52,41 +52,35 @@ const AgentCard: React.FC<AgentCardProps> = ({
       onKeyDown={(e) => e.key === 'Enter' && openDetails()}
       aria-label={agent.name}
     >
-      <div className="agent-card__icon-area">
-        <div className="agent-card__icon">
-          <Icon size={24} strokeWidth={1.7} />
+      {/* Header: icon + name */}
+      <div className="agent-card__header">
+        <div className="agent-card__icon-area">
+          <div className="agent-card__icon">
+            <Icon size={20} strokeWidth={1.6} />
+          </div>
+        </div>
+        <div className="agent-card__header-info">
+          <div className="agent-card__title-row">
+            <span className="agent-card__name">{agent.name}</span>
+            <div className="agent-card__badges">
+              <Badge variant={badge.variant}>
+                {agent.agentKind === 'mode' ? <Cpu size={10} /> : <Bot size={10} />}
+                {badge.label}
+              </Badge>
+              {!agent.enabled ? (
+                <Badge variant="neutral">{t('agentCard.badges.disabled', '已禁用')}</Badge>
+              ) : null}
+              {agent.model ? (
+                <Badge variant="neutral">{agent.model}</Badge>
+              ) : null}
+            </div>
+          </div>
         </div>
       </div>
 
+      {/* Body: description + meta */}
       <div className="agent-card__body">
-        <div className="agent-card__header">
-          <div className="agent-card__header-main">
-            <div className="agent-card__title-row">
-              <span className="agent-card__name">{agent.name}</span>
-              <div className="agent-card__badges">
-                <Badge variant={badge.variant}>
-                  {agent.agentKind === 'mode' ? <Cpu size={10} /> : <Bot size={10} />}
-                  {badge.label}
-                </Badge>
-                {!agent.enabled ? (
-                  <Badge variant="neutral">{t('agentCard.badges.disabled', '已禁用')}</Badge>
-                ) : null}
-                {agent.model ? (
-                  <Badge variant="neutral">{agent.model}</Badge>
-                ) : null}
-              </div>
-            </div>
-            <p className="agent-card__desc">{agent.description?.trim() || '—'}</p>
-          </div>
-
-          <div className="agent-card__actions" onClick={(e) => e.stopPropagation()}>
-            <Switch
-              checked={soloEnabled}
-              onChange={() => onToggleSolo(agent.id, !soloEnabled)}
-              size="small"
-            />
-          </div>
-        </div>
+        <p className="agent-card__desc">{agent.description?.trim() || '—'}</p>
 
         <div className="agent-card__meta">
           <div className="agent-card__cap-chips">
@@ -115,7 +109,19 @@ const AgentCard: React.FC<AgentCardProps> = ({
           ) : null}
         </div>
       </div>
+
+      {/* Footer: switch */}
+      <div className="agent-card__footer">
+        <div className="agent-card__footer-actions" onClick={(e) => e.stopPropagation()}>
+          <Switch
+            checked={soloEnabled}
+            onChange={() => onToggleSolo(agent.id, !soloEnabled)}
+            size="small"
+          />
+        </div>
+      </div>
     </div>
   );
 };
+
 export default AgentCard;

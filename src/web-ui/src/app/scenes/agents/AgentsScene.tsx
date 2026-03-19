@@ -384,7 +384,7 @@ const AgentsHomeView: React.FC = () => {
           ) : null}
 
           {!loading && filteredAgents.length > 0 ? (
-            <GalleryGrid>
+            <GalleryGrid minCardWidth={360}>
               {filteredAgents.map((agent, index) => (
                 <AgentCard
                   key={agent.id}
@@ -424,7 +424,7 @@ const AgentsHomeView: React.FC = () => {
               message={agentTeams.length === 0 ? t('teamsZone.empty.noTeams') : t('teamsZone.empty.noMatch')}
             />
           ) : (
-            <GalleryGrid>
+            <GalleryGrid minCardWidth={360}>
               {filteredTeams.map((team, index) => {
                 const caps = computeAgentTeamCapabilities(team, allAgents);
                 const topCaps = CAPABILITY_CATEGORIES
