@@ -38,7 +38,12 @@ export type I18nNamespace =
   | 'panels/git'
   | 'panels/terminal'
   | 'mermaid-editor'
-  | 'settings/prompt-templates';      
+  | 'settings/prompt-templates'
+  | 'scenes/miniapp'
+  | 'scenes/capabilities'
+  | 'scenes/agents'
+  | 'scenes/profile'
+  | 'scenes/skills';      
 
  
 export interface I18nConfig {

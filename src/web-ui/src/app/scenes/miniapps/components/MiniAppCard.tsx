@@ -2,6 +2,7 @@ import React from 'react';
 import { Play, Square, Trash2 } from 'lucide-react';
 import type { MiniAppMeta } from '@/infrastructure/api/service-api/MiniAppAPI';
 import { renderMiniAppIcon } from '../utils/miniAppIcons';
+import { useI18n } from '@/infrastructure/i18n';
 import './MiniAppCard.scss';
 
 interface MiniAppCardProps {
@@ -23,6 +24,7 @@ const MiniAppCard: React.FC<MiniAppCardProps> = ({
   onDelete,
   onStop,
 }) => {
+  const { t } = useI18n('scenes/miniapp');
   const handleDeleteClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     onDelete(app.id);
@@ -72,8 +74,8 @@ const MiniAppCard: React.FC<MiniAppCardProps> = ({
             <button
               className="miniapp-card__action-btn miniapp-card__action-btn--primary"
               onClick={handleOpenClick}
-              aria-label="启动"
-              title="启动"
+              aria-label={t('card.start')}
+              title={t('card.start')}
             >
               <Play size={15} fill="currentColor" strokeWidth={0} />
             </button>
@@ -81,8 +83,8 @@ const MiniAppCard: React.FC<MiniAppCardProps> = ({
               <button
                 className="miniapp-card__action-btn miniapp-card__action-btn--stop"
                 onClick={handleStopClick}
-                aria-label="停止"
-                title="停止"
+                aria-label={t('card.stop')}
+                title={t('card.stop')}
               >
                 <Square size={13} />
               </button>
@@ -90,8 +92,8 @@ const MiniAppCard: React.FC<MiniAppCardProps> = ({
               <button
                 className="miniapp-card__action-btn miniapp-card__action-btn--danger"
                 onClick={handleDeleteClick}
-                aria-label="删除"
-                title="删除"
+                aria-label={t('card.delete')}
+                title={t('card.delete')}
               >
                 <Trash2 size={13} />
               </button>

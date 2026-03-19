@@ -35,6 +35,7 @@ import zhCNScenesCapabilities from '../../../locales/zh-CN/scenes/capabilities.j
 import zhCNScenesAgents from '../../../locales/zh-CN/scenes/agents.json';
 import zhCNScenesProfile from '../../../locales/zh-CN/scenes/profile.json';
 import zhCNScenesSkills from '../../../locales/zh-CN/scenes/skills.json';
+import zhCNScenesMiniapp from '../../../locales/zh-CN/scenes/miniapp.json';
 import zhCNPanelsFiles from '../../../locales/zh-CN/panels/files.json';
 import zhCNPanelsGit from '../../../locales/zh-CN/panels/git.json';
 import zhCNPanelsTerminal from '../../../locales/zh-CN/panels/terminal.json';
@@ -74,6 +75,7 @@ import enUSScenesCapabilities from '../../../locales/en-US/scenes/capabilities.j
 import enUSScenesAgents from '../../../locales/en-US/scenes/agents.json';
 import enUSScenesProfile from '../../../locales/en-US/scenes/profile.json';
 import enUSScenesSkills from '../../../locales/en-US/scenes/skills.json';
+import enUSScenesMiniapp from '../../../locales/en-US/scenes/miniapp.json';
 import enUSPanelsFiles from '../../../locales/en-US/panels/files.json';
 import enUSPanelsGit from '../../../locales/en-US/panels/git.json';
 import enUSPanelsTerminal from '../../../locales/en-US/panels/terminal.json';
@@ -120,6 +122,7 @@ const resources = {
     'scenes/agents': zhCNScenesAgents,
     'scenes/profile': zhCNScenesProfile,
     'scenes/skills': zhCNScenesSkills,
+    'scenes/miniapp': zhCNScenesMiniapp,
     'panels/files': zhCNPanelsFiles,
     'panels/git': zhCNPanelsGit,
     'panels/terminal': zhCNPanelsTerminal,
@@ -160,6 +163,7 @@ const resources = {
     'scenes/agents': enUSScenesAgents,
     'scenes/profile': enUSScenesProfile,
     'scenes/skills': enUSScenesSkills,
+    'scenes/miniapp': enUSScenesMiniapp,
     'panels/files': enUSPanelsFiles,
     'panels/git': enUSPanelsGit,
     'panels/terminal': enUSPanelsTerminal,
@@ -223,6 +227,7 @@ export class I18nService {
           'scenes/agents',
           'scenes/profile',
           'scenes/skills',
+          'scenes/miniapp',
           'panels/files',
           'panels/git',
           'panels/terminal',
