@@ -7,7 +7,7 @@ use bitfun_core::service::snapshot::{
 };
 use log::{info, warn};
 use serde::{Deserialize, Serialize};
-use std::{path::PathBuf, sync::Arc};
+use std::{path::PathBuf, sync::Arc, time::Duration};
 use tauri::{AppHandle, Emitter};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -321,6 +321,22 @@ pub async fn rollback_to_turn(
     app_handle: AppHandle,
     request: RollbackTurnRequest,
 ) -> Result<Vec<String>, String> {
+    {
+        use bitfun_core::agentic::coordination::get_global_coordinator;
+
+        if let Some(coordinator) = get_global_coordinator() {
+            if let Err(e) = coordinator
+                .cancel_active_turn_for_session(&request.session_id, Duration::from_secs(2))
+                .await
+            {
+                warn!(
+                    "Failed to cancel active turn before rollback: session_id={}, turn_index={}, error={}",
+                    request.session_id, request.turn_index, e
+                );
+            }
+        }
+    }
+
     let manager = ensure_snapshot_manager_ready(&request.workspace_path).await?;
 
     let restored_files = manager
