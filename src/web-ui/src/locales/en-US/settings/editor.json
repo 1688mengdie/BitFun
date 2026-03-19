@@ -108,7 +108,8 @@
   },
   "actions": {
     "reset": "Reset to Default",
-    "save": "Save Settings"
+    "save": "Save Settings",
+    "saveDesc": "Reset editor config to default values"
   },
   "messages": {
     "loading": "Loading...",

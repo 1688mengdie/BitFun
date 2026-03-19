@@ -17,7 +17,6 @@ pub struct GlobalConfig {
     pub terminal: TerminalConfig,
     pub workspace: WorkspaceConfig,
     pub ai: AIConfig,
-    pub prompt_templates: Option<serde_json::Value>,
     /// MCP server configuration (stored uniformly; supports both JSON and structured formats).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mcp_servers: Option<serde_json::Value>,
@@ -897,7 +896,6 @@ impl Default for GlobalConfig {
             terminal: TerminalConfig::default(),
             workspace: WorkspaceConfig::default(),
             ai: AIConfig::default(),
-            prompt_templates: None,
             mcp_servers: None,
             themes: Some(ThemesConfig::default()),
             version: "1.0.0".to_string(),

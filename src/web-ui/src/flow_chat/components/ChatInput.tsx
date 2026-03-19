@@ -5,7 +5,7 @@
 
 import React, { useRef, useCallback, useEffect, useReducer, useState, useMemo } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
-import { ArrowUp, Image, Network, ChevronsUp, ChevronsDown, RotateCcw, FileText } from 'lucide-react';
+import { ArrowUp, Image, Network, ChevronsUp, ChevronsDown, RotateCcw } from 'lucide-react';
 import { ContextDropZone, useContextStore } from '../../shared/context-system';
 import { useActiveSessionState } from '../hooks/useActiveSessionState';
 import { RichTextInput, type MentionState } from './RichTextInput';
@@ -18,22 +18,16 @@ import { ModelSelector } from './ModelSelector';
 import { FlowChatStore } from '../store/FlowChatStore';
 import type { FlowChatState } from '../types/flow-chat';
 import type { FileContext, DirectoryContext } from '../../shared/types/context';
-import type { PromptTemplate } from '../../shared/types/prompt-template';
 import { SmartRecommendations } from './smart-recommendations';
 import { useCurrentWorkspace } from '@/infrastructure/contexts/WorkspaceContext';
 import { WorkspaceKind } from '@/shared/types';
 import { createImageContextFromFile, createImageContextFromClipboard } from '../utils/imageUtils';
 import { notificationService } from '@/shared/notification-system';
-import { TemplatePickerPanel } from './TemplatePickerPanel';
-import { promptTemplateService } from '@/infrastructure/services/PromptTemplateService';
-import { shortcutManager } from '@/infrastructure/services/ShortcutManager';
 import { inputReducer, initialInputState } from '../reducers/inputReducer';
-import { templateReducer, initialTemplateState } from '../reducers/templateReducer';
 import { modeReducer, initialModeState } from '../reducers/modeReducer';
 import { CHAT_INPUT_CONFIG } from '../constants/chatInputConfig';
 import { MERMAID_INTERACTIVE_EXAMPLE } from '../constants/mermaidExamples';
 import { useMessageSender } from '../hooks/useMessageSender';
-import { useTemplateEditor } from '../hooks/useTemplateEditor';
 import { useChatInputState } from '../store/chatInputStateStore';
 import { useInputHistoryStore } from '../store/inputHistoryStore';
 import { startBtwThread } from '../services/BtwThreadService';
@@ -75,7 +69,6 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const { t } = useTranslation('flow-chat');
   
   const [inputState, dispatchInput] = useReducer(inputReducer, initialInputState);
-  const [templateState, dispatchTemplate] = useReducer(templateReducer, initialTemplateState);
   const [modeState, dispatchMode] = useReducer(modeReducer, initialModeState);
   
   const richTextInputRef = useRef<HTMLDivElement>(null);
@@ -177,39 +170,8 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     contexts,
     onClearContexts: clearContexts,
     onSuccess: onSendMessage,
-    onExitTemplateMode: () => {
-      if (templateState.fillState?.isActive) {
-        dispatchTemplate({ type: 'EXIT_FILL' });
-        
-        if (richTextInputRef.current) {
-          const editor = richTextInputRef.current as HTMLElement;
-          editor.innerHTML = '';
-        }
-      }
-    },
     currentAgentType: effectiveTargetSession?.mode || modeState.current,
   });
-  
-  const {
-    handleTemplateSelect: originalHandleTemplateSelect,
-    exitTemplateMode,
-    moveToNextPlaceholder,
-    moveToPrevPlaceholder,
-  } = useTemplateEditor({
-    editorRef: richTextInputRef,
-    templateFillState: templateState.fillState,
-    onValueChange: (value: string) => dispatchInput({ type: 'SET_VALUE', payload: value }),
-    onStartFill: (state) => dispatchTemplate({ type: 'START_FILL', payload: state }),
-    onExitFill: () => dispatchTemplate({ type: 'EXIT_FILL' }),
-    onUpdateCurrentIndex: (index) => dispatchTemplate({ type: 'UPDATE_CURRENT_INDEX', payload: index }),
-    onNextPlaceholder: () => dispatchTemplate({ type: 'NEXT_PLACEHOLDER' }),
-    onPrevPlaceholder: () => dispatchTemplate({ type: 'PREV_PLACEHOLDER' }),
-  });
-  
-  const handleTemplateSelect = useCallback((template: PromptTemplate) => {
-    dispatchInput({ type: 'ACTIVATE' });
-    originalHandleTemplateSelect(template);
-  }, [originalHandleTemplateSelect]);
   
   const [recommendationContext, setRecommendationContext] = React.useState<{
     workspacePath?: string;
@@ -264,39 +226,6 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 
     return () => unsubscribe();
   }, [effectiveTargetSessionId]);
-
-  React.useEffect(() => {
-    const initializeTemplateService = async () => {
-      await promptTemplateService.initialize();
-      
-      const config = promptTemplateService.getConfig();
-      const shortcutConfig = shortcutManager.parseShortcut(config.globalShortcut);
-      
-      if (shortcutConfig) {
-        const unregister = shortcutManager.register(
-          'prompt-template-picker',
-          shortcutConfig,
-          () => {
-            dispatchTemplate({ type: 'OPEN_PICKER' });
-          },
-          {
-            description: 'Open prompt template picker panel',
-            priority: 10
-          }
-        );
-        
-        return unregister;
-      }
-    };
-    
-    const unregisterPromise = initializeTemplateService();
-    
-    return () => {
-      unregisterPromise.then(unregister => {
-        if (unregister) unregister();
-      });
-    };
-  }, []);
 
   React.useEffect(() => {
     const handleFillInput = (event: Event) => {
@@ -1036,27 +965,8 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       }
     }
     
-    if (templateState.fillState?.isActive) {
-      if (e.key === 'Tab') {
-        e.preventDefault();
-        
-        if (e.shiftKey) {
-          moveToPrevPlaceholder();
-        } else {
-          moveToNextPlaceholder();
-        }
-        return;
-      }
-      
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        exitTemplateMode();
-        return;
-      }
-    }
-    
     // Tab key: toggle send target when the btw session switcher is visible
-    if (showTargetSwitcher && e.key === 'Tab' && !e.shiftKey && !slashCommandState.isActive && !templateState.fillState?.isActive) {
+    if (showTargetSwitcher && e.key === 'Tab' && !e.shiftKey && !slashCommandState.isActive) {
       e.preventDefault();
       setInputTarget(prev => prev === 'main' ? 'btw' : 'main');
       return;
@@ -1161,9 +1071,6 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         return;
       }
 
-      if (templateState.fillState?.isActive) {
-        exitTemplateMode();
-      }
       handleSendOrCancel();
     }
     
@@ -1171,7 +1078,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       e.preventDefault();
       transition(SessionExecutionEvent.USER_CANCEL);
     }
-  }, [handleSendOrCancel, submitBtwFromInput, derivedState, transition, templateState.fillState, moveToNextPlaceholder, moveToPrevPlaceholder, exitTemplateMode, slashCommandState, getFilteredModes, getFilteredActions, getSlashPickerItems, selectSlashCommandMode, selectSlashCommandAction, canSwitchModes, historyIndex, inputHistory, savedDraft, inputState.value, currentSessionId, isBtwSession, showTargetSwitcher, setInputTarget, t]);
+  }, [handleSendOrCancel, submitBtwFromInput, derivedState, transition, slashCommandState, getFilteredModes, getFilteredActions, getSlashPickerItems, selectSlashCommandMode, selectSlashCommandAction, canSwitchModes, historyIndex, inputHistory, savedDraft, inputState.value, currentSessionId, isBtwSession, showTargetSwitcher, setInputTarget, t]);
 
   const handleImeCompositionStart = useCallback(() => {
     isImeComposingRef.current = true;
@@ -1384,12 +1291,6 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 
   return (
     <>
-      <TemplatePickerPanel
-        isOpen={templateState.isPickerOpen}
-        onClose={() => dispatchTemplate({ type: 'CLOSE_PICKER' })}
-        onSelect={handleTemplateSelect}
-      />
-      
       <ContextDropZone
         acceptedTypes={['file', 'directory', 'image', 'code-snippet', 'mermaid-diagram']}
         className="bitfun-chat-input-drop-zone"
@@ -1408,7 +1309,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       >
         <div 
           ref={containerRef}
-          className={`bitfun-chat-input ${inputState.isActive ? 'bitfun-chat-input--active' : 'bitfun-chat-input--collapsed'} ${inputState.isExpanded ? 'bitfun-chat-input--expanded' : ''} ${derivedState?.isProcessing ? 'bitfun-chat-input--processing' : ''} ${className} ${templateState.fillState?.isActive ? 'bitfun-chat-input--template-mode' : ''}`}
+          className={`bitfun-chat-input ${inputState.isActive ? 'bitfun-chat-input--active' : 'bitfun-chat-input--collapsed'} ${inputState.isExpanded ? 'bitfun-chat-input--expanded' : ''} ${derivedState?.isProcessing ? 'bitfun-chat-input--processing' : ''} ${className}`}
           onClick={!inputState.isActive ? handleActivate : undefined}
           data-testid="chat-input-container"
         >
@@ -1420,15 +1321,6 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         )}
 
         <div className="bitfun-chat-input__container">
-          {templateState.fillState?.isActive && (
-<div className="bitfun-chat-input__template-hint">
-                <span className="bitfun-chat-input__template-hint-text" dangerouslySetInnerHTML={{ __html: t('chatInput.templateHint') }} />
-                <span className="bitfun-chat-input__template-hint-progress">
-                  {t('chatInput.templateProgress', { current: templateState.fillState.currentIndex + 1, total: templateState.fillState.placeholders.length })}
-                </span>
-              </div>
-          )}
-          
           <div className={`bitfun-chat-input__box ${inputState.isExpanded ? 'bitfun-chat-input__box--expanded' : ''}`}>
             {showTargetSwitcher && (
               <div className="bitfun-chat-input__target-switcher" data-testid="chat-input-target-switcher">
@@ -1613,15 +1505,6 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                   variant="ghost"
                   size="xs"
                   onClick={() => {
-                    if (templateState.fillState?.isActive) {
-                      dispatchTemplate({ type: 'EXIT_FILL' });
-                      
-                      if (richTextInputRef.current) {
-                        const editor = richTextInputRef.current as HTMLElement;
-                        editor.innerHTML = '';
-                      }
-                    }
-                    
                     dispatchInput({ type: 'CLEAR_VALUE' });
                     setQueuedInput(null);
                   }}
@@ -1740,16 +1623,6 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                   <Network size={12} />
                 </IconButton>
                 
-                <IconButton
-                  className="bitfun-chat-input__action-button"
-                  variant="ghost"
-                  size="xs"
-                  onClick={() => dispatchTemplate({ type: 'TOGGLE_PICKER' })}
-                  tooltip={t('input.selectPromptTemplate')}
-                >
-                  <FileText size={12} />
-                </IconButton>
-
                 {renderActionButton()}
               </div>
             </div>

@@ -14,7 +14,6 @@
       "aiRules": "规则",
       "aiMemory": "记忆",
       "aiContext": "规则 & 记忆",
-      "promptTemplates": "提示词",
       "skills": "技能",
       "mcpTools": "MCP & 工具",
       "agents": "智能体",
@@ -404,17 +403,6 @@
     "disconnected": "已断开",
     "noServers": "暂无 MCP 服务器",
     "noServersHint": "添加 MCP 服务器以扩展功能"
-  },
-  "promptTemplates": {
-    "title": "提示词",
-    "subtitle": "管理提示词模板",
-    "addTemplate": "添加模板",
-    "editTemplate": "编辑模板",
-    "deleteTemplate": "删除模板",
-    "templateName": "模板名称",
-    "templateContent": "模板内容",
-    "noTemplates": "暂无模板",
-    "noTemplatesHint": "创建提示词模板以快速使用"
   },
   "editorConfig": {
     "title": "编辑器",

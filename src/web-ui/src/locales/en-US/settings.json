@@ -14,7 +14,6 @@
       "aiRules": "Rules",
       "aiMemory": "Memory",
       "aiContext": "Rules & Memory",
-      "promptTemplates": "Prompts",
       "skills": "Skills",
       "mcpTools": "MCP & Tools",
       "agents": "Agents",
@@ -404,17 +403,6 @@
     "disconnected": "Disconnected",
     "noServers": "No MCP servers",
     "noServersHint": "Add MCP servers to extend functionality"
-  },
-  "promptTemplates": {
-    "title": "Prompts",
-    "subtitle": "Manage prompt templates",
-    "addTemplate": "Add Template",
-    "editTemplate": "Edit Template",
-    "deleteTemplate": "Delete Template",
-    "templateName": "Template Name",
-    "templateContent": "Template Content",
-    "noTemplates": "No templates",
-    "noTemplatesHint": "Create prompt templates for quick access"
   },
   "editorConfig": {
     "title": "Editor",
