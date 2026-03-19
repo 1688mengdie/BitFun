@@ -2,10 +2,7 @@
  * Handles streamed text chunks and thinking content.
  */
 
-import { FlowChatStore } from '../../store/FlowChatStore';
-import { parsePartialJson } from '../../../shared/utils/partialJsonParser';
 import type { FlowChatContext, FlowTextItem } from './types';
-import { THINKING_END_MARKER } from './types';
 /**
  * Process a normal text chunk without notifying the store.
  */
@@ -58,14 +55,14 @@ export function processNormalTextChunkInternal(
 
 /**
  * Process thinking chunks without notifying the store.
- * Uses the <thinking_end> marker to avoid ordering issues.
  */
 export function processThinkingChunkInternal(
   context: FlowChatContext,
   sessionId: string,
   turnId: string,
   roundId: string,
-  text: string
+  text: string,
+  isThinkingEnd = false
 ): void {
   if (!context.contentBuffers.has(sessionId)) {
     context.contentBuffers.set(sessionId, new Map());
@@ -79,13 +76,9 @@ export function processThinkingChunkInternal(
 
   // Store thinking content under a separate key.
   const thinkingKey = `thinking_${roundId}`;
-  
-  const hasEndMarker = text.includes(THINKING_END_MARKER);
-  // Strip the end marker from stored content.
-  const cleanText = text.replace(THINKING_END_MARKER, '');
-  
+
   const currentContent = sessionContentBuffer.get(thinkingKey) || '';
-  const cleanedContent = (currentContent + cleanText).replace(/\n{3,}/g, '\n\n');
+  const cleanedContent = (currentContent + text).replace(/\n{3,}/g, '\n\n');
   sessionContentBuffer.set(thinkingKey, cleanedContent);
 
   let thinkingItemId = sessionActiveTextItems.get(thinkingKey);
@@ -97,22 +90,21 @@ export function processThinkingChunkInternal(
       id: thinkingItemId,
       type: 'thinking',
       content: cleanedContent,
-      isStreaming: !hasEndMarker,
-      isCollapsed: hasEndMarker,
+      isStreaming: !isThinkingEnd,
+      isCollapsed: isThinkingEnd,
       timestamp: Date.now(),
-      status: hasEndMarker ? 'completed' : 'streaming'
+      status: isThinkingEnd ? 'completed' : 'streaming'
     };
     
     context.flowChatStore.addModelRoundItemSilent(sessionId, turnId, thinkingItem, roundId);
     sessionActiveTextItems.set(thinkingKey, thinkingItemId);
     
-    // Clear buffers once the end marker arrives.
-    if (hasEndMarker) {
+    if (isThinkingEnd) {
       sessionContentBuffer.delete(thinkingKey);
       sessionActiveTextItems.delete(thinkingKey);
     }
   } else {
-    if (hasEndMarker) {
+    if (isThinkingEnd) {
       context.flowChatStore.updateModelRoundItemSilent(sessionId, turnId, thinkingItemId, {
         content: cleanedContent,
         isStreaming: false,
@@ -129,58 +121,6 @@ export function processThinkingChunkInternal(
         timestamp: Date.now()
       } as any);
     }
-  }
-}
-
-/**
- * Merge partial tool params without notifying the store.
- */
-export function processToolParamsPartialInternal(
-  _context: FlowChatContext,
-  sessionId: string,
-  turnId: string,
-  toolEvent: any
-): void {
-  const store = FlowChatStore.getInstance();
-  const existingItem = store.findToolItem(sessionId, turnId, toolEvent.tool_id);
-  
-  if (existingItem) {
-    const currentParams = (existingItem as any).parameters || {};
-    let newParams = currentParams;
-    
-    if (toolEvent.params_partial) {
-      try {
-        const partialParams = parsePartialJson(toolEvent.params_partial);
-        newParams = { ...currentParams, ...partialParams };
-      } catch {
-        // Ignore parse errors to keep streaming resilient.
-      }
-    }
-    
-    store.updateModelRoundItemSilent(sessionId, turnId, toolEvent.tool_id, {
-      parameters: newParams,
-      _rawParamsPartial: ((existingItem as any)._rawParamsPartial || '') + (toolEvent.params_partial || '')
-    } as any);
-  }
-}
-
-/**
- * Update tool progress without notifying the store.
- */
-export function processToolProgressInternal(
-  _context: FlowChatContext,
-  sessionId: string,
-  turnId: string,
-  toolEvent: any
-): void {
-  const store = FlowChatStore.getInstance();
-  const existingItem = store.findToolItem(sessionId, turnId, toolEvent.tool_id);
-  
-  if (existingItem) {
-    store.updateModelRoundItemSilent(sessionId, turnId, toolEvent.tool_id, {
-      _progressMessage: toolEvent.message,
-      _progressPercentage: toolEvent.percentage
-    } as any);
   }
 }
 

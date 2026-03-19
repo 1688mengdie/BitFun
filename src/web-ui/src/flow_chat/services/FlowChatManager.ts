@@ -48,8 +48,7 @@ export class FlowChatManager {
       flowChatStore: FlowChatStore.getInstance(),
       processingManager: processingStatusManager,
       eventBatcher: new EventBatcher({
-        onFlush: (events) => this.processBatchedEvents(events),
-        debug: false
+        onFlush: (events) => this.processBatchedEvents(events)
       }),
       contentBuffers: new Map(),
       activeTextItems: new Map(),

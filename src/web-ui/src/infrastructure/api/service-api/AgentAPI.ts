@@ -126,7 +126,8 @@ export interface AgenticEvent {
 export interface TextChunkEvent extends AgenticEvent {
   roundId: string;
   text: string;
-  contentType?: 'text' | 'thinking'; 
+  contentType?: 'text' | 'thinking';
+  isThinkingEnd?: boolean;
   subagentParentInfo?: SubagentParentInfo;
 }
 

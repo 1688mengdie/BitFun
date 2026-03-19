@@ -5,6 +5,7 @@
 import type { FlowChatStore } from '../../store/FlowChatStore';
 import type { EventBatcher } from '../EventBatcher';
 import type { processingStatusManager } from '../ProcessingStatusManager';
+import type { FlowToolEvent } from '../EventBatcher';
 
 /**
  * Shared context for FlowChatManager modules.
@@ -50,17 +51,13 @@ export interface SubagentTextChunkData {
   roundId: string;
   text: string;
   contentType: string;
+  isThinkingEnd?: boolean;
 }
 
 export interface SubagentToolEventData {
   sessionId: string;
   turnId: string;
-  toolEvent: any;
+  toolEvent: FlowToolEvent;
 }
 
 export type { SessionConfig, DialogTurn, ModelRound, FlowTextItem, FlowToolItem } from '../../types/flow-chat';
-
-/**
- * Thinking content end marker.
- */
-export const THINKING_END_MARKER = '<thinking_end>';

@@ -20,19 +20,18 @@ export interface BatchedEvent<T = any> {
   payload: T;
   strategy: MergeStrategy;
   accumulator?: (existing: T, incoming: T) => T;
+  sourceCount: number;
   timestamp: number;
 }
 
 export interface EventBatcherOptions {
   onFlush: (events: Array<{ key: string; payload: any }>) => void;
-  debug?: boolean;
 }
 
 export class EventBatcher {
   private buffer: Map<string, BatchedEvent> = new Map();
   private scheduled = false;
   private onFlush: (events: Array<{ key: string; payload: any }>) => void;
-  private debug: boolean;
   private frameId: number | null = null;
 
   // Update frequency control to prevent UI blocking with many events
@@ -42,7 +41,6 @@ export class EventBatcher {
 
   constructor(options: EventBatcherOptions) {
     this.onFlush = options.onFlush;
-    this.debug = options.debug ?? false;
   }
 
   add<T>(
@@ -61,22 +59,20 @@ export class EventBatcher {
         existing.payload = payload;
         existing.timestamp = Date.now();
       }
+      existing.sourceCount += 1;
 
-      if (this.debug) {
-        log.debug('Merged event', { key, strategy });
-      }
+      log.trace('Merged event', { key, strategy });
     } else {
       this.buffer.set(key, {
         key,
         payload,
         strategy,
         accumulator,
+        sourceCount: 1,
         timestamp: Date.now()
       });
 
-      if (this.debug) {
-        log.debug('Added new event', { key, strategy });
-      }
+      log.trace('Added new event', { key, strategy });
     }
 
     this.scheduleFlush();
@@ -114,32 +110,36 @@ export class EventBatcher {
     if (this.buffer.size === 0) return;
 
     const startTime = performance.now();
-    const bufferSize = this.buffer.size;
+    const bufferedEvents = Array.from(this.buffer.values());
+    const mergedEventCount = bufferedEvents.length;
+    const rawEventCount = bufferedEvents.reduce((count, event) => count + event.sourceCount, 0);
 
-    const events = Array.from(this.buffer.values()).map(({ key, payload }) => ({
+    const events = bufferedEvents.map(({ key, payload }) => ({
       key,
       payload
     }));
 
-    if (this.debug) {
-      log.debug('Flushing batched events', { count: events.length });
-    }
+    log.trace('Flushing batched events', {
+      rawEventCount,
+      mergedEventCount,
+      mergedEvents: bufferedEvents.map(({ key, payload, strategy, sourceCount, timestamp }) => ({
+        key,
+        strategy,
+        sourceCount,
+        timestamp,
+        payload
+      }))
+    });
 
     this.buffer = new Map();
     this.onFlush(events);
 
     const duration = performance.now() - startTime;
-    if (this.debug || duration > 10) {
-      log.warn('Event batch processing took longer than expected', { 
-        eventCount: bufferSize, 
+    if (duration > 10) {
+      log.warn('Event batch processing took longer than expected', {
+        rawEventCount,
+        mergedEventCount,
         duration: duration.toFixed(2) 
-      });
-    }
-    if (duration > 16.67) {
-      log.error('Event batch processing exceeded frame time', { 
-        eventCount: bufferSize, 
-        duration: duration.toFixed(2),
-        frameTime: 16.67
       });
     }
   }
@@ -172,10 +172,6 @@ export class EventBatcher {
     }
     this.buffer.clear();
     this.scheduled = false;
-
-    if (this.debug) {
-      log.debug('Buffer cleared');
-    }
   }
 
   destroy(): void {
@@ -189,23 +185,111 @@ export interface SubagentParentInfo {
   dialogTurnId: string;
 }
 
+export type ToolEventType =
+  | 'EarlyDetected'
+  | 'ParamsPartial'
+  | 'Queued'
+  | 'Waiting'
+  | 'Started'
+  | 'Progress'
+  | 'Streaming'
+  | 'StreamChunk'
+  | 'ConfirmationNeeded'
+  | 'Confirmed'
+  | 'Rejected'
+  | 'Completed'
+  | 'Failed'
+  | 'Cancelled';
+
+interface BaseToolEvent<T extends ToolEventType> {
+  event_type: T;
+  tool_id: string;
+  tool_name: string;
+}
+
+export interface EarlyDetectedToolEvent extends BaseToolEvent<'EarlyDetected'> {}
+
+export interface ParamsPartialToolEvent extends BaseToolEvent<'ParamsPartial'> {
+  params: string;
+}
+
+export interface QueuedToolEvent extends BaseToolEvent<'Queued'> {
+  position: number;
+}
+
+export interface WaitingToolEvent extends BaseToolEvent<'Waiting'> {
+  dependencies: string[];
+}
+
+export interface StartedToolEvent extends BaseToolEvent<'Started'> {
+  params: unknown;
+}
+
+export interface ProgressToolEvent extends BaseToolEvent<'Progress'> {
+  message: string;
+  percentage: number;
+}
+
+export interface StreamingToolEvent extends BaseToolEvent<'Streaming'> {
+  chunks_received: number;
+}
+
+export interface StreamChunkToolEvent extends BaseToolEvent<'StreamChunk'> {
+  data: unknown;
+}
+
+export interface ConfirmationNeededToolEvent extends BaseToolEvent<'ConfirmationNeeded'> {
+  params: unknown;
+}
+
+export interface ConfirmedToolEvent extends BaseToolEvent<'Confirmed'> {}
+
+export interface RejectedToolEvent extends BaseToolEvent<'Rejected'> {}
+
+export interface CompletedToolEvent extends BaseToolEvent<'Completed'> {
+  result: unknown;
+  result_for_assistant?: string;
+  duration_ms: number;
+}
+
+export interface FailedToolEvent extends BaseToolEvent<'Failed'> {
+  error: string;
+}
+
+export interface CancelledToolEvent extends BaseToolEvent<'Cancelled'> {
+  reason: string;
+}
+
+export type FlowToolEvent =
+  | EarlyDetectedToolEvent
+  | ParamsPartialToolEvent
+  | QueuedToolEvent
+  | WaitingToolEvent
+  | StartedToolEvent
+  | ProgressToolEvent
+  | StreamingToolEvent
+  | StreamChunkToolEvent
+  | ConfirmationNeededToolEvent
+  | ConfirmedToolEvent
+  | RejectedToolEvent
+  | CompletedToolEvent
+  | FailedToolEvent
+  | CancelledToolEvent;
+
 export interface TextChunkEventData {
   sessionId: string;
   turnId: string;
   roundId: string;
   text: string;
   contentType: 'text' | 'thinking';
+  isThinkingEnd?: boolean;
   subagentParentInfo?: SubagentParentInfo;
 }
 
 export interface ToolEventData {
   sessionId: string;
   turnId: string;
-  toolEvent: {
-    tool_id: string;
-    eventType: string;
-    [key: string]: any;
-  };
+  toolEvent: FlowToolEvent;
   subagentParentInfo?: SubagentParentInfo;
 }
 
@@ -240,9 +324,10 @@ export function generateTextChunkKey(data: TextChunkEventData): string {
  */
 export function generateToolEventKey(data: ToolEventData): { key: string; strategy: MergeStrategy } | null {
   const { sessionId, toolEvent, subagentParentInfo } = data;
-  const { tool_id: toolUseId, eventType } = toolEvent;
+  const toolUseId = toolEvent.tool_id;
+  const eventType = toolEvent.event_type;
 
-  const isolatedEvents = ['Detected', 'Started', 'Completed', 'Failed', 'Cancelled', 'ConfirmationNeeded'];
+  const isolatedEvents: ToolEventType[] = ['EarlyDetected', 'Started', 'Completed', 'Failed', 'Cancelled', 'ConfirmationNeeded'];
   if (isolatedEvents.includes(eventType)) {
     return null;
   }

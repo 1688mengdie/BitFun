@@ -294,11 +294,11 @@ impl StreamProcessor {
 
     // ==================== Helper Methods ====================
 
-    /// Send thinking end marker (if needed)
+    /// Send thinking end event (if needed)
     async fn send_thinking_end_if_needed(&self, ctx: &mut StreamContext) {
         if ctx.thinking_chunks_count > 0 && !ctx.thinking_completed_sent {
             ctx.thinking_completed_sent = true;
-            debug!("Thinking process ended, sending ThinkingChunk with end marker");
+            debug!("Thinking process ended, sending ThinkingChunk end event");
             let _ = self
                 .event_queue
                 .enqueue(
@@ -306,7 +306,8 @@ impl StreamProcessor {
                         session_id: ctx.session_id.clone(),
                         turn_id: ctx.dialog_turn_id.clone(),
                         round_id: ctx.round_id.clone(),
-                        content: "<thinking_end>".to_string(),
+                        content: String::new(),
+                        is_end: true,
                         subagent_parent_info: ctx.event_subagent_parent_info.clone(),
                     },
                     Some(EventPriority::Normal),
@@ -578,6 +579,7 @@ impl StreamProcessor {
                     turn_id: ctx.dialog_turn_id.clone(),
                     round_id: ctx.round_id.clone(),
                     content: thinking_content,
+                    is_end: false,
                     subagent_parent_info: ctx.event_subagent_parent_info.clone(),
                 },
                 Some(EventPriority::Normal),

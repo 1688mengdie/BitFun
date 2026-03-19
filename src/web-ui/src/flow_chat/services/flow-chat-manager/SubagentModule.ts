@@ -5,8 +5,8 @@
 import { FlowChatStore } from '../../store/FlowChatStore';
 import { createLogger } from '@/shared/utils/logger';
 import type { FlowChatContext, FlowTextItem, SubagentTextChunkData, SubagentToolEventData } from './types';
-import { THINKING_END_MARKER } from './types';
 import { processToolEvent } from './ToolEventModule';
+import type { ToolEventData } from '../EventBatcher';
 
 const log = createLogger('SubagentModule');
 
@@ -49,9 +49,8 @@ export function routeTextChunkToToolCard(
   // Format: subagent-{type}-{parentToolId}-{sessionId}-{roundId}
   const itemId = `${itemPrefix}-${parentToolId}-${data.sessionId}-${data.roundId}`;
   
-  const hasEndMarker = isThinking && data.text.includes(THINKING_END_MARKER);
-  // Strip the end marker from the rendered content.
-  const cleanText = data.text.replace(THINKING_END_MARKER, '');
+  const isThinkingEnd = isThinking && !!data.isThinkingEnd;
+  const textContent = data.text;
   
   const parentTurn = parentSession.dialogTurns.find(turn => turn.id === parentTurnId);
   let existingItem: FlowTextItem | import('../../types/flow-chat').FlowThinkingItem | null = null;
@@ -67,9 +66,9 @@ export function routeTextChunkToToolCard(
   }
   
   if (existingItem) {
-    if (hasEndMarker) {
+    if (isThinkingEnd) {
       store.updateModelRoundItem(parentSessionId, parentTurnId, itemId, {
-        content: existingItem.content + cleanText,
+        content: existingItem.content + textContent,
         isStreaming: false,
         isCollapsed: true,
         status: 'completed',
@@ -78,7 +77,7 @@ export function routeTextChunkToToolCard(
       
     } else {
       store.updateModelRoundItem(parentSessionId, parentTurnId, itemId, {
-        content: existingItem.content + cleanText,
+        content: existingItem.content + textContent,
         timestamp: Date.now()
       } as any);
     }
@@ -91,11 +90,11 @@ export function routeTextChunkToToolCard(
       const newThinkingItem: import('../../types/flow-chat').FlowThinkingItem = {
         id: itemId,
         type: 'thinking',
-        content: cleanText,
+        content: textContent,
         timestamp: parentTimestamp + 1,
-        isStreaming: !hasEndMarker,
-        isCollapsed: hasEndMarker,
-        status: hasEndMarker ? 'completed' : 'streaming',
+        isStreaming: !isThinkingEnd,
+        isCollapsed: isThinkingEnd,
+        status: isThinkingEnd ? 'completed' : 'streaming',
         isSubagentItem: true,
         parentTaskToolId: parentToolId,
         subagentSessionId: data.sessionId
@@ -106,7 +105,7 @@ export function routeTextChunkToToolCard(
       const newTextItem: FlowTextItem = {
         id: itemId,
         type: 'text',
-        content: cleanText,
+        content: textContent,
         timestamp: parentTimestamp + 1,
         isStreaming: true,
         status: 'streaming',
@@ -182,6 +181,7 @@ export function routeTextChunkToToolCardInternal(
     roundId: string;
     text: string;
     contentType: string;
+    isThinkingEnd?: boolean;
   }
 ): void {
   routeTextChunkToToolCard(context, parentSessionId, parentToolId, chunkData);
@@ -194,7 +194,7 @@ export function routeToolEventToToolCardInternal(
   context: FlowChatContext,
   parentSessionId: string,
   parentToolId: string,
-  eventData: any,
+  eventData: ToolEventData,
   onTodoWriteResult?: (sessionId: string, turnId: string, result: any) => void
 ): void {
   routeToolEventToToolCard(context, parentSessionId, parentToolId, eventData, onTodoWriteResult);

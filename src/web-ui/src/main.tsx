@@ -141,8 +141,6 @@ loader.config({
   }
 });
 
-log.debug('Monaco loader configured', { vs: monacoPath, isDev });
-
 // Debug: check resource availability in production.
 if (!isDev) {
   // Delay checks to avoid blocking startup.
@@ -186,9 +184,14 @@ async function initializeApp() {
     // Initialize logger first (attaches console in dev mode)
     const { initLogger } = await import('./shared/utils/logger');
     await initLogger();
-    
+
+    // Sync frontend logger with app.logging.level before startup logs.
+    const { initializeFrontendLogLevelSync } = await import('./infrastructure/config/services/FrontendLogLevelSync');
+    await initializeFrontendLogLevelSync();
+
+    log.debug('Monaco loader configured', { vs: monacoPath, isDev });
     log.info('Initializing BitFun');
-    
+
     // Synchronous initialization: core systems that must run first.
     const { registerDefaultContextTypes } = await import('./shared/context-system/core/registerDefaultTypes');
     registerDefaultContextTypes();

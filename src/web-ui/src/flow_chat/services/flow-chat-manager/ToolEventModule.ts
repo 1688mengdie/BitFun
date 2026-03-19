@@ -8,6 +8,17 @@ import { parsePartialJson } from '../../../shared/utils/partialJsonParser';
 import { createLogger } from '@/shared/utils/logger';
 import type { FlowChatContext, FlowToolItem, ToolEventOptions, DialogTurn } from './types';
 import { immediateSaveDialogTurn } from './PersistenceModule';
+import type {
+  CancelledToolEvent,
+  CompletedToolEvent,
+  ConfirmationNeededToolEvent,
+  EarlyDetectedToolEvent,
+  FailedToolEvent,
+  FlowToolEvent,
+  ParamsPartialToolEvent,
+  ProgressToolEvent,
+  StartedToolEvent,
+} from '../EventBatcher';
 
 const log = createLogger('ToolEventModule');
 
@@ -19,7 +30,7 @@ export function processToolEvent(
   context: FlowChatContext,
   sessionId: string,
   turnId: string,
-  toolEvent: any,
+  toolEvent: FlowToolEvent,
   options?: ToolEventOptions,
   onTodoWriteResult?: (sessionId: string, turnId: string, result: any) => void
 ): void {
@@ -50,26 +61,31 @@ export function processToolEvent(
     }
     
     case 'Started': {
+      flushPendingBatchedEvents(context);
       handleStarted(store, sessionId, turnId, dialogTurn, toolEvent, options);
       break;
     }
     
     case 'Completed': {
+      flushPendingBatchedEvents(context);
       handleCompleted(context, store, sessionId, turnId, toolEvent, options, onTodoWriteResult);
       break;
     }
     
     case 'Failed': {
+      flushPendingBatchedEvents(context);
       handleFailed(context, store, sessionId, turnId, toolEvent);
       break;
     }
     
     case 'Cancelled': {
+      flushPendingBatchedEvents(context);
       handleCancelled(context, store, sessionId, turnId, toolEvent);
       break;
     }
     
     case 'ConfirmationNeeded': {
+      flushPendingBatchedEvents(context);
       handleConfirmationNeeded(store, sessionId, turnId, toolEvent);
       break;
     }
@@ -84,6 +100,121 @@ export function processToolEvent(
   }
 }
 
+function flushPendingBatchedEvents(context: FlowChatContext): void {
+  if (context.eventBatcher.getBufferSize() > 0) {
+    context.eventBatcher.flushNow();
+  }
+}
+
+function updateToolItem(
+  store: FlowChatStore,
+  sessionId: string,
+  turnId: string,
+  toolId: string,
+  updates: Record<string, any>,
+  silent = false
+): void {
+  if (silent) {
+    store.updateModelRoundItemSilent(sessionId, turnId, toolId, updates as any);
+    return;
+  }
+
+  store.updateModelRoundItem(sessionId, turnId, toolId, updates as any);
+}
+
+function isTodoWriteSuccessResult(result: unknown): result is Record<string, unknown> {
+  return typeof result === 'object' && result !== null && (result as { success?: unknown }).success === true;
+}
+
+function isWriteLikeToolName(toolName: string): boolean {
+  return ['write', 'write_notebook', 'file_write', 'Write'].includes(toolName);
+}
+
+function shouldIgnoreParamsPartial(status: FlowToolItem['status']): boolean {
+  return ['running', 'completed', 'error', 'cancelled', 'pending_confirmation', 'confirmed'].includes(status);
+}
+
+function applyParamsPartial(
+  store: FlowChatStore,
+  sessionId: string,
+  turnId: string,
+  toolEvent: ParamsPartialToolEvent,
+  silent = false
+): void {
+  const existingItem = store.findToolItem(sessionId, turnId, toolEvent.tool_id);
+  
+  if (existingItem && existingItem.type === 'tool') {
+    const existingToolItem = existingItem as FlowToolItem;
+    if (shouldIgnoreParamsPartial(existingToolItem.status)) {
+      return;
+    }
+
+    const prevBuffer = existingToolItem._paramsBuffer || '';
+    const newBuffer = prevBuffer + (toolEvent.params || '');
+    
+    let parsedParams: Record<string, any> = {};
+    try {
+      parsedParams = parsePartialJson(newBuffer);
+    } catch {
+    }
+    
+    const isWriteTool = isWriteLikeToolName(toolEvent.tool_name);
+    const isEditTool = ['edit', 'search_replace', 'Edit'].includes(toolEvent.tool_name);
+    const hasContentField = parsedParams && ('content' in parsedParams || 'contents' in parsedParams);
+    const hasNewString = parsedParams && 'new_string' in parsedParams;
+    
+    let status: 'streaming' | 'receiving' = 'streaming';
+    if ((isWriteTool && hasContentField) || (isEditTool && hasNewString)) {
+      status = 'receiving';
+    }
+    
+    updateToolItem(store, sessionId, turnId, toolEvent.tool_id, {
+      toolCall: {
+        input: parsedParams,
+        id: toolEvent.tool_id
+      },
+      partialParams: parsedParams,
+      _paramsBuffer: newBuffer,
+      status,
+      isParamsStreaming: true,
+      _contentSize: hasContentField ? ((parsedParams.content || parsedParams.contents || '').length) : undefined
+    }, silent);
+  }
+}
+
+function applyProgress(
+  store: FlowChatStore,
+  sessionId: string,
+  turnId: string,
+  toolEvent: ProgressToolEvent,
+  silent = false
+): void {
+  const existingItem = store.findToolItem(sessionId, turnId, toolEvent.tool_id);
+  
+  if (existingItem) {
+    updateToolItem(store, sessionId, turnId, toolEvent.tool_id, {
+      _progressMessage: toolEvent.message,
+      _progressPercentage: toolEvent.percentage
+    }, silent);
+  }
+}
+
+export function processToolParamsPartialInternal(
+  sessionId: string,
+  turnId: string,
+  toolEvent: ParamsPartialToolEvent
+): void {
+  applyParamsPartial(FlowChatStore.getInstance(), sessionId, turnId, toolEvent, true);
+}
+
+export function processToolProgressInternal(
+  sessionId: string,
+  turnId: string,
+  toolEvent: ProgressToolEvent
+): void {
+  applyProgress(FlowChatStore.getInstance(), sessionId, turnId, toolEvent, true);
+}
+
 /**
  * Handle tool early detection event
  */
@@ -93,10 +224,10 @@ function handleEarlyDetected(
   sessionId: string,
   turnId: string,
   dialogTurn: DialogTurn,
-  toolEvent: any,
+  toolEvent: EarlyDetectedToolEvent,
   options?: ToolEventOptions
 ): void {
-  context.eventBatcher.flushNow();
+  flushPendingBatchedEvents(context);
   
   const shouldDisplayInMainFlow = toolEvent.tool_name === 'submit_code_review' || 
                                  toolEvent.tool_name === 'AskUserQuestion';
@@ -150,42 +281,9 @@ function handleParamsPartial(
   store: FlowChatStore,
   sessionId: string,
   turnId: string,
-  toolEvent: any
+  toolEvent: ParamsPartialToolEvent
 ): void {
-  const existingItem = store.findToolItem(sessionId, turnId, toolEvent.tool_id);
-  
-  if (existingItem && existingItem.type === 'tool') {
-    const prevBuffer = (existingItem as FlowToolItem)._paramsBuffer || '';
-    const newBuffer = prevBuffer + (toolEvent.params || '');
-    
-    let parsedParams: Record<string, any> = {};
-    try {
-      parsedParams = parsePartialJson(newBuffer);
-    } catch (e) {
-    }
-    
-    const isWriteTool = ['write', 'write_notebook', 'file_write', 'Write'].includes(toolEvent.tool_name);
-    const isEditTool = ['edit', 'search_replace', 'Edit'].includes(toolEvent.tool_name);
-    const hasContentField = parsedParams && ('content' in parsedParams || 'contents' in parsedParams);
-    const hasNewString = parsedParams && 'new_string' in parsedParams;
-    
-    let status: 'streaming' | 'receiving' = 'streaming';
-    if ((isWriteTool && hasContentField) || (isEditTool && hasNewString)) {
-      status = 'receiving';
-    }
-    
-    store.updateModelRoundItem(sessionId, turnId, toolEvent.tool_id, {
-      toolCall: {
-        input: parsedParams,
-        id: toolEvent.tool_id
-      },
-      partialParams: parsedParams,
-      _paramsBuffer: newBuffer,
-      status,
-      isParamsStreaming: true,
-      _contentSize: hasContentField ? ((parsedParams.content || parsedParams.contents || '').length) : undefined
-    } as any);
-  }
+  applyParamsPartial(store, sessionId, turnId, toolEvent);
 }
 
 /**
@@ -196,7 +294,7 @@ function handleStarted(
   sessionId: string,
   turnId: string,
   dialogTurn: DialogTurn,
-  toolEvent: any,
+  toolEvent: StartedToolEvent,
   options?: ToolEventOptions
 ): void {
   const existingItem = store.findToolItem(sessionId, turnId, toolEvent.tool_id);
@@ -257,26 +355,27 @@ function handleCompleted(
   store: FlowChatStore,
   sessionId: string,
   turnId: string,
-  toolEvent: any,
+  toolEvent: CompletedToolEvent,
   options?: ToolEventOptions,
   onTodoWriteResult?: (sessionId: string, turnId: string, result: any) => void
 ): void {
-  if (!options?.isSubagent && toolEvent.tool_name === 'TodoWrite' && toolEvent.result?.success) {
+  if (!options?.isSubagent && toolEvent.tool_name === 'TodoWrite' && isTodoWriteSuccessResult(toolEvent.result)) {
     onTodoWriteResult?.(sessionId, turnId, toolEvent.result);
   }
   
-  const updates: any = {
+  const updates = {
     toolResult: {
       result: toolEvent.result,
       success: true,
       resultForAssistant: toolEvent.result_for_assistant,
       duration_ms: toolEvent.duration_ms
     },
-    status: 'completed',
+    status: 'completed' as const,
+    isParamsStreaming: false,
     endTime: Date.now()
   };
 
-  store.updateModelRoundItem(sessionId, turnId, toolEvent.tool_id, updates);
+  store.updateModelRoundItem(sessionId, turnId, toolEvent.tool_id, updates as any);
   
   immediateSaveDialogTurn(context, sessionId, turnId);
 }
@@ -289,14 +388,13 @@ function handleFailed(
   store: FlowChatStore,
   sessionId: string,
   turnId: string,
-  toolEvent: any
+  toolEvent: FailedToolEvent
 ): void {
   store.updateModelRoundItem(sessionId, turnId, toolEvent.tool_id, {
     toolResult: {
       result: null,
       success: false,
-      error: toolEvent.error,
-      duration_ms: toolEvent.duration_ms
+      error: toolEvent.error
     },
     status: 'error',
     endTime: Date.now()
@@ -313,7 +411,7 @@ function handleCancelled(
   store: FlowChatStore,
   sessionId: string,
   turnId: string,
-  toolEvent: any
+  toolEvent: CancelledToolEvent
 ): void {
   const existingToolItem = store.findToolItem(sessionId, turnId, toolEvent.tool_id);
   const currentStatus = existingToolItem?.status;
@@ -323,8 +421,7 @@ function handleCancelled(
     toolResult: {
       result: null,
       success: false,
-      error: toolEvent.reason || 'User cancelled operation',
-      duration_ms: toolEvent.duration_ms
+      error: toolEvent.reason || 'User cancelled operation'
     },
     status: finalStatus,
     endTime: Date.now()
@@ -340,7 +437,7 @@ function handleConfirmationNeeded(
   store: FlowChatStore,
   sessionId: string,
   turnId: string,
-  toolEvent: any
+  toolEvent: ConfirmationNeededToolEvent
 ): void {
   store.updateModelRoundItem(sessionId, turnId, toolEvent.tool_id, {
     requiresConfirmation: true,
@@ -355,16 +452,9 @@ function handleProgress(
   store: FlowChatStore,
   sessionId: string,
   turnId: string,
-  toolEvent: any
+  toolEvent: ProgressToolEvent
 ): void {
-  const existingItem = store.findToolItem(sessionId, turnId, toolEvent.tool_id);
-  
-  if (existingItem) {
-    store.updateModelRoundItem(sessionId, turnId, toolEvent.tool_id, {
-      _progressMessage: toolEvent.message,
-      _progressPercentage: toolEvent.percentage
-    } as any);
-  }
+  applyProgress(store, sessionId, turnId, toolEvent);
 }
 
 /**

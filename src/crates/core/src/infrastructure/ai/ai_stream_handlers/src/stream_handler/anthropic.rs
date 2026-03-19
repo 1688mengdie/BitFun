@@ -1,3 +1,4 @@
+use super::stream_stats::StreamStats;
 use crate::types::anthropic::{
     AnthropicSSEError, ContentBlock, ContentBlockDelta, ContentBlockStart, MessageDelta,
     MessageStart, Usage,
@@ -26,6 +27,7 @@ pub async fn handle_anthropic_stream(
     let mut stream = response.bytes_stream().eventsource();
     let idle_timeout = Duration::from_secs(600);
     let mut usage = Usage::default();
+    let mut stats = StreamStats::new("Anthropic");
 
     loop {
         let sse_event = timeout(idle_timeout, stream.next()).await;
@@ -33,18 +35,21 @@ pub async fn handle_anthropic_stream(
             Ok(Some(Ok(sse))) => sse,
             Ok(None) => {
                 let error_msg = "SSE Error: stream closed before response completed";
+                stats.log_summary("stream_closed_before_completion");
                 error!("{}", error_msg);
                 let _ = tx_event.send(Err(anyhow!(error_msg)));
                 return;
             }
             Ok(Some(Err(e))) => {
                 let error_msg = format!("SSE Error: {}", e);
+                stats.log_summary("sse_stream_error");
                 error!("{}", error_msg);
                 let _ = tx_event.send(Err(anyhow!(error_msg)));
                 return;
             }
             Err(_) => {
                 let error_msg = "SSE Timeout: idle timeout waiting for SSE";
+                stats.log_summary("sse_stream_timeout");
                 error!("{}", error_msg);
                 let _ = tx_event.send(Err(anyhow!(error_msg)));
                 return;
@@ -54,6 +59,7 @@ pub async fn handle_anthropic_stream(
         trace!("Anthropic SSE: {:?}", sse);
         let event_type = sse.event;
         let data = sse.data;
+        stats.record_sse_event(&event_type);
 
         if let Some(ref tx) = tx_raw_sse {
             let _ = tx.send(format!("[{}] {}", event_type, data));
@@ -64,6 +70,7 @@ pub async fn handle_anthropic_stream(
                 let message_start: MessageStart = match serde_json::from_str(&data) {
                     Ok(message_start) => message_start,
                     Err(e) => {
+                        stats.increment("error:sse_parsing");
                         let err_str = format!("SSE Parsing Error: {e}, data: {}", &data);
                         error!("{}", err_str);
                         continue;
@@ -77,6 +84,7 @@ pub async fn handle_anthropic_stream(
                 let content_block_start: ContentBlockStart = match serde_json::from_str(&data) {
                     Ok(content_block_start) => content_block_start,
                     Err(e) => {
+                        stats.increment("error:sse_parsing");
                         let err_str = format!("SSE Parsing Error: {e}, data: {}", &data);
                         error!("{}", err_str);
                         continue;
@@ -88,6 +96,7 @@ pub async fn handle_anthropic_stream(
                 ) {
                     let unified_response = UnifiedResponse::from(content_block_start);
                     trace!("Anthropic unified response: {:?}", unified_response);
+                    stats.record_unified_response(&unified_response);
                     let _ = tx_event.send(Ok(unified_response));
                 }
             }
@@ -95,6 +104,7 @@ pub async fn handle_anthropic_stream(
                 let content_block_delta: ContentBlockDelta = match serde_json::from_str(&data) {
                     Ok(content_block_delta) => content_block_delta,
                     Err(e) => {
+                        stats.increment("error:sse_parsing");
                         let err_str = format!("SSE Parsing Error: {e}, data: {}", &data);
                         error!("{}", err_str);
                         continue;
@@ -103,9 +113,11 @@ pub async fn handle_anthropic_stream(
                 match UnifiedResponse::try_from(content_block_delta) {
                     Ok(unified_response) => {
                         trace!("Anthropic unified response: {:?}", unified_response);
+                        stats.record_unified_response(&unified_response);
                         let _ = tx_event.send(Ok(unified_response));
                     }
                     Err(e) => {
+                        stats.increment("skip:invalid_content_block_delta");
                         error!("Skipping invalid content_block_delta: {}", e);
                     }
                 };
@@ -114,6 +126,7 @@ pub async fn handle_anthropic_stream(
                 let mut message_delta: MessageDelta = match serde_json::from_str(&data) {
                     Ok(message_delta) => message_delta,
                     Err(e) => {
+                        stats.increment("error:sse_parsing");
                         let err_str = format!("SSE Parsing Error: {e}, data: {}", &data);
                         error!("{}", err_str);
                         continue;
@@ -129,22 +142,28 @@ pub async fn handle_anthropic_stream(
                 };
                 let unified_response = UnifiedResponse::from(message_delta);
                 trace!("Anthropic unified response: {:?}", unified_response);
+                stats.record_unified_response(&unified_response);
                 let _ = tx_event.send(Ok(unified_response));
             }
             "error" => {
                 let sse_error: AnthropicSSEError = match serde_json::from_str(&data) {
                     Ok(message_delta) => message_delta,
                     Err(e) => {
+                        stats.increment("error:sse_parsing");
                         let err_str = format!("SSE Parsing Error: {e}, data: {}", &data);
+                        stats.log_summary("sse_parsing_error");
                         error!("{}", err_str);
                         let _ = tx_event.send(Err(anyhow!(err_str)));
                         return;
                     }
                 };
+                stats.increment("error:api");
+                stats.log_summary("error_event_received");
                 let _ = tx_event.send(Err(anyhow!(String::from(sse_error.error))));
                 return;
             }
             "message_stop" => {
+                stats.log_summary("message_stop");
                 return;
             }
             _ => {}

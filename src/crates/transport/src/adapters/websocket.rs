@@ -121,6 +121,24 @@ impl TransportAdapter for WebSocketTransportAdapter {
                     "text": text,
                 })
             }
+            AgenticEvent::ThinkingChunk {
+                session_id,
+                turn_id,
+                round_id,
+                content,
+                is_end,
+                ..
+            } => {
+                json!({
+                    "type": "text-chunk",
+                    "sessionId": session_id,
+                    "turnId": turn_id,
+                    "roundId": round_id,
+                    "text": content,
+                    "contentType": "thinking",
+                    "isThinkingEnd": is_end,
+                })
+            }
             AgenticEvent::ToolEvent {
                 session_id,
                 turn_id,
