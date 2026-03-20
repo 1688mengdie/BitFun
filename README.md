@@ -16,7 +16,7 @@ AI Agent workspace for coding and knowledge work
 [![GitHub release](https://img.shields.io/github/v/release/GCWing/BitFun?style=flat-square&color=blue)](https://github.com/GCWing/BitFun/releases)
 [![Website](https://img.shields.io/badge/Website-openbitfun.com-6f42c1?style=flat-square)](https://openbitfun.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow?style=flat-square)](https://github.com/GCWing/BitFun/blob/main/LICENSE)
-[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-blue?style=flat-square)](https://github.com/GCWing/BitFun)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue?style=flat-square)](https://github.com/GCWing/BitFun)
 
 </div>
 
@@ -89,7 +89,7 @@ The project is built with Rust + TypeScript for cross-platform reuse, keeping yo
 
 | Form Factor | Supported Platforms | Status |
 |---|---|---|
-| **Desktop** | Windows, macOS | ✅ Supported (Tauri) |
+| **Desktop** | Windows, macOS, Linux | ✅ Supported (Tauri) |
 | **Remote Control** | Mobile browser, Telegram, Feishu | ✅ Supported |
 
 ---
@@ -123,6 +123,29 @@ pnpm run desktop:build
 ```
 
 For more details, see the [Chinese Contributing Guide](./CONTRIBUTING_CN.md).
+
+### Linux Build
+
+#### Prerequisites
+
+Install system dependencies:
+
+```bash
+# Debian/Ubuntu
+sudo apt install libwebkit2gtk-4.1-dev build-essential libgtk-3-dev \
+  libayatana-appindicator3-dev librsvg2-dev patchelf
+```
+
+See [docs/linux-setup.md](docs/linux-setup.md) for other distributions (Arch, Fedora, etc.).
+
+#### Build
+
+```bash
+pnpm install
+pnpm run desktop:build:linux
+```
+
+Output will be in `src/apps/desktop/target/release/bundle/` (`.deb`, `.rpm`, `.AppImage`).
 
 ---
 

@@ -33,6 +33,10 @@
     "desktop:build:nsis": "cross-env-shell CI=true \"cd src/apps/desktop && tauri build --bundles nsis\"",
     "desktop:build:arm64": "cross-env-shell CI=true \"cd src/apps/desktop && tauri build --target aarch64-apple-darwin --bundles dmg\"",
     "desktop:build:x86_64": "cross-env-shell CI=true \"cd src/apps/desktop && tauri build --target x86_64-apple-darwin --bundles dmg\"",
+    "desktop:build:linux": "cross-env-shell CI=true 'cd src/apps/desktop && tauri build'",
+    "desktop:build:linux:deb": "cross-env-shell CI=true 'cd src/apps/desktop && tauri build --bundles deb'",
+    "desktop:build:linux:rpm": "cross-env-shell CI=true 'cd src/apps/desktop && tauri build --bundles rpm'",
+    "desktop:build:linux:appimage": "cross-env-shell CI=true 'cd src/apps/desktop && tauri build --bundles appimage'",
     "installer:build": "pnpm --dir BitFun-Installer run installer:build",
     "installer:build:fast": "pnpm --dir BitFun-Installer run installer:build:fast",
     "installer:build:only": "pnpm --dir BitFun-Installer run installer:build:only",
@@ -68,5 +72,8 @@
     "typescript": "~5.8.3",
     "vite": "^7.0.4"
   },
-  "packageManager": "pnpm@10.15.0+sha512.486ebc259d3e999a4e8691ce03b5cac4a71cbeca39372a9b762cb500cfdf0873e2cb16abe3d951b1ee2cf012503f027b98b6584e4df22524e0c7450d9ec7aa7b"
+  "packageManager": "pnpm@10.15.0+sha512.486ebc259d3e999a4e8691ce03b5cac4a71cbeca39372a9b762cb500cfdf0873e2cb16abe3d951b1ee2cf012503f027b98b6584e4df22524e0c7450d9ec7aa7b",
+  "dependencies": {
+    "pnpm": "^10.32.1"
+  }
 }

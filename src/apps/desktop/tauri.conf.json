@@ -13,10 +13,19 @@
     "targets": "all",
     "icon": [
       "icons/icon.icns",
-      "icons/icon.ico"
+      "icons/icon.ico",
+      "icons/icon.png"
     ],
     "resources": {
       "../../mobile-web/dist": "mobile-web/dist"
+    },
+    "linux": {
+      "deb": {
+        "depends": [
+          "libwebkit2gtk-4.1-0",
+          "libgtk-3-0"
+        ]
+      }
     }
   },
   "app": {
