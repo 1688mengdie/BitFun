@@ -1,8 +1,8 @@
-import React, { useEffect, useCallback } from 'react';
+import React, { useEffect, useCallback, useState, useRef } from 'react';
 import {
   ExternalLink, Copy, Check, ArrowLeft, Loader2, AlertTriangle,
-  BarChart3, Clock, MessageSquare, Calendar, TrendingUp, X,
-  FileCode, FolderEdit,
+  BarChart3, MessageSquare, Calendar, Clock, X, Target, Zap, Trophy,
+  AlertCircle, Lightbulb, Rocket,
 } from 'lucide-react';
 import { openPath } from '@tauri-apps/plugin-opener';
 import { useI18n } from '@/infrastructure/i18n/hooks/useI18n';
@@ -13,6 +13,18 @@ import { notificationService } from '@/shared/notification-system';
 import './InsightsScene.scss';
 
 const log = createLogger('InsightsScene');
+
+// Report section ids for TOC / scroll targets
+const SECTIONS = [
+  { id: 'overview', labelKey: 'overview', icon: Target },
+  { id: 'stats', labelKey: 'stats', icon: BarChart3 },
+  { id: 'work-on', labelKey: 'workOn', icon: Target },
+  { id: 'usage', labelKey: 'usage', icon: Zap },
+  { id: 'wins', labelKey: 'wins', icon: Trophy },
+  { id: 'friction', labelKey: 'friction', icon: AlertCircle },
+  { id: 'suggestions', labelKey: 'suggestions', icon: Lightbulb },
+  { id: 'horizon', labelKey: 'horizon', icon: Rocket },
+] as const;
 
 const DAY_OPTIONS = [7, 14, 30, 90] as const;
 
@@ -35,9 +47,41 @@ const InsightsScene: React.FC = () => {
   return (
     <div className="insights-scene">
       <div className="insights-scene__header">
-        <div className="insights-scene__header-left">
-          <BarChart3 size={20} />
-          <h2>{t('insights.title')}</h2>
+        <div className="insights-scene__header-identity">
+          <h2 className="insights-scene__header-title">{t('insights.title')}</h2>
+          <div className="insights-scene__header-meta">
+            <p className="insights-scene__header-subtitle">{t('insights.subtitle')}</p>
+            <div className="insights-scene__header-actions">
+              <div className="insights-scene__day-selector">
+                {DAY_OPTIONS.map((d) => (
+                  <button
+                    key={d}
+                    className={`insights-scene__day-btn ${selectedDays === d ? 'is-active' : ''}`}
+                    onClick={() => setSelectedDays(d)}
+                  >
+                    {d} {t('insights.days')}
+                  </button>
+                ))}
+              </div>
+              {generating ? (
+                <button
+                  className="insights-scene__cancel-btn"
+                  onClick={cancelGeneration}
+                >
+                  <X size={14} />
+                  <span>{t('insights.cancelBtn')}</span>
+                </button>
+              ) : (
+                <button
+                  className="insights-scene__generate-btn"
+                  onClick={generateReport}
+                >
+                  <BarChart3 size={14} />
+                  <span>{t('insights.generateBtn')}</span>
+                </button>
+              )}
+            </div>
+          </div>
         </div>
       </div>
 
@@ -49,47 +93,14 @@ const InsightsScene: React.FC = () => {
         </div>
       )}
 
-      <div className="insights-scene__generate">
-        <div className="insights-scene__generate-label">{t('insights.generateNew')}</div>
-        <div className="insights-scene__generate-row">
-          <div className="insights-scene__day-selector">
-            {DAY_OPTIONS.map((d) => (
-              <button
-                key={d}
-                className={`insights-scene__day-btn ${selectedDays === d ? 'is-active' : ''}`}
-                onClick={() => setSelectedDays(d)}
-              >
-                {d} {t('insights.days')}
-              </button>
-            ))}
-          </div>
-          {generating ? (
-            <button
-              className="insights-scene__cancel-btn"
-              onClick={cancelGeneration}
-            >
-              <X size={14} />
-              <span>{t('insights.cancelBtn')}</span>
-            </button>
-          ) : (
-            <button
-              className="insights-scene__generate-btn"
-              onClick={generateReport}
-            >
-              <BarChart3 size={14} />
-              <span>{t('insights.generateBtn')}</span>
-            </button>
+      {generating && progress.message && (
+        <div className="insights-scene__progress-info">
+          {progress.current > 0 && progress.total > 0 && (
+            <span className="insights-scene__progress-count">{progress.current}/{progress.total}</span>
           )}
-          {generating && progress.message && (
-            <div className="insights-scene__progress-info">
-              {progress.current > 0 && progress.total > 0 && (
-                <span className="insights-scene__progress-count">{progress.current}/{progress.total}</span>
-              )}
-              <span className="insights-scene__progress-message">{progress.message}</span>
-            </div>
-          )}
+          <span className="insights-scene__progress-message">{progress.message}</span>
         </div>
-      </div>
+      )}
 
       <div className="insights-scene__history">
         <div className="insights-scene__history-label">
@@ -166,8 +177,83 @@ const ReportMetaCard: React.FC<{
 
 // ============ Report View ============
 
+// Report view: right-hand TOC / section nav
+const ReportNav: React.FC<{ report: InsightsReport; scrollContainerRef: React.RefObject<HTMLDivElement> }> = ({ report, scrollContainerRef }) => {
+  const { t } = useI18n('common');
+  const [activeSection, setActiveSection] = useState<string>('overview');
+
+  // Sections shown in the nav (skip empty blocks)
+  const visibleSections = [
+    { id: 'overview', label: t('insights.atAGlance'), hasContent: true },
+    { id: 'stats', label: t('insights.stats'), hasContent: true },
+    { id: 'work-on', label: t('insights.projectAreas'), hasContent: report.project_areas.length > 0 },
+    { id: 'usage', label: t('insights.interactionStyle'), hasContent: report.interaction_style.narrative || true },
+    { id: 'wins', label: t('insights.bigWins'), hasContent: report.big_wins.length > 0 },
+    { id: 'friction', label: t('insights.friction'), hasContent: report.friction_categories.length > 0 },
+    { id: 'suggestions', label: t('insights.suggestions'), hasContent: true },
+    { id: 'horizon', label: t('insights.horizon'), hasContent: report.on_the_horizon.length > 0 },
+  ].filter(s => s.hasContent);
+
+  useEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+
+    const handleScroll = () => {
+      const scrollTop = container.scrollTop;
+      const containerTop = container.getBoundingClientRect().top;
+      const sections = container.querySelectorAll('[data-section]');
+      let current = 'overview';
+
+      sections.forEach((section) => {
+        const el = section as HTMLElement;
+        const elTop = el.getBoundingClientRect().top - containerTop;
+        // Active section: heading within 80px of the scroll container top
+        if (scrollTop > 0 ? elTop < 80 : elTop <= 0) {
+          current = el.dataset.section || 'overview';
+        }
+      });
+
+      setActiveSection(current);
+    };
+
+    container.addEventListener('scroll', handleScroll, { passive: true });
+    handleScroll();
+    return () => container.removeEventListener('scroll', handleScroll);
+  }, [scrollContainerRef]);
+
+  const scrollToSection = (id: string) => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    const element = container.querySelector(`[data-section="${id}"]`) as HTMLElement | null;
+    if (!element) return;
+    const containerTop = container.getBoundingClientRect().top;
+    const elTop = element.getBoundingClientRect().top - containerTop;
+    container.scrollBy({ top: elTop - 16, behavior: 'smooth' });
+  };
+
+  return (
+    <nav className="insights-report-nav">
+      {visibleSections.map((section) => {
+        const Icon = SECTIONS.find(s => s.id === section.id)?.icon || Target;
+        return (
+          <button
+            key={section.id}
+            className={`insights-report-nav__item ${activeSection === section.id ? 'is-active' : ''}`}
+            onClick={() => scrollToSection(section.id)}
+            title={section.label}
+          >
+            <Icon size={14} />
+            <span className="insights-report-nav__label">{section.label}</span>
+          </button>
+        );
+      })}
+    </nav>
+  );
+};
+
 const ReportView: React.FC<{ report: InsightsReport; onBack: () => void }> = ({ report, onBack }) => {
   const { t } = useI18n('common');
+  const bodyRef = useRef<HTMLDivElement>(null);
 
   const handleOpenHtml = useCallback(async () => {
     if (report.html_report_path) {
@@ -190,121 +276,149 @@ const ReportView: React.FC<{ report: InsightsReport; onBack: () => void }> = ({ 
     <div className="insights-scene insights-scene--report">
       <div className="insights-report-header">
         <button className="insights-report-header__back" onClick={onBack}>
-          <ArrowLeft size={16} />
+          <ArrowLeft size={14} />
           <span>{t('insights.backToList')}</span>
         </button>
+        <div className="insights-report-header__meta">
+          <span><MessageSquare size={11} /> {report.total_messages} {t('insights.messages')}</span>
+          <span><BarChart3 size={11} /> {report.total_sessions} {t('insights.sessions')}</span>
+          <span><Calendar size={11} /> {dateStart} ~ {dateEnd}</span>
+        </div>
         <div className="insights-report-header__actions">
           <button
             className="insights-report-header__html-btn"
             onClick={handleOpenHtml}
             disabled={!report.html_report_path}
           >
-            <ExternalLink size={14} />
+            <ExternalLink size={12} />
             <span>{t('insights.openHtml')}</span>
           </button>
         </div>
       </div>
 
-      <div className="insights-report-subtitle">
-        <span><MessageSquare size={12} /> {report.total_messages} {t('insights.messages')}</span>
-        <span><BarChart3 size={12} /> {report.total_sessions} {t('insights.sessions')} ({report.analyzed_sessions} {t('insights.analyzed')})</span>
-        <span><Calendar size={12} /> {dateStart} ~ {dateEnd}</span>
-      </div>
-
-      <div className="insights-report-body">
-        <AtAGlanceSection report={report} />
-        <StatsRow report={report} />
-
-        {/* What You Work On */}
-        {report.project_areas.length > 0 && (
-          <section className="insights-section">
-            <h3>{t('insights.projectAreas')}</h3>
-            <div className="insights-areas">
-              {report.project_areas.map((area) => (
-                <div key={area.name} className="insights-area-card">
-                  <div className="insights-area-card__header">
-                    <span className="insights-area-card__name">{area.name}</span>
-                    <span className="insights-area-card__count">~{area.session_count} {t('insights.sessions')}</span>
-                  </div>
-                  <p className="insights-area-card__desc"><MarkdownInline text={area.description} /></p>
-                </div>
-              ))}
+      <div className="insights-report-content" ref={bodyRef}>
+        <div className="insights-report-body">
+          <div className="insights-report-body-inner">
+            <header className="insights-report-hero">
+              <h1 className="insights-report-hero__title">
+                {t('insights.reportTitle', { dateStart, dateEnd })}
+              </h1>
+            </header>
+            <div data-section="overview">
+              <AtAGlanceSection report={report} />
             </div>
-          </section>
-        )}
-        <BasicCharts stats={report.stats} />
-
-        {/* How You Use BitFun */}
-        {report.interaction_style.narrative && <InteractionStyleSection report={report} />}
-        <UsageCharts stats={report.stats} />
-
-        {/* Impressive Things You Did */}
-        {report.big_wins.length > 0 && (
-          <section className="insights-section">
-            <h3>{t('insights.bigWins')}</h3>
-            <div className="insights-wins">
-              {report.big_wins.map((win) => (
-                <div key={win.title} className="insights-win-card">
-                  <div className="insights-win-card__title">{win.title}</div>
-                  <p className="insights-win-card__desc"><MarkdownInline text={win.description} /></p>
-                  {win.impact && <p className="insights-win-card__impact"><MarkdownInline text={win.impact} /></p>}
-                </div>
-              ))}
+            <div data-section="stats">
+              <StatsRow report={report} />
             </div>
-          </section>
-        )}
-        <OutcomeCharts stats={report.stats} />
 
-        {/* Where Things Go Wrong */}
-        {report.friction_categories.length > 0 && (
-          <section className="insights-section">
-            <h3>{t('insights.friction')}</h3>
-            <div className="insights-friction">
-              {report.friction_categories.map((f) => (
-                <div key={f.category} className="insights-friction-card">
-                  <div className="insights-friction-card__title">{f.category}</div>
-                  <p className="insights-friction-card__desc"><MarkdownInline text={f.description} /></p>
-                  {f.examples.length > 0 && (
-                    <ul className="insights-friction-card__examples">
-                      {f.examples.map((ex, j) => <li key={j}><MarkdownInline text={ex} /></li>)}
-                    </ul>
-                  )}
-                  {f.suggestion && <div className="insights-friction-card__suggestion"><MarkdownInline text={f.suggestion} /></div>}
+            {/* What You Work On */}
+            {report.project_areas.length > 0 && (
+              <section className="insights-section" data-section="work-on">
+                <h3>{t('insights.projectAreas')}</h3>
+                <div className="insights-areas">
+                  {report.project_areas.map((area) => (
+                    <div key={area.name} className="insights-area-card">
+                      <div className="insights-area-card__header">
+                        <span className="insights-area-card__name">{area.name}</span>
+                        <span className="insights-area-card__count">~{area.session_count} {t('insights.sessions')}</span>
+                      </div>
+                      <p className="insights-area-card__desc"><MarkdownInline text={area.description} /></p>
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
-          </section>
-        )}
-        <FrictionCharts stats={report.stats} />
-
-        <SuggestionsSection report={report} />
-
-        {report.on_the_horizon.length > 0 && (
-          <section className="insights-section">
-            <h3>{t('insights.horizon')}</h3>
-            {report.horizon_intro && (
-              <p className="insights-section-intro"><MarkdownInline text={report.horizon_intro} /></p>
+              </section>
             )}
-            <div className="insights-horizon">
-              {report.on_the_horizon.map((h) => (
-                <div key={h.title} className="insights-horizon-card">
-                  <div className="insights-horizon-card__title">{h.title}</div>
-                  <p className="insights-horizon-card__desc"><MarkdownInline text={h.whats_possible} /></p>
-                  {h.how_to_try && (
-                    <p className="insights-horizon-card__how"><MarkdownInline text={h.how_to_try} /></p>
-                  )}
-                </div>
-              ))}
-            </div>
-          </section>
-        )}
+          <BasicCharts stats={report.stats} />
 
-        {report.fun_ending && (
-          <div className="insights-fun-ending">
-            <div className="insights-fun-ending__headline">{report.fun_ending.headline}</div>
-            <p className="insights-fun-ending__message"><MarkdownInline text={report.fun_ending.detail} /></p>
+          {/* How You Use BitFun */}
+          {report.interaction_style.narrative && <div data-section="usage"><InteractionStyleSection report={report} /></div>}
+          <div data-section="usage">
+            <UsageCharts stats={report.stats} />
           </div>
-        )}
+
+          {/* Impressive Things You Did */}
+          {report.big_wins.length > 0 && (
+            <section className="insights-section" data-section="wins">
+              <h3>{t('insights.bigWins')}</h3>
+              <div className="insights-wins">
+                {report.big_wins.map((win) => (
+                  <div key={win.title} className="insights-win-card">
+                    <div className="insights-win-card__title">{win.title}</div>
+                    <p className="insights-win-card__desc"><MarkdownInline text={win.description} /></p>
+                    {win.impact && <p className="insights-win-card__impact"><MarkdownInline text={win.impact} /></p>}
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+          <OutcomeCharts stats={report.stats} />
+
+          {/* Where Things Go Wrong */}
+          {report.friction_categories.length > 0 && (
+            <section className="insights-section" data-section="friction">
+              <h3>{t('insights.friction')}</h3>
+              <div className="insights-friction">
+                {report.friction_categories.map((f) => (
+                  <div key={f.category} className="insights-friction-card">
+                    <div className="insights-friction-card__title">{f.category}</div>
+                    <p className="insights-friction-card__desc"><MarkdownInline text={f.description} /></p>
+                    {f.examples.length > 0 && (
+                      <ul className="insights-friction-card__examples">
+                        {f.examples.map((ex, j) => <li key={j}><MarkdownInline text={ex} /></li>)}
+                      </ul>
+                    )}
+                    {f.suggestion && <div className="insights-friction-card__suggestion"><MarkdownInline text={f.suggestion} /></div>}
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+          <FrictionCharts stats={report.stats} />
+
+          <div data-section="suggestions">
+            <SuggestionsSection report={report} />
+          </div>
+
+          {report.on_the_horizon.length > 0 && (
+            <section className="insights-section" data-section="horizon">
+              <h3>{t('insights.horizon')}</h3>
+              {report.horizon_intro && (
+                <p className="insights-section-intro"><MarkdownInline text={report.horizon_intro} /></p>
+              )}
+              <div className="insights-horizon">
+                {report.on_the_horizon.map((h, i) => (
+                  <div key={h.title} className="insights-horizon-card">
+                    <span className="insights-horizon-card__index">{i + 1}</span>
+                    <div className="insights-horizon-card__body">
+                      <div className="insights-horizon-card__title">{h.title}</div>
+                      <p className="insights-horizon-card__desc"><MarkdownInline text={h.whats_possible} /></p>
+                      {h.how_to_try && (
+                        <div className="insights-horizon-card__how">
+                          <span className="insights-horizon-card__how-label">{t('insights.howToTry')}</span>
+                          <span><MarkdownInline text={h.how_to_try} /></span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {report.fun_ending && (
+            <div className="insights-fun-ending">
+              <div className="insights-fun-ending__blob" />
+              <div className="insights-fun-ending__blob-2" />
+              <div className="insights-fun-ending__bg">
+                <div className="insights-fun-ending__headline">{report.fun_ending.headline}</div>
+                <p className="insights-fun-ending__message"><MarkdownInline text={report.fun_ending.detail} /></p>
+              </div>
+            </div>
+          )}
+          </div>
+        </div>
+
+        <ReportNav report={report} scrollContainerRef={bodyRef as React.RefObject<HTMLDivElement>} />
       </div>
     </div>
   );
@@ -380,28 +494,59 @@ const StatsRow: React.FC<{ report: InsightsReport }> = ({ report }) => {
   const { stats } = report;
   const hasCodeChanges = (stats.total_lines_added ?? 0) > 0 || (stats.total_lines_removed ?? 0) > 0;
 
+  const items: Array<{ key: string; value: string; label: string }> = [
+    { key: 'messages', value: report.total_messages.toString(), label: t('insights.messages') },
+    { key: 'sessions', value: report.total_sessions.toString(), label: t('insights.sessions') },
+    { key: 'hours', value: `${stats.total_hours.toFixed(1)}h`, label: t('insights.hours') },
+    { key: 'days', value: report.days_covered.toString(), label: t('insights.days') },
+    { key: 'msgsPerDay', value: stats.msgs_per_day.toFixed(1), label: t('insights.msgsPerDay') },
+  ];
+  if (hasCodeChanges) {
+    items.push({
+      key: 'lines',
+      value: `+${formatNumber(stats.total_lines_added)}/-${formatNumber(stats.total_lines_removed)}`,
+      label: t('insights.lines'),
+    });
+  }
+  if ((stats.total_files_modified ?? 0) > 0) {
+    items.push({
+      key: 'files',
+      value: formatNumber(stats.total_files_modified),
+      label: t('insights.files'),
+    });
+  }
+  if (stats.median_response_time_secs != null) {
+    items.push({
+      key: 'medianRt',
+      value: formatDurationShort(stats.median_response_time_secs),
+      label: t('insights.medianResponseTime'),
+    });
+  }
+  if (stats.avg_response_time_secs != null) {
+    items.push({
+      key: 'avgRt',
+      value: formatDurationShort(stats.avg_response_time_secs),
+      label: t('insights.avgResponseTime'),
+    });
+  }
+
+  const mid = Math.ceil(items.length / 2);
+  const row1 = items.slice(0, mid);
+  const row2 = items.slice(mid);
+
   return (
-    <div className="insights-stats-row">
-      {hasCodeChanges && (
-        <StatItem
-          icon={<FileCode size={14} />}
-          value={`+${formatNumber(stats.total_lines_added)}/-${formatNumber(stats.total_lines_removed)}`}
-          label={t('insights.lines')}
-        />
-      )}
-      {hasCodeChanges && (stats.total_files_modified ?? 0) > 0 && (
-        <StatItem icon={<FolderEdit size={14} />} value={formatNumber(stats.total_files_modified)} label={t('insights.files')} />
-      )}
-      <StatItem icon={<BarChart3 size={14} />} value={report.total_sessions.toString()} label={t('insights.sessions')} />
-      <StatItem icon={<MessageSquare size={14} />} value={report.total_messages.toString()} label={t('insights.messages')} />
-      <StatItem icon={<Clock size={14} />} value={stats.total_hours.toFixed(1)} label={t('insights.hours')} />
-      <StatItem icon={<Calendar size={14} />} value={report.days_covered.toString()} label={t('insights.days')} />
-      <StatItem icon={<TrendingUp size={14} />} value={stats.msgs_per_day.toFixed(1)} label={t('insights.msgsPerDay')} />
-      {stats.median_response_time_secs != null && (
-        <StatItem icon={<Clock size={14} />} value={formatDurationShort(stats.median_response_time_secs)} label={t('insights.medianResponseTime')} />
-      )}
-      {stats.avg_response_time_secs != null && (
-        <StatItem icon={<Clock size={14} />} value={formatDurationShort(stats.avg_response_time_secs)} label={t('insights.avgResponseTime')} />
+    <div className="insights-stats">
+      <div className="insights-stats__row">
+        {row1.map((it) => (
+          <StatItem key={it.key} value={it.value} label={it.label} />
+        ))}
+      </div>
+      {row2.length > 0 && (
+        <div className="insights-stats__row">
+          {row2.map((it) => (
+            <StatItem key={it.key} value={it.value} label={it.label} />
+          ))}
+        </div>
       )}
     </div>
   );
@@ -430,13 +575,13 @@ const BasicCharts: React.FC<{ stats: InsightsStats }> = ({ stats }) => {
   return (
     <>
       <ChartsRow>
-        {hasGoals && <BarChart title={t('insights.topGoals')} items={stats.top_goals} color="#2563eb" max={6} />}
-        {hasTools && <BarChart title={t('insights.topTools')} items={stats.top_tools} color="#0891b2" max={6} />}
+        {hasGoals && <BarChart title={t('insights.topGoals')} items={stats.top_goals} max={6} color={CHART_COLORS.blue} />}
+        {hasTools && <BarChart title={t('insights.topTools')} items={stats.top_tools} max={6} color={CHART_COLORS.blue} />}
       </ChartsRow>
       {(hasLangs || hasTypes) && (
         <ChartsRow>
-          {hasLangs && <BarChart title={t('insights.languages')} items={langItems} color="#10b981" max={6} />}
-          {hasTypes && <BarChart title={t('insights.sessionTypes')} items={typeItems} color="#8b5cf6" max={6} />}
+          {hasLangs && <BarChart title={t('insights.languages')} items={langItems} max={6} color={CHART_COLORS.green} />}
+          {hasTypes && <BarChart title={t('insights.sessionTypes')} items={typeItems} max={6} color={CHART_COLORS.purple} />}
         </ChartsRow>
       )}
     </>
@@ -473,8 +618,8 @@ const UsageCharts: React.FC<{ stats: InsightsStats }> = ({ stats }) => {
           <BarChart
             title={t('insights.responseTime')}
             items={sortedResponseTime}
-            color="#6366f1"
             max={7}
+            color={CHART_COLORS.indigo}
           />
         </ChartsRow>
       )}
@@ -484,16 +629,16 @@ const UsageCharts: React.FC<{ stats: InsightsStats }> = ({ stats }) => {
             <BarChart
               title={t('insights.timeOfDay')}
               items={timeOfDayItems}
-              color="#8b5cf6"
               max={4}
+              color={CHART_COLORS.orange}
             />
           )}
           {hasToolErrors && (
             <BarChart
               title={t('insights.toolErrors')}
               items={Object.entries(toolErrors).sort(([, a], [, b]) => b - a).slice(0, 6)}
-              color="#dc2626"
               max={6}
+              color={CHART_COLORS.red}
             />
           )}
         </ChartsRow>
@@ -503,8 +648,8 @@ const UsageCharts: React.FC<{ stats: InsightsStats }> = ({ stats }) => {
           <BarChart
             title={t('insights.agentTypes')}
             items={Object.entries(agentTypes).sort(([, a], [, b]) => b - a)}
-            color="#f97316"
             max={6}
+            color={CHART_COLORS.purple}
           />
         </ChartsRow>
       )}
@@ -527,16 +672,16 @@ const OutcomeCharts: React.FC<{ stats: InsightsStats }> = ({ stats }) => {
         <BarChart
           title={t('insights.whatHelpedMost')}
           items={Object.entries(success).sort(([, a], [, b]) => b - a).slice(0, 6)}
-          color="#16a34a"
           max={6}
+          color={CHART_COLORS.green}
         />
       )}
       {hasOutcomes && (
         <BarChart
           title={t('insights.outcomes')}
           items={Object.entries(outcomes).sort(([, a], [, b]) => b - a).slice(0, 6)}
-          color="#8b5cf6"
           max={6}
+          color={CHART_COLORS.purple}
         />
       )}
     </ChartsRow>
@@ -558,36 +703,49 @@ const FrictionCharts: React.FC<{ stats: InsightsStats }> = ({ stats }) => {
         <BarChart
           title={t('insights.frictionTypes')}
           items={Object.entries(friction).sort(([, a], [, b]) => b - a).slice(0, 6)}
-          color="#dc2626"
           max={6}
+          color={CHART_COLORS.red}
         />
       )}
       {hasSatisfaction && (
         <BarChart
           title={t('insights.satisfaction')}
           items={Object.entries(satisfaction).sort(([, a], [, b]) => b - a).slice(0, 6)}
-          color="#eab308"
           max={6}
+          color={CHART_COLORS.orange}
         />
       )}
     </ChartsRow>
   );
 };
 
-const StatItem: React.FC<{ icon: React.ReactNode; value: string; label: string }> = ({ icon, value, label }) => (
+const StatItem: React.FC<{ value: string; label: string }> = ({ value, label }) => (
   <div className="insights-stat">
-    <div className="insights-stat__icon">{icon}</div>
-    <div className="insights-stat__value">{value}</div>
-    <div className="insights-stat__label">{label}</div>
+    <span className="insights-stat__value">{value}</span>
+    <span className="insights-stat__label">{label}</span>
   </div>
 );
 
-const BarChart: React.FC<{ title: string; items: [string, number][]; color: string; max: number }> = ({ title, items, color, max }) => {
+// Bar chart palette (default + semantic roles)
+const CHART_COLORS = {
+  blue: '#60a5fa',      // default / primary series
+  green: '#6eb88c',     // positive / success
+  purple: '#8b5cf6',    // distribution / category
+  indigo: '#818cf8',    // time-related
+  orange: '#c9944d',    // time-of-day / neutral
+  red: '#c77070',       // issues / errors
+} as const;
+
+type ChartColor = typeof CHART_COLORS[keyof typeof CHART_COLORS];
+
+const BarChart: React.FC<{ title: string; items: [string, number][]; max: number; color?: ChartColor }> = ({ title, items, max, color }) => {
   const nonZero = items.filter(([, v]) => v > 0);
   const displayed = nonZero.slice(0, max);
   const maxVal = Math.max(...displayed.map(([, v]) => v), 1);
 
   if (displayed.length === 0) return null;
+
+  const barColor = color || CHART_COLORS.blue;
 
   return (
     <div className="insights-chart-card">
@@ -599,7 +757,7 @@ const BarChart: React.FC<{ title: string; items: [string, number][]; color: stri
           <div key={label} className="insights-bar-row">
             <span className="insights-bar-row__label">{displayLabel}</span>
             <div className="insights-bar-row__track">
-              <div className="insights-bar-row__fill" style={{ width: `${pct}%`, background: color }} />
+              <div className="insights-bar-row__fill" style={{ width: `${pct}%`, background: barColor }} />
             </div>
             <span className="insights-bar-row__value">{value}</span>
           </div>
@@ -624,39 +782,44 @@ const SuggestionsSection: React.FC<{ report: InsightsReport }> = ({ report }) =>
       <h3>{t('insights.suggestions')}</h3>
 
       {suggestions.bitfun_md_additions.length > 0 && (
-        <div className="insights-md-section">
+        <div className="insights-md-list">
           <h4>{t('insights.mdAdditions')}</h4>
           {suggestions.bitfun_md_additions.map((md, i) => (
-            <div key={i} className="insights-md-item">
-              {md.section && <div className="insights-md-item__section">{md.section}</div>}
+            <div key={i} className="insights-md-row">
+              <div className="insights-md-row__header">
+                {md.section && <span className="insights-md-row__badge">{md.section}</span>}
+              </div>
               <CopyableCode text={md.content} />
-              <p className="insights-md-item__rationale">{md.rationale}</p>
+              {md.rationale && <p className="insights-md-row__rationale">{md.rationale}</p>}
             </div>
           ))}
         </div>
       )}
 
       {suggestions.features_to_try.length > 0 && (
-        <div className="insights-features">
+        <div className="insights-feature-list">
           <h4>{t('insights.featuresToTry')}</h4>
-          {suggestions.features_to_try.map((f) => (
-            <div key={f.feature} className="insights-feature-card">
-              <div className="insights-feature-card__title">{f.feature}</div>
-              <p className="insights-feature-card__desc"><MarkdownInline text={f.description} /></p>
-              <p className="insights-feature-card__benefit"><MarkdownInline text={f.benefit} /></p>
-              {f.example_usage && <CopyableCode text={f.example_usage} />}
+          {suggestions.features_to_try.map((f, i) => (
+            <div key={f.feature} className="insights-feature-row">
+              <span className="insights-feature-row__index">{i + 1}</span>
+              <div className="insights-feature-row__body">
+                <div className="insights-feature-row__title">{f.feature}</div>
+                <p className="insights-feature-row__desc"><MarkdownInline text={f.description} /></p>
+                {f.benefit && <p className="insights-feature-row__benefit"><MarkdownInline text={f.benefit} /></p>}
+                {f.example_usage && <CopyableCode text={f.example_usage} />}
+              </div>
             </div>
           ))}
         </div>
       )}
 
       {suggestions.usage_patterns.length > 0 && (
-        <div className="insights-patterns">
+        <div className="insights-pattern-list">
           <h4>{t('insights.usagePatterns')}</h4>
           {suggestions.usage_patterns.map((p) => (
-            <div key={p.pattern} className="insights-pattern-card">
-              <div className="insights-pattern-card__title">{p.pattern}</div>
-              <p className="insights-pattern-card__desc"><MarkdownInline text={p.description} /></p>
+            <div key={p.pattern} className="insights-pattern-row">
+              <div className="insights-pattern-row__title">{p.pattern}</div>
+              <p className="insights-pattern-row__desc"><MarkdownInline text={p.description} /></p>
               {p.suggested_prompt && <CopyableCode text={p.suggested_prompt} label={t('insights.tryThisPrompt')} />}
             </div>
           ))}

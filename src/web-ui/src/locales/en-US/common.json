@@ -163,6 +163,7 @@
       "confirmEdit": "Confirm",
       "cancelEdit": "Cancel",
       "showMore": "{{count}} more sessions",
+      "showAll": "{{count}} more (show all)",
       "showLess": "Show less"
     },
     "scheduledJobs": {
@@ -818,7 +819,9 @@
   },
   "insights": {
     "title": "Insights",
+    "subtitle": "Analyze your usage patterns and productivity insights",
     "buttonTooltip": "Insights",
+    "reportTitle": "Insights Report ({{dateStart}} ~ {{dateEnd}})",
     "generating": "Generating insights...",
     "generateNew": "Generate New Report",
     "generateBtn": "Generate",
@@ -827,6 +830,7 @@
     "backToList": "Back to list",
     "openHtml": "Open Full Report",
     "atAGlance": "At a Glance",
+    "stats": "Key metrics",
     "whatsWorking": "What's working",
     "whatsHindering": "What's hindering you",
     "quickWins": "Quick wins to try",
@@ -851,6 +855,7 @@
     "usagePatterns": "Usage Patterns",
     "tryThisPrompt": "Try this prompt",
     "horizon": "On the Horizon",
+    "howToTry": "How to try",
     "error": "Failed to generate insights report",
     "impact": "Impact",
     "rateLimited": "Rate limited, retrying sequentially...",

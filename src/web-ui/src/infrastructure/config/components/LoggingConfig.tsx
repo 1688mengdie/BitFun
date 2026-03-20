@@ -2,8 +2,8 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { FolderOpen } from 'lucide-react';
 import {
-  Button,
   Select,
+  Tooltip,
   ConfigPageLoading,
   ConfigPageMessage,
   ConfigPageRefreshButton,
@@ -103,7 +103,6 @@ const LoggingConfig: React.FC = () => {
     try {
       setOpeningFolder(true);
       await workspaceAPI.revealInExplorer(folder);
-      showMessage('success', t('messages.openedFolder'));
     } catch (error) {
       log.error('Failed to open log folder', { folder, error });
       showMessage('error', t('messages.openFailed'));
@@ -156,26 +155,25 @@ const LoggingConfig: React.FC = () => {
           </ConfigPageRow>
         </ConfigPageSection>
 
-        <ConfigPageSection
-          title={t('sections.path')}
-          extra={(
-            <Button
-              size="small"
-              variant="secondary"
-              onClick={handleOpenFolder}
-              disabled={openingFolder || !runtimeInfo?.sessionLogDir}
-            >
-              <FolderOpen size={14} />
-              {t('actions.openFolder')}
-            </Button>
-          )}
-        >
+        <ConfigPageSection title={t('sections.path')}>
           <ConfigPageRow
             label={t('sections.path')}
             description={t('subtitle')}
+            multiline
           >
-            <div className="bitfun-logging-config__path-box">
-              {runtimeInfo?.sessionLogDir || '-'}
+            <div className="bitfun-logging-config__path-row">
+              <div className="bitfun-logging-config__path-box">
+                {runtimeInfo?.sessionLogDir || '-'}
+              </div>
+              <Tooltip content={t('actions.openFolderTooltip')} placement="top">
+                <button
+                  className="bitfun-logging-config__open-btn"
+                  onClick={handleOpenFolder}
+                  disabled={openingFolder || !runtimeInfo?.sessionLogDir}
+                >
+                  <FolderOpen size={14} />
+                </button>
+              </Tooltip>
             </div>
           </ConfigPageRow>
         </ConfigPageSection>

@@ -49,6 +49,17 @@ const WorkspaceBody: React.FC<WorkspaceBodyProps> = ({
   const { state, toggleLeftPanel } = useApp();
   const isNavCollapsed = state.layout.leftPanelCollapsed;
   const [navWidth, setNavWidth] = useState(NAV_DEFAULT_WIDTH);
+  const [isDividerHovered, setIsDividerHovered] = useState(false);
+
+  const handleDividerMouseEnter = useCallback(() => {
+    setIsDividerHovered(true);
+    document.body.classList.add('bitfun-divider-hovered');
+  }, []);
+
+  const handleDividerMouseLeave = useCallback(() => {
+    setIsDividerHovered(false);
+    document.body.classList.remove('bitfun-divider-hovered');
+  }, []);
 
   const handleNavCollapseDragStart = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
     if (event.button !== 0 || isNavCollapsed) return;
@@ -64,6 +75,7 @@ const WorkspaceBody: React.FC<WorkspaceBodyProps> = ({
     const cleanup = () => {
       document.body.classList.remove('bitfun-is-dragging-nav-collapse');
       document.body.classList.remove('bitfun-is-resizing-nav');
+      document.body.classList.remove('bitfun-divider-hovered');
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
     };
@@ -91,7 +103,7 @@ const WorkspaceBody: React.FC<WorkspaceBodyProps> = ({
   }, [isNavCollapsed, navWidth, toggleLeftPanel]);
 
   return (
-    <div className={`bitfun-workspace-body${isEntering ? ' is-entering' : ''}${isExiting ? ' is-exiting' : ''} ${className}`}>
+    <div className={`bitfun-workspace-body${isEntering ? ' is-entering' : ''}${isExiting ? ' is-exiting' : ''}${isDividerHovered ? ' is-divider-hovered' : ''} ${className}`}>
       {isNavCollapsed && (
         <div className="bitfun-workspace-body__collapsed-nav">
           <NavBar isCollapsed onExpandNav={toggleLeftPanel} onMaximize={onMaximize} />
@@ -113,6 +125,8 @@ const WorkspaceBody: React.FC<WorkspaceBodyProps> = ({
           className="bitfun-workspace-body__nav-divider"
           style={{ '--nav-width': `${navWidth}px` } as React.CSSProperties}
           onMouseDown={handleNavCollapseDragStart}
+          onMouseEnter={handleDividerMouseEnter}
+          onMouseLeave={handleDividerMouseLeave}
           role="separator"
           aria-hidden="true"
         />

@@ -298,6 +298,8 @@ $font-weight-medium: 500;
 $font-weight-semibold: 600;
 $font-weight-bold: 600; // Optimized: use 600 instead of 700; Bold font removed
 
+$font-size-xxs: 10px;
+$font-size-2xs: 11px;
 $font-size-xs: 12px;
 $font-size-sm: 14px;
 $font-size-base: 15px;
@@ -920,6 +922,8 @@ $badge-info-text: $color-info;
   --font-weight-semibold: #{$font-weight-semibold};
   --font-weight-bold: #{$font-weight-bold};
   
+  --font-size-xxs: #{$font-size-xxs};
+  --font-size-2xs: #{$font-size-2xs};
   --font-size-xs: #{$font-size-xs};
   --font-size-sm: #{$font-size-sm};
   --font-size-base: #{$font-size-base};

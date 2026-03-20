@@ -24,106 +24,12 @@
     padding: $size-gap-3;
   }
 
-  &__cli-agents-list {
-    border-top: 1px solid var(--border-subtle);
-    padding: $size-gap-3;
-    display: flex;
-    flex-direction: column;
-    gap: $size-gap-2;
-  }
-
-  &__cli-agent-item {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: $size-gap-3;
-    padding: $size-gap-3;
-    border: 1px solid var(--border-base);
-    border-radius: $size-radius-sm;
-    background: transparent;
-  }
-
-  &__cli-agent-info {
-    min-width: 0;
-    flex: 1;
-  }
-
-  &__cli-agent-header {
-    display: flex;
-    align-items: center;
-    gap: $size-gap-2;
-    flex-wrap: wrap;
-  }
-
-  &__cli-agent-name {
-    font-size: $font-size-sm;
-    font-weight: $font-weight-semibold;
-    color: var(--color-text-primary);
-  }
-
-  &__cli-agent-status {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    padding: 4px 10px;
-    border-radius: 9999px;
-    font-size: $font-size-xs;
-    font-weight: $font-weight-medium;
-
-    &.checking {
-      background: var(--element-bg-subtle);
-      color: var(--color-text-muted);
-    }
-
-    &.available {
-      background: var(--color-success-bg);
-      color: var(--color-success);
-    }
-
-    &.unavailable {
-      background: var(--element-bg-subtle);
-      color: var(--color-text-muted);
-    }
-  }
-
-  &__status-spinner {
-    width: 12px;
-    height: 12px;
-    border: 2px solid currentColor;
-    border-right-color: transparent;
-    border-radius: 50%;
-    animation: bitfun-terminal-config-spin 0.9s linear infinite;
-  }
-
-  &__cli-agent-actions {
-    display: flex;
-    align-items: center;
-    gap: $size-gap-1;
-    flex-shrink: 0;
-  }
-
-}
-
-@keyframes bitfun-terminal-config-spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
 }
 
 @container config-panel (max-width: 520px) {
   .bitfun-terminal-config {
-    &__inline-alert,
-    &__cli-agents-list {
+    &__inline-alert {
       padding: $size-gap-2;
-    }
-
-    &__cli-agent-item {
-      flex-direction: column;
-      align-items: flex-start;
-    }
-
-    &__cli-agent-actions {
-      width: 100%;
-      flex-wrap: wrap;
     }
   }
 }

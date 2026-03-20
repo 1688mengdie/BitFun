@@ -163,6 +163,7 @@
       "confirmEdit": "确认",
       "cancelEdit": "取消",
       "showMore": "还有 {{count}} 个会话",
+      "showAll": "还有 {{count}} 个（展开全部）",
       "showLess": "收起"
     },
     "scheduledJobs": {
@@ -818,7 +819,9 @@
   },
   "insights": {
     "title": "洞察",
+    "subtitle": "分析你的使用习惯与效率洞察",
     "buttonTooltip": "洞察",
+    "reportTitle": "{{dateStart}} ~ {{dateEnd}} 洞察报告",
     "generating": "正在生成洞察...",
     "generateNew": "生成新报告",
     "generateBtn": "生成",
@@ -827,6 +830,7 @@
     "backToList": "返回列表",
     "openHtml": "打开完整报告",
     "atAGlance": "概览",
+    "stats": "关键指标",
     "whatsWorking": "做得好的",
     "whatsHindering": "遇到的阻碍",
     "quickWins": "快速提升",
@@ -851,6 +855,7 @@
     "usagePatterns": "使用模式",
     "tryThisPrompt": "试试这个提示",
     "horizon": "未来展望",
+    "howToTry": "如何尝试",
     "error": "生成洞察报告失败",
     "impact": "影响",
     "rateLimited": "请求频率受限，正在逐个重试...",

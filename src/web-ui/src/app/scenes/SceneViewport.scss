@@ -12,6 +12,9 @@
   border-radius: $size-radius-base;
   border: 1px solid var(--border-subtle);
   background: var(--color-bg-scene);
+  transition:
+    border-color 240ms cubic-bezier(0.25, 1, 0.5, 1),
+    box-shadow   240ms cubic-bezier(0.25, 1, 0.5, 1);
 
   // ── Welcome overlay (app start) ──────────────────────
 
@@ -47,5 +50,29 @@
       display: flex;
       flex-direction: row;
     }
+  }
+}
+
+// ── Drag handle hover / active glow effect ──────────────────────────────
+
+body.bitfun-divider-hovered .bitfun-scene-viewport {
+  border-color: var(--border-accent-strong);
+  box-shadow:
+    inset 6px 0 32px -4px rgba(96, 165, 250, 0.22),
+    inset 0 0 60px -16px rgba(96, 165, 250, 0.10),
+    -3px 0 20px -4px rgba(96, 165, 250, 0.30);
+}
+
+body.bitfun-is-resizing-nav .bitfun-scene-viewport {
+  border-color: var(--border-accent-strong);
+  box-shadow:
+    inset 4px 0 24px -4px rgba(96, 165, 250, 0.20),
+    inset 0 0 48px -16px rgba(96, 165, 250, 0.08),
+    -2px 0 18px -4px rgba(96, 165, 250, 0.28);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bitfun-scene-viewport {
+    transition: none;
   }
 }

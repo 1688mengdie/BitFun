@@ -1,20 +1,6 @@
 @use '../../../component-library/styles/tokens' as *;
 
 .bitfun-agents-scene {
-  .gallery-page-header__title {
-    margin: 0;
-    font-size: clamp(24px, 3vw, 32px);
-    line-height: 1.08;
-    letter-spacing: -0.03em;
-  }
-
-  .gallery-page-header__subtitle {
-    margin-top: $size-gap-2;
-    max-width: 720px;
-    font-size: $font-size-sm;
-    color: var(--color-text-secondary);
-  }
-
   .gallery-zone__subtitle {
     font-size: $font-size-sm;
     color: var(--color-text-secondary);

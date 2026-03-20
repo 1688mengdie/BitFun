@@ -41,7 +41,11 @@ const SettingsScene: React.FC = () => {
   return (
     <div className="bitfun-settings-scene">
       <Suspense fallback={<div className="bitfun-settings-scene__loading" />}>
-        {Content && <Content />}
+        {Content && (
+          <div key={activeTab} className="bitfun-settings-scene__content-wrapper">
+            <Content />
+          </div>
+        )}
       </Suspense>
     </div>
   );
