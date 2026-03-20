@@ -18,7 +18,8 @@
   },
   "actions": {
     "refreshTooltip": "Refresh runtime status",
-    "openFolder": "Open Folder"
+    "openFolder": "Open Folder",
+    "openFolderTooltip": "Open log folder in file explorer"
   },
   "messages": {
     "loading": "Loading...",

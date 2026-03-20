@@ -104,6 +104,10 @@ const AgentsHomeView: React.FC = () => {
   const [selectedTeamId, setSelectedTeamId] = React.useState<string | null>(null);
   const [toolsEditing, setToolsEditing] = React.useState(false);
   const [skillsEditing, setSkillsEditing] = React.useState(false);
+  const [pendingTools, setPendingTools] = React.useState<string[] | null>(null);
+  const [pendingSkills, setPendingSkills] = React.useState<string[] | null>(null);
+  const [savingTools, setSavingTools] = React.useState(false);
+  const [savingSkills, setSavingSkills] = React.useState(false);
 
   const {
     allAgents,
@@ -198,25 +202,31 @@ const AgentsHomeView: React.FC = () => {
       .slice(0, 3);
   }, [allAgents, selectedTeam]);
 
+  const resetEditState = useCallback(() => {
+    setToolsEditing(false);
+    setSkillsEditing(false);
+    setPendingTools(null);
+    setPendingSkills(null);
+    setSavingTools(false);
+    setSavingSkills(false);
+  }, []);
+
   const openAgentDetails = useCallback((agent: AgentWithCapabilities) => {
     setSelectedTeamId(null);
     setSelectedAgentId(agent.id);
-    setToolsEditing(false);
-    setSkillsEditing(false);
-  }, []);
+    resetEditState();
+  }, [resetEditState]);
 
   const closeAgentDetails = useCallback(() => {
     setSelectedAgentId(null);
-    setToolsEditing(false);
-    setSkillsEditing(false);
-  }, []);
+    resetEditState();
+  }, [resetEditState]);
 
   const openTeamDetails = useCallback((teamId: string) => {
     setSelectedAgentId(null);
-    setToolsEditing(false);
-    setSkillsEditing(false);
+    resetEditState();
     setSelectedTeamId(teamId);
-  }, []);
+  }, [resetEditState]);
 
   return (
     <GalleryLayout className="bitfun-agents-scene">
@@ -512,25 +522,78 @@ const AgentsHomeView: React.FC = () => {
                     <span>{t('agentsOverview.tools', '工具')}</span>
                     <span className="agent-card__section-count">
                       {selectedAgent.agentKind === 'mode'
-                        ? `${selectedAgentTools.length}/${availableTools.length}`
+                        ? `${(toolsEditing ? (pendingTools ?? selectedAgentTools) : selectedAgentTools).length}/${availableTools.length}`
                         : `${selectedAgentTools.length}`}
                     </span>
                   </div>
                   {selectedAgent.agentKind === 'mode' ? (
                     <div className="agent-card__section-actions">
-                      <Button variant="secondary" size="small" onClick={() => setToolsEditing((prev) => !prev)}>
-                        {toolsEditing ? t('agentsOverview.toolsCancel', '完成管理') : t('agentsOverview.toolsEdit', '管理工具')}
-                      </Button>
                       {toolsEditing ? (
-                        <IconButton
+                        <>
+                          <IconButton
+                            size="small"
+                            variant="ghost"
+                            tooltip={t('agentsOverview.toolsReset', '重置默认')}
+                            onClick={async () => {
+                              await handleResetTools(selectedAgent.id);
+                              setToolsEditing(false);
+                              setPendingTools(null);
+                            }}
+                          >
+                            <RefreshCw size={12} />
+                          </IconButton>
+                          <Button
+                            variant="ghost"
+                            size="small"
+                            onClick={() => {
+                              setToolsEditing(false);
+                              setPendingTools(null);
+                            }}
+                          >
+                            {t('agentsOverview.toolsCancel', '取消')}
+                          </Button>
+                          <Button
+                            variant="primary"
+                            size="small"
+                            isLoading={savingTools}
+                            onClick={async () => {
+                              if (!pendingTools) {
+                                setToolsEditing(false);
+                                return;
+                              }
+                              setSavingTools(true);
+                              try {
+                                await Promise.all(
+                                  availableTools
+                                    .filter((tool) => {
+                                      const wasOn = selectedAgentTools.includes(tool.name);
+                                      const isOn = pendingTools.includes(tool.name);
+                                      return wasOn !== isOn;
+                                    })
+                                    .map((tool) => handleToggleTool(selectedAgent.id, tool.name)),
+                                );
+                              } finally {
+                                setSavingTools(false);
+                                setToolsEditing(false);
+                                setPendingTools(null);
+                              }
+                            }}
+                          >
+                            {t('agentsOverview.toolsSave', '保存')}
+                          </Button>
+                        </>
+                      ) : (
+                        <Button
+                          variant="secondary"
                           size="small"
-                          variant="ghost"
-                          tooltip={t('agentsOverview.toolsReset', '重置默认')}
-                          onClick={() => void handleResetTools(selectedAgent.id)}
+                          onClick={() => {
+                            setPendingTools([...selectedAgentTools]);
+                            setToolsEditing(true);
+                          }}
                         >
-                          <RefreshCw size={12} />
-                        </IconButton>
-                      ) : null}
+                          {t('agentsOverview.toolsEdit', '管理工具')}
+                        </Button>
+                      )}
                     </div>
                   ) : null}
                 </div>
@@ -539,21 +602,30 @@ const AgentsHomeView: React.FC = () => {
                   <div className="agent-card__token-grid">
                     {[...availableTools]
                       .sort((a, b) => {
-                        const aOn = selectedAgentTools.includes(a.name);
-                        const bOn = selectedAgentTools.includes(b.name);
+                        const draft = pendingTools ?? selectedAgentTools;
+                        const aOn = draft.includes(a.name);
+                        const bOn = draft.includes(b.name);
                         if (aOn && !bOn) return -1;
                         if (!aOn && bOn) return 1;
                         return 0;
                       })
                       .map((tool) => {
-                        const isOn = selectedAgentTools.includes(tool.name);
+                        const draft = pendingTools ?? selectedAgentTools;
+                        const isOn = draft.includes(tool.name);
                         return (
                           <button
                             key={tool.name}
                             type="button"
                             className={`agent-card__token${isOn ? ' is-on' : ''}`}
                             title={tool.description || tool.name}
-                            onClick={() => void handleToggleTool(selectedAgent.id, tool.name)}
+                            onClick={() => {
+                              setPendingTools((prev) => {
+                                const current = prev ?? selectedAgentTools;
+                                return isOn
+                                  ? current.filter((n) => n !== tool.name)
+                                  : [...current, tool.name];
+                              });
+                            }}
                           >
                             <span className="agent-card__token-name">{tool.name}</span>
                           </button>
@@ -579,13 +651,64 @@ const AgentsHomeView: React.FC = () => {
                     <Puzzle size={12} />
                     <span>{t('agentsOverview.skills', 'Skills')}</span>
                     <span className="agent-card__section-count">
-                      {`${selectedAgentSkills.length}/${availableSkills.length}`}
+                      {`${(skillsEditing ? (pendingSkills ?? selectedAgentSkills) : selectedAgentSkills).length}/${availableSkills.length}`}
                     </span>
                   </div>
                   <div className="agent-card__section-actions">
-                    <Button variant="secondary" size="small" onClick={() => setSkillsEditing((prev) => !prev)}>
-                      {skillsEditing ? t('agentsOverview.skillsCancel', '完成管理') : t('agentsOverview.skillsEdit', '管理 Skills')}
-                    </Button>
+                    {skillsEditing ? (
+                      <>
+                        <Button
+                          variant="ghost"
+                          size="small"
+                          onClick={() => {
+                            setSkillsEditing(false);
+                            setPendingSkills(null);
+                          }}
+                        >
+                          {t('agentsOverview.skillsCancel', '取消')}
+                        </Button>
+                        <Button
+                          variant="primary"
+                          size="small"
+                          isLoading={savingSkills}
+                          onClick={async () => {
+                            if (!pendingSkills) {
+                              setSkillsEditing(false);
+                              return;
+                            }
+                            setSavingSkills(true);
+                            try {
+                              await Promise.all(
+                                availableSkills
+                                  .filter((skill) => {
+                                    const wasOn = selectedAgentSkills.includes(skill.name);
+                                    const isOn = pendingSkills.includes(skill.name);
+                                    return wasOn !== isOn;
+                                  })
+                                  .map((skill) => handleToggleSkill(selectedAgent.id, skill.name)),
+                              );
+                            } finally {
+                              setSavingSkills(false);
+                              setSkillsEditing(false);
+                              setPendingSkills(null);
+                            }
+                          }}
+                        >
+                          {t('agentsOverview.skillsSave', '保存')}
+                        </Button>
+                      </>
+                    ) : (
+                      <Button
+                        variant="secondary"
+                        size="small"
+                        onClick={() => {
+                          setPendingSkills([...selectedAgentSkills]);
+                          setSkillsEditing(true);
+                        }}
+                      >
+                        {t('agentsOverview.skillsEdit', '管理 Skills')}
+                      </Button>
+                    )}
                   </div>
                 </div>
 
@@ -593,21 +716,30 @@ const AgentsHomeView: React.FC = () => {
                   <div className="agent-card__token-grid">
                     {[...availableSkills]
                       .sort((a, b) => {
-                        const aOn = selectedAgentSkills.includes(a.name);
-                        const bOn = selectedAgentSkills.includes(b.name);
+                        const draft = pendingSkills ?? selectedAgentSkills;
+                        const aOn = draft.includes(a.name);
+                        const bOn = draft.includes(b.name);
                         if (aOn && !bOn) return -1;
                         if (!aOn && bOn) return 1;
                         return 0;
                       })
                       .map((skill) => {
-                        const isOn = selectedAgentSkills.includes(skill.name);
+                        const draft = pendingSkills ?? selectedAgentSkills;
+                        const isOn = draft.includes(skill.name);
                         return (
                           <button
                             key={skill.name}
                             type="button"
                             className={`agent-card__token${isOn ? ' is-on' : ''}`}
                             title={skill.description || skill.name}
-                            onClick={() => void handleToggleSkill(selectedAgent.id, skill.name)}
+                            onClick={() => {
+                              setPendingSkills((prev) => {
+                                const current = prev ?? selectedAgentSkills;
+                                return isOn
+                                  ? current.filter((n) => n !== skill.name)
+                                  : [...current, skill.name];
+                              });
+                            }}
                           >
                             <span className="agent-card__token-name">{skill.name}</span>
                           </button>

@@ -254,6 +254,62 @@
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Detail modal content styles (rendered inside GalleryDetailModal)
+// These classes are used in AgentsScene.tsx for the team detail popup
+// ─────────────────────────────────────────────────────────────────────────────
+
+.agent-team-card {
+  &__section {
+    display: flex;
+    flex-direction: column;
+    gap: $size-gap-2;
+  }
+
+  &__section-title {
+    font-size: $font-size-xs;
+    font-weight: $font-weight-semibold;
+    color: var(--color-text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  &__member-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: $size-gap-1;
+  }
+
+  &__member-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: $size-gap-1;
+    padding: 4px 10px;
+    border-radius: $size-radius-full;
+    border: 1px solid var(--border-subtle);
+    background: var(--element-bg-subtle);
+    font-size: 11px;
+    color: var(--color-text-secondary);
+    white-space: nowrap;
+  }
+
+  &__member-name {
+    font-weight: $font-weight-medium;
+    color: var(--color-text-primary);
+  }
+
+  &__member-role {
+    font-size: 10px;
+    color: var(--color-text-muted);
+    padding-left: 2px;
+
+    &::before {
+      content: "·";
+      margin-right: 2px;
+    }
+  }
+}
+
 // ── Animations ──
 @keyframes agent-team-card-in {
   from {
