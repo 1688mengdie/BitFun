@@ -49,6 +49,14 @@
   }
 }
 
+.subagent-items-wrapper--collapsed {
+  display: none;
+}
+
+.subagent-items-wrapper--expanded {
+  display: block;
+}
+
 // Subagent container for items under the same parent task.
 .subagent-items-container {
   // Blend with the TaskTool card.
@@ -70,6 +78,10 @@
   // Keep height even when content is short; overflow scrolls.
   height: 400px;
   overflow-y: auto;
+}
+
+.subagent-items-container--collapsed {
+  overflow: hidden;
 }
 
 // TaskTool card bottom radius is controlled by TaskToolDisplay.scss.

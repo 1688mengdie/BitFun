@@ -55,7 +55,7 @@ export const TaskToolDisplay: React.FC<ToolCardProps> = ({
     reason: 'manual' | 'auto' = 'manual',
   ) => {
     applyExpandedState(isExpanded, nextExpanded, setIsExpanded, { reason });
-  }, [applyExpandedState, isExpanded]);
+  }, [applyExpandedState, isExpanded, isRunning, status, toolId]);
 
   const updatePromptExpandedState = useCallback((nextExpanded: boolean) => {
     applyExpandedState(isPromptExpanded, nextExpanded, setIsPromptExpanded);

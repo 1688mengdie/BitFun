@@ -412,7 +412,7 @@ const SubagentItemsContainer = React.memo<SubagentItemsContainerProps>(({
     
     return unsubscribe;
   }, [parentTaskToolId]);
-  
+
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -481,15 +481,11 @@ const SubagentItemsContainer = React.memo<SubagentItemsContainerProps>(({
     };
   }, [isCollapsed]);
   
-  if (isCollapsed) {
-    return null;
-  }
-  
   return (
-    <div className="subagent-items-wrapper">
+    <div className={`subagent-items-wrapper ${isCollapsed ? 'subagent-items-wrapper--collapsed' : 'subagent-items-wrapper--expanded'}`}>
       <div 
         ref={containerRef}
-        className="subagent-items-container"
+        className={`subagent-items-container ${isCollapsed ? 'subagent-items-container--collapsed' : 'subagent-items-container--expanded'}`}
         data-parent-tool-id={parentTaskToolId}
       >
         {items.map((item, idx) => (
