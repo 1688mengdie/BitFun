@@ -38,6 +38,17 @@ export const InlineAiPreviewBlock: React.FC<InlineAiPreviewBlockProps> = ({
   onReject,
   onRetry,
 }) => {
+  const handlePointerDown: React.PointerEventHandler<HTMLElement> = (event) => {
+    // Keep ProseMirror from stealing focus and remounting the widget before click fires.
+    event.preventDefault();
+    event.stopPropagation();
+  };
+
+  const handleMouseDown: React.MouseEventHandler<HTMLElement> = (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+  };
+
   const statusText =
     status === 'submitting' || status === 'streaming'
       ? labels.streaming
@@ -47,7 +58,11 @@ export const InlineAiPreviewBlock: React.FC<InlineAiPreviewBlockProps> = ({
   const previewStateClass = `m-editor-inline-ai-preview--${status}`;
 
   return (
-    <div className={`m-editor-inline-ai-preview m-editor-inline-ai-preview--inline ${previewStateClass}`}>
+    <div
+      className={`m-editor-inline-ai-preview m-editor-inline-ai-preview--inline ${previewStateClass}`}
+      onPointerDownCapture={handlePointerDown}
+      onMouseDownCapture={handleMouseDown}
+    >
       <div className="m-editor-inline-ai-preview__header">
         <span className="m-editor-inline-ai-preview__title">{labels.title}</span>
         <span className="m-editor-inline-ai-preview__status">{statusText}</span>
