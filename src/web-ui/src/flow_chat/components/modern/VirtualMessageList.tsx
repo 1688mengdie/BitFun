@@ -141,6 +141,34 @@ function isUpwardScrollIntentKey(event: KeyboardEvent): boolean {
   );
 }
 
+function isPointerOnScrollbarGutter(
+  scroller: HTMLElement,
+  clientX: number,
+  clientY: number,
+): boolean {
+  const rect = scroller.getBoundingClientRect();
+  const verticalScrollbarWidth = Math.max(0, scroller.offsetWidth - scroller.clientWidth);
+  const horizontalScrollbarHeight = Math.max(0, scroller.offsetHeight - scroller.clientHeight);
+
+  const isWithinVerticalScrollbar = (
+    verticalScrollbarWidth > 0 &&
+    clientX >= rect.right - verticalScrollbarWidth &&
+    clientX <= rect.right &&
+    clientY >= rect.top &&
+    clientY <= rect.bottom
+  );
+
+  const isWithinHorizontalScrollbar = (
+    horizontalScrollbarHeight > 0 &&
+    clientY >= rect.bottom - horizontalScrollbarHeight &&
+    clientY <= rect.bottom &&
+    clientX >= rect.left &&
+    clientX <= rect.right
+  );
+
+  return isWithinVerticalScrollbar || isWithinHorizontalScrollbar;
+}
+
 function sanitizeBottomReservationState(state: BottomReservationState): BottomReservationState {
   const collapsePx = sanitizeReservationPx(state.collapse.px);
   const collapseFloorPx = Math.min(collapsePx, sanitizeReservationPx(state.collapse.floorPx));
@@ -206,6 +234,7 @@ export const VirtualMessageList = forwardRef<VirtualMessageListRef>((_, ref) => 
   const mutationObserverRef = useRef<MutationObserver | null>(null);
   const layoutTransitionCountRef = useRef(0);
   const touchScrollIntentStartYRef = useRef<number | null>(null);
+  const scrollbarPointerInteractionActiveRef = useRef(false);
   const anchorLockRef = useRef<ScrollAnchorLockState>({
     active: false,
     targetScrollTop: 0,
@@ -503,6 +532,7 @@ export const VirtualMessageList = forwardRef<VirtualMessageListRef>((_, ref) => 
     turnId: latestTurnId,
     sawPositiveFloor: false,
   });
+  const hasPrimedMountedStreamingTurnFollowRef = useRef(false);
   const previousLatestTurnIdForFollowRef = useRef<string | null>(latestTurnId);
   const previousSessionIdForFollowRef = useRef<string | undefined>(activeSession?.sessionId);
 
@@ -1126,12 +1156,46 @@ export const VirtualMessageList = forwardRef<VirtualMessageListRef>((_, ref) => 
       followOutputControllerRef.current.handleUserScrollIntent();
     };
 
+    const handlePointerDown = (event: PointerEvent) => {
+      if (event.pointerType === 'touch' || event.button !== 0) {
+        return;
+      }
+
+      if (!isPointerOnScrollbarGutter(scrollerElement, event.clientX, event.clientY)) {
+        return;
+      }
+
+      scrollbarPointerInteractionActiveRef.current = true;
+      followOutputControllerRef.current.handleUserScrollIntent();
+    };
+
+    const handlePointerMove = (event: PointerEvent) => {
+      if (!scrollbarPointerInteractionActiveRef.current || event.pointerType === 'touch') {
+        return;
+      }
+
+      if ((event.buttons & 1) !== 1) {
+        scrollbarPointerInteractionActiveRef.current = false;
+        return;
+      }
+
+      followOutputControllerRef.current.handleUserScrollIntent();
+    };
+
+    const endScrollbarPointerInteraction = () => {
+      scrollbarPointerInteractionActiveRef.current = false;
+    };
+
     scrollerElement.addEventListener('wheel', handleWheel, { passive: true });
     scrollerElement.addEventListener('touchstart', handleTouchStart, { passive: true });
     scrollerElement.addEventListener('touchmove', handleTouchMove, { passive: true });
     scrollerElement.addEventListener('touchend', resetTouchScrollIntent, { passive: true });
     scrollerElement.addEventListener('touchcancel', resetTouchScrollIntent, { passive: true });
     scrollerElement.addEventListener('keydown', handleKeyDown, true);
+    scrollerElement.addEventListener('pointerdown', handlePointerDown, true);
+    window.addEventListener('pointermove', handlePointerMove, true);
+    window.addEventListener('pointerup', endScrollbarPointerInteraction, true);
+    window.addEventListener('pointercancel', endScrollbarPointerInteraction, true);
 
     const handleToolCardToggle = () => {
       scheduleHeightMeasure(2);
@@ -1201,6 +1265,10 @@ export const VirtualMessageList = forwardRef<VirtualMessageListRef>((_, ref) => 
       scrollerElement.removeEventListener('touchend', resetTouchScrollIntent);
       scrollerElement.removeEventListener('touchcancel', resetTouchScrollIntent);
       scrollerElement.removeEventListener('keydown', handleKeyDown, true);
+      scrollerElement.removeEventListener('pointerdown', handlePointerDown, true);
+      window.removeEventListener('pointermove', handlePointerMove, true);
+      window.removeEventListener('pointerup', endScrollbarPointerInteraction, true);
+      window.removeEventListener('pointercancel', endScrollbarPointerInteraction, true);
       window.removeEventListener('tool-card-toggle', handleToolCardToggle);
       window.removeEventListener('flowchat:tool-card-collapse-intent', handleToolCardCollapseIntent as EventListener);
       resizeObserverRef.current?.disconnect();
@@ -1208,6 +1276,7 @@ export const VirtualMessageList = forwardRef<VirtualMessageListRef>((_, ref) => 
       mutationObserverRef.current?.disconnect();
       mutationObserverRef.current = null;
       touchScrollIntentStartYRef.current = null;
+      scrollbarPointerInteractionActiveRef.current = false;
 
       if (measureFrameRef.current !== null) {
         cancelAnimationFrame(measureFrameRef.current);
@@ -1475,6 +1544,29 @@ export const VirtualMessageList = forwardRef<VirtualMessageListRef>((_, ref) => 
   });
 
   useEffect(() => {
+    if (hasPrimedMountedStreamingTurnFollowRef.current) {
+      return;
+    }
+
+    hasPrimedMountedStreamingTurnFollowRef.current = true;
+    if (!latestTurnId || !isStreamingOutput) {
+      return;
+    }
+
+    latestTurnAutoFollowStateRef.current = {
+      turnId: latestTurnId,
+      sawPositiveFloor: false,
+    };
+    armFollowOutputForNewTurn();
+  }, [
+    activeSession?.sessionId,
+    armFollowOutputForNewTurn,
+    isStreamingOutput,
+    latestTurnId,
+    virtualItems.length,
+  ]);
+
+  useEffect(() => {
     const previousSessionId = previousSessionIdForFollowRef.current;
     if (previousSessionId !== activeSession?.sessionId) {
       previousSessionIdForFollowRef.current = activeSession?.sessionId;
@@ -1538,10 +1630,6 @@ export const VirtualMessageList = forwardRef<VirtualMessageListRef>((_, ref) => 
 
     if (bottomReservationState.pin.floorPx > COMPENSATION_EPSILON_PX) {
       trackingState.sawPositiveFloor = true;
-      return;
-    }
-
-    if (!trackingState.sawPositiveFloor) {
       return;
     }
 

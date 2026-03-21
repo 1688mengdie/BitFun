@@ -10,6 +10,7 @@ import { useCallback, useEffect, useRef, useState, type RefObject } from 'react'
 const PROGRAMMATIC_SCROLL_GUARD_MS = 160;
 const AUTO_FOLLOW_BOTTOM_THRESHOLD_PX = 24;
 const USER_SCROLL_DIRECTION_EPSILON_PX = 0.5;
+const USER_SCROLL_INTENT_WINDOW_MS = 450;
 
 export type FollowOutputEnterReason = 'jump-to-latest' | 'auto-follow';
 export type FollowOutputExitReason =
@@ -63,6 +64,7 @@ export function useFlowChatFollowOutput({
   const isFollowingOutputRef = useRef(isFollowingOutput);
   const followFrameRef = useRef<number | null>(null);
   const programmaticScrollUntilMsRef = useRef(0);
+  const explicitUserScrollIntentUntilMsRef = useRef(0);
   const lastObservedScrollTopRef = useRef(0);
   const previousSessionIdRef = useRef<string | undefined>(activeSessionId);
   const armedAutoFollowTurnIdRef = useRef<string | null>(null);
@@ -85,6 +87,7 @@ export function useFlowChatFollowOutput({
 
   const runProgrammaticScroll = useCallback((scrollAction: () => void) => {
     programmaticScrollUntilMsRef.current = performance.now() + PROGRAMMATIC_SCROLL_GUARD_MS;
+    explicitUserScrollIntentUntilMsRef.current = 0;
     scrollAction();
     const scroller = scrollerRef.current;
     if (scroller) {
@@ -95,6 +98,7 @@ export function useFlowChatFollowOutput({
   const enterFollowOutput = useCallback((reason: FollowOutputEnterReason) => {
     cancelPendingAutoFollowArm();
     cancelScheduledFollow();
+    explicitUserScrollIntentUntilMsRef.current = 0;
     setFollowingOutput(true);
     const followAction = reason === 'jump-to-latest'
       ? performUserFollowScroll
@@ -112,6 +116,7 @@ export function useFlowChatFollowOutput({
   const exitFollowOutput = useCallback((_reason: FollowOutputExitReason) => {
     cancelPendingAutoFollowArm();
     cancelScheduledFollow();
+    explicitUserScrollIntentUntilMsRef.current = 0;
     setFollowingOutput(false);
     const scroller = scrollerRef.current;
     if (scroller) {
@@ -139,15 +144,16 @@ export function useFlowChatFollowOutput({
   ]);
 
   const activateArmedFollowOutput = useCallback(() => {
-    if (
-      !latestTurnId ||
-      armedAutoFollowTurnIdRef.current !== latestTurnId ||
-      isFollowingOutputRef.current
-    ) {
+    const armedTurnId = armedAutoFollowTurnIdRef.current;
+    const isAlreadyFollowing = isFollowingOutputRef.current;
+    const isArmedForLatestTurn = Boolean(latestTurnId && armedTurnId === latestTurnId);
+    const isAutoFollowSuspended = shouldSuspendAutoFollow?.() === true;
+
+    if (!latestTurnId || !isArmedForLatestTurn || isAlreadyFollowing) {
       return false;
     }
 
-    if (shouldSuspendAutoFollow?.() === true) {
+    if (isAutoFollowSuspended) {
       return false;
     }
 
@@ -171,17 +177,12 @@ export function useFlowChatFollowOutput({
       return;
     }
 
-    if (performance.now() <= programmaticScrollUntilMsRef.current) {
+    const now = performance.now();
+    if (now <= programmaticScrollUntilMsRef.current) {
       return;
     }
-
-    if (!isFollowingOutputRef.current) {
-      cancelPendingAutoFollowArm();
-      return;
-    }
-
-    exitFollowOutput('user-scroll-up');
-  }, [cancelPendingAutoFollowArm, exitFollowOutput]);
+    explicitUserScrollIntentUntilMsRef.current = now + USER_SCROLL_INTENT_WINDOW_MS;
+  }, []);
 
   const scheduleFollowToLatest = useCallback((_reason: string) => {
     if (
@@ -246,9 +247,29 @@ export function useFlowChatFollowOutput({
 
     const upwardDelta = previousScrollTop - currentScrollTop;
     if (upwardDelta > USER_SCROLL_DIRECTION_EPSILON_PX) {
-      handleUserScrollIntent();
+      const now = performance.now();
+      const hasRecentExplicitUserIntent = now <= explicitUserScrollIntentUntilMsRef.current;
+      const distanceFromBottom = getDistanceFromBottom(scroller);
+      if (!hasRecentExplicitUserIntent) {
+        if (
+          isFollowingOutputRef.current &&
+          distanceFromBottom <= AUTO_FOLLOW_BOTTOM_THRESHOLD_PX
+        ) {
+          return;
+        }
+        return;
+      }
+
+      explicitUserScrollIntentUntilMsRef.current = 0;
+
+      if (!isFollowingOutputRef.current) {
+        cancelPendingAutoFollowArm();
+        return;
+      }
+
+      exitFollowOutput('user-scroll-up');
     }
-  }, [handleUserScrollIntent, scrollerRef, shouldSuspendAutoFollow]);
+  }, [cancelPendingAutoFollowArm, exitFollowOutput, scrollerRef, shouldSuspendAutoFollow]);
 
   useEffect(() => {
     const scroller = scrollerRef.current;
@@ -266,6 +287,7 @@ export function useFlowChatFollowOutput({
     previousSessionIdRef.current = activeSessionId;
     cancelPendingAutoFollowArm();
     cancelScheduledFollow();
+    explicitUserScrollIntentUntilMsRef.current = 0;
     const nextFollowState = Boolean(activeSessionId && virtualItemCount === 0);
 
     if (nextFollowState) {
