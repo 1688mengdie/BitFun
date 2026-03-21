@@ -2,11 +2,12 @@
  * Tool card for GrepSearch text queries.
  */
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useCallback } from 'react';
 import { Loader2, Clock, Check } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { ToolCardProps } from '../types/flow-chat';
 import { CompactToolCard, CompactToolCardHeader } from './CompactToolCard';
+import { useToolCardHeightContract } from './useToolCardHeightContract';
 export const GrepSearchDisplay: React.FC<ToolCardProps> = ({
   toolItem,
   onExpand
@@ -14,6 +15,11 @@ export const GrepSearchDisplay: React.FC<ToolCardProps> = ({
   const { t } = useTranslation('flow-chat');
   const { toolCall, toolResult, status } = toolItem;
   const [isExpanded, setIsExpanded] = useState(false);
+  const toolId = toolItem.id ?? toolCall?.id;
+  const { cardRootRef, applyExpandedState } = useToolCardHeightContract({
+    toolId,
+    toolName: toolItem.toolName,
+  });
 
   const getStatusIcon = () => {
     switch (status) {
@@ -74,12 +80,13 @@ export const GrepSearchDisplay: React.FC<ToolCardProps> = ({
     return null;
   }
 
-  const handleClick = () => {
+  const handleClick = useCallback(() => {
     if (hasDetails) {
-      setIsExpanded(!isExpanded);
-      onExpand?.();
+      applyExpandedState(isExpanded, !isExpanded, setIsExpanded, {
+        onExpand,
+      });
     }
-  };
+  }, [applyExpandedState, hasDetails, isExpanded, onExpand]);
 
   const renderContent = () => {
     if (status === 'completed') {
@@ -135,19 +142,21 @@ export const GrepSearchDisplay: React.FC<ToolCardProps> = ({
   );
 
   return (
-    <CompactToolCard
-      status={status}
-      isExpanded={isExpanded}
-      onClick={handleClick}
-      className="grep-search-card"
-      clickable={hasDetails}
-      header={
-        <CompactToolCardHeader
-          statusIcon={getStatusIcon()}
-          content={renderContent()}
-        />
-      }
-      expandedContent={hasDetails ? renderExpandedContent() : undefined}
-    />
+    <div ref={cardRootRef} data-tool-card-id={toolId ?? ''}>
+      <CompactToolCard
+        status={status}
+        isExpanded={isExpanded}
+        onClick={handleClick}
+        className="grep-search-card"
+        clickable={hasDetails}
+        header={
+          <CompactToolCardHeader
+            statusIcon={getStatusIcon()}
+            content={renderContent()}
+          />
+        }
+        expandedContent={hasDetails ? renderExpandedContent() : undefined}
+      />
+    </div>
   );
 };

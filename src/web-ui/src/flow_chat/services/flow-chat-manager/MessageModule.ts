@@ -16,6 +16,11 @@ import type { FlowChatContext, DialogTurn } from './types';
 import { ensureBackendSession, retryCreateBackendSession } from './SessionModule';
 import { cleanupSessionBuffers } from './TextChunkModule';
 import type { ImageContextData as ImageInputContextData } from '@/infrastructure/api/service-api/ImageContextTypes';
+import { globalEventBus } from '@/infrastructure/event-bus';
+import {
+  FLOWCHAT_PIN_TURN_TO_TOP_EVENT,
+  type FlowChatPinTurnToTopRequest,
+} from '../../events/flowchatNavigation';
 
 const log = createLogger('MessageModule');
 
@@ -137,6 +142,14 @@ export async function sendMessage(
     };
 
     context.flowChatStore.addDialogTurn(sessionId, dialogTurn);
+    const pinRequest: FlowChatPinTurnToTopRequest = {
+      sessionId,
+      turnId: dialogTurnId,
+      behavior: 'auto',
+      source: 'send-message',
+      pinMode: 'sticky-latest',
+    };
+    globalEventBus.emit(FLOWCHAT_PIN_TURN_TO_TOP_EVENT, pinRequest, 'MessageModule');
     
     await stateMachineManager.transition(sessionId, SessionExecutionEvent.START, {
       taskId: sessionId,

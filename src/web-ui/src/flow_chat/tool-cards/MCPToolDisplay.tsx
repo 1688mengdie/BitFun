@@ -13,6 +13,7 @@ import { createLogger } from '@/shared/utils/logger';
 import { MCPAPI, MCP_APPS_PROTOCOL_VERSION, type McpUiResourceCsp, type McpUiResourcePermissions, type McpUiMessageParams, type McpUiMessageResult, type McpAppMessageEvent, type McpAppMessageResponseEvent } from '@/infrastructure/api/service-api/MCPAPI';
 import { systemAPI } from '@/infrastructure/api/service-api/SystemAPI';
 import { globalEventBus } from '@/infrastructure/event-bus';
+import { useToolCardHeightContract } from './useToolCardHeightContract';
 import './MCPToolDisplay.scss';
 
 const log = createLogger('MCPToolDisplay');
@@ -150,6 +151,11 @@ export const MCPToolDisplay: React.FC<ToolCardProps> = ({
   const { t } = useTranslation('flow-chat');
   const { status, toolCall, toolResult, requiresConfirmation, userConfirmed } = toolItem;
   const [isExpanded, setIsExpanded] = useState(false);
+  const toolId = toolItem.id ?? toolCall?.id;
+  const { cardRootRef, applyExpandedState } = useToolCardHeightContract({
+    toolId,
+    toolName: toolItem.toolName,
+  });
 
   const getResultData = (): MCPToolResult | null => {
     if (!toolResult?.result) return null;
@@ -226,9 +232,11 @@ export const MCPToolDisplay: React.FC<ToolCardProps> = ({
   // Auto-expand when MCP App UI is ready so user sees the interactive UI immediately
   useEffect(() => {
     if (mcpAppState?.html && !isExpanded) {
-      setIsExpanded(true);
+      applyExpandedState(isExpanded, true, setIsExpanded, {
+        reason: 'auto',
+      });
     }
-  }, [mcpAppState?.html, isExpanded]);
+  }, [applyExpandedState, isExpanded, mcpAppState?.html]);
 
   // Iframe <-> parent postMessage bridge (MCP App protocol). Register in useLayoutEffect so listener is attached before iframe script runs.
   useLayoutEffect(() => {
@@ -541,6 +549,10 @@ export const MCPToolDisplay: React.FC<ToolCardProps> = ({
     (!!uiResourceUri || (resultData?.content && resultData.content.length > 0));
   const isLoading = status === 'preparing' || status === 'streaming' || status === 'running';
 
+  const toggleExpanded = useCallback(() => {
+    applyExpandedState(isExpanded, !isExpanded, setIsExpanded);
+  }, [applyExpandedState, isExpanded]);
+
   const getErrorMessage = () => {
     if (toolResult && 'error' in toolResult) {
       return toolResult.error;
@@ -559,9 +571,9 @@ export const MCPToolDisplay: React.FC<ToolCardProps> = ({
     }
     
     if (hasContent) {
-      setIsExpanded(!isExpanded);
+      toggleExpanded();
     }
-  }, [isFailed, isExpanded, hasContent]);
+  }, [hasContent, isFailed, toggleExpanded]);
 
   const renderToolIcon = () => {
     return <Package size={16} />;
@@ -631,7 +643,7 @@ export const MCPToolDisplay: React.FC<ToolCardProps> = ({
               size="xs"
               onClick={(e) => {
                 e.stopPropagation();
-                setIsExpanded(!isExpanded);
+                toggleExpanded();
               }}
               tooltip={isExpanded ? t('toolCards.common.collapseContent') : t('toolCards.common.expandContent')}
             >
@@ -730,16 +742,18 @@ export const MCPToolDisplay: React.FC<ToolCardProps> = ({
   );
 
   return (
-    <BaseToolCard
-      status={status}
-      isExpanded={isExpanded}
-      onClick={handleCardClick}
-      className="mcp-tool-display"
-      header={renderHeader()}
-      expandedContent={renderExpandedContent()}
-      errorContent={renderErrorContent()}
-      isFailed={isFailed}
-      requiresConfirmation={requiresConfirmation && !userConfirmed}
-    />
+    <div ref={cardRootRef} data-tool-card-id={toolId ?? ''}>
+      <BaseToolCard
+        status={status}
+        isExpanded={isExpanded}
+        onClick={handleCardClick}
+        className="mcp-tool-display"
+        header={renderHeader()}
+        expandedContent={renderExpandedContent()}
+        errorContent={renderErrorContent()}
+        isFailed={isFailed}
+        requiresConfirmation={requiresConfirmation && !userConfirmed}
+      />
+    </div>
   );
 };

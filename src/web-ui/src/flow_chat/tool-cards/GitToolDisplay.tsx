@@ -9,6 +9,7 @@ import { CubeLoading, IconButton } from '../../component-library';
 import type { ToolCardProps } from '../types/flow-chat';
 import { BaseToolCard, ToolCardHeader } from './BaseToolCard';
 import { createLogger } from '@/shared/utils/logger';
+import { useToolCardHeightContract } from './useToolCardHeightContract';
 import './GitToolDisplay.scss';
 
 const log = createLogger('GitToolDisplay');
@@ -67,6 +68,11 @@ export const GitToolDisplay: React.FC<ToolCardProps> = ({
   const { t } = useTranslation('flow-chat');
   const { status, toolCall, toolResult, requiresConfirmation, userConfirmed } = toolItem;
   const [isExpanded, setIsExpanded] = useState(false);
+  const toolId = toolItem.id ?? toolCall?.id;
+  const { cardRootRef, applyExpandedState } = useToolCardHeightContract({
+    toolId,
+    toolName: toolItem.toolName,
+  });
 
   const getInputData = (): GitToolInput | null => {
     if (!toolCall?.input) return null;
@@ -144,6 +150,10 @@ export const GitToolDisplay: React.FC<ToolCardProps> = ({
 
   const hasWarning = resultData && resultData.success && resultData.stderr;
 
+  const toggleExpanded = useCallback(() => {
+    applyExpandedState(isExpanded, !isExpanded, setIsExpanded);
+  }, [applyExpandedState, isExpanded]);
+
   const getErrorMessage = () => {
     if (toolResult && 'error' in toolResult) {
       return toolResult.error;
@@ -161,9 +171,9 @@ export const GitToolDisplay: React.FC<ToolCardProps> = ({
     }
     
     if (hasOutput || isFailed) {
-      setIsExpanded(!isExpanded);
+      toggleExpanded();
     }
-  }, [isExpanded, hasOutput, isFailed]);
+  }, [hasOutput, isFailed, toggleExpanded]);
 
   const renderToolIcon = () => {
     return <GitBranch size={16} />;
@@ -238,7 +248,7 @@ export const GitToolDisplay: React.FC<ToolCardProps> = ({
               size="xs"
               onClick={(e) => {
                 e.stopPropagation();
-                setIsExpanded(!isExpanded);
+                toggleExpanded();
               }}
               tooltip={isExpanded ? t('toolCards.git.collapseOutput') : t('toolCards.git.expandOutput')}
             >
@@ -323,16 +333,18 @@ export const GitToolDisplay: React.FC<ToolCardProps> = ({
   );
 
   return (
-    <BaseToolCard
-      status={status}
-      isExpanded={isExpanded}
-      onClick={handleCardClick}
-      className="git-tool-display"
-      header={renderHeader()}
-      expandedContent={renderExpandedContent()}
-      errorContent={renderErrorContent()}
-      isFailed={(isFailed && status === 'error') || undefined}
-      requiresConfirmation={requiresConfirmation && !userConfirmed}
-    />
+    <div ref={cardRootRef} data-tool-card-id={toolId ?? ''}>
+      <BaseToolCard
+        status={status}
+        isExpanded={isExpanded}
+        onClick={handleCardClick}
+        className="git-tool-display"
+        header={renderHeader()}
+        expandedContent={renderExpandedContent()}
+        errorContent={renderErrorContent()}
+        isFailed={(isFailed && status === 'error') || undefined}
+        requiresConfirmation={requiresConfirmation && !userConfirmed}
+      />
+    </div>
   );
 };

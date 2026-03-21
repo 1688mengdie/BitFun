@@ -21,9 +21,15 @@ import { BaseToolCard, ToolCardHeader } from './BaseToolCard';
 import { CubeLoading, IconButton } from '../../component-library';
 import { TerminalOutputRenderer } from '@/tools/terminal/components';
 import { createLogger } from '@/shared/utils/logger';
+import { useToolCardHeightContract } from './useToolCardHeightContract';
 import './TerminalToolCard.scss';
 
 const log = createLogger('TerminalToolCard');
+const TERMINAL_OUTPUT_PREVIEW_ROWS = 4;
+const TERMINAL_OUTPUT_ESTIMATED_LINE_HEIGHT = 18;
+const TERMINAL_OUTPUT_VERTICAL_PADDING = 16;
+const TERMINAL_OUTPUT_PREVIEW_MAX_HEIGHT =
+  TERMINAL_OUTPUT_PREVIEW_ROWS * TERMINAL_OUTPUT_ESTIMATED_LINE_HEIGHT + TERMINAL_OUTPUT_VERTICAL_PADDING;
 
 interface TerminalToolCardProps extends ToolCardProps {
   terminalSessionId?: string;
@@ -97,7 +103,7 @@ export const TerminalToolCard: React.FC<TerminalToolCardProps> = ({
   const canEditCommand = showConfirmButtons;
   
   const [userAction, setUserAction] = useState<'none' | 'rejected' | 'interrupted'>('none');
-  const toolId = toolCall?.id;
+  const toolId = toolItem.id ?? toolCall?.id;
   const isTerminalState = isTerminalStatus(status);
   
   const [isExpanded, setIsExpanded] = useState(() => getInitialExpandedState(toolId, status));
@@ -107,8 +113,33 @@ export const TerminalToolCard: React.FC<TerminalToolCardProps> = ({
   const inputRef = useRef<HTMLInputElement>(null);
   const hasInitializedExpand = useRef(false);
   const previousStatusRef = useRef<string>(status);
+  const {
+    cardRootRef,
+    applyExpandedState: applyHeightContractExpandedState,
+  } = useToolCardHeightContract({
+    toolId,
+    toolName: toolItem.toolName,
+  });
   
   const [accumulatedOutput, setAccumulatedOutput] = useState('');
+
+  const applyExpandedState = useCallback((
+    nextExpanded: boolean,
+    isManual: boolean,
+    reason: 'manual' | 'auto'
+  ) => {
+    if (nextExpanded !== isExpanded) {
+      applyHeightContractExpandedState(isExpanded, nextExpanded, (nextValue) => {
+        setIsExpanded(nextValue);
+        setCachedExpandedState(toolId, nextValue, isManual);
+      }, {
+        reason,
+        onExpand,
+      });
+    } else if (isManual) {
+      setCachedExpandedState(toolId, nextExpanded, isManual);
+    }
+  }, [applyHeightContractExpandedState, isExpanded, onExpand, toolId]);
 
   useEffect(() => {
     if (terminalSessionId && !hasInitializedExpand.current) {
@@ -119,12 +150,12 @@ export const TerminalToolCard: React.FC<TerminalToolCardProps> = ({
       
       const cached = getCachedExpandedState(toolId);
       if (cached === undefined || !cached.isManual) {
-        setIsExpanded(true);
+        applyExpandedState(true, false, 'auto');
         setCachedExpandedState(toolId, true, false);
       }
       hasInitializedExpand.current = true;
     }
-  }, [terminalSessionId, toolId, isTerminalState]);
+  }, [applyExpandedState, terminalSessionId, toolId, isTerminalState]);
 
   useEffect(() => {
     const prevStatus = previousStatusRef.current;
@@ -136,15 +167,13 @@ export const TerminalToolCard: React.FC<TerminalToolCardProps> = ({
     }
     
     if (status === 'running' && prevStatus !== 'running') {
-      setIsExpanded(true);
-      setCachedExpandedState(toolId, true, false);
+      applyExpandedState(true, false, 'auto');
     }
     
-    if (!isTerminalStatus(prevStatus) && isTerminalStatus(status)) {
-      setIsExpanded(false);
-      setCachedExpandedState(toolId, false, false);
+    if (!isTerminalStatus(prevStatus) && isTerminalStatus(status) && isExpanded) {
+      applyExpandedState(false, false, 'auto');
     }
-  }, [status, toolId]);
+  }, [applyExpandedState, isExpanded, status, toolId]);
   
   useEffect(() => {
     if (progressMessage && (status === 'running' || status === 'streaming')) {
@@ -199,7 +228,7 @@ export const TerminalToolCard: React.FC<TerminalToolCardProps> = ({
     }
 
     setIsExecuting(true);
-    setIsExpanded(true);
+    applyExpandedState(true, true, 'manual');
     setAccumulatedOutput('');
 
     try {
@@ -247,10 +276,8 @@ export const TerminalToolCard: React.FC<TerminalToolCardProps> = ({
 
   const toggleExpand = useCallback(() => {
     const newExpanded = !isExpanded;
-    setIsExpanded(newExpanded);
-    setCachedExpandedState(toolId, newExpanded, true);
-    onExpand?.();
-  }, [isExpanded, toolId, onExpand]);
+    applyExpandedState(newExpanded, true, 'manual');
+  }, [applyExpandedState, isExpanded]);
   
   const handleToggleExpand = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
@@ -430,6 +457,7 @@ export const TerminalToolCard: React.FC<TerminalToolCardProps> = ({
             <TerminalOutputRenderer 
               content={accumulatedOutput}
               className="terminal-xterm-output"
+              maxHeight={TERMINAL_OUTPUT_PREVIEW_MAX_HEIGHT}
             />
           </div>
         )}
@@ -464,6 +492,7 @@ export const TerminalToolCard: React.FC<TerminalToolCardProps> = ({
                 <TerminalOutputRenderer 
                   content={output}
                   className="terminal-xterm-output"
+                  maxHeight={TERMINAL_OUTPUT_PREVIEW_MAX_HEIGHT}
                 />
               </div>
             )}
@@ -479,6 +508,7 @@ export const TerminalToolCard: React.FC<TerminalToolCardProps> = ({
               <TerminalOutputRenderer 
                 content={accumulatedOutput}
                 className="terminal-xterm-output"
+                maxHeight={TERMINAL_OUTPUT_PREVIEW_MAX_HEIGHT}
               />
             </div>
           </div>
@@ -504,17 +534,19 @@ export const TerminalToolCard: React.FC<TerminalToolCardProps> = ({
   }, [toggleExpand]);
 
   return (
-    <BaseToolCard
-      status={status}
-      isExpanded={isExpanded}
-      onClick={handleCardClick}
-      className="terminal-tool-card"
-      header={renderHeader()}
-      expandedContent={isExpanded ? renderExpandedContent() : null}
-      errorContent={isFailed ? renderErrorContent() : null}
-      isFailed={isFailed}
-      requiresConfirmation={showConfirmButtons}
-    />
+    <div ref={cardRootRef} data-tool-card-id={toolItem.id ?? toolCall?.id ?? ''}>
+      <BaseToolCard
+        status={status}
+        isExpanded={isExpanded}
+        onClick={handleCardClick}
+        className="terminal-tool-card"
+        header={renderHeader()}
+        expandedContent={isExpanded ? renderExpandedContent() : null}
+        errorContent={isFailed ? renderErrorContent() : null}
+        isFailed={isFailed}
+        requiresConfirmation={showConfirmButtons}
+      />
+    </div>
   );
 };
 

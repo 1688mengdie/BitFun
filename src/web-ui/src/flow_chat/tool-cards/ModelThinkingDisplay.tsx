@@ -1,7 +1,9 @@
 /**
  * Model thinking display component.
- * Default expanded. Collapses when isLastItem becomes false
- * (i.e. the next atomic step has started).
+ * Default expanded while this is still the active last step.
+ * If the component mounts after later content already appeared
+ * (for example after a parent remount), start collapsed directly
+ * to avoid a visible expand-then-collapse flash.
  * Applies typewriter effect during streaming.
  */
 
@@ -10,6 +12,7 @@ import { ChevronRight } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { FlowThinkingItem } from '../types/flow-chat';
 import { useTypewriter } from '../hooks/useTypewriter';
+import { useToolCardHeightContract } from './useToolCardHeightContract';
 import './ModelThinkingDisplay.scss';
 
 interface ModelThinkingDisplayProps {
@@ -21,20 +24,32 @@ interface ModelThinkingDisplayProps {
 export const ModelThinkingDisplay: React.FC<ModelThinkingDisplayProps> = ({ thinkingItem, isLastItem = true }) => {
   const { t } = useTranslation('flow-chat');
   const { content, isStreaming, status } = thinkingItem;
+  const wrapperRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
 
   const isActive = isStreaming || status === 'streaming';
   const displayContent = useTypewriter(content, isActive);
 
-  const [isExpanded, setIsExpanded] = useState(true);
+  const [isExpanded, setIsExpanded] = useState(isLastItem);
   const userToggledRef = useRef(false);
+  const { applyExpandedState } = useToolCardHeightContract({
+    toolId: thinkingItem.id,
+    toolName: 'thinking',
+    getCardHeight: () => {
+      const contentScrollHeight = contentRef.current?.scrollHeight ?? null;
+      const wrapperHeight = wrapperRef.current?.getBoundingClientRect().height ?? null;
+      return contentScrollHeight ?? wrapperHeight;
+    },
+  });
 
   useEffect(() => {
     if (userToggledRef.current) return;
-    if (!isLastItem) {
-      setIsExpanded(false);
+    if (!isLastItem && isExpanded) {
+      applyExpandedState(isExpanded, false, setIsExpanded, {
+        reason: 'auto',
+      });
     }
-  }, [isLastItem]);
+  }, [applyExpandedState, isExpanded, isLastItem]);
 
   // Auto-scroll to bottom while content grows.
   useEffect(() => {
@@ -77,9 +92,9 @@ export const ModelThinkingDisplay: React.FC<ModelThinkingDisplayProps> = ({ thin
   }, [content, t]);
 
   const handleToggleClick = () => {
-    window.dispatchEvent(new CustomEvent('tool-card-toggle'));
+    const nextExpanded = !isExpanded;
     userToggledRef.current = true;
-    setIsExpanded(prev => !prev);
+    applyExpandedState(isExpanded, nextExpanded, setIsExpanded);
   };
 
   const headerLabel = isExpanded
@@ -94,7 +109,7 @@ export const ModelThinkingDisplay: React.FC<ModelThinkingDisplayProps> = ({ thin
   const renderedContent = isActive ? displayContent : content;
 
   return (
-    <div className={wrapperClassName}>
+    <div ref={wrapperRef} data-tool-card-id={thinkingItem.id} className={wrapperClassName}>
       <div
         className="thinking-collapsed-header"
         onClick={handleToggleClick}

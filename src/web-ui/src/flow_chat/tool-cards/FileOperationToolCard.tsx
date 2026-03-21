@@ -19,9 +19,15 @@ import { Tooltip } from '@/component-library';
 import { diffLines } from 'diff';
 import { createLogger } from '@/shared/utils/logger';
 import { CompactToolCard, CompactToolCardHeader } from './CompactToolCard';
+import { useToolCardHeightContract } from './useToolCardHeightContract';
 import './FileOperationToolCard.scss';
 
 const log = createLogger('FileOperationToolCard');
+const FILE_OPERATION_PREVIEW_ROWS = 4;
+const FILE_OPERATION_PREVIEW_ROW_HEIGHT = 22;
+// Keep streaming and completed previews at the same height to avoid layout jumps.
+const FILE_OPERATION_PREVIEW_MAX_HEIGHT =
+  FILE_OPERATION_PREVIEW_ROWS * FILE_OPERATION_PREVIEW_ROW_HEIGHT;
 
 interface FileOperationToolCardProps extends ToolCardProps {
   sessionId?: string;
@@ -35,30 +41,18 @@ export const FileOperationToolCard: React.FC<FileOperationToolCardProps> = ({
 }) => {
   const { t } = useTranslation('flow-chat');
   const { toolCall, toolResult, status, isParamsStreaming, partialParams } = toolItem;
+  const toolId = toolItem.id ?? toolCall?.id;
   
   const [isErrorExpanded, setIsErrorExpanded] = useState(false);
-  const [isPreviewExpanded, setIsPreviewExpanded] = useState(isParamsStreaming);
+  const [isPreviewExpanded, setIsPreviewExpanded] = useState(true);
   const [operationDiffStats, setOperationDiffStats] = useState<{ additions: number; deletions: number } | null>(null);
   
-  const prevIsParamsStreamingRef = useRef(isParamsStreaming);
-  const userCollapsedRef = useRef(false);
   const hasInitializedCompletionEffectRef = useRef(false);
   const previousCompletionEndTimeRef = useRef<number | null>(toolItem.endTime ?? null);
-  
-  useEffect(() => {
-    const prevIsParamsStreaming = prevIsParamsStreamingRef.current;
-    
-    if (prevIsParamsStreaming !== isParamsStreaming) {
-      prevIsParamsStreamingRef.current = isParamsStreaming;
-      
-      if (isParamsStreaming) {
-        userCollapsedRef.current = false;
-        setIsPreviewExpanded(true);
-      } else {
-        setIsPreviewExpanded(false);
-      }
-    }
-  }, [isParamsStreaming]);
+  const { cardRootRef, applyExpandedState } = useToolCardHeightContract({
+    toolId,
+    toolName: toolItem.toolName,
+  });
   
   const {
     files,
@@ -78,6 +72,12 @@ export const FileOperationToolCard: React.FC<FileOperationToolCardProps> = ({
   }, [toolCall, partialParams]);
 
   const currentFilePath = getFilePath();
+
+  useEffect(() => {
+    if (isParamsStreaming) {
+      setIsPreviewExpanded(true);
+    }
+  }, [isParamsStreaming]);
   
   const getOldString = useCallback((): string => {
     const params = partialParams || toolCall?.input;
@@ -206,6 +206,34 @@ export const FileOperationToolCard: React.FC<FileOperationToolCardProps> = ({
   }, [sessionId, toolCall?.id, status, isFailed]);
 
   const isLoading = status === 'preparing' || status === 'streaming' || status === 'running';
+  const previewVariant = useMemo(() => {
+    if (toolItem.toolName === 'Edit') {
+      if (status !== 'completed' && newStringContent) {
+        return 'streaming-code';
+      }
+      if (status === 'completed' && !isParamsStreaming && (oldStringContent || newStringContent)) {
+        return 'completed-diff';
+      }
+    }
+
+    if (toolItem.toolName === 'Write') {
+      if (status !== 'completed' && contentPreview) {
+        return 'streaming-code';
+      }
+      if (status === 'completed' && !isParamsStreaming && contentPreview) {
+        return 'completed-diff';
+      }
+    }
+
+    return 'none';
+  }, [
+    contentPreview,
+    isParamsStreaming,
+    newStringContent,
+    oldStringContent,
+    status,
+    toolItem.toolName,
+  ]);
   
   const getErrorMessage = () => {
     if (toolResult && 'error' in toolResult) {
@@ -350,11 +378,28 @@ export const FileOperationToolCard: React.FC<FileOperationToolCardProps> = ({
   };
 
   const renderStatusIcon = () => {
-    if (isLoading) {
+    const shouldShowStatusIcon = (
+      status === 'preparing' ||
+      status === 'streaming' ||
+      (status === 'running' && previewVariant === 'none')
+    );
+
+    if (shouldShowStatusIcon) {
       return <CubeLoading size="small" />;
     }
     return null;
   };
+
+  const handlePreviewToggle = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    e.stopPropagation();
+    const nextExpanded = !isPreviewExpanded;
+
+    applyExpandedState(isPreviewExpanded, nextExpanded, setIsPreviewExpanded, {
+      detail: {
+        filePath: currentFilePath,
+      },
+    });
+  }, [applyExpandedState, currentFilePath, isPreviewExpanded]);
 
   const renderHeader = () => {
     const { className: iconClassName } = getToolIconInfo();
@@ -394,13 +439,7 @@ export const FileOperationToolCard: React.FC<FileOperationToolCardProps> = ({
             <Tooltip content={isPreviewExpanded ? t('toolCards.file.collapsePreview') : t('toolCards.file.expandPreview')} placement="top">
               <button
                 className="diff-preview-group"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  window.dispatchEvent(new CustomEvent('tool-card-toggle'));
-                  const next = !isPreviewExpanded;
-                  userCollapsedRef.current = !next;
-                  setIsPreviewExpanded(next);
-                }}
+                onClick={handlePreviewToggle}
               >
                 {currentFileDiffStats.additions > 0 && (
                   <span className="additions">+{currentFileDiffStats.additions}</span>
@@ -457,7 +496,7 @@ export const FileOperationToolCard: React.FC<FileOperationToolCardProps> = ({
     if (isFailed) return null;
 
     if (toolItem.toolName === 'Edit') {
-      if (isParamsStreaming && newStringContent) {
+      if (status !== 'completed' && newStringContent) {
         return (
           <div className="streaming-content-preview">
             <div className="preview-text">
@@ -466,8 +505,8 @@ export const FileOperationToolCard: React.FC<FileOperationToolCardProps> = ({
                 filePath={currentFilePath}
                 isStreaming={isParamsStreaming}
                 showLineNumbers={false}
-                maxHeight={300}
-                autoScrollToBottom={true}
+                maxHeight={FILE_OPERATION_PREVIEW_MAX_HEIGHT}
+                autoScrollToBottom={isParamsStreaming}
                 onLineClick={handleCodeLineClick}
               />
             </div>
@@ -483,7 +522,7 @@ export const FileOperationToolCard: React.FC<FileOperationToolCardProps> = ({
                 originalContent={oldStringContent}
                 modifiedContent={newStringContent}
                 filePath={currentFilePath}
-                maxHeight={300}
+                maxHeight={FILE_OPERATION_PREVIEW_MAX_HEIGHT}
                 showLineNumbers={false}
                 lineNumberMode="dual"
                 showPrefix={false}
@@ -496,7 +535,7 @@ export const FileOperationToolCard: React.FC<FileOperationToolCardProps> = ({
     }
 
     if (toolItem.toolName === 'Write') {
-      if (isParamsStreaming && contentPreview) {
+      if (status !== 'completed' && contentPreview) {
         return (
           <div className="streaming-content-preview">
             <div className="preview-text">
@@ -505,8 +544,8 @@ export const FileOperationToolCard: React.FC<FileOperationToolCardProps> = ({
                 filePath={currentFilePath}
                 isStreaming={isParamsStreaming}
                 showLineNumbers={false}
-                maxHeight={300}
-                autoScrollToBottom={true}
+                maxHeight={FILE_OPERATION_PREVIEW_MAX_HEIGHT}
+                autoScrollToBottom={isParamsStreaming}
                 onLineClick={handleCodeLineClick}
               />
             </div>
@@ -522,7 +561,7 @@ export const FileOperationToolCard: React.FC<FileOperationToolCardProps> = ({
                 originalContent=""
                 modifiedContent={contentPreview}
                 filePath={currentFilePath}
-                maxHeight={300}
+                maxHeight={FILE_OPERATION_PREVIEW_MAX_HEIGHT}
                 showLineNumbers={false}
                 lineNumberMode="single"
                 showPrefix={true}
@@ -599,15 +638,17 @@ export const FileOperationToolCard: React.FC<FileOperationToolCardProps> = ({
   }
 
   return (
-    <BaseToolCard
-      status={status}
-      isExpanded={isPreviewExpanded}
-      onClick={handleCardClick}
-      className={`file-operation-card ${isDeleteTool ? 'non-clickable' : ''}`}
-      header={renderHeader()}
-      expandedContent={renderExpandedContent()}
-      errorContent={isFailed && isErrorExpanded ? renderErrorContent() : null}
-      isFailed={isFailed}
-    />
+    <div ref={cardRootRef} data-tool-card-id={toolId ?? ''}>
+      <BaseToolCard
+        status={status}
+        isExpanded={isPreviewExpanded}
+        onClick={handleCardClick}
+        className={`file-operation-card ${isDeleteTool ? 'non-clickable' : ''}`}
+        header={renderHeader()}
+        expandedContent={renderExpandedContent()}
+        errorContent={isFailed && isErrorExpanded ? renderErrorContent() : null}
+        isFailed={isFailed}
+      />
+    </div>
   );
 };

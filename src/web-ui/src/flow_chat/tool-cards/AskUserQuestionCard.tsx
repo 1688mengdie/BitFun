@@ -3,13 +3,14 @@
  * Displays multiple questions, collects user answers and submits them
  */
 
-import React, { useState, useCallback, useMemo } from 'react';
+import React, { useState, useCallback, useMemo, useLayoutEffect, useRef } from 'react';
 import { Loader2, AlertCircle, Send, ChevronDown, ChevronRight } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { ToolCardProps } from '../types/flow-chat';
 import { toolAPI } from '@/infrastructure/api/service-api/ToolAPI';
 import { createLogger } from '@/shared/utils/logger';
 import { Button } from '@/component-library';
+import { useToolCardHeightContract } from './useToolCardHeightContract';
 import './AskUserQuestionCard.scss';
 
 const log = createLogger('AskUserQuestionCard');
@@ -55,6 +56,31 @@ export const AskUserQuestionCard: React.FC<ToolCardProps> = ({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSubmitted, setIsSubmitted] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
+  const [showCompletedSummary, setShowCompletedSummary] = useState(status === 'completed');
+  const toolId = toolItem.id ?? toolCall?.id;
+  const { cardRootRef, applyExpandedState } = useToolCardHeightContract({
+    toolId,
+    toolName: toolItem.toolName,
+  });
+  const previousStatusRef = useRef(status);
+
+  useLayoutEffect(() => {
+    const previousStatus = previousStatusRef.current;
+    previousStatusRef.current = status;
+
+    if (previousStatus !== 'completed' && status === 'completed' && !showCompletedSummary) {
+      applyExpandedState(true, false, (nextExpanded) => {
+        setShowCompletedSummary(!nextExpanded);
+      }, {
+        reason: 'auto',
+      });
+      return;
+    }
+
+    if (status !== 'completed' && showCompletedSummary) {
+      setShowCompletedSummary(false);
+    }
+  }, [applyExpandedState, showCompletedSummary, status]);
 
   const isAllAnswered = useCallback(() => {
     if (questions.length === 0) return false;
@@ -339,8 +365,12 @@ export const AskUserQuestionCard: React.FC<ToolCardProps> = ({
   }
 
   return (
-    <div className={`ask-user-question-card status-${status}`}>
-      {status !== 'completed' ? (
+    <div
+      ref={cardRootRef}
+      data-tool-card-id={toolId ?? ''}
+      className={`ask-user-question-card status-${status}`}
+    >
+      {!showCompletedSummary ? (
         <>
           <div className="card-header-row">
             <div className="card-title">
@@ -380,7 +410,7 @@ export const AskUserQuestionCard: React.FC<ToolCardProps> = ({
         <>
           <div 
             className="completed-summary"
-            onClick={() => setIsExpanded(!isExpanded)}
+            onClick={() => applyExpandedState(isExpanded, !isExpanded, setIsExpanded)}
           >
             <div className="summary-content">
               {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}

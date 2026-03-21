@@ -15,6 +15,7 @@ import { CubeLoading, Button, IconButton } from '../../component-library';
 import type { ToolCardProps } from '../types/flow-chat';
 import { BaseToolCard } from './BaseToolCard';
 import { taskCollapseStateManager } from '../store/TaskCollapseStateManager';
+import { useToolCardHeightContract } from './useToolCardHeightContract';
 import './TaskToolDisplay.scss';
 
 export const TaskToolDisplay: React.FC<ToolCardProps> = ({
@@ -26,6 +27,7 @@ export const TaskToolDisplay: React.FC<ToolCardProps> = ({
 }) => {
   const { t } = useTranslation('flow-chat');
   const { toolCall, toolResult, status, requiresConfirmation, userConfirmed } = toolItem;
+  const toolId = toolItem.id ?? toolCall?.id;
   
   // Restore collapse state; default to collapsed until running.
   const [isExpanded, setIsExpanded] = useState(() => {
@@ -41,8 +43,23 @@ export const TaskToolDisplay: React.FC<ToolCardProps> = ({
   const [isPromptExpanded, setIsPromptExpanded] = useState(false);
   const promptRef = useRef<HTMLDivElement>(null);
   const [isPromptOverflow, setIsPromptOverflow] = useState(false);
+  const { cardRootRef, applyExpandedState } = useToolCardHeightContract({
+    toolId,
+    toolName: toolItem.toolName,
+  });
   
   const prevStatusRef = useRef(status);
+
+  const updateCardExpandedState = useCallback((
+    nextExpanded: boolean,
+    reason: 'manual' | 'auto' = 'manual',
+  ) => {
+    applyExpandedState(isExpanded, nextExpanded, setIsExpanded, { reason });
+  }, [applyExpandedState, isExpanded, isRunning, status, toolId]);
+
+  const updatePromptExpandedState = useCallback((nextExpanded: boolean) => {
+    applyExpandedState(isPromptExpanded, nextExpanded, setIsPromptExpanded);
+  }, [applyExpandedState, isPromptExpanded]);
   
   useEffect(() => {
     const prevStatus = prevStatusRef.current;
@@ -51,12 +68,12 @@ export const TaskToolDisplay: React.FC<ToolCardProps> = ({
       prevStatusRef.current = status;
       
       if (status === 'completed') {
-        setIsExpanded(false);
+        updateCardExpandedState(false, 'auto');
       } else if (isRunning) {
-        setIsExpanded(true);
+        updateCardExpandedState(true, 'auto');
       }
     }
-  }, [status, isRunning]);
+  }, [isRunning, status, updateCardExpandedState]);
   
   useEffect(() => {
     const prompt = toolCall?.input?.prompt;
@@ -141,9 +158,8 @@ export const TaskToolDisplay: React.FC<ToolCardProps> = ({
     }
     
     // Pause auto-scroll while the user toggles the card.
-    window.dispatchEvent(new CustomEvent('tool-card-toggle'));
-    setIsExpanded(!isExpanded);
-  }, [isFailed, isExpanded]);
+    updateCardExpandedState(!isExpanded);
+  }, [isFailed, isExpanded, updateCardExpandedState]);
 
   const formatDuration = (ms: number) => {
     if (ms < 1000) return `${ms}ms`;
@@ -197,8 +213,7 @@ export const TaskToolDisplay: React.FC<ToolCardProps> = ({
               size="xs"
               onClick={(e) => {
                 e.stopPropagation();
-                window.dispatchEvent(new CustomEvent('tool-card-toggle'));
-                setIsExpanded(!isExpanded);
+                updateCardExpandedState(!isExpanded);
               }}
               tooltip={isExpanded ? t('toolCards.common.collapse') : t('toolCards.common.expand')}
               tooltipPlacement="top"
@@ -244,10 +259,9 @@ export const TaskToolDisplay: React.FC<ToolCardProps> = ({
   const handlePromptRowClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
     if (isPromptOverflow) {
-      window.dispatchEvent(new CustomEvent('tool-card-toggle'));
-      setIsPromptExpanded(!isPromptExpanded);
+      updatePromptExpandedState(!isPromptExpanded);
     }
-  }, [isPromptExpanded, isPromptOverflow]);
+  }, [isPromptExpanded, isPromptOverflow, updatePromptExpandedState]);
 
   const renderPromptRow = () => {
     const hasPrompt = taskInput && taskInput.prompt && taskInput.prompt !== 'Not provided';
@@ -329,15 +343,17 @@ export const TaskToolDisplay: React.FC<ToolCardProps> = ({
   ].filter(Boolean).join(' ');
 
   return (
-    <BaseToolCard
-      status={status}
-      isExpanded={isExpanded}
-      onClick={handleCardClick}
-      className={cardClassName}
-      header={renderHeader()}
-      expandedContent={renderExpandedContent()}
-      isFailed={isFailed}
-      requiresConfirmation={requiresConfirmation && !userConfirmed}
-    />
+    <div ref={cardRootRef} data-tool-card-id={toolId ?? ''}>
+      <BaseToolCard
+        status={status}
+        isExpanded={isExpanded}
+        onClick={handleCardClick}
+        className={cardClassName}
+        header={renderHeader()}
+        expandedContent={renderExpandedContent()}
+        isFailed={isFailed}
+        requiresConfirmation={requiresConfirmation && !userConfirmed}
+      />
+    </div>
   );
 };

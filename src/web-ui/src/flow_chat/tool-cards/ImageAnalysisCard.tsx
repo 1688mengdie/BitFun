@@ -8,6 +8,7 @@ import { Loader2, Clock, Check } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { ToolCardProps } from '../types/flow-chat';
 import { CompactToolCard, CompactToolCardHeader } from './CompactToolCard';
+import { useToolCardHeightContract } from './useToolCardHeightContract';
 import './ImageAnalysisCard.scss';
 
 const imageAnalysisExpandedStateCache = new Map<string, boolean>();
@@ -20,6 +21,10 @@ export const ImageAnalysisCard: React.FC<ToolCardProps> = ({
   const { toolCall, toolResult, status } = toolItem;
   const toolId = toolItem.id || toolCall?.id;
   const [isExpanded, setIsExpanded] = useState(false);
+  const { cardRootRef, applyExpandedState } = useToolCardHeightContract({
+    toolId,
+    toolName: toolItem.toolName,
+  });
 
   useEffect(() => {
     if (!toolId) return;
@@ -95,16 +100,14 @@ export const ImageAnalysisCard: React.FC<ToolCardProps> = ({
   };
 
   const handleToggleExpand = useCallback(() => {
-    window.dispatchEvent(new CustomEvent('tool-card-toggle'));
-    setIsExpanded(prev => {
-      const next = !prev;
-      if (toolId) {
-        imageAnalysisExpandedStateCache.set(toolId, next);
-      }
-      return next;
+    const nextExpanded = !isExpanded;
+    applyExpandedState(isExpanded, nextExpanded, setIsExpanded, {
+      onExpand,
     });
-    onExpand?.();
-  }, [onExpand, toolId]);
+    if (toolId) {
+      imageAnalysisExpandedStateCache.set(toolId, nextExpanded);
+    }
+  }, [applyExpandedState, isExpanded, onExpand, toolId]);
 
   const analysisInfo = useMemo(() => getAnalysisInfo(), [toolCall?.input]);
   const analysisResult = useMemo(() => getAnalysisResult(), [toolResult?.result]);
@@ -186,19 +189,21 @@ export const ImageAnalysisCard: React.FC<ToolCardProps> = ({
   const normalizedStatus = status === 'analyzing' ? 'running' : status;
 
   return (
-    <CompactToolCard
-      status={normalizedStatus as 'pending' | 'preparing' | 'streaming' | 'running' | 'completed' | 'error' | 'cancelled'}
-      isExpanded={isExpanded}
-      onClick={handleCardClick}
-      className="image-analysis-card"
-      clickable={canExpand}
-      header={
-        <CompactToolCardHeader
-          statusIcon={getStatusIcon()}
-          content={renderContent()}
-        />
-      }
-      expandedContent={expandedContent ?? undefined}
-    />
+    <div ref={cardRootRef} data-tool-card-id={toolId ?? ''}>
+      <CompactToolCard
+        status={normalizedStatus as 'pending' | 'preparing' | 'streaming' | 'running' | 'completed' | 'error' | 'cancelled'}
+        isExpanded={isExpanded}
+        onClick={handleCardClick}
+        className="image-analysis-card"
+        clickable={canExpand}
+        header={
+          <CompactToolCardHeader
+            statusIcon={getStatusIcon()}
+            content={renderContent()}
+          />
+        }
+        expandedContent={expandedContent ?? undefined}
+      />
+    </div>
   );
 };

@@ -3,33 +3,23 @@
  * Uses virtual scrolling with Zustand and syncs legacy store state.
  */
 
-import React, { useEffect, useMemo, useCallback, useRef, useState } from 'react';
+import React, { useMemo, useCallback, useRef, useEffect, useState } from 'react';
 import { VirtualMessageList, VirtualMessageListRef } from './VirtualMessageList';
-import { FlowChatHeader } from './FlowChatHeader';
+import { FlowChatHeader, type FlowChatHeaderTurnSummary } from './FlowChatHeader';
 import { WelcomePanel } from '../WelcomePanel';
 import { FlowChatContext, FlowChatContextValue } from './FlowChatContext';
-import { useVirtualItems, useActiveSession, useVisibleTurnInfo } from '../../store/modernFlowChatStore';
-import type { VirtualItem } from '../../store/modernFlowChatStore';
-import { flowChatStore } from '../../store/FlowChatStore';
-import { startAutoSync } from '../../services/storeSync';
-import { useModernFlowChatStore } from '../../store/modernFlowChatStore';
-import { globalEventBus } from '../../../infrastructure/event-bus';
-import { getElementText, copyTextToClipboard } from '../../../shared/utils/textSelection';
-import type { FlowChatConfig, FlowToolItem, DialogTurn, ModelRound, FlowItem, Session } from '../../types/flow-chat';
-import { notificationService } from '../../../shared/notification-system';
-import { agentAPI } from '@/infrastructure/api';
-import { fileTabManager } from '@/shared/services/FileTabManager';
+import { useExploreGroupState } from './useExploreGroupState';
+import { useFlowChatFileActions } from './useFlowChatFileActions';
+import { useFlowChatNavigation } from './useFlowChatNavigation';
+import { useFlowChatCopyDialog } from './useFlowChatCopyDialog';
+import { useFlowChatSessionRelationship } from './useFlowChatSessionRelationship';
+import { useFlowChatSync } from './useFlowChatSync';
+import { useFlowChatToolActions } from './useFlowChatToolActions';
+import { useVirtualItems, useActiveSession, useVisibleTurnInfo, type VisibleTurnInfo } from '../../store/modernFlowChatStore';
+import type { FlowChatConfig } from '../../types/flow-chat';
 import type { LineRange } from '@/component-library';
 import { useWorkspaceContext } from '@/infrastructure/contexts/WorkspaceContext';
-import path from 'path-browserify';
-import { createLogger } from '@/shared/utils/logger';
-import { flowChatManager } from '../../services/FlowChatManager';
-import { resolveSessionRelationship } from '../../utils/sessionMetadata';
 import './ModernFlowChatContainer.scss';
-
-const log = createLogger('ModernFlowChatContainer');
-
-type ExploreGroupVirtualItem = Extract<VirtualItem, { type: 'explore-group' }>;
 
 interface ModernFlowChatContainerProps {
   className?: string;
@@ -53,398 +43,31 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
   const virtualItems = useVirtualItems();
   const activeSession = useActiveSession();
   const visibleTurnInfo = useVisibleTurnInfo();
+  const [pendingHeaderTurnId, setPendingHeaderTurnId] = useState<string | null>(null);
+  const autoPinnedSessionIdRef = useRef<string | null>(null);
   const virtualListRef = useRef<VirtualMessageListRef>(null);
   const { workspacePath } = useWorkspaceContext();
-  const isBtwSession = resolveSessionRelationship(activeSession).isBtw;
-  const [btwOrigin, setBtwOrigin] = useState<Session['btwOrigin'] | null>(null);
-  const [btwParentTitle, setBtwParentTitle] = useState('');
-  
-  // Explore group collapse state (key: groupId, true = user-expanded).
-  const [exploreGroupStates, setExploreGroupStates] = useState<Map<string, boolean>>(new Map());
-  
-  const handleExploreGroupToggle = useCallback((groupId: string) => {
-    setExploreGroupStates(prev => {
-      const next = new Map(prev);
-      next.set(groupId, !prev.get(groupId));
-      return next;
-    });
-  }, []);
-  
-  const handleExpandAllInTurn = useCallback((turnId: string) => {
-    const groupIds = virtualItems
-      .filter((item): item is ExploreGroupVirtualItem =>
-        item.type === 'explore-group' && 
-        item.turnId === turnId
-      )
-      .map(item => item.data.groupId);
-    
-    setExploreGroupStates(prev => {
-      const next = new Map(prev);
-      [...new Set(groupIds)].forEach(id => next.set(id, true));
-      return next;
-    });
-  }, [virtualItems]);
-  
-  const handleCollapseGroup = useCallback((groupId: string) => {
-    setExploreGroupStates(prev => {
-      const next = new Map(prev);
-      next.set(groupId, false);
-      return next;
-    });
-  }, []);
-  
-  useEffect(() => {
-    const unsubscribe = startAutoSync();
-    return () => {
-      unsubscribe();
-    };
-  }, []);
+  const { isBtwSession, btwOrigin, btwParentTitle } = useFlowChatSessionRelationship(activeSession);
+  const {
+    exploreGroupStates,
+    onExploreGroupToggle: handleExploreGroupToggle,
+    onExpandAllInTurn: handleExpandAllInTurn,
+    onCollapseGroup: handleCollapseGroup,
+  } = useExploreGroupState(virtualItems);
+  const { handleToolConfirm, handleToolReject } = useFlowChatToolActions();
+  const { handleFileViewRequest } = useFlowChatFileActions({
+    workspacePath,
+    onFileViewRequest,
+  });
 
-  useEffect(() => {
-    const syncBtwState = (state = flowChatStore.getState()) => {
-      const currentSessionId = activeSession?.sessionId;
-      if (!currentSessionId) {
-        setBtwOrigin(null);
-        setBtwParentTitle('');
-        return;
-      }
+  useFlowChatSync();
+  useFlowChatCopyDialog();
 
-      const session = state.sessions.get(currentSessionId);
-      if (!session) {
-        setBtwOrigin(null);
-        setBtwParentTitle('');
-        return;
-      }
-
-      const relationship = resolveSessionRelationship(session);
-      const nextOrigin = relationship.origin || null;
-      const parentId = relationship.parentSessionId;
-      const parent = parentId ? state.sessions.get(parentId) : undefined;
-
-      setBtwOrigin(nextOrigin);
-      setBtwParentTitle(parent?.title || '');
-    };
-
-    syncBtwState();
-    const unsubscribe = flowChatStore.subscribe(syncBtwState);
-    return unsubscribe;
-  }, [activeSession?.sessionId]);
-  
-  useEffect(() => {
-    const unlisten = agentAPI.onSessionTitleGenerated((event) => {
-      flowChatStore.updateSessionTitle(
-        event.sessionId,
-        event.title,
-        'generated'
-      );
-    });
-
-    return () => {
-      unlisten();
-    };
-  }, []);
-  
-  useEffect(() => {
-    const unsubscribe = globalEventBus.on('flowchat:copy-dialog', ({ dialogTurn }) => {
-      if (!dialogTurn) {
-        log.warn('Copy failed: dialog element not provided');
-        return;
-      }
-
-      const dialogElement = dialogTurn as HTMLElement;
-      const fullText = getElementText(dialogElement);
-      
-      if (!fullText || fullText.trim().length === 0) {
-        notificationService.warning('Dialog is empty, nothing to copy');
-        return;
-      }
-
-      copyTextToClipboard(fullText).then(success => {
-        if (!success) {
-          notificationService.error('Copy failed. Please try again.');
-        }
-      });
-    });
-    
-    return unsubscribe;
-  }, []);
-
-  useEffect(() => {
-    const unsubscribe = globalEventBus.on<{
-      sessionId: string;
-      turnIndex?: number;
-      itemId?: string;
-    }>('flowchat:focus-item', async ({ sessionId, turnIndex, itemId }) => {
-      if (!sessionId) return;
-
-      const waitFor = async (predicate: () => boolean, timeoutMs: number): Promise<boolean> => {
-        const start = performance.now();
-        while (performance.now() - start < timeoutMs) {
-          if (predicate()) return true;
-          await new Promise<void>(r => requestAnimationFrame(() => r()));
-        }
-        return predicate();
-      };
-
-      // Switch session first (if needed). Note: Modern virtual list methods are bound to
-      // the current render; after switching sessions we must wait a frame or two so
-      // VirtualMessageList updates its imperative ref and item map before scrolling.
-      if (activeSession?.sessionId !== sessionId) {
-        try {
-          await flowChatManager.switchChatSession(sessionId);
-        } catch (e) {
-          log.warn('Failed to switch session for focus request', { sessionId, e });
-          return;
-        }
-      }
-
-      // Wait until the modern store and list ref have caught up to the target session.
-      // This avoids a common race where scrollToTurn no-ops against the previous session's item list.
-      await waitFor(() => {
-        const modernActive = useModernFlowChatStore.getState().activeSession?.sessionId;
-        return modernActive === sessionId && !!virtualListRef.current;
-      }, 1500);
-
-      let resolvedVirtualIndex: number | undefined = undefined;
-      let resolvedTurnIndex = turnIndex;
-      if (itemId) {
-        const s = flowChatStore.getState().sessions.get(sessionId);
-        if (s) {
-          for (let i = 0; i < s.dialogTurns.length; i++) {
-            const t = s.dialogTurns[i];
-            const found = t.modelRounds?.some(r => r.items?.some(it => it.id === itemId));
-            if (found) {
-              resolvedTurnIndex = i + 1;
-              break;
-            }
-          }
-        }
-
-        // Prefer a precise virtual scroll target so the marker is actually rendered.
-        // Scrolling to the turn's user message can leave the marker far outside the rendered range.
-        const currentVirtualItems = useModernFlowChatStore.getState().virtualItems;
-        for (let i = 0; i < currentVirtualItems.length; i++) {
-          const vi = currentVirtualItems[i];
-          if (vi.type === 'model-round') {
-            const hit = vi.data?.items?.some((it: any) => it?.id === itemId);
-            if (hit) {
-              resolvedVirtualIndex = i;
-              break;
-            }
-          } else if (vi.type === 'explore-group') {
-            const hit = vi.data?.allItems?.some((it: any) => it?.id === itemId);
-            if (hit) {
-              resolvedVirtualIndex = i;
-              break;
-            }
-          }
-        }
-      }
-
-      // Scroll to the most precise target we have.
-      if (resolvedVirtualIndex != null && virtualListRef.current) {
-        virtualListRef.current.scrollToIndex(resolvedVirtualIndex);
-      } else if (resolvedTurnIndex && virtualListRef.current) {
-        virtualListRef.current.scrollToTurn(resolvedTurnIndex);
-      }
-
-      if (!itemId) return;
-
-      // Wait two frames for Virtuoso to settle after instant scrollToIndex before
-      // searching the DOM. This avoids finding an element that Virtuoso is about
-      // to recycle when it processes the new scroll position.
-      await new Promise<void>(r => requestAnimationFrame(() => requestAnimationFrame(() => r())));
-
-      // Then focus the specific flow item (marker) within the DOM.
-      // Retry a few times because virtualization/paint can lag behind the scroll.
-      const maxAttempts = 120;
-      let attempts = 0;
-      const tryFocus = () => {
-        attempts++;
-        const el = document.querySelector(`[data-flow-item-id="${CSS.escape(itemId)}"]`) as HTMLElement | null;
-        if (!el) {
-          // Keep nudging the list to the right neighborhood; scrollToTurn can be preempted by
-          // stick-to-bottom mode during session switches or streaming updates.
-          if (attempts % 12 === 0 && virtualListRef.current) {
-            if (resolvedVirtualIndex != null) {
-              virtualListRef.current.scrollToIndex(resolvedVirtualIndex);
-            } else if (resolvedTurnIndex) {
-              virtualListRef.current.scrollToTurn(resolvedTurnIndex);
-            }
-          }
-          if (attempts < maxAttempts) {
-            requestAnimationFrame(tryFocus);
-          }
-          return;
-        }
-
-        el.classList.add('flowchat-flow-item--focused');
-        window.setTimeout(() => el.classList.remove('flowchat-flow-item--focused'), 1600);
-      };
-
-      requestAnimationFrame(tryFocus);
-    });
-
-    return unsubscribe;
-  }, [activeSession?.sessionId]);
-
-  const handleToolConfirm = useCallback(async (toolId: string, updatedInput?: any) => {
-    try {
-      const latestState = flowChatStore.getState();
-      const dialogTurns = Array.from(latestState.sessions.values()).flatMap(session => 
-        Object.values(session.dialogTurns) as DialogTurn[]
-      );
-
-      let toolItem: FlowToolItem | null = null;
-      let turnId: string | null = null;
-
-      for (const turn of dialogTurns) {
-        for (const modelRound of Object.values(turn.modelRounds) as ModelRound[]) {
-          const item = modelRound.items.find((item: FlowItem) => 
-            item.type === 'tool' && item.id === toolId
-          ) as FlowToolItem;
-          
-          if (item) {
-            toolItem = item;
-            turnId = turn.id;
-            break;
-          }
-        }
-        if (toolItem) break;
-      }
-
-      if (!toolItem || !turnId) {
-        notificationService.error(`Tool confirmation failed: tool item ${toolId} not found in current session`);
-        return;
-      }
-
-      const finalInput = updatedInput || toolItem.toolCall?.input;
-      
-      const activeSessionId = latestState.activeSessionId;
-      if (activeSessionId) {
-        flowChatStore.updateModelRoundItem(activeSessionId, turnId, toolId, {
-          userConfirmed: true,
-          status: 'confirmed',
-          toolCall: {
-            ...toolItem.toolCall,
-            input: finalInput
-          }
-        } as any);
-      }
-
-      if (!activeSessionId) {
-        throw new Error('No active session ID');
-      }
-
-      const { agentService } = await import('../../../shared/services/agent-service');
-      await agentService.confirmToolExecution(
-        activeSessionId,
-        toolId,
-        'confirm',
-        finalInput
-      );
-    } catch (error) {
-      log.error('Tool confirmation failed', error);
-      notificationService.error(`Tool confirmation failed: ${error}`);
-    }
-  }, []);
-
-  const handleToolReject = useCallback(async (toolId: string) => {
-    try {
-      const latestState = flowChatStore.getState();
-      const dialogTurns = Array.from(latestState.sessions.values()).flatMap(session => 
-        Object.values(session.dialogTurns) as DialogTurn[]
-      );
-
-      let toolItem: FlowToolItem | null = null;
-      let turnId: string | null = null;
-
-      for (const turn of dialogTurns) {
-        for (const modelRound of Object.values(turn.modelRounds) as ModelRound[]) {
-          const item = modelRound.items.find((item: FlowItem) => 
-            item.type === 'tool' && item.id === toolId
-          ) as FlowToolItem;
-          
-          if (item) {
-            toolItem = item;
-            turnId = turn.id;
-            break;
-          }
-        }
-        if (toolItem) break;
-      }
-
-      if (!toolItem || !turnId) {
-        log.warn('Tool rejection failed: tool item not found', { toolId });
-        return;
-      }
-
-      const activeSessionId = latestState.activeSessionId;
-      if (activeSessionId) {
-        flowChatStore.updateModelRoundItem(activeSessionId, turnId, toolId, {
-          userConfirmed: false,
-          status: 'rejected'
-        } as any);
-      }
-
-      if (!activeSessionId) {
-        throw new Error('No active session ID');
-      }
-
-      const { agentService } = await import('../../../shared/services/agent-service');
-      await agentService.confirmToolExecution(
-        activeSessionId,
-        toolId,
-        'reject'
-      );
-    } catch (error) {
-      log.error('Tool rejection failed', error);
-      notificationService.error(`Tool rejection failed: ${error}`);
-    }
-  }, []);
-
-  const handleFileViewRequest = useCallback(async (
-    filePath: string,
-    fileName: string,
-    lineRange?: LineRange
-  ) => {
-    log.debug('File view request', {
-      filePath,
-      fileName,
-      hasLineRange: !!lineRange,
-      hasExternalCallback: !!onFileViewRequest
-    });
-
-    if (onFileViewRequest) {
-      onFileViewRequest(filePath, fileName, lineRange);
-      return;
-    }
-
-    let absoluteFilePath = filePath;
-
-    const isWindowsAbsolutePath = /^[A-Za-z]:[\\/]/.test(filePath);
-
-    if (!isWindowsAbsolutePath && !path.isAbsolute(filePath) && workspacePath) {
-      absoluteFilePath = path.join(workspacePath, filePath);
-      log.debug('Converted relative path to absolute', {
-        relative: filePath,
-        absolute: absoluteFilePath
-      });
-    }
-
-    try {
-      fileTabManager.openFile({
-        filePath: absoluteFilePath,
-        fileName,
-        workspacePath,
-        jumpToRange: lineRange,
-        mode: 'agent',
-      });
-    } catch (error) {
-      log.error('File navigation failed', error);
-      notificationService.error(`Unable to open file: ${absoluteFilePath}`);
-    }
-  }, [onFileViewRequest, workspacePath]);
+  useFlowChatNavigation({
+    activeSessionId: activeSession?.sessionId,
+    virtualItems,
+    virtualListRef,
+  });
 
   const contextValue: FlowChatContextValue = useMemo(() => ({
     onFileViewRequest: handleFileViewRequest,
@@ -489,19 +112,127 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
       detail: { message: '/btw ' }
     }));
   }, [activeSession?.sessionId]);
+
+  const turnSummaries = useMemo<FlowChatHeaderTurnSummary[]>(() => {
+    return (activeSession?.dialogTurns ?? [])
+      .filter(turn => !!turn.userMessage)
+      .map((turn, index) => ({
+        turnId: turn.id,
+        turnIndex: index + 1,
+        title: turn.userMessage?.content ?? '',
+      }));
+  }, [activeSession?.dialogTurns]);
+
+  const effectiveVisibleTurnInfo = useMemo<VisibleTurnInfo | null>(() => {
+    if (!pendingHeaderTurnId) {
+      return visibleTurnInfo;
+    }
+
+    const targetTurn = turnSummaries.find(turn => turn.turnId === pendingHeaderTurnId);
+    if (!targetTurn) {
+      return visibleTurnInfo;
+    }
+
+    return {
+      turnId: targetTurn.turnId,
+      turnIndex: targetTurn.turnIndex,
+      totalTurns: turnSummaries.length,
+      userMessage: targetTurn.title,
+    };
+  }, [pendingHeaderTurnId, turnSummaries, visibleTurnInfo]);
+
+  useEffect(() => {
+    if (!pendingHeaderTurnId) return;
+
+    if (visibleTurnInfo?.turnId === pendingHeaderTurnId) {
+      setPendingHeaderTurnId(null);
+      return;
+    }
+
+    const targetStillExists = turnSummaries.some(turn => turn.turnId === pendingHeaderTurnId);
+    if (!targetStillExists) {
+      setPendingHeaderTurnId(null);
+    }
+  }, [pendingHeaderTurnId, turnSummaries, visibleTurnInfo?.turnId]);
+
+  useEffect(() => {
+    autoPinnedSessionIdRef.current = null;
+    setPendingHeaderTurnId(null);
+  }, [activeSession?.sessionId]);
+
+  useEffect(() => {
+    const sessionId = activeSession?.sessionId;
+    const latestTurnId = turnSummaries[turnSummaries.length - 1]?.turnId;
+    if (!sessionId || !latestTurnId || autoPinnedSessionIdRef.current === sessionId) {
+      return;
+    }
+
+    const resolvedLatestTurnId = latestTurnId;
+    const resolvedSessionId = sessionId;
+
+    autoPinnedSessionIdRef.current = resolvedSessionId;
+    setPendingHeaderTurnId(resolvedLatestTurnId);
+
+    const frameId = requestAnimationFrame(() => {
+      const accepted = virtualListRef.current?.pinTurnToTop(resolvedLatestTurnId, {
+        behavior: 'auto',
+        pinMode: 'sticky-latest',
+      }) ?? false;
+
+      if (!accepted) {
+        autoPinnedSessionIdRef.current = null;
+        setPendingHeaderTurnId(null);
+      }
+    });
+
+    return () => {
+      cancelAnimationFrame(frameId);
+    };
+  }, [activeSession?.sessionId, turnSummaries]);
+
+  const handleJumpToTurn = useCallback((turnId: string) => {
+    if (!turnId) return;
+
+    const isLatestTurn = turnSummaries[turnSummaries.length - 1]?.turnId === turnId;
+
+    const accepted = virtualListRef.current?.pinTurnToTop(turnId, {
+      behavior: 'smooth',
+      pinMode: isLatestTurn ? 'sticky-latest' : 'transient',
+    }) ?? false;
+
+    setPendingHeaderTurnId(accepted ? turnId : null);
+  }, [turnSummaries]);
+
+  const handleJumpToPreviousTurn = useCallback(() => {
+    if (!effectiveVisibleTurnInfo || effectiveVisibleTurnInfo.turnIndex <= 1) return;
+    const previousTurn = turnSummaries[effectiveVisibleTurnInfo.turnIndex - 2];
+    if (!previousTurn) return;
+    handleJumpToTurn(previousTurn.turnId);
+  }, [effectiveVisibleTurnInfo, handleJumpToTurn, turnSummaries]);
+
+  const handleJumpToNextTurn = useCallback(() => {
+    if (!effectiveVisibleTurnInfo || effectiveVisibleTurnInfo.turnIndex >= turnSummaries.length) return;
+    const nextTurn = turnSummaries[effectiveVisibleTurnInfo.turnIndex];
+    if (!nextTurn) return;
+    handleJumpToTurn(nextTurn.turnId);
+  }, [effectiveVisibleTurnInfo, handleJumpToTurn, turnSummaries]);
   
   return (
     <FlowChatContext.Provider value={contextValue}>
       <div className={`modern-flowchat-container ${className}`}>
         <FlowChatHeader
-          currentTurn={visibleTurnInfo?.turnIndex ?? 0}
-          totalTurns={visibleTurnInfo?.totalTurns ?? 0}
-          currentUserMessage={visibleTurnInfo?.userMessage ?? ''}
+          currentTurn={effectiveVisibleTurnInfo?.turnIndex ?? 0}
+          totalTurns={effectiveVisibleTurnInfo?.totalTurns ?? 0}
+          currentUserMessage={effectiveVisibleTurnInfo?.userMessage ?? ''}
           visible={virtualItems.length > 0}
           sessionId={activeSession?.sessionId}
           btwOrigin={btwOrigin}
           btwParentTitle={btwParentTitle}
           onCreateBtwSession={activeSession?.sessionId && !isBtwSession ? handleCreateBtwSession : undefined}
+          turns={turnSummaries}
+          onJumpToTurn={handleJumpToTurn}
+          onJumpToPreviousTurn={handleJumpToPreviousTurn}
+          onJumpToNextTurn={handleJumpToNextTurn}
         />
 
         <div className="modern-flowchat-container__messages">
@@ -517,7 +248,12 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
               }}
             />
           ) : (
-            <VirtualMessageList ref={virtualListRef} />
+            <VirtualMessageList
+              // Remount per session so Virtuoso does not reuse the previous
+              // viewport before the new session's auto-pin settles.
+              key={activeSession?.sessionId ?? 'virtual-message-list'}
+              ref={virtualListRef}
+            />
           )}
         </div>
       </div>

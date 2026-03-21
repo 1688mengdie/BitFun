@@ -3,6 +3,7 @@ import { Check, Clock, Loader2, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { ToolCardProps } from '../types/flow-chat';
 import { CompactToolCard, CompactToolCardHeader } from './CompactToolCard';
+import { useToolCardHeightContract } from './useToolCardHeightContract';
 
 interface SessionMessageInput {
   workspace?: string;
@@ -34,6 +35,11 @@ export const SessionMessageToolCard: React.FC<ToolCardProps> = React.memo(({
   const { t } = useTranslation('flow-chat');
   const { toolCall, toolResult, status } = toolItem;
   const [isExpanded, setIsExpanded] = useState(false);
+  const toolId = toolItem.id ?? toolCall?.id;
+  const { cardRootRef, applyExpandedState } = useToolCardHeightContract({
+    toolId,
+    toolName: toolItem.toolName,
+  });
 
   const inputData = useMemo(
     () => parseData<SessionMessageInput>(toolCall?.input) ?? {},
@@ -137,25 +143,27 @@ export const SessionMessageToolCard: React.FC<ToolCardProps> = React.memo(({
   ) : null;
 
   return (
-    <CompactToolCard
-      status={status}
-      isExpanded={isExpanded}
-      onClick={() => {
-        if (hasDetails) {
-          setIsExpanded(prev => !prev);
-        }
-      }}
-      className="session-message-card"
-      clickable={hasDetails}
-      header={(
-        <CompactToolCardHeader
-          statusIcon={getStatusIcon()}
-          action={`${t('toolCards.sessionMessage.title')}:`}
-          content={renderContent()}
-          extra={agentType ? agentType : undefined}
-        />
-      )}
-      expandedContent={expandedContent}
-    />
+    <div ref={cardRootRef} data-tool-card-id={toolId ?? ''}>
+      <CompactToolCard
+        status={status}
+        isExpanded={isExpanded}
+        onClick={() => {
+          if (hasDetails) {
+            applyExpandedState(isExpanded, !isExpanded, setIsExpanded);
+          }
+        }}
+        className="session-message-card"
+        clickable={hasDetails}
+        header={(
+          <CompactToolCardHeader
+            statusIcon={getStatusIcon()}
+            action={`${t('toolCards.sessionMessage.title')}:`}
+            content={renderContent()}
+            extra={agentType ? agentType : undefined}
+          />
+        )}
+        expandedContent={expandedContent}
+      />
+    </div>
   );
 });

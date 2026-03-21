@@ -8,6 +8,7 @@ import { ProcessingIndicator } from '../modern/ProcessingIndicator';
 import { flowChatStore } from '../../store/FlowChatStore';
 import type { FlowChatConfig, FlowChatState, Session } from '../../types/flow-chat';
 import { sessionToVirtualItems } from '../../store/modernFlowChatStore';
+import { FLOWCHAT_FOCUS_ITEM_EVENT, type FlowChatFocusItemRequest } from '../../events/flowchatNavigation';
 import { fileTabManager } from '@/shared/services/FileTabManager';
 import { createTab } from '@/shared/utils/tabUtils';
 import { IconButton, type LineRange } from '@/component-library';
@@ -210,14 +211,16 @@ export const BtwSessionPanel: React.FC<BtwSessionPanelProps> = ({
 
     const requestId = btwOrigin?.requestId;
     const itemId = requestId ? `btw_marker_${requestId}` : undefined;
+    const request: FlowChatFocusItemRequest = {
+      sessionId: resolvedParentSessionId,
+      turnIndex: btwOrigin?.parentTurnIndex,
+      itemId,
+      source: 'btw-back',
+    };
 
     globalEventBus.emit(
-      'flowchat:focus-item',
-      {
-        sessionId: resolvedParentSessionId,
-        turnIndex: btwOrigin?.parentTurnIndex,
-        itemId,
-      },
+      FLOWCHAT_FOCUS_ITEM_EVENT,
+      request,
       'BtwSessionPanel'
     );
   }, [btwOrigin, parentSessionId]);

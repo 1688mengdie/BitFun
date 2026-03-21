@@ -2,10 +2,11 @@
  * Tool card for TodoWrite with a dot-track progress view.
  */
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useCallback } from 'react';
 import { Loader2, ListTodo, CheckCircle2, Circle, XCircle, PlayCircle, ChevronDown, ChevronUp } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { ToolCardProps } from '../types/flow-chat';
+import { useToolCardHeightContract } from './useToolCardHeightContract';
 import './TodoWriteDisplay.scss';
 
 export const TodoWriteDisplay: React.FC<ToolCardProps> = ({
@@ -17,6 +18,11 @@ export const TodoWriteDisplay: React.FC<ToolCardProps> = ({
   
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
   const [expandedState, setExpandedState] = useState<boolean | null>(null);
+  const toolId = toolItem.id;
+  const { cardRootRef, applyExpandedState } = useToolCardHeightContract({
+    toolId,
+    toolName: toolItem.toolName,
+  });
 
   const todosToDisplay = useMemo(() => {
     if (isParamsStreaming && partialParams?.todos && Array.isArray(partialParams.todos)) {
@@ -123,11 +129,25 @@ export const TodoWriteDisplay: React.FC<ToolCardProps> = ({
     return null;
   }, [hoveredTask, inProgressTasks]);
 
+  const handleToggleExpanded = useCallback(() => {
+    if (todosToDisplay.length === 0) {
+      return;
+    }
+
+    applyExpandedState(isExpanded, !isExpanded, (nextExpanded) => {
+      setExpandedState(nextExpanded);
+    });
+  }, [applyExpandedState, isExpanded, todosToDisplay.length]);
+
   return (
-    <div className={`flow-tool-card todo-write-card mode-${displayMode} status-${status} ${isAllCompleted ? 'all-completed' : ''}`}>
+    <div
+      ref={cardRootRef}
+      data-tool-card-id={toolId ?? ''}
+      className={`flow-tool-card todo-write-card mode-${displayMode} status-${status} ${isAllCompleted ? 'all-completed' : ''}`}
+    >
       <div
         className={`tool-card-header ${todosToDisplay.length > 0 ? 'clickable' : ''}`}
-        onClick={todosToDisplay.length > 0 ? () => setExpandedState(!isExpanded) : undefined}
+        onClick={todosToDisplay.length > 0 ? handleToggleExpanded : undefined}
       >
         <div className="todo-header-center">
           {isAllCompleted ? (
