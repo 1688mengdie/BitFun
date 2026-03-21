@@ -445,6 +445,8 @@ export class SessionPoller {
   private stopped = false;
   private hasActiveTurn = false;
   private knownModelCatalogVersion = 0;
+  private turnJustEndedAt: number | null = null;
+  private readonly TURN_JUST_ENDED_GRACE_PERIOD_MS = 5000;
 
   constructor(
     sessionMgr: RemoteSessionManager,
@@ -492,6 +494,13 @@ export class SessionPoller {
 
   private getInterval(): number {
     if (document.visibilityState !== 'visible') return 5000;
+    
+    // 如果在宽限期内（turn 刚刚结束），继续保持快速轮询
+    const now = Date.now();
+    if (this.turnJustEndedAt != null && (now - this.turnJustEndedAt) < this.TURN_JUST_ENDED_GRACE_PERIOD_MS) {
+      return 1000;
+    }
+    
     return this.hasActiveTurn ? 1000 : 10000;
   }
 
@@ -528,9 +537,20 @@ export class SessionPoller {
       // When changed=false the backend omits active_turn, so we must
       // preserve the previous value to keep 1-second fast polling alive.
       if (resp.changed) {
-        this.hasActiveTurn = resp.active_turn != null && resp.active_turn.status === 'active';
-      }
-      if (resp.changed) {
+        const wasActive = this.hasActiveTurn;
+        const isActiveNow = resp.active_turn != null && resp.active_turn.status === 'active';
+        this.hasActiveTurn = isActiveNow;
+        
+        // 检测到 active_turn 刚刚结束，设置宽限期
+        if (wasActive && !isActiveNow) {
+          this.turnJustEndedAt = Date.now();
+        }
+        
+        // 如果有新消息或者 active_turn 仍然活跃，重置宽限期
+        if (resp.new_messages && resp.new_messages.length > 0) {
+          this.turnJustEndedAt = null;
+        }
+        
         this.sinceVersion = resp.version;
         if (resp.total_msg_count != null) {
           this.knownMsgCount = resp.total_msg_count;
