@@ -38,7 +38,7 @@ import {
   buildInlineContinuePrompt,
   sanitizeInlineAiMarkdownResponse,
 } from '../utils/inlineAi';
-import { loadLocalImages } from '../utils/loadLocalImages';
+import { getCachedLocalImageDataUrl, loadLocalImages } from '../utils/loadLocalImages';
 import { isLocalPath, resolveImagePath } from '../utils/rehype-local-images';
 import { markdownToTiptapDoc, tiptapDocToMarkdown } from '../utils/tiptapMarkdown';
 import './TiptapEditor.scss';
@@ -73,6 +73,25 @@ interface TiptapEditorProps {
 
 function executeContentEditableAction(action: 'copy' | 'cut'): boolean {
   return document.execCommand(action);
+}
+
+function focusEditorWithoutScroll(instance: TiptapEditorInstance | null | undefined): void {
+  if (!instance) {
+    return;
+  }
+
+  const dom = instance.view.dom as HTMLElement | null;
+  if (dom) {
+    try {
+      dom.focus({ preventScroll: true });
+      return;
+    } catch {
+      dom.focus();
+      return;
+    }
+  }
+
+  instance.commands.focus();
 }
 
 function getTopLevelBlockIds(doc: JSONContent | null | undefined): string[] {
@@ -152,10 +171,20 @@ async function resolveEditorLocalImages(
     }
 
     const absolutePath = resolveImagePath(src, basePath);
+    const cachedDataUrl = getCachedLocalImageDataUrl(absolutePath);
     img.setAttribute('data-local-image', 'true');
     img.setAttribute('data-local-path', absolutePath);
     img.setAttribute('data-original-src', src);
     img.dataset.localResolved = 'true';
+
+    if (cachedDataUrl) {
+      img.src = cachedDataUrl;
+      img.classList.remove('local-image-loading', 'local-image-error');
+      img.classList.add('local-image-loaded');
+      img.removeAttribute('data-local-image');
+      img.removeAttribute('data-local-path');
+      return;
+    }
 
     if (!img.classList.contains('local-image-loaded')) {
       img.classList.add('local-image-loading');
@@ -349,7 +378,7 @@ export const TiptapEditor = React.forwardRef<TiptapEditorHandle, TiptapEditorPro
 
     if (shouldFocusEditor) {
       window.setTimeout(() => {
-        editorRef.current?.commands.focus();
+        focusEditorWithoutScroll(editorRef.current);
       }, 0);
     }
   }, []);
@@ -430,7 +459,9 @@ export const TiptapEditor = React.forwardRef<TiptapEditorHandle, TiptapEditorPro
       }),
       MarkdownAlignmentExtension,
       BlockIdExtension,
-      MarkdownImage,
+      MarkdownImage.configure({
+        basePath,
+      }),
       MarkdownTable,
       MarkdownTableRow,
       MarkdownTableHeader,
@@ -530,28 +561,37 @@ export const TiptapEditor = React.forwardRef<TiptapEditorHandle, TiptapEditorPro
     }
 
     let cancelled = false;
-    let rafId: number | null = null;
-    let pending = false;
+    let running = false;
+    let rerunRequested = false;
 
     const run = async () => {
-      pending = false;
-      try {
-        await resolveEditorLocalImages(rootRef.current, basePath);
-      } catch (error) {
-        if (!cancelled) {
-          log.error('Failed to resolve editor local images', { error, basePath });
-        }
+      if (cancelled || running) {
+        rerunRequested = true;
+        return;
       }
+
+      running = true;
+      rerunRequested = false;
+
+      do {
+        rerunRequested = false;
+        try {
+          await resolveEditorLocalImages(rootRef.current, basePath);
+        } catch (error) {
+          if (!cancelled) {
+            log.error('Failed to resolve editor local images', { error, basePath });
+          }
+        }
+      } while (!cancelled && rerunRequested);
+
+      running = false;
     };
 
     const scheduleRun = () => {
-      if (cancelled || pending) {
+      if (cancelled) {
         return;
       }
-      pending = true;
-      rafId = window.requestAnimationFrame(() => {
-        void run();
-      });
+      void run();
     };
 
     scheduleRun();
@@ -574,9 +614,6 @@ export const TiptapEditor = React.forwardRef<TiptapEditorHandle, TiptapEditorPro
 
     return () => {
       cancelled = true;
-      if (rafId !== null) {
-        window.cancelAnimationFrame(rafId);
-      }
       observer?.disconnect();
     };
   }, [basePath, editor, value]);
@@ -605,7 +642,7 @@ export const TiptapEditor = React.forwardRef<TiptapEditorHandle, TiptapEditorPro
       id: targetIdRef.current,
       kind: 'markdown-ir',
       focus: () => {
-        editor.commands.focus();
+        focusEditorWithoutScroll(editor);
       },
       hasTextFocus: () => editor.isFocused,
       undo: () => editor.commands.undo(),
@@ -957,7 +994,7 @@ export const TiptapEditor = React.forwardRef<TiptapEditorHandle, TiptapEditorPro
       return editor?.can().redo() ?? false;
     },
     focus: () => {
-      editor?.commands.focus();
+      focusEditorWithoutScroll(editor);
     },
     getContent: () => currentMarkdownRef.current,
     markSaved: () => {
