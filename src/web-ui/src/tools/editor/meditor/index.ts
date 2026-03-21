@@ -3,9 +3,7 @@ export type { MEditorProps } from './components/MEditor'
 
 export { EditArea } from './components/EditArea'
 export { Preview } from './components/Preview'
-export { IREditor } from './components/IREditor'
 export { TiptapEditor } from './components/TiptapEditor'
-export type { IREditorHandle } from './components/IREditor'
 export type { TiptapEditorHandle } from './components/TiptapEditor'
 
 // Hooks
@@ -20,7 +18,6 @@ export * from './utils/tiptapMarkdown'
 
 export type {
   EditorMode,
-  EditorEngine,
   EditorTheme,
   EditorOptions,
   EditorInstance,

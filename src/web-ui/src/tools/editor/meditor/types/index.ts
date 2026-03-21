@@ -5,8 +5,6 @@ import { CSSProperties, ReactNode } from 'react'
  */
 export type EditorMode = 'ir' | 'split' | 'edit' | 'preview'
 
-export type EditorEngine = 'tiptap' | 'legacy'
-
 /**
  * Editor theme
  */
@@ -60,7 +58,6 @@ export interface EditorOptions {
   height?: string | number
   width?: string | number
   mode?: EditorMode
-  engine?: EditorEngine
   theme?: EditorTheme
   toolbar?: boolean | ToolbarConfig
   outline?: boolean
