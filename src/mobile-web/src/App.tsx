@@ -73,6 +73,31 @@ const AppContent: React.FC = () => {
 
   useEffect(() => () => clearTimeout(timerRef.current), []);
 
+  // 全局链接点击处理 - 确保所有外部链接在新标签页打开
+  useEffect(() => {
+    const handleLinkClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      const link = target.closest('a') as HTMLAnchorElement | null;
+      
+      if (link && link.href) {
+        const href = link.href;
+        // 检查是否是外部链接 (http/https 且不是当前域名)
+        if (href.startsWith('http://') || href.startsWith('https://')) {
+          e.preventDefault();
+          e.stopPropagation();
+          window.open(href, '_blank', 'noopener,noreferrer');
+        }
+      }
+    };
+    
+    // 添加全局点击监听
+    document.addEventListener('click', handleLinkClick, true);
+    
+    return () => {
+      document.removeEventListener('click', handleLinkClick, true);
+    };
+  }, []);
+
   const handlePaired = useCallback(
     (client: RelayHttpClient, sessionMgr: RemoteSessionManager) => {
       clientRef.current = client;

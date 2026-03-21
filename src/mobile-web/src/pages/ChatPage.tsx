@@ -466,17 +466,21 @@ const MarkdownContent: React.FC<MarkdownContentProps> = ({ content, onFileDownlo
 
       // Fallback: render as plain text for computer:// links without handler,
       // or as a regular link for http(s) links.
-      if (typeof href === 'string' && (href.startsWith('http://') || href.startsWith('https://'))) {
-        return (
-          <a
-            href={href}
-            target="_blank"
-            rel="noopener noreferrer"
-            style={{ color: 'var(--color-accent, #3b82f6)', textDecoration: 'underline' }}
-          >
-            {children}
-          </a>
-        );
+      if (typeof href === 'string') {
+        // 所有外部链接都在新标签页打开
+        const isExternalLink = href.startsWith('http://') || href.startsWith('https://');
+        if (isExternalLink) {
+          return (
+            <a
+              href={href}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ color: 'var(--color-accent, #3b82f6)', textDecoration: 'underline' }}
+            >
+              {children}
+            </a>
+          );
+        }
       }
 
       return <span style={{ textDecoration: 'underline', opacity: 0.7 }}>{children}</span>;
