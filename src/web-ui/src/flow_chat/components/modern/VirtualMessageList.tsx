@@ -690,8 +690,11 @@ export const VirtualMessageList = forwardRef<VirtualMessageListRef>((_, ref) => 
     const viewportTop = scrollerRect.top + PINNED_TURN_VIEWPORT_OFFSET_PX;
     const desiredScrollTop = Math.max(0, scroller.scrollTop + (targetRect.top - viewportTop));
     const effectiveScrollHeight = Math.max(0, scroller.scrollHeight - Math.max(0, ignoredTailSpacePx));
-    const maxScrollTop = Math.max(0, effectiveScrollHeight - scroller.clientHeight);
-    const missingTailSpace = Math.max(0, desiredScrollTop - maxScrollTop);
+    const rawMaxScrollTop = effectiveScrollHeight - scroller.clientHeight;
+    const maxScrollTop = Math.max(0, rawMaxScrollTop);
+    // When content is shorter than the viewport, the clamped max scroll range is 0
+    // even though we still need to reserve the underflow gap before the target can pin.
+    const missingTailSpace = Math.max(0, desiredScrollTop - rawMaxScrollTop);
 
     return {
       targetElement,
@@ -791,6 +794,7 @@ export const VirtualMessageList = forwardRef<VirtualMessageListRef>((_, ref) => 
   const tryResolvePendingTurnPin = useCallback((request: PendingTurnPinState) => {
     const scroller = scrollerElementRef.current;
     const virtuoso = virtuosoRef.current;
+
     if (!scroller || !virtuoso) return false;
 
     const targetItem = userMessageItems.find(({ item }) => item.turnId === request.turnId);
@@ -1064,6 +1068,18 @@ export const VirtualMessageList = forwardRef<VirtualMessageListRef>((_, ref) => 
       scheduleHeightMeasure(2);
       scheduleVisibleTurnMeasure(2);
       schedulePinReservationReconcile(2);
+      if (layoutTransitionCountRef.current === 0 && pendingCollapseIntentRef.current.active) {
+        pendingCollapseIntentRef.current = {
+          active: false,
+          anchorScrollTop: 0,
+          toolId: null,
+          toolName: null,
+          expiresAtMs: 0,
+          distanceFromBottomBeforeCollapse: 0,
+          baseTotalCompensationPx: 0,
+          cumulativeShrinkPx: 0,
+        };
+      }
       if (layoutTransitionCountRef.current === 0 && deferredFollowReasonRef.current && !shouldSuspendAutoFollow()) {
         const deferredReason = deferredFollowReasonRef.current;
         deferredFollowReasonRef.current = null;
@@ -1438,16 +1454,15 @@ export const VirtualMessageList = forwardRef<VirtualMessageListRef>((_, ref) => 
       setPendingTurnPin(null);
       virtuosoRef.current.scrollTo({ top: 999999999, behavior });
     }
-  }, [releaseAnchorLock, virtualItems.length]);
+  }, [getTotalBottomCompensationPx, releaseAnchorLock, virtualItems.length]);
 
   const requestTurnPinToTop = useCallback((turnId: string, options?: { behavior?: ScrollBehavior; pinMode?: FlowChatPinTurnToTopMode }) => {
+    const requestedPinMode = options?.pinMode ?? 'transient';
+    const requestedBehavior = options?.behavior ?? 'auto';
     const targetItem = userMessageItems.find(({ item }) => item.turnId === turnId);
     if (!targetItem || !virtuosoRef.current) {
       return false;
     }
-
-    const requestedPinMode = options?.pinMode ?? 'transient';
-    const requestedBehavior = options?.behavior ?? 'auto';
 
     if (targetItem.index === 0 && requestedPinMode === 'transient') {
       // The first turn has a deterministic destination, so bypass the deferred
@@ -1474,6 +1489,7 @@ export const VirtualMessageList = forwardRef<VirtualMessageListRef>((_, ref) => 
     }
 
     const currentPinReservation = bottomReservationStateRef.current.pin;
+    const totalBottomCompensationPx = getTotalBottomCompensationPx();
     const hasPendingLatestStickyPin = (
       pendingTurnPin?.turnId === latestTurnId &&
       pendingTurnPin.pinMode === 'sticky-latest'
@@ -1485,6 +1501,10 @@ export const VirtualMessageList = forwardRef<VirtualMessageListRef>((_, ref) => 
     const shouldKeepStickyLatest = (
       hasAppliedLatestStickyPin &&
       currentPinReservation.floorPx > COMPENSATION_EPSILON_PX
+    );
+    const shouldPreserveSyntheticTail = (
+      hasAppliedLatestStickyPin &&
+      totalBottomCompensationPx > COMPENSATION_EPSILON_PX
     );
 
     if (hasPendingLatestStickyPin) {
@@ -1503,8 +1523,13 @@ export const VirtualMessageList = forwardRef<VirtualMessageListRef>((_, ref) => 
       return;
     }
 
+    if (shouldPreserveSyntheticTail) {
+      return;
+    }
+
     scrollToLatestEndPositionInternal('auto');
   }, [
+    getTotalBottomCompensationPx,
     latestTurnId,
     pendingTurnPin?.pinMode,
     pendingTurnPin?.turnId,
@@ -1541,6 +1566,9 @@ export const VirtualMessageList = forwardRef<VirtualMessageListRef>((_, ref) => 
       }
     },
     shouldSuspendAutoFollow,
+    getAutoFollowDistanceFromBottom: (scroller) => (
+      Math.max(0, scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop - getTotalBottomCompensationPx())
+    ),
   });
 
   useEffect(() => {

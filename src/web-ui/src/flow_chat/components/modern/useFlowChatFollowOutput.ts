@@ -30,6 +30,7 @@ interface UseFlowChatFollowOutputOptions {
   performAutoFollowScroll: () => void;
   performLatestTurnStickyPin: () => void;
   shouldSuspendAutoFollow?: () => boolean;
+  getAutoFollowDistanceFromBottom?: (scroller: HTMLElement) => number;
 }
 
 interface UseFlowChatFollowOutputResult {
@@ -58,6 +59,7 @@ export function useFlowChatFollowOutput({
   performAutoFollowScroll,
   performLatestTurnStickyPin,
   shouldSuspendAutoFollow,
+  getAutoFollowDistanceFromBottom,
 }: UseFlowChatFollowOutputOptions): UseFlowChatFollowOutputResult {
   const [isFollowingOutput, setIsFollowingOutput] = useState(false);
 
@@ -214,14 +216,15 @@ export function useFlowChatFollowOutput({
         return;
       }
 
-      const distanceFromBottom = getDistanceFromBottom(scroller);
+      const rawDistanceFromBottom = getDistanceFromBottom(scroller);
+      const distanceFromBottom = getAutoFollowDistanceFromBottom?.(scroller) ?? rawDistanceFromBottom;
       if (distanceFromBottom <= AUTO_FOLLOW_BOTTOM_THRESHOLD_PX) {
         return;
       }
 
       runProgrammaticScroll(performAutoFollowScroll);
     });
-  }, [isStreaming, performAutoFollowScroll, runProgrammaticScroll, scrollerRef, shouldSuspendAutoFollow, virtualItemCount]);
+  }, [getAutoFollowDistanceFromBottom, isStreaming, performAutoFollowScroll, runProgrammaticScroll, scrollerRef, shouldSuspendAutoFollow, virtualItemCount]);
 
   const handleScroll = useCallback(() => {
     const scroller = scrollerRef.current;
