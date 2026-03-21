@@ -107,8 +107,8 @@
 
   h1 {
     font-size: $font-size-3xl;
-    color: #111111;
-    border-bottom: 1px solid rgba(17, 17, 17, 0.12);
+    color: var(--color-text-primary);
+    border-bottom: 1px solid $border-base;
     padding-bottom: $size-gap-3;
     text-align: center;
     letter-spacing: 0.5px;
@@ -116,7 +116,7 @@
 
   h2 {
     font-size: $font-size-2xl;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+    border-bottom: 1px solid $border-base;
     padding-bottom: $size-gap-2;
   }
 
@@ -145,7 +145,7 @@
     padding: 0.2em 0.4em;
     margin: 0;
     font-size: 100%;
-    background-color: rgba(255, 255, 255, 0.08);
+    background-color: $element-bg-subtle;
     border-radius: $size-radius-sm;
     font-family: $font-family-mono;
     color: var(--color-accent-500);
@@ -157,7 +157,7 @@
     font-size: 100%;
     line-height: 1.45;
     background-color: $element-bg-subtle;
-    border: 1px solid rgba(255, 255, 255, 0.03);
+    border: 1px solid $border-base;
     border-radius: $size-radius-base;
     margin-bottom: $size-gap-4;
 
@@ -175,7 +175,7 @@
   blockquote {
     padding: $size-gap-3 $size-gap-4;
     color: var(--color-text-muted);
-    border-left: 3px solid rgba(255, 255, 255, 0.15);
+    border-left: 3px solid $border-base;
     margin: 0 0 $size-gap-4 0;
     background: $element-bg-subtle;
     border-radius: 0 $size-radius-base $size-radius-base 0;
@@ -263,28 +263,28 @@
     margin-bottom: $size-gap-4;
     border-radius: $size-radius-base;
     overflow: hidden;
-    border: 1px solid rgba(255, 255, 255, 0.04);
+    border: 1px solid $border-base;
 
     th {
       font-weight: $font-weight-semibold;
       padding: $size-gap-2 $size-gap-3;
-      border: 1px solid rgba(255, 255, 255, 0.04);
+      border: 1px solid $border-base;
       background: $element-bg-soft;
       color: var(--color-text-primary);
     }
 
     td {
       padding: $size-gap-2 $size-gap-3;
-      border: 1px solid rgba(255, 255, 255, 0.03);
+      border: 1px solid $border-base;
     }
 
     tr {
       background-color: transparent;
-      border-top: 1px solid rgba(255, 255, 255, 0.03);
+      border-top: 1px solid $border-base;
       transition: background-color $motion-fast $easing-standard;
 
       &:nth-child(2n) {
-        background-color: rgba(255, 255, 255, 0.01);
+        background-color: color-mix(in srgb, var(--color-text-primary) 2%, transparent);
       }
 
       &:hover {
@@ -306,8 +306,8 @@
     margin: $size-gap-6 0;
     background: linear-gradient(90deg, 
       transparent 0%, 
-      rgba(255, 255, 255, 0.1) 20%, 
-      rgba(255, 255, 255, 0.1) 80%, 
+      color-mix(in srgb, var(--color-text-muted) 30%, transparent) 20%, 
+      color-mix(in srgb, var(--color-text-muted) 30%, transparent) 80%, 
       transparent 100%);
     border: 0;
     border-radius: 1px;
@@ -358,7 +358,7 @@
     margin: $size-gap-4 0;
     padding: $size-gap-4;
     background: $element-bg-subtle;
-    border: 1px solid rgba(255, 255, 255, 0.03);
+    border: 1px solid $border-base;
     border-radius: $size-radius-base;
     overflow-x: auto;
 

@@ -85,7 +85,7 @@
 
     h1 {
       font-size: $font-size-3xl;
-      color: #111111;
+      color: var(--color-text-primary);
       text-align: center;
     }
 
@@ -114,7 +114,7 @@
     blockquote {
       margin: 0;
       padding-left: $size-gap-3;
-      border-left: 3px solid rgba(255, 255, 255, 0.15);
+      border-left: 3px solid $border-base;
     }
 
     pre {
@@ -309,8 +309,8 @@
       height: 3.5rem;
       padding-right: $size-gap-2;
       border-radius: 999px;
-      background: rgba(255, 255, 255, 0.03);
-      border-color: rgba(255, 255, 255, 0.1);
+      background: $element-bg-subtle;
+      border-color: $border-base;
     }
 
     .bitfun-input {
@@ -330,7 +330,7 @@
     padding: 0 $size-gap-2;
     height: 2rem;
     border-radius: 999px;
-    background: rgba(255, 255, 255, 0.05);
+    background: $element-bg-subtle;
     color: var(--color-text-muted);
     font-size: $font-size-xs;
     white-space: nowrap;
@@ -389,8 +389,8 @@
     transition: background $motion-fast $easing-standard, border-color $motion-fast $easing-standard, color $motion-fast $easing-standard;
 
     &:hover {
-      background: rgba(255, 255, 255, 0.04);
-      border-color: rgba(255, 255, 255, 0.08);
+      background: $element-bg-subtle;
+      border-color: $border-base;
     }
   }
 

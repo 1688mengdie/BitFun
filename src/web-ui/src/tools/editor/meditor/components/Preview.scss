@@ -33,7 +33,7 @@
   margin: $size-gap-4 0;
   padding: $size-gap-4;
   background: $element-bg-subtle;
-  border: 1px solid rgba(255, 255, 255, 0.03);
+  border: 1px solid $border-base;
   border-radius: $size-radius-base;
   overflow-x: auto;
 
@@ -70,7 +70,7 @@
 
   &-divider {
     border: none;
-    border-top: 1px dashed rgba(255, 255, 255, 0.08);
+    border-top: 1px dashed $border-base;
     margin: $size-gap-1 0;
   }
 
@@ -80,4 +80,3 @@
     word-break: break-word;
   }
 }
-
