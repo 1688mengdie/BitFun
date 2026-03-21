@@ -24,15 +24,10 @@ import './FileOperationToolCard.scss';
 
 const log = createLogger('FileOperationToolCard');
 const FILE_OPERATION_PREVIEW_ROWS = 4;
-const FILE_OPERATION_CODE_FONT_SIZE = 12;
-const FILE_OPERATION_CODE_LINE_HEIGHT = 1.6;
-const FILE_OPERATION_CODE_VERTICAL_PADDING = 4;
-const FILE_OPERATION_CODE_PREVIEW_MAX_HEIGHT = Math.ceil(
-  FILE_OPERATION_PREVIEW_ROWS * FILE_OPERATION_CODE_FONT_SIZE * FILE_OPERATION_CODE_LINE_HEIGHT + FILE_OPERATION_CODE_VERTICAL_PADDING
-);
-const FILE_OPERATION_DIFF_ROW_HEIGHT = 22;
-const FILE_OPERATION_DIFF_PREVIEW_MAX_HEIGHT =
-  FILE_OPERATION_PREVIEW_ROWS * FILE_OPERATION_DIFF_ROW_HEIGHT;
+const FILE_OPERATION_PREVIEW_ROW_HEIGHT = 22;
+// Keep streaming and completed previews at the same height to avoid layout jumps.
+const FILE_OPERATION_PREVIEW_MAX_HEIGHT =
+  FILE_OPERATION_PREVIEW_ROWS * FILE_OPERATION_PREVIEW_ROW_HEIGHT;
 
 interface FileOperationToolCardProps extends ToolCardProps {
   sessionId?: string;
@@ -211,6 +206,34 @@ export const FileOperationToolCard: React.FC<FileOperationToolCardProps> = ({
   }, [sessionId, toolCall?.id, status, isFailed]);
 
   const isLoading = status === 'preparing' || status === 'streaming' || status === 'running';
+  const previewVariant = useMemo(() => {
+    if (toolItem.toolName === 'Edit') {
+      if (status !== 'completed' && newStringContent) {
+        return 'streaming-code';
+      }
+      if (status === 'completed' && !isParamsStreaming && (oldStringContent || newStringContent)) {
+        return 'completed-diff';
+      }
+    }
+
+    if (toolItem.toolName === 'Write') {
+      if (status !== 'completed' && contentPreview) {
+        return 'streaming-code';
+      }
+      if (status === 'completed' && !isParamsStreaming && contentPreview) {
+        return 'completed-diff';
+      }
+    }
+
+    return 'none';
+  }, [
+    contentPreview,
+    isParamsStreaming,
+    newStringContent,
+    oldStringContent,
+    status,
+    toolItem.toolName,
+  ]);
   
   const getErrorMessage = () => {
     if (toolResult && 'error' in toolResult) {
@@ -355,7 +378,13 @@ export const FileOperationToolCard: React.FC<FileOperationToolCardProps> = ({
   };
 
   const renderStatusIcon = () => {
-    if (isLoading) {
+    const shouldShowStatusIcon = (
+      status === 'preparing' ||
+      status === 'streaming' ||
+      (status === 'running' && previewVariant === 'none')
+    );
+
+    if (shouldShowStatusIcon) {
       return <CubeLoading size="small" />;
     }
     return null;
@@ -476,7 +505,7 @@ export const FileOperationToolCard: React.FC<FileOperationToolCardProps> = ({
                 filePath={currentFilePath}
                 isStreaming={isParamsStreaming}
                 showLineNumbers={false}
-                maxHeight={FILE_OPERATION_CODE_PREVIEW_MAX_HEIGHT}
+                maxHeight={FILE_OPERATION_PREVIEW_MAX_HEIGHT}
                 autoScrollToBottom={isParamsStreaming}
                 onLineClick={handleCodeLineClick}
               />
@@ -493,7 +522,7 @@ export const FileOperationToolCard: React.FC<FileOperationToolCardProps> = ({
                 originalContent={oldStringContent}
                 modifiedContent={newStringContent}
                 filePath={currentFilePath}
-                maxHeight={FILE_OPERATION_DIFF_PREVIEW_MAX_HEIGHT}
+                maxHeight={FILE_OPERATION_PREVIEW_MAX_HEIGHT}
                 showLineNumbers={false}
                 lineNumberMode="dual"
                 showPrefix={false}
@@ -515,7 +544,7 @@ export const FileOperationToolCard: React.FC<FileOperationToolCardProps> = ({
                 filePath={currentFilePath}
                 isStreaming={isParamsStreaming}
                 showLineNumbers={false}
-                maxHeight={FILE_OPERATION_CODE_PREVIEW_MAX_HEIGHT}
+                maxHeight={FILE_OPERATION_PREVIEW_MAX_HEIGHT}
                 autoScrollToBottom={isParamsStreaming}
                 onLineClick={handleCodeLineClick}
               />
@@ -532,7 +561,7 @@ export const FileOperationToolCard: React.FC<FileOperationToolCardProps> = ({
                 originalContent=""
                 modifiedContent={contentPreview}
                 filePath={currentFilePath}
-                maxHeight={FILE_OPERATION_DIFF_PREVIEW_MAX_HEIGHT}
+                maxHeight={FILE_OPERATION_PREVIEW_MAX_HEIGHT}
                 showLineNumbers={false}
                 lineNumberMode="single"
                 showPrefix={true}
