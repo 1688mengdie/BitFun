@@ -19,6 +19,15 @@ import { InputDialog, CubeLoading } from '@/component-library';
 import { openFileInBestTarget } from '@/shared/utils/tabUtils';
 import { PanelHeader } from './base';
 import { createLogger } from '@/shared/utils/logger';
+import { workspaceManager } from '@/infrastructure/services/business/workspaceManager';
+import { isRemoteWorkspace } from '@/shared/types';
+import {
+  downloadWorkspaceFileToDisk,
+  isDragPositionOverElement,
+  resolveDropTargetDirectoryFromDragPosition,
+  uploadLocalPathsToWorkspaceDirectory,
+  type TransferProgressState,
+} from '@/tools/file-system/services/workspaceFileTransfer';
 import '@/tools/file-system/styles/FileExplorer.scss';
 import './FilesPanel.scss';
 
@@ -65,6 +74,8 @@ const FilesPanel: React.FC<FilesPanelProps> = ({
   });
 
   const [renamingPath, setRenamingPath] = useState<string | null>(null);
+  const [transferProgress, setTransferProgress] = useState<TransferProgressState | null>(null);
+  const [fileDropHighlight, setFileDropHighlight] = useState(false);
   const [inputDialog, setInputDialog] = useState<{
     isOpen: boolean;
     type: 'newFile' | 'newFolder' | null;
@@ -259,6 +270,9 @@ const FilesPanel: React.FC<FilesPanelProps> = ({
   }, [workspacePath, loadFileTree, notification, t]);
 
   const handleReveal = useCallback(async (data: { path: string }) => {
+    if (isRemoteWorkspace(workspaceManager.getState().currentWorkspace)) {
+      return;
+    }
     try {
       await workspaceAPI.revealInExplorer(data.path);
     } catch (error) {
@@ -266,6 +280,20 @@ const FilesPanel: React.FC<FilesPanelProps> = ({
       notification.error(t('notifications.openExplorerFailed', { error: String(error) }));
     }
   }, [notification, t]);
+
+  const handleFileDownload = useCallback(
+    async (data: { path: string }) => {
+      const ws = workspaceManager.getState().currentWorkspace;
+      try {
+        await downloadWorkspaceFileToDisk(data.path, ws, setTransferProgress);
+      } catch (error) {
+        log.error('Failed to download file', error);
+        setTransferProgress(null);
+        notification.error(t('transfer.failed', { error: String(error) }));
+      }
+    },
+    [notification, t]
+  );
 
   const handleFileTreeRefresh = useCallback(() => {
     loadFileTree(undefined, true);
@@ -441,6 +469,7 @@ const FilesPanel: React.FC<FilesPanelProps> = ({
     globalEventBus.on('file:rename', handleStartRename);
     globalEventBus.on('file:delete', handleDelete);
     globalEventBus.on('file:reveal', handleReveal);
+    globalEventBus.on('file:download', handleFileDownload);
     globalEventBus.on('file:paste', handlePasteFromContextMenu);
     globalEventBus.on('file-tree:refresh', handleFileTreeRefresh);
     globalEventBus.on('file-explorer:navigate', handleNavigateToPath);
@@ -452,11 +481,93 @@ const FilesPanel: React.FC<FilesPanelProps> = ({
       globalEventBus.off('file:rename', handleStartRename);
       globalEventBus.off('file:delete', handleDelete);
       globalEventBus.off('file:reveal', handleReveal);
+      globalEventBus.off('file:download', handleFileDownload);
       globalEventBus.off('file:paste', handlePasteFromContextMenu);
       globalEventBus.off('file-tree:refresh', handleFileTreeRefresh);
       globalEventBus.off('file-explorer:navigate', handleNavigateToPath);
     };
-  }, [handleOpenFile, handleNewFile, handleNewFolder, handleStartRename, handleDelete, handleReveal, handlePasteFromContextMenu, handleFileTreeRefresh, handleNavigateToPath]);
+  }, [handleOpenFile, handleNewFile, handleNewFolder, handleStartRename, handleDelete, handleReveal, handleFileDownload, handlePasteFromContextMenu, handleFileTreeRefresh, handleNavigateToPath]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !('__TAURI__' in window) || !workspacePath) {
+      return;
+    }
+
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    let lastEnterPaths: string[] = [];
+
+    const setup = async () => {
+      try {
+        // File-drop IPC is scoped to the webview; Window.onDragDropEvent may not receive events.
+        const { getCurrentWebview } = await import('@tauri-apps/api/webview');
+        const webview = getCurrentWebview();
+        unlisten = await webview.onDragDropEvent(async (event) => {
+          if (cancelled) return;
+          const payload = event.payload;
+          if (payload.type === 'leave') {
+            setFileDropHighlight(false);
+            lastEnterPaths = [];
+            return;
+          }
+          if (payload.type === 'enter') {
+            lastEnterPaths = payload.paths;
+            return;
+          }
+          if (payload.type === 'over') {
+            const factor = await webview.window.scaleFactor();
+            const panelEl = panelRef.current;
+            setFileDropHighlight(
+              isDragPositionOverElement(payload.position, factor, panelEl)
+            );
+            return;
+          }
+          if (payload.type === 'drop') {
+            setFileDropHighlight(false);
+            const paths =
+              payload.paths.length > 0 ? payload.paths : [...lastEnterPaths];
+            lastEnterPaths = [];
+            if (!workspacePath || paths.length === 0) {
+              return;
+            }
+
+            const factor = await webview.window.scaleFactor();
+            const targetDir = resolveDropTargetDirectoryFromDragPosition(
+              payload.position,
+              factor,
+              workspacePath
+            );
+
+            const ws = workspaceManager.getState().currentWorkspace;
+            try {
+              await uploadLocalPathsToWorkspaceDirectory(
+                paths,
+                targetDir,
+                ws,
+                setTransferProgress
+              );
+              loadFileTree(workspacePath, true);
+              if (targetDir !== workspacePath) {
+                expandFolder(targetDir, true);
+              }
+            } catch (error) {
+              log.error('Failed to upload dropped files', error);
+              setTransferProgress(null);
+              notification.error(t('transfer.failed', { error: String(error) }));
+            }
+          }
+        });
+      } catch (e) {
+        log.warn('File drag-drop listener not available', e);
+      }
+    };
+
+    void setup();
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [workspacePath, loadFileTree, expandFolder, notification, t]);
 
   const handleFileSelect = useCallback((filePath: string, fileName: string) => {
     selectFile(filePath);
@@ -558,7 +669,11 @@ const FilesPanel: React.FC<FilesPanelProps> = ({
           </div>
         )}
 
-        <div className="bitfun-files-panel__main-content">
+        <div
+          className={`bitfun-files-panel__main-content${
+            fileDropHighlight ? ' bitfun-files-panel__main-content--drop-target' : ''
+          }`}
+        >
         {!workspacePath ? (
           <div className="bitfun-files-panel__placeholder">
             <div className="bitfun-files-panel__placeholder-icon">
@@ -660,6 +775,36 @@ const FilesPanel: React.FC<FilesPanelProps> = ({
         )}
         </div>
       </div>
+
+      {transferProgress && (
+        <div className="bitfun-files-panel__transfer" role="status">
+          <div className="bitfun-files-panel__transfer-label">
+            {transferProgress.phase === 'download'
+              ? t('transfer.downloading')
+              : t('transfer.uploading')}
+            {transferProgress.label ? ` — ${transferProgress.label}` : ''}
+          </div>
+          <div
+            className={`bitfun-files-panel__transfer-track${
+              transferProgress.indeterminate ? ' bitfun-files-panel__transfer-track--indeterminate' : ''
+            }`}
+          >
+            <div
+              className="bitfun-files-panel__transfer-fill"
+              style={
+                transferProgress.indeterminate || !transferProgress.total
+                  ? undefined
+                  : {
+                      width: `${Math.min(
+                        100,
+                        Math.round((100 * transferProgress.current) / transferProgress.total)
+                      )}%`,
+                    }
+              }
+            />
+          </div>
+        </div>
+      )}
 
       <InputDialog
         isOpen={inputDialog.isOpen}

@@ -158,6 +158,56 @@
   &__main-content {
     flex: 1;
     overflow: hidden;
+    transition: box-shadow $motion-base $easing-standard, background $motion-base $easing-standard;
+
+    &--drop-target {
+      box-shadow: inset 0 0 0 2px $color-accent-500;
+      background: var(--element-bg-subtle);
+    }
+  }
+
+  &__transfer {
+    flex-shrink: 0;
+    padding: $size-gap-2 $size-gap-3;
+    border-top: 1px solid $border-base;
+    background: var(--color-bg-secondary);
+  }
+
+  &__transfer-label {
+    font-size: $font-size-xs;
+    color: var(--color-text-secondary);
+    margin-bottom: $size-gap-1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  &__transfer-track {
+    height: 4px;
+    border-radius: $size-radius-full;
+    background: var(--element-bg-base);
+    overflow: hidden;
+  }
+
+  &__transfer-track--indeterminate .bitfun-files-panel__transfer-fill {
+    width: 40% !important;
+    animation: bitfun-files-panel-transfer-indeterminate 1.1s ease-in-out infinite;
+  }
+
+  &__transfer-fill {
+    height: 100%;
+    border-radius: $size-radius-full;
+    background: $color-accent-500;
+    transition: width $motion-base $easing-standard;
+  }
+
+  @keyframes bitfun-files-panel-transfer-indeterminate {
+    0% {
+      transform: translateX(-100%);
+    }
+    100% {
+      transform: translateX(350%);
+    }
   }
 
   &__explorer {

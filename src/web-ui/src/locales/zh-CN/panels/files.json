@@ -40,6 +40,13 @@
   "validation": {
     "invalidFilename": "文件名包含非法字符"
   },
+  "transfer": {
+    "downloading": "正在下载",
+    "uploading": "正在上传",
+    "missingConnection": "远程工作区缺少 SSH 连接信息。",
+    "failed": "文件传输失败：{{error}}",
+    "dropHint": "将文件拖放到此处以上传"
+  },
   "notifications": {
     "createFileSuccess": "文件创建成功",
     "createFileFailed": "创建文件失败: {{error}}",

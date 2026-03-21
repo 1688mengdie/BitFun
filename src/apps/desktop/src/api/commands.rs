@@ -159,6 +159,13 @@ pub struct RenameFileRequest {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportLocalFileRequest {
+    pub source_path: String,
+    pub destination_path: String,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct DeleteFileRequest {
     pub path: String,
 }
@@ -1577,6 +1584,25 @@ pub async fn rename_file(
         .map_err(|e| format!("Failed to rename file: {}", e))?;
 
     Ok(())
+}
+
+/// Copy a local file to another local path (binary-safe). Used for export and drag-upload into local workspaces.
+#[tauri::command]
+pub async fn export_local_file_to_path(request: ExportLocalFileRequest) -> Result<(), String> {
+    let src = request.source_path;
+    let dst = request.destination_path;
+    tokio::task::spawn_blocking(move || {
+        let dst_path = Path::new(&dst);
+        if let Some(parent) = dst_path.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            }
+        }
+        std::fs::copy(&src, &dst).map_err(|e| e.to_string())?;
+        Ok::<(), String>(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]

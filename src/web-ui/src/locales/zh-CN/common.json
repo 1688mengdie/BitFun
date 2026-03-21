@@ -268,6 +268,7 @@
       "dropBefore": "松开后插入到此项前",
       "dropAfter": "松开后插入到此项后",
       "revealFailed": "打开工作区目录失败",
+      "copyPathFailed": "复制路径失败",
       "createSessionFailed": "新建会话失败",
       "worktreeCreated": "已创建 worktree",
       "worktreeCreateFailed": "创建 worktree 失败：{{error}}",
@@ -286,6 +287,7 @@
         "deleteAssistant": "删除个人助理",
         "resetWorkspace": "重置工作区",
         "newWorktree": "新建 worktree",
+        "copyPath": "复制路径",
         "reveal": "在资源管理器中打开",
         "close": "关闭工作区"
       },
@@ -634,6 +636,8 @@
     "reveal": "在资源管理器中显示",
     "copyPath": "复制路径",
     "copyRelativePath": "复制相对路径",
+    "download": "下载",
+    "downloadSaveTitle": "保存文件",
     "newFileDescription": "在当前文件夹中创建新文件",
     "newFolderDescription": "在当前文件夹中创建新文件夹",
     "renameDescription": "重命名文件或文件夹",
@@ -921,7 +925,14 @@
       "delete": "删除",
       "deleteTitle": "确认删除",
       "deleteConfirm": "确定要删除此文件/文件夹吗？此操作无法撤销。",
-      "rename": "重命名"
+      "rename": "重命名",
+      "upload": "上传到远程",
+      "download": "下载到本地",
+      "uploadDialogTitle": "选择要上传的文件",
+      "downloadDialogTitle": "保存文件",
+      "transferFailed": "传输失败",
+      "transferNeedsDesktop": "上传与下载仅适用于桌面版应用。",
+      "transferring": "正在传输…"
     }
   }
 }

@@ -157,6 +157,36 @@ export const sshApi = {
   },
 
   /**
+   * Download a remote file to a local filesystem path (desktop; binary-safe).
+   */
+  async downloadToLocalPath(
+    connectionId: string,
+    remotePath: string,
+    localPath: string
+  ): Promise<void> {
+    return api.invoke('remote_download_to_local_path', {
+      connectionId,
+      remotePath,
+      localPath,
+    });
+  },
+
+  /**
+   * Upload a local file to a remote path (desktop; binary-safe).
+   */
+  async uploadFromLocalPath(
+    connectionId: string,
+    localPath: string,
+    remotePath: string
+  ): Promise<void> {
+    return api.invoke('remote_upload_from_local_path', {
+      connectionId,
+      localPath,
+      remotePath,
+    });
+  },
+
+  /**
    * Execute command on remote server
    */
   async execute(

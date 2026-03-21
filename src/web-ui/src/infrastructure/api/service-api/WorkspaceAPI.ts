@@ -327,6 +327,22 @@ export class WorkspaceAPI {
     }
   }
 
+  /**
+   * Copy a local file to another local path (binary-safe).
+   */
+  async exportLocalFileToPath(sourcePath: string, destinationPath: string): Promise<void> {
+    try {
+      await api.invoke('export_local_file_to_path', {
+        request: { sourcePath, destinationPath },
+      });
+    } catch (error) {
+      throw createTauriCommandError('export_local_file_to_path', error, {
+        sourcePath,
+        destinationPath,
+      });
+    }
+  }
+
    
   async revealInExplorer(path: string): Promise<void> {
     try {

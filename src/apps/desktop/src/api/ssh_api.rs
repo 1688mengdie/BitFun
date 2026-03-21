@@ -252,6 +252,54 @@ pub async fn remote_rename(
         .map_err(|e| e.to_string())
 }
 
+/// Read a remote file via SFTP and write it to a local path (binary-safe).
+#[tauri::command]
+pub async fn remote_download_to_local_path(
+    state: State<'_, AppState>,
+    connection_id: String,
+    remote_path: String,
+    local_path: String,
+) -> Result<(), String> {
+    let remote_fs = state.get_remote_file_service_async().await?;
+    let bytes = remote_fs
+        .read_file(&connection_id, &remote_path)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    tokio::task::spawn_blocking(move || {
+        let path = std::path::Path::new(&local_path);
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            }
+        }
+        std::fs::write(path, &bytes).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Read a local file and write it to the remote path via SFTP (binary-safe).
+#[tauri::command]
+pub async fn remote_upload_from_local_path(
+    state: State<'_, AppState>,
+    connection_id: String,
+    local_path: String,
+    remote_path: String,
+) -> Result<(), String> {
+    let bytes = tokio::task::spawn_blocking(move || {
+        std::fs::read(&local_path).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    let remote_fs = state.get_remote_file_service_async().await?;
+    remote_fs
+        .write_file(&connection_id, &remote_path, &bytes)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub async fn remote_execute(
     state: State<'_, AppState>,

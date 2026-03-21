@@ -208,74 +208,78 @@ export const WelcomePanel: React.FC<WelcomePanelProps> = ({
               </>
             ) : (
               <>
-                {isCoworkSession ? t('welcome.workingInCowork') : t('welcome.workingIn')}{' '}
-                <span className="welcome-panel__context-row">
-                  <span className="welcome-panel__workspace-anchor" ref={workspaceDropdownRef}>
-                    <button
-                      type="button"
-                      className={`welcome-panel__inline-btn${workspaceDropdownOpen ? ' welcome-panel__inline-btn--active' : ''}`}
-                      onClick={() => setWorkspaceDropdownOpen(v => !v)}
-                      disabled={isSelectingWorkspace}
-                      title={currentWorkspace?.rootPath}
-                    >
-                      <FolderOpen size={13} className="welcome-panel__inline-icon" />
-                      {currentWorkspace?.name || t('welcome.workspace')}
-                      <ChevronDown
-                        size={11}
-                        className={`welcome-panel__inline-chevron${workspaceDropdownOpen ? ' welcome-panel__inline-chevron--open' : ''}`}
-                      />
-                    </button>
-                    {workspaceDropdownOpen && (
-                      <div className="welcome-panel__dropdown">
-                        {hasWorkspace && currentWorkspace && (
-                          <div className="welcome-panel__dropdown-current">
-                            <Check size={11} />
-                            <FolderOpen size={12} />
-                            <span className="welcome-panel__dropdown-name">{currentWorkspace.name}</span>
-                          </div>
-                        )}
-                        {otherWorkspaces.length > 0 && (
-                          <>
-                            {hasWorkspace && <div className="welcome-panel__dropdown-sep" />}
-                            {otherWorkspaces.map(ws => (
-                              <button
-                                key={ws.id}
-                                type="button"
-                                className="welcome-panel__dropdown-item"
-                                onClick={() => { void handleSwitchWorkspace(ws); }}
-                                title={ws.rootPath}
-                              >
-                                <FolderOpen size={12} />
-                                <span className="welcome-panel__dropdown-name">{ws.name}</span>
-                              </button>
-                            ))}
-                          </>
-                        )}
-                      </div>
+                <span className="welcome-panel__narrative-sentence">
+                  <span className="welcome-panel__narrative-sentence__text">
+                    {isCoworkSession ? t('welcome.workingInCowork') : t('welcome.workingIn')}
+                  </span>
+                  <span className="welcome-panel__context-row">
+                    <span className="welcome-panel__workspace-anchor" ref={workspaceDropdownRef}>
+                      <button
+                        type="button"
+                        className={`welcome-panel__inline-btn${workspaceDropdownOpen ? ' welcome-panel__inline-btn--active' : ''}`}
+                        onClick={() => setWorkspaceDropdownOpen(v => !v)}
+                        disabled={isSelectingWorkspace}
+                        title={currentWorkspace?.rootPath}
+                      >
+                        <FolderOpen size={13} className="welcome-panel__inline-icon" />
+                        {currentWorkspace?.name || t('welcome.workspace')}
+                        <ChevronDown
+                          size={11}
+                          className={`welcome-panel__inline-chevron${workspaceDropdownOpen ? ' welcome-panel__inline-chevron--open' : ''}`}
+                        />
+                      </button>
+                      {workspaceDropdownOpen && (
+                        <div className="welcome-panel__dropdown">
+                          {hasWorkspace && currentWorkspace && (
+                            <div className="welcome-panel__dropdown-current">
+                              <Check size={11} />
+                              <FolderOpen size={12} />
+                              <span className="welcome-panel__dropdown-name">{currentWorkspace.name}</span>
+                            </div>
+                          )}
+                          {otherWorkspaces.length > 0 && (
+                            <>
+                              {hasWorkspace && <div className="welcome-panel__dropdown-sep" />}
+                              {otherWorkspaces.map(ws => (
+                                <button
+                                  key={ws.id}
+                                  type="button"
+                                  className="welcome-panel__dropdown-item"
+                                  onClick={() => { void handleSwitchWorkspace(ws); }}
+                                  title={ws.rootPath}
+                                >
+                                  <FolderOpen size={12} />
+                                  <span className="welcome-panel__dropdown-name">{ws.name}</span>
+                                </button>
+                              ))}
+                            </>
+                          )}
+                        </div>
+                      )}
+                    </span>
+                    {!isCoworkSession && gitState && (
+                      <>
+                        <span className="welcome-panel__context-sep">/</span>
+                        <button type="button" className="welcome-panel__inline-btn" onClick={handleGitClick}>
+                          <GitBranch size={13} className="welcome-panel__inline-icon" />
+                          {gitState.currentBranch}
+                        </button>
+                      </>
                     )}
                   </span>
-                  {!isCoworkSession && gitState && (
-                    <>
-                      <span className="welcome-panel__context-sep">/</span>
-                      <button type="button" className="welcome-panel__inline-btn" onClick={handleGitClick}>
-                        <GitBranch size={13} className="welcome-panel__inline-icon" />
-                        {gitState.currentBranch}
-                      </button>
-                    </>
-                  )}
+                  <span className="welcome-panel__narrative-sentence__text">
+                    {!isCoworkSession && gitState ? t('welcome.project') : t('welcome.projectCowork')}
+                  </span>
                 </span>
                 {!isCoworkSession && gitState ? (
                   <>
-                    {t('welcome.project')}
                     <br />
                     {isGitClean
                       ? <span className="welcome-panel__narrative-clean">{t('welcome.gitClean')}</span>
                       : buildGitNarrative()
                     }
                   </>
-                ) : (
-                  <>{t('welcome.projectCowork')}</>
-                )}
+                ) : null}
               </>
             )}
           </p>

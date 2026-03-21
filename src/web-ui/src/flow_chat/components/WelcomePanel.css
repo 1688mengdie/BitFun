@@ -120,6 +120,19 @@
   color: var(--color-text-muted);
 }
 
+/* One flex row: lead text, workspace/branch controls, trail text share the same vertical center */
+.welcome-panel__narrative-sentence {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  column-gap: 0.35em;
+  row-gap: 0.2em;
+}
+
+.welcome-panel__narrative-sentence__text {
+  line-height: inherit;
+}
+
 .welcome-panel__inline-btn {
   display: inline-flex;
   align-items: center;
@@ -130,10 +143,13 @@
   border: none;
   border-radius: 5px;
   color: var(--color-text-primary);
-  font: inherit;
+  font-size: inherit;
+  font-family: inherit;
   font-weight: 600;
+  /* Do not inherit narrative line-height (1.8); it inflates the flex line box vs fixed-size SVGs */
+  line-height: 1.2;
   cursor: pointer;
-  vertical-align: -0.1em;
+  vertical-align: middle;
   transition: background 0.15s;
 }
 
@@ -152,12 +168,14 @@
 
 .welcome-panel__inline-icon {
   flex-shrink: 0;
+  display: block;
 }
 
 .welcome-panel__inline-chevron {
   opacity: 0.5;
   transition: transform 0.2s ease;
   flex-shrink: 0;
+  display: block;
 }
 
 .welcome-panel__inline-chevron--open {
@@ -174,7 +192,6 @@
   display: inline-flex;
   align-items: center;
   flex-wrap: nowrap;
-  vertical-align: -0.1em;
   margin: 0 1px;
 }
 

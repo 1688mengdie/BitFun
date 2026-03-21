@@ -19,6 +19,8 @@ import {
   Home,
   ArrowLeft,
   Loader2,
+  Upload,
+  Download,
 } from 'lucide-react';
 import './RemoteFileBrowser.scss';
 
@@ -39,6 +41,19 @@ interface ContextMenuState {
 interface DeleteConfirmState {
   show: boolean;
   entry: RemoteFileEntry | null;
+}
+
+function joinRemotePath(dir: string, fileName: string): string {
+  const name = fileName.replace(/^\/+/, '');
+  if (!dir || dir === '/') {
+    return `/${name}`;
+  }
+  const base = dir.endsWith('/') ? dir.slice(0, -1) : dir;
+  return `${base}/${name}`;
+}
+
+function isTauriDesktop(): boolean {
+  return typeof window !== 'undefined' && '__TAURI__' in window;
 }
 
 export const RemoteFileBrowser: React.FC<RemoteFileBrowserProps> = ({
@@ -68,6 +83,7 @@ export const RemoteFileBrowser: React.FC<RemoteFileBrowserProps> = ({
     show: false,
     entry: null,
   });
+  const [transferBusy, setTransferBusy] = useState(false);
   const contextMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -175,6 +191,10 @@ export const RemoteFileBrowser: React.FC<RemoteFileBrowserProps> = ({
           setRenameEntry(entry);
           setRenameValue(entry.name);
           break;
+        case 'download': {
+          void handleDownloadEntry(entry);
+          break;
+        }
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Operation failed');
@@ -222,12 +242,70 @@ export const RemoteFileBrowser: React.FC<RemoteFileBrowserProps> = ({
     return '/' + parts.join('/');
   };
 
+  const handleDownloadEntry = async (entry: RemoteFileEntry) => {
+    if (entry.isDir) return;
+    if (!isTauriDesktop()) {
+      setError(t('ssh.remote.transferNeedsDesktop'));
+      return;
+    }
+    const { save } = await import('@tauri-apps/plugin-dialog');
+    const localPath = await save({
+      title: t('ssh.remote.downloadDialogTitle'),
+      defaultPath: entry.name,
+    });
+    if (localPath === null) return;
+
+    setTransferBusy(true);
+    setError(null);
+    try {
+      await sshApi.downloadToLocalPath(connectionId, entry.path, localPath);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : t('ssh.remote.transferFailed'));
+    } finally {
+      setTransferBusy(false);
+    }
+  };
+
+  const handleUploadToCurrentDir = async () => {
+    if (!isTauriDesktop()) {
+      setError(t('ssh.remote.transferNeedsDesktop'));
+      return;
+    }
+    const { open } = await import('@tauri-apps/plugin-dialog');
+    const selected = await open({
+      title: t('ssh.remote.uploadDialogTitle'),
+      multiple: true,
+      directory: false,
+    });
+    if (selected === null) return;
+    const paths = Array.isArray(selected) ? selected : [selected];
+    if (paths.length === 0) return;
+
+    setTransferBusy(true);
+    setError(null);
+    try {
+      for (const localPath of paths) {
+        const segments = localPath.split(/[/\\]/);
+        const base = segments.pop();
+        if (!base) continue;
+        const remotePath = joinRemotePath(currentPath, base);
+        await sshApi.uploadFromLocalPath(connectionId, localPath, remotePath);
+      }
+      await loadDirectory(currentPath);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : t('ssh.remote.transferFailed'));
+    } finally {
+      setTransferBusy(false);
+    }
+  };
+
   const openSelectedWorkspace = () => {
     onSelect(selectedPath || currentPath);
   };
 
   const formatFileSize = (bytes?: number): string => {
-    if (!bytes) return '-';
+    if (bytes === undefined || bytes === null) return '-';
+    if (bytes === 0) return '0 B';
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
     if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
@@ -236,7 +314,11 @@ export const RemoteFileBrowser: React.FC<RemoteFileBrowserProps> = ({
 
   const formatDate = (timestamp?: number): string => {
     if (!timestamp) return '-';
-    return new Date(timestamp).toLocaleDateString();
+    const d = new Date(timestamp);
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}/${m}/${day}`;
   };
 
   const getEntryIcon = (entry: RemoteFileEntry) => {
@@ -319,6 +401,7 @@ export const RemoteFileBrowser: React.FC<RemoteFileBrowserProps> = ({
             className="remote-file-browser__toolbar-btn"
             onClick={() => loadDirectory(currentPath)}
             title={t('actions.refresh')}
+            disabled={transferBusy}
           >
             <RefreshCw size={16} />
           </button>
@@ -326,11 +409,27 @@ export const RemoteFileBrowser: React.FC<RemoteFileBrowserProps> = ({
             className="remote-file-browser__toolbar-btn"
             onClick={() => navigateTo(getParentPath(currentPath) || '/')}
             title="Go up"
-            disabled={currentPath === '/'}
+            disabled={currentPath === '/' || transferBusy}
           >
             <ArrowLeft size={16} />
           </button>
+          <button
+            type="button"
+            className="remote-file-browser__toolbar-btn"
+            onClick={() => void handleUploadToCurrentDir()}
+            title={t('ssh.remote.upload')}
+            disabled={transferBusy}
+          >
+            <Upload size={16} />
+          </button>
         </div>
+
+        {transferBusy && (
+          <div className="remote-file-browser__transfer-status">
+            <Loader2 size={16} className="remote-file-browser__spinner-inline" />
+            <span>{t('ssh.remote.transferring')}</span>
+          </div>
+        )}
 
         {/* File List */}
         <div className="remote-file-browser__content">
@@ -386,8 +485,10 @@ export const RemoteFileBrowser: React.FC<RemoteFileBrowserProps> = ({
                     className={`remote-file-browser__row ${selectedPath === entry.path ? 'remote-file-browser__row--selected' : ''}`}
                   >
                     <td className="remote-file-browser__td remote-file-browser__td--name">
-                      {getEntryIcon(entry)}
-                      <span className="remote-file-browser__name">{entry.name}</span>
+                      <div className="remote-file-browser__name-cell">
+                        {getEntryIcon(entry)}
+                        <span className="remote-file-browser__name">{entry.name}</span>
+                      </div>
                     </td>
                     <td className="remote-file-browser__td remote-file-browser__td--size">
                       {entry.isDir ? '-' : formatFileSize(entry.size)}
@@ -423,6 +524,16 @@ export const RemoteFileBrowser: React.FC<RemoteFileBrowserProps> = ({
               <Folder size={14} />
               <span>{t('actions.open') || 'Open'}</span>
             </button>
+            {!contextMenu.entry.isDir && (
+              <button
+                type="button"
+                className="remote-file-browser__context-menu-item"
+                onClick={() => handleContextMenuAction('download')}
+              >
+                <Download size={14} />
+                <span>{t('ssh.remote.download')}</span>
+              </button>
+            )}
             <button
               className="remote-file-browser__context-menu-item"
               onClick={() => handleContextMenuAction('rename')}

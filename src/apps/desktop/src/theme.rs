@@ -242,8 +242,7 @@ pub fn create_main_window(app_handle: &tauri::AppHandle) {
         .visible(false)
         .background_color(bg_color)
         .accept_first_mouse(true)
-        .initialization_script(&init_script)
-        .disable_drag_drop_handler();
+        .initialization_script(&init_script);
 
     #[cfg(target_os = "macos")]
     {

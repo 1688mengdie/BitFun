@@ -40,6 +40,13 @@
   "validation": {
     "invalidFilename": "File name contains invalid characters"
   },
+  "transfer": {
+    "downloading": "Downloading",
+    "uploading": "Uploading",
+    "missingConnection": "Remote workspace has no SSH connection id.",
+    "failed": "File transfer failed: {{error}}",
+    "dropHint": "Drop files here to upload"
+  },
   "notifications": {
     "createFileSuccess": "File created successfully",
     "createFileFailed": "Failed to create file: {{error}}",
