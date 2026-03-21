@@ -28,6 +28,11 @@ type TiptapMarkdownOptions = {
   preserveTrailingNewline?: boolean;
 };
 
+export interface TiptapTopLevelMarkdownBlock {
+  blockId?: string;
+  markdown: string;
+}
+
 type AlignmentStackEntry = {
   align: string | null;
   groupId: number | null;
@@ -679,4 +684,13 @@ export function tiptapDocToMarkdown(
   }
 
   return options.preserveTrailingNewline ? `${markdown}\n` : markdown;
+}
+
+export function tiptapDocToTopLevelMarkdownBlocks(
+  doc: JSONContent | null | undefined,
+): TiptapTopLevelMarkdownBlock[] {
+  return (doc?.content ?? []).map((node: JSONContent) => ({
+    blockId: typeof node.attrs?.blockId === 'string' ? node.attrs.blockId : undefined,
+    markdown: renderBlock(node).trim(),
+  }));
 }
