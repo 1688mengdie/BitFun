@@ -1,9 +1,14 @@
+import type { TiptapTopLevelMarkdownBlock } from './tiptapMarkdown';
+
 type InlineAiPromptParams = {
   userInput: string;
   markdown: string;
   blockIndex: number;
   filePath?: string;
+  topLevelBlocks?: TiptapTopLevelMarkdownBlock[];
 };
+
+type InlineAiPromptKind = 'continue' | 'summary' | 'todo';
 
 const MAX_CONTEXT_CHARS = 12000;
 const SURROUNDING_BLOCK_WINDOW = 2;
@@ -12,8 +17,17 @@ const MAX_BLOCK_SNIPPET_CHARS = 1600;
 const MAX_STRUCTURE_SUMMARY_CHARS = 2400;
 const MAX_RANGE_SUMMARY_ENTRIES = 6;
 
-function formatDocumentContext(markdown: string, blockIndex: number): string {
-  const content = buildPromptDocumentContext(markdown, blockIndex).trim();
+function formatDocumentContext(markdown: string, blocks: string[], blockIndex: number): string {
+  const normalized = markdown.trim();
+  if (!normalized) {
+    return '(Document is currently empty)';
+  }
+
+  if (normalized.length <= MAX_CONTEXT_CHARS) {
+    return '(Omitted because the full document is short and already shown below.)';
+  }
+
+  const content = buildPromptDocumentContext(markdown, blocks, blockIndex).trim();
   if (!content) {
     return '(Document is currently empty)';
   }
@@ -21,13 +35,21 @@ function formatDocumentContext(markdown: string, blockIndex: number): string {
   return content;
 }
 
-function parseTopLevelBlocks(markdown: string): string[] {
-  const normalized = markdown.replace(/\r\n/g, '\n').trim();
-  if (!normalized) {
+function getPromptBlocks(markdown: string, topLevelBlocks?: TiptapTopLevelMarkdownBlock[]): string[] {
+  const normalizedMarkdown = markdown.replace(/\r\n/g, '\n').trim();
+  const normalizedTopLevelBlocks = (topLevelBlocks ?? [])
+    .map(block => block.markdown.replace(/\r\n/g, '\n').trim())
+    .filter(Boolean);
+
+  if (normalizedTopLevelBlocks.length > 0) {
+    return normalizedTopLevelBlocks;
+  }
+
+  if (!normalizedMarkdown) {
     return [];
   }
 
-  return normalized
+  return normalizedMarkdown
     .split(/\n{2,}/)
     .map(block => block.trim())
     .filter(Boolean);
@@ -121,7 +143,7 @@ function buildOmittedRangeSummary(
   ].join('\n');
 }
 
-function buildPromptDocumentContext(markdown: string, blockIndex: number): string {
+function buildPromptDocumentContext(markdown: string, blocks: string[], blockIndex: number): string {
   const normalized = markdown.trim();
   if (!normalized) {
     return '';
@@ -131,7 +153,6 @@ function buildPromptDocumentContext(markdown: string, blockIndex: number): strin
     return normalized;
   }
 
-  const blocks = parseTopLevelBlocks(markdown);
   if (blocks.length === 0) {
     return normalized.slice(0, MAX_CONTEXT_CHARS);
   }
@@ -214,8 +235,7 @@ function buildPromptDocumentContext(markdown: string, blockIndex: number): strin
   ].join('\n');
 }
 
-function formatInsertionContext(markdown: string, blockIndex: number): string {
-  const blocks = parseTopLevelBlocks(markdown);
+function formatInsertionContext(blocks: string[], blockIndex: number): string {
   if (blocks.length === 0) {
     return '(No surrounding blocks yet)';
   }
@@ -228,74 +248,132 @@ function formatInsertionContext(markdown: string, blockIndex: number): string {
   const nextBlocks = blocks.slice(anchorIndex, anchorIndex + SURROUNDING_BLOCK_WINDOW);
 
   return [
+    `Insertion anchor: after top-level block #${blockIndex} and before top-level block #${blockIndex + 1}.`,
+    `Resolved anchor index in current prompt blocks: ${anchorIndex}.`,
+    '',
     'Blocks immediately before the insertion point:',
     previousBlocks.length > 0
-      ? previousBlocks.map((block, index) => `[[before_${index + 1}]]\n${block}`).join('\n\n')
+      ? previousBlocks.map((block, index) => {
+          const actualIndex = anchorIndex - previousBlocks.length + index;
+          return `[[before_block_${actualIndex + 1}]]\n${block}`;
+        }).join('\n\n')
       : '(No previous blocks)',
     '',
     'Blocks immediately after the insertion point:',
     nextBlocks.length > 0
-      ? nextBlocks.map((block, index) => `[[after_${index + 1}]]\n${block}`).join('\n\n')
+      ? nextBlocks.map((block, index) => `[[after_block_${anchorIndex + index + 1}]]\n${block}`).join('\n\n')
       : '(Insertion point is at the end of the document)',
   ].join('\n');
 }
 
-export function buildInlineAskAiPrompt(params: InlineAiPromptParams): string {
-  const { userInput, markdown, blockIndex, filePath } = params;
+function formatFullDocument(markdown: string): string {
+  const normalized = markdown.trim();
+  return normalized || '(Document is currently empty)';
+}
+
+function buildPromptDocumentSection(markdown: string, blocks: string[], blockIndex: number): string[] {
+  const normalizedMarkdown = markdown.trim();
+  const shouldIncludeFullDocument = normalizedMarkdown.length > 0 && normalizedMarkdown.length <= MAX_CONTEXT_CHARS;
+
+  return [
+    shouldIncludeFullDocument ? 'Current markdown document:' : 'Focused document context beyond the immediate neighbors:',
+    '```md',
+    shouldIncludeFullDocument ? formatFullDocument(markdown) : formatDocumentContext(markdown, blocks, blockIndex),
+    '```',
+  ];
+}
+
+function buildInlineInsertPrompt(
+  params: InlineAiPromptParams,
+  kind: InlineAiPromptKind,
+): string {
+  const { userInput, markdown, blockIndex, filePath, topLevelBlocks } = params;
+  const blocks = getPromptBlocks(markdown, topLevelBlocks);
   const locationLine = filePath
     ? `Current file path: ${filePath}`
     : 'Current file path: (not available)';
+  const trimmedUserInput = userInput.trim();
+
+  const promptByKind: Record<InlineAiPromptKind, string[]> = {
+    continue: [
+      'You are continuing an in-editor Markdown document at one exact insertion point.',
+      'This is continuation only, not rewriting.',
+      'Return only the new Markdown content that should be inserted at that location.',
+      'Do not add explanations, analysis, XML tags, or wrapper text.',
+      'Do not rewrite, summarize, paraphrase, or restate any existing block in the document.',
+      'Do not copy sentences, headings, list items, or bullet points from the surrounding blocks.',
+      'Keep the writing consistent with the existing language, tone, structure, heading depth, and list style.',
+      'The user is actively editing at the insertion anchor described below, so generate content for that exact location only.',
+      'If there are later blocks after the insertion point, make the continuation lead into them naturally without reusing their text.',
+      'If no new content is needed, return an empty string.',
+      'Prefer a concise continuation unless the user explicitly asks for something longer.',
+      '',
+      locationLine,
+      `Insertion point: the empty paragraph after top-level block #${blockIndex}.`,
+      'The generated content will replace that empty paragraph only.',
+      'Do not modify or regenerate the blocks before or after the insertion point.',
+      trimmedUserInput
+        ? `User direction for the continuation: ${trimmedUserInput}`
+        : 'User direction for the continuation: continue naturally from the current context.',
+    ],
+    summary: [
+      'You are inserting a short summary into an in-editor Markdown document at one exact insertion point.',
+      'Return only the new Markdown content that should be inserted at that location.',
+      'Do not add explanations, analysis, XML tags, or wrapper text.',
+      'Summarize the key points from the content before the insertion point in a compact way.',
+      'Do not copy sentences or headings verbatim unless a short phrase is necessary.',
+      'Do not modify or regenerate the surrounding blocks.',
+      'If there are later blocks after the insertion point, make sure the summary does not conflict with them.',
+      'Keep the writing consistent with the existing language, tone, structure, heading depth, and list style.',
+      'Prefer a single short paragraph or a very short bullet list unless the user asks for a different shape.',
+      '',
+      locationLine,
+      `Insertion point: the empty paragraph after top-level block #${blockIndex}.`,
+      'The generated content will replace that empty paragraph only.',
+      trimmedUserInput
+        ? `User direction for the summary: ${trimmedUserInput}`
+        : 'User direction for the summary: insert a short summary at the current position.',
+    ],
+    todo: [
+      'You are inserting a concise Markdown todo list into an in-editor Markdown document at one exact insertion point.',
+      'Return only the new Markdown content that should be inserted at that location.',
+      'Do not add explanations, analysis, XML tags, or wrapper text.',
+      'Extract the next concrete action items implied by the content before the insertion point.',
+      'Prefer Markdown task list items (`- [ ]`) unless the user explicitly asks for another format.',
+      'Do not copy sentences or bullet points verbatim from the surrounding blocks.',
+      'Do not modify or regenerate the surrounding blocks.',
+      'If there are later blocks after the insertion point, make sure the todo list does not conflict with them.',
+      'Keep the writing consistent with the existing language and style.',
+      'Prefer a short list focused on the most actionable next steps.',
+      '',
+      locationLine,
+      `Insertion point: the empty paragraph after top-level block #${blockIndex}.`,
+      'The generated content will replace that empty paragraph only.',
+      trimmedUserInput
+        ? `User direction for the todo list: ${trimmedUserInput}`
+        : 'User direction for the todo list: insert a concise Markdown todo list at the current position.',
+    ],
+  };
 
   return [
-    'You are helping with an in-editor Markdown document.',
-    'The document may contain unsaved local edits, so treat the content below as the source of truth.',
-    'You may answer the user, suggest edits, or decide which workspace actions to take.',
-    'If you reference edits to the current document, remember that the unsaved buffer may differ from the file on disk.',
+    ...promptByKind[kind],
     '',
-    locationLine,
-    `Cursor is on an empty paragraph after top-level block #${blockIndex + 1}.`,
+    formatInsertionContext(blocks, blockIndex),
     '',
-    formatInsertionContext(markdown, blockIndex),
-    '',
-    'Current markdown document or focused document context:',
-    '```md',
-    formatDocumentContext(markdown, blockIndex),
-    '```',
-    '',
-    'User request:',
-    userInput.trim(),
+    ...buildPromptDocumentSection(markdown, blocks, blockIndex),
   ].join('\n');
 }
 
 export function buildInlineContinuePrompt(params: InlineAiPromptParams): string {
-  const { userInput, markdown, blockIndex, filePath } = params;
-  const instruction = userInput.trim()
-    ? `User direction for the continuation: ${userInput.trim()}`
-    : 'User direction for the continuation: continue naturally from the current context.';
-  const locationLine = filePath
-    ? `Current file path: ${filePath}`
-    : 'Current file path: (not available)';
+  return buildInlineInsertPrompt(params, 'continue');
+}
 
-  return [
-    'You are completing an in-editor Markdown document at a specific insertion point.',
-    'Return only the Markdown content that should be inserted there.',
-    'Do not add explanations, analysis, XML tags, or wrapper text.',
-    'Keep the writing consistent with the existing language, tone, structure, heading depth, and list style.',
-    'Do not repeat surrounding content that is already in the document.',
-    'If there are later blocks after the insertion point, make the continuation flow into them naturally.',
-    'Prefer a concise continuation unless the user explicitly asks for something longer.',
-    '',
-    locationLine,
-    `Insertion point: empty paragraph after top-level block #${blockIndex + 1}.`,
-    instruction,
-    '',
-    formatInsertionContext(markdown, blockIndex),
-    '',
-    'Current markdown document or focused document context:',
-    '```md',
-    formatDocumentContext(markdown, blockIndex),
-    '```',
-  ].join('\n');
+export function buildInlineSummaryPrompt(params: InlineAiPromptParams): string {
+  return buildInlineInsertPrompt(params, 'summary');
+}
+
+export function buildInlineTodoPrompt(params: InlineAiPromptParams): string {
+  return buildInlineInsertPrompt(params, 'todo');
 }
 
 export function sanitizeInlineAiMarkdownResponse(value: string): string {

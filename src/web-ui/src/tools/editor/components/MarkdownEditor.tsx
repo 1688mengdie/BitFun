@@ -62,7 +62,10 @@ const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
   const lastModifiedTimeRef = useRef<number>(0);
   const lastJumpPositionRef = useRef<{ filePath: string; line: number } | null>(null);
   const onContentChangeRef = useRef(onContentChange);
+  const contentRef = useRef(content);
+  const lastReportedDirtyRef = useRef<boolean | null>(null);
   onContentChangeRef.current = onContentChange;
+  contentRef.current = content;
 
   const basePath = React.useMemo(() => {
     if (!filePath) return undefined;
@@ -106,6 +109,7 @@ const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
       if (!isUnmountedRef.current) {
         setContent(fileContent);
         setHasChanges(false);
+        lastReportedDirtyRef.current = false;
         setTimeout(() => {
           editorRef.current?.setInitialContent?.(fileContent);
         }, 0);
@@ -148,6 +152,7 @@ const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
     } else if (initialContent !== undefined) {
       setContent(initialContent);
       setHasChanges(false);
+      lastReportedDirtyRef.current = false;
       setTimeout(() => {
         editorRef.current?.setInitialContent?.(initialContent);
       }, 0);
@@ -181,6 +186,7 @@ const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
         if (!isUnmountedRef.current) {
           editorRef.current?.markSaved?.();
           setHasChanges(false);
+          lastReportedDirtyRef.current = false;
           if (onContentChangeRef.current) {
             onContentChangeRef.current(content, false);
           }
@@ -200,11 +206,18 @@ const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
   }, [content, filePath, workspacePath, hasChanges, onSave, t]);
 
   const handleContentChange = useCallback((newContent: string) => {
+    contentRef.current = newContent;
     setContent(newContent);
   }, []);
 
   const handleDirtyChange = useCallback((isDirty: boolean) => {
     setHasChanges(isDirty);
+    if (lastReportedDirtyRef.current === isDirty) {
+      return;
+    }
+
+    lastReportedDirtyRef.current = isDirty;
+    onContentChangeRef.current?.(contentRef.current, isDirty);
   }, []);
 
   const handleSave = useCallback((_value: string) => {

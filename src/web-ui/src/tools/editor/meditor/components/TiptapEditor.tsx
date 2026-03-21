@@ -36,11 +36,13 @@ import {
 import { getBlockIndexForLine } from '../utils/markdownBlocks';
 import {
   buildInlineContinuePrompt,
+  buildInlineSummaryPrompt,
+  buildInlineTodoPrompt,
   sanitizeInlineAiMarkdownResponse,
 } from '../utils/inlineAi';
 import { getCachedLocalImageDataUrl, loadLocalImages } from '../utils/loadLocalImages';
 import { isLocalPath, resolveImagePath } from '../utils/rehype-local-images';
-import { markdownToTiptapDoc, tiptapDocToMarkdown } from '../utils/tiptapMarkdown';
+import { markdownToTiptapDoc, tiptapDocToMarkdown, tiptapDocToTopLevelMarkdownBlocks } from '../utils/tiptapMarkdown';
 import './TiptapEditor.scss';
 
 const log = createLogger('TiptapEditor');
@@ -195,12 +197,12 @@ async function resolveEditorLocalImages(
   await loadLocalImages(container);
 }
 
-type InlineAiMode = 'ask' | 'continue';
 type InlineAiStatus = 'idle' | 'submitting' | 'streaming' | 'ready' | 'error';
+type InlineAiPromptKind = 'continue' | 'summary' | 'todo';
 
 type InlineAiState = {
   isOpen: boolean;
-  mode: InlineAiMode;
+  promptKind: InlineAiPromptKind;
   query: string;
   status: InlineAiStatus;
   response: string;
@@ -262,7 +264,7 @@ function getTopLevelBlockPositionById(
 function getCurrentEmptyParagraphContext(
   instance: TiptapEditorInstance,
   root: HTMLDivElement | null
-): Omit<InlineAiState, 'isOpen' | 'mode' | 'query' | 'status' | 'response' | 'error'> | null {
+): Omit<InlineAiState, 'isOpen' | 'promptKind' | 'query' | 'status' | 'response' | 'error'> | null {
   const { selection } = instance.state;
   if (!selection.empty || selection.$from.depth !== 1) {
     return null;
@@ -392,7 +394,7 @@ export const TiptapEditor = React.forwardRef<TiptapEditorHandle, TiptapEditorPro
     setInlineAiState({
       ...nextState,
       isOpen: true,
-      mode: 'continue',
+      promptKind: 'continue',
       query: '',
       status: 'idle',
       response: '',
@@ -745,7 +747,9 @@ export const TiptapEditor = React.forwardRef<TiptapEditorHandle, TiptapEditorPro
     instance.commands.focus();
   }, []);
 
-  const handleContinueWriting = useCallback(async (userInputOverride?: string) => {
+  const handleContinueWriting = useCallback(async (
+    options?: { userInputOverride?: string; promptKindOverride?: InlineAiPromptKind }
+  ) => {
     if (!inlineAiState || inlineAiState.status === 'submitting' || inlineAiState.status === 'streaming') {
       return;
     }
@@ -856,18 +860,27 @@ export const TiptapEditor = React.forwardRef<TiptapEditorHandle, TiptapEditorPro
       cleanup,
     };
 
-    const resolvedUserInput = userInputOverride ?? inlineAiState.query;
+    const resolvedUserInput = options?.userInputOverride ?? inlineAiState.query;
+    const promptKind = options?.promptKindOverride ?? inlineAiState.promptKind;
+    const instance = editorRef.current;
+    const promptParams = {
+      userInput: resolvedUserInput,
+      markdown: currentMarkdownRef.current,
+      blockIndex: inlineAiState.blockIndex,
+      filePath,
+      topLevelBlocks: instance ? tiptapDocToTopLevelMarkdownBlocks(instance.getJSON()) : undefined,
+    };
+    const prompt = promptKind === 'summary'
+      ? buildInlineSummaryPrompt(promptParams)
+      : promptKind === 'todo'
+        ? buildInlineTodoPrompt(promptParams)
+        : buildInlineContinuePrompt(promptParams);
 
     try {
       await editorAiAPI.stream({
         requestId,
         modelId: 'primary',
-        prompt: buildInlineContinuePrompt({
-          userInput: resolvedUserInput,
-          markdown: currentMarkdownRef.current,
-          blockIndex: inlineAiState.blockIndex,
-          filePath,
-        }),
+        prompt,
       });
     } catch (error) {
       cleanup();
@@ -913,12 +926,16 @@ export const TiptapEditor = React.forwardRef<TiptapEditorHandle, TiptapEditorPro
     void handleContinueWriting();
   }, [handleContinueWriting]);
 
-  const handleInlineAiQuickAction = useCallback((query: string) => {
+  const handleInlineAiQuickAction = useCallback((promptKind: InlineAiPromptKind, query: string) => {
     setInlineAiState(current => current ? {
       ...current,
+      promptKind,
       query,
     } : current);
-    void handleContinueWriting(query);
+    void handleContinueWriting({
+      userInputOverride: query,
+      promptKindOverride: promptKind,
+    });
   }, [handleContinueWriting]);
 
   useEffect(() => {
@@ -927,7 +944,6 @@ export const TiptapEditor = React.forwardRef<TiptapEditorHandle, TiptapEditorPro
     }
 
     const previewState = inlineAiState &&
-      inlineAiState.mode === 'continue' &&
       inlineAiState.status !== 'idle'
       ? {
           blockId: inlineAiState.blockId,
@@ -936,7 +952,6 @@ export const TiptapEditor = React.forwardRef<TiptapEditorHandle, TiptapEditorPro
           error: inlineAiState.error,
           basePath,
           canAccept: (
-            inlineAiState.mode === 'continue' &&
             inlineAiState.status === 'ready' &&
             !!inlineAiState.response.trim()
           ),
@@ -1115,7 +1130,7 @@ export const TiptapEditor = React.forwardRef<TiptapEditorHandle, TiptapEditorPro
                   type="button"
                   className="m-editor-inline-ai__quick-action m-editor-inline-ai__quick-action--primary"
                   onClick={() => {
-                    handleInlineAiQuickAction('');
+                    handleInlineAiQuickAction('continue', '');
                   }}
                 >
                   <span className="m-editor-inline-ai__quick-action-icon">
@@ -1127,7 +1142,7 @@ export const TiptapEditor = React.forwardRef<TiptapEditorHandle, TiptapEditorPro
                   type="button"
                   className="m-editor-inline-ai__quick-action"
                   onClick={() => {
-                    handleInlineAiQuickAction(t('editor.meditor.inlineAi.summaryDirection'));
+                    handleInlineAiQuickAction('summary', t('editor.meditor.inlineAi.summaryDirection'));
                   }}
                 >
                   <span className="m-editor-inline-ai__quick-action-icon">
@@ -1139,7 +1154,7 @@ export const TiptapEditor = React.forwardRef<TiptapEditorHandle, TiptapEditorPro
                   type="button"
                   className="m-editor-inline-ai__quick-action"
                   onClick={() => {
-                    handleInlineAiQuickAction(t('editor.meditor.inlineAi.todoDirection'));
+                    handleInlineAiQuickAction('todo', t('editor.meditor.inlineAi.todoDirection'));
                   }}
                 >
                   <span className="m-editor-inline-ai__quick-action-icon">
