@@ -5,6 +5,8 @@ import { CSSProperties, ReactNode } from 'react'
  */
 export type EditorMode = 'ir' | 'split' | 'edit' | 'preview'
 
+export type EditorEngine = 'tiptap' | 'legacy'
+
 /**
  * Editor theme
  */
@@ -58,6 +60,7 @@ export interface EditorOptions {
   height?: string | number
   width?: string | number
   mode?: EditorMode
+  engine?: EditorEngine
   theme?: EditorTheme
   toolbar?: boolean | ToolbarConfig
   outline?: boolean
@@ -79,6 +82,11 @@ export interface EditorOptions {
   onDirtyChange?: (isDirty: boolean) => void
   className?: string
   style?: CSSProperties
+  /**
+   * Absolute path of the Markdown document.
+   * Used by AI prompt builders and path-aware features.
+   */
+  filePath?: string
   /**
    * Directory path of the Markdown file.
    * Used to resolve relative image paths.
@@ -133,4 +141,3 @@ export interface RenderOptions {
    */
   basePath?: string
 }
-

@@ -4,6 +4,7 @@ import { activeEditTargetService } from '@/tools/editor/services/ActiveEditTarge
 import { useEditor } from '../hooks/useEditor'
 import { EditArea } from './EditArea'
 import { IREditor, IREditorHandle } from './IREditor'
+import { TiptapEditor, TiptapEditorHandle } from './TiptapEditor'
 import { Preview } from './Preview'
 import type { EditorOptions, EditorInstance } from '../types'
 import { useI18n } from '@/infrastructure/i18n'
@@ -43,6 +44,7 @@ export const MEditor = forwardRef<EditorInstance, MEditorProps>((props, ref) => 
     height = '500px',
     width = '100%',
     mode: initialMode = 'ir',
+    engine = 'tiptap',
     theme: initialTheme = 'dark',
     toolbar = false,
     placeholder: placeholderProp,
@@ -55,6 +57,7 @@ export const MEditor = forwardRef<EditorInstance, MEditorProps>((props, ref) => 
     onDirtyChange,
     className = '',
     style = {},
+    filePath,
     basePath
   } = props
 
@@ -75,6 +78,8 @@ export const MEditor = forwardRef<EditorInstance, MEditorProps>((props, ref) => 
   } = useEditor(controlledValue ?? defaultValue, onChange)
   
   const irEditorRef = useRef<IREditorHandle>(null)
+  const tiptapEditorRef = useRef<TiptapEditorHandle>(null)
+  const activeIrEditorRef = engine === 'legacy' ? irEditorRef : tiptapEditorRef
 
   useEffect(() => {
     if (mode === 'ir' || mode === 'preview') {
@@ -128,13 +133,13 @@ export const MEditor = forwardRef<EditorInstance, MEditorProps>((props, ref) => 
   useImperativeHandle(ref, () => ({
     ...editorInstance,
     scrollToLine: (line: number, highlight?: boolean) => {
-      if (mode === 'ir' && irEditorRef.current) {
-        irEditorRef.current.scrollToLine(line, highlight)
+      if (mode === 'ir' && activeIrEditorRef.current) {
+        activeIrEditorRef.current.scrollToLine(line, highlight)
       }
     },
     undo: () => {
-      if (mode === 'ir' && irEditorRef.current) {
-        return irEditorRef.current.undo()
+      if (mode === 'ir' && activeIrEditorRef.current) {
+        return activeIrEditorRef.current.undo()
       }
       if (mode === 'edit' || mode === 'split') {
         return executeTextareaAction(textareaRef.current, 'undo')
@@ -142,8 +147,8 @@ export const MEditor = forwardRef<EditorInstance, MEditorProps>((props, ref) => 
       return false
     },
     redo: () => {
-      if (mode === 'ir' && irEditorRef.current) {
-        return irEditorRef.current.redo()
+      if (mode === 'ir' && activeIrEditorRef.current) {
+        return activeIrEditorRef.current.redo()
       }
       if (mode === 'edit' || mode === 'split') {
         return executeTextareaAction(textareaRef.current, 'redo')
@@ -151,34 +156,34 @@ export const MEditor = forwardRef<EditorInstance, MEditorProps>((props, ref) => 
       return false
     },
     get canUndo() {
-      if (mode === 'ir' && irEditorRef.current) {
-        return irEditorRef.current.canUndo
+      if (mode === 'ir' && activeIrEditorRef.current) {
+        return activeIrEditorRef.current.canUndo
       }
       return false
     },
     get canRedo() {
-      if (mode === 'ir' && irEditorRef.current) {
-        return irEditorRef.current.canRedo
+      if (mode === 'ir' && activeIrEditorRef.current) {
+        return activeIrEditorRef.current.canRedo
       }
       return false
     },
     markSaved: () => {
-      if (mode === 'ir' && irEditorRef.current) {
-        irEditorRef.current.markSaved()
+      if (mode === 'ir' && activeIrEditorRef.current) {
+        activeIrEditorRef.current.markSaved()
       }
     },
     setInitialContent: (content: string) => {
-      if (mode === 'ir' && irEditorRef.current) {
-        irEditorRef.current.setInitialContent(content)
+      if (mode === 'ir' && activeIrEditorRef.current) {
+        activeIrEditorRef.current.setInitialContent(content)
       }
     },
     get isDirty() {
-      if (mode === 'ir' && irEditorRef.current) {
-        return irEditorRef.current.isDirty
+      if (mode === 'ir' && activeIrEditorRef.current) {
+        return activeIrEditorRef.current.isDirty
       }
       return false
     }
-  }), [editorInstance, mode])
+  }), [activeIrEditorRef, editorInstance, mode, textareaRef])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
     if ((e.ctrlKey || e.metaKey) && e.key === 's') {
@@ -275,18 +280,34 @@ export const MEditor = forwardRef<EditorInstance, MEditorProps>((props, ref) => 
 
         {mode === 'ir' && (
           <div className="m-editor-ir-panel">
-            <IREditor
-              ref={irEditorRef}
-              value={value}
-              onChange={setValue}
-              onFocus={onFocus}
-              onBlur={onBlur}
-              onDirtyChange={onDirtyChange}
-              placeholder={placeholder}
-              readonly={readonly}
-              autofocus={autofocus}
-              basePath={basePath}
-            />
+            {engine === 'legacy' ? (
+              <IREditor
+                ref={irEditorRef}
+                value={value}
+                onChange={setValue}
+                onFocus={onFocus}
+                onBlur={onBlur}
+                onDirtyChange={onDirtyChange}
+                placeholder={placeholder}
+                readonly={readonly}
+                autofocus={autofocus}
+                basePath={basePath}
+              />
+            ) : (
+              <TiptapEditor
+                ref={tiptapEditorRef}
+                value={value}
+                onChange={setValue}
+                onFocus={onFocus}
+                onBlur={onBlur}
+                onDirtyChange={onDirtyChange}
+                placeholder={placeholder}
+                readonly={readonly}
+                autofocus={autofocus}
+                filePath={filePath}
+                basePath={basePath}
+              />
+            )}
           </div>
         )}
       </div>
