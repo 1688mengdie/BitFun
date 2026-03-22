@@ -30,7 +30,9 @@ async function main() {
   // Tauri CLI reads CI and rejects numeric "1" (common in CI providers).
   process.env.CI = 'true';
 
-  const r = spawnSync('pnpm', ['exec', 'tauri', 'build', ...forward], {
+  const tauriConfig = join(desktopDir, 'tauri.conf.json');
+  const tauriBin = join(ROOT, 'node_modules', '.bin', 'tauri');
+  const r = spawnSync(tauriBin, ['build', '--config', tauriConfig, ...forward], {
     cwd: desktopDir,
     env: process.env,
     stdio: 'inherit',

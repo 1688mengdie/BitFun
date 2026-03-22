@@ -108,6 +108,29 @@ function runCommand(command, cwd = ROOT_DIR) {
 }
 
 /**
+ * Spawn a command with explicit args array (no shell interpolation, safe for paths with spaces)
+ */
+function spawnCommand(cmd, args, cwd = ROOT_DIR) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(cmd, args, {
+      cwd,
+      stdio: 'inherit',
+      shell: true,
+    });
+
+    child.on('close', (code) => {
+      if (code === 0) {
+        resolve();
+      } else {
+        reject(new Error(`Command failed with code ${code}`));
+      }
+    });
+
+    child.on('error', reject);
+  });
+}
+
+/**
  * Main entry
  */
 async function main() {
@@ -191,7 +214,10 @@ async function main() {
           process.exit(1);
         }
       }
-      await runCommand('pnpm exec tauri dev', path.join(ROOT_DIR, 'src/apps/desktop'));
+      const desktopDir = path.join(ROOT_DIR, 'src/apps/desktop');
+      const tauriConfig = path.join(desktopDir, 'tauri.conf.json');
+      const tauriBin = path.join(ROOT_DIR, 'node_modules', '.bin', 'tauri');
+      await spawnCommand(tauriBin, ['dev', '--config', tauriConfig], desktopDir);
     } else {
       await runCommand('pnpm exec vite', path.join(ROOT_DIR, 'src/web-ui'));
     }
