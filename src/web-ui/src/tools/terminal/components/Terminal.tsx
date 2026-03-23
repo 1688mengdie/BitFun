@@ -17,6 +17,17 @@ import './Terminal.scss';
 
 const log = createLogger('Terminal');
 
+type TerminalCoreWithMeasurement = XTerm & {
+  _core?: {
+    _charSizeService?: {
+      measure?: () => void;
+    };
+    _renderService?: {
+      handleDevicePixelRatioChange?: () => void;
+    };
+  };
+};
+
 /**
  * Clear xterm texture atlas when supported.
  * Used to force redraws and avoid WebGL cache artifacts.
@@ -29,6 +40,12 @@ function clearTextureAtlas(terminal: XTerm): void {
   } catch {
     // Ignore if unsupported.
   }
+}
+
+function remeasureTerminal(terminal: XTerm): void {
+  const rawTerminal = terminal as TerminalCoreWithMeasurement;
+  rawTerminal._core?._charSizeService?.measure?.();
+  rawTerminal._core?._renderService?.handleDevicePixelRatioChange?.();
 }
 
 /**
@@ -460,6 +477,31 @@ const Terminal = forwardRef<TerminalRef, TerminalProps>(({
       }
     });
 
+    let fontLoadCancelled = false;
+    if (typeof document !== 'undefined' && 'fonts' in document) {
+      const fontSet = document.fonts as FontFaceSet;
+      if (fontSet.status !== 'loaded') {
+        void fontSet.ready.then(() => {
+          if (fontLoadCancelled || !terminalRef.current) {
+            return;
+          }
+
+          requestAnimationFrame(() => {
+            if (!terminalRef.current) return;
+
+            remeasureTerminal(terminalRef.current);
+            fit(true);
+
+            requestAnimationFrame(() => {
+              if (!terminalRef.current) return;
+              forceRefresh(terminalRef.current);
+              scrollToBottomIfNeeded(terminalRef.current);
+            });
+          });
+        });
+      }
+    }
+
     const dataDisposable = terminal.onData((data) => {
       onData?.(data);
     });
@@ -548,6 +590,7 @@ const Terminal = forwardRef<TerminalRef, TerminalProps>(({
       titleDisposable.dispose();
       resizeObserver.disconnect();
       intersectionObserver.disconnect();
+      fontLoadCancelled = true;
       resizeDebouncer.dispose();
       webglAddonRef.current?.dispose();
       terminal.dispose();
