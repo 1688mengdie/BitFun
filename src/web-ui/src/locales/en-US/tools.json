@@ -60,7 +60,13 @@
     },
     "markdownEditor": {
       "loadingFile": "Loading file...",
-      "placeholder": "Start writing Markdown..."
+      "placeholder": "Start writing Markdown...",
+      "source": "Source",
+      "preview": "Preview",
+      "viewModeLabel": "Markdown source and preview mode",
+      "notice": {
+        "sourcePreviewFallback": "This document contains HTML fragments that are not safely editable in visual mode. Edit in source mode or switch to preview."
+      }
     },
     "planViewer": {
       "loadingPlan": "Loading plan...",
@@ -91,8 +97,6 @@
     "meditor": {
       "placeholder": "Enter Markdown...",
       "toolbarPlaceholder": "Toolbar",
-      "loading": "Loading...",
-      "parseError": "Parse error",
       "mermaidRendering": "Rendering Mermaid diagram...",
       "mermaidRenderFailed": "Mermaid Render Failed",
       "mermaidRenderFailedWithMessage": "Render failed: {{message}}",
@@ -101,6 +105,12 @@
       "localImageTitleUnableToLoadWithPath": "Unable to load: {{path}}",
       "localImageLoading": "Loading image...",
       "localImageFailed": "Image failed to load",
+      "rawHtml": {
+        "inlineLabel": "HTML"
+      },
+      "details": {
+        "summaryPlaceholder": "Summary"
+      },
       "insertLinkTextPlaceholder": "Link text",
       "inlineAi": {
         "triggerHint": "Press Space to use AI",

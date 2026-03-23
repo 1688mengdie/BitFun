@@ -8,6 +8,7 @@ import React, {
 } from 'react';
 import { EditorContent, useEditor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
+import { Details, DetailsContent, DetailsSummary } from '@tiptap/extension-details';
 import Placeholder from '@tiptap/extension-placeholder';
 import TaskItem from '@tiptap/extension-task-item';
 import TaskList from '@tiptap/extension-task-list';
@@ -33,6 +34,7 @@ import {
   InlineAiPreviewExtension,
   inlineAiPreviewPluginKey,
 } from '../extensions/InlineAiPreviewExtension';
+import { RawHtmlBlock, RawHtmlInline, RenderOnlyBlock } from '../extensions/RawHtmlExtensions';
 import { getBlockIndexForLine } from '../utils/markdownBlocks';
 import {
   buildInlineContinuePrompt,
@@ -463,6 +465,21 @@ export const TiptapEditor = React.forwardRef<TiptapEditorHandle, TiptapEditorPro
       BlockIdExtension,
       MarkdownImage.configure({
         basePath,
+      }),
+      Details.configure({
+        persist: true,
+      }),
+      DetailsSummary,
+      DetailsContent,
+      // Keep raw/render-only fallbacks for HTML we still can't round-trip safely.
+      RenderOnlyBlock.configure({
+        basePath,
+      }),
+      RawHtmlBlock.configure({
+        basePath,
+      }),
+      RawHtmlInline.configure({
+        label: t('editor.meditor.rawHtml.inlineLabel'),
       }),
       MarkdownTable,
       MarkdownTableRow,
