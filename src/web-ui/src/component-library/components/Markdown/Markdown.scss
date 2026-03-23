@@ -459,6 +459,47 @@
   margin: 0.5rem 0;
 }
 
+.markdown-renderer img,
+.markdown-renderer .markdown-image {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0.75rem 0;
+  border-radius: 8px;
+}
+
+.markdown-renderer .markdown-image--loading {
+  opacity: 0.75;
+}
+
+.markdown-renderer .markdown-image--error {
+  outline: 1px dashed rgba(239, 68, 68, 0.35);
+}
+
+.markdown-renderer details {
+  margin: 1rem 0;
+  padding: 0.9rem 1rem;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+}
+
+.markdown-renderer summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.markdown-renderer details[open] > summary {
+  margin-bottom: 0.75rem;
+}
+
+.markdown-renderer .katex-display {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.25rem 0;
+}
+
 
 .table-wrapper {
   overflow: auto;

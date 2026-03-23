@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useImperativeHandle, forwardRef, useRef } from 'react'
+import React, { useCallback, useEffect, useImperativeHandle, forwardRef, useMemo, useRef } from 'react'
 import { createLogger } from '@/shared/utils/logger'
 import { activeEditTargetService } from '@/tools/editor/services/ActiveEditTargetService'
 import { useEditor } from '../hooks/useEditor'
@@ -7,6 +7,7 @@ import { TiptapEditor, TiptapEditorHandle } from './TiptapEditor'
 import { Preview } from './Preview'
 import type { EditorOptions, EditorInstance } from '../types'
 import { useI18n } from '@/infrastructure/i18n'
+import { analyzeMarkdownEditability } from '../utils/tiptapMarkdown'
 import './MEditor.scss'
 
 void createLogger('MEditor')
@@ -76,9 +77,13 @@ export const MEditor = forwardRef<EditorInstance, MEditorProps>((props, ref) => 
   } = useEditor(controlledValue ?? defaultValue, onChange)
 
   const tiptapEditorRef = useRef<TiptapEditorHandle>(null)
+  const editability = useMemo(() => analyzeMarkdownEditability(value), [value])
+  const effectiveMode = mode === 'ir' && editability.containsRenderOnlyBlocks
+    ? (readonly ? 'preview' : 'split')
+    : mode
 
   useEffect(() => {
-    if (mode === 'ir' || mode === 'preview') {
+    if (effectiveMode === 'ir' || effectiveMode === 'preview') {
       return
     }
 
@@ -106,7 +111,7 @@ export const MEditor = forwardRef<EditorInstance, MEditorProps>((props, ref) => 
         return !!root && !!element && root.contains(element)
       }
     })
-  }, [mode, textareaRef])
+  }, [effectiveMode, textareaRef])
 
   useEffect(() => {
     if (controlledValue !== undefined && controlledValue !== value) {
@@ -129,57 +134,57 @@ export const MEditor = forwardRef<EditorInstance, MEditorProps>((props, ref) => 
   useImperativeHandle(ref, () => ({
     ...editorInstance,
     scrollToLine: (line: number, highlight?: boolean) => {
-      if (mode === 'ir' && tiptapEditorRef.current) {
+      if (effectiveMode === 'ir' && tiptapEditorRef.current) {
         tiptapEditorRef.current.scrollToLine(line, highlight)
       }
     },
     undo: () => {
-      if (mode === 'ir' && tiptapEditorRef.current) {
+      if (effectiveMode === 'ir' && tiptapEditorRef.current) {
         return tiptapEditorRef.current.undo()
       }
-      if (mode === 'edit' || mode === 'split') {
+      if (effectiveMode === 'edit' || effectiveMode === 'split') {
         return executeTextareaAction(textareaRef.current, 'undo')
       }
       return false
     },
     redo: () => {
-      if (mode === 'ir' && tiptapEditorRef.current) {
+      if (effectiveMode === 'ir' && tiptapEditorRef.current) {
         return tiptapEditorRef.current.redo()
       }
-      if (mode === 'edit' || mode === 'split') {
+      if (effectiveMode === 'edit' || effectiveMode === 'split') {
         return executeTextareaAction(textareaRef.current, 'redo')
       }
       return false
     },
     get canUndo() {
-      if (mode === 'ir' && tiptapEditorRef.current) {
+      if (effectiveMode === 'ir' && tiptapEditorRef.current) {
         return tiptapEditorRef.current.canUndo
       }
       return false
     },
     get canRedo() {
-      if (mode === 'ir' && tiptapEditorRef.current) {
+      if (effectiveMode === 'ir' && tiptapEditorRef.current) {
         return tiptapEditorRef.current.canRedo
       }
       return false
     },
     markSaved: () => {
-      if (mode === 'ir' && tiptapEditorRef.current) {
+      if (effectiveMode === 'ir' && tiptapEditorRef.current) {
         tiptapEditorRef.current.markSaved()
       }
     },
     setInitialContent: (content: string) => {
-      if (mode === 'ir' && tiptapEditorRef.current) {
+      if (effectiveMode === 'ir' && tiptapEditorRef.current) {
         tiptapEditorRef.current.setInitialContent(content)
       }
     },
     get isDirty() {
-      if (mode === 'ir' && tiptapEditorRef.current) {
+      if (effectiveMode === 'ir' && tiptapEditorRef.current) {
         return tiptapEditorRef.current.isDirty
       }
       return false
     }
-  }), [editorInstance, mode, textareaRef])
+  }), [editorInstance, effectiveMode, textareaRef])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
     if ((e.ctrlKey || e.metaKey) && e.key === 's') {
@@ -190,15 +195,15 @@ export const MEditor = forwardRef<EditorInstance, MEditorProps>((props, ref) => 
   }, [value, onSave])
 
   const handleFocusCapture = useCallback(() => {
-    if (mode === 'ir' || mode === 'preview') {
+    if (effectiveMode === 'ir' || effectiveMode === 'preview') {
       return
     }
 
     activeEditTargetService.setActiveTarget(textareaTargetIdRef.current)
-  }, [mode])
+  }, [effectiveMode])
 
   const handleBlurCapture = useCallback(() => {
-    if (mode === 'ir' || mode === 'preview') {
+    if (effectiveMode === 'ir' || effectiveMode === 'preview') {
       return
     }
 
@@ -211,7 +216,7 @@ export const MEditor = forwardRef<EditorInstance, MEditorProps>((props, ref) => 
 
       activeEditTargetService.clearActiveTarget(textareaTargetIdRef.current)
     }, 0)
-  }, [mode])
+  }, [effectiveMode])
 
   const containerStyle: React.CSSProperties = {
     ...style,
@@ -220,7 +225,7 @@ export const MEditor = forwardRef<EditorInstance, MEditorProps>((props, ref) => 
   }
 
   const themeClass = theme === 'dark' ? 'm-editor-dark' : 'm-editor-light'
-  const modeClass = `m-editor-mode-${mode}`
+  const modeClass = `m-editor-mode-${effectiveMode}`
 
   return (
     <div
@@ -235,11 +240,11 @@ export const MEditor = forwardRef<EditorInstance, MEditorProps>((props, ref) => 
       {toolbar && <div className="m-editor-toolbar">{t('editor.meditor.toolbarPlaceholder')}</div>}
       
       <div className="m-editor-content">
-        {mode === 'preview' && (
+        {effectiveMode === 'preview' && (
           <Preview value={value} basePath={basePath} />
         )}
 
-        {mode === 'edit' && (
+        {effectiveMode === 'edit' && (
           <div className="m-editor-edit-panel">
             <EditArea
               ref={textareaRef}
@@ -254,7 +259,7 @@ export const MEditor = forwardRef<EditorInstance, MEditorProps>((props, ref) => 
           </div>
         )}
 
-        {mode === 'split' && (
+        {effectiveMode === 'split' && (
           <>
             <div className="m-editor-edit-panel">
               <EditArea
@@ -274,7 +279,7 @@ export const MEditor = forwardRef<EditorInstance, MEditorProps>((props, ref) => 
           </>
         )}
 
-        {mode === 'ir' && (
+        {effectiveMode === 'ir' && (
           <div className="m-editor-ir-panel">
             <TiptapEditor
               ref={tiptapEditorRef}

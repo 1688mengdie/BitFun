@@ -3,9 +3,13 @@
  * Used to render Markdown-formatted text
  */
 
-import React, { useState, useMemo, useCallback, Component, type ReactNode } from 'react';
+import React, { useState, useMemo, useCallback, useEffect, Component, type ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
+import rehypeKatex from 'rehype-katex';
+import rehypeRaw from 'rehype-raw';
+import rehypeSanitize, { defaultSchema } from 'rehype-sanitize';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus, vs } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { visit } from 'unist-util-visit';
@@ -17,6 +21,7 @@ import { getPrismLanguageFromAlias } from '@/infrastructure/language-detection';
 import { useTheme } from '@/infrastructure/theme';
 import { createLogger } from '@/shared/utils/logger';
 import path from 'path-browserify';
+import 'katex/dist/katex.min.css';
 import './Markdown.scss';
 
 const log = createLogger('Markdown');
@@ -56,6 +61,8 @@ class MarkdownErrorBoundary extends Component<
 }
 const FILE_LINK_PREFIX = 'file://';
 const WORKSPACE_FOLDER_PLACEHOLDER = '{{workspaceFolder}}';
+const LOCAL_IMAGE_PLACEHOLDER =
+  'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
 const EDITOR_OPENABLE_EXTENSIONS = new Set([
   'js', 'jsx', 'ts', 'tsx', 'mjs', 'cjs', 'mts', 'cts',
   'py', 'pyw', 'pyi',
@@ -105,6 +112,30 @@ const EDITOR_OPENABLE_BASENAMES = new Set([
   'readme.md',
   'readme.txt',
 ]);
+
+const localImageDataUrlCache = new Map<string, string>();
+const localImageRequestCache = new Map<string, Promise<string>>();
+
+const sanitizeSchema = {
+  ...defaultSchema,
+  tagNames: [...(defaultSchema.tagNames || []), 'details', 'summary'],
+  attributes: {
+    ...defaultSchema.attributes,
+    a: [...(defaultSchema.attributes?.a || []), 'href', 'title'],
+    code: [...(defaultSchema.attributes?.code || []), 'className'],
+    details: [...(defaultSchema.attributes?.details || []), 'open'],
+    img: [...(defaultSchema.attributes?.img || []), 'src', 'alt', 'title', 'width', 'height', 'align'],
+    input: [...(defaultSchema.attributes?.input || []), 'type', 'checked', 'disabled'],
+    p: [...(defaultSchema.attributes?.p || []), 'align'],
+    pre: [...(defaultSchema.attributes?.pre || []), 'className'],
+    summary: [...(defaultSchema.attributes?.summary || [])],
+  },
+  protocols: {
+    ...defaultSchema.protocols,
+    href: [...(defaultSchema.protocols?.href || []), 'computer', 'file', 'tab', 'visualization'],
+    src: [...(defaultSchema.protocols?.src || []), 'asset', 'data', 'http', 'https', 'tauri'],
+  },
+};
 
 function remarkAutolinkComputerFileLinks() {
   return (tree: any) => {
@@ -196,6 +227,181 @@ function normalizeFileLikeHref(rawHref: string): string {
   }
 }
 
+function normalizePath(filePath: string): string {
+  return filePath.replace(/\\/g, '/');
+}
+
+function isAbsoluteFilesystemPath(filePath: string): boolean {
+  const normalized = normalizePath(filePath);
+  if (/^[A-Za-z]:/.test(normalized) || /^\/[A-Za-z]:/.test(normalized)) {
+    return true;
+  }
+
+  return normalized.startsWith('/') && !normalized.startsWith('//');
+}
+
+function resolveBaseRelativePath(targetPath: string, basePath?: string): string {
+  if (!targetPath || !basePath || isAbsoluteFilesystemPath(targetPath)) {
+    return targetPath;
+  }
+
+  const normalizedTarget = normalizePath(targetPath);
+  if (normalizedTarget.startsWith('./') || normalizedTarget.startsWith('../')) {
+    return path.normalize(path.join(basePath, normalizedTarget));
+  }
+
+  return path.normalize(path.join(basePath, normalizedTarget));
+}
+
+function isLocalAssetPath(src: string): boolean {
+  if (!src) {
+    return false;
+  }
+
+  return !/^(https?:|data:|asset:|tauri:)/i.test(src);
+}
+
+function normalizeExternalImageSrc(src: string): string {
+  const githubBlobMatch = src.match(
+    /^https:\/\/github\.com\/([^/]+)\/([^/]+)\/blob\/([^/]+)\/(.+)$/i,
+  );
+
+  if (githubBlobMatch) {
+    const [, owner, repo, ref, assetPath] = githubBlobMatch;
+    return `https://raw.githubusercontent.com/${owner}/${repo}/${ref}/${assetPath}`;
+  }
+
+  return src;
+}
+
+function getMimeType(filePath: string): string {
+  const ext = filePath.toLowerCase().split('.').pop();
+  const mimeTypes: Record<string, string> = {
+    avif: 'image/avif',
+    bmp: 'image/bmp',
+    gif: 'image/gif',
+    ico: 'image/x-icon',
+    jpeg: 'image/jpeg',
+    jpg: 'image/jpeg',
+    png: 'image/png',
+    svg: 'image/svg+xml',
+    webp: 'image/webp',
+  };
+
+  return mimeTypes[ext || ''] || 'image/jpeg';
+}
+
+async function getLocalImageDataUrl(localPath: string): Promise<string> {
+  const cachedDataUrl = localImageDataUrlCache.get(localPath);
+  if (cachedDataUrl) {
+    return cachedDataUrl;
+  }
+
+  const pendingRequest = localImageRequestCache.get(localPath);
+  if (pendingRequest) {
+    return pendingRequest;
+  }
+
+  const request = (async () => {
+    const base64Content = await workspaceAPI.readFileContent(localPath);
+    const dataUrl = `data:${getMimeType(localPath)};base64,${base64Content}`;
+    localImageDataUrlCache.set(localPath, dataUrl);
+    localImageRequestCache.delete(localPath);
+    return dataUrl;
+  })().catch((error) => {
+    localImageRequestCache.delete(localPath);
+    throw error;
+  });
+
+  localImageRequestCache.set(localPath, request);
+  return request;
+}
+
+interface MarkdownImageProps extends React.ImgHTMLAttributes<HTMLImageElement> {
+  basePath?: string;
+}
+
+const MarkdownImage: React.FC<MarkdownImageProps> = ({ src, alt, className, basePath, ...imgProps }) => {
+  const rawSrc = typeof src === 'string' ? normalizeExternalImageSrc(src) : '';
+  const localPath = useMemo(() => {
+    if (!rawSrc || !isLocalAssetPath(rawSrc)) {
+      return null;
+    }
+
+    return resolveBaseRelativePath(rawSrc, basePath);
+  }, [basePath, rawSrc]);
+  const [resolvedSrc, setResolvedSrc] = useState(() => {
+    if (!localPath) {
+      return rawSrc;
+    }
+
+    return localImageDataUrlCache.get(localPath) || LOCAL_IMAGE_PLACEHOLDER;
+  });
+  const [loadState, setLoadState] = useState<'idle' | 'loading' | 'loaded' | 'error'>(() => {
+    if (!localPath) {
+      return 'loaded';
+    }
+
+    return localImageDataUrlCache.has(localPath) ? 'loaded' : 'idle';
+  });
+
+  useEffect(() => {
+    if (!localPath) {
+      setResolvedSrc(rawSrc);
+      setLoadState('loaded');
+      return;
+    }
+
+    const cachedDataUrl = localImageDataUrlCache.get(localPath);
+    if (cachedDataUrl) {
+      setResolvedSrc(cachedDataUrl);
+      setLoadState('loaded');
+      return;
+    }
+
+    let cancelled = false;
+    setResolvedSrc(LOCAL_IMAGE_PLACEHOLDER);
+    setLoadState('loading');
+
+    void getLocalImageDataUrl(localPath)
+      .then((dataUrl) => {
+        if (cancelled) {
+          return;
+        }
+
+        setResolvedSrc(dataUrl);
+        setLoadState('loaded');
+      })
+      .catch((error) => {
+        if (cancelled) {
+          return;
+        }
+
+        log.error('Failed to load local markdown image', { path: localPath, error });
+        setResolvedSrc(rawSrc);
+        setLoadState('error');
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [localPath, rawSrc]);
+
+  return (
+    <img
+      {...imgProps}
+      alt={alt}
+      className={[
+        className,
+        loadState === 'loading' ? 'markdown-image markdown-image--loading' : '',
+        loadState === 'error' ? 'markdown-image markdown-image--error' : '',
+      ].filter(Boolean).join(' ')}
+      loading="lazy"
+      src={resolvedSrc}
+    />
+  );
+};
+
 function isEditorOpenableFilePath(filePath: string): boolean {
   const normalizedPath = filePath.trim().replace(/[?#].*$/, '');
   const fileName = normalizedPath.split(/[\\/]/).pop()?.toLowerCase() || '';
@@ -257,8 +463,10 @@ export interface LineRange {
 
 export interface MarkdownProps {
   content: string;
+  basePath?: string;
   className?: string;
   isStreaming?: boolean;
+  expandDetailsByDefault?: boolean;
   onOpenVisualization?: (visualization: any) => void;
   onFileViewRequest?: (filePath: string, fileName: string, lineRange?: LineRange) => void;
   onTabOpen?: (tabInfo: any) => void;
@@ -267,8 +475,10 @@ export interface MarkdownProps {
 
 export const Markdown = React.memo<MarkdownProps>(({ 
   content, 
+  basePath,
   className = '',
   isStreaming = false,
+  expandDetailsByDefault = false,
   onOpenVisualization,
   onFileViewRequest,
   onTabOpen,
@@ -422,13 +632,15 @@ export const Markdown = React.memo<MarkdownProps>(({
       const linkText = typeof children === 'string' ? children : String(children);
       const originalHref = linkMap.get(linkText);
       const hrefValue = originalHref || href || node?.properties?.href;
+      const isHashLink = typeof hrefValue === 'string' && hrefValue.startsWith('#');
       const isComputerLink = typeof hrefValue === 'string' && hrefValue.startsWith(COMPUTER_LINK_PREFIX);
       const isVisualizationLink = typeof hrefValue === 'string' && hrefValue.startsWith('visualization:');
       const isTabLink = typeof hrefValue === 'string' && hrefValue.startsWith('tab:');
       const isHttpLink = typeof hrefValue === 'string' &&
         (hrefValue.startsWith('http://') || hrefValue.startsWith('https://'));
+      const isMailtoLink = typeof hrefValue === 'string' && hrefValue.startsWith('mailto:');
 
-      if (typeof hrefValue === 'string' && !isVisualizationLink && !isTabLink && !isHttpLink) {
+      if (typeof hrefValue === 'string' && !isVisualizationLink && !isTabLink && !isHttpLink && !isMailtoLink && !isHashLink) {
         let filePath = normalizeFileLikeHref(hrefValue);
 
         let lineRange: LineRange | undefined;
@@ -455,6 +667,8 @@ export const Markdown = React.memo<MarkdownProps>(({
             }
           }
         }
+
+        filePath = resolveBaseRelativePath(filePath, basePath);
 
         fileName = filePath.split(/[\\/]/).pop() || filePath;
 
@@ -563,6 +777,14 @@ export const Markdown = React.memo<MarkdownProps>(({
           </a>
         );
       }
+
+      if (isMailtoLink && typeof hrefValue === 'string') {
+        return (
+          <a href={hrefValue} {...props}>
+            {children}
+          </a>
+        );
+      }
       
       return (
         <a 
@@ -585,6 +807,18 @@ export const Markdown = React.memo<MarkdownProps>(({
         </div>
       );
     },
+
+    details({ children, open, ...props }: any) {
+      return (
+        <details {...props} open={open ?? expandDetailsByDefault}>
+          {children}
+        </details>
+      );
+    },
+
+    img({ node, ...props }: any) {
+      return <MarkdownImage {...props} basePath={basePath} />;
+    },
     
     blockquote({ children }: any) {
       return <blockquote className="custom-blockquote">{children}</blockquote>;
@@ -602,10 +836,19 @@ export const Markdown = React.memo<MarkdownProps>(({
       return <li {...props}>{children}</li>;
     },
     
-    p({ children, ...props }: any) {
-      return <p {...props}>{children}</p>;
+    p({ children, align, style, ...props }: any) {
+      return (
+        <p
+          {...props}
+          style={align ? { ...style, textAlign: align } : style}
+        >
+          {children}
+        </p>
+      );
     }
   }), [
+    basePath,
+    expandDetailsByDefault,
     isStreaming,
     linkMap,
     handleFileViewRequest,
@@ -623,7 +866,8 @@ export const Markdown = React.memo<MarkdownProps>(({
     <div className={wrapperClassName}>
       <MarkdownErrorBoundary fallbackContent={markdownContent}>
         <ReactMarkdown
-          remarkPlugins={[remarkGfm, remarkAutolinkComputerFileLinks]}
+          remarkPlugins={[remarkGfm, remarkMath, remarkAutolinkComputerFileLinks]}
+          rehypePlugins={[rehypeRaw, [rehypeSanitize, sanitizeSchema], rehypeKatex]}
           components={components}
         >
           {markdownContent}

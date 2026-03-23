@@ -5,14 +5,16 @@
  * @module components/MarkdownEditor
  */
 
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { MEditor } from '../meditor';
 import type { EditorInstance } from '../meditor';
+import { analyzeMarkdownEditability, type MarkdownEditabilityAnalysis } from '../meditor/utils/tiptapMarkdown';
 import { AlertCircle } from 'lucide-react';
 import { createLogger } from '@/shared/utils/logger';
 import { CubeLoading, Button } from '@/component-library';
 import { useI18n } from '@/infrastructure/i18n';
 import { useTheme } from '@/infrastructure/theme/hooks/useTheme';
+import CodeEditor from './CodeEditor';
 import './MarkdownEditor.scss';
 
 const log = createLogger('MarkdownEditor');
@@ -46,6 +48,7 @@ const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
   filePath,
   initialContent = '',
   workspacePath,
+  fileName,
   readOnly = false,
   className = '',
   onContentChange,
@@ -57,8 +60,10 @@ const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
   const { isLight } = useTheme();
   const [content, setContent] = useState<string>(initialContent);
   const [hasChanges, setHasChanges] = useState(false);
+  const [unsafeViewMode, setUnsafeViewMode] = useState<'source' | 'preview'>('source');
   const [loading, setLoading] = useState(!!filePath);
   const [error, setError] = useState<string | null>(null);
+  const [editability, setEditability] = useState<MarkdownEditabilityAnalysis>(() => analyzeMarkdownEditability(initialContent));
   const editorRef = useRef<EditorInstance>(null);
   const isUnmountedRef = useRef(false);
   const lastModifiedTimeRef = useRef<number>(0);
@@ -87,6 +92,10 @@ const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
     };
   }, []);
 
+  useEffect(() => {
+    setUnsafeViewMode('source');
+  }, [filePath, initialContent]);
+
   const loadFileContent = useCallback(async () => {
     if (!filePath || isUnmountedRef.current) return;
 
@@ -109,11 +118,17 @@ const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
       }
         
       if (!isUnmountedRef.current) {
-        setContent(fileContent);
+        const nextEditability = analyzeMarkdownEditability(fileContent);
+        const nextContent = nextEditability.mode === 'unsafe'
+          ? fileContent
+          : nextEditability.canonicalMarkdown;
+
+        setEditability(nextEditability);
+        setContent(nextContent);
         setHasChanges(false);
         lastReportedDirtyRef.current = false;
         setTimeout(() => {
-          editorRef.current?.setInitialContent?.(fileContent);
+          editorRef.current?.setInitialContent?.(nextContent);
         }, 0);
         // NOTE: Do NOT call onContentChange here during initial load.
         // Calling it triggers parent re-render which unmounts this component,
@@ -152,11 +167,17 @@ const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
         loadFileContent();
       }
     } else if (initialContent !== undefined) {
-      setContent(initialContent);
+      const nextEditability = analyzeMarkdownEditability(initialContent);
+      const nextContent = nextEditability.mode === 'unsafe'
+        ? initialContent
+        : nextEditability.canonicalMarkdown;
+
+      setEditability(nextEditability);
+      setContent(nextContent);
       setHasChanges(false);
       lastReportedDirtyRef.current = false;
       setTimeout(() => {
-        editorRef.current?.setInitialContent?.(initialContent);
+        editorRef.current?.setInitialContent?.(nextContent);
       }, 0);
       // NOTE: Do NOT call onContentChange here during initial load.
       // Calling it triggers parent re-render which unmounts this component,
@@ -260,6 +281,26 @@ const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
     return () => clearTimeout(timer);
   }, [jumpToLine, jumpToColumn, filePath, loading, content]);
 
+  const notices = useMemo(() => {
+    const nextNotices: string[] = [];
+
+    if (filePath && (
+      editability.mode === 'unsafe' ||
+      editability.containsRenderOnlyBlocks ||
+      editability.containsRawHtmlInlines
+    )) {
+      nextNotices.push(t('editor.markdownEditor.notice.sourcePreviewFallback'));
+    }
+
+    return nextNotices;
+  }, [editability, filePath, t]);
+
+  const shouldUseSourcePreviewFallback = !!filePath && (
+    editability.mode === 'unsafe' ||
+    editability.containsRenderOnlyBlocks ||
+    editability.containsRawHtmlInlines
+  );
+
   if (loading) {
     return (
       <div className={`bitfun-markdown-editor-loading ${className}`}>
@@ -284,8 +325,105 @@ const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
     );
   }
 
+  if (shouldUseSourcePreviewFallback) {
+    return (
+      <div className={`bitfun-markdown-editor ${className}`}>
+        {notices.length > 0 && (
+          <div className="bitfun-markdown-editor__notice-bar">
+            <AlertCircle className="bitfun-markdown-editor__notice-icon" />
+            <div className="bitfun-markdown-editor__notice-copy">
+              {notices.map(notice => (
+                <p key={notice}>{notice}</p>
+              ))}
+            </div>
+          </div>
+        )}
+        <div className="bitfun-markdown-editor__unsafe-toolbar">
+          <div className="bitfun-markdown-editor__unsafe-toggle" role="tablist" aria-label={t('editor.markdownEditor.viewModeLabel')}>
+            <Button
+              type="button"
+              size="small"
+              variant={unsafeViewMode === 'source' ? 'primary' : 'secondary'}
+              onClick={() => setUnsafeViewMode('source')}
+              aria-pressed={unsafeViewMode === 'source'}
+            >
+              {t('editor.markdownEditor.source')}
+            </Button>
+            <Button
+              type="button"
+              size="small"
+              variant={unsafeViewMode === 'preview' ? 'primary' : 'secondary'}
+              onClick={() => setUnsafeViewMode('preview')}
+              aria-pressed={unsafeViewMode === 'preview'}
+            >
+              {t('editor.markdownEditor.preview')}
+            </Button>
+          </div>
+        </div>
+        <div className="bitfun-markdown-editor__unsafe-body">
+          {unsafeViewMode === 'source' ? (
+            <CodeEditor
+              filePath={filePath}
+              workspacePath={workspacePath}
+              fileName={filePath.split(/[/\\]/).pop() || fileName}
+              language="markdown"
+              readOnly={readOnly}
+              showLineNumbers={true}
+              showMinimap={true}
+              jumpToLine={jumpToLine}
+              jumpToColumn={jumpToColumn}
+              onContentChange={(newContent, dirty) => {
+                contentRef.current = newContent;
+                setContent(newContent);
+                setHasChanges(dirty);
+                if (lastReportedDirtyRef.current === dirty) {
+                  return;
+                }
+
+                lastReportedDirtyRef.current = dirty;
+                onContentChangeRef.current?.(newContent, dirty);
+              }}
+              onSave={(_savedContent) => {
+                setHasChanges(false);
+                lastReportedDirtyRef.current = false;
+                onContentChangeRef.current?.(contentRef.current, false);
+              }}
+            />
+          ) : (
+            <MEditor
+              ref={editorRef}
+              value={content}
+              onChange={handleContentChange}
+              onSave={handleSave}
+              onDirtyChange={handleDirtyChange}
+              mode="preview"
+              theme={isLight ? 'light' : 'dark'}
+              height="100%"
+              width="100%"
+              placeholder={t('editor.markdownEditor.placeholder')}
+              readonly={true}
+              toolbar={false}
+              filePath={filePath}
+              basePath={basePath}
+            />
+          )}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className={`bitfun-markdown-editor ${className}`}>
+      {notices.length > 0 && (
+        <div className="bitfun-markdown-editor__notice-bar">
+          <AlertCircle className="bitfun-markdown-editor__notice-icon" />
+          <div className="bitfun-markdown-editor__notice-copy">
+            {notices.map(notice => (
+              <p key={notice}>{notice}</p>
+            ))}
+          </div>
+        </div>
+      )}
       <MEditor
         ref={editorRef}
         value={content}

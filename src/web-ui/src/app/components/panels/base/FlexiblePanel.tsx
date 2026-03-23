@@ -111,7 +111,7 @@ const FlexiblePanel: React.FC<ExtendedFlexiblePanelProps> = memo(({
 
   // Sync dirty state from MonacoModelManager on component mount
   React.useEffect(() => {
-    if (content?.type !== 'code-editor' && content?.type !== 'markdown-editor') {
+    if (content?.type !== 'code-editor') {
       return;
     }
     
