@@ -156,6 +156,7 @@ export const ModelConfigStep: React.FC<ModelConfigStepProps> = ({ onSkipForNow }
       max_tokens: 8192,
       enable_thinking_process: false,
       support_preserved_thinking: false,
+      inline_think_in_text: false,
       skip_ssl_verify: skipSslVerify,
       custom_headers: Object.keys(customHeaders).length > 0 ? customHeaders : undefined,
       custom_headers_mode: Object.keys(customHeaders).length > 0 ? customHeadersMode : undefined,

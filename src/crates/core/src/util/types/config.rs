@@ -82,6 +82,7 @@ pub struct AIConfig {
     pub top_p: Option<f64>,
     pub enable_thinking_process: bool,
     pub support_preserved_thinking: bool,
+    pub inline_think_in_text: bool,
     pub custom_headers: Option<std::collections::HashMap<String, String>>,
     /// "replace" (default) or "merge" (defaults first, then custom)
     pub custom_headers_mode: Option<String>,
@@ -209,6 +210,7 @@ impl TryFrom<AIModelConfig> for AIConfig {
             top_p: other.top_p,
             enable_thinking_process: other.enable_thinking_process,
             support_preserved_thinking: other.support_preserved_thinking,
+            inline_think_in_text: other.inline_think_in_text,
             custom_headers: other.custom_headers,
             custom_headers_mode: other.custom_headers_mode,
             skip_ssl_verify: other.skip_ssl_verify,

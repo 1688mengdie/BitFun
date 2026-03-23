@@ -206,6 +206,7 @@ class OnboardingServiceClass {
         max_tokens: 8192,
         category: 'general_chat',
         capabilities: ['text_chat', 'function_calling'],
+        inline_think_in_text: false,
         custom_request_body: modelConfig.customRequestBody || undefined,
         skip_ssl_verify: modelConfig.skipSslVerify || undefined,
         custom_headers: modelConfig.customHeaders || undefined,
