@@ -7,7 +7,7 @@
   min-width: 0;
   height: 100%;
   overflow: hidden;
-  background: var(--color-bg-primary);
+  background: var(--color-bg-scene);
 
   // ── Top: Mermaid diagram ─────────────────────────────────────
   &__top {
@@ -129,7 +129,7 @@
     flex: 1;
     min-height: 0;
     overflow: hidden;
-    background: var(--color-bg-primary);
+    background: var(--color-bg-scene);
   }
 
   // Loading fallback

@@ -251,7 +251,6 @@ export class ThemeService {
       root.style.setProperty('--color-bg-tooltip', colors.background.tooltip);
     }
     
-    
     root.style.setProperty('--color-overlay', theme.type === 'dark' ? 'rgba(0, 0, 0, 0.5)' : 'rgba(0, 0, 0, 0.3)');
     
     

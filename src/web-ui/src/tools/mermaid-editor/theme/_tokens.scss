@@ -110,7 +110,7 @@
   --mermaid-branch-label: #{$color-text-primary};
   
   // ==================== Background and container ====================
-  --mermaid-bg: #{$color-bg-primary};
+  --mermaid-bg: var(--color-bg-scene);
   --mermaid-container-border: #{$border-subtle};
 }
 
@@ -188,7 +188,7 @@
   --mermaid-branch-label: #1e293b;
   
   // Background
-  --mermaid-bg: #f7f8fa;
+  --mermaid-bg: var(--color-bg-scene);
   --mermaid-container-border: rgba(100, 116, 139, 0.18);
 }
 
