@@ -49,7 +49,7 @@ export const BaseToolCard: React.FC<BaseToolCardProps> = ({
     status !== 'error';
   
   return (
-    <div className={`base-tool-card-wrapper ${hasExpandedContent ? 'has-expanded' : ''} ${showConfirmationHighlight ? 'requires-confirmation' : ''} ${className}`}>
+    <div className={`base-tool-card-wrapper ${showConfirmationHighlight ? 'requires-confirmation' : ''} ${className}`}>
       <div 
         className={`base-tool-card status-${status} ${isExpanded ? 'expanded' : ''}`}
         onClick={onClick}

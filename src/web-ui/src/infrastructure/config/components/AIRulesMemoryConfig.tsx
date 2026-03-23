@@ -230,10 +230,10 @@ function RulesPanel() {
           <ConfigPageRow label={t('list.loading')} align="center"><span /></ConfigPageRow>
         )}
         {!currentRules.isLoading && rules.length === 0 && (
-          <div className="bitfun-ai-rules-config__empty-row">
-            <p>{t('list.empty.description')}</p>
-            <Button variant="secondary" size="small" onClick={() => handleAdd(level)}>
-              <Plus size={14} /> {t('form.actions.add')}
+          <div className="bitfun-collection-empty">
+            <p>{t('list.empty.title')}</p>
+            <Button variant="dashed" size="small" onClick={() => handleAdd(level)}>
+              <Plus size={14} /> {t('toolbar.addTooltip')}
             </Button>
           </div>
         )}
