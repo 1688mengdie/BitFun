@@ -303,7 +303,7 @@ export const FileOperationToolCard: React.FC<FileOperationToolCardProps> = ({
     }
     
     if (isFailed) {
-      setIsErrorExpanded(!isErrorExpanded);
+      setIsErrorExpanded(prev => !prev);
       return;
     }
 

@@ -168,17 +168,18 @@ export async function sendMessage(
     });
 
     const currentAgentType = agentType || session.mode || 'agentic';
+
+    try {
+      await ensureBackendSession(context, sessionId);
+    } catch (createError: any) {
+      log.warn('Backend session create/restore failed', { sessionId: sessionId, error: createError });
+    }
+
     await syncSessionModelSelection(context, sessionId, currentAgentType);
 
     const updatedSession = context.flowChatStore.getState().sessions.get(sessionId);
     if (!updatedSession) {
       throw new Error(`Session lost after adding dialog turn: ${sessionId}`);
-    }
-    
-    try {
-      await ensureBackendSession(context, sessionId);
-    } catch (createError: any) {
-      log.warn('Backend session create/restore failed', { sessionId: sessionId, error: createError });
     }
     
     context.contentBuffers.set(sessionId, new Map());

@@ -8,6 +8,16 @@
 .file-operation-card {
   cursor: pointer;
 
+  /* .status-error sets cursor:default on the card; header remains clickable (toggle error / open editor) */
+  .base-tool-card.status-error {
+    cursor: pointer;
+  }
+
+  /* Ensure header row shows hand; inner triggers (e.g. Tooltip) can otherwise show I-beam/default */
+  .base-tool-card-header {
+    cursor: pointer;
+  }
+
   &.non-clickable {
     cursor: default;
     border-color: var(--border-light, rgba(255, 255, 255, 0.06));
@@ -33,6 +43,10 @@
     }
 
     .base-tool-card {
+      cursor: default;
+    }
+
+    .base-tool-card-header {
       cursor: default;
     }
   }
