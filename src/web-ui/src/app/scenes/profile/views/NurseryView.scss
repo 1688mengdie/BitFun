@@ -349,6 +349,11 @@ $nursery-scene-gutter: clamp(40px, 6vw, 80px);
     line-height: 1;
   }
 
+  &__avatar-icon {
+    flex-shrink: 0;
+    color: var(--color-text-primary);
+  }
+
   &__header-info {
     flex: 1;
     min-width: 0;

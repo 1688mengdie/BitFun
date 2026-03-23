@@ -9,7 +9,7 @@
   justify-content: space-between;
   height: 40px;
   padding: 0 var(--size-gap-3, 12px);
-  background: var(--mermaid-bg, var(--color-bg-primary, #121214));
+  background: var(--mermaid-bg, var(--color-bg-scene));
   border-bottom: none;
   flex-shrink: 0;
 }

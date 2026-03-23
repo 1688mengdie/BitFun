@@ -1,4 +1,5 @@
 import React from 'react';
+import { Bot } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Badge } from '@/component-library';
 import type { WorkspaceInfo } from '@/shared/types';
@@ -15,7 +16,7 @@ const AssistantCard: React.FC<AssistantCardProps> = ({ workspace, onClick, style
   const identity = workspace.identity;
 
   const name = identity?.name?.trim() || workspace.name || t('nursery.card.unnamed');
-  const emoji = identity?.emoji?.trim() || '🤖';
+  const emoji = identity?.emoji?.trim() ?? '';
   const creature = identity?.creature?.trim() || '';
   const vibe = identity?.vibe?.trim() || '';
   const modelPrimary = identity?.modelPrimary?.trim() || '';
@@ -37,7 +38,11 @@ const AssistantCard: React.FC<AssistantCardProps> = ({ workspace, onClick, style
       {/* Header: avatar + name + badges */}
       <div className="assistant-card__header">
         <div className="assistant-card__avatar">
-          <span className="assistant-card__emoji">{emoji}</span>
+          {emoji ? (
+            <span className="assistant-card__emoji">{emoji}</span>
+          ) : (
+            <Bot className="assistant-card__avatar-icon" size={20} strokeWidth={1.6} aria-hidden />
+          )}
         </div>
         <div className="assistant-card__header-info">
           <div className="assistant-card__title-row">

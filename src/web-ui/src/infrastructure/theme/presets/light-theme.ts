@@ -14,12 +14,12 @@ export const bitfunLightTheme: ThemeConfig = {
   
   colors: {
     background: {
-      primary: '#f7f8fa',          
+      primary: '#e8ecf2',          
       secondary: '#ffffff',        
-      tertiary: '#f3f5f8',         
-      quaternary: '#ebeef3',       
+      tertiary: '#dde2eb',         
+      quaternary: '#d4dae5',       
       elevated: '#ffffff',         
-      workbench: '#f7f8fa',        
+      workbench: '#e8ecf2',        
       scene: '#ffffff',
       tooltip: 'rgba(255, 255, 255, 0.98)',
     },
@@ -91,11 +91,11 @@ export const bitfunLightTheme: ThemeConfig = {
     
     
     element: {
-      subtle: 'rgba(71, 102, 143, 0.05)',      
-      soft: 'rgba(71, 102, 143, 0.08)',        
-      base: 'rgba(71, 102, 143, 0.11)',        
-      medium: 'rgba(71, 102, 143, 0.15)',      
-      strong: 'rgba(71, 102, 143, 0.20)',      
+      subtle: 'rgba(71, 102, 143, 0.07)',      
+      soft: 'rgba(71, 102, 143, 0.11)',        
+      base: 'rgba(71, 102, 143, 0.15)',        
+      medium: 'rgba(71, 102, 143, 0.20)',      
+      strong: 'rgba(71, 102, 143, 0.27)',      
       elevated: 'rgba(255, 255, 255, 0.92)',   
     },
     
