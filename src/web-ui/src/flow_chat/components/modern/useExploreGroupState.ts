@@ -14,6 +14,7 @@ interface UseExploreGroupStateResult {
    */
   exploreGroupStates: Map<string, boolean>;
   onExploreGroupToggle: (groupId: string) => void;
+  onExpandGroup: (groupId: string) => void;
   onExpandAllInTurn: (turnId: string) => void;
   onCollapseGroup: (groupId: string) => void;
 }
@@ -28,6 +29,17 @@ export function useExploreGroupState(
       const next = new Map(prev);
       const currentExpanded = prev.get(groupId) ?? false;
       next.set(groupId, !currentExpanded);
+      return next;
+    });
+  }, []);
+
+  const onExpandGroup = useCallback((groupId: string) => {
+    setExploreGroupStates(prev => {
+      if (prev.get(groupId) === true) {
+        return prev;
+      }
+      const next = new Map(prev);
+      next.set(groupId, true);
       return next;
     });
   }, []);
@@ -57,6 +69,7 @@ export function useExploreGroupState(
   return {
     exploreGroupStates,
     onExploreGroupToggle,
+    onExpandGroup,
     onExpandAllInTurn,
     onCollapseGroup,
   };

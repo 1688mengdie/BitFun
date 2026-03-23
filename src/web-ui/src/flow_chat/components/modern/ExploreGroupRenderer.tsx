@@ -30,6 +30,7 @@ export const ExploreGroupRenderer: React.FC<ExploreGroupRendererProps> = ({
   const { 
     exploreGroupStates, 
     onExploreGroupToggle, 
+    onExpandGroup,
     onCollapseGroup 
   } = useFlowChatContext();
   
@@ -40,6 +41,7 @@ export const ExploreGroupRenderer: React.FC<ExploreGroupRendererProps> = ({
     isGroupStreaming,
     isLastGroupInTurn
   } = data;
+  const wasStreamingRef = useRef(isGroupStreaming);
   const {
     cardRootRef,
     applyExpandedState,
@@ -53,8 +55,39 @@ export const ExploreGroupRenderer: React.FC<ExploreGroupRendererProps> = ({
     ),
   });
   
-  const isExpanded = exploreGroupStates?.get(groupId) ?? false;
+  const hasExplicitState = exploreGroupStates?.has(groupId) ?? false;
+  const explicitExpanded = exploreGroupStates?.get(groupId) ?? false;
+  const isExpanded = hasExplicitState ? explicitExpanded : isGroupStreaming;
   const isCollapsed = !isExpanded;
+  const allowManualToggle = !isGroupStreaming;
+
+  useEffect(() => {
+    if (isGroupStreaming && !hasExplicitState) {
+      applyExpandedState(false, true, () => {
+        onExpandGroup?.(groupId);
+      });
+      wasStreamingRef.current = true;
+      return;
+    }
+
+    if (wasStreamingRef.current && !isGroupStreaming && isExpanded) {
+      applyExpandedState(true, false, () => {
+        onCollapseGroup?.(groupId);
+      }, {
+        reason: 'auto',
+      });
+    }
+
+    wasStreamingRef.current = isGroupStreaming;
+  }, [
+    applyExpandedState,
+    groupId,
+    hasExplicitState,
+    isExpanded,
+    isGroupStreaming,
+    onCollapseGroup,
+    onExpandGroup,
+  ]);
   
   // Auto-scroll to bottom during streaming.
   useEffect(() => {
@@ -105,7 +138,7 @@ export const ExploreGroupRenderer: React.FC<ExploreGroupRendererProps> = ({
   // Build class list.
   const className = [
     'explore-region',
-    'explore-region--collapsible',
+    allowManualToggle ? 'explore-region--collapsible' : null,
     isCollapsed ? 'explore-region--collapsed' : 'explore-region--expanded',
     isGroupStreaming ? 'explore-region--streaming' : null,
   ].filter(Boolean).join(' ');
@@ -115,10 +148,12 @@ export const ExploreGroupRenderer: React.FC<ExploreGroupRendererProps> = ({
       data-tool-card-id={groupId}
       className={className}
     >
-      <div className="explore-region__header" onClick={handleToggle}>
-        <ChevronRight size={14} className="explore-region__icon" />
-        <span className="explore-region__summary">{displaySummary}</span>
-      </div>
+      {allowManualToggle && (
+        <div className="explore-region__header" onClick={handleToggle}>
+          <ChevronRight size={14} className="explore-region__icon" />
+          <span className="explore-region__summary">{displaySummary}</span>
+        </div>
+      )}
       <div className="explore-region__content-wrapper">
         <div className="explore-region__content-inner">
           <div ref={containerRef} className="explore-region__content">
