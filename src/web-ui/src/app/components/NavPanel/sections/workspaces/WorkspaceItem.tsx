@@ -199,6 +199,8 @@ const WorkspaceItem: React.FC<WorkspaceItemProps> = ({
       await flowChatManager.resetWorkspaceSessions(workspace.rootPath, {
         reinitialize: isActive,
         preferredMode: 'Claw',
+        ensureAssistantBootstrap:
+          isActive && workspace.workspaceKind === WorkspaceKind.Assistant,
       });
       notificationService.success(t('nav.workspaces.workspaceReset'), { duration: 2500 });
     } catch (error) {

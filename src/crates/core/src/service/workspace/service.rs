@@ -242,6 +242,7 @@ impl WorkspaceService {
             })?;
         }
 
+        // New assistant dirs get persona files at creation; coordinator also fills missing files when opening.
         initialize_workspace_persona_files(&path).await?;
 
         self.create_workspace(path, options).await
