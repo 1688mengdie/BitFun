@@ -153,7 +153,12 @@ export class FlowChatManager {
 
   async resetWorkspaceSessions(
     workspacePath: string,
-    options?: { reinitialize?: boolean; preferredMode?: string }
+    options?: {
+      reinitialize?: boolean;
+      preferredMode?: string;
+      /** After reinit, ask core to run assistant bootstrap if BOOTSTRAP.md is present (e.g. workspace reset). */
+      ensureAssistantBootstrap?: boolean;
+    }
   ): Promise<void> {
     const removedSessionIds = this.context.flowChatStore.removeSessionsByWorkspace(workspacePath);
 
@@ -179,6 +184,24 @@ export class FlowChatManager {
 
     if (!hasHistoricalSessions || !hasActiveWorkspaceSession) {
       await this.createChatSession({}, options.preferredMode);
+    }
+
+    if (options?.ensureAssistantBootstrap) {
+      const sid = this.context.flowChatStore.getState().activeSessionId;
+      if (sid) {
+        try {
+          const { agentAPI } = await import('@/infrastructure/api/service-api/AgentAPI');
+          await agentAPI.ensureAssistantBootstrap({
+            sessionId: sid,
+            workspacePath,
+          });
+        } catch (error) {
+          log.warn('ensureAssistantBootstrap after resetWorkspaceSessions failed', {
+            workspacePath,
+            error,
+          });
+        }
+      }
     }
   }
 
