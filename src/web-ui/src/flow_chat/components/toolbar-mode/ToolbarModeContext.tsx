@@ -141,7 +141,7 @@ export const ToolbarModeProvider: React.FC<ToolbarModeProviderProps> = ({ childr
       
       // Update state first so React renders the toolbar UI.
       setIsToolbarMode(true);
-      setIsExpanded(false); // Enter compact mode by default.
+      setIsExpanded(true); // Enter expanded FlowChat by default.
       
       if (isMaximized) {
         await win.unmaximize();
@@ -156,15 +156,15 @@ export const ToolbarModeProvider: React.FC<ToolbarModeProviderProps> = ({ childr
         const margin = Math.round(20 * scaleFactor);
         const taskbarHeight = Math.round(50 * scaleFactor); // Estimated taskbar height.
         
-        x = monitor.size.width - TOOLBAR_COMPACT_SIZE.width - margin;
-        y = monitor.size.height - TOOLBAR_COMPACT_SIZE.height - margin - taskbarHeight;
+        x = monitor.size.width - TOOLBAR_EXPANDED_SIZE.width - margin;
+        y = monitor.size.height - TOOLBAR_EXPANDED_SIZE.height - margin - taskbarHeight;
       }
       
       // Apply window props after toolbar UI renders.
       // macOS: avoid decorations toggles to preserve overlay title bar behavior.
       const toolbarWindowOps: Array<Promise<unknown>> = [
         win.setAlwaysOnTop(true),
-        win.setSize(new PhysicalSize(TOOLBAR_COMPACT_SIZE.width, TOOLBAR_COMPACT_SIZE.height)),
+        win.setSize(new PhysicalSize(TOOLBAR_EXPANDED_SIZE.width, TOOLBAR_EXPANDED_SIZE.height)),
         win.setPosition(new PhysicalPosition(x, y)),
         win.setResizable(true),
         win.setSkipTaskbar(true),
@@ -179,7 +179,7 @@ export const ToolbarModeProvider: React.FC<ToolbarModeProviderProps> = ({ childr
       }
       await Promise.all(toolbarWindowOps);
       
-      await win.setMinSize(new PhysicalSize(TOOLBAR_COMPACT_MIN.width, TOOLBAR_COMPACT_MIN.height));
+      await win.setMinSize(new PhysicalSize(TOOLBAR_EXPANDED_MIN.width, TOOLBAR_EXPANDED_MIN.height));
       
     } catch (error) {
       log.error('Failed to enable toolbar mode', error);

@@ -5,7 +5,7 @@
 
 import React, { useRef, useCallback, useEffect, useReducer, useState, useMemo } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
-import { ArrowUp, Image, ChevronsUp, ChevronsDown, RotateCcw, Plus, X, Sparkles, Loader2, ChevronRight } from 'lucide-react';
+import { ArrowUp, Image, ChevronsUp, ChevronsDown, RotateCcw, Plus, X, Sparkles, Loader2, ChevronRight, Files } from 'lucide-react';
 import { ContextDropZone, useContextStore } from '../../shared/context-system';
 import { useActiveSessionState } from '../hooks/useActiveSessionState';
 import { RichTextInput, type MentionState } from './RichTextInput';
@@ -1297,6 +1297,20 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     [handleImageInput]
   );
 
+  const handleBoostOpenAtContext = useCallback((e: React.SyntheticEvent) => {
+    e.stopPropagation();
+    dispatchMode({ type: 'CLOSE_DROPDOWN' });
+    dispatchInput({ type: 'ACTIVATE' });
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        const el = richTextInputRef.current;
+        if (el && typeof (el as unknown as { openMention?: () => void }).openMention === 'function') {
+          (el as unknown as { openMention: () => void }).openMention();
+        }
+      });
+    });
+  }, []);
+
   const handleOpenSkillsLibrary = useCallback(
     (e: React.MouseEvent) => {
       e.stopPropagation();
@@ -1771,6 +1785,17 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                       )}
 
                       <div className="bitfun-chat-input__boost-section">
+                        <div
+                          role="button"
+                          tabIndex={0}
+                          className="bitfun-chat-input__boost-context-row"
+                          onClick={handleBoostOpenAtContext}
+                          onKeyDown={e => e.key === 'Enter' && handleBoostOpenAtContext(e)}
+                        >
+                          <Files size={14} className="bitfun-chat-input__boost-context-icon" aria-hidden />
+                          <span>{t('chatInput.boostAddContext')}</span>
+                        </div>
+
                         <div
                           role="button"
                           tabIndex={0}

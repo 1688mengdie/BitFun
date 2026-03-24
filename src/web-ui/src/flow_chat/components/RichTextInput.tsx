@@ -557,11 +557,37 @@ export const RichTextInput = React.forwardRef<HTMLDivElement, RichTextInputProps
     onMentionStateChange?.({ isActive: false, query: '', startOffset: 0 });
   }, [createTagElement, getRangeByTextOffsets, handleInput, insertTagAtCursor, onMentionStateChange]);
 
+  /** Insert @ at caret and open the file/folder mention picker (e.g. from ChatInput + menu). */
+  const openMention = useCallback(() => {
+    const editor = internalRef.current;
+    if (!editor) return;
+
+    editor.focus();
+    const sel = window.getSelection();
+    let range: Range | null = null;
+    if (sel && sel.rangeCount > 0) {
+      range = sel.getRangeAt(0);
+    }
+    if (!range || !editor.contains(range.commonAncestorContainer)) {
+      range = document.createRange();
+      range.selectNodeContents(editor);
+      range.collapse(false);
+      sel?.removeAllRanges();
+      sel?.addRange(range);
+    }
+
+    document.execCommand('insertText', false, '@');
+    requestAnimationFrame(() => {
+      detectMention();
+    });
+  }, [detectMention, internalRef]);
+
   // Expose methods to parent
   useEffect(() => {
     if (internalRef.current) {
       (internalRef.current as any).insertTag = insertTagAtCursor;
       (internalRef.current as any).insertTagReplacingMention = insertTagReplacingMention;
+      (internalRef.current as any).openMention = openMention;
       (internalRef.current as any).closeMention = () => {
         if (mentionStateRef.current.isActive) {
           mentionStateRef.current = { isActive: false, query: '', startOffset: 0 };
@@ -569,7 +595,7 @@ export const RichTextInput = React.forwardRef<HTMLDivElement, RichTextInputProps
         }
       };
     }
-  }, [insertTagAtCursor, insertTagReplacingMention, onMentionStateChange, internalRef]);
+  }, [insertTagAtCursor, insertTagReplacingMention, openMention, onMentionStateChange, internalRef]);
 
   // Initialize and sync value changes from external sources.
   // Skip syncing when the change originated from local user input
