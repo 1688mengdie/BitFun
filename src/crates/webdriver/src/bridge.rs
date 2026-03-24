@@ -542,19 +542,60 @@ if (!window.__bitfunWd) {
     };
 
     const emitResult = async (payload) => {
-      if (window.__TAURI__ && window.__TAURI__.core && typeof window.__TAURI__.core.invoke === "function") {
-        await window.__TAURI__.core.invoke("webdriver_bridge_result", {
-          request: { payload }
-        });
-        return;
+      const errors = [];
+      const tauriInvoke = window.__TAURI__ && window.__TAURI__.core && typeof window.__TAURI__.core.invoke === "function"
+        ? window.__TAURI__.core.invoke.bind(window.__TAURI__.core)
+        : null;
+      const internalInvoke = window.__TAURI_INTERNALS__ && typeof window.__TAURI_INTERNALS__.invoke === "function"
+        ? window.__TAURI_INTERNALS__.invoke.bind(window.__TAURI_INTERNALS__)
+        : null;
+
+      if (tauriInvoke) {
+        try {
+          await tauriInvoke("webdriver_bridge_result", {
+            request: { payload }
+          });
+          return;
+        } catch (error) {
+          errors.push(`core.invoke command failed: ${safeStringify(error)}`);
+        }
       }
 
       if (window.__TAURI__ && window.__TAURI__.event && typeof window.__TAURI__.event.emit === "function") {
-        await window.__TAURI__.event.emit(EVENT_NAME, payload);
-        return;
+        try {
+          await window.__TAURI__.event.emit(EVENT_NAME, payload);
+          return;
+        } catch (error) {
+          errors.push(`window.__TAURI__.event.emit failed: ${safeStringify(error)}`);
+        }
       }
 
-      throw new Error("Tauri bridge unavailable");
+      if (internalInvoke) {
+        try {
+          await internalInvoke("plugin:event|emit", {
+            event: EVENT_NAME,
+            payload
+          });
+          return;
+        } catch (error) {
+          errors.push(`__TAURI_INTERNALS__.invoke(plugin:event|emit) failed: ${safeStringify(error)}`);
+        }
+
+        try {
+          await internalInvoke("webdriver_bridge_result", {
+            request: { payload }
+          });
+          return;
+        } catch (error) {
+          errors.push(`__TAURI_INTERNALS__.invoke command failed: ${safeStringify(error)}`);
+        }
+      }
+
+      throw new Error(
+        errors.length > 0
+          ? `Tauri bridge unavailable: ${errors.join("; ")}`
+          : "Tauri bridge unavailable"
+      );
     };
 
     const nextElementId = () => {
