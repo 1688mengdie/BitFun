@@ -1,11 +1,18 @@
 ---
 name: bitfun-webdriver-repro
-description: Use this skill when writing or updating BitFun desktop WebDriver/WDIO repro scripts, especially for flows like create project, open workspace, create session, and take screenshots in dev mode.
+description: Use this skill when working on BitFun desktop WebDriver/WDIO repro tasks in dev mode.
 ---
 
 # BitFun WebDriver Repro
 
-Write repro scripts against the real desktop app in `debug/dev` mode.
+Reproduce real desktop-app workflows in `debug/dev` mode and collect evidence the user can inspect.
+
+This skill is not only for writing or updating WDIO repro scripts. It is specifically for:
+
+- reproducing a concrete user operation or failure path against the real desktop app
+- capturing screenshots for key states and final outcomes
+- collecting relevant runtime logs from the repro
+- analyzing the screenshots when image understanding is available, so the run result is judged from both assertions and visible UI state
 
 ## Rules
 
@@ -13,6 +20,8 @@ Write repro scripts against the real desktop app in `debug/dev` mode.
 - Prefer existing WDIO helpers and screenshot helpers under `tests/e2e/`.
 - Treat screenshots as validation artifacts, not proof by themselves. Always assert the UI state that the screenshot is supposed to show.
 - After taking screenshots, inspect them. If left nav still shows `暂无普通工作区`, the repro is wrong even if backend assertions passed.
+- Keep the repro evidence set complete: script behavior, screenshots, and the logs needed to explain what happened during the run.
+- If multimodal inspection is available, use the screenshots as an additional debugging signal and call out mismatches between asserted state and visible UI state.
 
 ## Critical pitfall
 
@@ -84,3 +93,5 @@ TAURI_DEV_HOST=127.0.0.1 pnpm --dir src/web-ui exec vite --force --host 127.0.0.
 - One startup screenshot
 - One workspace-opened screenshot where the left nav shows the project
 - One final session screenshot where the header and chat input match the target workspace
+- Relevant runtime logs that explain the path to the reproduced state or failure
+- A short analysis of what the screenshots show, and, when multimodal inspection is available, whether the visible UI matches the expected state
