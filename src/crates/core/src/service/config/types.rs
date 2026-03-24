@@ -785,6 +785,11 @@ pub struct AIModelConfig {
     #[serde(default)]
     pub support_preserved_thinking: bool,
 
+    /// Whether to parse OpenAI-compatible text chunks containing `<think>...</think>` into
+    /// streaming reasoning content.
+    #[serde(default)]
+    pub inline_think_in_text: bool,
+
     /// Custom HTTP request headers.
     #[serde(default)]
     pub custom_headers: Option<std::collections::HashMap<String, String>>,
@@ -1196,6 +1201,7 @@ impl Default for AIModelConfig {
             metadata: None,
             enable_thinking_process: false,
             support_preserved_thinking: false,
+            inline_think_in_text: false,
             custom_headers: None,
             custom_headers_mode: None,
             skip_ssl_verify: false,

@@ -38,6 +38,11 @@ export interface FlowChatContextValue {
   onExploreGroupToggle?: (groupId: string) => void;
 
   /**
+   * Expand the specified explore group.
+   */
+  onExpandGroup?: (groupId: string) => void;
+
+  /**
    * Expand all explore groups within a turn.
    */
   onExpandAllInTurn?: (turnId: string) => void;

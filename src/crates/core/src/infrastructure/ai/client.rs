@@ -1365,7 +1365,12 @@ impl AIClient {
             let (tx, rx) = mpsc::unbounded_channel();
             let (tx_raw, rx_raw) = mpsc::unbounded_channel();
 
-            tokio::spawn(handle_openai_stream(response, tx, Some(tx_raw)));
+            tokio::spawn(handle_openai_stream(
+                response,
+                tx,
+                Some(tx_raw),
+                self.config.inline_think_in_text,
+            ));
 
             return Ok(StreamResponse {
                 stream: Box::pin(tokio_stream::wrappers::UnboundedReceiverStream::new(rx)),
@@ -2092,6 +2097,7 @@ mod tests {
             top_p: None,
             enable_thinking_process: false,
             support_preserved_thinking: false,
+            inline_think_in_text: false,
             custom_headers: None,
             custom_headers_mode: None,
             skip_ssl_verify: false,
@@ -2115,6 +2121,7 @@ mod tests {
             top_p: None,
             enable_thinking_process: false,
             support_preserved_thinking: false,
+            inline_think_in_text: false,
             custom_headers: None,
             custom_headers_mode: None,
             skip_ssl_verify: false,
@@ -2143,6 +2150,7 @@ mod tests {
             top_p: None,
             enable_thinking_process: false,
             support_preserved_thinking: false,
+            inline_think_in_text: false,
             custom_headers: None,
             custom_headers_mode: None,
             skip_ssl_verify: false,
@@ -2172,6 +2180,7 @@ mod tests {
             top_p: Some(0.8),
             enable_thinking_process: true,
             support_preserved_thinking: true,
+            inline_think_in_text: false,
             custom_headers: None,
             custom_headers_mode: None,
             skip_ssl_verify: false,
@@ -2250,6 +2259,7 @@ mod tests {
             top_p: None,
             enable_thinking_process: false,
             support_preserved_thinking: true,
+            inline_think_in_text: false,
             custom_headers: None,
             custom_headers_mode: None,
             skip_ssl_verify: false,

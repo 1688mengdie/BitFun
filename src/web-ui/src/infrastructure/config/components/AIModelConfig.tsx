@@ -512,6 +512,7 @@ const AIModelConfig: React.FC = () => {
       metadata: config.metadata || {},
       enable_thinking_process: config.enable_thinking_process ?? false,
       support_preserved_thinking: config.support_preserved_thinking ?? false,
+      inline_think_in_text: config.inline_think_in_text ?? false,
       reasoning_effort: config.reasoning_effort,
       custom_headers: config.custom_headers,
       custom_headers_mode: config.custom_headers_mode,
@@ -525,6 +526,7 @@ const AIModelConfig: React.FC = () => {
     base_url: config.base_url,
     api_key: config.api_key,
     model_name: config.model_name,
+    inline_think_in_text: config.inline_think_in_text ?? false,
     skip_ssl_verify: config.skip_ssl_verify ?? false,
     custom_headers_mode: config.custom_headers_mode || null,
     custom_headers: config.custom_headers || null,
@@ -632,7 +634,8 @@ const AIModelConfig: React.FC = () => {
       category: 'general_chat',
       capabilities: ['text_chat', 'function_calling'],
       recommended_for: [],
-      metadata: {}
+      metadata: {},
+      inline_think_in_text: false,
     });
     setSelectedModelDrafts(
       configuredProviderModels.length > 0
@@ -668,7 +671,8 @@ const AIModelConfig: React.FC = () => {
       category: 'general_chat',
       capabilities: ['text_chat'],
       recommended_for: [],
-      metadata: {}
+      metadata: {},
+      inline_think_in_text: false,
     });
     setSelectedModelDrafts([]);
     setShowAdvancedSettings(false);  
@@ -702,6 +706,7 @@ const AIModelConfig: React.FC = () => {
       metadata: config.metadata || {},
       enable_thinking_process: config.enable_thinking_process ?? false,
       support_preserved_thinking: config.support_preserved_thinking ?? false,
+      inline_think_in_text: config.inline_think_in_text ?? false,
       reasoning_effort: config.reasoning_effort,
       custom_headers: config.custom_headers,
       custom_headers_mode: config.custom_headers_mode,
@@ -710,6 +715,7 @@ const AIModelConfig: React.FC = () => {
     });
     setSelectedModelDrafts(createDraftsFromConfigs(configuredProviderModels));
     setShowAdvancedSettings(
+      !!config.inline_think_in_text ||
       !!config.skip_ssl_verify ||
       (!!config.custom_request_body && config.custom_request_body.trim() !== '') ||
       (!!config.custom_headers && Object.keys(config.custom_headers).length > 0)
@@ -733,7 +739,12 @@ const AIModelConfig: React.FC = () => {
     
     const hasCustomHeaders = !!config.custom_headers && Object.keys(config.custom_headers).length > 0;
     const hasCustomBody = !!config.custom_request_body && config.custom_request_body.trim() !== '';
-    setShowAdvancedSettings(hasCustomHeaders || hasCustomBody || !!config.skip_ssl_verify);
+    setShowAdvancedSettings(
+      hasCustomHeaders ||
+      hasCustomBody ||
+      !!config.skip_ssl_verify ||
+      !!config.inline_think_in_text
+    );
     setIsEditing(true);
   };
 
@@ -786,6 +797,7 @@ const AIModelConfig: React.FC = () => {
           metadata: editingConfig.metadata,
           enable_thinking_process: draft.enableThinking,
           support_preserved_thinking: editingConfig.support_preserved_thinking ?? false,
+          inline_think_in_text: editingConfig.inline_think_in_text ?? false,
           reasoning_effort: editingConfig.reasoning_effort,
           custom_headers: editingConfig.custom_headers,
           custom_headers_mode: editingConfig.custom_headers_mode,
@@ -1498,6 +1510,7 @@ const AIModelConfig: React.FC = () => {
                           ...prev,
                           provider,
                           request_url: resolveRequestUrl(prev?.base_url || '', provider, prev?.model_name || ''),
+                          inline_think_in_text: provider === 'openai' ? (prev?.inline_think_in_text ?? false) : false,
                           reasoning_effort: isResponsesProvider(provider) ? (prev?.reasoning_effort || 'medium') : undefined,
                         }));
                       }} placeholder={t('form.providerPlaceholder')} options={requestFormatOptions} size="small" />
@@ -1578,9 +1591,13 @@ const AIModelConfig: React.FC = () => {
 
             {showAdvancedSettings && (
               <>
-                {editingConfig.enable_thinking_process && (
-                  <ConfigPageRow label={t('thinking.preserve')} description={t('thinking.preserveHint')} align="center">
-                    <Switch checked={editingConfig.support_preserved_thinking ?? false} onChange={(e) => setEditingConfig(prev => ({ ...prev, support_preserved_thinking: e.target.checked }))} size="small" />
+                {editingConfig.provider === 'openai' && (
+                  <ConfigPageRow label={t('advancedSettings.inlineThinkInText.label')} description={t('advancedSettings.inlineThinkInText.hint')} align="center">
+                    <Switch
+                      checked={editingConfig.inline_think_in_text ?? false}
+                      onChange={(e) => setEditingConfig(prev => ({ ...prev, inline_think_in_text: e.target.checked }))}
+                      size="small"
+                    />
                   </ConfigPageRow>
                 )}
                 <ConfigPageRow label={t('advancedSettings.skipSslVerify.label')} align="center">

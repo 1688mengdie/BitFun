@@ -51,6 +51,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
   const {
     exploreGroupStates,
     onExploreGroupToggle: handleExploreGroupToggle,
+    onExpandGroup: handleExpandGroup,
     onExpandAllInTurn: handleExpandAllInTurn,
     onCollapseGroup: handleCollapseGroup,
   } = useExploreGroupState(virtualItems);
@@ -89,6 +90,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     },
     exploreGroupStates,
     onExploreGroupToggle: handleExploreGroupToggle,
+    onExpandGroup: handleExpandGroup,
     onExpandAllInTurn: handleExpandAllInTurn,
     onCollapseGroup: handleCollapseGroup,
   }), [
@@ -102,6 +104,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     config,
     exploreGroupStates,
     handleExploreGroupToggle,
+    handleExpandGroup,
     handleExpandAllInTurn,
     handleCollapseGroup,
   ]);

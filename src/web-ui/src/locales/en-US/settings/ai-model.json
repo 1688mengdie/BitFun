@@ -258,6 +258,10 @@
   },
   "advancedSettings": {
     "title": "Advanced Settings",
+    "inlineThinkInText": {
+      "label": "Parse <think> Tags In Text",
+      "hint": "Split OpenAI-compatible text streams containing <think>...</think> into live reasoning content. Disabled by default."
+    },
     "skipSslVerify": {
       "label": "Skip SSL Certificate Verification",
       "warning": "Skipping SSL verification is a security risk, use only in test or internal network environments!"

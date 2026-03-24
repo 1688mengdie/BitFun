@@ -130,6 +130,9 @@ export interface AIModelConfig {
   
   support_preserved_thinking?: boolean;
 
+  /** Parse `<think>...</think>` text chunks into streaming reasoning content. */
+  inline_think_in_text?: boolean;
+
   /** Reasoning effort for OpenAI Responses API ("low" | "medium" | "high" | "xhigh") */
   reasoning_effort?: string;
 }
