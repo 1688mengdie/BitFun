@@ -1,7 +1,9 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use serde_json::Value;
 use tauri::Manager;
+use tokio::time::Instant;
 
 use crate::bridge;
 use crate::platform::{self, ElementScreenshotMetadata, PrintOptions};
@@ -33,9 +35,15 @@ impl BridgeExecutor {
         args: Vec<Value>,
         async_mode: bool,
     ) -> Result<Value, WebDriverErrorResponse> {
-        bridge::run_script(self.state.clone(), &self.session.id, script, args, async_mode)
-            .await
-            .map_err(map_bridge_error)
+        bridge::run_script(
+            self.state.clone(),
+            &self.session.id,
+            script,
+            args,
+            async_mode,
+        )
+        .await
+        .map_err(map_bridge_error)
     }
 
     pub async fn find_elements(
@@ -45,19 +53,33 @@ impl BridgeExecutor {
         value: &str,
     ) -> Result<Vec<Value>, WebDriverErrorResponse> {
         let strategy = LocatorStrategy::try_from(using)?;
-        let result = self
-            .run_script(
-                "(rootId, using, value) => window.__bitfunWd.findElements(rootId, using, value)",
-                vec![
-                    root_element_id.map(Value::String).unwrap_or(Value::Null),
-                    Value::String(strategy.as_str().to_string()),
-                    Value::String(value.to_string()),
-                ],
-                false,
-            )
-            .await?;
+        let poll_interval = Duration::from_millis(50);
+        let implicit_timeout = Duration::from_millis(self.session.timeouts.implicit);
+        let deadline = Instant::now() + implicit_timeout;
 
-        Ok(result.as_array().cloned().unwrap_or_default())
+        loop {
+            let result = self
+                .run_script(
+                    "(rootId, using, value) => window.__bitfunWd.findElements(rootId, using, value)",
+                    vec![
+                        root_element_id.clone().map(Value::String).unwrap_or(Value::Null),
+                        Value::String(strategy.as_str().to_string()),
+                        Value::String(value.to_string()),
+                    ],
+                    false,
+                )
+                .await?;
+
+            let elements = result.as_array().cloned().unwrap_or_default();
+            if !elements.is_empty() || Instant::now() >= deadline {
+                return Ok(elements);
+            }
+
+            tokio::time::sleep(
+                poll_interval.min(deadline.saturating_duration_since(Instant::now())),
+            )
+            .await;
+        }
     }
 
     pub async fn take_screenshot(&self) -> Result<String, WebDriverErrorResponse> {
@@ -86,17 +108,21 @@ impl BridgeExecutor {
                 false,
             )
             .await?;
-        let metadata: ElementScreenshotMetadata = serde_json::from_value(metadata).map_err(|error| {
-            WebDriverErrorResponse::unknown_error(format!(
-                "Failed to decode element screenshot metadata: {error}"
-            ))
-        })?;
+        let metadata: ElementScreenshotMetadata =
+            serde_json::from_value(metadata).map_err(|error| {
+                WebDriverErrorResponse::unknown_error(format!(
+                    "Failed to decode element screenshot metadata: {error}"
+                ))
+            })?;
 
         let screenshot = self.take_screenshot().await?;
         platform::crop_screenshot(screenshot, metadata)
     }
 
-    pub async fn print_page(&self, options: PrintOptions) -> Result<String, WebDriverErrorResponse> {
+    pub async fn print_page(
+        &self,
+        options: PrintOptions,
+    ) -> Result<String, WebDriverErrorResponse> {
         let webview = self
             .state
             .app
@@ -110,6 +136,44 @@ impl BridgeExecutor {
 
         platform::print_page(webview, self.session.timeouts.script, &options).await
     }
+
+    pub async fn wait_for_page_load(&self) -> Result<(), WebDriverErrorResponse> {
+        let page_load_timeout = Duration::from_millis(self.session.timeouts.page_load);
+        if page_load_timeout.is_zero() {
+            return Ok(());
+        }
+
+        let poll_interval = Duration::from_millis(50);
+        let deadline = Instant::now() + page_load_timeout;
+
+        loop {
+            match self
+                .run_script("() => document.readyState || ''", Vec::new(), false)
+                .await
+            {
+                Ok(Value::String(ready_state)) if ready_state == "complete" => return Ok(()),
+                Ok(_) => {}
+                Err(error) if should_retry_page_load(&error) => {}
+                Err(error) => return Err(error),
+            }
+
+            if Instant::now() >= deadline {
+                return Err(WebDriverErrorResponse::timeout(format!(
+                    "Page load timed out after {}ms",
+                    self.session.timeouts.page_load
+                )));
+            }
+
+            tokio::time::sleep(
+                poll_interval.min(deadline.saturating_duration_since(Instant::now())),
+            )
+            .await;
+        }
+    }
+}
+
+fn should_retry_page_load(error: &WebDriverErrorResponse) -> bool {
+    matches!(error.error.as_str(), "javascript error" | "unknown error")
 }
 
 fn map_bridge_error(error: WebDriverErrorResponse) -> WebDriverErrorResponse {

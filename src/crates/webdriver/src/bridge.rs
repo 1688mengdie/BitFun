@@ -108,8 +108,15 @@ pub async fn run_script(
 
     #[cfg(target_os = "macos")]
     {
-        return run_script_native_macos(webview, timeout_ms, script, &args, async_mode, &frame_context)
-            .await;
+        return run_script_native_macos(
+            webview,
+            timeout_ms,
+            script,
+            &args,
+            async_mode,
+            &frame_context,
+        )
+        .await;
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -225,7 +232,9 @@ async fn run_script_native_macos<R: tauri::Runtime>(
 
     let response_payload = tokio::time::timeout(Duration::from_millis(timeout_ms), receiver)
         .await
-        .map_err(|_| WebDriverErrorResponse::timeout(format!("Script timed out after {timeout_ms}ms")))?
+        .map_err(|_| {
+            WebDriverErrorResponse::timeout(format!("Script timed out after {timeout_ms}ms"))
+        })?
         .map_err(|_| {
             WebDriverErrorResponse::unknown_error("Script response channel closed unexpectedly")
         })?
@@ -748,9 +757,9 @@ if (!window.__bitfunWd) {
       return getElement(rootId) || getCurrentDocument(frameContext);
     };
 
-    const findByXpath = (root, xpath) => {
+    const findByXpath = (root, xpath, frameContext = currentFrameContext) => {
       const results = [];
-      const ownerDocument = root && root.ownerDocument ? root.ownerDocument : getCurrentDocument();
+      const ownerDocument = root && root.ownerDocument ? root.ownerDocument : getCurrentDocument(frameContext);
       const iterator = ownerDocument.evaluate(
         xpath,
         root,
@@ -785,7 +794,7 @@ if (!window.__bitfunWd) {
           matches = Array.from(root.getElementsByClassName(value));
           break;
         case "xpath":
-          matches = findByXpath(root, value);
+          matches = findByXpath(root, value, frameContext);
           break;
         case "link text":
           matches = Array.from(root.querySelectorAll("a")).filter((item) => (item.textContent || "").trim() === value);
@@ -1181,6 +1190,7 @@ if (!window.__bitfunWd) {
         return false;
       }
       const ownerWindow = getOwnerWindow(target, frameContext);
+      const runtime = ensureRuntimeState();
       return target.dispatchEvent(
         new ownerWindow.MouseEvent(type, {
           bubbles: true,
@@ -1188,7 +1198,11 @@ if (!window.__bitfunWd) {
           clientX: x,
           clientY: y,
           button,
-          buttons
+          buttons,
+          ctrlKey: !!runtime.modifiers.ctrl,
+          shiftKey: !!runtime.modifiers.shift,
+          altKey: !!runtime.modifiers.alt,
+          metaKey: !!runtime.modifiers.meta
         })
       );
     };
@@ -1365,7 +1379,11 @@ if (!window.__bitfunWd) {
                   clientX: runtime.pointer.x,
                   clientY: runtime.pointer.y,
                   deltaX: Number(action.deltaX) || 0,
-                  deltaY: Number(action.deltaY) || 0
+                  deltaY: Number(action.deltaY) || 0,
+                  ctrlKey: !!runtime.modifiers.ctrl,
+                  shiftKey: !!runtime.modifiers.shift,
+                  altKey: !!runtime.modifiers.alt,
+                  metaKey: !!runtime.modifiers.meta
                 })
               );
             }

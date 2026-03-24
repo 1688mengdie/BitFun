@@ -169,32 +169,33 @@ pub async fn release(
     Path(session_id): Path<String>,
 ) -> WebDriverResult {
     ensure_session(&state, &session_id).await?;
-    let (pressed_keys, pressed_buttons) = {
-        let mut sessions = state.sessions.write().await;
-        let session = sessions.get_mut(&session_id)?;
-        let pressed_keys = session
-            .action_state
-            .pressed_keys
-            .drain()
-            .collect::<Vec<_>>();
-        let pressed_buttons = std::mem::take(&mut session.action_state.pressed_buttons)
-            .into_iter()
-            .flat_map(|(source_id, buttons)| {
-                buttons
-                    .into_iter()
-                    .map(move |button| json!({ "sourceId": source_id, "button": button }))
-            })
-            .collect::<Vec<_>>();
-        (pressed_keys, pressed_buttons)
+    let action_state = {
+        let sessions = state.sessions.read().await;
+        sessions.get(&session_id)?.action_state.clone()
     };
 
+    let pressed_keys = action_state.pressed_keys.into_iter().collect::<Vec<_>>();
+    let pressed_buttons = action_state
+        .pressed_buttons
+        .into_iter()
+        .flat_map(|(source_id, buttons)| {
+            buttons
+                .into_iter()
+                .map(move |button| json!({ "sourceId": source_id, "button": button }))
+        })
+        .collect::<Vec<_>>();
+
     run_script(
-        state,
+        state.clone(),
         &session_id,
         "async (pressedKeys, pressedButtons) => { await window.__bitfunWd.releaseActions(pressedKeys, pressedButtons); return null; }",
         vec![json!(pressed_keys), json!(pressed_buttons)],
         false,
     )
     .await?;
+
+    let mut sessions = state.sessions.write().await;
+    let session = sessions.get_mut(&session_id)?;
+    session.action_state = Default::default();
     Ok(WebDriverResponse::null())
 }

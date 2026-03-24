@@ -145,6 +145,43 @@ describe('L0 Embedded WebDriver Protocol', () => {
       body: JSON.stringify({ using: 'class name', value: 'wd-by-class' }),
     });
     expect(byClass.value[ELEMENT_KEY]).toBeDefined();
+
+    const byXpath = await driverRequest<Record<string, string>>(`/session/${sessionId}/element`, {
+      method: 'POST',
+      body: JSON.stringify({ using: 'xpath', value: '//*[@id="wd-by-id"]' }),
+    });
+    expect(byXpath.value[ELEMENT_KEY]).toBeDefined();
+  });
+
+  it('honors implicit timeout while waiting for elements', async () => {
+    const sessionId = browser.sessionId;
+    const delayedId = `wd-delayed-${Date.now()}`;
+
+    await driverRequest<null>(`/session/${sessionId}/timeouts`, {
+      method: 'POST',
+      body: JSON.stringify({ implicit: 500 }),
+    });
+
+    await browser.execute((elementId: string) => {
+      document.getElementById(elementId)?.remove();
+      window.setTimeout(() => {
+        const element = document.createElement('div');
+        element.id = elementId;
+        element.textContent = 'delayed';
+        document.body.appendChild(element);
+      }, 150);
+    }, delayedId);
+
+    const found = await driverRequest<Record<string, string>>(`/session/${sessionId}/element`, {
+      method: 'POST',
+      body: JSON.stringify({ using: 'id', value: delayedId }),
+    });
+    expect(found.value[ELEMENT_KEY]).toBeDefined();
+
+    await driverRequest<null>(`/session/${sessionId}/timeouts`, {
+      method: 'POST',
+      body: JSON.stringify({ implicit: 0 }),
+    });
   });
 
   it('uses the native cookie store endpoints', async () => {
@@ -326,6 +363,72 @@ describe('L0 Embedded WebDriver Protocol', () => {
     await browser.pause(100);
     const scrollY = await browser.execute(() => window.scrollY);
     expect(scrollY).toBeGreaterThan(0);
+  });
+
+  it('propagates modifier state into pointer-generated click events', async () => {
+    const sessionId = browser.sessionId;
+
+    await browser.execute(() => {
+      let button = document.getElementById('wd-modifier-click') as HTMLButtonElement | null;
+      const wdWindow = window as typeof window & { __wdModifierClick?: boolean };
+      wdWindow.__wdModifierClick = false;
+
+      if (!button) {
+        button = document.createElement('button');
+        button.id = 'wd-modifier-click';
+        button.textContent = 'modifier-click';
+        button.style.position = 'fixed';
+        button.style.left = '48px';
+        button.style.top = '48px';
+        document.body.appendChild(button);
+      }
+
+      button.onclick = (event) => {
+        wdWindow.__wdModifierClick = event.shiftKey;
+      };
+    });
+
+    const button = await driverRequest<Record<string, string>>(`/session/${sessionId}/element`, {
+      method: 'POST',
+      body: JSON.stringify({ using: 'id', value: 'wd-modifier-click' }),
+    });
+    const buttonId = button.value[ELEMENT_KEY];
+
+    await driverRequest<null>(`/session/${sessionId}/actions`, {
+      method: 'POST',
+      body: JSON.stringify({
+        actions: [
+          {
+            type: 'key',
+            id: 'keyboard',
+            actions: [
+              { type: 'keyDown', value: '\uE008' },
+            ],
+          },
+          {
+            type: 'pointer',
+            id: 'mouse',
+            parameters: { pointerType: 'mouse' },
+            actions: [
+              { type: 'pointerMove', origin: { [ELEMENT_KEY]: buttonId }, x: 0, y: 0 },
+              { type: 'pointerDown', button: 0 },
+              { type: 'pointerUp', button: 0 },
+            ],
+          },
+        ],
+      }),
+    });
+
+    await driverRequest<null>(`/session/${sessionId}/actions`, {
+      method: 'DELETE',
+      body: '{}',
+    });
+
+    const modifierCaptured = await browser.execute(() => {
+      const wdWindow = window as typeof window & { __wdModifierClick?: boolean };
+      return wdWindow.__wdModifierClick === true;
+    });
+    expect(modifierCaptured).toBe(true);
   });
 
   it('releases pressed keys when DELETE /actions is called', async () => {

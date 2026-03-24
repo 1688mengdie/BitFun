@@ -59,6 +59,8 @@ pub async fn switch_to_window(
     let mut sessions = state.sessions.write().await;
     let session = sessions.get_mut(&session_id)?;
     session.current_window = request.handle;
+    session.frame_context.clear();
+    session.action_state = Default::default();
 
     Ok(WebDriverResponse::null())
 }
@@ -93,6 +95,8 @@ pub async fn close_window(
     if let Some(next_handle) = next_handle {
         session.current_window = next_handle;
     }
+    session.frame_context.clear();
+    session.action_state = Default::default();
     Ok(WebDriverResponse::success(handles))
 }
 
