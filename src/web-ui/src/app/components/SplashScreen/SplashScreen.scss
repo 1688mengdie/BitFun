@@ -16,7 +16,9 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--color-bg-primary);
+  // Explicit dark background as fallback for Linux WebKitGTK
+  // where CSS variable might not load synchronously
+  background: var(--color-bg-primary, #121214);
   pointer-events: none;
 
   // ── Exit state ─────────────────────────────────────────────────────────────
@@ -45,6 +47,8 @@
 
 .splash-screen__logo-wrap {
   animation: splash-logo-idle 3.2s ease-in-out infinite;
+  // WebKit prefix for Linux WebKitGTK compatibility
+  -webkit-animation: splash-logo-idle 3.2s ease-in-out infinite;
 }
 
 .splash-screen__logo {
@@ -53,6 +57,8 @@
   height: 112px;
   border-radius: $size-radius-lg;
   user-select: none;
+  // Ensure proper rendering on Linux
+  -webkit-user-select: none;
 }
 
 // ── Keyframes ─────────────────────────────────────────────────────────────────
@@ -60,11 +66,11 @@
 // Idle logo: soft opacity pulse with a slight breathing scale
 @keyframes splash-logo-idle {
   0%, 100% {
-    opacity: 0.38;
+    opacity: 0.85;
     transform: scale(0.98);
   }
   50% {
-    opacity: 0.98;
+    opacity: 1;
     transform: scale(1);
   }
 }
