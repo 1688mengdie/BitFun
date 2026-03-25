@@ -177,6 +177,7 @@
   "themeSetup": {
     "title": "Theme & Launch",
     "subtitle": "Choose your startup theme, then launch",
+    "followSystem": "Match system",
     "skip": "Skip theme and launch",
     "themeNames": {
       "bitfun-dark": "Dark",

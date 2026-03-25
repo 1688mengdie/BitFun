@@ -177,6 +177,7 @@
   "themeSetup": {
     "title": "主题与启动",
     "subtitle": "选择首次启动主题，然后开始使用",
+    "followSystem": "跟随系统",
     "skip": "跳过主题并启动",
     "themeNames": {
       "bitfun-dark": "暗色",

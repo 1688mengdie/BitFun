@@ -20,6 +20,11 @@ export type ThemeId =
   | 'bitfun-cyber'
   | 'bitfun-slate';
 
+/** Matches main app `themes.current` when following OS appearance. */
+export const SYSTEM_THEME_ID = 'system' as const;
+
+export type ThemePreferenceId = ThemeId | typeof SYSTEM_THEME_ID;
+
 export interface ModelConfig {
   provider: string;
   apiKey: string;
@@ -55,7 +60,7 @@ export interface InstallOptions {
   addToPath: boolean;
   launchAfterInstall: boolean;
   appLanguage: 'zh-CN' | 'en-US';
-  themePreference: ThemeId;
+  themePreference: ThemePreferenceId;
   modelConfig: ModelConfig | null;
 }
 
@@ -83,6 +88,6 @@ export const DEFAULT_OPTIONS: InstallOptions = {
   addToPath: true,
   launchAfterInstall: true,
   appLanguage: 'zh-CN',
-  themePreference: 'bitfun-light',
+  themePreference: SYSTEM_THEME_ID,
   modelConfig: null,
 };

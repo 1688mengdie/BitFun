@@ -590,6 +590,7 @@ pub fn close_installer(window: Window) {
 #[tauri::command]
 pub fn set_theme_preference(theme_preference: String) -> Result<(), String> {
     let allowed = [
+        "system",
         "bitfun-dark",
         "bitfun-light",
         "bitfun-midnight",
