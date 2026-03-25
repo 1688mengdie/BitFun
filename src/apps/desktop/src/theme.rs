@@ -2,6 +2,7 @@
 
 use bitfun_core::infrastructure::try_get_path_manager_arc;
 use bitfun_core::service::config::types::GlobalConfig;
+use dark_light::Mode;
 use log::{debug, error, warn};
 use tauri::WebviewUrl;
 
@@ -147,13 +148,27 @@ impl ThemeConfig {
             .map(|t| t.current.as_str())
             .unwrap_or("bitfun-light");
 
-        match Self::get_builtin_theme(theme_id) {
+        let resolved_id = Self::resolve_builtin_theme_id(theme_id);
+
+        match Self::get_builtin_theme(resolved_id) {
             Some(config) => config,
             None => {
                 warn!("Unknown theme ID: {}, using default theme", theme_id);
                 default
             }
         }
+    }
+
+    /// Maps config `themes.current` to a built-in id for splash / window chrome.
+    /// `system` follows OS light/dark (aligned with web-ui `getSystemPreferredDefaultThemeId`).
+    fn resolve_builtin_theme_id(theme_id: &str) -> &str {
+        if theme_id == "system" {
+            return match dark_light::detect() {
+                Mode::Dark => "bitfun-dark",
+                Mode::Light | Mode::Default => "bitfun-light",
+            };
+        }
+        theme_id
     }
 
     pub fn generate_init_script(&self) -> String {

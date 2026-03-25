@@ -58,7 +58,6 @@ import zhCNSettingsAgents from '../../../locales/zh-CN/settings/agents.json';
 import zhCNSettingsDefaultModel from '../../../locales/zh-CN/settings/default-model.json';
 
 import zhCNMermaidEditor from '../../../locales/zh-CN/mermaid-editor.json';
-import zhCNOnboarding from '../../../locales/zh-CN/onboarding.json';
 
 import enUSCommon from '../../../locales/en-US/common.json';
 import enUSFlowChat from '../../../locales/en-US/flow-chat.json';
@@ -95,7 +94,6 @@ import enUSSettingsAgents from '../../../locales/en-US/settings/agents.json';
 import enUSSettingsDefaultModel from '../../../locales/en-US/settings/default-model.json';
 
 import enUSMermaidEditor from '../../../locales/en-US/mermaid-editor.json';
-import enUSOnboarding from '../../../locales/en-US/onboarding.json';
 
 import { createLogger } from '@/shared/utils/logger';
 
@@ -139,7 +137,6 @@ const resources = {
     'settings/default-model': zhCNSettingsDefaultModel,
     
     'mermaid-editor': zhCNMermaidEditor,
-    'onboarding': zhCNOnboarding,
   },
   'en-US': {
     common: enUSCommon,
@@ -177,7 +174,6 @@ const resources = {
     'settings/default-model': enUSSettingsDefaultModel,
     
     'mermaid-editor': enUSMermaidEditor,
-    'onboarding': enUSOnboarding,
   },
 };
 
@@ -237,7 +233,6 @@ export class I18nService {
           'settings/default-model',
           
           'mermaid-editor',
-          'onboarding',
         ],
         interpolation: {
           escapeValue: false,

@@ -7,6 +7,7 @@ import { ProgressPage } from './pages/Progress';
 import { ThemeSetup } from './pages/ThemeSetup';
 import { UninstallPage } from './pages/Uninstall';
 import { useInstaller } from './hooks/useInstaller';
+import { useSyncInstallerRootTheme } from './theme/installerThemeRuntime';
 import './styles/global.css';
 
 const STEP_NUMBERS: Record<string, number> = {
@@ -18,6 +19,7 @@ const STEP_NUMBERS: Record<string, number> = {
 
 function App() {
   const installer = useInstaller();
+  useSyncInstallerRootTheme(installer.options.themePreference);
   const { t, i18n } = useTranslation();
 
   const handleLanguageSelect = (lang: string) => {

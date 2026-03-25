@@ -50,23 +50,21 @@ export class ThemeService {
    
   async initialize(): Promise<void> {
     try {
-      
-      const preInjectedThemeId = document.documentElement.getAttribute('data-theme');
-      
-      if (preInjectedThemeId && this.themes.has(preInjectedThemeId as ThemeId)) {
-        await this.applyTheme(preInjectedThemeId as ThemeId);
+      const saved = await this.loadThemeSelection();
+
+      if (saved === SYSTEM_THEME_ID) {
+        await this.applyTheme(SYSTEM_THEME_ID);
+      } else if (saved && this.themes.has(saved)) {
+        await this.applyTheme(saved);
       } else {
-        const saved = await this.loadThemeSelection();
-        if (saved === SYSTEM_THEME_ID) {
-          await this.applyTheme(SYSTEM_THEME_ID);
-        } else if (saved && this.themes.has(saved)) {
-          await this.applyTheme(saved);
+        const preInjectedThemeId = document.documentElement.getAttribute('data-theme');
+        if (preInjectedThemeId && this.themes.has(preInjectedThemeId as ThemeId)) {
+          await this.applyTheme(preInjectedThemeId as ThemeId);
         } else {
           await this.applyTheme(SYSTEM_THEME_ID);
         }
       }
-      
-      
+
       this.loadUserThemes().catch(() => {
         
       });
