@@ -402,7 +402,12 @@ describe('L0 Embedded WebDriver Protocol', () => {
     expect(tracker.currentValue).toBe('foob');
   });
 
-  it('returns cropped element screenshots', async () => {
+  it('returns cropped element screenshots', async function () {
+    const capabilities = browser.capabilities as Record<string, unknown>;
+    if (!capabilities.takesScreenshot) {
+      this.skip();
+    }
+
     const cssWidth = 96;
     const cssHeight = 48;
 

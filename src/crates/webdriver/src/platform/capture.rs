@@ -206,7 +206,7 @@ mod imp {
         ICoreWebView2_7, COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG,
         COREWEBVIEW2_PRINT_ORIENTATION_LANDSCAPE, COREWEBVIEW2_PRINT_ORIENTATION_PORTRAIT,
     };
-    use windows::core::{implement, HSTRING, Interface};
+    use windows::core::{implement, Interface, HSTRING};
     use windows::Win32::Foundation::HGLOBAL;
     use windows::Win32::System::Com::StructuredStorage::CreateStreamOnHGlobal;
     use windows::Win32::System::Com::{
@@ -551,185 +551,25 @@ mod imp {
 
 #[cfg(target_os = "linux")]
 mod imp {
-    use std::sync::Arc;
-    use std::time::Duration;
-
     use super::*;
-    use gtk::prelude::*;
-    use gtk::{gio, glib};
-    use tokio::sync::oneshot;
-    use webkit2gtk::prelude::*;
 
     pub async fn take_screenshot<R: Runtime>(
-        webview: Webview<R>,
-        timeout_ms: u64,
+        _webview: Webview<R>,
+        _timeout_ms: u64,
     ) -> Result<String, WebDriverErrorResponse> {
-        let (tx, rx) = oneshot::channel();
-
-        let result = webview.with_webview(move |platform_webview| {
-            let webview = platform_webview.inner();
-            let sender = Arc::new(std::sync::Mutex::new(Some(tx)));
-
-            webview.snapshot(
-                webkit2gtk::SnapshotRegion::FullDocument,
-                webkit2gtk::SnapshotOptions::TRANSPARENT_BACKGROUND,
-                None::<&gio::Cancellable>,
-                move |result| {
-                    let response = result
-                        .map_err(|error| error.to_string())
-                        .and_then(|surface| {
-                            let mut png = Vec::new();
-                            surface
-                                .write_to_png(&mut png)
-                                .map_err(|error| error.to_string())?;
-                            Ok(BASE64_STANDARD.encode(png))
-                        });
-
-                    if let Ok(mut guard) = sender.lock() {
-                        if let Some(sender) = guard.take() {
-                            let _ = sender.send(response);
-                        }
-                    }
-                },
-            );
-        });
-
-        if let Err(error) = result {
-            return Err(WebDriverErrorResponse::unknown_error(format!(
-                "Failed to capture screenshot: {error}"
-            )));
-        }
-
-        await_base64_response(rx, timeout_ms, "Screenshot").await
+        Err(WebDriverErrorResponse::unsupported_operation(
+            "Linux embedded webdriver screenshots are temporarily disabled",
+        ))
     }
 
     pub async fn print_page<R: Runtime>(
-        webview: Webview<R>,
-        timeout_ms: u64,
-        options: &PrintOptions,
+        _webview: Webview<R>,
+        _timeout_ms: u64,
+        _options: &PrintOptions,
     ) -> Result<String, WebDriverErrorResponse> {
-        let (tx, rx) = oneshot::channel();
-        let tx = Arc::new(std::sync::Mutex::new(Some(tx)));
-
-        let temp_dir = tempfile::TempDir::new().map_err(|error| {
-            WebDriverErrorResponse::unknown_error(format!("Failed to create temp dir: {error}"))
-        })?;
-        let pdf_path = temp_dir.path().join("print.pdf");
-        let pdf_path_clone = pdf_path.clone();
-
-        let options = options.clone();
-
-        let result = webview.with_webview(move |platform_webview| {
-            let webview = platform_webview.inner();
-            let operation = webkit2gtk::PrintOperation::new(webview);
-            let settings = gtk::PrintSettings::new();
-            let page_setup = gtk::PageSetup::new();
-
-            if let Some(orientation) = options.orientation.as_deref() {
-                page_setup.set_orientation(if orientation == "landscape" {
-                    gtk::PageOrientation::Landscape
-                } else {
-                    gtk::PageOrientation::Portrait
-                });
-            }
-
-            let paper_size = gtk::PaperSize::new_custom(
-                "bitfun",
-                "BitFun Custom",
-                options.page_width.unwrap_or(21.0),
-                options.page_height.unwrap_or(29.7),
-                gtk::Unit::Mm,
-            );
-            page_setup.set_paper_size(&paper_size);
-            page_setup.set_top_margin(options.margin_top.unwrap_or(1.0) * 10.0, gtk::Unit::Mm);
-            page_setup.set_bottom_margin(
-                options.margin_bottom.unwrap_or(1.0) * 10.0,
-                gtk::Unit::Mm,
-            );
-            page_setup.set_left_margin(options.margin_left.unwrap_or(1.0) * 10.0, gtk::Unit::Mm);
-            page_setup.set_right_margin(
-                options.margin_right.unwrap_or(1.0) * 10.0,
-                gtk::Unit::Mm,
-            );
-
-            settings.set(
-                gtk::PRINT_SETTINGS_OUTPUT_URI,
-                &glib::Value::from(format!("file://{}", pdf_path_clone.display())),
-            );
-
-            operation.set_print_settings(&settings);
-            operation.set_default_page_setup(&page_setup);
-
-            let sender = tx.clone();
-            operation.connect_done(move |_, result| {
-                let response = match result {
-                    gtk::PrintOperationResult::Apply => Ok(()),
-                    gtk::PrintOperationResult::Cancel => Err("Print cancelled".to_string()),
-                    gtk::PrintOperationResult::Error => Err("Print failed".to_string()),
-                    _ => Err("Unexpected print result".to_string()),
-                };
-
-                if let Ok(mut guard) = sender.lock() {
-                    if let Some(sender) = guard.take() {
-                        let _ = sender.send(response);
-                    }
-                }
-            });
-
-            if let Err(error) = operation.run(gtk::PrintOperationAction::Export, None::<&gtk::Window>) {
-                if let Ok(mut guard) = tx.lock() {
-                    if let Some(sender) = guard.take() {
-                        let _ = sender.send(Err(error.to_string()));
-                    }
-                }
-            }
-        });
-
-        if let Err(error) = result {
-            return Err(WebDriverErrorResponse::unknown_error(format!(
-                "Failed to print page: {error}"
-            )));
-        }
-
-        match tokio::time::timeout(Duration::from_millis(timeout_ms), rx).await {
-            Ok(Ok(Ok(()))) => {}
-            Ok(Ok(Err(error))) => return Err(WebDriverErrorResponse::unknown_error(error)),
-            Ok(Err(_)) => {
-                return Err(WebDriverErrorResponse::unknown_error(
-                    "Print channel closed unexpectedly",
-                ))
-            }
-            Err(_) => {
-                return Err(WebDriverErrorResponse::timeout(format!(
-                    "Print timed out after {timeout_ms}ms"
-                )))
-            }
-        }
-
-        let pdf_bytes = std::fs::read(&pdf_path).map_err(|error| {
-            WebDriverErrorResponse::unknown_error(format!("Failed to read printed PDF: {error}"))
-        })?;
-        Ok(BASE64_STANDARD.encode(pdf_bytes))
-    }
-
-    async fn await_base64_response(
-        rx: oneshot::Receiver<Result<String, String>>,
-        timeout_ms: u64,
-        label: &str,
-    ) -> Result<String, WebDriverErrorResponse> {
-        match tokio::time::timeout(Duration::from_millis(timeout_ms), rx).await {
-            Ok(Ok(Ok(base64))) if !base64.is_empty() => Ok(base64),
-            Ok(Ok(Ok(_))) => Err(WebDriverErrorResponse::unknown_error(format!(
-                "{label} returned empty data"
-            ))),
-            Ok(Ok(Err(error))) => Err(WebDriverErrorResponse::unknown_error(error)),
-            Ok(Err(_)) => Err(WebDriverErrorResponse::unknown_error(format!(
-                "{label} channel closed unexpectedly"
-            ))),
-            Err(_) => Err(WebDriverErrorResponse::timeout(format!(
-                "{label} timed out after {timeout_ms}ms"
-            ))),
-        }
+        Err(WebDriverErrorResponse::unsupported_operation(
+            "Linux embedded webdriver print is temporarily disabled",
+        ))
     }
 }
 

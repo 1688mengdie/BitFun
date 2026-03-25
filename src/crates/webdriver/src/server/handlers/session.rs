@@ -70,9 +70,7 @@ fn parse_user_agent(user_agent: &str) -> (String, String) {
         return ("WebKitGTK".to_string(), version.to_string());
     }
 
-    if (user_agent.contains("iPhone")
-        || user_agent.contains("iPad")
-        || user_agent.contains("iPod"))
+    if (user_agent.contains("iPhone") || user_agent.contains("iPad") || user_agent.contains("iPod"))
         && user_agent.contains("AppleWebKit/")
     {
         let version = user_agent
@@ -97,10 +95,7 @@ fn parse_user_agent(user_agent: &str) -> (String, String) {
     ("webview".to_string(), "unknown".to_string())
 }
 
-async fn detect_browser_info(
-    state: Arc<AppState>,
-    window_label: &str,
-) -> (String, String) {
+async fn detect_browser_info(state: Arc<AppState>, window_label: &str) -> (String, String) {
     let Some(webview) = state.app.get_webview(window_label) else {
         return ("webview".to_string(), "unknown".to_string());
     };
@@ -127,8 +122,7 @@ pub async fn create(
     Json(request): Json<NewSessionRequest>,
 ) -> WebDriverResult {
     let initial_window = wait_for_window(&state, 10_000).await?;
-    let (browser_name, browser_version) =
-        detect_browser_info(state.clone(), &initial_window).await;
+    let (browser_name, browser_version) = detect_browser_info(state.clone(), &initial_window).await;
 
     let session = state.sessions.write().await.create(initial_window.clone());
 
@@ -147,8 +141,8 @@ pub async fn create(
             "acceptInsecureCerts": false,
             "pageLoadStrategy": "normal",
             "setWindowRect": set_window_rect,
-            "takesScreenshot": true,
-            "printPage": cfg!(any(target_os = "macos", target_os = "windows", target_os = "linux")),
+            "takesScreenshot": cfg!(any(target_os = "macos", target_os = "windows")),
+            "printPage": cfg!(any(target_os = "macos", target_os = "windows")),
             "timeouts": session.timeouts,
             "bitfun:embedded": true,
             "bitfun:webviewLabel": initial_window,

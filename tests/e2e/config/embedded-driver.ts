@@ -409,6 +409,11 @@ function sharedAfterTest(): Options.Testrunner['afterTest'] {
       return;
     }
 
+    if (process.platform === 'linux') {
+      console.warn('Skipping failure screenshot on linux');
+      return;
+    }
+
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
     const screenshotName = `failure-${test.title.replace(/\s+/g, '_')}-${timestamp}.png`;
 
