@@ -11,7 +11,8 @@
  * - Limits result count to reduce DOM rendering.
  */
 
-import React, { useCallback, useEffect, useRef, useMemo, memo, useState, startTransition } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useMemo, memo, useState, startTransition } from 'react';
+import { createPortal } from 'react-dom';
 import { CaseSensitive, Regex, WholeWord, Loader2, MoreHorizontal } from 'lucide-react';
 import { Search, Tooltip } from '@/component-library';
 import { useI18n } from '@/infrastructure/i18n';
@@ -26,6 +27,11 @@ const LOAD_MORE_COUNT = 50;
 interface GlobalSearchProps {
   className?: string;
   onSearchResultClick?: (result: FileSearchResult) => void;
+  /**
+   * Render the results dropdown in document.body with fixed positioning.
+   * Use when the parent uses overflow:hidden (e.g. sidebar) so results are not clipped.
+   */
+  attachResultsToBody?: boolean;
 }
 
 // Result item component (memoized)
@@ -92,12 +98,15 @@ SearchPhaseIndicator.displayName = 'SearchPhaseIndicator';
 
 export const GlobalSearch: React.FC<GlobalSearchProps> = ({
   className = '',
-  onSearchResultClick
+  onSearchResultClick,
+  attachResultsToBody = false,
 }) => {
   const { t } = useI18n('tools');
   const { workspacePath } = useWorkspaceContext();
   const searchContainerRef = useRef<HTMLDivElement>(null);
+  const resultsDropdownRef = useRef<HTMLDivElement>(null);
   const resultsListRef = useRef<HTMLDivElement>(null);
+  const [dropdownLayout, setDropdownLayout] = useState({ top: 0, left: 0, width: 0 });
   const [showResults, setShowResults] = useState(false);
   const [displayCount, setDisplayCount] = useState(INITIAL_DISPLAY_COUNT);
 
@@ -149,12 +158,30 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({
     setShowResults(false);
   }, [clearSearch]);
 
+  const updateDropdownPosition = useCallback(() => {
+    if (!attachResultsToBody || !searchContainerRef.current) return;
+    const r = searchContainerRef.current.getBoundingClientRect();
+    setDropdownLayout({ top: r.bottom + 6, left: r.left, width: r.width });
+  }, [attachResultsToBody]);
+
+  useLayoutEffect(() => {
+    if (!attachResultsToBody || !showResults) return;
+    updateDropdownPosition();
+    window.addEventListener('resize', updateDropdownPosition);
+    window.addEventListener('scroll', updateDropdownPosition, true);
+    return () => {
+      window.removeEventListener('resize', updateDropdownPosition);
+      window.removeEventListener('scroll', updateDropdownPosition, true);
+    };
+  }, [attachResultsToBody, showResults, updateDropdownPosition, query, allResults.length]);
+
   // Close results when clicking outside
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
-      if (searchContainerRef.current && !searchContainerRef.current.contains(event.target as Node)) {
-        setShowResults(false);
-      }
+      const target = event.target as Node;
+      if (searchContainerRef.current?.contains(target)) return;
+      if (resultsDropdownRef.current?.contains(target)) return;
+      setShowResults(false);
     };
 
     document.addEventListener('mousedown', handleClickOutside);
@@ -207,6 +234,67 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({
     });
   }, []);
 
+  const showResultsPanel = showResults && (query.trim() || allResults.length > 0);
+
+  const resultsDropdown = showResultsPanel ? (
+    <div
+      ref={resultsDropdownRef}
+      className="bitfun-global-search__results"
+      style={
+        attachResultsToBody
+          ? {
+              position: 'fixed',
+              top: dropdownLayout.top,
+              left: dropdownLayout.left,
+              width: Math.max(dropdownLayout.width, 200),
+              zIndex: 500,
+            }
+          : undefined
+      }
+    >
+      <div className="bitfun-global-search__results-header">
+        <span className="bitfun-global-search__results-count">
+          {allResults.length > 0 ? (
+            <>
+              {t('search.global.resultsFound', { count: allResults.length })}
+              {hasMoreResults && (
+                <span className="bitfun-global-search__results-showing">
+                  {t('search.global.resultsShowing', { count: displayCount })}
+                </span>
+              )}
+            </>
+          ) : (
+            isSearching ? '' : t('search.noResults')
+          )}
+        </span>
+        <SearchPhaseIndicator
+          filenameComplete={searchPhase.filenameComplete}
+          contentComplete={searchPhase.contentComplete}
+          isSearching={isSearching}
+        />
+      </div>
+
+      {displayResults.length > 0 && (
+        <div className="bitfun-global-search__results-list" ref={resultsListRef}>
+          {displayResults.map((result, index) => (
+            <ResultItem
+              key={`${result.path}-${result.lineNumber || 0}-${index}`}
+              result={result}
+              onClick={() => handleResultClick(result)}
+            />
+          ))}
+
+          {hasMoreResults && (
+            <button type="button" className="bitfun-global-search__load-more" onClick={handleLoadMore}>
+              <MoreHorizontal size={14} />
+              <span>{t('search.global.loadMore', { count: remainingCount })}</span>
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  ) : null;
+
   return (
     <div 
       className={`bitfun-global-search ${className}`}
@@ -257,55 +345,8 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({
         }
       />
 
-      {/* Search results dropdown */}
-      {showResults && (query.trim() || allResults.length > 0) && (
-        <div className="bitfun-global-search__results">
-          <div className="bitfun-global-search__results-header">
-            <span className="bitfun-global-search__results-count">
-              {allResults.length > 0 ? (
-                <>
-                  {t('search.global.resultsFound', { count: allResults.length })}
-                  {hasMoreResults && (
-                    <span className="bitfun-global-search__results-showing">
-                      {t('search.global.resultsShowing', { count: displayCount })}
-                    </span>
-                  )}
-                </>
-              ) : (
-                isSearching ? '' : t('search.noResults')
-              )}
-            </span>
-            <SearchPhaseIndicator 
-              filenameComplete={searchPhase.filenameComplete}
-              contentComplete={searchPhase.contentComplete}
-              isSearching={isSearching}
-            />
-          </div>
-          
-          {displayResults.length > 0 && (
-            <div className="bitfun-global-search__results-list" ref={resultsListRef}>
-              {displayResults.map((result, index) => (
-                <ResultItem
-                  key={`${result.path}-${result.lineNumber || 0}-${index}`}
-                  result={result}
-                  onClick={() => handleResultClick(result)}
-                />
-              ))}
-              
-              {/* Load more button */}
-              {hasMoreResults && (
-                <button 
-                  className="bitfun-global-search__load-more"
-                  onClick={handleLoadMore}
-                >
-                  <MoreHorizontal size={14} />
-                  <span>{t('search.global.loadMore', { count: remainingCount })}</span>
-                </button>
-              )}
-            </div>
-          )}
-        </div>
-      )}
+      {!attachResultsToBody && resultsDropdown}
+      {attachResultsToBody && resultsDropdown ? createPortal(resultsDropdown, document.body) : null}
     </div>
   );
 };

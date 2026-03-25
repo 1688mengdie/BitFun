@@ -11,9 +11,11 @@
   &__inline-list {
     display: flex;
     flex-direction: column;
-    padding: 2px $size-gap-2 $size-gap-1;
+    padding: 2px $size-gap-2 2px;
     gap: 1px;
-    margin: 1px $size-gap-2 2px calc(#{$size-gap-2} + 14px);
+    // No vertical margin: spacing between assistant blocks comes from 2px top/bottom padding only
+    // (see .bitfun-nav-panel__items--session-blocks gap: 0), aligned with __workspace-item padding.
+    margin: 0 $size-gap-2 0 calc(#{$size-gap-2} + 4px);
   }
 
   &__inline-action {
@@ -94,13 +96,13 @@
     &.is-child {
       min-height: 24px;
       font-size: 12px;
-      padding-left: calc(#{$size-gap-1} + 18px);
+      padding-left: calc(#{$size-gap-1} + 8px);
       position: relative;
 
       &::before {
         content: '';
         position: absolute;
-        left: 10px;
+        left: 6px;
         top: 0;
         width: 1px;
         height: 50%;
@@ -111,9 +113,9 @@
       &::after {
         content: '';
         position: absolute;
-        left: 10px;
+        left: 6px;
         top: 50%;
-        width: 12px;
+        width: 6px;
         height: 1px;
         background: color-mix(in srgb, var(--border-subtle) 92%, transparent);
         opacity: 0.95;

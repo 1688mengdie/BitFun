@@ -7,6 +7,7 @@ import type { ModeConfigItem, SkillInfo } from '@/infrastructure/config/types';
 import { useNotification } from '@/shared/notification-system';
 import type { AgentWithCapabilities } from '../agentsStore';
 import { enrichCapabilities } from '../utils';
+import { isAgentInOverviewZone } from '../agentVisibility';
 import { useCurrentWorkspace } from '@/infrastructure/contexts/WorkspaceContext';
 
 export type FilterLevel = 'all' | 'builtin' | 'user' | 'project';
@@ -217,14 +218,19 @@ export function useAgentsList({
     return true;
   }), [allAgents, filterLevel, filterType, searchQuery]);
 
+  const overviewAgents = useMemo(
+    () => allAgents.filter(isAgentInOverviewZone),
+    [allAgents],
+  );
+
   const counts = useMemo(() => ({
-    all: allAgents.length,
-    builtin: allAgents.filter((agent) => (agent.agentKind === 'mode' ? 'builtin' : (agent.subagentSource ?? 'builtin')) === 'builtin').length,
-    user: allAgents.filter((agent) => agent.subagentSource === 'user').length,
-    project: allAgents.filter((agent) => agent.subagentSource === 'project').length,
-    mode: allAgents.filter((agent) => agent.agentKind === 'mode').length,
-    subagent: allAgents.filter((agent) => agent.agentKind === 'subagent').length,
-  }), [allAgents]);
+    all: overviewAgents.length,
+    builtin: overviewAgents.filter((agent) => (agent.agentKind === 'mode' ? 'builtin' : (agent.subagentSource ?? 'builtin')) === 'builtin').length,
+    user: overviewAgents.filter((agent) => agent.subagentSource === 'user').length,
+    project: overviewAgents.filter((agent) => agent.subagentSource === 'project').length,
+    mode: overviewAgents.filter((agent) => agent.agentKind === 'mode').length,
+    subagent: overviewAgents.filter((agent) => agent.agentKind === 'subagent').length,
+  }), [overviewAgents]);
 
   return {
     allAgents,

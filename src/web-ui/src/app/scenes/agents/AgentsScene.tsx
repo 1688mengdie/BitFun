@@ -33,10 +33,7 @@ import { getAgentBadge } from './utils';
 import './AgentsView.scss';
 import './AgentsScene.scss';
 import { useGallerySceneAutoRefresh } from '@/app/hooks/useGallerySceneAutoRefresh';
-
-const HIDDEN_AGENT_IDS = new Set(['Claw']);
-
-const CORE_AGENT_IDS = new Set(['agentic', 'Cowork']);
+import { CORE_AGENT_IDS, isAgentInOverviewZone } from './agentVisibility';
 
 const AgentsHomeView: React.FC = () => {
   const { t } = useTranslation('scenes/agents');
@@ -99,7 +96,7 @@ const AgentsHomeView: React.FC = () => {
   const coreAgents = useMemo(() => allAgents.filter((agent) => CORE_AGENT_IDS.has(agent.id)), [allAgents]);
 
   const visibleAgents = useMemo(
-    () => filteredAgents.filter((agent) => !HIDDEN_AGENT_IDS.has(agent.id) && !CORE_AGENT_IDS.has(agent.id)),
+    () => filteredAgents.filter(isAgentInOverviewZone),
     [filteredAgents],
   );
 

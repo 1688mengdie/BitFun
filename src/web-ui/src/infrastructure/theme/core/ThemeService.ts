@@ -638,8 +638,8 @@ export class ThemeService {
       root.style.setProperty('--card-bg-default', 'rgba(0, 0, 0, 0.06)');
       root.style.setProperty('--card-bg-elevated', 'rgba(0, 0, 0, 0.08)');
       root.style.setProperty('--card-bg-subtle', 'rgba(0, 0, 0, 0.04)');
-      root.style.setProperty('--card-bg-hover', 'rgba(0, 0, 0, 0.09)');
-      root.style.setProperty('--card-bg-active', 'rgba(0, 0, 0, 0.12)');
+      root.style.setProperty('--card-bg-hover', 'rgba(0, 0, 0, 0.065)');
+      root.style.setProperty('--card-bg-active', 'rgba(0, 0, 0, 0.09)');
       root.style.setProperty('--card-bg-accent', 'rgba(59, 130, 246, 0.12)');
       root.style.setProperty('--card-bg-accent-hover', 'rgba(59, 130, 246, 0.18)');
       root.style.setProperty('--card-bg-purple', 'rgba(124, 58, 237, 0.12)');

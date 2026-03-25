@@ -2,9 +2,10 @@
  * MainNav — default workspace navigation sidebar.
  *
  * Layout (top to bottom):
- *   1. Top: New sessions | Assistant | Extensions (expand → Agents | Skills)
- *   2. Assistant sessions, Workspace
- *   3. Bottom: MiniApp
+ *   1. Workspace file search
+ *   2. Top: New sessions | Assistant | Extensions (expand → Agents | Skills)
+ *   3. Assistant sessions, Workspace
+ *   4. Bottom: MiniApp
  *
  * When a scene-nav transition is active (`isDeparting=true`), items receive
  * positional CSS classes for the split-open animation effect.
@@ -12,7 +13,7 @@
 
 import React, { useCallback, useState, useMemo, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { Plus, FolderOpen, FolderPlus, History, Check, BotMessageSquare, Users, Puzzle, Blocks, ChevronDown } from 'lucide-react';
+import { Plus, FolderOpen, FolderPlus, History, Check, BotMessageSquare, Users, Puzzle, Blocks, ChevronDown, Search } from 'lucide-react';
 import { Tooltip } from '@/component-library';
 import { useApp } from '../../hooks/useApp';
 import { useSceneManager } from '../../hooks/useSceneManager';
@@ -30,9 +31,16 @@ import { flowChatManager } from '@/flow_chat/services/FlowChatManager';
 import { workspaceManager } from '@/infrastructure/services/business/workspaceManager';
 import { useWorkspaceContext } from '@/infrastructure/contexts/WorkspaceContext';
 import { createLogger } from '@/shared/utils/logger';
+import { notificationService } from '@/shared/notification-system';
 import { WorkspaceKind, isRemoteWorkspace } from '@/shared/types';
+import {
+  findReusableEmptySessionId,
+  flowChatSessionConfigForWorkspace,
+  pickWorkspaceForProjectChatSession,
+} from '@/app/utils/projectSessionWorkspace';
 import { useSSHRemoteContext, SSHConnectionDialog, RemoteFileBrowser } from '@/features/ssh-remote';
 import { useSessionModeStore } from '../../stores/sessionModeStore';
+import NavSearchDialog from './NavSearchDialog';
 
 import './NavPanel.scss';
 
@@ -68,6 +76,7 @@ const MainNav: React.FC<MainNavProps> = ({
     recentWorkspaces,
     openedWorkspacesList,
     assistantWorkspacesList,
+    normalWorkspacesList,
     switchWorkspace,
     setActiveWorkspace,
   } = useWorkspaceContext();
@@ -88,6 +97,7 @@ const MainNav: React.FC<MainNavProps> = ({
   const [workspaceMenuClosing, setWorkspaceMenuClosing] = useState(false);
   const [workspaceMenuPos, setWorkspaceMenuPos] = useState({ top: 0, left: 0 });
   const [isExtensionsOpen, setIsExtensionsOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
 
   const toggleSection = useCallback((id: string) => {
     setExpandedSections(prev => {
@@ -137,28 +147,59 @@ const MainNav: React.FC<MainNavProps> = ({
     });
   }, [openedWorkspacesList]);
 
-  const handleCreateSession = useCallback(async (mode?: 'agentic' | 'Cowork' | 'Claw') => {
-    openScene('session');
-    switchLeftPanelTab('sessions');
-    try {
-      await flowChatManager.createChatSession(
-        {},
-        mode ?? (isAssistantWorkspaceActive ? 'Claw' : 'agentic')
-      );
-    } catch (err) {
-      log.error('Failed to create session', err);
-    }
-  }, [openScene, switchLeftPanelTab, isAssistantWorkspaceActive]);
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+        e.preventDefault();
+        setSearchOpen(v => !v);
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
+  const handleCreateProjectSession = useCallback(
+    async (mode: 'agentic' | 'Cowork') => {
+      const target = pickWorkspaceForProjectChatSession(currentWorkspace, normalWorkspacesList);
+      if (!target) {
+        notificationService.warning(t('nav.sessions.needProjectWorkspaceForSession'), { duration: 4500 });
+        return;
+      }
+      openScene('session');
+      switchLeftPanelTab('sessions');
+      try {
+        if (target.id !== currentWorkspace?.id) {
+          await setActiveWorkspace(target.id);
+        }
+        const reusableId = findReusableEmptySessionId(target, mode);
+        if (reusableId) {
+          await flowChatManager.switchChatSession(reusableId);
+          return;
+        }
+        await flowChatManager.createChatSession(flowChatSessionConfigForWorkspace(target), mode);
+      } catch (err) {
+        log.error('Failed to create session', err);
+      }
+    },
+    [
+      currentWorkspace,
+      normalWorkspacesList,
+      openScene,
+      setActiveWorkspace,
+      switchLeftPanelTab,
+      t,
+    ]
+  );
 
   const handleCreateCodeSession = useCallback(() => {
     setSessionMode('code');
-    void handleCreateSession('agentic');
-  }, [handleCreateSession, setSessionMode]);
+    void handleCreateProjectSession('agentic');
+  }, [handleCreateProjectSession, setSessionMode]);
 
   const handleCreateCoworkSession = useCallback(() => {
     setSessionMode('cowork');
-    void handleCreateSession('Cowork');
-  }, [handleCreateSession, setSessionMode]);
+    void handleCreateProjectSession('Cowork');
+  }, [handleCreateProjectSession, setSessionMode]);
 
   const handleOpenProject = useCallback(async () => {
     try {
@@ -338,6 +379,27 @@ const MainNav: React.FC<MainNavProps> = ({
   const extensionsLabel = t('nav.sections.extensions');
   return (
     <>
+      {/* ── Workspace search ───────────────────────── */}
+      <div className="bitfun-nav-panel__brand-header">
+        <div className="bitfun-nav-panel__brand-search">
+          <Tooltip content={t('nav.search.triggerTooltip')} placement="right" followCursor>
+            <button
+              type="button"
+              className="bitfun-nav-panel__search-trigger"
+              onClick={() => setSearchOpen(true)}
+              aria-label={t('nav.search.triggerTooltip')}
+            >
+              <Search size={13} />
+              <span className="bitfun-nav-panel__search-trigger__label">
+                {t('nav.search.triggerPlaceholder')}
+              </span>
+              <span className="bitfun-nav-panel__search-trigger__kbd">⌘K</span>
+            </button>
+          </Tooltip>
+          <NavSearchDialog open={searchOpen} onClose={() => setSearchOpen(false)} />
+        </div>
+      </div>
+
       {/* ── Top action strip ────────────────────────── */}
       <div className="bitfun-nav-panel__top-actions">
         <Tooltip content={createCodeTooltip} placement="right" followCursor>
@@ -462,7 +524,7 @@ const MainNav: React.FC<MainNavProps> = ({
           />
           <div className={`bitfun-nav-panel__collapsible${expandedSections.has('assistant-sessions') ? '' : ' is-collapsed'}`}>
             <div className="bitfun-nav-panel__collapsible-inner">
-              <div className="bitfun-nav-panel__items">
+              <div className="bitfun-nav-panel__items bitfun-nav-panel__items--session-blocks">
                 {assistantWorkspacesList.map(workspace => {
                   const assistantDisplayName =
                     workspace.workspaceKind === WorkspaceKind.Assistant

@@ -94,9 +94,19 @@
     },
     "sections": {
       "workspace": "Workspace",
-      "extensions": "Extensions",
+      "extensions": "Customize",
       "shell": "Shell",
       "assistantSessions": "Assistant Sessions"
+    },
+    "search": {
+      "triggerPlaceholder": "Search workspaces, assistants, sessions...",
+      "triggerTooltip": "Search (Ctrl+K)",
+      "inputPlaceholder": "Search workspaces, assistants, sessions...",
+      "groupWorkspaces": "Open Workspaces",
+      "groupAssistants": "Assistants",
+      "groupSessions": "All Sessions",
+      "empty": "No results found",
+      "sessionWorkspaceHint": "in {{workspace}}"
     },
     "displayModes": {
       "pro": "Expert Mode",
@@ -162,7 +172,8 @@
       "showMore": "{{count}} more sessions",
       "showAll": "{{count}} more (show all)",
       "showLess": "Show less",
-      "assistantOwner": "Assistant: {{name}}"
+      "assistantOwner": "Assistant: {{name}}",
+      "needProjectWorkspaceForSession": "Open or add a project workspace first. Code and Cowork sessions cannot be created in the assistant area."
     },
     "scheduledJobs": {
       "title": "Scheduled Jobs",
