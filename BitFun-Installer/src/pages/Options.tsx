@@ -1,8 +1,9 @@
 import { useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
+import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { Checkbox } from '../components/Checkbox';
-import type { InstallOptions, DiskSpaceInfo } from '../types/installer';
+import type { InstallOptions, DiskSpaceInfo, InstallPathValidation } from '../types/installer';
 
 interface OptionsProps {
   options: InstallOptions;
@@ -36,7 +37,14 @@ export function Options({
       title: t('options.pathLabel'),
     });
     if (selected && typeof selected === 'string') {
-      setOptions((prev) => ({ ...prev, installPath: selected }));
+      try {
+        const validated = await invoke<InstallPathValidation>('validate_install_path', {
+          path: selected,
+        });
+        setOptions((prev) => ({ ...prev, installPath: validated.installPath }));
+      } catch {
+        setOptions((prev) => ({ ...prev, installPath: selected }));
+      }
     }
   };
 

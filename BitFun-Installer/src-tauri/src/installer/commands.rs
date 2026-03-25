@@ -1060,6 +1060,21 @@ fn find_existing_ancestor(path: &Path) -> PathBuf {
     current
 }
 
+/// Actual install root is always under a `BitFun` directory: `{user choice}/BitFun`.
+/// If the user already chose a path whose last segment is `BitFun`, do not append again.
+fn with_bitfun_install_subdir(path: PathBuf) -> PathBuf {
+    let already_bitfun = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(|s| s.eq_ignore_ascii_case("BitFun"))
+        .unwrap_or(false);
+    if already_bitfun {
+        path
+    } else {
+        path.join("BitFun")
+    }
+}
+
 fn prepare_install_target(requested_path: &Path) -> Result<PathBuf, String> {
     if !requested_path.is_absolute() {
         return Err("Installation path must be absolute".into());
@@ -1069,10 +1084,11 @@ fn prepare_install_target(requested_path: &Path) -> Result<PathBuf, String> {
         return Err("Refusing to install into a filesystem root directory".into());
     }
 
-    #[cfg(target_os = "windows")]
-    let install_path = resolve_windows_install_target(requested_path)?;
-    #[cfg(not(target_os = "windows"))]
-    let install_path = requested_path.to_path_buf();
+    if requested_path.exists() && !requested_path.is_dir() {
+        return Err("Path exists but is not a directory".into());
+    }
+
+    let install_path = with_bitfun_install_subdir(requested_path.to_path_buf());
 
     if install_path.exists() {
         if !install_path.is_dir() {
@@ -1109,43 +1125,6 @@ fn directory_has_entries(path: &Path) -> Result<bool, String> {
     let mut entries = std::fs::read_dir(path)
         .map_err(|e| format!("Failed to inspect installation directory: {}", e))?;
     Ok(entries.next().transpose().map_err(|e| e.to_string())?.is_some())
-}
-
-#[cfg(target_os = "windows")]
-fn resolve_windows_install_target(requested_path: &Path) -> Result<PathBuf, String> {
-    if requested_path.exists() && !requested_path.is_dir() {
-        return Err("Path exists but is not a directory".into());
-    }
-
-    let sensitive_dirs = [
-        dirs::home_dir(),
-        dirs::desktop_dir(),
-        dirs::document_dir(),
-        dirs::download_dir(),
-        dirs::picture_dir(),
-        dirs::audio_dir(),
-        dirs::video_dir(),
-        dirs::data_local_dir(),
-        dirs::config_dir(),
-    ];
-
-    if sensitive_dirs
-        .into_iter()
-        .flatten()
-        .any(|sensitive_dir| windows_path_eq_case_insensitive(requested_path, &sensitive_dir))
-    {
-        return Ok(requested_path.join("BitFun"));
-    }
-
-    if requested_path.exists()
-        && directory_has_entries(requested_path)?
-        && !requested_path.join(INSTALL_MANIFEST_FILE).exists()
-        && !requested_path.join("BitFun.exe").exists()
-    {
-        return Ok(requested_path.join("BitFun"));
-    }
-
-    Ok(requested_path.to_path_buf())
 }
 
 fn ensure_app_config_path() -> Result<PathBuf, String> {
