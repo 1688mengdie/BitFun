@@ -502,6 +502,8 @@
     width: 100%;
     min-height: 56px;
     overflow: visible;
+    // Last line descenders + clearance above the action row (send is 28px tall in a short bar)
+    padding-bottom: 4px;
   }
   
   &__action-button {
@@ -1244,7 +1246,9 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    height: 20px;
+    // Must fit IconButton small (28px); fixed 20px caused vertical overflow into the input above
+    min-height: 28px;
+    margin-top: 4px;
     padding: 0 0 $size-gap-2;
   }
   

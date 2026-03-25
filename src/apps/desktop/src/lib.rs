@@ -141,6 +141,7 @@ pub async fn run() {
                 .app_name("BitFun")
                 .build(),
         )
+        .plugin(tauri_plugin_notification::init())
         .manage(app_state)
         .manage(coordinator_state)
         .manage(scheduler_state)
@@ -586,6 +587,7 @@ pub async fn run() {
             api::terminal_api::terminal_shutdown_all,
             api::terminal_api::terminal_get_history,
             get_system_info,
+            send_system_notification,
             check_command_exists,
             check_commands_exist,
             run_system_command,

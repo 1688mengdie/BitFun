@@ -171,10 +171,17 @@
     },
 
     "card": {
-      "unnamed":    "未命名助理",
-      "noVibe":     "一个等待定义的助理",
-      "configure":  "点击配置",
-      "tokenTitle": "上下文占用估算"
+      "unnamed":             "未命名助理",
+      "noVibe":              "一个等待定义的助理",
+      "configure":           "点击配置",
+      "newSession":          "新建会话",
+      "tokenTitle":          "上下文占用估算",
+      "primaryBadge":        "主助理",
+      "delete":              "删除助理",
+      "deleteConfirmTitle":  "删除助理",
+      "deleteConfirmMessage": "确定要删除助理「{{name}}」吗？此操作不可撤销。",
+      "deleteConfirm":       "确认删除",
+      "deleteCancel":        "取消"
     },
 
     "assistant": {
@@ -182,6 +189,8 @@
       "inheritPrimary": "继承模板（主力）",
       "inheritFast":    "继承模板（快速）",
       "personaDocsTitle": "关键文档",
+      "scheduledSessionsTitle": "定时会话",
+      "scheduledSessionsNoWorkspace": "请先选择助理工作区后再管理定时会话。",
       "personaDocs": {
         "IDENTITY": "身份",
         "SOUL":     "核心人设",

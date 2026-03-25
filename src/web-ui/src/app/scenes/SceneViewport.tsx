@@ -12,6 +12,7 @@ import React, { Suspense, lazy } from 'react';
 import type { SceneTabId } from '../components/SceneBar/types';
 import { useSceneManager } from '../hooks/useSceneManager';
 import { useI18n } from '@/infrastructure/i18n/hooks/useI18n';
+import { useDialogCompletionNotify } from '../hooks/useDialogCompletionNotify';
 import './SceneViewport.scss';
 
 const SessionScene    = lazy(() => import('./session/SessionScene'));
@@ -25,7 +26,8 @@ const SkillsScene     = lazy(() => import('./skills/SkillsScene'));
 const MiniAppGalleryScene = lazy(() => import('./miniapps/MiniAppGalleryScene'));
 const BrowserScene    = lazy(() => import('./browser/BrowserScene'));
 const MermaidEditorScene = lazy(() => import('./mermaid/MermaidEditorScene'));
-const MyAgentScene    = lazy(() => import('./my-agent/MyAgentScene'));
+const AssistantScene  = lazy(() => import('./assistant/AssistantScene'));
+const InsightsScene   = lazy(() => import('./my-agent/InsightsScene'));
 const ShellScene      = lazy(() => import('./shell/ShellScene'));
 const WelcomeScene    = lazy(() => import('./welcome/WelcomeScene'));
 const MiniAppScene    = lazy(() => import('./miniapps/MiniAppScene'));
@@ -38,6 +40,7 @@ interface SceneViewportProps {
 const SceneViewport: React.FC<SceneViewportProps> = ({ workspacePath, isEntering = false }) => {
   const { openTabs, activeTabId } = useSceneManager();
   const { t } = useI18n('common');
+  useDialogCompletionNotify();
 
   // All tabs closed — show empty state
   if (openTabs.length === 0) {
@@ -98,8 +101,10 @@ function renderScene(id: SceneTabId, workspacePath?: string, isEntering?: boolea
       return <BrowserScene />;
     case 'mermaid':
       return <MermaidEditorScene />;
-    case 'my-agent':
-      return <MyAgentScene workspacePath={workspacePath} />;
+    case 'assistant':
+      return <AssistantScene workspacePath={workspacePath} />;
+    case 'insights':
+      return <InsightsScene />;
     case 'shell':
       return <ShellScene />;
     default:

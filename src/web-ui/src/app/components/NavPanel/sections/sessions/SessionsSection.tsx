@@ -54,6 +54,10 @@ interface SessionsSectionProps {
   remoteConnectionId?: string | null;
   isActiveWorkspace?: boolean;
   showCreateActions?: boolean;
+  /** When set (e.g. assistant workspace), session row tooltip includes this assistant name. */
+  assistantLabel?: string;
+  /** When false, hide the leading mode / running icon on each row (e.g. assistant detail page). */
+  showSessionModeIcon?: boolean;
 }
 
 const SessionsSection: React.FC<SessionsSectionProps> = ({
@@ -61,6 +65,8 @@ const SessionsSection: React.FC<SessionsSectionProps> = ({
   workspacePath,
   remoteConnectionId = null,
   isActiveWorkspace = true,
+  assistantLabel,
+  showSessionModeIcon = true,
 }) => {
   const { t } = useI18n('common');
   const { setActiveWorkspace } = useWorkspaceContext();
@@ -336,12 +342,13 @@ const SessionsSection: React.FC<SessionsSectionProps> = ({
     [handleConfirmEdit, handleCancelEdit]
   );
 
+  if (topLevelSessions.length === 0) {
+    return null;
+  }
+
   return (
     <div className="bitfun-nav-panel__inline-list">
-      {topLevelSessions.length === 0 ? (
-        <div className="bitfun-nav-panel__inline-empty">{t('nav.sessions.noSessions')}</div>
-      ) : (
-        visibleItems.map(({ session, level }) => {
+      {visibleItems.map(({ session, level }) => {
           const isEditing = editingSessionId === session.sessionId;
           const relationship = resolveSessionRelationship(session);
           const isBtwChild = level === 1 && relationship.isBtw;
@@ -351,14 +358,26 @@ const SessionsSection: React.FC<SessionsSectionProps> = ({
           const parentSession = parentSessionId ? flowChatState.sessions.get(parentSessionId) : undefined;
           const parentTitle = parentSession ? resolveSessionTitle(parentSession) : '';
           const parentTurnIndex = relationship.origin?.parentTurnIndex;
-          const tooltipContent = isBtwChild ? (
+          const trimmedAssistant = assistantLabel?.trim() ?? '';
+          const showAssistantInTooltip = trimmedAssistant.length > 0;
+          const showRichTooltip = showAssistantInTooltip || isBtwChild;
+          const tooltipContent = showRichTooltip ? (
             <div className="bitfun-nav-panel__inline-item-tooltip">
               <div className="bitfun-nav-panel__inline-item-tooltip-title">{sessionTitle}</div>
-              <div className="bitfun-nav-panel__inline-item-tooltip-meta">
-                {`来自 ${parentTitle || '父会话'}${parentTurnIndex ? ` · 第 ${parentTurnIndex} 轮` : ''}`}
-              </div>
+              {showAssistantInTooltip ? (
+                <div className="bitfun-nav-panel__inline-item-tooltip-meta">
+                  {t('nav.sessions.assistantOwner', { name: trimmedAssistant })}
+                </div>
+              ) : null}
+              {isBtwChild ? (
+                <div className="bitfun-nav-panel__inline-item-tooltip-meta">
+                  {`来自 ${parentTitle || '父会话'}${parentTurnIndex ? ` · 第 ${parentTurnIndex} 轮` : ''}`}
+                </div>
+              ) : null}
             </div>
-          ) : sessionTitle;
+          ) : (
+            sessionTitle
+          );
           const SessionIcon =
             sessionModeKey === 'cowork'
               ? Users
@@ -382,27 +401,29 @@ const SessionsSection: React.FC<SessionsSectionProps> = ({
                 .join(' ')}
               onClick={() => handleSwitch(session.sessionId)}
             >
-              {isRunning ? (
-                <Loader2
-                  size={12}
-                  className={[
-                    'bitfun-nav-panel__inline-item-icon',
-                    'is-running',
-                  ].join(' ')}
-                />
-              ) : (
-                <SessionIcon
-                  size={12}
-                  className={[
-                    'bitfun-nav-panel__inline-item-icon',
-                    sessionModeKey === 'cowork'
-                      ? 'is-cowork'
-                      : sessionModeKey === 'claw'
-                        ? 'is-claw'
-                        : 'is-code',
-                  ].join(' ')}
-                />
-              )}
+              {showSessionModeIcon ? (
+                isRunning ? (
+                  <Loader2
+                    size={12}
+                    className={[
+                      'bitfun-nav-panel__inline-item-icon',
+                      'is-running',
+                    ].join(' ')}
+                  />
+                ) : (
+                  <SessionIcon
+                    size={12}
+                    className={[
+                      'bitfun-nav-panel__inline-item-icon',
+                      sessionModeKey === 'cowork'
+                        ? 'is-cowork'
+                        : sessionModeKey === 'claw'
+                          ? 'is-claw'
+                          : 'is-code',
+                    ].join(' ')}
+                  />
+                )
+              ) : null}
 
               {isEditing ? (
                 <div className="bitfun-nav-panel__inline-item-edit" onClick={e => e.stopPropagation()}>
@@ -489,8 +510,7 @@ const SessionsSection: React.FC<SessionsSectionProps> = ({
               {row}
             </Tooltip>
           );
-        })
-      )}
+        })}
 
       {topLevelSessions.length > SESSIONS_LEVEL_0 && (
         <button

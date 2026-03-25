@@ -94,8 +94,9 @@
     },
     "sections": {
       "workspace": "工作区",
-      "myAgent": "我的智能体",
-      "shell": "Shell"
+      "extensions": "扩展",
+      "shell": "Shell",
+      "assistantSessions": "助理会话"
     },
     "displayModes": {
       "pro": "专业模式",
@@ -106,7 +107,7 @@
       "assistantDesc": "适合持续推进、需要延续上下文和个人偏好的任务。"
     },
     "myAgent": {
-      "title": "我的智能体",
+      "title": "扩展",
       "categories": {
         "agents": "智能体",
         "extensions": "扩展",
@@ -146,6 +147,8 @@
       "newSession": "新建会话",
       "newCodeSession": "新建 Code 会话",
       "newCoworkSession": "新建 Cowork 会话",
+      "newCodeSessionShort": "编码会话",
+      "newCoworkSessionShort": "办公会话",
       "newClawSession": "新建 Claw 会话",
       "modeCode": "Code",
       "modeCowork": "Cowork",
@@ -158,7 +161,8 @@
       "cancelEdit": "取消",
       "showMore": "还有 {{count}} 个会话",
       "showAll": "还有 {{count}} 个（展开全部）",
-      "showLess": "收起"
+      "showLess": "收起",
+      "assistantOwner": "所属助理：{{name}}"
     },
     "scheduledJobs": {
       "title": "定时任务",
@@ -217,7 +221,8 @@
         "edit": "编辑任务",
         "delete": "删除任务",
         "save": "保存修改",
-        "create": "创建任务"
+        "create": "创建任务",
+        "cancel": "取消"
       },
       "editor": {
         "editTitle": "编辑任务",
@@ -320,7 +325,8 @@
       "mcpServices": "MCP 服务"
     },
     "actions": {
-      "openMyAgent": "我的智能体"
+      "openMyAgent": "我的智能体",
+      "customize": "自定义"
     },
     "moreOptions": "更多选项",
     "multimodalTools": "多模态工具",
@@ -735,8 +741,8 @@
     "settingsWithSection": "设置 - {{section}}"
   },
   "welcome": {
-    "greetingMorning": "早安，心流开发者",
-    "greetingAfternoon": "欢迎回到心流之境",
+    "greetingMorning": "早安，创造者",
+    "greetingAfternoon": "欢迎回来，一起开工",
     "greetingEvening": "傍晚好，创造者",
     "greetingNight": "深夜问好，代码诗人",
     "subtitleMorning": "「新的一天，新的可能，让我们一起创造些什么」",
@@ -768,13 +774,13 @@
     "settings": "设置",
     "fileViewer": "文件查看",
     "projectContext": "项目概况",
-    "capabilities": "能力配置",
     "agents": "智能体",
     "skills": "技能",
     "miniApps": "小应用",
     "browser": "浏览器",
     "mermaidEditor": "Mermaid 图表",
-    "myAgent": "我的智能体",
+    "insights": "洞察",
+    "assistant": "助理",
     "shell": "Shell"
   },
   "welcomeScene": {
@@ -953,5 +959,8 @@
       "transferNeedsDesktop": "上传与下载仅适用于桌面版应用。",
       "transferring": "正在传输…"
     }
+  },
+  "notify": {
+    "dialogCompleted": "AI 助手已完成任务。"
   }
 }

@@ -567,7 +567,16 @@ class WorkspaceManager {
 
       log.info('Deleting assistant workspace', { workspaceId });
 
+      const removedWorkspace = this.state.openedWorkspaces.get(workspaceId);
+      const removedRootPath = removedWorkspace?.rootPath;
+      const removedConnectionId = removedWorkspace?.connectionId ?? null;
+
       await globalStateAPI.deleteAssistantWorkspace(workspaceId);
+
+      if (removedRootPath) {
+        const { flowChatStore } = await import('@/flow_chat/store/FlowChatStore');
+        flowChatStore.removeSessionsByWorkspace(removedRootPath, removedConnectionId);
+      }
 
       const [currentWorkspace, recentWorkspaces, openedWorkspaces] = await Promise.all([
         globalStateAPI.getCurrentWorkspace(),

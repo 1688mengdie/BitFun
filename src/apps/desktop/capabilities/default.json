@@ -93,10 +93,17 @@
       ]
     },
     {
-      "identifier": "fs:allow-home-write-recursive",
+      "identifier":     "fs:allow-home-write-recursive",
       "allow": [
         { "path": "$HOME/**" }
       ]
-    }
+    },
+    "notification:default",
+    "notification:allow-notify",
+    "notification:allow-show",
+    "notification:allow-request-permission",
+    "notification:allow-check-permissions",
+    "notification:allow-permission-state",
+    "notification:allow-is-permission-granted"
   ]
 }

@@ -479,6 +479,7 @@ const WorkspaceItem: React.FC<WorkspaceItemProps> = ({
             workspacePath={workspace.rootPath}
             remoteConnectionId={isRemoteWorkspace(workspace) ? workspace.connectionId : null}
             isActiveWorkspace={isActive}
+            assistantLabel={workspaceDisplayName}
           />
         </div>
 

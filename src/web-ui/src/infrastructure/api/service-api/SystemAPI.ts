@@ -138,6 +138,20 @@ export class SystemAPI {
     }
   }
 
+  /** Desktop only: send an OS-level desktop notification. */
+  async sendSystemNotification(title: string, body?: string): Promise<void> {
+    if (typeof window === 'undefined' || !('__TAURI__' in window)) {
+      return;
+    }
+    try {
+      await api.invoke('send_system_notification', {
+        request: { title, body: body ?? null }
+      });
+    } catch (error) {
+      log.warn('Failed to send system notification', { title, error });
+    }
+  }
+
   /** Desktop only: register or unregister launch at OS login. */
   async setLaunchAtLoginEnabled(enabled: boolean): Promise<void> {
     if (typeof window === 'undefined' || !('__TAURI__' in window)) {

@@ -132,5 +132,17 @@
       "saveFailed": "Failed to save configuration",
       "refreshed": "Available terminals list refreshed"
     }
+  },
+  "notifications": {
+    "title": "Notifications",
+    "hint": "Toast notification preferences",
+    "dialogCompletion": {
+      "label": "Task completion notification",
+      "description": "Show a toast notification when an AI task completes while the window is not in focus"
+    },
+    "messages": {
+      "saveSuccess": "Notification settings saved",
+      "saveFailed": "Failed to save notification settings"
+    }
   }
 }

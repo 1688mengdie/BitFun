@@ -876,6 +876,57 @@ function ThemePreviewThumbnail({ theme }: ThemePreviewThumbnailProps) {
   );
 }
 
+function BasicsNotificationsSection() {
+  const { t } = useTranslation('settings/basics');
+  const [enabled, setEnabled] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const val = await configManager.getConfig<boolean>('app.notifications.dialog_completion_notify');
+        setEnabled(val !== false);
+      } catch {
+        setEnabled(true);
+      }
+    })();
+  }, []);
+
+  const handleToggle = async (checked: boolean) => {
+    setSaving(true);
+    try {
+      await configAPI.setConfig('app.notifications.dialog_completion_notify', checked);
+      setEnabled(checked);
+      setMessage({ type: 'success', text: t('notifications.messages.saveSuccess') });
+    } catch {
+      setMessage({ type: 'error', text: t('notifications.messages.saveFailed') });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <ConfigPageSection
+      title={t('notifications.title')}
+      description={t('notifications.hint')}
+    >
+      <ConfigPageMessage message={message} />
+      <ConfigPageRow
+        label={t('notifications.dialogCompletion.label')}
+        description={t('notifications.dialogCompletion.description')}
+        align="center"
+      >
+        <Switch
+          checked={enabled}
+          onChange={(e) => { void handleToggle(e.target.checked); }}
+          disabled={saving}
+        />
+      </ConfigPageRow>
+    </ConfigPageSection>
+  );
+}
+
 const BasicsConfig: React.FC = () => {
   const { t } = useTranslation('settings/basics');
 
@@ -887,6 +938,7 @@ const BasicsConfig: React.FC = () => {
         <BasicsLaunchAtLoginSection />
         <BasicsLoggingSection />
         <BasicsTerminalSection />
+        <BasicsNotificationsSection />
       </ConfigPageContent>
     </ConfigPageLayout>
   );

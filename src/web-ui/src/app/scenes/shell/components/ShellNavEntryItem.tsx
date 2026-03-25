@@ -1,5 +1,6 @@
 import React from 'react';
 import { Bookmark, SquareTerminal } from 'lucide-react';
+import { Tooltip } from '@/component-library/components/Tooltip';
 import type { MenuItem } from '@/shared/context-menu-system/types/menu.types';
 import type { ShellEntry } from '../hooks/shellEntryTypes';
 
@@ -58,37 +59,41 @@ const ShellNavEntryItem: React.FC<ShellNavEntryItemProps> = ({
 
         onOpenContextMenu(event, menuItems, { entry });
       }}
-      title={entry.name}
     >
-      {showSavedBadge ? (
-        <Bookmark size={14} className="bitfun-shell-nav__terminal-icon bitfun-shell-nav__terminal-icon--saved" />
-      ) : (
-        <SquareTerminal size={14} className="bitfun-shell-nav__terminal-icon" />
-      )}
+      <Tooltip content={entry.name} placement="right">
+        <span className="bitfun-shell-nav__terminal-item-main">
+          {showSavedBadge ? (
+            <Bookmark size={14} className="bitfun-shell-nav__terminal-icon bitfun-shell-nav__terminal-icon--saved" />
+          ) : (
+            <SquareTerminal size={14} className="bitfun-shell-nav__terminal-icon" />
+          )}
 
-      <span className="bitfun-shell-nav__terminal-label">{entry.name}</span>
+          <span className="bitfun-shell-nav__terminal-label">{entry.name}</span>
 
-      {showSavedBadge ? (
-        <span className="bitfun-shell-nav__saved-indicator">{savedBadgeLabel}</span>
-      ) : null}
+          {showSavedBadge ? (
+            <span className="bitfun-shell-nav__saved-indicator">{savedBadgeLabel}</span>
+          ) : null}
 
-      {entry.startupCommand ? (
-        <span className="bitfun-shell-nav__cmd-indicator">{startupCommandBadgeLabel}</span>
-      ) : null}
+          {entry.startupCommand ? (
+            <span className="bitfun-shell-nav__cmd-indicator">{startupCommandBadgeLabel}</span>
+          ) : null}
 
-      <span className={`bitfun-shell-nav__terminal-dot${entry.isRunning ? ' is-running' : ' is-stopped'}`} />
+          <span className={`bitfun-shell-nav__terminal-dot${entry.isRunning ? ' is-running' : ' is-stopped'}`} />
+        </span>
+      </Tooltip>
 
-      <button
-        type="button"
-        className="bitfun-shell-nav__terminal-close"
-        onClick={(event) => {
-          event.stopPropagation();
-          quickAction.onClick();
-        }}
-        title={quickAction.title}
-      >
-        {quickAction.icon}
-      </button>
+      <Tooltip content={quickAction.title} placement="right">
+        <button
+          type="button"
+          className="bitfun-shell-nav__terminal-close"
+          onClick={(event) => {
+            event.stopPropagation();
+            quickAction.onClick();
+          }}
+        >
+          {quickAction.icon}
+        </button>
+      </Tooltip>
     </div>
   );
 };

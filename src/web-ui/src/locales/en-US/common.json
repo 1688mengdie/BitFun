@@ -94,8 +94,9 @@
     },
     "sections": {
       "workspace": "Workspace",
-      "myAgent": "My Agent",
-      "shell": "Shell"
+      "extensions": "Extensions",
+      "shell": "Shell",
+      "assistantSessions": "Assistant Sessions"
     },
     "displayModes": {
       "pro": "Expert Mode",
@@ -106,7 +107,7 @@
       "assistantDesc": "Best for ongoing work with context and personal preferences."
     },
     "myAgent": {
-      "title": "My Agent",
+      "title": "Extensions",
       "categories": {
         "agents": "Agents",
         "extensions": "Extensions",
@@ -146,6 +147,8 @@
       "newSession": "New session",
       "newCodeSession": "New Code session",
       "newCoworkSession": "New Cowork session",
+      "newCodeSessionShort": "Code Session",
+      "newCoworkSessionShort": "Office Session",
       "newClawSession": "New Claw session",
       "modeCode": "Code",
       "modeCowork": "Cowork",
@@ -158,7 +161,8 @@
       "cancelEdit": "Cancel",
       "showMore": "{{count}} more sessions",
       "showAll": "{{count}} more (show all)",
-      "showLess": "Show less"
+      "showLess": "Show less",
+      "assistantOwner": "Assistant: {{name}}"
     },
     "scheduledJobs": {
       "title": "Scheduled Jobs",
@@ -217,7 +221,8 @@
         "edit": "Edit job",
         "delete": "Delete job",
         "save": "Save changes",
-        "create": "Create job"
+        "create": "Create job",
+        "cancel": "Cancel"
       },
       "editor": {
         "editTitle": "Edit job",
@@ -320,7 +325,8 @@
       "mcpServices": "MCP Services"
     },
     "actions": {
-      "openMyAgent": "My Agent"
+      "openMyAgent": "My Agent",
+      "customize": "Customize"
     },
     "moreOptions": "More options",
     "multimodalTools": "Multimodal Tools",
@@ -735,8 +741,8 @@
     "settingsWithSection": "Settings - {{section}}"
   },
   "welcome": {
-    "greetingMorning": "Good Morning, Flow Developer",
-    "greetingAfternoon": "Welcome Back to the Flow Zone",
+    "greetingMorning": "Good morning, creator",
+    "greetingAfternoon": "Welcome back — let's build",
     "greetingEvening": "Good Evening, Creator",
     "greetingNight": "Hello Night Owl, Code Poet",
     "subtitleMorning": "\"A new day, new possibilities. Let's create something amazing.\"",
@@ -768,13 +774,13 @@
     "settings": "Settings",
     "fileViewer": "File Viewer",
     "projectContext": "Profile",
-    "capabilities": "Capabilities",
     "agents": "Agents",
     "skills": "Skills",
     "miniApps": "Mini App",
     "browser": "Browser",
     "mermaidEditor": "Mermaid",
-    "myAgent": "My Agent",
+    "insights": "Insights",
+    "assistant": "Assistant",
     "shell": "Shell"
   },
   "welcomeScene": {
@@ -953,5 +959,8 @@
       "transferNeedsDesktop": "Upload and download require the desktop app.",
       "transferring": "Transferring..."
     }
+  },
+  "notify": {
+    "dialogCompleted": "AI agent has finished the task."
   }
 }

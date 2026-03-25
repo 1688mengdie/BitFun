@@ -132,5 +132,17 @@
       "saveFailed": "保存配置失败",
       "refreshed": "已刷新可用终端列表"
     }
+  },
+  "notifications": {
+    "title": "通知",
+    "hint": "Toast 弹窗通知偏好设置",
+    "dialogCompletion": {
+      "label": "任务完成通知",
+      "description": "当 AI 任务完成且窗口不在焦点时，弹出 Toast 通知"
+    },
+    "messages": {
+      "saveSuccess": "通知设置已保存",
+      "saveFailed": "保存通知设置失败"
+    }
   }
 }

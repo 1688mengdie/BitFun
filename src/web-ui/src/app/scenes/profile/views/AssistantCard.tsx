@@ -1,17 +1,20 @@
 import React from 'react';
-import { Bot } from 'lucide-react';
+import { Bot, MessageSquarePlus, Trash2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { Badge } from '@/component-library';
+import { Badge, Tooltip } from '@/component-library';
 import type { WorkspaceInfo } from '@/shared/types';
 import { getCardGradient } from '@/shared/utils/cardGradients';
 
 interface AssistantCardProps {
   workspace: WorkspaceInfo;
   onClick: () => void;
+  onNewSession?: () => void;
+  onDelete?: () => void;
+  isPrimary?: boolean;
   style?: React.CSSProperties;
 }
 
-const AssistantCard: React.FC<AssistantCardProps> = ({ workspace, onClick, style }) => {
+const AssistantCard: React.FC<AssistantCardProps> = ({ workspace, onClick, onNewSession, onDelete, isPrimary, style }) => {
   const { t } = useTranslation('scenes/profile');
   const identity = workspace.identity;
 
@@ -24,11 +27,20 @@ const AssistantCard: React.FC<AssistantCardProps> = ({ workspace, onClick, style
 
   const gradient = getCardGradient(workspace.id || name);
 
+  const handleCardKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      onClick();
+    }
+  };
+
   return (
-    <button
-      type="button"
+    <div
       className="assistant-card"
+      role="button"
+      tabIndex={0}
       onClick={onClick}
+      onKeyDown={handleCardKeyDown}
       aria-label={name}
       style={{
         ...style,
@@ -47,6 +59,11 @@ const AssistantCard: React.FC<AssistantCardProps> = ({ workspace, onClick, style
         <div className="assistant-card__header-info">
           <div className="assistant-card__title-row">
             <span className="assistant-card__name">{name}</span>
+            {isPrimary && (
+              <span className="assistant-card__primary-badge">
+                {t('nursery.card.primaryBadge')}
+              </span>
+            )}
           </div>
           <div className="assistant-card__badges">
             {creature && <Badge variant="neutral">{creature}</Badge>}
@@ -73,9 +90,43 @@ const AssistantCard: React.FC<AssistantCardProps> = ({ workspace, onClick, style
           <span className="assistant-card__footer-hint">
             {t('nursery.card.configure')}
           </span>
+          {(onNewSession || onDelete) ? (
+            <div className="assistant-card__footer-actions">
+              {onNewSession && (
+                <Tooltip content={t('nursery.card.newSession')} placement="top">
+                  <button
+                    type="button"
+                    className="assistant-card__new-session-btn"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onNewSession();
+                    }}
+                    aria-label={t('nursery.card.newSession')}
+                  >
+                    <MessageSquarePlus size={15} strokeWidth={2} aria-hidden />
+                  </button>
+                </Tooltip>
+              )}
+              {onDelete && (
+                <Tooltip content={t('nursery.card.delete')} placement="top">
+                  <button
+                    type="button"
+                    className="assistant-card__delete-btn"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onDelete();
+                    }}
+                    aria-label={t('nursery.card.delete')}
+                  >
+                    <Trash2 size={14} strokeWidth={2} aria-hidden />
+                  </button>
+                </Tooltip>
+              )}
+            </div>
+          ) : null}
         </div>
       </div>
-    </button>
+    </div>
   );
 };
 
