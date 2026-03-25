@@ -13,7 +13,14 @@ import { useCurrentSessionTitle } from '../../hooks/useCurrentSessionTitle';
 import { useCurrentSettingsTabTitle } from '../../hooks/useCurrentSettingsTabTitle';
 import { useI18n } from '@/infrastructure/i18n/hooks/useI18n';
 import { flowChatManager } from '@/flow_chat/services/FlowChatManager';
+import { useWorkspaceContext } from '@/infrastructure/contexts/WorkspaceContext';
+import { notificationService } from '@/shared/notification-system';
 import { createLogger } from '@/shared/utils/logger';
+import {
+  findReusableEmptySessionId,
+  flowChatSessionConfigForWorkspace,
+  pickWorkspaceForProjectChatSession,
+} from '@/app/utils/projectSessionWorkspace';
 import './SceneBar.scss';
 
 const log = createLogger('SceneBar');
@@ -37,6 +44,7 @@ const SceneBar: React.FC<SceneBarProps> = ({
   isMaximized = false,
 }) => {
   const { openTabs, activeTabId, tabDefs, activateScene, closeScene } = useSceneManager();
+  const { currentWorkspace, normalWorkspacesList, setActiveWorkspace } = useWorkspaceContext();
   const sessionTitle = useCurrentSessionTitle();
   const settingsTabTitle = useCurrentSettingsTabTitle();
   const { t } = useI18n('common');
@@ -81,13 +89,26 @@ const SceneBar: React.FC<SceneBarProps> = ({
   }, [isSingleTab, onMaximize]);
 
   const handleCreateSession = useCallback(async () => {
+    const target = pickWorkspaceForProjectChatSession(currentWorkspace, normalWorkspacesList);
+    if (!target) {
+      notificationService.warning(t('nav.sessions.needProjectWorkspaceForSession'), { duration: 4500 });
+      return;
+    }
     activateScene('session');
     try {
-      await flowChatManager.createChatSession({});
+      if (target.id !== currentWorkspace?.id) {
+        await setActiveWorkspace(target.id);
+      }
+      const reusableId = findReusableEmptySessionId(target, 'agentic');
+      if (reusableId) {
+        await flowChatManager.switchChatSession(reusableId);
+        return;
+      }
+      await flowChatManager.createChatSession(flowChatSessionConfigForWorkspace(target), 'agentic');
     } catch (err) {
       log.error('Failed to create session', err);
     }
-  }, [activateScene]);
+  }, [activateScene, currentWorkspace, normalWorkspacesList, setActiveWorkspace, t]);
 
   return (
     <div

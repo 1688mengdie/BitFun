@@ -94,9 +94,19 @@
     },
     "sections": {
       "workspace": "工作区",
-      "extensions": "扩展",
+      "extensions": "定制",
       "shell": "Shell",
       "assistantSessions": "助理会话"
+    },
+    "search": {
+      "triggerPlaceholder": "搜索工作区、助理、会话...",
+      "triggerTooltip": "搜索 (Ctrl+K)",
+      "inputPlaceholder": "搜索工作区、助理、会话...",
+      "groupWorkspaces": "已打开工作区",
+      "groupAssistants": "助理",
+      "groupSessions": "所有会话",
+      "empty": "未找到相关结果",
+      "sessionWorkspaceHint": "位于 {{workspace}}"
     },
     "displayModes": {
       "pro": "专业模式",
@@ -162,7 +172,8 @@
       "showMore": "还有 {{count}} 个会话",
       "showAll": "还有 {{count}} 个（展开全部）",
       "showLess": "收起",
-      "assistantOwner": "所属助理：{{name}}"
+      "assistantOwner": "所属助理：{{name}}",
+      "needProjectWorkspaceForSession": "请先打开或添加项目工作区。编码与工作（Cowork）会话不能在助理区域创建。"
     },
     "scheduledJobs": {
       "title": "定时任务",

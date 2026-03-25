@@ -67,11 +67,14 @@ const AssistantConfigPage: React.FC = () => {
     const inList = (id: string | null | undefined) =>
       id && assistantWorkspacesList.some((w) => w.id === id) ? id : null;
 
-    if (currentWorkspace?.workspaceKind === WorkspaceKind.Assistant) {
-      const id = inList(currentWorkspace.id);
-      if (id) return id;
-    }
-    return inList(activeWorkspaceId) ?? inList(selectedAssistantWorkspaceId) ?? null;
+    // Explicit selection from nursery gallery takes highest priority,
+    // followed by the selected assistant store, then the active workspace.
+    return (
+      inList(activeWorkspaceId) ??
+      inList(selectedAssistantWorkspaceId) ??
+      (currentWorkspace?.workspaceKind === WorkspaceKind.Assistant ? inList(currentWorkspace.id) : null) ??
+      null
+    );
   }, [
     activeWorkspaceId,
     assistantWorkspacesList,

@@ -4,8 +4,8 @@
   &__workspace-list {
     display: flex;
     flex-direction: column;
-    gap: $size-gap-2;
-    padding: 4px 0 0;
+    gap: 0;
+    padding: 2px 0 0;
 
     &.is-dragging {
       .bitfun-nav-panel__workspace-item {
@@ -75,7 +75,7 @@
     display: flex;
     flex-direction: column;
     gap: 2px;
-    padding: $size-gap-1;
+    padding: 2px $size-gap-1;
     border-radius: $size-radius-base;
     background: transparent;
     border: 1px solid transparent;
@@ -533,7 +533,7 @@
     }
 
     .bitfun-nav-panel__inline-list {
-      margin-left: 18px;
+      margin-left: 12px;
       margin-right: 0;
       padding-top: 0;
     }
@@ -799,7 +799,7 @@
     }
 
     .bitfun-nav-panel__inline-list {
-      margin-left: 18px;
+      margin-left: 12px;
       margin-right: 0;
       padding-top: 0;
     }

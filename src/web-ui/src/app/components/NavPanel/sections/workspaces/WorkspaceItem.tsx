@@ -14,6 +14,8 @@ import { useGitBasicInfo } from '@/tools/git/hooks/useGitState';
 import { workspaceAPI } from '@/infrastructure/api';
 import { notificationService } from '@/shared/notification-system';
 import { flowChatManager } from '@/flow_chat/services/FlowChatManager';
+import { openMainSession } from '@/flow_chat/services/openBtwSession';
+import { findReusableEmptySessionId } from '@/app/utils/projectSessionWorkspace';
 import { BranchSelectModal, type BranchSelectResult } from '../../../panels/BranchSelectModal';
 import SessionsSection from '../sessions/SessionsSection';
 import {
@@ -243,7 +245,16 @@ const WorkspaceItem: React.FC<WorkspaceItemProps> = ({
 
   const handleCreateSession = useCallback(async (mode?: 'agentic' | 'Cowork' | 'Claw') => {
     setMenuOpen(false);
+    const resolvedMode = mode ?? (workspace.workspaceKind === WorkspaceKind.Assistant ? 'Claw' : undefined);
     try {
+      const reusableId = findReusableEmptySessionId(workspace, resolvedMode);
+      if (reusableId) {
+        await openMainSession(reusableId, {
+          workspaceId: workspace.id,
+          activateWorkspace: setActiveWorkspace,
+        });
+        return;
+      }
       await flowChatManager.createChatSession(
         {
           workspacePath: workspace.rootPath,
@@ -251,7 +262,7 @@ const WorkspaceItem: React.FC<WorkspaceItemProps> = ({
             ? { remoteConnectionId: workspace.connectionId }
             : {}),
         },
-        mode ?? (workspace.workspaceKind === WorkspaceKind.Assistant ? 'Claw' : undefined)
+        resolvedMode
       );
       await setActiveWorkspace(workspace.id);
     } catch (error) {

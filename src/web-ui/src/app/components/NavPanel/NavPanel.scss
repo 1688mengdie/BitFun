@@ -520,7 +520,9 @@ $_section-header-height: 24px;
     flex: 1 1 auto;
     overflow-y: auto;
     overflow-x: hidden;
-    padding: $size-gap-5 0 $size-gap-3 0;
+    // No padding-top: separation from top-actions is only .bitfun-nav-panel__top-actions padding-bottom.
+    // Top padding here stacked with that and read as “extra” gap above the first section header.
+    padding: 0 0 $size-gap-3 0;
 
     &::-webkit-scrollbar { width: 3px; }
     &::-webkit-scrollbar-track { background: transparent; }
@@ -994,6 +996,11 @@ $_section-header-height: 24px;
     flex-direction: column;
     padding: 2px $size-gap-2;
     gap: 2px;
+
+    // Multiple SessionsSection siblings: match vertical rhythm of __workspace-list (gap 0 + 2px row padding).
+    &--session-blocks {
+      gap: 0;
+    }
   }
 
   button.bitfun-nav-panel__inline-item {
@@ -1020,9 +1027,13 @@ $_section-header-height: 24px;
   // Item slots depart with the split-open animation used by scene navs.
 
   &__section {
-    margin-bottom: $size-gap-5;
+    margin-bottom: $size-gap-5 * 0.75;
     transition: transform $_depart-duration $_depart-easing,
                 opacity $_depart-duration $_depart-easing;
+
+    &:last-child {
+      margin-bottom: $size-gap-5;
+    }
 
     &.is-departing-up {
       transform: translateY(-$_depart-distance);
@@ -1703,6 +1714,51 @@ $_section-header-height: 24px;
       filter: none;
     }
   }
+
+  .bitfun-nav-panel__top-action-icon-circle {
+    transition: none;
+  }
+
+  .bitfun-nav-panel__top-action-btn:hover .bitfun-nav-panel__top-action-icon-circle {
+    transform: scale(1);
+  }
+
+  .bitfun-nav-panel__top-action-btn:not(.bitfun-nav-panel__top-action-btn--sub) .bitfun-nav-panel__top-action-icon-slot {
+    transition: none;
+  }
+
+  .bitfun-nav-panel__top-action-btn:not(.bitfun-nav-panel__top-action-btn--sub):hover .bitfun-nav-panel__top-action-icon-slot {
+    transform: scale(1);
+  }
+}
+
+// ── Nav workspace search ─────────────────────────
+
+.bitfun-nav-panel__brand-header {
+  display: flex;
+  flex-direction: column;
+  padding: $size-gap-2 $size-gap-2 $size-gap-1;
+  flex-shrink: 0;
+}
+
+.bitfun-nav-panel__brand-search {
+  width: 100%;
+  min-width: 0;
+
+  // Legacy GlobalSearch overrides kept for reference but no longer rendered.
+  // Trigger button styles live in NavSearchDialog.scss.
+
+  .bitfun-global-search--nav-panel .bitfun-global-search__option {
+    width: 22px;
+    height: 22px;
+    min-width: 22px;
+    padding: 0;
+
+    svg {
+      width: 11px;
+      height: 11px;
+    }
+  }
 }
 
 // ── Top action strip ─────────────────────────────
@@ -1711,7 +1767,7 @@ $_section-header-height: 24px;
   display: flex;
   flex-direction: column;
   gap: $size-gap-1;
-  padding: $size-gap-2 $size-gap-2 $size-gap-4;
+  padding: $size-gap-2 $size-gap-2 $size-gap-4 * 0.75;
   flex-shrink: 0;
 }
 
@@ -1719,6 +1775,10 @@ $_section-header-height: 24px;
   display: flex;
   flex-direction: column;
   gap: 1px;
+  // Divider below 扩展 (main row + optional Agents / Skills sublist) → scrollable sections
+  padding-bottom: $size-gap-2;
+  margin-bottom: $size-gap-1;
+  border-bottom: 1px solid var(--border-subtle);
 }
 
 .bitfun-nav-panel__top-action-sublist {
@@ -1777,6 +1837,17 @@ $_section-header-height: 24px;
     justify-content: center;
   }
 
+  // 助理行：前导 icon 悬停微微放大（与 __top-action-icon-circle 一致；排除 --sub 的 Agents / Skills）
+  &:not(.bitfun-nav-panel__top-action-btn--sub) .bitfun-nav-panel__top-action-icon-slot {
+    transform: scale(1);
+    transform-origin: center;
+    transition: transform $motion-fast $easing-standard;
+  }
+
+  &:not(.bitfun-nav-panel__top-action-btn--sub):hover .bitfun-nav-panel__top-action-icon-slot {
+    transform: scale(1.07);
+  }
+
   &:hover {
     background: var(--element-bg-soft);
     color: var(--color-text-primary);
@@ -1795,7 +1866,7 @@ $_section-header-height: 24px;
   }
 
   &--sub {
-    padding-left: 28px;
+    padding-left: 18px;
   }
 }
 
@@ -1851,9 +1922,18 @@ $_section-header-height: 24px;
   justify-content: center;
   border-radius: 50%;
   background: var(--element-bg-medium);
-  transition: background $motion-fast $easing-standard;
+  color: var(--color-text-muted);
+  transform: scale(1);
+  transform-origin: center;
+  transition: background $motion-fast $easing-standard,
+              color $motion-fast $easing-standard,
+              box-shadow $motion-fast $easing-standard,
+              transform $motion-fast $easing-standard;
 
   .bitfun-nav-panel__top-action-btn:hover & {
-    background: color-mix(in srgb, var(--color-primary) 18%, var(--element-bg-medium));
+    background: var(--element-bg-strong);
+    color: var(--color-primary);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-primary) 28%, transparent);
+    transform: scale(1.07);
   }
 }

@@ -272,13 +272,11 @@ export const WelcomePanel: React.FC<WelcomePanelProps> = ({
                   </span>
                 </span>
                 {!isCoworkSession && gitState ? (
-                  <>
-                    <br />
+                  <span className="welcome-panel__narrative-git">
                     {isGitClean
                       ? <span className="welcome-panel__narrative-clean">{t('welcome.gitClean')}</span>
-                      : buildGitNarrative()
-                    }
-                  </>
+                      : buildGitNarrative()}
+                  </span>
                 ) : null}
               </>
             )}
