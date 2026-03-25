@@ -18,7 +18,8 @@ export type SceneTabId =
   | 'miniapps'
   | 'browser'
   | 'mermaid'
-  | 'my-agent'
+  | 'assistant'
+  | 'insights'
   | 'shell'
   | `miniapp:${string}`;
 

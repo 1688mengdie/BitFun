@@ -3,11 +3,10 @@ import {
   Plus,
   ChevronDown,
   RefreshCw,
-  Square,
   Play,
   Pencil,
+  Square,
   Trash2,
-  X,
 } from 'lucide-react';
 import { useI18n } from '@/infrastructure/i18n';
 import { configManager } from '@/infrastructure/config/services/ConfigManager';
@@ -25,6 +24,7 @@ import { useShellStore } from './shellStore';
 import { useShellEntries } from './hooks';
 import type { ShellEntry } from './hooks/shellEntryTypes';
 import { useShellNavMenuState } from './hooks/useShellNavMenuState';
+import { Tooltip } from '@/component-library/components/Tooltip';
 import ShellNavEntryItem from './components/ShellNavEntryItem';
 import ShellNavWorkspaceSwitcher from './components/ShellNavWorkspaceSwitcher';
 import './ShellNav.scss';
@@ -219,9 +219,9 @@ const ShellNav: React.FC = () => {
   const getQuickAction = useCallback((entry: ShellEntry) => {
     if (entry.isRunning) {
       return {
-        icon: <Square size={12} />,
-        title: t('nav.shell.context.stop'),
-        onClick: () => { void stopEntry(entry); },
+        icon: <Trash2 size={12} />,
+        title: t('nav.shell.context.close'),
+        onClick: () => { void deleteEntry(entry); },
       };
     }
 
@@ -234,11 +234,11 @@ const ShellNav: React.FC = () => {
     }
 
     return {
-      icon: <X size={12} />,
+      icon: <Trash2 size={12} />,
       title: t('nav.shell.context.close'),
       onClick: () => { void deleteEntry(entry); },
     };
-  }, [deleteEntry, stopEntry, t]);
+  }, [deleteEntry, t]);
 
   return (
     <div className="bitfun-shell-nav">
@@ -261,24 +261,26 @@ const ShellNav: React.FC = () => {
         </div>
         <div className="bitfun-shell-nav__header-actions" ref={menuRef}>
           <div className={`bitfun-shell-nav__split-button${menuOpen ? ' is-active' : ''}`}>
-            <button
-              type="button"
-              className="bitfun-shell-nav__split-button-main"
-              onClick={() => { void handleCreateManualTerminal(); }}
-              title={t('nav.shell.actions.newTerminal')}
-            >
-              <Plus size={14} />
-            </button>
-            <button
-              type="button"
-              className="bitfun-shell-nav__split-button-toggle"
-              onClick={handleToggleCreateMenu}
-              aria-haspopup="menu"
-              aria-expanded={menuOpen}
-              title={t('actions.more')}
-            >
-              <ChevronDown size={12} />
-            </button>
+            <Tooltip content={t('nav.shell.actions.newTerminal')} placement="bottom">
+              <button
+                type="button"
+                className="bitfun-shell-nav__split-button-main"
+                onClick={() => { void handleCreateManualTerminal(); }}
+              >
+                <Plus size={14} />
+              </button>
+            </Tooltip>
+            <Tooltip content={t('actions.more')} placement="bottom">
+              <button
+                type="button"
+                className="bitfun-shell-nav__split-button-toggle"
+                onClick={handleToggleCreateMenu}
+                aria-haspopup="menu"
+                aria-expanded={menuOpen}
+              >
+                <ChevronDown size={12} />
+              </button>
+            </Tooltip>
           </div>
 
           {menuOpen ? (

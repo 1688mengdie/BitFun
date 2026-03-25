@@ -99,6 +99,9 @@ pub struct NotificationConfig {
     pub enabled: bool,
     pub position: String,
     pub duration: u32,
+    /// Whether to show a toast notification when a dialog turn completes while the window is not focused.
+    #[serde(default = "default_true")]
+    pub dialog_completion_notify: bool,
 }
 
 /// Theme configuration.
@@ -932,6 +935,7 @@ impl Default for AppConfig {
                 enabled: true,
                 position: "topRight".to_string(),
                 duration: 5000,
+                dialog_completion_notify: true,
             },
             session_config: AppSessionConfig::default(),
             ai_experience: AIExperienceConfig::default(),
@@ -1235,6 +1239,7 @@ impl Default for NotificationConfig {
             enabled: true,
             position: "topRight".to_string(),
             duration: 5000,
+            dialog_completion_notify: true,
         }
     }
 }

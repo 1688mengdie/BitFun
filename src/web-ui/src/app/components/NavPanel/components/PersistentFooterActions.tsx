@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useRef } from 'react';
-import { Settings, Info, MoreVertical, PictureInPicture2, SquareTerminal, Smartphone, Globe, Network, Layers } from 'lucide-react';
+import { Settings, Info, MoreVertical, PictureInPicture2, SquareTerminal, Smartphone, Globe, Network, Layers, BarChart3 } from 'lucide-react';
 import { Tooltip, Modal } from '@/component-library';
 import { useI18n } from '@/infrastructure/i18n/hooks/useI18n';
 import { useSceneManager } from '../../../hooks/useSceneManager';
@@ -126,6 +126,13 @@ const PersistentFooterActions: React.FC = () => {
     if (multimodalHoverTimerRef.current) clearTimeout(multimodalHoverTimerRef.current);
     multimodalHoverTimerRef.current = setTimeout(() => setMultimodalOpen(false), 180);
   }, []);
+
+  const handleOpenInsights = useCallback(() => {
+    openScene('insights');
+  }, [openScene]);
+
+  const insightsTooltip = t('nav.items.insights');
+  const isInsightsActive = activeTabId === 'insights';
 
   const handleShowAbout = () => {
     closeMenu();
@@ -306,6 +313,17 @@ const PersistentFooterActions: React.FC = () => {
             );
           })()}
         </div>
+
+          <Tooltip content={insightsTooltip} placement="right" followCursor>
+            <button
+              type="button"
+              className={`bitfun-nav-panel__footer-btn bitfun-nav-panel__footer-btn--icon${isInsightsActive ? ' is-active' : ''}`}
+              onClick={handleOpenInsights}
+              aria-label={insightsTooltip}
+            >
+              <BarChart3 size={15} aria-hidden="true" />
+            </button>
+          </Tooltip>
         </div>
 
         <div className="bitfun-nav-panel__footer-right">

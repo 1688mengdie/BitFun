@@ -77,6 +77,8 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const agentBoostRef = useRef<HTMLDivElement>(null);
   const isImeComposingRef = useRef(false);
   const lastImeCompositionEndAtRef = useRef(0);
+  // Ref so the queuedInput sync effect can read the latest value without it being a dep
+  const inputValueRef = useRef('');
   
   // History navigation state
   const [historyIndex, setHistoryIndex] = useState(-1);
@@ -507,19 +509,26 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     }
     // Sync machine queue into the input (e.g. failed turn restored by EventHandlerModule).
     // `queuedInput` is cleared on successful send via `setQueuedInput(null)` so we do not fight CLEAR_VALUE.
-    if (inputState.value !== queuedInput) {
+    // Use inputValueRef (not inputState.value) so this effect only re-runs when the machine's
+    // queuedInput actually changes — not on every keystroke — avoiding the race condition where
+    // a stale queuedInput would overwrite what the user is currently typing.
+    const currentValue = inputValueRef.current;
+    if (currentValue !== queuedInput && !currentValue.trim()) {
+      // Only restore when the input is empty: this effect is for failure-recovery
+      // (EventHandlerModule sets queuedInput on failed turns), NOT for live typing.
+      // Restoring while the user is actively typing would overwrite their draft.
       log.debug('Detected queuedInput, restoring message to input', { queuedInput });
       dispatchInput({ type: 'ACTIVATE' });
       dispatchInput({ type: 'SET_VALUE', payload: queuedInput });
+      inputValueRef.current = queuedInput;
       if (richTextInputRef.current) {
         richTextInputRef.current.focus();
       }
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     stateMachine?.context?.queuedInput,
     effectiveTargetSessionId,
-    inputState.value,
-    stateMachine?.context,
   ]);
 
   React.useEffect(() => {
@@ -686,6 +695,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     });
     
     dispatchInput({ type: 'SET_VALUE', payload: text });
+    inputValueRef.current = text;
 
     const isBtwCommand = text.trim().toLowerCase().startsWith('/btw');
     const isProcessing = !!derivedState?.isProcessing;
@@ -973,9 +983,12 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     }
 
     dispatchInput({ type: 'SET_VALUE', payload: next });
+    // Clear the machine's queued input so the queuedInput sync effect does not overwrite
+    // the just-set "/btw ..." value back to the stale "/" that was queued while processing.
+    setQueuedInput(null);
     setSlashCommandState({ isActive: false, kind: 'modes', query: '', selectedIndex: 0 });
     window.setTimeout(() => richTextInputRef.current?.focus(), 0);
-  }, [inputState.value, isBtwSession]);
+  }, [inputState.value, isBtwSession, setQueuedInput]);
   
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     // Local /btw shortcut (Ctrl/Cmd+Alt+B) should work even when ChatInput is focused.

@@ -171,10 +171,17 @@
     },
 
     "card": {
-      "unnamed":    "Unnamed Assistant",
-      "noVibe":     "An assistant waiting to be defined",
-      "configure":  "Click to configure",
-      "tokenTitle": "Context usage estimate"
+      "unnamed":             "Unnamed Assistant",
+      "noVibe":              "An assistant waiting to be defined",
+      "configure":           "Click to configure",
+      "newSession":          "New session",
+      "tokenTitle":          "Context usage estimate",
+      "primaryBadge":        "Primary",
+      "delete":              "Delete assistant",
+      "deleteConfirmTitle":  "Delete assistant",
+      "deleteConfirmMessage": "Delete assistant \"{{name}}\"? This cannot be undone.",
+      "deleteConfirm":       "Delete",
+      "deleteCancel":        "Cancel"
     },
 
     "assistant": {
@@ -182,6 +189,8 @@
       "inheritPrimary": "Inherit from template (primary)",
       "inheritFast":    "Inherit from template (fast)",
       "personaDocsTitle": "Key documents",
+      "scheduledSessionsTitle": "Scheduled sessions",
+      "scheduledSessionsNoWorkspace": "Select an assistant workspace to manage scheduled sessions.",
       "personaDocs": {
         "IDENTITY": "Identity",
         "SOUL":     "Core persona",

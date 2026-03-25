@@ -1,21 +1,16 @@
-import React, { Suspense, lazy } from 'react';
-import { useMemo, useEffect } from 'react';
+import React, { Suspense, lazy, useMemo, useEffect } from 'react';
 import { useWorkspaceContext } from '@/infrastructure/contexts/WorkspaceContext';
 import { WorkspaceKind } from '@/shared/types';
-import { useMyAgentStore } from './myAgentStore';
-import './MyAgentScene.scss';
+import { useMyAgentStore } from '../my-agent/myAgentStore';
+import './AssistantScene.scss';
 
 const ProfileScene = lazy(() => import('../profile/ProfileScene'));
-const AgentsScene = lazy(() => import('../agents/AgentsScene'));
-const SkillsScene = lazy(() => import('../skills/SkillsScene'));
-const InsightsScene = lazy(() => import('./InsightsScene'));
 
-interface MyAgentSceneProps {
+interface AssistantSceneProps {
   workspacePath?: string;
 }
 
-const MyAgentScene: React.FC<MyAgentSceneProps> = ({ workspacePath }) => {
-  const activeView = useMyAgentStore((s) => s.activeView);
+const AssistantScene: React.FC<AssistantSceneProps> = ({ workspacePath }) => {
   const selectedAssistantWorkspaceId = useMyAgentStore((s) => s.selectedAssistantWorkspaceId);
   const setSelectedAssistantWorkspaceId = useMyAgentStore((s) => s.setSelectedAssistantWorkspaceId);
   const { currentWorkspace, assistantWorkspacesList } = useWorkspaceContext();
@@ -31,40 +26,24 @@ const MyAgentScene: React.FC<MyAgentSceneProps> = ({ workspacePath }) => {
     if (!selectedAssistantWorkspaceId) {
       return null;
     }
-
-    return assistantWorkspacesList.find(
-      (workspace) => workspace.id === selectedAssistantWorkspaceId
-    ) ?? null;
+    return assistantWorkspacesList.find((workspace) => workspace.id === selectedAssistantWorkspaceId) ?? null;
   }, [assistantWorkspacesList, selectedAssistantWorkspaceId]);
 
   const resolvedAssistantWorkspace = useMemo(() => {
     if (activeAssistantWorkspace) {
       return activeAssistantWorkspace;
     }
-
     if (selectedAssistantWorkspace) {
       return selectedAssistantWorkspace;
     }
-
     return defaultAssistantWorkspace;
-  }, [
-    activeAssistantWorkspace,
-    defaultAssistantWorkspace,
-    selectedAssistantWorkspace,
-  ]);
+  }, [activeAssistantWorkspace, defaultAssistantWorkspace, selectedAssistantWorkspace]);
 
   useEffect(() => {
-    if (
-      activeAssistantWorkspace?.id
-      && activeAssistantWorkspace.id !== selectedAssistantWorkspaceId
-    ) {
+    if (activeAssistantWorkspace?.id && activeAssistantWorkspace.id !== selectedAssistantWorkspaceId) {
       setSelectedAssistantWorkspaceId(activeAssistantWorkspace.id);
     }
-  }, [
-    activeAssistantWorkspace,
-    selectedAssistantWorkspaceId,
-    setSelectedAssistantWorkspaceId,
-  ]);
+  }, [activeAssistantWorkspace, selectedAssistantWorkspaceId, setSelectedAssistantWorkspaceId]);
 
   useEffect(() => {
     const selectedExists = selectedAssistantWorkspaceId
@@ -87,20 +66,15 @@ const MyAgentScene: React.FC<MyAgentSceneProps> = ({ workspacePath }) => {
   ]);
 
   return (
-    <div className="bitfun-my-agent-scene">
-      <Suspense fallback={<div className="bitfun-my-agent-scene__loading" />}>
-        {activeView === 'profile' && (
-          <ProfileScene
-            key={resolvedAssistantWorkspace?.id ?? 'default-assistant-workspace'}
-            workspacePath={resolvedAssistantWorkspace?.rootPath ?? workspacePath}
-          />
-        )}
-        {activeView === 'agents' && <AgentsScene />}
-        {activeView === 'skills' && <SkillsScene />}
-        {activeView === 'insights' && <InsightsScene />}
+    <div className="bitfun-assistant-scene">
+      <Suspense fallback={<div className="bitfun-assistant-scene__loading" />}>
+        <ProfileScene
+          key={resolvedAssistantWorkspace?.id ?? 'default-assistant-workspace'}
+          workspacePath={resolvedAssistantWorkspace?.rootPath ?? workspacePath}
+        />
       </Suspense>
     </div>
   );
 };
 
-export default MyAgentScene;
+export default AssistantScene;

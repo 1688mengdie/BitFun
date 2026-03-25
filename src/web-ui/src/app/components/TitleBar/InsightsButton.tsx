@@ -3,7 +3,6 @@ import { BarChart3 } from 'lucide-react';
 import { Tooltip } from '@/component-library';
 import { useI18n } from '@/infrastructure/i18n/hooks/useI18n';
 import { useSceneStore } from '@/app/stores/sceneStore';
-import { useMyAgentStore } from '@/app/scenes/my-agent/myAgentStore';
 import { useInsightsStore } from '@/app/scenes/my-agent/insightsStore';
 import './InsightsButton.scss';
 
@@ -18,8 +17,7 @@ const InsightsButton: React.FC<InsightsButtonProps> = ({ className, tooltipPlace
   const progress = useInsightsStore((s) => s.progress);
 
   const handleClick = useCallback(() => {
-    useMyAgentStore.getState().setActiveView('insights');
-    useSceneStore.getState().openScene('my-agent');
+    useSceneStore.getState().openScene('insights');
   }, []);
 
   const progressText = generating && progress.total > 0

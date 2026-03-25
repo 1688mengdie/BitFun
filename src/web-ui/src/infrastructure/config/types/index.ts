@@ -52,6 +52,8 @@ export interface NotificationConfig {
   enabled: boolean;
   position: string;
   duration: number;
+  /** Whether to show a toast when a dialog turn completes while the window is not focused. */
+  dialog_completion_notify: boolean;
 }
 
 export interface AIExperienceConfig {

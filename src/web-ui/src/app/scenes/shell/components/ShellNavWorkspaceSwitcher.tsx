@@ -1,6 +1,7 @@
 import React from 'react';
 import { createPortal } from 'react-dom';
 import { Check, ChevronDown } from 'lucide-react';
+import { Tooltip } from '@/component-library/components/Tooltip';
 import { WorkspaceKind, type WorkspaceInfo } from '@/shared/types';
 
 interface ShellNavWorkspaceSwitcherProps {
@@ -42,21 +43,25 @@ const ShellNavWorkspaceSwitcher: React.FC<ShellNavWorkspaceSwitcherProps> = ({
 
   return (
     <div className="bitfun-shell-nav__workspace-switcher">
-      <button
-        ref={workspaceTriggerRef}
-        type="button"
-        className={`bitfun-shell-nav__workspace-trigger${workspaceMenuOpen ? ' is-active' : ''}${hasMultipleWorkspaces ? ' is-switchable' : ''}`}
-        onClick={onToggle}
-        aria-haspopup={hasMultipleWorkspaces ? 'menu' : undefined}
-        aria-expanded={hasMultipleWorkspaces ? workspaceMenuOpen : undefined}
-        title={hasMultipleWorkspaces ? switchWorkspaceLabel : workspaceName}
+      <Tooltip
+        content={hasMultipleWorkspaces ? switchWorkspaceLabel : workspaceName}
+        placement="bottom"
       >
-        <span className="bitfun-shell-nav__workspace-separator">/</span>
-        <span className="bitfun-shell-nav__workspace-name">{workspaceName}</span>
-        {hasMultipleWorkspaces ? (
-          <ChevronDown size={12} className="bitfun-shell-nav__workspace-trigger-icon" />
-        ) : null}
-      </button>
+        <button
+          ref={workspaceTriggerRef}
+          type="button"
+          className={`bitfun-shell-nav__workspace-trigger${workspaceMenuOpen ? ' is-active' : ''}${hasMultipleWorkspaces ? ' is-switchable' : ''}`}
+          onClick={onToggle}
+          aria-haspopup={hasMultipleWorkspaces ? 'menu' : undefined}
+          aria-expanded={hasMultipleWorkspaces ? workspaceMenuOpen : undefined}
+        >
+          <span className="bitfun-shell-nav__workspace-separator">/</span>
+          <span className="bitfun-shell-nav__workspace-name">{workspaceName}</span>
+          {hasMultipleWorkspaces ? (
+            <ChevronDown size={12} className="bitfun-shell-nav__workspace-trigger-icon" />
+          ) : null}
+        </button>
+      </Tooltip>
 
       {workspaceMenuOpen && hasMultipleWorkspaces && workspaceMenuPosition
         ? createPortal(
@@ -75,20 +80,25 @@ const ShellNavWorkspaceSwitcher: React.FC<ShellNavWorkspaceSwitcherProps> = ({
                 const label = getWorkspaceDisplayName(workspace);
 
                 return (
-                  <button
+                  <Tooltip
                     key={workspace.id}
-                    type="button"
-                    role="menuitemradio"
-                    aria-checked={isActive}
-                    className={`bitfun-shell-nav__workspace-menu-item${isActive ? ' is-active' : ''}`}
-                    onClick={() => { void onSelectWorkspace(workspace.id); }}
-                    title={workspace.rootPath}
+                    content={workspace.rootPath}
+                    placement="right"
+                    disabled={!workspace.rootPath}
                   >
-                    <span className="bitfun-shell-nav__workspace-menu-check" aria-hidden="true">
-                      {isActive ? <Check size={12} /> : null}
-                    </span>
-                    <span className="bitfun-shell-nav__workspace-menu-text">{label}</span>
-                  </button>
+                    <button
+                      type="button"
+                      role="menuitemradio"
+                      aria-checked={isActive}
+                      className={`bitfun-shell-nav__workspace-menu-item${isActive ? ' is-active' : ''}`}
+                      onClick={() => { void onSelectWorkspace(workspace.id); }}
+                    >
+                      <span className="bitfun-shell-nav__workspace-menu-check" aria-hidden="true">
+                        {isActive ? <Check size={12} /> : null}
+                      </span>
+                      <span className="bitfun-shell-nav__workspace-menu-text">{label}</span>
+                    </button>
+                  </Tooltip>
                 );
               })}
             </div>,
