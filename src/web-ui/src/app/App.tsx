@@ -14,10 +14,6 @@ import SplashScreen from './components/SplashScreen/SplashScreen';
 // Toolbar Mode
 import { ToolbarModeProvider } from '../flow_chat';
 
-// Onboarding
-import { OnboardingWizard, useOnboardingStore, onboardingService } from '../features/onboarding';
-
-
 const log = createLogger('App');
 
 /**
@@ -32,7 +28,6 @@ const log = createLogger('App');
  */
 // Minimum time (ms) the splash is shown, so the animation is never a flash.
 const MIN_SPLASH_MS = 900;
-const ENABLE_MAIN_ONBOARDING = false;
 
 function App() {
   // AI initialization
@@ -61,45 +56,6 @@ function App() {
   const handleSplashExited = useCallback(() => {
     setSplashVisible(false);
   }, []);
-
-  // Onboarding state
-  const { isOnboardingActive, forceShowOnboarding, completeOnboarding } = useOnboardingStore();
-  
-  // Handle onboarding completion
-  const handleOnboardingComplete = useCallback(() => {
-    completeOnboarding();
-  }, [completeOnboarding]);
-
-  // Initialize onboarding: check first launch on startup
-  useEffect(() => {
-    if (!ENABLE_MAIN_ONBOARDING) {
-      onboardingService.markCompleted().catch((error) => {
-        log.warn('Failed to persist onboarding completion while disabled', error);
-      });
-      return;
-    }
-
-    onboardingService.initialize().catch((error) => {
-      log.error('Failed to initialize onboarding service', error);
-    });
-  }, []);
-
-  // In development, trigger onboarding via window.showOnboarding()
-  useEffect(() => {
-    if (!ENABLE_MAIN_ONBOARDING) {
-      delete (window as any).showOnboarding;
-      return;
-    }
-
-    (window as any).showOnboarding = () => {
-      forceShowOnboarding();
-      log.debug('Onboarding activated via debug command');
-    };
-    
-    return () => {
-      delete (window as any).showOnboarding;
-    };
-  }, [forceShowOnboarding]);
 
   const showMainWindow = useCallback(async (reason: string) => {
     if (mainWindowShownRef.current) {
@@ -220,13 +176,6 @@ function App() {
       <ViewModeProvider defaultMode="coder">
         <SSHRemoteProvider>
           <ToolbarModeProvider>
-            {/* Onboarding overlay (first launch) */}
-            {ENABLE_MAIN_ONBOARDING && isOnboardingActive && (
-              <OnboardingWizard
-                onComplete={handleOnboardingComplete}
-              />
-            )}
-
             {/* Unified app layout with startup/workspace modes */}
             <AppLayout />
 

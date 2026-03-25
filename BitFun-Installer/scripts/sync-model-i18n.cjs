@@ -54,39 +54,45 @@ function buildProviderPatch(settingsAiModel) {
   return providerPatch;
 }
 
-function buildModelPatch(onboarding, settingsAiModel, languageTag) {
+function buildModelPatch(settingsAiModel, languageTag) {
   const isZh = languageTag === 'zh';
   return {
     description: get(
-      onboarding,
-      'model.description',
+      settingsAiModel,
+      'subtitle',
       'Configure AI model provider, API key, and advanced parameters.'
     ),
-    providerLabel: get(onboarding, 'model.provider.label', 'Model Provider'),
-    selectProvider: get(onboarding, 'model.provider.placeholder', 'Select a provider...'),
-    customProvider: get(onboarding, 'model.provider.options.custom', 'Custom'),
-    getApiKey: get(onboarding, 'model.apiKey.help', 'How to get an API Key?'),
+    providerLabel: get(settingsAiModel, 'providerSelection.title', 'Model Provider'),
+    selectProvider: get(settingsAiModel, 'providerSelection.orSelectProvider', 'Select a provider...'),
+    customProvider: get(settingsAiModel, 'providerSelection.customTitle', 'Custom'),
+    getApiKey: get(settingsAiModel, 'providerSelection.getApiKey', 'How to get an API Key?'),
     modelNamePlaceholder: get(
-      onboarding,
-      'model.modelName.inputPlaceholder',
-      get(onboarding, 'model.modelName.placeholder', 'Enter model name...')
+      settingsAiModel,
+      'providerSelection.inputModelName',
+      get(settingsAiModel, 'form.modelName', 'Enter model name...')
     ),
-    modelNameSelectPlaceholder: get(onboarding, 'model.modelName.selectPlaceholder', 'Select a model...'),
+    modelNameSelectPlaceholder: get(settingsAiModel, 'providerSelection.selectModel', 'Select a model...'),
     modelSearchPlaceholder: get(
-      onboarding,
-      'model.modelName.searchPlaceholder',
+      settingsAiModel,
+      'providerSelection.searchOrInputModel',
       'Search or enter a custom model name...'
     ),
     modelNoResults: isZh ? '没有匹配的模型' : 'No matching models',
-    customModel: get(onboarding, 'model.modelName.customHint', 'Use custom model name'),
-    baseUrlPlaceholder: get(onboarding, 'model.baseUrl.placeholder', 'Enter API URL'),
+    customModel: get(settingsAiModel, 'providerSelection.useCustomModel', 'Use custom model name'),
+    baseUrlPlaceholder: isZh
+      ? '示例：https://open.bigmodel.cn/api/paas/v4/chat/completions'
+      : 'e.g., https://open.bigmodel.cn/api/paas/v4/chat/completions',
     customRequestBodyPlaceholder: get(
-      onboarding,
-      'model.advanced.customRequestBodyPlaceholder',
+      settingsAiModel,
+      'advancedSettings.customRequestBody.placeholder',
       '{\n  "temperature": 0.8,\n  "top_p": 0.9\n}'
     ),
-    jsonValid: get(onboarding, 'model.advanced.jsonValid', 'Valid JSON format'),
-    jsonInvalid: get(onboarding, 'model.advanced.jsonInvalid', 'Invalid JSON format'),
+    jsonValid: get(settingsAiModel, 'advancedSettings.customRequestBody.validJson', 'Valid JSON format'),
+    jsonInvalid: get(
+      settingsAiModel,
+      'advancedSettings.customRequestBody.invalidJson',
+      'Invalid JSON format'
+    ),
     skipSslVerify: get(
       settingsAiModel,
       'advancedSettings.skipSslVerify.label',
@@ -105,10 +111,10 @@ function buildModelPatch(onboarding, settingsAiModel, languageTag) {
     addHeader: get(settingsAiModel, 'advancedSettings.customHeaders.addHeader', 'Add Field'),
     headerKey: get(settingsAiModel, 'advancedSettings.customHeaders.keyPlaceholder', 'key'),
     headerValue: get(settingsAiModel, 'advancedSettings.customHeaders.valuePlaceholder', 'value'),
-    testConnection: get(onboarding, 'model.testConnection', 'Test Connection'),
-    testing: get(onboarding, 'model.testing', 'Testing...'),
-    testSuccess: get(onboarding, 'model.testSuccess', 'Connection successful'),
-    testFailed: get(onboarding, 'model.testFailed', 'Connection failed'),
+    testConnection: get(settingsAiModel, 'actions.test', 'Test Connection'),
+    testing: isZh ? '测试中...' : 'Testing...',
+    testSuccess: get(settingsAiModel, 'messages.testSuccess', 'Connection successful'),
+    testFailed: get(settingsAiModel, 'messages.testFailed', 'Connection failed'),
     advancedShow: 'Show advanced settings',
     advancedHide: 'Hide advanced settings',
     providers: buildProviderPatch(settingsAiModel),
@@ -118,16 +124,6 @@ function buildModelPatch(onboarding, settingsAiModel, languageTag) {
 function syncOne(languageTag) {
   const localeDir = languageTag === 'zh' ? 'zh-CN' : 'en-US';
   const installerLocale = languageTag === 'zh' ? 'zh.json' : 'en.json';
-
-  const sourceOnboardingPath = path.join(
-    PROJECT_ROOT,
-    'src',
-    'web-ui',
-    'src',
-    'locales',
-    localeDir,
-    'onboarding.json'
-  );
 
   const sourceAiModelPath = path.join(
     PROJECT_ROOT,
@@ -142,11 +138,10 @@ function syncOne(languageTag) {
 
   const targetPath = path.join(INSTALLER_ROOT, 'src', 'i18n', 'locales', installerLocale);
 
-  const onboarding = readJson(sourceOnboardingPath);
   const settingsAiModel = readJson(sourceAiModelPath);
   const target = readJson(targetPath);
 
-  const patch = buildModelPatch(onboarding, settingsAiModel, languageTag);
+  const patch = buildModelPatch(settingsAiModel, languageTag);
   target.model = mergeDeep(target.model || {}, patch);
 
   writeJson(targetPath, target);
