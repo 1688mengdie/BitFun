@@ -713,10 +713,11 @@ async fn init_agentic_system() -> anyhow::Result<(
     let path_manager = try_get_path_manager_arc()?;
     let persistence_manager = Arc::new(persistence::PersistenceManager::new(path_manager.clone())?);
 
-    let compression_manager = Arc::new(session::CompressionManager::new(Default::default()));
+    let context_store = Arc::new(session::SessionContextStore::new());
+    let context_compressor = Arc::new(session::ContextCompressor::new(Default::default()));
 
     let session_manager = Arc::new(session::SessionManager::new(
-        compression_manager,
+        context_store,
         persistence_manager,
         Default::default(),
     ));
@@ -746,6 +747,7 @@ async fn init_agentic_system() -> anyhow::Result<(
         round_executor,
         event_queue.clone(),
         session_manager.clone(),
+        context_compressor,
         Default::default(),
     ));
 

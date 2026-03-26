@@ -11,7 +11,7 @@ use crate::agentic::image_analysis::{
     build_multimodal_message_with_images, process_image_contexts_for_provider, ImageContextData,
     ImageLimits,
 };
-use crate::agentic::session::SessionManager;
+use crate::agentic::session::{ContextCompressor, SessionManager};
 use crate::agentic::tools::{get_all_registered_tools, SubagentParentInfo};
 use crate::agentic::WorkspaceBinding;
 use crate::infrastructure::ai::get_global_ai_client_factory;
@@ -44,6 +44,7 @@ pub struct ExecutionEngine {
     round_executor: Arc<RoundExecutor>,
     event_queue: Arc<EventQueue>,
     session_manager: Arc<SessionManager>,
+    context_compressor: Arc<ContextCompressor>,
     config: ExecutionEngineConfig,
 }
 
@@ -52,12 +53,14 @@ impl ExecutionEngine {
         round_executor: Arc<RoundExecutor>,
         event_queue: Arc<EventQueue>,
         session_manager: Arc<SessionManager>,
+        context_compressor: Arc<ContextCompressor>,
         config: ExecutionEngineConfig,
     ) -> Self {
         Self {
             round_executor,
             event_queue,
             session_manager,
+            context_compressor,
             config,
         }
     }
@@ -445,14 +448,13 @@ impl ExecutionEngine {
             .get_session(session_id)
             .ok_or_else(|| BitFunError::NotFound(format!("Session not found: {}", session_id)))?;
 
-        let compression_manager = self.session_manager.get_compression_manager();
-
         // Record start time
         let start_time = std::time::Instant::now();
 
         let old_messages_len = messages.len();
         // Preprocess turns
-        let (turn_index_to_keep, turns) = compression_manager
+        let (turn_index_to_keep, turns) = self
+            .context_compressor
             .preprocess_turns(session_id, context_window, messages)
             .await?;
         if turn_index_to_keep == 0 {
@@ -479,11 +481,14 @@ impl ExecutionEngine {
         .await;
 
         // Execute compression
-        match compression_manager
+        match self
+            .context_compressor
             .compress_turns(session_id, context_window, turn_index_to_keep, turns)
             .await
         {
             Ok(compression_result) => {
+                self.session_manager
+                    .replace_context_messages(session_id, compression_result.messages.clone());
                 let mut new_messages = vec![system_prompt_message];
                 new_messages.extend(compression_result.messages);
                 // Update session compression state

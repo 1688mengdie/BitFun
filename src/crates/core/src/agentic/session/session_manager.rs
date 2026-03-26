@@ -8,7 +8,7 @@ use crate::agentic::core::{
 };
 use crate::agentic::image_analysis::ImageContextData;
 use crate::agentic::persistence::PersistenceManager;
-use crate::agentic::session::CompressionManager;
+use crate::agentic::session::SessionContextStore;
 use crate::infrastructure::ai::get_global_ai_client_factory;
 use crate::service::session::{
     DialogTurnData, ModelRoundData, TextItemData, TurnStatus, UserMessageData,
@@ -49,7 +49,7 @@ pub struct SessionManager {
     sessions: Arc<DashMap<String, Session>>,
 
     /// Sub-components
-    compression_manager: Arc<CompressionManager>,
+    context_store: Arc<SessionContextStore>,
     persistence_manager: Arc<PersistenceManager>,
 
     /// Configuration
@@ -209,7 +209,7 @@ impl SessionManager {
     }
 
     pub fn new(
-        compression_manager: Arc<CompressionManager>,
+        context_store: Arc<SessionContextStore>,
         persistence_manager: Arc<PersistenceManager>,
         config: SessionManagerConfig,
     ) -> Self {
@@ -217,7 +217,7 @@ impl SessionManager {
 
         let manager = Self {
             sessions: Arc::new(DashMap::new()),
-            compression_manager,
+            context_store,
             persistence_manager,
             config,
         };
@@ -294,8 +294,8 @@ impl SessionManager {
         // 1. Add to memory
         self.sessions.insert(session_id.clone(), session.clone());
 
-        // 2. Initialize the in-memory compression/context cache.
-        self.compression_manager.create_session(&session_id);
+        // 2. Initialize the in-memory context cache.
+        self.context_store.create_session(&session_id);
 
         // 3. Persist to local path (handles remote workspaces correctly)
         if self.config.enable_persistence {
@@ -479,7 +479,7 @@ impl SessionManager {
             }
         }
 
-        self.compression_manager.delete_session(session_id);
+        self.context_store.delete_session(session_id);
 
         // 2. Delete persisted data
         if self.config.enable_persistence {
@@ -592,15 +592,14 @@ impl SessionManager {
             );
         }
 
-        // 3. Restore the in-memory compression manager state from the recovered messages.
+        // 3. Restore the in-memory context cache from the recovered messages.
         // If session already exists, delete old one first then create (ensure clean state)
         if session_already_in_memory {
-            self.compression_manager.delete_session(session_id);
+            self.context_store.delete_session(session_id);
         }
 
-        // Use restore_session for batch restore, avoid triggering persistence for each add_message
-        self.compression_manager
-            .restore_session(session_id, messages.clone());
+        self.context_store
+            .replace_context(session_id, messages.clone());
 
         // If session's recorded turn count doesn't match snapshot, truncate to snapshot's turn
         if let Some(latest_turn_index) = latest_turn_index {
@@ -622,10 +621,7 @@ impl SessionManager {
             session.dialog_turn_ids.clear();
         }
 
-        let context_msg_count = self
-            .compression_manager
-            .get_context_messages(session_id)
-            .len();
+        let context_msg_count = self.context_store.get_context_messages(session_id).len();
 
         info!(
             "Session restored: session_id={}, session_name={}, messages={}, context_messages={}",
@@ -671,8 +667,7 @@ impl SessionManager {
         };
 
         // 2) Restore the in-memory context cache.
-        self.compression_manager
-            .restore_session(session_id, messages);
+        self.context_store.replace_context(session_id, messages);
 
         // 3) Truncate session turn list & persist
         if let Some(mut session) = self.sessions.get_mut(session_id) {
@@ -784,9 +779,7 @@ impl SessionManager {
                     .with_turn_id(turn_id.clone())
                     .with_semantic_kind(MessageSemanticKind::ActualUserInput)
             };
-        self.compression_manager
-            .add_message(session_id, user_message)
-            .await?;
+        self.context_store.add_message(session_id, user_message);
 
         // 3. Persist
         if self.config.enable_persistence {
@@ -1099,13 +1092,11 @@ impl SessionManager {
         let assistant_message =
             Message::assistant(full_text.to_string()).with_turn_id(turn_id.clone());
 
-        // Add to the in-memory compression/context cache.
-        self.compression_manager
-            .add_message(child_session_id, user_message)
-            .await?;
-        self.compression_manager
-            .add_message(child_session_id, assistant_message)
-            .await?;
+        // Add to the in-memory runtime context cache.
+        self.context_store
+            .add_message(child_session_id, user_message);
+        self.context_store
+            .add_message(child_session_id, assistant_message);
 
         if let Some(mut session) = self.sessions.get_mut(child_session_id) {
             if !session
@@ -1139,7 +1130,7 @@ impl SessionManager {
             }
         }
 
-        Ok(self.compression_manager.get_context_messages(session_id))
+        Ok(self.context_store.get_context_messages(session_id))
     }
 
     /// Get a paginated best-effort message view for the session.
@@ -1153,20 +1144,22 @@ impl SessionManager {
         Ok(Self::paginate_messages(&messages, limit, before_message_id))
     }
 
-    /// Get session's context messages (may be compressed)
+    /// Get session's runtime context messages (may already include compressed reminders).
     pub async fn get_context_messages(&self, session_id: &str) -> BitFunResult<Vec<Message>> {
-        // Get context messages from compression manager (may be compressed)
-        let context_messages = self.compression_manager.get_context_messages(session_id);
+        let context_messages = self.context_store.get_context_messages(session_id);
 
         Ok(context_messages)
     }
 
-    /// Add message to session
+    /// Add a message to the runtime context cache.
     pub async fn add_message(&self, session_id: &str, message: Message) -> BitFunResult<()> {
-        self.compression_manager
-            .add_message(session_id, message)
-            .await?;
+        self.context_store.add_message(session_id, message);
         Ok(())
+    }
+
+    /// Replace the runtime context cache for a session.
+    pub fn replace_context_messages(&self, session_id: &str, messages: Vec<Message>) {
+        self.context_store.replace_context(session_id, messages);
     }
 
     /// Get dialog turn count
@@ -1182,11 +1175,6 @@ impl SessionManager {
         self.sessions
             .get(session_id)
             .map(|s| s.compression_state.clone())
-    }
-
-    /// Get compression manager (for ExecutionEngine use)
-    pub fn get_compression_manager(&self) -> Arc<CompressionManager> {
-        self.compression_manager.clone()
     }
 
     /// Update session's compression state
