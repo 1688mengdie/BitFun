@@ -2,12 +2,15 @@
 
 use async_trait::async_trait;
 use bitfun_core::agentic::tools::computer_use_host::{
-    clamp_point_crop_half_extent, ComputerScreenshot, ComputerUseForegroundApplication, ComputerUseHost,
-    ComputerUseImageContentRect, ComputerUseNavigateQuadrant, ComputerUseNavigationRect,
-    ComputerUsePermissionSnapshot, ComputerUsePointerGlobal, ComputerUseScreenshotParams,
-    ComputerUseScreenshotRefinement, ComputerUseSessionSnapshot, ScreenshotCropCenter,
-    UiElementLocateQuery, UiElementLocateResult, COMPUTER_USE_QUADRANT_CLICK_READY_MAX_LONG_EDGE,
-    COMPUTER_USE_QUADRANT_EDGE_EXPAND_PX,
+    clamp_point_crop_half_extent, ComputerScreenshot, ComputerUseHost, ComputerUseImageContentRect,
+    ComputerUseNavigateQuadrant, ComputerUseNavigationRect, ComputerUsePermissionSnapshot,
+    ComputerUseScreenshotParams, ComputerUseScreenshotRefinement, ComputerUseSessionSnapshot,
+    ScreenshotCropCenter, UiElementLocateQuery, UiElementLocateResult,
+    COMPUTER_USE_QUADRANT_CLICK_READY_MAX_LONG_EDGE, COMPUTER_USE_QUADRANT_EDGE_EXPAND_PX,
+};
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+use bitfun_core::agentic::tools::computer_use_host::{
+    ComputerUseForegroundApplication, ComputerUsePointerGlobal,
 };
 use bitfun_core::util::errors::{BitFunError, BitFunResult};
 use enigo::{
@@ -19,6 +22,7 @@ use image::{DynamicImage, Rgb, RgbImage};
 use log::warn;
 use resvg::tiny_skia::{Pixmap, Transform};
 use resvg::usvg;
+#[cfg(target_os = "macos")]
 use screenshots::display_info::DisplayInfo;
 use screenshots::Screen;
 use std::sync::{Mutex, OnceLock};
@@ -1941,6 +1945,7 @@ impl ComputerUseHost for DesktopComputerUseHost {
                     .iter()
                     .map(|s| Self::map_key(s))
                     .collect::<BitFunResult<_>>()?;
+                #[cfg(target_os = "macos")]
                 let chord_has_modifier = keys_for_job.iter().any(|s| {
                     matches!(
                         s.to_lowercase().as_str(),

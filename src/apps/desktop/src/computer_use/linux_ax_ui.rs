@@ -3,6 +3,7 @@
 //! Requires session D-Bus, `at-spi2` registry, and apps exposing AT-SPI (typical on GNOME/KDE with a11y).
 
 use crate::computer_use::ui_locate_common;
+use atspi::connection::P2P;
 use atspi::AccessibilityConnection;
 use atspi::CoordType;
 use atspi::proxy::accessible::AccessibleProxy;
