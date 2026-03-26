@@ -367,7 +367,7 @@ const EditorConfig: React.FC<EditorConfigProps> = () => {
           title={t('sections.appearance.title')}
           description={t('sections.appearance.description')}
         >
-          <ConfigPageRow label={t('appearance.font')} description={t('appearance.fontHint')} align="center">
+          <ConfigPageRow label={t('appearance.font')} align="center">
             <Select
               options={fontFamilyOptions}
               value={getPrimaryFont(config.fontFamily)}

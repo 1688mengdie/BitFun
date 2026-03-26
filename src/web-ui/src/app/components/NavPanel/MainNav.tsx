@@ -394,7 +394,7 @@ const MainNav: React.FC<MainNavProps> = ({
   const createCodeTooltip = t('nav.sessions.newCodeSession');
   const createCoworkTooltip = t('nav.sessions.newCoworkSession');
   const assistantTooltip = t('nav.items.persona');
-  const openProjectTooltip = t('header.openProject');
+  const addWorkspaceTooltip = t('nav.tooltips.addWorkspace');
   const isAssistantActive = activeTabId === 'assistant';
   const agentsTooltip = t('nav.tooltips.agents');
   const skillsTooltip = t('nav.tooltips.skills');
@@ -577,12 +577,12 @@ const MainNav: React.FC<MainNavProps> = ({
             onToggle={() => toggleSection('workspace')}
             actions={
               <div className="bitfun-nav-panel__workspace-action-wrap">
-                <Tooltip content={openProjectTooltip} placement="right" followCursor disabled={workspaceMenuOpen}>
+                <Tooltip content={addWorkspaceTooltip} placement="right" followCursor disabled={workspaceMenuOpen}>
                   <button
                     ref={workspaceMenuButtonRef}
                     type="button"
                     className={`bitfun-nav-panel__section-action${workspaceMenuOpen ? ' is-active' : ''}`}
-                    aria-label={openProjectTooltip}
+                    aria-label={addWorkspaceTooltip}
                     aria-expanded={workspaceMenuOpen}
                     onClick={toggleWorkspaceMenu}
                   >

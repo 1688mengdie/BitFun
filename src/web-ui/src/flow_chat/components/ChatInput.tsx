@@ -5,7 +5,7 @@
 
 import React, { useRef, useCallback, useEffect, useReducer, useState, useMemo } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
-import { ArrowUp, Image, ChevronsUp, ChevronsDown, RotateCcw, Plus, X, Sparkles, Loader2, ChevronRight, Files } from 'lucide-react';
+import { ArrowUp, Image, ChevronsUp, ChevronsDown, RotateCcw, Plus, X, Sparkles, Loader2, ChevronRight, Files, MessageSquarePlus } from 'lucide-react';
 import { ContextDropZone, useContextStore } from '../../shared/context-system';
 import { useActiveSessionState } from '../hooks/useActiveSessionState';
 import { RichTextInput, type MentionState } from './RichTextInput';
@@ -989,6 +989,25 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     setSlashCommandState({ isActive: false, kind: 'modes', query: '', selectedIndex: 0 });
     window.setTimeout(() => richTextInputRef.current?.focus(), 0);
   }, [inputState.value, isBtwSession, setQueuedInput]);
+
+  const handleBoostStartBtw = useCallback(
+    (e: React.SyntheticEvent) => {
+      e.stopPropagation();
+      if (!currentSessionId) {
+        notificationService.error(t('btw.noSession', { defaultValue: 'No active session for /btw' }));
+        return;
+      }
+      if (isBtwSession) {
+        notificationService.warning(
+          t('btw.nestedDisabled', { defaultValue: 'Side questions cannot create another side question' })
+        );
+        return;
+      }
+      selectSlashCommandAction('btw');
+      dispatchMode({ type: 'CLOSE_DROPDOWN' });
+    },
+    [currentSessionId, isBtwSession, selectSlashCommandAction, t]
+  );
   
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     // Local /btw shortcut (Ctrl/Cmd+Alt+B) should work even when ChatInput is focused.
@@ -1890,6 +1909,23 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                             </div>
                           </div>
                         </div>
+
+                        {!!currentSessionId && !isBtwSession && (
+                          <>
+                            <div className="bitfun-chat-input__boost-section-divider" aria-hidden />
+                            <div
+                              role="button"
+                              tabIndex={0}
+                              className="bitfun-chat-input__boost-context-row"
+                              data-testid="chat-input-boost-start-btw"
+                              onClick={handleBoostStartBtw}
+                              onKeyDown={e => e.key === 'Enter' && handleBoostStartBtw(e)}
+                            >
+                              <MessageSquarePlus size={14} className="bitfun-chat-input__boost-context-icon" aria-hidden />
+                              <span>{t('chatInput.boostStartBtw')}</span>
+                            </div>
+                          </>
+                        )}
                       </div>
                     </div>
                   )}
@@ -1917,7 +1953,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                     </span>
                   </>
                 )}
-                
+
                 {renderActionButton()}
               </div>
             </div>

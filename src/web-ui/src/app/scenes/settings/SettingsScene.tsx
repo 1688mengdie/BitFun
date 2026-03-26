@@ -6,21 +6,20 @@
  * driven by settingsStore.activeTab.
  */
 
-import React, { lazy, Suspense } from 'react';
+import React from 'react';
 import { useSettingsStore } from './settingsStore';
 import './SettingsScene.scss';
+import AIModelConfig from '../../../infrastructure/config/components/AIModelConfig';
+import SessionConfig from '../../../infrastructure/config/components/SessionConfig';
+import AIRulesMemoryConfig from '../../../infrastructure/config/components/AIRulesMemoryConfig';
+import McpToolsConfig from '../../../infrastructure/config/components/McpToolsConfig';
+import EditorConfig from '../../../infrastructure/config/components/EditorConfig';
+import BasicsConfig from '../../../infrastructure/config/components/BasicsConfig';
 
-const AIModelConfig        = lazy(() => import('../../../infrastructure/config/components/AIModelConfig'));
-const SessionConfig        = lazy(() => import('../../../infrastructure/config/components/SessionConfig'));
-const AIRulesMemoryConfig  = lazy(() => import('../../../infrastructure/config/components/AIRulesMemoryConfig'));
-const McpToolsConfig       = lazy(() => import('../../../infrastructure/config/components/McpToolsConfig'));
-// const LspConfig            = lazy(() => import('../../../infrastructure/config/components/LspConfig'));
-const EditorConfig         = lazy(() => import('../../../infrastructure/config/components/EditorConfig'));
-const BasicsConfig         = lazy(() => import('../../../infrastructure/config/components/BasicsConfig'));
 const SettingsScene: React.FC = () => {
   const activeTab = useSettingsStore(s => s.activeTab);
 
-  let Content: React.LazyExoticComponent<React.ComponentType> | null = null;
+  let Content: React.ComponentType | null = null;
 
   switch (activeTab) {
     case 'basics':           Content = BasicsConfig;         break;
@@ -28,19 +27,16 @@ const SettingsScene: React.FC = () => {
     case 'session-config':   Content = SessionConfig;        break;
     case 'ai-context':       Content = AIRulesMemoryConfig; break;
     case 'mcp-tools':        Content = McpToolsConfig;      break;
-    // case 'lsp':              Content = LspConfig;            break;
     case 'editor':           Content = EditorConfig;         break;
   }
 
   return (
     <div className="bitfun-settings-scene">
-      <Suspense fallback={<div className="bitfun-settings-scene__loading" />}>
-        {Content && (
-          <div key={activeTab} className="bitfun-settings-scene__content-wrapper">
-            <Content />
-          </div>
-        )}
-      </Suspense>
+      {Content && (
+        <div key={activeTab} className="bitfun-settings-scene__content-wrapper">
+          <Content />
+        </div>
+      )}
     </div>
   );
 };

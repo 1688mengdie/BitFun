@@ -90,7 +90,8 @@
       "persona": "助理 — 创建与管理所有助理实例",
       "agents": "它能调用哪些 Agent",
       "skills": "它懂什么专项知识 — 技能知识文件",
-      "tools": "它能用什么工具 — 内置工具与 MCP 服务"
+      "tools": "它能用什么工具 — 内置工具与 MCP 服务",
+      "addWorkspace": "添加工作区"
     },
     "sections": {
       "workspace": "工作区",

@@ -47,7 +47,6 @@ use api::startchat_agent_api::*;
 use api::storage_commands::*;
 use api::subagent_api::*;
 use api::system_api::*;
-use api::token_usage_api::*;
 use api::tool_api::*;
 
 /// Agentic Coordinator state
@@ -619,14 +618,6 @@ pub async fn run() {
             i18n_get_supported_languages,
             i18n_get_config,
             i18n_set_config,
-            // Token Usage
-            record_token_usage,
-            get_model_token_stats,
-            get_all_model_token_stats,
-            get_session_token_stats,
-            query_token_usage,
-            clear_model_token_stats,
-            clear_all_token_stats,
             // Remote Connect
             api::remote_connect_api::remote_connect_get_device_info,
             api::remote_connect_api::remote_connect_get_lan_ip,

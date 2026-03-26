@@ -90,7 +90,8 @@
       "persona": "Nursery — create and manage all assistant instances",
       "agents": "Which agents it can call",
       "skills": "What it knows — specialized knowledge files",
-      "tools": "What it can use — built-in tools & MCP services"
+      "tools": "What it can use — built-in tools & MCP services",
+      "addWorkspace": "Add workspace"
     },
     "sections": {
       "workspace": "Workspace",

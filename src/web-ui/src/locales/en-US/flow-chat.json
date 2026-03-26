@@ -184,6 +184,7 @@
     "addModeTooltip": "Add Plan or Debug",
     "boostSectionAgent": "Agent",
     "boostSectionContext": "Context",
+    "boostStartBtw": "Start side question",
     "boostAddContext": "Reference file or folder",
     "boostSkills": "Skills",
     "boostSkillsLoading": "Loading skills…",

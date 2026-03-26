@@ -1,6 +1,6 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { FolderOpen, Upload } from 'lucide-react';
+import { FolderOpen } from 'lucide-react';
 import {
   Alert,
   Select,
@@ -8,7 +8,6 @@ import {
   Tooltip,
   ConfigPageLoading,
   ConfigPageMessage,
-  IconButton,
 } from '@/component-library';
 import { configAPI, workspaceAPI } from '@/infrastructure/api';
 import { systemAPI } from '@/infrastructure/api/service-api/SystemAPI';
@@ -16,7 +15,6 @@ import { getTerminalService } from '@/tools/terminal';
 import type { ShellInfo } from '@/tools/terminal/types/session';
 import {
   useTheme,
-  useThemeManagement,
   ThemeMetadata,
   ThemeConfig as ThemeConfigType,
   SYSTEM_THEME_ID,
@@ -41,36 +39,10 @@ const log = createLogger('BasicsConfig');
 function BasicsAppearanceSection() {
   const { t } = useTranslation('settings/basics');
   const { themeId, themes, setTheme, loading } = useTheme();
-  const { importTheme } = useThemeManagement();
   const { currentLanguage, supportedLocales, selectLanguage, isChanging } = useLanguageSelector();
-  const [importing, setImporting] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleThemeChange = async (newThemeId: string) => {
     await setTheme(newThemeId);
-  };
-
-  const handleImportTheme = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-
-    setImporting(true);
-    try {
-      const text = await file.text();
-      const themeData = JSON.parse(text);
-      await importTheme(themeData);
-      alert(t('appearance.importSuccess'));
-    } catch (error) {
-      log.error('Failed to import theme', error);
-      alert(t('appearance.importFailed'));
-    } finally {
-      setImporting(false);
-      event.target.value = '';
-    }
-  };
-
-  const handleImportClick = () => {
-    fileInputRef.current?.click();
   };
 
   const getThemeDisplayName = (theme: ThemeMetadata) => {
@@ -106,31 +78,7 @@ function BasicsAppearanceSection() {
   return (
     <div className="theme-config">
       <div className="theme-config__content">
-        <ConfigPageSection
-          title={t('appearance.title')}
-          description={t('appearance.hint')}
-          extra={
-            <>
-              <IconButton
-                variant="ghost"
-                size="small"
-                onClick={handleImportClick}
-                disabled={importing || loading}
-                isLoading={importing}
-                title={importing ? t('appearance.importing') : t('appearance.importTheme')}
-              >
-                <Upload size={16} />
-              </IconButton>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".json"
-                onChange={handleImportTheme}
-                style={{ display: 'none' }}
-              />
-            </>
-          }
-        >
+        <ConfigPageSection title={t('appearance.title')} description={t('appearance.hint')}>
           <ConfigPageRow
             label={t('appearance.language')}
             description={t('appearance.languageRowHint', {
@@ -156,7 +104,7 @@ function BasicsAppearanceSection() {
           <ConfigPageRow
             label={t('appearance.themes')}
             description={t('appearance.themeRowHint', {
-              defaultValue: 'Pick an installed theme or manage custom themes.',
+              defaultValue: 'Choose the interface color theme.',
             })}
             align="center"
           >

@@ -5,7 +5,7 @@
  */
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronDown, ChevronUp, CornerUpLeft, List, MessageSquarePlus } from 'lucide-react';
+import { ChevronDown, ChevronUp, CornerUpLeft, List } from 'lucide-react';
 import { Tooltip, IconButton } from '@/component-library';
 import { useTranslation } from 'react-i18next';
 import { globalEventBus } from '@/infrastructure/event-bus';
@@ -35,8 +35,6 @@ export interface FlowChatHeaderProps {
   btwOrigin?: Session['btwOrigin'] | null;
   /** BTW parent session title. */
   btwParentTitle?: string;
-  /** Creates a new BTW thread from the current session. */
-  onCreateBtwSession?: () => void;
   /** Ordered turn summaries used by header navigation. */
   turns?: FlowChatHeaderTurnSummary[];
   /** Jump to a specific turn. */
@@ -54,7 +52,6 @@ export const FlowChatHeader: React.FC<FlowChatHeaderProps> = ({
   sessionId,
   btwOrigin,
   btwParentTitle = '',
-  onCreateBtwSession,
   turns = [],
   onJumpToTurn,
   onJumpToPreviousTurn,
@@ -80,9 +77,6 @@ export const FlowChatHeader: React.FC<FlowChatHeaderProps> = ({
       title: parentLabel,
       defaultValue: `Go back to the source session: ${parentLabel}`,
     });
-  const createBtwTooltip = t('flowChatHeader.btwCreateTooltip', {
-    defaultValue: 'Start a quick side question',
-  });
   const turnListTooltip = t('flowChatHeader.turnList', {
     defaultValue: 'Turn list',
   });
@@ -273,19 +267,6 @@ export const FlowChatHeader: React.FC<FlowChatHeaderProps> = ({
             data-testid="flowchat-header-btw-back"
           >
             <CornerUpLeft size={12} />
-          </IconButton>
-        )}
-        {onCreateBtwSession && (
-          <IconButton
-            className="flowchat-header__btw-create"
-            variant="ghost"
-            size="xs"
-            onClick={onCreateBtwSession}
-            tooltip={createBtwTooltip}
-            aria-label={createBtwTooltip}
-            data-testid="flowchat-header-btw-create"
-          >
-            <MessageSquarePlus size={14} />
           </IconButton>
         )}
       </div>

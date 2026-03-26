@@ -79,7 +79,6 @@ export function useThemeManagement() {
     addTheme,
     removeTheme,
     exportTheme,
-    importTheme,
     refreshThemes,
   } = useThemeStore();
   
@@ -88,7 +87,6 @@ export function useThemeManagement() {
     addTheme,
     removeTheme,
     exportTheme,
-    importTheme,
     refreshThemes,
   };
 }

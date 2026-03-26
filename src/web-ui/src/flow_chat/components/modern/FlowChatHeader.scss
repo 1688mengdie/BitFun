@@ -55,14 +55,6 @@
     }
   }
 
-  &__btw-create {
-    flex: 0 0 auto;
-
-    &:not(:disabled):hover {
-      background: color-mix(in srgb, var(--element-bg-soft) 82%, transparent);
-    }
-  }
-
   &__turn-nav {
     position: relative;
     display: flex;
