@@ -474,6 +474,24 @@ impl SessionManager {
                 .await?;
         }
 
+        if let Some(cron) = crate::service::cron::get_global_cron_service() {
+            match cron.delete_jobs_for_session(session_id).await {
+                Ok(removed) if removed > 0 => {
+                    info!(
+                        "Removed {} scheduled job(s) for deleted session_id={}",
+                        removed, session_id
+                    );
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    warn!(
+                        "Failed to remove scheduled jobs for deleted session_id={}: {}",
+                        session_id, e
+                    );
+                }
+            }
+        }
+
         // 4. Clean up associated Terminal session
         use crate::service::terminal::TerminalApi;
         if let Ok(terminal_api) = TerminalApi::from_singleton() {

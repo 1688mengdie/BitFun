@@ -11,7 +11,7 @@ const DEFAULT_CONFIG: NotificationConfig = {
   defaultDuration: 3000,
   enableSound: false,
   enableAnimation: true,
-  position: 'bottom-right'
+  position: 'bottom-left'
 };
 
 

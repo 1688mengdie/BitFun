@@ -268,17 +268,15 @@ const PersistentFooterActions: React.FC = () => {
             const isAnyActive = isBrowserActive || isMermaidActive;
             return (
               <>
-                <Tooltip content={t('nav.multimodalTools')} placement="right" disabled={multimodalOpen}>
-                  <button
-                    type="button"
-                    className={`bitfun-nav-panel__footer-btn bitfun-nav-panel__footer-btn--icon${isAnyActive ? ' is-active' : ''}${multimodalOpen ? ' is-hover-open' : ''}`}
-                    aria-label={t('nav.multimodalTools')}
-                    aria-expanded={multimodalOpen}
-                    aria-haspopup="menu"
-                  >
-                    <Layers size={15} />
-                  </button>
-                </Tooltip>
+                <button
+                  type="button"
+                  className={`bitfun-nav-panel__footer-btn bitfun-nav-panel__footer-btn--icon${isAnyActive ? ' is-active' : ''}${multimodalOpen ? ' is-hover-open' : ''}`}
+                  aria-label={t('nav.multimodalTools')}
+                  aria-expanded={multimodalOpen}
+                  aria-haspopup="menu"
+                >
+                  <Layers size={15} />
+                </button>
 
                 {multimodalOpen && (
                   <div

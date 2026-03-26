@@ -184,6 +184,7 @@
     "addModeTooltip": "附加 Plan 或 Debug",
     "boostSectionAgent": "智能体",
     "boostSectionContext": "上下文",
+    "boostStartBtw": "发起侧问",
     "boostAddContext": "引用文件或文件夹",
     "boostSkills": "Skills",
     "boostSkillsLoading": "正在加载 Skills…",

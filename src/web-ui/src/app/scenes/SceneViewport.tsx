@@ -14,12 +14,13 @@ import { useSceneManager } from '../hooks/useSceneManager';
 import { useI18n } from '@/infrastructure/i18n/hooks/useI18n';
 import { useDialogCompletionNotify } from '../hooks/useDialogCompletionNotify';
 import { ProcessingIndicator } from '@/flow_chat/components/modern/ProcessingIndicator';
+import SettingsScene from './settings/SettingsScene';
+import AssistantScene from './assistant/AssistantScene';
 import './SceneViewport.scss';
 
 const SessionScene    = lazy(() => import('./session/SessionScene'));
 const TerminalScene   = lazy(() => import('./terminal/TerminalScene'));
 const GitScene        = lazy(() => import('./git/GitScene'));
-const SettingsScene   = lazy(() => import('./settings/SettingsScene'));
 const FileViewerScene = lazy(() => import('./file-viewer/FileViewerScene'));
 const ProfileScene    = lazy(() => import('./profile/ProfileScene'));
 const AgentsScene       = lazy(() => import('./agents/AgentsScene'));
@@ -27,7 +28,6 @@ const SkillsScene     = lazy(() => import('./skills/SkillsScene'));
 const MiniAppGalleryScene = lazy(() => import('./miniapps/MiniAppGalleryScene'));
 const BrowserScene    = lazy(() => import('./browser/BrowserScene'));
 const MermaidEditorScene = lazy(() => import('./mermaid/MermaidEditorScene'));
-const AssistantScene  = lazy(() => import('./assistant/AssistantScene'));
 const InsightsScene   = lazy(() => import('./my-agent/InsightsScene'));
 const ShellScene      = lazy(() => import('./shell/ShellScene'));
 const WelcomeScene    = lazy(() => import('./welcome/WelcomeScene'));
@@ -59,31 +59,36 @@ const SceneViewport: React.FC<SceneViewportProps> = ({ workspacePath, isEntering
   return (
     <div className="bitfun-scene-viewport">
       <div className="bitfun-scene-viewport__clip">
-        <Suspense
-          fallback={(
-            <div
-              className="bitfun-scene-viewport__lazy-fallback"
-              role="status"
-              aria-busy="true"
-              aria-label={t('loading.scenes')}
-            >
-              <ProcessingIndicator visible />
-            </div>
-          )}
-        >
-          {openTabs.map(tab => (
+        {openTabs.map(tab => {
+          const isActive = tab.id === activeTabId;
+          return (
             <div
               key={tab.id}
               className={[
                 'bitfun-scene-viewport__scene',
-                tab.id === activeTabId && 'bitfun-scene-viewport__scene--active',
+                isActive && 'bitfun-scene-viewport__scene--active',
               ].filter(Boolean).join(' ')}
-              aria-hidden={tab.id !== activeTabId}
+              aria-hidden={!isActive}
             >
-              {renderScene(tab.id, workspacePath, isEntering)}
+              <Suspense
+                fallback={
+                  isActive ? (
+                    <div
+                      className="bitfun-scene-viewport__lazy-fallback"
+                      role="status"
+                      aria-busy="true"
+                      aria-label={t('loading.scenes')}
+                    >
+                      <ProcessingIndicator visible />
+                    </div>
+                  ) : null
+                }
+              >
+                {renderScene(tab.id, workspacePath, isEntering)}
+              </Suspense>
             </div>
-          ))}
-        </Suspense>
+          );
+        })}
       </div>
     </div>
   );

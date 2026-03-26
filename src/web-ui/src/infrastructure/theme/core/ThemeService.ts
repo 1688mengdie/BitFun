@@ -10,7 +10,6 @@ import {
   ThemeEvent,
   ThemeEventListener,
   ThemeHooks,
-  ThemeAdapter,
   SYSTEM_THEME_ID,
   ThemeSelectionId,
 } from '../types';
@@ -46,7 +45,6 @@ export class ThemeService {
   private systemThemeCleanup: (() => void) | null = null;
   private listeners: Map<ThemeEventType, Set<ThemeEventListener>> = new Map();
   private hooks: ThemeHooks = {};
-  private adapters: ThemeAdapter[] = [];
   
   constructor() {
     this.initializeBuiltinThemes();
@@ -758,36 +756,6 @@ export class ThemeService {
     };
   }
   
-   
-  async importTheme(themeExport: ThemeExport): Promise<void> {
-    const { theme } = themeExport;
-    
-    
-    const validation = this.validateTheme(theme);
-    if (!validation.valid) {
-      log.error('Theme validation failed', { errors: validation.errors });
-      throw new Error('Invalid theme configuration');
-    }
-    
-    
-    this.registerTheme(theme);
-    
-    
-    await this.saveUserThemes();
-  }
-  
-   
-  async importWithAdapter(data: any): Promise<void> {
-    const adapter = this.adapters.find(a => a.supports(data));
-    if (!adapter) {
-      throw new Error('No suitable adapter found for this theme format');
-    }
-    
-    const theme = adapter.convert(data);
-    this.registerTheme(theme);
-    await this.saveUserThemes();
-  }
-  
   
   
    
@@ -866,13 +834,6 @@ export class ThemeService {
    
   registerHooks(hooks: ThemeHooks): void {
     this.hooks = { ...this.hooks, ...hooks };
-  }
-  
-  
-  
-   
-  registerAdapter(adapter: ThemeAdapter): void {
-    this.adapters.push(adapter);
   }
 }
 

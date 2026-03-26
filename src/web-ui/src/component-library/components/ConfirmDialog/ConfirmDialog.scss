@@ -4,7 +4,7 @@
 @use '../../styles/tokens' as *;
 
 .confirm-dialog {
-  padding: $size-gap-4;
+  padding: $size-gap-4 $size-gap-5;
   text-align: center;
   min-width: 320px;
   max-width: 480px;
@@ -87,10 +87,15 @@
 
   &__actions {
     display: flex;
+    flex-wrap: wrap;
     gap: $size-gap-2;
-    justify-content: center;
+    justify-content: flex-end;
+    align-items: center;
+    width: 100%;
+    box-sizing: border-box;
+    padding-inline: $size-gap-3;
 
-    .bitfun-btn {
+    .btn {
       min-width: 80px;
     }
   }

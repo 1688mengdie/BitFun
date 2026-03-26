@@ -109,13 +109,6 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     handleCollapseGroup,
   ]);
 
-  const handleCreateBtwSession = useCallback(() => {
-    if (!activeSession?.sessionId) return;
-    window.dispatchEvent(new CustomEvent('fill-chat-input', {
-      detail: { message: '/btw ' }
-    }));
-  }, [activeSession?.sessionId]);
-
   const turnSummaries = useMemo<FlowChatHeaderTurnSummary[]>(() => {
     return (activeSession?.dialogTurns ?? [])
       .filter(turn => !!turn.userMessage)
@@ -231,7 +224,6 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
           sessionId={activeSession?.sessionId}
           btwOrigin={btwOrigin}
           btwParentTitle={btwParentTitle}
-          onCreateBtwSession={activeSession?.sessionId && !isBtwSession ? handleCreateBtwSession : undefined}
           turns={turnSummaries}
           onJumpToTurn={handleJumpToTurn}
           onJumpToPreviousTurn={handleJumpToPreviousTurn}

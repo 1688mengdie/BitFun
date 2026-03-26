@@ -23,7 +23,6 @@ interface ThemeState {
   addTheme: (theme: ThemeConfig) => Promise<void>;
   removeTheme: (themeId: ThemeId) => Promise<void>;
   exportTheme: (themeId: ThemeId) => any;
-  importTheme: (themeData: any) => Promise<void>;
 }
 
  
@@ -156,27 +155,6 @@ export const useThemeStore = create<ThemeState>((set) => ({
   
   exportTheme: (themeId: ThemeId) => {
     return themeService.exportTheme(themeId);
-  },
-  
-  
-  importTheme: async (themeData: any) => {
-    set({ loading: true, error: null });
-    
-    try {
-      await themeService.importTheme(themeData);
-      
-      const themes = themeService.getThemeList();
-      set({
-        themes,
-        loading: false,
-      });
-    } catch (error) {
-      log.error('Failed to import theme', error);
-      set({
-        loading: false,
-        error: error instanceof Error ? error.message : 'Failed to import theme',
-      });
-    }
   },
 }));
 
