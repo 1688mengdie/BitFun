@@ -2,7 +2,7 @@
 
 # BitFun E2E 测试
 
-使用 WebDriverIO + tauri-driver 的 E2E 测试框架。
+使用 WebDriverIO + BitFun 内置 WebDriver 的 E2E 测试框架。
 
 > 完整文档请参阅 [E2E-TESTING-GUIDE.zh-CN.md](E2E-TESTING-GUIDE.zh-CN.md)
 
@@ -11,11 +11,8 @@
 ### 1. 安装依赖
 
 ```bash
-# 安装 tauri-driver
-cargo install tauri-driver --locked
-
-# 构建应用
-pnpm run desktop:build
+# 构建 debug 应用
+cargo build -p bitfun-desktop
 
 # 安装测试依赖
 cd tests/e2e && pnpm install
@@ -58,16 +55,14 @@ tests/e2e/
 
 ## 常见问题
 
-### tauri-driver 找不到
+### 内置 WebDriver 未就绪
 
-```bash
-cargo install tauri-driver --locked
-```
+测试启动器会直接拉起 BitFun，并等待 `127.0.0.1:4445` 上的内置 WebDriver 服务就绪。
 
 ### 应用未构建
 
 ```bash
-pnpm run desktop:build
+cargo build -p bitfun-desktop
 ```
 
 ### 测试超时

@@ -13,6 +13,7 @@ use bitfun_core::infrastructure::ai::AIClientFactory;
 use bitfun_core::infrastructure::{get_path_manager_arc, try_get_path_manager_arc};
 use bitfun_core::service::workspace::get_global_workspace_service;
 use bitfun_transport::{TauriTransportAdapter, TransportAdapter};
+use serde::Deserialize;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -59,6 +60,18 @@ pub struct CoordinatorState {
 #[derive(Clone)]
 pub struct SchedulerState {
     pub scheduler: Arc<bitfun_core::agentic::coordination::DialogScheduler>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WebdriverBridgeResultRequest {
+    payload: serde_json::Value,
+}
+
+#[tauri::command]
+async fn webdriver_bridge_result(request: WebdriverBridgeResultRequest) -> Result<(), String> {
+    log::debug!("webdriver_bridge_result command invoked");
+    bitfun_webdriver::handle_bridge_result(request.payload)
 }
 
 /// Tauri application entry point
@@ -212,6 +225,7 @@ pub async fn run() {
 
             let app_handle = app.handle().clone();
             theme::create_main_window(&app_handle);
+            bitfun_webdriver::maybe_start(app_handle.clone());
 
             #[cfg(target_os = "macos")]
             {
@@ -306,6 +320,7 @@ pub async fn run() {
             api::agentic_api::cancel_dialog_turn,
             api::agentic_api::delete_session,
             api::agentic_api::restore_session,
+            webdriver_bridge_result,
             api::agentic_api::list_sessions,
             api::agentic_api::get_session_messages,
             api::agentic_api::confirm_tool_execution,
@@ -857,9 +872,7 @@ fn setup_panic_hook() {
         // continue instead of killing the process.
         // See: https://github.com/tauri-apps/wry/pull/1554
         if location.contains("wry") && location.contains("wkwebview") {
-            log::warn!(
-                "Suppressed non-fatal wry/wkwebview panic, application continues"
-            );
+            log::warn!("Suppressed non-fatal wry/wkwebview panic, application continues");
             return;
         }
 
