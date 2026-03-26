@@ -488,7 +488,8 @@ impl ExecutionEngine {
         {
             Ok(compression_result) => {
                 self.session_manager
-                    .replace_context_messages(session_id, compression_result.messages.clone());
+                    .replace_context_messages(session_id, compression_result.messages.clone())
+                    .await;
                 let mut new_messages = vec![system_prompt_message];
                 new_messages.extend(compression_result.messages);
                 // Update session compression state

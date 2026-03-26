@@ -444,7 +444,7 @@ Be thorough and precise. Do not lose important technical details from either the
         system_message_for_summary: Message,
         messages: Vec<Message>,
     ) -> BitFunResult<String> {
-        self.generate_summary_with_retry(ai_client, system_message_for_summary, messages, 1)
+        self.generate_summary_with_retry(ai_client, system_message_for_summary, messages, 2)
             .await
     }
 

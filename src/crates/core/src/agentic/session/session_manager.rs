@@ -132,15 +132,7 @@ impl SessionManager {
         Self::effective_workspace_path_from_config(&config).await
     }
 
-    async fn rebuild_messages_from_turns(
-        &self,
-        workspace_path: &Path,
-        session_id: &str,
-    ) -> BitFunResult<Vec<Message>> {
-        let turns = self
-            .persistence_manager
-            .load_session_turns(workspace_path, session_id)
-            .await?;
+    fn build_messages_from_turns(turns: &[DialogTurnData]) -> Vec<Message> {
         let mut messages = Vec::new();
 
         for turn in turns {
@@ -205,7 +197,82 @@ impl SessionManager {
             }
         }
 
-        Ok(messages)
+        messages
+    }
+
+    async fn rebuild_messages_from_turns(
+        &self,
+        workspace_path: &Path,
+        session_id: &str,
+    ) -> BitFunResult<Vec<Message>> {
+        let turns = self
+            .persistence_manager
+            .load_session_turns(workspace_path, session_id)
+            .await?;
+        Ok(Self::build_messages_from_turns(&turns))
+    }
+
+    /// Persist the current runtime context by overwriting `snapshots/context-{turn_index}.json`.
+    ///
+    /// Save timing is intentionally tied to semantic context changes rather than token chunks:
+    /// - after a turn starts and the user message enters runtime context
+    /// - after assistant/tool messages are appended to runtime context
+    /// - after compression replaces runtime context
+    /// - once more when a turn completes or fails
+    ///
+    /// This is still a best-effort multi-file persistence flow, not a transactional commit.
+    /// `session.json`, `turns/turn-*.json`, and `snapshots/context-*.json` may be briefly out of
+    /// sync if the process crashes between writes, so restore logic must tolerate partial updates.
+    async fn persist_context_snapshot_for_turn_best_effort(
+        &self,
+        session_id: &str,
+        turn_index: usize,
+        reason: &str,
+    ) {
+        if !self.config.enable_persistence {
+            return;
+        }
+
+        let Some(workspace_path) = self.effective_session_workspace_path(session_id).await else {
+            debug!(
+                "Skipping context snapshot persistence because workspace path is unavailable: session_id={}, turn_index={}, reason={}",
+                session_id, turn_index, reason
+            );
+            return;
+        };
+
+        let context_messages = self.context_store.get_context_messages(session_id);
+        if let Err(err) = self
+            .persistence_manager
+            .save_turn_context_snapshot(&workspace_path, session_id, turn_index, &context_messages)
+            .await
+        {
+            warn!(
+                "failed to persist context snapshot: session_id={}, turn_index={}, reason={}, err={}",
+                session_id, turn_index, reason, err
+            );
+        }
+    }
+
+    async fn persist_current_turn_context_snapshot_best_effort(
+        &self,
+        session_id: &str,
+        reason: &str,
+    ) {
+        let Some(turn_index) = self
+            .sessions
+            .get(session_id)
+            .and_then(|session| session.dialog_turn_ids.len().checked_sub(1))
+        else {
+            debug!(
+                "Skipping current-turn context snapshot because no turn is active: session_id={}, reason={}",
+                session_id, reason
+            );
+            return;
+        };
+
+        self.persist_context_snapshot_for_turn_best_effort(session_id, turn_index, reason)
+            .await;
     }
 
     pub fn new(
@@ -567,10 +634,22 @@ impl SessionManager {
             );
         }
 
-        // 2. Rebuild the runtime context cache from the latest persisted snapshot when
-        // available; otherwise reconstruct it from persisted turns.
+        // 2. Restore runtime context with snapshot-first semantics.
+        // If the latest snapshot lags behind turn persistence, append the missing turn delta
+        // instead of truncating session history.
+        //
+        // This compensates for the fact that persistence is not transactional across
+        // `session.json`, `turns/*.json`, and `snapshots/context-*.json`.
+        let persisted_turns = self
+            .persistence_manager
+            .load_session_turns(&session_storage_path, session_id)
+            .await?;
+        let persisted_turn_ids: Vec<String> = persisted_turns
+            .iter()
+            .map(|turn| turn.turn_id.clone())
+            .collect();
         let mut latest_turn_index: Option<usize> = None;
-        let messages = match self
+        let mut messages = match self
             .persistence_manager
             .load_latest_turn_context_snapshot(&session_storage_path, session_id)
             .await?
@@ -579,9 +658,21 @@ impl SessionManager {
                 latest_turn_index = Some(turn_index);
                 msgs
             }
-            None => {
-                self.rebuild_messages_from_turns(&session_storage_path, session_id)
-                    .await?
+            None => Self::build_messages_from_turns(&persisted_turns),
+        };
+
+        if let Some(snapshot_turn_index) = latest_turn_index {
+            let delta_start = snapshot_turn_index.saturating_add(1);
+            if delta_start < persisted_turns.len() {
+                warn!(
+                    "Context snapshot is behind persisted turns, rebuilding delta: session_id={}, snapshot_turn_index={}, persisted_turn_count={}",
+                    session_id,
+                    snapshot_turn_index,
+                    persisted_turns.len()
+                );
+                messages.extend(Self::build_messages_from_turns(
+                    &persisted_turns[delta_start..],
+                ));
             }
         };
 
@@ -601,19 +692,39 @@ impl SessionManager {
         self.context_store
             .replace_context(session_id, messages.clone());
 
-        // If session's recorded turn count doesn't match snapshot, truncate to snapshot's turn
-        if let Some(latest_turn_index) = latest_turn_index {
-            let expected_turn_count = latest_turn_index + 1;
-            if session.dialog_turn_ids.len() > expected_turn_count {
-                warn!(
-                    "Session turn count exceeds snapshot, truncating: session_id={}, turns={} -> {}",
-                    session_id,
-                    session.dialog_turn_ids.len(),
-                    expected_turn_count
-                );
-                session.dialog_turn_ids.truncate(expected_turn_count);
-            }
-        } else if !session.dialog_turn_ids.is_empty() && messages.is_empty() {
+        let recoverable_turn_count = latest_turn_index
+            .map(|turn_index| turn_index + 1)
+            .unwrap_or(0)
+            .max(persisted_turns.len());
+
+        if session.dialog_turn_ids.len() < persisted_turns.len() {
+            warn!(
+                "Session metadata is behind persisted turns, rebuilding dialog_turn_ids: session_id={}, session_turn_count={}, persisted_turn_count={}",
+                session_id,
+                session.dialog_turn_ids.len(),
+                persisted_turns.len()
+            );
+            session.dialog_turn_ids = persisted_turn_ids;
+        } else if session.dialog_turn_ids.len() > recoverable_turn_count {
+            warn!(
+                "Session metadata exceeds recoverable history, truncating: session_id={}, session_turn_count={}, recoverable_turn_count={}",
+                session_id,
+                session.dialog_turn_ids.len(),
+                recoverable_turn_count
+            );
+            session.dialog_turn_ids.truncate(recoverable_turn_count);
+        } else if persisted_turns.len() == session.dialog_turn_ids.len()
+            && session.dialog_turn_ids != persisted_turn_ids
+        {
+            warn!(
+                "Session metadata turn ids diverge from persisted turns, normalizing order: session_id={}",
+                session_id
+            );
+            session.dialog_turn_ids = persisted_turn_ids;
+        }
+
+        if recoverable_turn_count == 0 && !session.dialog_turn_ids.is_empty() && messages.is_empty()
+        {
             warn!(
                 "Session has no available context snapshot and messages are empty, clearing turns: session_id={}",
                 session_id
@@ -808,6 +919,9 @@ impl SessionManager {
                 .await?;
         }
 
+        self.persist_context_snapshot_for_turn_best_effort(session_id, turn_index, "turn_started")
+            .await;
+
         debug!(
             "Starting dialog turn: turn_id={}, turn_index={}",
             turn_id, turn_index
@@ -885,37 +999,12 @@ impl SessionManager {
         turn.duration_ms = Some(stats.duration_ms);
         turn.end_time = Some(completion_timestamp);
 
-        if self.config.enable_persistence {
-            match self.get_context_messages(session_id).await {
-                Ok(context_messages) => {
-                    if let Err(err) = self
-                        .persistence_manager
-                        .save_turn_context_snapshot(
-                            &workspace_path,
-                            session_id,
-                            turn.turn_index,
-                            &context_messages,
-                        )
-                        .await
-                    {
-                        warn!(
-                            "failed to save turn context snapshot: session_id={}, turn_index={}, err={}",
-                            session_id,
-                            turn.turn_index,
-                            err
-                        );
-                    }
-                }
-                Err(err) => {
-                    warn!(
-                        "failed to build context messages for snapshot: session_id={}, turn_index={}, err={}",
-                        session_id,
-                        turn.turn_index,
-                        err
-                    );
-                }
-            }
-        }
+        self.persist_context_snapshot_for_turn_best_effort(
+            session_id,
+            turn.turn_index,
+            "turn_completed",
+        )
+        .await;
 
         // Persist
         if self.config.enable_persistence {
@@ -968,32 +1057,13 @@ impl SessionManager {
                 .as_millis() as u64,
         );
 
+        self.persist_context_snapshot_for_turn_best_effort(
+            session_id,
+            turn.turn_index,
+            "turn_failed",
+        )
+        .await;
         if self.config.enable_persistence {
-            match self.get_context_messages(session_id).await {
-                Ok(context_messages) => {
-                    if let Err(err) = self
-                        .persistence_manager
-                        .save_turn_context_snapshot(
-                            &workspace_path,
-                            session_id,
-                            turn.turn_index,
-                            &context_messages,
-                        )
-                        .await
-                    {
-                        warn!(
-                            "failed to save turn context snapshot on failure: session_id={}, turn_index={}, err={}",
-                            session_id, turn.turn_index, err
-                        );
-                    }
-                }
-                Err(err) => {
-                    warn!(
-                        "failed to build context messages for snapshot on failure: session_id={}, turn_index={}, err={}",
-                        session_id, turn.turn_index, err
-                    );
-                }
-            }
             self.persistence_manager
                 .save_dialog_turn(&workspace_path, &turn)
                 .await?;
@@ -1022,8 +1092,13 @@ impl SessionManager {
         let session = self.sessions.get(child_session_id).ok_or_else(|| {
             BitFunError::NotFound(format!("Session not found: {}", child_session_id))
         })?;
-
         let turn_id = format!("btw-turn-{}", request_id);
+        let turn_index = session
+            .dialog_turn_ids
+            .iter()
+            .position(|existing| existing == &turn_id)
+            .unwrap_or(session.dialog_turn_ids.len());
+
         let user_message_id = format!("btw-user-{}", request_id);
         let round_id = format!("btw-round-{}", request_id);
         let text_id = format!("btw-text-{}", request_id);
@@ -1034,7 +1109,7 @@ impl SessionManager {
 
         let mut turn = DialogTurnData::new(
             turn_id.clone(),
-            0,
+            turn_index,
             child_session_id.to_string(),
             UserMessageData {
                 id: user_message_id,
@@ -1108,7 +1183,20 @@ impl SessionManager {
             }
             session.updated_at = SystemTime::now();
             session.last_activity_at = SystemTime::now();
+
+            if self.config.enable_persistence {
+                self.persistence_manager
+                    .save_session(workspace_path, &session)
+                    .await?;
+            }
         }
+
+        self.persist_context_snapshot_for_turn_best_effort(
+            child_session_id,
+            turn_index,
+            "btw_turn_persisted",
+        )
+        .await;
 
         Ok(())
     }
@@ -1151,15 +1239,21 @@ impl SessionManager {
         Ok(context_messages)
     }
 
-    /// Add a message to the runtime context cache.
+    /// Add a semantic message to the runtime context cache and immediately refresh the current
+    /// turn snapshot so crashes do not lose the latest in-memory context change.
     pub async fn add_message(&self, session_id: &str, message: Message) -> BitFunResult<()> {
         self.context_store.add_message(session_id, message);
+        self.persist_current_turn_context_snapshot_best_effort(session_id, "context_message_added")
+            .await;
         Ok(())
     }
 
-    /// Replace the runtime context cache for a session.
-    pub fn replace_context_messages(&self, session_id: &str, messages: Vec<Message>) {
+    /// Replace the runtime context cache for a session and immediately refresh the current turn
+    /// snapshot. This is primarily used after compression rewrites the model-visible context.
+    pub async fn replace_context_messages(&self, session_id: &str, messages: Vec<Message>) {
         self.context_store.replace_context(session_id, messages);
+        self.persist_current_turn_context_snapshot_best_effort(session_id, "context_replaced")
+            .await;
     }
 
     /// Get dialog turn count
