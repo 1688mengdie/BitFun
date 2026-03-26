@@ -8,7 +8,7 @@ use crate::agentic::core::{
 };
 use crate::agentic::image_analysis::ImageContextData;
 use crate::agentic::persistence::PersistenceManager;
-use crate::agentic::session::{CompressionManager, MessageHistoryManager};
+use crate::agentic::session::CompressionManager;
 use crate::infrastructure::ai::get_global_ai_client_factory;
 use crate::service::session::{
     DialogTurnData, ModelRoundData, TextItemData, TurnStatus, UserMessageData,
@@ -49,7 +49,6 @@ pub struct SessionManager {
     sessions: Arc<DashMap<String, Session>>,
 
     /// Sub-components
-    history_manager: Arc<MessageHistoryManager>,
     compression_manager: Arc<CompressionManager>,
     persistence_manager: Arc<PersistenceManager>,
 
@@ -58,6 +57,31 @@ pub struct SessionManager {
 }
 
 impl SessionManager {
+    fn paginate_messages(
+        messages: &[Message],
+        limit: usize,
+        before_message_id: Option<&str>,
+    ) -> (Vec<Message>, bool) {
+        if messages.is_empty() {
+            return (vec![], false);
+        }
+
+        let end_idx = if let Some(before_id) = before_message_id {
+            messages.iter().position(|m| m.id == before_id).unwrap_or(0)
+        } else {
+            messages.len()
+        };
+
+        if end_idx == 0 {
+            return (vec![], false);
+        }
+
+        let start_idx = end_idx.saturating_sub(limit);
+        let has_more = start_idx > 0;
+
+        (messages[start_idx..end_idx].to_vec(), has_more)
+    }
+
     fn session_workspace_from_config(config: &SessionConfig) -> Option<PathBuf> {
         config.workspace_path.as_ref().map(PathBuf::from)
     }
@@ -185,7 +209,6 @@ impl SessionManager {
     }
 
     pub fn new(
-        history_manager: Arc<MessageHistoryManager>,
         compression_manager: Arc<CompressionManager>,
         persistence_manager: Arc<PersistenceManager>,
         config: SessionManagerConfig,
@@ -194,7 +217,6 @@ impl SessionManager {
 
         let manager = Self {
             sessions: Arc::new(DashMap::new()),
-            history_manager,
             compression_manager,
             persistence_manager,
             config,
@@ -272,15 +294,10 @@ impl SessionManager {
         // 1. Add to memory
         self.sessions.insert(session_id.clone(), session.clone());
 
-        // 2. Initialize message history
-        self.history_manager
-            .create_session(&session_id)
-            .await?;
-
-        // 3. Initialize compression manager
+        // 2. Initialize the in-memory compression/context cache.
         self.compression_manager.create_session(&session_id);
 
-        // 4. Persist to local path (handles remote workspaces correctly)
+        // 3. Persist to local path (handles remote workspaces correctly)
         if self.config.enable_persistence {
             if let Some(session) = self.sessions.get(&session_id) {
                 self.persistence_manager
@@ -382,10 +399,9 @@ impl SessionManager {
 
         if self.config.enable_persistence {
             let effective_path = self.effective_session_workspace_path(session_id).await;
-            if let (Some(workspace_path), Some(session)) = (
-                effective_path,
-                self.sessions.get(session_id),
-            ) {
+            if let (Some(workspace_path), Some(session)) =
+                (effective_path, self.sessions.get(session_id))
+            {
                 self.persistence_manager
                     .save_session(&workspace_path, &session)
                     .await?;
@@ -419,10 +435,9 @@ impl SessionManager {
 
         if self.config.enable_persistence {
             let effective_path = self.effective_session_workspace_path(session_id).await;
-            if let (Some(workspace_path), Some(session)) = (
-                effective_path,
-                self.sessions.get(session_id),
-            ) {
+            if let (Some(workspace_path), Some(session)) =
+                (effective_path, self.sessions.get(session_id))
+            {
                 self.persistence_manager
                     .save_session(&workspace_path, &session)
                     .await?;
@@ -464,10 +479,9 @@ impl SessionManager {
             }
         }
 
-        // 2. Delete message history
-        self.history_manager.delete_session(session_id).await?;
+        self.compression_manager.delete_session(session_id);
 
-        // 3. Delete persisted data
+        // 2. Delete persisted data
         if self.config.enable_persistence {
             self.persistence_manager
                 .delete_session(workspace_path, session_id)
@@ -492,7 +506,7 @@ impl SessionManager {
             }
         }
 
-        // 4. Clean up associated Terminal session
+        // 3. Clean up associated Terminal session
         use crate::service::terminal::TerminalApi;
         if let Ok(terminal_api) = TerminalApi::from_singleton() {
             let binding = terminal_api.session_manager().binding();
@@ -508,7 +522,7 @@ impl SessionManager {
             }
         }
 
-        // 5. Remove from memory
+        // 4. Remove from memory
         self.sessions.remove(session_id);
 
         info!("Session deletion completed: session_id={}", session_id);
@@ -553,7 +567,8 @@ impl SessionManager {
             );
         }
 
-        // 2. Load message history - full list by turn, may already be compressed
+        // 2. Rebuild the runtime context cache from the latest persisted snapshot when
+        // available; otherwise reconstruct it from persisted turns.
         let mut latest_turn_index: Option<usize> = None;
         let messages = match self
             .persistence_manager
@@ -576,10 +591,6 @@ impl SessionManager {
                 session_id
             );
         }
-
-        self.history_manager
-            .restore_session(session_id, messages.clone())
-            .await?;
 
         // 3. Restore the in-memory compression manager state from the recovered messages.
         // If session already exists, delete old one first then create (ensure clean state)
@@ -659,10 +670,7 @@ impl SessionManager {
                 })?
         };
 
-        // 2) Restore history/compression context in memory
-        self.history_manager
-            .restore_session(session_id, messages.clone())
-            .await?;
+        // 2) Restore the in-memory context cache.
         self.compression_manager
             .restore_session(session_id, messages);
 
@@ -735,8 +743,9 @@ impl SessionManager {
         let session = self
             .get_session(session_id)
             .ok_or_else(|| BitFunError::NotFound(format!("Session not found: {}", session_id)))?;
-        let workspace_path =
-            Self::effective_workspace_path_from_config(&session.config).await.ok_or_else(|| {
+        let workspace_path = Self::effective_workspace_path_from_config(&session.config)
+            .await
+            .ok_or_else(|| {
                 BitFunError::Validation(format!(
                     "Session workspace_path is missing: {}",
                     session_id
@@ -764,7 +773,7 @@ impl SessionManager {
             session.last_activity_at = SystemTime::now();
         }
 
-        // 2. Add user message to history and compression managers
+        // 2. Add the user message to the in-memory context cache.
         let user_message =
             if let Some(images) = image_contexts.as_ref().filter(|v| !v.is_empty()).cloned() {
                 Message::user_multimodal(user_input.clone(), images)
@@ -775,9 +784,6 @@ impl SessionManager {
                     .with_turn_id(turn_id.clone())
                     .with_semantic_kind(MessageSemanticKind::ActualUserInput)
             };
-        self.history_manager
-            .add_message(session_id, user_message.clone())
-            .await?;
         self.compression_manager
             .add_message(session_id, user_message)
             .await?;
@@ -825,9 +831,15 @@ impl SessionManager {
         final_response: String,
         stats: TurnStats,
     ) -> BitFunResult<()> {
-        let workspace_path = self.effective_session_workspace_path(session_id).await.ok_or_else(|| {
-            BitFunError::Validation(format!("Session workspace_path is missing: {}", session_id))
-        })?;
+        let workspace_path = self
+            .effective_session_workspace_path(session_id)
+            .await
+            .ok_or_else(|| {
+                BitFunError::Validation(format!(
+                    "Session workspace_path is missing: {}",
+                    session_id
+                ))
+            })?;
         let turn_index = self
             .sessions
             .get(session_id)
@@ -935,9 +947,15 @@ impl SessionManager {
         turn_id: &str,
         error: String,
     ) -> BitFunResult<()> {
-        let workspace_path = self.effective_session_workspace_path(session_id).await.ok_or_else(|| {
-            BitFunError::Validation(format!("Session workspace_path is missing: {}", session_id))
-        })?;
+        let workspace_path = self
+            .effective_session_workspace_path(session_id)
+            .await
+            .ok_or_else(|| {
+                BitFunError::Validation(format!(
+                    "Session workspace_path is missing: {}",
+                    session_id
+                ))
+            })?;
         let turn_index = self
             .sessions
             .get(session_id)
@@ -1078,16 +1096,8 @@ impl SessionManager {
         let user_message = Message::user(question.to_string())
             .with_turn_id(turn_id.clone())
             .with_semantic_kind(MessageSemanticKind::ActualUserInput);
-        let assistant_message = Message::assistant(full_text.to_string())
-            .with_turn_id(turn_id.clone());
-
-        // Add to the in-memory history cache.
-        self.history_manager
-            .add_message(child_session_id, user_message.clone())
-            .await?;
-        self.history_manager
-            .add_message(child_session_id, assistant_message.clone())
-            .await?;
+        let assistant_message =
+            Message::assistant(full_text.to_string()).with_turn_id(turn_id.clone());
 
         // Add to the in-memory compression/context cache.
         self.compression_manager
@@ -1114,21 +1124,33 @@ impl SessionManager {
 
     // ============ Helper Methods ============
 
-    /// Get session's message history (complete)
+    /// Get a best-effort message view for the session.
+    /// When persistence is enabled, rebuild from persisted turns so callers see the
+    /// canonical turn history instead of the runtime context cache.
     pub async fn get_messages(&self, session_id: &str) -> BitFunResult<Vec<Message>> {
-        self.history_manager.get_messages(session_id).await
+        if self.config.enable_persistence {
+            if let Some(workspace_path) = self.effective_session_workspace_path(session_id).await {
+                let messages = self
+                    .rebuild_messages_from_turns(&workspace_path, session_id)
+                    .await?;
+                if !messages.is_empty() {
+                    return Ok(messages);
+                }
+            }
+        }
+
+        Ok(self.compression_manager.get_context_messages(session_id))
     }
 
-    /// Get session's message history (paginated)
+    /// Get a paginated best-effort message view for the session.
     pub async fn get_messages_paginated(
         &self,
         session_id: &str,
         limit: usize,
         before_message_id: Option<&str>,
     ) -> BitFunResult<(Vec<Message>, bool)> {
-        self.history_manager
-            .get_messages_paginated(session_id, limit, before_message_id)
-            .await
+        let messages = self.get_messages(session_id).await?;
+        Ok(Self::paginate_messages(&messages, limit, before_message_id))
     }
 
     /// Get session's context messages (may be compressed)
@@ -1141,11 +1163,6 @@ impl SessionManager {
 
     /// Add message to session
     pub async fn add_message(&self, session_id: &str, message: Message) -> BitFunResult<()> {
-        // Add to the in-memory history cache.
-        self.history_manager
-            .add_message(session_id, message.clone())
-            .await?;
-        // Also add to the in-memory compression/context cache.
         self.compression_manager
             .add_message(session_id, message)
             .await?;

@@ -33,12 +33,9 @@ pub async fn init_agentic_system() -> Result<AgenticSystem> {
     let path_manager = try_get_path_manager_arc()?;
     let persistence_manager = Arc::new(persistence::PersistenceManager::new(path_manager.clone())?);
 
-    let history_manager = Arc::new(session::MessageHistoryManager::new());
-
     let compression_manager = Arc::new(session::CompressionManager::new(Default::default()));
 
     let session_manager = Arc::new(session::SessionManager::new(
-        history_manager.clone(),
         compression_manager,
         persistence_manager.clone(),
         Default::default(),

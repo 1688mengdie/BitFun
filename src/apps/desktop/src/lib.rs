@@ -321,7 +321,6 @@ pub async fn run() {
             api::agentic_api::restore_session,
             webdriver_bridge_result,
             api::agentic_api::list_sessions,
-            api::agentic_api::get_session_messages,
             api::agentic_api::confirm_tool_execution,
             api::agentic_api::reject_tool_execution,
             api::agentic_api::cancel_tool,
@@ -714,12 +713,9 @@ async fn init_agentic_system() -> anyhow::Result<(
     let path_manager = try_get_path_manager_arc()?;
     let persistence_manager = Arc::new(persistence::PersistenceManager::new(path_manager.clone())?);
 
-    let history_manager = Arc::new(session::MessageHistoryManager::new());
-
     let compression_manager = Arc::new(session::CompressionManager::new(Default::default()));
 
     let session_manager = Arc::new(session::SessionManager::new(
-        history_manager,
         compression_manager,
         persistence_manager,
         Default::default(),

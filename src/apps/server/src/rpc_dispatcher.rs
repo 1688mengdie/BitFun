@@ -6,8 +6,8 @@
 
 use crate::bootstrap::ServerAppState;
 use anyhow::{anyhow, Result};
-use bitfun_core::agentic::core::SessionConfig;
 use bitfun_core::agentic::coordination::{DialogSubmissionPolicy, DialogTriggerSource};
+use bitfun_core::agentic::core::SessionConfig;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -48,9 +48,15 @@ pub async fn dispatch(
         "open_workspace" => {
             let request = extract_request(&params)?;
             let path: String = serde_json::from_value(
-                request.get("path").cloned().ok_or_else(|| anyhow!("Missing path"))?,
+                request
+                    .get("path")
+                    .cloned()
+                    .ok_or_else(|| anyhow!("Missing path"))?,
             )?;
-            let info = state.workspace_service.open_workspace(path.into()).await
+            let info = state
+                .workspace_service
+                .open_workspace(path.into())
+                .await
                 .map_err(|e| anyhow!("{}", e))?;
             *state.workspace_path.write().await = Some(info.root_path.clone());
             Ok(serde_json::to_value(&info).unwrap_or_default())
@@ -72,7 +78,10 @@ pub async fn dispatch(
         "read_file_content" => {
             let request = extract_request(&params)?;
             let file_path = get_string(&request, "filePath")?;
-            let result = state.filesystem_service.read_file(&file_path).await
+            let result = state
+                .filesystem_service
+                .read_file(&file_path)
+                .await
                 .map_err(|e| anyhow!("{}", e))?;
             Ok(serde_json::json!(result.content))
         }
@@ -80,7 +89,10 @@ pub async fn dispatch(
             let request = extract_request(&params)?;
             let file_path = get_string(&request, "filePath")?;
             let content = get_string(&request, "content")?;
-            state.filesystem_service.write_file(&file_path, &content).await
+            state
+                .filesystem_service
+                .write_file(&file_path, &content)
+                .await
                 .map_err(|e| anyhow!("{}", e))?;
             Ok(serde_json::Value::Null)
         }
@@ -96,7 +108,10 @@ pub async fn dispatch(
         "get_file_tree" => {
             let request = extract_request(&params)?;
             let path = get_string(&request, "path")?;
-            let nodes = state.filesystem_service.build_file_tree(&path).await
+            let nodes = state
+                .filesystem_service
+                .build_file_tree(&path)
+                .await
                 .map_err(|e| anyhow!("{}", e))?;
             Ok(serde_json::to_value(&nodes).unwrap_or_default())
         }
@@ -110,21 +125,32 @@ pub async fn dispatch(
         "get_config" => {
             let request = extract_request(&params)?;
             let key = request.get("key").and_then(|v| v.as_str());
-            let config: serde_json::Value = state.config_service
-                .get_config(key).await
+            let config: serde_json::Value = state
+                .config_service
+                .get_config(key)
+                .await
                 .map_err(|e| anyhow!("{}", e))?;
             Ok(config)
         }
         "set_config" => {
             let request = extract_request(&params)?;
             let key = get_string(&request, "key")?;
-            let value = request.get("value").cloned().ok_or_else(|| anyhow!("Missing value"))?;
-            state.config_service.set_config(&key, value).await
+            let value = request
+                .get("value")
+                .cloned()
+                .ok_or_else(|| anyhow!("Missing value"))?;
+            state
+                .config_service
+                .set_config(&key, value)
+                .await
                 .map_err(|e| anyhow!("{}", e))?;
             Ok(serde_json::json!("ok"))
         }
         "get_model_configs" => {
-            let models = state.config_service.get_ai_models().await
+            let models = state
+                .config_service
+                .get_ai_models()
+                .await
                 .map_err(|e| anyhow!("{}", e))?;
             Ok(serde_json::to_value(&models).unwrap_or_default())
         }
@@ -135,7 +161,8 @@ pub async fn dispatch(
             let session_name = get_string(&request, "sessionName")?;
             let agent_type = get_string(&request, "agentType")?;
             let workspace_path = get_string(&request, "workspacePath")?;
-            let session_id = request.get("sessionId")
+            let session_id = request
+                .get("sessionId")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
 
@@ -144,7 +171,8 @@ pub async fn dispatch(
                 ..Default::default()
             };
 
-            let session = state.coordinator
+            let session = state
+                .coordinator
                 .create_session_with_workspace(
                     session_id,
                     session_name,
@@ -164,7 +192,8 @@ pub async fn dispatch(
         "list_sessions" => {
             let request = extract_request(&params)?;
             let workspace_path = get_string(&request, "workspacePath")?;
-            let sessions = state.coordinator
+            let sessions = state
+                .coordinator
                 .list_sessions(&PathBuf::from(workspace_path))
                 .await
                 .map_err(|e| anyhow!("{}", e))?;
@@ -174,7 +203,8 @@ pub async fn dispatch(
             let request = extract_request(&params)?;
             let session_id = get_string(&request, "sessionId")?;
             let workspace_path = get_string(&request, "workspacePath")?;
-            state.coordinator
+            state
+                .coordinator
                 .delete_session(&PathBuf::from(workspace_path), &session_id)
                 .await
                 .map_err(|e| anyhow!("{}", e))?;
@@ -184,18 +214,22 @@ pub async fn dispatch(
             let request = extract_request(&params)?;
             let session_id = get_string(&request, "sessionId")?;
             let user_input = get_string(&request, "userInput")?;
-            let original_user_input = request.get("originalUserInput")
+            let original_user_input = request
+                .get("originalUserInput")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
             let agent_type = get_string(&request, "agentType")?;
-            let workspace_path = request.get("workspacePath")
+            let workspace_path = request
+                .get("workspacePath")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
-            let turn_id = request.get("turnId")
+            let turn_id = request
+                .get("turnId")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
 
-            state.scheduler
+            state
+                .scheduler
                 .submit(
                     session_id,
                     user_input,
@@ -215,26 +249,47 @@ pub async fn dispatch(
             let request = extract_request(&params)?;
             let session_id = get_string(&request, "sessionId")?;
             let dialog_turn_id = get_string(&request, "dialogTurnId")?;
-            state.coordinator
+            state
+                .coordinator
                 .cancel_dialog_turn(&session_id, &dialog_turn_id)
                 .await
                 .map_err(|e| anyhow!("{}", e))?;
             Ok(serde_json::json!({ "success": true }))
         }
         "get_session_messages" => {
-            let request = extract_request(&params)?;
-            let session_id = get_string(&request, "sessionId")?;
-            let messages = state.coordinator
-                .get_messages(&session_id)
+            let request = params.get("request").unwrap_or(&params);
+            let session_id = request
+                .get("sessionId")
+                .or_else(|| request.get("session_id"))
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow!("Missing or invalid 'sessionId'/'session_id' field"))?
+                .to_string();
+            let limit = request
+                .get("limit")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as usize)
+                .unwrap_or(50);
+            let before_message_id = request
+                .get("beforeMessageId")
+                .or_else(|| request.get("before_message_id"))
+                .and_then(|v| v.as_str());
+
+            let (messages, has_more) = state
+                .coordinator
+                .get_messages_paginated(&session_id, limit, before_message_id)
                 .await
                 .map_err(|e| anyhow!("{}", e))?;
-            Ok(serde_json::to_value(&messages).unwrap_or_default())
+            Ok(serde_json::json!({
+                "messages": messages,
+                "has_more": has_more,
+            }))
         }
         "confirm_tool_execution" => {
             let request = extract_request(&params)?;
             let tool_id = get_string(&request, "toolId")?;
             let updated_input = request.get("updatedInput").cloned();
-            state.coordinator
+            state
+                .coordinator
                 .confirm_tool(&tool_id, updated_input)
                 .await
                 .map_err(|e| anyhow!("{}", e))?;
@@ -243,11 +298,13 @@ pub async fn dispatch(
         "reject_tool_execution" => {
             let request = extract_request(&params)?;
             let tool_id = get_string(&request, "toolId")?;
-            let reason = request.get("reason")
+            let reason = request
+                .get("reason")
                 .and_then(|v| v.as_str())
                 .unwrap_or("User rejected")
                 .to_string();
-            state.coordinator
+            state
+                .coordinator
                 .reject_tool(&tool_id, reason)
                 .await
                 .map_err(|e| anyhow!("{}", e))?;
@@ -256,32 +313,38 @@ pub async fn dispatch(
 
         // ── I18n ─────────────────────────────────────────────
         "i18n_get_current_language" => {
-            let lang: String = state.config_service
-                .get_config(Some("app.language")).await
+            let lang: String = state
+                .config_service
+                .get_config(Some("app.language"))
+                .await
                 .unwrap_or_else(|_| "zh-CN".to_string());
             Ok(serde_json::json!(lang))
         }
         "i18n_set_language" => {
             let request = extract_request(&params)?;
             let language = get_string(&request, "language")?;
-            state.config_service.set_config("app.language", language.clone()).await
+            state
+                .config_service
+                .set_config("app.language", language.clone())
+                .await
                 .map_err(|e| anyhow!("{}", e))?;
             Ok(serde_json::json!(language))
         }
-        "i18n_get_supported_languages" => {
-            Ok(serde_json::json!([
-                {"id": "zh-CN", "name": "Chinese (Simplified)", "englishName": "Chinese (Simplified)", "nativeName": "简体中文", "rtl": false},
-                {"id": "en-US", "name": "English", "englishName": "English", "nativeName": "English", "rtl": false}
-            ]))
-        }
+        "i18n_get_supported_languages" => Ok(serde_json::json!([
+            {"id": "zh-CN", "name": "Chinese (Simplified)", "englishName": "Chinese (Simplified)", "nativeName": "简体中文", "rtl": false},
+            {"id": "en-US", "name": "English", "englishName": "English", "nativeName": "English", "rtl": false}
+        ])),
 
         // ── Tools ────────────────────────────────────────────
         "get_all_tools_info" => {
-            let tools: Vec<serde_json::Value> = state.tool_registry_snapshot
+            let tools: Vec<serde_json::Value> = state
+                .tool_registry_snapshot
                 .iter()
-                .map(|t| serde_json::json!({
-                    "name": t.name().to_string(),
-                }))
+                .map(|t| {
+                    serde_json::json!({
+                        "name": t.name().to_string(),
+                    })
+                })
                 .collect();
             Ok(serde_json::json!(tools))
         }

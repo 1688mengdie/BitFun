@@ -95,13 +95,6 @@ export interface UpdateSessionModelRequest {
 }
 
  
-export interface Message {
-  id: string;
-  role: 'user' | 'assistant' | 'tool' | 'system';
-  content: any;
-  timestamp: number;
-}
- 
 export interface ModeInfo {
   id: string;
   name: string;
@@ -286,21 +279,6 @@ export class AgentAPI {
     }
   }
 
-   
-  async getSessionMessages(sessionId: string, limit?: number): Promise<Message[]> {
-    try {
-      return await api.invoke<Message[]>('get_session_messages', {
-        request: {
-          sessionId,
-          limit
-        }
-      });
-    } catch (error) {
-      throw createTauriCommandError('get_session_messages', error, { sessionId, limit });
-    }
-  }
-
-   
   async confirmToolExecution(sessionId: string, toolId: string): Promise<void> {
     try {
       await api.invoke<void>('confirm_tool_execution', {

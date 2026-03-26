@@ -12,8 +12,8 @@ use crate::agentic::events::{
     AgenticEvent, EventPriority, EventQueue, EventRouter, EventSubscriber,
 };
 use crate::agentic::execution::{ExecutionContext, ExecutionEngine};
-use crate::agentic::round_preempt::DialogRoundPreemptSource;
 use crate::agentic::image_analysis::ImageContextData;
+use crate::agentic::round_preempt::DialogRoundPreemptSource;
 use crate::agentic::session::SessionManager;
 use crate::agentic::tools::pipeline::{SubagentParentInfo, ToolPipeline};
 use crate::agentic::WorkspaceBinding;
@@ -151,27 +151,26 @@ impl ConversationCoordinator {
             )
             .await;
 
-        let local_session_path =
-            if let Some(ref e) = entry {
-                if !e.ssh_host.trim().is_empty() {
-                    crate::service::remote_ssh::workspace_state::remote_workspace_session_mirror_dir(
-                        &e.ssh_host,
-                        &e.remote_root,
-                    )
-                } else {
-                    crate::service::remote_ssh::workspace_state::unresolved_remote_session_storage_dir(
-                        rid, &path_norm,
-                    )
-                }
-            } else if let Some(h) = host_from_config {
+        let local_session_path = if let Some(ref e) = entry {
+            if !e.ssh_host.trim().is_empty() {
                 crate::service::remote_ssh::workspace_state::remote_workspace_session_mirror_dir(
-                    h, &path_norm,
+                    &e.ssh_host,
+                    &e.remote_root,
                 )
             } else {
                 crate::service::remote_ssh::workspace_state::unresolved_remote_session_storage_dir(
                     rid, &path_norm,
                 )
-            };
+            }
+        } else if let Some(h) = host_from_config {
+            crate::service::remote_ssh::workspace_state::remote_workspace_session_mirror_dir(
+                h, &path_norm,
+            )
+        } else {
+            crate::service::remote_ssh::workspace_state::unresolved_remote_session_storage_dir(
+                rid, &path_norm,
+            )
+        };
 
         let connection_name = entry
             .map(|e| e.connection_name)
@@ -195,24 +194,31 @@ impl ConversationCoordinator {
         let binding = binding.as_ref()?;
 
         if binding.is_remote() {
-            let manager = match crate::service::remote_ssh::workspace_state::get_remote_workspace_manager() {
-                Some(m) => m,
-                None => {
-                    log::warn!("build_workspace_services: RemoteWorkspaceStateManager not initialized");
-                    return None;
-                }
-            };
+            let manager =
+                match crate::service::remote_ssh::workspace_state::get_remote_workspace_manager() {
+                    Some(m) => m,
+                    None => {
+                        log::warn!(
+                            "build_workspace_services: RemoteWorkspaceStateManager not initialized"
+                        );
+                        return None;
+                    }
+                };
             let ssh_manager = match manager.get_ssh_manager().await {
                 Some(m) => m,
                 None => {
-                    log::warn!("build_workspace_services: SSH manager not available in state manager");
+                    log::warn!(
+                        "build_workspace_services: SSH manager not available in state manager"
+                    );
                     return None;
                 }
             };
             let file_service = match manager.get_file_service().await {
                 Some(f) => f,
                 None => {
-                    log::warn!("build_workspace_services: File service not available in state manager");
+                    log::warn!(
+                        "build_workspace_services: File service not available in state manager"
+                    );
                     return None;
                 }
             };
@@ -223,7 +229,10 @@ impl ConversationCoordinator {
                     return None;
                 }
             };
-            log::info!("build_workspace_services: Built remote services for connection_id={}", connection_id);
+            log::info!(
+                "build_workspace_services: Built remote services for connection_id={}",
+                connection_id
+            );
             Some(crate::agentic::workspace::remote_workspace_services(
                 connection_id,
                 file_service,
@@ -571,7 +580,8 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             let binding = Self::build_workspace_binding(&SessionConfig {
                 workspace_path: Some(workspace_path.to_string()),
                 ..Default::default()
-            }).await;
+            })
+            .await;
             binding
                 .as_ref()
                 .map(|b| b.session_storage_path().to_path_buf())
@@ -1514,7 +1524,8 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             return Ok(None);
         };
 
-        self.cancel_dialog_turn(session_id, &current_turn_id).await?;
+        self.cancel_dialog_turn(session_id, &current_turn_id)
+            .await?;
 
         let deadline = Instant::now() + wait_timeout;
         while self.execution_engine.has_active_turn(&current_turn_id) {
@@ -1565,12 +1576,12 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         self.session_manager.list_sessions(workspace_path).await
     }
 
-    /// Get session messages
+    /// Get a best-effort message view for a session.
     pub async fn get_messages(&self, session_id: &str) -> BitFunResult<Vec<Message>> {
         self.session_manager.get_messages(session_id).await
     }
 
-    /// Get session messages paginated
+    /// Get a paginated best-effort message view for a session.
     pub async fn get_messages_paginated(
         &self,
         session_id: &str,
@@ -1818,7 +1829,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             }
         }
 
-        // Delete subagent session itself (including message history, persistence data, etc.)
+        // Delete the subagent session itself, including runtime context and persisted turn data.
         let workspace_path = self
             .session_manager
             .get_session(session_id)

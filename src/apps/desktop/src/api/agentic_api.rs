@@ -127,22 +127,6 @@ pub struct SessionResponse {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct GetMessagesRequest {
-    pub session_id: String,
-    pub limit: Option<usize>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MessageDTO {
-    pub id: String,
-    pub role: String,
-    pub content: serde_json::Value,
-    pub timestamp: u64,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct CancelDialogTurnRequest {
     pub session_id: String,
     pub dialog_turn_id: String,
@@ -584,21 +568,6 @@ pub async fn list_sessions(
 }
 
 #[tauri::command]
-pub async fn get_session_messages(
-    coordinator: State<'_, Arc<ConversationCoordinator>>,
-    request: GetMessagesRequest,
-) -> Result<Vec<MessageDTO>, String> {
-    let messages = coordinator
-        .get_messages(&request.session_id)
-        .await
-        .map_err(|e| format!("Failed to get messages: {}", e))?;
-
-    let message_dtos = messages.into_iter().map(message_to_dto).collect();
-
-    Ok(message_dtos)
-}
-
-#[tauri::command]
 pub async fn confirm_tool_execution(
     coordinator: State<'_, Arc<ConversationCoordinator>>,
     request: ConfirmToolRequest,
@@ -730,75 +699,6 @@ fn session_to_response(session: Session) -> SessionResponse {
         state: format!("{:?}", session.state),
         turn_count: session.dialog_turn_ids.len(),
         created_at: system_time_to_unix_secs(session.created_at),
-    }
-}
-
-fn message_to_dto(message: Message) -> MessageDTO {
-    let role = match message.role {
-        MessageRole::User => "user",
-        MessageRole::Assistant => "assistant",
-        MessageRole::Tool => "tool",
-        MessageRole::System => "system",
-    };
-
-    let content = match message.content {
-        MessageContent::Text(text) => serde_json::json!({ "type": "text", "text": text }),
-        MessageContent::Multimodal { text, images } => {
-            let images: Vec<serde_json::Value> = images
-                .into_iter()
-                .map(|img| {
-                    serde_json::json!({
-                        "id": img.id,
-                        "image_path": img.image_path,
-                        "mime_type": img.mime_type,
-                        "metadata": img.metadata,
-                        "has_data_url": img.data_url.as_ref().is_some_and(|s| !s.is_empty()),
-                    })
-                })
-                .collect();
-
-            serde_json::json!({
-                "type": "multimodal",
-                "text": text,
-                "images": images,
-            })
-        }
-        MessageContent::ToolResult {
-            tool_id,
-            tool_name,
-            result,
-            result_for_assistant,
-            is_error: _,
-            image_attachments,
-        } => {
-            serde_json::json!({
-                "type": "tool_result",
-                "tool_id": tool_id,
-                "tool_name": tool_name,
-                "result": result,
-                "result_for_assistant": result_for_assistant,
-                "has_image_attachments": image_attachments.as_ref().is_some_and(|a| !a.is_empty()),
-            })
-        }
-        MessageContent::Mixed {
-            reasoning_content,
-            text,
-            tool_calls,
-        } => {
-            serde_json::json!({
-                "type": "mixed",
-                "reasoning_content": reasoning_content,
-                "text": text,
-                "tool_calls": tool_calls,
-            })
-        }
-    };
-
-    MessageDTO {
-        id: message.id,
-        role: role.to_string(),
-        content,
-        timestamp: system_time_to_unix_secs(message.timestamp),
     }
 }
 

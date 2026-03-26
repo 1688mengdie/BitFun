@@ -276,8 +276,7 @@ impl ExecutionEngine {
             if Self::skip_message_for_model_send(msg) {
                 continue;
             }
-            let keep_this_message_images =
-                attach_images && keep_image_messages.contains(&msg_idx);
+            let keep_this_message_images = attach_images && keep_image_messages.contains(&msg_idx);
             match &msg.content {
                 MessageContent::Multimodal { text, images } => {
                     if !attach_images {
@@ -317,7 +316,7 @@ impl ExecutionEngine {
                         provider,
                         workspace_path,
                     )
-                        .await
+                    .await
                     {
                         Ok(processed) => {
                             let next_count = attached_image_count + processed.len();
@@ -397,10 +396,7 @@ impl ExecutionEngine {
         Ok(result)
     }
 
-    fn render_multimodal_as_text(
-        text: &str,
-        images: &[ImageContextData],
-    ) -> String {
+    fn render_multimodal_as_text(text: &str, images: &[ImageContextData]) -> String {
         let mut content = text.to_string();
 
         if images.is_empty() {
@@ -716,7 +712,7 @@ impl ExecutionEngine {
         // Save the last token usage statistics
         let mut last_usage: Option<crate::util::types::ai::GeminiUsage> = None;
 
-        // Add detailed logging showing received message history
+        // Add detailed logging showing the execution context messages.
         debug!(
             "Executing dialog turn: dialog_turn_id={}, mode={}, agent={}, initial_messages={}, messages_len={}",
             dialog_turn_id,
@@ -726,7 +722,7 @@ impl ExecutionEngine {
             messages.len()
         );
         trace!(
-            "Message history details: dialog_turn_id={}, session_id={}, roles={:?}",
+            "Context message details: dialog_turn_id={}, session_id={}, roles={:?}",
             dialog_turn_id,
             context.session_id,
             messages
@@ -761,7 +757,7 @@ impl ExecutionEngine {
                 context.workspace.as_ref(),
                 &agent_type,
             )
-                .await
+            .await
         } else {
             (vec![], None)
         };
@@ -843,8 +839,7 @@ impl ExecutionEngine {
                 let original_images = images.clone();
 
                 // Replace multimodal messages with text-only versions to avoid provider errors.
-                let next_text =
-                    Self::render_multimodal_as_text(&original_text, &original_images);
+                let next_text = Self::render_multimodal_as_text(&original_text, &original_images);
 
                 msg.content = MessageContent::Text(next_text);
                 msg.metadata.tokens = None;
@@ -1270,7 +1265,8 @@ impl ExecutionEngine {
         .collect();
         tool_definitions.sort_by_key(|tool| tool_ordering.get(&tool.name).unwrap_or(&100));
 
-        let enabled_tool_names: Vec<String> = tool_definitions.iter().map(|d| d.name.clone()).collect();
+        let enabled_tool_names: Vec<String> =
+            tool_definitions.iter().map(|d| d.name.clone()).collect();
 
         (enabled_tool_names, Some(tool_definitions))
     }

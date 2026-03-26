@@ -65,8 +65,10 @@ pub struct CompressionResult {
 
 /// Context compression manager
 pub struct CompressionManager {
-    /// Compressed message history (by session ID)
-    compressed_histories: Arc<DashMap<String, Vec<Message>>>,
+    /// In-memory session context cache (by session ID).
+    /// The cache stores the current model context, which may contain
+    /// compressed reminders plus the most recent turn messages.
+    session_contexts: Arc<DashMap<String, Vec<Message>>>,
     /// Configuration
     config: CompressionConfig,
 }
@@ -74,45 +76,38 @@ pub struct CompressionManager {
 impl CompressionManager {
     pub fn new(config: CompressionConfig) -> Self {
         Self {
-            compressed_histories: Arc::new(DashMap::new()),
+            session_contexts: Arc::new(DashMap::new()),
             config,
         }
     }
 
-    /// Create session compression history
+    /// Initialize an empty in-memory context cache for a session.
     pub fn create_session(&self, session_id: &str) {
-        self.compressed_histories
-            .insert(session_id.to_string(), vec![]);
-        debug!(
-            "Created session compression history: session_id={}",
-            session_id
-        );
+        self.session_contexts.insert(session_id.to_string(), vec![]);
+        debug!("Created session context cache: session_id={}", session_id);
     }
 
-    /// Add message to the in-memory context history.
+    /// Add a message to the in-memory context cache.
     pub async fn add_message(&self, session_id: &str, message: Message) -> BitFunResult<()> {
-        if let Some(mut compressed) = self.compressed_histories.get_mut(session_id) {
-            compressed.push(message);
+        if let Some(mut cached_messages) = self.session_contexts.get_mut(session_id) {
+            cached_messages.push(message);
         } else {
-            self.compressed_histories
+            self.session_contexts
                 .insert(session_id.to_string(), vec![message]);
         }
         Ok(())
     }
 
-    /// Batch restore messages into the in-memory compression cache.
+    /// Batch restore messages into the in-memory context cache.
     pub fn restore_session(&self, session_id: &str, messages: Vec<Message>) {
-        self.compressed_histories
+        self.session_contexts
             .insert(session_id.to_string(), messages);
-        debug!(
-            "Restored session compression history: session_id={}",
-            session_id
-        );
+        debug!("Restored session context cache: session_id={}", session_id);
     }
 
     /// Get copy of messages for sending to model (may be compressed)
     pub fn get_context_messages(&self, session_id: &str) -> Vec<Message> {
-        self.compressed_histories
+        self.session_contexts
             .get(session_id)
             .map(|h| h.clone())
             .unwrap_or_default()
@@ -277,8 +272,8 @@ impl CompressionManager {
             }
         }
 
-        // Update compression history
-        self.compressed_histories
+        // Replace the runtime context cache with the newly compressed context.
+        self.session_contexts
             .insert(session_id.to_string(), compressed_messages.clone());
 
         Ok(CompressionResult {
@@ -565,13 +560,10 @@ Be thorough and precise. Do not lose important technical details from either the
         Err(BitFunError::AIClient(error_msg))
     }
 
-    /// Delete session compression history
+    /// Delete the in-memory context cache for a session.
     pub fn delete_session(&self, session_id: &str) {
-        self.compressed_histories.remove(session_id);
-        debug!(
-            "Deleted session compression history: session_id={}",
-            session_id
-        );
+        self.session_contexts.remove(session_id);
+        debug!("Deleted session context cache: session_id={}", session_id);
     }
 
     fn get_compact_prompt(&self) -> String {
