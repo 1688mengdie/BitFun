@@ -330,6 +330,7 @@
   },
   "tabs": {
     "close": "Close Tab",
+    "popOut": "Pop out as scene",
     "closeOthers": "Close Other Tabs",
     "closeAll": "Close All Tabs",
     "closeRight": "Close Tabs to the Right",

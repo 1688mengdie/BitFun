@@ -21,6 +21,7 @@ import {
   Network,
   User,
   BarChart3,
+  ExternalLink,
 } from 'lucide-react';
 import type { SceneTabDef, SceneTabId } from '../components/SceneBar/types';
 
@@ -158,11 +159,25 @@ export const SCENE_TAB_REGISTRY: SceneTabDef[] = [
     singleton: true,
     defaultOpen: false,
   },
+  {
+    id: 'panel-view' as SceneTabId,
+    label: 'Panel View',
+    labelKey: 'scenes.panelView',
+    Icon: ExternalLink,
+    pinned: false,
+    fixed: false,
+    closable: true,
+    singleton: true,
+    defaultOpen: false,
+  },
 ];
 
 export function getSceneDef(id: SceneTabId): SceneTabDef | undefined {
   return SCENE_TAB_REGISTRY.find(d => d.id === id);
 }
+
+/** Static singleton scene def for the panel-view scene. */
+export const PANEL_VIEW_SCENE_DEF: SceneTabDef = SCENE_TAB_REGISTRY.find(d => d.id === 'panel-view')!;
 
 /** Dynamic scene def for a MiniApp tab (used by SceneBar and useSceneManager). */
 export function getMiniAppSceneDef(appId: string, appName?: string): SceneTabDef {

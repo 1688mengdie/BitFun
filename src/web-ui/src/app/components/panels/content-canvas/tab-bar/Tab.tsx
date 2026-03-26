@@ -4,7 +4,7 @@
  */
 
 import React, { useCallback, useState } from 'react';
-import { X, Pin, Split } from 'lucide-react';
+import { X, Pin, Split, ExternalLink } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Tooltip } from '@/component-library';
 import type { CanvasTab, EditorGroupId, TabState } from '../types';
@@ -30,6 +30,8 @@ export interface TabProps {
   onDragEnd: () => void;
   /** Whether being dragged */
   isDragging?: boolean;
+  /** Pop out as independent scene */
+  onPopOut?: () => void;
 }
 
 /**
@@ -57,6 +59,7 @@ export const Tab: React.FC<TabProps> = ({
   onDragStart,
   onDragEnd,
   isDragging = false,
+  onPopOut,
 }) => {
   const { t } = useTranslation('components');
   const [isHovered, setIsHovered] = useState(false);
@@ -92,6 +95,12 @@ export const Tab: React.FC<TabProps> = ({
     e.stopPropagation();
     onPin();
   }, [onPin]);
+
+  // Handle pop out click
+  const handlePopOutClick = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    onPopOut?.();
+  }, [onPopOut]);
 
   // Handle drag start
   const handleDragStart = useCallback((e: React.DragEvent) => {
@@ -164,6 +173,18 @@ export const Tab: React.FC<TabProps> = ({
           <span className="canvas-tab__dirty-indicator" title={t('tabs.unsaved')}>
             ●
           </span>
+        )}
+
+        {/* Pop out button */}
+        {showCloseButton && onPopOut && (
+          <Tooltip content={t('tabs.popOut', 'Pop out as scene')}>
+            <button
+              className="canvas-tab__popout-btn"
+              onClick={handlePopOutClick}
+            >
+              <ExternalLink size={12} />
+            </button>
+          </Tooltip>
         )}
 
         {/* Close button */}
