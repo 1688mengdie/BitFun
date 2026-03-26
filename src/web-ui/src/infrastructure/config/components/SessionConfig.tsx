@@ -520,7 +520,12 @@ const SessionConfig: React.FC = () => {
                   <span className="bitfun-func-agent-config__hint">{computerUseNote}</span>
                 </ConfigPageRow>
               ) : null}
-              <ConfigPageRow label={t('computerUse.accessibility')} align="center" balanced>
+              <ConfigPageRow
+                label={t('computerUse.accessibility')}
+                description={t('computerUse.accessibilityDesc')}
+                align="center"
+                balanced
+              >
                 <div
                   className="bitfun-func-agent-config__row-control"
                   style={{
@@ -570,7 +575,12 @@ const SessionConfig: React.FC = () => {
                   </Button>
                 </div>
               </ConfigPageRow>
-              <ConfigPageRow label={t('computerUse.screenCapture')} align="center" balanced>
+              <ConfigPageRow
+                label={t('computerUse.screenCapture')}
+                description={t('computerUse.screenCaptureDesc')}
+                align="center"
+                balanced
+              >
                 <div
                   className="bitfun-func-agent-config__row-control"
                   style={{

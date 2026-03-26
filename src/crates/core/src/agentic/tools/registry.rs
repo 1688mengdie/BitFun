@@ -135,6 +135,9 @@ impl ToolRegistry {
         self.register_tool(Arc::new(InitMiniAppTool::new()));
 
         self.register_tool(Arc::new(ComputerUseTool::new()));
+        self.register_tool(Arc::new(ComputerUseMousePreciseTool::new()));
+        self.register_tool(Arc::new(ComputerUseMouseStepTool::new()));
+        self.register_tool(Arc::new(ComputerUseMouseClickTool::new()));
     }
 
     /// Register a single tool

@@ -28,6 +28,11 @@ impl ClawMode {
                 "SessionHistory".to_string(),
                 "Cron".to_string(),
                 "ComputerUse".to_string(),
+                // Split computer-use tools must be allowlisted here; otherwise the pipeline rejects them
+                // ("Tool 'ComputerUseMousePrecise' is not in the allowed list") and the model falls back to ComputerUse-only + vision.
+                "ComputerUseMousePrecise".to_string(),
+                "ComputerUseMouseStep".to_string(),
+                "ComputerUseMouseClick".to_string(),
             ],
         }
     }

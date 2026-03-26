@@ -2,10 +2,15 @@
 
 use async_trait::async_trait;
 use bitfun_core::agentic::tools::computer_use_host::{
-    ComputerScreenshot, ComputerUseHost, ComputerUseImageContentRect,
+    clamp_point_crop_half_extent, ComputerScreenshot, ComputerUseHost, ComputerUseImageContentRect,
     ComputerUseNavigateQuadrant, ComputerUseNavigationRect, ComputerUsePermissionSnapshot,
-    ComputerUseScreenshotParams, ComputerUseScreenshotRefinement, ScreenshotCropCenter,
+    ComputerUseScreenshotParams, ComputerUseScreenshotRefinement, ComputerUseSessionSnapshot,
+    ScreenshotCropCenter, UiElementLocateQuery, UiElementLocateResult,
     COMPUTER_USE_QUADRANT_CLICK_READY_MAX_LONG_EDGE, COMPUTER_USE_QUADRANT_EDGE_EXPAND_PX,
+};
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+use bitfun_core::agentic::tools::computer_use_host::{
+    ComputerUseForegroundApplication, ComputerUsePointerGlobal,
 };
 use bitfun_core::util::errors::{BitFunError, BitFunResult};
 use enigo::{
@@ -17,6 +22,7 @@ use image::{DynamicImage, Rgb, RgbImage};
 use log::warn;
 use resvg::tiny_skia::{Pixmap, Transform};
 use resvg::usvg;
+#[cfg(target_os = "macos")]
 use screenshots::display_info::DisplayInfo;
 use screenshots::Screen;
 use std::sync::{Mutex, OnceLock};
@@ -466,9 +472,6 @@ fn compose_computer_use_frame(
 /// increase request payload size; if the API rejects the image, lower quality or split workflows may be needed.
 const JPEG_QUALITY: u8 = 75;
 
-/// Half extent from the crop center in **native** capture pixels (target region up to 500×500).
-const POINT_CROP_HALF_PX: u32 = 250;
-
 #[inline]
 fn clamp_center_to_native(cx: u32, cy: u32, nw: u32, nh: u32) -> (u32, u32) {
     if nw == 0 || nh == 0 {
@@ -479,17 +482,24 @@ fn clamp_center_to_native(cx: u32, cy: u32, nw: u32, nh: u32) -> (u32, u32) {
     (cx, cy)
 }
 
-/// Top-left and size of the native crop rectangle around `(cx, cy)`, clamped to the bitmap (≤500×500 when the display is large enough).
-fn crop_rect_around_point_native(cx: u32, cy: u32, nw: u32, nh: u32) -> (u32, u32, u32, u32) {
+/// Top-left and size of the native crop rectangle around `(cx, cy)`, clamped to the bitmap.
+/// `half_px` is the distance from center to each edge (see [`clamp_point_crop_half_extent`]).
+fn crop_rect_around_point_native(
+    cx: u32,
+    cy: u32,
+    nw: u32,
+    nh: u32,
+    half_px: u32,
+) -> (u32, u32, u32, u32) {
     let (cx, cy) = clamp_center_to_native(cx, cy, nw, nh);
     if nw == 0 || nh == 0 {
         return (0, 0, 1, 1);
     }
-    let edge = POINT_CROP_HALF_PX.saturating_mul(2);
+    let edge = half_px.saturating_mul(2);
     let tw = edge.min(nw).max(1);
     let th = edge.min(nh).max(1);
-    let mut x0 = cx.saturating_sub(POINT_CROP_HALF_PX);
-    let mut y0 = cy.saturating_sub(POINT_CROP_HALF_PX);
+    let mut x0 = cx.saturating_sub(half_px);
+    let mut y0 = cy.saturating_sub(half_px);
     if x0.saturating_add(tw) > nw {
         x0 = nw.saturating_sub(tw);
     }
@@ -798,6 +808,122 @@ impl DesktopComputerUseHost {
         }
     }
 
+    /// Best-effort foreground app + pointer; safe to call from `spawn_blocking`.
+    fn collect_session_snapshot_sync() -> ComputerUseSessionSnapshot {
+        #[cfg(target_os = "macos")]
+        {
+            return Self::session_snapshot_macos();
+        }
+        #[cfg(target_os = "windows")]
+        {
+            return Self::session_snapshot_windows();
+        }
+        #[cfg(target_os = "linux")]
+        {
+            return Self::session_snapshot_linux();
+        }
+        #[cfg(not(any(
+            target_os = "macos",
+            target_os = "windows",
+            target_os = "linux"
+        )))]
+        {
+            ComputerUseSessionSnapshot::default()
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn session_snapshot_macos() -> ComputerUseSessionSnapshot {
+        let pointer = macos::quartz_mouse_location().ok().map(|(x, y)| ComputerUsePointerGlobal { x, y });
+        let foreground = Self::macos_foreground_application();
+        ComputerUseSessionSnapshot {
+            foreground_application: foreground,
+            pointer_global: pointer,
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn macos_foreground_application() -> Option<ComputerUseForegroundApplication> {
+        let out = std::process::Command::new("/usr/bin/osascript")
+            .args(["-e", r#"tell application "System Events"
+  set p to first process whose frontmost is true
+  return (unix id of p as text) & "|" & (name of p) & "|" & (try (bundle identifier of p as text) on error "" end try)
+end tell"#])
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let s = String::from_utf8_lossy(&out.stdout);
+        let parts: Vec<&str> = s.trim().splitn(3, '|').collect();
+        if parts.len() < 2 {
+            return None;
+        }
+        let pid = parts[0].trim().parse::<i32>().ok()?;
+        let name = parts[1].trim();
+        let bundle = parts.get(2).map(|x| x.trim()).filter(|x| !x.is_empty());
+        Some(ComputerUseForegroundApplication {
+            name: Some(name.to_string()),
+            bundle_id: bundle.map(|b| b.to_string()),
+            process_id: Some(pid),
+        })
+    }
+
+    #[cfg(target_os = "windows")]
+    fn session_snapshot_windows() -> ComputerUseSessionSnapshot {
+        use windows::Win32::Foundation::POINT;
+        use windows::Win32::UI::WindowsAndMessaging::{
+            GetCursorPos, GetForegroundWindow, GetWindowTextW, GetWindowThreadProcessId,
+        };
+
+        unsafe {
+            let mut pt = POINT::default();
+            let pointer = if GetCursorPos(&mut pt).is_ok() {
+                Some(ComputerUsePointerGlobal {
+                    x: pt.x as f64,
+                    y: pt.y as f64,
+                })
+            } else {
+                None
+            };
+
+            let hwnd = GetForegroundWindow();
+            let foreground = if hwnd.is_invalid() {
+                None
+            } else {
+                let mut pid: u32 = 0;
+                GetWindowThreadProcessId(hwnd, Some(&mut pid));
+                let mut buf = [0u16; 512];
+                let n = GetWindowTextW(hwnd, &mut buf) as usize;
+                let title = if n > 0 {
+                    String::from_utf16_lossy(&buf[..n.min(512)])
+                } else {
+                    String::new()
+                };
+                Some(ComputerUseForegroundApplication {
+                    name: if title.is_empty() {
+                        None
+                    } else {
+                        Some(title)
+                    },
+                    bundle_id: None,
+                    process_id: Some(pid as i32),
+                })
+            };
+
+            ComputerUseSessionSnapshot {
+                foreground_application: foreground,
+                pointer_global: pointer,
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn session_snapshot_linux() -> ComputerUseSessionSnapshot {
+        // Best-effort: no standard API across Wayland/X11 without extra deps.
+        ComputerUseSessionSnapshot::default()
+    }
+
     fn refinement_from_shot(shot: &ComputerScreenshot) -> ComputerUseScreenshotRefinement {
         use ComputerUseScreenshotRefinement as R;
         if let Some(c) = shot.screenshot_crop_center {
@@ -1072,8 +1198,10 @@ impl DesktopComputerUseHost {
             quadrant_navigation_click_ready,
             persist_nav_focus,
         ) = if let Some(center) = params.crop_center {
+            let half = clamp_point_crop_half_extent(params.point_crop_half_extent_native);
             let (ccx, ccy) = clamp_center_to_native(center.x, center.y, native_w, native_h);
-            let (x0, y0, tw, th) = crop_rect_around_point_native(center.x, center.y, native_w, native_h);
+            let (x0, y0, tw, th) =
+                crop_rect_around_point_native(center.x, center.y, native_w, native_h, half);
             let cropped = Self::crop_rgb(&full_frame, x0, y0, tw, th)?;
             let ox = origin_x + x0 as i32;
             let oy = origin_y + y0 as i32;
@@ -1235,8 +1363,9 @@ impl DesktopComputerUseHost {
 
         #[cfg(target_os = "macos")]
         let macos_map_geo = if let Some(center) = params.crop_center {
+            let half = clamp_point_crop_half_extent(params.point_crop_half_extent_native);
             let (x0, y0, _, _) =
-                crop_rect_around_point_native(center.x, center.y, native_w, native_h);
+                crop_rect_around_point_native(center.x, center.y, native_w, native_h, half);
             full_geo.with_crop(x0, y0)
         } else {
             full_geo.with_crop(ruler_origin_native_x, ruler_origin_native_y)
@@ -1289,6 +1418,10 @@ impl DesktopComputerUseHost {
 
         let jpeg_bytes = Self::encode_jpeg(&frame, JPEG_QUALITY)?;
 
+        let point_crop_half_extent_native = params.crop_center.map(|_| {
+            clamp_point_crop_half_extent(params.point_crop_half_extent_native)
+        });
+
         let shot = ComputerScreenshot {
             bytes: jpeg_bytes,
             mime_type: "image/jpeg".to_string(),
@@ -1302,6 +1435,7 @@ impl DesktopComputerUseHost {
             pointer_image_x,
             pointer_image_y,
             screenshot_crop_center,
+            point_crop_half_extent_native,
             navigation_native_rect: shot_navigation_rect,
             quadrant_navigation_click_ready,
             image_content_rect: Some(image_content_rect),
@@ -1586,6 +1720,44 @@ impl ComputerUseHost for DesktopComputerUseHost {
             .and_then(|g| *g)
     }
 
+    async fn locate_ui_element_screen_center(
+        &self,
+        query: UiElementLocateQuery,
+    ) -> BitFunResult<UiElementLocateResult> {
+        Self::ensure_input_automation_allowed()?;
+        #[cfg(target_os = "macos")]
+        {
+            return tokio::task::spawn_blocking(move || {
+                crate::computer_use::macos_ax_ui::locate_ui_element_center(&query)
+            })
+            .await
+            .map_err(|e| BitFunError::tool(e.to_string()))?;
+        }
+        #[cfg(target_os = "windows")]
+        {
+            return tokio::task::spawn_blocking(move || {
+                crate::computer_use::windows_ax_ui::locate_ui_element_center(&query)
+            })
+            .await
+            .map_err(|e| BitFunError::tool(e.to_string()))?;
+        }
+        #[cfg(target_os = "linux")]
+        {
+            return crate::computer_use::linux_ax_ui::locate_ui_element_center(query).await;
+        }
+        #[cfg(not(any(
+            target_os = "macos",
+            target_os = "windows",
+            target_os = "linux"
+        )))]
+        {
+            Err(BitFunError::tool(
+                "Native UI element (accessibility) lookup is not available on this platform."
+                    .to_string(),
+            ))
+        }
+    }
+
     fn map_image_coords_to_pointer_f64(&self, x: i32, y: i32) -> BitFunResult<(f64, f64)> {
         let guard = self
             .last_pointer_map
@@ -1669,7 +1841,7 @@ impl ComputerUseHost for DesktopComputerUseHost {
                     .map_err(|e| BitFunError::tool(format!("lock: {}", e)))?;
                 let Some(map) = *guard else {
                     return Err(BitFunError::tool(
-                        "Run action screenshot first: on macOS, pointer_move_relative / pointer_nudge convert pixel deltas using the last capture scale."
+                        "Run action screenshot first: on macOS, pointer_move_relative / ComputerUseMouseStep convert pixel deltas using the last capture scale."
                             .to_string(),
                     ));
                 };
@@ -1773,6 +1945,7 @@ impl ComputerUseHost for DesktopComputerUseHost {
                     .iter()
                     .map(|s| Self::map_key(s))
                     .collect::<BitFunResult<_>>()?;
+                #[cfg(target_os = "macos")]
                 let chord_has_modifier = keys_for_job.iter().any(|s| {
                     matches!(
                         s.to_lowercase().as_str(),
@@ -1830,6 +2003,12 @@ impl ComputerUseHost for DesktopComputerUseHost {
         Ok(())
     }
 
+    async fn computer_use_session_snapshot(&self) -> ComputerUseSessionSnapshot {
+        tokio::task::spawn_blocking(Self::collect_session_snapshot_sync)
+            .await
+            .unwrap_or_else(|_| ComputerUseSessionSnapshot::default())
+    }
+
     fn computer_use_after_screenshot(&self) {
         if let Ok(mut g) = self.click_needs_fresh_screenshot.lock() {
             *g = false;
@@ -1862,7 +2041,7 @@ impl ComputerUseHost for DesktopComputerUseHost {
             }) => {}
             _ => {
                 return Err(BitFunError::tool(
-                    "Click refused: use a **fine** screenshot basis — either a **~500×500 point crop** (`screenshot_crop_center_x` / `y` in full-display native pixels) **or** keep drilling with `screenshot_navigate_quadrant` until `quadrant_navigation_click_ready` is true in the tool result, then `mouse_move` + `click`. Full-screen alone is not enough.".to_string(),
+                    "Click refused: use a **fine** screenshot basis — either a **~500×500 point crop** (`screenshot_crop_center_x` / `y` in full-display native pixels) **or** keep drilling with `screenshot_navigate_quadrant` until `quadrant_navigation_click_ready` is true in the tool result, then `ComputerUseMousePrecise` / `ComputerUseMouseStep` + `click`. Full-screen alone is not enough.".to_string(),
                 ));
             }
         }

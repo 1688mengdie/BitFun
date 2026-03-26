@@ -254,6 +254,19 @@ Usage notes:
         ))
     }
 
+    async fn description_with_context(
+        &self,
+        context: Option<&ToolUseContext>,
+    ) -> BitFunResult<String> {
+        let mut base = self.description().await?;
+        if context.and_then(|c| c.agent_type.as_deref()) == Some("Claw") {
+            base.push_str(
+                "\n\n**Claw (desktop automation):** Prefer this tool for anything achievable from the **workspace shell** (build, test, git, scripts, CLIs). On **macOS**, `open -a \"AppName\"` launches or foregrounds an app with fewer steps than GUI workflows. Use **`ComputerUse`** **`action: locate`** for **named** on-screen controls before guessing coordinates from **`action: screenshot`** alone.",
+            );
+        }
+        Ok(base)
+    }
+
     fn input_schema(&self) -> Value {
         json!({
             "type": "object",

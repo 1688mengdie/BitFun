@@ -756,7 +756,11 @@ impl ExecutionEngine {
                 agent_type,
                 allowed_tools.len()
             );
-            self.get_available_tools_and_definitions(&allowed_tools, context.workspace.as_ref())
+            self.get_available_tools_and_definitions(
+                &allowed_tools,
+                context.workspace.as_ref(),
+                &agent_type,
+            )
                 .await
         } else {
             (vec![], None)
@@ -1193,17 +1197,17 @@ impl ExecutionEngine {
         &self,
         mode_allowed_tools: &[String],
         workspace: Option<&crate::agentic::WorkspaceBinding>,
+        agent_type: &str,
     ) -> (Vec<String>, Option<Vec<ToolDefinition>>) {
         // Use get_all_registered_tools to get all tools including MCP tools
         let all_tools = get_all_registered_tools().await;
 
         // Filter tools: 1) Check if enabled 2) Check if mode allows
-        let mut enabled_tool_names = Vec::new();
         let mut tool_definitions = Vec::new();
         let description_context = crate::agentic::tools::framework::ToolUseContext {
             tool_call_id: None,
             message_id: None,
-            agent_type: None,
+            agent_type: Some(agent_type.to_string()),
             session_id: None,
             dialog_turn_id: None,
             workspace: workspace.cloned(),
@@ -1226,8 +1230,6 @@ impl ExecutionEngine {
             let tool_name = tool.name().to_string();
             // MCP tools are automatically allowed (all tools starting with mcp_)
             if mode_allowed_tools.contains(&tool_name) || tool_name.starts_with("mcp_") {
-                enabled_tool_names.push(tool_name);
-
                 let description = tool
                     .description_with_context(Some(&description_context))
                     .await
@@ -1241,31 +1243,35 @@ impl ExecutionEngine {
             }
         }
 
-        let tool_ordering = {
-            let ordering = vec![
-                "Task",
-                "Bash",
-                "Glob",
-                "Grep",
-                "Read",
-                "Edit",
-                "Write",
-                "Delete",
-                "WebFetch",
-                "WebSearch",
-                "TodoWrite",
-                "Skill",
-                "Log",
-                "MermaidInteractive",
-            ];
-            let num_tools = ordering.len();
-            ordering
-                .into_iter()
-                .map(|s| s.to_string())
-                .zip(1..=num_tools)
-                .collect::<HashMap<String, usize>>()
-        };
+        // Order tools for the model API: terminal → file-ish tools → **`ComputerUse`** (locate /
+        // screenshot / keys) **before** split mouse tools so the list matches “sense then act”.
+        let tool_ordering: HashMap<String, usize> = [
+            ("Task", 1),
+            ("Bash", 2),
+            ("TerminalControl", 3),
+            ("Glob", 4),
+            ("Grep", 5),
+            ("Read", 6),
+            ("Edit", 7),
+            ("Write", 8),
+            ("Delete", 9),
+            ("WebFetch", 10),
+            ("WebSearch", 11),
+            ("TodoWrite", 12),
+            ("Skill", 13),
+            ("Log", 14),
+            ("MermaidInteractive", 15),
+            ("ComputerUse", 16),
+            ("ComputerUseMousePrecise", 17),
+            ("ComputerUseMouseStep", 18),
+            ("ComputerUseMouseClick", 19),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
         tool_definitions.sort_by_key(|tool| tool_ordering.get(&tool.name).unwrap_or(&100));
+
+        let enabled_tool_names: Vec<String> = tool_definitions.iter().map(|d| d.name.clone()).collect();
 
         (enabled_tool_names, Some(tool_definitions))
     }

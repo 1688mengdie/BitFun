@@ -1,5 +1,3 @@
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
-use base64::Engine as _;
 use tauri::{Runtime, Webview};
 
 use super::types::PrintOptions;
@@ -26,6 +24,8 @@ mod imp {
     use std::time::Duration;
 
     use super::*;
+    use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+    use base64::Engine as _;
     use block2::RcBlock;
     use objc2::runtime::AnyObject;
     use objc2::MainThreadMarker;
@@ -198,6 +198,8 @@ mod imp {
     use std::time::Duration;
 
     use super::*;
+    use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+    use base64::Engine as _;
     use tokio::sync::oneshot;
     use webview2_com::Microsoft::Web::WebView2::Win32::{
         ICoreWebView2CapturePreviewCompletedHandler,
