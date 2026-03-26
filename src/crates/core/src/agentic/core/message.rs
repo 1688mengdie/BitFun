@@ -62,6 +62,8 @@ pub struct MessageMetadata {
     pub thinking_signature: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub semantic_kind: Option<MessageSemanticKind>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compression_payload: Option<CompressionPayload>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -74,6 +76,85 @@ pub enum MessageSemanticKind {
     /// Full-screen snapshot appended after mutating ComputerUse tool results within the same turn;
     /// **included** in the next model request so the agent sees the desktop without calling screenshot again.
     ComputerUsePostActionSnapshot,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CompressionPayload {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub entries: Vec<CompressionEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum CompressionEntry {
+    ModelSummary {
+        text: String,
+    },
+    Turn {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        turn_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        messages: Vec<CompressedMessage>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        todo: Option<CompressedTodoSnapshot>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompressedMessage {
+    pub role: CompressedMessageRole,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_calls: Vec<CompressedToolCall>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompressedMessageRole {
+    User,
+    Assistant,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompressedToolCall {
+    pub tool_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub arguments: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub is_error: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompressedTodoSnapshot {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub todos: Vec<CompressedTodoItem>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompressedTodoItem {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    pub content: String,
+    pub status: String,
+}
+
+impl CompressionPayload {
+    pub fn from_summary(text: String) -> Self {
+        Self {
+            entries: vec![CompressionEntry::ModelSummary { text }],
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 impl From<Message> for AIMessage {
@@ -375,6 +456,12 @@ impl Message {
 
     pub fn with_semantic_kind(mut self, semantic_kind: MessageSemanticKind) -> Self {
         self.metadata.semantic_kind = Some(semantic_kind);
+        self
+    }
+
+    pub fn with_compression_payload(mut self, compression_payload: CompressionPayload) -> Self {
+        self.metadata.compression_payload = Some(compression_payload);
+        self.metadata.tokens = None;
         self
     }
 

@@ -487,9 +487,9 @@ impl ExecutionEngine {
             .compress_turns(session_id, context_window, turn_index_to_keep, turns)
             .await
         {
-            Ok(compressed_messages) => {
+            Ok(compression_result) => {
                 let mut new_messages = vec![system_prompt_message];
-                new_messages.extend(compressed_messages);
+                new_messages.extend(compression_result.messages);
                 // Update session compression state
                 session.compression_state.increment_compression_count();
 
@@ -526,7 +526,7 @@ impl ExecutionEngine {
                         tokens_after: compressed_tokens,
                         compression_ratio: (compressed_tokens as f64) / (current_tokens as f64),
                         duration_ms,
-                        has_summary: true,
+                        has_summary: compression_result.has_model_summary,
                         subagent_parent_info: event_subagent_parent_info.clone(),
                     },
                     EventPriority::Normal,

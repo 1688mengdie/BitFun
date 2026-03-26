@@ -2,8 +2,12 @@
 //!
 //! Responsible for managing session context compression
 
+use super::fallback::{
+    build_structured_compression_reminder, CompressionFallbackOptions, CompressionReminder,
+};
 use crate::agentic::core::{
-    render_system_reminder, Message, MessageHelper, MessageRole, MessageSemanticKind,
+    render_system_reminder, CompressionPayload, Message, MessageHelper, MessageRole,
+    MessageSemanticKind,
 };
 use crate::agentic::persistence::PersistenceManager;
 use crate::infrastructure::ai::{get_global_ai_client_factory, AIClient};
@@ -21,6 +25,11 @@ pub struct CompressionConfig {
     pub keep_turns_ratio: f32,
     pub keep_last_turn_ratio: f32,
     pub single_request_max_tokens_ratio: f32,
+    pub fallback_max_tokens_ratio: f32,
+    pub fallback_user_chars: usize,
+    pub fallback_assistant_chars: usize,
+    pub fallback_tool_arg_chars: usize,
+    pub fallback_tool_command_chars: usize,
 }
 
 impl Default for CompressionConfig {
@@ -30,6 +39,11 @@ impl Default for CompressionConfig {
             keep_turns_ratio: 0.3,
             keep_last_turn_ratio: 0.4,
             single_request_max_tokens_ratio: 0.7,
+            fallback_max_tokens_ratio: 0.25,
+            fallback_user_chars: 1000,
+            fallback_assistant_chars: 1000,
+            fallback_tool_arg_chars: 100,
+            fallback_tool_command_chars: 100,
         }
     }
 }
@@ -44,6 +58,12 @@ impl TurnWithTokens {
     fn new(messages: Vec<Message>, tokens: usize) -> Self {
         Self { messages, tokens }
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct CompressionResult {
+    pub messages: Vec<Message>,
+    pub has_model_summary: bool,
 }
 
 /// Context compression manager
@@ -206,15 +226,21 @@ impl CompressionManager {
         context_window: usize,
         turn_index_to_keep: usize,
         mut turns: Vec<TurnWithTokens>,
-    ) -> BitFunResult<Vec<Message>> {
+    ) -> BitFunResult<CompressionResult> {
         if turns.is_empty() {
             debug!("No turns need compression");
-            return Ok(Vec::new());
+            return Ok(CompressionResult {
+                messages: Vec::new(),
+                has_model_summary: false,
+            });
         }
 
         let Some(last_turn_messages) = turns.last().map(|turn| &turn.messages) else {
             debug!("No turns available after split, skipping last-turn extraction");
-            return Ok(Vec::new());
+            return Ok(CompressionResult {
+                messages: Vec::new(),
+                has_model_summary: false,
+            });
         };
         let last_user_message = {
             last_turn_messages
@@ -234,28 +260,15 @@ impl CompressionManager {
         let turns_to_keep = turns.split_off(turn_index_to_keep);
 
         let mut compressed_messages = Vec::new();
+        let mut has_model_summary = false;
         if !turns.is_empty() {
-            // Dynamically get Agent client for generating summary
-            let ai_client_factory = get_global_ai_client_factory().await.map_err(|e| {
-                BitFunError::AIClient(format!("Failed to get AI client factory: {}", e))
-            })?;
-            let ai_client = ai_client_factory
-                .get_client_by_func_agent("compression")
-                .await
-                .map_err(|e| BitFunError::AIClient(format!("Failed to get AI client: {}", e)))?;
-
-            let summary = self
-                .execute_compression(ai_client, turns, context_window)
+            let reminder = self
+                .execute_compression_with_fallback(turns, context_window)
                 .await?;
-            trace!("Compression summary: {}", summary);
+            trace!("Compression reminder generated");
+            has_model_summary = reminder.used_model_summary;
 
-            compressed_messages.push(
-                Message::user(render_system_reminder(&format!(
-                    "Previous conversation is summarized below:\n{}",
-                    summary
-                )))
-                .with_semantic_kind(MessageSemanticKind::InternalReminder),
-            );
+            compressed_messages.push(self.create_reminder_message(reminder));
         }
 
         if !turns_to_keep.is_empty() {
@@ -305,7 +318,78 @@ impl CompressionManager {
             }
         }
 
-        Ok(compressed_messages)
+        Ok(CompressionResult {
+            messages: compressed_messages,
+            has_model_summary,
+        })
+    }
+
+    fn create_reminder_message(&self, reminder: CompressionReminder) -> Message {
+        Message::user(render_system_reminder(&reminder.model_text))
+            .with_semantic_kind(MessageSemanticKind::InternalReminder)
+            .with_compression_payload(reminder.payload)
+    }
+
+    async fn execute_compression_with_fallback(
+        &self,
+        turns_to_compress: Vec<TurnWithTokens>,
+        context_window: usize,
+    ) -> BitFunResult<CompressionReminder> {
+        let summary_result = match get_global_ai_client_factory().await {
+            Ok(ai_client_factory) => match ai_client_factory
+                .get_client_by_func_agent("compression")
+                .await
+            {
+                Ok(ai_client) => {
+                    self.execute_compression(ai_client, turns_to_compress.clone(), context_window)
+                        .await
+                }
+                Err(err) => Err(BitFunError::AIClient(format!(
+                    "Failed to get AI client: {}",
+                    err
+                ))),
+            },
+            Err(err) => Err(BitFunError::AIClient(format!(
+                "Failed to get AI client factory: {}",
+                err
+            ))),
+        };
+
+        match summary_result {
+            Ok(summary) => {
+                trace!("Compression summary: {}", summary);
+                Ok(CompressionReminder {
+                    model_text: format!("Previous conversation is summarized below:\n{}", summary),
+                    payload: CompressionPayload::from_summary(summary),
+                    used_model_summary: true,
+                })
+            }
+            Err(err) => {
+                warn!(
+                    "Model-based compression failed, falling back to structured local compression: {}",
+                    err
+                );
+                let reminder = build_structured_compression_reminder(
+                    turns_to_compress
+                        .into_iter()
+                        .map(|turn| turn.messages)
+                        .collect(),
+                    &self.build_fallback_options(context_window),
+                );
+                Ok(reminder)
+            }
+        }
+    }
+
+    fn build_fallback_options(&self, context_window: usize) -> CompressionFallbackOptions {
+        CompressionFallbackOptions {
+            max_tokens: ((context_window as f32 * self.config.fallback_max_tokens_ratio) as usize)
+                .max(256),
+            user_chars: self.config.fallback_user_chars,
+            assistant_chars: self.config.fallback_assistant_chars,
+            tool_arg_chars: self.config.fallback_tool_arg_chars,
+            tool_command_chars: self.config.fallback_tool_command_chars,
+        }
     }
 
     async fn execute_compression(
@@ -450,7 +534,7 @@ Be thorough and precise. Do not lose important technical details from either the
         system_message_for_summary: Message,
         messages: Vec<Message>,
     ) -> BitFunResult<String> {
-        self.generate_summary_with_retry(ai_client, system_message_for_summary, messages, 3)
+        self.generate_summary_with_retry(ai_client, system_message_for_summary, messages, 1)
             .await
     }
 
