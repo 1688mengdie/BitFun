@@ -164,6 +164,46 @@ impl BaselineCache {
 
         Ok(baseline_id)
     }
+
+    /// Creates an empty baseline for files that are first introduced during the session.
+    pub async fn create_empty(
+        &self,
+        file_path: &Path,
+        empty_content_hash: &str,
+        content_path: &Path,
+    ) -> SnapshotResult<String> {
+        let baseline_id = format!("baseline_empty_{}", Uuid::new_v4());
+
+        if !content_path.exists() {
+            fs::write(content_path, [])?;
+        }
+
+        let baseline_metadata = FileSnapshot {
+            snapshot_id: baseline_id.clone(),
+            file_path: file_path.to_path_buf(),
+            content_hash: empty_content_hash.to_string(),
+            snapshot_type: SnapshotType::Baseline,
+            compressed_content: Vec::new(),
+            timestamp: SystemTime::now(),
+            metadata: FileMetadata {
+                size: 0,
+                permissions: None,
+                last_modified: SystemTime::now(),
+                encoding: "utf-8".to_string(),
+            },
+        };
+
+        let baseline_meta_path = self.baseline_dir.join(format!("{}.json", baseline_id));
+        let metadata_json = serde_json::to_string_pretty(&baseline_metadata)?;
+        fs::write(&baseline_meta_path, metadata_json)?;
+
+        {
+            let mut cache = self.cache.write().await;
+            cache.insert(file_path.to_path_buf(), Some(baseline_id.clone()));
+        }
+
+        Ok(baseline_id)
+    }
 }
 
 /// Simplified file snapshot system
@@ -302,11 +342,18 @@ impl FileSnapshotSystem {
         let content_hash = self.calculate_content_hash(&content);
 
         if self.dedup_enabled && self.hash_to_path.contains_key(&content_hash) {
+            if let Some(snapshot_id) = self.find_snapshot_by_hash(&content_hash) {
+                debug!(
+                    "Found duplicate content, reusing existing snapshot: content_hash={}",
+                    content_hash
+                );
+                return Ok(snapshot_id);
+            }
+
             debug!(
-                "Found duplicate content, reusing existing snapshot: content_hash={}",
+                "Found reusable content without active snapshot metadata, creating new snapshot metadata: content_hash={}",
                 content_hash
             );
-            return Ok(self.find_snapshot_by_hash(&content_hash)?);
         }
 
         let optimized_content = self.optimize_content(&content);
@@ -473,17 +520,13 @@ impl FileSnapshotSystem {
     }
 
     /// Finds a snapshot ID by hash.
-    fn find_snapshot_by_hash(&self, content_hash: &str) -> SnapshotResult<String> {
+    fn find_snapshot_by_hash(&self, content_hash: &str) -> Option<String> {
         for (snapshot_id, snapshot) in &self.active_snapshots {
             if snapshot.content_hash == content_hash {
-                return Ok(snapshot_id.clone());
+                return Some(snapshot_id.clone());
             }
         }
-
-        Err(SnapshotError::SnapshotNotFound(format!(
-            "hash: {}",
-            content_hash
-        )))
+        None
     }
 
     /// Loads snapshot metadata from disk (without using in-memory cache).
@@ -775,6 +818,21 @@ impl FileSnapshotSystem {
 
         self.baseline_cache
             .create_from_snapshot(file_path, before_snapshot_id, &self.active_snapshots)
+            .await
+    }
+
+    /// Creates an empty baseline for files that did not exist before the session.
+    pub async fn create_empty_baseline(&mut self, file_path: &Path) -> SnapshotResult<String> {
+        let empty_content_hash = self.calculate_content_hash(&[]);
+        let content_path = self.get_content_path(&empty_content_hash);
+
+        if !self.hash_to_path.contains_key(&empty_content_hash) {
+            self.hash_to_path
+                .insert(empty_content_hash.clone(), content_path.clone());
+        }
+
+        self.baseline_cache
+            .create_empty(file_path, &empty_content_hash, &content_path)
             .await
     }
 

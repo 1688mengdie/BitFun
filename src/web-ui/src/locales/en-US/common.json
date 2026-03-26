@@ -741,6 +741,7 @@
   },
   "tabs": {
     "configCenter": "Config Center",
+    "diff": "Diff",
     "fixPreview": "Fix Preview",
     "gitDiff": "Git Diff",
     "gitSettings": "Git Settings",

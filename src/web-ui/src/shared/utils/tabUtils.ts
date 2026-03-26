@@ -130,15 +130,27 @@ export function createDiffEditorTab(
   mode: TabTargetMode = 'agent',
   repositoryPath?: string,
   revealLine?: number,
-  replaceExisting?: boolean
+  replaceExisting?: boolean,
+  options?: {
+    titleKind?: 'git-diff' | 'diff' | 'fix-preview';
+    duplicateKeyPrefix?: 'git-diff' | 'diff' | 'fix-diff';
+  }
 ): void {
+  const titleKind = options?.titleKind ?? (repositoryPath ? 'git-diff' : 'fix-preview');
+  const duplicateKeyPrefix = options?.duplicateKeyPrefix ?? (repositoryPath ? 'git-diff' : 'fix-diff');
   const duplicateKey = repositoryPath
-    ? `git-diff:${repositoryPath}:${filePath}`
-    : `fix-diff:${filePath}`;
+    ? `${duplicateKeyPrefix}:${repositoryPath}:${filePath}`
+    : `${duplicateKeyPrefix}:${filePath}`;
+  const titleSuffix =
+    titleKind === 'git-diff'
+      ? i18nService.getT()('common:tabs.gitDiff')
+      : titleKind === 'diff'
+        ? i18nService.getT()('common:tabs.diff')
+        : i18nService.getT()('common:tabs.fixPreview');
 
   createTab({
     type: 'diff-code-editor',
-    title: `${fileName} - ${repositoryPath ? i18nService.getT()('common:tabs.gitDiff') : i18nService.getT()('common:tabs.fixPreview')}`,
+    title: `${fileName} - ${titleSuffix}`,
     data: {
       fileName,
       filePath,

@@ -239,6 +239,10 @@ export const SessionFileModificationsBar: React.FC<SessionFileModificationsBarPr
 
     try {
       const diffData = await snapshotAPI.getOperationDiff(sessionId, filePath);
+      if ((diffData.originalContent || '') === (diffData.modifiedContent || '')) {
+        log.debug('Skipping empty session diff', { filePath, sessionId });
+        return;
+      }
       const fileName = filePath.split(/[/\\]/).pop() || filePath;
 
       window.dispatchEvent(new CustomEvent('expand-right-panel'));
@@ -251,7 +255,13 @@ export const SessionFileModificationsBar: React.FC<SessionFileModificationsBarPr
           diffData.modifiedContent || '',
           false,
           'agent',
-          currentWorkspace?.rootPath
+          currentWorkspace?.rootPath,
+          undefined,
+          false,
+          {
+            titleKind: 'diff',
+            duplicateKeyPrefix: 'diff'
+          }
         );
       }, 250);
     } catch (error) {
