@@ -322,38 +322,56 @@ export const FileOperationToolCard: React.FC<FileOperationToolCardProps> = ({
   }, [currentFilePath, onOpenInEditor, isFailed, sessionId, status, handleOpenInCodeEditor, toolItem.toolName]);
 
   const handleOpenBaselineDiff = useCallback(async () => {
-    if (!currentFile || !currentWorkspace) {
-      log.warn('Cannot open Baseline Diff: missing required info', { hasFile: !!currentFile, hasWorkspace: !!currentWorkspace });
+    if (!currentFilePath || !currentWorkspace || !sessionId) {
+      log.warn('Cannot open diff: missing required info', {
+        hasFilePath: !!currentFilePath,
+        hasWorkspace: !!currentWorkspace,
+        hasSessionId: !!sessionId
+      });
       return;
     }
 
-    const fileName = currentFile.filePath.split(/[/\\]/).pop() || currentFile.filePath;
+    const diffFilePath = currentFile?.filePath || currentFilePath;
+    const fileName = diffFilePath.split(/[/\\]/).pop() || diffFilePath;
 
     try {
       const { snapshotAPI } = await import('../../infrastructure/api');
       
-      const diffData = await snapshotAPI.getBaselineSnapshotDiff(
-        currentFile.filePath,
+      const diffData = await snapshotAPI.getOperationDiff(
+        sessionId,
+        diffFilePath,
+        toolCall?.id,
         currentWorkspace.rootPath
       );
+
+      if ((diffData.originalContent || '') === (diffData.modifiedContent || '')) {
+        log.debug('Skipping empty baseline diff', { filePath: diffFilePath });
+        return;
+      }
 
       window.dispatchEvent(new CustomEvent('expand-right-panel'));
 
       setTimeout(() => {
         createDiffEditorTab(
-          currentFile.filePath,
+          diffFilePath,
           fileName,
           diffData.originalContent || '',
           diffData.modifiedContent || '',
           false,
           'agent',
-          currentWorkspace.rootPath
+          currentWorkspace.rootPath,
+          undefined,
+          false,
+          {
+            titleKind: 'diff',
+            duplicateKeyPrefix: 'diff'
+          }
         );
       }, 250);
     } catch (error) {
-      log.error('Failed to open Baseline Diff', { filePath: currentFile?.filePath, error });
+      log.error('Failed to open Baseline Diff', { filePath: currentFilePath, error });
     }
-  }, [currentFile, currentWorkspace]);
+  }, [currentFile, currentFilePath, currentWorkspace, sessionId, toolCall?.id]);
 
   const getToolIconInfo = () => {
     const iconMap: Record<string, { icon: React.ReactNode; className: string }> = {
@@ -426,7 +444,7 @@ export const FileOperationToolCard: React.FC<FileOperationToolCardProps> = ({
           )}
           
           
-          {!isDeleteTool && !isFailed && !isLoading && status === 'completed' && (
+          {!isDeleteTool && !isFailed && !isLoading && status === 'completed' && currentFilePath && (
             <div className="compact-actions" onClick={(e) => e.stopPropagation()}>
               <Tooltip content={t('toolCards.file.viewGitDiff')}>
                 <button
@@ -435,7 +453,7 @@ export const FileOperationToolCard: React.FC<FileOperationToolCardProps> = ({
                     e.stopPropagation();
                     handleOpenBaselineDiff();
                   }}
-                  disabled={!currentFile || !currentWorkspace}
+                  disabled={!currentFilePath || !currentWorkspace || !sessionId}
                 >
                   <GitBranch size={12} />
                 </button>

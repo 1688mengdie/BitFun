@@ -741,6 +741,7 @@
   },
   "tabs": {
     "configCenter": "配置中心",
+    "diff": "Diff",
     "fixPreview": "修复预览",
     "gitDiff": "Git Diff",
     "gitSettings": "Git 设置",

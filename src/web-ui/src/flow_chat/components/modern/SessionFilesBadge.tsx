@@ -239,6 +239,11 @@ export const SessionFilesBadge: React.FC<SessionFilesBadgeProps> = ({
 
     try {
       const diffData = await snapshotAPI.getOperationDiff(sessionId, filePath);
+      if ((diffData.originalContent || '') === (diffData.modifiedContent || '')) {
+        log.debug('Skipping empty session diff', { filePath, sessionId });
+        setIsExpanded(false);
+        return;
+      }
       const fileName = filePath.split(/[/\\]/).pop() || filePath;
 
       // Expand the right panel.
@@ -252,7 +257,13 @@ export const SessionFilesBadge: React.FC<SessionFilesBadgeProps> = ({
           diffData.modifiedContent || '',
           false,
           'agent',
-          currentWorkspace?.rootPath
+          currentWorkspace?.rootPath,
+          undefined,
+          false,
+          {
+            titleKind: 'diff',
+            duplicateKeyPrefix: 'diff'
+          }
         );
       }, 250);
 

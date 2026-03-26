@@ -130,9 +130,9 @@ impl SnapshotCore {
             None
         };
 
-        if let Some(before_id) = &before_snapshot_id {
-            if !self.snapshot_system.has_baseline(&file_path).await {
-                match self
+        if !self.snapshot_system.has_baseline(&file_path).await {
+            match &before_snapshot_id {
+                Some(before_id) => match self
                     .snapshot_system
                     .create_baseline_from_snapshot(&file_path, before_id)
                     .await
@@ -149,13 +149,30 @@ impl SnapshotCore {
                             file_path, e
                         );
                     }
+                },
+                None if operation_type == OperationType::Create => {
+                    match self.snapshot_system.create_empty_baseline(&file_path).await {
+                        Ok(baseline_id) => {
+                            debug!(
+                                "Created empty baseline snapshot for new file: file_path={:?} baseline_id={}",
+                                file_path, baseline_id
+                            );
+                        }
+                        Err(e) => {
+                            warn!(
+                                "Failed to create empty baseline snapshot: file_path={:?} error={}",
+                                file_path, e
+                            );
+                        }
+                    }
                 }
-            } else {
-                debug!(
-                    "Baseline snapshot already exists: file_path={:?}",
-                    file_path
-                );
+                None => {}
             }
+        } else {
+            debug!(
+                "Baseline snapshot already exists: file_path={:?}",
+                file_path
+            );
         }
 
         let session = self
@@ -431,6 +448,11 @@ impl SnapshotCore {
             return Err(SnapshotError::SessionNotFound(session_id.to_string()));
         };
 
+        let first_op_for_file = session
+            .all_operations_iter()
+            .find(|op| op.file_path == file_path);
+        let file_created_in_session = matches!(first_op_for_file, Some(op) if op.before_snapshot_id.is_none());
+
         let load_first_before = || async {
             let first_before = session
                 .all_operations_iter()
@@ -447,31 +469,39 @@ impl SnapshotCore {
                 .unwrap_or_default()
         };
 
-        let before = if let Some(baseline_id) = self
-            .snapshot_system
-            .get_baseline_snapshot_id(file_path)
-            .await
-        {
+        let before = if file_created_in_session {
             debug!(
-                "Using baseline snapshot for diff: file_path={:?} baseline_id={}",
-                file_path, baseline_id
+                "Using empty baseline for session-created file diff: file_path={:?} session_id={}",
+                file_path, session_id
             );
-            match self
+            String::new()
+        } else {
+            if let Some(baseline_id) = self
                 .snapshot_system
-                .get_snapshot_content(&baseline_id)
+                .get_baseline_snapshot_id(file_path)
                 .await
             {
-                Ok(content) => content,
-                Err(e) => {
-                    warn!(
-                        "Failed to read baseline snapshot, falling back to first before snapshot: baseline_id={} error={}",
-                        baseline_id, e
-                    );
-                    load_first_before().await
+                debug!(
+                    "Using baseline snapshot for diff: file_path={:?} baseline_id={}",
+                    file_path, baseline_id
+                );
+                match self
+                    .snapshot_system
+                    .get_snapshot_content(&baseline_id)
+                    .await
+                {
+                    Ok(content) => content,
+                    Err(e) => {
+                        warn!(
+                            "Failed to read baseline snapshot, falling back to first before snapshot: baseline_id={} error={}",
+                            baseline_id, e
+                        );
+                        load_first_before().await
+                    }
                 }
+            } else {
+                load_first_before().await
             }
-        } else {
-            load_first_before().await
         };
 
         let after = if file_path.exists() {
