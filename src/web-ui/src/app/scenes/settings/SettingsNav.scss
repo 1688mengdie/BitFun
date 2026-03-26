@@ -104,18 +104,6 @@
       color: var(--color-text-primary);
       background: var(--element-bg-soft);
       font-weight: 500;
-
-      &::before {
-        content: '';
-        position: absolute;
-        left: 0;
-        top: 50%;
-        transform: translateY(-50%);
-        width: 2px;
-        height: 16px;
-        background: var(--color-primary);
-        border-radius: 0 2px 2px 0;
-      }
     }
 
     &:focus-visible {
@@ -233,18 +221,6 @@
       color: var(--color-text-primary);
       background: var(--element-bg-soft);
       font-weight: 500;
-
-      &::before {
-        content: '';
-        position: absolute;
-        left: 0;
-        top: 50%;
-        transform: translateY(-50%);
-        width: 2px;
-        height: 16px;
-        background: var(--color-primary);
-        border-radius: 0 2px 2px 0;
-      }
     }
 
     &:focus-visible {

@@ -792,7 +792,8 @@
     "mermaidEditor": "Mermaid 图表",
     "insights": "洞察",
     "assistant": "助理",
-    "shell": "Shell"
+    "shell": "Shell",
+    "panelView": "面板视图"
   },
   "loading": {
     "scenes": "正在加载场景"

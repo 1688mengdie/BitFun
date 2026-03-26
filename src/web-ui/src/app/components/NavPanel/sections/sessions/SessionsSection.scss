@@ -63,7 +63,7 @@
     border: none;
     border-radius: 4px;
     background: transparent;
-    color: var(--color-text-secondary);
+    color: var(--color-text-primary);
     font-size: 13px;
     font-weight: 400;
     cursor: pointer;
@@ -137,17 +137,17 @@
 
   &__inline-item-icon {
     flex-shrink: 0;
-    opacity: 0.6;
+    opacity: 0.78;
     display: flex;
     align-items: center;
-    color: var(--color-text-muted);
+    color: color-mix(in srgb, var(--color-text-primary) 72%, var(--color-text-muted));
 
     &.is-code {
-      color: color-mix(in srgb, var(--color-primary) 70%, var(--color-text-muted));
+      color: color-mix(in srgb, var(--color-primary) 70%, var(--color-text-primary));
     }
 
     &.is-cowork {
-      color: color-mix(in srgb, var(--color-accent-500) 70%, var(--color-text-muted));
+      color: color-mix(in srgb, var(--color-accent-500) 70%, var(--color-text-primary));
     }
 
     &.is-running {

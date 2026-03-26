@@ -549,7 +549,7 @@ $_section-header-height: 24px;
     padding: 0 $size-gap-2;
     margin: 0 $size-gap-2;
     border-radius: 4px;
-    opacity: 0.72;
+    opacity: 0.92;
     transition: background $motion-fast $easing-standard,
                 opacity $motion-fast $easing-standard;
 
@@ -561,7 +561,7 @@ $_section-header-height: 24px;
         background: var(--element-bg-soft);
 
         .bitfun-nav-panel__section-label {
-          color: var(--color-text-secondary);
+          color: var(--color-text-primary);
         }
       }
 
@@ -582,7 +582,7 @@ $_section-header-height: 24px;
     font-weight: 700;
     letter-spacing: 0.06em;
     text-transform: uppercase;
-    color: var(--color-text-secondary);
+    color: var(--color-text-primary);
     flex: 1;
     white-space: nowrap;
     overflow: hidden;
@@ -627,7 +627,7 @@ $_section-header-height: 24px;
     border: none;
     border-radius: 10px;
     background: transparent;
-    color: var(--color-text-secondary);
+    color: var(--color-text-primary);
     cursor: pointer;
     transition: background $motion-fast $easing-standard,
                 color $motion-fast $easing-standard,
@@ -664,13 +664,6 @@ $_section-header-height: 24px;
     font-size: 13px;
     font-weight: 500;
     line-height: 1.1;
-    opacity: 0.72;
-    transition: opacity $motion-fast $easing-standard;
-
-    .bitfun-nav-panel__assistant-entry:hover &,
-    .bitfun-nav-panel__assistant-entry.is-active & {
-      opacity: 1;
-    }
   }
 
   &__miniapp-entry-wrap {
@@ -687,7 +680,7 @@ $_section-header-height: 24px;
     border: none;
     border-radius: 10px;
     background: transparent;
-    color: var(--color-text-secondary);
+    color: var(--color-text-primary);
     cursor: pointer;
     text-align: left;
     transition: background $motion-fast $easing-standard,
@@ -750,13 +743,6 @@ $_section-header-height: 24px;
     font-size: 13px;
     font-weight: 500;
     line-height: 1.1;
-    opacity: 0.72;
-    transition: opacity $motion-fast $easing-standard;
-
-    .bitfun-nav-panel__miniapp-entry:hover &,
-    .bitfun-nav-panel__miniapp-entry.is-active & {
-      opacity: 1;
-    }
   }
 
   &__miniapp-entry-apps {
@@ -798,7 +784,7 @@ $_section-header-height: 24px;
 
     &--more {
       background: color-mix(in srgb, var(--element-bg-medium) 92%, transparent);
-      color: var(--color-text-secondary);
+      color: var(--color-text-primary);
       font-size: 10px;
       font-weight: 700;
       letter-spacing: 0.01em;
@@ -1125,21 +1111,21 @@ $_section-header-height: 24px;
     border: none;
     border-radius: 4px;
     background: transparent;
-    color: var(--color-text-muted);
+    color: var(--color-text-primary);
     cursor: pointer;
     text-align: left;
     font-size: $font-size-sm;
     font-weight: 400;
     width: 100%;
     position: relative;
-    opacity: 0.4;
+    opacity: 1;
     transition: color $motion-fast $easing-standard,
                 background $motion-fast $easing-standard,
                 opacity $motion-fast $easing-standard;
 
     &:hover {
       opacity: 1;
-      color: var(--color-text-secondary);
+      color: var(--color-text-primary);
       background: var(--element-bg-soft);
     }
 
@@ -1191,12 +1177,12 @@ $_section-header-height: 24px;
     display: flex;
     align-items: center;
     flex-shrink: 0;
-    opacity: 0.5;
+    opacity: 0.78;
     transition: opacity $motion-fast $easing-standard,
                 color $motion-fast $easing-standard;
 
     .bitfun-nav-panel__item:hover & {
-      opacity: 0.75;
+      opacity: 1;
     }
   }
 
@@ -1846,7 +1832,7 @@ $_section-header-height: 24px;
   border: none;
   border-radius: $size-radius-base;
   background: transparent;
-  color: var(--color-text-secondary);
+  color: var(--color-text-primary);
   font-size: 12.5px;
   font-weight: 500;
   cursor: pointer;
@@ -1965,13 +1951,11 @@ $_section-header-height: 24px;
   transform-origin: center;
   transition: background $motion-fast $easing-standard,
               color $motion-fast $easing-standard,
-              box-shadow $motion-fast $easing-standard,
               transform $motion-fast $easing-standard;
 
   .bitfun-nav-panel__top-action-btn:hover & {
     background: var(--element-bg-strong);
     color: var(--color-primary);
-    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-primary) 28%, transparent);
     transform: scale(1.07);
   }
 }

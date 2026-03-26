@@ -21,6 +21,21 @@ import { createLogger } from '@/shared/utils/logger';
 
 const log = createLogger('ThemeService');
 
+/** Space-separated R G B for `rgba(var(--color-primary-rgb) / α)` in component styles. */
+function accentColorToRgbChannels(accent: string): string | null {
+  const trimmed = accent.trim();
+  const hex6 = /^#([0-9a-f]{6})$/i.exec(trimmed);
+  if (hex6) {
+    const n = parseInt(hex6[1], 16);
+    return `${(n >> 16) & 255} ${(n >> 8) & 255} ${n & 255}`;
+  }
+  const rgb = /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i.exec(trimmed);
+  if (rgb) {
+    return `${rgb[1]} ${rgb[2]} ${rgb[3]}`;
+  }
+  return null;
+}
+
  
 export class ThemeService {
   private themes: Map<ThemeId, ThemeConfig> = new Map();
@@ -314,6 +329,16 @@ export class ThemeService {
     Object.entries(colors.accent).forEach(([key, value]) => {
       root.style.setProperty(`--color-accent-${key}`, value);
     });
+
+    const primaryAccent = colors.accent[500];
+    const primaryHover = colors.accent[600];
+    root.style.setProperty('--color-primary', primaryAccent);
+    root.style.setProperty('--color-primary-hover', primaryHover);
+    root.style.setProperty('--color-accent', primaryAccent);
+    const primaryRgb = accentColorToRgbChannels(primaryAccent);
+    if (primaryRgb) {
+      root.style.setProperty('--color-primary-rgb', primaryRgb);
+    }
     
     
     if (colors.purple) {

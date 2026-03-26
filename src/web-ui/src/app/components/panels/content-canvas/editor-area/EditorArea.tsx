@@ -15,6 +15,7 @@ export interface EditorAreaProps {
   onInteraction?: (itemId: string, userInput: string) => Promise<void>;
   onTabCloseWithDirtyCheck?: (tabId: string, groupId: EditorGroupId) => Promise<boolean>;
   onTabCloseAllWithDirtyCheck?: (groupId: EditorGroupId) => Promise<boolean>;
+  disablePopOut?: boolean;
 }
 
 export const EditorArea: React.FC<EditorAreaProps> = ({
@@ -23,6 +24,7 @@ export const EditorArea: React.FC<EditorAreaProps> = ({
   onInteraction,
   onTabCloseWithDirtyCheck,
   onTabCloseAllWithDirtyCheck,
+  disablePopOut = false,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const topRowRef = useRef<HTMLDivElement>(null);
@@ -142,6 +144,7 @@ export const EditorArea: React.FC<EditorAreaProps> = ({
       onOpenMissionControl={groupId === 'primary' ? onOpenMissionControl : undefined}
       onCloseAllTabs={handleCloseAllTabs(groupId)}
       onInteraction={onInteraction}
+      disablePopOut={disablePopOut}
     />
   );
 

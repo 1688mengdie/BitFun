@@ -1070,7 +1070,7 @@ const createCanvasStoreHook = () => create<CanvasStore>()(
     }))
 );
 
-export type CanvasStoreMode = 'agent' | 'project' | 'git';
+export type CanvasStoreMode = 'agent' | 'project' | 'git' | 'panel-view';
 
 /**
  * Selects which canvas store instance is used by the current subtree.
@@ -1081,10 +1081,12 @@ export const CanvasStoreModeContext = createContext<CanvasStoreMode>('agent');
 export const useAgentCanvasStore = createCanvasStoreHook();
 export const useProjectCanvasStore = createCanvasStoreHook();
 export const useGitCanvasStore = createCanvasStoreHook();
+export const usePanelViewCanvasStore = createCanvasStoreHook();
 
 const pickStoreByMode = (mode: CanvasStoreMode) => {
   if (mode === 'project') return useProjectCanvasStore;
   if (mode === 'git') return useGitCanvasStore;
+  if (mode === 'panel-view') return usePanelViewCanvasStore;
   return useAgentCanvasStore;
 };
 

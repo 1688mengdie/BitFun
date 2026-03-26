@@ -8,6 +8,7 @@ export {
   useAgentCanvasStore,
   useProjectCanvasStore,
   useGitCanvasStore,
+  usePanelViewCanvasStore,
   useGroupTabs,
   useActiveTabId,
   useLayout,

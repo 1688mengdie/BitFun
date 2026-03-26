@@ -792,7 +792,8 @@
     "mermaidEditor": "Mermaid",
     "insights": "Insights",
     "assistant": "Assistant",
-    "shell": "Shell"
+    "shell": "Shell",
+    "panelView": "Panel View"
   },
   "loading": {
     "scenes": "Loading scene"

@@ -32,6 +32,8 @@ const InsightsScene   = lazy(() => import('./my-agent/InsightsScene'));
 const ShellScene      = lazy(() => import('./shell/ShellScene'));
 const WelcomeScene    = lazy(() => import('./welcome/WelcomeScene'));
 const MiniAppScene    = lazy(() => import('./miniapps/MiniAppScene'));
+const PanelViewScene  = lazy(() => import('./panel-view/PanelViewScene'));
+
 
 interface SceneViewportProps {
   workspacePath?: string;
@@ -119,6 +121,8 @@ function renderScene(id: SceneTabId, workspacePath?: string, isEntering?: boolea
       return <InsightsScene />;
     case 'shell':
       return <ShellScene />;
+    case 'panel-view':
+      return <PanelViewScene workspacePath={workspacePath} />;
     default:
       if (typeof id === 'string' && id.startsWith('miniapp:')) {
         return <MiniAppScene appId={id.slice('miniapp:'.length)} />;

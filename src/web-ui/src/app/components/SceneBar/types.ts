@@ -21,6 +21,7 @@ export type SceneTabId =
   | 'assistant'
   | 'insights'
   | 'shell'
+  | 'panel-view'
   | `miniapp:${string}`;
 
 /** Static definition (from registry) for a scene tab type */

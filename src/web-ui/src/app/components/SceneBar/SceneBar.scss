@@ -227,6 +227,10 @@ $_tab-v-margin: 6px;   // symmetric top/bottom gap inside SceneBar
   }
 }
 
+[data-theme='bitfun-slate'] .bitfun-scene-tab__icon {
+  opacity: 0.94;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .bitfun-scene-tab {
     transition: none;
