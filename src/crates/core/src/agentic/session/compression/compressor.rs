@@ -1,35 +1,45 @@
-//! Context Compression Manager
+//! Context compressor
 //!
-//! Responsible for managing session context compression
+//! Responsible only for transforming a session context into a compressed one.
 
-use crate::agentic::core::{
-    render_system_reminder, Message, MessageHelper, MessageRole, MessageSemanticKind,
+use super::fallback::{
+    build_structured_compression_reminder, CompressionFallbackOptions, CompressionReminder,
 };
-use crate::agentic::persistence::PersistenceManager;
+use crate::agentic::core::{
+    render_system_reminder, CompressionPayload, Message, MessageHelper, MessageRole,
+    MessageSemanticKind,
+};
 use crate::infrastructure::ai::{get_global_ai_client_factory, AIClient};
 use crate::util::errors::{BitFunError, BitFunResult};
 use crate::util::types::Message as AIMessage;
 use anyhow;
-use dashmap::DashMap;
 use log::{debug, trace, warn};
 use std::sync::Arc;
 
-/// Compression manager configuration
+/// Context compressor configuration
 #[derive(Debug, Clone)]
 pub struct CompressionConfig {
-    pub enable_persistence: bool,
     pub keep_turns_ratio: f32,
     pub keep_last_turn_ratio: f32,
     pub single_request_max_tokens_ratio: f32,
+    pub fallback_max_tokens_ratio: f32,
+    pub fallback_user_chars: usize,
+    pub fallback_assistant_chars: usize,
+    pub fallback_tool_arg_chars: usize,
+    pub fallback_tool_command_chars: usize,
 }
 
 impl Default for CompressionConfig {
     fn default() -> Self {
         Self {
-            enable_persistence: true,
             keep_turns_ratio: 0.3,
             keep_last_turn_ratio: 0.4,
             single_request_max_tokens_ratio: 0.7,
+            fallback_max_tokens_ratio: 0.25,
+            fallback_user_chars: 1000,
+            fallback_assistant_chars: 1000,
+            fallback_tool_arg_chars: 100,
+            fallback_tool_command_chars: 100,
         }
     }
 }
@@ -46,71 +56,20 @@ impl TurnWithTokens {
     }
 }
 
-/// Context compression manager
-pub struct CompressionManager {
-    /// Compressed message history (by session ID)
-    compressed_histories: Arc<DashMap<String, Vec<Message>>>,
-    /// Persistence manager
-    persistence: Arc<PersistenceManager>,
-    /// Configuration
+#[derive(Debug, Clone)]
+pub struct CompressionResult {
+    pub messages: Vec<Message>,
+    pub has_model_summary: bool,
+}
+
+/// Stateless context compression service.
+pub struct ContextCompressor {
     config: CompressionConfig,
 }
 
-impl CompressionManager {
-    pub fn new(persistence: Arc<PersistenceManager>, config: CompressionConfig) -> Self {
-        Self {
-            compressed_histories: Arc::new(DashMap::new()),
-            persistence,
-            config,
-        }
-    }
-
-    /// Create session compression history
-    pub fn create_session(&self, session_id: &str) {
-        self.compressed_histories
-            .insert(session_id.to_string(), vec![]);
-        debug!(
-            "Created session compression history: session_id={}",
-            session_id
-        );
-    }
-
-    /// Add message (async, supports persistence)
-    pub async fn add_message(&self, session_id: &str, message: Message) -> BitFunResult<()> {
-        // 1. Add to memory
-        if let Some(mut compressed) = self.compressed_histories.get_mut(session_id) {
-            compressed.push(message.clone());
-        } else {
-            self.compressed_histories
-                .insert(session_id.to_string(), vec![message.clone()]);
-        }
-
-        // 2. Persist (append single message, similar to MessageHistoryManager)
-        if self.config.enable_persistence {
-            self.persistence
-                .append_compressed_message(session_id, &message)
-                .await?;
-        }
-
-        Ok(())
-    }
-
-    /// Batch restore messages (doesn't trigger persistence, used for session restore)
-    pub fn restore_session(&self, session_id: &str, messages: Vec<Message>) {
-        self.compressed_histories
-            .insert(session_id.to_string(), messages);
-        debug!(
-            "Restored session compression history: session_id={}",
-            session_id
-        );
-    }
-
-    /// Get copy of messages for sending to model (may be compressed)
-    pub fn get_context_messages(&self, session_id: &str) -> Vec<Message> {
-        self.compressed_histories
-            .get(session_id)
-            .map(|h| h.clone())
-            .unwrap_or_default()
+impl ContextCompressor {
+    pub fn new(config: CompressionConfig) -> Self {
+        Self { config }
     }
 
     fn get_turn_index_to_keep(&self, turns_tokens: &[usize], token_limit: usize) -> usize {
@@ -127,8 +86,8 @@ impl CompressionManager {
         result
     }
 
-    /// Returns (turn_index_to_keep, turns)
-    /// If turn_index_to_keep is 0, no compression is needed
+    /// Returns `(turn_index_to_keep, turns)`.
+    /// If `turn_index_to_keep` is 0, no compression is needed.
     pub async fn preprocess_turns(
         &self,
         session_id: &str,
@@ -136,11 +95,10 @@ impl CompressionManager {
         mut messages: Vec<Message>,
     ) -> BitFunResult<(usize, Vec<TurnWithTokens>)> {
         debug!(
-            "Starting session context compression: session_id={}",
+            "Starting session context compression analysis: session_id={}",
             session_id
         );
 
-        // Remove system messages
         let message_start = {
             let mut start_idx = messages.len();
             for (idx, msg) in messages.iter().enumerate() {
@@ -155,7 +113,7 @@ impl CompressionManager {
 
         if all_messages.is_empty() {
             debug!(
-                "Session history is empty, no compression needed: session_id={}",
+                "Session context is empty, no compression needed: session_id={}",
                 session_id
             );
             return Ok((0, Vec::new()));
@@ -167,7 +125,6 @@ impl CompressionManager {
             .iter_mut()
             .map(|turn| turn.iter_mut().map(|m| m.get_tokens()).sum::<usize>())
             .collect();
-        // Print message count and token count for each turn
         {
             let turns_msg_num: Vec<usize> = turns_messages.iter().map(|t| t.len()).collect();
             debug!(
@@ -181,7 +138,6 @@ impl CompressionManager {
         let mut turn_index_to_keep =
             self.get_turn_index_to_keep(&turns_tokens, token_limit_keep_turns);
         if turn_index_to_keep == turns_count {
-            // If the last turn exceeds 30% but not 40%, keep the last turn
             let token_limit_last_turn =
                 (context_window as f32 * self.config.keep_last_turn_ratio) as usize;
             if let Some(last_turn_tokens) = turns_tokens.last() {
@@ -190,7 +146,10 @@ impl CompressionManager {
                 }
             }
         }
-        debug!("Turn index to keep: {}", turn_index_to_keep);
+        debug!(
+            "Turn index to keep after compression analysis: session_id={}, keep_from_turn={}",
+            session_id, turn_index_to_keep
+        );
 
         let turns: Vec<TurnWithTokens> = turns_messages
             .into_iter()
@@ -206,15 +165,24 @@ impl CompressionManager {
         context_window: usize,
         turn_index_to_keep: usize,
         mut turns: Vec<TurnWithTokens>,
-    ) -> BitFunResult<Vec<Message>> {
+    ) -> BitFunResult<CompressionResult> {
         if turns.is_empty() {
-            debug!("No turns need compression");
-            return Ok(Vec::new());
+            debug!("No turns need compression: session_id={}", session_id);
+            return Ok(CompressionResult {
+                messages: Vec::new(),
+                has_model_summary: false,
+            });
         }
 
         let Some(last_turn_messages) = turns.last().map(|turn| &turn.messages) else {
-            debug!("No turns available after split, skipping last-turn extraction");
-            return Ok(Vec::new());
+            debug!(
+                "No turns available after split, skipping compression: session_id={}",
+                session_id
+            );
+            return Ok(CompressionResult {
+                messages: Vec::new(),
+                has_model_summary: false,
+            });
         };
         let last_user_message = {
             last_turn_messages
@@ -228,34 +196,20 @@ impl CompressionManager {
                     }
                 })
         };
-        let last_todo = MessageHelper::get_last_todo(&last_turn_messages);
+        let last_todo = MessageHelper::get_last_todo(last_turn_messages);
         trace!("Last user message: {:?}", last_user_message);
         trace!("Last todo: {:?}", last_todo);
         let turns_to_keep = turns.split_off(turn_index_to_keep);
 
         let mut compressed_messages = Vec::new();
+        let mut has_model_summary = false;
         if !turns.is_empty() {
-            // Dynamically get Agent client for generating summary
-            let ai_client_factory = get_global_ai_client_factory().await.map_err(|e| {
-                BitFunError::AIClient(format!("Failed to get AI client factory: {}", e))
-            })?;
-            let ai_client = ai_client_factory
-                .get_client_by_func_agent("compression")
-                .await
-                .map_err(|e| BitFunError::AIClient(format!("Failed to get AI client: {}", e)))?;
-
-            let summary = self
-                .execute_compression(ai_client, turns, context_window)
+            let reminder = self
+                .execute_compression_with_fallback(turns, context_window)
                 .await?;
-            trace!("Compression summary: {}", summary);
-
-            compressed_messages.push(
-                Message::user(render_system_reminder(&format!(
-                    "Previous conversation is summarized below:\n{}",
-                    summary
-                )))
-                .with_semantic_kind(MessageSemanticKind::InternalReminder),
-            );
+            trace!("Compression reminder generated");
+            has_model_summary = reminder.used_model_summary;
+            compressed_messages.push(self.create_reminder_message(reminder));
         }
 
         if !turns_to_keep.is_empty() {
@@ -263,11 +217,9 @@ impl CompressionManager {
                 compressed_messages.extend(turn.messages);
             }
         } else {
-            // All turns compressed, append last user message
             if let Some(last_user_message) = last_user_message {
                 compressed_messages.push(last_user_message);
             }
-            // Append last todo
             if let Some(last_todo) = last_todo {
                 compressed_messages.push(
                     Message::user(render_system_reminder(&format!(
@@ -279,33 +231,84 @@ impl CompressionManager {
             }
         }
 
-        // Update compression history
-        self.compressed_histories
-            .insert(session_id.to_string(), compressed_messages.clone());
+        debug!(
+            "Compression completed: session_id={}, compressed_messages={}",
+            session_id,
+            compressed_messages.len()
+        );
 
-        // Persist compression history (similar to MessageHistoryManager pattern).
-        // Persistence is intentionally off until the storage contract is finalized.
-        #[allow(clippy::overly_complex_bool_expr)]
-        if false && self.config.enable_persistence {
-            if let Err(e) = self
-                .persistence
-                .save_compressed_messages(session_id, &compressed_messages)
+        Ok(CompressionResult {
+            messages: compressed_messages,
+            has_model_summary,
+        })
+    }
+
+    fn create_reminder_message(&self, reminder: CompressionReminder) -> Message {
+        Message::user(render_system_reminder(&reminder.model_text))
+            .with_semantic_kind(MessageSemanticKind::InternalReminder)
+            .with_compression_payload(reminder.payload)
+    }
+
+    async fn execute_compression_with_fallback(
+        &self,
+        turns_to_compress: Vec<TurnWithTokens>,
+        context_window: usize,
+    ) -> BitFunResult<CompressionReminder> {
+        let summary_result = match get_global_ai_client_factory().await {
+            Ok(ai_client_factory) => match ai_client_factory
+                .get_client_by_func_agent("compression")
                 .await
             {
+                Ok(ai_client) => {
+                    self.execute_compression(ai_client, turns_to_compress.clone(), context_window)
+                        .await
+                }
+                Err(err) => Err(BitFunError::AIClient(format!(
+                    "Failed to get AI client: {}",
+                    err
+                ))),
+            },
+            Err(err) => Err(BitFunError::AIClient(format!(
+                "Failed to get AI client factory: {}",
+                err
+            ))),
+        };
+
+        match summary_result {
+            Ok(summary) => {
+                trace!("Compression summary: {}", summary);
+                Ok(CompressionReminder {
+                    model_text: format!("Previous conversation is summarized below:\n{}", summary),
+                    payload: CompressionPayload::from_summary(summary),
+                    used_model_summary: true,
+                })
+            }
+            Err(err) => {
                 warn!(
-                    "Failed to persist compressed history: session_id={}, error={}",
-                    session_id, e
+                    "Model-based compression failed, falling back to structured local compression: {}",
+                    err
                 );
-            } else {
-                debug!(
-                    "Compressed history persisted: session_id={}, message_count={}",
-                    session_id,
-                    compressed_messages.len()
+                let reminder = build_structured_compression_reminder(
+                    turns_to_compress
+                        .into_iter()
+                        .map(|turn| turn.messages)
+                        .collect(),
+                    &self.build_fallback_options(context_window),
                 );
+                Ok(reminder)
             }
         }
+    }
 
-        Ok(compressed_messages)
+    fn build_fallback_options(&self, context_window: usize) -> CompressionFallbackOptions {
+        CompressionFallbackOptions {
+            max_tokens: ((context_window as f32 * self.config.fallback_max_tokens_ratio) as usize)
+                .max(256),
+            user_chars: self.config.fallback_user_chars,
+            assistant_chars: self.config.fallback_assistant_chars,
+            tool_arg_chars: self.config.fallback_tool_arg_chars,
+            tool_command_chars: self.config.fallback_tool_command_chars,
+        }
     }
 
     async fn execute_compression(
@@ -361,11 +364,9 @@ Be thorough and precise. Do not lose important technical details from either the
         let mut request_cnt = 0;
         for (idx, turn) in turns_to_compress.into_iter().enumerate() {
             if current_tokens + turn.tokens <= max_tokens_in_one_request {
-                // Add current turn's messages to accumulated messages
                 cur_messages.extend(turn.messages);
                 current_tokens += turn.tokens;
             } else {
-                // Compress accumulated messages
                 if !cur_messages.is_empty() {
                     summary = self
                         .generate_summary(
@@ -374,7 +375,7 @@ Be thorough and precise. Do not lose important technical details from either the
                             cur_messages,
                         )
                         .await?;
-                    cur_messages = Vec::new(); // cur_messages has been consumed, need to reassign
+                    cur_messages = Vec::new();
                     current_tokens = 0;
                     request_cnt += 1;
                     trace!(
@@ -385,50 +386,44 @@ Be thorough and precise. Do not lose important technical details from either the
                 }
 
                 if turn.tokens <= max_tokens_in_one_request {
-                    // Add current turn's messages to accumulated messages
                     cur_messages.extend(turn.messages);
                     current_tokens = turn.tokens;
+                } else if let Some((messages_part1, messages_part2)) =
+                    MessageHelper::split_messages_in_middle(turn.messages)
+                {
+                    summary = self
+                        .generate_summary(
+                            ai_client.clone(),
+                            gen_system_message_for_summary(&summary),
+                            messages_part1,
+                        )
+                        .await?;
+                    request_cnt += 1;
+                    debug!(
+                        "[execute_compression] request_cnt={}, turn_idx={}, summary: \n{}",
+                        request_cnt, idx, summary
+                    );
+                    summary = self
+                        .generate_summary(
+                            ai_client.clone(),
+                            gen_system_message_for_summary(&summary),
+                            messages_part2,
+                        )
+                        .await?;
+                    request_cnt += 1;
+                    debug!(
+                        "[execute_compression] request_cnt={}, turn_idx={}, summary: \n{}",
+                        request_cnt, idx, summary
+                    );
                 } else {
-                    // Single turn too long
-                    if let Some((messages_part1, messages_part2)) =
-                        MessageHelper::split_messages_in_middle(turn.messages)
-                    {
-                        // Compress first half and second half separately
-                        summary = self
-                            .generate_summary(
-                                ai_client.clone(),
-                                gen_system_message_for_summary(&summary),
-                                messages_part1,
-                            )
-                            .await?;
-                        request_cnt += 1;
-                        debug!(
-                            "[execute_compression] request_cnt={}, turn_idx={}, summary: \n{}",
-                            request_cnt, idx, summary
-                        );
-                        summary = self
-                            .generate_summary(
-                                ai_client.clone(),
-                                gen_system_message_for_summary(&summary),
-                                messages_part2,
-                            )
-                            .await?;
-                        request_cnt += 1;
-                        debug!(
-                            "[execute_compression] request_cnt={}, turn_idx={}, summary: \n{}",
-                            request_cnt, idx, summary
-                        );
-                    } else {
-                        return Err(BitFunError::Service(format!(
-                            "Compression Failed, turn {} cannot be split in middle",
-                            idx
-                        )));
-                    }
+                    return Err(BitFunError::Service(format!(
+                        "Compression Failed, turn {} cannot be split in middle",
+                        idx
+                    )));
                 }
             }
         }
 
-        // Compress remaining messages
         if !cur_messages.is_empty() {
             summary = self
                 .generate_summary(
@@ -443,18 +438,16 @@ Be thorough and precise. Do not lose important technical details from either the
         Ok(summary)
     }
 
-    /// Generate summary for dialog turns, messages need to remove system prompt
     async fn generate_summary(
         &self,
         ai_client: Arc<AIClient>,
         system_message_for_summary: Message,
         messages: Vec<Message>,
     ) -> BitFunResult<String> {
-        self.generate_summary_with_retry(ai_client, system_message_for_summary, messages, 3)
+        self.generate_summary_with_retry(ai_client, system_message_for_summary, messages, 2)
             .await
     }
 
-    /// Generate summary for dialog turns, supports retry
     async fn generate_summary_with_retry(
         &self,
         ai_client: Arc<AIClient>,
@@ -462,9 +455,7 @@ Be thorough and precise. Do not lose important technical details from either the
         messages: Vec<Message>,
         max_tries: usize,
     ) -> BitFunResult<String> {
-        // Call AI to generate summary
         let mut summary_messages = vec![AIMessage::from(system_message_for_summary)];
-        // Remove thinking process when summarizing
         summary_messages.extend(messages.iter().map(|m| {
             let mut ai_msg = AIMessage::from(m);
             ai_msg.reasoning_content = None;
@@ -498,9 +489,8 @@ Be thorough and precise. Do not lose important technical details from either the
                     );
                     last_error = Some(e);
 
-                    // If not the last attempt, wait before retrying
                     if attempt < max_tries - 1 {
-                        let delay_ms = base_wait_time_ms * (1 << attempt.min(3)); // Exponential backoff
+                        let delay_ms = base_wait_time_ms * (1 << attempt.min(3));
                         debug!("Waiting {}ms before retry {}...", delay_ms, attempt + 2);
                         tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
                     }
@@ -508,7 +498,6 @@ Be thorough and precise. Do not lose important technical details from either the
             }
         }
 
-        // All attempts failed
         let error_msg = format!(
             "Summary generation failed after {} attempts: {}",
             max_tries,
@@ -516,15 +505,6 @@ Be thorough and precise. Do not lose important technical details from either the
         );
         warn!("{}", error_msg);
         Err(BitFunError::AIClient(error_msg))
-    }
-
-    /// Delete session compression history
-    pub fn delete_session(&self, session_id: &str) {
-        self.compressed_histories.remove(session_id);
-        debug!(
-            "Deleted session compression history: session_id={}",
-            session_id
-        );
     }
 
     fn get_compact_prompt(&self) -> String {
@@ -612,6 +592,7 @@ Here's an example of how your output should be structured:
 </example>
 
 Please provide your summary based on the conversation so far, following this structure and ensuring precision and thoroughness in your response. 
-"#.to_string()
+"#
+        .to_string()
     }
 }

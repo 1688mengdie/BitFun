@@ -8,7 +8,7 @@ use crate::agentic::core::{
 };
 use crate::agentic::image_analysis::ImageContextData;
 use crate::agentic::persistence::PersistenceManager;
-use crate::agentic::session::{CompressionManager, MessageHistoryManager};
+use crate::agentic::session::SessionContextStore;
 use crate::infrastructure::ai::get_global_ai_client_factory;
 use crate::service::session::{
     DialogTurnData, ModelRoundData, TextItemData, TurnStatus, UserMessageData,
@@ -49,8 +49,7 @@ pub struct SessionManager {
     sessions: Arc<DashMap<String, Session>>,
 
     /// Sub-components
-    history_manager: Arc<MessageHistoryManager>,
-    compression_manager: Arc<CompressionManager>,
+    context_store: Arc<SessionContextStore>,
     persistence_manager: Arc<PersistenceManager>,
 
     /// Configuration
@@ -58,6 +57,31 @@ pub struct SessionManager {
 }
 
 impl SessionManager {
+    fn paginate_messages(
+        messages: &[Message],
+        limit: usize,
+        before_message_id: Option<&str>,
+    ) -> (Vec<Message>, bool) {
+        if messages.is_empty() {
+            return (vec![], false);
+        }
+
+        let end_idx = if let Some(before_id) = before_message_id {
+            messages.iter().position(|m| m.id == before_id).unwrap_or(0)
+        } else {
+            messages.len()
+        };
+
+        if end_idx == 0 {
+            return (vec![], false);
+        }
+
+        let start_idx = end_idx.saturating_sub(limit);
+        let has_more = start_idx > 0;
+
+        (messages[start_idx..end_idx].to_vec(), has_more)
+    }
+
     fn session_workspace_from_config(config: &SessionConfig) -> Option<PathBuf> {
         config.workspace_path.as_ref().map(PathBuf::from)
     }
@@ -108,15 +132,7 @@ impl SessionManager {
         Self::effective_workspace_path_from_config(&config).await
     }
 
-    async fn rebuild_messages_from_turns(
-        &self,
-        workspace_path: &Path,
-        session_id: &str,
-    ) -> BitFunResult<Vec<Message>> {
-        let turns = self
-            .persistence_manager
-            .load_session_turns(workspace_path, session_id)
-            .await?;
+    fn build_messages_from_turns(turns: &[DialogTurnData]) -> Vec<Message> {
         let mut messages = Vec::new();
 
         for turn in turns {
@@ -181,12 +197,86 @@ impl SessionManager {
             }
         }
 
-        Ok(messages)
+        messages
+    }
+
+    async fn rebuild_messages_from_turns(
+        &self,
+        workspace_path: &Path,
+        session_id: &str,
+    ) -> BitFunResult<Vec<Message>> {
+        let turns = self
+            .persistence_manager
+            .load_session_turns(workspace_path, session_id)
+            .await?;
+        Ok(Self::build_messages_from_turns(&turns))
+    }
+
+    /// Persist the current runtime context by overwriting `snapshots/context-{turn_index}.json`.
+    ///
+    /// Save timing is intentionally tied to semantic context changes rather than token chunks:
+    /// - after a turn starts and the user message enters runtime context
+    /// - after assistant/tool messages are appended to runtime context
+    /// - after compression replaces runtime context
+    /// - once more when a turn completes or fails
+    ///
+    /// This is still a best-effort multi-file persistence flow, not a transactional commit.
+    /// `session.json`, `turns/turn-*.json`, and `snapshots/context-*.json` may be briefly out of
+    /// sync if the process crashes between writes, so restore logic must tolerate partial updates.
+    async fn persist_context_snapshot_for_turn_best_effort(
+        &self,
+        session_id: &str,
+        turn_index: usize,
+        reason: &str,
+    ) {
+        if !self.config.enable_persistence {
+            return;
+        }
+
+        let Some(workspace_path) = self.effective_session_workspace_path(session_id).await else {
+            debug!(
+                "Skipping context snapshot persistence because workspace path is unavailable: session_id={}, turn_index={}, reason={}",
+                session_id, turn_index, reason
+            );
+            return;
+        };
+
+        let context_messages = self.context_store.get_context_messages(session_id);
+        if let Err(err) = self
+            .persistence_manager
+            .save_turn_context_snapshot(&workspace_path, session_id, turn_index, &context_messages)
+            .await
+        {
+            warn!(
+                "failed to persist context snapshot: session_id={}, turn_index={}, reason={}, err={}",
+                session_id, turn_index, reason, err
+            );
+        }
+    }
+
+    async fn persist_current_turn_context_snapshot_best_effort(
+        &self,
+        session_id: &str,
+        reason: &str,
+    ) {
+        let Some(turn_index) = self
+            .sessions
+            .get(session_id)
+            .and_then(|session| session.dialog_turn_ids.len().checked_sub(1))
+        else {
+            debug!(
+                "Skipping current-turn context snapshot because no turn is active: session_id={}, reason={}",
+                session_id, reason
+            );
+            return;
+        };
+
+        self.persist_context_snapshot_for_turn_best_effort(session_id, turn_index, reason)
+            .await;
     }
 
     pub fn new(
-        history_manager: Arc<MessageHistoryManager>,
-        compression_manager: Arc<CompressionManager>,
+        context_store: Arc<SessionContextStore>,
         persistence_manager: Arc<PersistenceManager>,
         config: SessionManagerConfig,
     ) -> Self {
@@ -194,8 +284,7 @@ impl SessionManager {
 
         let manager = Self {
             sessions: Arc::new(DashMap::new()),
-            history_manager,
-            compression_manager,
+            context_store,
             persistence_manager,
             config,
         };
@@ -272,15 +361,10 @@ impl SessionManager {
         // 1. Add to memory
         self.sessions.insert(session_id.clone(), session.clone());
 
-        // 2. Initialize message history
-        self.history_manager
-            .create_session(&session_id)
-            .await?;
+        // 2. Initialize the in-memory context cache.
+        self.context_store.create_session(&session_id);
 
-        // 3. Initialize compression manager
-        self.compression_manager.create_session(&session_id);
-
-        // 4. Persist to local path (handles remote workspaces correctly)
+        // 3. Persist to local path (handles remote workspaces correctly)
         if self.config.enable_persistence {
             if let Some(session) = self.sessions.get(&session_id) {
                 self.persistence_manager
@@ -382,10 +466,9 @@ impl SessionManager {
 
         if self.config.enable_persistence {
             let effective_path = self.effective_session_workspace_path(session_id).await;
-            if let (Some(workspace_path), Some(session)) = (
-                effective_path,
-                self.sessions.get(session_id),
-            ) {
+            if let (Some(workspace_path), Some(session)) =
+                (effective_path, self.sessions.get(session_id))
+            {
                 self.persistence_manager
                     .save_session(&workspace_path, &session)
                     .await?;
@@ -419,10 +502,9 @@ impl SessionManager {
 
         if self.config.enable_persistence {
             let effective_path = self.effective_session_workspace_path(session_id).await;
-            if let (Some(workspace_path), Some(session)) = (
-                effective_path,
-                self.sessions.get(session_id),
-            ) {
+            if let (Some(workspace_path), Some(session)) =
+                (effective_path, self.sessions.get(session_id))
+            {
                 self.persistence_manager
                     .save_session(&workspace_path, &session)
                     .await?;
@@ -464,10 +546,9 @@ impl SessionManager {
             }
         }
 
-        // 2. Delete message history
-        self.history_manager.delete_session(session_id).await?;
+        self.context_store.delete_session(session_id);
 
-        // 3. Delete persisted data
+        // 2. Delete persisted data
         if self.config.enable_persistence {
             self.persistence_manager
                 .delete_session(workspace_path, session_id)
@@ -492,7 +573,7 @@ impl SessionManager {
             }
         }
 
-        // 4. Clean up associated Terminal session
+        // 3. Clean up associated Terminal session
         use crate::service::terminal::TerminalApi;
         if let Ok(terminal_api) = TerminalApi::from_singleton() {
             let binding = terminal_api.session_manager().binding();
@@ -508,7 +589,7 @@ impl SessionManager {
             }
         }
 
-        // 5. Remove from memory
+        // 4. Remove from memory
         self.sessions.remove(session_id);
 
         info!("Session deletion completed: session_id={}", session_id);
@@ -553,9 +634,22 @@ impl SessionManager {
             );
         }
 
-        // 2. Load message history - full list by turn, may already be compressed
+        // 2. Restore runtime context with snapshot-first semantics.
+        // If the latest snapshot lags behind turn persistence, append the missing turn delta
+        // instead of truncating session history.
+        //
+        // This compensates for the fact that persistence is not transactional across
+        // `session.json`, `turns/*.json`, and `snapshots/context-*.json`.
+        let persisted_turns = self
+            .persistence_manager
+            .load_session_turns(&session_storage_path, session_id)
+            .await?;
+        let persisted_turn_ids: Vec<String> = persisted_turns
+            .iter()
+            .map(|turn| turn.turn_id.clone())
+            .collect();
         let mut latest_turn_index: Option<usize> = None;
-        let messages = match self
+        let mut messages = match self
             .persistence_manager
             .load_latest_turn_context_snapshot(&session_storage_path, session_id)
             .await?
@@ -564,9 +658,21 @@ impl SessionManager {
                 latest_turn_index = Some(turn_index);
                 msgs
             }
-            None => {
-                self.rebuild_messages_from_turns(&session_storage_path, session_id)
-                    .await?
+            None => Self::build_messages_from_turns(&persisted_turns),
+        };
+
+        if let Some(snapshot_turn_index) = latest_turn_index {
+            let delta_start = snapshot_turn_index.saturating_add(1);
+            if delta_start < persisted_turns.len() {
+                warn!(
+                    "Context snapshot is behind persisted turns, rebuilding delta: session_id={}, snapshot_turn_index={}, persisted_turn_count={}",
+                    session_id,
+                    snapshot_turn_index,
+                    persisted_turns.len()
+                );
+                messages.extend(Self::build_messages_from_turns(
+                    &persisted_turns[delta_start..],
+                ));
             }
         };
 
@@ -577,33 +683,48 @@ impl SessionManager {
             );
         }
 
-        self.history_manager
-            .restore_session(session_id, messages.clone())
-            .await?;
-
-        // 3. Restore compression manager - batch restore, don't trigger persistence
+        // 3. Restore the in-memory context cache from the recovered messages.
         // If session already exists, delete old one first then create (ensure clean state)
         if session_already_in_memory {
-            self.compression_manager.delete_session(session_id);
+            self.context_store.delete_session(session_id);
         }
 
-        // Use restore_session for batch restore, avoid triggering persistence for each add_message
-        self.compression_manager
-            .restore_session(session_id, messages.clone());
+        self.context_store
+            .replace_context(session_id, messages.clone());
 
-        // If session's recorded turn count doesn't match snapshot, truncate to snapshot's turn
-        if let Some(latest_turn_index) = latest_turn_index {
-            let expected_turn_count = latest_turn_index + 1;
-            if session.dialog_turn_ids.len() > expected_turn_count {
-                warn!(
-                    "Session turn count exceeds snapshot, truncating: session_id={}, turns={} -> {}",
-                    session_id,
-                    session.dialog_turn_ids.len(),
-                    expected_turn_count
-                );
-                session.dialog_turn_ids.truncate(expected_turn_count);
-            }
-        } else if !session.dialog_turn_ids.is_empty() && messages.is_empty() {
+        let recoverable_turn_count = latest_turn_index
+            .map(|turn_index| turn_index + 1)
+            .unwrap_or(0)
+            .max(persisted_turns.len());
+
+        if session.dialog_turn_ids.len() < persisted_turns.len() {
+            warn!(
+                "Session metadata is behind persisted turns, rebuilding dialog_turn_ids: session_id={}, session_turn_count={}, persisted_turn_count={}",
+                session_id,
+                session.dialog_turn_ids.len(),
+                persisted_turns.len()
+            );
+            session.dialog_turn_ids = persisted_turn_ids;
+        } else if session.dialog_turn_ids.len() > recoverable_turn_count {
+            warn!(
+                "Session metadata exceeds recoverable history, truncating: session_id={}, session_turn_count={}, recoverable_turn_count={}",
+                session_id,
+                session.dialog_turn_ids.len(),
+                recoverable_turn_count
+            );
+            session.dialog_turn_ids.truncate(recoverable_turn_count);
+        } else if persisted_turns.len() == session.dialog_turn_ids.len()
+            && session.dialog_turn_ids != persisted_turn_ids
+        {
+            warn!(
+                "Session metadata turn ids diverge from persisted turns, normalizing order: session_id={}",
+                session_id
+            );
+            session.dialog_turn_ids = persisted_turn_ids;
+        }
+
+        if recoverable_turn_count == 0 && !session.dialog_turn_ids.is_empty() && messages.is_empty()
+        {
             warn!(
                 "Session has no available context snapshot and messages are empty, clearing turns: session_id={}",
                 session_id
@@ -611,10 +732,7 @@ impl SessionManager {
             session.dialog_turn_ids.clear();
         }
 
-        let context_msg_count = self
-            .compression_manager
-            .get_context_messages(session_id)
-            .len();
+        let context_msg_count = self.context_store.get_context_messages(session_id).len();
 
         info!(
             "Session restored: session_id={}, session_name={}, messages={}, context_messages={}",
@@ -659,12 +777,8 @@ impl SessionManager {
                 })?
         };
 
-        // 2) Restore history/compression context in memory
-        self.history_manager
-            .restore_session(session_id, messages.clone())
-            .await?;
-        self.compression_manager
-            .restore_session(session_id, messages);
+        // 2) Restore the in-memory context cache.
+        self.context_store.replace_context(session_id, messages);
 
         // 3) Truncate session turn list & persist
         if let Some(mut session) = self.sessions.get_mut(session_id) {
@@ -735,8 +849,9 @@ impl SessionManager {
         let session = self
             .get_session(session_id)
             .ok_or_else(|| BitFunError::NotFound(format!("Session not found: {}", session_id)))?;
-        let workspace_path =
-            Self::effective_workspace_path_from_config(&session.config).await.ok_or_else(|| {
+        let workspace_path = Self::effective_workspace_path_from_config(&session.config)
+            .await
+            .ok_or_else(|| {
                 BitFunError::Validation(format!(
                     "Session workspace_path is missing: {}",
                     session_id
@@ -764,7 +879,7 @@ impl SessionManager {
             session.last_activity_at = SystemTime::now();
         }
 
-        // 2. Add user message to history and compression managers
+        // 2. Add the user message to the in-memory context cache.
         let user_message =
             if let Some(images) = image_contexts.as_ref().filter(|v| !v.is_empty()).cloned() {
                 Message::user_multimodal(user_input.clone(), images)
@@ -775,12 +890,7 @@ impl SessionManager {
                     .with_turn_id(turn_id.clone())
                     .with_semantic_kind(MessageSemanticKind::ActualUserInput)
             };
-        self.history_manager
-            .add_message(session_id, user_message.clone())
-            .await?;
-        self.compression_manager
-            .add_message(session_id, user_message)
-            .await?;
+        self.context_store.add_message(session_id, user_message);
 
         // 3. Persist
         if self.config.enable_persistence {
@@ -809,6 +919,9 @@ impl SessionManager {
                 .await?;
         }
 
+        self.persist_context_snapshot_for_turn_best_effort(session_id, turn_index, "turn_started")
+            .await;
+
         debug!(
             "Starting dialog turn: turn_id={}, turn_index={}",
             turn_id, turn_index
@@ -825,9 +938,15 @@ impl SessionManager {
         final_response: String,
         stats: TurnStats,
     ) -> BitFunResult<()> {
-        let workspace_path = self.effective_session_workspace_path(session_id).await.ok_or_else(|| {
-            BitFunError::Validation(format!("Session workspace_path is missing: {}", session_id))
-        })?;
+        let workspace_path = self
+            .effective_session_workspace_path(session_id)
+            .await
+            .ok_or_else(|| {
+                BitFunError::Validation(format!(
+                    "Session workspace_path is missing: {}",
+                    session_id
+                ))
+            })?;
         let turn_index = self
             .sessions
             .get(session_id)
@@ -880,37 +999,12 @@ impl SessionManager {
         turn.duration_ms = Some(stats.duration_ms);
         turn.end_time = Some(completion_timestamp);
 
-        if self.config.enable_persistence {
-            match self.get_context_messages(session_id).await {
-                Ok(context_messages) => {
-                    if let Err(err) = self
-                        .persistence_manager
-                        .save_turn_context_snapshot(
-                            &workspace_path,
-                            session_id,
-                            turn.turn_index,
-                            &context_messages,
-                        )
-                        .await
-                    {
-                        warn!(
-                            "failed to save turn context snapshot: session_id={}, turn_index={}, err={}",
-                            session_id,
-                            turn.turn_index,
-                            err
-                        );
-                    }
-                }
-                Err(err) => {
-                    warn!(
-                        "failed to build context messages for snapshot: session_id={}, turn_index={}, err={}",
-                        session_id,
-                        turn.turn_index,
-                        err
-                    );
-                }
-            }
-        }
+        self.persist_context_snapshot_for_turn_best_effort(
+            session_id,
+            turn.turn_index,
+            "turn_completed",
+        )
+        .await;
 
         // Persist
         if self.config.enable_persistence {
@@ -935,9 +1029,15 @@ impl SessionManager {
         turn_id: &str,
         error: String,
     ) -> BitFunResult<()> {
-        let workspace_path = self.effective_session_workspace_path(session_id).await.ok_or_else(|| {
-            BitFunError::Validation(format!("Session workspace_path is missing: {}", session_id))
-        })?;
+        let workspace_path = self
+            .effective_session_workspace_path(session_id)
+            .await
+            .ok_or_else(|| {
+                BitFunError::Validation(format!(
+                    "Session workspace_path is missing: {}",
+                    session_id
+                ))
+            })?;
         let turn_index = self
             .sessions
             .get(session_id)
@@ -957,32 +1057,13 @@ impl SessionManager {
                 .as_millis() as u64,
         );
 
+        self.persist_context_snapshot_for_turn_best_effort(
+            session_id,
+            turn.turn_index,
+            "turn_failed",
+        )
+        .await;
         if self.config.enable_persistence {
-            match self.get_context_messages(session_id).await {
-                Ok(context_messages) => {
-                    if let Err(err) = self
-                        .persistence_manager
-                        .save_turn_context_snapshot(
-                            &workspace_path,
-                            session_id,
-                            turn.turn_index,
-                            &context_messages,
-                        )
-                        .await
-                    {
-                        warn!(
-                            "failed to save turn context snapshot on failure: session_id={}, turn_index={}, err={}",
-                            session_id, turn.turn_index, err
-                        );
-                    }
-                }
-                Err(err) => {
-                    warn!(
-                        "failed to build context messages for snapshot on failure: session_id={}, turn_index={}, err={}",
-                        session_id, turn.turn_index, err
-                    );
-                }
-            }
             self.persistence_manager
                 .save_dialog_turn(&workspace_path, &turn)
                 .await?;
@@ -1011,8 +1092,13 @@ impl SessionManager {
         let session = self.sessions.get(child_session_id).ok_or_else(|| {
             BitFunError::NotFound(format!("Session not found: {}", child_session_id))
         })?;
-
         let turn_id = format!("btw-turn-{}", request_id);
+        let turn_index = session
+            .dialog_turn_ids
+            .iter()
+            .position(|existing| existing == &turn_id)
+            .unwrap_or(session.dialog_turn_ids.len());
+
         let user_message_id = format!("btw-user-{}", request_id);
         let round_id = format!("btw-round-{}", request_id);
         let text_id = format!("btw-text-{}", request_id);
@@ -1023,7 +1109,7 @@ impl SessionManager {
 
         let mut turn = DialogTurnData::new(
             turn_id.clone(),
-            0,
+            turn_index,
             child_session_id.to_string(),
             UserMessageData {
                 id: user_message_id,
@@ -1074,28 +1160,18 @@ impl SessionManager {
             .save_dialog_turn(workspace_path, &turn)
             .await?;
 
-        // Sync messages to in-memory caches so subsequent对话 can access context
+        // Sync messages to the in-memory caches so subsequent turns can access context.
         let user_message = Message::user(question.to_string())
             .with_turn_id(turn_id.clone())
             .with_semantic_kind(MessageSemanticKind::ActualUserInput);
-        let assistant_message = Message::assistant(full_text.to_string())
-            .with_turn_id(turn_id.clone());
+        let assistant_message =
+            Message::assistant(full_text.to_string()).with_turn_id(turn_id.clone());
 
-        // Add to MessageHistoryManager
-        self.history_manager
-            .add_message(child_session_id, user_message.clone())
-            .await?;
-        self.history_manager
-            .add_message(child_session_id, assistant_message.clone())
-            .await?;
-
-        // Add to CompressionManager
-        self.compression_manager
-            .add_message(child_session_id, user_message)
-            .await?;
-        self.compression_manager
-            .add_message(child_session_id, assistant_message)
-            .await?;
+        // Add to the in-memory runtime context cache.
+        self.context_store
+            .add_message(child_session_id, user_message);
+        self.context_store
+            .add_message(child_session_id, assistant_message);
 
         if let Some(mut session) = self.sessions.get_mut(child_session_id) {
             if !session
@@ -1107,49 +1183,77 @@ impl SessionManager {
             }
             session.updated_at = SystemTime::now();
             session.last_activity_at = SystemTime::now();
+
+            if self.config.enable_persistence {
+                self.persistence_manager
+                    .save_session(workspace_path, &session)
+                    .await?;
+            }
         }
+
+        self.persist_context_snapshot_for_turn_best_effort(
+            child_session_id,
+            turn_index,
+            "btw_turn_persisted",
+        )
+        .await;
 
         Ok(())
     }
 
     // ============ Helper Methods ============
 
-    /// Get session's message history (complete)
+    /// Get a best-effort message view for the session.
+    /// When persistence is enabled, rebuild from persisted turns so callers see the
+    /// canonical turn history instead of the runtime context cache.
     pub async fn get_messages(&self, session_id: &str) -> BitFunResult<Vec<Message>> {
-        self.history_manager.get_messages(session_id).await
+        if self.config.enable_persistence {
+            if let Some(workspace_path) = self.effective_session_workspace_path(session_id).await {
+                let messages = self
+                    .rebuild_messages_from_turns(&workspace_path, session_id)
+                    .await?;
+                if !messages.is_empty() {
+                    return Ok(messages);
+                }
+            }
+        }
+
+        Ok(self.context_store.get_context_messages(session_id))
     }
 
-    /// Get session's message history (paginated)
+    /// Get a paginated best-effort message view for the session.
     pub async fn get_messages_paginated(
         &self,
         session_id: &str,
         limit: usize,
         before_message_id: Option<&str>,
     ) -> BitFunResult<(Vec<Message>, bool)> {
-        self.history_manager
-            .get_messages_paginated(session_id, limit, before_message_id)
-            .await
+        let messages = self.get_messages(session_id).await?;
+        Ok(Self::paginate_messages(&messages, limit, before_message_id))
     }
 
-    /// Get session's context messages (may be compressed)
+    /// Get session's runtime context messages (may already include compressed reminders).
     pub async fn get_context_messages(&self, session_id: &str) -> BitFunResult<Vec<Message>> {
-        // Get context messages from compression manager (may be compressed)
-        let context_messages = self.compression_manager.get_context_messages(session_id);
+        let context_messages = self.context_store.get_context_messages(session_id);
 
         Ok(context_messages)
     }
 
-    /// Add message to session
+    /// Add a semantic message to the runtime context cache and immediately refresh the current
+    /// turn snapshot so crashes do not lose the latest in-memory context change.
     pub async fn add_message(&self, session_id: &str, message: Message) -> BitFunResult<()> {
-        // Add to history manager
-        self.history_manager
-            .add_message(session_id, message.clone())
-            .await?;
-        // Also add to compression manager
-        self.compression_manager
-            .add_message(session_id, message)
-            .await?;
+        self.context_store.add_message(session_id, message);
+        self.persist_current_turn_context_snapshot_best_effort(session_id, "context_message_added")
+            .await;
         Ok(())
+    }
+
+    /// Replace the runtime context cache for a session and immediately refresh the current turn
+    /// snapshot. This is primarily used after compression rewrites the model-visible context.
+    pub async fn replace_context_messages(&self, session_id: &str, messages: Vec<Message>) {
+        self.context_store.replace_context(session_id, messages);
+        self.persist_current_turn_context_snapshot_best_effort(session_id, "context_replaced")
+            .await;
     }
 
     /// Get dialog turn count
@@ -1165,11 +1269,6 @@ impl SessionManager {
         self.sessions
             .get(session_id)
             .map(|s| s.compression_state.clone())
-    }
-
-    /// Get compression manager (for ExecutionEngine use)
-    pub fn get_compression_manager(&self) -> Arc<CompressionManager> {
-        self.compression_manager.clone()
     }
 
     /// Update session's compression state

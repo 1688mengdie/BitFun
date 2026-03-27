@@ -11,7 +11,7 @@ use crate::agentic::image_analysis::{
     build_multimodal_message_with_images, process_image_contexts_for_provider, ImageContextData,
     ImageLimits,
 };
-use crate::agentic::session::SessionManager;
+use crate::agentic::session::{ContextCompressor, SessionManager};
 use crate::agentic::tools::{get_all_registered_tools, SubagentParentInfo};
 use crate::agentic::WorkspaceBinding;
 use crate::infrastructure::ai::get_global_ai_client_factory;
@@ -44,6 +44,7 @@ pub struct ExecutionEngine {
     round_executor: Arc<RoundExecutor>,
     event_queue: Arc<EventQueue>,
     session_manager: Arc<SessionManager>,
+    context_compressor: Arc<ContextCompressor>,
     config: ExecutionEngineConfig,
 }
 
@@ -52,12 +53,14 @@ impl ExecutionEngine {
         round_executor: Arc<RoundExecutor>,
         event_queue: Arc<EventQueue>,
         session_manager: Arc<SessionManager>,
+        context_compressor: Arc<ContextCompressor>,
         config: ExecutionEngineConfig,
     ) -> Self {
         Self {
             round_executor,
             event_queue,
             session_manager,
+            context_compressor,
             config,
         }
     }
@@ -276,8 +279,7 @@ impl ExecutionEngine {
             if Self::skip_message_for_model_send(msg) {
                 continue;
             }
-            let keep_this_message_images =
-                attach_images && keep_image_messages.contains(&msg_idx);
+            let keep_this_message_images = attach_images && keep_image_messages.contains(&msg_idx);
             match &msg.content {
                 MessageContent::Multimodal { text, images } => {
                     if !attach_images {
@@ -317,7 +319,7 @@ impl ExecutionEngine {
                         provider,
                         workspace_path,
                     )
-                        .await
+                    .await
                     {
                         Ok(processed) => {
                             let next_count = attached_image_count + processed.len();
@@ -397,10 +399,7 @@ impl ExecutionEngine {
         Ok(result)
     }
 
-    fn render_multimodal_as_text(
-        text: &str,
-        images: &[ImageContextData],
-    ) -> String {
+    fn render_multimodal_as_text(text: &str, images: &[ImageContextData]) -> String {
         let mut content = text.to_string();
 
         if images.is_empty() {
@@ -449,14 +448,13 @@ impl ExecutionEngine {
             .get_session(session_id)
             .ok_or_else(|| BitFunError::NotFound(format!("Session not found: {}", session_id)))?;
 
-        let compression_manager = self.session_manager.get_compression_manager();
-
         // Record start time
         let start_time = std::time::Instant::now();
 
         let old_messages_len = messages.len();
         // Preprocess turns
-        let (turn_index_to_keep, turns) = compression_manager
+        let (turn_index_to_keep, turns) = self
+            .context_compressor
             .preprocess_turns(session_id, context_window, messages)
             .await?;
         if turn_index_to_keep == 0 {
@@ -483,13 +481,17 @@ impl ExecutionEngine {
         .await;
 
         // Execute compression
-        match compression_manager
+        match self
+            .context_compressor
             .compress_turns(session_id, context_window, turn_index_to_keep, turns)
             .await
         {
-            Ok(compressed_messages) => {
+            Ok(compression_result) => {
+                self.session_manager
+                    .replace_context_messages(session_id, compression_result.messages.clone())
+                    .await;
                 let mut new_messages = vec![system_prompt_message];
-                new_messages.extend(compressed_messages);
+                new_messages.extend(compression_result.messages);
                 // Update session compression state
                 session.compression_state.increment_compression_count();
 
@@ -526,7 +528,7 @@ impl ExecutionEngine {
                         tokens_after: compressed_tokens,
                         compression_ratio: (compressed_tokens as f64) / (current_tokens as f64),
                         duration_ms,
-                        has_summary: true,
+                        has_summary: compression_result.has_model_summary,
                         subagent_parent_info: event_subagent_parent_info.clone(),
                     },
                     EventPriority::Normal,
@@ -716,7 +718,7 @@ impl ExecutionEngine {
         // Save the last token usage statistics
         let mut last_usage: Option<crate::util::types::ai::GeminiUsage> = None;
 
-        // Add detailed logging showing received message history
+        // Add detailed logging showing the execution context messages.
         debug!(
             "Executing dialog turn: dialog_turn_id={}, mode={}, agent={}, initial_messages={}, messages_len={}",
             dialog_turn_id,
@@ -726,7 +728,7 @@ impl ExecutionEngine {
             messages.len()
         );
         trace!(
-            "Message history details: dialog_turn_id={}, session_id={}, roles={:?}",
+            "Context message details: dialog_turn_id={}, session_id={}, roles={:?}",
             dialog_turn_id,
             context.session_id,
             messages
@@ -761,7 +763,7 @@ impl ExecutionEngine {
                 context.workspace.as_ref(),
                 &agent_type,
             )
-                .await
+            .await
         } else {
             (vec![], None)
         };
@@ -843,8 +845,7 @@ impl ExecutionEngine {
                 let original_images = images.clone();
 
                 // Replace multimodal messages with text-only versions to avoid provider errors.
-                let next_text =
-                    Self::render_multimodal_as_text(&original_text, &original_images);
+                let next_text = Self::render_multimodal_as_text(&original_text, &original_images);
 
                 msg.content = MessageContent::Text(next_text);
                 msg.metadata.tokens = None;
@@ -1002,31 +1003,31 @@ impl ExecutionEngine {
             // Add assistant message to history
             messages.push(round_result.assistant_message.clone());
 
-            // Immediately save assistant message (prevent loss on cancellation)
+            // Update the in-memory message caches immediately so subsequent rounds see it.
             if let Err(e) = self
                 .session_manager
                 .add_message(&context.session_id, round_result.assistant_message.clone())
                 .await
             {
-                warn!("Failed to save assistant message in real-time: {}", e);
+                warn!("Failed to update assistant message in memory: {}", e);
             }
 
             // Add tool result messages to history
             for tool_result_msg in round_result.tool_result_messages.iter() {
                 messages.push(tool_result_msg.clone());
 
-                // Immediately save tool result message
+                // Update the in-memory message caches immediately so subsequent rounds see it.
                 if let Err(e) = self
                     .session_manager
                     .add_message(&context.session_id, tool_result_msg.clone())
                     .await
                 {
-                    warn!("Failed to save tool result message in real-time: {}", e);
+                    warn!("Failed to update tool result message in memory: {}", e);
                 }
             }
 
             debug!(
-                "Saved round messages in real-time: round_index={}, assistant + {} tool results",
+                "Updated round messages in memory: round_index={}, assistant + {} tool results",
                 round_index,
                 round_result.tool_result_messages.len()
             );
@@ -1042,8 +1043,8 @@ impl ExecutionEngine {
                 break;
             }
 
-            // Queued user message while this turn was running: stop after a full model round
-            // (AI response + tool execution for this round are already persisted).
+            // Queued user message while this turn was running: stop after a full model round.
+            // The round output has already been reflected in the in-memory message caches.
             // No special deferral for tool-confirmation phases: we do not require the user to
             // finish confirming before this boundary check runs; the check applies as soon as
             // this `execute_round` completes (same as any other round).
@@ -1270,7 +1271,8 @@ impl ExecutionEngine {
         .collect();
         tool_definitions.sort_by_key(|tool| tool_ordering.get(&tool.name).unwrap_or(&100));
 
-        let enabled_tool_names: Vec<String> = tool_definitions.iter().map(|d| d.name.clone()).collect();
+        let enabled_tool_names: Vec<String> =
+            tool_definitions.iter().map(|d| d.name.clone()).collect();
 
         (enabled_tool_names, Some(tool_definitions))
     }

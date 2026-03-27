@@ -11,7 +11,9 @@ pub mod session;
 pub mod state;
 pub use dialog_turn::{DialogTurn, DialogTurnState, TurnStats};
 pub use message::{
-    Message, MessageContent, MessageRole, MessageSemanticKind, ToolCall, ToolResult,
+    CompressedMessage, CompressedMessageRole, CompressedTodoItem, CompressedTodoSnapshot,
+    CompressedToolCall, CompressionEntry, CompressionPayload, Message, MessageContent, MessageRole,
+    MessageSemanticKind, ToolCall, ToolResult,
 };
 pub use messages_helper::MessageHelper;
 pub use model_round::ModelRound;

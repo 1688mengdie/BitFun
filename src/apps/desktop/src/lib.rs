@@ -321,7 +321,6 @@ pub async fn run() {
             api::agentic_api::restore_session,
             webdriver_bridge_result,
             api::agentic_api::list_sessions,
-            api::agentic_api::get_session_messages,
             api::agentic_api::confirm_tool_execution,
             api::agentic_api::reject_tool_execution,
             api::agentic_api::cancel_tool,
@@ -714,25 +713,11 @@ async fn init_agentic_system() -> anyhow::Result<(
     let path_manager = try_get_path_manager_arc()?;
     let persistence_manager = Arc::new(persistence::PersistenceManager::new(path_manager.clone())?);
 
-    let history_manager = Arc::new(session::MessageHistoryManager::new(
-        persistence_manager.clone(),
-        session::HistoryConfig {
-            enable_persistence: false,
-            ..Default::default()
-        },
-    ));
-
-    let compression_manager = Arc::new(session::CompressionManager::new(
-        persistence_manager.clone(),
-        session::CompressionConfig {
-            enable_persistence: false,
-            ..Default::default()
-        },
-    ));
+    let context_store = Arc::new(session::SessionContextStore::new());
+    let context_compressor = Arc::new(session::ContextCompressor::new(Default::default()));
 
     let session_manager = Arc::new(session::SessionManager::new(
-        history_manager,
-        compression_manager,
+        context_store,
         persistence_manager,
         Default::default(),
     ));
@@ -762,6 +747,7 @@ async fn init_agentic_system() -> anyhow::Result<(
         round_executor,
         event_queue.clone(),
         session_manager.clone(),
+        context_compressor,
         Default::default(),
     ));
 

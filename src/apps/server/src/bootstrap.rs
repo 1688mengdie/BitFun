@@ -5,9 +5,7 @@
 use bitfun_core::agentic::*;
 use bitfun_core::infrastructure::ai::AIClientFactory;
 use bitfun_core::infrastructure::try_get_path_manager_arc;
-use bitfun_core::service::{
-    ai_rules, config, filesystem, mcp, token_usage, workspace,
-};
+use bitfun_core::service::{ai_rules, config, filesystem, mcp, token_usage, workspace};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -50,28 +48,13 @@ pub async fn initialize(workspace: Option<String>) -> anyhow::Result<Arc<ServerA
     let event_queue = Arc::new(events::EventQueue::new(Default::default()));
     let event_router = Arc::new(events::EventRouter::new());
 
-    let persistence_manager =
-        Arc::new(persistence::PersistenceManager::new(path_manager.clone())?);
+    let persistence_manager = Arc::new(persistence::PersistenceManager::new(path_manager.clone())?);
 
-    let history_manager = Arc::new(session::MessageHistoryManager::new(
-        persistence_manager.clone(),
-        session::HistoryConfig {
-            enable_persistence: false,
-            ..Default::default()
-        },
-    ));
-
-    let compression_manager = Arc::new(session::CompressionManager::new(
-        persistence_manager.clone(),
-        session::CompressionConfig {
-            enable_persistence: false,
-            ..Default::default()
-        },
-    ));
+    let context_store = Arc::new(session::SessionContextStore::new());
+    let context_compressor = Arc::new(session::ContextCompressor::new(Default::default()));
 
     let session_manager = Arc::new(session::SessionManager::new(
-        history_manager,
-        compression_manager,
+        context_store,
         persistence_manager,
         Default::default(),
     ));
@@ -96,6 +79,7 @@ pub async fn initialize(workspace: Option<String>) -> anyhow::Result<Arc<ServerA
         round_executor,
         event_queue.clone(),
         session_manager.clone(),
+        context_compressor,
         Default::default(),
     ));
 
@@ -110,11 +94,11 @@ pub async fn initialize(workspace: Option<String>) -> anyhow::Result<Arc<ServerA
     coordination::ConversationCoordinator::set_global(coordinator.clone());
 
     // Token usage
-    let token_usage_service = Arc::new(
-        token_usage::TokenUsageService::new(path_manager.clone()).await?,
-    );
-    let token_usage_subscriber =
-        Arc::new(token_usage::TokenUsageSubscriber::new(token_usage_service.clone()));
+    let token_usage_service =
+        Arc::new(token_usage::TokenUsageService::new(path_manager.clone()).await?);
+    let token_usage_subscriber = Arc::new(token_usage::TokenUsageSubscriber::new(
+        token_usage_service.clone(),
+    ));
     event_router.subscribe_internal("token_usage".to_string(), token_usage_subscriber);
 
     // Dialog scheduler
