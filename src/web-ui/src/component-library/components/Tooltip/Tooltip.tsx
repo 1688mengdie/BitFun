@@ -327,8 +327,11 @@ export const Tooltip: React.FC<TooltipProps> = ({
   };
 
   const handleClick = (e: React.MouseEvent) => {
-    if (trigger === 'click') {
-      visible ? hideTooltip() : showTooltip();
+    // Always hide tooltip on click for better UX (e.g., button tooltips)
+    if (visible) {
+      hideTooltip();
+    } else if (trigger === 'click') {
+      showTooltip();
     }
     if (typeof childProps.onClick === 'function') {
       (childProps.onClick as (e: React.MouseEvent) => void)(e);
