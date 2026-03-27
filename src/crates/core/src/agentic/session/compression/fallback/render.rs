@@ -5,17 +5,11 @@ use serde_json::{json, Value};
 
 pub(super) fn render_payload_for_model(payload: &CompressionPayload) -> String {
     if payload.entries.is_empty() {
-        return [
-            "Earlier conversation has been condensed for context management.",
-            "The omitted history could not be kept within the available context budget.",
-        ]
-        .join("\n\n");
+        return "No detailed historical entries fit within the remaining context budget."
+            .to_string();
     }
 
-    let mut sections = vec![
-        "Earlier conversation has been condensed for context management.".to_string(),
-        "The history below is a partial record. Message text, tool arguments, and task lists may have been truncated or omitted during compression. All tool results have been cleared from this compressed history. Treat it as approximate historical context rather than a complete verbatim transcript.".to_string(),
-    ];
+    let mut sections = Vec::new();
 
     for (index, entry) in payload.entries.iter().enumerate() {
         match entry {

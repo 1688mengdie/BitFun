@@ -1,4 +1,4 @@
-use super::{build_structured_compression_reminder, CompressionFallbackOptions};
+use super::{build_structured_compression_summary, CompressionFallbackOptions};
 use crate::agentic::core::{
     render_system_reminder, CompressedMessageRole, CompressionEntry, CompressionPayload, Message,
     MessageSemanticKind, ToolCall, ToolResult,
@@ -40,7 +40,7 @@ fn clears_tool_results_from_compressed_history() {
         image_attachments: None,
     });
 
-    let reminder = build_structured_compression_reminder(
+    let summary_artifact = build_structured_compression_summary(
         vec![vec![
             Message::user("inspect".to_string()),
             assistant,
@@ -49,7 +49,7 @@ fn clears_tool_results_from_compressed_history() {
         &default_options(),
     );
 
-    let turn = match &reminder.payload.entries[0] {
+    let turn = match &summary_artifact.payload.entries[0] {
         CompressionEntry::Turn { messages, .. } => messages,
         _ => panic!("expected turn entry"),
     };
@@ -59,8 +59,11 @@ fn clears_tool_results_from_compressed_history() {
         .expect("assistant message");
 
     assert_eq!(assistant_message.tool_calls.len(), 1);
-    assert!(!reminder.model_text.contains("Tool result:"));
-    assert!(reminder.model_text.contains("All tool results have been cleared"));
+    assert!(!summary_artifact.summary_text.contains("Tool result:"));
+    assert!(!summary_artifact
+        .summary_text
+        .contains("All tool results have been cleared"));
+    assert!(summary_artifact.summary_text.contains("Historical turn 1:"));
 }
 
 #[test]
@@ -70,11 +73,11 @@ fn reuses_existing_compression_payload_atomically() {
         .with_semantic_kind(MessageSemanticKind::InternalReminder)
         .with_compression_payload(CompressionPayload::from_summary(prior_summary.clone()));
 
-    let reminder =
-        build_structured_compression_reminder(vec![vec![reminder_message]], &default_options());
+    let summary_artifact =
+        build_structured_compression_summary(vec![vec![reminder_message]], &default_options());
 
     assert!(matches!(
-        &reminder.payload.entries[0],
+        &summary_artifact.payload.entries[0],
         CompressionEntry::ModelSummary { text } if text == &prior_summary
     ));
 }

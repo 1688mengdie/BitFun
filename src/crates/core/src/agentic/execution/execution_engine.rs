@@ -11,7 +11,7 @@ use crate::agentic::image_analysis::{
     build_multimodal_message_with_images, process_image_contexts_for_provider, ImageContextData,
     ImageLimits,
 };
-use crate::agentic::session::{ContextCompressor, SessionManager};
+use crate::agentic::session::{CompressionTailPolicy, ContextCompressor, SessionManager};
 use crate::agentic::tools::{get_all_registered_tools, SubagentParentInfo};
 use crate::agentic::WorkspaceBinding;
 use crate::infrastructure::ai::get_global_ai_client_factory;
@@ -441,6 +441,7 @@ impl ExecutionEngine {
         context_window: usize,
         tool_definitions: &Option<Vec<ToolDefinition>>,
         system_prompt_message: Message,
+        tail_policy: CompressionTailPolicy,
     ) -> BitFunResult<Option<(usize, Vec<Message>)>> {
         let event_subagent_parent_info = subagent_parent_info.map(|info| info.clone().into());
         let mut session = self
@@ -483,7 +484,13 @@ impl ExecutionEngine {
         // Execute compression
         match self
             .context_compressor
-            .compress_turns(session_id, context_window, turn_index_to_keep, turns)
+            .compress_turns(
+                session_id,
+                context_window,
+                turn_index_to_keep,
+                turns,
+                tail_policy,
+            )
             .await
         {
             Ok(compression_result) => {
@@ -909,6 +916,7 @@ impl ExecutionEngine {
                         context_window,
                         &tool_definitions,
                         system_prompt_message.clone(),
+                        CompressionTailPolicy::PreserveLiveFrontier,
                     )
                     .await
                 {
