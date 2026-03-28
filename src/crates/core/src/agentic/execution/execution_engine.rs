@@ -39,6 +39,19 @@ impl Default for ExecutionEngineConfig {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct ContextCompactionOutcome {
+    pub compression_id: String,
+    pub compression_count: usize,
+    pub tokens_before: usize,
+    pub tokens_after: usize,
+    pub compression_ratio: f64,
+    pub duration_ms: u64,
+    pub has_summary: bool,
+    pub summary_source: String,
+    pub applied: bool,
+}
+
 /// Execution engine
 pub struct ExecutionEngine {
     round_executor: Arc<RoundExecutor>,
@@ -536,6 +549,11 @@ impl ExecutionEngine {
                         compression_ratio: (compressed_tokens as f64) / (current_tokens as f64),
                         duration_ms,
                         has_summary: compression_result.has_model_summary,
+                        summary_source: if compression_result.has_model_summary {
+                            "model".to_string()
+                        } else {
+                            "local_fallback".to_string()
+                        },
                         subagent_parent_info: event_subagent_parent_info.clone(),
                     },
                     EventPriority::Normal,
@@ -559,6 +577,175 @@ impl ExecutionEngine {
                 .await;
 
                 Err(BitFunError::Session(e.to_string()))
+            }
+        }
+    }
+
+    /// Compact the current session context outside the normal dialog execution loop.
+    /// Always emits compression started/completed/failed events for the provided turn.
+    pub async fn compact_session_context(
+        &self,
+        session_id: &str,
+        dialog_turn_id: &str,
+        messages: Vec<Message>,
+        current_tokens: usize,
+        context_window: usize,
+        trigger: &str,
+        tail_policy: CompressionTailPolicy,
+    ) -> BitFunResult<ContextCompactionOutcome> {
+        let mut session = self
+            .session_manager
+            .get_session(session_id)
+            .ok_or_else(|| BitFunError::NotFound(format!("Session not found: {}", session_id)))?;
+        let start_time = std::time::Instant::now();
+        let compression_id = format!("compression_{}", uuid::Uuid::new_v4());
+
+        self.emit_event(
+            AgenticEvent::ContextCompressionStarted {
+                session_id: session_id.to_string(),
+                turn_id: dialog_turn_id.to_string(),
+                compression_id: compression_id.clone(),
+                trigger: trigger.to_string(),
+                tokens_before: current_tokens,
+                context_window,
+                threshold: session.config.compression_threshold,
+                subagent_parent_info: None,
+            },
+            EventPriority::Normal,
+        )
+        .await;
+
+        let turns = self
+            .context_compressor
+            .collect_all_turns_for_manual_compaction(session_id, messages)?;
+
+        if turns.is_empty() {
+            let duration_ms = start_time.elapsed().as_millis() as u64;
+            let tokens_after = current_tokens;
+            let compression_ratio = if current_tokens == 0 {
+                1.0
+            } else {
+                (tokens_after as f64) / (current_tokens as f64)
+            };
+
+            self.emit_event(
+                AgenticEvent::ContextCompressionCompleted {
+                    session_id: session_id.to_string(),
+                    turn_id: dialog_turn_id.to_string(),
+                    compression_id: compression_id.clone(),
+                    compression_count: session.compression_state.compression_count,
+                    tokens_before: current_tokens,
+                    tokens_after,
+                    compression_ratio,
+                    duration_ms,
+                    has_summary: false,
+                    summary_source: "none".to_string(),
+                    subagent_parent_info: None,
+                },
+                EventPriority::Normal,
+            )
+            .await;
+
+            return Ok(ContextCompactionOutcome {
+                compression_id,
+                compression_count: session.compression_state.compression_count,
+                tokens_before: current_tokens,
+                tokens_after,
+                compression_ratio,
+                duration_ms,
+                has_summary: false,
+                summary_source: "none".to_string(),
+                applied: false,
+            });
+        }
+
+        match self
+            .context_compressor
+            .compress_turns(
+                session_id,
+                context_window,
+                turns.len(),
+                turns,
+                tail_policy,
+            )
+            .await
+        {
+            Ok(compression_result) => {
+                let mut compressed_messages = compression_result.messages;
+                self.session_manager
+                    .replace_context_messages(session_id, compressed_messages.clone())
+                    .await;
+
+                session.compression_state.increment_compression_count();
+                let compression_count = session.compression_state.compression_count;
+                let _ = self
+                    .session_manager
+                    .update_compression_state(session_id, session.compression_state.clone())
+                    .await;
+
+                let duration_ms = start_time.elapsed().as_millis() as u64;
+                let tokens_after = compressed_messages
+                    .iter_mut()
+                    .map(|message| message.get_tokens())
+                    .sum::<usize>();
+                let compression_ratio = if current_tokens == 0 {
+                    1.0
+                } else {
+                    (tokens_after as f64) / (current_tokens as f64)
+                };
+
+                self.emit_event(
+                    AgenticEvent::ContextCompressionCompleted {
+                        session_id: session_id.to_string(),
+                        turn_id: dialog_turn_id.to_string(),
+                        compression_id: compression_id.clone(),
+                        compression_count,
+                        tokens_before: current_tokens,
+                        tokens_after,
+                        compression_ratio,
+                        duration_ms,
+                        has_summary: compression_result.has_model_summary,
+                        summary_source: if compression_result.has_model_summary {
+                            "model".to_string()
+                        } else {
+                            "local_fallback".to_string()
+                        },
+                        subagent_parent_info: None,
+                    },
+                    EventPriority::Normal,
+                )
+                .await;
+
+                Ok(ContextCompactionOutcome {
+                    compression_id,
+                    compression_count,
+                    tokens_before: current_tokens,
+                    tokens_after,
+                    compression_ratio,
+                    duration_ms,
+                    has_summary: compression_result.has_model_summary,
+                    summary_source: if compression_result.has_model_summary {
+                        "model".to_string()
+                    } else {
+                        "local_fallback".to_string()
+                    },
+                    applied: true,
+                })
+            }
+            Err(err) => {
+                self.emit_event(
+                    AgenticEvent::ContextCompressionFailed {
+                        session_id: session_id.to_string(),
+                        turn_id: dialog_turn_id.to_string(),
+                        compression_id: compression_id.clone(),
+                        error: err.to_string(),
+                        subagent_parent_info: None,
+                    },
+                    EventPriority::High,
+                )
+                .await;
+
+                Err(BitFunError::Session(err.to_string()))
             }
         }
     }

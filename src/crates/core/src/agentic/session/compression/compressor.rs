@@ -92,16 +92,13 @@ impl ContextCompressor {
         result
     }
 
-    /// Returns `(turn_index_to_keep, turns)`.
-    /// If `turn_index_to_keep` is 0, no compression is needed.
-    pub async fn preprocess_turns(
+    fn collect_conversation_turns(
         &self,
         session_id: &str,
-        context_window: usize,
         mut messages: Vec<Message>,
-    ) -> BitFunResult<(usize, Vec<TurnWithTokens>)> {
+    ) -> BitFunResult<Vec<TurnWithTokens>> {
         debug!(
-            "Starting session context compression analysis: session_id={}",
+            "Collecting conversation turns for compression: session_id={}",
             session_id
         );
 
@@ -119,10 +116,10 @@ impl ContextCompressor {
 
         if all_messages.is_empty() {
             debug!(
-                "Session context is empty, no compression needed: session_id={}",
+                "Session context is empty, no compression candidates: session_id={}",
                 session_id
             );
-            return Ok((0, Vec::new()));
+            return Ok(Vec::new());
         }
 
         let mut turns_messages = MessageHelper::group_messages_by_turns(all_messages);
@@ -131,13 +128,38 @@ impl ContextCompressor {
             .iter_mut()
             .map(|turn| turn.iter_mut().map(|m| m.get_tokens()).sum::<usize>())
             .collect();
-        {
-            let turns_msg_num: Vec<usize> = turns_messages.iter().map(|t| t.len()).collect();
-            debug!(
-                "Session has {} turn(s), messages per turn: {:?}, tokens per turn: {:?}",
-                turns_count, turns_msg_num, turns_tokens
-            );
+        let turns_msg_num: Vec<usize> = turns_messages.iter().map(|turn| turn.len()).collect();
+        debug!(
+            "Session has {} turn(s), messages per turn: {:?}, tokens per turn: {:?}",
+            turns_count, turns_msg_num, turns_tokens
+        );
+
+        Ok(turns_messages
+            .into_iter()
+            .zip(turns_tokens)
+            .map(|(msgs, tokens)| TurnWithTokens::new(msgs, tokens))
+            .collect())
+    }
+
+    /// Returns `(turn_index_to_keep, turns)`.
+    /// If `turn_index_to_keep` is 0, no compression is needed.
+    pub async fn preprocess_turns(
+        &self,
+        session_id: &str,
+        context_window: usize,
+        messages: Vec<Message>,
+    ) -> BitFunResult<(usize, Vec<TurnWithTokens>)> {
+        debug!(
+            "Starting session context compression analysis: session_id={}",
+            session_id
+        );
+
+        let turns = self.collect_conversation_turns(session_id, messages)?;
+        if turns.is_empty() {
+            return Ok((0, Vec::new()));
         }
+        let turns_count = turns.len();
+        let turns_tokens: Vec<usize> = turns.iter().map(|turn| turn.tokens).collect();
 
         let token_limit_keep_turns =
             (context_window as f32 * self.config.keep_turns_ratio) as usize;
@@ -157,12 +179,16 @@ impl ContextCompressor {
             session_id, turn_index_to_keep
         );
 
-        let turns: Vec<TurnWithTokens> = turns_messages
-            .into_iter()
-            .zip(turns_tokens.into_iter())
-            .map(|(msgs, tokens)| TurnWithTokens::new(msgs, tokens))
-            .collect();
         Ok((turn_index_to_keep, turns))
+    }
+
+    /// Collect all non-system conversation turns for a full manual compaction pass.
+    pub fn collect_all_turns_for_manual_compaction(
+        &self,
+        session_id: &str,
+        messages: Vec<Message>,
+    ) -> BitFunResult<Vec<TurnWithTokens>> {
+        self.collect_conversation_turns(session_id, messages)
     }
 
     pub async fn compress_turns(
@@ -375,6 +401,26 @@ impl ContextCompressor {
         }
     }
 
+    fn normalize_model_summary_output(raw: &str) -> Option<String> {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+
+        if let Some(summary) = extract_tag_content(trimmed, "summary") {
+            let summary = summary.trim();
+            if !summary.is_empty() {
+                return Some(summary.to_string());
+            }
+        }
+
+        if trimmed.contains("<analysis>") {
+            return None;
+        }
+
+        Some(trimmed.to_string())
+    }
+
     async fn execute_compression(
         &self,
         ai_client: Arc<AIClient>,
@@ -508,8 +554,15 @@ Be thorough and precise. Do not lose important technical details from either the
         system_message_for_summary: Message,
         messages: Vec<Message>,
     ) -> BitFunResult<String> {
-        self.generate_summary_with_retry(ai_client, system_message_for_summary, messages, 2)
-            .await
+        let raw_summary = self
+            .generate_summary_with_retry(ai_client, system_message_for_summary, messages, 2)
+            .await?;
+        Self::normalize_model_summary_output(&raw_summary).ok_or_else(|| {
+            BitFunError::AIClient(
+                "Model-based compression returned <analysis> without a usable <summary>"
+                    .to_string(),
+            )
+        })
     }
 
     async fn generate_summary_with_retry(
@@ -575,7 +628,9 @@ Be thorough and precise. Do not lose important technical details from either the
         r#"Your task is to create a detailed summary of the conversation so far, paying close attention to the user's explicit requests and your previous actions.
 This summary should be thorough in capturing technical details, code patterns, and architectural decisions that would be essential for continuing development work without losing context.
 
-Before providing your final summary, wrap your analysis in <analysis> tags to organize your thoughts and ensure you've covered all necessary points. In your analysis process:
+Before providing your final summary, wrap your analysis in <analysis> tags to organize your thoughts and ensure you've covered all necessary points. Then output the final retained summary in <summary> tags.
+Important: only the content inside <summary> will be kept as compressed history. The <analysis> section is transient and will be discarded, so do not put any required final information only in <analysis>.
+In your analysis process:
 
 1. Chronologically analyze each message and section of the conversation. For each section thoroughly identify:
    - The user's explicit requests and intents
@@ -659,6 +714,15 @@ Please provide your summary based on the conversation so far, following this str
 "#
         .to_string()
     }
+}
+
+fn extract_tag_content<'a>(text: &'a str, tag: &str) -> Option<&'a str> {
+    let open = format!("<{tag}>");
+    let close = format!("</{tag}>");
+    let start = text.find(&open)?;
+    let after_open = &text[start + open.len()..];
+    let end = after_open.find(&close)?;
+    Some(&after_open[..end])
 }
 
 #[cfg(test)]
@@ -790,5 +854,54 @@ mod tests {
         let marker = ContextCompressor::render_boundary_marker_text(true);
         assert!(!marker.contains("partial reconstructed record"));
         assert!(marker.contains("historical context"));
+    }
+
+    #[test]
+    fn model_summary_output_uses_summary_tag_body_only() {
+        let normalized = ContextCompressor::normalize_model_summary_output(
+            "<analysis>\ninternal reasoning\n</analysis>\n<summary>\nFinal summary\n</summary>",
+        );
+
+        assert_eq!(normalized.as_deref(), Some("Final summary"));
+    }
+
+    #[test]
+    fn model_summary_output_without_tags_keeps_plain_text() {
+        let normalized =
+            ContextCompressor::normalize_model_summary_output("Plain summary without tags");
+
+        assert_eq!(normalized.as_deref(), Some("Plain summary without tags"));
+    }
+
+    #[test]
+    fn model_summary_output_with_analysis_but_no_summary_is_rejected() {
+        let normalized = ContextCompressor::normalize_model_summary_output(
+            "<analysis>\ninternal reasoning\n</analysis>",
+        );
+
+        assert_eq!(normalized, None);
+    }
+
+    #[tokio::test]
+    async fn manual_compaction_turn_collection_includes_all_non_system_turns() {
+        let compressor = ContextCompressor::new(Default::default());
+        let messages = vec![
+            Message::system("system".to_string()),
+            Message::user("First request".to_string()),
+            Message::assistant("First reply".to_string()),
+            Message::user("Second request".to_string()),
+            Message::assistant("Second reply".to_string()),
+        ];
+
+        let manual_turns = compressor
+            .collect_all_turns_for_manual_compaction("session", messages.clone())
+            .expect("manual collection succeeds");
+        let (_, passive_turns) = compressor
+            .preprocess_turns("session", 8_000, messages)
+            .await
+            .expect("passive preprocessing succeeds");
+
+        assert_eq!(manual_turns.len(), 2);
+        assert_eq!(manual_turns.len(), passive_turns.len());
     }
 }
