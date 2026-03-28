@@ -257,6 +257,7 @@ export const Modal: React.FC<ModalProps> = ({
           resizable ? 'modal--resizable' : '',
           isResizing ? 'modal--resizing' : '',
           contentInset ? 'modal--content-inset' : '',
+          showCloseButton ? 'modal--with-close' : '',
         ]
           .filter(Boolean)
           .join(' ')}
@@ -265,14 +266,31 @@ export const Modal: React.FC<ModalProps> = ({
         style={appliedStyle}
       >
         {(title || showCloseButton) && (
-          <div 
-            ref={headerRef}
-            className={`modal__header ${draggable ? 'modal__header--draggable' : ''}`}
+          <div
+            className={[
+              'modal__header-shell',
+              !title && showCloseButton && !draggable ? 'modal__header-shell--close-only' : '',
+            ]
+              .filter(Boolean)
+              .join(' ')}
           >
-            {title && (
-              <div className="modal__title-group">
-                <h2 className="modal__title">{title}</h2>
-                {titleExtra && <span className="modal__title-extra">{titleExtra}</span>}
+            {(title || (draggable && showCloseButton)) && (
+              <div
+                ref={headerRef}
+                className={[
+                  'modal__header',
+                  draggable ? 'modal__header--draggable' : '',
+                  !title && showCloseButton ? 'modal__header--empty' : '',
+                ]
+                  .filter(Boolean)
+                  .join(' ')}
+              >
+                {title && (
+                  <div className="modal__title-group">
+                    <h2 className="modal__title">{title}</h2>
+                    {titleExtra && <span className="modal__title-extra">{titleExtra}</span>}
+                  </div>
+                )}
               </div>
             )}
             {showCloseButton && (

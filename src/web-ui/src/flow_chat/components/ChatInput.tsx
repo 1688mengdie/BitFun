@@ -1411,7 +1411,9 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         containerRef.current &&
         !containerRef.current.contains(target)
       ) {
-        if (inputState.value.trim() === '') {
+        // While IME is composing, React value can still be empty (RichTextInput skips onChange),
+        // but the editor DOM holds preedit text — collapsing would show space-hint on top of it.
+        if (inputState.value.trim() === '' && !isImeComposingRef.current) {
           dispatchInput({ type: 'DEACTIVATE' });
         }
       }
@@ -1589,7 +1591,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                 data-testid="chat-input-textarea"
               />
 
-              {!inputState.isActive && (
+              {!inputState.isActive && !inputState.value.trim() && (
                 <span className="bitfun-chat-input__space-hint">
                   <Trans
                     i18nKey="input.spaceToActivate"

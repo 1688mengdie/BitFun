@@ -88,19 +88,29 @@ const NavSearchDialog: React.FC<NavSearchDialogProps> = ({ open, onClose }) => {
   }, [flowChatState.sessions, openedWorkspacesList]);
 
   const results = useMemo((): SearchResultItem[] => {
-    if (!query.trim()) return [];
-
     const items: SearchResultItem[] = [];
+    const q = query.trim();
+
+    if (!q) {
+      for (const w of projectWorkspaces.slice(0, MAX_PER_GROUP)) {
+        items.push({ kind: 'workspace', id: w.id, label: w.name, sublabel: w.rootPath });
+      }
+      for (const w of assistantWorkspacesList.slice(0, MAX_PER_GROUP)) {
+        const displayName = w.identity?.name?.trim() || w.name;
+        items.push({ kind: 'assistant', id: w.id, label: displayName, sublabel: w.description });
+      }
+      return items;
+    }
 
     const filteredWorkspaces = projectWorkspaces
-      .filter(w => matchesQuery(query, w.name, w.rootPath))
+      .filter(w => matchesQuery(q, w.name, w.rootPath))
       .slice(0, MAX_PER_GROUP);
     for (const w of filteredWorkspaces) {
       items.push({ kind: 'workspace', id: w.id, label: w.name, sublabel: w.rootPath });
     }
 
     const filteredAssistants = assistantWorkspacesList
-      .filter(w => matchesQuery(query, w.name, w.identity?.name, w.description))
+      .filter(w => matchesQuery(q, w.name, w.identity?.name, w.description))
       .slice(0, MAX_PER_GROUP);
     for (const w of filteredAssistants) {
       const displayName = w.identity?.name?.trim() || w.name;
@@ -108,7 +118,7 @@ const NavSearchDialog: React.FC<NavSearchDialogProps> = ({ open, onClose }) => {
     }
 
     const filteredSessions = allSessions
-      .filter(({ session }) => !session.parentSessionId && matchesQuery(query, getTitle(session)))
+      .filter(({ session }) => !session.parentSessionId && matchesQuery(q, getTitle(session)))
       .slice(0, MAX_PER_GROUP);
     for (const { session, workspace } of filteredSessions) {
       items.push({
@@ -155,7 +165,7 @@ const NavSearchDialog: React.FC<NavSearchDialogProps> = ({ open, onClose }) => {
     }
     if (e.key === 'ArrowDown') {
       e.preventDefault();
-      setActiveIndex(i => Math.min(i + 1, results.length - 1));
+      setActiveIndex(i => Math.min(i + 1, Math.max(0, results.length - 1)));
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
       setActiveIndex(i => Math.max(i - 1, 0));

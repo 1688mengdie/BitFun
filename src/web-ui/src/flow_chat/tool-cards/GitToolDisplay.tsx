@@ -271,44 +271,55 @@ export const GitToolDisplay: React.FC<ToolCardProps> = ({
     if (!resultData) return null;
 
     const { stdout, stderr, exit_code, execution_time_ms, working_directory } = resultData;
+    const hasStdout = Boolean(stdout?.trim());
+    const hasStderr = Boolean(stderr?.trim());
+    const showFooter =
+      exit_code !== undefined ||
+      execution_time_ms !== undefined ||
+      Boolean(working_directory?.trim());
 
     return (
-      <div className="git-expanded-content">
-        <div className="git-meta-info">
-          {exit_code !== undefined && (
-            <span className={`meta-item ${exit_code === 0 ? 'success' : 'error'}`}>
-              {t('toolCards.git.exitCode', { code: exit_code })}
-            </span>
-          )}
-          {execution_time_ms !== undefined && (
-            <span className="meta-item">
-              {t('toolCards.git.duration', { time: execution_time_ms >= 1000 
-                ? `${(execution_time_ms / 1000).toFixed(2)}s` 
-                : `${execution_time_ms}ms` })}
-            </span>
-          )}
-          {working_directory && (
-            <span className="meta-item working-dir" title={working_directory}>
-              {t('toolCards.git.directory', { dir: working_directory.split(/[/\\]/).pop() })}
-            </span>
-          )}
-        </div>
-
-        {stdout && (
-          <div className="output-section">
-            <div className="output-label">{t('toolCards.git.output')}</div>
-            <pre className="output-content stdout">{stdout}</pre>
+      <div className="git-result-container">
+        {(hasStdout || hasStderr) && (
+          <div className="git-result-output">
+            {hasStdout && <pre className="git-output-block git-output-stdout">{stdout}</pre>}
+            {hasStderr && (
+              <div className="git-stderr-block">
+                <div className="git-output-label">
+                  {resultData.success ? t('toolCards.git.warning') : t('toolCards.git.error')}
+                </div>
+                <pre
+                  className={`git-output-block ${resultData.success ? 'git-output-warning' : 'git-output-stderr'}`}
+                >
+                  {stderr}
+                </pre>
+              </div>
+            )}
           </div>
         )}
 
-        {stderr && (
-          <div className="output-section">
-            <div className="output-label error-label">
-              {resultData.success ? t('toolCards.git.warning') : t('toolCards.git.error')}
-            </div>
-            <pre className={`output-content ${resultData.success ? 'warning' : 'stderr'}`}>
-              {stderr}
-            </pre>
+        {showFooter && (
+          <div className="git-result-footer">
+            {working_directory?.trim() && (
+              <>
+                <span className="git-result-label">{t('toolCards.terminal.workingDirectory')}</span>
+                <span className="git-result-value" title={working_directory}>
+                  {working_directory}
+                </span>
+              </>
+            )}
+            {exit_code !== undefined && (
+              <span className={`git-exit-code ${exit_code === 0 ? 'success' : 'error'}`}>
+                {t('toolCards.git.exitCode', { code: exit_code })}
+              </span>
+            )}
+            {execution_time_ms !== undefined && (
+              <span className="git-execution-time">
+                {execution_time_ms >= 1000
+                  ? `${(execution_time_ms / 1000).toFixed(2)}s`
+                  : `${execution_time_ms}ms`}
+              </span>
+            )}
           </div>
         )}
       </div>
@@ -340,7 +351,7 @@ export const GitToolDisplay: React.FC<ToolCardProps> = ({
         onClick={handleCardClick}
         className="git-tool-display"
         header={renderHeader()}
-        expandedContent={renderExpandedContent()}
+        expandedContent={isExpanded ? renderExpandedContent() : null}
         errorContent={renderErrorContent()}
         isFailed={(isFailed && status === 'error') || undefined}
         requiresConfirmation={requiresConfirmation && !userConfirmed}
