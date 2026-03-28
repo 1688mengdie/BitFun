@@ -27,6 +27,7 @@ export type WorkspaceEvent =
   | { type: 'workspace:switched'; workspace: WorkspaceInfo }
   | { type: 'workspace:active-changed'; workspace: WorkspaceInfo | null }
   | { type: 'workspace:updated'; workspace: WorkspaceInfo }
+  | { type: 'workspace:recent-updated' }
   | { type: 'workspace:loading'; loading: boolean }
   | { type: 'workspace:error'; error: string | null };
 
@@ -835,11 +836,16 @@ class WorkspaceManager {
   public async refreshRecentWorkspaces(): Promise<void> {
     try {
       const recentWorkspaces = await globalStateAPI.getRecentWorkspaces();
-      this.updateState({ recentWorkspaces });
+      this.updateState({ recentWorkspaces }, { type: 'workspace:recent-updated' });
       log.debug('Recent workspaces refreshed', { count: recentWorkspaces.length });
     } catch (error) {
       log.error('Failed to refresh recent workspaces', { error });
     }
+  }
+
+  public async removeWorkspaceFromRecent(workspaceId: string): Promise<void> {
+    await globalStateAPI.removeWorkspaceFromRecent(workspaceId);
+    await this.refreshRecentWorkspaces();
   }
 
   public async cleanupInvalidWorkspaces(): Promise<number> {

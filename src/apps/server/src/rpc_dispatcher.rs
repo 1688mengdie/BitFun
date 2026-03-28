@@ -69,6 +69,16 @@ pub async fn dispatch(
             let list = state.workspace_service.get_recent_workspaces().await;
             Ok(serde_json::to_value(&list).unwrap_or_default())
         }
+        "remove_recent_workspace" => {
+            let request = extract_request(&params)?;
+            let workspace_id = get_string(request, "workspaceId")?;
+            state
+                .workspace_service
+                .remove_workspace_from_recent(&workspace_id)
+                .await
+                .map_err(|e| anyhow!("{}", e))?;
+            Ok(serde_json::Value::Null)
+        }
         "get_opened_workspaces" => {
             let list = state.workspace_service.get_opened_workspaces().await;
             Ok(serde_json::to_value(&list).unwrap_or_default())

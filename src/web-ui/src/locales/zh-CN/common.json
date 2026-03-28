@@ -845,6 +845,7 @@
     "comingSoon": "即将推出",
     "recentWorkspaces": "切换工作区",
     "openOtherProject": "打开",
+    "removeFromRecent": "从最近列表移除",
     "newProject": "新建",
     "noOtherWorkspaces": "暂无其他工作区",
     "emptyHint": "选一个场景，开始今天的创作吧",

@@ -576,6 +576,7 @@ pub async fn run() {
             subscribe_config_updates,
             get_model_configs,
             get_recent_workspaces,
+            remove_recent_workspace,
             cleanup_invalid_workspaces,
             get_opened_workspaces,
             open_workspace,

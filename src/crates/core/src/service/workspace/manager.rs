@@ -1379,6 +1379,22 @@ impl WorkspaceManager {
             .collect();
     }
 
+    /// Removes a workspace id from recent lists only (does not unregister the workspace).
+    pub fn remove_from_recent_workspaces_only(&mut self, workspace_id: &str) -> bool {
+        let mut changed = false;
+        let before = self.recent_workspaces.len();
+        self.recent_workspaces.retain(|id| id != workspace_id);
+        if self.recent_workspaces.len() != before {
+            changed = true;
+        }
+        let before_a = self.recent_assistant_workspaces.len();
+        self.recent_assistant_workspaces.retain(|id| id != workspace_id);
+        if self.recent_assistant_workspaces.len() != before_a {
+            changed = true;
+        }
+        changed
+    }
+
     /// Returns a reference to the recent-workspaces list.
     pub fn get_recent_workspaces(&self) -> &Vec<String> {
         &self.recent_workspaces

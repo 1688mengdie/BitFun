@@ -845,6 +845,7 @@
     "comingSoon": "Coming Soon",
     "recentWorkspaces": "Switch Workspace",
     "openOtherProject": "Open",
+    "removeFromRecent": "Remove from recent",
     "newProject": "New",
     "noOtherWorkspaces": "No other workspaces",
     "emptyHint": "Pick a scene and let's build something great",
