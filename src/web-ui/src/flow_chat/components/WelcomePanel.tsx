@@ -198,7 +198,7 @@ export const WelcomePanel: React.FC<WelcomePanelProps> = ({
                 {t('welcome.noWorkspaceHint')}
                 <button
                   type="button"
-                  className="welcome-panel__inline-btn"
+                  className="welcome-panel__inline-btn welcome-panel__inline-btn--interactive"
                   onClick={() => { void handleOpenOtherFolder(); }}
                   disabled={isSelectingWorkspace}
                 >
@@ -216,7 +216,7 @@ export const WelcomePanel: React.FC<WelcomePanelProps> = ({
                     <span className="welcome-panel__workspace-anchor" ref={workspaceDropdownRef}>
                       <button
                         type="button"
-                        className={`welcome-panel__inline-btn${workspaceDropdownOpen ? ' welcome-panel__inline-btn--active' : ''}`}
+                        className={`welcome-panel__inline-btn welcome-panel__inline-btn--interactive${workspaceDropdownOpen ? ' welcome-panel__inline-btn--active' : ''}`}
                         onClick={() => setWorkspaceDropdownOpen(v => !v)}
                         disabled={isSelectingWorkspace}
                         title={currentWorkspace?.rootPath}

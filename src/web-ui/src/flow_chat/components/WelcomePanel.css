@@ -147,12 +147,16 @@
   font-family: inherit;
   font-weight: 600;
   line-height: inherit;
-  cursor: pointer;
+  cursor: default;
   vertical-align: baseline;
   transition: background 0.15s;
 }
 
-.welcome-panel__inline-btn:hover {
+.welcome-panel__inline-btn--interactive {
+  cursor: pointer;
+}
+
+.welcome-panel__inline-btn--interactive:hover:not(:disabled) {
   background: var(--element-bg-subtle);
 }
 
