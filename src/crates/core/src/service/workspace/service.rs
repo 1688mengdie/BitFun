@@ -518,6 +518,18 @@ impl WorkspaceService {
         recent_workspaces
     }
 
+    /// Drops a workspace from recent lists only (workspace record and open state unchanged).
+    pub async fn remove_workspace_from_recent(&self, workspace_id: &str) -> BitFunResult<()> {
+        let changed = {
+            let mut manager = self.manager.write().await;
+            manager.remove_from_recent_workspaces_only(workspace_id)
+        };
+        if changed {
+            self.save_workspace_data().await?;
+        }
+        Ok(())
+    }
+
     /// Searches workspaces.
     pub async fn search_workspaces(&self, query: &str) -> Vec<WorkspaceSummary> {
         let manager = self.manager.read().await;

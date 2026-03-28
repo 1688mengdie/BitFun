@@ -8,7 +8,7 @@
 
 import React, { useState, useCallback, useMemo } from 'react';
 import {
-  FolderOpen, Clock, FolderPlus,
+  FolderOpen, Clock, FolderPlus, Trash2,
 } from 'lucide-react';
 import { useWorkspaceContext } from '@/infrastructure/contexts/WorkspaceContext';
 import { useSceneStore } from '@/app/stores/sceneStore';
@@ -26,7 +26,7 @@ const WelcomeScene: React.FC = () => {
   const { t } = useI18n('common');
   const {
     hasWorkspace, currentWorkspace, recentWorkspaces,
-    openWorkspace, switchWorkspace,
+    openWorkspace, switchWorkspace, removeWorkspaceFromRecent,
   } = useWorkspaceContext();
   const openScene = useSceneStore(s => s.openScene);
   const [isSelecting, setIsSelecting] = useState(false);
@@ -85,6 +85,14 @@ const WelcomeScene: React.FC = () => {
     }
   }, [switchWorkspace, openScene]);
 
+  const handleRemoveFromRecent = useCallback(async (workspaceId: string) => {
+    try {
+      await removeWorkspaceFromRecent(workspaceId);
+    } catch (e) {
+      log.error('Failed to remove workspace from recent', e);
+    }
+  }, [removeWorkspaceFromRecent]);
+
   const formatDate = useCallback((dateString: string) => {
     try {
       const date = new Date(dateString);
@@ -137,26 +145,42 @@ const WelcomeScene: React.FC = () => {
               {displayRecentWorkspaces.map(ws => {
                 const { hostPrefix, folderLabel, tooltip } = getRecentWorkspaceLineParts(ws);
                 return (
-                <Tooltip key={ws.id} content={tooltip} placement="right" followCursor>
+                <div key={ws.id} className="welcome-scene__recent-row">
+                  <Tooltip content={tooltip} placement="right" followCursor>
+                    <button
+                      type="button"
+                      className="welcome-scene__recent-item"
+                      onClick={() => { void handleSwitchWorkspace(ws); }}
+                    >
+                      <FolderOpen size={13} />
+                      <span className="welcome-scene__recent-name">
+                        {hostPrefix ? (
+                          <>
+                            <span className="welcome-scene__recent-host">{hostPrefix}</span>
+                            <span className="welcome-scene__recent-host-sep" aria-hidden>
+                              {' · '}
+                            </span>
+                          </>
+                        ) : null}
+                        {folderLabel}
+                      </span>
+                    </button>
+                  </Tooltip>
                   <button
-                    className="welcome-scene__recent-item"
-                    onClick={() => { void handleSwitchWorkspace(ws); }}
+                    type="button"
+                    className="welcome-scene__recent-time-btn"
+                    title={t('welcomeScene.removeFromRecent')}
+                    aria-label={t('welcomeScene.removeFromRecent')}
+                    onClick={() => { void handleRemoveFromRecent(ws.id); }}
                   >
-                    <FolderOpen size={13} />
-                    <span className="welcome-scene__recent-name">
-                      {hostPrefix ? (
-                        <>
-                          <span className="welcome-scene__recent-host">{hostPrefix}</span>
-                          <span className="welcome-scene__recent-host-sep" aria-hidden>
-                            {' · '}
-                          </span>
-                        </>
-                      ) : null}
-                      {folderLabel}
+                    <span className="welcome-scene__recent-time-btn__label">
+                      {formatDate(ws.lastAccessed)}
                     </span>
-                    <span className="welcome-scene__recent-time">{formatDate(ws.lastAccessed)}</span>
+                    <span className="welcome-scene__recent-time-btn__icon" aria-hidden>
+                      <Trash2 size={15} strokeWidth={2} />
+                    </span>
                   </button>
-                </Tooltip>
+                </div>
                 );
               })}
             </div>

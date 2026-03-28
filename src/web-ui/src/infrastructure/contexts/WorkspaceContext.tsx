@@ -40,6 +40,7 @@ interface WorkspaceContextValue extends WorkspaceState {
   ) => Promise<void>;
   scanWorkspaceInfo: () => Promise<WorkspaceInfo | null>;
   refreshRecentWorkspaces: () => Promise<void>;
+  removeWorkspaceFromRecent: (workspaceId: string) => Promise<void>;
   hasWorkspace: boolean;
   workspaceName: string;
   workspacePath: string;
@@ -158,6 +159,10 @@ export const WorkspaceProvider: React.FC<WorkspaceProviderProps> = ({ children }
     return await workspaceManager.refreshRecentWorkspaces();
   }, []);
 
+  const removeWorkspaceFromRecent = useCallback(async (workspaceId: string): Promise<void> => {
+    return await workspaceManager.removeWorkspaceFromRecent(workspaceId);
+  }, []);
+
   const activeWorkspace = state.currentWorkspace;
   const openedWorkspacesList = useMemo(
     () => Array.from(state.openedWorkspaces.values()),
@@ -198,6 +203,7 @@ export const WorkspaceProvider: React.FC<WorkspaceProviderProps> = ({ children }
     reorderOpenedWorkspacesInSection,
     scanWorkspaceInfo,
     refreshRecentWorkspaces,
+    removeWorkspaceFromRecent,
     hasWorkspace,
     workspaceName,
     workspacePath,
@@ -253,6 +259,8 @@ export const useWorkspaceEvents = (
           break;
         case 'workspace:updated':
           onWorkspaceUpdated?.(event.workspace);
+          break;
+        case 'workspace:recent-updated':
           break;
       }
     });

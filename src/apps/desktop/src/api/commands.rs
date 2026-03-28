@@ -104,6 +104,12 @@ pub struct ResetAssistantWorkspaceRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct RemoveRecentWorkspaceRequest {
+    pub workspace_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ReorderOpenedWorkspacesRequest {
     pub workspace_ids: Vec<String>,
 }
@@ -1238,6 +1244,18 @@ pub async fn get_recent_workspaces(
         .into_iter()
         .map(|info| WorkspaceInfoDto::from_workspace_info(&info))
         .collect())
+}
+
+#[tauri::command]
+pub async fn remove_recent_workspace(
+    state: State<'_, AppState>,
+    request: RemoveRecentWorkspaceRequest,
+) -> Result<(), String> {
+    state
+        .workspace_service
+        .remove_workspace_from_recent(&request.workspace_id)
+        .await
+        .map_err(|e| format!("Failed to remove workspace from recent: {}", e))
 }
 
 #[tauri::command]

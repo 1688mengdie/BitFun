@@ -184,6 +184,7 @@ export interface GlobalStateAPI {
   getCurrentWorkspace(): Promise<WorkspaceInfo | null>;
   getOpenedWorkspaces(): Promise<WorkspaceInfo[]>;
   getRecentWorkspaces(): Promise<WorkspaceInfo[]>;
+  removeWorkspaceFromRecent(workspaceId: string): Promise<void>;
   cleanupInvalidWorkspaces(): Promise<number>;
   scanWorkspaceInfo(workspacePath: string): Promise<WorkspaceInfo | null>;
   
@@ -401,6 +402,10 @@ export function createGlobalStateAPI(): GlobalStateAPI {
       const workspaces = (await globalAPI.getRecentWorkspaces()).map(mapWorkspaceInfo);
       logger.debug('getRecentWorkspaces returned', workspaces);
       return workspaces;
+    },
+
+    async removeWorkspaceFromRecent(workspaceId: string): Promise<void> {
+      await globalAPI.removeRecentWorkspace(workspaceId);
     },
 
     async cleanupInvalidWorkspaces(): Promise<number> {
