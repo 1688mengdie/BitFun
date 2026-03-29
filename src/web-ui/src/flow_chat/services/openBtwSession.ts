@@ -7,6 +7,7 @@ import { useAgentCanvasStore } from '@/app/components/panels/content-canvas/stor
 import type { CanvasTab } from '@/app/components/panels/content-canvas/types';
 import { flowChatStore } from '../store/FlowChatStore';
 import { flowChatManager } from './FlowChatManager';
+import { syncSessionToModernStore } from './storeSync';
 
 export const BTW_SESSION_PANEL_TYPE = 'btw-session' as const;
 
@@ -89,7 +90,6 @@ export async function openMainSession(
     activateWorkspace?: (workspaceId: string) => void | Promise<unknown>;
   }
 ): Promise<void> {
-  useSceneStore.getState().openScene('session');
   appManager.updateLayout({
     leftPanelActiveTab: 'sessions',
     leftPanelCollapsed: false,
@@ -100,10 +100,13 @@ export async function openMainSession(
   }
 
   if (flowChatStore.getState().activeSessionId === sessionId) {
-    return;
+    syncSessionToModernStore(sessionId);
+  } else {
+    await flowChatManager.switchChatSession(sessionId);
+    syncSessionToModernStore(sessionId);
   }
 
-  await flowChatManager.switchChatSession(sessionId);
+  useSceneStore.getState().openScene('session');
 }
 
 export function openBtwSessionInAuxPane(params: {
