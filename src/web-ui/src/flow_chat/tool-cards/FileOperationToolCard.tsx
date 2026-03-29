@@ -5,7 +5,19 @@
 
 import React, { useEffect, useCallback, useMemo, useState, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { XCircle, GitBranch, FileText, ChevronDown, ChevronUp, FileEdit, FilePlus, FileX2, Loader2, Clock, Check } from 'lucide-react';
+import {
+  XCircle,
+  GitBranch,
+  FileText,
+  ChevronDown,
+  ChevronUp,
+  FileEdit,
+  FilePlus,
+  FileX2,
+  Loader2,
+  Clock,
+  Check,
+} from 'lucide-react';
 import { CubeLoading } from '../../component-library';
 import type { ToolCardProps } from '../types/flow-chat';
 import { BaseToolCard, ToolCardHeader } from './BaseToolCard';
@@ -298,7 +310,11 @@ export const FileOperationToolCard: React.FC<FileOperationToolCardProps> = ({
   }, [sessionId, currentFilePath, toolCall?.id, fileName, toolItem.toolName]);
 
   const handleCardClick = useCallback((e: React.MouseEvent) => {
-    if ((e.target as HTMLElement).closest('.compact-actions')) {
+    if (
+      (e.target as HTMLElement).closest(
+        '.file-op-git-rail:not(.file-op-git-rail--disabled)',
+      )
+    ) {
       return;
     }
     
@@ -404,7 +420,9 @@ export const FileOperationToolCard: React.FC<FileOperationToolCardProps> = ({
   const renderHeader = () => {
     const { className: iconClassName } = getToolIconInfo();
     const isDeleteTool = toolItem.toolName === 'Delete';
-    
+    const gitRailDisabled =
+      !currentFilePath || !currentWorkspace || !sessionId;
+
     const actionText = isDeleteTool 
       ? '' 
       : (isFailed ? `${toolDisplayInfo.name}${t('toolCards.file.failed')}` : `${toolDisplayInfo.name}:`);
@@ -413,6 +431,7 @@ export const FileOperationToolCard: React.FC<FileOperationToolCardProps> = ({
       <ToolCardHeader
         icon={renderToolIcon()}
         iconClassName={iconClassName}
+        headerExpanded={isFailed ? isErrorExpanded : undefined}
         action={actionText}
       content={
         <>
@@ -442,24 +461,33 @@ export const FileOperationToolCard: React.FC<FileOperationToolCardProps> = ({
               {currentFilePath ? t('toolCards.file.receivingParams') : t('toolCards.file.analyzing')}
             </span>
           )}
-          
-          
-          {!isDeleteTool && !isFailed && !isLoading && status === 'completed' && currentFilePath && (
-            <div className="compact-actions" onClick={(e) => e.stopPropagation()}>
-              <Tooltip content={t('toolCards.file.viewGitDiff')}>
-                <button
-                  className="compact-action-btn git-diff-btn"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleOpenBaselineDiff();
-                  }}
-                  disabled={!currentFilePath || !currentWorkspace || !sessionId}
+          {!isDeleteTool &&
+            !isFailed &&
+            !isLoading &&
+            status === 'completed' &&
+            currentFilePath && (
+              <Tooltip content={t('toolCards.file.viewGitDiff')} placement="top">
+                <div
+                  className={`file-op-git-rail${gitRailDisabled ? ' file-op-git-rail--disabled' : ''}`}
                 >
-                  <GitBranch size={12} />
-                </button>
+                  {!gitRailDisabled && (
+                    <button
+                      type="button"
+                      className="file-op-git-rail__hit"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleOpenBaselineDiff();
+                      }}
+                      aria-label={t('toolCards.file.viewGitDiff')}
+                      title={t('toolCards.file.viewGitDiff')}
+                    />
+                  )}
+                  <div className="file-op-git-rail__visual" aria-hidden>
+                    <GitBranch size={16} strokeWidth={2} />
+                  </div>
+                </div>
               </Tooltip>
-            </div>
-          )}
+            )}
           
           {isFailed && (
             <div className="error-expand-indicator">
@@ -604,6 +632,12 @@ export const FileOperationToolCard: React.FC<FileOperationToolCardProps> = ({
     return <>{t('toolCards.file.delete')}: <span className="delete-file-name">{fileName}</span></>;
   };
 
+  const opensPanelOnClick =
+    !isFailed &&
+    !isDeleteTool &&
+    (Boolean(currentFilePath && sessionId && status === 'completed') ||
+      Boolean(currentFilePath && onOpenInEditor));
+
   if (isDeleteTool) {
     return (
       <CompactToolCard
@@ -632,6 +666,8 @@ export const FileOperationToolCard: React.FC<FileOperationToolCardProps> = ({
         expandedContent={renderExpandedContent()}
         errorContent={isFailed && isErrorExpanded ? renderErrorContent() : null}
         isFailed={isFailed}
+        headerExpandAffordance={opensPanelOnClick || isFailed}
+        headerAffordanceKind={opensPanelOnClick ? 'open-panel-right' : 'expand'}
       />
     </div>
   );

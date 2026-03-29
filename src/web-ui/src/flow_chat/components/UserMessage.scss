@@ -15,21 +15,12 @@
   display: block;
   visibility: visible;
   box-sizing: border-box;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
-  transition: all 0.2s ease;
   position: relative;
   animation: user-message-slide-in 0.4s cubic-bezier(0.25, 0.8, 0.25, 1);
   overflow-y: auto;
   
-  &:hover {
-    background: var(--element-bg-strong);
-    border-color: var(--border-prominent);
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
-  }
-  
   &:focus-within {
     border-color: var(--border-prominent);
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
   }
 
   // Collapsed state

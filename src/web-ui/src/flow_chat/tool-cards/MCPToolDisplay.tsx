@@ -557,7 +557,7 @@ export const MCPToolDisplay: React.FC<ToolCardProps> = ({
     if (toolResult && 'error' in toolResult) {
       return toolResult.error;
     }
-    return 'MCP tool execution failed';
+    return t('toolCards.mcp.executionFailed', 'MCP execution failed');
   };
 
   const handleCardClick = useCallback((e: React.MouseEvent) => {
@@ -590,11 +590,10 @@ export const MCPToolDisplay: React.FC<ToolCardProps> = ({
     <ToolCardHeader
       icon={renderToolIcon()}
       iconClassName="mcp-icon"
-      action={isFailed ? 'MCP tool failed' : 'MCP tool:'}
+      action={isFailed ? t('toolCards.mcp.failedLabel', 'MCP failed') : t('toolCards.mcp.actionLabel', 'MCP:')}
       content={
         <span className="mcp-tool-info">
           <span className="tool-name">{toolName}</span>
-          <span className="server-tag">from {serverName}</span>
         </span>
       }
       extra={
@@ -733,11 +732,6 @@ export const MCPToolDisplay: React.FC<ToolCardProps> = ({
   const renderErrorContent = () => (
     <div className="error-content">
       <div className="error-message">{getErrorMessage()}</div>
-      <div className="error-meta">
-        <span className="error-tool">Tool: {toolName}</span>
-        <span className="error-separator">|</span>
-        <span className="error-server">Server: {serverName}</span>
-      </div>
     </div>
   );
 

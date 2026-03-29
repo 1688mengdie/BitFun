@@ -4,7 +4,7 @@
 
 import React, { useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ChevronDown, ChevronUp, GitBranch, Check, X, AlertTriangle } from 'lucide-react';
+import { GitBranch, Check, X, AlertTriangle } from 'lucide-react';
 import { CubeLoading, IconButton } from '../../component-library';
 import type { ToolCardProps } from '../types/flow-chat';
 import { BaseToolCard, ToolCardHeader } from './BaseToolCard';
@@ -166,7 +166,7 @@ export const GitToolDisplay: React.FC<ToolCardProps> = ({
 
   const handleCardClick = useCallback((e: React.MouseEvent) => {
     const target = e.target as HTMLElement;
-    if (target.closest('.preview-toggle-btn') || target.closest('.git-action-buttons')) {
+    if (target.closest('.git-action-buttons')) {
       return;
     }
     
@@ -239,21 +239,6 @@ export const GitToolDisplay: React.FC<ToolCardProps> = ({
                 <X size={14} />
               </IconButton>
             </div>
-          )}
-          
-          {(hasOutput || isFailed) && (
-            <IconButton
-              className="preview-toggle-btn"
-              variant="ghost"
-              size="xs"
-              onClick={(e) => {
-                e.stopPropagation();
-                toggleExpanded();
-              }}
-              tooltip={isExpanded ? t('toolCards.git.collapseOutput') : t('toolCards.git.expandOutput')}
-            >
-              {isExpanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
-            </IconButton>
           )}
           
           {isFailed && (
@@ -343,6 +328,17 @@ export const GitToolDisplay: React.FC<ToolCardProps> = ({
     </div>
   );
 
+  /** Failure is summarized in the header; full details live here and only show when expanded. */
+  const renderDetailsWhenExpanded = (): React.ReactNode => {
+    if (resultData) {
+      return renderExpandedContent();
+    }
+    if (isFailed) {
+      return renderErrorContent();
+    }
+    return null;
+  };
+
   return (
     <div ref={cardRootRef} data-tool-card-id={toolId ?? ''}>
       <BaseToolCard
@@ -351,10 +347,9 @@ export const GitToolDisplay: React.FC<ToolCardProps> = ({
         onClick={handleCardClick}
         className="git-tool-display"
         header={renderHeader()}
-        expandedContent={isExpanded ? renderExpandedContent() : null}
-        errorContent={renderErrorContent()}
-        isFailed={(isFailed && status === 'error') || undefined}
+        expandedContent={isExpanded ? renderDetailsWhenExpanded() : null}
         requiresConfirmation={requiresConfirmation && !userConfirmed}
+        headerExpandAffordance={Boolean(hasOutput || isFailed)}
       />
     </div>
   );

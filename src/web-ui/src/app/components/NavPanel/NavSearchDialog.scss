@@ -1,73 +1,89 @@
 @use '../../../component-library/styles/tokens.scss' as *;
 
-// ── Overlay ──────────────────────────────────────────────────────────────────
-
 .bitfun-nav-search-dialog__overlay {
   position: fixed;
   inset: 0;
   z-index: 600;
-  background: rgba(0, 0, 0, 0.35);
+  background: transparent;
   display: flex;
   align-items: flex-start;
   justify-content: center;
   padding-top: 80px;
-  animation: bitfun-nav-search-overlay-in 0.12s ease;
 }
 
-@keyframes bitfun-nav-search-overlay-in {
-  from { opacity: 0; }
-  to   { opacity: 1; }
-}
-
-// ── Card ─────────────────────────────────────────────────────────────────────
+// ── Card — matches .bitfun-scene-viewport surface (--color-bg-scene)
 
 .bitfun-nav-search-dialog__card {
   width: 520px;
   max-width: calc(100vw - 32px);
-  background: var(--color-bg-elevated);
-  border-radius: $size-radius-lg;
+  background: var(--color-bg-scene);
+  border-radius: $size-radius-base;
+  border: 1px solid var(--border-subtle);
   box-shadow:
-    0 8px 32px rgba(0, 0, 0, 0.25),
-    0 2px 8px rgba(0, 0, 0, 0.15),
-    inset 0 0 0 1px var(--border-subtle);
+    0 1px 2px rgba(15, 23, 42, 0.05),
+    0 12px 32px -10px rgba(15, 23, 42, 0.14);
   overflow: hidden;
   display: flex;
   flex-direction: column;
   max-height: calc(100vh - 120px);
-  animation: bitfun-nav-search-card-in 0.14s ease;
+  animation: bitfun-nav-search-card-in 0.28s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+:root[data-theme-type='light'] .bitfun-nav-search-dialog__card {
+  border-color: var(--border-medium);
+}
+
+:root[data-theme-type='dark'] .bitfun-nav-search-dialog__card {
+  box-shadow:
+    0 1px 0 color-mix(in srgb, #fff 4%, transparent),
+    0 14px 40px -12px rgba(0, 0, 0, 0.55);
 }
 
 @keyframes bitfun-nav-search-card-in {
-  from { opacity: 0; transform: translateY(-8px) scale(0.98); }
-  to   { opacity: 1; transform: translateY(0) scale(1); }
+  from {
+    opacity: 0;
+    transform: translateY(-7px) scale(0.988);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
 // ── Input row ────────────────────────────────────────────────────────────────
 
 .bitfun-nav-search-dialog__input-row {
-  padding: $size-gap-3;
+  padding: $size-gap-2;
   border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;
+  background: var(--color-bg-scene);
 }
 
-// Search component — capsule style matching the nav trigger
+// Search component — capsule matches .bitfun-nav-panel__search-trigger
 .bitfun-nav-search-dialog__search {
   width: 100%;
 
   .search__wrapper {
     height: 32px;
+    min-height: 32px;
+    padding: 0 $size-gap-2;
+    gap: $size-gap-2;
+    border: none;
     border-radius: $size-radius-full;
-    background: var(--element-bg-soft);
+    background: var(--color-bg-scene);
     box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border-subtle) 65%, transparent);
+    transition:
+      background 0.2s ease,
+      box-shadow 0.2s ease;
 
     &:hover {
-      background: var(--element-bg-medium);
-      box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border-medium) 50%, transparent);
+      background: color-mix(in srgb, var(--color-bg-scene) 88%, var(--element-bg-medium));
+      box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border-medium) 55%, transparent);
     }
 
     &:focus-within {
-      background: var(--element-bg-medium);
-      box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border-medium) 65%, transparent);
+      background: color-mix(in srgb, var(--color-bg-scene) 82%, var(--element-bg-medium));
+      box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border-medium) 68%, transparent);
     }
   }
 
@@ -84,32 +100,63 @@
   }
 }
 
+@keyframes bitfun-nav-search-fade-rise {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 // ── Results ──────────────────────────────────────────────────────────────────
 
 .bitfun-nav-search-dialog__results {
   overflow-y: auto;
   flex: 1;
-  padding: $size-gap-1 0;
+  padding: $size-gap-1 $size-gap-2 $size-gap-2;
 
   &::-webkit-scrollbar {
-    width: 4px;
+    width: 3px;
   }
+
   &::-webkit-scrollbar-thumb {
-    background: var(--border-medium);
+    background: var(--border-subtle);
     border-radius: 2px;
+  }
+
+  &::-webkit-scrollbar-track {
+    background: transparent;
   }
 }
 
 .bitfun-nav-search-dialog__empty {
-  padding: $size-gap-4;
+  padding: $size-gap-4 $size-gap-2;
   text-align: center;
   color: var(--color-text-muted);
   font-size: $font-size-sm;
+  animation: bitfun-nav-search-fade-rise 0.32s cubic-bezier(0.22, 1, 0.36, 1) 0.06s both;
 }
 
 // ── Groups ───────────────────────────────────────────────────────────────────
 
 .bitfun-nav-search-dialog__group {
+  animation: bitfun-nav-search-fade-rise 0.34s cubic-bezier(0.22, 1, 0.36, 1) both;
+
+  &:nth-of-type(1) {
+    animation-delay: 0.04s;
+  }
+
+  &:nth-of-type(2) {
+    animation-delay: 0.08s;
+  }
+
+  &:nth-of-type(3) {
+    animation-delay: 0.12s;
+  }
+
   & + & {
     margin-top: $size-gap-1;
     border-top: 1px solid var(--border-subtle);
@@ -118,13 +165,14 @@
 }
 
 .bitfun-nav-search-dialog__group-label {
-  padding: $size-gap-1 $size-gap-3;
-  font-size: $font-size-xs;
-  font-weight: 600;
+  padding: $size-gap-1 $size-gap-1 $size-gap-1 2px;
+  font-size: 10px;
+  font-weight: 700;
   color: var(--color-text-muted);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.06em;
   user-select: none;
+  opacity: 0.88;
 }
 
 // ── Result item ──────────────────────────────────────────────────────────────
@@ -134,13 +182,14 @@
   align-items: center;
   gap: $size-gap-2;
   width: 100%;
-  padding: 5px $size-gap-3;
+  padding: 6px $size-gap-2;
   border: none;
+  border-radius: 4px;
   background: transparent;
   cursor: pointer;
   text-align: left;
   color: var(--color-text-primary);
-  transition: background 0.08s ease;
+  transition: background 0.2s cubic-bezier(0.22, 1, 0.36, 1);
 
   &:hover {
     background: var(--element-bg-soft);
@@ -152,10 +201,17 @@
 }
 
 .bitfun-nav-search-dialog__item-icon {
-  color: var(--color-text-muted);
+  color: var(--color-text-primary);
   display: flex;
   align-items: center;
   flex-shrink: 0;
+  opacity: 0.82;
+  transition: opacity 0.2s ease;
+
+  .bitfun-nav-search-dialog__item:hover &,
+  .bitfun-nav-search-dialog__item--active & {
+    opacity: 1;
+  }
 }
 
 .bitfun-nav-search-dialog__item-content {
@@ -183,6 +239,22 @@
 }
 
 // ── Trigger button (in NavPanel brand-header) ────────────────────────────────
+// Hover: (C) capsule “breath” via horizontal padding + (A) one-shot icon wiggle on inner span.
+
+@keyframes bitfun-search-trigger-icon-wiggle {
+  0% {
+    transform: rotate(0deg);
+  }
+  22% {
+    transform: rotate(-5.5deg);
+  }
+  52% {
+    transform: rotate(4deg);
+  }
+  100% {
+    transform: rotate(0deg);
+  }
+}
 
 .bitfun-nav-panel__search-trigger {
   display: flex;
@@ -192,37 +264,57 @@
   min-height: 32px;
   padding: 0 $size-gap-2;
   border: none;
-  // Capsule shape
   border-radius: $size-radius-full;
-  background: var(--element-bg-soft);
+  background: var(--color-bg-scene);
   box-shadow:
     inset 0 0 0 1px color-mix(in srgb, var(--border-subtle) 65%, transparent);
   cursor: text;
-  color: var(--color-text-muted);
+  color: var(--color-text-primary);
   font-size: $font-size-xs;
   text-align: left;
+  box-sizing: border-box;
   transition:
-    background 0.15s ease,
-    box-shadow 0.15s ease,
-    transform 0.12s ease,
-    color 0.15s ease;
+    background 0.2s ease,
+    box-shadow 0.2s ease,
+    color 0.2s ease,
+    padding 0.42s cubic-bezier(0.22, 1, 0.36, 1);
 
   &:hover {
-    background: var(--element-bg-medium);
+    padding: 0 calc(#{$size-gap-2} + 2px);
+    background: color-mix(in srgb, var(--color-bg-scene) 88%, var(--element-bg-medium));
     box-shadow:
-      inset 0 0 0 1px color-mix(in srgb, var(--border-medium) 55%, transparent),
-      0 2px 8px rgba(0, 0, 0, 0.12),
-      0 1px 3px rgba(0, 0, 0, 0.08);
-    transform: translateY(-1px);
-    color: var(--color-text-secondary);
+      inset 0 0 0 1px color-mix(in srgb, var(--border-medium) 55%, transparent);
+    color: var(--color-text-primary);
     cursor: text;
   }
 
   &:active {
-    transform: translateY(0);
+    padding: 0 calc(#{$size-gap-2} + 1px);
     box-shadow:
-      inset 0 0 0 1px color-mix(in srgb, var(--border-medium) 45%, transparent),
-      0 1px 3px rgba(0, 0, 0, 0.08);
+      inset 0 0 0 1px color-mix(in srgb, var(--border-medium) 45%, transparent);
+  }
+
+  &__icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    transition: transform 0.42s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  &:hover &__icon {
+    transform: translateX(2px);
+  }
+
+  &__icon-inner {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transform-origin: 50% 62%;
+  }
+
+  &:hover &__icon-inner {
+    animation: bitfun-search-trigger-icon-wiggle 0.58s cubic-bezier(0.34, 1.12, 0.52, 1) 1 both;
   }
 }
 
@@ -238,19 +330,45 @@
   }
 }
 
-.bitfun-nav-panel__search-trigger__kbd {
-  flex-shrink: 0;
-  font-size: 10px;
-  color: var(--color-text-muted);
-  background: var(--element-bg-subtle);
-  border: 1px solid var(--border-subtle);
-  border-radius: $size-radius-sm;
-  padding: 1px 5px;
-  line-height: 1.4;
-  opacity: 0.6;
-  transition: opacity 0.15s ease;
+@media (prefers-reduced-motion: reduce) {
+  .bitfun-nav-search-dialog__card,
+  .bitfun-nav-search-dialog__group,
+  .bitfun-nav-search-dialog__empty {
+    animation: none !important;
+  }
 
-  .bitfun-nav-panel__search-trigger:hover & {
-    opacity: 0.85;
+  .bitfun-nav-search-dialog__group {
+    animation-delay: 0s !important;
+    opacity: 1;
+    transform: none;
+  }
+
+  .bitfun-nav-search-dialog__empty {
+    opacity: 1;
+    transform: none;
+  }
+
+  .bitfun-nav-search-dialog__item {
+    transition: background 0.12s ease;
+  }
+
+  .bitfun-nav-panel__search-trigger {
+    transition:
+      background 0.15s ease,
+      box-shadow 0.15s ease,
+      color 0.15s ease;
+
+    &:hover,
+    &:active {
+      padding: 0 $size-gap-2;
+    }
+
+    &:hover .bitfun-nav-panel__search-trigger__icon {
+      transform: none;
+    }
+
+    &:hover .bitfun-nav-panel__search-trigger__icon-inner {
+      animation: none;
+    }
   }
 }

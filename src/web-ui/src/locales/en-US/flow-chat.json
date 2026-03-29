@@ -474,6 +474,7 @@
     },
     "plan": {
       "loadingPlan": "Loading plan...",
+      "generating": "Generating...",
       "clickToOpenPlan": "Click to open plan file",
       "remainingTodos": "{{count}} Remaining To-dos",
       "viewPlan": "View Plan",
@@ -555,6 +556,8 @@
       "processing": "Processing..."
     },
     "taskTool": {
+      "headerLine": "{{agentType}} agent: {{description}}",
+      "defaultAgentKind": "Sub-agent",
       "waitingConfirm": "Waiting for confirmation",
       "executing": "Executing...",
       "subAgentFailed": "Sub-agent task execution failed",
@@ -585,7 +588,7 @@
       }
     },
     "diagram": {
-      "interactive": "Interactive Visualization:",
+      "interactive": "Interactive diagram:",
       "preparing": "Preparing",
       "creating": "Creating",
       "mermaidInteractive": "Mermaid Interactive Chart"
@@ -618,7 +621,10 @@
       "cancel": "Cancel",
       "loadingApp": "Loading interactive app...",
       "appLoadError": "Failed to load app",
-      "interactiveApp": "interactive app"
+      "interactiveApp": "interactive app",
+      "actionLabel": "MCP:",
+      "failedLabel": "MCP failed",
+      "executionFailed": "MCP execution failed"
     },
     "default": {
       "waitingConfirm": "Waiting for confirmation",
@@ -631,8 +637,6 @@
     "skill": {
       "unknownSkill": "Unknown skill",
       "unknown": "Unknown",
-      "userLevel": "User level",
-      "projectLevel": "Project level",
       "loadSkillFailed": "Load skill failed",
       "skillAction": "Skill:"
     },
@@ -707,6 +711,7 @@
       "autoTrigger": "Auto trigger",
       "contextCompressionFailed": "Context compression failed",
       "contextCompression": "Context compression:",
+      "localFallbackHeader": "Model request failed; local structured trimming",
       "localFallbackNotice": "Model-based summary was unavailable, so this compression used local structured truncation.",
       "noSummaryNotice": "No additional summary was generated for this compaction pass."
     },

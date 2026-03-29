@@ -1,61 +1,213 @@
 /* Task tool card styles (BaseToolCard). */
 .task-tool-display {
+  /* Match .base-tool-card-header: gap + icon rail like .tool-card-icon-slot. */
   .task-header-wrapper {
     display: flex;
     align-items: stretch;
-    gap: 10px;
+    gap: 4px;
     width: 100%;
   }
 
   .task-icon-container {
+    position: relative;
     display: flex;
     align-items: center;
     justify-content: center;
     flex-shrink: 0;
-    width: 32px;
     align-self: stretch;
+    padding-right: 10px;
+    margin-right: 8px;
+    box-sizing: border-box;
+    min-height: 0;
     color: var(--color-text-secondary, #6b7280);
-    position: relative;
-    
-    svg {
-      width: 28px;
-      height: 28px;
+
+    &::after {
+      content: '';
+      position: absolute;
+      right: 0;
+      top: calc(-1 * var(--tool-card-header-pad-y, 10px));
+      bottom: calc(-1 * var(--tool-card-header-pad-y, 10px));
+      width: 0;
+      border-right: 1px solid var(--border-base);
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .task-task-icon-marks {
       position: relative;
       z-index: 1;
-      /* Mask the connector line behind the icon. */
-      background: var(--color-bg-flowchat, #121214);
-      border-radius: 4px;
-      padding: 3px;
+      width: var(--tool-card-header-icon-rail, 28px);
+      height: var(--tool-card-header-icon-rail, 28px);
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
     }
-    
+
+    .task-task-icon-main {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      transition: opacity 0.18s ease;
+
+      svg {
+        width: 16px;
+        height: 16px;
+      }
+    }
+
+    &.task-icon-container--expandable .task-task-icon-hint {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0;
+      padding: 0;
+      opacity: 0;
+      pointer-events: none;
+      color: var(--color-text-secondary);
+      transition: opacity 0.18s ease;
+
+      svg {
+        width: 16px;
+        height: 16px;
+        flex-shrink: 0;
+        transition: transform 0.2s ease;
+      }
+    }
+
+    &.task-icon-container--expandable .task-task-icon-hint--open svg {
+      transform: rotate(180deg);
+    }
+
     &.is-running {
       color: var(--color-primary, #3b82f6);
     }
-    
-    /* Expanded state: move icon to top and show connector line. */
-    &.prompt-visible {
-      align-items: flex-start;
-      padding-top: 2px;
-      
-      &::after {
-        content: '';
-        position: absolute;
-        top: 32px;
-        left: 50%;
-        transform: translateX(-50%);
-        width: 0;
-        height: calc(100% - 32px);
-        border-left: 1px dashed var(--border-base, rgba(255, 255, 255, 0.18));
-      }
-    }
+  }
+
+  &.base-tool-card-wrapper:hover
+    .base-tool-card.base-tool-card--header-expandable:not(.status-cancelled)
+    .task-icon-container.task-icon-container--expandable
+    .task-task-icon-main {
+    opacity: 0;
+  }
+
+  &.base-tool-card-wrapper:hover
+    .base-tool-card.base-tool-card--header-expandable:not(.status-cancelled)
+    .task-icon-container.task-icon-container--expandable
+    .task-task-icon-hint {
+    opacity: 1;
   }
 
   .task-content-wrapper {
     display: flex;
     flex-direction: column;
-    gap: 6px;
     flex: 1;
     min-width: 0;
+    align-self: stretch;
+    justify-content: center;
+  }
+
+  /* Title row + right rail: same vertical midline (avoid stretch making icons look low). */
+  .task-body-columns {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .task-body-main {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    flex: 1;
+    min-width: 0;
+  }
+
+  /* Narrow right rail; invisible hit layer matches hover tint + opens detail panel. */
+  .task-header-rail {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    align-self: center;
+    flex-shrink: 0;
+    min-width: 40px;
+    padding: 0 0 0 8px;
+    margin-left: 4px;
+
+    /* Hover fill: full header height + extend into header right padding to card inner edge. */
+    &::before {
+      content: '';
+      position: absolute;
+      left: 0;
+      right: calc(-1 * var(--tool-card-header-pad-x, 10px));
+      top: calc(-1 * var(--tool-card-header-pad-y, 10px));
+      bottom: calc(-1 * var(--tool-card-header-pad-y, 10px));
+      background-color: transparent;
+      border-radius: 0;
+      transition: background-color 0.15s ease;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    &:hover::before {
+      background-color: var(--tool-card-bg-hover, var(--color-bg-hover, rgba(255, 255, 255, 0.09)));
+    }
+
+    &:hover .task-header-rail__visual {
+      color: var(--color-text-primary);
+    }
+
+    &::after {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: calc(-1 * var(--tool-card-header-pad-y, 10px));
+      bottom: calc(-1 * var(--tool-card-header-pad-y, 10px));
+      width: 0;
+      border-left: 1px solid var(--border-base);
+      pointer-events: none;
+      z-index: 1;
+    }
+  }
+
+  .task-header-rail__hit {
+    position: absolute;
+    left: 0;
+    top: calc(-1 * var(--tool-card-header-pad-y, 10px));
+    right: calc(-1 * var(--tool-card-header-pad-x, 10px));
+    bottom: calc(-1 * var(--tool-card-header-pad-y, 10px));
+    z-index: 2;
+    margin: 0;
+    padding: 0;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    appearance: none;
+    font: inherit;
+
+    &:focus-visible {
+      outline: 2px solid var(--color-accent-500, #60a5fa);
+      outline-offset: -2px;
+    }
+  }
+
+  .task-header-rail__visual {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    align-self: center;
+    gap: 6px;
+    color: var(--color-text-muted);
+    pointer-events: none;
   }
 
   .task-header-main {
@@ -112,11 +264,12 @@
     letter-spacing: 0.02em;
   }
 
-  .task-header-extra {
+  .task-header-meta {
     display: flex;
     align-items: center;
     gap: 6px;
     margin-left: auto;
+    margin-right: 10px;
     flex-shrink: 0;
   }
 
@@ -139,103 +292,38 @@
     }
   }
 
-  .task-prompt-row {
-    display: flex;
-    align-items: flex-start;
-    gap: 8px;
-    padding: 4px 6px;
-    margin: 0 -6px;  /* Offset padding to keep alignment. */
-    background: transparent;
-    font-size: 11px;
-    color: var(--color-text-secondary, #9ca3af);
-    line-height: 1.4;
-    border-radius: 4px;
-    cursor: pointer;
-    transition: background 0.15s ease;
-    
-    .task-prompt-content {
-      flex: 1;
-      min-width: 0;
-      word-break: break-word;
-      white-space: pre-wrap;
-      max-height: calc(1.4em * 3);
-      overflow-y: auto;
-    }
-    
-    &.task-prompt-row--clickable {
-      cursor: pointer;
-      
-      &:hover {
-        background: var(--color-bg-hover, rgba(255, 255, 255, 0.04));
-      }
-    }
-    
-    &.task-prompt-row--collapsed {
-      align-items: center;
-      
-      .task-prompt-content {
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-      }
-    }
-    
-    .task-prompt-toggle-btn {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      width: 18px;
-      height: 18px;
-      padding: 0;
-      border: none;
-      border-radius: 4px;
-      background: transparent;
-      color: var(--color-text-muted);
-      cursor: pointer;
-      transition: all 0.15s ease;
-      flex-shrink: 0;
-      
-      &:hover {
-        background: var(--color-bg-hover, rgba(107, 114, 128, 0.12));
-        color: var(--color-text-primary, #e5e7eb);
-      }
-      
-      &--collapse {
-        align-self: flex-end;
-      }
-    }
+  .task-status-icon--rail {
+    position: relative;
+    z-index: 1;
+    margin-left: 0;
+    padding-left: 0;
+    border-left: none;
+  }
+
+  /* Prompt uses ModelThinkingDisplay shell + .thinking-markdown (see ModelThinkingDisplay.scss). */
+  .task-expanded-content .thinking-content {
+    /* Override thinking card 300px cap: ~5 lines (matches .thinking-markdown line-height 1.45). */
+    max-height: calc(1.45em * 5);
+  }
+
+  /* Extra breathing room below header / divider before prompt + actions. */
+  &.base-tool-card-wrapper > .base-tool-card-expanded {
+    padding-top: 14px;
   }
 
   .duration-text {
     display: flex;
     align-items: center;
-    gap: 3px;
-    color: var(--tool-card-text-muted);
-    font-size: 10px;
-    
+    gap: 4px;
+    color: var(--tool-card-text-secondary, var(--color-text-secondary, #9ca3af));
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    line-height: 1.2;
+
     svg {
       flex-shrink: 0;
-    }
-  }
-
-  .open-panel-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 20px;
-    height: 20px;
-    padding: 0;
-    border: none;
-    border-radius: 4px;
-    background: transparent;
-    color: var(--color-text-muted);
-    cursor: pointer;
-    transition: all 0.15s ease;
-    flex-shrink: 0;
-    
-    &:hover {
-      background: var(--color-bg-hover, rgba(255, 255, 255, 0.08));
-      color: var(--color-text-primary);
+      opacity: 0.95;
     }
   }
 
@@ -391,6 +479,16 @@
       }
     }
   }
+}
+
+/* Loading: task status icon (cube) hidden; border-pulse + text-fade from BaseToolCard handle the rest */
+.task-tool-display.base-tool-card-wrapper--loading-shimmer .task-status-icon:has(.cube-loading) {
+  display: none !important;
+}
+
+/* E — task description text fades with the card */
+.task-tool-display.base-tool-card-wrapper--loading-shimmer .task-action {
+  animation: tool-card-text-fade 1.6s ease-in-out infinite;
 }
 
 @keyframes slideDown {

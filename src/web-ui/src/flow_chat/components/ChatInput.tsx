@@ -5,7 +5,7 @@
 
 import React, { useRef, useCallback, useEffect, useReducer, useState, useMemo } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
-import { ArrowUp, Image, ChevronsUp, ChevronsDown, RotateCcw, Plus, X, Sparkles, Loader2, ChevronRight, Files, MessageSquarePlus } from 'lucide-react';
+import { ArrowUp, Image, Maximize2, Minimize2, RotateCcw, Plus, X, Sparkles, Loader2, ChevronRight, Files, MessageSquarePlus } from 'lucide-react';
 import { ContextDropZone, useContextStore } from '../../shared/context-system';
 import { useActiveSessionState } from '../hooks/useActiveSessionState';
 import { RichTextInput, type MentionState } from './RichTextInput';
@@ -1816,10 +1816,11 @@ export const ChatInput: React.FC<ChatInputProps> = ({
               className="bitfun-chat-input__expand-button"
               variant="ghost"
               size="xs"
+              shape="circle"
               onClick={toggleExpand}
               tooltip={inputState.isExpanded ? t('input.collapseInput') : t('input.expandInput')}
             >
-              {inputState.isExpanded ? <ChevronsDown size={14} /> : <ChevronsUp size={14} />}
+              {inputState.isExpanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
             </IconButton>
             <div className="bitfun-chat-input__actions">
               <div className="bitfun-chat-input__actions-left">

@@ -466,6 +466,7 @@
     },
     "plan": {
       "loadingPlan": "正在加载计划...",
+      "generating": "生成中...",
       "clickToOpenPlan": "点击打开计划文件",
       "remainingTodos": "剩余 {{count}} 个待办",
       "viewPlan": "查看计划",
@@ -547,6 +548,8 @@
       "processing": "处理中..."
     },
     "taskTool": {
+      "headerLine": "{{agentType}} 智能体：{{description}}",
+      "defaultAgentKind": "子代理",
       "waitingConfirm": "等待确认",
       "executing": "执行中...",
       "subAgentFailed": "子代理任务执行失败",
@@ -577,7 +580,7 @@
       }
     },
     "diagram": {
-      "interactive": "可视化交互视图:",
+      "interactive": "交互图表:",
       "preparing": "准备中",
       "creating": "创建中",
       "mermaidInteractive": "Mermaid 交互图表"
@@ -610,7 +613,10 @@
       "cancel": "取消",
       "loadingApp": "加载交互应用中...",
       "appLoadError": "加载应用失败",
-      "interactiveApp": "交互应用"
+      "interactiveApp": "交互应用",
+      "actionLabel": "MCP：",
+      "failedLabel": "MCP 失败",
+      "executionFailed": "MCP 执行失败"
     },
     "default": {
       "waitingConfirm": "等待确认",
@@ -623,10 +629,8 @@
     "skill": {
       "unknownSkill": "未知技能",
       "unknown": "未知",
-      "userLevel": "用户级",
-      "projectLevel": "项目级",
       "loadSkillFailed": "加载技能失败",
-      "skillAction": "Skill技能:"
+      "skillAction": "技能:"
     },
     "readFile": {
       "parsingParams": "解析参数中...",
@@ -699,6 +703,7 @@
       "autoTrigger": "自动触发",
       "contextCompressionFailed": "上下文压缩失败",
       "contextCompression": "上下文压缩:",
+      "localFallbackHeader": "模型请求异常，已改用本地结构化裁剪",
       "localFallbackNotice": "本次压缩无法使用模型生成总结，因此改用了本地结构化裁剪。",
       "noSummaryNotice": "本次压缩没有生成额外的总结内容。"
     },

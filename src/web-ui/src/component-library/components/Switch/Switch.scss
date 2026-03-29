@@ -56,8 +56,8 @@
     pointer-events: none;
 
     &--checked {
-      background: rgba(99, 102, 241, 0.1);
-      border-color: var(--color-accent-500);
+      background: var(--color-accent-100);
+      border-color: var(--color-accent-300);
     }
   }
 
@@ -89,18 +89,18 @@
   &__loading {
     width: 10px;
     height: 10px;
-    color: tokens.$color-accent-500;
+    color: var(--color-accent-500, #{tokens.$color-accent-500});
     animation: bitfun-switch-spin 1s linear infinite;
   }
 
   &__input:checked + &__track &__thumb {
     left: calc(100% - 18px);
-    background: var(--color-accent-500);
-    border-color: var(--color-accent-500);
+    background: var(--btn-primary-bg, var(--color-accent-500));
+    border-color: var(--btn-primary-bg, var(--color-accent-500));
   }
 
   &__input:focus-visible + &__track {
-    outline: 2px solid tokens.$color-accent-400;
+    outline: 2px solid var(--color-accent-400, #{tokens.$color-accent-400});
     outline-offset: 2px;
   }
 
@@ -114,13 +114,13 @@
   }
 
   &:hover:not(&--disabled):not(&--loading) &__input:checked + &__track {
-    background: rgba(99, 102, 241, 0.15);
+    background: var(--color-accent-200);
     border-color: var(--color-accent-400);
   }
 
   &:hover:not(&--disabled):not(&--loading) &__input:checked + &__track &__thumb {
-    background: var(--color-accent-400);
-    border-color: var(--color-accent-400);
+    background: var(--btn-primary-hover-bg, var(--color-accent-400));
+    border-color: var(--btn-primary-hover-bg, var(--color-accent-400));
   }
 
   &__input:active:not(:disabled) + &__track {

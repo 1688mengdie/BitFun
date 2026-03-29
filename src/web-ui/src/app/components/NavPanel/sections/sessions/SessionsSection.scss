@@ -28,7 +28,7 @@
     border: 1px dashed var(--border-subtle);
     border-radius: $size-radius-sm;
     background: transparent;
-    color: var(--color-text-muted);
+    color: var(--color-text-primary);
     font-size: 12px;
     cursor: pointer;
     flex: 1;
@@ -140,18 +140,19 @@
     opacity: 0.78;
     display: flex;
     align-items: center;
-    color: color-mix(in srgb, var(--color-text-primary) 72%, var(--color-text-muted));
-
-    &.is-code {
-      color: color-mix(in srgb, var(--color-primary) 70%, var(--color-text-primary));
-    }
+    color: var(--color-text-primary);
+    transform: scale(1);
+    transform-origin: center;
+    transition: opacity $motion-fast $easing-standard,
+                transform $motion-fast $easing-standard;
 
     &.is-cowork {
-      color: color-mix(in srgb, var(--color-accent-500) 70%, var(--color-text-primary));
+      color: var(--color-text-secondary);
     }
 
     &.is-running {
-      color: var(--color-primary);
+      color: var(--color-text-secondary);
+      transition: opacity $motion-fast $easing-standard;
       animation: bitfun-nav-session-spin 1s linear infinite;
     }
 
@@ -159,6 +160,11 @@
     .bitfun-nav-panel__inline-item.is-active & {
       opacity: 1;
     }
+  }
+
+  // 「助理会话」区块：行前导图标悬停微微放大（与顶部 __top-action-icon-slot 的 1.07 一致；运行中 Loader 仅用旋转动画）
+  &__items--session-blocks &__inline-item:hover &__inline-item-icon:not(.is-running) {
+    transform: scale(1.07);
   }
 
   &__inline-item-main {
@@ -237,7 +243,7 @@
     border: none;
     border-radius: 4px;
     background: transparent;
-    color: var(--color-text-muted);
+    color: var(--color-text-primary);
     cursor: pointer;
     transition: color $motion-fast $easing-standard,
                 background $motion-fast $easing-standard;
@@ -328,8 +334,8 @@
     }
 
     .bitfun-input-container:focus-within {
-      border-color: color-mix(in srgb, var(--color-primary) 65%, var(--border-subtle));
-      box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-primary) 18%, transparent);
+      border-color: color-mix(in srgb, var(--color-text-primary) 35%, var(--border-subtle));
+      box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-text-primary) 12%, transparent);
     }
   }
 
@@ -343,7 +349,7 @@
     border: none;
     border-radius: 4px;
     background: transparent;
-    color: var(--color-text-muted);
+    color: var(--color-text-primary);
     font-size: 11px;
     cursor: pointer;
     width: 100%;
@@ -351,8 +357,8 @@
                 background $motion-fast $easing-standard;
 
     &:hover {
-      color: var(--color-primary);
-      background: color-mix(in srgb, var(--color-primary) 8%, transparent);
+      color: var(--color-text-primary);
+      background: var(--element-bg-soft);
     }
   }
 
@@ -373,7 +379,7 @@
     border: none;
     border-radius: 4px;
     background: transparent;
-    color: var(--color-text-muted);
+    color: var(--color-text-primary);
     cursor: pointer;
     flex-shrink: 0;
     transition: color $motion-fast $easing-standard,
@@ -478,5 +484,13 @@
   .bitfun-nav-panel__inline-item-icon.is-running {
     animation: none;
     opacity: 0.8;
+  }
+
+  .bitfun-nav-panel__items--session-blocks .bitfun-nav-panel__inline-item:hover .bitfun-nav-panel__inline-item-icon:not(.is-running) {
+    transform: scale(1);
+  }
+
+  .bitfun-nav-panel__items--session-blocks .bitfun-nav-panel__inline-item-icon:not(.is-running) {
+    transition: opacity $motion-fast $easing-standard;
   }
 }

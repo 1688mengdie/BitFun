@@ -2,20 +2,23 @@
  * TaskTool card display component.
  */
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   Split,
   Timer,
-  PanelRightOpen
+  ChevronRight,
+  ChevronDown,
 } from 'lucide-react';
 
 import { useTranslation } from 'react-i18next';
-import { CubeLoading, Button, IconButton } from '../../component-library';
+import { CubeLoading, Button } from '../../component-library';
+import { Markdown } from '@/component-library/components/Markdown/Markdown';
 import type { ToolCardProps } from '../types/flow-chat';
 import { BaseToolCard } from './BaseToolCard';
 import { taskCollapseStateManager } from '../store/TaskCollapseStateManager';
 import { useToolCardHeightContract } from './useToolCardHeightContract';
 import './TaskToolDisplay.scss';
+import './ModelThinkingDisplay.scss';
 
 export const TaskToolDisplay: React.FC<ToolCardProps> = ({
   toolItem,
@@ -125,22 +128,96 @@ export const TaskToolDisplay: React.FC<ToolCardProps> = ({
   };
 
   const taskInput = getTaskInput();
+  const hasRealPrompt = Boolean(
+    taskInput && taskInput.prompt && taskInput.prompt !== 'Not provided',
+  );
+  const needsConfirmation =
+    requiresConfirmation && !userConfirmed && status !== 'completed';
 
-  const isFailed = status === 'error';
+  /* Prompt body: same scroll + Markdown shell as ModelThinkingDisplay. */
+  const promptContentRef = useRef<HTMLDivElement>(null);
+  const [promptScrollState, setPromptScrollState] = useState({
+    hasScroll: false,
+    atTop: true,
+    atBottom: true,
+  });
+
+  const checkPromptScrollState = useCallback(() => {
+    const el = promptContentRef.current;
+    if (!el) return;
+    setPromptScrollState({
+      hasScroll: el.scrollHeight > el.clientHeight,
+      atTop: el.scrollTop <= 5,
+      atBottom: el.scrollTop + el.clientHeight >= el.scrollHeight - 5,
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!isExpanded || !hasRealPrompt) return;
+    const timer = setTimeout(checkPromptScrollState, 50);
+    return () => clearTimeout(timer);
+  }, [isExpanded, hasRealPrompt, taskInput?.prompt, checkPromptScrollState]);
+
+  const isFailed =
+    status === 'error' ||
+    (toolResult != null &&
+      'success' in toolResult &&
+      toolResult.success === false);
 
   const handleCardClick = useCallback((e: React.MouseEvent) => {
     const target = e.target as HTMLElement;
-    if (target.closest('.preview-toggle-btn') || target.closest('.tool-actions') || target.closest('.result-expand-toggle')) {
+    if (
+      target.closest('.preview-toggle-btn') ||
+      target.closest('.tool-actions') ||
+      target.closest('.result-expand-toggle') ||
+      target.closest('.task-header-rail__hit')
+    ) {
       return;
     }
-    
+
     if (isFailed) {
       return;
     }
-    
+
     // Pause auto-scroll while the user toggles the card.
     updateCardExpandedState(!isExpanded);
   }, [isFailed, isExpanded, updateCardExpandedState]);
+
+  const showHeaderExpandHint =
+    !isFailed && (hasRealPrompt || needsConfirmation);
+
+  const taskHeaderLine = useMemo(() => {
+    const desc =
+      (taskInput?.description || '').trim() || t('toolCards.taskDetailPanel.untitled');
+    const raw = taskInput?.agentType;
+    const agentTypeLabel =
+      raw && raw !== 'Not provided'
+        ? raw
+        : t('toolCards.taskTool.defaultAgentKind');
+    return t('toolCards.taskTool.headerLine', {
+      agentType: agentTypeLabel,
+      description: desc,
+    });
+  }, [taskInput, t]);
+
+  const openTaskDetailPanel = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation();
+      const panelData = { toolItem, taskInput, sessionId };
+      const tabInfo = {
+        type: 'task-detail',
+        title: taskHeaderLine,
+        data: panelData,
+        metadata: { taskId: toolItem.id },
+      };
+      if (onOpenInPanel) {
+        onOpenInPanel(tabInfo.type, tabInfo);
+      } else {
+        window.dispatchEvent(new CustomEvent('agent-create-tab', { detail: tabInfo }));
+      }
+    },
+    [onOpenInPanel, sessionId, taskInput, toolItem, taskHeaderLine],
+  );
 
   const formatDuration = (ms: number) => {
     if (ms < 1000) return `${ms}ms`;
@@ -149,7 +226,7 @@ export const TaskToolDisplay: React.FC<ToolCardProps> = ({
   };
 
   const renderToolIcon = () => {
-    return <Split size={18} />;
+    return <Split size={16} />;
   };
 
   const renderStatusIcon = () => {
@@ -159,97 +236,98 @@ export const TaskToolDisplay: React.FC<ToolCardProps> = ({
     return null;
   };
 
-  const renderHeader = () => {
-    const hasPromptContent = taskInput && taskInput.prompt && taskInput.prompt !== 'Not provided';
-    
-    return (
+  const renderHeader = () => (
     <div className="task-header-wrapper">
-      <div className={`task-icon-container ${isRunning ? 'is-running' : ''} ${hasPromptContent ? 'prompt-visible' : ''}`}>
-        {renderToolIcon()}
-      </div>
-      
-      <div className="task-content-wrapper">
-        <div className={`task-header-main ${isFailed ? 'task-header-main--failed' : ''}`}>
-          <span className="task-action">
-            {taskInput?.description || ''}
-          </span>
-          {taskInput?.agentType && (
-            <span className="agent-type-badge">{taskInput.agentType}</span>
-          )}
-          <div className="task-header-extra">
-            {status === 'completed' && toolResult?.result?.duration && (
-              <span className="duration-text">
-                <Timer size={11} />
-                {formatDuration(toolResult.result.duration)}
-              </span>
-            )}
-            {isFailed && (
-              <span className="task-failed-badge">{t('toolCards.taskTool.failed')}</span>
-            )}
-            
-            <IconButton
-              className="open-panel-btn"
-              variant="ghost"
-              size="small"
-              onClick={(e) => {
-                e.stopPropagation();
-                const panelData = { toolItem, taskInput, sessionId };
-                const tabInfo = {
-                  type: 'task-detail',
-                  title: taskInput?.description || 'Sub Agent Task',
-                  data: panelData,
-                  metadata: { taskId: toolItem.id }
-                };
-                if (onOpenInPanel) {
-                  onOpenInPanel(tabInfo.type, tabInfo);
-                } else {
-                  window.dispatchEvent(new CustomEvent('agent-create-tab', { detail: tabInfo }));
-                }
-              }}
-              tooltip={t('toolCards.taskTool.openInPanel')}
-              tooltipPlacement="top"
+      <div
+        className={`task-icon-container ${isRunning ? 'is-running' : ''}${
+          showHeaderExpandHint ? ' task-icon-container--expandable' : ''
+        }`}
+      >
+        <div className="task-task-icon-marks">
+          <div className="task-task-icon-main">{renderToolIcon()}</div>
+          {showHeaderExpandHint && (
+            <span
+              className={`task-task-icon-hint${isExpanded ? ' task-task-icon-hint--open' : ''}`}
+              aria-hidden
             >
-              <PanelRightOpen size={14} />
-            </IconButton>
-            
-            <div className="task-status-icon">
-              {renderStatusIcon()}
+              <ChevronDown size={16} strokeWidth={2} absoluteStrokeWidth />
+            </span>
+          )}
+        </div>
+      </div>
+
+      <div className="task-content-wrapper">
+        <div className="task-body-columns">
+          <div className="task-body-main">
+            <div className={`task-header-main ${isFailed ? 'task-header-main--failed' : ''}`}>
+              <span className="task-action">{taskHeaderLine}</span>
+              <div className="task-header-meta">
+                {status === 'completed' && toolResult?.result?.duration && (
+                  <span className="duration-text">
+                    <Timer size={13} strokeWidth={2} />
+                    {formatDuration(toolResult.result.duration)}
+                  </span>
+                )}
+                {isFailed && (
+                  <span className="task-failed-badge">{t('toolCards.taskTool.failed')}</span>
+                )}
+              </div>
+            </div>
+          </div>
+          <div className="task-header-rail">
+            <button
+              type="button"
+              className="task-header-rail__hit"
+              onClick={openTaskDetailPanel}
+              aria-label={t('toolCards.taskTool.openInPanel')}
+              title={t('toolCards.taskTool.openInPanel')}
+            />
+            <div className="task-header-rail__visual" aria-hidden>
+              <ChevronRight size={18} strokeWidth={2} absoluteStrokeWidth />
+              <div className="task-status-icon task-status-icon--rail">
+                {renderStatusIcon()}
+              </div>
             </div>
           </div>
         </div>
-        {renderPromptRow()}
       </div>
     </div>
-  )};
-
-  const renderPromptRow = () => {
-    const hasPrompt = taskInput && taskInput.prompt && taskInput.prompt !== 'Not provided';
-    
-    if (!hasPrompt) {
-      return null;
-    }
-    
-    return (
-      <div className="task-prompt-row">
-        <div className="task-prompt-content">
-          {taskInput!.prompt}
-        </div>
-      </div>
-    );
-  };
+  );
 
   const renderExpandedContent = () => {
-    const needsConfirmation = requiresConfirmation && !userConfirmed && status !== 'completed';
-    
-    if (!needsConfirmation) {
+    /* Failure only in header badge; do not keep prompt/confirm in expanded body. */
+    if (isFailed) {
       return null;
     }
-    
+
+    if (!hasRealPrompt && !needsConfirmation) {
+      return null;
+    }
+
     return (
       <div className="task-expanded-content">
+        {hasRealPrompt && (
+          <div
+            className={`thinking-content-wrapper${promptScrollState.hasScroll ? ' has-scroll' : ''}${
+              promptScrollState.atTop ? ' at-top' : ''
+            }${promptScrollState.atBottom ? ' at-bottom' : ''}`}
+          >
+            <div
+              ref={promptContentRef}
+              className="thinking-content expanded"
+              onScroll={checkPromptScrollState}
+            >
+              <Markdown
+                content={taskInput!.prompt}
+                isStreaming={false}
+                className="thinking-markdown"
+              />
+            </div>
+          </div>
+        )}
         {needsConfirmation && (
           <div className="tool-actions">
-            <Button 
+            <Button
               className="confirm-button"
               variant="primary"
               size="small"
@@ -258,7 +336,7 @@ export const TaskToolDisplay: React.FC<ToolCardProps> = ({
             >
               {t('toolCards.taskTool.confirmDelegate')}
             </Button>
-            <Button 
+            <Button
               className="reject-button"
               variant="ghost"
               size="small"
@@ -282,6 +360,7 @@ export const TaskToolDisplay: React.FC<ToolCardProps> = ({
         className="task-tool-display"
         header={renderHeader()}
         expandedContent={renderExpandedContent()}
+        headerExpandAffordance={showHeaderExpandHint}
         isFailed={isFailed}
         requiresConfirmation={requiresConfirmation && !userConfirmed}
       />

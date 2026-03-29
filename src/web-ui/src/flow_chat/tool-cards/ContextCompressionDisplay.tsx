@@ -94,11 +94,18 @@ export const ContextCompressionDisplay: React.FC<ContextCompressionDisplayProps>
     return null;
   };
 
+  const headerAction =
+    isFailed
+      ? t('toolCards.contextCompression.contextCompressionFailed')
+      : usedLocalFallback && data.status === 'completed'
+        ? t('toolCards.contextCompression.localFallbackHeader')
+        : t('toolCards.contextCompression.contextCompression');
+
   const renderHeader = () => (
     <ToolCardHeader
       icon={renderToolIcon()}
       iconClassName="compression-icon"
-      action={isFailed ? t('toolCards.contextCompression.contextCompressionFailed') : t('toolCards.contextCompression.contextCompression')}
+      action={headerAction}
       content={
         <span className="compression-info">
           {data.tokensBefore !== undefined && data.tokensAfter !== undefined ? (
@@ -137,19 +144,15 @@ export const ContextCompressionDisplay: React.FC<ContextCompressionDisplayProps>
   );
 
   const renderExpandedContent = () => {
-    if (!usedLocalFallback && !usedNoSummary) {
+    if (!usedNoSummary) {
       return null;
     }
 
     return (
-      <div className={`compression-detail-note ${usedLocalFallback ? 'compression-detail-note--fallback' : ''}`}>
-        {usedLocalFallback
-          ? t('toolCards.contextCompression.localFallbackNotice', {
-              defaultValue: 'Model-based summary was unavailable, so this compression used local structured truncation.',
-            })
-          : t('toolCards.contextCompression.noSummaryNotice', {
-              defaultValue: 'No additional summary was generated for this compaction pass.',
-            })}
+      <div className="compression-detail-note">
+        {t('toolCards.contextCompression.noSummaryNotice', {
+          defaultValue: 'No additional summary was generated for this compaction pass.',
+        })}
       </div>
     );
   };
@@ -157,7 +160,7 @@ export const ContextCompressionDisplay: React.FC<ContextCompressionDisplayProps>
   return (
     <BaseToolCard
       status={data.status}
-      isExpanded={usedLocalFallback || usedNoSummary}
+      isExpanded={usedNoSummary}
       className="context-compression-display"
       header={renderHeader()}
       expandedContent={renderExpandedContent()}
