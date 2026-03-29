@@ -7,6 +7,7 @@
  */
 
 @use '../../../component-library/styles/tokens.scss' as *;
+@use '../../../component-library/styles/btn-primary-tokens.scss' as btn-primary;
 
 $_nav-width: 240px;
 // Scene-inner fade: used when switching between different SceneNav components
@@ -353,7 +354,7 @@ $_section-header-height: 24px;
     border: none;
     border-radius: $size-radius-base 0 0 $size-radius-base;
     background: var(--element-bg-soft);
-    color: var(--color-primary);
+    color: var(--color-text-primary);
     font-size: 12px;
     font-weight: 600;
     cursor: pointer;
@@ -417,7 +418,7 @@ $_section-header-height: 24px;
     border: none;
     border-radius: 0 $size-radius-base $size-radius-base 0;
     background: var(--element-bg-soft);
-    color: var(--color-text-muted);
+    color: var(--color-text-primary);
     cursor: pointer;
     transition: background $motion-fast $easing-standard,
                 color $motion-fast $easing-standard,
@@ -430,7 +431,7 @@ $_section-header-height: 24px;
 
     &.is-active {
       background: var(--element-bg-medium);
-      color: var(--color-primary);
+      color: var(--color-text-primary);
     }
 
     &:active { transform: translateY(1px); }
@@ -490,12 +491,9 @@ $_section-header-height: 24px;
   &__mode-dropdown-item-icon {
     flex-shrink: 0;
 
-    &.is-code {
-      color: color-mix(in srgb, var(--color-primary) 75%, var(--color-text-muted));
-    }
-
+    &.is-code,
     &.is-cowork {
-      color: color-mix(in srgb, var(--color-accent-500) 75%, var(--color-text-muted));
+      color: color-mix(in srgb, var(--color-text-secondary) 82%, var(--color-text-muted));
     }
   }
 
@@ -508,7 +506,7 @@ $_section-header-height: 24px;
 
   &__mode-dropdown-item-check {
     flex-shrink: 0;
-    color: var(--color-primary);
+    color: var(--color-text-primary);
     margin-left: auto;
   }
 
@@ -579,10 +577,10 @@ $_section-header-height: 24px;
 
   &__section-label {
     font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 0.06em;
+    font-weight: 600;
+    letter-spacing: 0.05em;
     text-transform: uppercase;
-    color: var(--color-text-primary);
+    color: var(--color-text-muted);
     flex: 1;
     white-space: nowrap;
     overflow: hidden;
@@ -680,7 +678,7 @@ $_section-header-height: 24px;
     border: none;
     border-radius: 10px;
     background: transparent;
-    color: var(--color-text-primary);
+    color: var(--color-text-secondary);
     cursor: pointer;
     text-align: left;
     transition: background $motion-fast $easing-standard,
@@ -766,28 +764,45 @@ $_section-header-height: 24px;
     box-shadow: none;
     overflow: hidden;
     transition: transform $motion-fast $easing-standard,
-                box-shadow $motion-fast $easing-standard;
+                box-shadow $motion-fast $easing-standard,
+                filter $motion-fast $easing-standard,
+                opacity $motion-fast $easing-standard;
 
     & + & {
       margin-left: -8px;
     }
 
+    &:not(.is-active):not(.bitfun-nav-panel__miniapp-bubble--more) {
+      filter: saturate(0.72);
+      opacity: 0.9;
+    }
+
     &:hover {
       transform: translateY(-2px) scale(1.06);
       box-shadow: 0 10px 20px rgba(0, 0, 0, 0.24);
+      filter: saturate(1);
+      opacity: 1;
     }
 
     &.is-active {
+      filter: saturate(1);
+      opacity: 1;
       box-shadow: 0 8px 18px rgba(0, 0, 0, 0.22),
                   0 0 0 3px color-mix(in srgb, var(--color-primary) 28%, transparent);
     }
 
     &--more {
       background: color-mix(in srgb, var(--element-bg-medium) 92%, transparent);
-      color: var(--color-text-primary);
+      color: var(--color-text-secondary);
       font-size: 10px;
       font-weight: 700;
       letter-spacing: 0.01em;
+      filter: none;
+      opacity: 1;
+
+      &:hover {
+        color: var(--color-text-primary);
+      }
     }
   }
 
@@ -826,7 +841,7 @@ $_section-header-height: 24px;
     border: none;
     border-radius: 4px;
     background: transparent;
-    color: var(--color-text-muted);
+    color: var(--color-text-primary);
     cursor: pointer;
     transition: color $motion-fast $easing-standard,
                 background $motion-fast $easing-standard;
@@ -1148,12 +1163,12 @@ $_section-header-height: 24px;
         transform: translateY(-50%);
         width: 2px;
         height: 16px;
-        background: var(--color-primary);
+        background: var(--btn-primary-bg, var(--color-text-primary));
         border-radius: 0 2px 2px 0;
       }
 
       .bitfun-nav-panel__item-icon {
-        color: var(--color-primary);
+        color: var(--color-text-primary);
         opacity: 1;
       }
     }
@@ -1244,13 +1259,13 @@ $_section-header-height: 24px;
     height: 22px;
     margin-left: auto;
     border-radius: $size-radius-sm;
-    color: var(--color-text-muted);
+    color: var(--color-text-primary);
     cursor: pointer;
     transition: color $motion-fast $easing-standard,
                 background $motion-fast $easing-standard;
 
     &:hover {
-      color: var(--color-primary);
+      color: var(--color-text-secondary);
       background: var(--element-bg-soft);
     }
 
@@ -1405,6 +1420,13 @@ $_section-header-height: 24px;
   color: #ca8a04;
 }
 
+.bitfun-nav-panel__footer .bitfun-notification-btn.bitfun-notification-btn--nav-hover-icon:not(.bitfun-notification-btn--has-progress) {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  justify-content: center;
+}
+
 .bitfun-nav-panel__footer-btn--icon {
   display: flex;
   align-items: center;
@@ -1433,6 +1455,48 @@ $_section-header-height: 24px;
   &:focus-visible {
     outline: 2px solid var(--color-accent-500);
     outline-offset: -1px;
+  }
+}
+
+// Footer icon buttons: default icon fades to alternate on hover / focus-visible
+.bitfun-nav-panel__footer-btn-icon-swap {
+  position: relative;
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+
+  > svg {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    transition: opacity $motion-fast $easing-standard;
+  }
+}
+
+.bitfun-nav-panel__footer-btn-icon-swap-default {
+  opacity: 1;
+}
+
+.bitfun-nav-panel__footer-btn-icon-swap-hover {
+  opacity: 0;
+}
+
+// is-hover-open: multimodal submenu is open but pointer may be over the menu, not the button — keep “hover” icon
+.bitfun-nav-panel__footer-btn--icon:hover .bitfun-nav-panel__footer-btn-icon-swap,
+.bitfun-nav-panel__footer-btn--icon:focus-visible .bitfun-nav-panel__footer-btn-icon-swap,
+.bitfun-nav-panel__footer-btn--icon.is-hover-open .bitfun-nav-panel__footer-btn-icon-swap,
+.bitfun-nav-panel__footer .bitfun-notification-btn--nav-hover-icon:hover .bitfun-nav-panel__footer-btn-icon-swap,
+.bitfun-nav-panel__footer .bitfun-notification-btn--nav-hover-icon:focus-visible .bitfun-nav-panel__footer-btn-icon-swap {
+  .bitfun-nav-panel__footer-btn-icon-swap-default {
+    opacity: 0;
+  }
+
+  .bitfun-nav-panel__footer-btn-icon-swap-hover {
+    opacity: 1;
   }
 }
 
@@ -1527,7 +1591,7 @@ $_section-header-height: 24px;
     background: var(--element-bg-soft);
 
     .bitfun-nav-panel__footer-multimodal-item-icon {
-      color: var(--color-primary);
+      color: var(--color-text-primary);
       opacity: 1;
     }
   }
@@ -1761,7 +1825,7 @@ $_section-header-height: 24px;
 .bitfun-nav-panel__brand-header {
   display: flex;
   flex-direction: column;
-  padding: $size-gap-2 $size-gap-2 $size-gap-1;
+  padding: 0 $size-gap-2 $size-gap-1;
   flex-shrink: 0;
 }
 
@@ -1886,7 +1950,7 @@ $_section-header-height: 24px;
 
   &.is-active {
     background: var(--element-bg-soft);
-    color: var(--color-primary);
+    color: var(--color-text-primary);
   }
 
   &--sub {
@@ -1945,17 +2009,20 @@ $_section-header-height: 24px;
   align-items: center;
   justify-content: center;
   border-radius: 50%;
-  background: var(--element-bg-medium);
-  color: var(--color-text-muted);
+  @include btn-primary.btn-primary-surface-default;
   transform: scale(1);
   transform-origin: center;
   transition: background $motion-fast $easing-standard,
               color $motion-fast $easing-standard,
+              box-shadow $motion-fast $easing-standard,
               transform $motion-fast $easing-standard;
 
   .bitfun-nav-panel__top-action-btn:hover & {
-    background: var(--element-bg-strong);
-    color: var(--color-primary);
+    @include btn-primary.btn-primary-surface-hover;
     transform: scale(1.07);
+  }
+
+  .bitfun-nav-panel__top-action-btn:active & {
+    @include btn-primary.btn-primary-surface-active;
   }
 }

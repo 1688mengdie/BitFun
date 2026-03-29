@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Plus, Edit2, Trash2, Wifi, Loader, AlertTriangle, X, Settings, ExternalLink, Eye, EyeOff } from 'lucide-react';
+import { Plus, SquarePen, Trash2, Wifi, Loader, AlertTriangle, X, Settings, ExternalLink, Eye, EyeOff } from 'lucide-react';
 import { Button, Switch, Select, IconButton, NumberInput, Card, Checkbox, Modal, Input, Textarea, type SelectOption } from '@/component-library';
 import { 
   AIModelConfig as AIModelConfigType, 
@@ -1765,7 +1765,7 @@ const AIModelConfig: React.FC = () => {
           onClick={() => handleEdit(config)}
           tooltip={t('actions.edit')}
         >
-          <Edit2 size={14} />
+          <SquarePen size={14} />
         </IconButton>
         <IconButton
           variant="danger"
@@ -1850,7 +1850,7 @@ const AIModelConfig: React.FC = () => {
                         onClick={() => handleEditProvider(group.models[0])}
                         tooltip={t('actions.edit')}
                       >
-                        <Edit2 size={14} />
+                        <SquarePen size={14} />
                       </IconButton>
                     </div>
                   </div>

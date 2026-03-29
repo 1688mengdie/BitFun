@@ -98,13 +98,13 @@ export class MonacoThemeSync {
               'diffEditor.insertedTextBorder': '#00000000',
               'diffEditor.removedTextBorder': '#00000000',
               
-              'editor.selectionBackground': 'rgba(90, 123, 178, 0.30)',
+              'editor.selectionBackground': 'rgba(15, 23, 42, 0.14)',
               'editor.selectionForeground': '#1e293b',
-              'editor.inactiveSelectionBackground': 'rgba(90, 123, 178, 0.20)',
-              'editor.selectionHighlightBackground': 'rgba(90, 123, 178, 0.22)',
-              'editor.selectionHighlightBorder': 'rgba(90, 123, 178, 0.40)',
-              'editor.wordHighlightBackground': 'rgba(90, 123, 178, 0.15)',
-              'editor.wordHighlightStrongBackground': 'rgba(90, 123, 178, 0.25)',
+              'editor.inactiveSelectionBackground': 'rgba(15, 23, 42, 0.09)',
+              'editor.selectionHighlightBackground': 'rgba(15, 23, 42, 0.10)',
+              'editor.selectionHighlightBorder': 'rgba(15, 23, 42, 0.22)',
+              'editor.wordHighlightBackground': 'rgba(15, 23, 42, 0.07)',
+              'editor.wordHighlightStrongBackground': 'rgba(15, 23, 42, 0.11)',
             })
           });
         }

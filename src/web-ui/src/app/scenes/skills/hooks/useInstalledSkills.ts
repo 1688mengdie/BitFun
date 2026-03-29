@@ -3,7 +3,7 @@ import { open } from '@tauri-apps/plugin-dialog';
 import { useTranslation } from 'react-i18next';
 import { configAPI } from '@/infrastructure/api';
 import type { SkillInfo, SkillLevel, SkillValidationResult } from '@/infrastructure/config/types';
-import { useCurrentWorkspace } from '@/infrastructure/contexts/WorkspaceContext';
+import { useWorkspaceManagerSync } from '@/infrastructure/hooks/useWorkspaceManagerSync';
 import { useNotification } from '@/shared/notification-system';
 import { createLogger } from '@/shared/utils/logger';
 import type { InstalledFilter } from '../skillsSceneStore';
@@ -18,7 +18,7 @@ interface UseInstalledSkillsOptions {
 export function useInstalledSkills({ searchQuery, activeFilter }: UseInstalledSkillsOptions) {
   const { t } = useTranslation('scenes/skills');
   const notification = useNotification();
-  const { workspacePath, hasWorkspace } = useCurrentWorkspace();
+  const { workspacePath, hasWorkspace } = useWorkspaceManagerSync();
 
   const [skills, setSkills] = useState<SkillInfo[]>([]);
   const [loading, setLoading] = useState(true);

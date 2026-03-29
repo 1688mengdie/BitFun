@@ -1,4 +1,5 @@
 @use '../../../component-library/styles/tokens' as *;
+@use '../../../component-library/styles/btn-primary-tokens.scss' as btn-primary;
 
 // ── Layout variables (mirrors acp-layout in NurseryView.scss) ─────────────────
 $skills-gutter:      clamp(36px, 5.5vw, 72px);
@@ -164,23 +165,30 @@ $skills-content-top: clamp(36px, 4.5vh, 48px);
   padding: 0 $size-gap-3;
   border: none;
   border-radius: $size-radius-base;
-  background: color-mix(in srgb, var(--color-accent-500) 10%, var(--element-bg-soft));
-  color: var(--color-text-primary);
+  @include btn-primary.btn-primary-surface-default;
   font-size: $font-size-xs;
   font-weight: $font-weight-medium;
   cursor: pointer;
   transition:
     background $motion-fast $easing-standard,
-    color $motion-fast $easing-standard;
+    color $motion-fast $easing-standard,
+    box-shadow $motion-fast $easing-standard;
   white-space: nowrap;
 
   &:hover {
-    background: color-mix(in srgb, var(--color-accent-500) 16%, var(--element-bg-medium));
-    color: var(--color-text-primary);
+    @include btn-primary.btn-primary-surface-hover;
+  }
+
+  &:active {
+    @include btn-primary.btn-primary-surface-active;
   }
 
   &:focus-visible {
-    outline: 2px solid var(--color-accent-500);
+    outline: 2px solid color-mix(
+      in srgb,
+      var(--btn-primary-color, var(--color-accent-500)) 55%,
+      transparent
+    );
     outline-offset: 2px;
   }
 }

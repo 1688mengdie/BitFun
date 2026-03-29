@@ -384,15 +384,14 @@ export function getToolCardConfig(toolName: string): ToolCardConfig {
     // Parse MCP tool name: mcp_{server_id}_{tool_name}
     const parts = toolName.split('_');
     const actualToolName = parts.slice(2).join('_'); // Actual tool name.
-    const serverName = parts[1] || 'MCP'; // Server ID.
-    
+
     return {
       toolName,
       displayName: actualToolName || toolName,
       icon: 'MCP',
       requiresConfirmation: false,
       resultDisplayType: 'detailed',
-      description: `MCP tool from ${serverName}`,
+      description: 'MCP',
       displayMode: 'compact',
       primaryColor: '#8b5cf6'
     };
@@ -446,8 +445,18 @@ export function getAllToolNames(): string[] {
 }
 
 // Export components
-export { BaseToolCard, ToolCardHeader } from './BaseToolCard';
-export type { BaseToolCardProps, ToolCardHeaderProps } from './BaseToolCard';
+export {
+  BaseToolCard,
+  ToolCardHeader,
+  ToolCardHeaderLayoutContext,
+  useToolCardHeaderLayout,
+} from './BaseToolCard';
+export type {
+  BaseToolCardProps,
+  ToolCardHeaderProps,
+  ToolCardHeaderLayoutContextValue,
+  ToolCardHeaderAffordanceKind,
+} from './BaseToolCard';
 export { PlanDisplay } from './CreatePlanDisplay';
 export type { PlanDisplayProps } from './CreatePlanDisplay';
 

@@ -27,11 +27,11 @@
   }
 
   &--blue {
-    background: rgba(59, 130, 246, 0.14);
-    color: tokens.$color-accent-500;
+    background: var(--color-accent-200);
+    color: var(--color-text-secondary);
 
     &:hover {
-      background: rgba(59, 130, 246, 0.2);
+      background: var(--color-accent-300);
     }
   }
 

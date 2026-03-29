@@ -434,6 +434,14 @@ export interface ThemeConfig {
   
   // Monaco Editor
   monaco?: MonacoThemeConfig;
+
+  /**
+   * Workbench chrome (nav + scene). Per-theme toggles; omitted keys use product defaults.
+   */
+  layout?: {
+    /** Outer border around the main scene viewport (right panel). Default true. */
+    sceneViewportBorder?: boolean;
+  };
 }
 
 

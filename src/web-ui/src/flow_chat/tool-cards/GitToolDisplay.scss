@@ -80,26 +80,6 @@
     font-family: var(--tool-card-font-mono);
   }
 
-  .preview-toggle-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 4px;
-    border: none;
-    background: transparent;
-    cursor: pointer;
-    color: var(--tool-card-text-secondary);
-    transition: color 0.2s ease;
-
-    &:hover {
-      color: var(--tool-card-text-primary);
-    }
-
-    svg {
-      display: block;
-    }
-  }
-
   .error-indicator {
     display: flex;
     align-items: center;

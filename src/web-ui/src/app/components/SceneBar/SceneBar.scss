@@ -66,7 +66,9 @@ $_tab-v-margin: 6px;   // symmetric top/bottom gap inside SceneBar
   font-size: $font-size-sm;
   font-weight: 400;
   white-space: nowrap;
-  background: var(--element-bg-soft);
+  // Slightly lift off --color-bg-primary so tabs never disappear into the chrome
+  // (dark presets often set tertiary === primary; mixing secondary fixes that).
+  background: color-mix(in srgb, var(--color-bg-secondary) 44%, var(--color-bg-primary));
   // Full radius — tab floats symmetrically inside the bar
   border-radius: $size-radius-sm;
   transition: color $motion-fast $easing-standard,
@@ -87,22 +89,15 @@ $_tab-v-margin: 6px;   // symmetric top/bottom gap inside SceneBar
 
   &:hover {
     color: var(--color-text-secondary);
-    background: var(--element-bg-medium);
+    background: color-mix(in srgb, var(--color-bg-secondary) 68%, var(--color-bg-primary));
 
     .bitfun-scene-tab__close {
       opacity: 1;
     }
   }
 
-  // Single tab: no default background, but hover still shows
   &:only-child,
   &:only-child#{&}--active {
-    background: transparent;
-    cursor: default;
-  }
-
-  &:only-child:hover {
-    background: transparent;
     cursor: default;
   }
 
@@ -229,6 +224,50 @@ $_tab-v-margin: 6px;   // symmetric top/bottom gap inside SceneBar
 
 [data-theme='bitfun-slate'] .bitfun-scene-tab__icon {
   opacity: 0.94;
+}
+
+// Light themes: inactive tabs use tiered bg.* tokens; active is a gentle step brighter
+// (not full scene white + cast shadow) so it does not read as a separate floating card.
+:root[data-theme-type='light'] .bitfun-scene-tab {
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-secondary);
+
+  &:hover {
+    background: var(--color-bg-quaternary);
+    color: var(--color-text-secondary);
+  }
+
+  &--active {
+    color: var(--color-text-primary);
+    // Softer than full scene white + drop shadow: stays in the same family as idle tabs
+    background: color-mix(in srgb, var(--color-bg-scene) 72%, var(--color-bg-tertiary));
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--border-subtle) 42%, transparent);
+
+    &:hover {
+      background: color-mix(in srgb, var(--color-bg-scene) 76%, var(--color-bg-tertiary));
+    }
+  }
+
+  // Single tab: still a visible chip when inactive; when active, align with scene card.
+  &:only-child:not(.bitfun-scene-tab--active) {
+    background: var(--color-bg-tertiary);
+    box-shadow: none;
+    color: var(--color-text-secondary);
+  }
+
+  &:only-child.bitfun-scene-tab--active {
+    background: color-mix(in srgb, var(--color-bg-scene) 72%, var(--color-bg-tertiary));
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--border-subtle) 42%, transparent);
+    color: var(--color-text-primary);
+
+    &:hover {
+      background: color-mix(in srgb, var(--color-bg-scene) 76%, var(--color-bg-tertiary));
+    }
+  }
+
+  &:only-child:not(.bitfun-scene-tab--active):hover {
+    background: var(--color-bg-quaternary);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

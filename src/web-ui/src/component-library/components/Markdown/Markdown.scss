@@ -250,16 +250,16 @@
   border-radius: 8px;
   background: var(--markdown-code-bg-elevated);
   border: 1px solid var(--border-color, rgba(255, 255, 255, 0.09));
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.04) inset, 0 8px 24px rgba(0, 0, 0, 0.22);
+  box-shadow: none;
   overflow: hidden;
   position: relative;
-  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  transition: border-color 0.2s ease;
 }
 
 
 .markdown-renderer .code-block-wrapper:hover {
   border-color: color-mix(in srgb, var(--border-color, rgba(255, 255, 255, 0.09)) 70%, var(--primary-color, #3b82f6) 30%);
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.05) inset, 0 10px 28px rgba(0, 0, 0, 0.26);
+  box-shadow: none;
 }
 
 
@@ -378,15 +378,15 @@
   border: 1px solid var(--border-color, rgba(255, 255, 255, 0.09));
   border-radius: 8px;
   margin: 0.65rem 0;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+  box-shadow: none;
   position: relative;
-  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  transition: border-color 0.2s ease;
 }
 
 
 .markdown-renderer pre:hover {
   border-color: color-mix(in srgb, var(--border-color, rgba(255, 255, 255, 0.09)) 75%, var(--primary-color, #3b82f6) 25%);
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.22);
+  box-shadow: none;
 }
 
 

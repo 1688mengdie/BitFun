@@ -8,7 +8,6 @@
   border: 1px solid var(--border-medium);
   border-radius: 8px;
   margin: 0 3rem 1rem 3rem;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
   transition: all 0.2s ease;
   animation: slideInUp 0.3s ease;
   position: relative;
@@ -85,12 +84,6 @@
   
   .user-message-item__content {
     color: var(--color-text-muted, #888);
-  }
-  
-  &:hover {
-    background: transparent;
-    border-color: var(--border-medium, #555);
-    box-shadow: none;
   }
 }
 

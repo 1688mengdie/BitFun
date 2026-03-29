@@ -411,11 +411,14 @@ const MainNav: React.FC<MainNavProps> = ({
               onClick={() => setSearchOpen(true)}
               aria-label={t('nav.search.triggerTooltip')}
             >
-              <Search size={13} />
+              <span className="bitfun-nav-panel__search-trigger__icon" aria-hidden="true">
+                <span className="bitfun-nav-panel__search-trigger__icon-inner">
+                  <Search size={13} />
+                </span>
+              </span>
               <span className="bitfun-nav-panel__search-trigger__label">
                 {t('nav.search.triggerPlaceholder')}
               </span>
-              <span className="bitfun-nav-panel__search-trigger__kbd">⌘K</span>
             </button>
           </Tooltip>
           <NavSearchDialog open={searchOpen} onClose={() => setSearchOpen(false)} />

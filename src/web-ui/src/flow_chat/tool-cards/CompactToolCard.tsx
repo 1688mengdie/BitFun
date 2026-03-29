@@ -53,8 +53,16 @@ export const CompactToolCard: React.FC<CompactToolCardProps> = ({
     }
   };
 
+  const loadingShimmer =
+    status === 'preparing' ||
+    status === 'streaming' ||
+    status === 'running' ||
+    status === 'analyzing';
+
   return (
-    <div className={`compact-tool-card-wrapper ${className}`}>
+    <div
+      className={`compact-tool-card-wrapper${loadingShimmer ? ' compact-tool-card-wrapper--loading-shimmer' : ''} ${className}`.trim()}
+    >
       <div
         className={`compact-tool-card status-${status} ${clickable ? 'clickable' : ''} ${isExpanded ? 'expanded' : ''}`}
         onClick={handleWrapperClick}

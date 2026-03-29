@@ -190,6 +190,8 @@ export const MermaidInteractiveDisplay: React.FC<ToolCardProps> = ({
       onClick={isClickable ? handleOpenMermaid : undefined}
       className={`mermaid-interactive-card ${isClickable ? 'clickable' : ''}`}
       header={renderHeader()}
+      headerExpandAffordance={isClickable}
+      headerAffordanceKind="open-panel-right"
     />
   );
 };

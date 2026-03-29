@@ -13,6 +13,21 @@
   gap: 0;
 }
 
+/* ========== Loading state: A (border via text fade) + E (text fade) ========== */
+
+/* Hide left spinner/cube */
+.compact-tool-card-wrapper--loading-shimmer .compact-card-status-icon:has(.cube-loading),
+.compact-tool-card-wrapper--loading-shimmer .compact-card-status-icon:has(svg.animate-spin) {
+  display: none !important;
+}
+
+/* E — status icon + action + content breathe */
+.compact-tool-card-wrapper--loading-shimmer .compact-card-status-icon,
+.compact-tool-card-wrapper--loading-shimmer .compact-card-action,
+.compact-tool-card-wrapper--loading-shimmer .compact-card-content {
+  animation: tool-card-text-fade 1.6s ease-in-out infinite;
+}
+
 /* ========== Card body - transparent, no border ========== */
 .compact-tool-card {
   background: transparent !important;
@@ -292,6 +307,15 @@
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+@keyframes tool-card-text-fade {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.25;
   }
 }
 

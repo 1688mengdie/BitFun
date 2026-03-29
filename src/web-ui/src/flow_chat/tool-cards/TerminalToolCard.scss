@@ -55,7 +55,7 @@
   font-family: var(--tool-card-font-mono);
   font-size: 12px;
   font-weight: 500;
-  color: var(--color-text-primary);
+  color: var(--tool-card-text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -76,7 +76,7 @@
       border: none !important;
       outline: none !important;
       box-shadow: none !important;
-      color: var(--color-text-primary);
+      color: var(--text-secondary, var(--color-text-secondary));
     }
   }
 
@@ -93,12 +93,6 @@
     color: #e06c75;
     font-style: italic;
   }
-}
-
-:root[data-theme="light"] .terminal-command,
-:root[data-theme-type="light"] .terminal-command,
-.light .terminal-command {
-  color: var(--color-text-secondary);
 }
 
 .terminal-command-input {

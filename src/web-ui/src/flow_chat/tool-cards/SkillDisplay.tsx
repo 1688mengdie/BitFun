@@ -22,25 +22,11 @@ export const SkillDisplay: React.FC<ToolCardProps> = ({
     const result = toolResult.result;
     return {
       name: result.skill_name || result.name || t('toolCards.skill.unknownSkill'),
-      location: result.location || 'unknown',
     };
   };
 
   const skillInfo = getSkillInfo();
   const commandName = toolCall?.input?.command || toolCall?.input?.skill_name || t('toolCards.skill.unknown');
-
-  // Map known locations to localized labels.
-  const getLocationLabel = (location: string) => {
-    switch (location) {
-      case 'user':
-      case 'personal':
-        return t('toolCards.skill.userLevel');
-      case 'project':
-        return t('toolCards.skill.projectLevel');
-      default:
-        return location;
-    }
-  };
 
   const isLoading = status === 'preparing' || status === 'streaming' || status === 'running';
 
@@ -70,19 +56,8 @@ export const SkillDisplay: React.FC<ToolCardProps> = ({
       iconClassName="skill-icon"
       action={isFailed ? t('toolCards.skill.loadSkillFailed') : t('toolCards.skill.skillAction')}
       content={
-        <span className="skill-name-wrapper">
-          {status === 'completed' && skillInfo ? (
-            <>
-              <span className="skill-name">{skillInfo.name}</span>
-              {skillInfo.location && (
-                <span className={`location-tag location-${skillInfo.location}`}>
-                  {getLocationLabel(skillInfo.location)}
-                </span>
-              )}
-            </>
-          ) : (
-            <span className="skill-name">{commandName}</span>
-          )}
+        <span className="skill-name">
+          {status === 'completed' && skillInfo ? skillInfo.name : commandName}
         </span>
       }
       statusIcon={renderStatusIcon()}

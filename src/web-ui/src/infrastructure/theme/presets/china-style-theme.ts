@@ -275,21 +275,21 @@ export const bitfunChinaStyleTheme: ThemeConfig = {
       
       primary: {
         default: {
-          background: 'rgba(46, 94, 138, 0.20)',
-          color: '#4a7aa5',
+          background: '#000000',
+          color: '#ffffff',
           border: 'transparent',
           shadow: 'none',
         },
         hover: {
-          background: 'rgba(46, 94, 138, 0.30)',
-          color: '#3d6689',
+          background: '#262626',
+          color: '#ffffff',
           border: 'transparent',
           shadow: 'none',
           transform: 'none',
         },
         active: {
-          background: 'rgba(46, 94, 138, 0.24)',
-          color: '#3d6689',
+          background: '#1a1a1a',
+          color: '#ffffff',
           border: 'transparent',
           shadow: 'none',
           transform: 'none',
