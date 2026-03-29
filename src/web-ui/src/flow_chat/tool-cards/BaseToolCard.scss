@@ -156,6 +156,24 @@
   z-index: 0;
 }
 
+.tool-card-icon-affordance-hit {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  appearance: none;
+
+  &:focus-visible {
+    outline: 2px solid var(--color-accent-500, #60a5fa);
+    outline-offset: 2px;
+    border-radius: 6px;
+  }
+}
+
 /* Same square box so tool glyph and chevron share center (no circular fill). */
 .tool-card-icon-marks {
   position: relative;

@@ -56,10 +56,12 @@ export const FileOperationToolCard: React.FC<FileOperationToolCardProps> = ({
   const toolId = toolItem.id ?? toolCall?.id;
   
   const [isErrorExpanded, setIsErrorExpanded] = useState(false);
+  const [isContentExpanded, setIsContentExpanded] = useState(status !== 'completed');
   const [operationDiffStats, setOperationDiffStats] = useState<{ additions: number; deletions: number } | null>(null);
   
   const hasInitializedCompletionEffectRef = useRef(false);
   const previousCompletionEndTimeRef = useRef<number | null>(toolItem.endTime ?? null);
+  const previousStatusRef = useRef(status);
   const { cardRootRef } = useToolCardHeightContract({
     toolId,
     toolName: toolItem.toolName,
@@ -162,6 +164,17 @@ export const FileOperationToolCard: React.FC<FileOperationToolCardProps> = ({
     }
   }, [error, clearError, currentFilePath]);
 
+  useEffect(() => {
+    if (previousStatusRef.current !== status) {
+      if (status === 'completed' && !isFailed) {
+        setIsContentExpanded(false);
+      } else if (status !== 'completed') {
+        setIsContentExpanded(true);
+      }
+      previousStatusRef.current = status;
+    }
+  }, [isFailed, status]);
+
   const localDiffStats = useMemo(() => {
     if (status !== 'completed' || isFailed) return null;
     if (toolItem.toolName === 'Write' && contentPreview) {
@@ -239,7 +252,7 @@ export const FileOperationToolCard: React.FC<FileOperationToolCardProps> = ({
     status,
     toolItem.toolName,
   ]);
-  
+
   const getErrorMessage = () => {
     if (toolResult && 'error' in toolResult) {
       return toolResult.error;
@@ -431,7 +444,18 @@ export const FileOperationToolCard: React.FC<FileOperationToolCardProps> = ({
       <ToolCardHeader
         icon={renderToolIcon()}
         iconClassName={iconClassName}
-        headerExpanded={isFailed ? isErrorExpanded : undefined}
+        headerExpanded={
+          isFailed
+            ? isErrorExpanded
+            : hasExpandableContent
+              ? isContentExpanded
+              : undefined
+        }
+        onAffordanceClick={
+          hasExpandableContent
+            ? () => setIsContentExpanded(prev => !prev)
+            : undefined
+        }
         action={actionText}
       content={
         <>
@@ -632,6 +656,18 @@ export const FileOperationToolCard: React.FC<FileOperationToolCardProps> = ({
     return <>{t('toolCards.file.delete')}: <span className="delete-file-name">{fileName}</span></>;
   };
 
+  const expandedContent = renderExpandedContent();
+  const hasExpandableContent =
+    status === 'completed' &&
+    !isFailed &&
+    !isDeleteTool &&
+    Boolean(expandedContent);
+
+  const isCardContentExpanded =
+    !isDeleteTool &&
+    !isFailed &&
+    (status === 'completed' ? isContentExpanded : true);
+
   const opensPanelOnClick =
     !isFailed &&
     !isDeleteTool &&
@@ -659,15 +695,21 @@ export const FileOperationToolCard: React.FC<FileOperationToolCardProps> = ({
     <div ref={cardRootRef} data-tool-card-id={toolId ?? ''}>
       <BaseToolCard
         status={status}
-        isExpanded={true}
+        isExpanded={isCardContentExpanded}
         onClick={handleCardClick}
         className={`file-operation-card ${isDeleteTool ? 'non-clickable' : ''}`}
         header={renderHeader()}
-        expandedContent={renderExpandedContent()}
+        expandedContent={expandedContent}
         errorContent={isFailed && isErrorExpanded ? renderErrorContent() : null}
         isFailed={isFailed}
-        headerExpandAffordance={opensPanelOnClick || isFailed}
-        headerAffordanceKind={opensPanelOnClick ? 'open-panel-right' : 'expand'}
+        headerExpandAffordance={hasExpandableContent || opensPanelOnClick || isFailed}
+        headerAffordanceKind={
+          hasExpandableContent
+            ? 'expand'
+            : opensPanelOnClick
+              ? 'open-panel-right'
+              : 'expand'
+        }
       />
     </div>
   );

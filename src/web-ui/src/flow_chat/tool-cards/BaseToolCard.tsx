@@ -132,6 +132,8 @@ export interface ToolCardHeaderProps {
   affordanceKind?: ToolCardHeaderAffordanceKind;
   /** Override context: expanded state for chevron rotation */
   headerExpanded?: boolean;
+  /** Optional dedicated affordance click handler for the left icon rail. */
+  onAffordanceClick?: (e: React.MouseEvent<HTMLButtonElement>) => void;
   /** Action text */
   action?: string;
   /** Main content */
@@ -151,6 +153,7 @@ export const ToolCardHeader: React.FC<ToolCardHeaderProps> = ({
   expandAffordance,
   affordanceKind,
   headerExpanded,
+  onAffordanceClick,
   action,
   content,
   extra,
@@ -188,6 +191,17 @@ export const ToolCardHeader: React.FC<ToolCardHeaderProps> = ({
               </span>
             )}
           </div>
+          {showExpandHint && onAffordanceClick && (
+            <button
+              type="button"
+              className="tool-card-icon-affordance-hit"
+              onClick={(e) => {
+                e.stopPropagation();
+                onAffordanceClick(e);
+              }}
+              aria-label={isPanelAffordance ? 'Open details' : 'Expand details'}
+            />
+          )}
         </div>
       )}
       {action && <span className="tool-card-action">{action}</span>}
