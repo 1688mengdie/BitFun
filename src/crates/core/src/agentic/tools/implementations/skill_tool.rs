@@ -10,7 +10,6 @@ use crate::util::errors::{BitFunError, BitFunResult};
 use async_trait::async_trait;
 use log::debug;
 use serde_json::{json, Value};
-use std::path::Path;
 
 // Use skills module
 use super::skills::{get_skill_registry, SkillLocation};
@@ -56,12 +55,31 @@ Important:
         )
     }
 
-    async fn build_description(&self, workspace_root: Option<&Path>) -> String {
+    async fn build_description_for_context(
+        &self,
+        context: Option<&ToolUseContext>,
+    ) -> String {
         let registry = get_skill_registry();
-        let available_skills = match workspace_root {
-            Some(workspace_root) => {
+        let available_skills = match context {
+            Some(ctx) if ctx.is_remote() => {
+                if let Some(fs) = ctx.ws_fs() {
+                    let root = ctx
+                        .workspace
+                        .as_ref()
+                        .map(|w| w.root_path_string())
+                        .unwrap_or_default();
+                    registry
+                        .get_enabled_skills_xml_for_remote_workspace(fs, &root)
+                        .await
+                } else {
+                    registry
+                        .get_enabled_skills_xml_for_workspace(ctx.workspace_root())
+                        .await
+                }
+            }
+            Some(ctx) => {
                 registry
-                    .get_enabled_skills_xml_for_workspace(Some(workspace_root))
+                    .get_enabled_skills_xml_for_workspace(ctx.workspace_root())
                     .await
             }
             None => registry.get_enabled_skills_xml().await,
@@ -78,19 +96,18 @@ impl Tool for SkillTool {
     }
 
     async fn description(&self) -> BitFunResult<String> {
-        Ok(self.build_description(None).await)
+        Ok(self.build_description_for_context(None).await)
     }
 
     async fn description_with_context(
         &self,
         context: Option<&ToolUseContext>,
     ) -> BitFunResult<String> {
-        let mut s = self
-            .build_description(context.and_then(|ctx| ctx.workspace_root()))
-            .await;
-        if context.map(|c| c.is_remote()).unwrap_or(false) {
+        let mut s = self.build_description_for_context(context).await;
+        if context.map(|c| c.is_remote()).unwrap_or(false) && context.and_then(|c| c.ws_fs()).is_none()
+        {
             s.push_str(
-                "\n\n**Remote workspace:** Project-level skills under `.bitfun/skills` on the **server** may not appear in the list above because this index is built from the local workspace view. Use **Read** / **Glob** on the remote tree if you need a skill file that is not listed.",
+                "\n\n**Remote workspace:** Project-level skills on the server could not be indexed (workspace I/O unavailable). Use **Read** / **Glob** on the remote tree if needed.",
             );
         }
         Ok(s)
@@ -170,9 +187,26 @@ impl Tool for SkillTool {
 
         // Find and load skill through registry
         let registry = get_skill_registry();
-        let skill_data = registry
-            .find_and_load_skill_for_workspace(skill_name, context.workspace_root())
-            .await?;
+        let skill_data = if context.is_remote() {
+            if let Some(ws_fs) = context.ws_fs() {
+                let root = context
+                    .workspace
+                    .as_ref()
+                    .map(|w| w.root_path_string())
+                    .unwrap_or_default();
+                registry
+                    .find_and_load_skill_for_remote_workspace(skill_name, ws_fs, &root)
+                    .await?
+            } else {
+                registry
+                    .find_and_load_skill_for_workspace(skill_name, context.workspace_root())
+                    .await?
+            }
+        } else {
+            registry
+                .find_and_load_skill_for_workspace(skill_name, context.workspace_root())
+                .await?
+        };
 
         let location_str = match skill_data.location {
             SkillLocation::User => "user",
