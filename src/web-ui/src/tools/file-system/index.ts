@@ -6,11 +6,14 @@ export { useFileTreeGitSync } from './hooks/useFileTreeGitSync';
 export type {
   FileSystemNode,
   FileExplorerProps,
+  FileExplorerToolbarHandlers,
   FileTreeProps,
   FileTreeNodeProps,
   FileSystemOptions,
   FileSystemState
 } from './types';
+
+export { getNewItemParentPath } from './utils/getNewItemParentPath';
 
 export {
   getFileIcon,

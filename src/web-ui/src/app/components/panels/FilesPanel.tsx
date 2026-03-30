@@ -6,7 +6,12 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Search as SearchIcon, CaseSensitive, Regex, WholeWord, List, Loader2 } from 'lucide-react';
-import { FileExplorer, useFileSystem } from '@/tools/file-system';
+import {
+  FileExplorer,
+  getNewItemParentPath,
+  useFileSystem,
+  type FileExplorerToolbarHandlers,
+} from '@/tools/file-system';
 import { Search, IconButton, Tooltip } from '@/component-library';
 import { useFileTreeGitSync } from '@/tools/file-system/hooks/useFileTreeGitSync';
 import { FileSearchResults } from '@/tools/file-system/components/FileSearchResults';
@@ -40,6 +45,9 @@ interface FilesPanelProps {
   hideHeader?: boolean;
   viewMode?: 'tree' | 'search';
   onViewModeChange?: (mode: 'tree' | 'search') => void;
+  /** Hide the in-explorer floating toolbar; parent can render equivalent actions (e.g. file viewer nav header). */
+  hideExplorerToolbar?: boolean;
+  onExplorerToolbarApi?: (api: FileExplorerToolbarHandlers | null) => void;
 }
 
 const FilesPanel: React.FC<FilesPanelProps> = ({
@@ -49,6 +57,8 @@ const FilesPanel: React.FC<FilesPanelProps> = ({
   hideHeader = false,
   viewMode: externalViewMode,
   onViewModeChange,
+  hideExplorerToolbar = false,
+  onExplorerToolbarApi,
 }) => {
   const { t } = useTranslation('panels/files');
   
@@ -600,6 +610,46 @@ const FilesPanel: React.FC<FilesPanelProps> = ({
     }
   }, [viewMode, onViewModeChange]);
 
+  const handleExplorerToolbarNewFile = useCallback(() => {
+    const parentPath = getNewItemParentPath(workspacePath, selectedFile, fileTree);
+    if (parentPath) {
+      handleNewFile({ parentPath });
+    }
+  }, [workspacePath, selectedFile, fileTree, handleNewFile]);
+
+  const handleExplorerToolbarNewFolder = useCallback(() => {
+    const parentPath = getNewItemParentPath(workspacePath, selectedFile, fileTree);
+    if (parentPath) {
+      handleNewFolder({ parentPath });
+    }
+  }, [workspacePath, selectedFile, fileTree, handleNewFolder]);
+
+  const handleExplorerToolbarRefresh = useCallback(() => {
+    loadFileTree(workspacePath || '', false);
+  }, [loadFileTree, workspacePath]);
+
+  useEffect(() => {
+    if (!onExplorerToolbarApi) return;
+    if (!hideExplorerToolbar || !workspacePath || viewMode !== 'tree') {
+      onExplorerToolbarApi(null);
+      return;
+    }
+    onExplorerToolbarApi({
+      onNewFile: handleExplorerToolbarNewFile,
+      onNewFolder: handleExplorerToolbarNewFolder,
+      onRefresh: handleExplorerToolbarRefresh,
+    });
+    return () => onExplorerToolbarApi(null);
+  }, [
+    onExplorerToolbarApi,
+    hideExplorerToolbar,
+    workspacePath,
+    viewMode,
+    handleExplorerToolbarNewFile,
+    handleExplorerToolbarNewFolder,
+    handleExplorerToolbarRefresh,
+  ]);
+
   return (
     <div 
       ref={panelRef}
@@ -770,6 +820,7 @@ const FilesPanel: React.FC<FilesPanelProps> = ({
               onNewFile={handleNewFile}
               onNewFolder={handleNewFolder}
               onRefresh={() => loadFileTree(workspacePath || '', false)}
+              hideToolbar={hideExplorerToolbar}
             />
           )
         )}

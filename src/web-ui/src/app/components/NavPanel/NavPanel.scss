@@ -1807,7 +1807,8 @@ $_section-header-height: 24px;
     transition: none;
   }
 
-  .bitfun-nav-panel__top-action-btn:hover .bitfun-nav-panel__top-action-icon-circle {
+  .bitfun-nav-panel__top-action-btn:hover .bitfun-nav-panel__top-action-icon-circle,
+  .bitfun-nav-panel__top-action-btn:active .bitfun-nav-panel__top-action-icon-circle {
     transform: scale(1);
   }
 
@@ -1941,8 +1942,6 @@ $_section-header-height: 24px;
     color: var(--color-text-primary);
   }
 
-  &:active { transform: translateY(1px); }
-
   &:focus-visible {
     outline: 1px solid var(--color-accent-500);
     outline-offset: 1px;
@@ -2015,7 +2014,7 @@ $_section-header-height: 24px;
   transition: background $motion-fast $easing-standard,
               color $motion-fast $easing-standard,
               box-shadow $motion-fast $easing-standard,
-              transform $motion-fast $easing-standard;
+              transform 0.4s $easing-bounce;
 
   .bitfun-nav-panel__top-action-btn:hover & {
     @include btn-primary.btn-primary-surface-hover;
@@ -2024,5 +2023,10 @@ $_section-header-height: 24px;
 
   .bitfun-nav-panel__top-action-btn:active & {
     @include btn-primary.btn-primary-surface-active;
+    transform: scale(0.86);
+    transition: background $motion-instant $easing-accelerate,
+                color $motion-instant $easing-accelerate,
+                box-shadow $motion-instant $easing-accelerate,
+                transform 0.09s $easing-accelerate;
   }
 }

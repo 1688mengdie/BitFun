@@ -36,13 +36,13 @@
     "clarificationBatchCompleted": "批量澄清处理完成"
   },
   "header": {
-    "openProject": "打开工程",
-    "newProject": "新建工程",
+    "openProject": "打开工作区",
+    "newProject": "新建工作区",
     "goHome": "返回首页",
     "about": "关于",
     "openMenu": "打开菜单",
     "closeMenu": "关闭菜单",
-    "selectProjectDirectory": "选择要打开的工程目录",
+    "selectProjectDirectory": "选择要打开的工作区目录",
     "configCenter": "配置中心",
     "expandLeftPanel": "展开左侧面板",
     "collapseLeftPanel": "收起左侧面板",
@@ -296,8 +296,6 @@
       "actions": {
         "more": "更多操作",
         "newSession": "新建会话",
-        "newCodeSession": "新建 Code 会话",
-        "newCoworkSession": "新建 Cowork 会话",
         "newAssistant": "新建个人助理",
         "deleteAssistant": "删除个人助理",
         "resetWorkspace": "重置工作区",
@@ -351,21 +349,21 @@
     "close": "关闭"
   },
   "newProject": {
-    "title": "新建工程",
+    "title": "新建工作区",
     "subtitle": "创建一个新的工作区目录",
     "parentDirectory": "父目录",
     "parentDirectoryPlaceholder": "点击右侧按钮选择父目录",
-    "selectParentDirectory": "选择新工程的父目录位置",
+    "selectParentDirectory": "选择新工作区的父目录位置",
     "select": "选择",
-    "projectName": "工程名称",
-    "projectNamePlaceholder": "请输入工程名称，例如：my-project",
+    "projectName": "工作区名称",
+    "projectNamePlaceholder": "请输入工作区名称，例如：my-project",
     "fullPath": "完整路径",
     "cancel": "取消",
     "create": "创建",
     "creating": "创建中...",
     "errorSelectParent": "请选择父目录",
-    "errorEnterName": "请输入工程名称",
-    "errorCreateFailed": "创建工程失败"
+    "errorEnterName": "请输入工作区名称",
+    "errorCreateFailed": "创建工作区失败"
   },
   "remoteConnect": {
     "title": "远程控制",
@@ -921,7 +919,7 @@
   "ssh": {
     "remote": {
       "title": "远程 SSH",
-      "connect": "连接远程工程",
+      "connect": "连接远程工作区",
       "connecting": "连接中...",
       "connected": "已连接",
       "disconnect": "断开连接",
