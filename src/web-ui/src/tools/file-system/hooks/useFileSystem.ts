@@ -565,11 +565,7 @@ export function useFileSystem(options: UseFileSystemOptions = {}): UseFileSystem
     loadFileTreeLazy,
     rootPath,
     state.fileTree.length,
-    state.options.excludePatterns,
-    state.options.maxDepth,
-    state.options.showHiddenFiles,
-    state.options.sortBy,
-    state.options.sortOrder,
+    state.options,
   ]);
 
   useEffect(() => {
