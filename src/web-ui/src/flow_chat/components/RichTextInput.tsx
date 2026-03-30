@@ -454,8 +454,7 @@ export const RichTextInput = React.forwardRef<HTMLDivElement, RichTextInputProps
     requestAnimationFrame(() => {
       isComposingRef.current = false;
     });
-<<<<<<< HEAD
-  }, [onLargePaste, onMentionStateChange]);
+  }, [internalRef, onLargePaste, onMentionStateChange]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     const nativeIsComposing = (e.nativeEvent as KeyboardEvent).isComposing;
