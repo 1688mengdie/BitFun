@@ -36,12 +36,20 @@ export interface ModelConfig {
   skipSslVerify?: boolean;
   customHeaders?: Record<string, string>;
   customHeadersMode?: 'merge' | 'replace';
+  /** Aligns with main app model capabilities when testing image input. */
+  capabilities?: string[];
+  /** Aligns with main app model category (e.g. multimodal). */
+  category?: string;
 }
+
+/** Matches backend `ConnectionTestMessageCode` (camelCase JSON). */
+export type ConnectionTestMessageCode = 'toolCallsNotDetected' | 'imageInputCheckFailed';
 
 export interface ConnectionTestResult {
   success: boolean;
   responseTimeMs: number;
   modelResponse?: string;
+  messageCode?: ConnectionTestMessageCode;
   errorDetails?: string;
 }
 

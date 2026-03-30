@@ -1,3 +1,4 @@
+pub mod ai_config;
 pub mod commands;
 pub mod extract;
 pub mod model_list;
