@@ -56,10 +56,12 @@ export const FileOperationToolCard: React.FC<FileOperationToolCardProps> = ({
   const toolId = toolItem.id ?? toolCall?.id;
   
   const [isErrorExpanded, setIsErrorExpanded] = useState(false);
+  const [isContentExpanded, setIsContentExpanded] = useState(status !== 'completed');
   const [operationDiffStats, setOperationDiffStats] = useState<{ additions: number; deletions: number } | null>(null);
   
   const hasInitializedCompletionEffectRef = useRef(false);
   const previousCompletionEndTimeRef = useRef<number | null>(toolItem.endTime ?? null);
+  const previousStatusRef = useRef(status);
   const { cardRootRef } = useToolCardHeightContract({
     toolId,
     toolName: toolItem.toolName,
@@ -162,6 +164,17 @@ export const FileOperationToolCard: React.FC<FileOperationToolCardProps> = ({
     }
   }, [error, clearError, currentFilePath]);
 
+  useEffect(() => {
+    if (previousStatusRef.current !== status) {
+      if (status === 'completed' && !isFailed) {
+        setIsContentExpanded(false);
+      } else if (status !== 'completed') {
+        setIsContentExpanded(true);
+      }
+      previousStatusRef.current = status;
+    }
+  }, [isFailed, status]);
+
   const localDiffStats = useMemo(() => {
     if (status !== 'completed' || isFailed) return null;
     if (toolItem.toolName === 'Write' && contentPreview) {
@@ -239,7 +252,7 @@ export const FileOperationToolCard: React.FC<FileOperationToolCardProps> = ({
     status,
     toolItem.toolName,
   ]);
-  
+
   const getErrorMessage = () => {
     if (toolResult && 'error' in toolResult) {
       return toolResult.error;
@@ -417,90 +430,6 @@ export const FileOperationToolCard: React.FC<FileOperationToolCardProps> = ({
     return null;
   };
 
-  const renderHeader = () => {
-    const { className: iconClassName } = getToolIconInfo();
-    const isDeleteTool = toolItem.toolName === 'Delete';
-    const gitRailDisabled =
-      !currentFilePath || !currentWorkspace || !sessionId;
-
-    const actionText = isDeleteTool 
-      ? '' 
-      : (isFailed ? `${toolDisplayInfo.name}${t('toolCards.file.failed')}` : `${toolDisplayInfo.name}:`);
-    
-    return (
-      <ToolCardHeader
-        icon={renderToolIcon()}
-        iconClassName={iconClassName}
-        headerExpanded={isFailed ? isErrorExpanded : undefined}
-        action={actionText}
-      content={
-        <>
-          <Tooltip content={currentFilePath || fileName} placement="top">
-            <span className={`file-name ${isDeleteTool ? 'file-name--muted' : ''}`}>
-              {fileName}
-            </span>
-          </Tooltip>
-          {!isDeleteTool && !isParamsStreaming && !isFailed && !isLoading && (
-            (currentFileDiffStats.additions > 0 || currentFileDiffStats.deletions > 0)
-          ) && (
-            <span className="diff-preview-group">
-              {currentFileDiffStats.additions > 0 && (
-                <span className="additions">+{currentFileDiffStats.additions}</span>
-              )}
-              {currentFileDiffStats.deletions > 0 && (
-                <span className="deletions">-{currentFileDiffStats.deletions}</span>
-              )}
-            </span>
-          )}
-        </>
-      }
-      extra={
-        <>
-          {isParamsStreaming && (status === 'preparing' || status === 'streaming') && (
-            <span className="params-streaming-indicator">
-              {currentFilePath ? t('toolCards.file.receivingParams') : t('toolCards.file.analyzing')}
-            </span>
-          )}
-          {!isDeleteTool &&
-            !isFailed &&
-            !isLoading &&
-            status === 'completed' &&
-            currentFilePath && (
-              <Tooltip content={t('toolCards.file.viewGitDiff')} placement="top">
-                <div
-                  className={`file-op-git-rail${gitRailDisabled ? ' file-op-git-rail--disabled' : ''}`}
-                >
-                  {!gitRailDisabled && (
-                    <button
-                      type="button"
-                      className="file-op-git-rail__hit"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleOpenBaselineDiff();
-                      }}
-                      aria-label={t('toolCards.file.viewGitDiff')}
-                      title={t('toolCards.file.viewGitDiff')}
-                    />
-                  )}
-                  <div className="file-op-git-rail__visual" aria-hidden>
-                    <GitBranch size={16} strokeWidth={2} />
-                  </div>
-                </div>
-              </Tooltip>
-            )}
-          
-          {isFailed && (
-            <div className="error-expand-indicator">
-              {isErrorExpanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
-            </div>
-          )}
-        </>
-      }
-      statusIcon={isDeleteTool ? null : renderStatusIcon()}
-    />
-    );
-  };
-
   const handleCodeLineClick = useCallback(async (lineNumber: number, filePath?: string) => {
     if (!filePath) return;
     
@@ -632,11 +561,117 @@ export const FileOperationToolCard: React.FC<FileOperationToolCardProps> = ({
     return <>{t('toolCards.file.delete')}: <span className="delete-file-name">{fileName}</span></>;
   };
 
+  const expandedContent = renderExpandedContent();
+  const hasExpandableContent =
+    status === 'completed' &&
+    !isFailed &&
+    !isDeleteTool &&
+    Boolean(expandedContent);
+
+  const isCardContentExpanded =
+    !isDeleteTool &&
+    !isFailed &&
+    (status === 'completed' ? isContentExpanded : true);
+
   const opensPanelOnClick =
     !isFailed &&
     !isDeleteTool &&
     (Boolean(currentFilePath && sessionId && status === 'completed') ||
       Boolean(currentFilePath && onOpenInEditor));
+
+  const renderHeader = () => {
+    const { className: iconClassName } = getToolIconInfo();
+    const gitRailDisabled =
+      !currentFilePath || !currentWorkspace || !sessionId;
+
+    const actionText = isDeleteTool
+      ? ''
+      : (isFailed ? `${toolDisplayInfo.name}${t('toolCards.file.failed')}` : `${toolDisplayInfo.name}:`);
+
+    return (
+      <ToolCardHeader
+        icon={renderToolIcon()}
+        iconClassName={iconClassName}
+        headerExpanded={
+          isFailed
+            ? isErrorExpanded
+            : hasExpandableContent
+              ? isContentExpanded
+              : undefined
+        }
+        onAffordanceClick={
+          hasExpandableContent
+            ? () => setIsContentExpanded(prev => !prev)
+            : undefined
+        }
+        action={actionText}
+      content={
+        <>
+          <Tooltip content={currentFilePath || fileName} placement="top">
+            <span className={`file-name ${isDeleteTool ? 'file-name--muted' : ''}`}>
+              {fileName}
+            </span>
+          </Tooltip>
+          {!isDeleteTool && !isParamsStreaming && !isFailed && !isLoading && (
+            (currentFileDiffStats.additions > 0 || currentFileDiffStats.deletions > 0)
+          ) && (
+            <span className="diff-preview-group">
+              {currentFileDiffStats.additions > 0 && (
+                <span className="additions">+{currentFileDiffStats.additions}</span>
+              )}
+              {currentFileDiffStats.deletions > 0 && (
+                <span className="deletions">-{currentFileDiffStats.deletions}</span>
+              )}
+            </span>
+          )}
+        </>
+      }
+      extra={
+        <>
+          {isParamsStreaming && (status === 'preparing' || status === 'streaming') && (
+            <span className="params-streaming-indicator">
+              {currentFilePath ? t('toolCards.file.receivingParams') : t('toolCards.file.analyzing')}
+            </span>
+          )}
+          {!isDeleteTool &&
+            !isFailed &&
+            !isLoading &&
+            status === 'completed' &&
+            currentFilePath && (
+              <Tooltip content={t('toolCards.file.viewGitDiff')} placement="top">
+                <div
+                  className={`file-op-git-rail${gitRailDisabled ? ' file-op-git-rail--disabled' : ''}`}
+                >
+                  {!gitRailDisabled && (
+                    <button
+                      type="button"
+                      className="file-op-git-rail__hit"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleOpenBaselineDiff();
+                      }}
+                      aria-label={t('toolCards.file.viewGitDiff')}
+                      title={t('toolCards.file.viewGitDiff')}
+                    />
+                  )}
+                  <div className="file-op-git-rail__visual" aria-hidden>
+                    <GitBranch size={16} strokeWidth={2} />
+                  </div>
+                </div>
+              </Tooltip>
+            )}
+
+          {isFailed && (
+            <div className="error-expand-indicator">
+              {isErrorExpanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+            </div>
+          )}
+        </>
+      }
+      statusIcon={isDeleteTool ? null : renderStatusIcon()}
+    />
+    );
+  };
 
   if (isDeleteTool) {
     return (
@@ -659,15 +694,21 @@ export const FileOperationToolCard: React.FC<FileOperationToolCardProps> = ({
     <div ref={cardRootRef} data-tool-card-id={toolId ?? ''}>
       <BaseToolCard
         status={status}
-        isExpanded={true}
+        isExpanded={isCardContentExpanded}
         onClick={handleCardClick}
         className={`file-operation-card ${isDeleteTool ? 'non-clickable' : ''}`}
         header={renderHeader()}
-        expandedContent={renderExpandedContent()}
+        expandedContent={expandedContent}
         errorContent={isFailed && isErrorExpanded ? renderErrorContent() : null}
         isFailed={isFailed}
-        headerExpandAffordance={opensPanelOnClick || isFailed}
-        headerAffordanceKind={opensPanelOnClick ? 'open-panel-right' : 'expand'}
+        headerExpandAffordance={hasExpandableContent || opensPanelOnClick || isFailed}
+        headerAffordanceKind={
+          hasExpandableContent
+            ? 'expand'
+            : opensPanelOnClick
+              ? 'open-panel-right'
+              : 'expand'
+        }
       />
     </div>
   );

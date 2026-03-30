@@ -10,6 +10,17 @@ import { createLogger } from '@/shared/utils/logger';
 
 const log = createLogger('StoreSync');
 
+function isSessionAlreadySynced(
+  sessionId: string,
+  session: object,
+  modernStore: ReturnType<typeof useModernFlowChatStore.getState>
+): boolean {
+  return (
+    modernStore.activeSession?.sessionId === sessionId &&
+    modernStore.activeSession === session
+  );
+}
+
 /**
  * Sync session data to new Store
  */
@@ -23,6 +34,9 @@ export function syncSessionToModernStore(sessionId: string): void {
   }
 
   const modernStore = useModernFlowChatStore.getState();
+  if (isSessionAlreadySynced(sessionId, session, modernStore)) {
+    return;
+  }
   modernStore.setActiveSession(session);
 }
 
@@ -61,7 +75,9 @@ export function startAutoSync(): () => void {
       lastSyncedSessionId = currentState.activeSessionId;
       lastSyncedSession = session;
       const modernStore = useModernFlowChatStore.getState();
-      modernStore.setActiveSession(session);
+      if (!isSessionAlreadySynced(currentState.activeSessionId, session, modernStore)) {
+        modernStore.setActiveSession(session);
+      }
     }
   }
 
