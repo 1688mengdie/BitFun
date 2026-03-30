@@ -630,7 +630,9 @@
       "unknownSkill": "未知技能",
       "unknown": "未知",
       "loadSkillFailed": "加载技能失败",
-      "skillAction": "技能:"
+      "skillAction": "技能:",
+      "loadingSkill": "正在加载",
+      "preparingSkill": "准备加载"
     },
     "readFile": {
       "parsingParams": "解析参数中...",

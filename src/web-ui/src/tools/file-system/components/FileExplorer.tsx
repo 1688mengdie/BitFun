@@ -5,6 +5,7 @@ import { VirtualFileTree } from './VirtualFileTree';
 import { FileExplorerProps, FileSystemNode, FlatFileNode } from '../types';
 import { GitStatusIndicator } from './GitStatusIndicator';
 import { flattenFileTree } from '../utils/treeFlattening';
+import { getNewItemParentPath } from '../utils/getNewItemParentPath';
 import { i18nService, useI18n } from '@/infrastructure/i18n';
 import { IconButton } from '@/component-library';
 
@@ -131,7 +132,8 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
   workspacePath,
   onNewFile,
   onNewFolder,
-  onRefresh
+  onRefresh,
+  hideToolbar = false,
 }) => {
   const { t } = useI18n('tools');
   const [internalExpandedFolders, setInternalExpandedFolders] = useState<Set<string>>(new Set());
@@ -288,73 +290,23 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
     };
   }, []);
   
-  const getNewItemParentPath = useCallback((): string => {
-    if (!workspacePath) {
-      return '';
-    }
-    
-    if (!selectedFile) {
-      return workspacePath;
-    }
-    
-    const normalizePath = (path: string): string => {
-      return path.replace(/\\/g, '/').toLowerCase();
-    };
-    
-    const findNodeInTree = (nodes: FileSystemNode[], path: string): FileSystemNode | null => {
-      for (const node of nodes) {
-        if (normalizePath(node.path) === normalizePath(path)) {
-          return node;
-        }
-        if (node.children) {
-          const found = findNodeInTree(node.children, path);
-          if (found) return found;
-        }
-      }
-      return null;
-    };
-    
-    const selectedNode = findNodeInTree(fileTree, selectedFile);
-    
-    if (!selectedNode) {
-      return workspacePath;
-    }
-    
-    if (selectedNode.isDirectory) {
-      return selectedNode.path;
-    }
-    
-    const isWindows = selectedNode.path.includes('\\');
-    const separator = isWindows ? '\\' : '/';
-    
-    const lastSeparatorIndex = selectedNode.path.lastIndexOf(separator);
-    
-    if (lastSeparatorIndex === -1) {
-      return workspacePath;
-    }
-    
-    const parentPath = selectedNode.path.substring(0, lastSeparatorIndex);
-    
-    return parentPath || workspacePath;
-  }, [workspacePath, selectedFile, fileTree]);
-  
   const handleNewFile = useCallback(() => {
     if (onNewFile) {
-      const parentPath = getNewItemParentPath();
+      const parentPath = getNewItemParentPath(workspacePath, selectedFile, fileTree);
       if (parentPath) {
         onNewFile({ parentPath });
       }
     }
-  }, [onNewFile, getNewItemParentPath]);
+  }, [onNewFile, workspacePath, selectedFile, fileTree]);
   
   const handleNewFolder = useCallback(() => {
     if (onNewFolder) {
-      const parentPath = getNewItemParentPath();
+      const parentPath = getNewItemParentPath(workspacePath, selectedFile, fileTree);
       if (parentPath) {
         onNewFolder({ parentPath });
       }
     }
-  }, [onNewFolder, getNewItemParentPath]);
+  }, [onNewFolder, workspacePath, selectedFile, fileTree]);
   
   const handleRefresh = useCallback(() => {
     if (onRefresh) {
@@ -407,7 +359,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
       onBlur={handleBlur}
       onClick={handleContainerClick}
     >
-      {(onNewFile || onNewFolder || onRefresh) && (
+      {(onNewFile || onNewFolder || onRefresh) && !hideToolbar && (
         <div 
           className={`bitfun-file-explorer__toolbar ${isToolbarVisible ? 'bitfun-file-explorer__toolbar--visible' : ''}`}
           onClick={(e) => e.stopPropagation()}

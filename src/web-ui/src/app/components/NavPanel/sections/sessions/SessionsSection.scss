@@ -65,7 +65,7 @@
     background: transparent;
     color: var(--color-text-primary);
     font-size: 13px;
-    font-weight: 400;
+    font-weight: 500;
     cursor: pointer;
     width: 100%;
     text-align: left;
@@ -79,7 +79,6 @@
 
     &.is-active {
       color: var(--color-text-primary);
-      font-weight: 500;
       background: var(--element-bg-soft);
     }
 

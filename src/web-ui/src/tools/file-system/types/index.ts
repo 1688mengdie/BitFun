@@ -52,6 +52,16 @@ export interface FileExplorerProps {
   onNewFile?: (data: { parentPath: string }) => void;
   onNewFolder?: (data: { parentPath: string }) => void;
   onRefresh?: () => void;
+
+  /** When true, the floating toolbar is not rendered (e.g. actions live in a parent header). */
+  hideToolbar?: boolean;
+}
+
+/** Zero-arg handlers for toolbar buttons when the UI is rendered outside FileExplorer. */
+export interface FileExplorerToolbarHandlers {
+  onNewFile: () => void;
+  onNewFolder: () => void;
+  onRefresh: () => void;
 }
 
 

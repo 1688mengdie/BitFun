@@ -638,7 +638,9 @@
       "unknownSkill": "Unknown skill",
       "unknown": "Unknown",
       "loadSkillFailed": "Load skill failed",
-      "skillAction": "Skill:"
+      "skillAction": "Skill:",
+      "loadingSkill": "Loading",
+      "preparingSkill": "Preparing to load"
     },
     "readFile": {
       "parsingParams": "Parsing parameters...",

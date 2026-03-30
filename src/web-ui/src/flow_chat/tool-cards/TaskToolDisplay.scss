@@ -127,14 +127,15 @@
     min-width: 0;
   }
 
-  /* Narrow right rail; invisible hit layer matches hover tint + opens detail panel. */
+  /* Narrow right rail; invisible hit layer matches hover tint + opens detail panel.
+     Stretch full header row height so ::before hover fill reaches padding edges (no vertical gap). */
   .task-header-rail {
     position: relative;
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    align-self: center;
+    align-self: stretch;
     flex-shrink: 0;
     min-width: 40px;
     padding: 0 0 0 8px;
