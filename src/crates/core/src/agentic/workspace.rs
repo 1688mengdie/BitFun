@@ -95,6 +95,15 @@ impl WorkspaceBinding {
 // traits instead of checking is_remote themselves.
 // ============================================================
 
+/// One row from [`WorkspaceFileSystem::read_dir`] (POSIX paths when backend is remote SSH).
+#[derive(Debug, Clone)]
+pub struct WorkspaceDirEntry {
+    pub name: String,
+    pub path: String,
+    pub is_dir: bool,
+    pub is_symlink: bool,
+}
+
 /// Unified file system operations that work for both local and remote workspaces.
 #[async_trait]
 pub trait WorkspaceFileSystem: Send + Sync {
@@ -104,6 +113,8 @@ pub trait WorkspaceFileSystem: Send + Sync {
     async fn exists(&self, path: &str) -> anyhow::Result<bool>;
     async fn is_file(&self, path: &str) -> anyhow::Result<bool>;
     async fn is_dir(&self, path: &str) -> anyhow::Result<bool>;
+    /// List immediate children (non-recursive). Symlinks may be included; callers often skip them.
+    async fn read_dir(&self, path: &str) -> anyhow::Result<Vec<WorkspaceDirEntry>>;
 }
 
 /// Unified shell execution for both local and remote workspaces.
@@ -179,6 +190,28 @@ impl WorkspaceFileSystem for LocalWorkspaceFs {
             Ok(m) => Ok(m.is_dir()),
             Err(_) => Ok(false),
         }
+    }
+
+    async fn read_dir(&self, path: &str) -> anyhow::Result<Vec<WorkspaceDirEntry>> {
+        let mut out = Vec::new();
+        let mut rd = tokio::fs::read_dir(path).await?;
+        while let Ok(Some(entry)) = rd.next_entry().await {
+            let p = entry.path();
+            let meta = tokio::fs::symlink_metadata(&p).await?;
+            if meta.file_type().is_symlink() {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().to_string();
+            let path_str = p.to_string_lossy().to_string();
+            let is_dir = meta.is_dir();
+            out.push(WorkspaceDirEntry {
+                name,
+                path: path_str,
+                is_dir,
+                is_symlink: false,
+            });
+        }
+        Ok(out)
     }
 }
 
@@ -270,6 +303,23 @@ impl WorkspaceFileSystem for RemoteWorkspaceFs {
             .is_dir(&self.connection_id, path)
             .await
             .map_err(|e| anyhow::anyhow!("{}", e))
+    }
+
+    async fn read_dir(&self, path: &str) -> anyhow::Result<Vec<WorkspaceDirEntry>> {
+        let entries = self
+            .file_service
+            .read_dir(&self.connection_id, path)
+            .await
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
+        Ok(entries
+            .into_iter()
+            .map(|e| WorkspaceDirEntry {
+                name: e.name,
+                path: e.path,
+                is_dir: e.is_dir,
+                is_symlink: e.is_symlink,
+            })
+            .collect())
     }
 }
 

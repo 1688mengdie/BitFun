@@ -6,6 +6,7 @@
 
 use super::builtin::ensure_builtin_skills_installed;
 use super::types::{SkillData, SkillInfo, SkillLocation};
+use crate::agentic::workspace::WorkspaceFileSystem;
 use crate::infrastructure::get_path_manager_arc;
 use crate::util::errors::{BitFunError, BitFunResult};
 use log::{debug, error};
@@ -382,6 +383,97 @@ impl SkillRegistry {
             .collect()
     }
 
+    /// Remote SSH workspace: merge **client** user-level skills with **server** project skills (via SFTP).
+    pub async fn get_enabled_skills_xml_for_remote_workspace(
+        &self,
+        fs: &dyn WorkspaceFileSystem,
+        remote_root: &str,
+    ) -> Vec<String> {
+        self.scan_skill_map_for_remote_workspace(fs, remote_root)
+            .await
+            .into_values()
+            .filter(|skill| skill.enabled)
+            .map(|skill| skill.to_xml_desc())
+            .collect()
+    }
+
+    async fn scan_skills_in_remote_dir(
+        fs: &dyn WorkspaceFileSystem,
+        dir: &str,
+        level: SkillLocation,
+    ) -> Vec<SkillInfo> {
+        let mut skills = Vec::new();
+        let entries = match fs.read_dir(dir).await {
+            Ok(e) => e,
+            Err(_) => return skills,
+        };
+        for e in entries {
+            if !e.is_dir || e.is_symlink {
+                continue;
+            }
+            let skill_md = format!("{}/SKILL.md", e.path.trim_end_matches('/'));
+            if !fs.is_file(&skill_md).await.unwrap_or(false) {
+                continue;
+            }
+            match fs.read_file_text(&skill_md).await {
+                Ok(content) => match SkillData::from_markdown(
+                    e.path.clone(),
+                    &content,
+                    level,
+                    false,
+                ) {
+                    Ok(skill_data) => {
+                        skills.push(SkillInfo {
+                            name: skill_data.name,
+                            description: skill_data.description,
+                            path: skill_data.path,
+                            level,
+                            enabled: skill_data.enabled,
+                        });
+                    }
+                    Err(err) => {
+                        error!("Failed to parse SKILL.md in {}: {}", e.path, err);
+                    }
+                },
+                Err(err) => {
+                    debug!("Failed to read {}: {}", skill_md, err);
+                }
+            }
+        }
+        skills
+    }
+
+    async fn scan_remote_project_skills(
+        fs: &dyn WorkspaceFileSystem,
+        remote_root: &str,
+    ) -> Vec<SkillInfo> {
+        let mut skills = Vec::new();
+        let root = remote_root.trim_end_matches('/');
+        for (parent, sub) in PROJECT_SKILL_SUBDIRS {
+            let skill_dir = format!("{}/{}/{}", root, parent, sub);
+            if !fs.is_dir(&skill_dir).await.unwrap_or(false) {
+                continue;
+            }
+            let mut part =
+                Self::scan_skills_in_remote_dir(fs, &skill_dir, SkillLocation::Project).await;
+            skills.append(&mut part);
+        }
+        skills
+    }
+
+    /// User skills from this machine plus project skills from the remote workspace root.
+    pub async fn scan_skill_map_for_remote_workspace(
+        &self,
+        fs: &dyn WorkspaceFileSystem,
+        remote_root: &str,
+    ) -> HashMap<String, SkillInfo> {
+        let mut map = self.scan_skill_map_for_workspace(None).await;
+        for info in Self::scan_remote_project_skills(fs, remote_root).await {
+            map.insert(info.name.clone(), info);
+        }
+        map
+    }
+
     pub async fn find_and_load_skill_for_workspace(
         &self,
         skill_name: &str,
@@ -401,6 +493,34 @@ impl SkillRegistry {
 
         let skill_md_path = PathBuf::from(&info.path).join("SKILL.md");
         let content = fs::read_to_string(&skill_md_path)
+            .await
+            .map_err(|e| BitFunError::tool(format!("Failed to read skill file: {}", e)))?;
+
+        SkillData::from_markdown(info.path.clone(), &content, info.level, true)
+    }
+
+    /// Load skill when the workspace is remote: reads SKILL.md via [`WorkspaceFileSystem`].
+    pub async fn find_and_load_skill_for_remote_workspace(
+        &self,
+        skill_name: &str,
+        fs: &dyn WorkspaceFileSystem,
+        remote_root: &str,
+    ) -> BitFunResult<SkillData> {
+        let map = self.scan_skill_map_for_remote_workspace(fs, remote_root).await;
+        let info = map
+            .get(skill_name)
+            .ok_or_else(|| BitFunError::tool(format!("Skill '{}' not found", skill_name)))?;
+
+        if !info.enabled {
+            return Err(BitFunError::tool(format!(
+                "Skill '{}' is disabled",
+                skill_name
+            )));
+        }
+
+        let skill_md_path = format!("{}/SKILL.md", info.path.trim_end_matches('/'));
+        let content = fs
+            .read_file_text(&skill_md_path)
             .await
             .map_err(|e| BitFunError::tool(format!("Failed to read skill file: {}", e)))?;
 
