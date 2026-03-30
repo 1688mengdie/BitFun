@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-use-before-define */
 /**
  * Model round item component.
  * Renders mixed FlowItems (text + tools).
@@ -235,7 +236,7 @@ export const ModelRoundItem = React.memo<ModelRoundItemProps>(
       });
       
       return contentParts.join('\n\n---\n\n');
-    }, [turnId]);
+    }, [t, turnId]);
     
     const handleCopy = useCallback(async () => {
       try {

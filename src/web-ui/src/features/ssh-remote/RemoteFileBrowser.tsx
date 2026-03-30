@@ -3,7 +3,7 @@
  * Used to browse and select remote directory as workspace
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useI18n } from '@/infrastructure/i18n';
 import { Button } from '@/component-library';
 import { ConfirmDialog } from './ConfirmDialog';
@@ -112,22 +112,7 @@ export const RemoteFileBrowser: React.FC<RemoteFileBrowserProps> = ({
   const [transferBusy, setTransferBusy] = useState(false);
   const contextMenuRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    loadDirectory(currentPath);
-  }, [currentPath]);
-
-  // Close context menu when clicking outside
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (contextMenuRef.current && !contextMenuRef.current.contains(e.target as Node)) {
-        setContextMenu({ show: false, x: 0, y: 0, entry: null });
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
-
-  const loadDirectory = async (path: string) => {
+  const loadDirectory = useCallback(async (path: string) => {
     setLoading(true);
     setError(null);
     try {
@@ -144,7 +129,22 @@ export const RemoteFileBrowser: React.FC<RemoteFileBrowserProps> = ({
     } finally {
       setLoading(false);
     }
-  };
+  }, [connectionId]);
+
+  useEffect(() => {
+    loadDirectory(currentPath);
+  }, [currentPath, loadDirectory]);
+
+  // Close context menu when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (contextMenuRef.current && !contextMenuRef.current.contains(e.target as Node)) {
+        setContextMenu({ show: false, x: 0, y: 0, entry: null });
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   const navigateTo = (path: string) => {
     setCurrentPath(path);
@@ -198,6 +198,30 @@ export const RemoteFileBrowser: React.FC<RemoteFileBrowserProps> = ({
       y: e.clientY,
       entry,
     });
+  };
+
+  const handleDownloadEntry = async (entry: RemoteFileEntry) => {
+    if (entry.isDir) return;
+    if (!isTauriDesktop()) {
+      setError(t('ssh.remote.transferNeedsDesktop'));
+      return;
+    }
+    const { save } = await import('@tauri-apps/plugin-dialog');
+    const localPath = await save({
+      title: t('ssh.remote.downloadDialogTitle'),
+      defaultPath: entry.name,
+    });
+    if (localPath === null) return;
+
+    setTransferBusy(true);
+    setError(null);
+    try {
+      await sshApi.downloadToLocalPath(connectionId, entry.path, localPath);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : t('ssh.remote.transferFailed'));
+    } finally {
+      setTransferBusy(false);
+    }
   };
 
   const handleContextMenuAction = async (action: string) => {
@@ -263,30 +287,6 @@ export const RemoteFileBrowser: React.FC<RemoteFileBrowserProps> = ({
       loadDirectory(currentPath);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to rename');
-    }
-  };
-
-  const handleDownloadEntry = async (entry: RemoteFileEntry) => {
-    if (entry.isDir) return;
-    if (!isTauriDesktop()) {
-      setError(t('ssh.remote.transferNeedsDesktop'));
-      return;
-    }
-    const { save } = await import('@tauri-apps/plugin-dialog');
-    const localPath = await save({
-      title: t('ssh.remote.downloadDialogTitle'),
-      defaultPath: entry.name,
-    });
-    if (localPath === null) return;
-
-    setTransferBusy(true);
-    setError(null);
-    try {
-      await sshApi.downloadToLocalPath(connectionId, entry.path, localPath);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : t('ssh.remote.transferFailed'));
-    } finally {
-      setTransferBusy(false);
     }
   };
 

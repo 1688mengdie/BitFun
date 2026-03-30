@@ -1,8 +1,7 @@
 /**
  * SSH Remote Feature - React Context Provider
  */
-
-import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { createLogger } from '@/shared/utils/logger';
 import { workspaceManager } from '@/infrastructure/services/business/workspaceManager';
 import { WorkspaceKind } from '@/shared/types/global-state';
@@ -10,6 +9,11 @@ import type { SSHConnectionConfig, RemoteWorkspace } from './types';
 import { sshApi } from './sshApi';
 import { flowChatStore } from '@/flow_chat/store/FlowChatStore';
 import { normalizeRemoteWorkspacePath } from '@/shared/utils/pathUtils';
+import {
+  SSHContext,
+  type ConnectionStatus,
+  type SSHContextValue,
+} from './SSHRemoteContext';
 
 const log = createLogger('SSHRemoteProvider');
 
@@ -27,50 +31,6 @@ function sshHostForRemoteWorkspace(connectionId: string, remotePath: string): st
   }
   return undefined;
 }
-
-export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
-
-interface SSHContextValue {
-  // Connection state
-  status: ConnectionStatus;
-  isConnected: boolean;
-  isConnecting: boolean;
-  connectionId: string | null;
-  connectionConfig: SSHConnectionConfig | null;
-  remoteWorkspace: RemoteWorkspace | null;
-  connectionError: string | null;
-
-  // Per-workspace connection statuses (keyed by connectionId)
-  workspaceStatuses: Record<string, ConnectionStatus>;
-
-  // UI state
-  showConnectionDialog: boolean;
-  showFileBrowser: boolean;
-  error: string | null;
-  /** Default path for remote folder picker (`~` or resolved `$HOME` from server). */
-  remoteFileBrowserInitialPath: string;
-
-  // Actions
-  connect: (connectionId: string, config: SSHConnectionConfig) => Promise<void>;
-  disconnect: () => Promise<void>;
-  openWorkspace: (path: string) => Promise<void>;
-  closeWorkspace: () => Promise<void>;
-
-  // UI actions
-  setShowConnectionDialog: (show: boolean) => void;
-  setShowFileBrowser: (show: boolean) => void;
-  clearError: () => void;
-}
-
-export const SSHContext = createContext<SSHContextValue | null>(null);
-
-export const useSSHRemoteContext = () => {
-  const context = useContext(SSHContext);
-  if (!context) {
-    throw new Error('useSSHRemoteContext must be used within SSHRemoteProvider');
-  }
-  return context;
-};
 
 interface SSHRemoteProviderProps {
   children: React.ReactNode;
@@ -92,29 +52,11 @@ export const SSHRemoteProvider: React.FC<SSHRemoteProviderProps> = ({ children }
   // Per-workspace connection statuses (keyed by connectionId)
   const [workspaceStatuses, setWorkspaceStatuses] = useState<Record<string, ConnectionStatus>>({});
   const heartbeatInterval = useRef<number | null>(null);
+  const startHeartbeatRef = useRef<(connId: string) => void>(() => {});
+  const checkRemoteWorkspaceRef = useRef<() => Promise<void>>(async () => {});
 
   const setWorkspaceStatus = useCallback((connId: string, st: ConnectionStatus) => {
     setWorkspaceStatuses(prev => ({ ...prev, [connId]: st }));
-  }, []);
-
-  // Wait for workspace manager to finish loading, then check remote workspaces
-  useEffect(() => {
-    const state = workspaceManager.getState();
-    if (!state.loading) {
-      // Already loaded — kick off immediately
-      void checkRemoteWorkspace();
-      return;
-    }
-    // Wait for loading to complete
-    const unsubscribe = workspaceManager.addEventListener(event => {
-      if (event.type === 'workspace:loading' && !event.loading) {
-        unsubscribe();
-        void checkRemoteWorkspace();
-      }
-    });
-    return unsubscribe;
-    // checkRemoteWorkspace is defined below but stable (no deps change it)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Cleanup heartbeat on unmount
@@ -131,7 +73,7 @@ export const SSHRemoteProvider: React.FC<SSHRemoteProviderProps> = ({ children }
   // Waits RETRY_WAIT_MS between each attempt (fixed, not exponential).
   const RETRY_WAIT_MS = 10_000;
 
-  const tryReconnectWithRetry = async (
+  const tryReconnectWithRetry = useCallback(async (
     workspace: RemoteWorkspace,
     maxRetries: number,
     timeoutMs: number
@@ -213,9 +155,44 @@ export const SSHRemoteProvider: React.FC<SSHRemoteProviderProps> = ({ children }
     }
 
     return false;
-  };
+  }, []);
 
-  const checkRemoteWorkspace = async () => {
+  const statusRef = useRef<ConnectionStatus>(status);
+  statusRef.current = status;
+
+  const handleConnectionLost = useCallback((connId: string) => {
+    log.warn('Remote connection lost, attempting auto-reconnect...');
+    setStatus('error');
+    setWorkspaceStatus(connId, 'error');
+    setConnectionError('Connection lost. Attempting to reconnect...');
+    setIsConnected(false);
+    if (heartbeatInterval.current) {
+      clearInterval(heartbeatInterval.current);
+      heartbeatInterval.current = null;
+    }
+    // Attempt auto-reconnect in background
+    void checkRemoteWorkspaceRef.current();
+  }, [setWorkspaceStatus]);
+
+  const startHeartbeat = useCallback((connId: string) => {
+    if (heartbeatInterval.current) {
+      clearInterval(heartbeatInterval.current);
+    }
+
+    heartbeatInterval.current = window.setInterval(async () => {
+      try {
+        const connected = await sshApi.isConnected(connId);
+        if (!connected && statusRef.current === 'connected') {
+          handleConnectionLost(connId);
+        }
+      } catch {
+        // Ignore heartbeat errors
+      }
+    }, 30000);
+  }, [handleConnectionLost]);
+  startHeartbeatRef.current = startHeartbeat;
+
+  const checkRemoteWorkspace = useCallback(async () => {
     try {
       // ── Collect all remote workspaces to reconnect ──────────────────────
       const allWorkspaces = Array.from(workspaceManager.getState().openedWorkspaces.values());
@@ -289,7 +266,7 @@ export const SSHRemoteProvider: React.FC<SSHRemoteProviderProps> = ({ children }
           setIsConnected(true);
           setConnectionId(workspace.connectionId);
           setRemoteWorkspace(workspace);
-          startHeartbeat(workspace.connectionId);
+          startHeartbeatRef.current(workspace.connectionId);
 
           if (!isAlreadyOpened) {
             await workspaceManager.openRemoteWorkspace(workspace).catch(() => {});
@@ -320,7 +297,7 @@ export const SSHRemoteProvider: React.FC<SSHRemoteProviderProps> = ({ children }
           setIsConnected(true);
           setConnectionId(result.connectionId);
           setRemoteWorkspace(result.workspace);
-          startHeartbeat(result.connectionId);
+          startHeartbeatRef.current(result.connectionId);
 
           if (!isAlreadyOpened) {
             await workspaceManager.openRemoteWorkspace(result.workspace).catch(() => {});
@@ -350,41 +327,26 @@ export const SSHRemoteProvider: React.FC<SSHRemoteProviderProps> = ({ children }
     } catch (e) {
       log.error('checkRemoteWorkspace failed', e);
     }
-  };
+  }, [setWorkspaceStatus, tryReconnectWithRetry]);
+  checkRemoteWorkspaceRef.current = checkRemoteWorkspace;
 
-  const statusRef = useRef<ConnectionStatus>(status);
-  statusRef.current = status;
-
-  const startHeartbeat = (connId: string) => {
-    if (heartbeatInterval.current) {
-      clearInterval(heartbeatInterval.current);
+  // Wait for workspace manager to finish loading, then check remote workspaces
+  useEffect(() => {
+    const state = workspaceManager.getState();
+    if (!state.loading) {
+      void checkRemoteWorkspace();
+      return;
     }
 
-    heartbeatInterval.current = window.setInterval(async () => {
-      try {
-        const connected = await sshApi.isConnected(connId);
-        if (!connected && statusRef.current === 'connected') {
-          handleConnectionLost(connId);
-        }
-      } catch {
-        // Ignore heartbeat errors
+    const unsubscribe = workspaceManager.addEventListener(event => {
+      if (event.type === 'workspace:loading' && !event.loading) {
+        unsubscribe();
+        void checkRemoteWorkspace();
       }
-    }, 30000);
-  };
+    });
 
-  const handleConnectionLost = (connId: string) => {
-    log.warn('Remote connection lost, attempting auto-reconnect...');
-    setStatus('error');
-    setWorkspaceStatus(connId, 'error');
-    setConnectionError('Connection lost. Attempting to reconnect...');
-    setIsConnected(false);
-    if (heartbeatInterval.current) {
-      clearInterval(heartbeatInterval.current);
-      heartbeatInterval.current = null;
-    }
-    // Attempt auto-reconnect in background
-    void checkRemoteWorkspace();
-  };
+    return unsubscribe;
+  }, [checkRemoteWorkspace]);
 
   const connect = useCallback(async (_connId: string, config: SSHConnectionConfig) => {
     log.debug('SSH connect called', { host: config.host });
@@ -439,7 +401,7 @@ export const SSHRemoteProvider: React.FC<SSHRemoteProviderProps> = ({ children }
     } finally {
       setIsConnecting(false);
     }
-  }, []);
+  }, [startHeartbeat]);
 
   const disconnect = useCallback(async () => {
     const currentRemoteWorkspace = remoteWorkspace;

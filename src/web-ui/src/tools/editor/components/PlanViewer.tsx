@@ -98,7 +98,7 @@ const PlanViewer: React.FC<PlanViewerProps> = ({
       return normalizedPath.substring(0, lastSlashIndex);
     }
     return undefined;
-  }, [filePath, t]);
+  }, [filePath]);
 
   const displayFileName = useMemo(() => {
     if (fileName) return fileName;
@@ -111,10 +111,12 @@ const PlanViewer: React.FC<PlanViewerProps> = ({
 
   useEffect(() => {
     isUnmountedRef.current = false;
+    const editor = editorRef.current;
+    const yamlEditor = yamlEditorRef.current;
     return () => {
       isUnmountedRef.current = true;
-      editorRef.current?.destroy();
-      yamlEditorRef.current?.destroy();
+      editor?.destroy();
+      yamlEditor?.destroy();
     };
   }, []);
 
@@ -176,7 +178,7 @@ const PlanViewer: React.FC<PlanViewerProps> = ({
         setLoading(false);
       }
     }
-  }, [filePath]);
+  }, [filePath, t]);
 
   useEffect(() => {
     loadFileContent();
@@ -482,7 +484,7 @@ const PlanViewer: React.FC<PlanViewerProps> = ({
       return;
     }
     setYamlEditorPlacement('inline');
-  }, [isInlineTodoEditing, isTodosExpanded, isTrailingTodoEditing, yamlEditorPlacement]);
+  }, []);
 
   const closeYamlEditor = useCallback(() => {
     setYamlEditorPlacement('none');
@@ -676,6 +678,7 @@ const PlanViewer: React.FC<PlanViewerProps> = ({
     trailingTodoDrafts,
     yamlContent,
     yamlEditorPlacement,
+    mEditorTheme,
   ]);
 
   // Build button click handler
@@ -714,7 +717,7 @@ ${JSON.stringify(simpleTodos, null, 2)}
   }, [filePath, buildStatus, planData, planContent, t]);
 
   // Get todo status icon
-  const getTodoIcon = (status?: string) => {
+  function getTodoIcon(status?: string) {
     switch (status) {
       case 'completed':
         return <Check size={14} className="todo-icon todo-icon--completed" />;
@@ -726,7 +729,7 @@ ${JSON.stringify(simpleTodos, null, 2)}
       default:
         return <Circle size={14} className="todo-icon todo-icon--pending" />;
     }
-  };
+  }
 
   // Render loading state
   if (loading) {

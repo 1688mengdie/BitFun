@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { useI18n } from '@/infrastructure/i18n';
-import { useSSHRemoteContext } from './SSHRemoteProvider';
+import { useSSHRemoteContext } from './SSHRemoteContext';
 import { SSHAuthPromptDialog, type SSHAuthPromptSubmitPayload } from './SSHAuthPromptDialog';
 import { Modal } from '@/component-library';
 import { Button } from '@/component-library';
@@ -52,16 +52,6 @@ export const SSHConnectionDialog: React.FC<SSHConnectionDialogProps> = ({
 
   const error = localError || connectionError;
 
-  // Clear errors when dialog opens
-  useEffect(() => {
-    if (open) {
-      clearError();
-      setLocalError(null);
-      loadSavedConnections();
-      loadSSHConfigHosts();
-    }
-  }, [open]);
-
   // Form state
   const [formData, setFormData] = useState({
     name: '',
@@ -74,24 +64,34 @@ export const SSHConnectionDialog: React.FC<SSHConnectionDialogProps> = ({
     passphrase: '',
   });
 
-  const loadSavedConnections = async () => {
+  async function loadSavedConnections() {
     setLocalError(null);
     try {
       const connections = await sshApi.listSavedConnections();
       setSavedConnections(connections);
-    } catch (e) {
+    } catch (_error) {
       setSavedConnections([]);
     }
-  };
+  }
 
-  const loadSSHConfigHosts = async () => {
+  async function loadSSHConfigHosts() {
     try {
       const hosts = await sshApi.listSSHConfigHosts();
       setSSHConfigHosts(hosts);
-    } catch (e) {
+    } catch (_error) {
       setSSHConfigHosts([]);
     }
-  };
+  }
+
+  // Clear errors when dialog opens
+  useEffect(() => {
+    if (open) {
+      clearError();
+      setLocalError(null);
+      void loadSavedConnections();
+      void loadSSHConfigHosts();
+    }
+  }, [open, clearError]);
 
   // Load SSH config from ~/.ssh/config when host changes
   useEffect(() => {
