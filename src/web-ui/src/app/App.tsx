@@ -15,7 +15,6 @@ import SplashScreen from './components/SplashScreen/SplashScreen';
 import { ToolbarModeProvider } from '../flow_chat';
 
 const log = createLogger('App');
-
 /**
  * BitFun main application component.
  *
@@ -83,8 +82,14 @@ function App() {
     }
   }, []);
 
-  // Keep the native window hidden until the startup splash has fully exited.
-  // This avoids showing a blank/half-painted webview before the first stable frame.
+  // Reveal the native window as soon as React has painted a frame.
+  // The splash still covers the UI, so users see immediate feedback instead
+  // of waiting on a hidden window while startup continues in the background.
+  useEffect(() => {
+    void showMainWindow('startup-overlay');
+  }, [showMainWindow]);
+
+  // If the early reveal path fails, keep the old post-splash show as a retry.
   useEffect(() => {
     if (splashVisible) {
       return;
