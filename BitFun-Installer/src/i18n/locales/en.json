@@ -4,6 +4,21 @@
     "subtitle": "Select your preferred language",
     "continue": "Continue"
   },
+  "errors": {
+    "install": {
+      "failed": "Installation failed"
+    },
+    "installPath": {
+      "notAbsolute": "The installation path must be an absolute path (for example C:\\…).",
+      "filesystemRoot": "Cannot install to a drive root. Choose a folder inside the drive.",
+      "pathNotDirectory": "The selected path exists but is not a folder.",
+      "directoryMustBeEmptyOrBitfun": "The installation folder must be empty, or already contain a BitFun installation.",
+      "inspectDirectoryFailed": "Could not read the installation folder. Check permissions and try again.",
+      "directoryNotWritable": "The installation folder is not writable. Choose another location or run the installer as administrator (see below).",
+      "parentNotWritable": "The parent folder is not writable. System folders such as Program Files often require administrator rights (see below).",
+      "adminHint": "To install under protected locations (for example C:\\Program Files), close this installer, right‑click the installer executable, choose \"Run as administrator\", then try again. Alternatively install under your user profile, for example %LOCALAPPDATA%\\Programs, which does not require elevation."
+    }
+  },
   "options": {
     "title": "Options",
     "subtitle": "Review install location and preferences",
@@ -27,6 +42,7 @@
     "launchAfterInstall": "Launch BitFun after setup",
     "back": "Back",
     "install": "Install",
+    "installing": "Preparing…",
     "nextModel": "Next: Configure model"
   },
   "model": {

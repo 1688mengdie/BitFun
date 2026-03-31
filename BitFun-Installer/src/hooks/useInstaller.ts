@@ -36,6 +36,7 @@ export interface UseInstallerReturn {
   launchApp: () => Promise<void>;
   closeInstaller: () => void;
   refreshDiskSpace: (path: string) => Promise<void>;
+  clearInstallError: () => void;
   isUninstallMode: boolean;
   isUninstalling: boolean;
   uninstallCompleted: boolean;
@@ -124,11 +125,9 @@ export function useInstaller(): UseInstallerReturn {
     return () => { unlisten.then((fn) => fn()); };
   }, []);
 
-  useEffect(() => {
-    if (step === 'options' && error) {
-      setError(null);
-    }
-  }, [error, options.installPath, step]);
+  const clearInstallError = useCallback(() => {
+    setError(null);
+  }, []);
 
   const goTo = useCallback((s: InstallStep) => setStep(s), []);
 
@@ -191,6 +190,9 @@ export function useInstaller(): UseInstallerReturn {
       return;
     }
 
+    setIsInstalling(true);
+    setInstallationCompleted(false);
+    setCanConfirmProgress(false);
     try {
       const validated = await invoke<InstallPathValidation>('validate_install_path', {
         path: options.installPath,
@@ -202,16 +204,14 @@ export function useInstaller(): UseInstallerReturn {
       if (validated.installPath !== options.installPath) {
         setOptions((prev) => ({ ...prev, installPath: validated.installPath }));
       }
-      setIsInstalling(true);
-      setInstallationCompleted(false);
-      setCanConfirmProgress(false);
       setStep('progress');
       setProgress({ step: 'prepare', percent: 0, message: '' });
       await invoke('start_installation', { options: effectiveOptions });
       setInstallationCompleted(true);
       setStep('model');
     } catch (err: any) {
-      setError(typeof err === 'string' ? err : err.message || 'Installation failed');
+      const raw = typeof err === 'string' ? err : err?.message;
+      setError((raw && String(raw).trim()) ? String(raw) : i18n.t('errors.install.failed'));
     } finally {
       setIsInstalling(false);
     }
@@ -293,7 +293,7 @@ export function useInstaller(): UseInstallerReturn {
     options, setOptions,
     progress, isInstalling, installationCompleted, error, diskSpace,
     install, canConfirmProgress, confirmProgress, retryInstall, backToOptions,
-    saveModelConfig, testModelConnection, launchApp, closeInstaller, refreshDiskSpace,
+    saveModelConfig, testModelConnection, launchApp, closeInstaller, refreshDiskSpace, clearInstallError,
     isUninstallMode, isUninstalling, uninstallCompleted, uninstallError, uninstallProgress, startUninstall,
   };
 }
