@@ -3,10 +3,10 @@ import { Folder, ChevronRight, FilePlus, FolderPlus, RefreshCw } from 'lucide-re
 import { FileTree } from './FileTree';
 import { VirtualFileTree } from './VirtualFileTree';
 import { FileExplorerProps, FileSystemNode, FlatFileNode } from '../types';
-import { GitStatusIndicator } from './GitStatusIndicator';
 import { flattenFileTree } from '../utils/treeFlattening';
 import { getNewItemParentPath } from '../utils/getNewItemParentPath';
 import { i18nService, useI18n } from '@/infrastructure/i18n';
+import { expandedFoldersContains } from '@/shared/utils/pathUtils';
 import { IconButton } from '@/component-library';
 
 const VIRTUAL_SCROLL_THRESHOLD = 100;
@@ -190,7 +190,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
   }, [onFileSelect]);
 
   const handleVirtualToggleExpand = useCallback((path: string) => {
-    const isCurrentlyExpanded = expandedFolders.has(path);
+    const isCurrentlyExpanded = expandedFoldersContains(expandedFolders, path);
     if (externalOnNodeExpand) {
       externalOnNodeExpand(path, !isCurrentlyExpanded);
     } else {
@@ -212,14 +212,6 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
         <span className={`bitfun-file-explorer__node-name ${node.isCompressed ? 'bitfun-file-explorer__compressed-path' : ''}`}>
           {node.name}
         </span>
-        
-        {(() => {
-          if (!node.isDirectory && node.gitStatus) {
-            return <GitStatusIndicator status={node.gitStatus} compact={true} />;
-          }
-          
-          return null;
-        })()}
         
         {showFileSize && !node.isDirectory && node.size && (
           <span className="bitfun-file-explorer__node-size">

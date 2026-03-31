@@ -6,26 +6,8 @@ import { getCompressionTooltip } from '../utils/pathCompression';
 import { dragManager } from '../../../shared/services/DragManager';
 import { fileTreeDragSource } from '../../../shared/context-system/drag-drop/FileTreeDragSource';
 import { Input } from '../../../component-library/components/Input';
-import { GitStatusIndicator } from './GitStatusIndicator';
 import { useI18n } from '@/infrastructure/i18n';
-
-/**
- * Get the Git status to display for a directory.
- * Single status: show that status. Multiple: show 'modified'.
- */
-function getDirectoryGitStatus(
-  childrenGitStatuses?: Set<'untracked' | 'modified' | 'added' | 'deleted' | 'renamed' | 'conflicted' | 'staged'>
-): 'untracked' | 'modified' | 'added' | 'deleted' | 'renamed' | 'conflicted' | 'staged' | undefined {
-  if (!childrenGitStatuses || childrenGitStatuses.size === 0) {
-    return undefined;
-  }
-  
-  if (childrenGitStatuses.size === 1) {
-    return Array.from(childrenGitStatuses)[0];
-  }
-  
-  return 'modified';
-}
+import { expandedFoldersContains } from '@/shared/utils/pathUtils';
 
 interface ExtendedFileTreeNodeProps extends FileTreeNodeProps {
   selectedFile?: string;
@@ -209,23 +191,8 @@ export const FileTreeNode: React.FC<ExtendedFileTreeNodeProps> = ({
   const handleContextMenu = (_e: React.MouseEvent) => {
   };
 
-  const getGitStatusClass = () => {
-    if (!node.isDirectory && node.gitStatus) {
-      return `bitfun-file-explorer__node--git-${node.gitStatus}`;
-    }
-    
-    if (node.isDirectory && !isExpanded && node.hasChildrenGitChanges) {
-      const dirStatus = getDirectoryGitStatus(node.childrenGitStatuses);
-      if (dirStatus) {
-        return `bitfun-file-explorer__node--git-${dirStatus}`;
-      }
-    }
-    
-    return '';
-  };
-
   return (
-    <div className={`bitfun-file-explorer__node ${className} ${getGitStatusClass()}`}>
+    <div className={`bitfun-file-explorer__node ${className}`}>
       <div 
         className={`bitfun-file-explorer__node-content ${isSelected ? 'bitfun-file-explorer__node-content--selected' : ''} ${node.isDirectory ? 'bitfun-file-explorer__node-content--directory' : ''} ${isCompressed ? 'bitfun-file-explorer__node-content--compressed' : ''}`}
         style={{ paddingLeft: `${(indentDepth - 1) * 20 + 16}px` }}
@@ -266,25 +233,9 @@ export const FileTreeNode: React.FC<ExtendedFileTreeNodeProps> = ({
         ) : renderContent ? (
           renderContent(node, level)
         ) : (
-          <>
-            <span className={`bitfun-file-explorer__node-name ${isCompressed ? 'bitfun-file-explorer__compressed-path' : ''}`}>
-              {node.name}
-            </span>
-            {(() => {
-              if (!node.isDirectory && node.gitStatus) {
-                return <GitStatusIndicator status={node.gitStatus} compact={true} />;
-              }
-              
-              if (node.isDirectory && !isExpanded && node.hasChildrenGitChanges) {
-                const dirStatus = getDirectoryGitStatus(node.childrenGitStatuses);
-                if (dirStatus) {
-                  return <GitStatusIndicator status={dirStatus} compact={true} />;
-                }
-              }
-              
-              return null;
-            })()}
-          </>
+          <span className={`bitfun-file-explorer__node-name ${isCompressed ? 'bitfun-file-explorer__compressed-path' : ''}`}>
+            {node.name}
+          </span>
         )}
 
         {renderActions && (
@@ -302,7 +253,9 @@ export const FileTreeNode: React.FC<ExtendedFileTreeNodeProps> = ({
               node={child}
               level={level + 1}
               isSelected={selectedFile === child.path}
-              isExpanded={expandedFolders?.has(child.path) || false}
+              isExpanded={
+                expandedFolders ? expandedFoldersContains(expandedFolders, child.path) : false
+              }
               selectedFile={selectedFile}
               expandedFolders={expandedFolders}
               onSelect={onSelect}

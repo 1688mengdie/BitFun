@@ -1,7 +1,6 @@
 export { FileExplorer, FileTree, FileTreeNode } from './components';
 
 export { useFileSystem, useFileTree } from './hooks';
-export { useFileTreeGitSync } from './hooks/useFileTreeGitSync';
 
 export type {
   FileSystemNode,

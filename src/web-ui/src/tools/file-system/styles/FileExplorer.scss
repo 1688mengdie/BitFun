@@ -131,40 +131,6 @@ $_indent-width: 8px;
 
 .bitfun-file-explorer__node {
   user-select: none;
-  
-  &--git-modified,
-  &--git-staged {
-    .bitfun-file-explorer__node-name {
-      color: rgb(229, 192, 123) !important;
-    }
-  }
-  
-  &--git-added,
-  &--git-untracked {
-    .bitfun-file-explorer__node-name {
-      color: rgb(115, 191, 105) !important;
-    }
-  }
-  
-  &--git-deleted {
-    .bitfun-file-explorer__node-name {
-      color: rgb(229, 109, 109) !important;
-      text-decoration: line-through;
-    }
-  }
-  
-  &--git-conflicted {
-    .bitfun-file-explorer__node-name {
-      color: rgb(232, 151, 91) !important;
-      font-weight: $font-weight-medium;
-    }
-  }
-  
-  &--git-renamed {
-    .bitfun-file-explorer__node-name {
-      color: rgb(180, 142, 217) !important;
-    }
-  }
 }
 
 .bitfun-file-explorer__node-content {
@@ -390,26 +356,26 @@ $_indent-width: 8px;
     .bitfun-input-container {
       height: 26px;
       padding: 0 8px;
-      background: rgba(15, 15, 15, 0.95);
+      background: var(--color-bg-elevated);
       backdrop-filter: blur(12px);
       -webkit-backdrop-filter: blur(12px);
       border: none !important;
-      box-shadow: 
-        0 0 0 1px rgba(59, 130, 246, 0.8),
-        0 2px 8px rgba(0, 0, 0, 0.4);
-      
+      box-shadow:
+        0 0 0 1px color-mix(in srgb, var(--color-accent-500) 80%, transparent),
+        0 2px 8px color-mix(in srgb, var(--color-text-primary) 10%, transparent);
+
       &:hover {
-        background: rgba(10, 10, 10, 0.98);
-        box-shadow: 
-          0 0 0 1px rgba(59, 130, 246, 0.9),
-          0 2px 8px rgba(0, 0, 0, 0.4);
+        background: var(--element-bg-soft);
+        box-shadow:
+          0 0 0 1px color-mix(in srgb, var(--color-accent-500) 90%, transparent),
+          0 2px 8px color-mix(in srgb, var(--color-text-primary) 12%, transparent);
       }
-      
+
       &:focus-within {
-        background: rgba(8, 8, 8, 1);
-        box-shadow: 
-          0 0 0 1px rgba(59, 130, 246, 1),
-          0 4px 12px rgba(0, 0, 0, 0.5);
+        background: var(--color-bg-elevated);
+        box-shadow:
+          0 0 0 1px var(--color-accent-500),
+          0 4px 12px color-mix(in srgb, var(--color-text-primary) 16%, transparent);
       }
     }
     
@@ -422,7 +388,7 @@ $_indent-width: 8px;
     }
     
     .bitfun-input-prefix {
-      color: rgba(59, 130, 246, 0.8);
+      color: color-mix(in srgb, var(--color-accent-500) 85%, transparent);
     }
   }
 }

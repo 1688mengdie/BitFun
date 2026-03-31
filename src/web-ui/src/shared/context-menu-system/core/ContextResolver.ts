@@ -243,6 +243,7 @@ export class ContextResolver {
 
     
     let cursorPosition: { line: number; column: number } | undefined;
+    let selectionRange: EditorContext['selectionRange'];
     
     try {
       const monacoGlobal = (window as any).monaco;
@@ -308,13 +309,30 @@ export class ContextResolver {
               };
             } else {
               
-              const selection = targetEditor.getSelection?.();
-              if (selection) {
+              const monacoSelection = targetEditor.getSelection?.();
+              if (monacoSelection) {
                 cursorPosition = {
-                  line: selection.startLineNumber,
-                  column: selection.startColumn
+                  line: monacoSelection.startLineNumber,
+                  column: monacoSelection.startColumn
                 };
               }
+            }
+          }
+
+          const monacoSelection = targetEditor.getSelection?.();
+          if (monacoSelection) {
+            const isEmpty =
+              typeof monacoSelection.isEmpty === 'function'
+                ? monacoSelection.isEmpty()
+                : monacoSelection.startLineNumber === monacoSelection.endLineNumber &&
+                  monacoSelection.startColumn === monacoSelection.endColumn;
+            if (!isEmpty) {
+              selectionRange = {
+                startLine: monacoSelection.startLineNumber,
+                endLine: monacoSelection.endLineNumber,
+                startColumn: monacoSelection.startColumn,
+                endColumn: monacoSelection.endColumn
+              };
             }
           }
         }
@@ -342,6 +360,7 @@ export class ContextResolver {
       filePath,
       cursorPosition,
       selectedText,
+      selectionRange,
       isReadOnly
     };
   }

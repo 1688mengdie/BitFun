@@ -3,6 +3,12 @@ import { FileSystemNode, FileSystemState, FileSystemOptions } from '../types';
 import { fileSystemService } from '../services/FileSystemService';
 import { directoryCache } from '../services/DirectoryCache';
 import { createLogger } from '@/shared/utils/logger';
+import {
+  expandedFoldersAddEquivalent,
+  expandedFoldersContains,
+  expandedFoldersDeleteEquivalent,
+  pathsEquivalentFs,
+} from '@/shared/utils/pathUtils';
 import { useI18n } from '@/infrastructure/i18n';
 import { globalEventBus } from '@/infrastructure/event-bus';
 
@@ -47,7 +53,7 @@ function didReloadRelevantOptionsChange(
 
 function findNodeByPath(nodes: FileSystemNode[], targetPath: string): FileSystemNode | undefined {
   for (const node of nodes) {
-    if (node.path === targetPath) return node;
+    if (pathsEquivalentFs(node.path, targetPath)) return node;
     if (node.children) {
       const found = findNodeByPath(node.children, targetPath);
       if (found) return found;
@@ -118,6 +124,7 @@ export function useFileSystem(options: UseFileSystemOptions = {}): UseFileSystem
 
   const abortControllerRef = useRef<AbortController | null>(null);
   const rootPathRef = useRef<string | undefined>(rootPath);
+  rootPathRef.current = rootPath;
   const isLoadingRef = useRef(false);
   const optionsRef = useRef(state.options);
   const expandedFoldersRef = useRef(state.expandedFolders);
@@ -307,14 +314,12 @@ export function useFileSystem(options: UseFileSystemOptions = {}): UseFileSystem
 
   const expandFolder = useCallback((folderPath: string, expanded?: boolean) => {
     setState(prev => {
-      const newExpandedFolders = new Set(prev.expandedFolders);
-      const shouldExpand = expanded !== undefined ? expanded : !newExpandedFolders.has(folderPath);
-      
-      if (shouldExpand) {
-        newExpandedFolders.add(folderPath);
-      } else {
-        newExpandedFolders.delete(folderPath);
-      }
+      const shouldExpand =
+        expanded !== undefined ? expanded : !expandedFoldersContains(prev.expandedFolders, folderPath);
+
+      const newExpandedFolders = shouldExpand
+        ? expandedFoldersAddEquivalent(prev.expandedFolders, folderPath)
+        : expandedFoldersDeleteEquivalent(prev.expandedFolders, folderPath);
 
       return {
         ...prev,
@@ -329,7 +334,7 @@ export function useFileSystem(options: UseFileSystemOptions = {}): UseFileSystem
     children: FileSystemNode[]
   ): FileSystemNode[] => {
     return nodes.map(node => {
-      if (node.path === targetPath) {
+      if (pathsEquivalentFs(node.path, targetPath)) {
         return {
           ...node,
           children: children,
@@ -377,29 +382,21 @@ export function useFileSystem(options: UseFileSystemOptions = {}): UseFileSystem
   }, [updateNodeChildrenInTree]);
 
   const expandFolderLazy = useCallback(async (folderPath: string) => {
-    if (state.expandedFolders.has(folderPath)) {
-      setState(prev => {
-        const newExpandedFolders = new Set(prev.expandedFolders);
-        newExpandedFolders.delete(folderPath);
-        return {
-          ...prev,
-          expandedFolders: newExpandedFolders
-        };
-      });
+    if (expandedFoldersContains(state.expandedFolders, folderPath)) {
+      setState(prev => ({
+        ...prev,
+        expandedFolders: expandedFoldersDeleteEquivalent(prev.expandedFolders, folderPath),
+      }));
       return;
     }
 
     const cachedChildren = directoryCache.get(folderPath);
     const needsLoading = !loadedPathsRef.current.has(folderPath) && !cachedChildren;
 
-    setState(prev => {
-      const newExpandedFolders = new Set(prev.expandedFolders);
-      newExpandedFolders.add(folderPath);
-      return {
-        ...prev,
-        expandedFolders: newExpandedFolders
-      };
-    });
+    setState(prev => ({
+      ...prev,
+      expandedFolders: expandedFoldersAddEquivalent(prev.expandedFolders, folderPath),
+    }));
 
     if (cachedChildren) {
       setState(prev => ({

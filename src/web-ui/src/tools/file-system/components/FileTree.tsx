@@ -3,6 +3,7 @@ import { FileTreeNode } from './FileTreeNode';
 import { FileTreeProps } from '../types';
 import { lazyCompressFileTree, shouldCompressPaths, CompressedNode } from '../utils/pathCompression';
 import { useI18n } from '@/infrastructure/i18n';
+import { expandedFoldersContains } from '@/shared/utils/pathUtils';
 
 export const FileTree: React.FC<FileTreeProps> = ({
   nodes,
@@ -26,7 +27,7 @@ export const FileTree: React.FC<FileTreeProps> = ({
 
   const handleNodeExpand = useCallback((path: string) => {
     if (onNodeExpand) {
-      const isCurrentlyExpanded = expandedFolders.has(path);
+      const isCurrentlyExpanded = expandedFoldersContains(expandedFolders, path);
       onNodeExpand(path, !isCurrentlyExpanded);
     } else {
       setInternalExpandedFolders(prev => {
@@ -55,7 +56,7 @@ export const FileTree: React.FC<FileTreeProps> = ({
         node={node}
         level={currentLevel}
         isSelected={selectedFile === node.path}
-        isExpanded={expandedFolders.has(node.path)}
+        isExpanded={expandedFoldersContains(expandedFolders, node.path)}
         selectedFile={selectedFile}
         expandedFolders={expandedFolders}
         onSelect={onNodeSelect}

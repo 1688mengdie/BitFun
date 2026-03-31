@@ -13,7 +13,6 @@ import {
   type FileExplorerToolbarHandlers,
 } from '@/tools/file-system';
 import { Search, IconButton, Tooltip } from '@/component-library';
-import { useFileTreeGitSync } from '@/tools/file-system/hooks/useFileTreeGitSync';
 import { FileSearchResults } from '@/tools/file-system/components/FileSearchResults';
 import { useFileSearch } from '@/hooks';
 import { workspaceAPI } from '@/infrastructure/api';
@@ -24,6 +23,7 @@ import { InputDialog, CubeLoading } from '@/component-library';
 import { openFileInBestTarget } from '@/shared/utils/tabUtils';
 import { PanelHeader } from './base';
 import { createLogger } from '@/shared/utils/logger';
+import { basenamePath, dirnameAbsolutePath, normalizeLocalPathForRename, replaceBasename } from '@/shared/utils/pathUtils';
 import { workspaceManager } from '@/infrastructure/services/business/workspaceManager';
 import { isRemoteWorkspace } from '@/shared/types';
 import {
@@ -108,7 +108,6 @@ const FilesPanel: React.FC<FilesPanelProps> = ({
     selectFile,
     expandFolder,
     expandFolderLazy,
-    setFileTree
   } = useFileSystem({
     rootPath: workspacePath,
     autoLoad: true,
@@ -117,21 +116,9 @@ const FilesPanel: React.FC<FilesPanelProps> = ({
     enableAutoWatch: true,
     enableLazyLoad: true
   });
-  const handleTreeUpdate = useCallback((updatedTree: FileSystemNode[]) => {
-    log.debug('File tree updated', { nodeCount: updatedTree.length });
-    setFileTree(updatedTree);
-  }, [setFileTree]);
-
   const handleNodeExpandLazy = useCallback((path: string) => {
     expandFolderLazy(path);
   }, [expandFolderLazy]);
-
-  useFileTreeGitSync({
-    workspacePath,
-    fileTree,
-    onTreeUpdate: handleTreeUpdate,
-    autoRefresh: true
-  });
 
   const prevWorkspacePathRef = useRef<string | undefined>(workspacePath);
   useEffect(() => {
@@ -235,22 +222,19 @@ const FilesPanel: React.FC<FilesPanelProps> = ({
   }, []);
 
   const handleExecuteRename = useCallback(async (oldPath: string, newName: string) => {
-    const isWindows = oldPath.includes('\\');
-    const separator = isWindows ? '\\' : '/';
-    const pathParts = oldPath.split(separator);
-    const oldName = pathParts[pathParts.length - 1];
-    
-    if (newName === oldName) {
+    const normalizedOld = normalizeLocalPathForRename(oldPath);
+    const oldName = basenamePath(normalizedOld);
+
+    if (newName.trim() === oldName) {
       setRenamingPath(null);
       return;
     }
-    
-    pathParts[pathParts.length - 1] = newName;
-    const newPath = pathParts.join(separator);
-    
+
+    const newPath = replaceBasename(normalizedOld, newName.trim());
+
     try {
-      await workspaceAPI.renameFile(oldPath, newPath);
-      log.info('File renamed', { oldPath, newPath });
+      await workspaceAPI.renameFile(normalizedOld, newPath);
+      log.info('File renamed', { oldPath: normalizedOld, newPath });
       setRenamingPath(null);
       loadFileTree(workspacePath || '', true);
     } catch (error) {
@@ -367,11 +351,7 @@ const FilesPanel: React.FC<FilesPanelProps> = ({
   }, [workspacePath, expandFolder, expandedFolders]);
 
   const getParentDirectory = useCallback((filePath: string): string => {
-    const isWindows = filePath.includes('\\');
-    const separator = isWindows ? '\\' : '/';
-    const parts = filePath.split(separator);
-    parts.pop();
-    return parts.join(separator);
+    return dirnameAbsolutePath(filePath);
   }, []);
 
   const findNode = useCallback((nodes: FileSystemNode[], path: string): FileSystemNode | null => {

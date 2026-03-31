@@ -1,4 +1,5 @@
 import { FileSystemNode, FlatFileNode } from '../types';
+import { expandedFoldersContains } from '@/shared/utils/pathUtils';
 
 function nodeToFlatNode(
   node: FileSystemNode,
@@ -17,10 +18,6 @@ function nodeToFlatNode(
     size: node.size,
     extension: node.extension,
     lastModified: node.lastModified,
-    gitStatus: node.gitStatus,
-    gitStatusText: node.gitStatusText,
-    hasChildrenGitChanges: node.hasChildrenGitChanges,
-    childrenGitStatuses: node.childrenGitStatuses,
     isCompressed: node.isCompressed,
     originalNode: node,
   };
@@ -35,7 +32,7 @@ export function flattenFileTree(
   const result: FlatFileNode[] = [];
 
   for (const node of nodes) {
-    const isExpanded = expandedFolders.has(node.path);
+    const isExpanded = expandedFoldersContains(expandedFolders, node.path);
     const hasChildren = node.children && node.children.length > 0;
     const childrenLoaded = node.isDirectory ? (node.children !== undefined) : true;
 
@@ -63,7 +60,7 @@ export function countVisibleNodes(
 
   for (const node of nodes) {
     count++;
-    if (node.isDirectory && expandedFolders.has(node.path) && node.children) {
+    if (node.isDirectory && expandedFoldersContains(expandedFolders, node.path) && node.children) {
       count += countVisibleNodes(node.children, expandedFolders);
     }
   }
