@@ -1,15 +1,17 @@
-import React, { useCallback, useMemo } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import {
   Bot,
   Cpu,
+  Pencil,
   Plus,
   Puzzle,
   RefreshCw,
   Search as SearchIcon,
+  Trash2,
   Wrench,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { Badge, Button, IconButton, Search } from '@/component-library';
+import { Badge, Button, IconButton, Search, confirmDanger } from '@/component-library';
 import {
   GalleryDetailModal,
   GalleryEmpty,
@@ -34,9 +36,13 @@ import './AgentsView.scss';
 import './AgentsScene.scss';
 import { useGallerySceneAutoRefresh } from '@/app/hooks/useGallerySceneAutoRefresh';
 import { CORE_AGENT_IDS, isAgentInOverviewZone } from './agentVisibility';
+import { SubagentAPI } from '@/infrastructure/api/service-api/SubagentAPI';
+import { useNotification } from '@/shared/notification-system';
 
 const AgentsHomeView: React.FC = () => {
   const { t } = useTranslation('scenes/agents');
+  const notification = useNotification();
+  const [deletingAgent, setDeletingAgent] = useState(false);
   const {
     agentSoloEnabled,
     searchQuery,
@@ -47,6 +53,7 @@ const AgentsHomeView: React.FC = () => {
     setAgentFilterType,
     setAgentSoloEnabled,
     openCreateAgent,
+    openEditAgent,
   } = useAgentsStore();
   const [selectedAgentId, setSelectedAgentId] = React.useState<string | null>(null);
   const [toolsEditing, setToolsEditing] = React.useState(false);
@@ -150,6 +157,42 @@ const AgentsHomeView: React.FC = () => {
     setSelectedAgentId(null);
     resetEditState();
   }, [resetEditState]);
+
+  const handleDeleteCustomAgent = useCallback(async () => {
+    if (!selectedAgent) return;
+    if (
+      selectedAgent.agentKind !== 'subagent'
+      || (selectedAgent.subagentSource !== 'user' && selectedAgent.subagentSource !== 'project')
+    ) {
+      return;
+    }
+    const id = selectedAgent.id;
+    const name = selectedAgent.name;
+    const ok = await confirmDanger(
+      t('agentsOverview.deleteAgent'),
+      t('agentsOverview.deleteConfirm', { name }),
+    );
+    if (!ok) return;
+    setDeletingAgent(true);
+    try {
+      await SubagentAPI.deleteSubagent(id);
+      notification.success(t('agentsOverview.deleteSuccess', { name }));
+      closeAgentDetails();
+      await loadAgents();
+    } catch (e) {
+      notification.error(
+        `${t('agentsOverview.deleteFailed')}${e instanceof Error ? e.message : String(e)}`,
+      );
+    } finally {
+      setDeletingAgent(false);
+    }
+  }, [selectedAgent, closeAgentDetails, loadAgents, notification, t]);
+
+  const canManageCustomSubagent = Boolean(
+    selectedAgent
+    && selectedAgent.agentKind === 'subagent'
+    && (selectedAgent.subagentSource === 'user' || selectedAgent.subagentSource === 'project'),
+  );
 
   return (
     <GalleryLayout className="bitfun-agents-scene">
@@ -615,6 +658,39 @@ const AgentsHomeView: React.FC = () => {
                     )}
                   </div>
                 )}
+              </div>
+            ) : null}
+
+            {canManageCustomSubagent ? (
+              <div className="agent-card__section">
+                <div className="agent-card__section-head">
+                  <div className="agent-card__section-title">
+                    <span>{t('agentsOverview.customActions')}</span>
+                  </div>
+                </div>
+                <div className="agent-card__section-actions" style={{ gap: 8 }}>
+                  <Button
+                    variant="secondary"
+                    size="small"
+                    onClick={() => {
+                      const id = selectedAgent?.id;
+                      closeAgentDetails();
+                      if (id) openEditAgent(id);
+                    }}
+                  >
+                    <Pencil size={12} style={{ marginRight: 6 }} />
+                    {t('agentsOverview.editAgent')}
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    size="small"
+                    isLoading={deletingAgent}
+                    onClick={() => void handleDeleteCustomAgent()}
+                  >
+                    <Trash2 size={12} style={{ marginRight: 6 }} />
+                    {t('agentsOverview.deleteAgent')}
+                  </Button>
+                </div>
               </div>
             ) : null}
           </>

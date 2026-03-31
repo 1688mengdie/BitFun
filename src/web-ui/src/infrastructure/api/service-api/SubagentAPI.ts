@@ -50,6 +50,34 @@ export interface UpdateSubagentConfigPayload {
   model?: string;
 }
 
+/** Full definition for create/edit form (custom user/project sub-agents) */
+export interface SubagentDetail {
+  subagentId: string;
+  name: string;
+  description: string;
+  prompt: string;
+  tools: string[];
+  readonly: boolean;
+  enabled: boolean;
+  model: string;
+  path: string;
+  level: SubagentLevel;
+}
+
+export interface GetSubagentDetailPayload {
+  subagentId: string;
+  workspacePath?: string;
+}
+
+export interface UpdateSubagentPayload {
+  subagentId: string;
+  description: string;
+  prompt: string;
+  tools?: string[];
+  readonly?: boolean;
+  workspacePath?: string;
+}
+
 // ==================== API ====================
 
 export const SubagentAPI = {
@@ -83,6 +111,38 @@ export const SubagentAPI = {
   async updateSubagentConfig(payload: UpdateSubagentConfigPayload): Promise<void> {
     return api.invoke('update_subagent_config', {
       request: payload,
+    });
+  },
+
+  async getSubagentDetail(payload: GetSubagentDetailPayload): Promise<SubagentDetail> {
+    const raw = await api.invoke<SubagentDetail & { level: string }>('get_subagent_detail', {
+      request: {
+        subagentId: payload.subagentId,
+        workspacePath: payload.workspacePath,
+      },
+    });
+    return {
+      ...raw,
+      level: raw.level === 'project' ? 'project' : 'user',
+    };
+  },
+
+  async updateSubagent(payload: UpdateSubagentPayload): Promise<void> {
+    return api.invoke('update_subagent', {
+      request: {
+        subagentId: payload.subagentId,
+        description: payload.description,
+        prompt: payload.prompt,
+        tools: payload.tools,
+        readonly: payload.readonly,
+        workspacePath: payload.workspacePath,
+      },
+    });
+  },
+
+  async deleteSubagent(subagentId: string): Promise<void> {
+    return api.invoke('delete_subagent', {
+      request: { subagentId },
     });
   },
 };

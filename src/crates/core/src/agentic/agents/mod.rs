@@ -35,7 +35,7 @@ pub use plan_mode::PlanMode;
 pub use prompt_builder::{PromptBuilder, PromptBuilderContext, RemoteExecutionHints};
 pub use registry::{
     get_agent_registry, AgentCategory, AgentInfo, AgentRegistry, CustomSubagentConfig,
-    SubAgentSource,
+    CustomSubagentDetail, SubAgentSource,
 };
 use std::any::Any;
 
