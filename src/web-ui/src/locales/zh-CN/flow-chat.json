@@ -801,7 +801,11 @@
       "aiProcessing": "AI 正在处理中...",
       "inputMessage": "输入消息...",
       "processing": "处理中...",
-      "startNewChat": "开始新对话..."
+      "startNewChat": "开始新对话...",
+      "openSessionMenu": "会话与新建",
+      "moreMenu": "更多",
+      "newCodeSessionItem": "编程会话",
+      "newCoworkSessionItem": "办公会话"
     },
     "chatInput": {
       "inputHint": "输入内容..."

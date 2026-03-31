@@ -30,6 +30,7 @@ import { useI18n } from '@/infrastructure/i18n';
 import { WorkspaceKind } from '@/shared/types';
 import { SSHContext } from '@/features/ssh-remote/SSHRemoteContext';
 import { shortcutManager } from '@/infrastructure/services/ShortcutManager';
+import { useSessionModeStore } from '../stores/sessionModeStore';
 import './AppLayout.scss';
 
 const log = createLogger('AppLayout');
@@ -359,18 +360,28 @@ const AppLayout: React.FC<AppLayoutProps> = ({ className = '' }) => {
     return () => window.removeEventListener('toolbar-cancel-task', handleToolbarCancelTask);
   }, []);
 
-  // Create FlowChat session
-  const handleCreateFlowChatSession = React.useCallback(async () => {
+  // Create FlowChat session (toolbar / floating UI). detail.mode: 'cowork' → Cowork, else code (agentic).
+  const handleCreateFlowChatSession = React.useCallback(async (mode?: 'code' | 'cowork') => {
     try {
       const flowChatManager = FlowChatManager.getInstance();
-      await flowChatManager.createChatSession({});
+      const setMode = useSessionModeStore.getState().setMode;
+      if (mode === 'cowork') {
+        setMode('cowork');
+        await flowChatManager.createChatSession({}, 'Cowork');
+      } else {
+        setMode('code');
+        await flowChatManager.createChatSession({}, 'agentic');
+      }
     } catch (error) {
       log.error('Failed to create FlowChat session', error);
     }
   }, []);
 
   React.useEffect(() => {
-    const handler = () => handleCreateFlowChatSession();
+    const handler = (e: Event) => {
+      const mode = (e as CustomEvent<{ mode?: 'code' | 'cowork' }>).detail?.mode;
+      void handleCreateFlowChatSession(mode === 'cowork' ? 'cowork' : 'code');
+    };
     window.addEventListener('toolbar-create-session', handler);
     return () => window.removeEventListener('toolbar-create-session', handler);
   }, [handleCreateFlowChatSession]);
