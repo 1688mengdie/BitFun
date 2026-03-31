@@ -96,23 +96,40 @@ $_tab-v-margin: 6px;   // symmetric top/bottom gap inside SceneBar
     }
   }
 
-  &:only-child,
-  &:only-child#{&}--active {
-    cursor: default;
-  }
-
-  // Active state
+  // Active state — same fill as .bitfun-nav-panel__item.is-active (no left rail on horizontal tabs)
   &--active {
     color: var(--color-text-primary);
     font-weight: 500;
-    background: var(--element-bg-base);
+    background: var(--element-bg-soft);
 
     .bitfun-scene-tab__icon {
-      color: var(--color-primary);
+      color: var(--color-text-primary);
+      opacity: 1;
     }
 
     &:hover .bitfun-scene-tab__close {
       opacity: 1;
+    }
+  }
+
+  // Single tab: no pill background (same whether active or not).
+  &:only-child {
+    cursor: default;
+    background: transparent;
+    box-shadow: none;
+
+    &:hover {
+      background: transparent;
+      color: var(--color-text-secondary);
+    }
+
+    &.bitfun-scene-tab--active {
+      background: transparent;
+      box-shadow: none;
+
+      &:hover {
+        background: transparent;
+      }
     }
   }
 
@@ -226,47 +243,61 @@ $_tab-v-margin: 6px;   // symmetric top/bottom gap inside SceneBar
   opacity: 0.94;
 }
 
-// Light themes: inactive tabs use tiered bg.* tokens; active is a gentle step brighter
-// (not full scene white + cast shadow) so it does not read as a separate floating card.
+// Light themes: inactive = former active (soft tint on chrome); active = former inactive (lifted pill + edge).
 :root[data-theme-type='light'] .bitfun-scene-tab {
-  background: var(--color-bg-tertiary);
-  color: var(--color-text-secondary);
+  background: var(--element-bg-soft);
+  color: var(--color-text-primary);
+  box-shadow: none;
 
   &:hover {
-    background: var(--color-bg-quaternary);
-    color: var(--color-text-secondary);
+    background: var(--element-bg-medium);
+    color: var(--color-text-primary);
+    box-shadow: none;
+  }
+
+  .bitfun-scene-tab__icon {
+    opacity: 1;
   }
 
   &--active {
-    color: var(--color-text-primary);
-    // Softer than full scene white + drop shadow: stays in the same family as idle tabs
-    background: color-mix(in srgb, var(--color-bg-scene) 72%, var(--color-bg-tertiary));
-    box-shadow: 0 0 0 1px color-mix(in srgb, var(--border-subtle) 42%, transparent);
+    background: var(--color-bg-secondary);
+    color: color-mix(in srgb, var(--color-text-primary) 86%, var(--color-text-muted));
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--border-subtle) 38%, transparent);
 
     &:hover {
-      background: color-mix(in srgb, var(--color-bg-scene) 76%, var(--color-bg-tertiary));
+      background: color-mix(in srgb, var(--color-bg-secondary) 82%, var(--color-bg-quaternary));
+      color: color-mix(in srgb, var(--color-text-primary) 90%, var(--color-text-muted));
+      box-shadow: 0 0 0 1px color-mix(in srgb, var(--border-subtle) 48%, transparent);
+    }
+
+    .bitfun-scene-tab__icon {
+      color: inherit;
+    }
+
+    .bitfun-scene-tab__subtitle {
+      color: var(--color-text-muted);
     }
   }
 
-  // Single tab: still a visible chip when inactive; when active, align with scene card.
-  &:only-child:not(.bitfun-scene-tab--active) {
-    background: var(--color-bg-tertiary);
+  &:only-child {
+    background: transparent;
     box-shadow: none;
-    color: var(--color-text-secondary);
-  }
-
-  &:only-child.bitfun-scene-tab--active {
-    background: color-mix(in srgb, var(--color-bg-scene) 72%, var(--color-bg-tertiary));
-    box-shadow: 0 0 0 1px color-mix(in srgb, var(--border-subtle) 42%, transparent);
-    color: var(--color-text-primary);
+    color: color-mix(in srgb, var(--color-text-primary) 86%, var(--color-text-muted));
 
     &:hover {
-      background: color-mix(in srgb, var(--color-bg-scene) 76%, var(--color-bg-tertiary));
+      background: transparent;
+      color: color-mix(in srgb, var(--color-text-primary) 90%, var(--color-text-muted));
     }
-  }
 
-  &:only-child:not(.bitfun-scene-tab--active):hover {
-    background: var(--color-bg-quaternary);
+    &.bitfun-scene-tab--active {
+      background: transparent;
+      box-shadow: none;
+      color: var(--color-text-primary);
+
+      &:hover {
+        background: transparent;
+      }
+    }
   }
 }
 

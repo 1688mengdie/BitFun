@@ -14,14 +14,8 @@ export interface FileSystemNode {
   isSelected?: boolean;
   isExpanded?: boolean;
   
-  // Git status
   totalAnchors?: number;
   hasFixResult?: boolean;
-  
-  gitStatus?: 'untracked' | 'modified' | 'added' | 'deleted' | 'renamed' | 'conflicted' | 'staged';
-  gitStatusText?: string;
-  hasChildrenGitChanges?: boolean;
-  childrenGitStatuses?: Set<'untracked' | 'modified' | 'added' | 'deleted' | 'renamed' | 'conflicted' | 'staged'>;
 }
 
 
@@ -192,10 +186,6 @@ export interface FlatFileNode {
   size?: number;
   extension?: string;
   lastModified?: Date;
-  gitStatus?: FileSystemNode['gitStatus'];
-  gitStatusText?: string;
-  hasChildrenGitChanges?: boolean;
-  childrenGitStatuses?: Set<'untracked' | 'modified' | 'added' | 'deleted' | 'renamed' | 'conflicted' | 'staged'>;
   isCompressed?: boolean;
   originalNode?: FileSystemNode;
 }

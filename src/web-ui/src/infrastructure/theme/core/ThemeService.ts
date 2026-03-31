@@ -333,6 +333,7 @@ export class ThemeService {
     root.style.setProperty('--color-primary', primaryAccent);
     root.style.setProperty('--color-primary-hover', primaryHover);
     root.style.setProperty('--color-accent', primaryAccent);
+    root.style.setProperty('--color-accent-primary', primaryAccent);
     const primaryRgb = accentColorToRgbChannels(primaryAccent);
     if (primaryRgb) {
       root.style.setProperty('--color-primary-rgb', primaryRgb);

@@ -685,7 +685,8 @@
     "renameSymbol": "重命名符号",
     "quickFix": "快速修复...",
     "goToSymbol": "转到符号...",
-    "highlightAllOccurrences": "高亮所有出现位置"
+    "highlightAllOccurrences": "高亮所有出现位置",
+    "addToChat": "添加到聊天上下文"
   },
   "document": {
     "delete": "删除文档"

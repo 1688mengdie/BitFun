@@ -685,7 +685,8 @@
     "renameSymbol": "Rename Symbol",
     "quickFix": "Quick Fix...",
     "goToSymbol": "Go to Symbol...",
-    "highlightAllOccurrences": "Highlight All Occurrences"
+    "highlightAllOccurrences": "Highlight All Occurrences",
+    "addToChat": "Add to Chat Context"
   },
   "document": {
     "delete": "Delete Document"

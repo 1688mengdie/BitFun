@@ -3,22 +3,8 @@ import { Virtuoso, VirtuosoHandle } from 'react-virtuoso';
 import { ChevronRight, ChevronDown, Loader2 } from 'lucide-react';
 import { VirtualFileTreeProps, FlatFileNode, FileSystemNode } from '../types';
 import { getFileIcon, getFileIconClass } from '../utils/fileIcons';
-import { GitStatusIndicator } from './GitStatusIndicator';
 import { useI18n } from '@/infrastructure/i18n';
-
-function getDirectoryGitStatus(
-  childrenGitStatuses?: Set<'untracked' | 'modified' | 'added' | 'deleted' | 'renamed' | 'conflicted' | 'staged'>
-): 'untracked' | 'modified' | 'added' | 'deleted' | 'renamed' | 'conflicted' | 'staged' | undefined {
-  if (!childrenGitStatuses || childrenGitStatuses.size === 0) {
-    return undefined;
-  }
-  
-  if (childrenGitStatuses.size === 1) {
-    return Array.from(childrenGitStatuses)[0];
-  }
-  
-  return 'modified';
-}
+import { expandedFoldersContains } from '@/shared/utils/pathUtils';
 
 interface VirtualFileRowProps {
   node: FlatFileNode;
@@ -60,21 +46,6 @@ const VirtualFileRow = React.memo<VirtualFileRowProps>(({
     onToggleExpand(node.path);
   }, [node.path, onToggleExpand]);
 
-  const getGitStatusClass = () => {
-    if (!node.isDirectory && node.gitStatus) {
-      return `bitfun-file-explorer__node--git-${node.gitStatus}`;
-    }
-    
-    if (node.isDirectory && !isExpanded && node.hasChildrenGitChanges) {
-      const dirStatus = getDirectoryGitStatus(node.childrenGitStatuses);
-      if (dirStatus) {
-        return `bitfun-file-explorer__node--git-${dirStatus}`;
-      }
-    }
-    
-    return '';
-  };
-
   const nodeForIcon: FileSystemNode = useMemo(() => ({
     path: node.path,
     name: node.name,
@@ -82,12 +53,11 @@ const VirtualFileRow = React.memo<VirtualFileRowProps>(({
     extension: node.extension,
     size: node.size,
     lastModified: node.lastModified,
-    gitStatus: node.gitStatus,
     isCompressed: node.isCompressed,
   }), [node]);
 
   return (
-    <div className={`bitfun-file-explorer__node ${getGitStatusClass()}`}>
+    <div className="bitfun-file-explorer__node">
       <div 
         className={`bitfun-file-explorer__node-content ${isSelected ? 'bitfun-file-explorer__node-content--selected' : ''} ${node.isDirectory ? 'bitfun-file-explorer__node-content--directory' : ''} ${node.isCompressed ? 'bitfun-file-explorer__node-content--compressed' : ''}`}
         style={{ paddingLeft: `${indentPx}px` }}
@@ -123,21 +93,6 @@ const VirtualFileRow = React.memo<VirtualFileRowProps>(({
         <span className={`bitfun-file-explorer__node-name ${node.isCompressed ? 'bitfun-file-explorer__compressed-path' : ''}`}>
           {node.name}
         </span>
-        
-        {(() => {
-          if (!node.isDirectory && node.gitStatus) {
-            return <GitStatusIndicator status={node.gitStatus} compact={true} />;
-          }
-          
-          if (node.isDirectory && !isExpanded && node.hasChildrenGitChanges) {
-            const dirStatus = getDirectoryGitStatus(node.childrenGitStatuses);
-            if (dirStatus) {
-              return <GitStatusIndicator status={dirStatus} compact={true} />;
-            }
-          }
-          
-          return null;
-        })()}
       </div>
     </div>
   );
@@ -173,7 +128,7 @@ export const VirtualFileTree = forwardRef<VirtuosoHandle, VirtualFileTreeProps>(
 
   const itemContent = useCallback((_index: number, node: FlatFileNode) => {
     const isSelected = selectedFile === node.path;
-    const isExpanded = expandedFolders.has(node.path);
+    const isExpanded = expandedFoldersContains(expandedFolders, node.path);
 
     return (
       <VirtualFileRow

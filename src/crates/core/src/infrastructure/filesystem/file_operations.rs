@@ -303,16 +303,21 @@ impl FileOperationService {
     }
 
     pub async fn copy_file(&self, from: &str, to: &str) -> BitFunResult<u64> {
-        let from_path = Path::new(from);
-        let to_path = Path::new(to);
+        let from_trim = from.trim();
+        let to_trim = to.trim();
+        let from_path = Path::new(from_trim);
+        let to_path = Path::new(to_trim);
 
         self.validate_file_access(from_path, false).await?;
         self.validate_file_access(to_path, true).await?;
 
-        if !from_path.exists() {
+        // Use symlink_metadata (do not follow symlinks). `Path::exists()` follows links and
+        // returns false for broken symlinks and some reparse-point / cloud placeholder edge cases
+        // even though the name is listed in the directory.
+        if fs::symlink_metadata(from_path).await.is_err() {
             return Err(BitFunError::service(format!(
                 "Source file does not exist: {}",
-                from
+                from_trim
             )));
         }
 
@@ -336,16 +341,18 @@ impl FileOperationService {
     }
 
     pub async fn move_file(&self, from: &str, to: &str) -> BitFunResult<()> {
-        let from_path = Path::new(from);
-        let to_path = Path::new(to);
+        let from_trim = from.trim();
+        let to_trim = to.trim();
+        let from_path = Path::new(from_trim);
+        let to_path = Path::new(to_trim);
 
         self.validate_file_access(from_path, true).await?;
         self.validate_file_access(to_path, true).await?;
 
-        if !from_path.exists() {
+        if fs::symlink_metadata(from_path).await.is_err() {
             return Err(BitFunError::service(format!(
                 "Source file does not exist: {}",
-                from
+                from_trim
             )));
         }
 
