@@ -20,7 +20,7 @@
     background: transparent;
     border: none;
     border-radius: $size-radius-base;
-    font-size: $font-size-sm;
+    font-size: var(--flowchat-font-size-sm);
     color: var(--color-text-secondary);
     cursor: pointer;
     transition: all $motion-fast $easing-standard;
@@ -45,14 +45,14 @@
   &__count {
     color: var(--color-text-secondary);
     font-weight: $font-weight-normal;
-    font-size: $font-size-xs;
+    font-size: var(--flowchat-font-size-xs);
     opacity: 0.8;
   }
 
   &__stats {
     font-weight: $font-weight-medium;
     font-family: 'SF Mono', 'Monaco', 'Cascadia Code', monospace;
-    font-size: $font-size-xs;
+    font-size: var(--flowchat-font-size-xs);
 
     &--add {
       color: var(--color-success);
@@ -102,7 +102,7 @@
   }
 
   &__review-text {
-    font-size: $font-size-xs;
+    font-size: var(--flowchat-font-size-xs);
     font-weight: $font-weight-normal;
   }
 
@@ -189,7 +189,7 @@
     gap: 6px;
     padding: 4px 6px;
     border-radius: $size-radius-base;
-    font-size: $font-size-sm;
+    font-size: var(--flowchat-font-size-sm);
     color: var(--color-text-secondary);
     cursor: pointer;
     transition: all $motion-fast $easing-standard;
@@ -257,7 +257,7 @@
     align-items: center;
     gap: 4px;
     flex-shrink: 0;
-    font-size: $font-size-xs;
+    font-size: var(--flowchat-font-size-xs);
     font-weight: $font-weight-medium;
     font-family: 'SF Mono', 'Monaco', 'Cascadia Code', monospace;
   }
@@ -273,7 +273,7 @@
   }
 
   &__file-error {
-    font-size: $font-size-xs;
+    font-size: var(--flowchat-font-size-xs);
     color: var(--color-error);
     font-style: italic;
   }

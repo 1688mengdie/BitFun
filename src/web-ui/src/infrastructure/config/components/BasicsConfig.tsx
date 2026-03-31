@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { FontPreferencePanel } from '@/infrastructure/font-preference';
 import { useTranslation } from 'react-i18next';
 import { FolderOpen } from 'lucide-react';
 import {
@@ -856,6 +857,7 @@ const BasicsConfig: React.FC = () => {
       <ConfigPageHeader title={t('title')} subtitle={t('subtitle')} />
       <ConfigPageContent className="bitfun-basics-config__content">
         <BasicsAppearanceSection />
+        <FontPreferencePanel />
         <BasicsLaunchAtLoginSection />
         <BasicsLoggingSection />
         <BasicsTerminalSection />

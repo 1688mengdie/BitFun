@@ -11,7 +11,7 @@
   border: none !important;
   outline: none !important;
   color: var(--color-text-primary);
-  font-size: 14px;
+  font-size: var(--flowchat-font-size-base);
   line-height: $line-height-base;
   padding: 0;
   vertical-align: top;
@@ -72,7 +72,7 @@
   background: rgba(99, 102, 241, 0.1);
   border: 1px dashed rgba(99, 102, 241, 0.35);
   border-radius: 6px;
-  font-size: $font-size-sm;
+  font-size: var(--flowchat-font-size-sm);
   font-weight: 500;
   color: var(--color-accent-400);
   cursor: pointer;
@@ -117,7 +117,7 @@
   background: rgba(96, 165, 250, 0.12);
   border: none;
   border-radius: 10px;
-  font-size: $font-size-sm;
+  font-size: var(--flowchat-font-size-sm);
   font-weight: 500;
   color: rgba(96, 165, 250, 0.95);
   cursor: default;
@@ -208,7 +208,7 @@
   background: transparent;
   color: currentColor;
   opacity: 0.6;
-  font-size: 18px;
+  font-size: var(--flowchat-font-size-2xl);
   line-height: 1;
   cursor: pointer;
   border-radius: 50%;

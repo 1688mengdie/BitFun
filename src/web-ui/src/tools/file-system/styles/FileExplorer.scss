@@ -336,7 +336,7 @@ $_indent-width: 8px;
 
 .bitfun-file-explorer__node-name {
   flex: 1;
-  font-size: $font-size-sm;
+  font-size: var(--font-size-sm);
   font-weight: $font-weight-normal;
   @include mixins.text-ellipsis;
   position: relative;
@@ -380,7 +380,7 @@ $_indent-width: 8px;
     }
     
     .bitfun-input {
-      font-size: $font-size-sm;
+      font-size: var(--font-size-sm);
       color: var(--color-text-primary);
       font-weight: $font-weight-medium;
       border: none !important;
@@ -400,7 +400,7 @@ $_indent-width: 8px;
 }
 
 .bitfun-file-explorer__node-size {
-  font-size: $font-size-xs;
+  font-size: var(--font-size-xs);
   color: var(--color-text-muted);
   opacity: 0.7;
   flex-shrink: 0;
@@ -409,7 +409,7 @@ $_indent-width: 8px;
 }
 
 .bitfun-file-explorer__node-modified {
-  font-size: $font-size-xs;
+  font-size: var(--font-size-xs);
   color: var(--color-text-muted);
   opacity: 0.7;
   flex-shrink: 0;
@@ -448,7 +448,7 @@ $_indent-width: 8px;
   }
 
   .bitfun-file-explorer__node-name {
-    font-size: $font-size-base;
+    font-size: var(--font-size-base);
   }
 
   .bitfun-file-explorer__node-size,

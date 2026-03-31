@@ -7,6 +7,30 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// Web UI font preferences (settings → basics). Keys match `FontPreference` in the frontend (camelCase).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FontPreferenceSnapshot {
+    pub ui_size: UiFontSizeSnapshot,
+    pub flow_chat: FlowChatFontSnapshot,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UiFontSizeSnapshot {
+    pub level: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_px: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FlowChatFontSnapshot {
+    pub mode: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_px: Option<u32>,
+}
+
 /// Global configuration structure - matches the frontend `GlobalConfig` exactly.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -23,6 +47,9 @@ pub struct GlobalConfig {
     /// Theme system configuration.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub themes: Option<ThemesConfig>,
+    /// Web UI font size preferences (`get_config` / `set_config` path `font`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub font: Option<FontPreferenceSnapshot>,
     pub version: String,
     #[serde(with = "chrono::serde::ts_milliseconds")]
     pub last_modified: chrono::DateTime<chrono::Utc>,
@@ -910,6 +937,7 @@ impl Default for GlobalConfig {
             ai: AIConfig::default(),
             mcp_servers: None,
             themes: Some(ThemesConfig::default()),
+            font: None,
             version: "1.0.0".to_string(),
             last_modified: chrono::Utc::now(),
         }

@@ -55,7 +55,7 @@
       background: transparent !important;
       color: var(--color-text-primary);
       font-family: $font-family-sans;
-      font-size: $font-size-base;
+      font-size: var(--font-size-base);
       line-height: $line-height-relaxed;
       resize: none;
       box-sizing: border-box;
@@ -93,7 +93,7 @@
   }
 
   &__hint {
-    font-size: $font-size-2xs;
+    font-size: var(--font-size-2xs);
     color: var(--color-text-muted);
     opacity: 0.72;
     user-select: none;

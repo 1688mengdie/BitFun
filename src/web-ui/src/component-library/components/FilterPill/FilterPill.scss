@@ -18,7 +18,7 @@
   border: 1px solid transparent;
   border-radius: 14px;
   color: var(--color-text-secondary);
-  font-size: $font-size-xs;
+  font-size: var(--font-size-xs);
   font-weight: $font-weight-medium;
   font-family: $font-family-sans;
   cursor: pointer;

@@ -38,14 +38,14 @@
 
   &__title {
     margin: 0 0 4px 0;
-    font-size: $font-size-xl;
+    font-size: var(--font-size-xl);
     font-weight: $font-weight-semibold;
     color: var(--color-text-primary);
   }
 
   &__subtitle {
     margin: 0;
-    font-size: $font-size-sm;
+    font-size: var(--font-size-sm);
     color: var(--color-text-secondary);
   }
 
@@ -95,7 +95,7 @@
     align-items: center;
     gap: $size-gap-2;
     min-width: 0;
-    font-size: $font-size-sm;
+    font-size: var(--font-size-sm);
     font-weight: $font-weight-semibold;
     color: var(--color-text-primary);
   }
@@ -145,7 +145,7 @@
 
   &__meta-tag {
     flex-shrink: 0;
-    font-size: $font-size-xs;
+    font-size: var(--font-size-xs);
     color: var(--color-text-muted);
     white-space: nowrap;
 
@@ -192,7 +192,7 @@
   }
 
   &__details-section-title {
-    font-size: $font-size-xs;
+    font-size: var(--font-size-xs);
     font-weight: $font-weight-semibold;
     color: var(--color-text-secondary);
   }
@@ -215,12 +215,12 @@
   }
 
   &__details-label {
-    font-size: $font-size-xs;
+    font-size: var(--font-size-xs);
     color: var(--color-text-muted);
   }
 
   &__details-value {
-    font-size: $font-size-xs;
+    font-size: var(--font-size-xs);
     color: var(--color-text-primary);
     font-family: $font-family-mono;
     word-break: break-all;
@@ -247,7 +247,7 @@
     border-radius: $size-radius-sm;
     border: 1px solid var(--border-subtle);
     background: var(--element-bg-medium);
-    font-size: $font-size-xs;
+    font-size: var(--font-size-xs);
     color: var(--color-text-secondary);
   }
 
@@ -259,7 +259,7 @@
   }
 
   &__json-status {
-    font-size: $font-size-xs;
+    font-size: var(--font-size-xs);
 
     &--success {
       color: var(--color-success);
@@ -290,7 +290,7 @@
     background: transparent;
     border: none;
     border-bottom: 2px solid transparent;
-    font-size: $font-size-sm;
+    font-size: var(--font-size-sm);
     font-weight: $font-weight-medium;
     color: var(--color-text-secondary);
     cursor: pointer;
@@ -363,7 +363,7 @@
     }
 
     p {
-      font-size: $font-size-base;
+      font-size: var(--font-size-base);
       margin: 0;
     }
   }
@@ -423,7 +423,7 @@
       outline: none !important;
       box-shadow: none !important;
       color: var(--color-text-primary, #e8e8e8);
-      font-size: $font-size-sm;
+      font-size: var(--font-size-sm);
       font-family: $font-family-sans;
 
       &::placeholder {
@@ -458,7 +458,7 @@
     background: transparent;
     border: none;
     border-radius: $size-radius-sm;
-    font-size: $font-size-sm;
+    font-size: var(--font-size-sm);
     font-weight: $font-weight-medium;
     color: var(--color-text-secondary);
     cursor: pointer;
@@ -548,7 +548,7 @@
 
   &__item-name {
     font-family: $font-family-sans;
-    font-size: $font-size-sm;
+    font-size: var(--font-size-sm);
     font-weight: $font-weight-semibold;
     color: var(--color-text-primary);
     margin-bottom: 2px;
@@ -559,7 +559,7 @@
 
   &__item-description {
     display: inline-block;
-    font-size: $font-size-xs;
+    font-size: var(--font-size-xs);
     font-family: $font-family-mono;
     color: var(--color-text-secondary);
     line-height: $line-height-base;
@@ -590,7 +590,7 @@
   &__badge {
     padding: 4px $size-gap-2;
     border-radius: $size-radius-sm;
-    font-size: $font-size-xs;
+    font-size: var(--font-size-xs);
     font-weight: $font-weight-medium;
     white-space: nowrap;
 
@@ -685,7 +685,7 @@
   }
 
   &__detail-label {
-    font-size: $font-size-sm;
+    font-size: var(--font-size-sm);
     font-weight: $font-weight-semibold;
     color: var(--color-text-primary);
     margin-bottom: $size-gap-2;
@@ -701,7 +701,7 @@
     display: flex;
     align-items: flex-start;
     gap: $size-gap-2;
-    font-size: $font-size-sm;
+    font-size: var(--font-size-sm);
   }
 
   &__property-label {
@@ -716,7 +716,7 @@
     gap: $size-gap-1;
     color: var(--color-text-primary);
     font-family: $font-family-mono;
-    font-size: $font-size-xs;
+    font-size: var(--font-size-xs);
     word-break: break-all;
   }
 
@@ -724,7 +724,7 @@
     margin-top: 0;
     padding: $size-gap-2;
     border-radius: $size-radius-sm;
-    font-size: $font-size-xs;
+    font-size: var(--font-size-xs);
     white-space: pre-wrap;
     line-height: $line-height-relaxed;
     background: transparent;
@@ -763,7 +763,7 @@
     border-radius: $size-radius-sm;
     background: transparent;
     color: var(--color-text-secondary);
-    font-size: $font-size-sm;
+    font-size: var(--font-size-sm);
     font-family: $font-family-sans;
     cursor: pointer;
     transition: all $motion-base $easing-standard;
@@ -877,7 +877,7 @@
     > label:not(.bitfun-checkbox):not(.bitfun-radio-label) {
       display: block;
       margin-bottom: $size-gap-2;
-      font-size: $font-size-sm;
+      font-size: var(--font-size-sm);
       font-weight: $font-weight-medium;
       color: var(--color-text-secondary);
     }
@@ -897,7 +897,7 @@
       border: 1px solid var(--border-base, rgba(255, 255, 255, 0.14));
       border-radius: var(--size-radius-sm, 6px);
       color: var(--color-text-primary, #e8e8e8);
-      font-size: $font-size-sm;
+      font-size: var(--font-size-sm);
       font-family: $font-family-sans;
       transition: all var(--motion-base, 0.3s) var(--easing-standard, cubic-bezier(0.4, 0, 0.2, 1));
       min-height: 36px;
@@ -1356,7 +1356,7 @@
     display: flex;
     align-items: center;
     cursor: pointer;
-    font-size: $font-size-sm;
+    font-size: var(--font-size-sm);
     color: var(--color-text-secondary);
     padding: $size-gap-2 $size-gap-3;
     border-radius: $size-radius-sm;
@@ -1399,7 +1399,7 @@
     border: 1px solid var(--border-base);
 
     > label {
-      font-size: $font-size-xs !important;
+      font-size: var(--font-size-xs) !important;
       color: var(--color-text-secondary) !important;
       margin-bottom: $size-gap-3;
       display: block;
@@ -1434,7 +1434,7 @@
     border-radius: $size-radius-sm;
     margin-top: $size-gap-2;
     color: var(--color-warning);
-    font-size: $font-size-sm;
+    font-size: var(--font-size-sm);
 
     svg {
       flex-shrink: 0;
@@ -1446,7 +1446,7 @@
   &__field-hint {
     display: block;
     color: var(--color-text-secondary);
-    font-size: $font-size-xs;
+    font-size: var(--font-size-xs);
     margin-bottom: $size-gap-2;
     line-height: 1.5;
   }
@@ -1530,13 +1530,13 @@
   }
 
   &__provider-name {
-    font-size: $font-size-base;
+    font-size: var(--font-size-base);
     font-weight: $font-weight-semibold;
     color: var(--color-text-primary);
   }
 
   &__provider-description {
-    font-size: $font-size-sm;
+    font-size: var(--font-size-sm);
     color: var(--color-text-secondary);
     line-height: 1.4;
   }
@@ -1568,7 +1568,7 @@
     gap: 4px;
     margin-top: auto;
     padding-top: $size-gap-2;
-    font-size: $font-size-xs;
+    font-size: var(--font-size-xs);
     color: var(--color-accent-500);
     text-decoration: none;
     transition: color $motion-base $easing-standard;
@@ -1585,7 +1585,7 @@
     gap: $size-gap-4;
     margin: $size-gap-6 0;
     color: var(--color-text-muted);
-    font-size: $font-size-sm;
+    font-size: var(--font-size-sm);
 
     &::before,
     &::after {
@@ -1625,14 +1625,14 @@
   }
 
   &__custom-option-title {
-    font-size: $font-size-base;
+    font-size: var(--font-size-base);
     font-weight: $font-weight-semibold;
     color: var(--color-text-primary);
     margin-bottom: 4px;
   }
 
   &__custom-option-description {
-    font-size: $font-size-sm;
+    font-size: var(--font-size-sm);
     color: var(--color-text-secondary);
   }
 
@@ -1653,7 +1653,7 @@
     border: none;
     border-radius: $size-radius-sm;
     color: var(--color-text-secondary);
-    font-size: $font-size-sm;
+    font-size: var(--font-size-sm);
     cursor: pointer;
     transition: all $motion-base $easing-standard;
 
@@ -1702,11 +1702,11 @@
     }
 
     &__title {
-      font-size: $font-size-lg;
+      font-size: var(--font-size-lg);
     }
 
     &__subtitle {
-      font-size: $font-size-xs;
+      font-size: var(--font-size-xs);
     }
 
     
@@ -1722,7 +1722,7 @@
 
     &__tab {
       padding: $size-gap-2 $size-gap-3;
-      font-size: $font-size-xs;
+      font-size: var(--font-size-xs);
       gap: $size-gap-1;
       
       svg {
@@ -1754,7 +1754,7 @@
 
     &__category-tab {
       padding: 5px $size-gap-2;
-      font-size: $font-size-xs;
+      font-size: var(--font-size-xs);
       height: 30px;
     }
 
@@ -1774,11 +1774,11 @@
     }
 
     &__item-name {
-      font-size: $font-size-sm;
+      font-size: var(--font-size-sm);
     }
 
     &__item-description {
-      font-size: $font-size-xs;
+      font-size: var(--font-size-xs);
     }
 
     &__item-badges {
@@ -1812,7 +1812,7 @@
 
     &__action-btn {
       padding: $size-gap-2 $size-gap-3;
-      font-size: $font-size-xs;
+      font-size: var(--font-size-xs);
       
       svg {
         width: 14px;
@@ -1833,13 +1833,13 @@
       margin-bottom: $size-gap-3;
       
       > label:not(.bitfun-checkbox):not(.bitfun-radio-label) {
-        font-size: $font-size-xs;
+        font-size: var(--font-size-xs);
         margin-bottom: $size-gap-1;
       }
 
       > input, > select, > textarea {
         padding: $size-gap-2 $size-gap-3;
-        font-size: $font-size-sm;
+        font-size: var(--font-size-sm);
       }
     }
 

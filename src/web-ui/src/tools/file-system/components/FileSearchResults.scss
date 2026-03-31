@@ -31,7 +31,7 @@ $_icon-size: 16px;
   }
 
   &-hint {
-    font-size: $font-size-xs;
+    font-size: var(--font-size-xs);
     opacity: 0.7;
     margin-top: $size-gap-2;
   }
@@ -45,7 +45,7 @@ $_icon-size: 16px;
 }
 
 .bitfun-search-results__count {
-  font-size: $font-size-xs;
+  font-size: var(--font-size-xs);
   color: var(--color-text-muted);
   font-weight: $font-weight-medium;
 }
@@ -105,7 +105,7 @@ $_icon-size: 16px;
   }
 
   &-name {
-    font-size: $font-size-sm;
+    font-size: var(--font-size-sm);
     font-weight: $font-weight-medium;
     color: inherit;
     @include mixins.text-ellipsis;
@@ -113,7 +113,7 @@ $_icon-size: 16px;
   }
 
   &-path {
-    font-size: $font-size-xs;
+    font-size: var(--font-size-xs);
     color: var(--color-text-muted);
     opacity: 0.6;
     @include mixins.text-ellipsis;
@@ -146,7 +146,7 @@ $_icon-size: 16px;
   }
 
   &-toggle-count {
-    font-size: $font-size-xs;
+    font-size: var(--font-size-xs);
     font-weight: $font-weight-medium;
     line-height: 1;
   }
@@ -196,7 +196,7 @@ $_icon-size: 16px;
   &-line {
     flex-shrink: 0;
     width: 40px;
-    font-size: $font-size-xs;
+    font-size: var(--font-size-xs);
     color: var(--color-text-muted);
     font-family: $font-family-mono;
     opacity: 0.6;
@@ -210,7 +210,7 @@ $_icon-size: 16px;
     
     code {
       display: block;
-      font-size: $font-size-xs;
+      font-size: var(--font-size-xs);
       font-family: $font-family-mono;
       color: var(--color-text-secondary);
       white-space: pre-wrap;
@@ -241,7 +241,7 @@ $_icon-size: 16px;
   border-top: 1px solid $border-base;
   background: var(--element-bg-subtle);
   color: var(--color-text-muted);
-  font-size: $font-size-xs;
+  font-size: var(--font-size-xs);
   cursor: pointer;
   transition: all $motion-base $easing-standard;
   user-select: none;

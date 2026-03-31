@@ -24,8 +24,8 @@ $transition-timing: cubic-bezier(0.4, 0, 0.2, 1);
   box-sizing: border-box;
   cursor: grab;
   
-  font-family: var(--font-family-sans, 'Noto Sans SC', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
-  font-size: 13px;
+  font-family: var(--font-sans, var(--font-family-sans, 'Noto Sans SC', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif));
+  font-size: var(--flowchat-font-size-sm);
   color: var(--color-text-primary, #e8e8e8);
   
   animation: toolbar-mode-enter $transition-duration $transition-timing;
@@ -181,7 +181,7 @@ $transition-timing: cubic-bezier(0.4, 0, 0.2, 1);
   padding: 4px 8px;
   box-sizing: border-box;
   color: var(--color-text-primary, #e8e8e8);
-  font-size: 12px;
+  font-size: var(--flowchat-font-size-xs);
   font-weight: var(--font-weight-medium, 500);
   border-radius: var(--radius-sm, 6px);
 }
@@ -299,7 +299,7 @@ $transition-timing: cubic-bezier(0.4, 0, 0.2, 1);
   border: none;
   background: transparent;
   color: var(--color-text-secondary, #a0a0a0);
-  font-size: 13px;
+  font-size: var(--flowchat-font-size-sm);
   text-align: left;
   cursor: pointer;
   transition: background 0.1s ease;
@@ -384,7 +384,7 @@ $transition-timing: cubic-bezier(0.4, 0, 0.2, 1);
   border-radius: var(--radius-sm, 6px);
   background: transparent;
   color: var(--color-text-primary, #e8e8e8);
-  font-size: 13px;
+  font-size: var(--flowchat-font-size-sm);
   text-align: left;
   cursor: pointer;
   transition: background 0.1s ease;
@@ -467,7 +467,7 @@ $transition-timing: cubic-bezier(0.4, 0, 0.2, 1);
     border-radius: var(--radius-sm, 6px);
     background: var(--color-purple-200, rgba(139, 92, 246, 0.15));
     color: var(--color-purple-500, #8b5cf6);
-    font-size: 11px;
+    font-size: var(--flowchat-font-size-2xs);
     font-weight: var(--font-weight-medium, 500);
   }
   
@@ -493,7 +493,7 @@ $transition-timing: cubic-bezier(0.4, 0, 0.2, 1);
     border-radius: var(--radius-sm, 6px);
     background: var(--color-accent-200, rgba(96, 165, 250, 0.15));
     color: var(--color-accent-500, #60a5fa);
-    font-size: 11px;
+    font-size: var(--flowchat-font-size-2xs);
     font-weight: var(--font-weight-medium, 500);
   }
   
@@ -524,7 +524,7 @@ $transition-timing: cubic-bezier(0.4, 0, 0.2, 1);
   border-radius: 0;
   background: transparent;
   color: var(--color-text-primary, #e8e8e8);
-  font-size: 13px;
+  font-size: var(--flowchat-font-size-sm);
   outline: none;
   box-shadow: none;
   cursor: text;
@@ -795,7 +795,7 @@ $transition-timing: cubic-bezier(0.4, 0, 0.2, 1);
     border-radius: var(--radius-base, 8px);
     background: var(--color-bg-primary, #121214);
     color: var(--color-text-primary, #e8e8e8);
-    font-size: 13px;
+    font-size: var(--flowchat-font-size-sm);
     outline: none;
     transition: border-color 0.15s ease;
     

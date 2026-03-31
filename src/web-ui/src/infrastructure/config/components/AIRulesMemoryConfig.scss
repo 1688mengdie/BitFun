@@ -45,7 +45,7 @@
     flex-shrink: 0;
     padding: 1px 7px;
     border-radius: $size-radius-sm;
-    font-size: $font-size-xs;
+    font-size: var(--font-size-xs);
     font-weight: $font-weight-medium;
     white-space: nowrap;
     background: var(--element-bg-medium);
@@ -98,13 +98,13 @@
   }
 
   &__details-field {
-    font-size: $font-size-sm;
+    font-size: var(--font-size-sm);
     color: var(--color-text-secondary);
     line-height: $line-height-relaxed;
   }
 
   &__details-label {
-    font-size: $font-size-xs;
+    font-size: var(--font-size-xs);
     font-weight: $font-weight-medium;
     color: var(--color-text-muted);
     margin-right: $size-gap-2;
@@ -115,7 +115,7 @@
     background: var(--element-bg-medium);
     border-radius: $size-radius-sm;
     font-family: $font-family-mono;
-    font-size: $font-size-xs;
+    font-size: var(--font-size-xs);
     color: var(--color-accent-500);
   }
 
@@ -132,7 +132,7 @@
     border: 1px solid var(--border-subtle);
     border-radius: $size-radius-sm;
     font-family: $font-family-mono;
-    font-size: $font-size-xs;
+    font-size: var(--font-size-xs);
     color: var(--color-text-primary);
     line-height: $line-height-relaxed;
     white-space: pre-wrap;
@@ -142,7 +142,7 @@
   }
 
   &__details-meta {
-    font-size: $font-size-xs;
+    font-size: var(--font-size-xs);
     color: var(--color-text-muted);
     padding-top: $size-gap-3;
     border-top: 1px solid var(--border-subtle);
@@ -161,7 +161,7 @@
     margin-bottom: $size-gap-3;
     h3 {
       margin: 0;
-      font-size: $font-size-sm;
+      font-size: var(--font-size-sm);
       font-weight: $font-weight-semibold;
       color: var(--color-text-primary);
     }
@@ -224,7 +224,7 @@
     flex-shrink: 0;
     padding: 1px 7px;
     border-radius: $size-radius-sm;
-    font-size: $font-size-xs;
+    font-size: var(--font-size-xs);
     font-weight: $font-weight-medium;
     white-space: nowrap;
     border: 1px solid transparent;
@@ -242,7 +242,7 @@
     flex-direction: column;
     gap: $size-gap-1;
     label {
-      font-size: $font-size-sm;
+      font-size: var(--font-size-sm);
       font-weight: $font-weight-medium;
       color: var(--color-text-secondary);
     }

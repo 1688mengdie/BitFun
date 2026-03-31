@@ -482,7 +482,7 @@ $_app-icon-size: 20px;
 
 // App title text
 .bitfun-app-title {
-  font-size: tokens.$font-size-xs;
+  font-size: var(--font-size-xs);
   font-weight: tokens.$font-weight-bold;
   color: tokens.$color-text-primary;
   text-shadow: tokens.$shadow-xs;

@@ -102,7 +102,7 @@
     display: inline-flex;
     align-items: center;
     gap: 4px;
-    font-size: $font-size-xs;
+    font-size: var(--font-size-xs);
     font-weight: $font-weight-medium;
     color: var(--core-accent, var(--color-accent-500));
     opacity: 0.9;

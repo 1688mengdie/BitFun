@@ -47,6 +47,8 @@ export const ConfigPageContent: React.FC<ConfigPageContentProps> = ({
 
 export interface ConfigPageSectionProps {
   title: string;
+  /** Renders inline after the title (e.g. status badge). */
+  titleSuffix?: React.ReactNode;
   description?: React.ReactNode;
   extra?: React.ReactNode;
   children: React.ReactNode;
@@ -55,6 +57,7 @@ export interface ConfigPageSectionProps {
 
 export const ConfigPageSection: React.FC<ConfigPageSectionProps> = ({
   title,
+  titleSuffix,
   description,
   extra,
   children,
@@ -64,7 +67,10 @@ export const ConfigPageSection: React.FC<ConfigPageSectionProps> = ({
     <section className={`bitfun-config-page-section ${className}`}>
       <div className="bitfun-config-page-section__header">
         <div className="bitfun-config-page-section__heading">
-          <h3 className="bitfun-config-page-section__title">{title}</h3>
+          <div className="bitfun-config-page-section__title-row">
+            <h3 className="bitfun-config-page-section__title">{title}</h3>
+            {titleSuffix}
+          </div>
           {description && (
             <p className="bitfun-config-page-section__description">{description}</p>
           )}

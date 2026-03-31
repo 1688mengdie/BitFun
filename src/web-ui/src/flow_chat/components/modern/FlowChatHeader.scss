@@ -96,7 +96,7 @@
     gap: $size-gap-2;
     padding: $size-gap-2 $size-gap-3;
     border-bottom: 1px solid var(--border-base);
-    font-size: $font-size-xs;
+    font-size: var(--flowchat-font-size-xs);
     color: var(--color-text-secondary);
   }
 
@@ -139,7 +139,7 @@
     border-radius: 999px;
     background: color-mix(in srgb, var(--element-bg-soft) 82%, transparent);
     color: var(--color-text-secondary);
-    font-size: $font-size-xs;
+    font-size: var(--flowchat-font-size-xs);
     line-height: 1;
     white-space: nowrap;
   }
@@ -147,7 +147,7 @@
   &__turn-list-title {
     min-width: 0;
     flex: 1;
-    font-size: $font-size-sm;
+    font-size: var(--flowchat-font-size-sm);
     color: inherit;
     white-space: nowrap;
     overflow: hidden;
@@ -175,14 +175,14 @@
     border-radius: 999px;
     background: color-mix(in srgb, var(--element-bg-soft) 82%, transparent);
     color: var(--color-text-secondary);
-    font-size: $font-size-xs;
+    font-size: var(--flowchat-font-size-xs);
     line-height: 1;
     white-space: nowrap;
   }
 
   &__message-text {
     min-width: 0;
-    font-size: $font-size-sm;
+    font-size: var(--flowchat-font-size-sm);
     color: var(--color-text-primary);
     white-space: nowrap;
     overflow: hidden;

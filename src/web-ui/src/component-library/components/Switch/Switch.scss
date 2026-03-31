@@ -134,14 +134,14 @@
   }
 
   &__label {
-    font-size: tokens.$font-size-sm;
+    font-size: var(--font-size-sm);
     font-weight: tokens.$font-weight-medium;
     color: var(--color-text-primary, tokens.$color-text-primary);
     line-height: tokens.$line-height-base;
   }
 
   &__description {
-    font-size: tokens.$font-size-xs;
+    font-size: var(--font-size-xs);
     color: var(--color-text-muted, tokens.$color-text-muted);
     line-height: tokens.$line-height-base;
   }
@@ -172,7 +172,7 @@
     }
 
     .bitfun-switch__label {
-      font-size: tokens.$font-size-xs;
+      font-size: var(--font-size-xs);
     }
 
     .bitfun-switch__description {
@@ -209,11 +209,11 @@
     }
 
     .bitfun-switch__label {
-      font-size: tokens.$font-size-base;
+      font-size: var(--font-size-base);
     }
 
     .bitfun-switch__description {
-      font-size: tokens.$font-size-xs;
+      font-size: var(--font-size-xs);
     }
   }
 }

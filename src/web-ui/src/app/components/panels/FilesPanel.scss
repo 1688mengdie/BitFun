@@ -98,7 +98,7 @@
     padding: $size-gap-2 $size-gap-3;
     background: var(--element-bg-subtle);
     border-bottom: 1px solid $border-base;
-    font-size: $font-size-xs;
+    font-size: var(--font-size-xs);
     color: $color-accent-600;
     flex-shrink: 0;
   }
@@ -174,7 +174,7 @@
   }
 
   &__transfer-label {
-    font-size: $font-size-xs;
+    font-size: var(--font-size-xs);
     color: var(--color-text-secondary);
     margin-bottom: $size-gap-1;
     white-space: nowrap;
@@ -226,7 +226,7 @@
     text-align: center;
 
     p {
-      font-size: $font-size-sm;
+      font-size: var(--font-size-sm);
       color: var(--color-text-muted);
       margin: 0;
     }
@@ -254,7 +254,7 @@
     padding: $size-gap-5;
 
     p {
-      font-size: $font-size-sm;
+      font-size: var(--font-size-sm);
       margin: 0 0 $size-gap-3 0;
     }
   }
@@ -267,7 +267,7 @@
     color: var(--color-text-muted);
     cursor: pointer;
     transition: all $motion-base $easing-standard;
-    font-size: $font-size-xs;
+    font-size: var(--font-size-xs);
 
     &:hover {
       background: var(--element-bg-soft);
@@ -288,7 +288,7 @@
     padding: $size-gap-5;
 
     p {
-      font-size: $font-size-sm;
+      font-size: var(--font-size-sm);
       color: var(--color-text-muted);
       margin: 0;
     }
@@ -397,14 +397,14 @@
 
     &__search-status {
       padding: $size-gap-3 $size-gap-4;
-      font-size: $font-size-sm;
+      font-size: var(--font-size-sm);
     }
 
     &__placeholder {
       padding: $size-gap-8;
       
       p {
-        font-size: $font-size-base;
+        font-size: var(--font-size-base);
       }
     }
 
@@ -415,7 +415,7 @@
 
     &__loading {
       p {
-        font-size: $font-size-base;
+        font-size: var(--font-size-base);
       }
     }
 
@@ -428,13 +428,13 @@
       padding: $size-gap-8;
       
       p {
-        font-size: $font-size-base;
+        font-size: var(--font-size-base);
       }
     }
 
     &__retry-button {
       padding: $size-gap-2 $size-gap-4;
-      font-size: $font-size-sm;
+      font-size: var(--font-size-sm);
     }
   }
 }
