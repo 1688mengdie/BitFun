@@ -2,8 +2,8 @@
 
 use crate::api::app_state::AppState;
 use bitfun_core::agentic::agents::{
-    AgentCategory, AgentInfo, CustomSubagent, CustomSubagentConfig, CustomSubagentKind,
-    SubAgentSource,
+    AgentCategory, AgentInfo, CustomSubagent, CustomSubagentConfig, CustomSubagentDetail,
+    CustomSubagentKind, SubAgentSource,
 };
 use bitfun_core::service::config::types::SubAgentConfig;
 use log::warn;
@@ -46,6 +46,26 @@ pub async fn list_subagents(
     };
 
     Ok(result)
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetSubagentDetailRequest {
+    pub subagent_id: String,
+    pub workspace_path: Option<String>,
+}
+
+#[tauri::command]
+pub async fn get_subagent_detail(
+    state: State<'_, AppState>,
+    request: GetSubagentDetailRequest,
+) -> Result<CustomSubagentDetail, String> {
+    let workspace = workspace_root_from_request(request.workspace_path.as_deref());
+    state
+        .agent_registry
+        .get_custom_subagent_detail(&request.subagent_id, workspace.as_deref())
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -111,6 +131,43 @@ pub async fn delete_subagent(
     }
 
     Ok(())
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateSubagentRequest {
+    pub subagent_id: String,
+    pub description: String,
+    pub prompt: String,
+    pub tools: Option<Vec<String>>,
+    pub readonly: Option<bool>,
+    pub workspace_path: Option<String>,
+}
+
+#[tauri::command]
+pub async fn update_subagent(
+    state: State<'_, AppState>,
+    request: UpdateSubagentRequest,
+) -> Result<(), String> {
+    if request.description.trim().is_empty() {
+        return Err("Description cannot be empty".to_string());
+    }
+    if request.prompt.trim().is_empty() {
+        return Err("Prompt cannot be empty".to_string());
+    }
+    let workspace = workspace_root_from_request(request.workspace_path.as_deref());
+    state
+        .agent_registry
+        .update_custom_subagent_definition(
+            &request.subagent_id,
+            workspace.as_deref(),
+            request.description.trim().to_string(),
+            request.prompt.trim().to_string(),
+            request.tools,
+            request.readonly,
+        )
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
