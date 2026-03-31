@@ -2,6 +2,7 @@
 //!
 //! This module manages SSH connections using the pure-Russ SSH implementation
 
+use crate::service::remote_ssh::password_vault::SSHPasswordVault;
 use crate::service::remote_ssh::types::{
     SavedConnection, ServerInfo, SSHConnectionConfig, SSHConnectionResult, SSHAuthMethod,
     SSHConfigEntry, SSHConfigLookupResult,
@@ -270,6 +271,7 @@ pub struct SSHConnectionManager {
     /// Remote workspace persistence (multiple workspaces)
     remote_workspaces: Arc<tokio::sync::RwLock<Vec<crate::service::remote_ssh::types::RemoteWorkspace>>>,
     remote_workspace_path: std::path::PathBuf,
+    password_vault: std::sync::Arc<SSHPasswordVault>,
 }
 
 impl SSHConnectionManager {
@@ -278,6 +280,7 @@ impl SSHConnectionManager {
         let config_path = data_dir.join("ssh_connections.json");
         let known_hosts_path = data_dir.join("known_hosts");
         let remote_workspace_path = data_dir.join("remote_workspace.json");
+        let password_vault = std::sync::Arc::new(SSHPasswordVault::new(data_dir));
         Self {
             connections: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
             saved_connections: Arc::new(tokio::sync::RwLock::new(Vec::new())),
@@ -286,6 +289,7 @@ impl SSHConnectionManager {
             known_hosts_path,
             remote_workspaces: Arc::new(tokio::sync::RwLock::new(Vec::new())),
             remote_workspace_path,
+            password_vault,
         }
     }
 
@@ -708,7 +712,38 @@ impl SSHConnectionManager {
         });
 
         drop(guard);
+
+        match &config.auth {
+            SSHAuthMethod::Password { password } => {
+                if !password.is_empty() {
+                    self.password_vault
+                        .store(&config.id, password)
+                        .await
+                        .with_context(|| format!("store ssh password vault for {}", config.id))?;
+                }
+            }
+            SSHAuthMethod::PrivateKey { .. } | SSHAuthMethod::Agent => {
+                self.password_vault.remove(&config.id).await?;
+            }
+        }
+
         self.save_connections().await
+    }
+
+    /// Decrypt stored password for password-based saved connections (auto-reconnect).
+    pub async fn load_stored_password(&self, connection_id: &str) -> anyhow::Result<Option<String>> {
+        self.password_vault.load(connection_id).await
+    }
+
+    /// Whether the vault has a stored password for this connection (skip auto-reconnect when false).
+    pub async fn has_stored_password(&self, connection_id: &str) -> bool {
+        match self.load_stored_password(connection_id).await {
+            Ok(opt) => opt.is_some(),
+            Err(e) => {
+                log::warn!("has_stored_password failed for {}: {}", connection_id, e);
+                false
+            }
+        }
     }
 
     /// Delete a saved connection
@@ -716,6 +751,7 @@ impl SSHConnectionManager {
         let mut guard = self.saved_connections.write().await;
         guard.retain(|c| c.id != connection_id);
         drop(guard);
+        self.password_vault.remove(connection_id).await?;
         self.save_connections().await
     }
 

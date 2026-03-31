@@ -216,7 +216,22 @@ export const SSHConnectionDialog: React.FC<SSHConnectionDialogProps> = ({
     setLocalError(null);
 
     if (conn.authType.type === 'Password') {
-      setCredentialsPrompt({ kind: 'saved', connection: conn });
+      setIsConnecting(true);
+      setLocalError(null);
+      try {
+        await connect(conn.id, {
+          id: conn.id,
+          name: conn.name,
+          host: conn.host,
+          port: conn.port,
+          username: conn.username,
+          auth: { type: 'Password', password: '' },
+        });
+      } catch {
+        setCredentialsPrompt({ kind: 'saved', connection: conn });
+      } finally {
+        setIsConnecting(false);
+      }
     } else {
       const auth: SSHAuthMethod = conn.authType.type === 'PrivateKey'
         ? { type: 'PrivateKey', keyPath: conn.authType.keyPath }

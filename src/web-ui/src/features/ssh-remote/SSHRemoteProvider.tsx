@@ -121,17 +121,15 @@ export const SSHRemoteProvider: React.FC<SSHRemoteProviderProps> = ({ children }
       return false;
     }
 
-    // Determine auth method from tagged enum
+    // Determine auth method from tagged enum (password uses empty string; backend fills from vault)
     let authMethod: SSHConnectionConfig['auth'] | null = null;
     if (savedConn.authType.type === 'PrivateKey') {
       authMethod = { type: 'PrivateKey', keyPath: savedConn.authType.keyPath };
     } else if (savedConn.authType.type === 'Agent') {
       authMethod = { type: 'Agent' };
     } else {
-      // Password auth cannot auto-reconnect because BitFun intentionally does not
-      // persist passwords. The user must reconnect manually after restarting the app.
-      log.warn('Skipping auto-reconnect: password auth requires user input', { connectionId: workspace.connectionId });
-      return false;
+      // Caller must only invoke password reconnect when vault has a password (see checkRemoteWorkspace).
+      authMethod = { type: 'Password', password: '' };
     }
 
     const reconnectConfig: SSHConnectionConfig = {
@@ -273,15 +271,32 @@ export const SSHRemoteProvider: React.FC<SSHRemoteProviderProps> = ({ children }
 
       log.info(`checkRemoteWorkspace: found ${toReconnect.size} remote workspace(s)`);
 
-      // Mark all as 'connecting' immediately so the UI shows the pending state
+      const reconnectList = Array.from(toReconnect.values());
+      const savedConnectionsList = await sshApi.listSavedConnections();
+
+      const skipPasswordAutoReconnect = new Set<string>();
+      for (const ws of reconnectList) {
+        const sc = savedConnectionsList.find(c => c.id === ws.connectionId);
+        if (sc?.authType.type === 'Password') {
+          let hasVault = false;
+          try {
+            hasVault = await sshApi.hasStoredPassword(sc.id);
+          } catch {
+            hasVault = false;
+          }
+          if (!hasVault) {
+            skipPasswordAutoReconnect.add(ws.connectionId);
+          }
+        }
+      }
+
       const initialStatuses: Record<string, ConnectionStatus> = {};
       for (const [, ws] of toReconnect) {
-        initialStatuses[ws.connectionId] = 'connecting';
+        initialStatuses[ws.connectionId] = skipPasswordAutoReconnect.has(ws.connectionId)
+          ? 'error'
+          : 'connecting';
       }
       setWorkspaceStatuses(prev => ({ ...prev, ...initialStatuses }));
-
-      // ── Process each workspace in parallel (slow servers no longer block others) ──
-      const reconnectList = Array.from(toReconnect.values());
 
       type ConnectedEntry = { workspace: RemoteWorkspace; connectionId: string };
       const results = await Promise.all(
@@ -315,6 +330,13 @@ export const SSHRemoteProvider: React.FC<SSHRemoteProviderProps> = ({ children }
             return { ok: true as const, connected: { workspace, connectionId: workspace.connectionId } };
           }
 
+          if (skipPasswordAutoReconnect.has(workspace.connectionId)) {
+            log.info('Skipping auto-reconnect: password auth but no stored password', {
+              connectionId: workspace.connectionId,
+            });
+            return { ok: false as const };
+          }
+
           log.info('Remote workspace disconnected, attempting auto-reconnect', {
             connectionId: workspace.connectionId,
             remotePath: workspace.remotePath,
@@ -346,10 +368,19 @@ export const SSHRemoteProvider: React.FC<SSHRemoteProviderProps> = ({ children }
             };
           }
 
-          log.warn('Auto-reconnect failed, removing workspace from sidebar', {
+          const savedConn = savedConnectionsList.find(c => c.id === workspace.connectionId);
+          log.warn('Auto-reconnect failed', {
             connectionId: workspace.connectionId,
+            auth: savedConn?.authType.type,
           });
-          await workspaceManager.removeRemoteWorkspace(workspace.connectionId, workspace.remotePath).catch(() => {});
+          if (savedConn?.authType.type === 'Password') {
+            // Keep workspace in sidebar; user reconnects manually. No auto password dialog.
+            setWorkspaceStatus(workspace.connectionId, 'error');
+          } else {
+            await workspaceManager
+              .removeRemoteWorkspace(workspace.connectionId, workspace.remotePath)
+              .catch(() => {});
+          }
           return { ok: false as const };
         })
       );

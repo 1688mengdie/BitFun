@@ -5,7 +5,7 @@
 use tauri::State;
 
 use bitfun_core::service::remote_ssh::{
-    SSHConnectionConfig, SSHConnectionResult, SavedConnection, RemoteTreeNode,
+    SSHAuthMethod, SSHConnectionConfig, SSHConnectionResult, SavedConnection, RemoteTreeNode,
     SSHConfigLookupResult, SSHConfigEntry, ServerInfo,
 };
 use crate::api::app_state::SSHServiceError;
@@ -55,9 +55,18 @@ pub async fn ssh_delete_connection(
 }
 
 #[tauri::command]
+pub async fn ssh_has_stored_password(
+    state: State<'_, AppState>,
+    connection_id: String,
+) -> Result<bool, String> {
+    let manager = state.get_ssh_manager_async().await?;
+    Ok(manager.has_stored_password(&connection_id).await)
+}
+
+#[tauri::command]
 pub async fn ssh_connect(
     state: State<'_, AppState>,
-    config: SSHConnectionConfig,
+    mut config: SSHConnectionConfig,
 ) -> Result<SSHConnectionResult, String> {
     log::info!("ssh_connect called: id={}, host={}, port={}, username={}",
         config.id, config.host, config.port, config.username);
@@ -72,6 +81,22 @@ pub async fn ssh_connect(
             return Err(e.to_string());
         }
     };
+
+    if let SSHAuthMethod::Password { ref password } = config.auth {
+        if password.is_empty() {
+            match manager.load_stored_password(&config.id).await {
+                Ok(Some(pwd)) => {
+                    config.auth = SSHAuthMethod::Password { password: pwd };
+                }
+                Ok(None) => {
+                    return Err(
+                        "SSH password is required (no saved password for this connection)".to_string(),
+                    );
+                }
+                Err(e) => return Err(e.to_string()),
+            }
+        }
+    }
 
     // First save the connection config so it persists across restarts
     log::info!("ssh_connect: about to save connection config");
