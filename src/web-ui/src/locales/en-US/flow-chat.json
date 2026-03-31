@@ -809,7 +809,11 @@
       "aiProcessing": "AI is processing...",
       "inputMessage": "Enter message...",
       "processing": "Processing...",
-      "startNewChat": "Start new chat..."
+      "startNewChat": "Start new chat...",
+      "openSessionMenu": "Sessions & new",
+      "moreMenu": "More",
+      "newCodeSessionItem": "Code session",
+      "newCoworkSessionItem": "Cowork session"
     },
     "chatInput": {
       "inputHint": "Enter content..."
