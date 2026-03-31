@@ -42,6 +42,13 @@ export const sshApi = {
   },
 
   /**
+   * Whether a password is stored in the local vault for this saved connection (password auth auto-reconnect).
+   */
+  async hasStoredPassword(connectionId: string): Promise<boolean> {
+    return api.invoke<boolean>('ssh_has_stored_password', { connectionId });
+  },
+
+  /**
    * Connect to remote SSH server
    */
   async connect(config: SSHConnectionConfig): Promise<SSHConnectionResult> {

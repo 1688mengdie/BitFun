@@ -95,11 +95,11 @@ pub struct SavedConnection {
     pub last_connected: Option<u64>,
 }
 
-/// Saved auth type (excludes sensitive credentials)
+/// Saved auth type (excludes sensitive credentials; password ciphertext is in `ssh_password_vault.json`)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum SavedAuthType {
-    Password,  // Password is stored in system keychain
+    Password,
     PrivateKey {
         #[serde(rename = "keyPath")]
         key_path: String,

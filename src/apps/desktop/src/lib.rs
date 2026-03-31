@@ -674,6 +674,7 @@ pub async fn run() {
             api::ssh_api::ssh_list_saved_connections,
             api::ssh_api::ssh_save_connection,
             api::ssh_api::ssh_delete_connection,
+            api::ssh_api::ssh_has_stored_password,
             api::ssh_api::ssh_connect,
             api::ssh_api::ssh_disconnect,
             api::ssh_api::ssh_disconnect_all,

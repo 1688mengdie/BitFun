@@ -5,6 +5,7 @@
 //! similar to VSCode's Remote SSH extension.
 
 pub mod manager;
+mod password_vault;
 pub mod remote_fs;
 pub mod remote_terminal;
 pub mod types;
