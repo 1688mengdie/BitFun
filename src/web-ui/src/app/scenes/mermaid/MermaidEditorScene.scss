@@ -82,7 +82,7 @@
     border-right: 1px solid var(--border-subtle);
     background: transparent;
     color: var(--color-text-secondary);
-    font-size: $font-size-xs;
+    font-size: var(--font-size-xs);
     white-space: nowrap;
     cursor: pointer;
     transition: background $motion-fast $easing-standard, color $motion-fast $easing-standard;
@@ -139,6 +139,6 @@
     justify-content: center;
     flex: 1;
     color: var(--color-text-muted);
-    font-size: $font-size-sm;
+    font-size: var(--font-size-sm);
   }
 }

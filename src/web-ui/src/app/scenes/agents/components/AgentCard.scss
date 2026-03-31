@@ -142,7 +142,7 @@
     margin-top: auto;
     padding-top: $size-gap-2;
     color: var(--color-text-muted);
-    font-size: $font-size-xs;
+    font-size: var(--font-size-xs);
     line-height: $line-height-base;
   }
 
@@ -245,7 +245,7 @@
   &__cap-label {
     flex-shrink: 0;
     width: 80px;
-    font-size: $font-size-xs;
+    font-size: var(--font-size-xs);
     font-weight: $font-weight-medium;
     white-space: nowrap;
     overflow: hidden;
@@ -271,7 +271,7 @@
     flex-shrink: 0;
     width: 28px;
     text-align: right;
-    font-size: $font-size-xs;
+    font-size: var(--font-size-xs);
     color: var(--color-text-muted);
     font-variant-numeric: tabular-nums;
   }
@@ -295,7 +295,7 @@
     display: inline-flex;
     align-items: center;
     gap: $size-gap-2;
-    font-size: $font-size-xs;
+    font-size: var(--font-size-xs);
     font-weight: $font-weight-semibold;
     color: var(--color-text-secondary);
     text-transform: uppercase;
@@ -396,7 +396,7 @@
 
   // ── Empty inline state ───────────────────────────────────────────────────
   &__empty-inline {
-    font-size: $font-size-xs;
+    font-size: var(--font-size-xs);
     color: var(--color-text-muted);
     font-style: italic;
   }

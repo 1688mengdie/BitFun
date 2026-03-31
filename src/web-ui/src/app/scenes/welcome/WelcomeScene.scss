@@ -35,7 +35,7 @@
 
   &__title {
     margin: 0;
-    font-size: $font-size-2xl;
+    font-size: var(--font-size-2xl);
     line-height: $line-height-tight;
     letter-spacing: -0.02em;
     color: var(--color-text-primary);
@@ -43,7 +43,7 @@
   }
 
   &__greeting-label {
-    font-size: $font-size-lg;
+    font-size: var(--font-size-lg);
     line-height: 1.5;
     color: var(--color-text-primary);
     margin: 0;
@@ -76,7 +76,7 @@
     display: flex;
     align-items: center;
     gap: $size-gap-1;
-    font-size: $font-size-sm;
+    font-size: var(--font-size-sm);
     color: var(--color-text-muted);
     font-weight: $font-weight-medium;
     text-transform: uppercase;
@@ -98,7 +98,7 @@
     border-radius: $size-radius-sm;
     background: transparent;
     color: var(--color-text-muted);
-    font-size: $font-size-sm;
+    font-size: var(--font-size-sm);
     cursor: pointer;
     transition: background $motion-fast $easing-standard,
                 color $motion-fast $easing-standard;
@@ -169,7 +169,7 @@
     border: none;
     background: transparent;
     color: var(--color-text-secondary);
-    font-size: $font-size-base;
+    font-size: var(--font-size-base);
     cursor: pointer;
     text-align: left;
     transition: color $motion-fast $easing-standard;
@@ -191,7 +191,7 @@
     border: none;
     background: transparent;
     color: var(--color-text-muted);
-    font-size: $font-size-sm;
+    font-size: var(--font-size-sm);
     cursor: pointer;
     transition: color $motion-fast $easing-standard,
                 background $motion-fast $easing-standard;
@@ -259,18 +259,18 @@
     overflow: hidden;
     text-overflow: ellipsis;
     color: var(--color-text-muted);
-    font-size: $font-size-sm;
+    font-size: var(--font-size-sm);
   }
 
   &__recent-host-sep {
     flex-shrink: 0;
     color: var(--color-text-muted);
     opacity: 0.6;
-    font-size: $font-size-sm;
+    font-size: var(--font-size-sm);
   }
 
   &__no-recent {
-    font-size: $font-size-xs;
+    font-size: var(--font-size-xs);
     color: var(--color-text-muted);
     margin: 0;
     padding: $size-gap-1 $size-gap-2;

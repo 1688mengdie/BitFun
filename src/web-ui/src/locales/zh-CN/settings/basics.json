@@ -44,6 +44,34 @@
         "name": "石板灰",
         "description": "石板灰几何主题 - 极深沉浸，高对比度灰度美学"
       }
+    },
+    "fontSize": {
+      "betaBadge": "Beta",
+      "title": "字体大小",
+      "hint": "调整界面与对话区域的字体大小（编辑器字号在编辑器设置中配置）。",
+      "uiSizeLabel": "界面字体",
+      "uiSizeHint": "调整导航、面板、设置等所有界面元素的字体大小。",
+      "levels": {
+        "compact": "紧凑",
+        "small": "小",
+        "default": "默认",
+        "medium": "中等",
+        "large": "大",
+        "custom": "自定义"
+      },
+      "customPxLabel": "自定义大小（12–20 px）",
+      "customPxPlaceholder": "14",
+      "customPxOutOfRange": "请输入 12–20 之间的整数",
+      "resetButton": "恢复默认",
+      "previewText": "BitFun 是一个由 AI 驱动的编程环境。The quick brown fox jumps over the lazy dog.",
+      "flowChatLabel": "对话区域",
+      "flowChatHint": "关闭时对话区域比界面大 1 px，并随界面档位变化。开启后在下方展开面板，从列表中选择基准字号（12–20 px）。",
+      "flowChatCustomToggle": "自定义对话字号",
+      "flowChatBaselinePicker": "基准字号",
+      "flowChatPxOption": "{{n}} px",
+      "flowChatBaseLabel": "对话基准字号",
+      "flowChatBaselinePicker": "基准字号",
+      "flowChatPxOption": "{{n}} px"
     }
   },
   "launchAtLogin": {

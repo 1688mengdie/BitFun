@@ -26,7 +26,7 @@
   }
 
   &__title {
-    font-size: $font-size-sm;
+    font-size: var(--font-size-sm);
     font-weight: $font-weight-semibold;
     color: var(--color-text-primary);
     margin: 0;
@@ -90,7 +90,7 @@
     background: transparent;
     border: none;
     border-bottom: 2px solid transparent;
-    font-size: $font-size-xs;
+    font-size: var(--font-size-xs);
     font-weight: $font-weight-medium;
     color: var(--color-text-secondary);
     cursor: pointer;
@@ -137,7 +137,7 @@
   }
 
   &__empty-text {
-    font-size: $font-size-sm;
+    font-size: var(--font-size-sm);
     color: var(--color-text-muted);
   }
 
@@ -277,7 +277,7 @@
   }
 
   &__item-title {
-    font-size: $font-size-sm;
+    font-size: var(--font-size-sm);
     font-weight: $font-weight-medium;
     color: var(--color-text-primary);
     line-height: 1.4;
@@ -297,7 +297,7 @@
   }
 
   &__item-message {
-    font-size: $font-size-xs;
+    font-size: var(--font-size-xs);
     color: var(--color-text-secondary);
     line-height: 1.45;
     margin-bottom: 2px;
@@ -498,7 +498,7 @@
   }
 
   &__active-task-title {
-    font-size: $font-size-sm;
+    font-size: var(--font-size-sm);
     font-weight: $font-weight-medium;
     color: var(--color-text-primary);
     overflow: hidden;
@@ -517,7 +517,7 @@
   }
 
   &__active-task-message {
-    font-size: $font-size-xs;
+    font-size: var(--font-size-xs);
     color: var(--color-text-secondary);
     overflow: hidden;
     text-overflow: ellipsis;
@@ -572,7 +572,7 @@
   }
 
   &__active-loading-title {
-    font-size: $font-size-sm;
+    font-size: var(--font-size-sm);
     font-weight: $font-weight-medium;
     color: var(--color-text-primary);
     overflow: hidden;
@@ -581,7 +581,7 @@
   }
 
   &__active-loading-message {
-    font-size: $font-size-xs;
+    font-size: var(--font-size-xs);
     color: var(--color-text-secondary);
     overflow: hidden;
     text-overflow: ellipsis;

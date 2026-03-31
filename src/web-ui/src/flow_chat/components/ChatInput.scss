@@ -133,7 +133,7 @@
         min-height: 24px !important;
         max-height: 24px !important;
         max-width: 100%;
-        font-size: 14px;
+        font-size: var(--flowchat-font-size-base);
         line-height: 24px;
         overflow: hidden;
         padding: 0 !important;
@@ -145,7 +145,7 @@
           display: block;
           color: var(--color-text-primary);
           opacity: 0.6;
-          font-size: 14px;
+          font-size: var(--flowchat-font-size-base);
           line-height: 24px;
           text-align: center;
           width: 100%;
@@ -160,7 +160,7 @@
         justify-content: center;
         gap: 6px;
         width: 100%;
-        font-size: 13px;
+        font-size: var(--flowchat-font-size-sm);
         line-height: 24px;
         color: var(--color-text-muted);
         opacity: 0.62;
@@ -230,7 +230,7 @@
     display: inline-block;
     padding: 0 4px;
     color: var(--color-text-secondary);
-    font-size: 12px;
+    font-size: var(--flowchat-font-size-xs);
     font-weight: 500;
     letter-spacing: 0.01em;
     background: transparent;
@@ -243,7 +243,7 @@
     align-items: center;
     flex-shrink: 0;
     gap: 4px;
-    font-size: 13px;
+    font-size: var(--flowchat-font-size-sm);
     line-height: 24px;
     color: var(--color-text-muted);
     opacity: 0.72;
@@ -413,7 +413,7 @@
   }
 
   &__target-switcher-label {
-    font-size: 10px;
+    font-size: var(--flowchat-font-size-xxs);
     color: var(--color-text-muted);
     font-weight: 400;
     padding: 2px 8px 2px 0;
@@ -431,7 +431,7 @@
     border: none;
     background: transparent;
     color: var(--color-text-muted);
-    font-size: 11px;
+    font-size: var(--flowchat-font-size-2xs);
     font-weight: 400;
     border-radius: 5px;
     cursor: pointer;
@@ -456,7 +456,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-size: 10px;
+    font-size: var(--flowchat-font-size-xxs);
     font-weight: 400;
     opacity: 0.65;
 
@@ -601,7 +601,7 @@
     padding: 2px 4px 2px 10px;
     border-radius: 999px;
     border: none;
-    font-size: 10px;
+    font-size: var(--flowchat-font-size-xxs);
     font-weight: 500;
     letter-spacing: 0.02em;
     color: var(--color-text-secondary);
@@ -650,7 +650,7 @@
 
   &__agent-boost-empty {
     padding: 12px 14px;
-    font-size: 11px;
+    font-size: var(--flowchat-font-size-2xs);
     color: var(--color-text-tertiary);
     text-align: center;
     line-height: 1.35;
@@ -679,7 +679,7 @@
     margin: 0;
     padding: 8px 12px;
     background: transparent;
-    font-size: 11px;
+    font-size: var(--flowchat-font-size-2xs);
     color: var(--color-text-secondary);
     cursor: pointer;
     user-select: none;
@@ -725,7 +725,7 @@
     margin: 0;
     padding: 8px 12px;
     background: transparent;
-    font-size: 11px;
+    font-size: var(--flowchat-font-size-2xs);
     color: var(--color-text-secondary);
     cursor: pointer;
     user-select: none;
@@ -809,7 +809,7 @@
     justify-content: center;
     gap: 8px;
     padding: 14px 12px;
-    font-size: 11px;
+    font-size: var(--flowchat-font-size-2xs);
     color: var(--color-text-muted);
   }
 
@@ -843,7 +843,7 @@
     padding: 5px 8px;
     border-radius: 4px;
     background: transparent;
-    font-size: 12px;
+    font-size: var(--flowchat-font-size-xs);
     color: var(--color-text-primary);
     cursor: pointer;
     user-select: none;
@@ -876,7 +876,7 @@
     padding: 8px 10px 10px;
     border-top: 1px solid var(--border-subtle);
     background: transparent;
-    font-size: 10px;
+    font-size: var(--flowchat-font-size-xxs);
     font-weight: 500;
     color: rgba(120, 160, 255, 0.95);
     cursor: pointer;
@@ -902,7 +902,7 @@
   }
 
   &__mode-pending-indicator {
-    font-size: 9px;
+    font-size: var(--flowchat-font-size-xxs);
     color: rgba(251, 146, 60, 0.9);
     margin-left: 4px;
     display: inline-flex;
@@ -940,7 +940,7 @@
   
   &__mode-option {
     padding: 7px 12px;
-    font-size: 11px;
+    font-size: var(--flowchat-font-size-2xs);
     color: var(--color-text-secondary);
     cursor: pointer;
     transition: all 0.15s ease;
@@ -966,7 +966,7 @@
         
         &::after {
           content: ' (Pending)';
-          font-size: 9px;
+          font-size: var(--flowchat-font-size-xxs);
           opacity: 0.8;
         }
       }
@@ -999,7 +999,7 @@
   
   &__mode-divider-text {
     padding: 0 8px;
-    font-size: 9px;
+    font-size: var(--flowchat-font-size-xxs);
     color: var(--color-text-muted);
     white-space: nowrap;
     font-weight: 500;
@@ -1012,7 +1012,7 @@
   
   &__mode-submenu-trigger {
     padding: 7px 12px;
-    font-size: 11px;
+    font-size: var(--flowchat-font-size-2xs);
     color: var(--color-text-secondary);
     cursor: pointer;
     transition: all 0.15s ease;
@@ -1044,7 +1044,7 @@
   }
   
   &__mode-submenu-active-name {
-    font-size: 10px;
+    font-size: var(--flowchat-font-size-xxs);
     color: rgba(140, 180, 255, 0.9);
     font-weight: 500;
     margin-left: auto;
@@ -1056,7 +1056,7 @@
   }
   
   &__mode-submenu-dots {
-    font-size: 10px;
+    font-size: var(--flowchat-font-size-xxs);
     color: var(--color-text-tertiary);
     margin-left: auto;
     letter-spacing: 1px;
@@ -1067,7 +1067,7 @@
     
     .bitfun-chat-input__mode-option {
       padding-left: 24px;
-      font-size: 10px;
+      font-size: var(--flowchat-font-size-xxs);
       
       &:hover:not(&--disabled) {
         background: rgba(255, 255, 255, 0.04);
@@ -1089,7 +1089,7 @@
     border-radius: 3px;
     background: var(--color-warning-bg);
     color: var(--color-warning);
-    font-size: 8px;
+    font-size: var(--flowchat-font-size-xxs);
     font-weight: 600;
     letter-spacing: 0.5px;
     margin-left: 6px;
@@ -1137,7 +1137,7 @@
     justify-content: space-between;
     padding: 8px 12px;
     border-bottom: 1px solid var(--border-subtle);
-    font-size: 10px;
+    font-size: var(--flowchat-font-size-xxs);
     font-weight: 500;
     color: var(--color-text-muted);
     text-transform: uppercase;
@@ -1145,7 +1145,7 @@
   }
   
   &__slash-command-hint {
-    font-size: 9px;
+    font-size: var(--flowchat-font-size-xxs);
     color: var(--color-text-tertiary);
     font-weight: 400;
     text-transform: none;
@@ -1199,7 +1199,7 @@
   }
   
   &__slash-command-name {
-    font-size: 11px;
+    font-size: var(--flowchat-font-size-2xs);
     font-weight: 500;
     color: rgba(120, 160, 255, 0.9);
     font-family: var(--font-mono);
@@ -1207,13 +1207,13 @@
   }
   
   &__slash-command-label {
-    font-size: 11px;
+    font-size: var(--flowchat-font-size-2xs);
     color: var(--color-text-secondary);
     flex: 1;
   }
   
   &__slash-command-current {
-    font-size: 9px;
+    font-size: var(--flowchat-font-size-xxs);
     padding: 2px 5px;
     border-radius: 3px;
     background: rgba(100, 140, 255, 0.15);
@@ -1224,7 +1224,7 @@
   &__slash-command-empty {
     padding: 16px 12px;
     text-align: center;
-    font-size: 11px;
+    font-size: var(--flowchat-font-size-2xs);
     color: var(--color-text-tertiary);
   }
 
@@ -1424,7 +1424,7 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    font-size: 8px;
+    font-size: var(--flowchat-font-size-xxs);
     font-weight: 700;
     line-height: 1;
     box-shadow: 0 0 0 1px rgba(18, 18, 28, 0.85);

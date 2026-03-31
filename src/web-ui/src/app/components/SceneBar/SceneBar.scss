@@ -63,7 +63,7 @@ $_tab-v-margin: 6px;   // symmetric top/bottom gap inside SceneBar
   position: relative;
   cursor: pointer;
   color: var(--color-text-muted);
-  font-size: $font-size-sm;
+  font-size: var(--font-size-sm);
   font-weight: 400;
   white-space: nowrap;
   // Slightly lift off --color-bg-primary so tabs never disappear into the chrome
@@ -166,13 +166,13 @@ $_tab-v-margin: 6px;   // symmetric top/bottom gap inside SceneBar
 
   &__sep {
     color: var(--color-text-disabled);
-    font-size: $font-size-xs;
+    font-size: var(--font-size-xs);
     flex-shrink: 0;
   }
 
   &__subtitle {
     color: var(--color-text-muted);
-    font-size: $font-size-xs;
+    font-size: var(--font-size-xs);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;

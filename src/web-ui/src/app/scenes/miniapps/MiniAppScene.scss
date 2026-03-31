@@ -27,7 +27,7 @@
   }
 
   &__title {
-    font-size: $font-size-sm;
+    font-size: var(--font-size-sm);
     font-weight: $font-weight-semibold;
     color: var(--color-text-primary);
     white-space: nowrap;
@@ -62,7 +62,7 @@
     height: 100%;
     gap: $size-gap-3;
     color: var(--color-text-muted);
-    font-size: $font-size-sm;
+    font-size: var(--font-size-sm);
   }
 
   &__error {
@@ -73,7 +73,7 @@
     height: 100%;
     gap: $size-gap-3;
     color: var(--color-text-muted);
-    font-size: $font-size-sm;
+    font-size: var(--font-size-sm);
     text-align: center;
     padding: $size-gap-6;
 

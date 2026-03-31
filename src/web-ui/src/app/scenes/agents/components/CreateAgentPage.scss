@@ -23,7 +23,7 @@
 }
 
 .th__title {
-  font-size: $font-size-xl;
+  font-size: var(--font-size-xl);
   font-weight: $font-weight-semibold;
   color: var(--color-text-primary);
   margin: 0;
@@ -31,7 +31,7 @@
 }
 
 .th__title-sub {
-  font-size: $font-size-sm;
+  font-size: var(--font-size-sm);
   color: var(--color-text-muted);
   margin: 0;
   line-height: $line-height-relaxed;
@@ -71,7 +71,7 @@
 }
 
 .th-create-panel__label {
-  font-size: $font-size-xs;
+  font-size: var(--font-size-xs);
   font-weight: $font-weight-medium;
   color: var(--color-text-secondary);
 }
@@ -83,7 +83,7 @@
 }
 
 .th-create-panel__error {
-  font-size: $font-size-xs;
+  font-size: var(--font-size-xs);
   color: var(--color-error);
 }
 
@@ -108,7 +108,7 @@
   border: 1px solid var(--border-subtle);
   border-radius: $size-radius-full;
   background: transparent;
-  font-size: $font-size-xs;
+  font-size: var(--font-size-xs);
   font-weight: $font-weight-medium;
   color: var(--color-text-secondary);
   cursor: pointer;
@@ -149,7 +149,7 @@
   border-radius: $size-radius-sm;
   border: 1px solid var(--border-subtle);
   background: var(--element-bg-base);
-  font-size: $font-size-xs;
+  font-size: var(--font-size-xs);
   color: var(--color-text-secondary);
   cursor: pointer;
   transition:

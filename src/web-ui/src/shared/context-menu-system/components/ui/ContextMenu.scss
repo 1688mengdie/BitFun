@@ -28,7 +28,7 @@
   pointer-events: none;
 
   font-family: var(--font-family-sans);
-  font-size: $font-size-sm;
+  font-size: var(--font-size-sm);
   line-height: 1.4;
 
   :root[data-theme-type='light'] & {

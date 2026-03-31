@@ -215,7 +215,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
   
   return (
     <FlowChatContext.Provider value={contextValue}>
-      <div className={`modern-flowchat-container ${className}`}>
+      <div className={`modern-flowchat-container flow-chat-typography ${className}`}>
         <FlowChatHeader
           currentTurn={effectiveVisibleTurnInfo?.turnIndex ?? 0}
           totalTurns={effectiveVisibleTurnInfo?.totalTurns ?? 0}

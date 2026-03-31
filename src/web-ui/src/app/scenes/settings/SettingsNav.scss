@@ -24,7 +24,7 @@
   }
 
   &__title {
-    font-size: $font-size-sm;
+    font-size: var(--font-size-sm);
     font-weight: 600;
     color: var(--color-text-primary);
     white-space: nowrap;
@@ -68,7 +68,7 @@
     }
 
     &.search .search__input {
-      font-size: $font-size-sm;
+      font-size: var(--font-size-sm);
 
       &::placeholder {
         color: var(--color-text-disabled);
@@ -100,7 +100,7 @@
     color: var(--color-text-secondary);
     cursor: pointer;
     text-align: left;
-    font-size: $font-size-sm;
+    font-size: var(--font-size-sm);
     font-weight: 400;
     width: 100%;
     position: relative;
@@ -145,7 +145,7 @@
 
   &__search-empty {
     padding: $size-gap-3 $size-gap-3;
-    font-size: $font-size-sm;
+    font-size: var(--font-size-sm);
     color: var(--color-text-muted);
     text-align: center;
   }
@@ -218,7 +218,7 @@
     color: var(--color-text-secondary);
     cursor: pointer;
     text-align: left;
-    font-size: $font-size-sm;
+    font-size: var(--font-size-sm);
     font-weight: 400;
     width: 100%;
     position: relative;

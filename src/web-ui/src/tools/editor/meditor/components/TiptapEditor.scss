@@ -16,7 +16,7 @@
     min-height: 100%;
     outline: none;
     color: var(--color-text-secondary);
-    font-size: $font-size-sm;
+    font-size: var(--font-size-sm);
     line-height: $line-height-relaxed;
 
     /* blockId lives on <hr> itself — do not use paragraph chrome (padding + radius + hover fill) on hr */
@@ -37,7 +37,7 @@
 
     > p.is-empty {
       position: relative;
-      min-height: calc(#{$font-size-sm} * #{$line-height-relaxed});
+      min-height: calc(var(--font-size-sm) * var(--line-height-relaxed));
     }
 
     > p.is-empty::before {
@@ -45,7 +45,7 @@
       color: var(--color-text-disabled);
       float: left;
       height: 0;
-      font-size: $font-size-sm;
+      font-size: var(--font-size-sm);
       letter-spacing: normal;
       white-space: nowrap;
       opacity: 0;
@@ -85,29 +85,29 @@
     }
 
     h1 {
-      font-size: $font-size-3xl;
+      font-size: var(--font-size-3xl);
       color: var(--color-text-primary);
       text-align: center;
     }
 
     h2 {
-      font-size: $font-size-2xl;
+      font-size: var(--font-size-2xl);
     }
 
     h3 {
-      font-size: $font-size-xl;
+      font-size: var(--font-size-xl);
     }
 
     h4 {
-      font-size: $font-size-lg;
+      font-size: var(--font-size-lg);
     }
 
     h5 {
-      font-size: $font-size-base;
+      font-size: var(--font-size-base);
     }
 
     h6 {
-      font-size: $font-size-sm;
+      font-size: var(--font-size-sm);
       letter-spacing: 0.02em;
       text-transform: uppercase;
     }
@@ -515,7 +515,7 @@
     }
 
     .bitfun-input {
-      font-size: $font-size-sm;
+      font-size: var(--font-size-sm);
       line-height: 1.35;
     }
   }
@@ -543,7 +543,7 @@
     border-radius: 999px;
     background: color-mix(in srgb, var(--color-text-muted) 14%, transparent);
     color: var(--color-text-muted);
-    font-size: $font-size-2xs;
+    font-size: var(--font-size-2xs);
     font-weight: $font-weight-medium;
     letter-spacing: 0.02em;
     white-space: nowrap;
@@ -613,7 +613,7 @@
   .m-editor-inline-ai__section-title {
     margin: $size-gap-2 0 6px;
     color: var(--color-text-muted);
-    font-size: $font-size-xxs;
+    font-size: var(--font-size-xxs);
     font-weight: $font-weight-medium;
     letter-spacing: 0.02em;
     opacity: 0.72;
@@ -635,7 +635,7 @@
     border-radius: 8px;
     background: transparent;
     color: var(--color-text-primary);
-    font-size: $font-size-xs;
+    font-size: var(--font-size-xs);
     line-height: 1.35;
     cursor: pointer;
     text-align: left;
@@ -656,7 +656,7 @@
 
   .m-editor-inline-ai__quick-action--primary {
     font-weight: $font-weight-semibold;
-    font-size: $font-size-sm;
+    font-size: var(--font-size-sm);
   }
 
   .m-editor-inline-ai__quick-action-icon {
@@ -679,7 +679,7 @@
     border: none;
     background: transparent;
     color: var(--color-text-muted);
-    font-size: $font-size-xs;
+    font-size: var(--font-size-xs);
     cursor: pointer;
 
     &:hover {
@@ -711,14 +711,14 @@
   }
 
   .m-editor-inline-ai-preview__title {
-    font-size: $font-size-2xs;
+    font-size: var(--font-size-2xs);
     font-weight: $font-weight-medium;
     color: var(--color-accent-500);
     letter-spacing: 0.02em;
   }
 
   .m-editor-inline-ai-preview__status {
-    font-size: $font-size-2xs;
+    font-size: var(--font-size-2xs);
     color: var(--color-text-disabled);
     white-space: nowrap;
   }
@@ -728,7 +728,7 @@
     position: relative;
     color: inherit;
     padding-left: $size-gap-3;
-    font-size: $font-size-xs;
+    font-size: var(--font-size-xs);
     line-height: 1.45;
   }
 
@@ -769,7 +769,7 @@
   .m-editor-inline-ai-rendered__loading {
     margin-bottom: $size-gap-2;
     color: var(--color-text-disabled);
-    font-size: $font-size-xs;
+    font-size: var(--font-size-xs);
   }
 
   .m-editor-inline-ai-rendered__content {
@@ -800,16 +800,16 @@
   }
 
   .m-editor-inline-ai-rendered__content.markdown-body h1 {
-    font-size: $font-size-lg;
+    font-size: var(--font-size-lg);
     text-align: left;
   }
 
   .m-editor-inline-ai-rendered__content.markdown-body h2 {
-    font-size: $font-size-base;
+    font-size: var(--font-size-base);
   }
 
   .m-editor-inline-ai-rendered__content.markdown-body h3 {
-    font-size: $font-size-sm;
+    font-size: var(--font-size-sm);
   }
 
   .m-editor-inline-ai-rendered__content.markdown-body p {
@@ -820,7 +820,7 @@
     margin: 0 0 6px;
     padding: var(--flowchat-md-bq-padding);
     font-style: italic;
-    font-size: $font-size-2xs;
+    font-size: var(--font-size-2xs);
     color: var(--flowchat-md-bq-fg);
     background: var(--flowchat-md-bq-bg);
     border-left: 3px solid var(--flowchat-md-bq-border);
@@ -831,7 +831,7 @@
   .m-editor-inline-ai-rendered__content.markdown-body pre {
     margin: 0 0 6px;
     padding: 8px 10px;
-    font-size: $font-size-2xs;
+    font-size: var(--font-size-2xs);
     line-height: 1.45;
     font-family: var(--flowchat-md-code-font-mono);
     color: var(--flowchat-md-pre-code-fg);
@@ -900,7 +900,7 @@
 
   .m-editor-inline-ai-preview__placeholder {
     color: inherit;
-    font-size: $font-size-xs;
+    font-size: var(--font-size-xs);
     line-height: 1.45;
     padding: 4px 6px;
   }
@@ -917,14 +917,14 @@
     gap: 4px;
     min-height: 28px;
     padding: 4px 12px;
-    font-size: $font-size-xs;
+    font-size: var(--font-size-xs);
     border-radius: 999px;
   }
 
   .m-editor-inline-ai__error {
     margin-top: $size-gap-2;
     color: var(--color-error);
-    font-size: $font-size-xs;
+    font-size: var(--font-size-xs);
   }
 
   .m-editor-render-only-block,
@@ -947,7 +947,7 @@
 
   .m-editor-raw-html-block__label,
   .m-editor-raw-html-inline__label {
-    font-size: $font-size-xs;
+    font-size: var(--font-size-xs);
     font-weight: $font-weight-semibold;
     letter-spacing: 0.02em;
     text-transform: uppercase;
@@ -957,7 +957,7 @@
   .m-editor-raw-html-inline__source {
     margin: 0;
     font-family: var(--flowchat-md-code-font-mono);
-    font-size: $font-size-xs;
+    font-size: var(--font-size-xs);
     white-space: pre-wrap;
     word-break: break-word;
   }
@@ -994,7 +994,7 @@
   .m-editor-raw-html-block__textarea {
     margin: 0;
     font-family: var(--flowchat-md-code-font-mono);
-    font-size: $font-size-sm;
+    font-size: var(--font-size-sm);
     display: block;
     width: 100%;
     min-height: 180px;
@@ -1056,7 +1056,7 @@
     display: none;
     margin: 0;
     font-family: var(--flowchat-md-code-font-mono);
-    font-size: $font-size-sm;
+    font-size: var(--font-size-sm);
     white-space: pre-wrap;
     word-break: break-word;
     border: 1px solid color-mix(in srgb, var(--color-text-primary) 12%, transparent);
@@ -1151,7 +1151,7 @@
     display: block;
     list-style: none;
     color: var(--color-text-primary);
-    font-size: $font-size-sm;
+    font-size: var(--font-size-sm);
     font-weight: $font-weight-medium;
     outline: none;
   }
@@ -1208,7 +1208,7 @@
     border: none;
     background: transparent;
     color: var(--color-text-primary);
-    font-size: $font-size-sm;
+    font-size: var(--font-size-sm);
     font-weight: $font-weight-medium;
     outline: none;
   }

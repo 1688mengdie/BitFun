@@ -28,7 +28,7 @@
     justify-content: space-between;
     gap: $size-gap-1;
     color: var(--color-text-primary);
-    font-size: 10px;
+    font-size: var(--font-size-xxs);
     font-weight: 700;
     letter-spacing: 0.06em;
     text-transform: uppercase;
@@ -66,7 +66,7 @@
     padding: $size-gap-2;
     border-radius: $size-radius-base;
     color: var(--color-text-muted);
-    font-size: 12px;
+    font-size: var(--font-size-xs);
     background: color-mix(in srgb, var(--element-bg-soft) 55%, transparent);
   }
 
@@ -236,7 +236,7 @@
     overflow: hidden;
 
     .bitfun-nav-panel__workspace-item-avatar-letter {
-      font-size: 16px;
+      font-size: var(--font-size-lg);
       font-weight: 700;
       line-height: 1;
       text-transform: uppercase;
@@ -312,7 +312,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-size: 12px;
+    font-size: var(--font-size-xs);
     font-weight: 600;
   }
 
@@ -338,7 +338,7 @@
     min-width: 0;
     max-width: 100%;
     color: var(--color-text-muted);
-    font-size: 10px;
+    font-size: var(--font-size-xxs);
     line-height: 1.2;
     opacity: 0.75;
 
@@ -384,7 +384,7 @@
     border-radius: 999px;
     background: color-mix(in srgb, var(--color-accent-200) 88%, transparent);
     color: var(--color-text-secondary);
-    font-size: 10px;
+    font-size: var(--font-size-xxs);
     font-weight: 700;
     line-height: 1.4;
     white-space: nowrap;
@@ -401,7 +401,7 @@
     border-radius: 999px;
     background: color-mix(in srgb, var(--element-bg-medium) 75%, transparent);
     color: var(--color-text-primary);
-    font-size: 10px;
+    font-size: var(--font-size-xxs);
     transition: max-width $motion-fast $easing-standard,
                 padding $motion-fast $easing-standard,
                 opacity $motion-fast $easing-standard,
@@ -473,7 +473,7 @@
     border-radius: $size-radius-sm;
     background: transparent;
     color: var(--color-text-secondary);
-    font-size: $font-size-sm;
+    font-size: var(--font-size-sm);
     font-weight: 400;
     cursor: pointer;
     text-align: left;
@@ -681,7 +681,7 @@
   }
 
   &__assistant-item-avatar-letter {
-    font-size: 15px;
+    font-size: var(--font-size-base);
     font-weight: 700;
     line-height: 1;
     text-transform: uppercase;
@@ -733,7 +733,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-size: 12px;
+    font-size: var(--font-size-xs);
     font-weight: 600;
   }
 
@@ -746,7 +746,7 @@
     border-radius: 999px;
     background: color-mix(in srgb, var(--color-accent-200) 88%, transparent);
     color: var(--color-text-secondary);
-    font-size: 10px;
+    font-size: var(--font-size-xxs);
     font-weight: 700;
     line-height: 1.4;
     white-space: nowrap;

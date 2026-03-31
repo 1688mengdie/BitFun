@@ -238,7 +238,12 @@ async function initializeApp() {
     const { themeService } = await import('./infrastructure/theme');
     await themeService.initialize();
     log.info('Theme system initialized');
-    
+
+    // Apply saved UI / flow-chat font tokens (theme sets typography first; this overrides).
+    const { fontPreferenceService } = await import('./infrastructure/font-preference');
+    await fontPreferenceService.initialize();
+    log.info('Font preference initialized at startup');
+
     // Preload editor configuration.
     const { configManager } = await import('./infrastructure/config');
     await configManager.getConfig('editor');

@@ -28,7 +28,7 @@
   }
 
   &__title {
-    font-size: $font-size-sm;
+    font-size: var(--font-size-sm);
     font-weight: 600;
     color: var(--color-text-primary);
     white-space: nowrap;
@@ -79,7 +79,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-size: $font-size-xs;
+    font-size: var(--font-size-xs);
   }
 
   &__workspace-trigger-icon {
@@ -112,7 +112,7 @@
     color: var(--color-text-secondary);
     cursor: pointer;
     text-align: left;
-    font-size: $font-size-xs;
+    font-size: var(--font-size-xs);
     transition:
       color $motion-fast $easing-standard,
       background $motion-fast $easing-standard;
@@ -223,7 +223,7 @@
     color: var(--color-text-secondary);
     cursor: pointer;
     text-align: left;
-    font-size: $font-size-xs;
+    font-size: var(--font-size-xs);
     transition:
       color $motion-fast $easing-standard,
       background $motion-fast $easing-standard;
@@ -260,7 +260,7 @@
     border-radius: 8px;
     background: transparent;
     color: var(--color-text-muted);
-    font-size: $font-size-xs;
+    font-size: var(--font-size-xs);
     font-weight: 500;
     cursor: pointer;
     transition:
@@ -315,7 +315,7 @@
     color: var(--color-text-secondary);
     cursor: pointer;
     text-align: left;
-    font-size: $font-size-sm;
+    font-size: var(--font-size-sm);
     font-weight: 400;
     position: relative;
     transition:
@@ -426,7 +426,7 @@
     flex-shrink: 0;
     padding: 2px 5px;
     border-radius: 999px;
-    font-size: 10px;
+    font-size: var(--font-size-xxs);
     line-height: 1;
     color: var(--color-text-muted);
     background: color-mix(in srgb, var(--color-text-muted) 12%, transparent);
@@ -436,7 +436,7 @@
     flex-shrink: 0;
     padding: 2px 5px;
     border-radius: 999px;
-    font-size: 10px;
+    font-size: var(--font-size-xxs);
     line-height: 1;
     color: var(--color-primary);
     background: color-mix(in srgb, var(--color-primary) 14%, transparent);
@@ -448,7 +448,7 @@
     border: 1px dashed var(--border-subtle);
     border-radius: 10px;
     color: var(--color-text-muted);
-    font-size: $font-size-xs;
+    font-size: var(--font-size-xs);
     line-height: $line-height-relaxed;
   }
 }
