@@ -499,7 +499,8 @@ impl SkillRegistry {
         SkillData::from_markdown(info.path.clone(), &content, info.level, true)
     }
 
-    /// Load skill when the workspace is remote: reads SKILL.md via [`WorkspaceFileSystem`].
+    /// Load skill when the workspace is remote: user-level skills are read from the **client** disk
+    /// (e.g. Windows `%AppData%`), project-level skills from the **SSH** workspace via [`WorkspaceFileSystem`].
     pub async fn find_and_load_skill_for_remote_workspace(
         &self,
         skill_name: &str,
@@ -518,12 +519,31 @@ impl SkillRegistry {
             )));
         }
 
-        let skill_md_path = format!("{}/SKILL.md", info.path.trim_end_matches('/'));
-        let content = fs
-            .read_file_text(&skill_md_path)
-            .await
-            .map_err(|e| BitFunError::tool(format!("Failed to read skill file: {}", e)))?;
+        let content = Self::read_skill_md_for_remote_merge(info, fs).await?;
 
         SkillData::from_markdown(info.path.clone(), &content, info.level, true)
+    }
+
+    /// Merged remote session: [`SkillLocation::User`] paths are host-OS paths (Windows/macOS/Linux);
+    /// [`SkillLocation::Project`] paths are POSIX paths on the SSH server.
+    async fn read_skill_md_for_remote_merge(
+        info: &SkillInfo,
+        remote_fs: &dyn WorkspaceFileSystem,
+    ) -> BitFunResult<String> {
+        match info.level {
+            SkillLocation::User => {
+                let p = PathBuf::from(&info.path).join("SKILL.md");
+                fs::read_to_string(&p)
+                    .await
+                    .map_err(|e| BitFunError::tool(format!("Failed to read skill file: {}", e)))
+            }
+            SkillLocation::Project => {
+                let skill_md_path = format!("{}/SKILL.md", info.path.trim_end_matches('/'));
+                remote_fs
+                    .read_file_text(&skill_md_path)
+                    .await
+                    .map_err(|e| BitFunError::tool(format!("Failed to read skill file: {}", e)))
+            }
+        }
     }
 }
