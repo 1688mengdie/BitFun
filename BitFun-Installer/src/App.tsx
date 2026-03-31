@@ -53,6 +53,8 @@ function App() {
             refreshDiskSpace={installer.refreshDiskSpace}
             onBack={installer.back}
             onInstall={installer.install}
+            isInstalling={installer.isInstalling}
+            clearInstallError={installer.clearInstallError}
           />
         );
       case 'model':

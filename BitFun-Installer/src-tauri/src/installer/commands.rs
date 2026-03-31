@@ -939,33 +939,36 @@ fn with_bitfun_install_subdir(path: PathBuf) -> PathBuf {
     }
 }
 
+/// Stable codes for `validate_install_path` / `prepare_install_target`; localized in the frontend.
+const INSTALL_PATH_ERR_PREFIX: &str = "INSTALL_PATH::";
+
 fn prepare_install_target(requested_path: &Path) -> Result<PathBuf, String> {
     if !requested_path.is_absolute() {
-        return Err("Installation path must be absolute".into());
+        return Err(format!("{}not_absolute", INSTALL_PATH_ERR_PREFIX));
     }
 
     if requested_path.parent().is_none() {
-        return Err("Refusing to install into a filesystem root directory".into());
+        return Err(format!("{}filesystem_root", INSTALL_PATH_ERR_PREFIX));
     }
 
     if requested_path.exists() && !requested_path.is_dir() {
-        return Err("Path exists but is not a directory".into());
+        return Err(format!("{}path_not_directory", INSTALL_PATH_ERR_PREFIX));
     }
 
     let install_path = with_bitfun_install_subdir(requested_path.to_path_buf());
 
     if install_path.exists() {
         if !install_path.is_dir() {
-            return Err("Path exists but is not a directory".into());
+            return Err(format!("{}path_not_directory", INSTALL_PATH_ERR_PREFIX));
         }
         if directory_has_entries(&install_path)?
             && !install_path.join(INSTALL_MANIFEST_FILE).exists()
             && !install_path.join("BitFun.exe").exists()
         {
-            return Err(
-                "Installation directory must be empty or already contain a BitFun installation"
-                    .into(),
-            );
+            return Err(format!(
+                "{}directory_must_be_empty_or_bitfun",
+                INSTALL_PATH_ERR_PREFIX
+            ));
         }
     }
 
@@ -980,15 +983,19 @@ fn prepare_install_target(requested_path: &Path) -> Result<PathBuf, String> {
             let _ = std::fs::remove_file(&test_file);
             Ok(install_path)
         }
-        Err(_) if install_path.exists() => Err("Directory is not writable".into()),
-        Err(_) => Err("Cannot write to the parent directory".into()),
+        Err(_) if install_path.exists() => Err(format!("{}directory_not_writable", INSTALL_PATH_ERR_PREFIX)),
+        Err(_) => Err(format!("{}parent_not_writable", INSTALL_PATH_ERR_PREFIX)),
     }
 }
 
 fn directory_has_entries(path: &Path) -> Result<bool, String> {
     let mut entries = std::fs::read_dir(path)
-        .map_err(|e| format!("Failed to inspect installation directory: {}", e))?;
-    Ok(entries.next().transpose().map_err(|e| e.to_string())?.is_some())
+        .map_err(|_| format!("{}inspect_directory_failed", INSTALL_PATH_ERR_PREFIX))?;
+    Ok(entries
+        .next()
+        .transpose()
+        .map_err(|_| format!("{}inspect_directory_failed", INSTALL_PATH_ERR_PREFIX))?
+        .is_some())
 }
 
 fn ensure_app_config_path() -> Result<PathBuf, String> {

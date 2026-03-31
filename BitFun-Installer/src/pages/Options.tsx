@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { Checkbox } from '../components/Checkbox';
+import { InstallErrorPanel } from '../components/InstallErrorPanel';
 import type { InstallOptions, DiskSpaceInfo, InstallPathValidation } from '../types/installer';
 
 interface OptionsProps {
@@ -12,7 +13,9 @@ interface OptionsProps {
   error: string | null;
   refreshDiskSpace: (path: string) => Promise<void>;
   onBack: () => void;
-  onInstall: () => void;
+  onInstall: () => Promise<void>;
+  isInstalling: boolean;
+  clearInstallError: () => void;
 }
 
 export function Options({
@@ -23,6 +26,8 @@ export function Options({
   refreshDiskSpace,
   onBack,
   onInstall,
+  isInstalling,
+  clearInstallError,
 }: OptionsProps) {
   const { t } = useTranslation();
 
@@ -45,6 +50,7 @@ export function Options({
       } catch {
         setOptions((prev) => ({ ...prev, installPath: selected }));
       }
+      clearInstallError();
     }
   };
 
@@ -88,11 +94,17 @@ export function Options({
                 className="input"
                 type="text"
                 value={options.installPath}
-                onChange={(e) => setOptions((prev) => ({ ...prev, installPath: e.target.value }))}
+                disabled={isInstalling}
+                onChange={(e) => {
+                  setOptions((prev) => ({ ...prev, installPath: e.target.value }));
+                  clearInstallError();
+                }}
                 placeholder={t('options.pathPlaceholder')}
               />
               <button
                 className="btn"
+                type="button"
+                disabled={isInstalling}
                 onClick={handleBrowse}
                 style={{ padding: '10px 14px', flexShrink: 0 }}
               >
@@ -121,22 +133,7 @@ export function Options({
                 )}
               </div>
             )}
-            {error && (
-              <div
-                style={{
-                  marginTop: 10,
-                  padding: '10px 12px',
-                  borderRadius: 10,
-                  border: '1px solid color-mix(in srgb, var(--color-error) 55%, transparent)',
-                  background: 'color-mix(in srgb, var(--color-error) 10%, transparent)',
-                  color: 'var(--color-text-primary)',
-                  fontSize: 12,
-                  lineHeight: 1.5,
-                }}
-              >
-                {error}
-              </div>
-            )}
+            {error && <InstallErrorPanel message={error} variant="options" />}
           </div>
 
           <div>
@@ -168,7 +165,7 @@ export function Options({
       </div>
 
       <div className="page-footer page-footer--split">
-        <button className="btn btn-ghost" onClick={onBack}>
+        <button className="btn btn-ghost" type="button" disabled={isInstalling} onClick={onBack}>
           <svg
             width="14"
             height="14"
@@ -185,10 +182,15 @@ export function Options({
         </button>
         <button
           className="btn btn-primary"
-          onClick={onInstall}
-          disabled={!options.installPath || (diskSpace !== null && !diskSpace.sufficient)}
+          type="button"
+          onClick={() => { void onInstall(); }}
+          disabled={
+            !options.installPath
+            || (diskSpace !== null && !diskSpace.sufficient)
+            || isInstalling
+          }
         >
-          {t('options.install')}
+          {isInstalling ? t('options.installing') : t('options.install')}
           <svg
             width="14"
             height="14"

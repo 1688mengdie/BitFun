@@ -1,5 +1,6 @@
 import { useTranslation } from 'react-i18next';
 import { ProgressBar } from '../components/ProgressBar';
+import { InstallErrorPanel } from '../components/InstallErrorPanel';
 import type { InstallProgress } from '../types/installer';
 
 interface ProgressProps {
@@ -85,26 +86,25 @@ export function ProgressPage({
                 <circle cx="12" cy="12" r="10" /><line x1="15" y1="9" x2="9" y2="15" /><line x1="9" y1="9" x2="15" y2="15" />
               </svg>
               <p style={{ fontSize: 14, fontWeight: 500, color: 'var(--color-text-primary)', marginBottom: 8 }}>{t('progress.failed')}</p>
-              <p style={{ fontSize: 12, color: 'var(--color-text-muted)', textAlign: 'center', maxWidth: 320, lineHeight: 1.6 }}>{error}</p>
+              <InstallErrorPanel message={error} variant="bare" />
             </>
           )}
         </div>
       </div>
 
       {!error ? (
-        <div className="page-footer page-footer--center">
-          <button
-            className="btn btn-primary"
-            onClick={onConfirmProgress}
-            disabled={!canConfirmProgress}
-            style={{
-              justifyContent: 'center',
-              visibility: canConfirmProgress ? 'visible' : 'hidden',
-            }}
-          >
-            {t('progress.confirmContinue')}
-          </button>
-        </div>
+        canConfirmProgress && (
+          <div className="page-footer page-footer--center">
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={onConfirmProgress}
+              style={{ justifyContent: 'center' }}
+            >
+              {t('progress.confirmContinue')}
+            </button>
+          </div>
+        )
       ) : (
         <div className="page-footer page-footer--center">
           <button className="btn btn-ghost" onClick={onBackToOptions}>
