@@ -20,6 +20,8 @@ import {
 import { notificationService } from '../../../shared/notification-system';
 import { createLogger } from '@/shared/utils/logger';
 import type { ImageAnalysisEvent } from '@/infrastructure/api/service-api/AgentAPI';
+import { MCPAPI } from '@/infrastructure/api/service-api/MCPAPI';
+import { globalEventBus } from '@/infrastructure/event-bus';
 import type { FlowChatContext, DialogTurn, ModelRound, FlowToolItem } from './types';
 
 const pendingImageAnalysisTurns = new Map<string, string>();
@@ -50,6 +52,14 @@ import {
 
 const log = createLogger('EventHandlerModule');
 const TURN_COMPLETION_QUIET_WINDOW_MS = 500;
+
+interface MCPInteractionRequestEvent {
+  interactionId: string;
+  serverId: string;
+  serverName: string;
+  method: string;
+  params?: unknown;
+}
 
 function isStreamingExecutionState(state: SessionExecutionState): boolean {
   return state === SessionExecutionState.PROCESSING || state === SessionExecutionState.FINISHING;
@@ -179,6 +189,9 @@ export async function initializeEventListeners(
     const eventData = (event.payload as any)?.value || event.payload;
     handleToolTerminalReady(eventData);
   });
+  const unlistenMcpInteractionRequest = await listen('backend-event-mcpinteractionrequest', (event: any) => {
+    void handleMcpInteractionRequest((event.payload as any)?.value || event.payload);
+  });
 
   const callbacks: AgenticEventCallbacks = {
     onSessionCreated: (event) => {
@@ -239,8 +252,44 @@ export async function initializeEventListeners(
   return () => {
     unlistenProgress();
     unlistenTerminalReady();
+    unlistenMcpInteractionRequest();
     agenticEventListener.stopListening();
   };
+}
+
+async function handleMcpInteractionRequest(rawEvent: unknown): Promise<void> {
+  const event = rawEvent as MCPInteractionRequestEvent | undefined;
+  const interactionId = event?.interactionId;
+  const method = event?.method;
+
+  if (!interactionId || !method) {
+    log.warn('Received invalid MCP interaction request event', { rawEvent });
+    return;
+  }
+
+  const emitted = globalEventBus.emit('mcp:interaction:request', event);
+  if (!emitted) {
+    log.warn('No MCP interaction UI handler registered, rejecting request', {
+      interactionId,
+      method,
+    });
+    try {
+      await MCPAPI.submitMCPInteractionResponse({
+        interactionId,
+        approve: false,
+        error: {
+          message: 'No MCP interaction UI handler registered',
+        },
+      });
+    } catch (submitError) {
+      log.error('Failed to submit MCP interaction auto-rejection', {
+        interactionId,
+        method,
+        submitError,
+      });
+      notificationService.error(`MCP interaction failed: ${method}`);
+    }
+  }
 }
 
 /**

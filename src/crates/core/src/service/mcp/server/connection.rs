@@ -6,9 +6,9 @@ use crate::service::mcp::protocol::{
     create_initialize_request, create_ping_request, create_prompts_get_request,
     create_prompts_list_request, create_resources_list_request, create_resources_read_request,
     create_tools_call_request, create_tools_list_request, parse_response_result,
-    transport::MCPTransport, transport_remote::RemoteMCPTransport, InitializeResult, MCPMessage,
-    MCPResponse, MCPToolResult, PromptsGetResult, PromptsListResult, ResourcesListResult,
-    ResourcesReadResult, ToolsListResult,
+    transport::MCPTransport, transport_remote::RemoteMCPTransport, InitializeResult, MCPError,
+    MCPMessage, MCPResponse, MCPToolResult, PromptsGetResult, PromptsListResult,
+    ResourcesListResult, ResourcesReadResult, ToolsListResult,
 };
 use crate::util::errors::{BitFunError, BitFunResult};
 use log::{debug, warn};
@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::process::ChildStdin;
-use tokio::sync::{mpsc, oneshot, RwLock};
+use tokio::sync::{broadcast, mpsc, oneshot, RwLock};
 
 /// Request/response waiter.
 type ResponseWaiter = oneshot::Sender<MCPResponse>;
@@ -28,11 +28,27 @@ enum TransportType {
     Remote(Arc<RemoteMCPTransport>),
 }
 
+/// Connection lifecycle / protocol events.
+#[derive(Debug, Clone)]
+pub enum MCPConnectionEvent {
+    Notification {
+        method: String,
+        params: Option<Value>,
+    },
+    Request {
+        request_id: Value,
+        method: String,
+        params: Option<Value>,
+    },
+    Closed,
+}
+
 /// MCP connection.
 pub struct MCPConnection {
     transport: TransportType,
     pending_requests: Arc<RwLock<HashMap<u64, ResponseWaiter>>>,
     request_timeout: Duration,
+    event_tx: broadcast::Sender<MCPConnectionEvent>,
 }
 
 impl MCPConnection {
@@ -40,16 +56,19 @@ impl MCPConnection {
     pub fn new_local(stdin: ChildStdin, message_rx: mpsc::UnboundedReceiver<MCPMessage>) -> Self {
         let transport = Arc::new(MCPTransport::new(stdin));
         let pending_requests = Arc::new(RwLock::new(HashMap::new()));
+        let (event_tx, _) = broadcast::channel(64);
 
         let pending = pending_requests.clone();
+        let event_tx_clone = event_tx.clone();
         tokio::spawn(async move {
-            Self::handle_messages(message_rx, pending).await;
+            Self::handle_messages(message_rx, pending, event_tx_clone).await;
         });
 
         Self {
             transport: TransportType::Local(transport),
             pending_requests,
             request_timeout: Duration::from_secs(180),
+            event_tx,
         }
     }
 
@@ -58,11 +77,13 @@ impl MCPConnection {
         let request_timeout = Duration::from_secs(180);
         let transport = Arc::new(RemoteMCPTransport::new(url, headers, request_timeout));
         let pending_requests = Arc::new(RwLock::new(HashMap::new()));
+        let (event_tx, _) = broadcast::channel(64);
 
         Self {
             transport: TransportType::Remote(transport),
             pending_requests,
             request_timeout,
+            event_tx,
         }
     }
 
@@ -79,10 +100,16 @@ impl MCPConnection {
         Self::new_local(stdin, message_rx)
     }
 
+    /// Subscribes to connection events.
+    pub fn subscribe_events(&self) -> broadcast::Receiver<MCPConnectionEvent> {
+        self.event_tx.subscribe()
+    }
+
     /// Handles received messages.
     async fn handle_messages(
         mut rx: mpsc::UnboundedReceiver<MCPMessage>,
         pending_requests: Arc<RwLock<HashMap<u64, ResponseWaiter>>>,
+        event_tx: broadcast::Sender<MCPConnectionEvent>,
     ) {
         while let Some(message) = rx.recv().await {
             match message {
@@ -98,12 +125,23 @@ impl MCPConnection {
                 }
                 MCPMessage::Notification(notification) => {
                     debug!("Received MCP notification: method={}", notification.method);
+                    let _ = event_tx.send(MCPConnectionEvent::Notification {
+                        method: notification.method,
+                        params: notification.params,
+                    });
                 }
-                MCPMessage::Request(_request) => {
+                MCPMessage::Request(request) => {
                     warn!("Received unexpected request from MCP server");
+                    let _ = event_tx.send(MCPConnectionEvent::Request {
+                        request_id: request.id,
+                        method: request.method,
+                        params: request.params,
+                    });
                 }
             }
         }
+
+        let _ = event_tx.send(MCPConnectionEvent::Closed);
     }
 
     /// Sends a request and waits for the response.
@@ -270,6 +308,28 @@ impl MCPConnection {
                 Ok(())
             }
             TransportType::Remote(transport) => transport.ping().await,
+        }
+    }
+
+    /// Sends a JSON-RPC success response for a server-initiated request.
+    pub async fn send_response(&self, request_id: Value, result: Value) -> BitFunResult<()> {
+        match &self.transport {
+            TransportType::Local(transport) => transport.send_response(request_id, result).await,
+            TransportType::Remote(_) => Err(BitFunError::NotImplemented(
+                "Sending server-request responses is not supported for Streamable HTTP connections"
+                    .to_string(),
+            )),
+        }
+    }
+
+    /// Sends a JSON-RPC error response for a server-initiated request.
+    pub async fn send_error(&self, request_id: Value, error: MCPError) -> BitFunResult<()> {
+        match &self.transport {
+            TransportType::Local(transport) => transport.send_error(request_id, error).await,
+            TransportType::Remote(_) => Err(BitFunError::NotImplemented(
+                "Sending server-request errors is not supported for Streamable HTTP connections"
+                    .to_string(),
+            )),
         }
     }
 }

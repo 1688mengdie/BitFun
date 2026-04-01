@@ -184,12 +184,23 @@ impl MCPContextProvider {
             BitFunError::NotFound(format!("MCP server connection not found: {}", server_id))
         })?;
 
-        let result = connection.list_resources(None).await?;
+        let mut resources = manager.get_cached_resources(server_id).await;
+        if resources.is_empty() {
+            if let Err(e) = manager.refresh_server_resource_catalog(server_id).await {
+                debug!(
+                    "Failed to refresh resources catalog cache; falling back to direct list: server_id={} error={}",
+                    server_id, e
+                );
+            }
+            resources = manager.get_cached_resources(server_id).await;
+        }
+
+        if resources.is_empty() {
+            resources = connection.list_resources(None).await?.resources;
+        }
 
         let relevant = ResourceAdapter::filter_and_rank(
-            result.resources,
-            query,
-            0.1, // Lower threshold; we do additional filtering later
+            resources, query, 0.1, // Lower threshold; we do additional filtering later
             50,  // Up to 50 per server
         );
 
@@ -252,21 +263,33 @@ impl MCPContextProvider {
 
         for server_id in server_ids {
             if let Some(connection) = self.server_manager.get_connection(&server_id).await {
-                if let Ok(result) = connection.list_prompts(None).await {
-                    for prompt in result.prompts {
-                        if prompt_names.contains(&prompt.name) {
-                            if let Ok(content) = connection
-                                .get_prompt(&prompt.name, Some(arguments.clone()))
-                                .await
-                            {
-                                let text = super::prompt::PromptAdapter::to_system_prompt(
-                                    &crate::service::mcp::protocol::MCPPromptContent {
-                                        name: prompt.name.clone(),
-                                        messages: content.messages,
-                                    },
-                                );
-                                enhancements.push(text);
-                            }
+                let mut prompts = self.server_manager.get_cached_prompts(&server_id).await;
+                if prompts.is_empty() {
+                    let _ = self
+                        .server_manager
+                        .refresh_server_prompt_catalog(&server_id)
+                        .await;
+                    prompts = self.server_manager.get_cached_prompts(&server_id).await;
+                }
+                if prompts.is_empty() {
+                    if let Ok(result) = connection.list_prompts(None).await {
+                        prompts = result.prompts;
+                    }
+                }
+
+                for prompt in prompts {
+                    if prompt_names.contains(&prompt.name) {
+                        if let Ok(content) = connection
+                            .get_prompt(&prompt.name, Some(arguments.clone()))
+                            .await
+                        {
+                            let text = super::prompt::PromptAdapter::to_system_prompt(
+                                &crate::service::mcp::protocol::MCPPromptContent {
+                                    name: prompt.name.clone(),
+                                    messages: content.messages,
+                                },
+                            );
+                            enhancements.push(text);
                         }
                     }
                 }

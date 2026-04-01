@@ -64,7 +64,7 @@ impl ToolRegistry {
 
     /// Remove all tools from the MCP server
     pub fn unregister_mcp_server_tools(&mut self, server_id: &str) {
-        let prefix = format!("mcp_{}_", server_id);
+        let prefix = format!("mcp__{}__", server_id);
         let to_remove: Vec<String> = self
             .tools
             .keys()
