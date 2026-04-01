@@ -8,7 +8,7 @@ mod manager;
 mod process;
 mod registry;
 
-pub use config::MCPServerConfig;
+pub use config::{MCPServerConfig, MCPServerOAuthConfig, MCPServerXaaConfig};
 pub use connection::{MCPConnection, MCPConnectionPool};
 pub use manager::MCPServerManager;
 pub use process::{MCPServerProcess, MCPServerStatus, MCPServerType};

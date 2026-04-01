@@ -7,6 +7,34 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct MCPServerOAuthConfig {
+    #[serde(default)]
+    pub scopes: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_metadata_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub callback_host: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub callback_port: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub callback_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct MCPServerXaaConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub issuer: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audience: Option<String>,
+    #[serde(default)]
+    pub scopes: Vec<String>,
+}
+
 /// MCP server configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -35,6 +63,10 @@ pub struct MCPServerConfig {
     pub capabilities: Vec<String>,
     #[serde(default)]
     pub settings: HashMap<String, Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub oauth: Option<MCPServerOAuthConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub xaa: Option<MCPServerXaaConfig>,
 }
 
 fn default_true() -> bool {
@@ -71,6 +103,17 @@ impl MCPServerConfig {
                         "Remote MCP server '{}' must have a URL",
                         self.id
                     )));
+                }
+
+                if let Some(oauth) = &self.oauth {
+                    if let Some(port) = oauth.callback_port {
+                        if port == 0 {
+                            return Err(BitFunError::Configuration(format!(
+                                "Remote MCP server '{}' OAuth callbackPort must be greater than 0",
+                                self.id
+                            )));
+                        }
+                    }
                 }
             }
             MCPServerType::Container => {

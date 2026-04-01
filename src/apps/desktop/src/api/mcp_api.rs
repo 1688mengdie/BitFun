@@ -1,6 +1,7 @@
 //! MCP API
 
 use crate::api::app_state::AppState;
+use bitfun_core::service::mcp::auth::{MCPRemoteOAuthSessionSnapshot, has_stored_oauth_credentials};
 use bitfun_core::service::mcp::config::MCPConfigService;
 use bitfun_core::service::mcp::MCPServerType;
 use bitfun_core::service::runtime::{RuntimeManager, RuntimeSource};
@@ -24,6 +25,10 @@ pub struct MCPServerInfo {
     pub auth_configured: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auth_source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub oauth_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub xaa_enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -85,6 +90,22 @@ pub async fn get_mcp_servers(state: State<'_, AppState>) -> Result<Vec<MCPServer
     let runtime_manager = RuntimeManager::new().ok();
 
     for config in configs {
+        let static_auth_configured = if matches!(config.server_type, MCPServerType::Remote) {
+            MCPConfigService::has_remote_authorization(&config)
+        } else {
+            false
+        };
+        let oauth_enabled = if matches!(config.server_type, MCPServerType::Remote) {
+            MCPConfigService::has_remote_oauth(&config)
+        } else {
+            false
+        };
+        let oauth_auth_configured = if oauth_enabled {
+            has_stored_oauth_credentials(&config.id).await.unwrap_or(false)
+        } else {
+            false
+        };
+
         let (command, command_available, command_source, command_resolved_path) = if matches!(
             config.server_type,
             MCPServerType::Local | MCPServerType::Container
@@ -147,13 +168,29 @@ pub async fn get_mcp_servers(state: State<'_, AppState>) -> Result<Vec<MCPServer
             auto_start: config.auto_start,
             url: config.url.clone(),
             auth_configured: if matches!(config.server_type, MCPServerType::Remote) {
-                Some(MCPConfigService::has_remote_authorization(&config))
+                Some(static_auth_configured || oauth_auth_configured)
             } else {
                 None
             },
             auth_source: if matches!(config.server_type, MCPServerType::Remote) {
-                MCPConfigService::get_remote_authorization_source(&config)
-                    .map(|source| source.to_string())
+                if static_auth_configured {
+                    MCPConfigService::get_remote_authorization_source(&config)
+                        .map(|source| source.to_string())
+                } else if oauth_enabled {
+                    Some("oauth".to_string())
+                } else {
+                    None
+                }
+            } else {
+                None
+            },
+            oauth_enabled: if matches!(config.server_type, MCPServerType::Remote) {
+                Some(oauth_enabled)
+            } else {
+                None
+            },
+            xaa_enabled: if matches!(config.server_type, MCPServerType::Remote) {
+                Some(MCPConfigService::has_remote_xaa(&config))
             } else {
                 None
             },
@@ -477,6 +514,24 @@ pub struct ClearMCPRemoteAuthRequest {
     pub server_id: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StartMCPRemoteOAuthRequest {
+    pub server_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetMCPRemoteOAuthSessionRequest {
+    pub server_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CancelMCPRemoteOAuthRequest {
+    pub server_id: String,
+}
+
 #[tauri::command]
 pub async fn send_mcp_app_message(
     state: State<'_, AppState>,
@@ -618,4 +673,54 @@ pub async fn clear_mcp_remote_auth(
         .map_err(|e| e.to_string())?;
 
     Ok(())
+}
+
+#[tauri::command]
+pub async fn start_mcp_remote_oauth(
+    state: State<'_, AppState>,
+    request: StartMCPRemoteOAuthRequest,
+) -> Result<MCPRemoteOAuthSessionSnapshot, String> {
+    let mcp_service = state
+        .mcp_service
+        .as_ref()
+        .ok_or_else(|| "MCP service not initialized".to_string())?;
+
+    mcp_service
+        .server_manager()
+        .start_remote_oauth_authorization(&request.server_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_mcp_remote_oauth_session(
+    state: State<'_, AppState>,
+    request: GetMCPRemoteOAuthSessionRequest,
+) -> Result<Option<MCPRemoteOAuthSessionSnapshot>, String> {
+    let mcp_service = state
+        .mcp_service
+        .as_ref()
+        .ok_or_else(|| "MCP service not initialized".to_string())?;
+
+    Ok(mcp_service
+        .server_manager()
+        .get_remote_oauth_session(&request.server_id)
+        .await)
+}
+
+#[tauri::command]
+pub async fn cancel_mcp_remote_oauth(
+    state: State<'_, AppState>,
+    request: CancelMCPRemoteOAuthRequest,
+) -> Result<(), String> {
+    let mcp_service = state
+        .mcp_service
+        .as_ref()
+        .ok_or_else(|| "MCP service not initialized".to_string())?;
+
+    mcp_service
+        .server_manager()
+        .cancel_remote_oauth_authorization(&request.server_id)
+        .await
+        .map_err(|e| e.to_string())
 }

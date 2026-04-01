@@ -44,6 +44,14 @@ pub(super) fn config_to_cursor_format(config: &MCPServerConfig) -> serde_json::V
         cursor_config.insert("url".to_string(), serde_json::json!(url));
     }
 
+    if let Some(oauth) = &config.oauth {
+        cursor_config.insert("oauth".to_string(), serde_json::json!(oauth));
+    }
+
+    if let Some(xaa) = &config.xaa {
+        cursor_config.insert("xaa".to_string(), serde_json::json!(xaa));
+    }
+
     serde_json::Value::Object(cursor_config)
 }
 
@@ -144,6 +152,14 @@ pub(super) fn parse_cursor_format(
                     location: ConfigLocation::User,
                     capabilities: Vec::new(),
                     settings: Default::default(),
+                    oauth: obj
+                        .get("oauth")
+                        .cloned()
+                        .and_then(|value| serde_json::from_value(value).ok()),
+                    xaa: obj
+                        .get("xaa")
+                        .cloned()
+                        .and_then(|value| serde_json::from_value(value).ok()),
                 };
 
                 servers.push(server_config);

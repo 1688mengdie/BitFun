@@ -70,6 +70,7 @@ eventsource-stream = { workspace = true }
 
 # MCP Streamable HTTP client (official rust-sdk used by Codex)
 rmcp = { version = "0.12.0", default-features = false, features = [
+    "auth",
     "base64",
     "client",
     "macros",

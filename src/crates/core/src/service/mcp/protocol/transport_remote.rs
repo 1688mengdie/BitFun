@@ -8,6 +8,7 @@ use super::types::{
     MCPTool, MCPToolResult, MCPToolResultContent, PromptsGetResult, PromptsListResult,
     ResourcesListResult, ResourcesReadResult, ToolsListResult,
 };
+use crate::service::mcp::auth::build_authorization_manager;
 use crate::util::errors::{BitFunError, BitFunResult};
 use futures::StreamExt;
 use log::{debug, error, info, warn};
@@ -21,6 +22,7 @@ use rmcp::model::{
     ResourceContents,
 };
 use rmcp::service::RunningService;
+use rmcp::transport::auth::AuthorizationManager;
 use rmcp::transport::common::http_header::{
     EVENT_STREAM_MIME_TYPE, HEADER_LAST_EVENT_ID, HEADER_SESSION_ID, JSON_MIME_TYPE,
 };
@@ -111,6 +113,25 @@ enum ClientState {
 #[derive(Clone)]
 struct BitFunStreamableHttpClient {
     client: reqwest::Client,
+    oauth_manager: Option<Arc<Mutex<AuthorizationManager>>>,
+}
+
+impl BitFunStreamableHttpClient {
+    async fn resolve_auth_token(
+        &self,
+        auth_token: Option<String>,
+    ) -> Result<Option<String>, StreamableHttpError<reqwest::Error>> {
+        if auth_token.is_some() {
+            return Ok(auth_token);
+        }
+
+        let Some(oauth_manager) = &self.oauth_manager else {
+            return Ok(None);
+        };
+
+        let token = oauth_manager.lock().await.get_access_token().await?;
+        Ok(Some(token))
+    }
 }
 
 impl StreamableHttpClient for BitFunStreamableHttpClient {
@@ -126,6 +147,7 @@ impl StreamableHttpClient for BitFunStreamableHttpClient {
         futures::stream::BoxStream<'static, Result<Sse, SseError>>,
         StreamableHttpError<Self::Error>,
     > {
+        let auth_token = self.resolve_auth_token(auth_token).await?;
         let mut request_builder = self
             .client
             .get(uri.as_ref())
@@ -169,6 +191,7 @@ impl StreamableHttpClient for BitFunStreamableHttpClient {
         session: StdArc<str>,
         auth_token: Option<String>,
     ) -> Result<(), StreamableHttpError<Self::Error>> {
+        let auth_token = self.resolve_auth_token(auth_token).await?;
         let mut request_builder = self.client.delete(uri.as_ref());
         if let Some(auth_header) = auth_token {
             request_builder = request_builder.bearer_auth(auth_header);
@@ -192,6 +215,7 @@ impl StreamableHttpClient for BitFunStreamableHttpClient {
         session_id: Option<StdArc<str>>,
         auth_token: Option<String>,
     ) -> Result<StreamableHttpPostResponse, StreamableHttpError<Self::Error>> {
+        let auth_token = self.resolve_auth_token(auth_token).await?;
         let mut request = self
             .client
             .post(uri.as_ref())
@@ -282,6 +306,7 @@ impl StreamableHttpClient for BitFunStreamableHttpClient {
 pub struct RemoteMCPTransport {
     url: String,
     default_headers: HeaderMap,
+    oauth_manager: Option<Arc<Mutex<AuthorizationManager>>>,
     request_timeout: Duration,
     state: Mutex<ClientState>,
 }
@@ -348,8 +373,30 @@ impl RemoteMCPTransport {
     }
 
     /// Creates a new streamable HTTP remote transport instance.
-    pub fn new(url: String, headers: HashMap<String, String>, request_timeout: Duration) -> Self {
+    pub async fn new(
+        server_id: &str,
+        url: String,
+        headers: HashMap<String, String>,
+        request_timeout: Duration,
+        oauth_enabled: bool,
+    ) -> BitFunResult<Self> {
         let default_headers = Self::build_default_headers(&headers);
+        let oauth_manager = if oauth_enabled
+            && !default_headers.contains_key(reqwest::header::AUTHORIZATION)
+        {
+            let (manager, initialized) = build_authorization_manager(server_id, &url).await?;
+            if initialized {
+                Some(Arc::new(Mutex::new(manager)))
+            } else {
+                info!(
+                    "Remote MCP OAuth configured but credentials are not authorized yet: server_id={}",
+                    server_id
+                );
+                None
+            }
+        } else {
+            None
+        };
 
         let http_client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(10))
@@ -365,26 +412,41 @@ impl RemoteMCPTransport {
         let transport = StreamableHttpClientTransport::with_client(
             BitFunStreamableHttpClient {
                 client: http_client,
+                oauth_manager: oauth_manager.clone(),
             },
             StreamableHttpClientTransportConfig::with_uri(url.clone()),
         );
 
-        Self {
+        Ok(Self {
             url,
             default_headers,
+            oauth_manager,
             request_timeout,
             state: Mutex::new(ClientState::Connecting {
                 transport: Some(transport),
             }),
-        }
+        })
     }
 
     /// Returns the auth token header value (if present).
-    pub fn get_auth_token(&self) -> Option<String> {
-        self.default_headers
+    pub async fn get_auth_token(&self) -> Option<String> {
+        if let Some(value) = self
+            .default_headers
             .get(reqwest::header::AUTHORIZATION)
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_string())
+        {
+            return Some(value);
+        }
+
+        let oauth_manager = self.oauth_manager.as_ref()?;
+        oauth_manager
+            .lock()
+            .await
+            .get_access_token()
+            .await
+            .ok()
+            .map(|token| format!("Bearer {}", token))
     }
 
     async fn service(

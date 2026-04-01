@@ -26,6 +26,8 @@ impl MCPConfigService {
             "env": env,
             "headers": headers,
             "url": config.url,
+            "oauth": config.oauth,
+            "xaa": config.xaa,
         })
         .to_string()
     }
@@ -151,6 +153,14 @@ impl MCPConfigService {
 
     pub fn has_remote_authorization(config: &MCPServerConfig) -> bool {
         Self::get_remote_authorization_value(config).is_some()
+    }
+
+    pub fn has_remote_oauth(config: &MCPServerConfig) -> bool {
+        config.oauth.is_some()
+    }
+
+    pub fn has_remote_xaa(config: &MCPServerConfig) -> bool {
+        config.xaa.is_some()
     }
 
     /// Creates a new MCP configuration service.
@@ -460,6 +470,8 @@ mod tests {
             location,
             capabilities: Vec::new(),
             settings: Default::default(),
+            oauth: None,
+            xaa: None,
         }
     }
 

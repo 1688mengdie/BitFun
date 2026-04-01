@@ -180,6 +180,24 @@ impl MCPConfigService {
                             return Err(BitFunError::validation(error_msg));
                         }
                     }
+
+                    if let Some(oauth) = obj.get("oauth") {
+                        if !oauth.is_object() {
+                            let error_msg =
+                                format!("Server '{}' 'oauth' field must be an object", server_id);
+                            error!("{}", error_msg);
+                            return Err(BitFunError::validation(error_msg));
+                        }
+                    }
+
+                    if let Some(xaa) = obj.get("xaa") {
+                        if !xaa.is_object() {
+                            let error_msg =
+                                format!("Server '{}' 'xaa' field must be an object", server_id);
+                            error!("{}", error_msg);
+                            return Err(BitFunError::validation(error_msg));
+                        }
+                    }
                 } else {
                     let error_msg = format!("Server '{}' config must be an object", server_id);
                     error!("{}", error_msg);

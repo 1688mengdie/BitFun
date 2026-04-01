@@ -27,7 +27,9 @@ export interface MCPServerInfo {
   autoStart: boolean;
   url?: string;
   authConfigured?: boolean;
-  authSource?: 'headers' | 'env';
+  authSource?: 'headers' | 'env' | 'oauth';
+  oauthEnabled?: boolean;
+  xaaEnabled?: boolean;
   command?: string;
   commandAvailable?: boolean;
   commandSource?: 'system' | 'managed';
@@ -189,6 +191,34 @@ export interface ClearMCPRemoteAuthRequest {
   serverId: string;
 }
 
+export type MCPRemoteOAuthStatus =
+  | 'awaitingBrowser'
+  | 'awaitingCallback'
+  | 'exchangingToken'
+  | 'authorized'
+  | 'failed'
+  | 'cancelled';
+
+export interface MCPRemoteOAuthSessionSnapshot {
+  serverId: string;
+  status: MCPRemoteOAuthStatus;
+  authorizationUrl?: string;
+  redirectUri?: string;
+  message?: string;
+}
+
+export interface StartMCPRemoteOAuthRequest {
+  serverId: string;
+}
+
+export interface GetMCPRemoteOAuthSessionRequest {
+  serverId: string;
+}
+
+export interface CancelMCPRemoteOAuthRequest {
+  serverId: string;
+}
+
 export class MCPAPI {
 
   static async initializeServers(): Promise<void> {
@@ -284,6 +314,26 @@ export class MCPAPI {
 
   static async clearRemoteAuth(request: ClearMCPRemoteAuthRequest): Promise<void> {
     return api.invoke('clear_mcp_remote_auth', { request });
+  }
+
+  static async startRemoteOAuth(
+    request: StartMCPRemoteOAuthRequest
+  ): Promise<MCPRemoteOAuthSessionSnapshot> {
+    return api.invoke('start_mcp_remote_oauth', { request });
+  }
+
+  static async getRemoteOAuthSession(
+    request: GetMCPRemoteOAuthSessionRequest
+  ): Promise<MCPRemoteOAuthSessionSnapshot | null> {
+    const result = await api.invoke<MCPRemoteOAuthSessionSnapshot | null>(
+      'get_mcp_remote_oauth_session',
+      { request }
+    );
+    return result ?? null;
+  }
+
+  static async cancelRemoteOAuth(request: CancelMCPRemoteOAuthRequest): Promise<void> {
+    return api.invoke('cancel_mcp_remote_oauth', { request });
   }
 }
 
