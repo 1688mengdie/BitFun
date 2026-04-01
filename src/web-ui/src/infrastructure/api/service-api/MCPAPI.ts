@@ -10,6 +10,7 @@ export type MCPServerStatus =
   | 'Starting'
   | 'Connected'
   | 'Healthy'
+  | 'NeedsAuth'
   | 'Reconnecting'
   | 'Failed'
   | 'Stopping'
@@ -20,6 +21,7 @@ export interface MCPServerInfo {
   id: string;
   name: string;
   status: string;
+  statusMessage?: string;
   serverType: string;
   enabled: boolean;
   autoStart: boolean;
@@ -162,6 +164,19 @@ export interface FetchMCPAppResourceResponse {
   contents: MCPAppResourceContent[];
 }
 
+export interface McpInteractionError {
+  code?: number;
+  message?: string;
+  data?: Record<string, unknown> | unknown[] | string | number | boolean | null;
+}
+
+export interface SubmitMCPInteractionResponseRequest {
+  interactionId: string;
+  approve: boolean;
+  result?: Record<string, unknown> | unknown[] | string | number | boolean | null;
+  error?: McpInteractionError;
+}
+
 export class MCPAPI {
 
   static async initializeServers(): Promise<void> {
@@ -243,6 +258,12 @@ export class MCPAPI {
     [key: string]: unknown;
   }): Promise<Record<string, unknown>> {
     return api.invoke('send_mcp_app_message', { request });
+  }
+
+  static async submitMCPInteractionResponse(
+    request: SubmitMCPInteractionResponseRequest
+  ): Promise<void> {
+    return api.invoke('submit_mcp_interaction_response', { request });
   }
 }
 

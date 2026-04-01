@@ -169,6 +169,17 @@ impl MCPConfigService {
                             return Err(BitFunError::validation(error_msg));
                         }
                     }
+
+                    if let Some(headers) = obj.get("headers") {
+                        if !headers.is_object() {
+                            let error_msg = format!(
+                                "Server '{}' 'headers' field must be an object",
+                                server_id
+                            );
+                            error!("{}", error_msg);
+                            return Err(BitFunError::validation(error_msg));
+                        }
+                    }
                 } else {
                     let error_msg = format!("Server '{}' config must be an object", server_id);
                     error!("{}", error_msg);

@@ -1,4 +1,5 @@
 use log::{info, warn};
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use crate::service::config::ConfigService;
@@ -13,6 +14,98 @@ pub struct MCPConfigService {
 }
 
 impl MCPConfigService {
+    fn config_signature(config: &MCPServerConfig) -> String {
+        let env: BTreeMap<_, _> = config.env.clone().into_iter().collect();
+        let headers: BTreeMap<_, _> = config.headers.clone().into_iter().collect();
+        serde_json::json!({
+            "serverType": config.server_type,
+            "command": config.command,
+            "args": config.args,
+            "env": env,
+            "headers": headers,
+            "url": config.url,
+        })
+        .to_string()
+    }
+
+    fn precedence(location: ConfigLocation) -> u8 {
+        match location {
+            ConfigLocation::BuiltIn => 0,
+            ConfigLocation::User => 1,
+            ConfigLocation::Project => 2,
+        }
+    }
+
+    fn merge_configs(
+        merged: &mut Vec<MCPServerConfig>,
+        source: Vec<MCPServerConfig>,
+        signature_index: &mut HashMap<String, usize>,
+        id_index: &mut HashMap<String, usize>,
+    ) {
+        for config in source {
+            let config_id = config.id.clone();
+            let signature = Self::config_signature(&config);
+
+            if let Some(existing_index) = id_index.get(&config_id).copied() {
+                let previous = &merged[existing_index];
+                warn!(
+                    "Overriding MCP config by id: id={} previous_location={:?} new_location={:?}",
+                    config_id, previous.location, config.location
+                );
+
+                let previous_signature = Self::config_signature(previous);
+                merged[existing_index] = config;
+                signature_index.remove(&previous_signature);
+                signature_index.insert(signature, existing_index);
+                continue;
+            }
+
+            if let Some(existing_index) = signature_index.get(&signature).copied() {
+                let previous = &merged[existing_index];
+                if Self::precedence(previous.location) <= Self::precedence(config.location) {
+                    warn!(
+                        "Deduplicating MCP config by content signature: previous_id={} previous_location={:?} replacement_id={} replacement_location={:?}",
+                        previous.id, previous.location, config_id, config.location
+                    );
+
+                    id_index.remove(&previous.id);
+                    merged[existing_index] = config;
+                    id_index.insert(config_id, existing_index);
+                    signature_index.insert(signature, existing_index);
+                }
+                continue;
+            }
+
+            let next_index = merged.len();
+            signature_index.insert(signature, next_index);
+            id_index.insert(config_id, next_index);
+            merged.push(config);
+        }
+    }
+
+    fn parse_config_array(
+        &self,
+        servers: &[serde_json::Value],
+        location: ConfigLocation,
+    ) -> Vec<MCPServerConfig> {
+        servers
+            .iter()
+            .filter_map(|value| match serde_json::from_value::<MCPServerConfig>(value.clone()) {
+                Ok(mut config) => {
+                    config.location = location;
+                    Some(config)
+                }
+                Err(e) => {
+                    warn!(
+                        "Failed to parse MCP config item at {:?} scope: {}",
+                        location, e
+                    );
+                    None
+                }
+            })
+            .collect()
+    }
+
     /// Creates a new MCP configuration service.
     pub fn new(config_service: Arc<ConfigService>) -> BitFunResult<Self> {
         Ok(Self { config_service })
@@ -20,28 +113,49 @@ impl MCPConfigService {
 
     /// Loads all MCP server configurations.
     pub async fn load_all_configs(&self) -> BitFunResult<Vec<MCPServerConfig>> {
-        let mut configs = Vec::new();
-
-        let builtin = self.load_builtin_configs().await?;
-        configs.extend(builtin);
-
-        match self.load_user_configs().await {
+        let builtin_configs = self.load_builtin_configs().await?;
+        let user_configs = match self.load_user_configs().await {
             Ok(user_configs) => {
-                configs.extend(user_configs);
+                user_configs
             }
             Err(e) => {
                 warn!("Failed to load user-level MCP configs: {}", e);
+                Vec::new()
             }
-        }
+        };
 
-        match self.load_project_configs().await {
+        let project_configs = match self.load_project_configs().await {
             Ok(project_configs) => {
-                configs.extend(project_configs);
+                project_configs
             }
             Err(e) => {
                 warn!("Failed to load project-level MCP configs: {}", e);
+                Vec::new()
             }
-        }
+        };
+
+        let mut configs = Vec::new();
+        let mut signature_index = HashMap::new();
+        let mut id_index = HashMap::new();
+
+        Self::merge_configs(
+            &mut configs,
+            builtin_configs,
+            &mut signature_index,
+            &mut id_index,
+        );
+        Self::merge_configs(
+            &mut configs,
+            user_configs,
+            &mut signature_index,
+            &mut id_index,
+        );
+        Self::merge_configs(
+            &mut configs,
+            project_configs,
+            &mut signature_index,
+            &mut id_index,
+        );
 
         info!("Loaded {} MCP server config(s)", configs.len());
         Ok(configs)
@@ -70,19 +184,7 @@ impl MCPConfigService {
                 }
 
                 if let Some(servers) = config_value.as_array() {
-                    let configs: Vec<MCPServerConfig> = servers
-                        .iter()
-                        .filter_map(|v| {
-                            match serde_json::from_value::<MCPServerConfig>(v.clone()) {
-                                Ok(config) => Some(config),
-                                Err(e) => {
-                                    warn!("Failed to parse MCP config item: {}", e);
-                                    None
-                                }
-                            }
-                        })
-                        .collect();
-                    return Ok(configs);
+                    return Ok(self.parse_config_array(servers, ConfigLocation::User));
                 }
 
                 warn!("Invalid MCP config format, returning empty list");
@@ -100,12 +202,20 @@ impl MCPConfigService {
             .await
         {
             Ok(config_value) => {
+                if config_value
+                    .get("mcpServers")
+                    .and_then(|v| v.as_object())
+                    .is_some()
+                {
+                    let mut configs = super::cursor_format::parse_cursor_format(&config_value)?;
+                    for config in &mut configs {
+                        config.location = ConfigLocation::Project;
+                    }
+                    return Ok(configs);
+                }
+
                 if let Some(servers) = config_value.as_array() {
-                    let configs: Vec<MCPServerConfig> = servers
-                        .iter()
-                        .filter_map(|v| serde_json::from_value(v.clone()).ok())
-                        .collect();
-                    Ok(configs)
+                    Ok(self.parse_config_array(servers, ConfigLocation::Project))
                 } else {
                     Ok(Vec::new())
                 }
@@ -221,5 +331,107 @@ impl MCPConfigService {
             .await?;
         info!("Deleted MCP server config: {}", server_id);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::service::mcp::server::MCPServerType;
+
+    fn make_config(
+        id: &str,
+        location: ConfigLocation,
+        server_type: MCPServerType,
+        command: Option<&str>,
+        url: Option<&str>,
+    ) -> MCPServerConfig {
+        MCPServerConfig {
+            id: id.to_string(),
+            name: id.to_string(),
+            server_type,
+            command: command.map(str::to_string),
+            args: Vec::new(),
+            env: HashMap::new(),
+            headers: HashMap::new(),
+            url: url.map(str::to_string),
+            auto_start: true,
+            enabled: true,
+            location,
+            capabilities: Vec::new(),
+            settings: Default::default(),
+        }
+    }
+
+    #[test]
+    fn merge_configs_prefers_higher_precedence_when_ids_match() {
+        let mut merged = Vec::new();
+        let mut signature_index = HashMap::new();
+        let mut id_index = HashMap::new();
+
+        MCPConfigService::merge_configs(
+            &mut merged,
+            vec![make_config(
+                "github",
+                ConfigLocation::User,
+                MCPServerType::Remote,
+                None,
+                Some("https://example.com/mcp"),
+            )],
+            &mut signature_index,
+            &mut id_index,
+        );
+        MCPConfigService::merge_configs(
+            &mut merged,
+            vec![make_config(
+                "github",
+                ConfigLocation::Project,
+                MCPServerType::Remote,
+                None,
+                Some("https://project.example.com/mcp"),
+            )],
+            &mut signature_index,
+            &mut id_index,
+        );
+
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].location, ConfigLocation::Project);
+        assert_eq!(merged[0].url.as_deref(), Some("https://project.example.com/mcp"));
+    }
+
+    #[test]
+    fn merge_configs_deduplicates_same_server_content_across_ids() {
+        let mut merged = Vec::new();
+        let mut signature_index = HashMap::new();
+        let mut id_index = HashMap::new();
+
+        MCPConfigService::merge_configs(
+            &mut merged,
+            vec![make_config(
+                "github-user",
+                ConfigLocation::User,
+                MCPServerType::Remote,
+                None,
+                Some("https://example.com/mcp"),
+            )],
+            &mut signature_index,
+            &mut id_index,
+        );
+        MCPConfigService::merge_configs(
+            &mut merged,
+            vec![make_config(
+                "github-project",
+                ConfigLocation::Project,
+                MCPServerType::Remote,
+                None,
+                Some("https://example.com/mcp"),
+            )],
+            &mut signature_index,
+            &mut id_index,
+        );
+
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].id, "github-project");
+        assert_eq!(merged[0].location, ConfigLocation::Project);
     }
 }

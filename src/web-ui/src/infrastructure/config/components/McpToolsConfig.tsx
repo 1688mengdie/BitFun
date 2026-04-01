@@ -482,7 +482,7 @@ const McpToolsConfig: React.FC = () => {
     const s = status.toLowerCase();
     if (s.includes('healthy') || s.includes('connected')) return 'is-healthy';
     if (s.includes('starting') || s.includes('reconnecting')) return 'is-pending';
-    if (s.includes('failed') || s.includes('stopped')) return 'is-error';
+    if (s.includes('failed') || s.includes('stopped') || s.includes('auth')) return 'is-error';
     return '';
   };
 
@@ -490,13 +490,14 @@ const McpToolsConfig: React.FC = () => {
     const s = status.toLowerCase();
     if (s.includes('healthy') || s.includes('connected')) return <CheckCircle size={10} />;
     if (s.includes('starting') || s.includes('reconnecting')) return <Clock size={10} />;
-    if (s.includes('failed') || s.includes('stopped')) return <AlertTriangle size={10} />;
+    if (s.includes('failed') || s.includes('stopped') || s.includes('auth'))
+      return <AlertTriangle size={10} />;
     return <MinusCircle size={10} />;
   };
 
   const isStopped = (status: string) => {
     const s = status.toLowerCase();
-    return s.includes('stopped') || s.includes('failed');
+    return s.includes('stopped') || s.includes('failed') || s.includes('auth');
   };
 
   const getRuntimeSourceLabel = (server: MCPServerInfo) => {
@@ -589,10 +590,22 @@ const McpToolsConfig: React.FC = () => {
   );
 
   const renderServerDetails = (server: MCPServerInfo) => {
-    if (!isCommandDrivenServer(server)) return null;
+    if (!server.statusMessage && !isCommandDrivenServer(server)) return null;
 
     return (
       <div className="bitfun-mcp-tools__server-details">
+        {server.statusMessage && (
+          <div className="bitfun-mcp-tools__server-detail-item">
+            <span className="bitfun-mcp-tools__server-detail-label">
+              {tMcp('server.statusDetail', { defaultValue: 'Status Detail' })}:
+            </span>
+            <span className="bitfun-mcp-tools__server-detail-value">
+              {server.statusMessage}
+            </span>
+          </div>
+        )}
+        {!isCommandDrivenServer(server) ? null : (
+          <>
         <div className="bitfun-mcp-tools__server-detail-item">
           <span className="bitfun-mcp-tools__server-detail-label">
             {tMcp('server.command', { defaultValue: 'Command' })}:
@@ -618,6 +631,8 @@ const McpToolsConfig: React.FC = () => {
               {server.commandResolvedPath}
             </code>
           </div>
+        )}
+          </>
         )}
       </div>
     );

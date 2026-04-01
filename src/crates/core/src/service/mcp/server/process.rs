@@ -28,6 +28,7 @@ pub enum MCPServerStatus {
     Starting,      // Starting
     Connected,     // Connected
     Healthy,       // Healthy (heartbeat OK)
+    NeedsAuth,     // Authentication required / token expired
     Reconnecting,  // Reconnecting
     Failed,        // Failed
     Stopping,      // Stopping
@@ -48,10 +49,31 @@ pub struct MCPServerProcess {
     max_restarts: u32,
     health_check_interval: Duration,
     last_ping_time: Arc<RwLock<Option<Instant>>>,
+    last_error_message: Arc<RwLock<Option<String>>>,
     message_rx: Option<mpsc::UnboundedReceiver<MCPMessage>>,
 }
 
 impl MCPServerProcess {
+    fn is_auth_error(error: &BitFunError) -> bool {
+        let msg = error.to_string().to_ascii_lowercase();
+        let patterns = [
+            "unauthorized",
+            "forbidden",
+            "auth required",
+            "authentication required",
+            "authentication failed",
+            "www-authenticate",
+            "invalid token",
+            "token expired",
+            "session expired",
+            "status code: 401",
+            "status code: 403",
+            " 401 ",
+            " 403 ",
+        ];
+        patterns.iter().any(|p| msg.contains(p))
+    }
+
     /// Creates a new server process instance.
     pub fn new(id: String, name: String, server_type: MCPServerType) -> Self {
         Self {
@@ -67,6 +89,7 @@ impl MCPServerProcess {
             max_restarts: 3,
             health_check_interval: Duration::from_secs(30),
             last_ping_time: Arc::new(RwLock::new(None)),
+            last_error_message: Arc::new(RwLock::new(None)),
             message_rx: None,
         }
     }
@@ -121,7 +144,8 @@ impl MCPServerProcess {
         let mut child = match child {
             Ok(c) => c,
             Err(e) => {
-                self.set_status(MCPServerStatus::Failed).await;
+                self.set_status_with_error(MCPServerStatus::Failed, Some(e.to_string()))
+                    .await;
                 return Err(e);
             }
         };
@@ -152,11 +176,13 @@ impl MCPServerProcess {
                 self.name, self.id, e
             );
             let _ = self.stop().await;
-            self.set_status(MCPServerStatus::Failed).await;
+            self.set_status_with_error(MCPServerStatus::Failed, Some(e.to_string()))
+                .await;
             return Err(e);
         }
 
-        self.set_status(MCPServerStatus::Connected).await;
+        self.set_status_with_error(MCPServerStatus::Connected, None).await;
+        self.restart_count = 0;
         info!(
             "MCP server started successfully: name={} id={}",
             self.name, self.id
@@ -208,11 +234,18 @@ impl MCPServerProcess {
             self.message_rx = None;
             self.child = None;
             self.server_info = None;
-            self.set_status(MCPServerStatus::Failed).await;
+            if Self::is_auth_error(&e) {
+                self.set_status_with_error(MCPServerStatus::NeedsAuth, Some(e.to_string()))
+                    .await;
+            } else {
+                self.set_status_with_error(MCPServerStatus::Failed, Some(e.to_string()))
+                    .await;
+            }
             return Err(e);
         }
 
-        self.set_status(MCPServerStatus::Connected).await;
+        self.set_status_with_error(MCPServerStatus::Connected, None).await;
+        self.restart_count = 0;
         info!(
             "Remote MCP server started successfully: name={} id={}",
             self.name, self.id
@@ -286,7 +319,14 @@ impl MCPServerProcess {
                 "Max restart attempts reached: name={} id={} max_restarts={}",
                 self.name, self.id, self.max_restarts
             );
-            self.set_status(MCPServerStatus::Failed).await;
+            self.set_status_with_error(
+                MCPServerStatus::Failed,
+                Some(format!(
+                    "Max restart attempts ({}) reached",
+                    self.max_restarts
+                )),
+            )
+            .await;
             return Err(BitFunError::MCPError(format!(
                 "Max restart attempts ({}) reached",
                 self.max_restarts
@@ -306,13 +346,24 @@ impl MCPServerProcess {
 
     /// Sets status.
     async fn set_status(&self, status: MCPServerStatus) {
+        self.set_status_with_error(status, None).await;
+    }
+
+    async fn set_status_with_error(&self, status: MCPServerStatus, error: Option<String>) {
         let mut current_status = self.status.write().await;
         *current_status = status;
+        let mut last_error_message = self.last_error_message.write().await;
+        *last_error_message = error;
     }
 
     /// Gets status.
     pub async fn status(&self) -> MCPServerStatus {
         *self.status.read().await
+    }
+
+    /// Returns the last status/error detail associated with the process.
+    pub async fn status_message(&self) -> Option<String> {
+        self.last_error_message.read().await.clone()
     }
 
     /// Returns the connection.
@@ -329,6 +380,7 @@ impl MCPServerProcess {
     fn start_health_check(&self) {
         let status = self.status.clone();
         let last_ping = self.last_ping_time.clone();
+        let last_error_message = self.last_error_message.clone();
         let connection = self.connection.clone();
         let interval = self.health_check_interval;
         let server_name = self.name.clone();
@@ -356,13 +408,19 @@ impl MCPServerProcess {
                         Ok(_) => {
                             *status.write().await = MCPServerStatus::Healthy;
                             *last_ping.write().await = Some(Instant::now());
+                            *last_error_message.write().await = None;
                         }
                         Err(e) => {
                             warn!(
                                 "Health check failed: server_name={} error={}",
                                 server_name, e
                             );
-                            *status.write().await = MCPServerStatus::Reconnecting;
+                            if MCPServerProcess::is_auth_error(&e) {
+                                *status.write().await = MCPServerStatus::NeedsAuth;
+                            } else {
+                                *status.write().await = MCPServerStatus::Reconnecting;
+                            }
+                            *last_error_message.write().await = Some(e.to_string());
                         }
                     }
                 } else {
@@ -398,5 +456,21 @@ impl Drop for MCPServerProcess {
         if let Some(mut child) = self.child.take() {
             let _ = child.start_kill();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MCPServerProcess;
+    use crate::util::errors::BitFunError;
+
+    #[test]
+    fn detect_auth_error_patterns() {
+        let unauthorized =
+            BitFunError::MCPError("Handshake failed: Unauthorized (401)".to_string());
+        assert!(MCPServerProcess::is_auth_error(&unauthorized));
+
+        let generic = BitFunError::MCPError("Handshake failed: connection reset".to_string());
+        assert!(!MCPServerProcess::is_auth_error(&generic));
     }
 }

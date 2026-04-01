@@ -356,6 +356,8 @@ pub struct MCPToolAnnotations {
     pub read_only_hint: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub destructive_hint: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub open_world_hint: Option<bool>,
 }
 
 /// MCP tool definition (2025-11-25 spec).

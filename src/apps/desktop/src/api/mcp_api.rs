@@ -12,6 +12,8 @@ pub struct MCPServerInfo {
     pub id: String,
     pub name: String,
     pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status_message: Option<String>,
     pub server_type: String,
     pub enabled: bool,
     pub auto_start: bool,
@@ -103,19 +105,27 @@ pub async fn get_mcp_servers(state: State<'_, AppState>) -> Result<Vec<MCPServer
             (None, None, None, None)
         };
 
-        let status = match mcp_service
+        let (status, status_message) = match mcp_service
             .server_manager()
             .get_server_status(&config.id)
             .await
         {
-            Ok(s) => format!("{:?}", s),
+            Ok(s) => {
+                let status_message = mcp_service
+                    .server_manager()
+                    .get_server_status_message(&config.id)
+                    .await
+                    .ok()
+                    .flatten();
+                (format!("{:?}", s), status_message)
+            }
             Err(_) => {
                 if !config.enabled {
-                    "Stopped".to_string()
+                    ("Stopped".to_string(), None)
                 } else if config.auto_start {
-                    "Starting".to_string()
+                    ("Starting".to_string(), None)
                 } else {
-                    "Uninitialized".to_string()
+                    ("Uninitialized".to_string(), None)
                 }
             }
         };
@@ -124,6 +134,7 @@ pub async fn get_mcp_servers(state: State<'_, AppState>) -> Result<Vec<MCPServer
             id: config.id.clone(),
             name: config.name.clone(),
             status,
+            status_message,
             server_type: format!("{:?}", config.server_type),
             enabled: config.enabled,
             auto_start: config.auto_start,
@@ -278,7 +289,7 @@ pub struct McpUiResourcePermissions {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FetchMCPAppResourceRequest {
-    /// MCP server ID (e.g. from tool name mcp_{server_id}_{tool_name})
+    /// MCP server ID (e.g. from tool name mcp__{server_id}__{tool_name})
     pub server_id: String,
     /// Full resource URI, e.g. "ui://my-server/widget"
     pub resource_uri: String,
@@ -316,7 +327,7 @@ pub async fn get_mcp_tool_ui_uri(
     _state: State<'_, AppState>,
     tool_name: String,
 ) -> Result<Option<String>, String> {
-    if !tool_name.starts_with("mcp_") {
+    if !tool_name.starts_with("mcp__") {
         return Ok(None);
     }
     let registry = bitfun_core::agentic::tools::registry::get_global_tool_registry();
@@ -412,6 +423,28 @@ pub struct SendMCPAppMessageResponse {
     pub response: serde_json::Value,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubmitMCPInteractionError {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubmitMCPInteractionResponseRequest {
+    pub interaction_id: String,
+    pub approve: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<SubmitMCPInteractionError>,
+}
+
 #[tauri::command]
 pub async fn send_mcp_app_message(
     state: State<'_, AppState>,
@@ -485,4 +518,34 @@ pub async fn send_mcp_app_message(
         "result": result_value
     });
     Ok(SendMCPAppMessageResponse { response })
+}
+
+#[tauri::command]
+pub async fn submit_mcp_interaction_response(
+    state: State<'_, AppState>,
+    request: SubmitMCPInteractionResponseRequest,
+) -> Result<(), String> {
+    let mcp_service = state
+        .mcp_service
+        .as_ref()
+        .ok_or_else(|| "MCP service not initialized".to_string())?;
+
+    let error_message = request.error.as_ref().and_then(|e| e.message.clone());
+    let error_code = request.error.as_ref().and_then(|e| e.code);
+    let error_data = request.error.as_ref().and_then(|e| e.data.clone());
+
+    mcp_service
+        .server_manager()
+        .submit_interaction_response(
+            &request.interaction_id,
+            request.approve,
+            request.result,
+            error_message,
+            error_code,
+            error_data,
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
 }
