@@ -6,7 +6,7 @@ use crate::agentic::tools::framework::{
     Tool, ToolRenderOptions, ToolResult, ToolUseContext, ValidationResult,
 };
 use crate::service::mcp::protocol::{MCPTool, MCPToolResult};
-use crate::service::mcp::server::connection::MCPConnection;
+use crate::service::mcp::server::MCPConnection;
 use crate::util::errors::BitFunResult;
 use async_trait::async_trait;
 use log::{debug, error, info, warn};
@@ -209,14 +209,17 @@ impl Tool for MCPToolWrapper {
     fn render_tool_use_message(&self, input: &Value, _options: &ToolRenderOptions) -> String {
         format!(
             "Using MCP tool '{}' from '{}' with input: {}",
-            self.tool_title(), self.server_name, input
+            self.tool_title(),
+            self.server_name,
+            input
         )
     }
 
     fn render_tool_use_rejected_message(&self) -> String {
         format!(
             "MCP tool '{}' from '{}' was rejected by user",
-            self.tool_title(), self.server_name
+            self.tool_title(),
+            self.server_name
         )
     }
 
@@ -235,7 +238,8 @@ impl Tool for MCPToolWrapper {
     ) -> BitFunResult<Vec<ToolResult>> {
         info!(
             "Calling MCP tool: {} from server: {}",
-            self.tool_title(), self.server_name
+            self.tool_title(),
+            self.server_name
         );
         debug!(
             "Input: {}",

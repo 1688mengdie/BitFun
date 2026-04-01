@@ -14,7 +14,9 @@ pub mod config;
 pub mod protocol;
 pub mod server;
 
-// Re-export main components.
+use std::sync::Arc;
+
+// Stable public surface for the MCP service.
 pub use protocol::{
     MCPCapability, MCPMessage, MCPNotification, MCPProtocolVersion, MCPRequest, MCPResponse,
     MCPServerInfo,
@@ -33,19 +35,19 @@ pub use config::{ConfigLocation, MCPConfigService};
 
 /// MCP service interface.
 pub struct MCPService {
-    server_manager: std::sync::Arc<MCPServerManager>,
-    config_service: std::sync::Arc<MCPConfigService>,
-    context_provider: std::sync::Arc<MCPContextProvider>,
+    server_manager: Arc<MCPServerManager>,
+    config_service: Arc<MCPConfigService>,
+    context_provider: Arc<MCPContextProvider>,
 }
 
 impl MCPService {
     /// Creates a new MCP service instance.
     pub fn new(
-        config_service: std::sync::Arc<crate::service::config::ConfigService>,
+        config_service: Arc<crate::service::config::ConfigService>,
     ) -> crate::util::errors::BitFunResult<Self> {
-        let mcp_config_service = std::sync::Arc::new(MCPConfigService::new(config_service)?);
-        let server_manager = std::sync::Arc::new(MCPServerManager::new(mcp_config_service.clone()));
-        let context_provider = std::sync::Arc::new(MCPContextProvider::new(server_manager.clone()));
+        let mcp_config_service = Arc::new(MCPConfigService::new(config_service)?);
+        let server_manager = Arc::new(MCPServerManager::new(mcp_config_service.clone()));
+        let context_provider = Arc::new(MCPContextProvider::new(server_manager.clone()));
 
         Ok(Self {
             server_manager,
@@ -55,17 +57,17 @@ impl MCPService {
     }
 
     /// Returns the server manager.
-    pub fn server_manager(&self) -> std::sync::Arc<MCPServerManager> {
+    pub fn server_manager(&self) -> Arc<MCPServerManager> {
         self.server_manager.clone()
     }
 
     /// Returns the context provider.
-    pub fn context_provider(&self) -> std::sync::Arc<MCPContextProvider> {
+    pub fn context_provider(&self) -> Arc<MCPContextProvider> {
         self.context_provider.clone()
     }
 
     /// Returns the configuration service.
-    pub fn config_service(&self) -> std::sync::Arc<MCPConfigService> {
+    pub fn config_service(&self) -> Arc<MCPConfigService> {
         self.config_service.clone()
     }
 }

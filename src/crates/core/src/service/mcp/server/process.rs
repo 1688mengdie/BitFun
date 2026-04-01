@@ -3,7 +3,7 @@
 //! Handles starting, stopping, monitoring, and restarting MCP server processes.
 
 use super::connection::MCPConnection;
-use crate::service::mcp::protocol::{InitializeResult, MCPMessage, MCPServerInfo};
+use crate::service::mcp::protocol::{InitializeResult, MCPMessage, MCPServerInfo, MCPTransport};
 use crate::util::errors::{BitFunError, BitFunResult};
 use log::{debug, error, info, warn};
 use std::sync::Arc;
@@ -164,7 +164,7 @@ impl MCPServerProcess {
         let connection = Arc::new(MCPConnection::new(stdin, rx));
         self.message_rx = None; // The connection already owns rx
 
-        crate::service::mcp::protocol::transport::MCPTransport::start_receive_loop(stdout, tx);
+        MCPTransport::start_receive_loop(stdout, tx);
 
         self.connection = Some(connection.clone());
         self.child = Some(child);
@@ -181,7 +181,8 @@ impl MCPServerProcess {
             return Err(e);
         }
 
-        self.set_status_with_error(MCPServerStatus::Connected, None).await;
+        self.set_status_with_error(MCPServerStatus::Connected, None)
+            .await;
         self.restart_count = 0;
         info!(
             "MCP server started successfully: name={} id={}",
@@ -244,7 +245,8 @@ impl MCPServerProcess {
             return Err(e);
         }
 
-        self.set_status_with_error(MCPServerStatus::Connected, None).await;
+        self.set_status_with_error(MCPServerStatus::Connected, None)
+            .await;
         self.restart_count = 0;
         info!(
             "Remote MCP server started successfully: name={} id={}",

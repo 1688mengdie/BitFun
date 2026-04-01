@@ -5,10 +5,10 @@
 use crate::service::mcp::protocol::{
     create_initialize_request, create_ping_request, create_prompts_get_request,
     create_prompts_list_request, create_resources_list_request, create_resources_read_request,
-    create_tools_call_request, create_tools_list_request, parse_response_result,
-    transport::MCPTransport, transport_remote::RemoteMCPTransport, InitializeResult, MCPError,
-    MCPMessage, MCPResponse, MCPToolResult, PromptsGetResult, PromptsListResult,
-    ResourcesListResult, ResourcesReadResult, ToolsListResult,
+    create_tools_call_request, create_tools_list_request, parse_response_result, InitializeResult,
+    MCPError, MCPMessage, MCPResponse, MCPToolResult, MCPTransport, PromptsGetResult,
+    PromptsListResult, RemoteMCPTransport, ResourcesListResult, ResourcesReadResult,
+    ToolsListResult,
 };
 use crate::util::errors::{BitFunError, BitFunResult};
 use log::{debug, warn};
