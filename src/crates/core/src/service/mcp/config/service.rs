@@ -14,6 +14,8 @@ pub struct MCPConfigService {
 }
 
 impl MCPConfigService {
+    const AUTHORIZATION_KEYS: [&'static str; 3] = ["Authorization", "authorization", "AUTHORIZATION"];
+
     fn config_signature(config: &MCPServerConfig) -> String {
         let env: BTreeMap<_, _> = config.env.clone().into_iter().collect();
         let headers: BTreeMap<_, _> = config.headers.clone().into_iter().collect();
@@ -104,6 +106,51 @@ impl MCPConfigService {
                 }
             })
             .collect()
+    }
+
+    fn normalize_authorization_value(value: &str) -> Option<String> {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+
+        if trimmed.to_ascii_lowercase().starts_with("bearer ") || trimmed.contains(char::is_whitespace) {
+            return Some(trimmed.to_string());
+        }
+
+        Some(format!("Bearer {}", trimmed))
+    }
+
+    fn config_authorization_from_map(map: &std::collections::HashMap<String, String>) -> Option<String> {
+        Self::AUTHORIZATION_KEYS
+            .iter()
+            .find_map(|key| map.get(*key).cloned())
+            .filter(|value| !value.trim().is_empty())
+    }
+
+    fn remove_authorization_keys(map: &mut std::collections::HashMap<String, String>) {
+        for key in Self::AUTHORIZATION_KEYS {
+            map.remove(key);
+        }
+    }
+
+    pub fn get_remote_authorization_value(config: &MCPServerConfig) -> Option<String> {
+        Self::config_authorization_from_map(&config.headers)
+            .or_else(|| Self::config_authorization_from_map(&config.env))
+    }
+
+    pub fn get_remote_authorization_source(config: &MCPServerConfig) -> Option<&'static str> {
+        if Self::config_authorization_from_map(&config.headers).is_some() {
+            Some("headers")
+        } else if Self::config_authorization_from_map(&config.env).is_some() {
+            Some("env")
+        } else {
+            None
+        }
+    }
+
+    pub fn has_remote_authorization(config: &MCPServerConfig) -> bool {
+        Self::get_remote_authorization_value(config).is_some()
     }
 
     /// Creates a new MCP configuration service.
@@ -242,6 +289,59 @@ impl MCPConfigService {
             ConfigLocation::User => self.save_user_config(config).await,
             ConfigLocation::Project => self.save_project_config(config).await,
         }
+    }
+
+    pub async fn set_remote_authorization(
+        &self,
+        server_id: &str,
+        authorization_value: &str,
+    ) -> BitFunResult<MCPServerConfig> {
+        let mut config = self
+            .get_server_config(server_id)
+            .await?
+            .ok_or_else(|| BitFunError::NotFound(format!("MCP server config not found: {}", server_id)))?;
+
+        if config.server_type != crate::service::mcp::server::MCPServerType::Remote {
+            return Err(BitFunError::Validation(format!(
+                "MCP server '{}' is not a remote server",
+                server_id
+            )));
+        }
+
+        let normalized = Self::normalize_authorization_value(authorization_value).ok_or_else(|| {
+            BitFunError::Validation("Authorization value cannot be empty".to_string())
+        })?;
+
+        Self::remove_authorization_keys(&mut config.headers);
+        Self::remove_authorization_keys(&mut config.env);
+        config
+            .headers
+            .insert("Authorization".to_string(), normalized);
+
+        self.save_server_config(&config).await?;
+        Ok(config)
+    }
+
+    pub async fn clear_remote_authorization(
+        &self,
+        server_id: &str,
+    ) -> BitFunResult<MCPServerConfig> {
+        let mut config = self
+            .get_server_config(server_id)
+            .await?
+            .ok_or_else(|| BitFunError::NotFound(format!("MCP server config not found: {}", server_id)))?;
+
+        if config.server_type != crate::service::mcp::server::MCPServerType::Remote {
+            return Err(BitFunError::Validation(format!(
+                "MCP server '{}' is not a remote server",
+                server_id
+            )));
+        }
+
+        Self::remove_authorization_keys(&mut config.headers);
+        Self::remove_authorization_keys(&mut config.env);
+        self.save_server_config(&config).await?;
+        Ok(config)
     }
 
     /// Saves user-level configuration.
@@ -433,5 +533,35 @@ mod tests {
         assert_eq!(merged.len(), 1);
         assert_eq!(merged[0].id, "github-project");
         assert_eq!(merged[0].location, ConfigLocation::Project);
+    }
+
+    #[test]
+    fn remote_authorization_prefers_headers_and_normalizes_tokens() {
+        let mut config = make_config(
+            "remote-auth",
+            ConfigLocation::User,
+            MCPServerType::Remote,
+            None,
+            Some("https://example.com/mcp"),
+        );
+        config
+            .env
+            .insert("Authorization".to_string(), "legacy-token".to_string());
+        config
+            .headers
+            .insert("Authorization".to_string(), "Bearer header-token".to_string());
+
+        assert_eq!(
+            MCPConfigService::get_remote_authorization_value(&config).as_deref(),
+            Some("Bearer header-token")
+        );
+        assert_eq!(
+            MCPConfigService::get_remote_authorization_source(&config),
+            Some("headers")
+        );
+        assert_eq!(
+            MCPConfigService::normalize_authorization_value("plain-token").as_deref(),
+            Some("Bearer plain-token")
+        );
     }
 }

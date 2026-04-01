@@ -1277,6 +1277,35 @@ impl MCPServerManager {
         Ok(())
     }
 
+    /// Updates remote MCP authorization and immediately retries the connection.
+    pub async fn reauthenticate_remote_server(
+        &self,
+        server_id: &str,
+        authorization_value: &str,
+    ) -> BitFunResult<()> {
+        let config = self
+            .config_service
+            .set_remote_authorization(server_id, authorization_value)
+            .await?;
+
+        let _ = self.stop_server(server_id).await;
+        self.clear_reconnect_state(server_id).await;
+
+        if config.enabled {
+            self.start_server(server_id).await?;
+        }
+
+        Ok(())
+    }
+
+    /// Clears remote MCP authorization and stops the current connection so stale credentials are dropped.
+    pub async fn clear_remote_server_auth(&self, server_id: &str) -> BitFunResult<()> {
+        self.config_service.clear_remote_authorization(server_id).await?;
+        let _ = self.stop_server(server_id).await;
+        self.clear_reconnect_state(server_id).await;
+        Ok(())
+    }
+
     /// Shuts down all servers.
     pub async fn shutdown(&self) -> BitFunResult<()> {
         info!("Shutting down all MCP servers");

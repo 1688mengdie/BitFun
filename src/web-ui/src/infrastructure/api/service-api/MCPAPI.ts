@@ -25,6 +25,9 @@ export interface MCPServerInfo {
   serverType: string;
   enabled: boolean;
   autoStart: boolean;
+  url?: string;
+  authConfigured?: boolean;
+  authSource?: 'headers' | 'env';
   command?: string;
   commandAvailable?: boolean;
   commandSource?: 'system' | 'managed';
@@ -177,6 +180,15 @@ export interface SubmitMCPInteractionResponseRequest {
   error?: McpInteractionError;
 }
 
+export interface UpdateMCPRemoteAuthRequest {
+  serverId: string;
+  authorizationValue: string;
+}
+
+export interface ClearMCPRemoteAuthRequest {
+  serverId: string;
+}
+
 export class MCPAPI {
 
   static async initializeServers(): Promise<void> {
@@ -264,6 +276,14 @@ export class MCPAPI {
     request: SubmitMCPInteractionResponseRequest
   ): Promise<void> {
     return api.invoke('submit_mcp_interaction_response', { request });
+  }
+
+  static async updateRemoteAuth(request: UpdateMCPRemoteAuthRequest): Promise<void> {
+    return api.invoke('update_mcp_remote_auth', { request });
+  }
+
+  static async clearRemoteAuth(request: ClearMCPRemoteAuthRequest): Promise<void> {
+    return api.invoke('clear_mcp_remote_auth', { request });
   }
 }
 

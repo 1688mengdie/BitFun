@@ -536,6 +536,8 @@ pub async fn run() {
             fetch_mcp_app_resource,
             send_mcp_app_message,
             submit_mcp_interaction_response,
+            update_mcp_remote_auth,
+            clear_mcp_remote_auth,
             lsp_initialize,
             lsp_start_server_for_file,
             lsp_stop_server,

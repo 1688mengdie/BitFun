@@ -1,6 +1,7 @@
 //! MCP API
 
 use crate::api::app_state::AppState;
+use bitfun_core::service::mcp::config::MCPConfigService;
 use bitfun_core::service::mcp::MCPServerType;
 use bitfun_core::service::runtime::{RuntimeManager, RuntimeSource};
 use serde::{Deserialize, Serialize};
@@ -17,6 +18,12 @@ pub struct MCPServerInfo {
     pub server_type: String,
     pub enabled: bool,
     pub auto_start: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth_configured: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth_source: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -138,6 +145,18 @@ pub async fn get_mcp_servers(state: State<'_, AppState>) -> Result<Vec<MCPServer
             server_type: format!("{:?}", config.server_type),
             enabled: config.enabled,
             auto_start: config.auto_start,
+            url: config.url.clone(),
+            auth_configured: if matches!(config.server_type, MCPServerType::Remote) {
+                Some(MCPConfigService::has_remote_authorization(&config))
+            } else {
+                None
+            },
+            auth_source: if matches!(config.server_type, MCPServerType::Remote) {
+                MCPConfigService::get_remote_authorization_source(&config)
+                    .map(|source| source.to_string())
+            } else {
+                None
+            },
             command,
             command_available,
             command_source,
@@ -445,6 +464,19 @@ pub struct SubmitMCPInteractionResponseRequest {
     pub error: Option<SubmitMCPInteractionError>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateMCPRemoteAuthRequest {
+    pub server_id: String,
+    pub authorization_value: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClearMCPRemoteAuthRequest {
+    pub server_id: String,
+}
+
 #[tauri::command]
 pub async fn send_mcp_app_message(
     state: State<'_, AppState>,
@@ -544,6 +576,44 @@ pub async fn submit_mcp_interaction_response(
             error_code,
             error_data,
         )
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn update_mcp_remote_auth(
+    state: State<'_, AppState>,
+    request: UpdateMCPRemoteAuthRequest,
+) -> Result<(), String> {
+    let mcp_service = state
+        .mcp_service
+        .as_ref()
+        .ok_or_else(|| "MCP service not initialized".to_string())?;
+
+    mcp_service
+        .server_manager()
+        .reauthenticate_remote_server(&request.server_id, &request.authorization_value)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn clear_mcp_remote_auth(
+    state: State<'_, AppState>,
+    request: ClearMCPRemoteAuthRequest,
+) -> Result<(), String> {
+    let mcp_service = state
+        .mcp_service
+        .as_ref()
+        .ok_or_else(|| "MCP service not initialized".to_string())?;
+
+    mcp_service
+        .server_manager()
+        .clear_remote_server_auth(&request.server_id)
         .await
         .map_err(|e| e.to_string())?;
 

@@ -16,8 +16,10 @@ import {
   Clock,
   AlertTriangle,
   MinusCircle,
+  KeyRound,
+  Trash2,
 } from 'lucide-react';
-import { Button, Textarea, IconButton } from '@/component-library';
+import { Button, Textarea, IconButton, Modal } from '@/component-library';
 import {
   ConfigPageHeader,
   ConfigPageLayout,
@@ -150,6 +152,9 @@ const McpToolsConfig: React.FC = () => {
   const [mcpLoading, setMcpLoading] = useState(true);
   const [showJsonEditor, setShowJsonEditor] = useState(false);
   const [jsonConfig, setJsonConfig] = useState('');
+  const [authDialogServer, setAuthDialogServer] = useState<MCPServerInfo | null>(null);
+  const [authValue, setAuthValue] = useState('');
+  const [authSubmitting, setAuthSubmitting] = useState(false);
   const [jsonLintError, setJsonLintError] = useState<{
     message: string;
     line?: number;
@@ -394,6 +399,10 @@ const McpToolsConfig: React.FC = () => {
     return normalizedType.includes('local') || normalizedType.includes('container');
   };
 
+  const isRemoteServer = (server: MCPServerInfo) => {
+    return server.serverType.toLowerCase().includes('remote');
+  };
+
   const canStartServer = (server: MCPServerInfo) => {
     if (!isCommandDrivenServer(server)) return true;
     return server.commandAvailable !== false;
@@ -478,6 +487,93 @@ const McpToolsConfig: React.FC = () => {
     }
   };
 
+  const handleOpenAuthDialog = (server: MCPServerInfo) => {
+    setAuthDialogServer(server);
+    setAuthValue('');
+  };
+
+  const closeAuthDialog = () => {
+    setAuthDialogServer(null);
+    setAuthValue('');
+  };
+
+  const handleCloseAuthDialog = () => {
+    if (authSubmitting) return;
+    closeAuthDialog();
+  };
+
+  const handleSaveRemoteAuth = async () => {
+    if (!authDialogServer || authSubmitting) return;
+
+    const trimmed = authValue.trim();
+    if (!trimmed) {
+      notification.warning(
+        tMcp('messages.remoteAuthRequired', {
+          defaultValue: 'Please provide a Bearer token or full Authorization header value.',
+        }),
+        {
+          title: tMcp('notifications.operationFailed', { defaultValue: 'Operation failed' }),
+          duration: 5000,
+        }
+      );
+      return;
+    }
+
+    setAuthSubmitting(true);
+    try {
+      await MCPAPI.updateRemoteAuth({
+        serverId: authDialogServer.id,
+        authorizationValue: trimmed,
+      });
+      notification.success(
+        tMcp('messages.remoteAuthUpdated', {
+          serverId: authDialogServer.id,
+          defaultValue: `Updated remote auth for "${authDialogServer.id}".`,
+        }),
+        {
+          title: tMcp('notifications.saveSuccess'),
+          duration: 3000,
+        }
+      );
+      closeAuthDialog();
+      await loadServers();
+    } catch (error) {
+      const errorInfo = classifyError(error, tMcp('actions.saveConfig'));
+      notification.error(errorInfo.message, {
+        title: errorInfo.title,
+        duration: errorInfo.duration,
+      });
+    } finally {
+      setAuthSubmitting(false);
+    }
+  };
+
+  const handleClearRemoteAuth = async (server: MCPServerInfo) => {
+    try {
+      await MCPAPI.clearRemoteAuth({ serverId: server.id });
+      notification.success(
+        tMcp('messages.remoteAuthCleared', {
+          serverId: server.id,
+          defaultValue: `Cleared remote auth for "${server.id}".`,
+        }),
+        {
+          title: tMcp('notifications.saveSuccess'),
+          duration: 3000,
+        }
+      );
+      if (authDialogServer?.id === server.id) {
+        closeAuthDialog();
+      }
+      await loadServers();
+    } catch (error) {
+      const errorInfo = classifyError(error, tMcp('actions.saveConfig'));
+      notification.error(errorInfo.message, {
+        title: errorInfo.title,
+        duration: errorInfo.duration,
+      });
+    }
+  };
+
   const getStatusClass = (status: string): string => {
     const s = status.toLowerCase();
     if (s.includes('healthy') || s.includes('connected')) return 'is-healthy';
@@ -545,6 +641,26 @@ const McpToolsConfig: React.FC = () => {
 
   const renderServerControl = (server: MCPServerInfo) => (
     <>
+      {isRemoteServer(server) && (
+        <IconButton
+          size="small"
+          variant="ghost"
+          onClick={() => handleOpenAuthDialog(server)}
+          tooltip={tMcp('actions.remoteAuth', { defaultValue: 'Remote auth' })}
+        >
+          <KeyRound size={14} />
+        </IconButton>
+      )}
+      {isRemoteServer(server) && server.authConfigured && (
+        <IconButton
+          size="small"
+          variant="ghost"
+          onClick={() => handleClearRemoteAuth(server)}
+          tooltip={tMcp('actions.clearRemoteAuth', { defaultValue: 'Clear auth' })}
+        >
+          <Trash2 size={14} />
+        </IconButton>
+      )}
       {isStopped(server.status) ? (
         <IconButton
           size="small"
@@ -590,7 +706,7 @@ const McpToolsConfig: React.FC = () => {
   );
 
   const renderServerDetails = (server: MCPServerInfo) => {
-    if (!server.statusMessage && !isCommandDrivenServer(server)) return null;
+    if (!server.statusMessage && !isCommandDrivenServer(server) && !isRemoteServer(server)) return null;
 
     return (
       <div className="bitfun-mcp-tools__server-details">
@@ -603,6 +719,30 @@ const McpToolsConfig: React.FC = () => {
               {server.statusMessage}
             </span>
           </div>
+        )}
+        {isRemoteServer(server) && (
+          <>
+            <div className="bitfun-mcp-tools__server-detail-item">
+              <span className="bitfun-mcp-tools__server-detail-label">
+                {tMcp('server.remoteUrl', { defaultValue: 'Remote URL' })}:
+              </span>
+              <code className="bitfun-mcp-tools__server-detail-value">
+                {server.url || '-'}
+              </code>
+            </div>
+            <div className="bitfun-mcp-tools__server-detail-item">
+              <span className="bitfun-mcp-tools__server-detail-label">
+                {tMcp('server.remoteAuth', { defaultValue: 'Authentication' })}:
+              </span>
+              <span className="bitfun-mcp-tools__server-detail-value">
+                {server.authConfigured
+                  ? tMcp('server.remoteAuthConfigured', {
+                      defaultValue: `configured${server.authSource ? ` via ${server.authSource}` : ''}`,
+                    })
+                  : tMcp('server.remoteAuthMissing', { defaultValue: 'not configured' })}
+              </span>
+            </div>
+          </>
         )}
         {!isCommandDrivenServer(server) ? null : (
           <>
@@ -732,6 +872,57 @@ const McpToolsConfig: React.FC = () => {
             ))}
         </ConfigPageSection>
       </ConfigPageContent>
+      <Modal
+        isOpen={!!authDialogServer}
+        onClose={handleCloseAuthDialog}
+        title={
+          authDialogServer
+            ? tMcp('modal.remoteAuthTitle', {
+                serverName: authDialogServer.name,
+                defaultValue: `Remote auth: ${authDialogServer.name}`,
+              })
+            : tMcp('modal.remoteAuthTitle', { defaultValue: 'Remote auth' })
+        }
+        size="medium"
+        showCloseButton={!authSubmitting}
+      >
+        {authDialogServer && (
+          <div className="bitfun-mcp-tools__json-editor">
+            <p className="bitfun-mcp-tools__json-hint">
+              {tMcp('modal.remoteAuthHint', {
+                defaultValue: 'Paste a Bearer token or a full Authorization header value. Saving will restart the remote MCP server.',
+              })}
+            </p>
+            {authDialogServer.url && (
+              <p className="bitfun-mcp-tools__json-hint">
+                {tMcp('modal.remoteAuthServerUrl', {
+                  url: authDialogServer.url,
+                  defaultValue: `Server URL: ${authDialogServer.url}`,
+                })}
+              </p>
+            )}
+            <Textarea
+              value={authValue}
+              onChange={(e) => setAuthValue(e.target.value)}
+              rows={4}
+              placeholder={tMcp('modal.remoteAuthPlaceholder', {
+                defaultValue: 'Bearer eyJ... or eyJ...',
+              })}
+              variant="outlined"
+              className="bitfun-mcp-tools__json-textarea"
+              spellCheck={false}
+            />
+            <div className="bitfun-mcp-tools__json-actions">
+              <Button variant="secondary" onClick={handleCloseAuthDialog} disabled={authSubmitting}>
+                {tMcp('actions.cancel')}
+              </Button>
+              <Button variant="primary" onClick={handleSaveRemoteAuth} isLoading={authSubmitting}>
+                {tMcp('actions.saveRemoteAuth', { defaultValue: 'Save and reconnect' })}
+              </Button>
+            </div>
+          </div>
+        )}
+      </Modal>
     </ConfigPageLayout>
   );
 };
