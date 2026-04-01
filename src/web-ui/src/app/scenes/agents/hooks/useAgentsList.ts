@@ -113,16 +113,8 @@ export function useAgentsList({
     if (!userConfig) {
       return {
         mode_id: agentId,
-        available_tools: defaultTools,
+        enabled_tools: defaultTools,
         enabled: true,
-        default_tools: defaultTools,
-      };
-    }
-
-    if (!userConfig.available_tools || userConfig.available_tools.length === 0) {
-      return {
-        ...userConfig,
-        available_tools: defaultTools,
         default_tools: defaultTools,
       };
     }
@@ -152,7 +144,7 @@ export function useAgentsList({
   const handleSetTools = useCallback(async (agentId: string, toolNames: string[]) => {
     try {
       const nextTools = Array.from(new Set(toolNames));
-      await saveModeConfig(agentId, { available_tools: nextTools });
+      await saveModeConfig(agentId, { enabled_tools: nextTools });
     } catch {
       notification.error(t('agentsOverview.toolToggleFailed', '工具切换失败'));
     }

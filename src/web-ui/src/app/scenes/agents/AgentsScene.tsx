@@ -135,13 +135,13 @@ const AgentsHomeView: React.FC = () => {
     [getModeConfig, selectedAgent],
   );
   const selectedAgentTools = selectedAgent?.agentKind === 'mode'
-    ? (selectedAgentModeConfig?.available_tools ?? selectedAgent.defaultTools ?? [])
+    ? (selectedAgentModeConfig?.enabled_tools ?? selectedAgent.defaultTools ?? [])
     : (selectedAgent?.defaultTools ?? []);
   const selectedAgentSkills = selectedAgentModeConfig?.available_skills ?? [];
   const selectedAgentSkillItems = availableSkills.filter((skill) => selectedAgentSkills.includes(skill.name));
   const getDisplayedToolCount = useCallback((agent: AgentWithCapabilities): number => {
     if (agent.agentKind === 'mode') {
-      return getModeConfig(agent.id)?.available_tools?.length
+      return getModeConfig(agent.id)?.enabled_tools?.length
         ?? agent.defaultTools?.length
         ?? agent.toolCount
         ?? 0;
