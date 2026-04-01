@@ -149,20 +149,14 @@ export function useAgentsList({
     }
   }, [getModeConfig]);
 
-  const handleToggleTool = useCallback(async (agentId: string, toolName: string) => {
-    const config = getModeConfig(agentId);
-    if (!config) return;
-
-    const tools = config.available_tools ?? [];
-    const isEnabling = !tools.includes(toolName);
-    const newTools = isEnabling ? [...tools, toolName] : tools.filter((tool) => tool !== toolName);
-
+  const handleSetTools = useCallback(async (agentId: string, toolNames: string[]) => {
     try {
-      await saveModeConfig(agentId, { available_tools: newTools });
+      const nextTools = Array.from(new Set(toolNames));
+      await saveModeConfig(agentId, { available_tools: nextTools });
     } catch {
       notification.error(t('agentsOverview.toolToggleFailed', '工具切换失败'));
     }
-  }, [getModeConfig, notification, saveModeConfig, t]);
+  }, [notification, saveModeConfig, t]);
 
   const handleResetTools = useCallback(async (agentId: string) => {
     try {
@@ -182,20 +176,14 @@ export function useAgentsList({
     }
   }, [notification, t]);
 
-  const handleToggleSkill = useCallback(async (agentId: string, skillName: string) => {
-    const config = getModeConfig(agentId);
-    if (!config) return;
-
-    const skills = config.available_skills ?? [];
-    const isEnabling = !skills.includes(skillName);
-    const newSkills = isEnabling ? [...skills, skillName] : skills.filter((skill) => skill !== skillName);
-
+  const handleSetSkills = useCallback(async (agentId: string, skillNames: string[]) => {
     try {
-      await saveModeConfig(agentId, { available_skills: newSkills });
+      const nextSkills = Array.from(new Set(skillNames));
+      await saveModeConfig(agentId, { available_skills: nextSkills });
     } catch {
       notification.error(t('agentsOverview.skillToggleFailed', 'Skill 切换失败'));
     }
-  }, [getModeConfig, notification, saveModeConfig, t]);
+  }, [notification, saveModeConfig, t]);
 
   const filteredAgents = useMemo(() => allAgents.filter((agent) => {
     if (searchQuery) {
@@ -241,9 +229,9 @@ export function useAgentsList({
     counts,
     loadAgents,
     getModeConfig,
-    handleToggleTool,
+    handleSetTools,
     handleResetTools,
-    handleToggleSkill,
+    handleSetSkills,
   };
 }
 

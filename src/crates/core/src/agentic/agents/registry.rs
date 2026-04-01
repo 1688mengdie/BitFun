@@ -385,18 +385,10 @@ impl AgentRegistry {
         match entry.category {
             AgentCategory::Mode => {
                 let mode_configs = get_mode_configs().await;
-                let mut tools = mode_configs
+                mode_configs
                     .get(agent_type)
                     .map(|config| config.available_tools.clone())
-                    .unwrap_or_else(|| entry.agent.default_tools());
-                let defaults = entry.agent.default_tools();
-                const COMPUTER_USE: &str = "ComputerUse";
-                if defaults.iter().any(|t| t == COMPUTER_USE)
-                    && !tools.iter().any(|t| t == COMPUTER_USE)
-                {
-                    tools.push(COMPUTER_USE.to_string());
-                }
-                tools
+                    .unwrap_or_else(|| entry.agent.default_tools())
             }
             AgentCategory::SubAgent | AgentCategory::Hidden => entry.agent.default_tools(),
         }
