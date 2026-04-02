@@ -259,6 +259,9 @@ pub fn create_main_window(app_handle: &tauri::AppHandle) {
         .accept_first_mouse(true)
         .initialization_script(&init_script);
 
+    // Keep HTML5 drag-and-drop working inside the webview for desktop UI drag targets.
+    builder = builder.disable_drag_drop_handler();
+
     #[cfg(target_os = "macos")]
     {
         builder = builder
