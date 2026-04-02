@@ -3,13 +3,90 @@ use crate::util::errors::{BitFunError, BitFunResult};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::sync::Arc;
-use tool_runtime::search::grep_search::{grep_search, GrepOptions, OutputMode, ProgressCallback};
+use tool_runtime::search::grep_search::{
+    grep_search, GrepOptions, GrepSearchResult, OutputMode, ProgressCallback,
+};
+
+const DEFAULT_HEAD_LIMIT: usize = 250;
 
 pub struct GrepTool;
 
 impl GrepTool {
     pub fn new() -> Self {
         Self
+    }
+
+    fn resolve_head_limit(input: &Value) -> Option<usize> {
+        match input.get("head_limit").and_then(|v| v.as_u64()) {
+            Some(0) => None,
+            Some(value) => Some(value as usize),
+            None => Some(DEFAULT_HEAD_LIMIT),
+        }
+    }
+
+    fn shell_escape(value: &str) -> String {
+        value.replace('\'', "'\\''")
+    }
+
+    fn parse_glob_patterns(glob: Option<&str>) -> Vec<String> {
+        let Some(glob) = glob else {
+            return Vec::new();
+        };
+
+        let mut patterns = Vec::new();
+        for raw_pattern in glob.split_whitespace() {
+            if raw_pattern.contains('{') && raw_pattern.contains('}') {
+                patterns.push(raw_pattern.to_string());
+            } else {
+                patterns.extend(
+                    raw_pattern
+                        .split(',')
+                        .filter(|pattern| !pattern.is_empty())
+                        .map(|pattern| pattern.to_string()),
+                );
+            }
+        }
+        patterns
+    }
+
+    fn resolve_offset(input: &Value) -> usize {
+        input
+            .get("offset")
+            .and_then(|v| v.as_u64())
+            .map(|value| value as usize)
+            .unwrap_or(0)
+    }
+
+    fn display_base(context: &ToolUseContext) -> Option<String> {
+        context.current_working_directory.clone().or_else(|| {
+            context
+                .workspace
+                .as_ref()
+                .map(|workspace| workspace.root_path_string())
+        })
+    }
+
+    fn relativize_result_text(result_text: &str, display_base: Option<&str>) -> String {
+        let Some(base) = display_base else {
+            return result_text.to_string();
+        };
+
+        let normalized_base = base.replace('\\', "/").trim_end_matches('/').to_string();
+        if normalized_base.is_empty() {
+            return result_text.to_string();
+        }
+
+        result_text
+            .lines()
+            .map(|line| {
+                if let Some(rest) = line.strip_prefix(&(normalized_base.clone() + "/")) {
+                    rest.to_string()
+                } else {
+                    line.to_string()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     async fn call_remote(
@@ -30,39 +107,85 @@ impl GrepTool {
         let resolved_path = context.resolve_workspace_tool_path(search_path)?;
 
         let case_insensitive = input.get("-i").and_then(|v| v.as_bool()).unwrap_or(false);
-        let head_limit = input
-            .get("head_limit")
+        let head_limit = Self::resolve_head_limit(input);
+        let offset = Self::resolve_offset(input);
+        let output_mode = input
+            .get("output_mode")
+            .and_then(|v| v.as_str())
+            .unwrap_or("files_with_matches");
+        let show_line_numbers = input
+            .get("-n")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(output_mode == "content");
+        let context_c = input
+            .get("context")
+            .or_else(|| input.get("-C"))
             .and_then(|v| v.as_u64())
-            .map(|v| v as usize)
-            .unwrap_or(200);
-        let glob_pattern = input.get("glob").and_then(|v| v.as_str());
+            .map(|v| v.to_string());
+        let before_context = input
+            .get("-B")
+            .and_then(|v| v.as_u64())
+            .map(|v| v.to_string());
+        let after_context = input
+            .get("-A")
+            .and_then(|v| v.as_u64())
+            .map(|v| v.to_string());
+        let glob_patterns = Self::parse_glob_patterns(input.get("glob").and_then(|v| v.as_str()));
         let file_type = input.get("type").and_then(|v| v.as_str());
 
-        let escaped_path = resolved_path.replace('\'', "'\\''");
-        let escaped_pattern = pattern.replace('\'', "'\\''");
+        let escaped_path = Self::shell_escape(&resolved_path);
+        let escaped_pattern = Self::shell_escape(pattern);
+        let offset_cmd = if offset > 0 {
+            format!(" | tail -n +{}", offset + 1)
+        } else {
+            String::new()
+        };
+        let limit_cmd = head_limit
+            .map(|limit| format!(" | head -n {}", limit))
+            .unwrap_or_default();
 
-        let mut cmd = "rg --no-heading --line-number".to_string();
+        let mut cmd = "rg --no-heading --hidden --max-columns 500".to_string();
         if case_insensitive {
             cmd.push_str(" -i");
         }
-        if let Some(glob) = glob_pattern {
-            cmd.push_str(&format!(" --glob '{}'", glob.replace('\'', "'\\''")));
+        if output_mode == "files_with_matches" {
+            cmd.push_str(" -l");
+        } else if output_mode == "count" {
+            cmd.push_str(" -c");
+        } else if show_line_numbers {
+            cmd.push_str(" --line-number");
+        }
+        if output_mode == "content" {
+            if let Some(context) = context_c {
+                cmd.push_str(&format!(" -C {}", context));
+            } else {
+                if let Some(before) = before_context {
+                    cmd.push_str(&format!(" -B {}", before));
+                }
+                if let Some(after) = after_context {
+                    cmd.push_str(&format!(" -A {}", after));
+                }
+            }
+        }
+        for glob_pattern in glob_patterns {
+            cmd.push_str(&format!(" --glob '{}'", Self::shell_escape(&glob_pattern)));
         }
         if let Some(ft) = file_type {
-            cmd.push_str(&format!(" --type {}", ft));
+            cmd.push_str(&format!(" --type '{}'", Self::shell_escape(ft)));
         }
         cmd.push_str(&format!(
-            " '{}' '{}' 2>/dev/null | head -n {}",
-            escaped_pattern, escaped_path, head_limit
+            " -e '{}' '{}' 2>/dev/null{}{}",
+            escaped_pattern, escaped_path, offset_cmd, limit_cmd
         ));
 
         let full_cmd = format!(
-            "if command -v rg >/dev/null 2>&1; then {}; else grep -rn{} '{}' '{}' 2>/dev/null | head -n {}; fi",
+            "if command -v rg >/dev/null 2>&1; then {}; else grep -rn{} -e '{}' '{}' 2>/dev/null{}{}; fi",
             cmd,
             if case_insensitive { "i" } else { "" },
             escaped_pattern,
             escaped_path,
-            head_limit,
+            offset_cmd,
+            limit_cmd,
         );
 
         let (stdout, _stderr, _exit_code) = ws_shell
@@ -72,18 +195,21 @@ impl GrepTool {
 
         let lines: Vec<&str> = stdout.lines().collect();
         let total_matches = lines.len();
+        let display_base = Self::display_base(context);
         let result_text = if lines.is_empty() {
             format!("No matches found for pattern '{}'", pattern)
         } else {
-            stdout.clone()
+            Self::relativize_result_text(&stdout, display_base.as_deref())
         };
 
         Ok(vec![ToolResult::Result {
             data: json!({
                 "pattern": pattern,
                 "path": resolved_path,
-                "output_mode": "content",
+                "output_mode": output_mode,
                 "total_matches": total_matches,
+                "applied_limit": head_limit,
+                "applied_offset": if offset > 0 { Some(offset) } else { None::<usize> },
                 "result": result_text,
             }),
             result_for_assistant: Some(result_text),
@@ -114,18 +240,20 @@ impl GrepTool {
             .and_then(|v| v.as_str())
             .unwrap_or("files_with_matches");
         let output_mode = OutputMode::from_str(output_mode_str);
-        let show_line_numbers = input.get("-n").and_then(|v| v.as_bool()).unwrap_or(false);
-        let context_c = input.get("-C").and_then(|v| v.as_u64()).map(|v| v as usize);
-        let before_context = input.get("-B").and_then(|v| v.as_u64()).map(|v| v as usize);
-        let after_context = input.get("-A").and_then(|v| v.as_u64()).map(|v| v as usize);
-        let head_limit = input
-            .get("head_limit")
+        let show_line_numbers = input
+            .get("-n")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(output_mode_str == "content");
+        let context_c = input
+            .get("context")
+            .or_else(|| input.get("-C"))
             .and_then(|v| v.as_u64())
             .map(|v| v as usize);
-        let glob_pattern = input
-            .get("glob")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
+        let before_context = input.get("-B").and_then(|v| v.as_u64()).map(|v| v as usize);
+        let after_context = input.get("-A").and_then(|v| v.as_u64()).map(|v| v as usize);
+        let head_limit = Self::resolve_head_limit(input);
+        let offset = Self::resolve_offset(input);
+        let glob_patterns = Self::parse_glob_patterns(input.get("glob").and_then(|v| v.as_str()));
         let file_type = input
             .get("type")
             .and_then(|v| v.as_str())
@@ -136,6 +264,10 @@ impl GrepTool {
             .multiline(multiline)
             .output_mode(output_mode)
             .show_line_numbers(show_line_numbers);
+
+        if let Some(display_base) = Self::display_base(context) {
+            options = options.display_base(display_base);
+        }
 
         if let Some(c) = context_c {
             options = options.context(c);
@@ -149,14 +281,50 @@ impl GrepTool {
         if let Some(h) = head_limit {
             options = options.head_limit(h);
         }
-        if let Some(g) = glob_pattern {
-            options = options.glob(g);
+        if offset > 0 {
+            options = options.offset(offset);
+        }
+        if !glob_patterns.is_empty() {
+            options = options.globs(glob_patterns);
         }
         if let Some(t) = file_type {
             options = options.file_type(t);
         }
 
         Ok(options)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{GrepTool, DEFAULT_HEAD_LIMIT};
+    use serde_json::json;
+
+    #[test]
+    fn head_limit_defaults_and_zero_escape_hatch() {
+        assert_eq!(
+            GrepTool::resolve_head_limit(&json!({})),
+            Some(DEFAULT_HEAD_LIMIT)
+        );
+        assert_eq!(
+            GrepTool::resolve_head_limit(&json!({ "head_limit": 25 })),
+            Some(25)
+        );
+        assert_eq!(
+            GrepTool::resolve_head_limit(&json!({ "head_limit": 0 })),
+            None
+        );
+    }
+
+    #[test]
+    fn relativizes_prefixed_result_lines() {
+        let text = "/repo/src/main.rs:12:fn main()\n/repo/src/lib.rs:3:pub fn lib()";
+        let relativized = GrepTool::relativize_result_text(text, Some("/repo"));
+
+        assert_eq!(
+            relativized,
+            "src/main.rs:12:fn main()\nsrc/lib.rs:3:pub fn lib()"
+        );
     }
 }
 
@@ -203,10 +371,12 @@ Usage:
                 "-B": { "type": "number", "description": "Number of lines to show before each match (rg -B). Requires output_mode: \"content\", ignored otherwise." },
                 "-A": { "type": "number", "description": "Number of lines to show after each match (rg -A). Requires output_mode: \"content\", ignored otherwise." },
                 "-C": { "type": "number", "description": "Number of lines to show before and after each match (rg -C). Requires output_mode: \"content\", ignored otherwise." },
+                "context": { "type": "number", "description": "Alias for -C. Number of lines to show before and after each match." },
                 "-n": { "type": "boolean", "description": "Show line numbers in output (rg -n). Requires output_mode: \"content\", ignored otherwise." },
                 "-i": { "type": "boolean", "description": "Case insensitive search (rg -i)" },
                 "type": { "type": "string", "description": "File type to search (rg --type). Common types: js, py, rust, go, java, etc." },
                 "head_limit": { "type": "number", "description": "Limit output to first N lines/entries." },
+                "offset": { "type": "number", "description": "Skip the first N lines/entries before applying head_limit." },
                 "multiline": { "type": "boolean", "description": "Enable multiline mode where . matches newlines and patterns can span lines (rg -U --multiline-dotall). Default: false." }
             },
             "required": ["pattern"],
@@ -221,7 +391,7 @@ Usage:
     fn is_concurrency_safe(&self, _input: Option<&Value>) -> bool {
         true
     }
-    
+
     fn needs_permissions(&self, _input: Option<&Value>) -> bool {
         false
     }
@@ -321,7 +491,13 @@ Usage:
         })
         .await;
 
-        let (file_count, total_matches, result_text) = match search_result {
+        let GrepSearchResult {
+            file_count,
+            total_matches,
+            result_text,
+            applied_limit,
+            applied_offset,
+        } = match search_result {
             Ok(Ok(result)) => result,
             Ok(Err(e)) => return Err(BitFunError::tool(e)),
             Err(e) => return Err(BitFunError::tool(format!("grep search failed: {}", e))),
@@ -334,6 +510,8 @@ Usage:
                 "output_mode": output_mode,
                 "file_count": file_count,
                 "total_matches": total_matches,
+                "applied_limit": applied_limit,
+                "applied_offset": applied_offset,
                 "result": result_text,
             }),
             result_for_assistant: Some(result_text),
