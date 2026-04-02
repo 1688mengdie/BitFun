@@ -7,6 +7,24 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum MCPServerTransport {
+    Stdio,
+    StreamableHttp,
+    Sse,
+}
+
+impl MCPServerTransport {
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Stdio => "stdio",
+            Self::StreamableHttp => "streamable-http",
+            Self::Sse => "sse",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct MCPServerOAuthConfig {
@@ -44,6 +62,8 @@ pub struct MCPServerConfig {
     #[serde(rename = "type")]
     pub server_type: MCPServerType,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub transport: Option<MCPServerTransport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
     #[serde(default)]
     pub args: Vec<String>,
@@ -74,6 +94,13 @@ fn default_true() -> bool {
 }
 
 impl MCPServerConfig {
+    pub fn resolved_transport(&self) -> MCPServerTransport {
+        self.transport.unwrap_or(match self.server_type {
+            MCPServerType::Local => MCPServerTransport::Stdio,
+            MCPServerType::Remote => MCPServerTransport::StreamableHttp,
+        })
+    }
+
     /// Validates the configuration.
     pub fn validate(&self) -> BitFunResult<()> {
         if self.id.is_empty() {
@@ -88,12 +115,21 @@ impl MCPServerConfig {
             ));
         }
 
+        let transport = self.resolved_transport();
         match self.server_type {
             MCPServerType::Local => {
                 if self.command.is_none() {
                     return Err(BitFunError::Configuration(format!(
                         "Local MCP server '{}' must have a command",
                         self.id
+                    )));
+                }
+
+                if transport != MCPServerTransport::Stdio {
+                    return Err(BitFunError::Configuration(format!(
+                        "Local MCP server '{}' must use stdio transport, got '{}'",
+                        self.id,
+                        transport.as_str()
                     )));
                 }
             }
@@ -115,12 +151,15 @@ impl MCPServerConfig {
                         }
                     }
                 }
-            }
-            MCPServerType::Container => {
-                if self.command.is_none() {
+
+                if !matches!(
+                    transport,
+                    MCPServerTransport::StreamableHttp | MCPServerTransport::Sse
+                ) {
                     return Err(BitFunError::Configuration(format!(
-                        "Container MCP server '{}' must have a command",
-                        self.id
+                        "Remote MCP server '{}' must use streamable-http or sse transport, got '{}'",
+                        self.id,
+                        transport.as_str()
                     )));
                 }
             }

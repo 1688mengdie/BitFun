@@ -2,18 +2,18 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::{
-    Router,
     extract::{Query, State},
     response::{Html, IntoResponse},
     routing::get,
+    Router,
 };
 use reqwest::Url;
-use tokio::sync::{Mutex, oneshot};
-use tokio::time::{Duration, timeout};
+use tokio::sync::{oneshot, Mutex};
+use tokio::time::{timeout, Duration};
 
 use crate::service::mcp::auth::{
-    MCPRemoteOAuthSessionSnapshot, MCPRemoteOAuthStatus, clear_stored_oauth_credentials,
-    map_auth_error, prepare_remote_oauth_authorization,
+    clear_stored_oauth_credentials, map_auth_error, prepare_remote_oauth_authorization,
+    MCPRemoteOAuthSessionSnapshot, MCPRemoteOAuthStatus,
 };
 use crate::service::mcp::server::MCPServerType;
 use crate::util::errors::{BitFunError, BitFunResult};
@@ -28,6 +28,372 @@ struct OAuthCallbackPayload {
     state: Option<String>,
     error: Option<String>,
     error_description: Option<String>,
+}
+
+fn escape_html(input: &str) -> String {
+    input
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
+
+fn render_oauth_callback_page(payload: &OAuthCallbackPayload) -> String {
+    let (badge, badge_class, title, message, detail_title, detail_body, icon_label) =
+        if let Some(error) = payload.error.as_deref() {
+            let description = payload
+                .error_description
+                .as_deref()
+                .unwrap_or("The provider rejected the authorization request.");
+            (
+                "Authorization failed",
+                "is-error",
+                "BitFun could not finish the OAuth handoff",
+                "Return to BitFun and restart the OAuth flow after checking the provider response below.",
+                "Provider response",
+                format!("{}: {}", escape_html(error), escape_html(description)),
+                "!",
+            )
+        } else if payload.code.is_some() && payload.state.is_some() {
+            (
+                "Authorization received",
+                "is-success",
+                "BitFun has the callback",
+                "You can switch back to the app now. BitFun is exchanging the authorization code and reconnecting the MCP server.",
+                "What happens next",
+                "This tab can be closed. If BitFun does not finish reconnecting automatically, reopen the MCP settings and retry OAuth.".to_string(),
+                "OK",
+            )
+        } else {
+            let mut missing = Vec::new();
+            if payload.code.is_none() {
+                missing.push("code");
+            }
+            if payload.state.is_none() {
+                missing.push("state");
+            }
+            (
+                "Callback incomplete",
+                "is-warning",
+                "BitFun received an incomplete OAuth redirect",
+                "The provider redirected back, but required OAuth parameters were missing. Return to BitFun and start the sign-in flow again.",
+                "Missing parameters",
+                escape_html(&missing.join(", ")),
+                "?",
+            )
+        };
+
+    format!(
+        r#"<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>BitFun OAuth Callback</title>
+    <style>
+      :root {{
+        color-scheme: light;
+        --bg-0: #f3efe5;
+        --bg-1: #dbe7ff;
+        --bg-2: #f8c98b;
+        --panel: rgba(255, 252, 246, 0.88);
+        --panel-border: rgba(53, 66, 97, 0.14);
+        --text-strong: #172033;
+        --text-muted: #5c6474;
+        --shadow: 0 24px 80px rgba(23, 32, 51, 0.16);
+        --success: #176b52;
+        --success-soft: rgba(23, 107, 82, 0.12);
+        --warning: #9a5a00;
+        --warning-soft: rgba(154, 90, 0, 0.14);
+        --error: #a63232;
+        --error-soft: rgba(166, 50, 50, 0.12);
+      }}
+
+      * {{
+        box-sizing: border-box;
+      }}
+
+      body {{
+        margin: 0;
+        min-height: 100vh;
+        font-family: "Segoe UI Variable Display", "Aptos", "Trebuchet MS", sans-serif;
+        color: var(--text-strong);
+        background:
+          radial-gradient(circle at top left, rgba(255, 255, 255, 0.72), transparent 34%),
+          radial-gradient(circle at bottom right, rgba(255, 230, 202, 0.9), transparent 30%),
+          linear-gradient(135deg, var(--bg-0) 0%, var(--bg-1) 52%, var(--bg-2) 100%);
+        overflow: hidden;
+      }}
+
+      .orb {{
+        position: fixed;
+        border-radius: 999px;
+        filter: blur(12px);
+        opacity: 0.56;
+        pointer-events: none;
+      }}
+
+      .orb-a {{
+        width: 320px;
+        height: 320px;
+        top: -96px;
+        right: -48px;
+        background: rgba(126, 159, 255, 0.34);
+      }}
+
+      .orb-b {{
+        width: 260px;
+        height: 260px;
+        bottom: -84px;
+        left: -40px;
+        background: rgba(255, 193, 118, 0.38);
+      }}
+
+      .shell {{
+        position: relative;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        padding: 28px;
+      }}
+
+      .panel {{
+        width: min(100%, 720px);
+        padding: 32px;
+        border: 1px solid var(--panel-border);
+        border-radius: 28px;
+        background: var(--panel);
+        backdrop-filter: blur(18px);
+        box-shadow: var(--shadow);
+      }}
+
+      .brand {{
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        margin-bottom: 24px;
+      }}
+
+      .brand-mark {{
+        width: 52px;
+        height: 52px;
+        border-radius: 16px;
+        display: grid;
+        place-items: center;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        color: #fffaf0;
+        background: linear-gradient(135deg, #172033 0%, #335c95 100%);
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16);
+      }}
+
+      .eyebrow {{
+        display: block;
+        margin-bottom: 4px;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        color: var(--text-muted);
+      }}
+
+      h1 {{
+        margin: 0;
+        font-size: clamp(28px, 5vw, 44px);
+        line-height: 1.04;
+        letter-spacing: -0.04em;
+      }}
+
+      .badge {{
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 14px;
+        border-radius: 999px;
+        font-size: 13px;
+        font-weight: 700;
+      }}
+
+      .badge.is-success {{
+        color: var(--success);
+        background: var(--success-soft);
+      }}
+
+      .badge.is-warning {{
+        color: var(--warning);
+        background: var(--warning-soft);
+      }}
+
+      .badge.is-error {{
+        color: var(--error);
+        background: var(--error-soft);
+      }}
+
+      .content {{
+        display: grid;
+        gap: 20px;
+      }}
+
+      .lead {{
+        margin: 0;
+        max-width: 58ch;
+        font-size: 17px;
+        line-height: 1.7;
+        color: var(--text-muted);
+      }}
+
+      .status-card {{
+        display: grid;
+        grid-template-columns: auto 1fr;
+        gap: 18px;
+        padding: 20px;
+        border-radius: 22px;
+        background: rgba(255, 255, 255, 0.58);
+        border: 1px solid rgba(53, 66, 97, 0.08);
+      }}
+
+      .status-icon {{
+        width: 52px;
+        height: 52px;
+        border-radius: 18px;
+        display: grid;
+        place-items: center;
+        font-weight: 800;
+        font-size: 16px;
+        color: var(--text-strong);
+        background: linear-gradient(135deg, rgba(255, 255, 255, 0.94), rgba(227, 235, 255, 0.92));
+        border: 1px solid rgba(53, 66, 97, 0.08);
+      }}
+
+      .status-title {{
+        margin: 0 0 8px;
+        font-size: 15px;
+        font-weight: 700;
+        letter-spacing: 0.01em;
+      }}
+
+      .status-body {{
+        margin: 0;
+        font-family: "Cascadia Code", "Consolas", monospace;
+        font-size: 13px;
+        line-height: 1.7;
+        color: var(--text-muted);
+        word-break: break-word;
+      }}
+
+      .actions {{
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin-top: 4px;
+      }}
+
+      button {{
+        appearance: none;
+        border: 0;
+        border-radius: 999px;
+        padding: 12px 18px;
+        font: inherit;
+        font-weight: 700;
+        cursor: pointer;
+        transition: transform 140ms ease, opacity 140ms ease, background 140ms ease;
+      }}
+
+      button:hover {{
+        transform: translateY(-1px);
+      }}
+
+      .primary {{
+        color: #fffaf0;
+        background: linear-gradient(135deg, #172033 0%, #335c95 100%);
+      }}
+
+      .secondary {{
+        color: var(--text-strong);
+        background: rgba(23, 32, 51, 0.08);
+      }}
+
+      .footnote {{
+        margin: 2px 0 0;
+        font-size: 13px;
+        line-height: 1.7;
+        color: var(--text-muted);
+      }}
+
+      @media (max-width: 640px) {{
+        .panel {{
+          padding: 24px;
+          border-radius: 24px;
+        }}
+
+        .brand,
+        .status-card {{
+          grid-template-columns: 1fr;
+        }}
+
+        .status-card {{
+          gap: 14px;
+        }}
+      }}
+    </style>
+  </head>
+  <body>
+    <div class="orb orb-a"></div>
+    <div class="orb orb-b"></div>
+    <main class="shell">
+      <section class="panel">
+        <div class="brand">
+          <div class="brand-mark">BF</div>
+          <div>
+            <span class="eyebrow">BitFun Desktop</span>
+            <h1>{title}</h1>
+          </div>
+        </div>
+        <div class="content">
+          <div class="badge {badge_class}">{badge}</div>
+          <p class="lead">{message}</p>
+          <div class="status-card">
+            <div class="status-icon">{icon_label}</div>
+            <div>
+              <p class="status-title">{detail_title}</p>
+              <p class="status-body">{detail_body}</p>
+            </div>
+          </div>
+          <div class="actions">
+            <button class="primary" type="button" onclick="window.close()">Close this tab</button>
+            <button class="secondary" type="button" onclick="location.reload()">Refresh page</button>
+          </div>
+          <p class="footnote">
+            This page will try to close automatically in <span id="countdown">4</span>s. If your browser blocks that action, you can close it manually and return to BitFun.
+          </p>
+        </div>
+      </section>
+    </main>
+    <script>
+      let secondsRemaining = 4;
+      const countdown = document.getElementById('countdown');
+      const intervalId = window.setInterval(() => {{
+        secondsRemaining -= 1;
+        if (countdown && secondsRemaining >= 0) {{
+          countdown.textContent = String(secondsRemaining);
+        }}
+        if (secondsRemaining <= 0) {{
+          window.clearInterval(intervalId);
+        }}
+      }}, 1000);
+      window.setTimeout(() => window.close(), 4000);
+    </script>
+  </body>
+</html>"#,
+        title = title,
+        badge = badge,
+        badge_class = badge_class,
+        message = message,
+        detail_title = detail_title,
+        detail_body = detail_body,
+        icon_label = icon_label,
+    )
 }
 
 #[derive(Clone)]
@@ -93,7 +459,9 @@ impl MCPServerManager {
             .config_service
             .get_server_config(server_id)
             .await?
-            .ok_or_else(|| BitFunError::NotFound(format!("MCP server config not found: {}", server_id)))?;
+            .ok_or_else(|| {
+                BitFunError::NotFound(format!("MCP server config not found: {}", server_id))
+            })?;
 
         if config.server_type != MCPServerType::Remote {
             return Err(BitFunError::Validation(format!(
@@ -145,25 +513,27 @@ impl MCPServerManager {
         let callback_server_session = session.clone();
         let callback_server_id = server_id.to_string();
         tokio::spawn(async move {
-            let server = axum::serve(prepared.listener, router).with_graceful_shutdown(async move {
-                let _ = shutdown_rx.await;
-            });
+            let server =
+                axum::serve(prepared.listener, router).with_graceful_shutdown(async move {
+                    let _ = shutdown_rx.await;
+                });
 
             if let Err(error) = server.await {
-                let _ = MCPServerManager::update_oauth_snapshot(&callback_server_session, |snapshot| {
-                    if matches!(
-                        snapshot.status,
-                        MCPRemoteOAuthStatus::Authorized | MCPRemoteOAuthStatus::Cancelled
-                    ) {
-                        return;
-                    }
-                    snapshot.status = MCPRemoteOAuthStatus::Failed;
-                    snapshot.message = Some(format!(
-                        "OAuth callback listener failed for server '{}': {}",
-                        callback_server_id, error
-                    ));
-                })
-                .await;
+                let _ =
+                    MCPServerManager::update_oauth_snapshot(&callback_server_session, |snapshot| {
+                        if matches!(
+                            snapshot.status,
+                            MCPRemoteOAuthStatus::Authorized | MCPRemoteOAuthStatus::Cancelled
+                        ) {
+                            return;
+                        }
+                        snapshot.status = MCPRemoteOAuthStatus::Failed;
+                        snapshot.message = Some(format!(
+                            "OAuth callback listener failed for server '{}': {}",
+                            callback_server_id, error
+                        ));
+                    })
+                    .await;
             }
         });
 
@@ -184,11 +554,13 @@ impl MCPServerManager {
             let callback = match timeout(OAUTH_CALLBACK_TIMEOUT, callback_rx).await {
                 Ok(Ok(callback)) => callback,
                 Ok(Err(_)) => {
-                    let _ = MCPServerManager::update_oauth_snapshot(&callback_session, |snapshot| {
-                        snapshot.status = MCPRemoteOAuthStatus::Cancelled;
-                        snapshot.message = Some("OAuth authorization was cancelled.".to_string());
-                    })
-                    .await;
+                    let _ =
+                        MCPServerManager::update_oauth_snapshot(&callback_session, |snapshot| {
+                            snapshot.status = MCPRemoteOAuthStatus::Cancelled;
+                            snapshot.message =
+                                Some("OAuth authorization was cancelled.".to_string());
+                        })
+                        .await;
                     Self::shutdown_oauth_session(&callback_session).await;
                     return;
                 }
@@ -242,7 +614,8 @@ impl MCPServerManager {
 
             let _ = MCPServerManager::update_oauth_snapshot(&callback_session, |snapshot| {
                 snapshot.status = MCPRemoteOAuthStatus::ExchangingToken;
-                snapshot.message = Some("Exchanging the authorization code for an access token.".to_string());
+                snapshot.message =
+                    Some("Exchanging the authorization code for an access token.".to_string());
             })
             .await;
 
@@ -255,7 +628,10 @@ impl MCPServerManager {
                             MCPRemoteOAuthStatus::Authorized,
                             Some(authorization_url.clone()),
                             Some(redirect_uri.clone()),
-                            Some("OAuth authorization completed. Reconnecting MCP server.".to_string()),
+                            Some(
+                                "OAuth authorization completed. Reconnecting MCP server."
+                                    .to_string(),
+                            ),
                         ),
                     )
                     .await;
@@ -267,12 +643,15 @@ impl MCPServerManager {
                     manager.clear_reconnect_state(&callback_server_id).await;
                     let _ = manager.stop_server(&callback_server_id).await;
                     if let Err(error) = manager.start_server(&callback_server_id).await {
-                        let _ = MCPServerManager::update_oauth_snapshot(&callback_session, |snapshot| {
-                            snapshot.message = Some(format!(
-                                "OAuth token saved, but reconnect failed: {}",
-                                error
-                            ));
-                        })
+                        let _ = MCPServerManager::update_oauth_snapshot(
+                            &callback_session,
+                            |snapshot| {
+                                snapshot.message = Some(format!(
+                                    "OAuth token saved, but reconnect failed: {}",
+                                    error
+                                ));
+                            },
+                        )
                         .await;
                     }
                 }
@@ -327,12 +706,11 @@ async fn handle_oauth_callback(
         error: params.get("error").cloned(),
         error_description: params.get("error_description").cloned(),
     };
+    let page = render_oauth_callback_page(&payload);
 
     if let Some(callback_tx) = state.callback_tx.lock().await.take() {
         let _ = callback_tx.send(payload);
     }
 
-    Html(
-        "<html><body><h3>BitFun OAuth complete</h3><p>You can return to the app.</p></body></html>",
-    )
+    Html(page)
 }

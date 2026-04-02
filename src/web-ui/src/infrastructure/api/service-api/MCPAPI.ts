@@ -23,6 +23,7 @@ export interface MCPServerInfo {
   status: string;
   statusMessage?: string;
   serverType: string;
+  transport: string;
   enabled: boolean;
   autoStart: boolean;
   url?: string;
@@ -34,6 +35,8 @@ export interface MCPServerInfo {
   commandAvailable?: boolean;
   commandSource?: 'system' | 'managed';
   commandResolvedPath?: string;
+  startSupported: boolean;
+  startDisabledReason?: string;
 }
 
 export interface RuntimeCommandCapability {

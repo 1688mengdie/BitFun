@@ -1,7 +1,9 @@
 //! MCP API
 
 use crate::api::app_state::AppState;
-use bitfun_core::service::mcp::auth::{MCPRemoteOAuthSessionSnapshot, has_stored_oauth_credentials};
+use bitfun_core::service::mcp::auth::{
+    has_stored_oauth_credentials, MCPRemoteOAuthSessionSnapshot,
+};
 use bitfun_core::service::mcp::config::MCPConfigService;
 use bitfun_core::service::mcp::MCPServerType;
 use bitfun_core::service::runtime::{RuntimeManager, RuntimeSource};
@@ -17,6 +19,7 @@ pub struct MCPServerInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status_message: Option<String>,
     pub server_type: String,
+    pub transport: String,
     pub enabled: bool,
     pub auto_start: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -37,6 +40,9 @@ pub struct MCPServerInfo {
     pub command_source: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub command_resolved_path: Option<String>,
+    pub start_supported: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_disabled_reason: Option<String>,
 }
 
 #[tauri::command]
@@ -90,6 +96,7 @@ pub async fn get_mcp_servers(state: State<'_, AppState>) -> Result<Vec<MCPServer
     let runtime_manager = RuntimeManager::new().ok();
 
     for config in configs {
+        let transport = config.resolved_transport();
         let static_auth_configured = if matches!(config.server_type, MCPServerType::Remote) {
             MCPConfigService::has_remote_authorization(&config)
         } else {
@@ -101,15 +108,15 @@ pub async fn get_mcp_servers(state: State<'_, AppState>) -> Result<Vec<MCPServer
             false
         };
         let oauth_auth_configured = if oauth_enabled {
-            has_stored_oauth_credentials(&config.id).await.unwrap_or(false)
+            has_stored_oauth_credentials(&config.id)
+                .await
+                .unwrap_or(false)
         } else {
             false
         };
 
-        let (command, command_available, command_source, command_resolved_path) = if matches!(
-            config.server_type,
-            MCPServerType::Local | MCPServerType::Container
-        ) {
+        let (command, command_available, command_source, command_resolved_path) =
+            if transport == bitfun_core::service::mcp::MCPServerTransport::Stdio {
             if let Some(command) = config.command.clone() {
                 let capability = runtime_manager
                     .as_ref()
@@ -131,6 +138,14 @@ pub async fn get_mcp_servers(state: State<'_, AppState>) -> Result<Vec<MCPServer
             }
         } else {
             (None, None, None, None)
+        };
+
+        let (start_supported, start_disabled_reason) = match config.server_type {
+            MCPServerType::Remote if transport.as_str() == "sse" => (
+                false,
+                Some("Remote MCP SSE transport is not yet supported".to_string()),
+            ),
+            _ => (true, None),
         };
 
         let (status, status_message) = match mcp_service
@@ -164,6 +179,7 @@ pub async fn get_mcp_servers(state: State<'_, AppState>) -> Result<Vec<MCPServer
             status,
             status_message,
             server_type: format!("{:?}", config.server_type),
+            transport: transport.as_str().to_string(),
             enabled: config.enabled,
             auto_start: config.auto_start,
             url: config.url.clone(),
@@ -198,6 +214,8 @@ pub async fn get_mcp_servers(state: State<'_, AppState>) -> Result<Vec<MCPServer
             command_available,
             command_source,
             command_resolved_path,
+            start_supported,
+            start_disabled_reason,
         });
     }
 

@@ -43,6 +43,13 @@
   gap: $size-gap-2;
   flex-wrap: nowrap;
   min-width: 0;
+  margin: 0;
+}
+
+.bitfun-collection-item__label--stacked {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: $size-gap-1;
 }
 
 .bitfun-collection-item__name {
@@ -51,6 +58,24 @@
   text-overflow: ellipsis;
   flex-shrink: 1;
   min-width: 0;
+  max-width: 100%;
+}
+
+.bitfun-collection-item__badges {
+  display: flex;
+  gap: $size-gap-2;
+  min-width: 0;
+}
+
+.bitfun-collection-item__badges--inline {
+  align-items: center;
+  flex-wrap: nowrap;
+  overflow: hidden;
+}
+
+.bitfun-collection-item__badges--stacked {
+  align-items: flex-start;
+  flex-wrap: wrap;
 }
 
 .bitfun-collection-item__badge {
@@ -240,6 +265,14 @@
   .bitfun-collection-item__details {
     padding: $size-gap-3;
     gap: $size-gap-2;
+  }
+
+  .bitfun-collection-item__label {
+    align-items: flex-start;
+  }
+
+  .bitfun-collection-item__badges--inline {
+    flex-wrap: wrap;
   }
 
   .bitfun-collection-form {

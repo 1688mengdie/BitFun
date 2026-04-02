@@ -500,8 +500,7 @@ const McpToolsConfig: React.FC = () => {
   };
 
   const isCommandDrivenServer = (server: MCPServerInfo) => {
-    const normalizedType = server.serverType.toLowerCase();
-    return normalizedType.includes('local') || normalizedType.includes('container');
+    return server.transport.toLowerCase() === 'stdio';
   };
 
   const isRemoteServer = (server: MCPServerInfo) => {
@@ -509,6 +508,7 @@ const McpToolsConfig: React.FC = () => {
   };
 
   const canStartServer = (server: MCPServerInfo) => {
+    if (server.startSupported === false) return false;
     if (!isCommandDrivenServer(server)) return true;
     return server.commandAvailable !== false;
   };
@@ -530,11 +530,14 @@ const McpToolsConfig: React.FC = () => {
     ].some((pattern) => message.includes(pattern));
   };
 
-  const notifyCommandUnavailable = (server: MCPServerInfo) => {
+  const notifyServerStartUnavailable = (server: MCPServerInfo) => {
+    const defaultMessage = server.startDisabledReason
+      ? server.startDisabledReason
+      : `Server "${server.id}" command is unavailable. Check runtime installation or command configuration.`;
     notification.warning(
       tMcp('messages.commandUnavailable', {
         serverId: server.id,
-        defaultValue: `Server "${server.id}" command is unavailable. Check runtime installation or command configuration.`,
+        defaultValue: defaultMessage,
       }),
       {
         title: tMcp('notifications.startFailed'),
@@ -545,7 +548,7 @@ const McpToolsConfig: React.FC = () => {
 
   const handleStartServer = async (server: MCPServerInfo) => {
     if (!canStartServer(server)) {
-      notifyCommandUnavailable(server);
+      notifyServerStartUnavailable(server);
       return;
     }
 
@@ -593,7 +596,7 @@ const McpToolsConfig: React.FC = () => {
 
   const handleRestartServer = async (server: MCPServerInfo) => {
     if (!canStartServer(server)) {
-      notifyCommandUnavailable(server);
+      notifyServerStartUnavailable(server);
       return;
     }
 
@@ -881,33 +884,10 @@ const McpToolsConfig: React.FC = () => {
   );
 
   const renderServerBadge = (server: MCPServerInfo) => (
-    <>
-      <span className={`bitfun-mcp-tools__status-badge ${getStatusClass(server.status)}`}>
-        {getStatusIcon(server.status)}
-        {server.status}
-      </span>
-      <span className="bitfun-collection-item__badge">{server.serverType}</span>
-      {server.oauthEnabled && (
-        <span className="bitfun-collection-item__badge">
-          {server.authSource === 'oauth' && server.authConfigured
-            ? tMcp('server.remoteOAuthConnected', { defaultValue: 'oauth connected' })
-            : tMcp('server.remoteOAuthEnabled', { defaultValue: 'oauth ready' })}
-        </span>
-      )}
-      {isCommandDrivenServer(server) && (
-        <span
-          className={`bitfun-collection-item__badge ${
-            server.commandAvailable === false
-              ? 'bitfun-mcp-tools__runtime-badge bitfun-mcp-tools__runtime-badge--error'
-              : 'bitfun-mcp-tools__runtime-badge bitfun-mcp-tools__runtime-badge--ok'
-          }`}
-        >
-          {server.commandAvailable === false
-            ? tMcp('server.runtime.unavailable', { defaultValue: 'command unavailable' })
-            : tMcp('server.runtime.available', { defaultValue: 'command available' })}
-        </span>
-      )}
-    </>
+    <span className={`bitfun-mcp-tools__status-badge ${getStatusClass(server.status)}`}>
+      {getStatusIcon(server.status)}
+      {server.status}
+    </span>
   );
 
   const renderServerControl = (server: MCPServerInfo) => (
@@ -981,6 +961,12 @@ const McpToolsConfig: React.FC = () => {
 
     return (
       <div className="bitfun-mcp-tools__server-details">
+        <div className="bitfun-mcp-tools__server-detail-item">
+          <span className="bitfun-mcp-tools__server-detail-label">
+            {tMcp('server.transport', { defaultValue: 'Transport' })}:
+          </span>
+          <code className="bitfun-mcp-tools__server-detail-value">{server.transport}</code>
+        </div>
         {server.statusMessage && (
           <div className="bitfun-mcp-tools__server-detail-item">
             <span className="bitfun-mcp-tools__server-detail-label">
@@ -988,6 +974,16 @@ const McpToolsConfig: React.FC = () => {
             </span>
             <span className="bitfun-mcp-tools__server-detail-value">
               {server.statusMessage}
+            </span>
+          </div>
+        )}
+        {server.startDisabledReason && (
+          <div className="bitfun-mcp-tools__server-detail-item">
+            <span className="bitfun-mcp-tools__server-detail-label">
+              {tMcp('server.runtime.unsupportedReason', { defaultValue: 'Unavailable Reason' })}:
+            </span>
+            <span className="bitfun-mcp-tools__server-detail-value">
+              {server.startDisabledReason}
             </span>
           </div>
         )}

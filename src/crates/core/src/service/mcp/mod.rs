@@ -25,7 +25,7 @@ pub use protocol::{
 
 pub use server::{
     MCPConnection, MCPConnectionPool, MCPServerConfig, MCPServerManager, MCPServerStatus,
-    MCPServerType,
+    MCPServerTransport, MCPServerType,
 };
 
 pub use adapter::{
