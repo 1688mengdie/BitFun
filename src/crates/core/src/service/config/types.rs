@@ -104,6 +104,8 @@ pub struct AIExperienceConfig {
     pub enable_welcome_panel_ai_analysis: bool,
     /// Whether to enable visual mode.
     pub enable_visual_mode: bool,
+    /// Whether to show the pixel Agent companion in the collapsed chat input.
+    pub enable_agent_companion: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -440,12 +442,7 @@ pub struct AIConfig {
     #[serde(default)]
     pub debug_mode_config: DebugModeConfig,
 
-    /// Known tools (all non-MCP tools from the registry at last startup).
-    /// Used to detect added and removed tools.
-    #[serde(default)]
-    pub known_tools: Vec<String>,
-
-    /// Allow Claw Computer use (desktop automation) when the desktop host is available.
+    /// Allow Computer use (desktop automation) when the desktop host is available (all session modes).
     #[serde(default)]
     pub computer_use_enabled: bool,
 }
@@ -498,17 +495,33 @@ pub struct ModeConfig {
     /// Mode ID (e.g. agentic, debug, requirement, ui-design).
     pub mode_id: String,
 
-    /// Available tools.
-    pub available_tools: Vec<String>,
+    /// Tools explicitly enabled by the user that are not part of the mode defaults.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub added_tools: Vec<String>,
+
+    /// Default tools explicitly disabled by the user.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub removed_tools: Vec<String>,
 
     /// Whether this mode is enabled.
     #[serde(default = "default_true")]
     pub enabled: bool,
 
-    /// Default tools for this mode (from the mode registry; not read from config).
-    /// Used only for frontend display and reset; persisted but overwritten on load.
-    #[serde(skip_deserializing)]
+    /// User-level skills disabled for this mode.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub disabled_user_skills: Vec<String>,
+}
+
+/// API view of a mode configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ModeConfigView {
+    pub mode_id: String,
+    pub enabled_tools: Vec<String>,
     pub default_tools: Vec<String>,
+    pub enabled: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub disabled_user_skills: Vec<String>,
 }
 
 fn default_true() -> bool {
@@ -533,9 +546,22 @@ impl Default for ModeConfig {
     fn default() -> Self {
         Self {
             mode_id: String::new(),
-            available_tools: Vec::new(),
+            added_tools: Vec::new(),
+            removed_tools: Vec::new(),
             enabled: true,
+            disabled_user_skills: Vec::new(),
+        }
+    }
+}
+
+impl Default for ModeConfigView {
+    fn default() -> Self {
+        Self {
+            mode_id: String::new(),
+            enabled_tools: Vec::new(),
             default_tools: Vec::new(),
+            enabled: true,
+            disabled_user_skills: Vec::new(),
         }
     }
 }
@@ -998,6 +1024,7 @@ impl Default for AIExperienceConfig {
             enable_session_title_generation: true,
             enable_welcome_panel_ai_analysis: false,
             enable_visual_mode: false,
+            enable_agent_companion: false,
         }
     }
 }
@@ -1198,7 +1225,6 @@ impl Default for AIConfig {
             tool_confirmation_timeout_secs: default_tool_confirmation_timeout(),
             skip_tool_confirmation: true,
             debug_mode_config: DebugModeConfig::default(),
-            known_tools: Vec::new(),
             computer_use_enabled: false,
         }
     }

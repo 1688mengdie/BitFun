@@ -3,7 +3,7 @@ import type { TFunction } from 'i18next';
 import { agentAPI } from '@/infrastructure/api/service-api/AgentAPI';
 import { SubagentAPI } from '@/infrastructure/api/service-api/SubagentAPI';
 import { configAPI } from '@/infrastructure/api/service-api/ConfigAPI';
-import type { ModeConfigItem, SkillInfo } from '@/infrastructure/config/types';
+import type { ModeConfigItem, ModeSkillInfo } from '@/infrastructure/config/types';
 import { useNotification } from '@/shared/notification-system';
 import type { AgentWithCapabilities } from '../agentsStore';
 import { enrichCapabilities } from '../utils';
@@ -37,7 +37,7 @@ export function useAgentsList({
   const [allAgents, setAllAgents] = useState<AgentWithCapabilities[]>([]);
   const [loading, setLoading] = useState(true);
   const [availableTools, setAvailableTools] = useState<ToolInfo[]>([]);
-  const [availableSkills, setAvailableSkills] = useState<SkillInfo[]>([]);
+  const [modeSkills, setModeSkills] = useState<Record<string, ModeSkillInfo[]>>({});
   const [modeConfigs, setModeConfigs] = useState<Record<string, ModeConfigItem>>({});
   const loadRequestIdRef = useRef(0);
 
@@ -55,13 +55,21 @@ export function useAgentsList({
     };
 
     try {
-      const [modes, subagents, tools, configs, skills] = await Promise.all([
+      const [modes, subagents, tools, configs] = await Promise.all([
         agentAPI.getAvailableModes().catch(() => []),
         SubagentAPI.listSubagents({ workspacePath: workspacePath || undefined }).catch(() => []),
         fetchTools(),
         configAPI.getModeConfigs().catch(() => ({})),
-        configAPI.getSkillConfigs({ workspacePath: workspacePath || undefined }).catch(() => []),
       ]);
+      const skillEntries = await Promise.all(
+        modes.map(async (mode) => [
+          mode.id,
+          await configAPI.getModeSkillConfigs({
+            modeId: mode.id,
+            workspacePath: workspacePath || undefined,
+          }).catch(() => []),
+        ] as const),
+      );
       if (requestId !== loadRequestIdRef.current) {
         return;
       }
@@ -90,7 +98,7 @@ export function useAgentsList({
 
       setAllAgents([...modeAgents, ...subAgents]);
       setAvailableTools(tools);
-      setAvailableSkills(skills.filter((skill: SkillInfo) => skill.enabled));
+      setModeSkills(Object.fromEntries(skillEntries));
       setModeConfigs(configs as Record<string, ModeConfigItem>);
     } finally {
       if (requestId === loadRequestIdRef.current) {
@@ -113,16 +121,8 @@ export function useAgentsList({
     if (!userConfig) {
       return {
         mode_id: agentId,
-        available_tools: defaultTools,
+        enabled_tools: defaultTools,
         enabled: true,
-        default_tools: defaultTools,
-      };
-    }
-
-    if (!userConfig.available_tools || userConfig.available_tools.length === 0) {
-      return {
-        ...userConfig,
-        available_tools: defaultTools,
         default_tools: defaultTools,
       };
     }
@@ -132,6 +132,10 @@ export function useAgentsList({
       default_tools: userConfig.default_tools ?? defaultTools,
     };
   }, [allAgents, modeConfigs]);
+
+  const getModeSkills = useCallback((agentId: string): ModeSkillInfo[] => {
+    return modeSkills[agentId] ?? [];
+  }, [modeSkills]);
 
   const saveModeConfig = useCallback(async (agentId: string, updates: Partial<ModeConfigItem>) => {
     const config = getModeConfig(agentId);
@@ -149,26 +153,25 @@ export function useAgentsList({
     }
   }, [getModeConfig]);
 
-  const handleToggleTool = useCallback(async (agentId: string, toolName: string) => {
-    const config = getModeConfig(agentId);
-    if (!config) return;
-
-    const tools = config.available_tools ?? [];
-    const isEnabling = !tools.includes(toolName);
-    const newTools = isEnabling ? [...tools, toolName] : tools.filter((tool) => tool !== toolName);
-
+  const handleSetTools = useCallback(async (agentId: string, toolNames: string[]) => {
     try {
-      await saveModeConfig(agentId, { available_tools: newTools });
+      const nextTools = Array.from(new Set(toolNames));
+      await saveModeConfig(agentId, { enabled_tools: nextTools });
     } catch {
       notification.error(t('agentsOverview.toolToggleFailed', '工具切换失败'));
     }
-  }, [getModeConfig, notification, saveModeConfig, t]);
+  }, [notification, saveModeConfig, t]);
 
   const handleResetTools = useCallback(async (agentId: string) => {
     try {
       await configAPI.resetModeConfig(agentId);
       const updated = await configAPI.getModeConfigs();
+      const updatedSkills = await configAPI.getModeSkillConfigs({
+        modeId: agentId,
+        workspacePath: workspacePath || undefined,
+      });
       setModeConfigs(updated as Record<string, ModeConfigItem>);
+      setModeSkills((prev) => ({ ...prev, [agentId]: updatedSkills }));
       notification.success(t('agentsOverview.toolsResetSuccess', '已重置为默认工具'));
 
       try {
@@ -180,22 +183,44 @@ export function useAgentsList({
     } catch {
       notification.error(t('agentsOverview.toolToggleFailed', '重置失败'));
     }
-  }, [notification, t]);
+  }, [notification, t, workspacePath]);
 
-  const handleToggleSkill = useCallback(async (agentId: string, skillName: string) => {
-    const config = getModeConfig(agentId);
-    if (!config) return;
-
-    const skills = config.available_skills ?? [];
-    const isEnabling = !skills.includes(skillName);
-    const newSkills = isEnabling ? [...skills, skillName] : skills.filter((skill) => skill !== skillName);
-
+  const handleSetSkills = useCallback(async (agentId: string, enabledSkillKeys: string[]) => {
     try {
-      await saveModeConfig(agentId, { available_skills: newSkills });
+      const currentSkills = getModeSkills(agentId);
+      const nextEnabled = new Set(enabledSkillKeys);
+
+      for (const skill of currentSkills) {
+        const shouldBeEnabled = nextEnabled.has(skill.key);
+        const isEnabled = !skill.disabledByMode;
+        if (shouldBeEnabled === isEnabled) {
+          continue;
+        }
+
+        await configAPI.setModeSkillDisabled({
+          modeId: agentId,
+          skillKey: skill.key,
+          disabled: !shouldBeEnabled,
+          workspacePath: workspacePath || undefined,
+        });
+      }
+
+      const updatedSkills = await configAPI.getModeSkillConfigs({
+        modeId: agentId,
+        workspacePath: workspacePath || undefined,
+      });
+      setModeSkills((prev) => ({ ...prev, [agentId]: updatedSkills }));
+
+      try {
+        const { globalEventBus } = await import('@/infrastructure/event-bus');
+        globalEventBus.emit('mode:config:updated');
+      } catch {
+        // ignore
+      }
     } catch {
       notification.error(t('agentsOverview.skillToggleFailed', 'Skill 切换失败'));
     }
-  }, [getModeConfig, notification, saveModeConfig, t]);
+  }, [getModeSkills, notification, t, workspacePath]);
 
   const filteredAgents = useMemo(() => allAgents.filter((agent) => {
     if (searchQuery) {
@@ -237,13 +262,13 @@ export function useAgentsList({
     filteredAgents,
     loading,
     availableTools,
-    availableSkills,
+    getModeSkills,
     counts,
     loadAgents,
     getModeConfig,
-    handleToggleTool,
+    handleSetTools,
     handleResetTools,
-    handleToggleSkill,
+    handleSetSkills,
   };
 }
 

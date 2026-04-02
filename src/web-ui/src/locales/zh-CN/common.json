@@ -100,13 +100,14 @@
       "assistantSessions": "助理会话"
     },
     "search": {
-      "triggerPlaceholder": "搜索工作区、助理、会话...",
+      "triggerPlaceholder": "搜索",
       "triggerTooltip": "搜索 (Ctrl+K)",
       "inputPlaceholder": "搜索工作区、助理、会话...",
       "groupWorkspaces": "已打开工作区",
       "groupAssistants": "助理",
       "groupSessions": "所有会话",
       "empty": "未找到相关结果",
+      "sessionSearchHintDefault": "输入关键词，搜索已打开工作区内的会话",
       "sessionWorkspaceHint": "位于 {{workspace}}"
     },
     "displayModes": {
@@ -938,7 +939,6 @@
       "authMethod": "认证方式",
       "password": "密码",
       "privateKey": "私钥",
-      "sshAgent": "SSH Agent",
       "privateKeyPath": "私钥路径",
       "browsePrivateKey": "选择私钥文件",
       "pickPrivateKeyDialogTitle": "选择 SSH 私钥",
@@ -963,7 +963,6 @@
       "enterKeyPath": "请输入私钥路径",
       "keyPathDescription": "输入私钥文件路径",
       "authPromptTitle": "SSH 认证",
-      "authPromptAgentHint": "将使用本机 SSH Agent 中已加载的密钥进行认证。",
       "disconnectConfirm": "确定要断开连接吗？",
       "disconnectWorkspaceConfirm": "确定要关闭远程工作区吗？这将断开与远程服务器的连接。",
       "newFile": "新建文件",

@@ -15,7 +15,7 @@ import '@/app/components/GalleryLayout/GalleryLayout.scss';
 import { Select, Switch, type SelectOption } from '@/component-library';
 import { configAPI } from '@/infrastructure/api/service-api/ConfigAPI';
 import { configManager } from '@/infrastructure/config/services/ConfigManager';
-import type { AIModelConfig, ModeConfigItem, SkillInfo } from '@/infrastructure/config/types';
+import type { AIModelConfig, ModeConfigItem, ModeSkillInfo } from '@/infrastructure/config/types';
 import { MCPAPI, type MCPServerInfo } from '@/infrastructure/api/service-api/MCPAPI';
 import { notificationService } from '@/shared/notification-system';
 import { createLogger } from '@/shared/utils/logger';
@@ -30,7 +30,7 @@ interface ToolInfo { name: string; description: string; is_readonly: boolean; }
 type TemplateDetail =
   | { type: 'tool'; tool: ToolInfo; isMcp: boolean }
   | { type: 'mcpServer'; serverId: string }
-  | { type: 'skill'; skill: SkillInfo };
+  | { type: 'skill'; skill: ModeSkillInfo };
 
 type ModelSlot = 'primary' | 'fast';
 
@@ -85,6 +85,29 @@ interface MockBreakdown {
   total: number;
 }
 
+function buildDuplicateSkillNameSet(skills: ModeSkillInfo[]): Set<string> {
+  const counts = new Map<string, number>();
+  for (const skill of skills) {
+    counts.set(skill.name, (counts.get(skill.name) ?? 0) + 1);
+  }
+  return new Set(
+    [...counts.entries()]
+      .filter(([, count]) => count > 1)
+      .map(([name]) => name),
+  );
+}
+
+function formatSkillOrigin(skill: ModeSkillInfo): string {
+  return `${skill.level}/${skill.sourceSlot}`;
+}
+
+function formatSkillDisplayName(skill: ModeSkillInfo, duplicateNames: Set<string>): string {
+  if (!duplicateNames.has(skill.name)) {
+    return skill.name;
+  }
+  return `${skill.name} [${formatSkillOrigin(skill)}]`;
+}
+
 function buildMockBreakdown(
   toolCount: number,
   rulesCount: number,
@@ -106,7 +129,7 @@ const TemplateConfigPage: React.FC = () => {
   const [agenticConfig, setAgenticConfig] = useState<ModeConfigItem | null>(null);
   const [availableTools, setAvailableTools] = useState<ToolInfo[]>([]);
   const [mcpServers, setMcpServers] = useState<MCPServerInfo[]>([]);
-  const [skills, setSkills] = useState<SkillInfo[]>([]);
+  const [modeSkills, setModeSkills] = useState<ModeSkillInfo[]>([]);
   const [toolsLoading, setToolsLoading] = useState<Record<string, boolean>>({});
   const [skillsLoading, setSkillsLoading] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(true);
@@ -114,31 +137,22 @@ const TemplateConfigPage: React.FC = () => {
   const [detail, setDetail] = useState<TemplateDetail | null>(null);
 
   const enabledToolCount = useMemo(
-    () => agenticConfig?.available_tools?.length ?? 0,
+    () => agenticConfig?.enabled_tools?.length ?? 0,
     [agenticConfig],
   );
 
-  // Whether a skill is enabled in this template:
-  // - If available_skills is undefined, fall back to the skill's global enabled state
-  // - Otherwise check if the skill name appears in the list
-  const isSkillEnabled = useCallback(
-    (skillName: string): boolean => {
-      if (agenticConfig?.available_skills == null) {
-        return skills.find((s) => s.name === skillName)?.enabled ?? true;
-      }
-      return agenticConfig.available_skills.includes(skillName);
-    },
-    [agenticConfig, skills],
-  );
-
   const skillsEnabled = useMemo(
-    () => skills.filter((s) => isSkillEnabled(s.name)),
-    [skills, isSkillEnabled],
+    () => modeSkills.filter((skill) => !skill.disabledByMode),
+    [modeSkills],
   );
 
   const skillsDisabled = useMemo(
-    () => skills.filter((s) => !isSkillEnabled(s.name)),
-    [skills, isSkillEnabled],
+    () => modeSkills.filter((skill) => skill.disabledByMode),
+    [modeSkills],
+  );
+  const duplicateSkillNames = useMemo(
+    () => buildDuplicateSkillNameSet(modeSkills),
+    [modeSkills],
   );
 
   const tokenBreakdown = useMemo(
@@ -162,12 +176,12 @@ const TemplateConfigPage: React.FC = () => {
   );
 
   const builtinToolsEnabled = useMemo(
-    () => builtinTools.filter((tool) => agenticConfig?.available_tools?.includes(tool.name)),
+    () => builtinTools.filter((tool) => agenticConfig?.enabled_tools?.includes(tool.name)),
     [builtinTools, agenticConfig],
   );
 
   const builtinToolsDisabled = useMemo(
-    () => builtinTools.filter((tool) => !agenticConfig?.available_tools?.includes(tool.name)),
+    () => builtinTools.filter((tool) => !agenticConfig?.enabled_tools?.includes(tool.name)),
     [builtinTools, agenticConfig],
   );
 
@@ -200,14 +214,14 @@ const TemplateConfigPage: React.FC = () => {
           configManager.getConfig<Record<string, string>>('ai.func_agent_models').catch(() => ({} as Record<string, string>)),
           configAPI.getModeConfig('agentic').catch(() => null as ModeConfigItem | null),
           invoke<ToolInfo[]>('get_all_tools_info').catch(() => [] as ToolInfo[]),
-          configAPI.getSkillConfigs({}).catch(() => [] as SkillInfo[]),
+          configAPI.getModeSkillConfigs({ modeId: 'agentic' }).catch(() => [] as ModeSkillInfo[]),
           MCPAPI.getServers().catch(() => [] as MCPServerInfo[]),
         ]);
         setModels(allModels ?? []);
         setFuncAgentModels(funcModels ?? {});
         setAgenticConfig(modeConf);
         setAvailableTools(tools);
-        setSkills(skillList ?? []);
+        setModeSkills(skillList ?? []);
         setMcpServers(servers ?? []);
       } catch (e) {
         log.error('Failed to load template config', e);
@@ -265,10 +279,10 @@ const TemplateConfigPage: React.FC = () => {
   const handleToolToggle = useCallback(async (toolName: string) => {
     if (!agenticConfig) return;
     setToolsLoading((prev) => ({ ...prev, [toolName]: true }));
-    const current = agenticConfig.available_tools ?? [];
+    const current = agenticConfig.enabled_tools ?? [];
     const isEnabled = current.includes(toolName);
     const newTools = isEnabled ? current.filter((n) => n !== toolName) : [...current, toolName];
-    const newConfig = { ...agenticConfig, available_tools: newTools };
+    const newConfig = { ...agenticConfig, enabled_tools: newTools };
     setAgenticConfig(newConfig);
     try {
       await configAPI.setModeConfig('agentic', newConfig);
@@ -286,8 +300,12 @@ const TemplateConfigPage: React.FC = () => {
   const handleResetTools = useCallback(async () => {
     try {
       await configAPI.resetModeConfig('agentic');
-      const modeConf = await configAPI.getModeConfig('agentic');
+      const [modeConf, skills] = await Promise.all([
+        configAPI.getModeConfig('agentic'),
+        configAPI.getModeSkillConfigs({ modeId: 'agentic' }),
+      ]);
       setAgenticConfig(modeConf);
+      setModeSkills(skills);
       const { globalEventBus } = await import('@/infrastructure/event-bus');
       globalEventBus.emit('mode:config:updated');
       notificationService.success(t('notifications.resetSuccess'));
@@ -299,12 +317,12 @@ const TemplateConfigPage: React.FC = () => {
 
   const handleGroupToggleAll = useCallback(async (toolNames: string[]) => {
     if (!agenticConfig) return;
-    const current = agenticConfig.available_tools ?? [];
+    const current = agenticConfig.enabled_tools ?? [];
     const allEnabled = toolNames.every((n) => current.includes(n));
     const newTools = allEnabled
       ? current.filter((n) => !toolNames.includes(n))
       : [...new Set([...current, ...toolNames])];
-    const newConfig = { ...agenticConfig, available_tools: newTools };
+    const newConfig = { ...agenticConfig, enabled_tools: newTools };
     setAgenticConfig(newConfig);
     try {
       await configAPI.setModeConfig('agentic', newConfig);
@@ -317,31 +335,27 @@ const TemplateConfigPage: React.FC = () => {
     }
   }, [agenticConfig, t]);
 
-  const handleSkillToggle = useCallback(async (skillName: string) => {
-    if (!agenticConfig) return;
-    setSkillsLoading((prev) => ({ ...prev, [skillName]: true }));
-    // Initialise from global state when available_skills is not yet set
-    const current =
-      agenticConfig.available_skills ??
-      skills.filter((s) => s.enabled).map((s) => s.name);
-    const isEnabled = current.includes(skillName);
-    const next = isEnabled
-      ? current.filter((n) => n !== skillName)
-      : [...current, skillName];
-    const newConfig = { ...agenticConfig, available_skills: next };
-    setAgenticConfig(newConfig);
+  const handleSkillToggle = useCallback(async (skill: ModeSkillInfo) => {
+    const loadingKey = skill.key;
+    setSkillsLoading((prev) => ({ ...prev, [loadingKey]: true }));
+    const nextDisabled = !skill.disabledByMode;
     try {
-      await configAPI.setModeConfig('agentic', newConfig);
+      await configAPI.setModeSkillDisabled({
+        modeId: 'agentic',
+        skillKey: skill.key,
+        disabled: nextDisabled,
+      });
+      const updatedSkills = await configAPI.getModeSkillConfigs({ modeId: 'agentic' });
+      setModeSkills(updatedSkills);
       const { globalEventBus } = await import('@/infrastructure/event-bus');
       globalEventBus.emit('mode:config:updated');
     } catch (e) {
       log.error('Failed to toggle skill', e);
       notificationService.error(t('notifications.toggleFailed'));
-      setAgenticConfig(agenticConfig);
     } finally {
-      setSkillsLoading((prev) => ({ ...prev, [skillName]: false }));
+      setSkillsLoading((prev) => ({ ...prev, [loadingKey]: false }));
     }
-  }, [agenticConfig, skills, t]);
+  }, [t]);
 
   const toggleCollapse = useCallback((id: string) => {
     setCollapsedGroups((prev) => {
@@ -387,9 +401,9 @@ const TemplateConfigPage: React.FC = () => {
     ));
   }, []);
 
-  const openSkillDetail = useCallback((skill: SkillInfo) => {
+  const openSkillDetail = useCallback((skill: ModeSkillInfo) => {
     setDetail((prev) => (
-      prev?.type === 'skill' && prev.skill.name === skill.name
+      prev?.type === 'skill' && prev.skill.key === skill.key
         ? null
         : { type: 'skill', skill }
     ));
@@ -400,7 +414,7 @@ const TemplateConfigPage: React.FC = () => {
   const renderToolList = (tools: ToolInfo[], isMcp: boolean) => (
     <div className="tc-tool-list">
       {tools.map((tool) => {
-        const enabled = agenticConfig?.available_tools?.includes(tool.name) ?? false;
+        const enabled = agenticConfig?.enabled_tools?.includes(tool.name) ?? false;
         const displayName = isMcp ? getMcpShortName(tool.name) : tool.name;
         const selected = detail?.type === 'tool' && detail.tool.name === tool.name;
         return (
@@ -456,14 +470,15 @@ const TemplateConfigPage: React.FC = () => {
     </div>
   );
 
-  const renderSkillList = (list: SkillInfo[]) => (
+  const renderSkillList = (list: ModeSkillInfo[]) => (
     <div className="tc-skill-list">
       {list.map((skill) => {
-        const on = isSkillEnabled(skill.name);
-        const selected = detail?.type === 'skill' && detail.skill.name === skill.name;
+        const on = !skill.disabledByMode;
+        const selected = detail?.type === 'skill' && detail.skill.key === skill.key;
+        const displayName = formatSkillDisplayName(skill, duplicateSkillNames);
         return (
           <div
-            key={skill.name}
+            key={skill.key}
             className={`tc-skill-row${!on ? ' tc-skill-row--off' : ''}${selected ? ' tc-skill-row--selected' : ''}`}
           >
             <button
@@ -471,13 +486,13 @@ const TemplateConfigPage: React.FC = () => {
               className="tc-skill-row__hit"
               onClick={() => openSkillDetail(skill)}
             >
-              <span className="tc-skill-row__name">{skill.name}</span>
-              <span className="tc-skill-row__level">{skill.level}</span>
+              <span className="tc-skill-row__name">{displayName}</span>
+              <span className="tc-skill-row__level">{formatSkillOrigin(skill)}</span>
             </button>
             <Switch
               checked={on}
-              onChange={() => handleSkillToggle(skill.name)}
-              disabled={skillsLoading[skill.name]}
+              onChange={() => handleSkillToggle(skill)}
+              disabled={skillsLoading[skill.key]}
               size="small"
             />
           </div>
@@ -515,8 +530,8 @@ const TemplateConfigPage: React.FC = () => {
     serverStatus?: string,
     mcpServerId?: string,
   ) => {
-    const groupEnabled = toolNames.filter(
-      (n) => agenticConfig?.available_tools?.includes(n),
+      const groupEnabled = toolNames.filter(
+      (n) => agenticConfig?.enabled_tools?.includes(n),
     ).length;
     const isCollapsed = collapsedGroups.has(id);
     const allOn = toolNames.length > 0 && groupEnabled === toolNames.length;
@@ -584,7 +599,7 @@ const TemplateConfigPage: React.FC = () => {
     if (detail.type === 'tool') {
       const { tool, isMcp } = detail;
       const displayName = isMcp ? getMcpShortName(tool.name) : tool.name;
-      const enabled = agenticConfig?.available_tools?.includes(tool.name) ?? false;
+      const enabled = agenticConfig?.enabled_tools?.includes(tool.name) ?? false;
       return (
         <aside className="tc-template-detail" aria-label={t('nursery.template.detailPanel')}>
           <div className="tc-template-detail__head tc-template-detail__head--center-line">
@@ -671,7 +686,7 @@ const TemplateConfigPage: React.FC = () => {
     }
 
     const { skill } = detail;
-    const on = isSkillEnabled(skill.name);
+    const on = !skill.disabledByMode;
     return (
       <aside className="tc-template-detail" aria-label={t('nursery.template.detailPanel')}>
         <div className="tc-template-detail__head tc-template-detail__head--center-line">
@@ -679,7 +694,7 @@ const TemplateConfigPage: React.FC = () => {
           <div className="tc-template-detail__head-text">
             <div className="tc-template-detail__head-line">
               <span className="tc-template-detail__kind">{t('cards.skills')}</span>
-              <h3 className="tc-template-detail__title">{skill.name}</h3>
+              <h3 className="tc-template-detail__title">{formatSkillDisplayName(skill, duplicateSkillNames)}</h3>
             </div>
           </div>
           <button
@@ -692,15 +707,15 @@ const TemplateConfigPage: React.FC = () => {
           </button>
         </div>
         <div className="tc-template-detail__body">
-          <p className="tc-template-detail__meta">{t('nursery.template.skillLevel', { level: skill.level })}</p>
+          <p className="tc-template-detail__meta">{t('nursery.template.skillLevel', { level: formatSkillOrigin(skill) })}</p>
           <p className="tc-template-detail__desc">
             {skill.description?.trim() ? skill.description : '—'}
           </p>
           <div className="tc-template-detail__actions">
             <Switch
               checked={on}
-              onChange={() => handleSkillToggle(skill.name)}
-              disabled={skillsLoading[skill.name]}
+              onChange={() => handleSkillToggle(skill)}
+              disabled={skillsLoading[skill.key]}
               size="small"
             />
           </div>
@@ -815,7 +830,7 @@ const TemplateConfigPage: React.FC = () => {
             <GalleryZone
               title={t('cards.skills')}
             >
-              {skills.length === 0 ? (
+              {modeSkills.length === 0 ? (
                 <p className="nursery-empty">{t('empty.skills')}</p>
               ) : (
                 renderSkillEnabledDisabledSplit()
@@ -859,8 +874,8 @@ const TemplateConfigPage: React.FC = () => {
                     const serverInfo = mcpServers.find((s) => s.id === serverId);
                     const status = serverInfo?.status ?? (serverTools.length > 0 ? 'Connected' : 'Unknown');
                     const groupId = `mcp_${serverId}`;
-                    const mcpEnabled = serverTools.filter((tool) => agenticConfig?.available_tools?.includes(tool.name));
-                    const mcpDisabled = serverTools.filter((tool) => !agenticConfig?.available_tools?.includes(tool.name));
+                    const mcpEnabled = serverTools.filter((tool) => agenticConfig?.enabled_tools?.includes(tool.name));
+                    const mcpDisabled = serverTools.filter((tool) => !agenticConfig?.enabled_tools?.includes(tool.name));
 
                     return (
                       <div key={serverId} className="tc-tool-block">

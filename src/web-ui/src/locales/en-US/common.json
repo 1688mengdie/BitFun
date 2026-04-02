@@ -100,13 +100,14 @@
       "assistantSessions": "Assistant Sessions"
     },
     "search": {
-      "triggerPlaceholder": "Search workspaces, assistants, sessions...",
+      "triggerPlaceholder": "Search",
       "triggerTooltip": "Search (Ctrl+K)",
       "inputPlaceholder": "Search workspaces, assistants, sessions...",
       "groupWorkspaces": "Open Workspaces",
       "groupAssistants": "Assistants",
       "groupSessions": "All Sessions",
       "empty": "No results found",
+      "sessionSearchHintDefault": "Type a keyword to search sessions in open workspaces",
       "sessionWorkspaceHint": "in {{workspace}}"
     },
     "displayModes": {
@@ -938,7 +939,6 @@
       "authMethod": "Authentication Method",
       "password": "Password",
       "privateKey": "Private Key",
-      "sshAgent": "SSH Agent",
       "privateKeyPath": "Private Key Path",
       "browsePrivateKey": "Choose private key file",
       "pickPrivateKeyDialogTitle": "Select SSH private key",
@@ -963,7 +963,6 @@
       "enterKeyPath": "Enter Private Key Path",
       "keyPathDescription": "Enter the private key file path",
       "authPromptTitle": "SSH authentication",
-      "authPromptAgentHint": "Uses keys already loaded in your SSH agent.",
       "disconnectConfirm": "Are you sure you want to disconnect?",
       "disconnectWorkspaceConfirm": "Are you sure you want to close the remote workspace? This will disconnect from the remote server.",
       "newFile": "New File",

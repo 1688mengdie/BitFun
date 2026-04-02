@@ -37,7 +37,35 @@ import './AgentsScene.scss';
 import { useGallerySceneAutoRefresh } from '@/app/hooks/useGallerySceneAutoRefresh';
 import { CORE_AGENT_IDS, isAgentInOverviewZone } from './agentVisibility';
 import { SubagentAPI } from '@/infrastructure/api/service-api/SubagentAPI';
+import type { ModeSkillInfo } from '@/infrastructure/config/types';
 import { useNotification } from '@/shared/notification-system';
+
+function getConfiguredEnabledSkillKeys(skills: ModeSkillInfo[]): string[] {
+  return skills.filter((skill) => !skill.disabledByMode).map((skill) => skill.key);
+}
+
+function buildDuplicateSkillNameSet(skills: ModeSkillInfo[]): Set<string> {
+  const counts = new Map<string, number>();
+  for (const skill of skills) {
+    counts.set(skill.name, (counts.get(skill.name) ?? 0) + 1);
+  }
+  return new Set(
+    [...counts.entries()]
+      .filter(([, count]) => count > 1)
+      .map(([name]) => name),
+  );
+}
+
+function formatSkillOrigin(skill: ModeSkillInfo): string {
+  return `${skill.level}/${skill.sourceSlot}`;
+}
+
+function formatSkillDisplayName(skill: ModeSkillInfo, duplicateNames: Set<string>): string {
+  if (!duplicateNames.has(skill.name)) {
+    return skill.name;
+  }
+  return `${skill.name} [${formatSkillOrigin(skill)}]`;
+}
 
 const AgentsHomeView: React.FC = () => {
   const { t } = useTranslation('scenes/agents');
@@ -68,13 +96,13 @@ const AgentsHomeView: React.FC = () => {
     filteredAgents,
     loading,
     availableTools,
-    availableSkills,
+    getModeSkills,
     counts,
     loadAgents,
     getModeConfig,
-    handleToggleTool,
+    handleSetTools,
     handleResetTools,
-    handleToggleSkill,
+    handleSetSkills,
   } = useAgentsList({
     searchQuery,
     filterLevel: agentFilterLevel,
@@ -134,11 +162,35 @@ const AgentsHomeView: React.FC = () => {
     () => (selectedAgent?.agentKind === 'mode' ? getModeConfig(selectedAgent.id) : null),
     [getModeConfig, selectedAgent],
   );
+  const selectedAgentModeSkills = useMemo(
+    () => (selectedAgent?.agentKind === 'mode' ? getModeSkills(selectedAgent.id) : []),
+    [getModeSkills, selectedAgent],
+  );
   const selectedAgentTools = selectedAgent?.agentKind === 'mode'
-    ? (selectedAgentModeConfig?.available_tools ?? selectedAgent.defaultTools ?? [])
+    ? (selectedAgentModeConfig?.enabled_tools ?? selectedAgent.defaultTools ?? [])
     : (selectedAgent?.defaultTools ?? []);
-  const selectedAgentSkills = selectedAgentModeConfig?.available_skills ?? [];
-  const selectedAgentSkillItems = availableSkills.filter((skill) => selectedAgentSkills.includes(skill.name));
+  const selectedAgentSkills = useMemo(
+    () => getConfiguredEnabledSkillKeys(selectedAgentModeSkills),
+    [selectedAgentModeSkills],
+  );
+  const selectedAgentSkillItems = useMemo(
+    () => selectedAgentModeSkills.filter((skill) => !skill.disabledByMode),
+    [selectedAgentModeSkills],
+  );
+  const selectedAgentDuplicateSkillNames = useMemo(
+    () => buildDuplicateSkillNameSet(selectedAgentModeSkills),
+    [selectedAgentModeSkills],
+  );
+  const getDisplayedToolCount = useCallback((agent: AgentWithCapabilities): number => {
+    if (agent.agentKind === 'mode') {
+      return getModeConfig(agent.id)?.enabled_tools?.length
+        ?? agent.defaultTools?.length
+        ?? agent.toolCount
+        ?? 0;
+    }
+    return agent.toolCount ?? agent.defaultTools?.length ?? 0;
+  }, [getModeConfig]);
+  const selectedAgentToolCount = selectedAgent ? getDisplayedToolCount(selectedAgent) : 0;
   const resetEditState = useCallback(() => {
     setToolsEditing(false);
     setSkillsEditing(false);
@@ -264,7 +316,8 @@ const AgentsHomeView: React.FC = () => {
                   agent={agent}
                   index={index}
                   meta={coreAgentMeta[agent.id] ?? { role: agent.name, accentColor: '#6366f1', accentBg: 'rgba(99,102,241,0.10)' }}
-                  skillCount={agent.agentKind === 'mode' ? (getModeConfig(agent.id)?.available_skills?.length ?? 0) : 0}
+                  toolCount={getDisplayedToolCount(agent)}
+                  skillCount={agent.agentKind === 'mode' ? getConfiguredEnabledSkillKeys(getModeSkills(agent.id)).length : 0}
                   onOpenDetails={openAgentDetails}
                 />
               ))}
@@ -347,7 +400,8 @@ const AgentsHomeView: React.FC = () => {
                   agent={agent}
                   index={index}
                   soloEnabled={agentSoloEnabled[agent.id] ?? agent.enabled}
-                  skillCount={agent.agentKind === 'mode' ? (getModeConfig(agent.id)?.available_skills?.length ?? 0) : 0}
+                  toolCount={getDisplayedToolCount(agent)}
+                  skillCount={agent.agentKind === 'mode' ? getConfiguredEnabledSkillKeys(getModeSkills(agent.id)).length : 0}
                   onToggleSolo={setAgentSoloEnabled}
                   onOpenDetails={openAgentDetails}
                 />
@@ -379,7 +433,7 @@ const AgentsHomeView: React.FC = () => {
         description={selectedAgent?.description}
         meta={selectedAgent ? (
           <>
-            <span>{t('agentCard.meta.tools', { count: selectedAgent.toolCount ?? selectedAgentTools.length })}</span>
+            <span>{t('agentCard.meta.tools', { count: selectedAgentToolCount })}</span>
             {selectedAgent.agentKind === 'mode' ? (
               <span>{t('agentCard.meta.skills', { count: selectedAgentSkills.length })}</span>
             ) : null}
@@ -460,15 +514,7 @@ const AgentsHomeView: React.FC = () => {
                               }
                               setSavingTools(true);
                               try {
-                                await Promise.all(
-                                  availableTools
-                                    .filter((tool) => {
-                                      const wasOn = selectedAgentTools.includes(tool.name);
-                                      const isOn = pendingTools.includes(tool.name);
-                                      return wasOn !== isOn;
-                                    })
-                                    .map((tool) => handleToggleTool(selectedAgent.id, tool.name)),
-                                );
+                                await handleSetTools(selectedAgent.id, pendingTools);
                               } finally {
                                 setSavingTools(false);
                                 setToolsEditing(false);
@@ -541,14 +587,14 @@ const AgentsHomeView: React.FC = () => {
               </div>
             ) : null}
 
-            {selectedAgent.agentKind === 'mode' && availableSkills.length > 0 ? (
+            {selectedAgent.agentKind === 'mode' && selectedAgentModeSkills.length > 0 ? (
               <div className="agent-card__section">
                 <div className="agent-card__section-head">
                   <div className="agent-card__section-title">
                     <Puzzle size={12} />
                     <span>{t('agentsOverview.skills')}</span>
                     <span className="agent-card__section-count">
-                      {`${(skillsEditing ? (pendingSkills ?? selectedAgentSkills) : selectedAgentSkills).length}/${availableSkills.length}`}
+                      {`${(skillsEditing ? (pendingSkills ?? selectedAgentSkills) : selectedAgentSkills).length}/${selectedAgentModeSkills.length}`}
                     </span>
                   </div>
                   <div className="agent-card__section-actions">
@@ -575,15 +621,7 @@ const AgentsHomeView: React.FC = () => {
                             }
                             setSavingSkills(true);
                             try {
-                              await Promise.all(
-                                availableSkills
-                                  .filter((skill) => {
-                                    const wasOn = selectedAgentSkills.includes(skill.name);
-                                    const isOn = pendingSkills.includes(skill.name);
-                                    return wasOn !== isOn;
-                                  })
-                                  .map((skill) => handleToggleSkill(selectedAgent.id, skill.name)),
-                              );
+                              await handleSetSkills(selectedAgent.id, pendingSkills);
                             } finally {
                               setSavingSkills(false);
                               setSkillsEditing(false);
@@ -611,34 +649,40 @@ const AgentsHomeView: React.FC = () => {
 
                 {skillsEditing ? (
                   <div className="agent-card__token-grid">
-                    {[...availableSkills]
+                    {[...selectedAgentModeSkills]
                       .sort((a, b) => {
                         const draft = pendingSkills ?? selectedAgentSkills;
-                        const aOn = draft.includes(a.name);
-                        const bOn = draft.includes(b.name);
+                        const aOn = draft.includes(a.key);
+                        const bOn = draft.includes(b.key);
                         if (aOn && !bOn) return -1;
                         if (!aOn && bOn) return 1;
                         return 0;
                       })
                       .map((skill) => {
                         const draft = pendingSkills ?? selectedAgentSkills;
-                        const isOn = draft.includes(skill.name);
+                        const isOn = draft.includes(skill.key);
+                        const displayName = formatSkillDisplayName(skill, selectedAgentDuplicateSkillNames);
+                        const title = [
+                          skill.description || skill.name,
+                          `key: ${skill.key}`,
+                          !skill.disabledByMode && !skill.selectedForRuntime ? 'shadowed by a higher-priority skill with the same name' : null,
+                        ].filter(Boolean).join('\n');
                         return (
                           <button
-                            key={skill.name}
+                            key={skill.key}
                             type="button"
                             className={`agent-card__token${isOn ? ' is-on' : ''}`}
-                            title={skill.description || skill.name}
+                            title={title}
                             onClick={() => {
                               setPendingSkills((prev) => {
                                 const current = prev ?? selectedAgentSkills;
                                 return isOn
-                                  ? current.filter((n) => n !== skill.name)
-                                  : [...current, skill.name];
+                                  ? current.filter((n) => n !== skill.key)
+                                  : [...current, skill.key];
                               });
                             }}
                           >
-                            <span className="agent-card__token-name">{skill.name}</span>
+                            <span className="agent-card__token-name">{displayName}</span>
                           </button>
                         );
                       })}
@@ -651,8 +695,16 @@ const AgentsHomeView: React.FC = () => {
                       </span>
                     ) : (
                       selectedAgentSkillItems.map((skill) => (
-                        <span key={skill.name} className="agent-card__chip" title={skill.description || skill.name}>
-                          {skill.name}
+                        <span
+                          key={skill.key}
+                          className="agent-card__chip"
+                          title={[
+                            skill.description || skill.name,
+                            `key: ${skill.key}`,
+                            !skill.disabledByMode && !skill.selectedForRuntime ? 'shadowed by a higher-priority skill with the same name' : null,
+                          ].filter(Boolean).join('\n')}
+                        >
+                          {formatSkillDisplayName(skill, selectedAgentDuplicateSkillNames)}
                         </span>
                       ))
                     )}
