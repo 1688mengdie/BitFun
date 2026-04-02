@@ -164,7 +164,8 @@
       "selectToView": "Select a resource to view its content"
     },
     "errors": {
-      "loadContentFailed": "Failed to load resource content"
+      "loadContentFailed": "Failed to load resource content",
+      "binaryContent": "Binary resource content cannot be previewed here"
     },
     "mockContent": "# {{name}}\n\nThis is the content of {{uri}}\n\nLorem ipsum dolor sit amet..."
   },

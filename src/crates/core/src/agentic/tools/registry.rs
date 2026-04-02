@@ -112,6 +112,10 @@ impl ToolRegistry {
         // Web tool
         self.register_tool(Arc::new(WebSearchTool::new()));
         self.register_tool(Arc::new(WebFetchTool::new()));
+        self.register_tool(Arc::new(ListMCPResourcesTool::new()));
+        self.register_tool(Arc::new(ReadMCPResourceTool::new()));
+        self.register_tool(Arc::new(ListMCPPromptsTool::new()));
+        self.register_tool(Arc::new(GetMCPPromptTool::new()));
 
         // Mermaid interactive chart tool
         self.register_tool(Arc::new(MermaidInteractiveTool::new()));

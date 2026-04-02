@@ -50,20 +50,66 @@ export interface RuntimeCommandCapability {
 export interface MCPResource {
   uri: string;
   name: string;
+  title?: string;
   description?: string;
   mimeType?: string;
+  size?: number;
   metadata?: Record<string, any>;
+}
+
+export interface MCPResourceContent {
+  uri: string;
+  content?: string;
+  blob?: string;
+  mimeType?: string;
+}
+
+export interface ListMCPResourcesRequest {
+  serverId: string;
+  refresh?: boolean;
+}
+
+export interface ReadMCPResourceRequest {
+  serverId: string;
+  resourceUri: string;
+}
+
+export interface ReadMCPResourceResponse {
+  contents: MCPResourceContent[];
 }
 
  
 export interface MCPPrompt {
   name: string;
+  title?: string;
   description?: string;
   arguments?: Array<{
     name: string;
+    title?: string;
     description?: string;
     required: boolean;
   }>;
+}
+
+export interface ListMCPPromptsRequest {
+  serverId: string;
+  refresh?: boolean;
+}
+
+export interface GetMCPPromptRequest {
+  serverId: string;
+  promptName: string;
+  arguments?: Record<string, string>;
+}
+
+export interface MCPPromptMessage {
+  role: string;
+  content: unknown;
+}
+
+export interface GetMCPPromptResponse {
+  description?: string;
+  messages: MCPPromptMessage[];
 }
 
  
@@ -240,6 +286,22 @@ export class MCPAPI {
    
   static async getServers(): Promise<MCPServerInfo[]> {
     return api.invoke('get_mcp_servers');
+  }
+
+  static async listResources(request: ListMCPResourcesRequest): Promise<MCPResource[]> {
+    return api.invoke('list_mcp_resources', { request });
+  }
+
+  static async readResource(request: ReadMCPResourceRequest): Promise<ReadMCPResourceResponse> {
+    return api.invoke('read_mcp_resource', { request });
+  }
+
+  static async listPrompts(request: ListMCPPromptsRequest): Promise<MCPPrompt[]> {
+    return api.invoke('list_mcp_prompts', { request });
+  }
+
+  static async getPrompt(request: GetMCPPromptRequest): Promise<GetMCPPromptResponse> {
+    return api.invoke('get_mcp_prompt', { request });
   }
 
    

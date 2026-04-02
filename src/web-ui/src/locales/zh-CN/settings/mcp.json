@@ -164,7 +164,8 @@
       "selectToView": "选择资源以查看内容"
     },
     "errors": {
-      "loadContentFailed": "加载资源内容失败"
+      "loadContentFailed": "加载资源内容失败",
+      "binaryContent": "二进制资源内容无法在此预览"
     },
     "mockContent": "# {{name}}\n\n这是 {{uri}} 的内容\n\nLorem ipsum dolor sit amet..."
   },
