@@ -201,6 +201,10 @@ impl Tool for MCPToolWrapper {
                     .join("\n");
                 return Self::truncate_for_assistant(rendered);
             }
+
+            if let Some(structured_content) = result.structured_content {
+                return Self::truncate_for_assistant(structured_content.to_string());
+            }
         }
 
         "MCP tool execution completed".to_string()

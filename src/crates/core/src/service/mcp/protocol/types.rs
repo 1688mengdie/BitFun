@@ -237,6 +237,8 @@ pub struct MCPPrompt {
 pub struct MCPPromptArgument {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     #[serde(default)]
     pub required: bool,
@@ -270,6 +272,16 @@ pub enum MCPPromptMessageContentBlock {
     Image { data: String, mime_type: String },
     #[serde(rename = "audio")]
     Audio { data: String, mime_type: String },
+    #[serde(rename = "resource_link")]
+    ResourceLink {
+        uri: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        mime_type: Option<String>,
+    },
     #[serde(rename = "resource")]
     Resource { resource: MCPResourceContent },
 }
@@ -294,6 +306,15 @@ impl MCPPromptMessageContent {
             }) => {
                 format!("[Audio: {}]", mime_type)
             }
+            MCPPromptMessageContent::Block(MCPPromptMessageContentBlock::ResourceLink {
+                uri,
+                name,
+                ..
+            }) => name
+                .as_ref()
+                .map_or_else(|| format!("[Resource Link: {}]", uri), |n| {
+                    format!("[Resource Link: {} ({})]", n, uri)
+                }),
             MCPPromptMessageContent::Block(MCPPromptMessageContentBlock::Resource { resource }) => {
                 format!("[Resource: {}]", resource.uri)
             }
@@ -357,6 +378,8 @@ pub struct MCPToolAnnotations {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub destructive_hint: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub idempotent_hint: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub open_world_hint: Option<bool>,
 }
 
@@ -397,6 +420,9 @@ pub struct MCPToolResult {
     /// Structured data for MCP App UI (ext-apps ontoolresult expects this).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub structured_content: Option<Value>,
+    /// Optional protocol-level metadata returned by the server.
+    #[serde(skip_serializing_if = "Option::is_none", rename = "_meta")]
+    pub meta: Option<Value>,
 }
 
 /// MCP tool result content (2025-11-25 spec).
