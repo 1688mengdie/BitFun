@@ -194,6 +194,10 @@ export interface ClearMCPRemoteAuthRequest {
   serverId: string;
 }
 
+export interface DeleteMCPServerRequest {
+  serverId: string;
+}
+
 export type MCPRemoteOAuthStatus =
   | 'awaitingBrowser'
   | 'awaitingCallback'
@@ -317,6 +321,10 @@ export class MCPAPI {
 
   static async clearRemoteAuth(request: ClearMCPRemoteAuthRequest): Promise<void> {
     return api.invoke('clear_mcp_remote_auth', { request });
+  }
+
+  static async deleteServer(request: DeleteMCPServerRequest): Promise<void> {
+    return api.invoke('delete_mcp_server', { request });
   }
 
   static async startRemoteOAuth(

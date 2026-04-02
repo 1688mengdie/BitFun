@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use axum::{
     extract::{Query, State},
+    http::HeaderMap,
     response::{Html, IntoResponse},
     routing::get,
     Router,
@@ -11,6 +12,7 @@ use reqwest::Url;
 use tokio::sync::{oneshot, Mutex};
 use tokio::time::{timeout, Duration};
 
+use crate::service::config::app_language::get_app_language_code;
 use crate::service::mcp::auth::{
     clear_stored_oauth_credentials, map_auth_error, prepare_remote_oauth_authorization,
     MCPRemoteOAuthSessionSnapshot, MCPRemoteOAuthStatus,
@@ -30,6 +32,100 @@ struct OAuthCallbackPayload {
     error_description: Option<String>,
 }
 
+#[derive(Clone, Copy)]
+enum OAuthCallbackLocale {
+    ZhCN,
+    EnUS,
+}
+
+struct OAuthCallbackPageCopy {
+    html_lang: &'static str,
+    page_title: &'static str,
+    brand_label: &'static str,
+    badge_success: &'static str,
+    badge_warning: &'static str,
+    badge_error: &'static str,
+    success_title: &'static str,
+    success_message: &'static str,
+    success_detail_title: &'static str,
+    success_detail_body: &'static str,
+    warning_title: &'static str,
+    warning_message: &'static str,
+    warning_detail_title: &'static str,
+    error_title: &'static str,
+    error_message: &'static str,
+    error_detail_title: &'static str,
+    close_hint: &'static str,
+}
+
+impl OAuthCallbackLocale {
+    fn from_language_code(value: &str) -> Option<Self> {
+        match value {
+            "zh-CN" | "zh" => Some(Self::ZhCN),
+            "en-US" | "en" => Some(Self::EnUS),
+            _ => None,
+        }
+    }
+
+    fn from_accept_language(value: &str) -> Self {
+        value
+            .split(',')
+            .filter_map(|part| part.split(';').next())
+            .find_map(|part| Self::from_language_code(part.trim()))
+            .unwrap_or(Self::ZhCN)
+    }
+
+    fn copy(self) -> OAuthCallbackPageCopy {
+        match self {
+            Self::ZhCN => OAuthCallbackPageCopy {
+                html_lang: "zh-CN",
+                page_title: "BitFun OAuth 回调",
+                brand_label: "BitFun Desktop",
+                badge_success: "已收到授权",
+                badge_warning: "回调参数不完整",
+                badge_error: "授权失败",
+                success_title: "BitFun 已收到 OAuth 回调",
+                success_message: "可以返回 BitFun。应用正在交换授权码并重新连接 MCP 服务器。",
+                success_detail_title: "接下来会发生什么",
+                success_detail_body:
+                    "这个页面可以直接关闭。如果 BitFun 没有自动完成重连，请回到 MCP 设置页后重试 OAuth。",
+                warning_title: "BitFun 收到的 OAuth 回调缺少必要参数",
+                warning_message:
+                    "OAuth 提供方已跳转回来，但缺少必须的参数。请返回 BitFun 重新发起登录流程。",
+                warning_detail_title: "缺少的参数",
+                error_title: "BitFun 未能完成 OAuth 授权",
+                error_message:
+                    "请返回 BitFun，并根据下面的提供方返回信息检查问题后重新发起 OAuth。",
+                error_detail_title: "提供方返回",
+                close_hint: "处理完成后，这个页面可以直接关闭。",
+            },
+            Self::EnUS => OAuthCallbackPageCopy {
+                html_lang: "en-US",
+                page_title: "BitFun OAuth Callback",
+                brand_label: "BitFun Desktop",
+                badge_success: "Authorization received",
+                badge_warning: "Callback incomplete",
+                badge_error: "Authorization failed",
+                success_title: "BitFun received the OAuth callback",
+                success_message:
+                    "You can return to BitFun now. The app is exchanging the authorization code and reconnecting the MCP server.",
+                success_detail_title: "What happens next",
+                success_detail_body:
+                    "This page can be closed now. If BitFun does not finish reconnecting automatically, return to MCP settings and retry OAuth.",
+                warning_title: "BitFun received an OAuth callback with missing parameters",
+                warning_message:
+                    "The provider redirected back, but required OAuth parameters were missing. Return to BitFun and start the sign-in flow again.",
+                warning_detail_title: "Missing parameters",
+                error_title: "BitFun could not finish the OAuth authorization",
+                error_message:
+                    "Return to BitFun and review the provider response below before retrying OAuth.",
+                error_detail_title: "Provider response",
+                close_hint: "This page can be closed after you review the status.",
+            },
+        }
+    }
+}
+
 fn escape_html(input: &str) -> String {
     input
         .replace('&', "&amp;")
@@ -39,31 +135,51 @@ fn escape_html(input: &str) -> String {
         .replace('\'', "&#39;")
 }
 
-fn render_oauth_callback_page(payload: &OAuthCallbackPayload) -> String {
+fn resolve_oauth_callback_locale(
+    preferred_language: Option<&str>,
+    accept_language: Option<&str>,
+) -> OAuthCallbackLocale {
+    preferred_language
+        .and_then(OAuthCallbackLocale::from_language_code)
+        .or_else(|| accept_language.map(OAuthCallbackLocale::from_accept_language))
+        .unwrap_or(OAuthCallbackLocale::ZhCN)
+}
+
+fn render_oauth_callback_page(
+    payload: &OAuthCallbackPayload,
+    locale: OAuthCallbackLocale,
+) -> String {
+    let copy = locale.copy();
     let (badge, badge_class, title, message, detail_title, detail_body, icon_label) =
         if let Some(error) = payload.error.as_deref() {
             let description = payload
                 .error_description
                 .as_deref()
-                .unwrap_or("The provider rejected the authorization request.");
+                .unwrap_or(match locale {
+                    OAuthCallbackLocale::ZhCN => "OAuth 提供方拒绝了这次授权请求。",
+                    OAuthCallbackLocale::EnUS => "The provider rejected the authorization request.",
+                });
             (
-                "Authorization failed",
+                copy.badge_error,
                 "is-error",
-                "BitFun could not finish the OAuth handoff",
-                "Return to BitFun and restart the OAuth flow after checking the provider response below.",
-                "Provider response",
+                copy.error_title,
+                copy.error_message,
+                copy.error_detail_title,
                 format!("{}: {}", escape_html(error), escape_html(description)),
                 "!",
             )
         } else if payload.code.is_some() && payload.state.is_some() {
             (
-                "Authorization received",
+                copy.badge_success,
                 "is-success",
-                "BitFun has the callback",
-                "You can switch back to the app now. BitFun is exchanging the authorization code and reconnecting the MCP server.",
-                "What happens next",
-                "This tab can be closed. If BitFun does not finish reconnecting automatically, reopen the MCP settings and retry OAuth.".to_string(),
-                "OK",
+                copy.success_title,
+                copy.success_message,
+                copy.success_detail_title,
+                copy.success_detail_body.to_string(),
+                match locale {
+                    OAuthCallbackLocale::ZhCN => "完成",
+                    OAuthCallbackLocale::EnUS => "Done",
+                },
             )
         } else {
             let mut missing = Vec::new();
@@ -74,11 +190,11 @@ fn render_oauth_callback_page(payload: &OAuthCallbackPayload) -> String {
                 missing.push("state");
             }
             (
-                "Callback incomplete",
+                copy.badge_warning,
                 "is-warning",
-                "BitFun received an incomplete OAuth redirect",
-                "The provider redirected back, but required OAuth parameters were missing. Return to BitFun and start the sign-in flow again.",
-                "Missing parameters",
+                copy.warning_title,
+                copy.warning_message,
+                copy.warning_detail_title,
                 escape_html(&missing.join(", ")),
                 "?",
             )
@@ -86,11 +202,11 @@ fn render_oauth_callback_page(payload: &OAuthCallbackPayload) -> String {
 
     format!(
         r#"<!DOCTYPE html>
-<html lang="en">
+<html lang="{html_lang}">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>BitFun OAuth Callback</title>
+    <title>{page_title}</title>
     <style>
       :root {{
         color-scheme: light;
@@ -235,6 +351,10 @@ fn render_oauth_callback_page(payload: &OAuthCallbackPayload) -> String {
         gap: 20px;
       }}
 
+      .content > * {{
+        min-width: 0;
+      }}
+
       .lead {{
         margin: 0;
         max-width: 58ch;
@@ -282,40 +402,15 @@ fn render_oauth_callback_page(payload: &OAuthCallbackPayload) -> String {
         word-break: break-word;
       }}
 
-      .actions {{
-        display: flex;
-        flex-wrap: wrap;
-        gap: 12px;
-        margin-top: 4px;
-      }}
-
-      button {{
-        appearance: none;
-        border: 0;
-        border-radius: 999px;
-        padding: 12px 18px;
-        font: inherit;
-        font-weight: 700;
-        cursor: pointer;
-        transition: transform 140ms ease, opacity 140ms ease, background 140ms ease;
-      }}
-
-      button:hover {{
-        transform: translateY(-1px);
-      }}
-
-      .primary {{
-        color: #fffaf0;
-        background: linear-gradient(135deg, #172033 0%, #335c95 100%);
-      }}
-
-      .secondary {{
-        color: var(--text-strong);
-        background: rgba(23, 32, 51, 0.08);
+      .close-note {{
+        padding: 16px 18px;
+        border-radius: 18px;
+        background: rgba(23, 32, 51, 0.06);
+        border: 1px solid rgba(53, 66, 97, 0.08);
       }}
 
       .footnote {{
-        margin: 2px 0 0;
+        margin: 0;
         font-size: 13px;
         line-height: 1.7;
         color: var(--text-muted);
@@ -346,7 +441,7 @@ fn render_oauth_callback_page(payload: &OAuthCallbackPayload) -> String {
         <div class="brand">
           <div class="brand-mark">BF</div>
           <div>
-            <span class="eyebrow">BitFun Desktop</span>
+            <span class="eyebrow">{brand_label}</span>
             <h1>{title}</h1>
           </div>
         </div>
@@ -360,32 +455,17 @@ fn render_oauth_callback_page(payload: &OAuthCallbackPayload) -> String {
               <p class="status-body">{detail_body}</p>
             </div>
           </div>
-          <div class="actions">
-            <button class="primary" type="button" onclick="window.close()">Close this tab</button>
-            <button class="secondary" type="button" onclick="location.reload()">Refresh page</button>
+          <div class="close-note">
+            <p class="footnote">{close_hint}</p>
           </div>
-          <p class="footnote">
-            This page will try to close automatically in <span id="countdown">4</span>s. If your browser blocks that action, you can close it manually and return to BitFun.
-          </p>
         </div>
       </section>
     </main>
-    <script>
-      let secondsRemaining = 4;
-      const countdown = document.getElementById('countdown');
-      const intervalId = window.setInterval(() => {{
-        secondsRemaining -= 1;
-        if (countdown && secondsRemaining >= 0) {{
-          countdown.textContent = String(secondsRemaining);
-        }}
-        if (secondsRemaining <= 0) {{
-          window.clearInterval(intervalId);
-        }}
-      }}, 1000);
-      window.setTimeout(() => window.close(), 4000);
-    </script>
   </body>
 </html>"#,
+        html_lang = copy.html_lang,
+        page_title = copy.page_title,
+        brand_label = copy.brand_label,
         title = title,
         badge = badge,
         badge_class = badge_class,
@@ -393,12 +473,14 @@ fn render_oauth_callback_page(payload: &OAuthCallbackPayload) -> String {
         detail_title = detail_title,
         detail_body = detail_body,
         icon_label = icon_label,
+        close_hint = copy.close_hint,
     )
 }
 
 #[derive(Clone)]
 struct OAuthCallbackAppState {
     callback_tx: Arc<Mutex<Option<oneshot::Sender<OAuthCallbackPayload>>>>,
+    preferred_language: String,
 }
 
 impl MCPServerManager {
@@ -506,6 +588,7 @@ impl MCPServerManager {
 
         let callback_state = OAuthCallbackAppState {
             callback_tx: Arc::new(Mutex::new(Some(callback_tx))),
+            preferred_language: get_app_language_code().await,
         };
         let router = Router::new()
             .route(&callback_path, get(handle_oauth_callback))
@@ -698,6 +781,7 @@ impl MCPServerManager {
 
 async fn handle_oauth_callback(
     State(state): State<OAuthCallbackAppState>,
+    headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
 ) -> impl IntoResponse {
     let payload = OAuthCallbackPayload {
@@ -706,7 +790,12 @@ async fn handle_oauth_callback(
         error: params.get("error").cloned(),
         error_description: params.get("error_description").cloned(),
     };
-    let page = render_oauth_callback_page(&payload);
+    let accept_language = headers
+        .get(axum::http::header::ACCEPT_LANGUAGE)
+        .and_then(|value| value.to_str().ok());
+    let locale =
+        resolve_oauth_callback_locale(Some(state.preferred_language.as_str()), accept_language);
+    let page = render_oauth_callback_page(&payload, locale);
 
     if let Some(callback_tx) = state.callback_tx.lock().await.take() {
         let _ = callback_tx.send(payload);

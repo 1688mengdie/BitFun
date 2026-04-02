@@ -245,11 +245,7 @@ const McpToolsConfig: React.FC = () => {
 
     if (status === 'authorized') {
       notification.success(
-        session?.message ||
-          tMcp('messages.remoteOAuthAuthorized', {
-            serverId,
-            defaultValue: `OAuth connected for "${serverId}".`,
-          }),
+        session?.message || tMcp('messages.remoteOAuthAuthorized', { serverId }),
         {
           title: tMcp('notifications.saveSuccess'),
           duration: 4000,
@@ -262,13 +258,9 @@ const McpToolsConfig: React.FC = () => {
 
     if (status === 'failed') {
       notification.error(
-        session?.message ||
-          tMcp('messages.remoteOAuthFailed', {
-            serverId,
-            defaultValue: `OAuth failed for "${serverId}".`,
-          }),
+        session?.message || tMcp('messages.remoteOAuthFailed', { serverId }),
         {
-          title: tMcp('notifications.operationFailed', { defaultValue: 'Operation failed' }),
+          title: tMcp('notifications.operationFailed'),
           duration: 6000,
         }
       );
@@ -286,7 +278,7 @@ const McpToolsConfig: React.FC = () => {
         notification.error(
           error instanceof Error ? error.message : String(error),
           {
-            title: tMcp('notifications.operationFailed', { defaultValue: 'Operation failed' }),
+            title: tMcp('notifications.operationFailed'),
             duration: 5000,
           }
         );
@@ -531,14 +523,11 @@ const McpToolsConfig: React.FC = () => {
   };
 
   const notifyServerStartUnavailable = (server: MCPServerInfo) => {
-    const defaultMessage = server.startDisabledReason
-      ? server.startDisabledReason
-      : `Server "${server.id}" command is unavailable. Check runtime installation or command configuration.`;
+    const message = server.startDisabledReason
+      ? getStartDisabledReasonLabel(server)
+      : tMcp('messages.commandUnavailable', { serverId: server.id });
     notification.warning(
-      tMcp('messages.commandUnavailable', {
-        serverId: server.id,
-        defaultValue: defaultMessage,
-      }),
+      message,
       {
         title: tMcp('notifications.startFailed'),
         duration: 5000,
@@ -689,15 +678,10 @@ const McpToolsConfig: React.FC = () => {
 
     const trimmed = authValue.trim();
     if (!trimmed) {
-      notification.warning(
-        tMcp('messages.remoteAuthRequired', {
-          defaultValue: 'Please provide a Bearer token or full Authorization header value.',
-        }),
-        {
-          title: tMcp('notifications.operationFailed', { defaultValue: 'Operation failed' }),
-          duration: 5000,
-        }
-      );
+      notification.warning(tMcp('messages.remoteAuthRequired'), {
+        title: tMcp('notifications.operationFailed'),
+        duration: 5000,
+      });
       return;
     }
 
@@ -708,10 +692,7 @@ const McpToolsConfig: React.FC = () => {
         authorizationValue: trimmed,
       });
       notification.success(
-        tMcp('messages.remoteAuthUpdated', {
-          serverId: authDialogServer.id,
-          defaultValue: `Updated remote auth for "${authDialogServer.id}".`,
-        }),
+        tMcp('messages.remoteAuthUpdated', { serverId: authDialogServer.id }),
         {
           title: tMcp('notifications.saveSuccess'),
           duration: 3000,
@@ -730,29 +711,32 @@ const McpToolsConfig: React.FC = () => {
     }
   };
 
-  const handleClearRemoteAuth = async (server: MCPServerInfo) => {
+  const handleDeleteServer = async (server: MCPServerInfo) => {
+    const confirmed = await window.confirm(tMcp('messages.deleteConfirm'));
+    if (!confirmed) return;
+
     try {
-      await MCPAPI.clearRemoteAuth({ serverId: server.id });
-      notification.success(
-        tMcp('messages.remoteAuthCleared', {
-          serverId: server.id,
-          defaultValue: `Cleared remote auth for "${server.id}".`,
-        }),
-        {
-          title: tMcp('notifications.saveSuccess'),
-          duration: 3000,
-        }
-      );
+      await MCPAPI.deleteServer({ serverId: server.id });
       if (authDialogServer?.id === server.id) {
         closeAuthDialog();
       }
+      notification.success(tMcp('messages.deleteSuccess'), {
+        title: tMcp('notifications.saveSuccess'),
+        duration: 3000,
+      });
       await loadServers();
     } catch (error) {
-      const errorInfo = classifyError(error, tMcp('actions.saveConfig'));
-      notification.error(errorInfo.message, {
-        title: errorInfo.title,
-        duration: errorInfo.duration,
-      });
+      const errorInfo = classifyError(error, tMcp('actions.delete'));
+      notification.error(
+        tMcp('errors.deleteServerFailed', {
+          serverId: server.id,
+          message: errorInfo.message,
+        }),
+        {
+          title: tMcp('messages.deleteFailed'),
+          duration: errorInfo.duration,
+        }
+      );
     }
   };
 
@@ -766,18 +750,14 @@ const McpToolsConfig: React.FC = () => {
       }
       pollOAuthSession(server.id);
       notification.success(
-        session.message ||
-          tMcp('messages.remoteOAuthStarted', {
-            serverId: server.id,
-            defaultValue: `Opened OAuth sign-in for "${server.id}".`,
-          }),
+        session.message || tMcp('messages.remoteOAuthStarted', { serverId: server.id }),
         {
           title: tMcp('notifications.startSuccess'),
           duration: 3000,
         }
       );
     } catch (error) {
-      const errorInfo = classifyError(error, tMcp('actions.remoteAuth', { defaultValue: 'Remote auth' }));
+      const errorInfo = classifyError(error, tMcp('actions.remoteAuth'));
       notification.error(errorInfo.message, {
         title: errorInfo.title,
         duration: errorInfo.duration,
@@ -814,62 +794,123 @@ const McpToolsConfig: React.FC = () => {
     return s.includes('stopped') || s.includes('failed') || s.includes('auth');
   };
 
+  const getServerStatusLabel = (status: string) => {
+    const normalized = status.trim().toLowerCase();
+    switch (normalized) {
+      case 'uninitialized':
+        return tMcp('status.uninitialized');
+      case 'starting':
+        return tMcp('status.starting');
+      case 'connected':
+        return tMcp('status.connected');
+      case 'healthy':
+        return tMcp('status.healthy');
+      case 'needsauth':
+        return tMcp('status.needsAuth');
+      case 'reconnecting':
+        return tMcp('status.reconnecting');
+      case 'failed':
+        return tMcp('status.failed');
+      case 'stopping':
+        return tMcp('status.stopping');
+      case 'stopped':
+        return tMcp('status.stopped');
+      default:
+        return status;
+    }
+  };
+
   const getRuntimeSourceLabel = (server: MCPServerInfo) => {
     if (!server.commandSource) {
-      return tMcp('server.runtime.unknown', { defaultValue: 'unknown' });
+      return tMcp('server.runtime.unknown');
     }
     return server.commandSource === 'managed'
-      ? tMcp('server.runtime.managed', { defaultValue: 'managed' })
-      : tMcp('server.runtime.system', { defaultValue: 'system' });
+      ? tMcp('server.runtime.managed')
+      : tMcp('server.runtime.system');
   };
 
   const getOAuthStatusLabel = (session: MCPRemoteOAuthSessionSnapshot | null) => {
     if (!session) {
-      return tMcp('server.remoteOAuthIdle', {
-        defaultValue: 'Not started yet',
-      });
+      return tMcp('server.remoteOAuthIdle');
     }
 
     switch (session.status) {
       case 'awaitingBrowser':
-        return tMcp('server.remoteOAuthAwaitingBrowser', {
-          defaultValue: 'Waiting to open browser',
-        });
+        return tMcp('server.remoteOAuthAwaitingBrowser');
       case 'awaitingCallback':
-        return tMcp('server.remoteOAuthAwaitingCallback', {
-          defaultValue: 'Waiting for provider callback',
-        });
+        return tMcp('server.remoteOAuthAwaitingCallback');
       case 'exchangingToken':
-        return tMcp('server.remoteOAuthExchangingToken', {
-          defaultValue: 'Exchanging authorization code',
-        });
+        return tMcp('server.remoteOAuthExchangingToken');
       case 'authorized':
-        return tMcp('server.remoteOAuthAuthorized', {
-          defaultValue: 'Authorized',
-        });
+        return tMcp('server.remoteOAuthAuthorized');
       case 'failed':
-        return tMcp('server.remoteOAuthFailed', {
-          defaultValue: 'Failed',
-        });
+        return tMcp('server.remoteOAuthFailed');
       case 'cancelled':
-        return tMcp('server.remoteOAuthCancelled', {
-          defaultValue: 'Cancelled',
-        });
+        return tMcp('server.remoteOAuthCancelled');
       default:
         return session.status;
     }
+  };
+
+  const getAuthSourceLabel = (authSource?: MCPServerInfo['authSource']) => {
+    if (!authSource) return '';
+    switch (authSource) {
+      case 'headers':
+        return tMcp('server.authSource.headers');
+      case 'env':
+        return tMcp('server.authSource.env');
+      case 'oauth':
+        return tMcp('server.authSource.oauth');
+      default:
+        return authSource;
+    }
+  };
+
+  const getRemoteAuthSummary = (server: MCPServerInfo) => {
+    if (server.authConfigured) {
+      if (server.authSource) {
+        return tMcp('server.remoteAuthConfiguredWithSource', {
+          source: getAuthSourceLabel(server.authSource),
+        });
+      }
+      return tMcp('server.remoteAuthConfigured');
+    }
+
+    if (server.oauthEnabled) {
+      return tMcp('server.remoteOAuthReady');
+    }
+
+    return tMcp('server.remoteAuthMissing');
+  };
+
+  const getRemoteAuthMethodLabel = (server: MCPServerInfo) => {
+    if (server.oauthEnabled && server.xaaEnabled) {
+      return tMcp('server.remoteAuthMethodOAuthXaa');
+    }
+    if (server.oauthEnabled) {
+      return tMcp('server.remoteAuthMethodOAuth');
+    }
+    return tMcp('server.remoteAuthMethodXaa');
+  };
+
+  const getStartDisabledReasonLabel = (server: MCPServerInfo) => {
+    if (server.transport.toLowerCase() === 'sse' && server.startSupported === false) {
+      return tMcp('server.runtime.unsupportedRemoteSse');
+    }
+
+    return server.startDisabledReason || '';
   };
 
   const isOAuthFlowActive = !!oauthSession && !['authorized', 'failed', 'cancelled'].includes(oauthSession.status);
 
   const getOAuthActionLabel = (server: MCPServerInfo) => {
     if (isOAuthFlowActive) {
-      return tMcp('actions.restartRemoteOAuth', { defaultValue: 'Restart OAuth' });
+      return tMcp('actions.restartRemoteOAuth');
     }
     if (server.authSource === 'oauth' && server.authConfigured) {
-      return tMcp('actions.reconnectRemoteOAuth', { defaultValue: 'Reconnect with OAuth' });
+      return tMcp('actions.reconnectRemoteOAuth');
     }
-    return tMcp('actions.startRemoteOAuth', { defaultValue: 'Connect with OAuth' });
+    return tMcp('actions.startRemoteOAuth');
   };
 
   const mcpSectionExtra = (
@@ -886,7 +927,7 @@ const McpToolsConfig: React.FC = () => {
   const renderServerBadge = (server: MCPServerInfo) => (
     <span className={`bitfun-mcp-tools__status-badge ${getStatusClass(server.status)}`}>
       {getStatusIcon(server.status)}
-      {server.status}
+      {getServerStatusLabel(server.status)}
     </span>
   );
 
@@ -897,21 +938,19 @@ const McpToolsConfig: React.FC = () => {
           size="small"
           variant="ghost"
           onClick={() => handleOpenAuthDialog(server)}
-          tooltip={tMcp('actions.remoteAuth', { defaultValue: 'Remote auth' })}
+          tooltip={tMcp('actions.remoteAuth')}
         >
           <KeyRound size={14} />
         </IconButton>
       )}
-      {isRemoteServer(server) && server.authConfigured && (
-        <IconButton
-          size="small"
-          variant="ghost"
-          onClick={() => handleClearRemoteAuth(server)}
-          tooltip={tMcp('actions.clearRemoteAuth', { defaultValue: 'Clear auth' })}
-        >
-          <Trash2 size={14} />
-        </IconButton>
-      )}
+      <IconButton
+        size="small"
+        variant="ghost"
+        onClick={() => handleDeleteServer(server)}
+        tooltip={tMcp('actions.delete')}
+      >
+        <Trash2 size={14} />
+      </IconButton>
       {isStopped(server.status) ? (
         <IconButton
           size="small"
@@ -920,10 +959,7 @@ const McpToolsConfig: React.FC = () => {
           tooltip={
             canStartServer(server)
               ? tMcp('actions.start')
-              : tMcp('messages.commandUnavailable', {
-                  serverId: server.id,
-                  defaultValue: `Server "${server.id}" command is unavailable.`,
-                })
+              : tMcp('messages.commandUnavailable', { serverId: server.id })
           }
         >
           <Play size={14} />
@@ -945,10 +981,7 @@ const McpToolsConfig: React.FC = () => {
         tooltip={
           canStartServer(server)
             ? tMcp('actions.restart')
-            : tMcp('messages.commandUnavailable', {
-                serverId: server.id,
-                defaultValue: `Server "${server.id}" command is unavailable.`,
-              })
+            : tMcp('messages.commandUnavailable', { serverId: server.id })
         }
       >
         <RefreshCw size={14} />
@@ -963,14 +996,14 @@ const McpToolsConfig: React.FC = () => {
       <div className="bitfun-mcp-tools__server-details">
         <div className="bitfun-mcp-tools__server-detail-item">
           <span className="bitfun-mcp-tools__server-detail-label">
-            {tMcp('server.transport', { defaultValue: 'Transport' })}:
+            {tMcp('server.transport')}:
           </span>
           <code className="bitfun-mcp-tools__server-detail-value">{server.transport}</code>
         </div>
         {server.statusMessage && (
           <div className="bitfun-mcp-tools__server-detail-item">
             <span className="bitfun-mcp-tools__server-detail-label">
-              {tMcp('server.statusDetail', { defaultValue: 'Status Detail' })}:
+              {tMcp('server.statusDetail')}:
             </span>
             <span className="bitfun-mcp-tools__server-detail-value">
               {server.statusMessage}
@@ -980,10 +1013,10 @@ const McpToolsConfig: React.FC = () => {
         {server.startDisabledReason && (
           <div className="bitfun-mcp-tools__server-detail-item">
             <span className="bitfun-mcp-tools__server-detail-label">
-              {tMcp('server.runtime.unsupportedReason', { defaultValue: 'Unavailable Reason' })}:
+              {tMcp('server.runtime.unsupportedReason')}:
             </span>
             <span className="bitfun-mcp-tools__server-detail-value">
-              {server.startDisabledReason}
+              {getStartDisabledReasonLabel(server)}
             </span>
           </div>
         )}
@@ -991,7 +1024,7 @@ const McpToolsConfig: React.FC = () => {
           <>
             <div className="bitfun-mcp-tools__server-detail-item">
               <span className="bitfun-mcp-tools__server-detail-label">
-                {tMcp('server.remoteUrl', { defaultValue: 'Remote URL' })}:
+                {tMcp('server.remoteUrl')}:
               </span>
               <code className="bitfun-mcp-tools__server-detail-value">
                 {server.url || '-'}
@@ -999,33 +1032,19 @@ const McpToolsConfig: React.FC = () => {
             </div>
             <div className="bitfun-mcp-tools__server-detail-item">
               <span className="bitfun-mcp-tools__server-detail-label">
-                {tMcp('server.remoteAuth', { defaultValue: 'Authentication' })}:
+                {tMcp('server.remoteAuth')}:
               </span>
               <span className="bitfun-mcp-tools__server-detail-value">
-                {server.authConfigured
-                  ? tMcp('server.remoteAuthConfigured', {
-                      defaultValue: `configured${server.authSource ? ` via ${server.authSource}` : ''}`,
-                    })
-                  : server.oauthEnabled
-                    ? tMcp('server.remoteOAuthReady', {
-                        defaultValue: 'OAuth configured, authorization required',
-                      })
-                  : tMcp('server.remoteAuthMissing', { defaultValue: 'not configured' })}
+                {getRemoteAuthSummary(server)}
               </span>
             </div>
             {(server.oauthEnabled || server.xaaEnabled) && (
               <div className="bitfun-mcp-tools__server-detail-item">
                 <span className="bitfun-mcp-tools__server-detail-label">
-                  {tMcp('server.remoteAuthMethod', { defaultValue: 'Auth Method' })}:
+                  {tMcp('server.remoteAuthMethod')}:
                 </span>
                 <span className="bitfun-mcp-tools__server-detail-value">
-                  {server.oauthEnabled && server.xaaEnabled
-                    ? tMcp('server.remoteAuthMethodOAuthXaa', {
-                        defaultValue: 'OAuth configured, XAA reserved',
-                      })
-                    : server.oauthEnabled
-                      ? tMcp('server.remoteAuthMethodOAuth', { defaultValue: 'OAuth' })
-                      : tMcp('server.remoteAuthMethodXaa', { defaultValue: 'XAA' })}
+                  {getRemoteAuthMethodLabel(server)}
                 </span>
               </div>
             )}
@@ -1035,7 +1054,7 @@ const McpToolsConfig: React.FC = () => {
           <>
         <div className="bitfun-mcp-tools__server-detail-item">
           <span className="bitfun-mcp-tools__server-detail-label">
-            {tMcp('server.command', { defaultValue: 'Command' })}:
+            {tMcp('server.command')}:
           </span>
           <code className="bitfun-mcp-tools__server-detail-value">
             {server.command || '-'}
@@ -1043,7 +1062,7 @@ const McpToolsConfig: React.FC = () => {
         </div>
         <div className="bitfun-mcp-tools__server-detail-item">
           <span className="bitfun-mcp-tools__server-detail-label">
-            {tMcp('server.runtime.source', { defaultValue: 'Source' })}:
+            {tMcp('server.runtime.source')}:
           </span>
           <span className="bitfun-mcp-tools__server-detail-value">
             {getRuntimeSourceLabel(server)}
@@ -1052,7 +1071,7 @@ const McpToolsConfig: React.FC = () => {
         {server.commandResolvedPath && (
           <div className="bitfun-mcp-tools__server-detail-item">
             <span className="bitfun-mcp-tools__server-detail-label">
-              {tMcp('server.runtime.path', { defaultValue: 'Resolved Path' })}:
+              {tMcp('server.runtime.path')}:
             </span>
             <code className="bitfun-mcp-tools__server-detail-value">
               {server.commandResolvedPath}
@@ -1164,11 +1183,8 @@ const McpToolsConfig: React.FC = () => {
         onClose={handleCloseAuthDialog}
         title={
           authDialogServer
-            ? tMcp('modal.remoteAuthTitle', {
-                serverName: authDialogServer.name,
-                defaultValue: `Remote auth: ${authDialogServer.name}`,
-              })
-            : tMcp('modal.remoteAuthTitle', { defaultValue: 'Remote auth' })
+            ? tMcp('modal.remoteAuthTitle', { serverName: authDialogServer.name })
+            : tMcp('actions.remoteAuth')
         }
         size="medium"
         showCloseButton={!authSubmitting && !oauthCancelling}
@@ -1178,20 +1194,16 @@ const McpToolsConfig: React.FC = () => {
             {authDialogServer.oauthEnabled && (
               <>
                 <p className="bitfun-mcp-tools__json-hint">
-                  {tMcp('modal.remoteOAuthHint', {
-                    defaultValue: 'Use OAuth to connect this remote MCP server. BitFun will listen on a local callback URL and reconnect the server after authorization.',
-                  })}
+                  {tMcp('modal.remoteOAuthHint')}
                 </p>
                 <p className="bitfun-mcp-tools__json-hint">
                   {tMcp('modal.remoteOAuthCurrentStatus', {
-                    defaultValue: `OAuth state: ${getOAuthStatusLabel(oauthSession)}`,
                     status: getOAuthStatusLabel(oauthSession),
                   })}
                 </p>
                 {oauthSession?.redirectUri && (
                   <p className="bitfun-mcp-tools__json-hint">
                     {tMcp('modal.remoteOAuthRedirectUri', {
-                      defaultValue: `Callback URL: ${oauthSession.redirectUri}`,
                       redirectUri: oauthSession.redirectUri,
                     })}
                   </p>
@@ -1199,8 +1211,7 @@ const McpToolsConfig: React.FC = () => {
                 {oauthSession?.message && (
                   <p className="bitfun-mcp-tools__json-hint">
                     {tMcp('modal.remoteOAuthStatus', {
-                      defaultValue: `OAuth status: ${oauthSession.status} - ${oauthSession.message}`,
-                      status: oauthSession.status,
+                      status: getOAuthStatusLabel(oauthSession),
                       message: oauthSession.message,
                     })}
                   </p>
@@ -1218,15 +1229,12 @@ const McpToolsConfig: React.FC = () => {
               </>
             )}
             <p className="bitfun-mcp-tools__json-hint">
-              {tMcp('modal.remoteAuthHint', {
-                defaultValue: 'Paste a Bearer token or a full Authorization header value. Saving will restart the remote MCP server.',
-              })}
+              {tMcp('modal.remoteAuthHint')}
             </p>
             {authDialogServer.url && (
               <p className="bitfun-mcp-tools__json-hint">
                 {tMcp('modal.remoteAuthServerUrl', {
                   url: authDialogServer.url,
-                  defaultValue: `Server URL: ${authDialogServer.url}`,
                 })}
               </p>
             )}
@@ -1234,9 +1242,7 @@ const McpToolsConfig: React.FC = () => {
               value={authValue}
               onChange={(e) => setAuthValue(e.target.value)}
               rows={4}
-              placeholder={tMcp('modal.remoteAuthPlaceholder', {
-                defaultValue: 'Bearer eyJ... or eyJ...',
-              })}
+              placeholder={tMcp('modal.remoteAuthPlaceholder')}
               variant="outlined"
               className="bitfun-mcp-tools__json-textarea"
               spellCheck={false}
@@ -1248,7 +1254,7 @@ const McpToolsConfig: React.FC = () => {
                 disabled={authSubmitting || oauthStarting || oauthCancelling}
               >
                 {isOAuthFlowActive
-                  ? tMcp('actions.cancelRemoteOAuth', { defaultValue: 'Cancel OAuth' })
+                  ? tMcp('actions.cancelRemoteOAuth')
                   : tMcp('actions.cancel')}
               </Button>
               <Button
@@ -1257,7 +1263,7 @@ const McpToolsConfig: React.FC = () => {
                 isLoading={authSubmitting}
                 disabled={oauthStarting || oauthCancelling}
               >
-                {tMcp('actions.saveRemoteAuth', { defaultValue: 'Save and reconnect' })}
+                {tMcp('actions.saveRemoteAuth')}
               </Button>
             </div>
           </div>

@@ -534,6 +534,12 @@ pub struct ClearMCPRemoteAuthRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct DeleteMCPServerRequest {
+    pub server_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct StartMCPRemoteOAuthRequest {
     pub server_id: String,
 }
@@ -687,6 +693,25 @@ pub async fn clear_mcp_remote_auth(
     mcp_service
         .server_manager()
         .clear_remote_server_auth(&request.server_id)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn delete_mcp_server(
+    state: State<'_, AppState>,
+    request: DeleteMCPServerRequest,
+) -> Result<(), String> {
+    let mcp_service = state
+        .mcp_service
+        .as_ref()
+        .ok_or_else(|| "MCP service not initialized".to_string())?;
+
+    mcp_service
+        .server_manager()
+        .remove_server(&request.server_id)
         .await
         .map_err(|e| e.to_string())?;
 

@@ -539,6 +539,7 @@ pub async fn run() {
             submit_mcp_interaction_response,
             update_mcp_remote_auth,
             clear_mcp_remote_auth,
+            api::mcp_api::delete_mcp_server,
             api::mcp_api::start_mcp_remote_oauth,
             api::mcp_api::get_mcp_remote_oauth_session,
             api::mcp_api::cancel_mcp_remote_oauth,
