@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { Badge, Switch } from '@/component-library';
 import { ConfigPageRow, ConfigPageSection } from '@/infrastructure/config/components/common';
 import { useFontPreference } from '../hooks/useFontPreference';
-import { FontSizeLevel, UI_FONT_SIZE_PRESETS } from '../types';
+import { FontSizeLevel, PRESET_UI_BASE_PX, UI_FONT_SIZE_PRESETS } from '../types';
 import './FontPreferencePanel.scss';
 
 const UI_LEVELS: Array<Exclude<FontSizeLevel, 'custom'>> = ['compact', 'small', 'default', 'medium', 'large'];
@@ -32,20 +32,26 @@ export function FontPreferencePanel() {
     }
   }, [preference.flowChat.mode, setFlowChatFont]);
 
+  /** Baseline px currently applied in the UI (preset level or custom). */
+  const getEffectiveUiBasePx = useCallback((): number => {
+    if (level === 'custom') {
+      const n = parseInt(customInput, 10);
+      if (!isNaN(n) && n >= 12 && n <= 20) return n;
+      return customPx ?? 14;
+    }
+    return PRESET_UI_BASE_PX[level];
+  }, [level, customInput, customPx]);
+
   const handleLevelClick = useCallback(async (l: FontSizeLevel) => {
     if (l === 'custom') {
-      const px = parseInt(customInput, 10);
-      if (isNaN(px) || px < 12 || px > 20) {
-        await setUiSize('custom', 14);
-        setCustomInput('14');
-      } else {
-        await setUiSize('custom', px);
-      }
+      const px = getEffectiveUiBasePx();
+      setCustomInput(String(px));
+      await setUiSize('custom', px);
     } else {
       await setUiSize(l);
     }
     setCustomError(null);
-  }, [customInput, setUiSize]);
+  }, [getEffectiveUiBasePx, setUiSize]);
 
   const handleCustomInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const raw = e.target.value;

@@ -12,7 +12,9 @@ import { flowChatStore } from '@/flow_chat/store/FlowChatStore';
 import { findWorkspaceForSession } from '@/flow_chat/utils/workspaceScope';
 import { openMainSession } from '@/flow_chat/services/openBtwSession';
 import type { FlowChatState, Session } from '@/flow_chat/types/flow-chat';
+import type { SessionMetadata } from '@/shared/types/session-history';
 import type { WorkspaceInfo } from '@/shared/types';
+import { sessionAPI } from '@/infrastructure/api';
 import { WorkspaceKind } from '@/shared/types';
 import './NavSearchDialog.scss';
 
@@ -36,6 +38,9 @@ const MAX_PER_GROUP = 20;
 const getTitle = (session: Session): string =>
   session.title?.trim() || `Session ${session.sessionId.slice(0, 6)}`;
 
+const sessionRecencyTime = (session: Session): number =>
+  session.updatedAt ?? session.lastActiveAt ?? session.createdAt ?? 0;
+
 const matchesQuery = (query: string, ...fields: (string | undefined | null)[]): boolean => {
   const q = query.toLowerCase();
   return fields.some(f => f && f.toLowerCase().includes(q));
@@ -51,6 +56,10 @@ const NavSearchDialog: React.FC<NavSearchDialogProps> = ({ open, onClose }) => {
   const [query, setQuery] = useState('');
   const [activeIndex, setActiveIndex] = useState(0);
   const [flowChatState, setFlowChatState] = useState<FlowChatState>(() => flowChatStore.getState());
+  /** Persisted session rows for opened workspaces — filled when dialog opens (search filters client-side). */
+  const [persistedOpenWorkspaceSessions, setPersistedOpenWorkspaceSessions] = useState<
+    Array<{ meta: SessionMetadata; workspace: WorkspaceInfo }>
+  >([]);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
@@ -68,25 +77,66 @@ const NavSearchDialog: React.FC<NavSearchDialogProps> = ({ open, onClose }) => {
     }
   }, [open]);
 
+  useEffect(() => {
+    if (!open) {
+      setPersistedOpenWorkspaceSessions([]);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const rows: Array<{ meta: SessionMetadata; workspace: WorkspaceInfo }> = [];
+        for (const w of openedWorkspacesList) {
+          const list = await sessionAPI.listSessions(
+            w.rootPath,
+            w.connectionId ?? undefined,
+            w.sshHost ?? undefined
+          );
+          for (const meta of list) {
+            rows.push({ meta, workspace: w });
+          }
+        }
+        if (!cancelled) {
+          setPersistedOpenWorkspaceSessions(rows);
+        }
+      } catch {
+        if (!cancelled) {
+          setPersistedOpenWorkspaceSessions([]);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, openedWorkspacesList]);
+
   const projectWorkspaces = useMemo(
     () => openedWorkspacesList.filter(w => w.workspaceKind !== WorkspaceKind.Assistant),
     [openedWorkspacesList]
   );
 
-  const allSessions = useMemo((): Array<{ session: Session; workspace: WorkspaceInfo | undefined }> => {
-    const result: Array<{ session: Session; workspace: WorkspaceInfo | undefined }> = [];
-    const allWorkspaces = [...openedWorkspacesList];
+  const openedWorkspaceIdSet = useMemo(
+    () => new Set(openedWorkspacesList.map(w => w.id)),
+    [openedWorkspacesList]
+  );
+
+  /** Sessions that resolve to an opened workspace (project + assistant rows in the nav). */
+  const sessionsInOpenedWorkspaces = useMemo((): Array<{ session: Session; workspace: WorkspaceInfo }> => {
+    const result: Array<{ session: Session; workspace: WorkspaceInfo }> = [];
     for (const session of flowChatState.sessions.values()) {
-      const workspace = findWorkspaceForSession(session, allWorkspaces);
-      result.push({ session, workspace });
+      const workspace = findWorkspaceForSession(session, openedWorkspacesList);
+      if (workspace && openedWorkspaceIdSet.has(workspace.id)) {
+        result.push({ session, workspace });
+      }
     }
-    result.sort((a, b) => {
-      const aTime = a.session.updatedAt ?? a.session.createdAt ?? 0;
-      const bTime = b.session.updatedAt ?? b.session.createdAt ?? 0;
-      return bTime - aTime;
-    });
+    result.sort((a, b) => sessionRecencyTime(b.session) - sessionRecencyTime(a.session));
     return result;
-  }, [flowChatState.sessions, openedWorkspacesList]);
+  }, [flowChatState.sessions, openedWorkspacesList, openedWorkspaceIdSet]);
+
+  const mainLineSessionsOpen = useMemo(
+    () => sessionsInOpenedWorkspaces.filter(({ session }) => !session.parentSessionId),
+    [sessionsInOpenedWorkspaces]
+  );
 
   const results = useMemo((): SearchResultItem[] => {
     const items: SearchResultItem[] = [];
@@ -118,21 +168,67 @@ const NavSearchDialog: React.FC<NavSearchDialogProps> = ({ open, onClose }) => {
       items.push({ kind: 'assistant', id: w.id, label: displayName, sublabel: w.description });
     }
 
-    const filteredSessions = allSessions
-      .filter(({ session }) => !session.parentSessionId && matchesQuery(q, getTitle(session)))
-      .slice(0, MAX_PER_GROUP);
-    for (const { session, workspace } of filteredSessions) {
-      items.push({
-        kind: 'session',
-        id: session.sessionId,
-        label: getTitle(session),
-        sublabel: workspace ? t('nav.search.sessionWorkspaceHint', { workspace: workspace.name }) : undefined,
-        workspaceId: workspace?.id,
-      });
+    const storeMatches = mainLineSessionsOpen.filter(({ session }) =>
+      matchesQuery(q, getTitle(session), session.sessionId)
+    );
+    const storeIds = new Set(storeMatches.map(({ session }) => session.sessionId));
+
+    const diskMatches = persistedOpenWorkspaceSessions.filter(({ meta, workspace }) => {
+      if (!openedWorkspaceIdSet.has(workspace.id)) return false;
+      if (meta.customMetadata?.parentSessionId) return false;
+      const label = meta.sessionName?.trim() || `Session ${meta.sessionId.slice(0, 6)}`;
+      if (!matchesQuery(q, label, meta.sessionId)) return false;
+      return !storeIds.has(meta.sessionId);
+    });
+
+    const merged: Array<{ session: Session; workspace: WorkspaceInfo } | { disk: SessionMetadata; workspace: WorkspaceInfo }> = [
+      ...storeMatches.map(({ session, workspace }) => ({ session, workspace })),
+      ...diskMatches.map(({ meta, workspace }) => ({ disk: meta, workspace })),
+    ];
+    merged.sort((a, b) => {
+      const ta =
+        'session' in a
+          ? sessionRecencyTime(a.session)
+          : a.disk.lastActiveAt ?? a.disk.createdAt ?? 0;
+      const tb =
+        'session' in b
+          ? sessionRecencyTime(b.session)
+          : b.disk.lastActiveAt ?? b.disk.createdAt ?? 0;
+      return tb - ta;
+    });
+
+    for (const entry of merged.slice(0, MAX_PER_GROUP)) {
+      if ('session' in entry) {
+        const { session, workspace } = entry;
+        items.push({
+          kind: 'session',
+          id: session.sessionId,
+          label: getTitle(session),
+          sublabel: t('nav.search.sessionWorkspaceHint', { workspace: workspace.name }),
+          workspaceId: workspace.id,
+        });
+      } else {
+        const { disk: meta, workspace } = entry;
+        items.push({
+          kind: 'session',
+          id: meta.sessionId,
+          label: meta.sessionName?.trim() || `Session ${meta.sessionId.slice(0, 6)}`,
+          sublabel: t('nav.search.sessionWorkspaceHint', { workspace: workspace.name }),
+          workspaceId: workspace.id,
+        });
+      }
     }
 
     return items;
-  }, [query, projectWorkspaces, assistantWorkspacesList, allSessions, t]);
+  }, [
+    query,
+    projectWorkspaces,
+    assistantWorkspacesList,
+    mainLineSessionsOpen,
+    persistedOpenWorkspaceSessions,
+    openedWorkspaceIdSet,
+    t,
+  ]);
 
   useEffect(() => {
     setActiveIndex(0);
@@ -190,6 +286,8 @@ const NavSearchDialog: React.FC<NavSearchDialogProps> = ({ open, onClose }) => {
   const workspaceItems = results.filter(r => r.kind === 'workspace');
   const assistantItems = results.filter(r => r.kind === 'assistant');
   const sessionItems = results.filter(r => r.kind === 'session');
+  const queryTrimmed = query.trim();
+  const showDefaultSessionColumn = !queryTrimmed;
 
   let globalIndex = 0;
   const renderGroup = (
@@ -245,13 +343,22 @@ const NavSearchDialog: React.FC<NavSearchDialogProps> = ({ open, onClose }) => {
           />
         </div>
         <div className="bitfun-nav-search-dialog__results" ref={listRef}>
-          {results.length === 0 ? (
+          {results.length === 0 && !showDefaultSessionColumn ? (
             <div className="bitfun-nav-search-dialog__empty">{t('nav.search.empty')}</div>
           ) : (
             <>
               {renderGroup(t('nav.search.groupWorkspaces'), workspaceItems, () => <FolderOpen size={14} />)}
               {renderGroup(t('nav.search.groupAssistants'), assistantItems, () => <User size={14} />)}
-              {renderGroup(t('nav.search.groupSessions'), sessionItems, () => <MessageSquare size={14} />)}
+              {showDefaultSessionColumn ? (
+                <div className="bitfun-nav-search-dialog__group" key="nav-search-sessions-default">
+                  <div className="bitfun-nav-search-dialog__group-label">{t('nav.search.groupSessions')}</div>
+                  <div className="bitfun-nav-search-dialog__session-hint" role="status">
+                    {t('nav.search.sessionSearchHintDefault')}
+                  </div>
+                </div>
+              ) : (
+                renderGroup(t('nav.search.groupSessions'), sessionItems, () => <MessageSquare size={14} />)
+              )}
             </>
           )}
         </div>
