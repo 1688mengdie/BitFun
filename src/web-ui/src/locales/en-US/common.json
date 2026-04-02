@@ -100,7 +100,7 @@
       "assistantSessions": "Assistant Sessions"
     },
     "search": {
-      "triggerPlaceholder": "Search workspaces, assistants, sessions...",
+      "triggerPlaceholder": "Search",
       "triggerTooltip": "Search (Ctrl+K)",
       "inputPlaceholder": "Search workspaces, assistants, sessions...",
       "groupWorkspaces": "Open Workspaces",

@@ -100,7 +100,7 @@
       "assistantSessions": "助理会话"
     },
     "search": {
-      "triggerPlaceholder": "搜索工作区、助理、会话...",
+      "triggerPlaceholder": "搜索",
       "triggerTooltip": "搜索 (Ctrl+K)",
       "inputPlaceholder": "搜索工作区、助理、会话...",
       "groupWorkspaces": "已打开工作区",

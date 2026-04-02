@@ -65,7 +65,7 @@
   background: var(--color-bg-scene);
 }
 
-// Search component — capsule matches .bitfun-nav-panel__search-trigger
+// Real search field in dialog (capsule). Nav trigger is a plain button — styles differ on purpose.
 .bitfun-nav-search-dialog__search {
   width: 100%;
 
@@ -244,60 +244,43 @@
   text-overflow: ellipsis;
 }
 
-// ── Trigger button (in NavPanel brand-header) ────────────────────────────────
-// Hover: (C) capsule “breath” via horizontal padding + (A) one-shot icon wiggle on inner span.
-
-@keyframes bitfun-search-trigger-icon-wiggle {
-  0% {
-    transform: rotate(0deg);
-  }
-  22% {
-    transform: rotate(-5.5deg);
-  }
-  52% {
-    transform: rotate(4deg);
-  }
-  100% {
-    transform: rotate(0deg);
-  }
-}
+// ── Trigger button (NavPanel brand-header) ───────────────────────────────────
+// Opens the search dialog — compact surface (not a text field): bg distinguishes from nav strip.
 
 .bitfun-nav-panel__search-trigger {
   display: flex;
   align-items: center;
-  gap: $size-gap-2;
+  gap: 8px;
   width: 100%;
+  height: 32px;
   min-height: 32px;
   padding: 0 $size-gap-2;
   border: none;
-  border-radius: $size-radius-full;
-  background: var(--color-bg-scene);
-  box-shadow:
-    inset 0 0 0 1px color-mix(in srgb, var(--border-subtle) 65%, transparent);
-  cursor: text;
+  border-radius: $size-radius-base;
+  background: var(--element-bg-soft);
+  box-shadow: none;
+  cursor: pointer;
   color: var(--color-text-primary);
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-sm);
+  font-weight: 500;
   text-align: left;
   box-sizing: border-box;
   transition:
-    background 0.2s ease,
-    box-shadow 0.2s ease,
-    color 0.2s ease,
-    padding 0.42s cubic-bezier(0.22, 1, 0.36, 1);
+    background $motion-fast $easing-standard,
+    color $motion-fast $easing-standard;
 
   &:hover {
-    padding: 0 calc(#{$size-gap-2} + 2px);
-    background: color-mix(in srgb, var(--color-bg-scene) 88%, var(--element-bg-medium));
-    box-shadow:
-      inset 0 0 0 1px color-mix(in srgb, var(--border-medium) 55%, transparent);
+    background: var(--element-bg-medium);
     color: var(--color-text-primary);
-    cursor: text;
   }
 
   &:active {
-    padding: 0 calc(#{$size-gap-2} + 1px);
-    box-shadow:
-      inset 0 0 0 1px color-mix(in srgb, var(--border-medium) 45%, transparent);
+    background: var(--element-bg-strong);
+  }
+
+  &:focus-visible {
+    outline: 1px solid var(--color-accent-500);
+    outline-offset: 1px;
   }
 
   &__icon {
@@ -305,35 +288,32 @@
     align-items: center;
     justify-content: center;
     flex-shrink: 0;
-    transition: transform 0.42s cubic-bezier(0.22, 1, 0.36, 1);
+    width: 22px;
+    min-width: 22px;
+    height: 22px;
+    transform: scale(1);
+    transform-origin: center;
+    transition: transform $motion-fast $easing-standard;
   }
 
   &:hover &__icon {
-    transform: translateX(2px);
+    transform: scale(1.07);
   }
 
   &__icon-inner {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    transform-origin: 50% 62%;
-  }
-
-  &:hover &__icon-inner {
-    animation: bitfun-search-trigger-icon-wiggle 0.58s cubic-bezier(0.34, 1.12, 0.52, 1) 1 both;
   }
 }
 
 .bitfun-nav-panel__search-trigger__label {
   flex: 1;
+  min-width: 0;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-  color: var(--color-text-disabled);
-
-  .bitfun-nav-panel__search-trigger:hover & {
-    color: var(--color-text-secondary);
-  }
+  color: var(--color-text-primary);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -361,20 +341,10 @@
   .bitfun-nav-panel__search-trigger {
     transition:
       background 0.15s ease,
-      box-shadow 0.15s ease,
       color 0.15s ease;
-
-    &:hover,
-    &:active {
-      padding: 0 $size-gap-2;
-    }
 
     &:hover .bitfun-nav-panel__search-trigger__icon {
       transform: none;
-    }
-
-    &:hover .bitfun-nav-panel__search-trigger__icon-inner {
-      animation: none;
     }
   }
 }
