@@ -181,6 +181,15 @@
   opacity: 0.88;
 }
 
+// Default (no query): sessions column — label only, no rows; hint below label.
+.bitfun-nav-search-dialog__session-hint {
+  padding: $size-gap-2 $size-gap-2 $size-gap-1 2px;
+  font-size: var(--font-size-xs);
+  line-height: 1.45;
+  color: var(--color-text-muted);
+  user-select: none;
+}
+
 // ── Result item ──────────────────────────────────────────────────────────────
 
 .bitfun-nav-search-dialog__item {
@@ -259,7 +268,7 @@
   border-radius: $size-radius-base;
   background: var(--element-bg-soft);
   box-shadow: none;
-  cursor: pointer;
+  cursor: text;
   color: var(--color-text-primary);
   font-size: var(--font-size-sm);
   font-weight: 500;

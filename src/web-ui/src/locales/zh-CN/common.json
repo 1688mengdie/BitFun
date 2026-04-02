@@ -107,6 +107,7 @@
       "groupAssistants": "助理",
       "groupSessions": "所有会话",
       "empty": "未找到相关结果",
+      "sessionSearchHintDefault": "输入关键词，搜索已打开工作区内的会话",
       "sessionWorkspaceHint": "位于 {{workspace}}"
     },
     "displayModes": {

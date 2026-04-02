@@ -19,9 +19,10 @@ type WorkspaceScope = Pick<WorkspaceInfo, 'id' | 'rootPath' | 'connectionId' | '
 export function sessionMatchesWorkspace(session: SessionScope, workspace: WorkspaceScope): boolean {
   const sid = session.workspaceId?.trim();
   const wid = workspace.id?.trim();
-  if (sid && wid) {
-    return sid === wid;
+  if (sid && wid && sid === wid) {
+    return true;
   }
+  // Stale or missing id on the session: still match by path + remote scope.
   return sessionBelongsToWorkspaceNavRow(
     session,
     workspace.rootPath,
