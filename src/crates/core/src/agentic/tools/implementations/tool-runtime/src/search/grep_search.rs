@@ -1,13 +1,17 @@
 use log::{debug, info, warn};
 use std::io;
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::SystemTime;
 
-use globset::GlobBuilder;
+use globset::{GlobBuilder, GlobMatcher};
 use grep_regex::RegexMatcherBuilder;
 use grep_searcher::{Searcher, SearcherBuilder, Sink, SinkContext, SinkMatch};
 use ignore::types::TypesBuilder;
 use ignore::WalkBuilder;
+
+const MAX_DISPLAY_COLUMNS: usize = 500;
+const VCS_DIRECTORIES_TO_EXCLUDE: &[&str] = &[".git", ".svn", ".hg", ".bzr", ".jj", ".sl"];
 
 /// Output mode enumeration
 #[derive(Debug, Clone, Copy)]
@@ -45,6 +49,7 @@ struct GrepSink {
     after_context: usize,
     head_limit: Option<usize>,
     current_file: PathBuf,
+    display_base: Option<String>,
     output: Arc<Mutex<Vec<u8>>>,
     line_count: Arc<Mutex<usize>>,
     match_count: Arc<Mutex<usize>>,
@@ -70,6 +75,7 @@ impl GrepSink {
         after_context: usize,
         head_limit: Option<usize>,
         current_file: PathBuf,
+        display_base: Option<String>,
     ) -> Self {
         Self {
             output_mode,
@@ -78,6 +84,7 @@ impl GrepSink {
             after_context,
             head_limit,
             current_file,
+            display_base,
             output: Arc::new(Mutex::new(Vec::new())),
             line_count: Arc::new(Mutex::new(0)),
             match_count: Arc::new(Mutex::new(0)),
@@ -88,10 +95,6 @@ impl GrepSink {
     fn get_output(&self) -> String {
         let output = lock_recover(&self.output, "output");
         String::from_utf8_lossy(&output).to_string()
-    }
-
-    fn get_line_count(&self) -> usize {
-        *lock_recover(&self.line_count, "line_count")
     }
 
     fn get_match_count(&self) -> usize {
@@ -146,13 +149,23 @@ impl GrepSink {
 
     /// Format output line (rg style: only show line number and content, no path)
     fn format_line(&self, line_number: u64, line: &[u8], is_match: bool) -> Vec<u8> {
-        let line_str = String::from_utf8_lossy(line).trim_end().to_string();
+        let mut line_str = String::from_utf8_lossy(line).trim_end().to_string();
+        if line_str.chars().count() > MAX_DISPLAY_COLUMNS {
+            line_str = format!(
+                "{} [truncated]",
+                line_str
+                    .chars()
+                    .take(MAX_DISPLAY_COLUMNS)
+                    .collect::<String>()
+            );
+        }
         let separator = if is_match { ":" } else { "-" };
+        let path_prefix = relativize_display_path(&self.current_file, self.display_base.as_deref());
 
         if self.show_line_numbers {
-            format!("{}{}{}", line_number, separator, line_str).into_bytes()
+            format!("{}{}{}:{}", path_prefix, separator, line_number, line_str).into_bytes()
         } else {
-            line_str.into_bytes()
+            format!("{}{}{}", path_prefix, separator, line_str).into_bytes()
         }
     }
 }
@@ -176,8 +189,6 @@ impl Sink for GrepSink {
                 self.write_line(&formatted);
             }
             OutputMode::FilesWithMatches => {
-                let path_str = self.current_file.display().to_string();
-                self.write_line(path_str.as_bytes());
                 return Ok(false); // Only need first match, then stop
             }
             OutputMode::Count => {
@@ -250,10 +261,14 @@ pub struct GrepOptions {
     pub after_context: Option<usize>,
     /// Limit output lines/files
     pub head_limit: Option<usize>,
-    /// Glob pattern filter
-    pub glob: Option<String>,
+    /// Number of lines/files to skip before limiting output
+    pub offset: usize,
+    /// Glob pattern filters
+    pub globs: Vec<String>,
     /// File type filter
     pub file_type: Option<String>,
+    /// Prefer displaying paths relative to this base when possible
+    pub display_base: Option<String>,
 }
 
 impl Default for GrepOptions {
@@ -269,8 +284,10 @@ impl Default for GrepOptions {
             before_context: None,
             after_context: None,
             head_limit: None,
-            glob: None,
+            offset: 0,
+            globs: Vec::new(),
             file_type: None,
+            display_base: None,
         }
     }
 }
@@ -334,14 +351,24 @@ impl GrepOptions {
     }
 
     /// Set glob pattern filter
-    pub fn glob(mut self, pattern: impl Into<String>) -> Self {
-        self.glob = Some(pattern.into());
+    pub fn offset(mut self, offset: usize) -> Self {
+        self.offset = offset;
+        self
+    }
+
+    pub fn globs(mut self, patterns: Vec<String>) -> Self {
+        self.globs = patterns;
         self
     }
 
     /// Set file type filter
     pub fn file_type(mut self, ftype: impl Into<String>) -> Self {
         self.file_type = Some(ftype.into());
+        self
+    }
+
+    pub fn display_base(mut self, base: impl Into<String>) -> Self {
+        self.display_base = Some(base.into());
         self
     }
 }
@@ -367,11 +394,86 @@ impl GrepOptions {
 ///
 /// let result = grep_search(options, None, None);
 /// ```
+pub struct GrepSearchResult {
+    pub file_count: usize,
+    pub total_matches: usize,
+    pub result_text: String,
+    pub applied_limit: Option<usize>,
+    pub applied_offset: Option<usize>,
+}
+
+fn is_vcs_path(path: &Path) -> bool {
+    path.components().any(|component| {
+        matches!(
+            component,
+            Component::Normal(name)
+                if VCS_DIRECTORIES_TO_EXCLUDE
+                    .iter()
+                    .any(|excluded| name.to_string_lossy() == *excluded)
+        )
+    })
+}
+
+fn modified_time(path: &Path) -> SystemTime {
+    std::fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .unwrap_or(SystemTime::UNIX_EPOCH)
+}
+
+fn normalize_display_base(base: &str) -> String {
+    base.replace('\\', "/").trim_end_matches('/').to_string()
+}
+
+fn relativize_display_path(path: &Path, display_base: Option<&str>) -> String {
+    let normalized = path.display().to_string().replace('\\', "/");
+    let Some(base) = display_base else {
+        return normalized;
+    };
+
+    let normalized_base = normalize_display_base(base);
+    if normalized == normalized_base {
+        return ".".to_string();
+    }
+
+    if let Some(rest) = normalized.strip_prefix(&(normalized_base + "/")) {
+        return rest.to_string();
+    }
+
+    normalized
+}
+
+fn apply_offset_limit<T>(
+    items: Vec<T>,
+    limit: Option<usize>,
+    offset: usize,
+) -> (Vec<T>, Option<usize>, Option<usize>)
+where
+    T: Clone,
+{
+    let total_len = items.len();
+    let sliced = match limit {
+        Some(limit) => items
+            .into_iter()
+            .skip(offset)
+            .take(limit)
+            .collect::<Vec<_>>(),
+        None => items.into_iter().skip(offset).collect::<Vec<_>>(),
+    };
+
+    let applied_limit = match limit {
+        Some(limit) if total_len.saturating_sub(offset) > limit => Some(limit),
+        _ => None,
+    };
+    let applied_offset = if offset > 0 { Some(offset) } else { None };
+
+    (sliced, applied_limit, applied_offset)
+}
+
 pub fn grep_search(
     options: GrepOptions,
     progress_callback: Option<ProgressCallback>,
     progress_interval_millis: Option<u128>,
-) -> Result<(usize, usize, String), String> {
+) -> Result<GrepSearchResult, String> {
     let search_path = &options.path;
 
     // Validate that search path exists
@@ -392,8 +494,9 @@ pub fn grep_search(
     let output_mode = options.output_mode;
     let show_line_numbers = options.show_line_numbers;
     let head_limit = options.head_limit;
-    let glob_pattern = options.glob.as_deref();
+    let offset = options.offset;
     let file_type = options.file_type.as_deref();
+    let display_base = options.display_base.clone();
 
     // Build regex matcher
     let matcher = RegexMatcherBuilder::new()
@@ -419,17 +522,11 @@ pub fn grep_search(
     // Build walker
     let mut walk_builder = WalkBuilder::new(search_path);
     walk_builder
-        .hidden(true) // Ignore hidden files
+        .hidden(false) // Include hidden files, closer to Claude's rg --hidden
         .ignore(true) // Use .gitignore
         .git_ignore(true)
-        .git_global(false)
-        .git_exclude(false);
-
-    // Add glob filter
-    if glob_pattern.is_some() {
-        walk_builder.add_custom_ignore_filename(".gitignore");
-        // Glob filter needs to be handled manually during traversal
-    }
+        .git_global(true)
+        .git_exclude(true);
 
     // Add file type filter
     let mut types_builder = TypesBuilder::new();
@@ -479,23 +576,23 @@ pub fn grep_search(
     let walker = walk_builder.build();
 
     // Pre-build glob matcher
-    let glob_matcher = if let Some(glob) = glob_pattern {
-        Some(
+    let glob_matchers = options
+        .globs
+        .iter()
+        .map(|glob| {
             GlobBuilder::new(glob)
                 .build()
-                .map_err(|e| format!("Invalid glob pattern: {}", e))?
-                .compile_matcher(),
-        )
-    } else {
-        None
-    };
+                .map(|compiled| compiled.compile_matcher())
+                .map_err(|e| format!("Invalid glob pattern: {}", e))
+        })
+        .collect::<Result<Vec<GlobMatcher>, String>>()?;
 
     // Collect all results
-    let mut all_output = Vec::new();
+    let mut content_lines = Vec::new();
     let mut total_matches = 0;
-    let mut total_lines = 0;
     let mut file_count = 0;
     let mut file_match_counts: Vec<(String, usize)> = Vec::new();
+    let mut matched_files_with_mtime: Vec<(String, SystemTime)> = Vec::new();
 
     // Progress tracking
     let mut files_processed = 0;
@@ -528,40 +625,24 @@ pub fn grep_search(
                     continue;
                 }
 
-                // Filter using pre-built glob matcher
-                if let Some(ref matcher) = glob_matcher {
-                    if !matcher.is_match(path) {
-                        continue;
-                    }
+                if is_vcs_path(path) {
+                    continue;
                 }
 
-                // Check head_limit
-                if let Some(limit) = head_limit {
-                    if matches!(output_mode, OutputMode::FilesWithMatches) {
-                        if file_count >= limit {
-                            break;
-                        }
-                    } else if total_lines >= limit {
-                        break;
-                    }
+                if !glob_matchers.is_empty()
+                    && !glob_matchers.iter().any(|matcher| matcher.is_match(path))
+                {
+                    continue;
                 }
-
-                // Create sink
-                let remaining_limit = head_limit.map(|limit| {
-                    if total_lines < limit {
-                        limit - total_lines
-                    } else {
-                        0
-                    }
-                });
 
                 let sink = GrepSink::new(
                     output_mode,
                     show_line_numbers,
                     before_context,
                     after_context,
-                    remaining_limit,
+                    None,
                     path.to_path_buf(),
+                    display_base.clone(),
                 );
 
                 // Execute search
@@ -578,27 +659,25 @@ pub fn grep_search(
                         OutputMode::Content => {
                             let output = sink.get_output();
                             if !output.is_empty() {
-                                // rg style: files separated by blank lines, file path on separate line at top
-                                let mut file_output = String::new();
-                                if !all_output.is_empty() {
-                                    file_output.push('\n'); // Separate files with blank lines
-                                }
-                                // File path at top
-                                file_output.push_str(&path.display().to_string());
-                                file_output.push('\n');
-                                file_output.push_str(&output);
-                                all_output.push(file_output);
+                                content_lines.extend(
+                                    output
+                                        .lines()
+                                        .filter(|line| !line.is_empty())
+                                        .map(|line| line.to_string()),
+                                );
                             }
-                            total_lines += sink.get_line_count();
                         }
                         OutputMode::FilesWithMatches => {
-                            let output = sink.get_output();
-                            if !output.is_empty() {
-                                all_output.push(output);
-                            }
+                            matched_files_with_mtime.push((
+                                relativize_display_path(path, display_base.as_deref()),
+                                modified_time(path),
+                            ));
                         }
                         OutputMode::Count => {
-                            file_match_counts.push((path.display().to_string(), file_matches));
+                            file_match_counts.push((
+                                relativize_display_path(path, display_base.as_deref()),
+                                file_matches,
+                            ));
                         }
                     }
                 }
@@ -612,71 +691,117 @@ pub fn grep_search(
     // Build result
     let result_text = match output_mode {
         OutputMode::Content => {
-            if all_output.is_empty() {
+            let (lines, applied_limit, applied_offset) =
+                apply_offset_limit(content_lines, head_limit, offset);
+            if lines.is_empty() {
                 format!("No matches found for pattern '{}'", pattern)
             } else {
-                let limited = if let Some(limit) = head_limit {
-                    format!(" (limited to {} lines)", limit)
-                } else {
-                    String::new()
-                };
-                format!(
-                    "Found {} matches{}:\n{}",
+                return Ok(GrepSearchResult {
+                    file_count,
                     total_matches,
-                    limited,
-                    all_output.join("")
-                )
+                    result_text: lines.join("\n").trim_end_matches('\n').to_string(),
+                    applied_limit,
+                    applied_offset,
+                });
             }
         }
         OutputMode::FilesWithMatches => {
-            if all_output.is_empty() {
+            matched_files_with_mtime
+                .sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
+            let sorted_matches = matched_files_with_mtime
+                .into_iter()
+                .map(|(path, _)| path)
+                .collect::<Vec<_>>();
+            let (matches, applied_limit, applied_offset) =
+                apply_offset_limit(sorted_matches, head_limit, offset);
+
+            if matches.is_empty() {
                 format!("No files found matching pattern '{}'", pattern)
             } else {
-                let limited = if let Some(limit) = head_limit {
-                    format!(" (limited to {} files)", limit)
-                } else {
-                    String::new()
-                };
-                format!(
-                    "Found {} file(s){}:\n{}",
+                return Ok(GrepSearchResult {
                     file_count,
-                    limited,
-                    all_output.join("")
-                )
+                    total_matches,
+                    result_text: matches.join("\n").trim_end_matches('\n').to_string(),
+                    applied_limit,
+                    applied_offset,
+                });
             }
         }
         OutputMode::Count => {
             if file_match_counts.is_empty() {
                 format!("No matches found for pattern '{}'", pattern)
             } else {
-                let count_list: Vec<(String, usize)> = if let Some(limit) = head_limit {
-                    file_match_counts.into_iter().take(limit).collect()
-                } else {
-                    file_match_counts
-                };
-
-                let limited = if head_limit.is_some() {
-                    format!(" (limited to {} files)", count_list.len())
-                } else {
-                    String::new()
-                };
+                let (count_list, applied_limit, applied_offset) =
+                    apply_offset_limit(file_match_counts, head_limit, offset);
 
                 let count_lines: Vec<String> = count_list
                     .iter()
                     .map(|(file, count)| format!("{}:{}", file, count))
                     .collect();
 
-                format!(
-                    "Total {} matches in {} files{}:\n{}",
+                return Ok(GrepSearchResult {
+                    file_count,
                     total_matches,
-                    count_list.len(),
-                    limited,
-                    count_lines.join("\n")
-                )
+                    result_text: format!(
+                        "Total {} matches in {} files:\n{}",
+                        total_matches,
+                        count_list.len(),
+                        count_lines.join("\n")
+                    )
+                    .trim_end_matches('\n')
+                    .to_string(),
+                    applied_limit,
+                    applied_offset,
+                });
             }
         }
     };
 
-    let result_text = result_text.trim_end_matches("\n").to_string();
-    Ok((file_count, total_matches, result_text))
+    Ok(GrepSearchResult {
+        file_count,
+        total_matches,
+        result_text: result_text.trim_end_matches('\n').to_string(),
+        applied_limit: None,
+        applied_offset: if offset > 0 { Some(offset) } else { None },
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{grep_search, GrepOptions, OutputMode};
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn make_temp_dir(name: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("bitfun-grep-search-{name}-{unique}"));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn truncates_very_long_output_lines() {
+        let root = make_temp_dir("truncate");
+        let file_path = root.join("sample.txt");
+        let long_line = "a".repeat(600);
+        fs::write(&file_path, format!("{long_line}\n")).unwrap();
+
+        let result = grep_search(
+            GrepOptions::new("a+", root.to_string_lossy().to_string())
+                .output_mode(OutputMode::Content)
+                .show_line_numbers(true)
+                .head_limit(10),
+            None,
+            None,
+        )
+        .unwrap();
+
+        assert!(result.result_text.contains("[truncated]"));
+
+        let _ = fs::remove_dir_all(root);
+    }
 }
