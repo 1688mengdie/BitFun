@@ -20,7 +20,6 @@ use serde::{Deserialize, Serialize};
 
 /// Supported shell types
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[derive(Default)]
 pub enum ShellType {
     /// Bash shell
     Bash,
@@ -31,7 +30,6 @@ pub enum ShellType {
     /// PowerShell (Windows PowerShell)
     PowerShell,
     /// PowerShell Core (cross-platform)
-    #[default]
     PowerShellCore,
     /// Windows CMD
     Cmd,
@@ -133,6 +131,19 @@ impl ShellType {
     }
 }
 
+impl Default for ShellType {
+    fn default() -> Self {
+        #[cfg(windows)]
+        {
+            // Prefer PowerShell Core over Windows PowerShell
+            ShellType::PowerShellCore
+        }
+        #[cfg(not(windows))]
+        {
+            ShellType::Bash
+        }
+    }
+}
 
 impl std::fmt::Display for ShellType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

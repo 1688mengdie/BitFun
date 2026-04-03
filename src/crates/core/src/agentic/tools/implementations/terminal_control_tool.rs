@@ -10,12 +10,6 @@ use terminal_core::{CloseSessionRequest, SignalRequest, TerminalApi};
 /// TerminalControl tool - kill or interrupt a terminal session
 pub struct TerminalControlTool;
 
-impl Default for TerminalControlTool {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl TerminalControlTool {
     pub fn new() -> Self {
         Self

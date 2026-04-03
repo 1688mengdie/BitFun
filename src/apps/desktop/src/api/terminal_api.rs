@@ -67,8 +67,8 @@ impl TerminalState {
             *initialized = true;
         }
 
-        TerminalApi::from_singleton()
-            .map_err(|e| format!("Terminal API not initialized: {}", e))
+        Ok(TerminalApi::from_singleton()
+            .map_err(|e| format!("Terminal API not initialized: {}", e))?)
     }
 
     /// Get the scripts directory path for shell integration

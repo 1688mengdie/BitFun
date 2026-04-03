@@ -33,7 +33,7 @@ impl CompiledGlob {
         if is_dir {
             // For directories, try matching with and without trailing slash
             self.matcher.is_match(rel_path_str)
-                || self.matcher.is_match(format!("{}/", rel_path_str))
+                || self.matcher.is_match(&format!("{}/", rel_path_str))
         } else {
             self.matcher.is_match(rel_path_str)
         }
@@ -105,13 +105,15 @@ pub fn list_files(
     let gitignore = load_gitignore(path);
 
     // Special folders that should not be expanded
-    let special_folders = [Path::new("/"),
+    let special_folders = vec![
+        Path::new("/"),
         Path::new("/home"),
         Path::new("/Users"),
         Path::new("/System"),
         Path::new("/Windows"),
         Path::new("/Program Files"),
-        Path::new("/Program Files (x86)")];
+        Path::new("/Program Files (x86)"),
+    ];
 
     // Folders to exclude
     let excluded_folders = vec![
@@ -167,7 +169,9 @@ pub fn list_files(
                 // Never exclude the root directory
                 false
             } else {
-                excluded_folders.contains(&folder_name)
+                excluded_folders
+                    .iter()
+                    .any(|excluded| folder_name == *excluded)
                     || (folder_name.starts_with('.') && folder_name != "." && folder_name != "..")
             };
 

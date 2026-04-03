@@ -103,7 +103,6 @@ impl SnapshotService {
     }
 
     /// Intercept a tool call before it modifies the file system.
-    #[allow(clippy::too_many_arguments)]
     pub async fn intercept_file_modification(
         &self,
         session_id: &str,

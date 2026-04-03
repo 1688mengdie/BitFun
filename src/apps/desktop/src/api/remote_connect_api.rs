@@ -54,10 +54,8 @@ async fn ensure_service() -> Result<(), String> {
     }
     drop(guard);
 
-    let config = RemoteConnectConfig {
-        mobile_web_dir: detect_mobile_web_dir(),
-        ..RemoteConnectConfig::default()
-    };
+    let mut config = RemoteConnectConfig::default();
+    config.mobile_web_dir = detect_mobile_web_dir();
     let service =
         RemoteConnectService::new(config).map_err(|e| format!("init remote connect: {e}"))?;
     *holder.write().await = Some(service);
@@ -480,10 +478,8 @@ pub async fn remote_connect_configure_custom_server(url: String) -> Result<(), S
     let holder = get_service_holder();
     let mut guard = holder.write().await;
     if guard.is_none() {
-        let config = RemoteConnectConfig {
-            custom_server_url: Some(url),
-            ..RemoteConnectConfig::default()
-        };
+        let mut config = RemoteConnectConfig::default();
+        config.custom_server_url = Some(url);
         let service = RemoteConnectService::new(config).map_err(|e| format!("init: {e}"))?;
         *guard = Some(service);
     }
@@ -534,23 +530,13 @@ pub async fn remote_connect_configure_bot(request: ConfigureBotRequest) -> Resul
     };
 
     if guard.is_none() {
-        let config = match bot_config {
-            BotConfig::Feishu { .. } => RemoteConnectConfig {
-                mobile_web_dir: detect_mobile_web_dir(),
-                bot_feishu: Some(bot_config),
-                ..RemoteConnectConfig::default()
-            },
-            BotConfig::Telegram { .. } => RemoteConnectConfig {
-                mobile_web_dir: detect_mobile_web_dir(),
-                bot_telegram: Some(bot_config),
-                ..RemoteConnectConfig::default()
-            },
-            BotConfig::Weixin { .. } => RemoteConnectConfig {
-                mobile_web_dir: detect_mobile_web_dir(),
-                bot_weixin: Some(bot_config),
-                ..RemoteConnectConfig::default()
-            },
-        };
+        let mut config = RemoteConnectConfig::default();
+        config.mobile_web_dir = detect_mobile_web_dir();
+        match &bot_config {
+            BotConfig::Feishu { .. } => config.bot_feishu = Some(bot_config),
+            BotConfig::Telegram { .. } => config.bot_telegram = Some(bot_config),
+            BotConfig::Weixin { .. } => config.bot_weixin = Some(bot_config),
+        }
         let service = RemoteConnectService::new(config).map_err(|e| format!("init: {e}"))?;
         *guard = Some(service);
     } else if let Some(service) = guard.as_mut() {

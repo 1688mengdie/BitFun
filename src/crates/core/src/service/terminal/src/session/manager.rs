@@ -1,4 +1,4 @@
-﻿//! Session Manager - Manages terminal sessions lifecycle
+//! Session Manager - Manages terminal sessions lifecycle
 
 use std::collections::HashMap;
 use std::pin::Pin;
@@ -378,7 +378,6 @@ impl SessionManager {
     }
 
     /// Create a new terminal session with shell integration
-    #[allow(clippy::too_many_arguments)]
     pub async fn create_session(
         &self,
         session_id: Option<String>,
@@ -405,7 +404,6 @@ impl SessionManager {
     }
 
     /// Create a new terminal session with optional shell integration
-    #[allow(clippy::too_many_arguments)]
     pub async fn create_session_with_options(
         &self,
         session_id: Option<String>,

@@ -447,7 +447,6 @@ impl ExecutionEngine {
     }
 
     /// Compress context, will emit compression events (Started, Completed, and Failed)
-    #[allow(clippy::too_many_arguments)]
     pub async fn compress_messages(
         &self,
         session_id: &str,
@@ -587,7 +586,6 @@ impl ExecutionEngine {
 
     /// Compact the current session context outside the normal dialog execution loop.
     /// Always emits compression started/completed/failed events for the provided turn.
-    #[allow(clippy::too_many_arguments)]
     pub async fn compact_session_context(
         &self,
         session_id: &str,

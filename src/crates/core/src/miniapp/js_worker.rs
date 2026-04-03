@@ -11,15 +11,11 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::{oneshot, Mutex};
 
-type JsWorkerResponse = Result<Value, String>;
-type PendingResponseSender = oneshot::Sender<JsWorkerResponse>;
-type PendingResponseMap = HashMap<String, PendingResponseSender>;
-
 /// Single JS Worker process: stdin for requests, stderr for RPC responses, stdout for user logs.
 pub struct JsWorker {
     _child: Child,
     stdin: Mutex<Option<ChildStdin>>,
-    pending: Arc<Mutex<PendingResponseMap>>,
+    pending: Arc<Mutex<HashMap<String, oneshot::Sender<Result<Value, String>>>>>,
     last_activity: Arc<AtomicI64>,
 }
 
@@ -48,7 +44,10 @@ impl JsWorker {
         let stderr = child.stderr.take().ok_or("No stderr")?;
         let _stdout = child.stdout.take();
 
-        let pending = Arc::new(Mutex::new(PendingResponseMap::new()));
+        let pending = Arc::new(Mutex::new(HashMap::<
+            String,
+            oneshot::Sender<Result<Value, String>>,
+        >::new()));
         let last_activity = Arc::new(AtomicI64::new(
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

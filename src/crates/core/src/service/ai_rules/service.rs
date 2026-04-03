@@ -636,7 +636,7 @@ The rules section has a number of possible rules/memories/context that you shoul
         while let Ok(Some(entry)) = entries.next_entry().await {
             let path = entry.path();
 
-            if path.extension().is_some_and(|ext| ext == "mdc") {
+            if path.extension().map_or(false, |ext| ext == "mdc") {
                 match self.load_rule_from_file(&path, level).await {
                     Ok(rule) => rules.push(rule),
                     Err(e) => {
@@ -664,7 +664,7 @@ The rules section has a number of possible rules/memories/context that you shoul
             .ok_or_else(|| BitFunError::service("Invalid file name".to_string()))?;
 
         AIRule::from_mdc(name, level, path.to_path_buf(), &content)
-            .map_err(BitFunError::service)
+            .map_err(|e| BitFunError::service(e))
     }
 
     /// Creates a rule file.
@@ -733,7 +733,7 @@ The rules section has a number of possible rules/memories/context that you shoul
             .map_err(|e| BitFunError::service(format!("Failed to read file: {}", e)))?;
 
         let (mut frontmatter, mut body) =
-            parse_mdc_content(&content).map_err(BitFunError::service)?;
+            parse_mdc_content(&content).map_err(|e| BitFunError::service(e))?;
 
         if let Some(apply_type) = request.apply_type {
             match apply_type {

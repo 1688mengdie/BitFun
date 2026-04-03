@@ -1010,7 +1010,6 @@ impl SessionManager {
 
     // ============ Dialog Turn Management ============
 
-    #[allow(clippy::too_many_arguments)]
     async fn start_persisted_turn(
         &self,
         session_id: &str,
@@ -1411,7 +1410,6 @@ impl SessionManager {
     }
 
     /// Persist a completed `/btw` side-question turn into an existing child session.
-    #[allow(clippy::too_many_arguments)]
     pub async fn persist_btw_turn(
         &self,
         workspace_path: &Path,

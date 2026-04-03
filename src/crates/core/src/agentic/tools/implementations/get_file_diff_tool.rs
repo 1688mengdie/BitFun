@@ -23,12 +23,6 @@ use std::path::Path;
 /// 3. Return full file content
 pub struct GetFileDiffTool;
 
-impl Default for GetFileDiffTool {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl GetFileDiffTool {
     pub fn new() -> Self {
         Self
@@ -483,7 +477,7 @@ Usage:
         // Priority 1: Try baseline diff
         let path = Path::new(&resolved_path);
         if let Some(result) = self
-            .try_baseline_diff(path, context.workspace_root())
+            .try_baseline_diff(&path, context.workspace_root())
             .await
         {
             match result {
@@ -507,7 +501,7 @@ Usage:
         }
 
         // Priority 2: Try git diff
-        if let Some(result) = self.try_git_diff(path).await {
+        if let Some(result) = self.try_git_diff(&path).await {
             match result {
                 Ok(data) => {
                     debug!("GetFileDiff tool using git diff");
@@ -530,7 +524,7 @@ Usage:
 
         // Priority 3: Return full file content
         debug!("GetFileDiff tool returning full file content");
-        let data = self.return_full_content(path)?;
+        let data = self.return_full_content(&path)?;
         let result_for_assistant = self.render_tool_result_message(&data);
 
         Ok(vec![ToolResult::Result {

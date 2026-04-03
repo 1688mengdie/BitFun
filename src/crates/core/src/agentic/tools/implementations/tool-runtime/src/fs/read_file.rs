@@ -1,4 +1,4 @@
-﻿use crate::util::string::truncate_string_by_chars;
+use crate::util::string::truncate_string_by_chars;
 use std::fs::File;
 use std::io::BufRead;
 use std::io::BufReader;
@@ -21,10 +21,10 @@ pub fn read_file(
     max_total_chars: usize,
 ) -> Result<ReadFileResult, String> {
     if start_line == 0 {
-        return Err("`start_line` should start from 1".to_string());
+        return Err(format!("`start_line` should start from 1",));
     }
     if limit == 0 {
-        return Err("`limit` can't be 0".to_string());
+        return Err(format!("`limit` can't be 0"));
     }
     if max_total_chars == 0 {
         return Err("`max_total_chars` can't be 0".to_string());

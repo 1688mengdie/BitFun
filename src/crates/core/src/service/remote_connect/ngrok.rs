@@ -41,9 +41,13 @@ fn find_ngrok() -> Option<PathBuf> {
         PathBuf::from("C:\\ngrok\\ngrok.exe"),
     ];
 
-    candidates
-        .into_iter()
-        .find(|path| path.exists() && path.is_file())
+    for path in candidates {
+        if path.exists() && path.is_file() {
+            return Some(path);
+        }
+    }
+
+    None
 }
 
 /// Check if ngrok is installed and available.

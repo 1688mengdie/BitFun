@@ -86,7 +86,6 @@ impl RemoteTerminalManager {
     /// Returns a `CreateSessionResult` with a pre-subscribed output receiver.
     /// The owner task is spawned immediately — the output_rx is guaranteed to
     /// receive all data including the initial shell prompt.
-    #[allow(clippy::too_many_arguments)]
     pub async fn create_session(
         &self,
         session_id: Option<String>,

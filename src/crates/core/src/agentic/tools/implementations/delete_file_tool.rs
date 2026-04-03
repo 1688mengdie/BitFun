@@ -13,12 +13,6 @@ use tokio::fs;
 /// This tool automatically integrates with the snapshot system, all deletion operations are recorded and support rollback
 pub struct DeleteFileTool;
 
-impl Default for DeleteFileTool {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl DeleteFileTool {
     pub fn new() -> Self {
         Self

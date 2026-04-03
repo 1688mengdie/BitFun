@@ -31,12 +31,6 @@ struct ExaContent {
 
 pub struct WebSearchTool;
 
-impl Default for WebSearchTool {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl WebSearchTool {
     pub fn new() -> Self {
         Self
@@ -359,12 +353,6 @@ Advanced features:
 
 /// WebFetch tool
 pub struct WebFetchTool;
-
-impl Default for WebFetchTool {
-    fn default() -> Self {
-        Self::new()
-    }
-}
 
 impl WebFetchTool {
     pub fn new() -> Self {

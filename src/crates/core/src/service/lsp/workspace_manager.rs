@@ -476,7 +476,11 @@ impl WorkspaceLspManager {
         let status = {
             let states = self.server_states.read().await;
 
-            states.get(language).map(|state| state.status.clone())
+            if let Some(state) = states.get(language) {
+                Some(state.status.clone())
+            } else {
+                None
+            }
         };
 
         if let Some(status) = status {
@@ -733,7 +737,7 @@ impl WorkspaceLspManager {
                     if let Some(state) = states.get_mut(&language) {
                         state.status = ServerStatus::Failed;
                         state.last_error =
-                            Some("Server process crashed or became unresponsive".to_string());
+                            Some(format!("Server process crashed or became unresponsive"));
                     }
                 }
 

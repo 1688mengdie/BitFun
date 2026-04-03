@@ -131,7 +131,7 @@ impl ChatView {
 
     fn render_messages(&mut self, frame: &mut Frame, area: Rect) {
         let title = if self.browse_mode {
-            " Conversation [Browse Mode ↕] ".to_string()
+            format!(" Conversation [Browse Mode ↕] ")
         } else {
             " Conversation ".to_string()
         };

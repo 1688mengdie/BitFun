@@ -23,12 +23,6 @@ pub struct LSTool {
     default_limit: usize,
 }
 
-impl Default for LSTool {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl LSTool {
     pub fn new() -> Self {
         Self { default_limit: 200 }
@@ -277,7 +271,7 @@ Usage:
                 .collect::<Vec<String>>()
         });
 
-        let entries = list_files(path, limit, ignore_patterns).map_err(BitFunError::tool)?;
+        let entries = list_files(path, limit, ignore_patterns).map_err(|e| BitFunError::tool(e))?;
 
         let entries_json = entries
             .iter()

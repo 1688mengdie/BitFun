@@ -5,12 +5,6 @@ pub struct GenerateDocAgent {
     default_tools: Vec<String>,
 }
 
-impl Default for GenerateDocAgent {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl GenerateDocAgent {
     pub fn new() -> Self {
         Self {
