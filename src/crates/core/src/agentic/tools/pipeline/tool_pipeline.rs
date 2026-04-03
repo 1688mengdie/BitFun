@@ -96,8 +96,8 @@ fn generate_default_assistant_text(tool_name: &str, data: &serde_json::Value) ->
     }
 
     // If it is an empty object or empty array
-    if (data.is_object() && data.as_object().map_or(false, |o| o.is_empty()))
-        || (data.is_array() && data.as_array().map_or(false, |a| a.is_empty()))
+    if (data.is_object() && data.as_object().is_some_and(|o| o.is_empty()))
+        || (data.is_array() && data.as_array().is_some_and(|a| a.is_empty()))
     {
         return Some(format!(
             "Tool {} completed, returned empty result.",
@@ -504,10 +504,7 @@ impl ToolPipeline {
                         timeout_secs, tool_name
                     );
                     // There is a timeout limit
-                    match timeout(Duration::from_secs(timeout_secs), rx).await {
-                        Ok(result) => Some(result),
-                        Err(_) => None,
-                    }
+                    timeout(Duration::from_secs(timeout_secs), rx).await.ok()
                 }
                 None => {
                     debug!(

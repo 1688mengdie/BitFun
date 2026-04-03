@@ -12,6 +12,12 @@ pub struct SessionContextStore {
     session_contexts: Arc<DashMap<String, Vec<Message>>>,
 }
 
+impl Default for SessionContextStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SessionContextStore {
     pub fn new() -> Self {
         Self {

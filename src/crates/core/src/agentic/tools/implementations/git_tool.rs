@@ -374,7 +374,7 @@ impl GitTool {
             .collect();
 
         let params = GitPushParams {
-            remote: parts.get(0).map(|s| s.to_string()),
+            remote: parts.first().map(|s| s.to_string()),
             branch: parts.get(1).map(|s| s.to_string()),
             force: Some(args_str.contains("--force") || args_str.contains("-f")),
             set_upstream: Some(args_str.contains("-u") || args_str.contains("--set-upstream")),
@@ -402,7 +402,7 @@ impl GitTool {
             .collect();
 
         let params = GitPullParams {
-            remote: parts.get(0).map(|s| s.to_string()),
+            remote: parts.first().map(|s| s.to_string()),
             branch: parts.get(1).map(|s| s.to_string()),
             rebase: Some(args_str.contains("--rebase")),
         };
@@ -427,17 +427,13 @@ impl GitTool {
 
         // Extract branch name
         let branch_name = args_str
-            .split_whitespace()
-            .filter(|s| !s.starts_with('-'))
-            .last()
+            .split_whitespace().rfind(|s| !s.starts_with('-'))
             .ok_or_else(|| BitFunError::tool("Branch name is required".to_string()))?;
 
         let result = if create_branch {
             // Create and switch to new branch
             let start_point = args_str
-                .split_whitespace()
-                .filter(|s| !s.starts_with('-') && *s != branch_name)
-                .last();
+                .split_whitespace().rfind(|s| !s.starts_with('-') && *s != branch_name);
             GitService::create_branch(repo_path, branch_name, start_point).await
         } else {
             // Switch to existing branch
@@ -493,9 +489,7 @@ impl GitTool {
             // Delete branch
             let force = args_str.contains("-D");
             let branch_name = args_str
-                .split_whitespace()
-                .filter(|s| !s.starts_with('-'))
-                .next()
+                .split_whitespace().find(|s| !s.starts_with('-'))
                 .ok_or_else(|| {
                     BitFunError::tool("Branch name is required for deletion".to_string())
                 })?;

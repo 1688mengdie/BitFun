@@ -24,6 +24,12 @@ pub struct SideQuestionRuntime {
     tokens: Arc<Mutex<HashMap<String, CancellationToken>>>,
 }
 
+impl Default for SideQuestionRuntime {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SideQuestionRuntime {
     pub fn new() -> Self {
         Self {

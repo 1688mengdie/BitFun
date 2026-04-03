@@ -1,3 +1,3 @@
-mod prompt_builder;
+mod prompt_builder_impl;
 
-pub use prompt_builder::{PromptBuilder, PromptBuilderContext, RemoteExecutionHints};
+pub use prompt_builder_impl::{PromptBuilder, PromptBuilderContext, RemoteExecutionHints};

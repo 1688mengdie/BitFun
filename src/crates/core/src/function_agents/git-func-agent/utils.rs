@@ -76,10 +76,7 @@ pub fn detect_change_patterns(file_changes: &[FileChange]) -> Vec<ChangePattern>
     let mut has_new_files = false;
 
     for change in file_changes {
-        match change.change_type {
-            FileChangeType::Added => has_new_files = true,
-            _ => {}
-        }
+        if change.change_type == FileChangeType::Added { has_new_files = true }
 
         if is_test_file(&change.path) {
             has_test_changes = true;

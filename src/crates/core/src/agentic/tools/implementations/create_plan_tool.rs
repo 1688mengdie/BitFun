@@ -208,7 +208,7 @@ Additional guidelines:
                 .workspace_root()
                 .ok_or(BitFunError::tool("Workspace path not set".to_string()))?;
             let path_manager = get_path_manager_arc();
-            let plans_dir = path_manager.project_plans_dir(&workspace_path);
+            let plans_dir = path_manager.project_plans_dir(workspace_path);
             let plan_file_path = plans_dir.join(&plan_file_name);
             path_manager
                 .ensure_dir(&plans_dir)

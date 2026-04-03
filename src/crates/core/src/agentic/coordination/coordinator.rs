@@ -856,6 +856,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
     /// Note: Events are sent to frontend via EventLoop, no Stream returned.
     /// Submission behavior is controlled by `submission_policy`, which provides
     /// default per-source behavior while still allowing selective overrides.
+    #[allow(clippy::too_many_arguments)]
     pub async fn start_dialog_turn(
         &self,
         session_id: String,
@@ -881,6 +882,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn start_dialog_turn_with_image_contexts(
         &self,
         session_id: String,
@@ -940,7 +942,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         let needs_restore = if context_messages.is_empty() {
             true
         } else {
-            context_messages.len() == 1 && session.dialog_turn_ids.len() > 0
+            context_messages.len() == 1 && !session.dialog_turn_ids.is_empty()
         };
 
         if needs_restore {
@@ -1065,6 +1067,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn start_dialog_turn_internal(
         &self,
         session_id: String,
@@ -1190,7 +1193,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                 session_id
             );
             true
-        } else if context_messages.len() == 1 && session.dialog_turn_ids.len() > 0 {
+        } else if context_messages.len() == 1 && !session.dialog_turn_ids.is_empty() {
             debug!(
                 "Session {} has {} turns but only {} messages, restoring history",
                 session_id,
@@ -1879,8 +1882,10 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                 "workspace_path is required when creating a subagent session".to_string(),
             )
         })?;
-        let mut subagent_config = SessionConfig::default();
-        subagent_config.workspace_path = Some(workspace_path);
+        let subagent_config = SessionConfig {
+            workspace_path: Some(workspace_path),
+            ..SessionConfig::default()
+        };
         let session = self
             .create_subagent_session(
                 format!("Subagent: {}", task_description),
@@ -2140,6 +2145,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
     }
 
     /// Persist a completed `/btw` side-question turn into an existing child session.
+    #[allow(clippy::too_many_arguments)]
     pub async fn persist_btw_turn(
         &self,
         workspace_path: &Path,
