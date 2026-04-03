@@ -73,24 +73,32 @@ impl MCPConnection {
     }
 
     /// Creates a new remote connection instance (Streamable HTTP).
-    pub fn new_remote(url: String, headers: HashMap<String, String>) -> Self {
+    pub async fn new_remote(
+        server_id: &str,
+        url: String,
+        headers: HashMap<String, String>,
+        oauth_enabled: bool,
+    ) -> BitFunResult<Self> {
         let request_timeout = Duration::from_secs(180);
-        let transport = Arc::new(RemoteMCPTransport::new(url, headers, request_timeout));
+        let transport = Arc::new(
+            RemoteMCPTransport::new(server_id, url, headers, request_timeout, oauth_enabled)
+                .await?,
+        );
         let pending_requests = Arc::new(RwLock::new(HashMap::new()));
         let (event_tx, _) = broadcast::channel(64);
 
-        Self {
+        Ok(Self {
             transport: TransportType::Remote(transport),
             pending_requests,
             request_timeout,
             event_tx,
-        }
+        })
     }
 
     /// Returns the auth token for a remote connection.
     pub async fn get_auth_token(&self) -> Option<String> {
         match &self.transport {
-            TransportType::Remote(transport) => transport.get_auth_token(),
+            TransportType::Remote(transport) => transport.get_auth_token().await,
             TransportType::Local(_) => None,
         }
     }

@@ -123,7 +123,9 @@ impl AppState {
         let mcp_service = match mcp::MCPService::new(config_service.clone()) {
             Ok(service) => {
                 log::info!("MCP service initialized successfully");
-                Some(Arc::new(service))
+                let service = Arc::new(service);
+                mcp::set_global_mcp_service(service.clone());
+                Some(service)
             }
             Err(e) => {
                 log::warn!("Failed to initialize MCP service: {}", e);

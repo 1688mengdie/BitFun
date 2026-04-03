@@ -3,7 +3,9 @@
 //! Handles starting, stopping, monitoring, and restarting MCP server processes.
 
 use super::connection::MCPConnection;
+use super::MCPServerConfig;
 use crate::service::mcp::protocol::{InitializeResult, MCPMessage, MCPServerInfo, MCPTransport};
+use crate::service::mcp::server::MCPServerTransport;
 use crate::util::errors::{BitFunError, BitFunResult};
 use log::{debug, error, info, warn};
 use std::sync::Arc;
@@ -15,9 +17,8 @@ use tokio::sync::{mpsc, RwLock};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum MCPServerType {
-    Local,     // Local executable
-    Remote,    // Remote HTTP/WebSocket server
-    Container, // Docker container
+    Local,  // Command-driven stdio server, including docker/podman wrappers
+    Remote, // Remote HTTP/WebSocket server
 }
 
 /// MCP server status.
@@ -60,11 +61,17 @@ impl MCPServerProcess {
             "unauthorized",
             "forbidden",
             "auth required",
+            "authorization required",
             "authentication required",
             "authentication failed",
+            "oauth authorization required",
+            "oauth token refresh failed",
+            "token refresh failed",
             "www-authenticate",
             "invalid token",
             "token expired",
+            "access token expired",
+            "refresh token",
             "session expired",
             "status code: 401",
             "status code: 403",
@@ -195,34 +202,45 @@ impl MCPServerProcess {
     }
 
     /// Starts a remote server (Streamable HTTP).
-    pub async fn start_remote(
-        &mut self,
-        url: &str,
-        env: &std::collections::HashMap<String, String>,
-        headers: &std::collections::HashMap<String, String>,
-    ) -> BitFunResult<()> {
+    pub async fn start_remote(&mut self, config: &MCPServerConfig) -> BitFunResult<()> {
+        let url = config.url.as_deref().ok_or_else(|| {
+            BitFunError::Configuration(format!("Remote MCP server '{}' is missing a URL", self.id))
+        })?;
+        let transport = config.resolved_transport();
+        if transport != MCPServerTransport::StreamableHttp {
+            return Err(BitFunError::NotImplemented(format!(
+                "Remote MCP transport '{}' is not yet supported",
+                transport.as_str()
+            )));
+        }
         info!(
-            "Starting remote MCP server: name={} id={} url={}",
-            self.name, self.id, url
+            "Starting remote MCP server: name={} id={} transport={} url={}",
+            self.name,
+            self.id,
+            transport.as_str(),
+            url
         );
         self.set_status(MCPServerStatus::Starting).await;
 
-        let mut merged_headers = headers.clone();
+        let mut merged_headers = config.headers.clone();
         if !merged_headers.contains_key("Authorization")
             && !merged_headers.contains_key("authorization")
             && !merged_headers.contains_key("AUTHORIZATION")
         {
             // Backward compatibility: older BitFun configs store `Authorization` under `env`.
-            if let Some(value) = env
+            if let Some(value) = config
+                .env
                 .get("Authorization")
-                .or_else(|| env.get("authorization"))
-                .or_else(|| env.get("AUTHORIZATION"))
+                .or_else(|| config.env.get("authorization"))
+                .or_else(|| config.env.get("AUTHORIZATION"))
             {
                 merged_headers.insert("Authorization".to_string(), value.clone());
             }
         }
 
-        let connection = Arc::new(MCPConnection::new_remote(url.to_string(), merged_headers));
+        let connection = Arc::new(
+            MCPConnection::new_remote(&self.id, url.to_string(), merged_headers, true).await?,
+        );
         self.connection = Some(connection.clone());
         self.start_time = Some(Instant::now());
 
@@ -471,6 +489,11 @@ mod tests {
         let unauthorized =
             BitFunError::MCPError("Handshake failed: Unauthorized (401)".to_string());
         assert!(MCPServerProcess::is_auth_error(&unauthorized));
+
+        let oauth_refresh = BitFunError::MCPError(
+            "Ping failed: OAuth token refresh failed: no refresh token available".to_string(),
+        );
+        assert!(MCPServerProcess::is_auth_error(&oauth_refresh));
 
         let generic = BitFunError::MCPError("Handshake failed: connection reset".to_string());
         assert!(!MCPServerProcess::is_auth_error(&generic));

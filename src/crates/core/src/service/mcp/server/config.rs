@@ -7,6 +7,52 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum MCPServerTransport {
+    Stdio,
+    StreamableHttp,
+    Sse,
+}
+
+impl MCPServerTransport {
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Stdio => "stdio",
+            Self::StreamableHttp => "streamable-http",
+            Self::Sse => "sse",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct MCPServerOAuthConfig {
+    #[serde(default)]
+    pub scopes: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_metadata_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub callback_host: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub callback_port: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub callback_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct MCPServerXaaConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub issuer: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audience: Option<String>,
+    #[serde(default)]
+    pub scopes: Vec<String>,
+}
+
 /// MCP server configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -15,6 +61,8 @@ pub struct MCPServerConfig {
     pub name: String,
     #[serde(rename = "type")]
     pub server_type: MCPServerType,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transport: Option<MCPServerTransport>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
     #[serde(default)]
@@ -35,6 +83,10 @@ pub struct MCPServerConfig {
     pub capabilities: Vec<String>,
     #[serde(default)]
     pub settings: HashMap<String, Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub oauth: Option<MCPServerOAuthConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub xaa: Option<MCPServerXaaConfig>,
 }
 
 fn default_true() -> bool {
@@ -42,6 +94,13 @@ fn default_true() -> bool {
 }
 
 impl MCPServerConfig {
+    pub fn resolved_transport(&self) -> MCPServerTransport {
+        self.transport.unwrap_or(match self.server_type {
+            MCPServerType::Local => MCPServerTransport::Stdio,
+            MCPServerType::Remote => MCPServerTransport::StreamableHttp,
+        })
+    }
+
     /// Validates the configuration.
     pub fn validate(&self) -> BitFunResult<()> {
         if self.id.is_empty() {
@@ -56,12 +115,21 @@ impl MCPServerConfig {
             ));
         }
 
+        let transport = self.resolved_transport();
         match self.server_type {
             MCPServerType::Local => {
                 if self.command.is_none() {
                     return Err(BitFunError::Configuration(format!(
                         "Local MCP server '{}' must have a command",
                         self.id
+                    )));
+                }
+
+                if transport != MCPServerTransport::Stdio {
+                    return Err(BitFunError::Configuration(format!(
+                        "Local MCP server '{}' must use stdio transport, got '{}'",
+                        self.id,
+                        transport.as_str()
                     )));
                 }
             }
@@ -72,12 +140,26 @@ impl MCPServerConfig {
                         self.id
                     )));
                 }
-            }
-            MCPServerType::Container => {
-                if self.command.is_none() {
+
+                if let Some(oauth) = &self.oauth {
+                    if let Some(port) = oauth.callback_port {
+                        if port == 0 {
+                            return Err(BitFunError::Configuration(format!(
+                                "Remote MCP server '{}' OAuth callbackPort must be greater than 0",
+                                self.id
+                            )));
+                        }
+                    }
+                }
+
+                if !matches!(
+                    transport,
+                    MCPServerTransport::StreamableHttp | MCPServerTransport::Sse
+                ) {
                     return Err(BitFunError::Configuration(format!(
-                        "Container MCP server '{}' must have a command",
-                        self.id
+                        "Remote MCP server '{}' must use streamable-http or sse transport, got '{}'",
+                        self.id,
+                        transport.as_str()
                     )));
                 }
             }

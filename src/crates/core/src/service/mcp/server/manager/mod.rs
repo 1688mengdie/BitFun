@@ -3,6 +3,7 @@
 //! The manager is split into focused submodules so lifecycle, reconnect,
 //! catalog, interaction, and tool-registration logic can evolve independently.
 
+mod auth;
 mod catalog;
 mod interaction;
 mod lifecycle;
@@ -14,6 +15,7 @@ mod tools;
 use super::connection::{MCPConnection, MCPConnectionEvent, MCPConnectionPool};
 use super::{MCPServerConfig, MCPServerRegistry, MCPServerStatus};
 use crate::infrastructure::events::event_system::{get_global_event_system, BackendEvent};
+use crate::service::mcp::auth::MCPRemoteOAuthSessionSnapshot;
 use crate::service::mcp::adapter::MCPToolAdapter;
 use crate::service::mcp::config::MCPConfigService;
 use crate::service::mcp::protocol::{MCPError, MCPPrompt, MCPResource};
@@ -27,7 +29,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::oneshot;
+use tokio::sync::{Mutex, oneshot};
 use tokio::task::JoinHandle;
 
 /// Reconnect policy for unhealthy MCP servers.
@@ -75,6 +77,11 @@ struct PendingMCPInteraction {
     sender: oneshot::Sender<MCPInteractionDecision>,
 }
 
+struct ActiveRemoteOAuthSession {
+    snapshot: Arc<tokio::sync::RwLock<MCPRemoteOAuthSessionSnapshot>>,
+    shutdown_tx: Mutex<Option<oneshot::Sender<()>>>,
+}
+
 impl ReconnectAttemptState {
     fn new(now: Instant) -> Self {
         Self {
@@ -98,6 +105,7 @@ pub struct MCPServerManager {
     resource_catalog_cache: Arc<tokio::sync::RwLock<HashMap<String, Vec<MCPResource>>>>,
     prompt_catalog_cache: Arc<tokio::sync::RwLock<HashMap<String, Vec<MCPPrompt>>>>,
     pending_interactions: Arc<tokio::sync::RwLock<HashMap<String, PendingMCPInteraction>>>,
+    oauth_sessions: Arc<tokio::sync::RwLock<HashMap<String, Arc<ActiveRemoteOAuthSession>>>>,
 }
 
 impl MCPServerManager {
@@ -114,6 +122,7 @@ impl MCPServerManager {
             resource_catalog_cache: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
             prompt_catalog_cache: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
             pending_interactions: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+            oauth_sessions: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
         }
     }
 }

@@ -5,6 +5,38 @@ use crate::util::errors::{BitFunError, BitFunResult};
 use super::service::MCPConfigService;
 
 impl MCPConfigService {
+    fn normalize_source(value: &str) -> Option<&'static str> {
+        match value.trim() {
+            "local" => Some("local"),
+            "remote" => Some("remote"),
+            _ => None,
+        }
+    }
+
+    fn normalize_transport(value: &str) -> Option<&'static str> {
+        match value.trim() {
+            "stdio" => Some("stdio"),
+            "sse" => Some("sse"),
+            "http" | "streamable_http" | "streamable-http" | "streamablehttp" => {
+                Some("streamable-http")
+            }
+            _ => None,
+        }
+    }
+
+    fn normalize_legacy_type(value: &str) -> Option<(Option<&'static str>, Option<&'static str>)> {
+        match value.trim() {
+            "stdio" => Some((None, Some("stdio"))),
+            "local" => Some((Some("local"), Some("stdio"))),
+            "sse" => Some((Some("remote"), Some("sse"))),
+            "remote" => Some((Some("remote"), Some("streamable-http"))),
+            "http" | "streamable_http" | "streamable-http" | "streamablehttp" => {
+                Some((Some("remote"), Some("streamable-http")))
+            }
+            _ => None,
+        }
+    }
+
     /// Loads MCP JSON config (Cursor format).
     pub async fn load_mcp_json_config(&self) -> BitFunResult<String> {
         match self
@@ -75,6 +107,16 @@ impl MCPConfigService {
                         .and_then(|v| v.as_str())
                         .map(|s| s.trim())
                         .filter(|s| !s.is_empty());
+                    let source_str = obj
+                        .get("source")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.trim())
+                        .filter(|s| !s.is_empty());
+                    let transport_str = obj
+                        .get("transport")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.trim())
+                        .filter(|s| !s.is_empty());
 
                     let command = obj
                         .get("command")
@@ -88,7 +130,7 @@ impl MCPConfigService {
                         .map(|s| s.trim())
                         .filter(|s| !s.is_empty());
 
-                    let inferred_transport = match (command.is_some(), url.is_some()) {
+                    match (command.is_some(), url.is_some()) {
                         (true, true) => {
                             let error_msg = format!(
                                 "Server '{}' must not set both 'command' and 'url' fields",
@@ -97,8 +139,6 @@ impl MCPConfigService {
                             error!("{}", error_msg);
                             return Err(BitFunError::validation(error_msg));
                         }
-                        (true, false) => "stdio",
-                        (false, true) => "streamable-http",
                         (false, false) => {
                             let error_msg = format!(
                                 "Server '{}' must provide either 'command' (stdio) or 'url' (streamable-http)",
@@ -107,34 +147,98 @@ impl MCPConfigService {
                             error!("{}", error_msg);
                             return Err(BitFunError::validation(error_msg));
                         }
+                        _ => {}
+                    }
+
+                    let legacy_type = match type_str {
+                        Some(value) => Self::normalize_legacy_type(value).ok_or_else(|| {
+                            BitFunError::validation(format!(
+                                "Server '{}' has unsupported 'type' value: '{}'",
+                                server_id, value
+                            ))
+                        })?,
+                        None => (None, None),
                     };
 
-                    if let Some(t) = type_str {
-                        let normalized_transport = match t {
-                            "stdio" | "local" | "container" => "stdio",
-                            "sse" | "remote" | "http" | "streamable_http" | "streamable-http"
-                            | "streamablehttp" => "streamable-http",
-                            _ => {
+                    let explicit_source = match source_str {
+                        Some(value) => Some(Self::normalize_source(value).ok_or_else(|| {
+                            BitFunError::validation(format!(
+                                "Server '{}' has unsupported 'source' value: '{}'",
+                                server_id, value
+                            ))
+                        })?),
+                        None => legacy_type.0,
+                    };
+                    let explicit_transport = match transport_str {
+                        Some(value) => Some(Self::normalize_transport(value).ok_or_else(|| {
+                            BitFunError::validation(format!(
+                                "Server '{}' has unsupported 'transport' value: '{}'",
+                                server_id, value
+                            ))
+                        })?),
+                        None => legacy_type.1,
+                    };
+
+                    let effective_source = match (command.is_some(), url.is_some()) {
+                        (true, false) => match explicit_source {
+                            Some("remote") => {
                                 let error_msg = format!(
-                                    "Server '{}' has unsupported 'type' value: '{}'",
-                                    server_id, t
+                                    "Server '{}' source='remote' conflicts with command-based configuration",
+                                    server_id
                                 );
                                 error!("{}", error_msg);
                                 return Err(BitFunError::validation(error_msg));
                             }
-                        };
+                            Some(source) => source,
+                            None => "local",
+                        },
+                        (false, true) => match explicit_source {
+                            Some("local") => {
+                                let error_msg = format!(
+                                    "Server '{}' source='{}' conflicts with url-based configuration",
+                                    server_id,
+                                    explicit_source.unwrap_or("unknown")
+                                );
+                                error!("{}", error_msg);
+                                return Err(BitFunError::validation(error_msg));
+                            }
+                            Some(source) => source,
+                            None => "remote",
+                        },
+                        _ => unreachable!(),
+                    };
 
-                        if normalized_transport != inferred_transport {
-                            let error_msg = format!(
-                                "Server '{}' 'type' conflicts with provided fields (type='{}')",
-                                server_id, t
-                            );
-                            error!("{}", error_msg);
-                            return Err(BitFunError::validation(error_msg));
+                    let effective_transport = match effective_source {
+                        "local" => {
+                            if let Some(transport) = explicit_transport {
+                                if transport != "stdio" {
+                                    let error_msg = format!(
+                                        "Server '{}' source='{}' must use stdio transport",
+                                        server_id, effective_source
+                                    );
+                                    error!("{}", error_msg);
+                                    return Err(BitFunError::validation(error_msg));
+                                }
+                            }
+                            "stdio"
                         }
-                    }
+                        "remote" => match explicit_transport.unwrap_or("streamable-http") {
+                            "streamable-http" | "sse" => {
+                                explicit_transport.unwrap_or("streamable-http")
+                            }
+                            _ => {
+                                let error_msg = format!(
+                                    "Server '{}' remote source must use 'streamable-http' or 'sse' transport",
+                                    server_id
+                                );
+                                error!("{}", error_msg);
+                                return Err(BitFunError::validation(error_msg));
+                            }
+                        },
+                        _ => unreachable!(),
+                    };
 
-                    if inferred_transport == "stdio" && command.is_none() {
+                    if effective_transport == "stdio" && command.is_none() {
                         let error_msg = format!(
                             "Server '{}' (stdio) must provide 'command' field",
                             server_id
@@ -143,10 +247,12 @@ impl MCPConfigService {
                         return Err(BitFunError::validation(error_msg));
                     }
 
-                    if inferred_transport == "streamable-http" && url.is_none() {
+                    if (effective_transport == "streamable-http" || effective_transport == "sse")
+                        && url.is_none()
+                    {
                         let error_msg = format!(
-                            "Server '{}' (streamable-http) must provide 'url' field",
-                            server_id
+                            "Server '{}' ({}) must provide 'url' field",
+                            server_id, effective_transport
                         );
                         error!("{}", error_msg);
                         return Err(BitFunError::validation(error_msg));
@@ -172,10 +278,26 @@ impl MCPConfigService {
 
                     if let Some(headers) = obj.get("headers") {
                         if !headers.is_object() {
-                            let error_msg = format!(
-                                "Server '{}' 'headers' field must be an object",
-                                server_id
-                            );
+                            let error_msg =
+                                format!("Server '{}' 'headers' field must be an object", server_id);
+                            error!("{}", error_msg);
+                            return Err(BitFunError::validation(error_msg));
+                        }
+                    }
+
+                    if let Some(oauth) = obj.get("oauth") {
+                        if !oauth.is_object() {
+                            let error_msg =
+                                format!("Server '{}' 'oauth' field must be an object", server_id);
+                            error!("{}", error_msg);
+                            return Err(BitFunError::validation(error_msg));
+                        }
+                    }
+
+                    if let Some(xaa) = obj.get("xaa") {
+                        if !xaa.is_object() {
+                            let error_msg =
+                                format!("Server '{}' 'xaa' field must be an object", server_id);
                             error!("{}", error_msg);
                             return Err(BitFunError::validation(error_msg));
                         }
@@ -208,5 +330,19 @@ impl MCPConfigService {
         info!("MCP config saved to app.json");
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MCPConfigService;
+
+    #[test]
+    fn normalize_legacy_type_rejects_container_and_preserves_sse() {
+        assert_eq!(MCPConfigService::normalize_legacy_type("container"), None);
+        assert_eq!(
+            MCPConfigService::normalize_legacy_type("sse"),
+            Some((Some("remote"), Some("sse")))
+        );
     }
 }

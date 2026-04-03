@@ -10,11 +10,13 @@
 //! - `config`: MCP configuration management
 
 pub mod adapter;
+pub mod auth;
 pub mod config;
 pub mod protocol;
 pub mod server;
 
 use std::sync::Arc;
+use std::sync::OnceLock;
 
 // Stable public surface for the MCP service.
 pub use protocol::{
@@ -24,7 +26,7 @@ pub use protocol::{
 
 pub use server::{
     MCPConnection, MCPConnectionPool, MCPServerConfig, MCPServerManager, MCPServerStatus,
-    MCPServerType,
+    MCPServerTransport, MCPServerType,
 };
 
 pub use adapter::{
@@ -70,4 +72,16 @@ impl MCPService {
     pub fn config_service(&self) -> Arc<MCPConfigService> {
         self.config_service.clone()
     }
+}
+
+static GLOBAL_MCP_SERVICE: OnceLock<Arc<MCPService>> = OnceLock::new();
+
+/// Stores the global MCP service for code paths that cannot receive it via DI yet.
+pub fn set_global_mcp_service(service: Arc<MCPService>) {
+    let _ = GLOBAL_MCP_SERVICE.set(service);
+}
+
+/// Returns the global MCP service if it has been initialized.
+pub fn get_global_mcp_service() -> Option<Arc<MCPService>> {
+    GLOBAL_MCP_SERVICE.get().cloned()
 }

@@ -221,36 +221,43 @@ impl MCPServerManager {
                         error!(
                             "Failed to start local MCP server process: id={} command={} source={} error={}",
                             server_id, resolved.command, source_label, e
-                        );
-                        e
-                    })?;
+                    );
+                    e
+                })?;
             }
             super::super::MCPServerType::Remote => {
+                let transport = config.resolved_transport();
+                if transport != crate::service::mcp::server::MCPServerTransport::StreamableHttp {
+                    error!(
+                        "Remote MCP transport not supported yet: id={} transport={}",
+                        server_id,
+                        transport.as_str()
+                    );
+                    return Err(BitFunError::NotImplemented(format!(
+                        "Remote MCP transport '{}' is not yet supported",
+                        transport.as_str()
+                    )));
+                }
+
                 let url = config.url.as_ref().ok_or_else(|| {
                     error!("Missing URL for remote MCP server: id={}", server_id);
                     BitFunError::Configuration("Missing URL for remote MCP server".to_string())
                 })?;
 
                 info!(
-                    "Connecting to remote MCP server: url={} id={}",
-                    url, server_id
+                    "Connecting to remote MCP server: transport={} url={} id={}",
+                    transport.as_str(),
+                    url,
+                    server_id
                 );
 
-                proc.start_remote(url, &config.env, &config.headers)
-                    .await
-                    .map_err(|e| {
-                        error!(
-                            "Failed to connect to remote MCP server: url={} id={} error={}",
-                            url, server_id, e
-                        );
-                        e
-                    })?;
-            }
-            super::super::MCPServerType::Container => {
-                error!("Container MCP servers not supported: id={}", server_id);
-                return Err(BitFunError::NotImplemented(
-                    "Container MCP servers not yet supported".to_string(),
-                ));
+                proc.start_remote(&config).await.map_err(|e| {
+                    error!(
+                        "Failed to connect to remote MCP server: url={} id={} error={}",
+                        url, server_id, e
+                    );
+                    e
+                })?;
             }
         }
 
@@ -344,11 +351,6 @@ impl MCPServerManager {
                 let _ = self.stop_server(server_id).await;
                 self.start_server(server_id).await?;
             }
-            _ => {
-                return Err(BitFunError::NotImplemented(
-                    "Restart not supported for this server type".to_string(),
-                ));
-            }
         }
 
         Ok(())
@@ -427,6 +429,7 @@ impl MCPServerManager {
     pub async fn remove_server(&self, server_id: &str) -> BitFunResult<()> {
         info!("Removing MCP server: id={}", server_id);
 
+        let _ = self.clear_remote_oauth_credentials(server_id).await;
         self.stop_connection_event_listener(server_id).await;
 
         match self.registry.unregister(server_id).await {
@@ -493,6 +496,7 @@ impl MCPServerManager {
         server_id: &str,
         authorization_value: &str,
     ) -> BitFunResult<()> {
+        self.clear_remote_oauth_credentials(server_id).await?;
         let config = self
             .config_service
             .set_remote_authorization(server_id, authorization_value)
@@ -510,6 +514,7 @@ impl MCPServerManager {
 
     /// Clears remote MCP authorization and stops the current connection so stale credentials are dropped.
     pub async fn clear_remote_server_auth(&self, server_id: &str) -> BitFunResult<()> {
+        self.clear_remote_oauth_credentials(server_id).await?;
         self.config_service
             .clear_remote_authorization(server_id)
             .await?;
@@ -534,6 +539,16 @@ impl MCPServerManager {
         self.resource_catalog_cache.write().await.clear();
         self.prompt_catalog_cache.write().await.clear();
         self.pending_interactions.write().await.clear();
+        let oauth_sessions: Vec<_> = self
+            .oauth_sessions
+            .write()
+            .await
+            .drain()
+            .map(|(_, session)| session)
+            .collect();
+        for session in oauth_sessions {
+            Self::shutdown_oauth_session(&session).await;
+        }
         let mut event_tasks = self.connection_event_tasks.write().await;
         for (_, handle) in event_tasks.drain() {
             handle.abort();

@@ -1,10 +1,17 @@
 //! MCP API
 
 use crate::api::app_state::AppState;
+use bitfun_core::service::mcp::auth::{
+    has_stored_oauth_credentials, MCPRemoteOAuthSessionSnapshot,
+};
 use bitfun_core::service::mcp::config::MCPConfigService;
+use bitfun_core::service::mcp::protocol::{
+    MCPPrompt, MCPResource, PromptsGetResult, ResourcesReadResult,
+};
 use bitfun_core::service::mcp::MCPServerType;
 use bitfun_core::service::runtime::{RuntimeManager, RuntimeSource};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use tauri::State;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -16,6 +23,7 @@ pub struct MCPServerInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status_message: Option<String>,
     pub server_type: String,
+    pub transport: String,
     pub enabled: bool,
     pub auto_start: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -25,6 +33,10 @@ pub struct MCPServerInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auth_source: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub oauth_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub xaa_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub command_available: Option<bool>,
@@ -32,6 +44,79 @@ pub struct MCPServerInfo {
     pub command_source: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub command_resolved_path: Option<String>,
+    pub start_supported: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_disabled_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListMCPResourcesRequest {
+    pub server_id: String,
+    #[serde(default)]
+    pub refresh: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadMCPResourceRequest {
+    pub server_id: String,
+    pub resource_uri: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListMCPPromptsRequest {
+    pub server_id: String,
+    #[serde(default)]
+    pub refresh: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetMCPPromptRequest {
+    pub server_id: String,
+    pub prompt_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub arguments: Option<HashMap<String, String>>,
+}
+
+async fn load_mcp_resources(
+    mcp_service: &bitfun_core::service::mcp::MCPService,
+    server_id: &str,
+    refresh: bool,
+) -> Result<Vec<MCPResource>, String> {
+    let manager = mcp_service.server_manager();
+    let mut resources = manager.get_cached_resources(server_id).await;
+
+    if refresh || resources.is_empty() {
+        manager
+            .refresh_server_resource_catalog(server_id)
+            .await
+            .map_err(|e| e.to_string())?;
+        resources = manager.get_cached_resources(server_id).await;
+    }
+
+    Ok(resources)
+}
+
+async fn load_mcp_prompts(
+    mcp_service: &bitfun_core::service::mcp::MCPService,
+    server_id: &str,
+    refresh: bool,
+) -> Result<Vec<MCPPrompt>, String> {
+    let manager = mcp_service.server_manager();
+    let mut prompts = manager.get_cached_prompts(server_id).await;
+
+    if refresh || prompts.is_empty() {
+        manager
+            .refresh_server_prompt_catalog(server_id)
+            .await
+            .map_err(|e| e.to_string())?;
+        prompts = manager.get_cached_prompts(server_id).await;
+    }
+
+    Ok(prompts)
 }
 
 #[tauri::command]
@@ -85,31 +170,56 @@ pub async fn get_mcp_servers(state: State<'_, AppState>) -> Result<Vec<MCPServer
     let runtime_manager = RuntimeManager::new().ok();
 
     for config in configs {
-        let (command, command_available, command_source, command_resolved_path) = if matches!(
-            config.server_type,
-            MCPServerType::Local | MCPServerType::Container
-        ) {
-            if let Some(command) = config.command.clone() {
-                let capability = runtime_manager
-                    .as_ref()
-                    .map(|manager| manager.get_command_capability(&command));
-                let available = capability.as_ref().map(|c| c.available);
-                let source = capability.and_then(|c| {
-                    c.source.map(|source| match source {
-                        RuntimeSource::System => "system".to_string(),
-                        RuntimeSource::Managed => "managed".to_string(),
-                    })
-                });
-                let resolved_path = runtime_manager
-                    .as_ref()
-                    .and_then(|manager| manager.resolve_command(&command))
-                    .and_then(|resolved| resolved.resolved_path);
-                (Some(command), available, source, resolved_path)
+        let transport = config.resolved_transport();
+        let static_auth_configured = if matches!(config.server_type, MCPServerType::Remote) {
+            MCPConfigService::has_remote_authorization(&config)
+        } else {
+            false
+        };
+        let oauth_enabled = if matches!(config.server_type, MCPServerType::Remote) {
+            true
+        } else {
+            false
+        };
+        let oauth_auth_configured = if oauth_enabled {
+            has_stored_oauth_credentials(&config.id)
+                .await
+                .unwrap_or(false)
+        } else {
+            false
+        };
+
+        let (command, command_available, command_source, command_resolved_path) =
+            if transport == bitfun_core::service::mcp::MCPServerTransport::Stdio {
+                if let Some(command) = config.command.clone() {
+                    let capability = runtime_manager
+                        .as_ref()
+                        .map(|manager| manager.get_command_capability(&command));
+                    let available = capability.as_ref().map(|c| c.available);
+                    let source = capability.and_then(|c| {
+                        c.source.map(|source| match source {
+                            RuntimeSource::System => "system".to_string(),
+                            RuntimeSource::Managed => "managed".to_string(),
+                        })
+                    });
+                    let resolved_path = runtime_manager
+                        .as_ref()
+                        .and_then(|manager| manager.resolve_command(&command))
+                        .and_then(|resolved| resolved.resolved_path);
+                    (Some(command), available, source, resolved_path)
+                } else {
+                    (None, None, None, None)
+                }
             } else {
                 (None, None, None, None)
-            }
-        } else {
-            (None, None, None, None)
+            };
+
+        let (start_supported, start_disabled_reason) = match config.server_type {
+            MCPServerType::Remote if transport.as_str() == "sse" => (
+                false,
+                Some("Remote MCP SSE transport is not yet supported".to_string()),
+            ),
+            _ => (true, None),
         };
 
         let (status, status_message) = match mcp_service
@@ -143,17 +253,34 @@ pub async fn get_mcp_servers(state: State<'_, AppState>) -> Result<Vec<MCPServer
             status,
             status_message,
             server_type: format!("{:?}", config.server_type),
+            transport: transport.as_str().to_string(),
             enabled: config.enabled,
             auto_start: config.auto_start,
             url: config.url.clone(),
             auth_configured: if matches!(config.server_type, MCPServerType::Remote) {
-                Some(MCPConfigService::has_remote_authorization(&config))
+                Some(static_auth_configured || oauth_auth_configured)
             } else {
                 None
             },
             auth_source: if matches!(config.server_type, MCPServerType::Remote) {
-                MCPConfigService::get_remote_authorization_source(&config)
-                    .map(|source| source.to_string())
+                if static_auth_configured {
+                    MCPConfigService::get_remote_authorization_source(&config)
+                        .map(|source| source.to_string())
+                } else if oauth_auth_configured {
+                    Some("oauth".to_string())
+                } else {
+                    None
+                }
+            } else {
+                None
+            },
+            oauth_enabled: if matches!(config.server_type, MCPServerType::Remote) {
+                Some(oauth_enabled)
+            } else {
+                None
+            },
+            xaa_enabled: if matches!(config.server_type, MCPServerType::Remote) {
+                Some(MCPConfigService::has_remote_xaa(&config))
             } else {
                 None
             },
@@ -161,10 +288,82 @@ pub async fn get_mcp_servers(state: State<'_, AppState>) -> Result<Vec<MCPServer
             command_available,
             command_source,
             command_resolved_path,
+            start_supported,
+            start_disabled_reason,
         });
     }
 
     Ok(infos)
+}
+
+#[tauri::command]
+pub async fn list_mcp_resources(
+    state: State<'_, AppState>,
+    request: ListMCPResourcesRequest,
+) -> Result<Vec<MCPResource>, String> {
+    let mcp_service = state
+        .mcp_service
+        .as_ref()
+        .ok_or_else(|| "MCP service not initialized".to_string())?;
+
+    load_mcp_resources(mcp_service.as_ref(), &request.server_id, request.refresh).await
+}
+
+#[tauri::command]
+pub async fn read_mcp_resource(
+    state: State<'_, AppState>,
+    request: ReadMCPResourceRequest,
+) -> Result<ResourcesReadResult, String> {
+    let mcp_service = state
+        .mcp_service
+        .as_ref()
+        .ok_or_else(|| "MCP service not initialized".to_string())?;
+
+    let connection = mcp_service
+        .server_manager()
+        .get_connection(&request.server_id)
+        .await
+        .ok_or_else(|| format!("MCP server not connected: {}", request.server_id))?;
+
+    connection
+        .read_resource(&request.resource_uri)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn list_mcp_prompts(
+    state: State<'_, AppState>,
+    request: ListMCPPromptsRequest,
+) -> Result<Vec<MCPPrompt>, String> {
+    let mcp_service = state
+        .mcp_service
+        .as_ref()
+        .ok_or_else(|| "MCP service not initialized".to_string())?;
+
+    load_mcp_prompts(mcp_service.as_ref(), &request.server_id, request.refresh).await
+}
+
+#[tauri::command]
+pub async fn get_mcp_prompt(
+    state: State<'_, AppState>,
+    request: GetMCPPromptRequest,
+) -> Result<PromptsGetResult, String> {
+    let mcp_service = state
+        .mcp_service
+        .as_ref()
+        .ok_or_else(|| "MCP service not initialized".to_string())?;
+
+    let connection = mcp_service
+        .server_manager()
+        .get_connection(&request.server_id)
+        .await
+        .ok_or_else(|| format!("MCP server not connected: {}", request.server_id))?;
+
+    connection
+        .get_prompt(&request.prompt_name, request.arguments)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -477,6 +676,30 @@ pub struct ClearMCPRemoteAuthRequest {
     pub server_id: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteMCPServerRequest {
+    pub server_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StartMCPRemoteOAuthRequest {
+    pub server_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetMCPRemoteOAuthSessionRequest {
+    pub server_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CancelMCPRemoteOAuthRequest {
+    pub server_id: String,
+}
+
 #[tauri::command]
 pub async fn send_mcp_app_message(
     state: State<'_, AppState>,
@@ -618,4 +841,73 @@ pub async fn clear_mcp_remote_auth(
         .map_err(|e| e.to_string())?;
 
     Ok(())
+}
+
+#[tauri::command]
+pub async fn delete_mcp_server(
+    state: State<'_, AppState>,
+    request: DeleteMCPServerRequest,
+) -> Result<(), String> {
+    let mcp_service = state
+        .mcp_service
+        .as_ref()
+        .ok_or_else(|| "MCP service not initialized".to_string())?;
+
+    mcp_service
+        .server_manager()
+        .remove_server(&request.server_id)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn start_mcp_remote_oauth(
+    state: State<'_, AppState>,
+    request: StartMCPRemoteOAuthRequest,
+) -> Result<MCPRemoteOAuthSessionSnapshot, String> {
+    let mcp_service = state
+        .mcp_service
+        .as_ref()
+        .ok_or_else(|| "MCP service not initialized".to_string())?;
+
+    mcp_service
+        .server_manager()
+        .start_remote_oauth_authorization(&request.server_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_mcp_remote_oauth_session(
+    state: State<'_, AppState>,
+    request: GetMCPRemoteOAuthSessionRequest,
+) -> Result<Option<MCPRemoteOAuthSessionSnapshot>, String> {
+    let mcp_service = state
+        .mcp_service
+        .as_ref()
+        .ok_or_else(|| "MCP service not initialized".to_string())?;
+
+    Ok(mcp_service
+        .server_manager()
+        .get_remote_oauth_session(&request.server_id)
+        .await)
+}
+
+#[tauri::command]
+pub async fn cancel_mcp_remote_oauth(
+    state: State<'_, AppState>,
+    request: CancelMCPRemoteOAuthRequest,
+) -> Result<(), String> {
+    let mcp_service = state
+        .mcp_service
+        .as_ref()
+        .ok_or_else(|| "MCP service not initialized".to_string())?;
+
+    mcp_service
+        .server_manager()
+        .cancel_remote_oauth_authorization(&request.server_id)
+        .await
+        .map_err(|e| e.to_string())
 }

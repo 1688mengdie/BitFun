@@ -155,6 +155,28 @@ async fn get_subagent_configs() -> HashMap<String, SubAgentConfig> {
     }
 }
 
+fn merge_dynamic_mcp_tools(
+    mut configured_tools: Vec<String>,
+    registered_tool_names: &[String],
+) -> Vec<String> {
+    for tool_name in registered_tool_names {
+        if !tool_name.starts_with("mcp__") {
+            continue;
+        }
+
+        if configured_tools
+            .iter()
+            .any(|existing| existing == tool_name)
+        {
+            continue;
+        }
+
+        configured_tools.push(tool_name.clone());
+    }
+
+    configured_tools
+}
+
 /// Agent category
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentCategory {
@@ -386,13 +408,16 @@ impl AgentRegistry {
         match entry.category {
             AgentCategory::Mode => {
                 let mode_configs = get_mode_configs().await;
+                let registered_tool_names = get_all_registered_tool_names().await;
                 let valid_tools: HashSet<String> =
-                    get_all_registered_tool_names().await.into_iter().collect();
-                resolve_effective_tools(
+                    registered_tool_names.iter().cloned().collect();
+                let resolved_tools = resolve_effective_tools(
                     &entry.agent.default_tools(),
                     mode_configs.get(agent_type),
                     &valid_tools,
-                )
+                );
+
+                merge_dynamic_mcp_tools(resolved_tools, &registered_tool_names)
             }
             AgentCategory::SubAgent | AgentCategory::Hidden => entry.agent.default_tools(),
         }
@@ -1038,7 +1063,7 @@ pub fn get_agent_registry() -> Arc<AgentRegistry> {
 
 #[cfg(test)]
 mod tests {
-    use super::default_model_id_for_builtin_agent;
+    use super::{default_model_id_for_builtin_agent, merge_dynamic_mcp_tools};
 
     #[test]
     fn top_level_modes_default_to_auto() {
@@ -1051,5 +1076,28 @@ mod tests {
     fn non_mode_agents_default_to_primary() {
         assert_eq!(default_model_id_for_builtin_agent("Explore"), "primary");
         assert_eq!(default_model_id_for_builtin_agent("CodeReview"), "primary");
+    }
+
+    #[test]
+    fn merge_dynamic_mcp_tools_appends_registered_mcp_tools_once() {
+        let configured_tools = vec!["Read".to_string(), "Bash".to_string()];
+        let registered_tool_names = vec![
+            "Read".to_string(),
+            "mcp__notion__notion-search".to_string(),
+            "mcp__github__list_issues".to_string(),
+            "mcp__notion__notion-search".to_string(),
+        ];
+
+        let merged = merge_dynamic_mcp_tools(configured_tools, &registered_tool_names);
+
+        assert_eq!(
+            merged,
+            vec![
+                "Read".to_string(),
+                "Bash".to_string(),
+                "mcp__notion__notion-search".to_string(),
+                "mcp__github__list_issues".to_string(),
+            ]
+        );
     }
 }

@@ -54,7 +54,12 @@ interface UseMessageSenderProps {
 
 interface UseMessageSenderReturn {
   /** Send a message */
-  sendMessage: (message: string) => Promise<void>;
+  sendMessage: (
+    message: string,
+    options?: {
+      displayMessage?: string;
+    }
+  ) => Promise<void>;
   /** Whether a send is in progress */
   isSending: boolean;
 }
@@ -69,7 +74,12 @@ export function useMessageSender(props: UseMessageSenderProps): UseMessageSender
     currentAgentType,
   } = props;
 
-  const sendMessage = useCallback(async (message: string) => {
+  const sendMessage = useCallback(async (
+    message: string,
+    options?: {
+      displayMessage?: string;
+    }
+  ) => {
     if (!message.trim()) {
       return;
     }
@@ -142,7 +152,7 @@ export function useMessageSender(props: UseMessageSenderProps): UseMessageSender
       }
 
       let fullMessage = trimmedMessage;
-      const displayMessage = trimmedMessage;
+      const displayMessage = options?.displayMessage?.trim() || trimmedMessage;
 
       if (contexts.length > 0) {
         const fullContextSection = contexts.map(ctx => {

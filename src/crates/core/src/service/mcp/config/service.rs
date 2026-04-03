@@ -14,18 +14,22 @@ pub struct MCPConfigService {
 }
 
 impl MCPConfigService {
-    const AUTHORIZATION_KEYS: [&'static str; 3] = ["Authorization", "authorization", "AUTHORIZATION"];
+    const AUTHORIZATION_KEYS: [&'static str; 3] =
+        ["Authorization", "authorization", "AUTHORIZATION"];
 
     fn config_signature(config: &MCPServerConfig) -> String {
         let env: BTreeMap<_, _> = config.env.clone().into_iter().collect();
         let headers: BTreeMap<_, _> = config.headers.clone().into_iter().collect();
         serde_json::json!({
             "serverType": config.server_type,
+            "transport": config.resolved_transport().as_str(),
             "command": config.command,
             "args": config.args,
             "env": env,
             "headers": headers,
             "url": config.url,
+            "oauth": config.oauth,
+            "xaa": config.xaa,
         })
         .to_string()
     }
@@ -92,19 +96,21 @@ impl MCPConfigService {
     ) -> Vec<MCPServerConfig> {
         servers
             .iter()
-            .filter_map(|value| match serde_json::from_value::<MCPServerConfig>(value.clone()) {
-                Ok(mut config) => {
-                    config.location = location;
-                    Some(config)
-                }
-                Err(e) => {
-                    warn!(
-                        "Failed to parse MCP config item at {:?} scope: {}",
-                        location, e
-                    );
-                    None
-                }
-            })
+            .filter_map(
+                |value| match serde_json::from_value::<MCPServerConfig>(value.clone()) {
+                    Ok(mut config) => {
+                        config.location = location;
+                        Some(config)
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Failed to parse MCP config item at {:?} scope: {}",
+                            location, e
+                        );
+                        None
+                    }
+                },
+            )
             .collect()
     }
 
@@ -114,14 +120,18 @@ impl MCPConfigService {
             return None;
         }
 
-        if trimmed.to_ascii_lowercase().starts_with("bearer ") || trimmed.contains(char::is_whitespace) {
+        if trimmed.to_ascii_lowercase().starts_with("bearer ")
+            || trimmed.contains(char::is_whitespace)
+        {
             return Some(trimmed.to_string());
         }
 
         Some(format!("Bearer {}", trimmed))
     }
 
-    fn config_authorization_from_map(map: &std::collections::HashMap<String, String>) -> Option<String> {
+    fn config_authorization_from_map(
+        map: &std::collections::HashMap<String, String>,
+    ) -> Option<String> {
         Self::AUTHORIZATION_KEYS
             .iter()
             .find_map(|key| map.get(*key).cloned())
@@ -153,6 +163,14 @@ impl MCPConfigService {
         Self::get_remote_authorization_value(config).is_some()
     }
 
+    pub fn has_remote_oauth(config: &MCPServerConfig) -> bool {
+        config.oauth.is_some()
+    }
+
+    pub fn has_remote_xaa(config: &MCPServerConfig) -> bool {
+        config.xaa.is_some()
+    }
+
     /// Creates a new MCP configuration service.
     pub fn new(config_service: Arc<ConfigService>) -> BitFunResult<Self> {
         Ok(Self { config_service })
@@ -162,9 +180,7 @@ impl MCPConfigService {
     pub async fn load_all_configs(&self) -> BitFunResult<Vec<MCPServerConfig>> {
         let builtin_configs = self.load_builtin_configs().await?;
         let user_configs = match self.load_user_configs().await {
-            Ok(user_configs) => {
-                user_configs
-            }
+            Ok(user_configs) => user_configs,
             Err(e) => {
                 warn!("Failed to load user-level MCP configs: {}", e);
                 Vec::new()
@@ -172,9 +188,7 @@ impl MCPConfigService {
         };
 
         let project_configs = match self.load_project_configs().await {
-            Ok(project_configs) => {
-                project_configs
-            }
+            Ok(project_configs) => project_configs,
             Err(e) => {
                 warn!("Failed to load project-level MCP configs: {}", e);
                 Vec::new()
@@ -204,7 +218,6 @@ impl MCPConfigService {
             &mut id_index,
         );
 
-        info!("Loaded {} MCP server config(s)", configs.len());
         Ok(configs)
     }
 
@@ -296,10 +309,9 @@ impl MCPConfigService {
         server_id: &str,
         authorization_value: &str,
     ) -> BitFunResult<MCPServerConfig> {
-        let mut config = self
-            .get_server_config(server_id)
-            .await?
-            .ok_or_else(|| BitFunError::NotFound(format!("MCP server config not found: {}", server_id)))?;
+        let mut config = self.get_server_config(server_id).await?.ok_or_else(|| {
+            BitFunError::NotFound(format!("MCP server config not found: {}", server_id))
+        })?;
 
         if config.server_type != crate::service::mcp::server::MCPServerType::Remote {
             return Err(BitFunError::Validation(format!(
@@ -308,9 +320,10 @@ impl MCPConfigService {
             )));
         }
 
-        let normalized = Self::normalize_authorization_value(authorization_value).ok_or_else(|| {
-            BitFunError::Validation("Authorization value cannot be empty".to_string())
-        })?;
+        let normalized =
+            Self::normalize_authorization_value(authorization_value).ok_or_else(|| {
+                BitFunError::Validation("Authorization value cannot be empty".to_string())
+            })?;
 
         Self::remove_authorization_keys(&mut config.headers);
         Self::remove_authorization_keys(&mut config.env);
@@ -326,10 +339,9 @@ impl MCPConfigService {
         &self,
         server_id: &str,
     ) -> BitFunResult<MCPServerConfig> {
-        let mut config = self
-            .get_server_config(server_id)
-            .await?
-            .ok_or_else(|| BitFunError::NotFound(format!("MCP server config not found: {}", server_id)))?;
+        let mut config = self.get_server_config(server_id).await?.ok_or_else(|| {
+            BitFunError::NotFound(format!("MCP server config not found: {}", server_id))
+        })?;
 
         if config.server_type != crate::service::mcp::server::MCPServerType::Remote {
             return Err(BitFunError::Validation(format!(
@@ -450,6 +462,7 @@ mod tests {
             id: id.to_string(),
             name: id.to_string(),
             server_type,
+            transport: None,
             command: command.map(str::to_string),
             args: Vec::new(),
             env: HashMap::new(),
@@ -460,6 +473,8 @@ mod tests {
             location,
             capabilities: Vec::new(),
             settings: Default::default(),
+            oauth: None,
+            xaa: None,
         }
     }
 
@@ -496,7 +511,10 @@ mod tests {
 
         assert_eq!(merged.len(), 1);
         assert_eq!(merged[0].location, ConfigLocation::Project);
-        assert_eq!(merged[0].url.as_deref(), Some("https://project.example.com/mcp"));
+        assert_eq!(
+            merged[0].url.as_deref(),
+            Some("https://project.example.com/mcp")
+        );
     }
 
     #[test]
@@ -547,9 +565,10 @@ mod tests {
         config
             .env
             .insert("Authorization".to_string(), "legacy-token".to_string());
-        config
-            .headers
-            .insert("Authorization".to_string(), "Bearer header-token".to_string());
+        config.headers.insert(
+            "Authorization".to_string(),
+            "Bearer header-token".to_string(),
+        );
 
         assert_eq!(
             MCPConfigService::get_remote_authorization_value(&config).as_deref(),
