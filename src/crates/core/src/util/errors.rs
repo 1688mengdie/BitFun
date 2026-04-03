@@ -138,8 +138,7 @@ impl BitFunError {
     }
 
     pub fn serialization<T: Into<String>>(msg: T) -> Self {
-        Self::Serialization(serde_json::Error::io(std::io::Error::new(
-            std::io::ErrorKind::Other,
+        Self::Serialization(serde_json::Error::io(std::io::Error::other(
             msg.into(),
         )))
     }
@@ -149,7 +148,7 @@ impl BitFunError {
     }
 
     pub fn io<T: Into<String>>(msg: T) -> Self {
-        Self::Io(std::io::Error::new(std::io::ErrorKind::Other, msg.into()))
+        Self::Io(std::io::Error::other(msg.into()))
     }
 
     pub fn cancelled<T: Into<String>>(msg: T) -> Self {
