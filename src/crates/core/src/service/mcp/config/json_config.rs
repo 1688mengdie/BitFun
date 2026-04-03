@@ -89,10 +89,9 @@ impl MCPConfigService {
             return Err(BitFunError::validation(error_msg.to_string()));
         }
 
-        if !config_value
+        if config_value
             .get("mcpServers")
-            .and_then(|v| v.as_object())
-            .is_some()
+            .and_then(|v| v.as_object()).is_none()
         {
             let error_msg = "'mcpServers' field must be an object";
             error!("{}", error_msg);

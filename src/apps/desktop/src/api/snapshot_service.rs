@@ -890,7 +890,7 @@ pub async fn get_file_change_history(
         .await
         .map_err(|e| format!("Failed to get file change history: {}", e))?;
 
-    Ok(serde_json::to_value(changes).map_err(|e| format!("Serialization failed: {}", e))?)
+    serde_json::to_value(changes).map_err(|e| format!("Serialization failed: {}", e))
 }
 
 #[tauri::command]

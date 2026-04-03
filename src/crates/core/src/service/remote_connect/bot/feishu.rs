@@ -21,6 +21,12 @@ use super::command_router::{
 };
 use super::{load_bot_persistence, save_bot_persistence, BotConfig, SavedBotConnection};
 
+type FeishuWsStream = tokio_tungstenite::WebSocketStream<
+    tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+>;
+type FeishuWsWrite = futures::stream::SplitSink<FeishuWsStream, WsMessage>;
+type SharedFeishuWsWrite = Arc<RwLock<FeishuWsWrite>>;
+
 // ── Minimal protobuf codec for Feishu WebSocket binary protocol ─────────
 
 mod pb {
@@ -160,7 +166,7 @@ mod pb {
     }
 
     fn write_varint(buf: &mut Vec<u8>, field: u32, val: u64) {
-        buf.extend(encode_varint(((field << 3) | 0) as u64));
+        buf.extend(encode_varint((field << 3) as u64));
         buf.extend(encode_varint(val));
     }
 
@@ -1135,16 +1141,7 @@ impl FeishuBot {
     async fn handle_data_frame_for_pairing(
         &self,
         frame: &pb::Frame,
-        write: &Arc<
-            RwLock<
-                futures::stream::SplitSink<
-                    tokio_tungstenite::WebSocketStream<
-                        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
-                    >,
-                    WsMessage,
-                >,
-            >,
-        >,
+        write: &SharedFeishuWsWrite,
     ) -> Option<String> {
         let msg_type = frame.get_header("type").unwrap_or("");
         if msg_type != "event" {
@@ -1519,8 +1516,8 @@ impl FeishuBot {
         }
 
         // Intercept file download callbacks before normal command routing.
-        if text.starts_with("download_file:") {
-            let token = text["download_file:".len()..].trim().to_string();
+        if let Some(stripped) = text.strip_prefix("download_file:") {
+            let token = stripped.trim().to_string();
             drop(states);
             self.handle_download_request(chat_id, &token).await;
             return;

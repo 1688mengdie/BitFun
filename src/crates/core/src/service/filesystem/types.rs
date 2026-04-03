@@ -5,19 +5,12 @@ use serde::{Deserialize, Serialize};
 
 /// File system service configuration
 #[derive(Debug, Clone)]
+#[derive(Default)]
 pub struct FileSystemConfig {
     pub tree_options: FileTreeOptions,
     pub operation_options: FileOperationOptions,
 }
 
-impl Default for FileSystemConfig {
-    fn default() -> Self {
-        Self {
-            tree_options: FileTreeOptions::default(),
-            operation_options: FileOperationOptions::default(),
-        }
-    }
-}
 
 /// Directory scan result
 #[derive(Debug, Serialize, Deserialize)]

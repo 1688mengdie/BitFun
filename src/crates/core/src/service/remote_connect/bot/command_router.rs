@@ -1972,7 +1972,7 @@ async fn select_session(
         ));
         reply.push_str(&format!(
             "{}: {assistant_text}\n\n",
-            if language.is_chinese() { "AI" } else { "AI" }
+            "AI"
         ));
         reply.push_str(if language.is_chinese() {
             "你可以继续对话。"
@@ -2147,6 +2147,7 @@ async fn submit_question_answers(tool_id: &str, answers: &[Value]) -> HandleResu
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_question_reply(
     state: &mut BotChatState,
     tool_id: String,

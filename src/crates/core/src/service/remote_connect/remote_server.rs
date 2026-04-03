@@ -433,7 +433,7 @@ pub enum RemoteResponse {
         #[serde(skip_serializing_if = "Option::is_none")]
         active_turn: Option<ActiveTurnSnapshot>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        model_catalog: Option<RemoteModelCatalog>,
+        model_catalog: Box<Option<RemoteModelCatalog>>,
     },
     AnswerAccepted,
     InteractionAccepted {
@@ -1198,7 +1198,7 @@ impl RemoteSessionStateTracker {
 
         if let Some(item) = state.active_items.iter_mut().rev().find(|i| {
             i.item_type == "tool"
-                && i.tool.as_ref().map_or(false, |t| {
+                && i.tool.as_ref().is_some_and(|t| {
                     t.id == resolved_id || (allow_name_fallback && t.name == tool_name)
                 })
         }) {
@@ -1233,7 +1233,7 @@ impl RemoteSessionStateTracker {
                     ..
                 } => subagent_parent_info
                     .as_ref()
-                    .map_or(false, |p| p.session_id == self.target_session_id),
+                    .is_some_and(|p| p.session_id == self.target_session_id),
                 _ => false,
             }
         } else {
@@ -1333,7 +1333,7 @@ impl RemoteSessionStateTracker {
                         }
                         "ConfirmationNeeded" => {
                             let params = val.get("params").cloned();
-                            let input_preview = params.as_ref().and_then(|v| make_slim_params(v));
+                            let input_preview = params.as_ref().and_then(make_slim_params);
                             Self::upsert_active_tool(
                                 &mut s,
                                 &tool_id,
@@ -1346,7 +1346,7 @@ impl RemoteSessionStateTracker {
                         }
                         "Started" => {
                             let params = val.get("params").cloned();
-                            let input_preview = params.as_ref().and_then(|v| make_slim_params(v));
+                            let input_preview = params.as_ref().and_then(make_slim_params);
                             let tool_input = if tool_name == "AskUserQuestion"
                                 || tool_name == "Task"
                                 || tool_name == "TodoWrite"
@@ -1403,7 +1403,7 @@ impl RemoteSessionStateTracker {
                             }
                             if let Some(item) = s.active_items.iter_mut().rev().find(|i| {
                                 i.item_type == "tool"
-                                    && i.tool.as_ref().map_or(false, |t| {
+                                    && i.tool.as_ref().is_some_and(|t| {
                                         (t.id == tool_id
                                             || (allow_name_fallback && t.name == tool_name))
                                             && t.status == "running"
@@ -1430,7 +1430,7 @@ impl RemoteSessionStateTracker {
                             }
                             if let Some(item) = s.active_items.iter_mut().rev().find(|i| {
                                 i.item_type == "tool"
-                                    && i.tool.as_ref().map_or(false, |t| {
+                                    && i.tool.as_ref().is_some_and(|t| {
                                         (t.id == tool_id
                                             || (allow_name_fallback && t.name == tool_name))
                                             && t.status == "running"
@@ -1459,7 +1459,7 @@ impl RemoteSessionStateTracker {
                             }
                             if let Some(item) = s.active_items.iter_mut().rev().find(|i| {
                                 i.item_type == "tool"
-                                    && i.tool.as_ref().map_or(false, |t| {
+                                    && i.tool.as_ref().is_some_and(|t| {
                                         (t.id == tool_id
                                             || (allow_name_fallback && t.name == tool_name))
                                             && matches!(
@@ -2037,7 +2037,7 @@ impl RemoteServer {
                 new_messages: None,
                 total_msg_count: None,
                 active_turn: None,
-                model_catalog: None,
+                model_catalog: Box::new(None),
             };
         }
 
@@ -2058,11 +2058,11 @@ impl RemoteServer {
                 new_messages: None,
                 total_msg_count: None,
                 active_turn,
-                model_catalog: if should_send_model_catalog {
+                model_catalog: Box::new(if should_send_model_catalog {
                     current_model_catalog
                 } else {
                     None
-                },
+                }),
             };
         }
 
@@ -2120,11 +2120,11 @@ impl RemoteServer {
             new_messages: send_msgs,
             total_msg_count: send_total,
             active_turn,
-            model_catalog: if should_send_model_catalog {
+            model_catalog: Box::new(if should_send_model_catalog {
                 current_model_catalog
             } else {
                 None
-            },
+            }),
         }
     }
 

@@ -30,7 +30,7 @@ impl WorkStateAnalyzer {
 
         let git_diff = if git_state
             .as_ref()
-            .map_or(false, |g| g.unstaged_files > 0 || g.staged_files > 0)
+            .is_some_and(|g| g.unstaged_files > 0 || g.staged_files > 0)
         {
             Self::get_git_diff(repo_path).await.unwrap_or_default()
         } else {
@@ -242,7 +242,7 @@ impl WorkStateAnalyzer {
         }
 
         let result = String::from_utf8_lossy(&output.stdout);
-        let parts: Vec<&str> = result.trim().split_whitespace().collect();
+        let parts: Vec<&str> = result.split_whitespace().collect();
 
         if parts.len() >= 2 {
             let ahead = parts[0].parse().unwrap_or(0);

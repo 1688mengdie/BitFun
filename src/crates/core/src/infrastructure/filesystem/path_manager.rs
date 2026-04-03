@@ -270,14 +270,14 @@ impl PathManager {
 
         let canonical_exists = canonical.exists();
         let legacy_exists = legacy.exists();
-        let chosen = if canonical_exists {
+        
+        if canonical_exists {
             canonical.clone()
         } else if legacy_exists {
             legacy.clone()
         } else {
             canonical.clone()
-        };
-        chosen
+        }
     }
 
     /// Root for per-host, per-remote-path workspace mirrors: `~/.bitfun/remote_ssh/`.

@@ -250,10 +250,10 @@ pub fn parse_branch_line(line: &str) -> Option<(String, bool)> {
         return None;
     }
 
-    if trimmed.starts_with("* ") {
-        Some((trimmed[2..].to_string(), true))
-    } else if trimmed.starts_with("  ") {
-        Some((trimmed[2..].to_string(), false))
+    if let Some(stripped) = trimmed.strip_prefix("* ") {
+        Some((stripped.to_string(), true))
+    } else if let Some(stripped) = trimmed.strip_prefix("  ") {
+        Some((stripped.to_string(), false))
     } else {
         Some((trimmed.to_string(), false))
     }
