@@ -71,28 +71,38 @@ function getParentInterruptionContext(parentSessionId: string): { parentDialogTu
   return { parentDialogTurnId, parentTurnIndex: idx >= 0 ? idx + 1 : undefined };
 }
 
-export async function startBtwThread(params: {
+export async function createBtwChildSession(params: {
   parentSessionId: string;
-  workspacePath: string;
-  question: string;
-  modelId?: string;
-  maxContextMessages?: number;
-}): Promise<{ requestId: string; childSessionId: string }> {
-  const { parentSessionId, workspacePath } = params;
-  const question = params.question.trim();
-  if (!question) {
-    notificationService.warning('Please provide a question after /btw');
-    throw new Error('Empty /btw question');
-  }
-
-  const requestId = safeUuid('btw');
+  workspacePath?: string;
+  childSessionName: string;
+  agentType?: string;
+  modelName?: string;
+  enableTools?: boolean;
+  safeMode?: boolean;
+  autoCompact?: boolean;
+  enableContextCompression?: boolean;
+  requestId?: string;
+  addMarker?: boolean;
+}): Promise<{
+  requestId: string;
+  childSessionId: string;
+  parentDialogTurnId?: string;
+  parentTurnIndex?: number;
+}> {
+  const { parentSessionId } = params;
+  const requestId = params.requestId || safeUuid('btw');
   const createdAt = Date.now();
   const { parentDialogTurnId, parentTurnIndex } = getParentInterruptionContext(parentSessionId);
 
   const parentSession = flowChatStore.getState().sessions.get(parentSessionId);
-  const agentType = parentSession?.mode || 'agentic';
-  const modelName = parentSession?.config?.modelName || 'default';
-  const childSessionName = buildChildSessionName(question);
+  const workspacePath = params.workspacePath || parentSession?.workspacePath;
+  if (!workspacePath) {
+    throw new Error(`Workspace path is required for BTW child session: ${parentSessionId}`);
+  }
+
+  const agentType = params.agentType || parentSession?.mode || 'agentic';
+  const modelName = params.modelName || parentSession?.config?.modelName || 'default';
+  const childSessionName = params.childSessionName.trim() || 'Side thread';
   const remoteConnectionId = parentSession?.remoteConnectionId;
   const remoteSshHost = parentSession?.remoteSshHost;
 
@@ -104,17 +114,16 @@ export async function startBtwThread(params: {
     remoteSshHost,
     config: {
       modelName,
-      enableTools: false,
-      safeMode: true,
-      autoCompact: true,
-      enableContextCompression: true,
+      enableTools: params.enableTools ?? false,
+      safeMode: params.safeMode ?? true,
+      autoCompact: params.autoCompact ?? true,
+      enableContextCompression: params.enableContextCompression ?? true,
       remoteConnectionId,
       remoteSshHost,
     },
   });
 
   const childSessionId = created.sessionId;
-  // Ensure the child session exists in the store even if the backend SessionCreated event is delayed.
   flowChatStore.addExternalSession(
     childSessionId,
     childSessionName,
@@ -141,15 +150,74 @@ export async function startBtwThread(params: {
     parentTurnIndex,
   });
 
-  // Add a lightweight marker to the parent session for quick navigation.
-  flowChatStore.addBtwThreadMarker(parentSessionId, {
+  if (params.addMarker ?? false) {
+    flowChatStore.addBtwThreadMarker(parentSessionId, {
+      requestId,
+      childSessionId,
+      title: childSessionName,
+      status: 'running',
+      createdAt,
+      parentDialogTurnId,
+      parentTurnIndex,
+    });
+  }
+
+  const meta = await loadSessionMetadataWithRetry(
+    childSessionId,
+    workspacePath,
+    undefined,
+    remoteConnectionId
+  );
+  if (meta) {
+    const childSession = flowChatStore.getState().sessions.get(childSessionId);
+
+    if (childSession) {
+      await sessionAPI.saveSessionMetadata(
+        buildSessionMetadata(childSession, meta),
+        workspacePath,
+        remoteConnectionId
+      );
+    }
+  }
+
+  return {
     requestId,
     childSessionId,
-    title: childSessionName,
-    status: 'running',
-    createdAt,
     parentDialogTurnId,
     parentTurnIndex,
+  };
+}
+
+export async function startBtwThread(params: {
+  parentSessionId: string;
+  workspacePath: string;
+  question: string;
+  modelId?: string;
+  maxContextMessages?: number;
+}): Promise<{ requestId: string; childSessionId: string }> {
+  const { parentSessionId, workspacePath } = params;
+  const question = params.question.trim();
+  if (!question) {
+    notificationService.warning('Please provide a question after /btw');
+    throw new Error('Empty /btw question');
+  }
+
+  const childSessionName = buildChildSessionName(question);
+  const {
+    requestId,
+    childSessionId,
+    parentDialogTurnId,
+    parentTurnIndex,
+  } = await createBtwChildSession({
+    parentSessionId,
+    workspacePath,
+    childSessionName,
+    requestId: safeUuid('btw'),
+    enableTools: false,
+    safeMode: true,
+    autoCompact: true,
+    enableContextCompression: true,
+    addMarker: true,
   });
 
   // Insert a lightweight in-stream marker into the parent flow chat, and split the
@@ -207,20 +275,6 @@ export async function startBtwThread(params: {
   };
 
   flowChatStore.addDialogTurn(childSessionId, childTurn);
-
-  // Persist child session metadata (parent linkage) to disk.
-  const meta = await loadSessionMetadataWithRetry(childSessionId, workspacePath, undefined, remoteConnectionId);
-  if (meta) {
-    const childSession = flowChatStore.getState().sessions.get(childSessionId);
-
-    if (childSession) {
-      await sessionAPI.saveSessionMetadata(
-        buildSessionMetadata(childSession, meta),
-        workspacePath,
-        remoteConnectionId
-      );
-    }
-  }
 
   let answerAcc = '';
 

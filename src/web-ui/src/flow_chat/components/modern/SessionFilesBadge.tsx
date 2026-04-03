@@ -12,6 +12,8 @@ import { snapshotAPI } from '../../../infrastructure/api';
 import { useWorkspaceContext } from '../../../infrastructure/contexts/WorkspaceContext';
 import { diffService } from '../../../tools/editor/services';
 import { createLogger } from '@/shared/utils/logger';
+import { createBtwChildSession } from '../../services/BtwThreadService';
+import { openBtwSessionInAuxPane } from '../../services/openBtwSession';
 import './SessionFilesBadge.scss';
 
 const log = createLogger('SessionFilesBadge');
@@ -287,12 +289,31 @@ export const SessionFilesBadge: React.FC<SessionFilesBadgeProps> = ({
     try {
       const { FlowChatManager } = await import('../../services/FlowChatManager');
       const flowChatManager = FlowChatManager.getInstance();
+      const { childSessionId } = await createBtwChildSession({
+        parentSessionId: sessionId,
+        workspacePath: currentWorkspace?.rootPath,
+        childSessionName: t('sessionFilesBadge.review.threadTitle', {
+          defaultValue: 'Code review',
+        }),
+        agentType: 'CodeReview',
+        enableTools: true,
+        safeMode: true,
+        autoCompact: true,
+        enableContextCompression: true,
+        addMarker: false,
+      });
+
+      openBtwSessionInAuxPane({
+        childSessionId,
+        parentSessionId: sessionId,
+        workspacePath: currentWorkspace?.rootPath,
+        expand: true,
+      });
 
       await flowChatManager.sendMessage(
         reviewMessage,
-        sessionId,
-        displayMessage,
-        'CodeReview'
+        childSessionId,
+        displayMessage
       );
 
       setIsExpanded(false);

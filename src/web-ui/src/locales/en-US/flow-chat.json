@@ -333,7 +333,8 @@
     "clickToViewDiff": "Click to view diff",
     "review": {
       "displayMessage": "Review modified files:\n{{files}}",
-      "prompt": "Please review the following files modified in this session:\n\n{{files}}"
+      "prompt": "Please review the following files modified in this session:\n\n{{files}}",
+      "threadTitle": "Code review"
     }
   },
   "sessionFileModificationsBar": {

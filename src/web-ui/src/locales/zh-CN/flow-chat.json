@@ -333,7 +333,8 @@
     "clickToViewDiff": "点击查看 Diff",
     "review": {
       "displayMessage": "审查修改的文件：\n{{files}}",
-      "prompt": "请审查本次会话中修改的以下文件：\n\n{{files}}"
+      "prompt": "请审查本次会话中修改的以下文件：\n\n{{files}}",
+      "threadTitle": "代码审查"
     }
   },
   "sessionFileModificationsBar": {
