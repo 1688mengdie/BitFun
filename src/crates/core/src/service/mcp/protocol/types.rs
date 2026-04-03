@@ -259,7 +259,7 @@ pub enum MCPPromptMessageContent {
     /// Legacy: plain string content from older servers.
     Plain(String),
     /// Structured content block.
-    Block(Box<MCPPromptMessageContentBlock>),
+    Block(MCPPromptMessageContentBlock),
 }
 
 /// Structured content block types for prompt messages.
@@ -283,7 +283,7 @@ pub enum MCPPromptMessageContentBlock {
         mime_type: Option<String>,
     },
     #[serde(rename = "resource")]
-    Resource { resource: Box<MCPResourceContent> },
+    Resource { resource: MCPResourceContent },
 }
 
 impl MCPPromptMessageContent {
@@ -291,24 +291,33 @@ impl MCPPromptMessageContent {
     pub fn text_or_placeholder(&self) -> String {
         match self {
             MCPPromptMessageContent::Plain(s) => s.clone(),
-            MCPPromptMessageContent::Block(block) => match block.as_ref() {
-                MCPPromptMessageContentBlock::Text { text } => text.clone(),
-                MCPPromptMessageContentBlock::Image { mime_type, .. } => {
-                    format!("[Image: {}]", mime_type)
-                }
-                MCPPromptMessageContentBlock::Audio { mime_type, .. } => {
-                    format!("[Audio: {}]", mime_type)
-                }
-                MCPPromptMessageContentBlock::ResourceLink { uri, name, .. } => {
-                    name.as_ref().map_or_else(
-                        || format!("[Resource Link: {}]", uri),
-                        |n| format!("[Resource Link: {} ({})]", n, uri),
-                    )
-                }
-                MCPPromptMessageContentBlock::Resource { resource } => {
-                    format!("[Resource: {}]", resource.uri)
-                }
-            },
+            MCPPromptMessageContent::Block(MCPPromptMessageContentBlock::Text { text }) => {
+                text.clone()
+            }
+            MCPPromptMessageContent::Block(MCPPromptMessageContentBlock::Image {
+                mime_type,
+                ..
+            }) => {
+                format!("[Image: {}]", mime_type)
+            }
+            MCPPromptMessageContent::Block(MCPPromptMessageContentBlock::Audio {
+                mime_type,
+                ..
+            }) => {
+                format!("[Audio: {}]", mime_type)
+            }
+            MCPPromptMessageContent::Block(MCPPromptMessageContentBlock::ResourceLink {
+                uri,
+                name,
+                ..
+            }) => name
+                .as_ref()
+                .map_or_else(|| format!("[Resource Link: {}]", uri), |n| {
+                    format!("[Resource Link: {} ({})]", n, uri)
+                }),
+            MCPPromptMessageContent::Block(MCPPromptMessageContentBlock::Resource { resource }) => {
+                format!("[Resource: {}]", resource.uri)
+            }
         }
     }
 
@@ -321,14 +330,13 @@ impl MCPPromptMessageContent {
                     *s = s.replace(&placeholder, value);
                 }
             }
-            MCPPromptMessageContent::Block(block) => {
-                if let MCPPromptMessageContentBlock::Text { text } = block.as_mut() {
-                    for (key, value) in arguments {
-                        let placeholder = format!("{{{{{}}}}}", key);
-                        *text = text.replace(&placeholder, value);
-                    }
+            MCPPromptMessageContent::Block(MCPPromptMessageContentBlock::Text { text }) => {
+                for (key, value) in arguments {
+                    let placeholder = format!("{{{{{}}}}}", key);
+                    *text = text.replace(&placeholder, value);
                 }
             }
+            _ => {}
         }
     }
 }
@@ -448,7 +456,7 @@ pub enum MCPToolResultContent {
     },
     /// Embedded resource content.
     #[serde(rename = "resource")]
-    Resource { resource: Box<MCPResourceContent> },
+    Resource { resource: MCPResourceContent },
 }
 
 /// MCP message type (based on JSON-RPC 2.0).

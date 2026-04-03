@@ -14,12 +14,6 @@ pub struct DebugMode;
 
 include!(concat!(env!("OUT_DIR"), "/embedded_agents_prompt.rs"));
 
-impl Default for DebugMode {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl DebugMode {
     pub fn new() -> Self {
         Self
@@ -153,9 +147,9 @@ impl DebugMode {
         let mut section = format!("## {} Instrumentation\n\n", template.display_name);
         section.push_str("```");
         section.push_str(lang_hint);
-        section.push('\n');
+        section.push_str("\n");
         section.push_str(&template.region_start);
-        section.push('\n');
+        section.push_str("\n");
         section.push_str(
             &template
                 .instrumentation_template
@@ -165,7 +159,7 @@ impl DebugMode {
                 .replace("{HYPOTHESIS_ID}", "X")
                 .replace("{RUN_ID}", "pre-fix"),
         );
-        section.push('\n');
+        section.push_str("\n");
         section.push_str(&template.region_end);
         section.push_str("\n```\n\n");
 
@@ -174,7 +168,7 @@ impl DebugMode {
             for note in &template.notes {
                 section.push_str(&format!("- {}\n", note));
             }
-            section.push('\n');
+            section.push_str("\n");
         }
 
         section

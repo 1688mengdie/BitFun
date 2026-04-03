@@ -41,10 +41,8 @@ pub enum OscSequence {
 
 /// Command execution state
 #[derive(Debug, Clone, PartialEq)]
-#[derive(Default)]
 pub enum CommandState {
     /// Waiting for prompt
-    #[default]
     Idle,
     /// Prompt is being displayed
     Prompt,
@@ -69,6 +67,11 @@ impl CommandState {
     }
 }
 
+impl Default for CommandState {
+    fn default() -> Self {
+        CommandState::Idle
+    }
+}
 
 /// Event emitted by shell integration
 #[derive(Debug, Clone)]
@@ -426,10 +429,14 @@ impl ShellIntegration {
                 self.post_command_collecting = true;
 
                 // Emit event but keep command_id for output collection
-                let event = self.current_command_id.as_ref().map(|cmd_id| ShellIntegrationEvent::CommandFinished {
+                let event = if let Some(cmd_id) = &self.current_command_id {
+                    Some(ShellIntegrationEvent::CommandFinished {
                         command_id: cmd_id.clone(),
                         exit_code,
-                    });
+                    })
+                } else {
+                    None
+                };
 
                 self.current_command = None;
                 event

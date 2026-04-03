@@ -14,9 +14,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::fs;
 
-type ConfigMigrationFn = fn(Value) -> BitFunResult<Value>;
-type ConfigMigration = (&'static str, &'static str, ConfigMigrationFn);
-
 /// Configuration manager.
 pub struct ConfigManager {
     config_dir: PathBuf,
@@ -187,7 +184,7 @@ impl ConfigManager {
 
     /// Auto-completes missing fields in model configuration (backward compatible).
     /// Ensures older configurations won't panic.
-    fn ensure_models_config(models: &mut [AIModelConfig]) {
+    fn ensure_models_config(models: &mut Vec<AIModelConfig>) {
         for model in models.iter_mut() {
             model.ensure_category_and_capabilities();
         }
@@ -232,7 +229,7 @@ impl ConfigManager {
         from_version: &str,
         mut config: Value,
     ) -> BitFunResult<Value> {
-        let migrations: Vec<ConfigMigration> =
+        let migrations: Vec<(&str, &str, fn(Value) -> BitFunResult<Value>)> =
             vec![("0.0.0", "1.0.0", migrate_0_0_0_to_1_0_0)];
 
         let mut current_version = from_version.to_string();
@@ -608,7 +605,7 @@ pub(crate) fn version_lt(v1: &str, v2: &str) -> bool {
 /// Parses a version string into a tuple `(major, minor, patch)`.
 pub(crate) fn parse_version(version: &str) -> (u32, u32, u32) {
     let parts: Vec<&str> = version.split('.').collect();
-    let major = parts.first().and_then(|s| s.parse().ok()).unwrap_or(0);
+    let major = parts.get(0).and_then(|s| s.parse().ok()).unwrap_or(0);
     let minor = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
     let patch = parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
     (major, minor, patch)

@@ -180,8 +180,8 @@ fn coord_blit_glyph(
     }
     let iw = img.width() as i32;
     let ih = img.height() as i32;
-    let xmin = metrics.xmin;
-    let ymin = metrics.ymin;
+    let xmin = metrics.xmin as i32;
+    let ymin = metrics.ymin as i32;
     for row in 0..h {
         for col in 0..w {
             let alpha = bitmap[row * w + col] as u32;
@@ -313,7 +313,7 @@ fn draw_som_labels<F>(
 
         // Draw label text centered in badge
         let text_x = bx0 + SOM_PAD_X;
-        let baseline_y = by0 + SOM_PAD_Y + text_h - m_rep.ymin.max(0);
+        let baseline_y = by0 + SOM_PAD_Y + text_h - (m_rep.ymin.max(0) as i32);
         coord_draw_text_h(frame, text_x, baseline_y, &label_text, SOM_FG, SOM_LABEL_PX);
     }
 }
@@ -809,12 +809,6 @@ impl std::fmt::Debug for DesktopComputerUseHost {
     }
 }
 
-impl Default for DesktopComputerUseHost {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl DesktopComputerUseHost {
     pub fn new() -> Self {
         Self {
@@ -836,7 +830,7 @@ impl DesktopComputerUseHost {
         }
         #[cfg(target_os = "windows")]
         {
-            Self::session_snapshot_windows()
+            return Self::session_snapshot_windows();
         }
         #[cfg(target_os = "linux")]
         {
@@ -1366,7 +1360,6 @@ end tell"#])
 
     /// Pointer position in **scaled image** pixels, if it lies inside the captured display.
     #[cfg(not(target_os = "macos"))]
-    #[allow(clippy::too_many_arguments)]
     fn pointer_in_scaled_image(
         origin_x: i32,
         origin_y: i32,
@@ -2165,7 +2158,7 @@ impl ComputerUseHost for DesktopComputerUseHost {
                 .map_err(|e| BitFunError::tool(format!("lock: {}", e)))?;
             s.screenshot_cache = Some(ScreenshotCacheEntry {
                 rgba: rgba.clone(),
-                screen,
+                screen: screen.clone(),
                 capture_time: Instant::now(),
             });
         }

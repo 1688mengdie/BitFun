@@ -207,7 +207,7 @@ impl FileTreeService {
         // For remote workspaces, return simple directory listing with empty stats
         if crate::service::remote_ssh::workspace_state::is_remote_path(root_path).await {
             let nodes = self.get_directory_contents_with_remote_hint(root_path, None).await
-                .map_err(BitFunError::service)?;
+                .map_err(|e| BitFunError::service(e))?;
             let stats = FileTreeStatistics {
                 total_files: nodes.iter().filter(|n| !n.is_directory).count(),
                 total_directories: nodes.iter().filter(|n| n.is_directory).count(),
@@ -252,7 +252,7 @@ impl FileTreeService {
                 &mut stats,
             )
             .await
-            .map_err(BitFunError::service)?;
+            .map_err(|e| BitFunError::service(e))?;
 
         Ok((nodes, stats))
     }
@@ -356,9 +356,9 @@ impl FileTreeService {
                 }
 
                 let last_modified = metadata.and_then(|m| {
-                    m.modified().ok().map(|t| {
+                    m.modified().ok().and_then(|t| {
                         let datetime: chrono::DateTime<chrono::Utc> = t.into();
-                        datetime.format("%Y-%m-%d %H:%M:%S").to_string()
+                        Some(datetime.format("%Y-%m-%d %H:%M:%S").to_string())
                     })
                 });
 
@@ -389,8 +389,8 @@ impl FileTreeService {
                 .with_depth(depth)
                 .with_enhanced_info(is_symlink, permissions, mime_type, None);
 
-                if is_directory
-                    && (!is_symlink || self.options.follow_symlinks) {
+                if is_directory {
+                    if !is_symlink || self.options.follow_symlinks {
                         match self
                             .build_tree_recursive(&entry_path, root_path, visited, depth + 1)
                             .await
@@ -403,6 +403,7 @@ impl FileTreeService {
                             }
                         }
                     }
+                }
 
                 nodes.push(node);
             }
@@ -550,9 +551,9 @@ impl FileTreeService {
                 }
 
                 let last_modified = metadata.and_then(|m| {
-                    m.modified().ok().map(|t| {
+                    m.modified().ok().and_then(|t| {
                         let datetime: chrono::DateTime<chrono::Utc> = t.into();
-                        datetime.format("%Y-%m-%d %H:%M:%S").to_string()
+                        Some(datetime.format("%Y-%m-%d %H:%M:%S").to_string())
                     })
                 });
 
@@ -583,8 +584,8 @@ impl FileTreeService {
                 .with_depth(depth)
                 .with_enhanced_info(is_symlink, permissions, mime_type, None);
 
-                if is_directory
-                    && (!is_symlink || self.options.follow_symlinks) {
+                if is_directory {
+                    if !is_symlink || self.options.follow_symlinks {
                         match self
                             .build_tree_recursive_with_stats(
                                 &entry_path,
@@ -603,6 +604,7 @@ impl FileTreeService {
                             }
                         }
                     }
+                }
 
                 nodes.push(node);
             }
@@ -1038,7 +1040,6 @@ impl FileTreeService {
         Ok(final_results)
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn search_file_content_static(
         path: &Path,
         file_name: &str,

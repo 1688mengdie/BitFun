@@ -14,12 +14,6 @@ use std::time::SystemTime;
 /// SessionControl tool - create, delete, or list persisted sessions
 pub struct SessionControlTool;
 
-impl Default for SessionControlTool {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl SessionControlTool {
     pub fn new() -> Self {
         Self
@@ -33,7 +27,7 @@ impl SessionControlTool {
         let current_session_id = context.session_id.as_deref()?;
         let current_workspace = context.workspace_root()?;
         let normalized_current_workspace =
-            normalize_path(current_workspace.to_string_lossy().as_ref());
+            normalize_path(&current_workspace.to_string_lossy().to_string());
 
         if normalized_current_workspace == workspace {
             Some(current_session_id)

@@ -16,12 +16,6 @@ pub struct FileReadTool {
     max_total_chars: usize,
 }
 
-impl Default for FileReadTool {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl FileReadTool {
     pub fn new() -> Self {
         Self {
@@ -328,7 +322,7 @@ Usage:
                 self.max_line_chars,
                 self.max_total_chars,
             )
-                .map_err(BitFunError::tool)?
+                .map_err(|e| BitFunError::tool(e))?
         };
 
         let file_rules = match get_global_ai_rules_service().await {

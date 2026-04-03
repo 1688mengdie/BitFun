@@ -525,7 +525,7 @@ impl InsightsService {
             suggestions_handle,
             "Suggestions",
             || async { Self::generate_suggestions(ai_client, aggregate, lang_instruction).await },
-            default_suggestions,
+            || default_suggestions(),
         ).await;
 
         let areas = Self::resolve_with_retry(
@@ -793,23 +793,28 @@ impl InsightsService {
                 .as_array()
                 .map(|arr| {
                     arr.iter()
-                        .map(|v| UsagePattern {
-                            pattern: v["pattern"]
-                                .as_str()
-                                .or(v["title"].as_str())
-                                .unwrap_or("")
-                                .to_string(),
-                            description: v["description"]
-                                .as_str()
-                                .or(v["suggestion"].as_str())
-                                .unwrap_or("")
-                                .to_string(),
-                            detail: v["detail"].as_str().unwrap_or("").to_string(),
-                            suggested_prompt: v["suggested_prompt"]
-                                .as_str()
-                                .or(v["copyable_prompt"].as_str())
-                                .unwrap_or("")
-                                .to_string(),
+                        .filter_map(|v| {
+                            Some(UsagePattern {
+                                pattern: v["pattern"]
+                                    .as_str()
+                                    .or(v["title"].as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                                description: v["description"]
+                                    .as_str()
+                                    .or(v["suggestion"].as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                                detail: v["detail"]
+                                    .as_str()
+                                    .unwrap_or("")
+                                    .to_string(),
+                                suggested_prompt: v["suggested_prompt"]
+                                    .as_str()
+                                    .or(v["copyable_prompt"].as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                            })
                         })
                         .collect()
                 })
@@ -1155,7 +1160,6 @@ impl InsightsService {
 
     // ============ Stage 5: Assembly ============
 
-    #[allow(clippy::too_many_arguments)]
     fn assemble_report(
         _base_stats: BaseStats,
         aggregate: InsightsAggregate,

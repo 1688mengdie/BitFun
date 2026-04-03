@@ -594,7 +594,7 @@ impl WorkspaceInfo {
                         if stats
                             .last_modified
                             .as_ref()
-                            .is_none_or(|last_modified| last_modified < &modified_dt)
+                            .map_or(true, |last_modified| last_modified < &modified_dt)
                         {
                             stats.last_modified = Some(modified_dt);
                         }
@@ -1217,7 +1217,7 @@ impl WorkspaceManager {
 
     /// Removes a workspace.
     pub fn remove_workspace(&mut self, workspace_id: &str) -> BitFunResult<()> {
-        if self.workspaces.remove(workspace_id).is_some() {
+        if let Some(_) = self.workspaces.remove(workspace_id) {
             if self.current_workspace_id.as_ref() == Some(&workspace_id.to_string()) {
                 self.current_workspace_id = None;
             }
@@ -1325,10 +1325,9 @@ impl WorkspaceManager {
 
     /// Returns manager statistics.
     pub fn get_statistics(&self) -> WorkspaceManagerStatistics {
-        let mut stats = WorkspaceManagerStatistics {
-            total_workspaces: self.workspaces.len(),
-            ..WorkspaceManagerStatistics::default()
-        };
+        let mut stats = WorkspaceManagerStatistics::default();
+
+        stats.total_workspaces = self.workspaces.len();
 
         for workspace in self.workspaces.values() {
             match workspace.status {

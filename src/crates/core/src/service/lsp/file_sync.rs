@@ -343,7 +343,7 @@ impl LspFileSync {
             if let Some(ws) = workspace {
                 grouped
                     .entry(ws.clone())
-                    .or_default()
+                    .or_insert_with(Vec::new)
                     .push(path);
             }
         }

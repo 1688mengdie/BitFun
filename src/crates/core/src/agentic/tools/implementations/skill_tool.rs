@@ -159,7 +159,7 @@ impl Tool for SkillTool {
         if input
             .get("command")
             .and_then(|v| v.as_str())
-            .is_none_or(|s| s.is_empty())
+            .map_or(true, |s| s.is_empty())
         {
             return ValidationResult {
                 result: false,

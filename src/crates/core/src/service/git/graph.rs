@@ -190,7 +190,7 @@ pub fn build_git_graph_for_branch(
             let parent_hash = parent_id.to_string();
             children_map
                 .entry(parent_hash)
-                .or_default()
+                .or_insert_with(Vec::new)
                 .push(hash.clone());
         }
     }
@@ -251,10 +251,11 @@ fn collect_refs(repo: &Repository) -> Result<HashMap<String, Vec<GraphRef>>, git
 
         if let Some(oid) = reference.target() {
             let hash = oid.to_string();
-            let is_current = current_branch.as_ref().is_some_and(|cb| cb == name);
+            let is_current = current_branch.as_ref().map_or(false, |cb| cb == name);
             let is_head = head
                 .as_ref()
-                .and_then(|h| h.target()) == Some(oid);
+                .and_then(|h| h.target())
+                .map_or(false, |h| h == oid);
 
             let graph_ref = GraphRef {
                 name: name.to_string(),
@@ -265,7 +266,7 @@ fn collect_refs(repo: &Repository) -> Result<HashMap<String, Vec<GraphRef>>, git
 
             refs_map
                 .entry(hash)
-                .or_default()
+                .or_insert_with(Vec::new)
                 .push(graph_ref);
         }
     }

@@ -1,8 +1,7 @@
-﻿use crate::agentic::tools::framework::{Tool, ToolResult, ToolUseContext};
+use crate::agentic::tools::framework::{Tool, ToolResult, ToolUseContext};
 use crate::util::errors::{BitFunError, BitFunResult};
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use std::str::FromStr;
 use std::sync::Arc;
 use tool_runtime::search::grep_search::{
     grep_search, GrepOptions, GrepSearchResult, OutputMode, ProgressCallback,
@@ -11,12 +10,6 @@ use tool_runtime::search::grep_search::{
 const DEFAULT_HEAD_LIMIT: usize = 250;
 
 pub struct GrepTool;
-
-impl Default for GrepTool {
-    fn default() -> Self {
-        Self::new()
-    }
-}
 
 impl GrepTool {
     pub fn new() -> Self {
@@ -246,7 +239,7 @@ impl GrepTool {
             .get("output_mode")
             .and_then(|v| v.as_str())
             .unwrap_or("files_with_matches");
-        let output_mode = OutputMode::from_str(output_mode_str).unwrap_or(OutputMode::FilesWithMatches);
+        let output_mode = OutputMode::from_str(output_mode_str);
         let show_line_numbers = input
             .get("-n")
             .and_then(|v| v.as_bool())

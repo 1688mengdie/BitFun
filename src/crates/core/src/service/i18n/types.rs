@@ -4,13 +4,18 @@ use serde::{Deserialize, Serialize};
 
 /// Locale identifier.
 /// Currently supports Chinese and English only.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum LocaleId {
     #[serde(rename = "zh-CN")]
-    #[default]
     ZhCN,
     #[serde(rename = "en-US")]
     EnUS,
+}
+
+impl Default for LocaleId {
+    fn default() -> Self {
+        LocaleId::ZhCN
+    }
 }
 
 impl LocaleId {
@@ -23,7 +28,6 @@ impl LocaleId {
     }
 
     /// Parses a locale identifier from a string.
-    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "zh-CN" => Some(LocaleId::ZhCN),

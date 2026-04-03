@@ -20,7 +20,6 @@ impl DiffService {
     }
 
     /// Creates with default configuration.
-    #[allow(clippy::should_implement_trait)]
     pub fn default() -> Self {
         Self::new(DiffConfig::new())
     }

@@ -25,12 +25,6 @@ pub struct LogToolInput {
     pub level: Option<String>, // Log level filter: "error", "warn", "info", "debug"
 }
 
-impl Default for LogTool {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl LogTool {
     pub fn new() -> Self {
         Self
@@ -96,7 +90,7 @@ impl LogTool {
         }
 
         if results.is_empty() {
-            Ok("No matching log records found".to_string())
+            Ok(format!("No matching log records found"))
         } else {
             Ok(format!(
                 "Found {} matching records:\n{}",

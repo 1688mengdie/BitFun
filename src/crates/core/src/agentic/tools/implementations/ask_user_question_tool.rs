@@ -40,12 +40,6 @@ pub struct AskUserQuestionInput {
 /// AskUserQuestion tool
 pub struct AskUserQuestionTool;
 
-impl Default for AskUserQuestionTool {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl AskUserQuestionTool {
     pub fn new() -> Self {
         Self

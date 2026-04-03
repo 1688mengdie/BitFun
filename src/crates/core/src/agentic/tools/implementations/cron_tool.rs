@@ -113,7 +113,7 @@ impl CronTool {
             )
         })?;
         self.resolve_workspace(
-            workspace.to_string_lossy().as_ref(),
+            &workspace.to_string_lossy().to_string(),
             Some(context),
         )
     }

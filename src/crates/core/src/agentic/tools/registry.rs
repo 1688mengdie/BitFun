@@ -12,12 +12,6 @@ pub struct ToolRegistry {
     tools: IndexMap<String, Arc<dyn Tool>>,
 }
 
-impl Default for ToolRegistry {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl ToolRegistry {
     /// Create a new tool registry
     pub fn new() -> Self {

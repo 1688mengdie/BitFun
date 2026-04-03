@@ -230,10 +230,8 @@ impl ToolStateManager {
     pub fn get_stats(&self) -> ToolStats {
         let tasks: Vec<_> = self.tasks.iter().map(|e| e.value().clone()).collect();
 
-        let mut stats = ToolStats {
-            total: tasks.len(),
-            ..ToolStats::default()
-        };
+        let mut stats = ToolStats::default();
+        stats.total = tasks.len();
 
         for task in tasks {
             match task.state {

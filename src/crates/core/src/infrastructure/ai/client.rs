@@ -101,7 +101,9 @@ impl AIClient {
             .filter(|s| !s.is_empty())
             .collect();
 
-        if tokens.contains(&Self::TEST_IMAGE_EXPECTED_CODE)
+        if tokens
+            .iter()
+            .any(|token| *token == Self::TEST_IMAGE_EXPECTED_CODE)
         {
             return true;
         }
@@ -534,7 +536,7 @@ impl AIClient {
             .config
             .custom_headers
             .as_ref()
-            .is_some_and(|h| !h.is_empty());
+            .map_or(false, |h| !h.is_empty());
         let is_merge_mode = self.is_merge_headers_mode();
 
         if has_custom_headers && !is_merge_mode {
@@ -566,7 +568,7 @@ impl AIClient {
             .config
             .custom_headers
             .as_ref()
-            .is_some_and(|h| !h.is_empty());
+            .map_or(false, |h| !h.is_empty());
         let is_merge_mode = self.is_merge_headers_mode();
 
         if has_custom_headers && !is_merge_mode {
@@ -603,7 +605,7 @@ impl AIClient {
             .config
             .custom_headers
             .as_ref()
-            .is_some_and(|h| !h.is_empty());
+            .map_or(false, |h| !h.is_empty());
         let is_merge_mode = self.is_merge_headers_mode();
 
         if has_custom_headers && !is_merge_mode {
@@ -872,7 +874,7 @@ impl AIClient {
         if let Some(tools) = openai_tools {
             let tool_names = tools
                 .iter()
-                .map(Self::extract_openai_tool_name)
+                .map(|tool| Self::extract_openai_tool_name(tool))
                 .collect::<Vec<_>>();
             debug!(target: "ai::openai_stream_request", "\ntools: {:?}", tool_names);
             if !tools.is_empty() {
@@ -942,7 +944,7 @@ impl AIClient {
         if let Some(tools) = openai_tools {
             let tool_names = tools
                 .iter()
-                .map(Self::extract_openai_tool_name)
+                .map(|tool| Self::extract_openai_tool_name(tool))
                 .collect::<Vec<_>>();
             debug!(target: "ai::responses_stream_request", "\ntools: {:?}", tool_names);
             if !tools.is_empty() {
@@ -1015,7 +1017,7 @@ impl AIClient {
         if let Some(tools) = anthropic_tools {
             let tool_names = tools
                 .iter()
-                .map(Self::extract_anthropic_tool_name)
+                .map(|tool| Self::extract_anthropic_tool_name(tool))
                 .collect::<Vec<_>>();
             debug!(target: "ai::anthropic_stream_request", "\ntools: {:?}", tool_names);
             if !tools.is_empty() {

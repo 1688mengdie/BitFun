@@ -1,5 +1,4 @@
-﻿use log::{debug, info, warn};
-use std::fmt;
+use log::{debug, info, warn};
 use std::io;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -22,25 +21,21 @@ pub enum OutputMode {
     Count,
 }
 
-impl std::str::FromStr for OutputMode {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
+impl OutputMode {
+    pub fn from_str(s: &str) -> Self {
         match s {
-            "content" => Ok(OutputMode::Content),
-            "count" => Ok(OutputMode::Count),
-            "files_with_matches" => Ok(OutputMode::FilesWithMatches),
-            _ => Err(format!("Unknown output mode: {}", s)),
+            "content" => OutputMode::Content,
+            "count" => OutputMode::Count,
+            "files_with_matches" => OutputMode::FilesWithMatches,
+            _ => OutputMode::Content, // Default to Content mode
         }
     }
-}
 
-impl fmt::Display for OutputMode {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    pub fn to_string(&self) -> String {
         match self {
-            OutputMode::Content => write!(f, "content"),
-            OutputMode::Count => write!(f, "count"),
-            OutputMode::FilesWithMatches => write!(f, "files_with_matches"),
+            OutputMode::Content => "content".to_string(),
+            OutputMode::Count => "count".to_string(),
+            OutputMode::FilesWithMatches => "files_with_matches".to_string(),
         }
     }
 }
