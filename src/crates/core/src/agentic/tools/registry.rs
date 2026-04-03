@@ -64,7 +64,7 @@ impl ToolRegistry {
 
     /// Remove all tools from the MCP server
     pub fn unregister_mcp_server_tools(&mut self, server_id: &str) {
-        let prefix = format!("mcp_{}_", server_id);
+        let prefix = format!("mcp__{}__", server_id);
         let to_remove: Vec<String> = self
             .tools
             .keys()
@@ -112,6 +112,10 @@ impl ToolRegistry {
         // Web tool
         self.register_tool(Arc::new(WebSearchTool::new()));
         self.register_tool(Arc::new(WebFetchTool::new()));
+        self.register_tool(Arc::new(ListMCPResourcesTool::new()));
+        self.register_tool(Arc::new(ReadMCPResourceTool::new()));
+        self.register_tool(Arc::new(ListMCPPromptsTool::new()));
+        self.register_tool(Arc::new(GetMCPPromptTool::new()));
 
         // Mermaid interactive chart tool
         self.register_tool(Arc::new(MermaidInteractiveTool::new()));

@@ -23,6 +23,7 @@ import { ToolbarMode, useToolbarModeContext } from '../../flow_chat';
 import { FloatingMiniChat } from './FloatingMiniChat';
 import { NewProjectDialog } from '../components/NewProjectDialog';
 import { AboutDialog } from '../components/AboutDialog';
+import { MCPInteractionDialog } from '../components/MCPInteractionDialog/MCPInteractionDialog';
 import { WorkspaceManager } from '../../tools/workspace';
 import { workspaceAPI } from '@/infrastructure/api';
 import { createLogger } from '@/shared/utils/logger';
@@ -455,6 +456,7 @@ const AppLayout: React.FC<AppLayoutProps> = ({ className = '' }) => {
         onClose={() => setShowWorkspaceStatus(false)}
         onWorkspaceSelect={() => {}}
       />
+      <MCPInteractionDialog />
     </>
   );
 };

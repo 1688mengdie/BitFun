@@ -19,6 +19,7 @@ import type { AIModelConfig, ModeConfigItem, ModeSkillInfo } from '@/infrastruct
 import { MCPAPI, type MCPServerInfo } from '@/infrastructure/api/service-api/MCPAPI';
 import { notificationService } from '@/shared/notification-system';
 import { createLogger } from '@/shared/utils/logger';
+import { isMcpToolName, parseMcpToolName } from '@/infrastructure/mcp/toolName';
 import { useNurseryStore } from '../nurseryStore';
 import { formatTokenCount } from './useTokenEstimate';
 
@@ -33,20 +34,16 @@ type TemplateDetail =
 
 type ModelSlot = 'primary' | 'fast';
 
-// MCP tools are registered as "mcp_{server_id}_{tool_name}" (single underscores)
 function isMcpTool(name: string): boolean {
-  return name.startsWith('mcp_');
+  return isMcpToolName(name);
 }
 
-// Extract server id: "mcp_github_create_issue" → "github"
 function getMcpServerName(toolName: string): string {
-  return toolName.split('_')[1] ?? toolName;
+  return parseMcpToolName(toolName)?.serverId ?? toolName;
 }
 
-// Short display name: "mcp_github_create_issue" → "create_issue"
 function getMcpShortName(toolName: string): string {
-  const parts = toolName.split('_');
-  return parts.slice(2).join('_') || toolName;
+  return parseMcpToolName(toolName)?.toolName ?? toolName;
 }
 
 type CtxSegKey = 'systemPrompt' | 'toolInjection' | 'rules' | 'memories';

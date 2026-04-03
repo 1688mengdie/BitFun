@@ -1456,7 +1456,7 @@ console.log(user.greet());`);
           <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', padding: '20px' }}>
             <h3 style={{ color: '#ffffff', marginBottom: '8px' }}>MCP工具 - 文件列表</h3>
             <MCPToolDisplay
-              toolItem={createMockToolItem('mcp_server_list_files',
+              toolItem={createMockToolItem('mcp__server__list_files',
                 { directory: '/project/src' },
                 {
                   content: [
@@ -1469,7 +1469,7 @@ console.log(user.greet());`);
                 'completed'
               )}
               config={{
-                toolName: 'mcp_server_list_files',
+                toolName: 'mcp__server__list_files',
                 displayName: 'list_files',
                 icon: '🔌',
                 requiresConfirmation: false,
@@ -1483,13 +1483,13 @@ console.log(user.greet());`);
 
             <h3 style={{ color: '#ffffff', marginTop: '16px', marginBottom: '8px' }}>MCP - 执行中</h3>
             <MCPToolDisplay
-              toolItem={createMockToolItem('mcp_server_fetch_data',
+              toolItem={createMockToolItem('mcp__server__fetch_data',
                 { url: 'https://api.example.com/data' },
                 undefined,
                 'running'
               )}
               config={{
-                toolName: 'mcp_server_fetch_data',
+                toolName: 'mcp__server__fetch_data',
                 displayName: 'fetch_data',
                 icon: '🔌',
                 requiresConfirmation: false,

@@ -44,6 +44,7 @@ import { useSceneStore } from '@/app/stores/sceneStore';
 import type { SceneTabId } from '@/app/components/SceneBar/types';
 import type { SkillInfo } from '@/infrastructure/config/types';
 import { aiExperienceConfigService } from '@/infrastructure/config/services/AIExperienceConfigService';
+import MCPAPI, { type MCPPrompt, type MCPPromptMessage, type MCPServerInfo } from '@/infrastructure/api/service-api/MCPAPI';
 import { deriveChatInputPetMood } from '../utils/chatInputPetMood';
 import { ChatInputPixelPet } from './ChatInputPixelPet';
 import './ChatInput.scss';
@@ -69,12 +70,116 @@ type SlashModeItem = {
   name: string;
 };
 
-type SlashPickerItem = SlashActionItem | SlashModeItem;
+type SlashMcpPromptItem = {
+  kind: 'mcpPrompt';
+  id: string;
+  command: string;
+  label: string;
+  serverId: string;
+  serverName: string;
+  promptName: string;
+  description?: string;
+  arguments: Array<{
+    name: string;
+    required: boolean;
+    description?: string;
+  }>;
+};
+
+type SlashPickerItem = SlashActionItem | SlashModeItem | SlashMcpPromptItem;
 type ChatInputTarget = 'main' | 'btw';
 type PendingLargePasteMap = Record<string, string>;
 
 function getCharacterCount(text: string): number {
   return Array.from(text).length;
+}
+
+function buildMcpPromptSlashCommand(serverId: string, promptName: string): string {
+  return `/${serverId}:${promptName}`;
+}
+
+function parseSlashArguments(input: string): string[] {
+  const matches = input.match(/"([^"]*)"|'([^']*)'|[^\s]+/g) || [];
+  return matches.map(token => {
+    if (
+      (token.startsWith('"') && token.endsWith('"')) ||
+      (token.startsWith('\'') && token.endsWith('\''))
+    ) {
+      return token.slice(1, -1);
+    }
+    return token;
+  });
+}
+
+function renderMcpPromptContent(content: unknown): string {
+  if (typeof content === 'string') {
+    return content;
+  }
+
+  if (!content || typeof content !== 'object') {
+    return '[Unsupported MCP prompt content]';
+  }
+
+  const block = content as Record<string, unknown>;
+  const type = typeof block.type === 'string' ? block.type : undefined;
+
+  if (type === 'text' && typeof block.text === 'string') {
+    return block.text;
+  }
+
+  if (type === 'image') {
+    return `[Image${typeof block.mimeType === 'string' ? `: ${block.mimeType}` : ''}]`;
+  }
+
+  if (type === 'audio') {
+    return `[Audio${typeof block.mimeType === 'string' ? `: ${block.mimeType}` : ''}]`;
+  }
+
+  if (type === 'resource_link') {
+    const uri = typeof block.uri === 'string' ? block.uri : 'unknown';
+    const name = typeof block.name === 'string' ? block.name : undefined;
+    return name ? `[Resource Link: ${name} (${uri})]` : `[Resource Link: ${uri}]`;
+  }
+
+  if (type === 'resource' && block.resource && typeof block.resource === 'object') {
+    const resource = block.resource as Record<string, unknown>;
+    const resourceText =
+      typeof resource.text === 'string'
+        ? resource.text
+        : typeof resource.content === 'string'
+          ? resource.content
+          : undefined;
+    if (resourceText) {
+      return resourceText;
+    }
+    const uri = typeof resource.uri === 'string' ? resource.uri : 'unknown';
+    return `[Resource: ${uri}]`;
+  }
+
+  return '[Unsupported MCP prompt content]';
+}
+
+function renderMcpPromptMessages(messages: MCPPromptMessage[]): string {
+  return messages
+    .map(message => {
+      const text = renderMcpPromptContent(message.content).trim();
+      if (!text) {
+        return '';
+      }
+
+      switch (message.role) {
+        case 'system':
+          return text;
+        case 'user':
+          return `User: ${text}`;
+        case 'assistant':
+          return `Assistant: ${text}`;
+        default:
+          return `${message.role}: ${text}`;
+      }
+    })
+    .filter(Boolean)
+    .join('\n\n');
 }
 
 export const ChatInput: React.FC<ChatInputProps> = ({
@@ -256,6 +361,62 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     onSuccess: onSendMessage,
     currentAgentType: effectiveTargetSession?.mode || modeState.current,
   });
+
+  const [mcpPromptCommands, setMcpPromptCommands] = useState<SlashMcpPromptItem[]>([]);
+  const [mcpPromptCommandsLoading, setMcpPromptCommandsLoading] = useState(false);
+
+  const loadMcpPromptCommands = useCallback(async () => {
+    setMcpPromptCommandsLoading(true);
+
+    try {
+      const servers = await MCPAPI.getServers();
+      const connectedServers = servers.filter(
+        server => server.status === 'Connected' || server.status === 'Healthy'
+      );
+
+      const promptGroups = await Promise.all(
+        connectedServers.map(async (server: MCPServerInfo) => {
+          try {
+            const prompts = await MCPAPI.listPrompts({
+              serverId: server.id,
+              refresh: true,
+            });
+            return prompts.map((prompt: MCPPrompt) => ({
+              kind: 'mcpPrompt' as const,
+              id: `${server.id}:${prompt.name}`,
+              command: buildMcpPromptSlashCommand(server.id, prompt.name),
+              label:
+                prompt.description?.trim() ||
+                `${server.name} MCP prompt`,
+              serverId: server.id,
+              serverName: server.name,
+              promptName: prompt.name,
+              description: prompt.description,
+              arguments: (prompt.arguments || []).map(argument => ({
+                name: argument.name,
+                required: argument.required,
+                description: argument.description,
+              })),
+            }));
+          } catch (error) {
+            log.warn('Failed to load MCP prompts for server', {
+              serverId: server.id,
+              error,
+            });
+            return [] as SlashMcpPromptItem[];
+          }
+        })
+      );
+
+      setMcpPromptCommands(
+        promptGroups
+          .flat()
+          .sort((a, b) => a.command.localeCompare(b.command))
+      );
+    } finally {
+      setMcpPromptCommandsLoading(false);
+    }
+  }, []);
   
   const [recommendationContext, setRecommendationContext] = React.useState<{
     workspacePath?: string;
@@ -406,6 +567,14 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       globalEventBus.off('fill-chat-input', handleFillChatInput);
     };
   }, [clearPendingLargePastes]);
+
+  React.useEffect(() => {
+    if (!slashCommandState.isActive || slashCommandState.kind !== 'all' || derivedState?.isProcessing) {
+      return;
+    }
+
+    void loadMcpPromptCommands();
+  }, [derivedState?.isProcessing, loadMcpPromptCommands, slashCommandState.isActive, slashCommandState.kind]);
 
   // Handle MCP App ui/message requests (aligned with VSCode behavior)
   React.useEffect(() => {
@@ -774,6 +943,91 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       }
     }
   }, [effectiveTargetSessionId, workspacePath, derivedState?.isProcessing]);
+
+  const getFilteredActions = useCallback(() => {
+    const items: SlashActionItem[] = [
+      ...(isBtwSession
+        ? []
+        : [{
+            kind: 'action' as const,
+            id: 'btw',
+            command: '/btw',
+            label: t('btw.title', { defaultValue: 'Side question' }),
+          }]),
+      {
+        kind: 'action',
+        id: 'compact',
+        command: '/compact',
+        label: t('chatInput.compactAction', { defaultValue: 'Compact session' }),
+      },
+      {
+        kind: 'action',
+        id: 'init',
+        command: '/init',
+        label: t('chatInput.initAction', { defaultValue: 'Generate AGENTS.md' }),
+      },
+    ];
+
+    const q = (slashCommandState.query || '').trim().toLowerCase();
+    if (!q) return items;
+
+    return items.filter(i => {
+      const cmd = i.command.slice(1).toLowerCase();
+      return cmd.includes(q) || i.label.toLowerCase().includes(q);
+    });
+  }, [isBtwSession, slashCommandState.query, t]);
+
+  const getFilteredMcpPromptCommands = useCallback((): SlashMcpPromptItem[] => {
+    const q = (slashCommandState.query || '').trim().toLowerCase();
+    if (!q) {
+      return mcpPromptCommands;
+    }
+
+    return mcpPromptCommands.filter(item => {
+      const commandToken = item.command.slice(1).toLowerCase();
+      return (
+        commandToken.includes(q) ||
+        item.serverName.toLowerCase().includes(q) ||
+        item.label.toLowerCase().includes(q)
+      );
+    });
+  }, [mcpPromptCommands, slashCommandState.query]);
+
+  const resolveTypedMcpPromptCommand = useCallback((text: string): SlashMcpPromptItem | null => {
+    const trimmed = text.trim();
+    if (!trimmed.startsWith('/')) {
+      return null;
+    }
+
+    const token = trimmed.slice(1).split(/\s+/, 1)[0]?.toLowerCase() || '';
+    if (!token) {
+      return null;
+    }
+
+    return (
+      mcpPromptCommands.find(item => item.command.slice(1).toLowerCase() === token) || null
+    );
+  }, [mcpPromptCommands]);
+
+  const getSlashPickerItems = useCallback((): SlashPickerItem[] => {
+    const actions = getFilteredActions();
+    const mcpPrompts = getFilteredMcpPromptCommands();
+    let modeList = incrementalCodeModes;
+    if (canSwitchModes && slashCommandState.query) {
+      const q = slashCommandState.query;
+      modeList = incrementalCodeModes.filter(
+        mode =>
+          mode.name.toLowerCase().includes(q) ||
+          mode.id.toLowerCase().includes(q)
+      );
+    }
+    const modes: SlashModeItem[] = (canSwitchModes ? modeList : []).map(mode => ({
+      kind: 'mode',
+      id: mode.id,
+      name: mode.name,
+    }));
+    return [...actions, ...mcpPrompts, ...modes];
+  }, [canSwitchModes, getFilteredActions, getFilteredMcpPromptCommands, incrementalCodeModes, slashCommandState.query]);
   
   const handleInputChange = useCallback((text: string, activeContexts: import('../../shared/types/context').ContextItem[]) => {
     if (!inputState.isActive && text.length > 0) {
@@ -806,6 +1060,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       const hasWhitespace = /\s/.test(afterSlash);
       const firstToken = afterSlash.trimStart().split(/\s+/, 1)[0]?.toLowerCase?.() ?? '';
       const query = firstToken;
+      const matchedMcpPrompt = resolveTypedMcpPromptCommand(text);
 
       // While the main session is running, expose a single quick action (/btw) via the same picker UX.
       if (isProcessing) {
@@ -826,7 +1081,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       }
 
       // When idle, keep the picker for mode switching, but don't interfere with executable slash commands.
-      if (!isBtwCommand && !isCompactCommand) {
+      if (!isBtwCommand && !isCompactCommand && !matchedMcpPrompt) {
         setSlashCommandState({
           isActive: true,
           kind: 'all',
@@ -845,7 +1100,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         selectedIndex: 0,
       });
     }
-  }, [contexts, derivedState, inputState.isActive, prunePendingLargePastes, removeContext, setQueuedInput, slashCommandState.isActive, slashCommandState.kind]);
+  }, [contexts, derivedState, inputState.isActive, prunePendingLargePastes, removeContext, resolveTypedMcpPromptCommand, setQueuedInput, slashCommandState.isActive, slashCommandState.kind]);
 
   const submitBtwFromInput = useCallback(async () => {
     if (!derivedState) return;
@@ -1042,6 +1297,102 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     setQueuedInput,
     t,
   ]);
+
+  const submitMcpPromptFromInput = useCallback(async () => {
+    const originalMessage = inputState.value.trim();
+    let command = resolveTypedMcpPromptCommand(originalMessage);
+
+    if (!command) {
+      await loadMcpPromptCommands();
+      command = resolveTypedMcpPromptCommand(originalMessage);
+    }
+
+    if (!command) {
+      notificationService.warning(
+        t('chatInput.noMatchingCommand', { defaultValue: 'No matching command' })
+      );
+      return;
+    }
+
+    const argsText = originalMessage
+      .slice(command.command.length)
+      .trim();
+    const argValues = parseSlashArguments(argsText);
+    const requiredArgs = command.arguments.filter(argument => argument.required);
+
+    if (argValues.length < requiredArgs.length) {
+      const requiredNames = requiredArgs.map(argument => argument.name).join(', ');
+      notificationService.warning(
+        t('chatInput.mcpPromptMissingArgs', {
+          defaultValue: 'This MCP prompt requires arguments: {{args}}',
+          args: requiredNames,
+        })
+      );
+      return;
+    }
+
+    const originalPendingLargePastes = { ...pendingLargePastesRef.current };
+    if (effectiveTargetSessionId) {
+      addToHistory(effectiveTargetSessionId, originalMessage);
+    }
+    setHistoryIndex(-1);
+    setSavedDraft('');
+    dispatchInput({ type: 'CLEAR_VALUE' });
+    clearPendingLargePastes();
+    setQueuedInput(null);
+    setSlashCommandState({ isActive: false, kind: 'modes', query: '', selectedIndex: 0 });
+
+    try {
+      const promptArguments = command.arguments.reduce<Record<string, string>>((acc, argument, index) => {
+        const value = argValues[index];
+        if (typeof value === 'string' && value.length > 0) {
+          acc[argument.name] = value;
+        }
+        return acc;
+      }, {});
+
+      const prompt = await MCPAPI.getPrompt({
+        serverId: command.serverId,
+        promptName: command.promptName,
+        arguments: Object.keys(promptArguments).length > 0 ? promptArguments : undefined,
+      });
+
+      const renderedPrompt = renderMcpPromptMessages(prompt.messages);
+      if (!renderedPrompt.trim()) {
+        throw new Error('MCP prompt returned no displayable content');
+      }
+
+      await sendMessage(renderedPrompt, {
+        displayMessage: originalMessage,
+      });
+      dispatchInput({ type: 'DEACTIVATE' });
+    } catch (error) {
+      log.error('Failed to run MCP prompt command', {
+        command: originalMessage,
+        error,
+      });
+      pendingLargePastesRef.current = originalPendingLargePastes;
+      dispatchInput({ type: 'ACTIVATE' });
+      dispatchInput({ type: 'SET_VALUE', payload: originalMessage });
+      notificationService.error(
+        error instanceof Error ? error.message : t('error.unknown'),
+        {
+          title: t('chatInput.mcpPromptFailed', { defaultValue: 'MCP prompt failed' }),
+          duration: 5000,
+        }
+      );
+    }
+  }, [
+    clearPendingLargePastes,
+    addToHistory,
+    effectiveTargetSessionId,
+    inputState.value,
+    loadMcpPromptCommands,
+    resolveTypedMcpPromptCommand,
+    sendMessage,
+    setQueuedInput,
+    t,
+  ]);
   
   const handleSendOrCancel = useCallback(async () => {
     if (!derivedState) return;
@@ -1080,6 +1431,11 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 
     if (/^\/init\s*$/i.test(message)) {
       await submitInitFromInput();
+      return;
+    }
+
+    if (resolveTypedMcpPromptCommand(message)) {
+      await submitMcpPromptFromInput();
       return;
     }
 
@@ -1151,7 +1507,9 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     submitBtwFromInput,
     submitCompactFromInput,
     submitInitFromInput,
+    submitMcpPromptFromInput,
     t,
+    resolveTypedMcpPromptCommand,
   ]);
   
   const getFilteredIncrementalModes = useCallback(() => {
@@ -1213,58 +1571,6 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     });
   }, [requestModeChange]);
 
-  const getFilteredActions = useCallback(() => {
-    const items: SlashActionItem[] = [
-      ...(isBtwSession
-        ? []
-        : [{
-            kind: 'action' as const,
-            id: 'btw',
-            command: '/btw',
-            label: t('btw.title', { defaultValue: 'Side question' }),
-          }]),
-      {
-        kind: 'action',
-        id: 'compact',
-        command: '/compact',
-        label: t('chatInput.compactAction', { defaultValue: 'Compact session' }),
-      },
-      {
-        kind: 'action',
-        id: 'init',
-        command: '/init',
-        label: t('chatInput.initAction', { defaultValue: 'Generate AGENTS.md' }),
-      },
-    ];
-
-    const q = (slashCommandState.query || '').trim().toLowerCase();
-    if (!q) return items;
-
-    return items.filter(i => {
-      const cmd = i.command.slice(1).toLowerCase();
-      return cmd.includes(q) || i.label.toLowerCase().includes(q);
-    });
-  }, [isBtwSession, slashCommandState.query, t]);
-
-  const getSlashPickerItems = useCallback((): SlashPickerItem[] => {
-    const actions = getFilteredActions();
-    let modeList = incrementalCodeModes;
-    if (canSwitchModes && slashCommandState.query) {
-      const q = slashCommandState.query;
-      modeList = incrementalCodeModes.filter(
-        mode =>
-          mode.name.toLowerCase().includes(q) ||
-          mode.id.toLowerCase().includes(q)
-      );
-    }
-    const modes: SlashModeItem[] = (canSwitchModes ? modeList : []).map(mode => ({
-      kind: 'mode',
-      id: mode.id,
-      name: mode.name,
-    }));
-    return [...actions, ...modes];
-  }, [canSwitchModes, getFilteredActions, incrementalCodeModes, slashCommandState.query]);
-
   const selectSlashCommandAction = useCallback((actionId: string) => {
     const raw = inputState.value || '';
     const lower = raw.trimStart().toLowerCase();
@@ -1303,6 +1609,17 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     setSlashCommandState({ isActive: false, kind: 'modes', query: '', selectedIndex: 0 });
     window.setTimeout(() => richTextInputRef.current?.focus(), 0);
   }, [inputState.value, isBtwSession, setQueuedInput]);
+
+  const selectSlashPromptCommand = useCallback((item: SlashMcpPromptItem) => {
+    const hasArguments = item.arguments.length > 0;
+    dispatchInput({
+      type: 'SET_VALUE',
+      payload: hasArguments ? `${item.command} ` : item.command,
+    });
+    setQueuedInput(null);
+    setSlashCommandState({ isActive: false, kind: 'modes', query: '', selectedIndex: 0 });
+    window.setTimeout(() => richTextInputRef.current?.focus(), 0);
+  }, [setQueuedInput]);
 
   const handleBoostStartBtw = useCallback(
     (e: React.SyntheticEvent) => {
@@ -1387,6 +1704,8 @@ export const ChatInput: React.FC<ChatInputProps> = ({
               const item = items[slashCommandState.selectedIndex] as SlashPickerItem;
               if (item.kind === 'mode') {
                 selectSlashCommandMode(item.id);
+              } else if (item.kind === 'mcpPrompt') {
+                selectSlashPromptCommand(item);
               } else {
                 selectSlashCommandAction(item.id);
               }
@@ -1420,6 +1739,8 @@ export const ChatInput: React.FC<ChatInputProps> = ({
               const item = items[slashCommandState.selectedIndex] as SlashPickerItem;
               if (item.kind === 'mode') {
                 selectSlashCommandMode(item.id);
+              } else if (item.kind === 'mcpPrompt') {
+                selectSlashPromptCommand(item);
               } else {
                 selectSlashCommandAction(item.id);
               }
@@ -1545,7 +1866,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       e.preventDefault();
       transition(SessionExecutionEvent.USER_CANCEL);
     }
-  }, [handleSendOrCancel, submitBtwFromInput, derivedState, transition, slashCommandState, getFilteredIncrementalModes, getFilteredActions, getSlashPickerItems, selectSlashCommandMode, selectSlashCommandAction, canSwitchModes, historyIndex, inputHistory, savedDraft, inputState.value, currentSessionId, isBtwSession, showTargetSwitcher, setInputTarget, t]);
+  }, [handleSendOrCancel, submitBtwFromInput, derivedState, transition, slashCommandState, getFilteredIncrementalModes, getFilteredActions, getSlashPickerItems, selectSlashCommandMode, selectSlashCommandAction, selectSlashPromptCommand, canSwitchModes, historyIndex, inputHistory, savedDraft, inputState.value, currentSessionId, isBtwSession, showTargetSwitcher, setInputTarget, t]);
 
   const handleImeCompositionStart = useCallback(() => {
     isImeComposingRef.current = true;
@@ -2042,19 +2363,35 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                         <span className="bitfun-chat-input__slash-command-hint">{t('chatInput.selectHint')}</span>
                       </div>
                       <div className="bitfun-chat-input__slash-command-list">
-                        {items.length > 0 ? (
+                        {mcpPromptCommandsLoading && items.length === 0 ? (
+                          <div className="bitfun-chat-input__slash-command-empty">
+                            {t('chatInput.loadingMcpPrompts', { defaultValue: 'Loading MCP prompts…' })}
+                          </div>
+                        ) : items.length > 0 ? (
                           items.map((item, index) => (
                             <div
                               key={`${item.kind}-${item.id}`}
                               className={`bitfun-chat-input__slash-command-item ${index === slashCommandState.selectedIndex ? 'bitfun-chat-input__slash-command-item--selected' : ''} ${item.kind === 'mode' && item.id === modeState.current ? 'bitfun-chat-input__slash-command-item--active' : ''}`}
-                              onClick={() => item.kind === 'mode' ? selectSlashCommandMode(item.id) : selectSlashCommandAction(item.id)}
+                              onClick={() => {
+                                if (item.kind === 'mode') {
+                                  selectSlashCommandMode(item.id);
+                                } else if (item.kind === 'mcpPrompt') {
+                                  selectSlashPromptCommand(item);
+                                } else {
+                                  selectSlashCommandAction(item.id);
+                                }
+                              }}
                               onMouseEnter={() => setSlashCommandState(prev => ({ ...prev, selectedIndex: index }))}
                             >
                               <span className="bitfun-chat-input__slash-command-name">
                                 {item.kind === 'mode' ? `/${item.id}` : item.command}
                               </span>
                               <span className="bitfun-chat-input__slash-command-label">
-                                {item.kind === 'mode' ? item.name : item.label}
+                                {item.kind === 'mode'
+                                  ? item.name
+                                  : item.kind === 'mcpPrompt'
+                                    ? `${item.serverName} · ${item.label}`
+                                    : item.label}
                               </span>
                               {item.kind === 'mode' && item.id === modeState.current && <span className="bitfun-chat-input__slash-command-current">{t('chatInput.current')}</span>}
                             </div>

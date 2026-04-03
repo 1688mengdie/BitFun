@@ -3,11 +3,14 @@
 //! Uses the official `rmcp` Rust SDK to implement the MCP Streamable HTTP client transport.
 
 use super::types::{
-    InitializeResult as BitFunInitializeResult, MCPCapability, MCPPrompt, MCPPromptArgument,
-    MCPPromptMessage, MCPPromptMessageContent, MCPResource, MCPResourceContent, MCPServerInfo,
-    MCPTool, MCPToolResult, MCPToolResultContent, PromptsGetResult, PromptsListResult,
-    ResourcesListResult, ResourcesReadResult, ToolsListResult,
+    InitializeResult as BitFunInitializeResult, MCPCapability, MCPAnnotations, MCPPrompt,
+    MCPPromptArgument, MCPPromptMessage, MCPPromptMessageContent, MCPPromptMessageContentBlock,
+    MCPResource, MCPResourceContent, MCPResourceIcon, MCPServerInfo, MCPTool,
+    MCPToolAnnotations, MCPToolResult, MCPToolResultContent,
+    PromptsGetResult, PromptsListResult, ResourcesListResult, ResourcesReadResult,
+    ToolsListResult,
 };
+use crate::service::mcp::auth::build_authorization_manager;
 use crate::util::errors::{BitFunError, BitFunResult};
 use futures::StreamExt;
 use log::{debug, error, info, warn};
@@ -21,6 +24,7 @@ use rmcp::model::{
     ResourceContents,
 };
 use rmcp::service::RunningService;
+use rmcp::transport::auth::AuthorizationManager;
 use rmcp::transport::common::http_header::{
     EVENT_STREAM_MIME_TYPE, HEADER_LAST_EVENT_ID, HEADER_SESSION_ID, JSON_MIME_TYPE,
 };
@@ -32,6 +36,7 @@ use rmcp::transport::streamable_http_client::{
 use rmcp::transport::StreamableHttpClientTransport;
 use rmcp::ClientHandler;
 use rmcp::RoleClient;
+use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -111,6 +116,25 @@ enum ClientState {
 #[derive(Clone)]
 struct BitFunStreamableHttpClient {
     client: reqwest::Client,
+    oauth_manager: Option<Arc<Mutex<AuthorizationManager>>>,
+}
+
+impl BitFunStreamableHttpClient {
+    async fn resolve_auth_token(
+        &self,
+        auth_token: Option<String>,
+    ) -> Result<Option<String>, StreamableHttpError<reqwest::Error>> {
+        if auth_token.is_some() {
+            return Ok(auth_token);
+        }
+
+        let Some(oauth_manager) = &self.oauth_manager else {
+            return Ok(None);
+        };
+
+        let token = oauth_manager.lock().await.get_access_token().await?;
+        Ok(Some(token))
+    }
 }
 
 impl StreamableHttpClient for BitFunStreamableHttpClient {
@@ -126,6 +150,7 @@ impl StreamableHttpClient for BitFunStreamableHttpClient {
         futures::stream::BoxStream<'static, Result<Sse, SseError>>,
         StreamableHttpError<Self::Error>,
     > {
+        let auth_token = self.resolve_auth_token(auth_token).await?;
         let mut request_builder = self
             .client
             .get(uri.as_ref())
@@ -169,6 +194,7 @@ impl StreamableHttpClient for BitFunStreamableHttpClient {
         session: StdArc<str>,
         auth_token: Option<String>,
     ) -> Result<(), StreamableHttpError<Self::Error>> {
+        let auth_token = self.resolve_auth_token(auth_token).await?;
         let mut request_builder = self.client.delete(uri.as_ref());
         if let Some(auth_header) = auth_token {
             request_builder = request_builder.bearer_auth(auth_header);
@@ -192,6 +218,7 @@ impl StreamableHttpClient for BitFunStreamableHttpClient {
         session_id: Option<StdArc<str>>,
         auth_token: Option<String>,
     ) -> Result<StreamableHttpPostResponse, StreamableHttpError<Self::Error>> {
+        let auth_token = self.resolve_auth_token(auth_token).await?;
         let mut request = self
             .client
             .post(uri.as_ref())
@@ -282,6 +309,7 @@ impl StreamableHttpClient for BitFunStreamableHttpClient {
 pub struct RemoteMCPTransport {
     url: String,
     default_headers: HeaderMap,
+    oauth_manager: Option<Arc<Mutex<AuthorizationManager>>>,
     request_timeout: Duration,
     state: Mutex<ClientState>,
 }
@@ -348,8 +376,30 @@ impl RemoteMCPTransport {
     }
 
     /// Creates a new streamable HTTP remote transport instance.
-    pub fn new(url: String, headers: HashMap<String, String>, request_timeout: Duration) -> Self {
+    pub async fn new(
+        server_id: &str,
+        url: String,
+        headers: HashMap<String, String>,
+        request_timeout: Duration,
+        oauth_enabled: bool,
+    ) -> BitFunResult<Self> {
         let default_headers = Self::build_default_headers(&headers);
+        let oauth_manager = if oauth_enabled
+            && !default_headers.contains_key(reqwest::header::AUTHORIZATION)
+        {
+            let (manager, initialized) = build_authorization_manager(server_id, &url).await?;
+            if initialized {
+                Some(Arc::new(Mutex::new(manager)))
+            } else {
+                info!(
+                    "Remote MCP OAuth configured but credentials are not authorized yet: server_id={}",
+                    server_id
+                );
+                None
+            }
+        } else {
+            None
+        };
 
         let http_client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(10))
@@ -365,26 +415,41 @@ impl RemoteMCPTransport {
         let transport = StreamableHttpClientTransport::with_client(
             BitFunStreamableHttpClient {
                 client: http_client,
+                oauth_manager: oauth_manager.clone(),
             },
             StreamableHttpClientTransportConfig::with_uri(url.clone()),
         );
 
-        Self {
+        Ok(Self {
             url,
             default_headers,
+            oauth_manager,
             request_timeout,
             state: Mutex::new(ClientState::Connecting {
                 transport: Some(transport),
             }),
-        }
+        })
     }
 
     /// Returns the auth token header value (if present).
-    pub fn get_auth_token(&self) -> Option<String> {
-        self.default_headers
+    pub async fn get_auth_token(&self) -> Option<String> {
+        if let Some(value) = self
+            .default_headers
             .get(reqwest::header::AUTHORIZATION)
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_string())
+        {
+            return Some(value);
+        }
+
+        let oauth_manager = self.oauth_manager.as_ref()?;
+        oauth_manager
+            .lock()
+            .await
+            .get_access_token()
+            .await
+            .ok()
+            .map(|token| format!("Bearer {}", token))
     }
 
     async fn service(
@@ -402,7 +467,13 @@ impl RemoteMCPTransport {
     fn build_client_info(client_name: &str, client_version: &str) -> ClientInfo {
         ClientInfo {
             protocol_version: ProtocolVersion::LATEST,
-            capabilities: ClientCapabilities::default(),
+            capabilities: ClientCapabilities::builder()
+                .enable_roots()
+                .enable_sampling()
+                .enable_elicitation_with(rmcp::model::ElicitationCapability {
+                    schema_validation: Some(true),
+                })
+                .build(),
             client_info: Implementation {
                 name: client_name.to_string(),
                 title: None,
@@ -657,13 +728,13 @@ fn map_tool(tool: rmcp::model::Tool) -> MCPTool {
     let schema = Value::Object((*tool.input_schema).clone());
     MCPTool {
         name: tool.name.to_string(),
-        title: None,
+        title: tool.title,
         description: tool.description.map(|d| d.to_string()),
         input_schema: schema,
-        output_schema: None,
-        icons: None,
-        annotations: None,
-        meta: None,
+        output_schema: tool.output_schema.map(|schema| Value::Object((*schema).clone())),
+        icons: map_icons(tool.icons.as_ref()),
+        annotations: tool.annotations.map(map_tool_annotations),
+        meta: map_optional_via_json(tool.meta.as_ref()),
     }
 }
 
@@ -671,13 +742,13 @@ fn map_resource(resource: rmcp::model::Resource) -> MCPResource {
     MCPResource {
         uri: resource.uri.clone(),
         name: resource.name.clone(),
-        title: None,
+        title: resource.title.clone(),
         description: resource.description.clone(),
         mime_type: resource.mime_type.clone(),
-        icons: None,
-        size: None,
-        annotations: None,
-        metadata: None,
+        icons: map_icons(resource.icons.as_ref()),
+        size: resource.size.map(u64::from),
+        annotations: map_annotations(resource.annotations.as_ref()),
+        metadata: map_meta_to_hash_map(resource.meta.as_ref()),
     }
 }
 
@@ -687,6 +758,7 @@ fn map_resource_content(contents: ResourceContents) -> MCPResourceContent {
             uri,
             mime_type,
             text,
+            meta,
             ..
         } => MCPResourceContent {
             uri,
@@ -694,12 +766,13 @@ fn map_resource_content(contents: ResourceContents) -> MCPResourceContent {
             blob: None,
             mime_type,
             annotations: None,
-            meta: None,
+            meta: map_optional_via_json(meta.as_ref()),
         },
         ResourceContents::BlobResourceContents {
             uri,
             mime_type,
             blob,
+            meta,
             ..
         } => MCPResourceContent {
             uri,
@@ -707,7 +780,7 @@ fn map_resource_content(contents: ResourceContents) -> MCPResourceContent {
             blob: Some(blob),
             mime_type,
             annotations: None,
-            meta: None,
+            meta: map_optional_via_json(meta.as_ref()),
         },
     }
 }
@@ -715,18 +788,19 @@ fn map_resource_content(contents: ResourceContents) -> MCPResourceContent {
 fn map_prompt(prompt: rmcp::model::Prompt) -> MCPPrompt {
     MCPPrompt {
         name: prompt.name,
-        title: None,
+        title: prompt.title,
         description: prompt.description,
         arguments: prompt.arguments.map(|args| {
             args.into_iter()
                 .map(|a| MCPPromptArgument {
                     name: a.name,
+                    title: a.title,
                     description: a.description,
                     required: a.required.unwrap_or(false),
                 })
                 .collect()
         }),
-        icons: None,
+        icons: map_icons(prompt.icons.as_ref()),
     }
 }
 
@@ -738,34 +812,47 @@ fn map_prompt_message(message: rmcp::model::PromptMessage) -> MCPPromptMessage {
     .to_string();
 
     let content = match message.content {
-        rmcp::model::PromptMessageContent::Text { text } => text,
-        rmcp::model::PromptMessageContent::Image { .. } => "[image]".to_string(),
-        rmcp::model::PromptMessageContent::Resource { resource } => resource.get_text(),
+        rmcp::model::PromptMessageContent::Text { text } => {
+            MCPPromptMessageContent::Block(MCPPromptMessageContentBlock::Text { text })
+        }
+        rmcp::model::PromptMessageContent::Image { image } => {
+            MCPPromptMessageContent::Block(MCPPromptMessageContentBlock::Image {
+                data: image.data.clone(),
+                mime_type: image.mime_type.clone(),
+            })
+        }
+        rmcp::model::PromptMessageContent::Resource { resource } => {
+            let mut mapped = map_resource_content(resource.resource.clone());
+            if mapped.meta.is_none() {
+                mapped.meta = map_optional_via_json(resource.meta.as_ref());
+            }
+            mapped.annotations = map_annotations(resource.annotations.as_ref());
+            MCPPromptMessageContent::Block(MCPPromptMessageContentBlock::Resource {
+                resource: mapped,
+            })
+        }
         rmcp::model::PromptMessageContent::ResourceLink { link } => {
-            format!("[resource_link] {}", link.uri)
+            MCPPromptMessageContent::Block(MCPPromptMessageContentBlock::ResourceLink {
+                uri: link.uri.clone(),
+                name: Some(link.name.clone()),
+                description: link.description.clone(),
+                mime_type: link.mime_type.clone(),
+            })
         }
     };
 
     MCPPromptMessage {
         role,
-        content: MCPPromptMessageContent::Plain(content),
+        content,
     }
 }
 
 fn map_tool_result(result: rmcp::model::CallToolResult) -> MCPToolResult {
-    let mut mapped: Vec<MCPToolResultContent> = result
+    let mapped: Vec<MCPToolResultContent> = result
         .content
         .into_iter()
         .filter_map(map_content_block)
         .collect();
-
-    if mapped.is_empty() {
-        if let Some(value) = result.structured_content {
-            mapped.push(MCPToolResultContent::Text {
-                text: value.to_string(),
-            });
-        }
-    }
 
     MCPToolResult {
         content: if mapped.is_empty() {
@@ -774,7 +861,8 @@ fn map_tool_result(result: rmcp::model::CallToolResult) -> MCPToolResult {
             Some(mapped)
         },
         is_error: result.is_error.unwrap_or(false),
-        structured_content: None,
+        structured_content: result.structured_content,
+        meta: map_optional_json_value(result.meta.as_ref()),
     }
 }
 
@@ -788,11 +876,326 @@ fn map_content_block(content: Content) -> Option<MCPToolResultContent> {
         rmcp::model::RawContent::Resource(resource) => Some(MCPToolResultContent::Resource {
             resource: map_resource_content(resource.resource),
         }),
-        rmcp::model::RawContent::Audio(audio) => Some(MCPToolResultContent::Text {
-            text: format!("[audio] mime_type={}", audio.mime_type),
+        rmcp::model::RawContent::Audio(audio) => Some(MCPToolResultContent::Audio {
+            data: audio.data,
+            mime_type: audio.mime_type,
         }),
-        rmcp::model::RawContent::ResourceLink(link) => Some(MCPToolResultContent::Text {
-            text: format!("[resource_link] {}", link.uri),
+        rmcp::model::RawContent::ResourceLink(link) => Some(MCPToolResultContent::ResourceLink {
+            uri: link.uri,
+            name: Some(link.name),
+            description: link.description,
+            mime_type: link.mime_type,
         }),
+    }
+}
+
+fn map_icons(icons: Option<&Vec<rmcp::model::Icon>>) -> Option<Vec<MCPResourceIcon>> {
+    icons.map(|icons| {
+        icons
+            .iter()
+            .map(|icon| MCPResourceIcon {
+                src: icon.src.clone(),
+                mime_type: icon.mime_type.clone(),
+                sizes: icon.sizes.as_ref().map(|sizes| {
+                    Value::Array(
+                        sizes
+                            .iter()
+                            .cloned()
+                            .map(Value::String)
+                            .collect::<Vec<_>>(),
+                    )
+                }),
+            })
+            .collect()
+    })
+}
+
+fn map_annotations(annotations: Option<&rmcp::model::Annotations>) -> Option<MCPAnnotations> {
+    annotations.map(|annotations| MCPAnnotations {
+        audience: annotations
+            .audience
+            .as_ref()
+            .map(|audience| audience.iter().map(map_role).collect()),
+        priority: annotations.priority.map(f64::from),
+        last_modified: annotations.last_modified.map(|timestamp| timestamp.to_rfc3339()),
+    })
+}
+
+fn map_tool_annotations(annotations: rmcp::model::ToolAnnotations) -> MCPToolAnnotations {
+    MCPToolAnnotations {
+        title: annotations.title,
+        read_only_hint: annotations.read_only_hint,
+        destructive_hint: annotations.destructive_hint,
+        idempotent_hint: annotations.idempotent_hint,
+        open_world_hint: annotations.open_world_hint,
+    }
+}
+
+fn map_role(role: &rmcp::model::Role) -> String {
+    match role {
+        rmcp::model::Role::User => "user",
+        rmcp::model::Role::Assistant => "assistant",
+    }
+    .to_string()
+}
+
+fn map_meta_to_hash_map(meta: Option<&rmcp::model::Meta>) -> Option<HashMap<String, Value>> {
+    meta.and_then(|meta| match serde_json::to_value(meta.clone()).ok()? {
+        Value::Object(map) => Some(map.into_iter().collect()),
+        _ => None,
+    })
+}
+
+fn map_optional_json_value<T>(value: Option<&T>) -> Option<Value>
+where
+    T: serde::Serialize,
+{
+    value.and_then(|value| serde_json::to_value(value).ok())
+}
+
+fn map_optional_via_json<T, U>(value: Option<&T>) -> Option<U>
+where
+    T: serde::Serialize,
+    U: DeserializeOwned,
+{
+    value
+        .and_then(|value| serde_json::to_value(value).ok())
+        .and_then(|value| serde_json::from_value(value).ok())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rmcp::model::{AnnotateAble, Annotations, Content, Icon, Meta, RawResource};
+    use serde_json::json;
+
+    #[test]
+    fn build_client_info_declares_supported_client_capabilities() {
+        let info = RemoteMCPTransport::build_client_info("BitFun", "1.0.0");
+
+        assert!(info.capabilities.roots.is_some());
+        assert!(info.capabilities.sampling.is_some());
+        assert!(info.capabilities.elicitation.is_some());
+        assert_eq!(
+            info.capabilities
+                .elicitation
+                .as_ref()
+                .and_then(|cap| cap.schema_validation),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn mapping_preserves_remote_tool_resource_and_prompt_metadata() {
+        let mut tool_meta = Meta::default();
+        tool_meta.insert("ui".to_string(), json!({ "resourceUri": "ui://widget" }));
+        let tool = rmcp::model::Tool {
+            name: "search".into(),
+            title: Some("Search".to_string()),
+            description: Some("Find items".into()),
+            input_schema: Arc::new(serde_json::Map::new()),
+            output_schema: Some(Arc::new(serde_json::Map::from_iter([(
+                "type".to_string(),
+                json!("object"),
+            )]))),
+            annotations: Some(
+                rmcp::model::ToolAnnotations::new()
+                    .read_only(true)
+                    .destructive(false)
+                    .idempotent(true)
+                    .open_world(true),
+            ),
+            icons: Some(vec![Icon {
+                src: "https://example.com/tool.png".to_string(),
+                mime_type: Some("image/png".to_string()),
+                sizes: Some(vec!["32x32".to_string()]),
+            }]),
+            meta: Some(tool_meta),
+        };
+        let mapped_tool = map_tool(tool);
+        assert_eq!(mapped_tool.title.as_deref(), Some("Search"));
+        assert_eq!(mapped_tool.output_schema, Some(json!({ "type": "object" })));
+        assert_eq!(
+            mapped_tool
+                .annotations
+                .as_ref()
+                .and_then(|annotations| annotations.read_only_hint),
+            Some(true)
+        );
+        assert_eq!(
+            mapped_tool
+                .meta
+                .as_ref()
+                .and_then(|meta| meta.ui.as_ref())
+                .and_then(|ui| ui.resource_uri.as_deref()),
+            Some("ui://widget")
+        );
+
+        let mut resource_meta = Meta::default();
+        resource_meta.insert("source".to_string(), json!("catalog"));
+        let resource = RawResource {
+            uri: "file:///tmp/report.md".to_string(),
+            name: "report".to_string(),
+            title: Some("Quarterly Report".to_string()),
+            description: Some("Report".to_string()),
+            mime_type: Some("text/markdown".to_string()),
+            size: Some(42),
+            icons: Some(vec![Icon {
+                src: "https://example.com/resource.png".to_string(),
+                mime_type: Some("image/png".to_string()),
+                sizes: Some(vec!["64x64".to_string()]),
+            }]),
+            meta: Some(resource_meta),
+        }
+        .annotate(Annotations {
+            audience: Some(vec![rmcp::model::Role::User]),
+            priority: Some(0.9),
+            last_modified: None,
+        });
+        let mapped_resource = map_resource(resource);
+        assert_eq!(mapped_resource.title.as_deref(), Some("Quarterly Report"));
+        assert_eq!(mapped_resource.size, Some(42));
+        assert_eq!(
+            mapped_resource
+                .annotations
+                .as_ref()
+                .and_then(|annotations| annotations.audience.as_ref())
+                .cloned(),
+            Some(vec!["user".to_string()])
+        );
+        assert_eq!(
+            mapped_resource
+                .metadata
+                .as_ref()
+                .and_then(|meta| meta.get("source")),
+            Some(&json!("catalog"))
+        );
+
+        let prompt = rmcp::model::Prompt {
+            name: "summarize".to_string(),
+            title: Some("Summarize".to_string()),
+            description: Some("Summarize content".to_string()),
+            arguments: Some(vec![rmcp::model::PromptArgument {
+                name: "topic".to_string(),
+                title: Some("Topic".to_string()),
+                description: Some("Topic to summarize".to_string()),
+                required: Some(true),
+            }]),
+            icons: Some(vec![Icon {
+                src: "https://example.com/prompt.png".to_string(),
+                mime_type: Some("image/png".to_string()),
+                sizes: Some(vec!["16x16".to_string()]),
+            }]),
+            meta: None,
+        };
+        let mapped_prompt = map_prompt(prompt);
+        assert_eq!(mapped_prompt.title.as_deref(), Some("Summarize"));
+        assert_eq!(
+            mapped_prompt
+                .arguments
+                .as_ref()
+                .and_then(|arguments| arguments.first())
+                .and_then(|argument| argument.title.as_deref()),
+            Some("Topic")
+        );
+        assert!(mapped_prompt.icons.is_some());
+    }
+
+    #[test]
+    fn mapping_preserves_structured_results_and_resource_links() {
+        let resource_link = RawResource {
+            uri: "file:///tmp/output.json".to_string(),
+            name: "output".to_string(),
+            title: Some("Output".to_string()),
+            description: Some("Generated output".to_string()),
+            mime_type: Some("application/json".to_string()),
+            size: Some(7),
+            icons: None,
+            meta: None,
+        };
+        let mut result_meta = Meta::default();
+        result_meta.insert("traceId".to_string(), json!("abc123"));
+        let result = rmcp::model::CallToolResult {
+            content: vec![
+                Content::text("done"),
+                Content::resource_link(resource_link),
+                Content::image("aGVsbG8=", "image/png"),
+            ],
+            structured_content: Some(json!({ "ok": true })),
+            is_error: Some(false),
+            meta: Some(result_meta),
+        };
+
+        let mapped = map_tool_result(result);
+        assert_eq!(mapped.structured_content, Some(json!({ "ok": true })));
+        assert_eq!(mapped.meta, Some(json!({ "traceId": "abc123" })));
+        assert!(matches!(
+            mapped.content.as_ref().and_then(|content| content.get(1)),
+            Some(MCPToolResultContent::ResourceLink { uri, .. }) if uri == "file:///tmp/output.json"
+        ));
+        assert!(matches!(
+            mapped.content.as_ref().and_then(|content| content.get(2)),
+            Some(MCPToolResultContent::Image { mime_type, .. }) if mime_type == "image/png"
+        ));
+    }
+
+    #[test]
+    fn mapping_preserves_prompt_message_blocks() {
+        let prompt_message = rmcp::model::PromptMessage {
+            role: rmcp::model::PromptMessageRole::User,
+            content: rmcp::model::PromptMessageContent::Text {
+                text: "hello".to_string(),
+            },
+        };
+        let mapped = map_prompt_message(prompt_message);
+        assert!(matches!(
+            mapped.content,
+            MCPPromptMessageContent::Block(MCPPromptMessageContentBlock::Text { ref text }) if text == "hello"
+        ));
+
+        let resource_link = RawResource {
+            uri: "file:///tmp/input.md".to_string(),
+            name: "input".to_string(),
+            title: None,
+            description: Some("input".to_string()),
+            mime_type: Some("text/markdown".to_string()),
+            size: None,
+            icons: None,
+            meta: None,
+        }
+        .no_annotation();
+        let prompt_message = rmcp::model::PromptMessage {
+            role: rmcp::model::PromptMessageRole::Assistant,
+            content: rmcp::model::PromptMessageContent::ResourceLink {
+                link: resource_link,
+            },
+        };
+        let mapped = map_prompt_message(prompt_message);
+        assert!(matches!(
+            mapped.content,
+            MCPPromptMessageContent::Block(MCPPromptMessageContentBlock::ResourceLink { ref uri, .. })
+                if uri == "file:///tmp/input.md"
+        ));
+
+        let embedded = rmcp::model::RawEmbeddedResource {
+            meta: Some(Meta::default()),
+            resource: ResourceContents::TextResourceContents {
+                uri: "file:///tmp/embedded.txt".to_string(),
+                mime_type: Some("text/plain".to_string()),
+                text: "embedded".to_string(),
+                meta: None,
+            },
+        }
+        .no_annotation();
+        let prompt_message = rmcp::model::PromptMessage {
+            role: rmcp::model::PromptMessageRole::Assistant,
+            content: rmcp::model::PromptMessageContent::Resource { resource: embedded },
+        };
+        let mapped = map_prompt_message(prompt_message);
+        assert!(matches!(
+            mapped.content,
+            MCPPromptMessageContent::Block(MCPPromptMessageContentBlock::Resource { ref resource })
+                if resource.uri == "file:///tmp/embedded.txt"
+        ));
     }
 }

@@ -16,10 +16,10 @@ use crate::agentic::tools::framework::ToolOptions;
 use crate::agentic::tools::{get_all_registered_tools, SubagentParentInfo};
 use crate::agentic::util::build_remote_workspace_layout_preview;
 use crate::agentic::{WorkspaceBackend, WorkspaceBinding};
-use crate::service::remote_ssh::workspace_state::get_remote_workspace_manager;
 use crate::infrastructure::ai::get_global_ai_client_factory;
 use crate::service::config::get_global_config_service;
 use crate::service::config::types::{ModelCapability, ModelCategory};
+use crate::service::remote_ssh::workspace_state::get_remote_workspace_manager;
 use crate::util::errors::{BitFunError, BitFunResult};
 use crate::util::token_counter::TokenCounter;
 use crate::util::types::Message as AIMessage;
@@ -664,13 +664,7 @@ impl ExecutionEngine {
 
         match self
             .context_compressor
-            .compress_turns(
-                session_id,
-                context_window,
-                turns.len(),
-                turns,
-                tail_policy,
-            )
+            .compress_turns(session_id, context_window, turns.len(), turns, tail_policy)
             .await
         {
             Ok(compression_result) => {
@@ -947,30 +941,21 @@ impl ExecutionEngine {
                             if let Some(mgr) = get_remote_workspace_manager() {
                                 let ssh_opt = mgr.get_ssh_manager().await;
                                 let fs_opt = mgr.get_file_service().await;
-                                let (kernel_name, hostname) =
-                                    if let Some(ref ssh) = ssh_opt {
-                                        if let Some(info) = ssh.get_server_info(cid).await {
-                                            (info.os_type, info.hostname)
-                                        } else {
-                                            (
-                                                "Linux".to_string(),
-                                                "remote".to_string(),
-                                            )
-                                        }
+                                let (kernel_name, hostname) = if let Some(ref ssh) = ssh_opt {
+                                    if let Some(info) = ssh.get_server_info(cid).await {
+                                        (info.os_type, info.hostname)
                                     } else {
-                                        (
-                                            "Linux".to_string(),
-                                            "remote".to_string(),
-                                        )
-                                    };
-                                let connection_display_name =
-                                    match &ws.backend {
-                                        WorkspaceBackend::Remote {
-                                            connection_name,
-                                            ..
-                                        } => connection_name.clone(),
-                                        _ => cid.to_string(),
-                                    };
+                                        ("Linux".to_string(), "remote".to_string())
+                                    }
+                                } else {
+                                    ("Linux".to_string(), "remote".to_string())
+                                };
+                                let connection_display_name = match &ws.backend {
+                                    WorkspaceBackend::Remote {
+                                        connection_name, ..
+                                    } => connection_name.clone(),
+                                    _ => cid.to_string(),
+                                };
                                 let remote_layout = if let Some(ref fs) = fs_opt {
                                     match build_remote_workspace_layout_preview(
                                         fs,
@@ -1473,7 +1458,7 @@ impl ExecutionEngine {
             .await
     }
 
-    /// Get available tool names and definitions: 1. Tool itself is enabled 2. Allowed in mode or is MCP tool
+    /// Get available tool names and definitions: 1. Tool itself is enabled 2. Explicitly allowed in mode config
     async fn get_available_tools_and_definitions(
         &self,
         mode_allowed_tools: &[String],
@@ -1529,8 +1514,7 @@ impl ExecutionEngine {
             }
 
             let tool_name = tool.name().to_string();
-            // MCP tools are automatically allowed (all tools starting with mcp_)
-            if mode_allowed_tools.contains(&tool_name) || tool_name.starts_with("mcp_") {
+            if mode_allowed_tools.contains(&tool_name) {
                 let description = tool
                     .description_with_context(Some(&description_context))
                     .await

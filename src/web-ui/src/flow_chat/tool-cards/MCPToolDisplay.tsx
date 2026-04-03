@@ -13,6 +13,7 @@ import { createLogger } from '@/shared/utils/logger';
 import { MCPAPI, MCP_APPS_PROTOCOL_VERSION, type McpUiResourceCsp, type McpUiResourcePermissions, type McpUiMessageParams, type McpUiMessageResult, type McpAppMessageEvent, type McpAppMessageResponseEvent } from '@/infrastructure/api/service-api/MCPAPI';
 import { systemAPI } from '@/infrastructure/api/service-api/SystemAPI';
 import { globalEventBus } from '@/infrastructure/event-bus';
+import { isMcpToolName, parseMcpToolName } from '@/infrastructure/mcp/toolName';
 import { useToolCardHeightContract } from './useToolCardHeightContract';
 import './MCPToolDisplay.scss';
 
@@ -175,15 +176,14 @@ export const MCPToolDisplay: React.FC<ToolCardProps> = ({
 
   const getToolInfo = () => {
     const fullToolName = config.toolName;
-    const parts = fullToolName.split('_');
-    const actualToolName = parts.slice(2).join('_') || fullToolName;
-    const serverName = parts[1] || 'unknown';
-    
-    return { toolName: actualToolName, serverName };
+    const parsed = parseMcpToolName(fullToolName);
+    return {
+      toolName: parsed?.toolName ?? fullToolName,
+      serverId: parsed?.serverId ?? 'unknown',
+    };
   };
 
-  const { toolName, serverName } = getToolInfo();
-  const serverId = serverName;
+  const { toolName, serverId } = getToolInfo();
   const isFailed = status === 'error';
 
   const mcpAppIframeRef = useRef<HTMLIFrameElement | null>(null);
@@ -217,7 +217,7 @@ export const MCPToolDisplay: React.FC<ToolCardProps> = ({
   useEffect(() => {
     if (
       uiResourceUriFromResult ||
-      !config.toolName.startsWith('mcp_') ||
+      !isMcpToolName(config.toolName) ||
       status !== 'completed' ||
       isFailed
     ) {

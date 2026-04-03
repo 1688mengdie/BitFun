@@ -5,6 +5,7 @@
 
 import type { ToolCardConfig } from '../types/flow-chat';
 import { createLogger } from '@/shared/utils/logger';
+import { isMcpToolName, parseMcpToolName } from '@/infrastructure/mcp/toolName';
 
 const log = createLogger('ToolCardRegistry');
 // Tool display components
@@ -379,11 +380,10 @@ export const TOOL_CARD_COMPONENTS = {
  * Get tool card config.
  */
 export function getToolCardConfig(toolName: string): ToolCardConfig {
-  // Check MCP tools (prefix: mcp_).
-  if (toolName.startsWith('mcp_')) {
-    // Parse MCP tool name: mcp_{server_id}_{tool_name}
-    const parts = toolName.split('_');
-    const actualToolName = parts.slice(2).join('_'); // Actual tool name.
+  // Check MCP tools (prefix: mcp__).
+  if (isMcpToolName(toolName)) {
+    const parsed = parseMcpToolName(toolName);
+    const actualToolName = parsed?.toolName ?? toolName;
 
     return {
       toolName,
@@ -414,8 +414,8 @@ export function getToolCardConfig(toolName: string): ToolCardConfig {
  * Get tool card component.
  */
 export function getToolCardComponent(toolName: string) {
-  // Check MCP tools (prefix: mcp_).
-  if (toolName.startsWith('mcp_')) {
+  // Check MCP tools (prefix: mcp__).
+  if (isMcpToolName(toolName)) {
     return MCPToolDisplay;
   }
   
