@@ -6,6 +6,7 @@ use std::collections::HashMap;
 /// Memory type
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum MemoryType {
     /// Technology preference
     TechPreference,
@@ -18,14 +19,10 @@ pub enum MemoryType {
     /// Architecture decision
     Decision,
     /// Other
+    #[default]
     Other,
 }
 
-impl Default for MemoryType {
-    fn default() -> Self {
-        Self::Other
-    }
-}
 
 /// AI memory point
 #[derive(Debug, Clone, Serialize, Deserialize)]

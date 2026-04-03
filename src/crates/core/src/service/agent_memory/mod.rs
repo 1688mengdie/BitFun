@@ -1,3 +1,3 @@
-mod agent_memory;
+mod agent_memory_impl;
 
-pub(crate) use agent_memory::build_workspace_agent_memory_prompt;
+pub(crate) use agent_memory_impl::build_workspace_agent_memory_prompt;

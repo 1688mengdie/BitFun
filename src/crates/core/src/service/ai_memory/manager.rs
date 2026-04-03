@@ -188,9 +188,9 @@ impl AIMemoryManager {
                 "## {} [{}] (Importance: {}/5)\n{}\n",
                 memory.title, type_label, memory.importance, memory.content
             ));
-            prompt.push_str("\n");
+            prompt.push('\n');
         }
-        prompt.push_str("\n");
+        prompt.push('\n');
 
         Ok(Some(prompt))
     }

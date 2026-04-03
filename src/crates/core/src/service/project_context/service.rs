@@ -336,7 +336,7 @@ impl ProjectContextService {
     pub async fn cancel_generate_document(&self, doc_id: &str) -> BitFunResult<()> {
         super::cancellation::cancel_generation(doc_id)
             .await
-            .map_err(|e| BitFunError::service(e))
+            .map_err(BitFunError::service)
     }
 
     /// Parses a filter string.
@@ -435,7 +435,7 @@ impl ProjectContextService {
         workspace: &Path,
         filter: Option<&str>,
     ) -> BitFunResult<String> {
-        let filter = filter.and_then(|f| Self::parse_filter(f));
+        let filter = filter.and_then(Self::parse_filter);
         let config = self.load_config_and_cleanup(workspace).await?;
         let statuses = self.get_document_statuses(workspace).await?;
 

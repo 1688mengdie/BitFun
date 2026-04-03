@@ -496,7 +496,7 @@ impl RemoteMCPTransport {
                 let info = service.peer().peer_info().ok_or_else(|| {
                     BitFunError::MCPError("Handshake succeeded but server info missing".to_string())
                 })?;
-                return Ok(map_initialize_result(info));
+                Ok(map_initialize_result(info))
             }
             ClientState::Connecting { transport } => {
                 let Some(transport) = transport.take() else {
@@ -813,13 +813,13 @@ fn map_prompt_message(message: rmcp::model::PromptMessage) -> MCPPromptMessage {
 
     let content = match message.content {
         rmcp::model::PromptMessageContent::Text { text } => {
-            MCPPromptMessageContent::Block(MCPPromptMessageContentBlock::Text { text })
+            MCPPromptMessageContent::Block(Box::new(MCPPromptMessageContentBlock::Text { text }))
         }
         rmcp::model::PromptMessageContent::Image { image } => {
-            MCPPromptMessageContent::Block(MCPPromptMessageContentBlock::Image {
+            MCPPromptMessageContent::Block(Box::new(MCPPromptMessageContentBlock::Image {
                 data: image.data.clone(),
                 mime_type: image.mime_type.clone(),
-            })
+            }))
         }
         rmcp::model::PromptMessageContent::Resource { resource } => {
             let mut mapped = map_resource_content(resource.resource.clone());
@@ -827,17 +827,17 @@ fn map_prompt_message(message: rmcp::model::PromptMessage) -> MCPPromptMessage {
                 mapped.meta = map_optional_via_json(resource.meta.as_ref());
             }
             mapped.annotations = map_annotations(resource.annotations.as_ref());
-            MCPPromptMessageContent::Block(MCPPromptMessageContentBlock::Resource {
-                resource: mapped,
-            })
+            MCPPromptMessageContent::Block(Box::new(MCPPromptMessageContentBlock::Resource {
+                resource: Box::new(mapped),
+            }))
         }
         rmcp::model::PromptMessageContent::ResourceLink { link } => {
-            MCPPromptMessageContent::Block(MCPPromptMessageContentBlock::ResourceLink {
+            MCPPromptMessageContent::Block(Box::new(MCPPromptMessageContentBlock::ResourceLink {
                 uri: link.uri.clone(),
                 name: Some(link.name.clone()),
                 description: link.description.clone(),
                 mime_type: link.mime_type.clone(),
-            })
+            }))
         }
     };
 
@@ -874,7 +874,7 @@ fn map_content_block(content: Content) -> Option<MCPToolResultContent> {
             mime_type: image.mime_type,
         }),
         rmcp::model::RawContent::Resource(resource) => Some(MCPToolResultContent::Resource {
-            resource: map_resource_content(resource.resource),
+            resource: Box::new(map_resource_content(resource.resource)),
         }),
         rmcp::model::RawContent::Audio(audio) => Some(MCPToolResultContent::Audio {
             data: audio.data,

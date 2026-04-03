@@ -339,8 +339,10 @@ pub enum ModelCapability {
 /// Model category (for UI display and filtering).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum ModelCategory {
     /// General chat model.
+    #[default]
     GeneralChat,
     /// Multimodal model (text + image understanding).
     Multimodal,
@@ -356,15 +358,11 @@ pub enum ModelCategory {
     SpeechRecognition,
 }
 
-impl Default for ModelCategory {
-    fn default() -> Self {
-        Self::GeneralChat
-    }
-}
 
 /// Default model configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct DefaultModelsConfig {
     /// Primary model ID (for complex tasks).
     pub primary: Option<String>,
@@ -380,18 +378,6 @@ pub struct DefaultModelsConfig {
     pub speech_recognition: Option<String>,
 }
 
-impl Default for DefaultModelsConfig {
-    fn default() -> Self {
-        Self {
-            primary: None,
-            fast: None,
-            search: None,
-            image_understanding: None,
-            image_generation: None,
-            speech_recognition: None,
-        }
-    }
-}
 
 /// AI configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -876,6 +862,7 @@ pub struct AIModelConfig {
 /// Proxy configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct ProxyConfig {
     /// Whether the proxy is enabled.
     pub enabled: bool,
@@ -1230,16 +1217,6 @@ impl Default for AIConfig {
     }
 }
 
-impl Default for ProxyConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            url: String::new(),
-            username: None,
-            password: None,
-        }
-    }
-}
 
 impl Default for AIModelConfig {
     fn default() -> Self {

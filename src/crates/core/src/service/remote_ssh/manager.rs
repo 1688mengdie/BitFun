@@ -65,7 +65,7 @@ struct SSHHandler {
     /// Expected host key (if connecting to known host)
     expected_key: Option<(String, u16, PublicKey)>,
     /// Callback for new host key verification
-    verify_callback: Option<Box<dyn Fn(String, u16, &PublicKey) -> bool + Send + Sync>>,
+    verify_callback: Option<Box<HostKeyVerifyCallback>>,
     /// Known hosts storage for verification
     known_hosts: Option<Arc<tokio::sync::RwLock<HashMap<String, KnownHostEntry>>>>,
     /// Host info for known hosts lookup
@@ -77,6 +77,8 @@ struct SSHHandler {
     /// Uses std::sync::Mutex so it can be read from sync map_err closures.
     disconnect_reason: Arc<std::sync::Mutex<Option<String>>>,
 }
+
+type HostKeyVerifyCallback = dyn Fn(String, u16, &PublicKey) -> bool + Send + Sync;
 
 impl SSHHandler {
     #[allow(dead_code)]
@@ -531,7 +533,7 @@ impl SSHConnectionManager {
 
         let has_proxy_command = ssh_cfg_has(&host_settings, "ProxyCommand");
 
-        return SSHConfigLookupResult {
+        SSHConfigLookupResult {
             found: true,
             config: Some(SSHConfigEntry {
                 host: host.to_string(),
@@ -541,7 +543,7 @@ impl SSHConnectionManager {
                 identity_file,
                 agent: if has_proxy_command { None } else { Some(true) },
             }),
-        };
+        }
     }
 
     #[cfg(not(feature = "ssh_config"))]

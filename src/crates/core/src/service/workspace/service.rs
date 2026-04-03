@@ -1112,8 +1112,8 @@ impl WorkspaceService {
             workspaces.retain(|_id, ws| {
                 if ws.workspace_kind == WorkspaceKind::Remote {
                     // Check if this remote workspace has the required metadata
-                    let has_ssh_host = ws.metadata.get("sshHost").and_then(|v| v.as_str()).map_or(false, |s| !s.trim().is_empty());
-                    let has_connection_id = ws.metadata.get("connectionId").and_then(|v| v.as_str()).map_or(false, |s| !s.trim().is_empty());
+                    let has_ssh_host = ws.metadata.get("sshHost").and_then(|v| v.as_str()).is_some_and(|s| !s.trim().is_empty());
+                    let has_connection_id = ws.metadata.get("connectionId").and_then(|v| v.as_str()).is_some_and(|s| !s.trim().is_empty());
                     if !has_ssh_host || !has_connection_id {
                         // Skip this legacy remote workspace
                         info!("Skipping legacy remote workspace without required metadata: id={}, root_path={}", _id, ws.root_path.display());
