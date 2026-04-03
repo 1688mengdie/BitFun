@@ -83,7 +83,7 @@ pub async fn computer_use_open_system_settings(
     #[cfg(target_os = "windows")]
     {
         let _ = request;
-        return Err("Open system settings is not wired for Windows yet.".to_string());
+        Err("Open system settings is not wired for Windows yet.".to_string())
     }
     #[cfg(target_os = "linux")]
     {

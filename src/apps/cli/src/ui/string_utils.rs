@@ -1,4 +1,4 @@
-/// String processing utilities
+//! String processing utilities
 
 /// Safely truncate string to specified byte length
 pub fn truncate_str(s: &str, max_bytes: usize) -> String {

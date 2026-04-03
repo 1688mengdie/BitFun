@@ -102,7 +102,7 @@ pub async fn run_system_command(
         .env
         .map(|vars| vars.into_iter().map(|v| (v.key, v.value)).collect());
 
-    let env_ref: Option<&[(String, String)]> = env_vars.as_ref().map(|v| v.as_slice());
+    let env_ref: Option<&[(String, String)]> = env_vars.as_deref();
 
     let result = system::run_command(
         &request.command,

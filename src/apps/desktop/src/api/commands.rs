@@ -809,9 +809,7 @@ pub async fn open_remote_workspace(
     let stable_workspace_id = remote_workspace_stable_id(&ssh_host, &remote_path);
 
     let display_name = remote_path
-        .split('/')
-        .filter(|s| !s.is_empty())
-        .last()
+        .split('/').rfind(|s| !s.is_empty())
         .unwrap_or(remote_path.as_str())
         .to_string();
 
@@ -1596,8 +1594,10 @@ pub async fn write_file_content(
     }
 
     let full_path = request.file_path;
-    let mut options = FileOperationOptions::default();
-    options.backup_on_overwrite = false;
+    let options = FileOperationOptions {
+        backup_on_overwrite: false,
+        ..FileOperationOptions::default()
+    };
 
     match state
         .filesystem_service
@@ -2000,7 +2000,7 @@ pub async fn reveal_in_explorer(request: RevealInExplorerRequest) -> Result<(), 
         } else {
             let normalized_path = request.path.replace("/", "\\");
             bitfun_core::util::process_manager::create_command("explorer")
-                .args(&["/select,", &normalized_path])
+                .args(["/select,", &normalized_path])
                 .spawn()
                 .map_err(|e| format!("Failed to open explorer: {}", e))?;
         }
