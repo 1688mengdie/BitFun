@@ -331,9 +331,8 @@ impl SkillRegistry {
         remote_root: &str,
     ) -> Vec<SkillCandidate> {
         let mut roots = Vec::new();
-        let mut priority = 0usize;
         let root = remote_root.trim_end_matches('/');
-        for (parent, sub, slot) in PROJECT_SKILL_SLOTS {
+        for (priority, (parent, sub, slot)) in PROJECT_SKILL_SLOTS.iter().enumerate() {
             let path = format!("{}/{}/{}", root, parent, sub);
             if fs.is_dir(&path).await.unwrap_or(false) {
                 roots.push(RemoteSkillRootEntry {
@@ -342,7 +341,6 @@ impl SkillRegistry {
                     priority,
                 });
             }
-            priority += 1;
         }
 
         let mut skills = Vec::new();

@@ -26,6 +26,7 @@ impl FileSystemService {
     }
 
     /// Creates the default service.
+    #[allow(clippy::should_implement_trait)]
     pub fn default() -> Self {
         Self::new(FileSystemConfig::default())
     }
@@ -44,7 +45,7 @@ impl FileSystemService {
         self.file_tree_service
             .build_tree_with_remote_hint(root_path, preferred_remote_connection_id)
             .await
-            .map_err(|e| BitFunError::service(e))
+            .map_err(BitFunError::service)
     }
 
     /// Scans a directory and returns a detailed result.
@@ -78,7 +79,7 @@ impl FileSystemService {
         self.file_tree_service
             .get_directory_contents_with_remote_hint(path, preferred_remote_connection_id)
             .await
-            .map_err(|e| BitFunError::service(e))
+            .map_err(BitFunError::service)
     }
 
     /// Searches files.

@@ -80,6 +80,12 @@ struct ResolvedShell {
 /// Bash tool
 pub struct BashTool;
 
+impl Default for BashTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BashTool {
     pub fn new() -> Self {
         Self
@@ -777,6 +783,7 @@ Usage notes:
 impl BashTool {
     /// Execute a command in a new background terminal session.
     /// Returns immediately with the new session ID.
+    #[allow(clippy::too_many_arguments)]
     async fn call_background(
         &self,
         command_str: &str,

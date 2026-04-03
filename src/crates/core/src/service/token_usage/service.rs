@@ -139,6 +139,7 @@ impl TokenUsageService {
     }
 
     /// Record a token usage event
+    #[allow(clippy::too_many_arguments)]
     pub async fn record_usage(
         &self,
         model_id: String,
@@ -351,7 +352,7 @@ impl TokenUsageService {
                 }
             }
 
-            current_date = current_date + Duration::days(1);
+            current_date += Duration::days(1);
         }
 
         // Filter by model_id, session_id, and subagent flag

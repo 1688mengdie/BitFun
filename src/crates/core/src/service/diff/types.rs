@@ -65,6 +65,7 @@ pub struct DiffHunk {
 
 /// Diff result
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct DiffResult {
     /// Hunk list
     pub hunks: Vec<DiffHunk>,
@@ -76,16 +77,6 @@ pub struct DiffResult {
     pub changes: usize,
 }
 
-impl Default for DiffResult {
-    fn default() -> Self {
-        Self {
-            hunks: Vec::new(),
-            additions: 0,
-            deletions: 0,
-            changes: 0,
-        }
-    }
-}
 
 /// Diff computation options
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

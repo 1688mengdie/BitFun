@@ -214,6 +214,7 @@ impl DialogScheduler {
     /// - Session error → queue cleared, dispatched immediately.
     ///
     /// Returns `Err(String)` if the queue is full or the coordinator returns an error.
+    #[allow(clippy::too_many_arguments)]
     pub async fn submit(
         &self,
         session_id: String,

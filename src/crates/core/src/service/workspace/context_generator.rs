@@ -111,6 +111,7 @@ impl WorkspaceContextGenerator {
     }
 
     /// Creates a default generator.
+    #[allow(clippy::should_implement_trait)]
     pub fn default() -> Self {
         Self::new(None, Arc::new(FileTreeService::default()))
     }
@@ -432,7 +433,7 @@ impl WorkspaceContextGenerator {
             .file_tree_service
             .get_directory_contents(path)
             .await
-            .map_err(|e| BitFunError::service(e))?;
+            .map_err(BitFunError::service)?;
 
         let mut structure = String::new();
         let dir_name = path_buf
@@ -551,14 +552,13 @@ impl WorkspaceContextGenerator {
                             in_package = false;
                         }
 
-                        if in_package && line.contains('=') {
-                            if line.starts_with("name")
+                        if in_package && line.contains('=')
+                            && (line.starts_with("name")
                                 || line.starts_with("description")
-                                || line.starts_with("version")
+                                || line.starts_with("version"))
                             {
                                 info.push_str(&format!("{}\n", line));
                             }
-                        }
                     }
 
                     if !info.is_empty() {

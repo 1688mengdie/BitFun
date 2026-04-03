@@ -196,6 +196,12 @@ pub struct AgentRegistry {
     project_subagents: RwLock<HashMap<PathBuf, HashMap<String, AgentEntry>>>,
 }
 
+impl Default for AgentRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AgentRegistry {
     fn read_agents(&self) -> std::sync::RwLockReadGuard<'_, HashMap<String, AgentEntry>> {
         match self.agents.read() {
@@ -380,14 +386,14 @@ impl AgentRegistry {
 
     /// check if a subagent exists with specified source (used for duplicate check before adding)
     pub fn has_subagent(&self, agent_id: &str, source: SubAgentSource) -> bool {
-        if self.read_agents().get(agent_id).map_or(false, |e| {
+        if self.read_agents().get(agent_id).is_some_and(|e| {
             e.category == AgentCategory::SubAgent && e.subagent_source == Some(source)
         }) {
             return true;
         }
 
         self.read_project_subagents().values().any(|entries| {
-            entries.get(agent_id).map_or(false, |entry| {
+            entries.get(agent_id).is_some_and(|entry| {
                 entry.category == AgentCategory::SubAgent && entry.subagent_source == Some(source)
             })
         })
@@ -517,7 +523,7 @@ impl AgentRegistry {
                 result.extend(
                     project_entries
                         .values()
-                        .map(|entry| AgentInfo::from_agent_entry(entry)),
+                        .map(AgentInfo::from_agent_entry),
                 );
             }
         }

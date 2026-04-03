@@ -11,6 +11,8 @@ use tokio::time::timeout;
 
 pub struct GitService;
 
+type CommitStats = (Option<i32>, Option<i32>, Option<i32>);
+
 impl GitService {
     /// Checks whether the path is a Git repository.
     pub async fn is_repository<P: AsRef<Path>>(path: P) -> Result<bool, GitError> {
@@ -232,7 +234,7 @@ impl GitService {
         for branch in &mut branches {
             if !branch.remote {
                 branch.stats = Self::calculate_branch_stats(&repo, &branch.name).ok();
-                branch.is_stale = Some(Self::is_branch_stale(&branch));
+                branch.is_stale = Some(Self::is_branch_stale(branch));
                 branch.can_merge = Self::can_merge_safely(&repo, &branch.name).ok();
                 branch.has_conflicts = branch.can_merge.map(|can| !can);
             }
@@ -265,7 +267,7 @@ impl GitService {
     }
 
     /// Analyzes branch relationships.
-    fn analyze_branch_relations(branches: &mut Vec<GitBranch>) -> Result<(), GitError> {
+    fn analyze_branch_relations(branches: &mut [GitBranch]) -> Result<(), GitError> {
         let main_branches = ["main", "master", "develop"];
 
         let available_main_branches: Vec<String> = branches
@@ -289,7 +291,7 @@ impl GitService {
             if let Some(base) = &branch.base_branch {
                 child_map
                     .entry(base.clone())
-                    .or_insert_with(Vec::new)
+                    .or_default()
                     .push(branch.name.clone());
             }
         }
@@ -340,11 +342,7 @@ impl GitService {
 
     /// Checks whether a branch is stale.
     fn is_branch_stale(branch: &GitBranch) -> bool {
-        if let Some(_last_commit_date) = &branch.last_commit_date {
-            false
-        } else {
-            true
-        }
+        !matches!(&branch.last_commit_date, Some(_last_commit_date))
     }
 
     /// Checks whether a branch can be merged safely.
@@ -856,7 +854,7 @@ impl GitService {
     fn get_commit_stats(
         _repo: &Repository,
         _commit: &Commit,
-    ) -> Result<(Option<i32>, Option<i32>, Option<i32>), GitError> {
+    ) -> Result<CommitStats, GitError> {
         Ok((None, None, None))
     }
 
@@ -1068,7 +1066,7 @@ impl GitService {
         let worktree_path_str = worktree_path.to_string_lossy().to_string();
 
         if !worktree_dir.exists() {
-            std::fs::create_dir_all(&worktree_dir).map_err(|e| GitError::IoError(e))?;
+            std::fs::create_dir_all(&worktree_dir).map_err(GitError::IoError)?;
         }
 
         let args = if create_branch {

@@ -59,7 +59,7 @@ fn encrypt_aes_128_ecb_pkcs7(plaintext: &[u8], key: &[u8; 16]) -> Vec<u8> {
     let pad_len = 16 - (plaintext.len() % 16);
     let pad_len = if pad_len == 0 { 16 } else { pad_len };
     let mut buf = plaintext.to_vec();
-    buf.extend(std::iter::repeat(pad_len as u8).take(pad_len));
+    buf.extend(std::iter::repeat_n(pad_len as u8, pad_len));
     let mut out = Vec::with_capacity(buf.len());
     for chunk in buf.chunks_exact(16) {
         let mut block = aes::cipher::generic_array::GenericArray::clone_from_slice(chunk);
@@ -94,7 +94,7 @@ fn build_cdn_download_url(cdn_base: &str, encrypted_query_param: &str) -> String
 }
 
 fn decrypt_aes_128_ecb_pkcs7(ciphertext: &[u8], key: &[u8; 16]) -> Result<Vec<u8>> {
-    if ciphertext.is_empty() || ciphertext.len() % 16 != 0 {
+    if ciphertext.is_empty() || !ciphertext.len().is_multiple_of(16) {
         return Err(anyhow!(
             "invalid ciphertext length {}",
             ciphertext.len()
@@ -824,6 +824,7 @@ impl WeixinBot {
     }
 
     /// `ilink/bot/getuploadurl` — returns `upload_param` for CDN POST.
+    #[allow(clippy::too_many_arguments)]
     async fn ilink_get_upload_url(
         &self,
         to_user_id: &str,
@@ -1212,7 +1213,7 @@ impl WeixinBot {
     }
 
     fn is_weixin_media_item_type(type_id: i64) -> bool {
-        matches!(type_id, 2 | 3 | 4 | 5)
+        matches!(type_id, 2..=5)
     }
 
     fn body_from_item_list(items: &[Value]) -> String {
@@ -1333,11 +1334,7 @@ impl WeixinBot {
         let mut s = header.to_string();
         for (i, a) in actions.iter().enumerate() {
             let n = i + 1;
-            if language.is_chinese() {
-                s.push_str(&format!("{n}. {} → {}\n", a.label, a.command));
-            } else {
-                s.push_str(&format!("{n}. {} → {}\n", a.label, a.command));
-            }
+            s.push_str(&format!("{n}. {} → {}\n", a.label, a.command));
         }
         s
     }
@@ -1672,8 +1669,8 @@ impl WeixinBot {
         }
 
         let trimmed = text.trim();
-        if trimmed.starts_with("download_file:") {
-            let token = trimmed["download_file:".len()..].trim().to_string();
+        if let Some(stripped) = trimmed.strip_prefix("download_file:") {
+            let token = stripped.trim().to_string();
             let workspace_root = state.current_workspace.clone();
             drop(states);
             self.handle_download_request(&peer_id, &token, workspace_root)

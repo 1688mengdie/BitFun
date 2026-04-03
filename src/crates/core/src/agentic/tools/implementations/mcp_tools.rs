@@ -200,6 +200,12 @@ fn render_prompt_catalog(prompts: &[MCPPrompt]) -> String {
 
 pub struct ListMCPResourcesTool;
 
+impl Default for ListMCPResourcesTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ListMCPResourcesTool {
     pub fn new() -> Self {
         Self
@@ -299,6 +305,12 @@ impl Tool for ListMCPResourcesTool {
 
 pub struct ReadMCPResourceTool {
     max_render_chars: usize,
+}
+
+impl Default for ReadMCPResourceTool {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ReadMCPResourceTool {
@@ -410,6 +422,12 @@ impl Tool for ReadMCPResourceTool {
 
 pub struct ListMCPPromptsTool;
 
+impl Default for ListMCPPromptsTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ListMCPPromptsTool {
     pub fn new() -> Self {
         Self
@@ -509,6 +527,12 @@ impl Tool for ListMCPPromptsTool {
 
 pub struct GetMCPPromptTool {
     max_render_chars: usize,
+}
+
+impl Default for GetMCPPromptTool {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl GetMCPPromptTool {

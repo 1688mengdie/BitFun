@@ -2,7 +2,7 @@ use crate::service::snapshot::types::{SnapshotError, SnapshotResult};
 use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use tokio::sync::RwLock;
 
@@ -203,7 +203,7 @@ impl FileLockManager {
     /// Adds an item to the waiting queue.
     async fn add_to_waiting_queue(
         &self,
-        file_path: &PathBuf,
+        file_path: &Path,
         session_id: &str,
         tool_name: &str,
     ) -> SnapshotResult<()> {
@@ -216,7 +216,7 @@ impl FileLockManager {
         };
 
         waiting_queue
-            .entry(file_path.clone())
+            .entry(file_path.to_path_buf())
             .or_insert_with(Vec::new)
             .push(queue_item);
 

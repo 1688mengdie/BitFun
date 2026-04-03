@@ -12,6 +12,12 @@ use std::path::Path;
 
 pub struct TaskTool;
 
+impl Default for TaskTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TaskTool {
     pub fn new() -> Self {
         Self

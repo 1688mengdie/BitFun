@@ -150,7 +150,7 @@ fn build_fallback_matcher(relative_pattern: &str) -> Result<GlobMatcher, String>
 
 fn match_relative_path(matcher: &GlobMatcher, relative_path: &str, is_dir: bool) -> bool {
     if is_dir {
-        matcher.is_match(relative_path) || matcher.is_match(&format!("{}/", relative_path))
+        matcher.is_match(relative_path) || matcher.is_match(format!("{}/", relative_path))
     } else {
         matcher.is_match(relative_path)
     }
@@ -389,6 +389,12 @@ fn build_remote_find_command(search_dir: &str, pattern: &str, limit: usize) -> S
 }
 
 pub struct GlobTool;
+
+impl Default for GlobTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl GlobTool {
     pub fn new() -> Self {

@@ -176,11 +176,7 @@ pub async fn get_mcp_servers(state: State<'_, AppState>) -> Result<Vec<MCPServer
         } else {
             false
         };
-        let oauth_enabled = if matches!(config.server_type, MCPServerType::Remote) {
-            true
-        } else {
-            false
-        };
+        let oauth_enabled = matches!(config.server_type, MCPServerType::Remote);
         let oauth_auth_configured = if oauth_enabled {
             has_stored_oauth_credentials(&config.id)
                 .await

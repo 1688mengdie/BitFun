@@ -26,16 +26,12 @@ use tokio::sync::mpsc;
 
 /// SSE log collector configuration
 #[derive(Debug, Clone)]
+#[derive(Default)]
 pub struct SseLogConfig {
     /// Maximum number of SSE data entries to output on error, None means unlimited
     pub max_output: Option<usize>,
 }
 
-impl Default for SseLogConfig {
-    fn default() -> Self {
-        Self { max_output: None }
-    }
-}
 
 /// SSE log collector - Collects raw SSE data, outputs only on error
 pub struct SseLogCollector {
@@ -466,8 +462,8 @@ impl StreamProcessor {
                                 session_id: ctx.session_id.clone(),
                                 turn_id: ctx.dialog_turn_id.clone(),
                                 tool_event: ToolEventData::EarlyDetected {
-                                    tool_id: tool_id,
-                                    tool_name: tool_name,
+                                    tool_id,
+                                    tool_name,
                                 },
                                 subagent_parent_info: ctx.event_subagent_parent_info.clone(),
                             },
@@ -618,6 +614,7 @@ impl StreamProcessor {
     /// * `round_id` - Model round ID
     /// * `subagent_parent_info` - Subagent parent info
     /// * `cancellation_token` - Cancellation token
+    #[allow(clippy::too_many_arguments)]
     pub async fn process_stream(
         &self,
         mut stream: futures::stream::BoxStream<'static, Result<UnifiedResponse, anyhow::Error>>,

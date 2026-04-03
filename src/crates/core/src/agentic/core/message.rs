@@ -4,6 +4,7 @@ use crate::util::types::{Message as AIMessage, ToolCall as AIToolCall, ToolImage
 use crate::util::TokenCounter;
 use log::warn;
 use serde::{Deserialize, Serialize};
+use std::fmt::{self, Display};
 use std::time::SystemTime;
 use uuid::Uuid;
 
@@ -247,7 +248,7 @@ impl From<Message> for AIMessage {
                                 // Convert serde_json::Value to HashMap
                                 let arguments = if let serde_json::Value::Object(map) = tc.arguments
                                 {
-                                    map.into_iter().map(|(k, v)| (k, v)).collect()
+                                    map.into_iter().collect()
                                 } else {
                                     std::collections::HashMap::new()
                                 };
@@ -495,8 +496,8 @@ impl Message {
             })
             .unwrap_or((1024, 1024));
 
-        let tiles_w = (width + 511) / 512;
-        let tiles_h = (height + 511) / 512;
+        let tiles_w = width.div_ceil(512);
+        let tiles_h = height.div_ceil(512);
         let tiles = (tiles_w.max(1) * tiles_h.max(1)) as usize;
         50 + tiles * 200
     }
@@ -561,11 +562,12 @@ impl Message {
     }
 }
 
-impl ToString for MessageContent {
-    fn to_string(&self) -> String {
+impl Display for MessageContent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            MessageContent::Text(text) => text.clone(),
-            MessageContent::Multimodal { text, images } => format!(
+            MessageContent::Text(text) => write!(f, "{}", text),
+            MessageContent::Multimodal { text, images } => write!(
+                f,
                 "Multimodal: text_length={}, images={}",
                 text.len(),
                 images.len()
@@ -577,36 +579,34 @@ impl ToString for MessageContent {
                 result_for_assistant,
                 is_error,
                 image_attachments,
-            } => {
-                format!(
-                    "ToolResult: tool_id={}, tool_name={}, result={}, result_for_assistant={:?}, is_error={}, images={}",
-                    tool_id,
-                    tool_name,
-                    result,
-                    result_for_assistant,
-                    is_error,
-                    image_attachments.as_ref().map(|v| v.len()).unwrap_or(0)
-                )
-            }
+            } => write!(
+                f,
+                "ToolResult: tool_id={}, tool_name={}, result={}, result_for_assistant={:?}, is_error={}, images={}",
+                tool_id,
+                tool_name,
+                result,
+                result_for_assistant,
+                is_error,
+                image_attachments.as_ref().map(|v| v.len()).unwrap_or(0)
+            ),
             MessageContent::Mixed {
                 reasoning_content,
                 text,
                 tool_calls,
-            } => {
-                format!(
-                    "Mixed: reasoning_content={:?}, text={}, tool_calls={}",
-                    reasoning_content,
-                    text,
-                    tool_calls
-                        .iter()
-                        .map(|tc| format!(
-                            "ToolCall: tool_id={}, tool_name={}, arguments={}",
-                            tc.tool_id, tc.tool_name, tc.arguments
-                        ))
-                        .collect::<Vec<String>>()
-                        .join(", ")
-                )
-            }
+            } => write!(
+                f,
+                "Mixed: reasoning_content={:?}, text={}, tool_calls={}",
+                reasoning_content,
+                text,
+                tool_calls
+                    .iter()
+                    .map(|tc| format!(
+                        "ToolCall: tool_id={}, tool_name={}, arguments={}",
+                        tc.tool_id, tc.tool_name, tc.arguments
+                    ))
+                    .collect::<Vec<String>>()
+                    .join(", ")
+            ),
         }
     }
 }

@@ -4,6 +4,12 @@ pub struct ExploreAgent {
     default_tools: Vec<String>,
 }
 
+impl Default for ExploreAgent {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ExploreAgent {
     pub fn new() -> Self {
         Self {

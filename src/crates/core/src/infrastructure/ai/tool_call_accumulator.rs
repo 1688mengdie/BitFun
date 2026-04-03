@@ -56,7 +56,7 @@ impl PendingToolCall {
             .find(|(_, ch)| !ch.is_whitespace())
             .map(|(idx, _)| idx)?;
 
-        if raw_arguments[last_non_whitespace_idx..].chars().next() != Some('}') {
+        if !raw_arguments[last_non_whitespace_idx..].starts_with('}') {
             return None;
         }
 

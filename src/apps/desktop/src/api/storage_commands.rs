@@ -81,7 +81,7 @@ pub async fn cleanup_storage(state: State<'_, AppState>) -> Result<CleanupResult
     let path_manager = workspace_service.path_manager();
 
     let policy = CleanupPolicy::default();
-    let cleanup_service = CleanupService::new((&**path_manager).clone(), policy);
+    let cleanup_service = CleanupService::new((**path_manager).clone(), policy);
 
     cleanup_service
         .cleanup_all()
@@ -97,7 +97,7 @@ pub async fn cleanup_storage_with_policy(
     let workspace_service = &state.workspace_service;
     let path_manager = workspace_service.path_manager();
 
-    let cleanup_service = CleanupService::new((&**path_manager).clone(), policy);
+    let cleanup_service = CleanupService::new((**path_manager).clone(), policy);
 
     cleanup_service
         .cleanup_all()

@@ -194,7 +194,7 @@ fn validate_agent_name(name: &str) -> Result<(), String> {
         return Err("Name cannot be empty".to_string());
     }
     let mut chars = name.chars();
-    if !chars.next().map_or(false, |c| c.is_ascii_alphabetic()) {
+    if !chars.next().is_some_and(|c| c.is_ascii_alphabetic()) {
         return Err("Name must start with a letter".to_string());
     }
     for c in chars {
@@ -214,11 +214,10 @@ pub async fn create_subagent(
     validate_agent_name(name)?;
     let workspace = workspace_root_from_request(request.workspace_path.as_deref());
 
-    if request.level == SubagentLevel::Project {
-        if workspace.is_none() {
+    if request.level == SubagentLevel::Project
+        && workspace.is_none() {
             return Err("Project-level Agent requires opening a workspace first".to_string());
         }
-    }
 
     let modes = state.agent_registry.get_modes_info().await;
     let subagents = state

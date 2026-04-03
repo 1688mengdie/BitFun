@@ -10,6 +10,12 @@ use serde_json::{json, Value};
 
 pub struct ComputerUseMouseClickTool;
 
+impl Default for ComputerUseMouseClickTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ComputerUseMouseClickTool {
     pub fn new() -> Self {
         Self
