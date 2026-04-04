@@ -1,11 +1,10 @@
-use crate::service::snapshot::types::{SnapshotError, SnapshotResult};
+﻿use crate::service::snapshot::types::{SnapshotError, SnapshotResult};
 use log::{debug, info};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
 /// Git isolation manager
-
 pub struct IsolationManager {
     bitfun_dir: PathBuf,
     workspace_dir: PathBuf,
@@ -98,13 +97,12 @@ impl IsolationManager {
     /// Verifies no Git operations are impacted.
     async fn verify_no_git_operations(&self) -> SnapshotResult<()> {
         let git_dir = self.workspace_dir.join(".git");
-        if git_dir.exists() {
-            if self.bitfun_dir.starts_with(&git_dir) {
+        if git_dir.exists()
+            && self.bitfun_dir.starts_with(&git_dir) {
                 return Err(SnapshotError::GitIsolationFailure(
                     ".bitfun directory should not be inside .git directory".to_string(),
                 ));
             }
-        }
 
         self.verify_isolation_integrity().await?;
 

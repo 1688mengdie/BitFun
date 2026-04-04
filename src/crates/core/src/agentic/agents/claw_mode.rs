@@ -6,6 +6,12 @@ pub struct ClawMode {
     default_tools: Vec<String>,
 }
 
+impl Default for ClawMode {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ClawMode {
     pub fn new() -> Self {
         Self {

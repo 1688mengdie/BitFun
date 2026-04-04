@@ -5,6 +5,12 @@ pub struct FileFinderAgent {
     default_tools: Vec<String>,
 }
 
+impl Default for FileFinderAgent {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FileFinderAgent {
     pub fn new() -> Self {
         Self {

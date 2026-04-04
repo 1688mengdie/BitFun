@@ -5,7 +5,7 @@ pub struct MessageHelper;
 
 impl MessageHelper {
     pub fn compute_keep_thinking_flags(
-        messages: &mut Vec<Message>,
+        messages: &mut [Message],
         enable_thinking: bool,
         support_preserved_thinking: bool,
     ) {
@@ -69,7 +69,7 @@ impl MessageHelper {
     }
 
     pub fn convert_messages(messages: &[Message]) -> Vec<AIMessage> {
-        messages.iter().map(|m| AIMessage::from(m)).collect()
+        messages.iter().map(AIMessage::from).collect()
     }
 
     pub fn group_messages_by_turns(mut messages: Vec<Message>) -> Vec<Vec<Message>> {
@@ -112,11 +112,9 @@ impl MessageHelper {
                 mid_idx = Some(idx);
             }
 
-            if message.role == MessageRole::Assistant {
-                if delta < min_delta0 {
-                    min_delta0 = delta;
-                    mid_assistant_msg_idx = Some(idx);
-                }
+            if message.role == MessageRole::Assistant && delta < min_delta0 {
+                min_delta0 = delta;
+                mid_assistant_msg_idx = Some(idx);
             }
 
             // Delta will only get larger going forward, so can exit early

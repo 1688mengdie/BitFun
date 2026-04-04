@@ -6,6 +6,12 @@ use tool_runtime::fs::edit_file::edit_file;
 
 pub struct FileEditTool;
 
+impl Default for FileEditTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FileEditTool {
     pub fn new() -> Self {
         Self

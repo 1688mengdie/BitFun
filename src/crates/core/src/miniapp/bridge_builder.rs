@@ -152,7 +152,7 @@ pub fn build_import_map(deps: &[EsmDep]) -> String {
         imports.insert(dep.name.clone(), serde_json::Value::String(url));
     }
     let json = serde_json::json!({ "imports": imports });
-    format!(r#"<script type="importmap">{}</script>"#, json.to_string())
+    format!(r#"<script type="importmap">{}</script>"#, json)
 }
 
 /// Build CSP meta content from permissions (net.allow → connect-src).

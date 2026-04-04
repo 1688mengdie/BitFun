@@ -543,8 +543,8 @@ impl ConfigProviderRegistry {
     }
 
     /// Gets a provider by name.
-    pub fn get_provider(&self, name: &str) -> Option<&Box<dyn ConfigProvider>> {
-        self.providers.get(name)
+    pub fn get_provider(&self, name: &str) -> Option<&dyn ConfigProvider> {
+        self.providers.get(name).map(Box::as_ref)
     }
 
     /// Returns all provider names.

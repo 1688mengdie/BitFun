@@ -299,7 +299,7 @@ impl InsightsCollector {
                     if let Some(prev) = last_assistant_time {
                         if let Ok(duration) = msg.timestamp.duration_since(prev) {
                             let secs = duration.as_secs();
-                            if secs >= 2 && secs <= ACTIVITY_GAP_THRESHOLD_SECS {
+                            if (2..=ACTIVITY_GAP_THRESHOLD_SECS).contains(&secs) {
                                 base_stats.response_times_raw.push(secs as f64);
                             }
                         }
@@ -564,11 +564,7 @@ fn smart_truncate_parts(parts: &[String], max_chars: usize, tail_reserve: usize)
     }
     tail_parts.reverse();
 
-    let omitted = if tail_start_idx > head_end_idx {
-        tail_start_idx - head_end_idx
-    } else {
-        0
-    };
+    let omitted = tail_start_idx.saturating_sub(head_end_idx);
 
     let mut result = head_parts.join("\n");
     if omitted > 0 {
@@ -633,7 +629,7 @@ fn compute_response_time_stats(raw: &[f64]) -> (f64, f64) {
 
     let mut sorted = raw.to_vec();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let median = if sorted.len() % 2 == 0 {
+    let median = if sorted.len().is_multiple_of(2) {
         let mid = sorted.len() / 2;
         (sorted[mid - 1] + sorted[mid]) / 2.0
     } else {

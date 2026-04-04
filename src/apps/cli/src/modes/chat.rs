@@ -248,6 +248,7 @@ impl ChatMode {
         Ok(exit_reason)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn handle_key_event(
         &self,
         key: KeyEvent,

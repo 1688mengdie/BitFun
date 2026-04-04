@@ -22,6 +22,7 @@ pub struct TokenUsageRecord {
 
 /// Aggregated token statistics for a model
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct ModelTokenStats {
     pub model_id: String,
     pub total_input: u64,
@@ -39,22 +40,6 @@ pub struct ModelTokenStats {
     pub last_used: Option<DateTime<Utc>>,
 }
 
-impl Default for ModelTokenStats {
-    fn default() -> Self {
-        Self {
-            model_id: String::new(),
-            total_input: 0,
-            total_output: 0,
-            total_cached: 0,
-            total_tokens: 0,
-            session_count: 0,
-            request_count: 0,
-            session_ids: HashSet::new(),
-            first_used: None,
-            last_used: None,
-        }
-    }
-}
 
 /// Token statistics for a specific session
 #[derive(Debug, Clone, Serialize, Deserialize)]

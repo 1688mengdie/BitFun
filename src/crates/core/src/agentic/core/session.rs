@@ -57,6 +57,7 @@ pub struct Session {
 
 /// Context compression state
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct CompressionState {
     /// Time of last compression
     pub last_compression_at: Option<SystemTime>,
@@ -64,14 +65,6 @@ pub struct CompressionState {
     pub compression_count: usize,
 }
 
-impl Default for CompressionState {
-    fn default() -> Self {
-        Self {
-            last_compression_at: None,
-            compression_count: 0,
-        }
-    }
-}
 
 impl CompressionState {
     pub fn increment_compression_count(&mut self) {

@@ -1,4 +1,4 @@
-/**
+﻿/*!
  * Function Agents module
  *
  * Provides various function agents for automating specific tasks

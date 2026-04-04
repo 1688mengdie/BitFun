@@ -17,6 +17,12 @@ use std::path::Path;
 /// SessionMessage tool - send a message to another session via the dialog scheduler
 pub struct SessionMessageTool;
 
+impl Default for SessionMessageTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SessionMessageTool {
     pub fn new() -> Self {
         Self

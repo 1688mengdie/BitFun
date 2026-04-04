@@ -172,16 +172,13 @@ pub struct DialogTurnData {
 /// Persisted dialog turn kind.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum DialogTurnKind {
+    #[default]
     UserDialog,
     ManualCompaction,
 }
 
-impl Default for DialogTurnKind {
-    fn default() -> Self {
-        Self::UserDialog
-    }
-}
 
 impl DialogTurnKind {
     pub fn is_model_visible(self) -> bool {
@@ -380,6 +377,7 @@ pub struct SessionTranscriptIndexEntry {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+#[derive(Default)]
 pub struct SessionTranscriptExportOptions {
     #[serde(default)]
     pub tools: bool,
@@ -391,16 +389,6 @@ pub struct SessionTranscriptExportOptions {
     pub turns: Option<Vec<String>>,
 }
 
-impl Default for SessionTranscriptExportOptions {
-    fn default() -> Self {
-        Self {
-            tools: false,
-            tool_inputs: false,
-            thinking: false,
-            turns: None,
-        }
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]

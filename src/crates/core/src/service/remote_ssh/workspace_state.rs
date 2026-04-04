@@ -338,6 +338,12 @@ pub struct RemoteWorkspaceStateManager {
     terminal_manager: Arc<RwLock<Option<RemoteTerminalManager>>>,
 }
 
+impl Default for RemoteWorkspaceStateManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RemoteWorkspaceStateManager {
     pub fn new() -> Self {
         Self {

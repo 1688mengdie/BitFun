@@ -88,6 +88,12 @@ const COMPUTER_USE_DEBUG_SUBDIR: &str = ".bitfun/computer_use_debug";
 
 pub struct ComputerUseTool;
 
+impl Default for ComputerUseTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ComputerUseTool {
     pub fn new() -> Self {
         Self

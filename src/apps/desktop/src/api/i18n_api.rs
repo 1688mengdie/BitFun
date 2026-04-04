@@ -47,7 +47,7 @@ pub async fn i18n_set_language(
     _app: tauri::AppHandle,
     request: SetLanguageRequest,
 ) -> Result<String, String> {
-    let supported = vec!["zh-CN", "en-US"];
+    let supported = ["zh-CN", "en-US"];
     if !supported.contains(&request.language.as_str()) {
         return Err(format!("Unsupported language: {}", request.language));
     }

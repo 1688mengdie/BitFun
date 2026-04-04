@@ -206,10 +206,7 @@ impl RemoteFileService {
             .unwrap_or_else(|| path.to_string());
 
         // Check if this is a directory
-        let is_dir = match self.exists(connection_id, path).await {
-            Ok(exists) => exists,
-            Err(_) => false,
-        };
+        let is_dir: bool = self.exists(connection_id, path).await.unwrap_or_default();
 
         // Check if it's a directory by trying to read it
         let is_dir = if is_dir {
@@ -300,19 +297,16 @@ impl RemoteFileService {
     /// Remove a directory and its contents recursively via SFTP
     pub async fn remove_dir_all(&self, connection_id: &str, path: &str) -> anyhow::Result<()> {
         // First, delete all contents
-        match self.read_dir(connection_id, path).await {
-            Ok(entries) => {
-                for entry in entries {
-                    let entry_path = entry.path.clone();
-                    if entry.is_dir {
-                        Box::pin(self.remove_dir_all(connection_id, &entry_path)).await?;
-                    } else {
-                        let manager = self.get_manager(connection_id).await?;
-                        manager.sftp_remove(connection_id, &entry_path).await?;
-                    }
+        if let Ok(entries) = self.read_dir(connection_id, path).await {
+            for entry in entries {
+                let entry_path = entry.path.clone();
+                if entry.is_dir {
+                    Box::pin(self.remove_dir_all(connection_id, &entry_path)).await?;
+                } else {
+                    let manager = self.get_manager(connection_id).await?;
+                    manager.sftp_remove(connection_id, &entry_path).await?;
                 }
             }
-            Err(_) => {}
         }
 
         // Then remove the directory itself
