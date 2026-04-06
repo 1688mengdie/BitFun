@@ -2290,8 +2290,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 
               {!inputState.isActive &&
                 !inputState.value.trim() &&
-                !agentCompanionEnabled &&
-                !isCollapsedProcessing && (
+                !agentCompanionEnabled && (
                 <span className="bitfun-chat-input__space-hint">
                   <Trans
                     i18nKey="input.spaceToActivate"

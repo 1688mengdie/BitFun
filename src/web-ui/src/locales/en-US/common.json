@@ -152,7 +152,8 @@
       },
       "empty": {
         "manual": "No user terminals yet",
-        "agent": "No agent terminals yet"
+        "agent": "No agent terminals yet",
+        "quickNew": "Quick new terminal"
       }
     },
     "sessions": {
