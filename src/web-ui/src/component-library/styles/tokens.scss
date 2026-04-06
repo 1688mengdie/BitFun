@@ -946,6 +946,19 @@ $badge-info-text: $color-info;
   --flowchat-font-size-3xl: var(--font-size-3xl);
   --flowchat-font-size-4xl: var(--font-size-4xl);
   --flowchat-font-size-5xl: var(--font-size-5xl);
+
+  /* Left nav: one baseline step below flow-chat scale (overwritten by FontPreferenceService). */
+  --nav-font-size-xxs: var(--font-size-xxs);
+  --nav-font-size-2xs: var(--font-size-2xs);
+  --nav-font-size-xs: var(--font-size-xs);
+  --nav-font-size-sm: var(--font-size-sm);
+  --nav-font-size-base: var(--font-size-base);
+  --nav-font-size-lg: var(--font-size-lg);
+  --nav-font-size-xl: var(--font-size-xl);
+  --nav-font-size-2xl: var(--font-size-2xl);
+  --nav-font-size-3xl: var(--font-size-3xl);
+  --nav-font-size-4xl: var(--font-size-4xl);
+  --nav-font-size-5xl: var(--font-size-5xl);
   
   --line-height-tight: #{$line-height-tight};
   --line-height-base: #{$line-height-base};

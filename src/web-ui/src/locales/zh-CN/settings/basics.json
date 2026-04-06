@@ -46,7 +46,6 @@
       }
     },
     "fontSize": {
-      "betaBadge": "Beta",
       "title": "字体大小",
       "hint": "调整界面与对话区域的字体大小（编辑器字号在编辑器设置中配置）。",
       "uiSizeLabel": "界面字体",
@@ -65,12 +64,8 @@
       "resetButton": "恢复默认",
       "previewText": "BitFun 是一个由 AI 驱动的编程环境。The quick brown fox jumps over the lazy dog.",
       "flowChatLabel": "对话区域",
-      "flowChatHint": "关闭时对话区域比界面大 1 px，并随界面档位变化。开启后在下方展开面板，从列表中选择基准字号（12–20 px）。",
+      "flowChatHint": "关闭时对话区域比界面大 1 px，并随界面档位变化。开启后在下方从列表中选择 12–20 px。",
       "flowChatCustomToggle": "自定义对话字号",
-      "flowChatBaselinePicker": "基准字号",
-      "flowChatPxOption": "{{n}} px",
-      "flowChatBaseLabel": "对话基准字号",
-      "flowChatBaselinePicker": "基准字号",
       "flowChatPxOption": "{{n}} px"
     }
   },

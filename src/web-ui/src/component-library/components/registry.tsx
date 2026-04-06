@@ -36,6 +36,7 @@ import { SkillDisplay } from '@/flow_chat/tool-cards/SkillDisplay';
 import { AskUserQuestionCard } from '@/flow_chat/tool-cards/AskUserQuestionCard';
 import { GitToolDisplay } from '@/flow_chat/tool-cards/GitToolDisplay';
 import { CreatePlanDisplay } from '@/flow_chat/tool-cards/CreatePlanDisplay';
+import { InitMiniAppDisplay } from '@/flow_chat/tool-cards/MiniAppToolDisplay';
 import type { FlowToolItem, FlowThinkingItem } from '@/flow_chat/types/flow-chat';
 import { TOOL_CARD_CONFIGS } from '@/flow_chat/tool-cards';
 import { ModelThinkingDisplay } from '@/flow_chat/tool-cards/ModelThinkingDisplay';
@@ -1974,6 +1975,55 @@ Aborting`,
                 'error'
               )}
               config={TOOL_CARD_CONFIGS['Git']}
+              sessionId="preview-session"
+            />
+          </div>
+        ),
+      },
+      {
+        id: 'init-miniapp-card',
+        name: 'InitMiniApp - 小应用创建',
+        description: '创建 Mini App 骨架后的工具卡片（InitMiniApp）',
+        category: 'flowchat-cards',
+        component: () => (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', padding: '20px' }}>
+            <h3 style={{ color: '#ffffff', marginBottom: '8px' }}>InitMiniApp - 执行中</h3>
+            <InitMiniAppDisplay
+              toolItem={createMockToolItem(
+                'InitMiniApp',
+                { name: 'Weather Dashboard', description: 'A small weather widget' },
+                undefined,
+                'running'
+              )}
+              config={TOOL_CARD_CONFIGS['InitMiniApp']}
+              sessionId="preview-session"
+            />
+
+            <h3 style={{ color: '#ffffff', marginTop: '16px', marginBottom: '8px' }}>InitMiniApp - 参数流式</h3>
+            <InitMiniAppDisplay
+              toolItem={
+                {
+                  ...createMockToolItem('InitMiniApp', {}, undefined, 'streaming'),
+                  isParamsStreaming: true,
+                  partialParams: { name: 'My Mini App' },
+                } as FlowToolItem
+              }
+              config={TOOL_CARD_CONFIGS['InitMiniApp']}
+              sessionId="preview-session"
+            />
+
+            <h3 style={{ color: '#ffffff', marginTop: '16px', marginBottom: '8px' }}>InitMiniApp - 创建成功</h3>
+            <InitMiniAppDisplay
+              toolItem={createMockToolItem(
+                'InitMiniApp',
+                { name: 'Weather Dashboard' },
+                {
+                  app_id: 'ma-preview-001',
+                  path: '.bitfun/miniapps/ma-preview-001',
+                },
+                'completed'
+              )}
+              config={TOOL_CARD_CONFIGS['InitMiniApp']}
               sessionId="preview-session"
             />
           </div>
