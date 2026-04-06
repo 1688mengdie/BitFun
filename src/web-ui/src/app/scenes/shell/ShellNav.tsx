@@ -24,6 +24,7 @@ import { useShellStore } from './shellStore';
 import { useShellEntries } from './hooks';
 import type { ShellEntry } from './hooks/shellEntryTypes';
 import { useShellNavMenuState } from './hooks/useShellNavMenuState';
+import { Button } from '@/component-library/components/Button';
 import { Tooltip } from '@/component-library/components/Tooltip';
 import ShellNavEntryItem from './components/ShellNavEntryItem';
 import ShellNavWorkspaceSwitcher from './components/ShellNavWorkspaceSwitcher';
@@ -328,7 +329,9 @@ const ShellNav: React.FC = () => {
         </button>
       </div>
 
-      <div className="bitfun-shell-nav__sections">
+      <div
+        className={`bitfun-shell-nav__sections${!hasVisibleContent ? ' bitfun-shell-nav__sections--empty' : ''}`}
+      >
         {hasVisibleContent ? (
           <div className="bitfun-shell-nav__terminal-list">
             {visibleEntries.map((entry) => (
@@ -348,7 +351,18 @@ const ShellNav: React.FC = () => {
           </div>
         ) : (
           <div className="bitfun-shell-nav__empty">
-            {navView === 'agent' ? t('nav.shell.empty.agent') : t('nav.shell.empty.manual')}
+            <p className="bitfun-shell-nav__empty-message">
+              {navView === 'agent' ? t('nav.shell.empty.agent') : t('nav.shell.empty.manual')}
+            </p>
+            <Button
+              type="button"
+              variant="secondary"
+              size="small"
+              onClick={() => { void handleCreateManualTerminal(); }}
+            >
+              <Plus size={14} aria-hidden />
+              {t('nav.shell.empty.quickNew')}
+            </Button>
           </div>
         )}
       </div>
