@@ -674,13 +674,8 @@ export class ThemeService {
       root.style.setProperty('--card-bg-subtle', 'rgba(255, 255, 255, 0.015)');
       root.style.setProperty('--card-bg-hover', 'rgba(255, 255, 255, 0.04)');
       root.style.setProperty('--card-bg-active', 'rgba(255, 255, 255, 0.05)');
-      if (theme.id === 'bitfun-slate') {
-        root.style.setProperty('--card-bg-accent', 'rgba(209, 186, 122, 0.12)');
-        root.style.setProperty('--card-bg-accent-hover', 'rgba(209, 186, 122, 0.18)');
-      } else {
-        root.style.setProperty('--card-bg-accent', 'rgba(96, 165, 250, 0.08)');
-        root.style.setProperty('--card-bg-accent-hover', 'rgba(96, 165, 250, 0.12)');
-      }
+      root.style.setProperty('--card-bg-accent', 'rgba(255, 255, 255, 0.09)');
+      root.style.setProperty('--card-bg-accent-hover', 'rgba(255, 255, 255, 0.13)');
       root.style.setProperty('--card-bg-purple', 'rgba(139, 92, 246, 0.08)');
       root.style.setProperty('--card-bg-purple-hover', 'rgba(139, 92, 246, 0.12)');
     } else {

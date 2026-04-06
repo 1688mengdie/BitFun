@@ -12,26 +12,16 @@
   cursor: pointer;
   pointer-events: none;
   
-  // Default height: ChatInput active (box ~80px + bottom gap 16px = 96px, add 49px margin for content visibility)
-  height: 145px;
+  // Default height fallback (overridden by inline style when inputHeight is measured).
+  // Active non-expanded: ~80px input + 16px gap + 6px clearance + 24px gradient = 126px.
+  height: 126px;
   
   transition: height 0.35s cubic-bezier(0.4, 0, 0.2, 1);
   
   // ========== ChatInput collapsed ==========
   &--input-collapsed {
-    // Pill height ~42px + bottom gap 16px = 58px, add 17px margin
-    height: 75px;
-  }
-  
-  // ========== ChatInput expanded ==========
-  &--input-expanded {
-    // Account for app headers and offsets
-    height: calc(100vh - 200px);
-    
-    // Keep content layer within visible area
-    .scroll-to-latest-bar__content {
-      bottom: 14px;
-    }
+    // Pill ~42px + 16px gap + 6px clearance + 24px gradient = 88px (fallback only)
+    height: 88px;
   }
   
   // ========== Gradient background layer ==========
@@ -60,10 +50,10 @@
   }
   
   // ========== Divider content layer ==========
-  // Default: sit just above ChatInput (~80px tall + 16px bottom gap + 14px clearance)
+  // bottom is driven by inline style (inputHeight + 16 + 6); CSS value is fallback only.
   &__content {
     position: absolute;
-    bottom: 110px;
+    bottom: 102px;
     left: 0;
     right: 0;
     pointer-events: auto;
@@ -73,12 +63,6 @@
     justify-content: center;
     
     transition: bottom 0.35s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.2s ease;
-  }
-  
-  // ========== Content position: input collapsed ==========
-  &--input-collapsed &__content {
-    // Pill ~42px + 16px gap + 14px clearance
-    bottom: 72px;
   }
   
   // ========== Circle arrow button ==========
