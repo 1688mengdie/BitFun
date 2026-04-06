@@ -112,6 +112,11 @@
     transform: scale(1.08);
   }
 
+  /* MermaidBlock.scss adds a heavy hover shadow; keep chat diagrams flat. */
+  .markdown-renderer .mermaid-block:hover {
+    box-shadow: none;
+  }
+
   .text-content {
     color: var(--color-text-primary);
     line-height: 1.6;
