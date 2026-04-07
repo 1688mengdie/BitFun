@@ -727,6 +727,12 @@ export class ThemeService {
     
     root.setAttribute('data-theme', theme.id);
     root.setAttribute('data-theme-type', theme.type);
+
+    const bgPrimary = colors.background.primary;
+    root.style.backgroundColor = bgPrimary;
+    if (document.body) {
+      document.body.style.backgroundColor = bgPrimary;
+    }
   }
   
    

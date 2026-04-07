@@ -213,105 +213,94 @@ const DEFAULT_WORKER = 'base/worker/workerMain.js';
   }
 };
 
-// Initialize app.
-async function initializeApp() {
+/** Logger, theme, and minimal deps — must finish before first React paint (F5 / webview reload does not re-run Tauri init script). */
+async function initializeBeforeRender(): Promise<void> {
+  await initLogger();
+
+  const { initializeFrontendLogLevelSync } = await import('./infrastructure/config/services/FrontendLogLevelSync');
+  await initializeFrontendLogLevelSync();
+
+  log.debug('Monaco loader configured', { vs: monacoPath, isDev });
+  log.info('Initializing BitFun');
+
+  const { registerDefaultContextTypes } = await import('./shared/context-system/core/registerDefaultTypes');
+  registerDefaultContextTypes();
+
+  const { initRecommendationProviders } = await import('./flow_chat/components/smart-recommendations');
+  initRecommendationProviders();
+
+  const { themeService } = await import('./infrastructure/theme');
+  await themeService.initialize();
+  log.info('Theme system initialized');
+}
+
+/** Rest of startup runs after the shell is visible so refresh latency stays reasonable. */
+async function initializeAfterRender(): Promise<void> {
+  const { fontPreferenceService } = await import('./infrastructure/font-preference');
+  await fontPreferenceService.initialize();
+  log.info('Font preference initialized at startup');
+
+  const { configManager } = await import('./infrastructure/config');
+  await configManager.getConfig('editor');
+  log.info('Editor configuration preloaded');
+
+  const initResults = await Promise.allSettled([
+    initializeAllTools(),
+    (async () => {
+      initContextMenuSystem({
+        registerBuiltinCommands: true,
+        registerBuiltinProviders: true,
+        debug: false,
+      });
+
+      const { registerNotificationContextMenu } = await import('./shared/notification-system');
+      registerNotificationContextMenu();
+    })(),
+    (async () => {
+      const { MonacoManager } = await import('./tools/editor');
+      await MonacoManager.initialize();
+
+      const { monacoThemeSync } = await import('./infrastructure/theme/integrations/MonacoThemeSync');
+      await monacoThemeSync.initialize();
+      log.info('Monaco theme sync initialized');
+    })(),
+  ]);
+
+  initResults.forEach((result, index) => {
+    const names = ['Tools', 'ContextMenu', 'Editors'];
+    if (result.status === 'rejected') {
+      log.warn('Initialization failed', { module: names[index], error: result.reason });
+    }
+  });
+
+  log.info('BitFun core systems initialized successfully');
+}
+
+async function startApplication(): Promise<void> {
   try {
-    // Initialize logger state before startup logs.
-    await initLogger();
-
-    // Sync frontend logger with app.logging.level before startup logs.
-    const { initializeFrontendLogLevelSync } = await import('./infrastructure/config/services/FrontendLogLevelSync');
-    await initializeFrontendLogLevelSync();
-
-    log.debug('Monaco loader configured', { vs: monacoPath, isDev });
-    log.info('Initializing BitFun');
-
-    // Synchronous initialization: core systems that must run first.
-    const { registerDefaultContextTypes } = await import('./shared/context-system/core/registerDefaultTypes');
-    registerDefaultContextTypes();
-    
-    // Initialize smart recommendation system.
-    const { initRecommendationProviders } = await import('./flow_chat/components/smart-recommendations');
-    initRecommendationProviders();
-    
-    // Initialize theme system.
-    const { themeService } = await import('./infrastructure/theme');
-    await themeService.initialize();
-    log.info('Theme system initialized');
-
-    // Apply saved UI / flow-chat font tokens (theme sets typography first; this overrides).
-    const { fontPreferenceService } = await import('./infrastructure/font-preference');
-    await fontPreferenceService.initialize();
-    log.info('Font preference initialized at startup');
-
-    // Preload editor configuration.
-    const { configManager } = await import('./infrastructure/config');
-    await configManager.getConfig('editor');
-    log.info('Editor configuration preloaded');
-    
-    // Note: i18n is initialized by I18nProvider, not here.
-    // This avoids blocking startup and ensures i18n is ready during React render.
-    
-    // Parallel initialization: independent systems.
-    const initResults = await Promise.allSettled([
-      // Snapshot system - lazy load: initialize on first use.
-      // SandboxInitializer.initialize(),
-      
-      // Feature module initialization.
-      initializeAllTools(),
-      
-      // Context menu system initialization.
-      (async () => {
-        initContextMenuSystem({
-          registerBuiltinCommands: true,
-          registerBuiltinProviders: true,
-          debug: false  // Disable debug mode to reduce log output.
-        });
-        
-        // Register notification context menu.
-        const { registerNotificationContextMenu } = await import('./shared/notification-system');
-        registerNotificationContextMenu();
-      })(),
-      
-      // Editor preload (Monaco).
-      (async () => {
-        const { MonacoManager } = await import('./tools/editor');
-        await MonacoManager.initialize();  // Preload Monaco Editor.
-        
-        // Initialize Monaco theme sync.
-        const { monacoThemeSync } = await import('./infrastructure/theme/integrations/MonacoThemeSync');
-        await monacoThemeSync.initialize();
-        log.info('Monaco theme sync initialized');
-      })()
-    ]);
-    
-    // Check initialization results.
-    initResults.forEach((result, index) => {
-      const names = ['Tools', 'ContextMenu', 'Editors'];
-      if (result.status === 'rejected') {
-        log.warn('Initialization failed', { module: names[index], error: result.reason });
-      }
-    });
-    
-    log.info('BitFun core systems initialized successfully');
+    await initializeBeforeRender();
   } catch (error) {
-    log.error('Failed to initialize BitFun', error);
+    log.error('Failed to initialize BitFun (pre-render)', error);
+  }
+
+  // I18n Provider.
+  const { I18nProvider } = await import('./infrastructure/i18n');
+
+  ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
+    <AppErrorBoundary>
+      <I18nProvider>
+        <WorkspaceProvider>
+          <App />
+        </WorkspaceProvider>
+      </I18nProvider>
+    </AppErrorBoundary>
+  );
+
+  try {
+    await initializeAfterRender();
+  } catch (error) {
+    log.error('Failed to complete post-render initialization', error);
   }
 }
 
-// Start initialization.
-initializeApp();
-
-// I18n Provider.
-import { I18nProvider } from './infrastructure/i18n';
-
-// Render app (single-window mode; toolbar via window transform).
-ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
-  <AppErrorBoundary>
-    <I18nProvider>
-      <WorkspaceProvider>
-        <App />
-      </WorkspaceProvider>
-    </I18nProvider>
-  </AppErrorBoundary>
-);
+void startApplication();

@@ -22,13 +22,13 @@ impl Default for ThemeConfig {
     fn default() -> Self {
         Self::get_builtin_theme("bitfun-light").unwrap_or_else(|| Self {
             id: "bitfun-light".to_string(),
-            bg_primary: "#f4f4f4".to_string(),
+            bg_primary: "#f3f3f5".to_string(),
             bg_secondary: "#ffffff".to_string(),
             bg_scene: "#ffffff".to_string(),
             is_light: true,
-            text_primary: "#111827".to_string(),
-            text_muted: "rgba(0, 0, 0, 0.5)".to_string(),
-            accent_color: "#3b82f6".to_string(),
+            text_primary: "#1e293b".to_string(),
+            text_muted: "#64748b".to_string(),
+            accent_color: "#64748b".to_string(),
         })
     }
 }
@@ -88,13 +88,13 @@ impl ThemeConfig {
             }),
             "bitfun-light" => Some(Self {
                 id: theme_id.to_string(),
-                bg_primary: "#f4f4f4".to_string(),
+                bg_primary: "#f3f3f5".to_string(),
                 bg_secondary: "#ffffff".to_string(),
                 bg_scene: "#ffffff".to_string(),
                 is_light: true,
-                text_primary: "#111827".to_string(),
-                text_muted: "rgba(0, 0, 0, 0.5)".to_string(),
-                accent_color: "#3b82f6".to_string(),
+                text_primary: "#1e293b".to_string(),
+                text_muted: "#64748b".to_string(),
+                accent_color: "#64748b".to_string(),
             }),
             "bitfun-china-style" => Some(Self {
                 id: theme_id.to_string(),
