@@ -22,9 +22,9 @@ import { useFlowChatFollowOutput } from './useFlowChatFollowOutput';
 import type { FlowChatPinTurnToTopMode } from '../../events/flowchatNavigation';
 import { useVirtualItems, useActiveSession, useModernFlowChatStore, type VisibleTurnInfo } from '../../store/modernFlowChatStore';
 import { useChatInputState } from '../../store/chatInputStateStore';
+import { computeFlowChatInputStackFooterPx } from '../../utils/flowChatScrollLayout';
 import './VirtualMessageList.scss';
 
-const MESSAGE_LIST_FOOTER_HEIGHT = 140;
 const COMPENSATION_EPSILON_PX = 0.5;
 const ANCHOR_LOCK_MIN_DEVIATION_PX = 0.5;
 const ANCHOR_LOCK_DURATION_MS = 450;
@@ -266,17 +266,29 @@ export const VirtualMessageList = forwardRef<VirtualMessageListRef>((_, ref) => 
   const isInputExpanded = useChatInputState(state => state.isExpanded);
   const inputHeight = useChatInputState(state => state.inputHeight);
 
+  const inputStackFooterPxRef = useRef(0);
+  const inputStackFooterPx = computeFlowChatInputStackFooterPx(inputHeight, isInputActive);
+  inputStackFooterPxRef.current = inputStackFooterPx;
+
   const activeSessionState = useActiveSessionState();
   const isProcessing = activeSessionState.isProcessing;
   const processingPhase = activeSessionState.processingPhase;
 
   const getFooterHeightPx = useCallback((compensationPx: number) => {
-    return MESSAGE_LIST_FOOTER_HEIGHT + compensationPx;
+    return inputStackFooterPxRef.current + compensationPx;
   }, []);
 
   const getTotalBottomCompensationPx = useCallback((state: BottomReservationState = bottomReservationStateRef.current) => {
     return getReservationTotalPx(state.collapse) + getReservationTotalPx(state.pin);
   }, []);
+
+  const snapshotMeasuredContentHeight = useCallback((
+    scroller: HTMLElement,
+    reservationState: BottomReservationState = bottomReservationStateRef.current,
+  ) => {
+    const compensationPx = getTotalBottomCompensationPx(reservationState);
+    return Math.max(0, scroller.scrollHeight - compensationPx - inputStackFooterPxRef.current);
+  }, [getTotalBottomCompensationPx]);
 
   const updateBottomReservationState = useCallback((
     updater: BottomReservationState | ((prev: BottomReservationState) => BottomReservationState),
@@ -392,7 +404,10 @@ export const VirtualMessageList = forwardRef<VirtualMessageListRef>((_, ref) => 
     const currentScrollTop = scroller.scrollTop;
     const previousScrollTop = previousScrollTopRef.current;
     const currentTotalCompensation = getTotalBottomCompensationPx();
-    const effectiveScrollHeight = Math.max(0, scroller.scrollHeight - currentTotalCompensation);
+    const effectiveScrollHeight = Math.max(
+      0,
+      scroller.scrollHeight - currentTotalCompensation - inputStackFooterPxRef.current,
+    );
     const previousMeasuredHeight = previousMeasuredHeightRef.current;
     previousMeasuredHeightRef.current = effectiveScrollHeight;
 
@@ -773,15 +788,12 @@ export const VirtualMessageList = forwardRef<VirtualMessageListRef>((_, ref) => 
     };
     updateBottomReservationState(nextState);
     applyFooterCompensationNow(nextState);
-    previousMeasuredHeightRef.current = Math.max(
-      0,
-      scroller.scrollHeight - getTotalBottomCompensationPx(nextState),
-    );
+    previousMeasuredHeightRef.current = snapshotMeasuredContentHeight(scroller, nextState);
     return true;
   }, [
     applyFooterCompensationNow,
-    getTotalBottomCompensationPx,
     resolveTurnPinMetrics,
+    snapshotMeasuredContentHeight,
     updateBottomReservationState,
   ]);
 
@@ -852,10 +864,7 @@ export const VirtualMessageList = forwardRef<VirtualMessageListRef>((_, ref) => 
         };
         updateBottomReservationState(nextReservationState);
         applyFooterCompensationNow(nextReservationState);
-        previousMeasuredHeightRef.current = Math.max(
-          0,
-          scroller.scrollHeight - getTotalBottomCompensationPx(nextReservationState),
-        );
+        previousMeasuredHeightRef.current = snapshotMeasuredContentHeight(scroller, nextReservationState);
       }
 
       virtuoso.scrollToIndex({
@@ -928,9 +937,9 @@ export const VirtualMessageList = forwardRef<VirtualMessageListRef>((_, ref) => 
 
       scroller.scrollTop = correctedScrollTop;
       previousScrollTopRef.current = correctedScrollTop;
-      previousMeasuredHeightRef.current = Math.max(
-        0,
-        scroller.scrollHeight - getTotalBottomCompensationPx(bottomReservationStateRef.current),
+      previousMeasuredHeightRef.current = snapshotMeasuredContentHeight(
+        scroller,
+        bottomReservationStateRef.current,
       );
       scheduleVisibleTurnMeasure(2);
       schedulePinReservationReconcile(2);
@@ -946,10 +955,7 @@ export const VirtualMessageList = forwardRef<VirtualMessageListRef>((_, ref) => 
     });
 
     previousScrollTopRef.current = targetScrollTop;
-    previousMeasuredHeightRef.current = Math.max(
-      0,
-      scroller.scrollHeight - getTotalBottomCompensationPx(nextReservationState),
-    );
+    previousMeasuredHeightRef.current = snapshotMeasuredContentHeight(scroller, nextReservationState);
 
     const alignedRect = resolvedMetrics.targetElement.getBoundingClientRect();
     const alignedWithinTolerance = Math.abs(alignedRect.top - resolvedMetrics.viewportTop) <= 1.5;
@@ -959,10 +965,10 @@ export const VirtualMessageList = forwardRef<VirtualMessageListRef>((_, ref) => 
     buildPinReservation,
     applyFooterCompensationNow,
     getRenderedUserMessageElement,
-    getTotalBottomCompensationPx,
     resolveTurnPinMetrics,
     schedulePinReservationReconcile,
     scheduleVisibleTurnMeasure,
+    snapshotMeasuredContentHeight,
     updateBottomReservationState,
     userMessageItems,
   ]);
@@ -1038,10 +1044,7 @@ export const VirtualMessageList = forwardRef<VirtualMessageListRef>((_, ref) => 
         ? scrollerElement.firstElementChild
         : scrollerElement;
 
-    previousMeasuredHeightRef.current = Math.max(
-      0,
-      scrollerElement.scrollHeight - getTotalBottomCompensationPx()
-    );
+    previousMeasuredHeightRef.current = snapshotMeasuredContentHeight(scrollerElement);
     previousScrollTopRef.current = scrollerElement.scrollTop;
 
     resizeObserverRef.current?.disconnect();
@@ -1140,9 +1143,9 @@ export const VirtualMessageList = forwardRef<VirtualMessageListRef>((_, ref) => 
         if (scrollDelta > COMPENSATION_EPSILON_PX) {
           const nextCompensationState = consumeBottomCompensation(scrollDelta);
           applyFooterCompensationNow(nextCompensationState);
-          previousMeasuredHeightRef.current = Math.max(
-            0,
-            scrollerElement.scrollHeight - getTotalBottomCompensationPx(nextCompensationState),
+          previousMeasuredHeightRef.current = snapshotMeasuredContentHeight(
+            scrollerElement,
+            nextCompensationState,
           );
         }
       }
@@ -1357,6 +1360,7 @@ export const VirtualMessageList = forwardRef<VirtualMessageListRef>((_, ref) => 
     scheduleVisibleTurnMeasure,
     scrollerElement,
     shouldSuspendAutoFollow,
+    snapshotMeasuredContentHeight,
     isProcessing,
     updateBottomReservationState,
   ]);
@@ -1447,15 +1451,12 @@ export const VirtualMessageList = forwardRef<VirtualMessageListRef>((_, ref) => 
 
     if (scroller) {
       previousScrollTopRef.current = scroller.scrollTop;
-      previousMeasuredHeightRef.current = Math.max(
-        0,
-        scroller.scrollHeight - getTotalBottomCompensationPx(nextReservationState),
-      );
+      previousMeasuredHeightRef.current = snapshotMeasuredContentHeight(scroller, nextReservationState);
     }
   }, [
     applyFooterCompensationNow,
-    getTotalBottomCompensationPx,
     releaseAnchorLock,
+    snapshotMeasuredContentHeight,
     updateBottomReservationState,
   ]);
 

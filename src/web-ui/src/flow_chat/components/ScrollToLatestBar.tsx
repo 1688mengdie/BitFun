@@ -5,6 +5,10 @@
 
 import React from 'react';
 import { useTranslation } from 'react-i18next';
+import {
+  CHAT_INPUT_DROP_ZONE_BOTTOM_PX,
+  SCROLL_TO_LATEST_INPUT_CLEARANCE_PX,
+} from '../utils/flowChatScrollLayout';
 import './ScrollToLatestBar.scss';
 
 interface ScrollToLatestBarProps {
@@ -45,19 +49,14 @@ export const ScrollToLatestBar: React.FC<ScrollToLatestBarProps> = ({
   // overflows the bar and is clipped by virtual-message-list's overflow:hidden.
   // Therefore we always set barHeight >= contentBottom + button clearance together.
   //
-  // Layout constants:
-  //   - drop-zone bottom offset from viewport: 16px
-  //   - clearance between input top and button: 6px (tight but visible)
-  //   - extra space above button for gradient: 24px
+  // Layout constants: shared with VirtualMessageList footer (flowChatScrollLayout).
+  const ABOVE_BTN = 24; // gradient fade above the control
   let dynamicStyle: React.CSSProperties = {};
   let contentStyle: React.CSSProperties | undefined;
 
-  if (isInputActive && inputHeight > 0) {
-    const BOTTOM_GAP = 16;   // .bitfun-chat-input-drop-zone bottom offset
-    const CLEARANCE = 6;     // space between top of input and button
-    const ABOVE_BTN = 24;    // extra gradient space above button
-
-    const contentBottom = inputHeight + BOTTOM_GAP + CLEARANCE;
+  if (inputHeight > 0) {
+    const contentBottom =
+      inputHeight + CHAT_INPUT_DROP_ZONE_BOTTOM_PX + SCROLL_TO_LATEST_INPUT_CLEARANCE_PX;
     const barHeight = contentBottom + ABOVE_BTN;
 
     dynamicStyle = { height: `${barHeight}px` };
