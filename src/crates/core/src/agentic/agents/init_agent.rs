@@ -5,6 +5,12 @@ pub struct InitAgent {
     default_tools: Vec<String>,
 }
 
+impl Default for InitAgent {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl InitAgent {
     pub fn new() -> Self {
         Self {

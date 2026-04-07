@@ -249,7 +249,7 @@ pub async fn get_mode_configs(_state: State<'_, AppState>) -> Result<Value, Stri
             .await
             .map_err(|e| format!("Failed to get mode configs: {}", e))?;
 
-    Ok(to_json_value(mode_configs, "mode configs")?)
+    to_json_value(mode_configs, "mode configs")
 }
 
 #[tauri::command]
@@ -262,7 +262,7 @@ pub async fn get_mode_config(
             .await
             .map_err(|e| format!("Failed to get mode config: {}", e))?;
 
-    Ok(to_json_value(config, "mode config")?)
+    to_json_value(config, "mode config")
 }
 
 #[tauri::command]
@@ -361,8 +361,8 @@ pub async fn get_subagent_configs(state: State<'_, AppState>) -> Result<Value, S
 
     for subagent in all_subagents {
         let subagent_id = subagent.id;
-        if !subagent_configs.contains_key(&subagent_id) {
-            subagent_configs.insert(subagent_id, SubAgentConfig { enabled: true });
+        if let std::collections::hash_map::Entry::Vacant(e) = subagent_configs.entry(subagent_id) {
+            e.insert(SubAgentConfig { enabled: true });
             needs_save = true;
         }
     }
@@ -383,7 +383,7 @@ pub async fn get_subagent_configs(state: State<'_, AppState>) -> Result<Value, S
         }
     }
 
-    Ok(to_json_value(subagent_configs, "subagent configs")?)
+    to_json_value(subagent_configs, "subagent configs")
 }
 
 #[tauri::command]

@@ -1085,11 +1085,10 @@ fn find_closing_double_star(chars: &[char], start: usize) -> Option<usize> {
     let len = chars.len();
     let mut i = start;
     while i + 1 < len {
-        if chars[i] == '*' && chars[i + 1] == '*' {
-            if i > start {
+        if chars[i] == '*' && chars[i + 1] == '*'
+            && i > start {
                 return Some(i);
             }
-        }
         i += 1;
     }
     None
@@ -1099,13 +1098,11 @@ fn find_closing_single_star(chars: &[char], start: usize) -> Option<usize> {
     let len = chars.len();
     let mut i = start;
     while i < len {
-        if chars[i] == '*' {
-            if i + 1 >= len || chars[i + 1] != '*' {
-                if i > start {
+        if chars[i] == '*'
+            && (i + 1 >= len || chars[i + 1] != '*')
+                && i > start {
                     return Some(i);
                 }
-            }
-        }
         i += 1;
     }
     None

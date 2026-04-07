@@ -197,6 +197,6 @@ impl CustomSubagent {
         }
         let metadata = Value::Mapping(metadata);
         FrontMatterMarkdown::save(&self.path, &metadata, &self.prompt)
-            .map_err(|e| BitFunError::Agent(e))
+            .map_err(BitFunError::Agent)
     }
 }

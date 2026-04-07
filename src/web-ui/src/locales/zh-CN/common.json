@@ -152,7 +152,8 @@
       },
       "empty": {
         "manual": "还没有用户终端",
-        "agent": "还没有 Agent 终端"
+        "agent": "还没有 Agent 终端",
+        "quickNew": "快速新建"
       }
     },
     "sessions": {

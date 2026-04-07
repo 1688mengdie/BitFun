@@ -9,7 +9,7 @@ export const bitfunDarkTheme: ThemeConfig = {
   type: 'dark',
   description: 'Default dark theme',
   author: 'BitFun Team',
-  version: '2.0.0',
+  version: '2.1.0',
   
   
   colors: {
@@ -68,13 +68,13 @@ export const bitfunDarkTheme: ThemeConfig = {
       errorBg: 'rgba(239, 68, 68, 0.1)',
       errorBorder: 'rgba(239, 68, 68, 0.3)',
       
-      info: '#E1AB80',
-      infoBg: 'rgba(225, 171, 128, 0.1)',
-      infoBorder: 'rgba(225, 171, 128, 0.3)',
+      info: '#a1a1aa',
+      infoBg: 'rgba(255, 255, 255, 0.08)',
+      infoBorder: 'rgba(255, 255, 255, 0.22)',
       
       
-      highlight: '#d4a574',
-      highlightBg: 'rgba(212, 165, 116, 0.15)',
+      highlight: '#a8a8a8',
+      highlightBg: 'rgba(255, 255, 255, 0.1)',
     },
     
     border: {
@@ -82,7 +82,7 @@ export const bitfunDarkTheme: ThemeConfig = {
       base: 'rgba(255, 255, 255, 0.18)',
       medium: 'rgba(255, 255, 255, 0.24)',
       strong: 'rgba(255, 255, 255, 0.32)',
-      prominent: 'rgba(225, 171, 128, 0.50)',
+      prominent: 'rgba(255, 255, 255, 0.4)',
     },
     
     element: {
@@ -95,8 +95,8 @@ export const bitfunDarkTheme: ThemeConfig = {
     },
     
     git: {
-      branch: '#E1AB80',
-      branchBg: 'rgba(225, 171, 128, 0.08)',
+      branch: '#a1a1aa',
+      branchBg: 'rgba(255, 255, 255, 0.06)',
       changes: 'rgb(245, 158, 11)',
       changesBg: 'rgba(245, 158, 11, 0.1)',
       added: 'rgb(34, 197, 94)',
@@ -125,9 +125,9 @@ export const bitfunDarkTheme: ThemeConfig = {
     },
     
     glow: {
-      blue: '0 12px 32px rgba(225, 171, 128, 0.25), 0 6px 16px rgba(225, 171, 128, 0.18), 0 3px 8px rgba(0, 0, 0, 0.1)',
-      purple: '0 12px 32px rgba(139, 92, 246, 0.25), 0 6px 16px rgba(124, 58, 237, 0.18), 0 3px 8px rgba(0, 0, 0, 0.1)',
-      mixed: '0 12px 32px rgba(225, 171, 128, 0.2), 0 6px 16px rgba(139, 92, 246, 0.15), 0 3px 8px rgba(0, 0, 0, 0.1)',
+      blue: '0 12px 32px rgba(96, 165, 250, 0.2), 0 6px 16px rgba(96, 165, 250, 0.12), 0 3px 8px rgba(0, 0, 0, 0.12)',
+      purple: '0 12px 32px rgba(139, 92, 246, 0.22), 0 6px 16px rgba(124, 58, 237, 0.14), 0 3px 8px rgba(0, 0, 0, 0.12)',
+      mixed: '0 12px 32px rgba(255, 255, 255, 0.06), 0 6px 16px rgba(139, 92, 246, 0.12), 0 3px 8px rgba(0, 0, 0, 0.12)',
     },
     
     blur: {
@@ -225,20 +225,20 @@ export const bitfunDarkTheme: ThemeConfig = {
     
     windowControls: {
       minimize: {
-        dot: 'rgba(225, 171, 128, 0.45)',
-        dotShadow: '0 0 4px rgba(225, 171, 128, 0.2)',
-        hoverBg: 'rgba(225, 171, 128, 0.12)',
-        hoverColor: '#E1AB80',
-        hoverBorder: 'rgba(225, 171, 128, 0.2)',
-        hoverShadow: '0 2px 8px rgba(225, 171, 128, 0.15), inset 0 1px 0 rgba(255, 255, 255, 0.1)',
+        dot: 'rgba(255, 255, 255, 0.38)',
+        dotShadow: '0 0 4px rgba(0, 0, 0, 0.35)',
+        hoverBg: 'rgba(255, 255, 255, 0.1)',
+        hoverColor: '#e4e4e4',
+        hoverBorder: 'rgba(255, 255, 255, 0.16)',
+        hoverShadow: '0 2px 8px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.08)',
       },
       maximize: {
-        dot: 'rgba(225, 171, 128, 0.45)',
-        dotShadow: '0 0 4px rgba(225, 171, 128, 0.2)',
-        hoverBg: 'rgba(225, 171, 128, 0.12)',
-        hoverColor: '#E1AB80',
-        hoverBorder: 'rgba(225, 171, 128, 0.2)',
-        hoverShadow: '0 2px 8px rgba(225, 171, 128, 0.15), inset 0 1px 0 rgba(255, 255, 255, 0.1)',
+        dot: 'rgba(255, 255, 255, 0.38)',
+        dotShadow: '0 0 4px rgba(0, 0, 0, 0.35)',
+        hoverBg: 'rgba(255, 255, 255, 0.1)',
+        hoverColor: '#e4e4e4',
+        hoverBorder: 'rgba(255, 255, 255, 0.16)',
+        hoverShadow: '0 2px 8px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.08)',
       },
       close: {
         dot: 'rgba(239, 68, 68, 0.45)',
@@ -282,21 +282,21 @@ export const bitfunDarkTheme: ThemeConfig = {
       
       primary: {
         default: {
-          background: '#E1AB80',
-          color: '#000000',
+          background: 'rgba(255, 255, 255, 0.16)',
+          color: '#f4f4f5',
           border: 'transparent',
           shadow: 'none',
         },
         hover: {
-          background: '#F6D0A3',
-          color: '#000000',
+          background: 'rgba(255, 255, 255, 0.24)',
+          color: '#fafafa',
           border: 'transparent',
           shadow: 'none',
           transform: 'none',
         },
         active: {
-          background: '#F6D0A3',
-          color: '#000000',
+          background: 'rgba(255, 255, 255, 0.2)',
+          color: '#fafafa',
           border: 'transparent',
           shadow: 'none',
           transform: 'none',
@@ -340,8 +340,8 @@ export const bitfunDarkTheme: ThemeConfig = {
       background: '#121214',
       foreground: '#e8e8e8',
       lineHighlight: '#18181a',
-      selection: 'rgba(225, 171, 128, 0.25)',
-      cursor: '#E1AB80',
+      selection: 'rgba(255, 255, 255, 0.12)',
+      cursor: '#c4c4c4',
     },
   },
 };

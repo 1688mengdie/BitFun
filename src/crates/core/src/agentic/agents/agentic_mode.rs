@@ -6,6 +6,12 @@ pub struct AgenticMode {
     default_tools: Vec<String>,
 }
 
+impl Default for AgenticMode {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AgenticMode {
     pub fn new() -> Self {
         Self {

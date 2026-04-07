@@ -1,6 +1,6 @@
-import React, { useId, useState, useCallback, useEffect } from 'react';
+import React, { useMemo, useState, useCallback, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Badge, Switch } from '@/component-library';
+import { Select, type SelectOption, Switch } from '@/component-library';
 import { ConfigPageRow, ConfigPageSection } from '@/infrastructure/config/components/common';
 import { useFontPreference } from '../hooks/useFontPreference';
 import { FontSizeLevel, PRESET_UI_BASE_PX, UI_FONT_SIZE_PRESETS } from '../types';
@@ -11,7 +11,6 @@ const FLOW_CHAT_PX_OPTIONS = [12, 13, 14, 15, 16, 17, 18, 19, 20];
 
 export function FontPreferencePanel() {
   const { t } = useTranslation('settings/basics');
-  const flowChatBaselineLabelId = useId();
   const { preference, setUiSize, setFlowChatFont, reset } = useFontPreference();
 
   const { level, customPx } = preference.uiSize;
@@ -91,10 +90,19 @@ export function FontPreferencePanel() {
   })();
 
   const fcIndependent = preference.flowChat.mode === 'independent';
-  const flowChatSelectValue = (() => {
+  const flowChatPxValue = (() => {
     const n = parseInt(fcBaseInput, 10);
-    return n >= 12 && n <= 20 ? String(n) : '14';
+    return n >= 12 && n <= 20 ? n : 14;
   })();
+
+  const flowChatPxOptions = useMemo<SelectOption[]>(
+    () =>
+      FLOW_CHAT_PX_OPTIONS.map((n) => ({
+        value: n,
+        label: t('appearance.fontSize.flowChatPxOption', { n }),
+      })),
+    [t]
+  );
 
   const handleFlowChatCustomToggle = (enabled: boolean) => {
     if (enabled) {
@@ -107,16 +115,20 @@ export function FontPreferencePanel() {
     }
   };
 
-  const handleFlowChatPxSelect = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const v = parseInt(e.target.value, 10);
-    setFcBaseInput(String(v));
-    void setFlowChatFont('independent', v);
-  };
+  const handleFlowChatPxChange = useCallback(
+    (v: string | number | (string | number)[]) => {
+      if (Array.isArray(v)) return;
+      const n = typeof v === 'number' ? v : parseInt(String(v), 10);
+      if (Number.isNaN(n)) return;
+      setFcBaseInput(String(n));
+      void setFlowChatFont('independent', n);
+    },
+    [setFlowChatFont]
+  );
 
   return (
     <ConfigPageSection
       title={t('appearance.fontSize.title')}
-      titleSuffix={<Badge variant="info">{t('appearance.fontSize.betaBadge')}</Badge>}
       description={t('appearance.fontSize.hint')}
     >
       {/* UI Font Size */}
@@ -239,24 +251,14 @@ export function FontPreferencePanel() {
             />
           </div>
           {fcIndependent && (
-            <div className="font-pref-panel__flow-chat-panel">
-              <span className="font-pref-panel__flow-chat-panel-label" id={flowChatBaselineLabelId}>
-                {t('appearance.fontSize.flowChatBaselinePicker')}
-              </span>
-              <div className="font-pref-panel__flow-chat-picker">
-                <select
-                  className="font-pref-panel__flow-select"
-                  value={flowChatSelectValue}
-                  onChange={handleFlowChatPxSelect}
-                  aria-labelledby={flowChatBaselineLabelId}
-                >
-                  {FLOW_CHAT_PX_OPTIONS.map((n) => (
-                    <option key={n} value={n}>
-                      {t('appearance.fontSize.flowChatPxOption', { n })}
-                    </option>
-                  ))}
-                </select>
-              </div>
+            <div className="font-pref-panel__flow-chat-controls">
+              <Select
+                size="small"
+                value={flowChatPxValue}
+                options={flowChatPxOptions}
+                onChange={handleFlowChatPxChange}
+                placement="bottom"
+              />
             </div>
           )}
         </div>

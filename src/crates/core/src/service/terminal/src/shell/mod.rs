@@ -135,7 +135,6 @@ impl Default for ShellType {
     fn default() -> Self {
         #[cfg(windows)]
         {
-            // Prefer PowerShell Core over Windows PowerShell
             ShellType::PowerShellCore
         }
         #[cfg(not(windows))]
@@ -144,6 +143,7 @@ impl Default for ShellType {
         }
     }
 }
+
 
 impl std::fmt::Display for ShellType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

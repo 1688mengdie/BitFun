@@ -90,7 +90,7 @@ pub fn create_command<S: AsRef<std::ffi::OsStr>>(program: S) -> Command {
     {
         let mut cmd = cmd;
         cmd.creation_flags(CREATE_NO_WINDOW);
-        return cmd;
+        cmd
     }
 
     #[cfg(not(windows))]
@@ -105,7 +105,7 @@ pub fn create_tokio_command<S: AsRef<std::ffi::OsStr>>(program: S) -> TokioComma
     {
         let mut cmd = cmd;
         cmd.creation_flags(CREATE_NO_WINDOW);
-        return cmd;
+        cmd
     }
 
     #[cfg(not(windows))]

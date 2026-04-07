@@ -366,7 +366,7 @@ impl Tool for WrappedTool {
     }
 
     fn user_facing_name(&self) -> String {
-        format!("{}", self.original_tool.user_facing_name())
+        self.original_tool.user_facing_name().to_string()
     }
 
     async fn is_enabled(&self) -> bool {
@@ -413,11 +413,11 @@ impl Tool for WrappedTool {
         options: &crate::agentic::tools::framework::ToolRenderOptions,
     ) -> String {
         let original_message = self.original_tool.render_tool_use_message(input, options);
-        format!("{}", original_message)
+        original_message.to_string()
     }
 
     fn render_tool_use_rejected_message(&self) -> String {
-        format!("{}", self.original_tool.render_tool_use_rejected_message())
+        self.original_tool.render_tool_use_rejected_message().to_string()
     }
 
     fn render_tool_result_message(&self, output: &Value) -> String {

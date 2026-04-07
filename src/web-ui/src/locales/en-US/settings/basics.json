@@ -46,7 +46,6 @@
       }
     },
     "fontSize": {
-      "betaBadge": "Beta",
       "title": "Font Size",
       "hint": "Adjust font size for the UI and chat area (editor font is configured in the editor settings).",
       "uiSizeLabel": "UI Font",
@@ -65,12 +64,8 @@
       "resetButton": "Reset to Default",
       "previewText": "BitFun is an AI-driven programming environment. The quick brown fox jumps over the lazy dog.",
       "flowChatLabel": "Chat area",
-      "flowChatHint": "When off, chat uses UI +1 px and tracks UI presets. Turn on to open a panel and pick a baseline size (12–20 px) from the list.",
+      "flowChatHint": "When off, chat uses UI +1 px and tracks UI presets. When on, pick a size (12–20 px) from the list below.",
       "flowChatCustomToggle": "Custom chat font size",
-      "flowChatBaselinePicker": "Baseline size",
-      "flowChatPxOption": "{{n}} px",
-      "flowChatBaseLabel": "Chat baseline size",
-      "flowChatBaselinePicker": "Baseline size",
       "flowChatPxOption": "{{n}} px"
     }
   },

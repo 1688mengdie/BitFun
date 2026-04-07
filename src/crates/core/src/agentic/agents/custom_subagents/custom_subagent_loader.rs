@@ -103,7 +103,7 @@ impl CustomSubagentLoader {
         };
         for e in rd.flatten() {
             let p = e.path();
-            if p.is_file() && p.extension().map_or(false, |ext| ext == "md") {
+            if p.is_file() && p.extension().is_some_and(|ext| ext == "md") {
                 out.push(p);
             }
         }

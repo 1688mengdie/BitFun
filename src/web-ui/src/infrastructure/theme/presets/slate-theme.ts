@@ -9,7 +9,7 @@ export const bitfunSlateTheme: ThemeConfig = {
   type: 'dark',
   description: 'Slate gray geometric theme - Deep immersion, high contrast grayscale aesthetics',
   author: 'BitFun Team',
-  version: '1.2.7',
+  version: '1.3.0',
   
   
   colors: {
@@ -32,17 +32,17 @@ export const bitfunSlateTheme: ThemeConfig = {
     },
     
     
-    // Antique gold accent: warm, restrained, reads well on charcoal slate (nav wells, CTAs).
+    // Cool gray accent — neutral chrome for slate surfaces (links, focus, nav tints).
     accent: {
-      50: 'rgba(209, 186, 122, 0.06)',
-      100: 'rgba(209, 186, 122, 0.11)',
-      200: 'rgba(209, 186, 122, 0.20)',
-      300: 'rgba(209, 186, 122, 0.34)',
-      400: 'rgba(209, 186, 122, 0.50)',
-      500: '#cfba7a',
-      600: '#b89d52',
-      700: 'rgba(184, 157, 82, 0.88)',
-      800: 'rgba(184, 157, 82, 0.94)',
+      50: 'rgba(226, 232, 240, 0.05)',
+      100: 'rgba(226, 232, 240, 0.09)',
+      200: 'rgba(203, 213, 225, 0.14)',
+      300: 'rgba(203, 213, 225, 0.24)',
+      400: 'rgba(148, 163, 184, 0.45)',
+      500: '#94a3b8',
+      600: '#64748b',
+      700: 'rgba(100, 116, 139, 0.85)',
+      800: 'rgba(71, 85, 105, 0.92)',
     },
     
     
@@ -63,21 +63,21 @@ export const bitfunSlateTheme: ThemeConfig = {
       successBg: 'rgba(127, 184, 153, 0.1)',
       successBorder: 'rgba(127, 184, 153, 0.3)',
       
-      warning: '#c4916a',
-      warningBg: 'rgba(196, 145, 106, 0.12)',
-      warningBorder: 'rgba(196, 145, 106, 0.32)',
+      warning: '#f59e0b',
+      warningBg: 'rgba(245, 158, 11, 0.1)',
+      warningBorder: 'rgba(245, 158, 11, 0.3)',
       
       error: '#c9878d',         
       errorBg: 'rgba(201, 135, 141, 0.1)',
       errorBorder: 'rgba(201, 135, 141, 0.3)',
       
-      info: '#cfba7a',
-      infoBg: 'rgba(209, 186, 122, 0.12)',
-      infoBorder: 'rgba(209, 186, 122, 0.34)',
+      info: '#a8b0bd',
+      infoBg: 'rgba(255, 255, 255, 0.07)',
+      infoBorder: 'rgba(255, 255, 255, 0.2)',
       
       
-      highlight: '#e2e4e7',
-      highlightBg: 'rgba(212, 214, 216, 0.12)',
+      highlight: '#c8cdd4',
+      highlightBg: 'rgba(255, 255, 255, 0.1)',
     },
     
     border: {
@@ -85,7 +85,7 @@ export const bitfunSlateTheme: ThemeConfig = {
       base: 'rgba(255, 255, 255, 0.18)',      
       medium: 'rgba(255, 255, 255, 0.24)',    
       strong: 'rgba(255, 255, 255, 0.32)',    
-      prominent: 'rgba(255, 255, 255, 0.45)',  
+      prominent: 'rgba(255, 255, 255, 0.4)',  
     },
     
     element: {
@@ -98,10 +98,10 @@ export const bitfunSlateTheme: ThemeConfig = {
     },
     
     git: {
-      branch: '#cfba7a',
-      branchBg: 'rgba(209, 186, 122, 0.12)',
-      changes: 'rgb(212, 165, 116)',
-      changesBg: 'rgba(212, 165, 116, 0.1)',
+      branch: '#9ca6b8',
+      branchBg: 'rgba(255, 255, 255, 0.06)',
+      changes: 'rgb(245, 158, 11)',
+      changesBg: 'rgba(245, 158, 11, 0.1)',
       added: 'rgb(127, 184, 153)',
       addedBg: 'rgba(127, 184, 153, 0.1)',
       deleted: 'rgb(201, 135, 141)',
@@ -111,8 +111,8 @@ export const bitfunSlateTheme: ThemeConfig = {
     },
     
     scrollbar: {
-      thumb: 'rgba(200, 188, 168, 0.24)',
-      thumbHover: 'rgba(212, 198, 172, 0.38)',
+      thumb: 'rgba(255, 255, 255, 0.15)',
+      thumbHover: 'rgba(255, 255, 255, 0.28)',
     },
   },
   
@@ -128,9 +128,9 @@ export const bitfunSlateTheme: ThemeConfig = {
     },
     
     glow: {
-      blue: '0 12px 32px rgba(209, 186, 122, 0.22), 0 6px 16px rgba(209, 186, 122, 0.14), 0 3px 8px rgba(0, 0, 0, 0.2)',
-      purple: '0 12px 32px rgba(184, 198, 255, 0.22), 0 6px 16px rgba(184, 198, 255, 0.15), 0 3px 8px rgba(0, 0, 0, 0.2)',
-      mixed: '0 12px 32px rgba(209, 186, 122, 0.18), 0 6px 16px rgba(184, 198, 255, 0.14), 0 3px 8px rgba(0, 0, 0, 0.2)',
+      blue: '0 12px 32px rgba(148, 163, 184, 0.14), 0 6px 16px rgba(148, 163, 184, 0.1), 0 3px 8px rgba(0, 0, 0, 0.2)',
+      purple: '0 12px 32px rgba(184, 198, 255, 0.2), 0 6px 16px rgba(184, 198, 255, 0.12), 0 3px 8px rgba(0, 0, 0, 0.2)',
+      mixed: '0 12px 32px rgba(255, 255, 255, 0.05), 0 6px 16px rgba(184, 198, 255, 0.1), 0 3px 8px rgba(0, 0, 0, 0.18)',
     },
     
     blur: {
@@ -228,20 +228,20 @@ export const bitfunSlateTheme: ThemeConfig = {
     
     windowControls: {
       minimize: {
-        dot: 'rgba(209, 186, 122, 0.55)',
-        dotShadow: '0 0 4px rgba(209, 186, 122, 0.26)',
-        hoverBg: 'rgba(209, 186, 122, 0.18)',
-        hoverColor: '#e8d9a8',
-        hoverBorder: 'rgba(209, 186, 122, 0.32)',
-        hoverShadow: '0 2px 8px rgba(209, 186, 122, 0.20), inset 0 1px 0 rgba(255, 255, 255, 0.08)',
+        dot: 'rgba(203, 213, 225, 0.42)',
+        dotShadow: '0 0 4px rgba(0, 0, 0, 0.35)',
+        hoverBg: 'rgba(255, 255, 255, 0.09)',
+        hoverColor: '#e2e6eb',
+        hoverBorder: 'rgba(255, 255, 255, 0.14)',
+        hoverShadow: '0 2px 8px rgba(0, 0, 0, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.06)',
       },
       maximize: {
-        dot: 'rgba(209, 186, 122, 0.55)',
-        dotShadow: '0 0 4px rgba(209, 186, 122, 0.26)',
-        hoverBg: 'rgba(209, 186, 122, 0.18)',
-        hoverColor: '#e8d9a8',
-        hoverBorder: 'rgba(209, 186, 122, 0.32)',
-        hoverShadow: '0 2px 8px rgba(209, 186, 122, 0.20), inset 0 1px 0 rgba(255, 255, 255, 0.08)',
+        dot: 'rgba(203, 213, 225, 0.42)',
+        dotShadow: '0 0 4px rgba(0, 0, 0, 0.35)',
+        hoverBg: 'rgba(255, 255, 255, 0.09)',
+        hoverColor: '#e2e6eb',
+        hoverBorder: 'rgba(255, 255, 255, 0.14)',
+        hoverShadow: '0 2px 8px rgba(0, 0, 0, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.06)',
       },
       close: {
         dot: 'rgba(201, 135, 141, 0.5)',
@@ -255,28 +255,28 @@ export const bitfunSlateTheme: ThemeConfig = {
         defaultColor: 'rgba(232, 234, 236, 0.92)',
         defaultDot: 'rgba(198, 202, 208, 0.48)',
         disabledDot: 'rgba(168, 171, 176, 0.2)',
-        flowGradient: 'linear-gradient(90deg, transparent, rgba(200, 188, 168, 0.09), rgba(200, 188, 168, 0.15), rgba(200, 188, 168, 0.09), transparent)',
+        flowGradient: 'linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.05), transparent)',
       },
     },
     
     button: {
       
       default: {
-        background: 'rgba(200, 192, 176, 0.14)',
-        color: '#c8c0b0',
+        background: 'rgba(255, 255, 255, 0.08)',
+        color: '#a8b0bd',
         border: 'transparent',
         shadow: 'none',
       },
       hover: {
-        background: 'rgba(210, 200, 180, 0.22)',
-        color: '#ebe4d6',
+        background: 'rgba(255, 255, 255, 0.12)',
+        color: '#dce0e6',
         border: 'transparent',
         shadow: 'none',
         transform: 'none',
       },
       active: {
-        background: 'rgba(205, 195, 175, 0.18)',
-        color: '#ebe4d6',
+        background: 'rgba(255, 255, 255, 0.1)',
+        color: '#dce0e6',
         border: 'transparent',
         shadow: 'none',
         transform: 'none',
@@ -285,21 +285,21 @@ export const bitfunSlateTheme: ThemeConfig = {
       
       primary: {
         default: {
-          background: 'rgba(209, 186, 122, 0.38)',
-          color: '#f5e9c8',
+          background: 'rgba(255, 255, 255, 0.14)',
+          color: '#f0f2f5',
           border: 'transparent',
           shadow: 'none',
         },
         hover: {
-          background: 'rgba(209, 186, 122, 0.50)',
-          color: '#fff8e8',
+          background: 'rgba(255, 255, 255, 0.2)',
+          color: '#ffffff',
           border: 'transparent',
           shadow: 'none',
           transform: 'none',
         },
         active: {
-          background: 'rgba(209, 186, 122, 0.42)',
-          color: '#fff8e8',
+          background: 'rgba(255, 255, 255, 0.17)',
+          color: '#ffffff',
           border: 'transparent',
           shadow: 'none',
           transform: 'none',
@@ -310,20 +310,20 @@ export const bitfunSlateTheme: ThemeConfig = {
       ghost: {
         default: {
           background: 'transparent',
-          color: '#c8c0b0',
+          color: '#a8b0bd',
           border: 'transparent',
           shadow: 'none',
         },
         hover: {
-          background: 'rgba(200, 192, 176, 0.16)',
-          color: '#ebe4d6',
+          background: 'rgba(255, 255, 255, 0.08)',
+          color: '#dce0e6',
           border: 'transparent',
           shadow: 'none',
           transform: 'none',
         },
         active: {
-          background: 'rgba(200, 192, 176, 0.12)',
-          color: '#ebe4d6',
+          background: 'rgba(255, 255, 255, 0.06)',
+          color: '#dce0e6',
           border: 'transparent',
           shadow: 'none',
           transform: 'none',
@@ -338,16 +338,16 @@ export const bitfunSlateTheme: ThemeConfig = {
     inherit: true,
     rules: [
       { token: 'comment', foreground: '9ca2a9', fontStyle: 'italic' },
-      { token: 'keyword', foreground: 'cfba7a' },
+      { token: 'keyword', foreground: 'a8b4c4' },
       { token: 'string', foreground: '8fc8a9' },
       { token: 'number', foreground: 'b5c4fc' },
-      { token: 'type', foreground: 'e4b584' },
-      { token: 'class', foreground: 'e4b584' },
-      { token: 'function', foreground: 'e8d9a8' },
+      { token: 'type', foreground: '9ca6b8' },
+      { token: 'class', foreground: '9ca6b8' },
+      { token: 'function', foreground: 'c5cad3' },
       { token: 'variable', foreground: 'c4c8ce' },
       { token: 'constant', foreground: 'b5c4fc' },
-      { token: 'operator', foreground: 'cfba7a' },
-      { token: 'tag', foreground: 'e4b584' },
+      { token: 'operator', foreground: 'a8b4c4' },
+      { token: 'tag', foreground: '9ca6b8' },
       { token: 'attribute.name', foreground: 'c4c8ce' },
       { token: 'attribute.value', foreground: '8fc8a9' },
     ],
@@ -355,8 +355,8 @@ export const bitfunSlateTheme: ThemeConfig = {
       background: '#1a1c1e',
       foreground: '#eef0f3',
       lineHighlight: '#22252a',
-      selection: 'rgba(209, 186, 122, 0.30)',
-      cursor: '#cfba7a',
+      selection: 'rgba(255, 255, 255, 0.12)',
+      cursor: '#aeb6c3',
     },
   },
 };

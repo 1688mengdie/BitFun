@@ -114,6 +114,7 @@ impl SnapshotCore {
     }
 
     /// Start a file operation (before snapshot), returns operation_id.
+    #[allow(clippy::too_many_arguments)]
     pub async fn start_file_operation(
         &mut self,
         session_id: &str,
@@ -856,7 +857,7 @@ impl SnapshotCore {
         };
         let path = self.session_file_path(session_id);
         let data =
-            serde_json::to_string_pretty(session).map_err(|e| SnapshotError::Serialization(e))?;
+            serde_json::to_string_pretty(session).map_err(SnapshotError::Serialization)?;
         tokio::fs::write(path, data)
             .await
             .map_err(SnapshotError::Io)?;

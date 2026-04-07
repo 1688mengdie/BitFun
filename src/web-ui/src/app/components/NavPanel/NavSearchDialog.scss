@@ -1,6 +1,9 @@
 @use '../../../component-library/styles/tokens.scss' as *;
+@use '../../../component-library/styles/nav-panel-font-scope.scss' as nav-font;
 
 .bitfun-nav-search-dialog__overlay {
+  @include nav-font.nav-panel-font-token-scope;
+
   position: fixed;
   inset: 0;
   z-index: 600;

@@ -640,7 +640,7 @@ impl PersistenceManager {
             custom_metadata: existing.and_then(|value| value.custom_metadata.clone()),
             todos: existing.and_then(|value| value.todos.clone()),
             workspace_path: Some(workspace_root),
-            workspace_hostname: workspace_hostname,
+            workspace_hostname,
         }
     }
 
@@ -1743,7 +1743,7 @@ impl PersistenceManager {
         metadata.workspace_path = metadata.workspace_path.clone().or_else(|| {
             turns
                 .first()
-                .and_then(|_| None::<String>)
+                .and(None::<String>)
                 .or_else(|| Some(workspace_path.to_string_lossy().to_string()))
         });
         self.save_session_metadata(workspace_path, &metadata).await

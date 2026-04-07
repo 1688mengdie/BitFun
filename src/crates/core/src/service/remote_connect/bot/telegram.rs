@@ -109,7 +109,7 @@ impl TelegramBot {
     pub async fn send_message(&self, chat_id: i64, text: &str) -> Result<()> {
         let client = reqwest::Client::new();
         let resp = client
-            .post(&self.api_url("sendMessage"))
+            .post(self.api_url("sendMessage"))
             .json(&serde_json::json!({
                 "chat_id": chat_id,
                 "text": text,
@@ -152,7 +152,7 @@ impl TelegramBot {
 
         let client = reqwest::Client::new();
         let resp = client
-            .post(&self.api_url("sendMessage"))
+            .post(self.api_url("sendMessage"))
             .json(&serde_json::json!({
                 "chat_id": chat_id,
                 "text": text,
@@ -188,7 +188,7 @@ impl TelegramBot {
 
         let client = reqwest::Client::new();
         let resp = client
-            .post(&self.api_url("sendDocument"))
+            .post(self.api_url("sendDocument"))
             .multipart(form)
             .send()
             .await?;
@@ -280,7 +280,7 @@ impl TelegramBot {
     async fn answer_callback_query(&self, callback_query_id: &str) {
         let client = reqwest::Client::new();
         let _ = client
-            .post(&self.api_url("answerCallbackQuery"))
+            .post(self.api_url("answerCallbackQuery"))
             .json(&serde_json::json!({ "callback_query_id": callback_query_id }))
             .send()
             .await;
@@ -345,7 +345,7 @@ impl TelegramBot {
             ]
         });
         let resp = client
-            .post(&self.api_url("setMyCommands"))
+            .post(self.api_url("setMyCommands"))
             .json(&commands)
             .send()
             .await?;
@@ -443,7 +443,7 @@ impl TelegramBot {
             .build()?;
 
         let resp = client
-            .get(&self.api_url("getUpdates"))
+            .get(self.api_url("getUpdates"))
             .query(&[
                 ("offset", (offset + 1).to_string()),
                 ("timeout", "30".to_string()),
@@ -668,8 +668,8 @@ impl TelegramBot {
         }
 
         // Intercept file download callbacks before normal command routing.
-        if text.starts_with("download_file:") {
-            let token = text["download_file:".len()..].trim().to_string();
+        if let Some(stripped) = text.strip_prefix("download_file:") {
+            let token = stripped.trim().to_string();
             drop(states);
             self.handle_download_request(chat_id, &token).await;
             return;

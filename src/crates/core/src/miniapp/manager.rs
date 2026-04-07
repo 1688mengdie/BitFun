@@ -146,6 +146,7 @@ impl MiniAppManager {
     }
 
     /// Create a new MiniApp (generates id, sets created_at/updated_at, compiles).
+    #[allow(clippy::too_many_arguments)]
     pub async fn create(
         &self,
         name: String,
@@ -188,6 +189,7 @@ impl MiniAppManager {
     }
 
     /// Update existing MiniApp (increment version, recompile, save).
+    #[allow(clippy::too_many_arguments)]
     pub async fn update(
         &self,
         app_id: &str,
