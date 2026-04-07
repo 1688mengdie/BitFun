@@ -604,7 +604,7 @@ $_section-header-height: 24px;
     display: flex;
     align-items: stretch;
     gap: $size-gap-1;
-    padding: $size-gap-1 $size-gap-2 $size-gap-2;
+    padding: $size-gap-1 $size-gap-2 $size-gap-1;
   }
 
   &__miniapp-footer {
@@ -1400,7 +1400,7 @@ $_section-header-height: 24px;
   align-items: center;
   justify-content: space-between;
   flex-shrink: 0;
-  padding: $size-gap-2 $size-gap-2 0;
+  padding: $size-gap-1 $size-gap-2 0;
   gap: $size-gap-1;
 }
 
@@ -1860,7 +1860,7 @@ $_section-header-height: 24px;
 .bitfun-nav-panel__top-actions {
   display: flex;
   flex-direction: column;
-  gap: $size-gap-1;
+  gap: 1px;
   padding: $size-gap-2 $size-gap-2 $size-gap-4 * 0.75;
   flex-shrink: 0;
 }

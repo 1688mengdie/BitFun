@@ -330,7 +330,7 @@ function RulesPanel() {
 function MemoryPanel() {
   const { t } = useTranslation('settings/ai-memory');
   const { t: tScope } = useTranslation('settings/ai-context');
-  const notification = useNotification();
+  const { error: notifyError, success: notifySuccess } = useNotification();
   const [expandedMemoryIds, setExpandedMemoryIds] = useState<Set<string>>(new Set());
   const [memories, setMemories] = useState<AIMemory[]>([]);
   const [loading, setLoading] = useState(true);
@@ -345,11 +345,11 @@ function MemoryPanel() {
       const data = await getAllMemories();
       setMemories(data);
     } catch (error) {
-      notification.error(t('messages.loadFailed', { error: String(error) }));
+      notifyError(t('messages.loadFailed', { error: String(error) }));
     } finally {
       setLoading(false);
     }
-  }, [notification, t]);
+  }, [notifyError, t]);
 
   React.useEffect(() => {
     if (scopeTab === 'user') loadMemories();
@@ -382,11 +382,11 @@ function MemoryPanel() {
     try {
       setIsDeleting(true);
       await deleteMemory(id);
-      notification.success(t('messages.deleteSuccess'));
+      notifySuccess(t('messages.deleteSuccess'));
       await loadMemories();
     } catch (error) {
       log.error('Failed to delete memory', { memoryId: id, error });
-      notification.error(t('messages.deleteFailed', { error: String(error) }));
+      notifyError(t('messages.deleteFailed', { error: String(error) }));
     } finally {
       setIsDeleting(false);
     }
@@ -397,7 +397,7 @@ function MemoryPanel() {
       await toggleMemory(id);
       loadMemories();
     } catch (error) {
-      notification.error(t('messages.toggleFailed', { error: String(error) }));
+      notifyError(t('messages.toggleFailed', { error: String(error) }));
     }
   };
 
