@@ -11,7 +11,7 @@
  * 4. Large content can be truncated when exceeding limits
  */
 
-import React, { useMemo, memo, useRef, useEffect, useState, useCallback } from 'react';
+import React, { useMemo, memo, useRef, useEffect, useState, useCallback, useDeferredValue } from 'react';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { getPrismLanguage } from '@/infrastructure/language-detection';
 import { useTheme } from '@/infrastructure/theme';
@@ -66,7 +66,13 @@ export const CodePreview: React.FC<CodePreviewProps> = memo(({
 
   const containerRef = useRef<HTMLDivElement>(null);
   const prevContentLengthRef = useRef(0);
-  
+
+  // During streaming, content updates at high frequency. Defer the highlighted
+  // content passed to SyntaxHighlighter so that auto-scroll and cursor updates
+  // (which use the real content) remain responsive on the main thread while
+  // tokenization runs during browser idle time.
+  const deferredContent = useDeferredValue(content);
+
   const [highlightedLine, setHighlightedLine] = useState<number | null>(null);
   
   const detectedLanguage = useMemo(() => {
@@ -160,7 +166,7 @@ export const CodePreview: React.FC<CodePreviewProps> = memo(({
             opacity: isLight ? 0.88 : 0.6,
           }}
         >
-          {content}
+          {deferredContent}
         </SyntaxHighlighter>
         
         {/* Streaming cursor indicator */}
