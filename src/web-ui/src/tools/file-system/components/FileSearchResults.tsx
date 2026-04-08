@@ -25,7 +25,7 @@ interface FileSearchResultsProps {
   className?: string;
 }
 
-interface SearchResultTarget extends FileMentionTarget {}
+type SearchResultTarget = FileMentionTarget;
 
 interface MatchPreviewSegments {
   before: string;

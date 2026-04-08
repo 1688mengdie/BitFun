@@ -39,6 +39,15 @@ pub fn is_builtin_skill_dir_name(dir_name: &str) -> bool {
     builtin_skill_dir_names().contains(dir_name)
 }
 
+pub fn builtin_skill_group_key(dir_name: &str) -> Option<&'static str> {
+    match dir_name {
+        "docx" | "pdf" | "pptx" | "xlsx" => Some("office"),
+        "find-skills" | "writing-skills" => Some("meta"),
+        "agent-browser" => Some("computer-use"),
+        _ => Some("superpowers"),
+    }
+}
+
 pub async fn ensure_builtin_skills_installed() -> BitFunResult<()> {
     let pm = get_path_manager_arc();
     let dest_root = pm.user_skills_dir();
@@ -150,4 +159,24 @@ async fn desired_file_content(
     _dest_path: &Path,
 ) -> BitFunResult<Vec<u8>> {
     Ok(file.contents().to_vec())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::builtin_skill_group_key;
+
+    #[test]
+    fn builtin_skill_groups_match_expected_sets() {
+        assert_eq!(builtin_skill_group_key("docx"), Some("office"));
+        assert_eq!(builtin_skill_group_key("pdf"), Some("office"));
+        assert_eq!(builtin_skill_group_key("pptx"), Some("office"));
+        assert_eq!(builtin_skill_group_key("xlsx"), Some("office"));
+        assert_eq!(builtin_skill_group_key("find-skills"), Some("meta"));
+        assert_eq!(builtin_skill_group_key("writing-skills"), Some("meta"));
+        assert_eq!(builtin_skill_group_key("agent-browser"), Some("computer-use"));
+        assert_eq!(
+            builtin_skill_group_key("test-driven-development"),
+            Some("superpowers")
+        );
+    }
 }

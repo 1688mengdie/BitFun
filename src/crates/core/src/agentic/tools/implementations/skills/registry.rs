@@ -2,7 +2,9 @@
 //!
 //! Manages skill discovery, mode-specific filtering, and loading.
 
-use super::builtin::{ensure_builtin_skills_installed, is_builtin_skill_dir_name};
+use super::builtin::{
+    builtin_skill_group_key, ensure_builtin_skills_installed, is_builtin_skill_dir_name,
+};
 use super::default_profiles::is_skill_enabled_for_mode;
 use super::mode_overrides::{
     load_disabled_mode_skills_local, load_disabled_mode_skills_remote,
@@ -77,6 +79,11 @@ impl SkillCandidate {
         let is_builtin = data.location == SkillLocation::User
             && slot == "bitfun"
             && is_builtin_skill_dir_name(&data.dir_name);
+        let group_key = if is_builtin {
+            builtin_skill_group_key(&data.dir_name).map(str::to_string)
+        } else {
+            None
+        };
 
         Self {
             info: SkillInfo {
@@ -88,6 +95,7 @@ impl SkillCandidate {
                 source_slot: data.source_slot,
                 dir_name: data.dir_name,
                 is_builtin,
+                group_key,
             },
             priority,
         }

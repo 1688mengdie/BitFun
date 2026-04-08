@@ -44,6 +44,9 @@ pub struct SkillInfo {
     /// Whether this skill is bundled with BitFun as a built-in skill.
     #[serde(default)]
     pub is_builtin: bool,
+    /// Optional logical group for built-in skills.
+    #[serde(default)]
+    pub group_key: Option<String>,
 }
 
 impl SkillInfo {

@@ -208,7 +208,7 @@ export function useAgentsList({
     } catch {
       notification.error(t('agentsOverview.skillToggleFailed', 'Skill 切换失败'));
     }
-  }, [getModeSkills, notification, t, workspacePath]);
+  }, [notification, t, workspacePath]);
 
   const filteredAgents = useMemo(() => allAgents.filter((agent) => {
     if (searchQuery) {

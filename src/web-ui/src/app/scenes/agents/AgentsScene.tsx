@@ -1,4 +1,5 @@
 import React, { useCallback, useMemo, useState } from 'react';
+import type { TFunction } from 'i18next';
 import {
   Bot,
   Cpu,
@@ -40,6 +41,22 @@ import { SubagentAPI } from '@/infrastructure/api/service-api/SubagentAPI';
 import type { ModeSkillInfo } from '@/infrastructure/config/types';
 import { useNotification } from '@/shared/notification-system';
 
+const UNGROUPED_SKILL_GROUP = '__ungrouped__';
+
+const SKILL_GROUP_ORDER: Record<string, number> = {
+  office: 0,
+  meta: 1,
+  [UNGROUPED_SKILL_GROUP]: 99,
+};
+
+interface SkillGroup {
+  key: string;
+  label: string;
+  skills: ModeSkillInfo[];
+  enabledCount: number;
+  totalCount: number;
+}
+
 function getConfiguredEnabledSkillKeys(skills: ModeSkillInfo[]): string[] {
   return skills.filter((skill) => !skill.disabledByMode).map((skill) => skill.key);
 }
@@ -69,6 +86,76 @@ function formatSkillDisplayName(skill: ModeSkillInfo, duplicateNames: Set<string
     return skill.name;
   }
   return `${skill.name} [${formatSkillOrigin(skill)}]`;
+}
+
+function getSkillGroupKey(skill: ModeSkillInfo): string {
+  return skill.groupKey?.trim() || UNGROUPED_SKILL_GROUP;
+}
+
+function getSkillGroupLabel(groupKey: string, t: TFunction<'scenes/agents'>): string {
+  switch (groupKey) {
+    case 'office':
+      return t('agentsOverview.skillGroups.office');
+    case 'computer-use':
+      return t('agentsOverview.skillGroups.computerUse');
+    case 'meta':
+      return t('agentsOverview.skillGroups.meta');
+    case 'superpowers':
+      return t('agentsOverview.skillGroups.superpowers');
+    default:
+      return t('agentsOverview.skillGroups.other');
+  }
+}
+
+function getSkillTitle(skill: ModeSkillInfo, t: TFunction<'scenes/agents'>): string {
+  return [
+    skill.description || skill.name,
+    `key: ${skill.key}`,
+    !skill.disabledByMode && !skill.selectedForRuntime
+      ? t('agentsOverview.skillShadowed')
+      : null,
+  ].filter(Boolean).join('\n');
+}
+
+function buildSkillGroups(
+  skills: ModeSkillInfo[],
+  enabledSkillKeys: string[],
+  t: TFunction<'scenes/agents'>,
+): SkillGroup[] {
+  const enabledSkillKeySet = new Set(enabledSkillKeys);
+  const groups = new Map<string, ModeSkillInfo[]>();
+
+  for (const skill of skills) {
+    const groupKey = getSkillGroupKey(skill);
+    const items = groups.get(groupKey);
+    if (items) {
+      items.push(skill);
+    } else {
+      groups.set(groupKey, [skill]);
+    }
+  }
+
+  return [...groups.entries()]
+    .map(([groupKey, groupSkills]) => ({
+      key: groupKey,
+      label: getSkillGroupLabel(groupKey, t),
+      skills: [...groupSkills].sort((a, b) => {
+        const aEnabled = enabledSkillKeySet.has(a.key);
+        const bEnabled = enabledSkillKeySet.has(b.key);
+        if (aEnabled && !bEnabled) return -1;
+        if (!aEnabled && bEnabled) return 1;
+        return a.name.localeCompare(b.name) || a.key.localeCompare(b.key);
+      }),
+      enabledCount: groupSkills.filter((skill) => enabledSkillKeySet.has(skill.key)).length,
+      totalCount: groupSkills.length,
+    }))
+    .sort((a, b) => {
+      const orderDiff = (SKILL_GROUP_ORDER[a.key] ?? 50) - (SKILL_GROUP_ORDER[b.key] ?? 50);
+      if (orderDiff !== 0) {
+        return orderDiff;
+      }
+      return a.label.localeCompare(b.label);
+    });
 }
 
 const AgentsHomeView: React.FC = () => {
@@ -184,6 +271,14 @@ const AgentsHomeView: React.FC = () => {
     () => selectedAgentModeSkills.filter((skill) => !skill.disabledByMode),
     [selectedAgentModeSkills],
   );
+  const selectedAgentSkillGroups = useMemo(
+    () => buildSkillGroups(selectedAgentModeSkills, selectedAgentSkills, t),
+    [selectedAgentModeSkills, selectedAgentSkills, t],
+  );
+  const editableSkillGroups = useMemo(
+    () => buildSkillGroups(selectedAgentModeSkills, pendingSkills ?? selectedAgentSkills, t),
+    [pendingSkills, selectedAgentModeSkills, selectedAgentSkills, t],
+  );
   const selectedAgentDuplicateSkillNames = useMemo(
     () => buildDuplicateSkillNameSet(selectedAgentModeSkills),
     [selectedAgentModeSkills],
@@ -206,6 +301,34 @@ const AgentsHomeView: React.FC = () => {
     setSavingTools(false);
     setSavingSkills(false);
   }, []);
+
+  const togglePendingSkill = useCallback((skillKey: string) => {
+    setPendingSkills((prev) => {
+      const current = prev ?? selectedAgentSkills;
+      return current.includes(skillKey)
+        ? current.filter((key) => key !== skillKey)
+        : [...current, skillKey];
+    });
+  }, [selectedAgentSkills]);
+
+  const setPendingSkillGroupEnabled = useCallback((skills: ModeSkillInfo[], enabled: boolean) => {
+    setPendingSkills((prev) => {
+      const current = prev ?? selectedAgentSkills;
+      const groupKeys = new Set(skills.map((skill) => skill.key));
+
+      if (!enabled) {
+        return current.filter((key) => !groupKeys.has(key));
+      }
+
+      const next = [...current];
+      for (const skill of skills) {
+        if (!next.includes(skill.key)) {
+          next.push(skill.key);
+        }
+      }
+      return next;
+    });
+  }, [selectedAgentSkills]);
 
   const openAgentDetails = useCallback((agent: AgentWithCapabilities) => {
     setSelectedAgentId(agent.id);
@@ -659,65 +782,100 @@ const AgentsHomeView: React.FC = () => {
                 </div>
 
                 {skillsEditing ? (
-                  <div className="agent-card__token-grid">
-                    {[...selectedAgentModeSkills]
-                      .sort((a, b) => {
-                        const draft = pendingSkills ?? selectedAgentSkills;
-                        const aOn = draft.includes(a.key);
-                        const bOn = draft.includes(b.key);
-                        if (aOn && !bOn) return -1;
-                        if (!aOn && bOn) return 1;
-                        return 0;
-                      })
-                      .map((skill) => {
-                        const draft = pendingSkills ?? selectedAgentSkills;
-                        const isOn = draft.includes(skill.key);
-                        const displayName = formatSkillDisplayName(skill, selectedAgentDuplicateSkillNames);
-                        const title = [
-                          skill.description || skill.name,
-                          `key: ${skill.key}`,
-                          !skill.disabledByMode && !skill.selectedForRuntime ? 'shadowed by a higher-priority skill with the same name' : null,
-                        ].filter(Boolean).join('\n');
-                        return (
-                          <button
-                            key={skill.key}
-                            type="button"
-                            className={`agent-card__token${isOn ? ' is-on' : ''}`}
-                            title={title}
-                            onClick={() => {
-                              setPendingSkills((prev) => {
-                                const current = prev ?? selectedAgentSkills;
-                                return isOn
-                                  ? current.filter((n) => n !== skill.key)
-                                  : [...current, skill.key];
-                              });
-                            }}
-                          >
-                            <span className="agent-card__token-name">{displayName}</span>
-                          </button>
-                        );
-                      })}
+                  <div className="agent-card__skill-groups">
+                    {editableSkillGroups.map((group) => {
+                      const allEnabled = group.enabledCount === group.totalCount;
+                      const someEnabled = group.enabledCount > 0;
+
+                      return (
+                        <div key={group.key} className="agent-card__skill-group">
+                          <div className="agent-card__skill-group-head">
+                            <div className="agent-card__skill-group-title-wrap">
+                              <span className="agent-card__skill-group-title">{group.label}</span>
+                              <span className="agent-card__skill-group-count">
+                                {`${group.enabledCount}/${group.totalCount}`}
+                              </span>
+                            </div>
+                            <div className="agent-card__skill-group-actions">
+                              <Button
+                                variant="ghost"
+                                size="small"
+                                onClick={() => setPendingSkillGroupEnabled(group.skills, !allEnabled)}
+                              >
+                                {allEnabled
+                                  ? t('agentsOverview.disableGroup')
+                                  : t('agentsOverview.enableGroup')}
+                              </Button>
+                              {someEnabled && !allEnabled ? (
+                                <Button
+                                  variant="ghost"
+                                  size="small"
+                                  onClick={() => setPendingSkillGroupEnabled(group.skills, false)}
+                                >
+                                  {t('agentsOverview.clearGroup')}
+                                </Button>
+                              ) : null}
+                            </div>
+                          </div>
+                          <div className="agent-card__token-grid">
+                            {group.skills.map((skill) => {
+                              const isOn = (pendingSkills ?? selectedAgentSkills).includes(skill.key);
+                              const displayName = formatSkillDisplayName(
+                                skill,
+                                selectedAgentDuplicateSkillNames,
+                              );
+
+                              return (
+                                <button
+                                  key={skill.key}
+                                  type="button"
+                                  className={`agent-card__token${isOn ? ' is-on' : ''}`}
+                                  title={getSkillTitle(skill, t)}
+                                  onClick={() => togglePendingSkill(skill.key)}
+                                >
+                                  <span className="agent-card__token-name">{displayName}</span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 ) : (
-                  <div className="agent-card__chip-grid">
+                  <div className="agent-card__skill-groups">
                     {selectedAgentSkillItems.length === 0 ? (
                       <span className="agent-card__empty-inline">
                         {t('agentsOverview.noSkills')}
                       </span>
                     ) : (
-                      selectedAgentSkillItems.map((skill) => (
-                        <span
-                          key={skill.key}
-                          className="agent-card__chip"
-                          title={[
-                            skill.description || skill.name,
-                            `key: ${skill.key}`,
-                            !skill.disabledByMode && !skill.selectedForRuntime ? 'shadowed by a higher-priority skill with the same name' : null,
-                          ].filter(Boolean).join('\n')}
-                        >
-                          {formatSkillDisplayName(skill, selectedAgentDuplicateSkillNames)}
-                        </span>
-                      ))
+                      selectedAgentSkillGroups
+                        .filter((group) => group.enabledCount > 0)
+                        .map((group) => (
+                          <div key={group.key} className="agent-card__skill-group">
+                            <div className="agent-card__skill-group-head">
+                              <div className="agent-card__skill-group-title-wrap">
+                                <span className="agent-card__skill-group-title">{group.label}</span>
+                                <span className="agent-card__skill-group-count">
+                                  {group.enabledCount}
+                                </span>
+                              </div>
+                            </div>
+                            <div className="agent-card__chip-grid">
+                              {group.skills
+                                .filter((skill) => !skill.disabledByMode)
+                                .map((skill) => (
+                                  <span
+                                    key={skill.key}
+                                    className="agent-card__chip"
+                                    title={getSkillTitle(skill, t)}
+                                  >
+                                    {formatSkillDisplayName(skill, selectedAgentDuplicateSkillNames)}
+                                  </span>
+                                ))}
+                            </div>
+                          </div>
+                        ))
                     )}
                   </div>
                 )}

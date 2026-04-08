@@ -98,6 +98,7 @@ mod tests {
             source_slot: "bitfun".to_string(),
             dir_name: dir_name.to_string(),
             is_builtin: true,
+            group_key: None,
         }
     }
 
@@ -111,6 +112,7 @@ mod tests {
             source_slot: "bitfun".to_string(),
             dir_name: dir_name.to_string(),
             is_builtin: false,
+            group_key: None,
         }
     }
 

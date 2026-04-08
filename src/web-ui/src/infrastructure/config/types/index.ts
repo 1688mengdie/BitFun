@@ -193,6 +193,7 @@ export interface SkillInfo {
   sourceSlot: string;
   dirName: string;
   isBuiltin: boolean;
+  groupKey?: string | null;
 }
 
 export interface ModeSkillInfo extends SkillInfo {
