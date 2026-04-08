@@ -325,7 +325,6 @@ impl InsightsCollector {
         let mut satisfaction: HashMap<String, u32> = HashMap::new();
         let mut friction: HashMap<String, u32> = HashMap::new();
         let mut success: HashMap<String, u32> = HashMap::new();
-        let mut languages: HashMap<String, u32> = HashMap::new();
         let mut session_types: HashMap<String, u32> = HashMap::new();
         let mut session_summaries = Vec::new();
         let mut friction_details = Vec::new();
@@ -346,9 +345,6 @@ impl InsightsCollector {
                 *success
                     .entry(facet.primary_success.clone())
                     .or_insert(0) += 1;
-            }
-            for lang in &facet.languages_used {
-                *languages.entry(lang.clone()).or_insert(0) += 1;
             }
             *session_types
                 .entry(facet.session_type.clone())
@@ -393,6 +389,8 @@ impl InsightsCollector {
         } else {
             base_stats.total_messages as f32
         };
+
+        let languages = base_stats.languages_by_files.clone();
 
         InsightsAggregate {
             sessions: base_stats.total_sessions,
@@ -651,6 +649,9 @@ fn compute_days_covered(range: &DateRange) -> u32 {
 /// newlines in `old_string`/`new_string`.
 ///
 /// For Write tool: counts newlines in the written content as lines added.
+///
+/// Per session, each distinct file path touched by Edit/Write contributes once to `languages_by_files`
+/// according to [`language_name_for_path`].
 fn accumulate_code_stats_from_turns(base_stats: &mut BaseStats, turns: &[DialogTurnData]) {
     let mut modified_files: HashSet<String> = HashSet::new();
 
@@ -716,5 +717,58 @@ fn accumulate_code_stats_from_turns(base_stats: &mut BaseStats, turns: &[DialogT
         }
     }
 
+    for path in &modified_files {
+        if let Some(lang) = language_name_for_path(path) {
+            *base_stats
+                .languages_by_files
+                .entry(lang.to_string())
+                .or_insert(0) += 1;
+        }
+    }
+
     base_stats.total_files_modified += modified_files.len();
+}
+
+/// Infer a language label from a file path (extension or well-known filename).
+fn language_name_for_path(path: &str) -> Option<&'static str> {
+    let p = Path::new(path);
+    if let Some(name) = p.file_name().and_then(|n| n.to_str()) {
+        match name.to_ascii_lowercase().as_str() {
+            "dockerfile" | "containerfile" => return Some("Dockerfile"),
+            "makefile" | "gnumakefile" => return Some("Makefile"),
+            "cargo.toml" | "cargo.lock" => return Some("Rust"),
+            _ => {}
+        }
+    }
+    let ext = p.extension()?.to_str()?.to_ascii_lowercase();
+    Some(match ext.as_str() {
+        "ts" | "tsx" => "TypeScript",
+        "js" | "jsx" | "mjs" | "cjs" => "JavaScript",
+        "py" | "pyi" | "pyw" => "Python",
+        "rs" => "Rust",
+        "go" => "Go",
+        "java" => "Java",
+        "kt" | "kts" => "Kotlin",
+        "swift" => "Swift",
+        "cs" => "C#",
+        "cpp" | "cc" | "cxx" | "hpp" => "C/C++",
+        "c" | "h" => "C/C++",
+        "rb" => "Ruby",
+        "php" => "PHP",
+        "vue" => "Vue",
+        "svelte" => "Svelte",
+        "md" | "mdx" => "Markdown",
+        "json" | "jsonc" => "JSON",
+        "yaml" | "yml" => "YAML",
+        "toml" => "TOML",
+        "xml" => "XML",
+        "html" | "htm" => "HTML",
+        "css" | "scss" | "sass" | "less" => "CSS",
+        "sh" | "bash" | "zsh" | "fish" => "Shell",
+        "ps1" => "PowerShell",
+        "sql" => "SQL",
+        "gradle" => "Gradle",
+        "properties" => "Properties",
+        _ => return None,
+    })
 }
