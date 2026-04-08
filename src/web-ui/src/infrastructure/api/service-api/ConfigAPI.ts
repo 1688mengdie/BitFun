@@ -31,6 +31,12 @@ export interface SetModeSkillDisabledParams {
   workspacePath?: string;
 }
 
+export interface ReplaceModeSkillSelectionParams {
+  modeId: string;
+  enabledSkillKeys: string[];
+  workspacePath?: string;
+}
+
 export interface AddSkillParams {
   sourcePath: string;
   level: SkillLevel;
@@ -276,6 +282,24 @@ export class ConfigAPI {
       return await api.invoke('set_mode_skill_disabled', { modeId, skillKey, disabled, workspacePath });
     } catch (error) {
       throw createTauriCommandError('set_mode_skill_disabled', error, { modeId, skillKey, disabled, workspacePath });
+    }
+  }
+
+  async replaceModeSkillSelection({
+    modeId,
+    enabledSkillKeys,
+    workspacePath,
+  }: ReplaceModeSkillSelectionParams): Promise<string> {
+    try {
+      return await api.invoke('replace_mode_skill_selection', {
+        request: { modeId, enabledSkillKeys, workspacePath },
+      });
+    } catch (error) {
+      throw createTauriCommandError('replace_mode_skill_selection', error, {
+        modeId,
+        enabledSkillKeys,
+        workspacePath,
+      });
     }
   }
 

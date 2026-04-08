@@ -7,10 +7,37 @@ use crate::infrastructure::get_path_manager_arc;
 use crate::util::errors::BitFunResult;
 use include_dir::{include_dir, Dir};
 use log::{debug, error};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use tokio::fs;
 
 static BUILTIN_SKILLS_DIR: Dir = include_dir!("$CARGO_MANIFEST_DIR/builtin_skills");
+static BUILTIN_SKILL_DIR_NAMES: OnceLock<HashSet<String>> = OnceLock::new();
+
+fn collect_builtin_skill_dir_names() -> HashSet<String> {
+    BUILTIN_SKILLS_DIR
+        .dirs()
+        .filter_map(|dir| {
+            let rel = dir.path();
+            if rel.components().count() != 1 {
+                return None;
+            }
+
+            rel.file_name()
+                .and_then(|name| name.to_str())
+                .map(|name| name.to_string())
+        })
+        .collect()
+}
+
+pub fn builtin_skill_dir_names() -> &'static HashSet<String> {
+    BUILTIN_SKILL_DIR_NAMES.get_or_init(collect_builtin_skill_dir_names)
+}
+
+pub fn is_builtin_skill_dir_name(dir_name: &str) -> bool {
+    builtin_skill_dir_names().contains(dir_name)
+}
 
 pub async fn ensure_builtin_skills_installed() -> BitFunResult<()> {
     let pm = get_path_manager_arc();

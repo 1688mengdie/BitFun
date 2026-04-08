@@ -44,6 +44,10 @@ function getConfiguredEnabledSkillKeys(skills: ModeSkillInfo[]): string[] {
   return skills.filter((skill) => !skill.disabledByMode).map((skill) => skill.key);
 }
 
+function modeHasSkillTool(enabledTools: string[]): boolean {
+  return enabledTools.includes('Skill');
+}
+
 function buildDuplicateSkillNameSet(skills: ModeSkillInfo[]): Set<string> {
   const counts = new Map<string, number>();
   for (const skill of skills) {
@@ -169,6 +173,9 @@ const AgentsHomeView: React.FC = () => {
   const selectedAgentTools = selectedAgent?.agentKind === 'mode'
     ? (selectedAgentModeConfig?.enabled_tools ?? selectedAgent.defaultTools ?? [])
     : (selectedAgent?.defaultTools ?? []);
+  const selectedAgentHasSkillTool = selectedAgent?.agentKind === 'mode'
+    ? modeHasSkillTool(selectedAgentTools)
+    : false;
   const selectedAgentSkills = useMemo(
     () => getConfiguredEnabledSkillKeys(selectedAgentModeSkills),
     [selectedAgentModeSkills],
@@ -317,7 +324,9 @@ const AgentsHomeView: React.FC = () => {
                   index={index}
                   meta={coreAgentMeta[agent.id] ?? { role: agent.name, accentColor: '#6366f1', accentBg: 'rgba(99,102,241,0.10)' }}
                   toolCount={getDisplayedToolCount(agent)}
-                  skillCount={agent.agentKind === 'mode' ? getConfiguredEnabledSkillKeys(getModeSkills(agent.id)).length : 0}
+                  skillCount={agent.agentKind === 'mode' && modeHasSkillTool(getModeConfig(agent.id)?.enabled_tools ?? agent.defaultTools ?? [])
+                    ? getConfiguredEnabledSkillKeys(getModeSkills(agent.id)).length
+                    : 0}
                   onOpenDetails={openAgentDetails}
                 />
               ))}
@@ -401,7 +410,9 @@ const AgentsHomeView: React.FC = () => {
                   index={index}
                   soloEnabled={agentSoloEnabled[agent.id] ?? agent.enabled}
                   toolCount={getDisplayedToolCount(agent)}
-                  skillCount={agent.agentKind === 'mode' ? getConfiguredEnabledSkillKeys(getModeSkills(agent.id)).length : 0}
+                  skillCount={agent.agentKind === 'mode' && modeHasSkillTool(getModeConfig(agent.id)?.enabled_tools ?? agent.defaultTools ?? [])
+                    ? getConfiguredEnabledSkillKeys(getModeSkills(agent.id)).length
+                    : 0}
                   onToggleSolo={setAgentSoloEnabled}
                   onOpenDetails={openAgentDetails}
                 />
@@ -434,7 +445,7 @@ const AgentsHomeView: React.FC = () => {
         meta={selectedAgent ? (
           <>
             <span>{t('agentCard.meta.tools', { count: selectedAgentToolCount })}</span>
-            {selectedAgent.agentKind === 'mode' ? (
+            {selectedAgent.agentKind === 'mode' && selectedAgentHasSkillTool ? (
               <span>{t('agentCard.meta.skills', { count: selectedAgentSkills.length })}</span>
             ) : null}
           </>
@@ -587,7 +598,7 @@ const AgentsHomeView: React.FC = () => {
               </div>
             ) : null}
 
-            {selectedAgent.agentKind === 'mode' && selectedAgentModeSkills.length > 0 ? (
+            {selectedAgent.agentKind === 'mode' && selectedAgentHasSkillTool && selectedAgentModeSkills.length > 0 ? (
               <div className="agent-card__section">
                 <div className="agent-card__section-head">
                   <div className="agent-card__section-title">

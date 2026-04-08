@@ -187,23 +187,11 @@ export function useAgentsList({
 
   const handleSetSkills = useCallback(async (agentId: string, enabledSkillKeys: string[]) => {
     try {
-      const currentSkills = getModeSkills(agentId);
-      const nextEnabled = new Set(enabledSkillKeys);
-
-      for (const skill of currentSkills) {
-        const shouldBeEnabled = nextEnabled.has(skill.key);
-        const isEnabled = !skill.disabledByMode;
-        if (shouldBeEnabled === isEnabled) {
-          continue;
-        }
-
-        await configAPI.setModeSkillDisabled({
-          modeId: agentId,
-          skillKey: skill.key,
-          disabled: !shouldBeEnabled,
-          workspacePath: workspacePath || undefined,
-        });
-      }
+      await configAPI.replaceModeSkillSelection({
+        modeId: agentId,
+        enabledSkillKeys,
+        workspacePath: workspacePath || undefined,
+      });
 
       const updatedSkills = await configAPI.getModeSkillConfigs({
         modeId: agentId,
