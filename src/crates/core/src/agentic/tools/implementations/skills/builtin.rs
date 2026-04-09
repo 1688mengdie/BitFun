@@ -7,10 +7,46 @@ use crate::infrastructure::get_path_manager_arc;
 use crate::util::errors::BitFunResult;
 use include_dir::{include_dir, Dir};
 use log::{debug, error};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use tokio::fs;
 
 static BUILTIN_SKILLS_DIR: Dir = include_dir!("$CARGO_MANIFEST_DIR/builtin_skills");
+static BUILTIN_SKILL_DIR_NAMES: OnceLock<HashSet<String>> = OnceLock::new();
+
+fn collect_builtin_skill_dir_names() -> HashSet<String> {
+    BUILTIN_SKILLS_DIR
+        .dirs()
+        .filter_map(|dir| {
+            let rel = dir.path();
+            if rel.components().count() != 1 {
+                return None;
+            }
+
+            rel.file_name()
+                .and_then(|name| name.to_str())
+                .map(|name| name.to_string())
+        })
+        .collect()
+}
+
+pub fn builtin_skill_dir_names() -> &'static HashSet<String> {
+    BUILTIN_SKILL_DIR_NAMES.get_or_init(collect_builtin_skill_dir_names)
+}
+
+pub fn is_builtin_skill_dir_name(dir_name: &str) -> bool {
+    builtin_skill_dir_names().contains(dir_name)
+}
+
+pub fn builtin_skill_group_key(dir_name: &str) -> Option<&'static str> {
+    match dir_name {
+        "docx" | "pdf" | "pptx" | "xlsx" => Some("office"),
+        "find-skills" | "writing-skills" => Some("meta"),
+        "agent-browser" => Some("computer-use"),
+        _ => Some("superpowers"),
+    }
+}
 
 pub async fn ensure_builtin_skills_installed() -> BitFunResult<()> {
     let pm = get_path_manager_arc();
@@ -123,4 +159,24 @@ async fn desired_file_content(
     _dest_path: &Path,
 ) -> BitFunResult<Vec<u8>> {
     Ok(file.contents().to_vec())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::builtin_skill_group_key;
+
+    #[test]
+    fn builtin_skill_groups_match_expected_sets() {
+        assert_eq!(builtin_skill_group_key("docx"), Some("office"));
+        assert_eq!(builtin_skill_group_key("pdf"), Some("office"));
+        assert_eq!(builtin_skill_group_key("pptx"), Some("office"));
+        assert_eq!(builtin_skill_group_key("xlsx"), Some("office"));
+        assert_eq!(builtin_skill_group_key("find-skills"), Some("meta"));
+        assert_eq!(builtin_skill_group_key("writing-skills"), Some("meta"));
+        assert_eq!(builtin_skill_group_key("agent-browser"), Some("computer-use"));
+        assert_eq!(
+            builtin_skill_group_key("test-driven-development"),
+            Some("superpowers")
+        );
+    }
 }

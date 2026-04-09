@@ -13,6 +13,12 @@ use std::path::Path;
 const PROJECT_MODE_SKILLS_FILE_NAME: &str = "mode_skills.json";
 const DISABLED_SKILLS_KEY: &str = "disabled_skills";
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct UserModeSkillOverrides {
+    pub disabled_skills: Vec<String>,
+    pub enabled_skills: Vec<String>,
+}
+
 fn dedupe_skill_keys(keys: Vec<String>) -> Vec<String> {
     let mut seen = HashSet::new();
     let mut normalized = Vec::new();
@@ -31,36 +37,71 @@ fn dedupe_skill_keys(keys: Vec<String>) -> Vec<String> {
     normalized
 }
 
-pub async fn load_disabled_user_mode_skills(mode_id: &str) -> BitFunResult<Vec<String>> {
+fn normalize_user_overrides(
+    disabled_skills: Vec<String>,
+    enabled_skills: Vec<String>,
+) -> UserModeSkillOverrides {
+    let disabled_skills = dedupe_skill_keys(disabled_skills);
+    let disabled_set: HashSet<String> = disabled_skills.iter().cloned().collect();
+    let mut enabled_skills = dedupe_skill_keys(enabled_skills);
+    enabled_skills.retain(|key| !disabled_set.contains(key));
+
+    UserModeSkillOverrides {
+        disabled_skills,
+        enabled_skills,
+    }
+}
+
+pub async fn load_user_mode_skill_overrides(mode_id: &str) -> BitFunResult<UserModeSkillOverrides> {
     let config_service = GlobalConfigManager::get_service().await?;
     let stored_configs: HashMap<String, ModeConfig> = config_service
         .get_config(Some("ai.mode_configs"))
         .await
         .unwrap_or_default();
 
-    Ok(dedupe_skill_keys(
-        stored_configs
-            .get(mode_id)
-            .map(|config| config.disabled_user_skills.clone())
+    let config = stored_configs.get(mode_id);
+    Ok(normalize_user_overrides(
+        config
+            .map(|item| item.disabled_user_skills.clone())
+            .unwrap_or_default(),
+        config
+            .map(|item| item.enabled_user_skills.clone())
             .unwrap_or_default(),
     ))
 }
 
-pub async fn set_user_mode_skill_disabled(
+pub async fn set_user_mode_skill_state(
     mode_id: &str,
     skill_key: &str,
-    disabled: bool,
-) -> BitFunResult<Vec<String>> {
-    let mut next = load_disabled_user_mode_skills(mode_id).await?;
-    if disabled {
-        next.push(skill_key.to_string());
-        next = dedupe_skill_keys(next);
+    enabled: bool,
+    default_enabled: bool,
+) -> BitFunResult<UserModeSkillOverrides> {
+    let mut overrides = load_user_mode_skill_overrides(mode_id).await?;
+    overrides.disabled_skills.retain(|value| value != skill_key);
+    overrides.enabled_skills.retain(|value| value != skill_key);
+
+    if default_enabled {
+        if !enabled {
+            overrides.disabled_skills.push(skill_key.to_string());
+        }
     } else {
-        next.retain(|value| value != skill_key);
+        if enabled {
+            overrides.enabled_skills.push(skill_key.to_string());
+        }
     }
 
-    persist_mode_config_from_value(mode_id, json!({ "disabled_user_skills": next })).await?;
-    load_disabled_user_mode_skills(mode_id).await
+    let overrides = normalize_user_overrides(overrides.disabled_skills, overrides.enabled_skills);
+
+    persist_mode_config_from_value(
+        mode_id,
+        json!({
+            "disabled_user_skills": overrides.disabled_skills,
+            "enabled_user_skills": overrides.enabled_skills,
+        }),
+    )
+    .await?;
+
+    load_user_mode_skill_overrides(mode_id).await
 }
 
 pub fn project_mode_skills_path_for_remote(remote_root: &str) -> String {
@@ -154,6 +195,51 @@ pub fn set_mode_skill_disabled_in_document(
     if mode_object.is_empty() {
         mode_skills.remove(mode_id);
     }
+
+    Ok(next)
+}
+
+pub fn set_disabled_mode_skills_in_document(
+    document: &mut Value,
+    mode_id: &str,
+    skill_keys: Vec<String>,
+) -> BitFunResult<Vec<String>> {
+    let mode_skills = mode_skills_object_mut(document)?;
+    let next = dedupe_skill_keys(skill_keys);
+
+    if next.is_empty() {
+        if let Some(mode_entry) = mode_skills.get_mut(mode_id) {
+            if !mode_entry.is_object() {
+                *mode_entry = Value::Object(Map::new());
+            }
+
+            if let Some(mode_object) = mode_entry.as_object_mut() {
+                mode_object.remove(DISABLED_SKILLS_KEY);
+                if mode_object.is_empty() {
+                    mode_skills.remove(mode_id);
+                }
+            }
+        }
+
+        return Ok(Vec::new());
+    }
+
+    let mode_entry = mode_skills
+        .entry(mode_id.to_string())
+        .or_insert_with(|| Value::Object(Map::new()));
+
+    if !mode_entry.is_object() {
+        *mode_entry = Value::Object(Map::new());
+    }
+
+    let mode_object = mode_entry.as_object_mut().ok_or_else(|| {
+        BitFunError::config("Mode skills entry must be a JSON object".to_string())
+    })?;
+
+    mode_object.insert(
+        DISABLED_SKILLS_KEY.to_string(),
+        serde_json::to_value(&next)?,
+    );
 
     Ok(next)
 }

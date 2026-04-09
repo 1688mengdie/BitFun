@@ -57,6 +57,17 @@ fn normalize_skill_keys(keys: Vec<String>) -> Vec<String> {
     dedupe_preserving_order(keys)
 }
 
+fn normalize_skill_override_lists(
+    disabled_user_skills: Vec<String>,
+    enabled_user_skills: Vec<String>,
+) -> (Vec<String>, Vec<String>) {
+    let disabled_user_skills = normalize_skill_keys(disabled_user_skills);
+    let disabled_set: HashSet<String> = disabled_user_skills.iter().cloned().collect();
+    let mut enabled_user_skills = normalize_skill_keys(enabled_user_skills);
+    enabled_user_skills.retain(|key| !disabled_set.contains(key));
+    (disabled_user_skills, enabled_user_skills)
+}
+
 pub fn resolve_effective_tools(
     default_tools: &[String],
     mode_config: Option<&ModeConfig>,
@@ -96,6 +107,7 @@ fn stored_mode_from_enabled_tools(
     enabled: bool,
     enabled_tools: Vec<String>,
     disabled_user_skills: Vec<String>,
+    enabled_user_skills: Vec<String>,
     default_tools: &[String],
     valid_tools: &HashSet<String>,
 ) -> Option<ModeConfig> {
@@ -124,6 +136,7 @@ fn stored_mode_from_enabled_tools(
         added_tools,
         removed_tools,
         disabled_user_skills,
+        enabled_user_skills,
         &default_tools,
         valid_tools,
     )
@@ -135,13 +148,15 @@ fn stored_mode_from_overrides(
     added_tools: Vec<String>,
     removed_tools: Vec<String>,
     disabled_user_skills: Vec<String>,
+    enabled_user_skills: Vec<String>,
     default_tools: &[String],
     valid_tools: &HashSet<String>,
 ) -> Option<ModeConfig> {
     let default_set: HashSet<String> = default_tools.iter().cloned().collect();
     let mut added_tools = normalize_tools(added_tools, valid_tools);
     let mut removed_tools = normalize_tools(removed_tools, valid_tools);
-    let disabled_user_skills = normalize_skill_keys(disabled_user_skills);
+    let (disabled_user_skills, enabled_user_skills) =
+        normalize_skill_override_lists(disabled_user_skills, enabled_user_skills);
 
     added_tools.retain(|tool| !default_set.contains(tool));
     removed_tools.retain(|tool| default_set.contains(tool));
@@ -153,6 +168,7 @@ fn stored_mode_from_overrides(
         && added_tools.is_empty()
         && removed_tools.is_empty()
         && disabled_user_skills.is_empty()
+        && enabled_user_skills.is_empty()
     {
         return None;
     }
@@ -163,6 +179,7 @@ fn stored_mode_from_overrides(
         removed_tools,
         enabled,
         disabled_user_skills,
+        enabled_user_skills,
     })
 }
 
@@ -175,9 +192,14 @@ fn build_mode_view(
     let default_tools = normalize_tools(default_tools, valid_tools);
     let enabled_tools = resolve_effective_tools(&default_tools, mode_config, valid_tools);
     let enabled = mode_config.map(|config| config.enabled).unwrap_or(true);
-    let disabled_user_skills = mode_config
-        .map(|config| normalize_skill_keys(config.disabled_user_skills.clone()))
-        .unwrap_or_default();
+    let (disabled_user_skills, enabled_user_skills) = mode_config
+        .map(|config| {
+            normalize_skill_override_lists(
+                config.disabled_user_skills.clone(),
+                config.enabled_user_skills.clone(),
+            )
+        })
+        .unwrap_or_else(|| (Vec::new(), Vec::new()));
 
     ModeConfigView {
         mode_id: mode_id.to_string(),
@@ -185,6 +207,7 @@ fn build_mode_view(
         default_tools,
         enabled,
         disabled_user_skills,
+        enabled_user_skills,
     }
 }
 
@@ -214,6 +237,7 @@ fn canonicalize_mode_config(
         stored.added_tools,
         stored.removed_tools,
         stored.disabled_user_skills,
+        stored.enabled_user_skills,
         default_tools,
         valid_tools,
     ))
@@ -316,12 +340,34 @@ pub async fn persist_mode_config_from_value(mode_id: &str, config: Value) -> Bit
             .map(|item| item.disabled_user_skills.clone())
             .unwrap_or_default()
     };
+    let enabled_user_skills = if config
+        .as_object()
+        .map(|obj| obj.contains_key("enabled_user_skills"))
+        .unwrap_or(false)
+    {
+        match config.get("enabled_user_skills") {
+            Some(Value::Null) | None => Vec::new(),
+            Some(value) => {
+                serde_json::from_value::<Vec<String>>(value.clone()).map_err(|error| {
+                    BitFunError::config(format!(
+                        "Invalid enabled_user_skills for mode '{}': {}",
+                        mode_id, error
+                    ))
+                })?
+            }
+        }
+    } else {
+        current
+            .map(|item| item.enabled_user_skills.clone())
+            .unwrap_or_default()
+    };
 
     if let Some(canonical) = stored_mode_from_enabled_tools(
         mode_id,
         enabled,
         enabled_tools,
         disabled_user_skills,
+        enabled_user_skills,
         default_tools,
         &valid_tools,
     ) {
@@ -404,4 +450,50 @@ pub async fn canonicalize_mode_configs() -> BitFunResult<ModeConfigCanonicalizat
         removed_mode_configs,
         updated_modes,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{normalize_skill_override_lists, stored_mode_from_overrides};
+    use std::collections::HashSet;
+
+    #[test]
+    fn normalize_skill_override_lists_removes_duplicates_and_conflicts() {
+        let (disabled, enabled) = normalize_skill_override_lists(
+            vec![
+                "user::bitfun::pdf".to_string(),
+                "user::bitfun::pdf".to_string(),
+            ],
+            vec![
+                "user::bitfun::pdf".to_string(),
+                "user::bitfun::docx".to_string(),
+                "user::bitfun::docx".to_string(),
+            ],
+        );
+
+        assert_eq!(disabled, vec!["user::bitfun::pdf".to_string()]);
+        assert_eq!(enabled, vec!["user::bitfun::docx".to_string()]);
+    }
+
+    #[test]
+    fn stored_mode_from_overrides_keeps_enabled_user_skills() {
+        let valid_tools = HashSet::new();
+        let stored = stored_mode_from_overrides(
+            "agentic",
+            true,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            vec!["user::bitfun::pdf".to_string()],
+            &[],
+            &valid_tools,
+        )
+        .expect("mode config should be retained when skill overrides exist");
+
+        assert_eq!(
+            stored.enabled_user_skills,
+            vec!["user::bitfun::pdf".to_string()]
+        );
+        assert!(stored.disabled_user_skills.is_empty());
+    }
 }

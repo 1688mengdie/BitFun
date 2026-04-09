@@ -1144,7 +1144,8 @@ mod tests {
         let mapped = map_prompt_message(prompt_message);
         assert!(matches!(
             mapped.content,
-            MCPPromptMessageContent::Block(MCPPromptMessageContentBlock::Text { ref text }) if text == "hello"
+            MCPPromptMessageContent::Block(ref block)
+                if matches!(block.as_ref(), MCPPromptMessageContentBlock::Text { text } if text == "hello")
         ));
 
         let resource_link = RawResource {
@@ -1167,8 +1168,12 @@ mod tests {
         let mapped = map_prompt_message(prompt_message);
         assert!(matches!(
             mapped.content,
-            MCPPromptMessageContent::Block(MCPPromptMessageContentBlock::ResourceLink { ref uri, .. })
-                if uri == "file:///tmp/input.md"
+            MCPPromptMessageContent::Block(ref block)
+                if matches!(
+                    block.as_ref(),
+                    MCPPromptMessageContentBlock::ResourceLink { uri, .. }
+                        if uri == "file:///tmp/input.md"
+                )
         ));
 
         let embedded = rmcp::model::RawEmbeddedResource {
@@ -1188,8 +1193,12 @@ mod tests {
         let mapped = map_prompt_message(prompt_message);
         assert!(matches!(
             mapped.content,
-            MCPPromptMessageContent::Block(MCPPromptMessageContentBlock::Resource { ref resource })
-                if resource.uri == "file:///tmp/embedded.txt"
+            MCPPromptMessageContent::Block(ref block)
+                if matches!(
+                    block.as_ref(),
+                    MCPPromptMessageContentBlock::Resource { resource }
+                        if resource.uri == "file:///tmp/embedded.txt"
+                )
         ));
     }
 }

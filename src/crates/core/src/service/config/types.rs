@@ -494,6 +494,10 @@ pub struct ModeConfig {
     /// User-level skills disabled for this mode.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub disabled_user_skills: Vec<String>,
+
+    /// User-level built-in skills explicitly enabled even though the mode default disables them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub enabled_user_skills: Vec<String>,
 }
 
 /// API view of a mode configuration.
@@ -506,6 +510,8 @@ pub struct ModeConfigView {
     pub enabled: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub disabled_user_skills: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub enabled_user_skills: Vec<String>,
 }
 
 fn default_true() -> bool {
@@ -534,6 +540,7 @@ impl Default for ModeConfig {
             removed_tools: Vec::new(),
             enabled: true,
             disabled_user_skills: Vec::new(),
+            enabled_user_skills: Vec::new(),
         }
     }
 }
@@ -546,6 +553,7 @@ impl Default for ModeConfigView {
             default_tools: Vec::new(),
             enabled: true,
             disabled_user_skills: Vec::new(),
+            enabled_user_skills: Vec::new(),
         }
     }
 }

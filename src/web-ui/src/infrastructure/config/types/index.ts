@@ -1,4 +1,3 @@
- 
 import { i18nService } from '@/infrastructure/i18n';
 
 const t = (key: string, options?: Record<string, unknown>) => i18nService.t(key, options);
@@ -9,7 +8,7 @@ export interface GlobalConfig {
   workspace: WorkspaceConfig;
   ai: AIConfig;
   version: string;
-  last_modified: number; 
+  last_modified: number;
 }
 
 export interface AppConfig {
@@ -65,13 +64,11 @@ export interface AIExperienceConfig {
   enable_agent_companion: boolean;
 }
 
-
-
 export type ModelCapability =
   | 'text_chat'
   | 'function_calling';
 
-export type ModelCategory = 
+export type ModelCategory =
   | 'general_chat'
   | 'multimodal';
 
@@ -82,61 +79,49 @@ export interface ModelMetadata {
   strengths?: string[];
 }
 
-
 export const CATEGORY_LABELS: Record<ModelCategory, string> = {
   general_chat: t('settings/ai-model:category.general_chat'),
   multimodal: t('settings/ai-model:category.multimodal')
 };
-
 
 export const CATEGORY_ICONS: Record<ModelCategory, string> = {
   general_chat: t('settings/ai-model:categoryIcons.general_chat'),
   multimodal: t('settings/ai-model:categoryIcons.multimodal')
 };
 
-
 export type CustomHeadersMode = 'replace' | 'merge';
-
 
 export interface AIModelConfig {
   id?: string;
   name: string;
   provider: string;
-  api_key?: string;        
+  api_key?: string;
   base_url: string;
   /** Computed actual request URL, derived from base_url + provider format. Stored on save. */
   request_url?: string;
-  model_name: string;      
-  description?: string;    
-  context_window?: number; 
-  max_tokens?: number;     
+  model_name: string;
+  description?: string;
+  context_window?: number;
+  max_tokens?: number;
   temperature?: number;
-  top_p?: number;          
-  frequency_penalty?: number; 
-  presence_penalty?: number;  
+  top_p?: number;
+  frequency_penalty?: number;
+  presence_penalty?: number;
   enabled: boolean;
-  is_default?: boolean;    
-  custom_headers?: Record<string, string>; 
-  custom_headers_mode?: CustomHeadersMode; 
-  skip_ssl_verify?: boolean; 
-  custom_request_body?: string; 
+  is_default?: boolean;
+  custom_headers?: Record<string, string>;
+  custom_headers_mode?: CustomHeadersMode;
+  skip_ssl_verify?: boolean;
+  custom_request_body?: string;
   timeout?: number;
-
-  
   category: ModelCategory;
   capabilities: ModelCapability[];
   recommended_for?: string[];
   metadata?: Record<string, any>;
-
-  
   enable_thinking_process?: boolean;
-
-  
   support_preserved_thinking?: boolean;
-
   /** Parse `<think>...</think>` text chunks into streaming reasoning content. */
   inline_think_in_text?: boolean;
-
   /** Reasoning effort for OpenAI Responses API ("low" | "medium" | "high" | "xhigh") */
   reasoning_effort?: string;
 }
@@ -148,23 +133,20 @@ export interface ProxyConfig {
   password?: string;
 }
 
- 
 export interface DefaultModelsConfig {
-   
   primary?: string | null;
-   
   fast?: string | null;
 }
 
 export interface AIConfig {
-  models: AIModelConfig[];  
-  default_models: DefaultModelsConfig;  
-  agent_models: Record<string, string>;  
-  func_agent_models: Record<string, string>;  
-  mode_configs: Record<string, StoredModeConfigItem>;  
-  subagent_configs: Record<string, SubAgentConfigItem>;  
-  proxy: ProxyConfig;  
-  debug_mode_config: DebugModeConfig;  
+  models: AIModelConfig[];
+  default_models: DefaultModelsConfig;
+  agent_models: Record<string, string>;
+  func_agent_models: Record<string, string>;
+  mode_configs: Record<string, StoredModeConfigItem>;
+  subagent_configs: Record<string, SubAgentConfigItem>;
+  proxy: ProxyConfig;
+  debug_mode_config: DebugModeConfig;
   request_timeout: number;
   max_retries: number;
   temperature: number;
@@ -178,43 +160,40 @@ export interface AIConfig {
   computer_use_enabled?: boolean;
 }
 
-
-
-
 export interface StoredModeConfigItem {
   mode_id: string;
   added_tools: string[];
   removed_tools: string[];
   enabled: boolean;
   disabled_user_skills?: string[];
+  enabled_user_skills?: string[];
 }
 
 export interface ModeConfigItem {
-  mode_id: string;  
-  enabled_tools: string[];  
-  enabled: boolean;  
-  default_tools: string[];  
+  mode_id: string;
+  enabled_tools: string[];
+  enabled: boolean;
+  default_tools: string[];
   disabled_user_skills?: string[];
+  enabled_user_skills?: string[];
 }
-
 
 export interface SubAgentConfigItem {
-  enabled: boolean;  
+  enabled: boolean;
 }
-
-
 
 export type SkillLevel = 'user' | 'project';
 
-
 export interface SkillInfo {
   key: string;
-  name: string;         
-  description: string;  
-  path: string;         
+  name: string;
+  description: string;
+  path: string;
   level: SkillLevel;
   sourceSlot: string;
   dirName: string;
+  isBuiltin: boolean;
+  groupKey?: string | null;
 }
 
 export interface ModeSkillInfo extends SkillInfo {
@@ -241,39 +220,24 @@ export interface SkillMarketDownloadResult {
   output: string;
 }
 
-
-
- 
 export interface DebugModeConfig {
-   
   log_path: string;
-   
   ingest_port: number;
-   
   enabled_languages: string[];
-   
   language_templates: Record<string, LanguageDebugTemplate>;
 }
 
- 
+
 export interface LanguageDebugTemplate {
-   
   language: string;
-   
   display_name: string;
-   
   enabled: boolean;
-   
   instrumentation_template: string;
-   
   region_start: string;
-   
   region_end: string;
-   
   notes: string[];
 }
 
- 
 export const DEFAULT_DEBUG_MODE_CONFIG: DebugModeConfig = {
   log_path: '.bitfun/debug.log',
   ingest_port: 7242,
@@ -281,7 +245,6 @@ export const DEFAULT_DEBUG_MODE_CONFIG: DebugModeConfig = {
   language_templates: {}
 };
 
- 
 export const LANGUAGE_TEMPLATE_LABELS: Record<string, string> = {
   javascript: t('settings/debug:languageLabels.javascript'),
   python: t('settings/debug:languageLabels.python'),
@@ -290,15 +253,13 @@ export const LANGUAGE_TEMPLATE_LABELS: Record<string, string> = {
   java: t('settings/debug:languageLabels.java')
 };
 
- 
 export const ALL_LANGUAGES = ['javascript', 'python', 'rust', 'go', 'java'] as const;
 
- 
 export const DEFAULT_LANGUAGE_TEMPLATES: Record<string, LanguageDebugTemplate> = {
   javascript: {
     language: 'javascript',
     display_name: t('settings/debug:languageLabels.javascript'),
-    enabled: false,  
+    enabled: false,
     instrumentation_template: `fetch('http://127.0.0.1:{PORT}/ingest/{SESSION_ID}',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'{LOCATION}',message:'{MESSAGE}',data:{DATA},timestamp:Date.now(),sessionId:'{SESSION_ID}',hypothesisId:'{HYPOTHESIS_ID}',runId:'{RUN_ID}'})}).catch(()=>{});`,
     region_start: '// #region agent log',
     region_end: '// #endregion',
@@ -388,7 +349,6 @@ with open(os.path.join(os.getcwd(), '{LOG_PATH}'), 'a', encoding='utf-8') as _f:
   },
 };
 
-
 export interface SkillValidationResult {
   valid: boolean;
   name?: string;
@@ -396,34 +356,30 @@ export interface SkillValidationResult {
   error?: string;
 }
 
-
 export interface EditorConfig {
-  font_size: number;        
-  font_family: string;      
-  font_weight?: 'normal' | 'bold'; 
-  line_height: number;      
-  tab_size: number;         
-  insert_spaces: boolean;   
-  word_wrap: string;        
-  line_numbers: string;     
+  font_size: number;
+  font_family: string;
+  font_weight?: 'normal' | 'bold';
+  line_height: number;
+  tab_size: number;
+  insert_spaces: boolean;
+  word_wrap: string;
+  line_numbers: string;
   minimap: MinimapConfig;
   theme: string;
-  auto_save: string;        
-  auto_save_delay: number;  
-  format_on_save: boolean;  
-  format_on_paste: boolean; 
-  trim_auto_whitespace: boolean; 
-  
-  cursor_style?: string;           
-  cursor_blinking?: string;        
-  render_whitespace?: string;      
-  render_line_highlight?: string;  
-  
-  smooth_scrolling?: boolean;      
-  scroll_beyond_last_line?: boolean; 
-  
-  semantic_highlighting?: boolean;   
-  bracket_pair_colorization?: boolean; 
+  auto_save: string;
+  auto_save_delay: number;
+  format_on_save: boolean;
+  format_on_paste: boolean;
+  trim_auto_whitespace: boolean;
+  cursor_style?: string;
+  cursor_blinking?: string;
+  render_whitespace?: string;
+  render_line_highlight?: string;
+  smooth_scrolling?: boolean;
+  scroll_beyond_last_line?: boolean;
+  semantic_highlighting?: boolean;
+  bracket_pair_colorization?: boolean;
 }
 
 export interface MinimapConfig {
@@ -432,24 +388,22 @@ export interface MinimapConfig {
   size?: string;
 }
 
-
 export interface TerminalConfig {
-  default_shell: string;        
-  font_size: number;            
-  font_family: string;          
-  cursor_style: string;         
-  cursor_blink: boolean;        
-  scrollback_lines: number;     
+  default_shell: string;
+  font_size: number;
+  font_family: string;
+  cursor_style: string;
+  cursor_blink: boolean;
+  scrollback_lines: number;
   theme: string;
   transparency: number;
-  bell_style: string;           
-  copy_on_select: boolean;      
-  paste_on_right_click: boolean; 
-  confirm_on_exit: boolean;     
-  startup_command: string;      
-  env_vars: Record<string, string>; 
+  bell_style: string;
+  copy_on_select: boolean;
+  paste_on_right_click: boolean;
+  confirm_on_exit: boolean;
+  startup_command: string;
+  env_vars: Record<string, string>;
 }
-
 
 export interface WorkspaceConfig {
   recent_workspaces: string[];
@@ -462,23 +416,14 @@ export interface WorkspaceConfig {
   search_exclude_patterns: string[];
 }
 
-
-
 export interface IConfigManager {
-  
   getConfig<T = any>(path?: string): Promise<T>;
   setConfig<T = any>(path: string, value: T): Promise<void>;
   resetConfig(path?: string): Promise<void>;
-  
-  
   validateConfig(): Promise<ConfigValidationResult>;
   exportConfig(): Promise<ConfigExport>;
   importConfig(config: ConfigExport): Promise<void>;
-  
-  
   onConfigChange(callback: (path: string, oldValue: any, newValue: any) => void): () => void;
-  
-  
   refreshCache(): Promise<void>;
   clearCache(): void;
 }
@@ -510,16 +455,12 @@ export interface ConfigExport {
   };
 }
 
-
-
 export interface ConfigChangeEvent {
   path: string;
   old_value: any;
   new_value: any;
   timestamp: number;
 }
-
-
 
 export interface UseConfigReturn<T = any> {
   data: T | null;
@@ -530,9 +471,7 @@ export interface UseConfigReturn<T = any> {
   refreshConfig: () => Promise<void>;
 }
 
-
-
-export type ConfigPath = 
+export type ConfigPath =
   | 'app'
   | 'app.language'
   | 'app.auto_update'
@@ -551,9 +490,7 @@ export type ConfigPath =
   | 'ai.default_model'
   | 'ai.models'
   | 'agents'
-  | string; 
-
-
+  | string;
 
 export interface ConfigPanelProps {
   section?: keyof GlobalConfig;
@@ -570,15 +507,9 @@ export interface RuntimeLoggingInfo {
   webviewLogPath: string;
 }
 
-
-
- 
 export interface DefaultModels {
-   
   primary: string | null;
-   
   fast: string | null;
 }
 
- 
 export type OptionalCapabilityModels = Record<string, never>;

@@ -41,6 +41,12 @@ pub struct SkillInfo {
     pub source_slot: String,
     /// Directory name under the slot's `skills/` root.
     pub dir_name: String,
+    /// Whether this skill is bundled with BitFun as a built-in skill.
+    #[serde(default)]
+    pub is_builtin: bool,
+    /// Optional logical group for built-in skills.
+    #[serde(default)]
+    pub group_key: Option<String>,
 }
 
 impl SkillInfo {
@@ -70,7 +76,8 @@ impl SkillInfo {
 pub struct ModeSkillInfo {
     #[serde(flatten)]
     pub skill: SkillInfo,
-    /// True when this skill key is explicitly disabled in the current mode's config.
+    /// True when this skill is currently disabled for the mode after applying
+    /// defaults plus user/project overrides.
     pub disabled_by_mode: bool,
     /// True when this skill is the one actually selected for runtime after applying
     /// mode disables and same-name priority resolution.
