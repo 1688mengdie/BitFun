@@ -404,6 +404,8 @@ export const SSHConnectionDialog: React.FC<SSHConnectionDialogProps> = ({
         title={t('ssh.remote.title') || 'SSH Remote'}
         size="medium"
         showCloseButton
+        closeOnOverlayClick={false}
+        overlayClassName="ssh-connection-dialog__modal-overlay"
         contentClassName="modal__content--fill-flex"
       >
         <div className="ssh-connection-dialog">

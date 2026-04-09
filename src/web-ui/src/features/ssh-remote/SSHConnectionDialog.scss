@@ -263,3 +263,8 @@
     transform: rotate(360deg);
   }
 }
+
+/** SSH remote workspace dialog only: above nav fixed popovers (~10k) so the dimmed backdrop captures clicks. */
+.ssh-connection-dialog__modal-overlay {
+  z-index: 20000;
+}

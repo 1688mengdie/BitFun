@@ -14,7 +14,8 @@
   background: transparent;
   color: inherit;
 
-  &:focus {
+  &:focus,
+  &:focus-visible {
     border: none !important;
     outline: none !important;
     box-shadow: none !important;

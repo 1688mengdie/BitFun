@@ -145,8 +145,7 @@
         
         &:empty::before {
           display: block;
-          color: var(--color-text-primary);
-          opacity: 0.6;
+          color: color-mix(in srgb, var(--color-text-muted) 52%, transparent);
           font-size: var(--flowchat-font-size-base);
           line-height: 24px;
           text-align: center;
@@ -164,8 +163,7 @@
         width: 100%;
         font-size: var(--flowchat-font-size-sm);
         line-height: 24px;
-        color: var(--color-text-muted);
-        opacity: 0.62;
+        color: color-mix(in srgb, var(--color-text-muted) 48%, transparent);
         white-space: nowrap;
         pointer-events: none;
         letter-spacing: 0.01em;
@@ -220,7 +218,7 @@
     }
 
     &:hover .bitfun-chat-input__space-hint {
-      opacity: 0.9;
+      color: color-mix(in srgb, var(--color-text-muted) 62%, transparent);
     }
 
     &.bitfun-chat-input--pet-visible {
@@ -238,7 +236,8 @@
       }
 
       &:hover .bitfun-chat-input__space-hint {
-        opacity: 0.88;
+        opacity: 1;
+        color: color-mix(in srgb, var(--color-text-muted) 58%, transparent);
       }
 
       &.bitfun-chat-input--pet-split-send.bitfun-chat-input--processing {
