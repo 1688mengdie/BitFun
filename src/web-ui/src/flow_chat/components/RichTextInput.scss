@@ -27,7 +27,7 @@
   
   &:empty::before {
     content: attr(data-placeholder);
-    color: var(--color-text-muted);
+    color: color-mix(in srgb, var(--color-text-muted) 52%, transparent);
     pointer-events: none;
     animation: rich-text-placeholder-fade-in 0.25s ease-out;
   }
@@ -54,12 +54,12 @@
   
 }
 
-// Improve placeholder contrast in light theme.
+// Light theme: placeholder slightly softer than body text.
 :root[data-theme="light"] .rich-text-input,
 :root[data-theme-type="light"] .rich-text-input,
 .light .rich-text-input {
   &:empty::before {
-    color: var(--color-text-secondary, #6b7280);
+    color: color-mix(in srgb, var(--color-text-secondary, #6b7280) 48%, transparent);
   }
 }
 

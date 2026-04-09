@@ -18,6 +18,10 @@ export interface ModalProps {
   /** Extra class on `.modal__content` (e.g. flex layout for scroll regions inside children) */
   contentClassName?: string;
   showCloseButton?: boolean;
+  /** When false, clicks on the backdrop do not call onClose. Default true. */
+  closeOnOverlayClick?: boolean;
+  /** Extra class on `.modal-overlay` (stacking / theme hooks for specific dialogs only). */
+  overlayClassName?: string;
   draggable?: boolean;
   resizable?: boolean;
   placement?: 'center' | 'bottom-left' | 'bottom-right';
@@ -33,6 +37,8 @@ export const Modal: React.FC<ModalProps> = ({
   contentInset = false,
   contentClassName,
   showCloseButton = true,
+  closeOnOverlayClick = true,
+  overlayClassName,
   draggable = false,
   resizable = false,
   placement = 'center',
@@ -246,7 +252,16 @@ export const Modal: React.FC<ModalProps> = ({
   } : {};
 
   return createPortal(
-    <div className={`modal-overlay ${placement !== 'center' ? `modal-overlay--${placement}` : ''}`} onClick={onClose}>
+    <div
+      className={[
+        'modal-overlay',
+        placement !== 'center' ? `modal-overlay--${placement}` : '',
+        overlayClassName ?? '',
+      ]
+        .filter(Boolean)
+        .join(' ')}
+      onClick={closeOnOverlayClick ? onClose : undefined}
+    >
       <div
         ref={modalRef}
         className={[

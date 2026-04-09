@@ -10,7 +10,10 @@ export const bitfunSlateTheme: ThemeConfig = {
   description: 'Slate gray geometric theme - Deep immersion, high contrast grayscale aesthetics',
   author: 'BitFun Team',
   version: '1.3.0',
-  
+
+  layout: {
+    sceneViewportBorder: false,
+  },
   
   colors: {
     background: {

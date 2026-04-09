@@ -11,6 +11,15 @@
   height: 100%;
   overflow-y: auto;
   padding: $size-gap-4;
+  border-radius: 0;
+
+  /* Single contenteditable surface: suppress global :focus-visible ring on the whole editor */
+  [contenteditable='true']:focus,
+  [contenteditable='true']:focus-visible {
+    outline: none !important;
+    outline-offset: 0 !important;
+    box-shadow: none !important;
+  }
 
   .ProseMirror {
     min-height: 100%;
@@ -23,7 +32,7 @@
     > [data-block-id]:not(hr) {
       margin-bottom: $size-gap-2;
       padding: $size-gap-2;
-      border-radius: $size-radius-base;
+      border-radius: 0;
       transition: background $motion-base $easing-standard;
 
       &:hover {
