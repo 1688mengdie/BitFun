@@ -1,9 +1,18 @@
 **中文**  [English](README.md)
 
-[GitHub release](https://github.com/GCWing/BitFun/releases)  
-[Website](https://openbitfun.com/)  
-[License: MIT](https://github.com/GCWing/BitFun/blob/main/LICENSE)  
-[Platform](https://github.com/GCWing/BitFun)
+<div align="center">
+
+![BitFun](./png/BitFun_title.png)
+
+</div>
+<div align="center">
+
+[![GitHub release](https://img.shields.io/github/v/release/GCWing/BitFun?style=flat-square&color=blue)](https://github.com/GCWing/BitFun/releases)
+[![Website](https://img.shields.io/badge/Website-openbitfun.com-6f42c1?style=flat-square)](https://openbitfun.com/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow?style=flat-square)](https://github.com/GCWing/BitFun/blob/main/LICENSE)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue?style=flat-square)](https://github.com/GCWing/BitFun)
+
+</div>
 
 ---
 
