@@ -6,6 +6,7 @@
 import { spawnSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+import { readdirSync } from 'fs';
 import { ensureOpenSslWindows } from './ensure-openssl-windows.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -43,7 +44,54 @@ async function main() {
     console.error(r.error);
     process.exit(1);
   }
+
+  if (r.status === 0 && process.platform === 'darwin') {
+    patchDmgExtras(ROOT);
+  }
+
   process.exit(r.status ?? 1);
+}
+
+// Find all .dmg files under target/ and inject the helper TXT files
+// (quarantine removal instructions) into each one.
+function patchDmgExtras(root) {
+  const patchScript = join(root, 'scripts', 'patch-dmg-extras.sh');
+  const targetDir = join(root, 'target');
+
+  const dmgFiles = findDmgFiles(targetDir);
+  if (dmgFiles.length === 0) {
+    console.log('[patch-dmg] No .dmg files found — skipping.');
+    return;
+  }
+
+  for (const dmg of dmgFiles) {
+    console.log(`[patch-dmg] Patching ${dmg}`);
+    const p = spawnSync('bash', [patchScript, dmg], {
+      stdio: 'inherit',
+      shell: false,
+    });
+    if (p.status !== 0) {
+      console.error(`[patch-dmg] Failed to patch ${dmg}`);
+      process.exit(1);
+    }
+  }
+}
+
+function findDmgFiles(dir) {
+  const results = [];
+  try {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        results.push(...findDmgFiles(full));
+      } else if (entry.name.endsWith('.dmg')) {
+        results.push(full);
+      }
+    }
+  } catch {
+    // directory may not exist for some targets
+  }
+  return results;
 }
 
 main().catch((e) => {

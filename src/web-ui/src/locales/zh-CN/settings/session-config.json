@@ -28,7 +28,6 @@
     "screenCaptureDesc": "",
     "granted": "已授权",
     "notGranted": "未授权",
-    "request": "请求授权",
     "openSettings": "系统设置",
     "refreshStatus": "刷新状态",
     "desktopOnly": "Computer use 仅在 BitFun 桌面应用中可用。",

@@ -230,21 +230,6 @@ const SessionConfig: React.FC = () => {
     }
   };
 
-  const handleComputerUseRequestPermissions = async () => {
-    setComputerUseBusy(true);
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      await invoke('computer_use_request_permissions');
-      await refreshComputerUseStatus();
-      notificationService.success(t('messages.saveSuccess'), { duration: 2000 });
-    } catch (error) {
-      log.error('computer_use_request_permissions failed', error);
-      notificationService.error(t('messages.saveFailed'));
-    } finally {
-      setComputerUseBusy(false);
-    }
-  };
-
   const handleComputerUseOpenSettings = async (pane: 'accessibility' | 'screen_capture') => {
     try {
       const { invoke } = await import('@tauri-apps/api/core');
@@ -573,17 +558,6 @@ const SessionConfig: React.FC = () => {
                       <RefreshCw size={14} />
                     </IconButton>
                   </span>
-                  {!computerUseAccess ? (
-                    <Button
-                      className="bitfun-func-agent-config__row-action-btn"
-                      size="small"
-                      variant="secondary"
-                      disabled={computerUseBusy}
-                      onClick={() => void handleComputerUseRequestPermissions()}
-                    >
-                      {t('computerUse.request')}
-                    </Button>
-                  ) : null}
                   <Button
                     className="bitfun-func-agent-config__row-action-btn"
                     size="small"

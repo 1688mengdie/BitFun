@@ -28,7 +28,6 @@
     "screenCaptureDesc": "",
     "granted": "Granted",
     "notGranted": "Not granted",
-    "request": "Request",
     "openSettings": "Setting",
     "refreshStatus": "Refresh status",
     "desktopOnly": "Computer use settings are only available in the BitFun desktop app.",
