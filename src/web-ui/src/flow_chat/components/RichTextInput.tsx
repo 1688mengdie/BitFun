@@ -211,12 +211,20 @@ export const RichTextInput = React.forwardRef<HTMLDivElement, RichTextInputProps
         text += node.textContent || '';
       } else if (node.nodeType === Node.ELEMENT_NODE) {
         const element = node as HTMLElement;
+        
+        const isBlock = element.tagName === 'DIV' || element.tagName === 'P';
+        if (isBlock && text.length > 0 && !text.endsWith('\n')) {
+          text += '\n';
+        }
+        
         // For tag elements, use the stored full format with # prefix
         if (element.classList.contains('rich-text-tag-pill')) {
           const tagFormat = element.getAttribute('data-tag-format');
           if (tagFormat) {
             text += tagFormat;
           }
+        } else if (element.tagName === 'BR') {
+          text += '\n';
         } else {
           node.childNodes.forEach(traverse);
         }

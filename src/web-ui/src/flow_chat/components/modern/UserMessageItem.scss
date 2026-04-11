@@ -58,12 +58,16 @@
   font-weight: 500;
   line-height: 1.6;
   color: var(--color-text-primary, #e0e0e0);
-  white-space: nowrap;
+  white-space: pre-wrap;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  -webkit-box-orient: vertical;
   overflow: hidden;
   text-overflow: ellipsis;
   word-break: break-word;
   min-width: 0; /* Ensures the content can shrink properly. */
-  max-height: 1.6em; /* Collapsed: show a single line (line-height * 1). */
+  max-height: 4.8em; /* Collapsed: show up to 3 lines (line-height * 3). */
   user-select: text;
   transition: all 0.2s ease;
   
@@ -90,6 +94,9 @@
 // Expanded message body: after --failed so multiline / whitespace always apply when open.
 .user-message-item--expanded .user-message-item__content {
   white-space: pre-wrap;
+  display: block;
+  -webkit-line-clamp: unset;
+  line-clamp: unset;
   overflow: visible;
   text-overflow: unset;
   max-height: none;

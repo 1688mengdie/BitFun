@@ -11,12 +11,13 @@ import { notificationService } from '@/shared/notification-system';
 import { FlowTextBlock } from '../FlowTextBlock';
 import { FlowToolCard } from '../FlowToolCard';
 import { Tooltip } from '@/component-library';
-import type { DialogTurn, FlowTextItem, FlowToolItem } from '../../types/flow-chat';
+import type { DialogTurn, FlowTextItem, FlowToolItem, FlowThinkingItem } from '../../types/flow-chat';
 import { i18nService } from '@/infrastructure/i18n';
 import { workspaceAPI } from '@/infrastructure/api';
 import { createLogger } from '@/shared/utils/logger';
 import { downloadDir, join } from '@tauri-apps/api/path';
 import { writeFile } from '@tauri-apps/plugin-fs';
+import { ModelThinkingDisplay } from '../../tool-cards/ModelThinkingDisplay';
 import './ExportImageButton.scss';
 
 const log = createLogger('ExportImageButton');
@@ -32,24 +33,21 @@ interface ExportImageButtonProps {
 // Exported content renderer.
 interface ExportContentProps {
   dialogTurn: DialogTurn;
+  logoDataUrl?: string;
 }
 
-const ExportContent: React.FC<ExportContentProps> = ({ dialogTurn }) => {
+const ExportContent: React.FC<ExportContentProps> = ({ dialogTurn, logoDataUrl }) => {
   return (
     <div className="export-content">
       <div className="export-content__header">
-        <img 
-          src="/Logo-ICON.png" 
-          alt="BitFun" 
+        <img
+          src={logoDataUrl ?? '/Logo-ICON.png'}
+          alt="BitFun"
           className="export-content__logo"
-          onError={(e) => {
-            // Hide if the logo fails to load.
-            (e.target as HTMLImageElement).style.display = 'none';
-          }}
         />
         <div className="export-content__title-group">
           <div className="export-content__title">BitFun</div>
-          <div className="export-content__subtitle">{i18nService.t('flow-chat:exportImage.subtitle')}</div>
+          <div className="export-content__subtitle">{i18nService.t('flow-chat:exportImage.subtitle').replace(/ /g, '\u00A0')}</div>
         </div>
         <div className="export-content__timestamp">
           {i18nService.formatDate(new Date())}
@@ -79,20 +77,30 @@ const ExportContent: React.FC<ExportContentProps> = ({ dialogTurn }) => {
                         <FlowTextBlock 
                           textItem={{
                             ...textItem,
-                            isStreaming: false, // Hide streaming state in exports.
+                            isStreaming: false,
                           }}
                         />
                       </div>
                     );
                   }
+                } else if (item.type === 'thinking') {
+                  const thinkingItem = item as FlowThinkingItem;
+                  return (
+                    <div key={item.id} className="export-content__thinking-item">
+                      <ModelThinkingDisplay 
+                        thinkingItem={{
+                          ...thinkingItem,
+                          isStreaming: false,
+                        }}
+                        isLastItem={true}
+                      />
+                    </div>
+                  );
                 } else if (item.type === 'tool') {
                   const toolItem = item as FlowToolItem;
                   return (
                     <div key={item.id} className="export-content__tool-item">
-                      <FlowToolCard 
-                        toolItem={toolItem}
-                        // Disable interactions in exports.
-                      />
+                      <FlowToolCard toolItem={toolItem} />
                     </div>
                   );
                 }
@@ -103,10 +111,10 @@ const ExportContent: React.FC<ExportContentProps> = ({ dialogTurn }) => {
       </div>
 
       <div className="export-content__footer">
-        <span>{i18nService.t('flow-chat:exportImage.poweredBy')}</span>
+        <span>{i18nService.t('flow-chat:exportImage.poweredBy').replace(/ /g, '\u00A0')}</span>
         <span className="export-content__footer-brand">BitFun</span>
         <span>•</span>
-        <span>{i18nService.t('flow-chat:exportImage.aiAssistant')}</span>
+        <span>{i18nService.t('flow-chat:exportImage.aiAssistant').replace(/ /g, '\u00A0')}</span>
       </div>
     </div>
   );
@@ -147,18 +155,44 @@ export const ExportImageButton: React.FC<ExportImageButtonProps> = ({
       // Get theme background color.
       const computedStyle = getComputedStyle(document.documentElement);
       const bgColor = computedStyle.getPropertyValue('--color-bg-flowchat').trim() || '#121214';
+
+      // Pre-load logo and resize to 64x64 via canvas to produce a compact data URL.
+      // html-to-image truncates very long base64 strings in SVG attributes,
+      // so we must keep the data URL small by downscaling the original 1024x1024 image.
+      let logoDataUrl: string | undefined;
+      try {
+        logoDataUrl = await new Promise<string>((resolve, reject) => {
+          const img = new window.Image();
+          img.onload = () => {
+            const canvas = document.createElement('canvas');
+            canvas.width = 64;
+            canvas.height = 64;
+            const ctx = canvas.getContext('2d');
+            if (!ctx) { reject(new Error('no canvas ctx')); return; }
+            ctx.drawImage(img, 0, 0, 64, 64);
+            resolve(canvas.toDataURL('image/png'));
+          };
+          img.onerror = reject;
+          img.src = '/Logo-ICON.png';
+        });
+      } catch (e) {
+        log.warn('Logo canvas resize failed, will use original path', e);
+      }
       
       // Create hidden wrapper for rendering.
+      // Use left: -9999px (not z-index: -9999) so elements remain visible to html-to-image.
       const wrapper = document.createElement('div');
       wrapper.id = 'export-image-wrapper';
       wrapper.className = 'export-image-wrapper';
       wrapper.style.cssText = `
         position: fixed;
-        left: 0;
+        left: -9999px;
         top: 0;
-        z-index: -9999;
+        z-index: 9999;
         pointer-events: none;
         background: ${bgColor};
+        visibility: visible;
+        opacity: 1;
       `;
       
       // Copy CSS variables for consistent styling.
@@ -181,10 +215,10 @@ export const ExportImageButton: React.FC<ExportImageButtonProps> = ({
       
       // Render export content with React.
       const root = createRoot(wrapper);
-      root.render(<ExportContent dialogTurn={dialogTurn} />);
+      root.render(<ExportContent dialogTurn={dialogTurn} logoDataUrl={logoDataUrl} />);
       
-      // Wait for render.
-      await new Promise(resolve => setTimeout(resolve, 200));
+      // Wait for render and images to load.
+      await new Promise(resolve => setTimeout(resolve, 500));
       
       // Find rendered container.
       const container = wrapper.querySelector('.export-content') as HTMLElement;
@@ -217,6 +251,8 @@ export const ExportImageButton: React.FC<ExportImageButtonProps> = ({
             if (node.classList?.contains('user-message-item__actions')) return false;
             if (node.classList?.contains('tool-card__actions')) return false;
             if (node.classList?.contains('base-tool-card__confirm-actions')) return false;
+            if (node.classList?.contains('base-tool-card-expanded')) return false;
+            if (node.classList?.contains('compact-tool-card-expanded')) return false;
             return true;
           },
         });
@@ -229,6 +265,15 @@ export const ExportImageButton: React.FC<ExportImageButtonProps> = ({
           backgroundColor: bgColor,
           skipFonts: true,
           cacheBust: true,
+          filter: (node: HTMLElement) => {
+            if (node.classList?.contains('model-round-item__footer')) return false;
+            if (node.classList?.contains('user-message-item__actions')) return false;
+            if (node.classList?.contains('tool-card__actions')) return false;
+            if (node.classList?.contains('base-tool-card__confirm-actions')) return false;
+            if (node.classList?.contains('base-tool-card-expanded')) return false;
+            if (node.classList?.contains('compact-tool-card-expanded')) return false;
+            return true;
+          },
         });
         
         const response = await fetch(dataUrl);

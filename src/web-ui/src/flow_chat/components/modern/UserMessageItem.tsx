@@ -195,8 +195,6 @@ export const UserMessageItem = React.memo<UserMessageItemProps>(
             title={(hasOverflow || expanded) ? (expanded ? t('message.clickToCollapse') : t('message.clickToExpand')) : undefined}
             style={{
               cursor: (hasOverflow || expanded) ? 'pointer' : 'text',
-              // Inline so newline preservation wins over any global/cascade overrides.
-              ...(expanded ? { whiteSpace: 'pre-wrap' as const } : {}),
             }}
           >
             {displayText}
