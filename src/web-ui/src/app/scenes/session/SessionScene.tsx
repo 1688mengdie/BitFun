@@ -49,7 +49,7 @@ const SessionScene: React.FC<SessionSceneProps> = ({
   const [isDragging, setIsDragging] = useState(false);
   const [isHovering, setIsHovering] = useState(false);
 
-  const [lastRightWidth, setLastRightWidth] = useState<number>(() =>
+  const [, setLastRightWidth] = useState<number>(() =>
     loadPanelWidth(STORAGE_KEYS.RIGHT_PANEL_LAST_WIDTH, RIGHT_PANEL_CONFIG.COMFORTABLE_DEFAULT)
   );
 
