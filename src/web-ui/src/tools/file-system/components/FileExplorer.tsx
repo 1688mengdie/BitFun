@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react';
+import { useShortcut } from '@/infrastructure/hooks/useShortcut';
 import { Folder, ChevronRight, FilePlus, FolderPlus, RefreshCw } from 'lucide-react';
 import { FileTree } from './FileTree';
 import { VirtualFileTree } from './VirtualFileTree';
@@ -300,12 +301,32 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
     }
   }, [externalOnNodeExpand]);
 
+  useShortcut(
+    'filetree.refresh',
+    { key: 'F5', scope: 'filetree' },
+    handleRefresh,
+    { enabled: Boolean(onRefresh), description: 'keyboard.shortcuts.filetree.refresh' }
+  );
+  useShortcut(
+    'filetree.newFile',
+    { key: 'N', ctrl: true, scope: 'filetree' },
+    handleNewFile,
+    { enabled: Boolean(onNewFile), description: 'keyboard.shortcuts.filetree.newFile' }
+  );
+  useShortcut(
+    'filetree.newFolder',
+    { key: 'N', ctrl: true, shift: true, scope: 'filetree' },
+    handleNewFolder,
+    { enabled: Boolean(onNewFolder), description: 'keyboard.shortcuts.filetree.newFolder' }
+  );
+
   if (filteredFileTree.length === 0) {
     return (
       <div 
         className={`bitfun-file-explorer bitfun-file-explorer--empty ${className}`}
         data-area="file-explorer"
         data-workspace-root={workspacePath}
+        data-shortcut-scope="filetree"
         tabIndex={0}
       >
         <div className="bitfun-file-explorer__empty">
@@ -322,6 +343,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
       className={`bitfun-file-explorer ${className}`}
       data-area="file-explorer"
       data-workspace-root={workspacePath}
+      data-shortcut-scope="filetree"
       tabIndex={0}
       onMouseEnter={() => setIsToolbarVisible(true)}
       onMouseLeave={() => {

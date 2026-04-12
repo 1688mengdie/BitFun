@@ -2,7 +2,7 @@
  * SCENE_TAB_REGISTRY — static definitions for all scene tab types.
  *
  * Rules:
- *  - Max 3 open tabs total.
+ *  - Max MAX_OPEN_SCENES open tabs total.
  *  - pinned = true: protected from auto-eviction and manual close.
  *  - pinned = false: can be auto-evicted and manually closed.
  */
@@ -25,6 +25,7 @@ import {
 } from 'lucide-react';
 import type { SceneTabDef, SceneTabId } from '../components/SceneBar/types';
 
+/** Upper bound for concurrent open scene tabs (top bar); oldest closable tab is evicted when exceeded. */
 export const MAX_OPEN_SCENES = 3;
 
 export const SCENE_TAB_REGISTRY: SceneTabDef[] = [

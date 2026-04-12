@@ -145,7 +145,10 @@ export const ContentCanvas: React.FC<ContentCanvasProps> = ({
   };
 
   return (
-    <div className={`canvas-content-canvas ${layout.isMaximized ? 'is-maximized' : ''}`}>
+    <div
+      className={`canvas-content-canvas ${layout.isMaximized ? 'is-maximized' : ''}`}
+      data-shortcut-scope="canvas"
+    >
       {/* Main content */}
       {renderContent()}
 

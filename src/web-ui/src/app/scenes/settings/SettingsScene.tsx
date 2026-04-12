@@ -6,7 +6,7 @@
  * driven by settingsStore.activeTab.
  */
 
-import React from 'react';
+import React, { lazy, Suspense } from 'react';
 import { useSettingsStore } from './settingsStore';
 import './SettingsScene.scss';
 import AIModelConfig from '../../../infrastructure/config/components/AIModelConfig';
@@ -16,8 +16,22 @@ import McpToolsConfig from '../../../infrastructure/config/components/McpToolsCo
 import EditorConfig from '../../../infrastructure/config/components/EditorConfig';
 import BasicsConfig from '../../../infrastructure/config/components/BasicsConfig';
 
+const KeyboardShortcutsTab = lazy(() => import('./components/KeyboardShortcutsTab'));
+
 const SettingsScene: React.FC = () => {
   const activeTab = useSettingsStore(s => s.activeTab);
+
+  if (activeTab === 'keyboard') {
+    return (
+      <div className="bitfun-settings-scene">
+        <div key="keyboard" className="bitfun-settings-scene__content-wrapper">
+          <Suspense fallback={null}>
+            <KeyboardShortcutsTab />
+          </Suspense>
+        </div>
+      </div>
+    );
+  }
 
   let Content: React.ComponentType | null = null;
 

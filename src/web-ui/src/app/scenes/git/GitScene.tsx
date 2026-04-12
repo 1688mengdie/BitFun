@@ -143,7 +143,7 @@ const GitScene: React.FC<GitSceneProps> = ({
     );
   }
 
-  return <div className="bitfun-git-scene">{renderView()}</div>;
+  return <div className="bitfun-git-scene" data-shortcut-scope="git">{renderView()}</div>;
 };
 
 export default GitScene;

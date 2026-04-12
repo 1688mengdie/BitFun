@@ -74,6 +74,11 @@ pub struct AppConfig {
     #[serde(default)]
     pub session_config: AppSessionConfig,
     pub ai_experience: AIExperienceConfig,
+    /// User-defined keyboard shortcut overrides.
+    /// Stored as opaque JSON so the backend remains schema-agnostic;
+    /// the frontend owns the versioned format (StoredKeybindingsV1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keybindings: Option<serde_json::Value>,
 }
 
 /// App logging configuration.
@@ -990,6 +995,7 @@ impl Default for AppConfig {
             },
             session_config: AppSessionConfig::default(),
             ai_experience: AIExperienceConfig::default(),
+            keybindings: None,
         }
     }
 }

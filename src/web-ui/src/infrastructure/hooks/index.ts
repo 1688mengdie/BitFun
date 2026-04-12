@@ -6,3 +6,6 @@
 export * from './useAIInitialization';
 export * from './useAIRules';
 export * from './useWorkspaceManagerSync';
+
+// Shortcut hook
+export * from './useShortcut';
