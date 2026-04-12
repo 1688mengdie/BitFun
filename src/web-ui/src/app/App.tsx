@@ -1,4 +1,5 @@
 import { useEffect, useCallback, useState, useRef } from 'react';
+import { useShortcut } from '@/infrastructure/hooks/useShortcut';
 import { ChatProvider, useAIInitialization } from '../infrastructure';
 import { ViewModeProvider } from '../infrastructure/contexts/ViewModeProvider';
 import { SSHRemoteProvider } from '../features/ssh-remote';
@@ -10,6 +11,7 @@ import { ConfirmDialogRenderer } from '../component-library';
 import { createLogger } from '@/shared/utils/logger';
 import { useWorkspaceContext } from '../infrastructure/contexts/WorkspaceContext';
 import SplashScreen from './components/SplashScreen/SplashScreen';
+import { useGlobalSceneShortcuts } from './hooks/useGlobalSceneShortcuts';
 
 // Toolbar Mode
 import { ToolbarModeProvider } from '../flow_chat';
@@ -159,21 +161,16 @@ function App() {
     }
   }, [aiInitialized, aiInitializing, aiError, currentConfig]);
 
-  // Keyboard shortcuts
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // Escape closes modal
-      if (e.key === 'Escape') {
-        window.dispatchEvent(new CustomEvent('closePreview'));
-      }
-    };
+  // Escape closes preview overlay (registered via ShortcutManager)
+  useShortcut(
+    'app.closePreview',
+    { key: 'Escape', scope: 'app', allowInInput: true },
+    () => window.dispatchEvent(new CustomEvent('closePreview')),
+    { priority: 1, description: 'keyboard.shortcuts.app.closePreview' }
+  );
 
-    window.addEventListener('keydown', handleKeyDown);
-    
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-    };
-  }, []);
+  // Top SceneBar: Mod+Alt+1..9 / Mod+Alt+PageUp/PageDown
+  useGlobalSceneShortcuts();
 
   // Unified layout via a single AppLayout
   return (

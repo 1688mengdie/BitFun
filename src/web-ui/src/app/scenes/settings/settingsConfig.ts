@@ -12,7 +12,8 @@ export type ConfigTab =
   | 'ai-context'
   | 'mcp-tools'
   // | 'lsp' // temporarily hidden from config center
-  | 'editor';
+  | 'editor'
+  | 'keyboard';
 
 export interface ConfigTabDef {
   id: ConfigTab;
@@ -21,6 +22,8 @@ export interface ConfigTabDef {
   descriptionKey?: string;
   /** Language-neutral extra tokens matched by search (ASCII recommended). */
   keywords?: string[];
+  /** Show a Beta pill next to the tab label in the settings nav. */
+  beta?: boolean;
 }
 
 export interface ConfigCategoryDef {
@@ -72,6 +75,22 @@ export const SETTINGS_CATEGORIES: ConfigCategoryDef[] = [
           'model',
           'temperature',
           'token',
+        ],
+      },
+      {
+        id: 'keyboard',
+        labelKey: 'configCenter.tabs.keyboard',
+        descriptionKey: 'configCenter.tabDescriptions.keyboard',
+        beta: true,
+        keywords: [
+          'keyboard',
+          'shortcut',
+          'keybinding',
+          'hotkey',
+          'shortcut key',
+          '快捷键',
+          '键位',
+          'beta',
         ],
       },
     ],
@@ -150,6 +169,7 @@ const KNOWN_TABS: ConfigTab[] = SETTINGS_CATEGORIES.flatMap((c) => c.tabs.map((t
 export function normalizeSettingsTab(section: string): ConfigTab {
   if (section === 'theme' || section === 'logging' || section === 'terminal') return 'basics';
   if (section === 'lsp') return DEFAULT_SETTINGS_TAB;
+  if (section === 'shortcuts' || section === 'keybindings' || section === 'hotkeys') return 'keyboard';
   if ((KNOWN_TABS as readonly string[]).includes(section)) return section as ConfigTab;
   return DEFAULT_SETTINGS_TAB;
 }

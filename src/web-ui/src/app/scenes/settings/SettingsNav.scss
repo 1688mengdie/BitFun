@@ -207,9 +207,30 @@
     gap: 2px;
   }
 
+  &__item-label {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-align: left;
+  }
+
+  &__item-beta {
+    flex-shrink: 0;
+    margin-left: $size-gap-2;
+    font-size: 10px;
+    font-weight: 600;
+    line-height: 1;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+  }
+
   &__item {
     display: flex;
     align-items: center;
+    justify-content: space-between;
+    gap: $size-gap-2;
     height: 32px;
     padding: 0 $size-gap-2 0 $size-gap-3;
     border: none;

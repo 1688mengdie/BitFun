@@ -97,5 +97,20 @@ export const SETTINGS_TAB_SEARCH_CONTENT: Record<ConfigTab, readonly SettingsTab
     { ns: 'settings/editor', key: 'actions.saveDesc' },
   ],
 
+  keyboard: [
+    { ns: 'settings', key: 'keyboard.title' },
+    { ns: 'settings', key: 'keyboard.description' },
+    { ns: 'settings', key: 'keyboard.scopes.app' },
+    { ns: 'settings', key: 'keyboard.scopes.chat' },
+    { ns: 'settings', key: 'keyboard.scopes.filetree' },
+    { ns: 'settings', key: 'keyboard.scopes.git' },
+    { ns: 'settings', key: 'keyboard.shortcuts.panel.toggleLeft' },
+    { ns: 'settings', key: 'keyboard.shortcuts.tab.close' },
+    { ns: 'settings', key: 'keyboard.shortcuts.scene.focusMerged' },
+    { ns: 'settings', key: 'keyboard.shortcuts.scene.focusMergedHint' },
+    { ns: 'settings', key: 'keyboard.shortcuts.tab.switchMerged' },
+    { ns: 'settings', key: 'keyboard.shortcuts.tab.switchMergedHint' },
+  ],
+
   // lsp: [ ... ], // nav entry temporarily hidden; omit from search index
 };

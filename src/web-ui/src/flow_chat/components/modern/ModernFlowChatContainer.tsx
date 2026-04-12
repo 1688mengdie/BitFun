@@ -4,6 +4,9 @@
  */
 
 import React, { useMemo, useCallback, useRef, useEffect, useState } from 'react';
+import { useShortcut } from '@/infrastructure/hooks/useShortcut';
+import { FlowChatManager } from '@/flow_chat/services/FlowChatManager';
+import { useSessionModeStore } from '@/app/stores/sessionModeStore';
 import { VirtualMessageList, VirtualMessageListRef } from './VirtualMessageList';
 import { FlowChatHeader, type FlowChatHeaderTurnSummary } from './FlowChatHeader';
 import { WelcomePanel } from '../WelcomePanel';
@@ -46,6 +49,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
   const [pendingHeaderTurnId, setPendingHeaderTurnId] = useState<string | null>(null);
   const autoPinnedSessionIdRef = useRef<string | null>(null);
   const virtualListRef = useRef<VirtualMessageListRef>(null);
+  const chatScopeRef = useRef<HTMLDivElement>(null);
   const { workspacePath } = useWorkspaceContext();
   const { btwOrigin, btwParentTitle } = useFlowChatSessionRelationship(activeSession);
   const {
@@ -212,10 +216,63 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     if (!nextTurn) return;
     handleJumpToTurn(nextTurn.turnId);
   }, [effectiveVisibleTurnInfo, handleJumpToTurn, turnSummaries]);
-  
+
+  useShortcut(
+    'chat.stopGeneration',
+    { key: 'Escape', scope: 'chat', allowInInput: true },
+    () => {
+      void FlowChatManager.getInstance().cancelCurrentTask();
+    },
+    { priority: 20, description: 'keyboard.shortcuts.chat.stopGeneration' }
+  );
+
+  useShortcut(
+    'chat.activateInput',
+    { key: ' ', scope: 'chat' },
+    () => {
+      const root = chatScopeRef.current;
+      const el = root?.querySelector(
+        '.bitfun-chat-input textarea, .bitfun-chat-input [contenteditable="true"]'
+      ) as HTMLElement | null;
+      el?.focus();
+    },
+    { priority: 10, description: 'keyboard.shortcuts.chat.activateInput' }
+  );
+
+  useShortcut(
+    'chat.newSession',
+    { key: 'N', ctrl: true, scope: 'chat' },
+    () => {
+      void (async () => {
+        try {
+          useSessionModeStore.getState().setMode('code');
+          await FlowChatManager.getInstance().createChatSession({}, 'agentic');
+        } catch {
+          /* ignore */
+        }
+      })();
+    },
+    { priority: 10, description: 'keyboard.shortcuts.chat.newSession' }
+  );
+
+  useShortcut(
+    'btw-fill',
+    { key: 'B', ctrl: true, alt: true, scope: 'chat', allowInInput: true },
+    () => {
+      const selected = (window.getSelection?.()?.toString() ?? '').trim();
+      const message = selected ? `/btw Explain this:\n\n${selected}` : '/btw ';
+      window.dispatchEvent(new CustomEvent('fill-chat-input', { detail: { message } }));
+    },
+    { priority: 20, description: 'keyboard.shortcuts.chat.btwFill' }
+  );
+
   return (
     <FlowChatContext.Provider value={contextValue}>
-      <div className={`modern-flowchat-container flow-chat-typography ${className}`}>
+      <div
+        ref={chatScopeRef}
+        className={`modern-flowchat-container flow-chat-typography ${className}`}
+        data-shortcut-scope="chat"
+      >
         <FlowChatHeader
           currentTurn={effectiveVisibleTurnInfo?.turnIndex ?? 0}
           totalTurns={effectiveVisibleTurnInfo?.totalTurns ?? 0}

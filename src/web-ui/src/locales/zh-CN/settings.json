@@ -6,6 +6,7 @@
     "searchPlaceholder": "搜索配置…",
     "searchNoResults": "没有匹配的配置",
     "searchClear": "清除搜索",
+    "beta": "Beta",
     "tabDescriptions": {
       "basics": "语言、主题、日志、终端 Shell 与开机启动。",
       "models": "AI 模型、API 密钥、供应商与代理。",
@@ -13,7 +14,8 @@
       "aiContext": "规则与记忆等 AI 上下文。",
       "mcpTools": "MCP 服务器与工具集成。",
       "editor": "编辑器字体、显示与格式化。",
-      "lsp": "语言服务与代码智能。"
+      "lsp": "语言服务与代码智能。",
+      "keyboard": "快捷键与键位。"
     },
     "categories": {
       "general": "通用",
@@ -31,7 +33,8 @@
       "mcpTools": "MCP",
       "agents": "智能体",
       "editor": "编辑器",
-      "lsp": "语言服务"
+      "lsp": "语言服务",
+      "keyboard": "快捷键"
     }
   },
   "general": {
@@ -141,10 +144,83 @@
   },
   "keyboard": {
     "title": "快捷键",
-    "shortcuts": "快捷键设置",
-    "search": "搜索快捷键",
+    "description": "在此查看并修改快捷键。",
+    "search": "搜索快捷键或键位…",
+    "apply": "应用",
+    "saving": "保存中…",
     "reset": "重置为默认",
-    "conflict": "快捷键冲突"
+    "clickToRecord": "点击录制新的快捷键",
+    "recording": "按下新键位…",
+    "revertChange": "撤销此更改",
+    "fixedBinding": "系统固定快捷键，无法自定义",
+    "noResults": "未找到匹配的快捷键",
+    "conflict": "冲突",
+    "saveError": "保存失败，请重试",
+    "resetError": "重置失败，请重试",
+    "mergedNonUniform": "键位不一致，可重新录制为一组",
+    "keyLabels": {
+      "space": "空格"
+    },
+    "scopes": {
+      "app": "全局",
+      "canvas": "编辑器画布",
+      "chat": "Agent 会话",
+      "filetree": "文件树",
+      "git": "Git"
+    },
+    "shortcuts": {
+      "panel": {
+        "toggleLeft": "展开/收起左侧导航区域",
+        "toggleBoth": "折叠所有面板"
+      },
+      "scene": {
+        "focusMerged": "切换场景",
+        "focusMergedHint": "录制一次修饰键 + 任意数字 1–3；数字 1–3 对应从左到右的场景。",
+        "openSession": "打开 Agent 会话",
+        "openGit": "打开 Git",
+        "openSettings": "打开设置",
+        "openTerminal": "打开终端"
+      },
+      "app": {
+        "closePreview": "关闭预览 / 关闭弹窗"
+      },
+      "canvas": {
+        "missionControl": "Mission Control",
+        "splitHorizontal": "水平分屏",
+        "splitVertical": "垂直分屏",
+        "anchorZone": "切换锚点区",
+        "maximize": "最大化编辑器",
+        "closePreview": "关闭预览"
+      },
+      "tab": {
+        "close": "关闭当前标签页",
+        "reopenClosed": "重新打开已关闭标签页",
+        "switchMerged": "切换编辑器标签",
+        "switchMergedHint": "录制一次修饰键 + 任意数字 1–9；同一组修饰键会应用到各标签位。"
+      },
+      "chat": {
+        "btwFill": "开启侧问会话",
+        "stopGeneration": "停止生成",
+        "activateInput": "激活输入框",
+        "newSession": "新建会话"
+      },
+      "filetree": {
+        "rename": "重命名",
+        "delete": "删除",
+        "refresh": "刷新",
+        "newFile": "新建文件",
+        "newFolder": "新建文件夹",
+        "collapseAll": "折叠所有目录"
+      },
+      "git": {
+        "commit": "提交",
+        "refresh": "刷新状态",
+        "stageAll": "暂存所有更改",
+        "unstageAll": "取消暂存所有更改",
+        "push": "推送",
+        "pull": "拉取"
+      }
+    }
   },
   "advanced": {
     "title": "高级",
