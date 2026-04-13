@@ -236,14 +236,16 @@
       "Claw": "Personal assistant mode for dedicated assistant workspaces and everyday task support",
       "Plan": "Plan first, execute later — clarify requirements and create an implementation plan before coding",
       "debug": "Evidence-driven systematic debugging: form hypotheses, gather runtime evidence, and fix with confidence",
-      "Cowork": "Collaborative mode: clarify first, track progress lightly, verify outcomes anytime"
+      "Cowork": "Collaborative mode: clarify first, track progress lightly, verify outcomes anytime",
+      "DeepResearch": "Deep research with parallel sub-agents: dispatches multiple agents to investigate concurrently, producing comprehensive sourced reports"
     },
     "modeNames": {
       "agentic": "Agentic",
       "Claw": "Claw",
       "Plan": "Plan",
       "debug": "Debug",
-      "Cowork": "Cowork"
+      "Cowork": "Cowork",
+      "DeepResearch": "Deep Research"
     },
     "openFolder": "Open folder…",
     "selectWorkspaceTitle": "Select workspace directory",
