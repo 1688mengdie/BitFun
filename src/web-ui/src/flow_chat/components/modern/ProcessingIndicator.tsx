@@ -8,6 +8,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { DotMatrixLoader } from '@/component-library';
+import { processingHintsZh, processingHintsEn } from '../../constants/processingHints';
 import './ProcessingIndicator.scss';
 
 interface ProcessingIndicatorProps {
@@ -17,8 +18,8 @@ interface ProcessingIndicatorProps {
 }
 
 export const ProcessingIndicator: React.FC<ProcessingIndicatorProps> = ({ visible, reserveSpace = false }) => {
-  const { t } = useTranslation('flow-chat');
-  const hints = t('processingHints', { returnObjects: true }) as string[];
+  const { i18n } = useTranslation();
+  const hints = i18n.language.startsWith('zh') ? processingHintsZh : processingHintsEn;
 
   const [showHint, setShowHint] = useState(false);
   const [hintIndex, setHintIndex] = useState(0);
