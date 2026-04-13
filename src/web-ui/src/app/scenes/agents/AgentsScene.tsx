@@ -12,7 +12,7 @@ import {
   Wrench,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { Badge, Button, IconButton, Search, confirmDanger } from '@/component-library';
+import { Badge, Button, IconButton, Search, Switch, confirmDanger } from '@/component-library';
 import {
   GalleryDetailModal,
   GalleryEmpty,
@@ -796,16 +796,22 @@ const AgentsHomeView: React.FC = () => {
                                 {`${group.enabledCount}/${group.totalCount}`}
                               </span>
                             </div>
-                            <div className="agent-card__skill-group-actions">
-                              <Button
-                                variant="ghost"
+                            <div
+                              className="agent-card__skill-group-actions"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <Switch
                                 size="small"
-                                onClick={() => setPendingSkillGroupEnabled(group.skills, !allEnabled)}
-                              >
-                                {allEnabled
-                                  ? t('agentsOverview.disableGroup')
-                                  : t('agentsOverview.enableGroup')}
-                              </Button>
+                                checked={allEnabled}
+                                onChange={(e) =>
+                                  setPendingSkillGroupEnabled(group.skills, e.target.checked)
+                                }
+                                aria-label={
+                                  allEnabled
+                                    ? t('agentsOverview.disableGroup')
+                                    : t('agentsOverview.enableGroup')
+                                }
+                              />
                               {someEnabled && !allEnabled ? (
                                 <Button
                                   variant="ghost"

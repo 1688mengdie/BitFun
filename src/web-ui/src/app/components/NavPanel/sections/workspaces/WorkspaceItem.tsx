@@ -1,6 +1,7 @@
 import React, { useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Folder, FolderOpen, MoreHorizontal, GitBranch, FolderSearch, Plus, ChevronDown, Trash2, RotateCcw, Copy, FileText } from 'lucide-react';
+import { Folder, FolderOpen, MoreHorizontal, FolderSearch, Plus, ChevronDown, Trash2, RotateCcw, Copy, FileText, GitBranch } from 'lucide-react';
+import { DotMatrixArrowRightIcon } from './DotMatrixArrowRightIcon';
 import { ConfirmDialog, Tooltip } from '@/component-library';
 import { useI18n } from '@/infrastructure/i18n';
 import { i18nService } from '@/infrastructure/i18n';
@@ -56,7 +57,7 @@ const WorkspaceItem: React.FC<WorkspaceItemProps> = ({
   } = useWorkspaceContext();
   const { switchLeftPanelTab } = useApp();
   const openNavScene = useNavSceneStore(s => s.openNavScene);
-  const { isRepository, currentBranch } = useGitBasicInfo(workspace.rootPath);
+  const { isRepository } = useGitBasicInfo(workspace.rootPath);
   const [menuOpen, setMenuOpen] = useState(false);
   const [worktreeModalOpen, setWorktreeModalOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
@@ -401,6 +402,7 @@ const WorkspaceItem: React.FC<WorkspaceItemProps> = ({
         sessionsCollapsed && 'is-sessions-collapsed',
         isSingle && 'is-single',
       ].filter(Boolean).join(' ')}
+      aria-current={isActive ? 'location' : undefined}
       aria-grabbed={draggable ? isDragging : undefined}>
         <div
           className="bitfun-nav-panel__assistant-item-card"
@@ -416,9 +418,15 @@ const WorkspaceItem: React.FC<WorkspaceItemProps> = ({
             aria-expanded={!sessionsCollapsed}
           >
             <span className="bitfun-nav-panel__assistant-item-avatar" aria-hidden="true">
-              <span className="bitfun-nav-panel__assistant-item-avatar-letter">
-                {workspaceDisplayName.charAt(0)}
-              </span>
+              {isActive ? (
+                <span className="bitfun-nav-panel__assistant-item-active-icon">
+                  <DotMatrixArrowRightIcon size={14} />
+                </span>
+              ) : (
+                <span className="bitfun-nav-panel__assistant-item-avatar-letter">
+                  {workspaceDisplayName.charAt(0)}
+                </span>
+              )}
               <span className={`bitfun-nav-panel__assistant-item-icon-toggle${sessionsCollapsed ? ' is-collapsed' : ''}`}>
                 <ChevronDown size={12} />
               </span>
@@ -568,6 +576,7 @@ const WorkspaceItem: React.FC<WorkspaceItemProps> = ({
       sessionsCollapsed && 'is-sessions-collapsed',
       isSingle && 'is-single',
     ].filter(Boolean).join(' ')}
+    aria-current={isActive ? 'location' : undefined}
     aria-grabbed={draggable ? isDragging : undefined}>
       <div
         className="bitfun-nav-panel__workspace-item-card"
@@ -584,7 +593,13 @@ const WorkspaceItem: React.FC<WorkspaceItemProps> = ({
         >
           <span className="bitfun-nav-panel__workspace-item-icon" aria-hidden="true">
             <span className="bitfun-nav-panel__workspace-item-icon-default">
-              <FolderOpen size={14} />
+              {isActive ? (
+                <span className="bitfun-nav-panel__workspace-item-active-icon">
+                  <DotMatrixArrowRightIcon size={14} />
+                </span>
+              ) : (
+                <FolderOpen size={14} />
+              )}
             </span>
             <span className={`bitfun-nav-panel__workspace-item-icon-toggle${sessionsCollapsed ? ' is-collapsed' : ''}`}>
               <ChevronDown size={14} />
@@ -608,12 +623,6 @@ const WorkspaceItem: React.FC<WorkspaceItemProps> = ({
               </span>
             )}
           </span>
-          {!isRemoteWorkspace(workspace) && currentBranch ? (
-            <span className="bitfun-nav-panel__workspace-item-branch">
-              <GitBranch size={11} />
-              <span>{currentBranch}</span>
-            </span>
-          ) : null}
         </button>
 
         <div className="bitfun-nav-panel__workspace-item-menu" ref={menuRef}>

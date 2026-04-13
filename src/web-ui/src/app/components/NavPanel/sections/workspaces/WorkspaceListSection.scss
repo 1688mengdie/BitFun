@@ -92,32 +92,13 @@
     }
 
     &.is-active {
-      background: var(
-        --card-bg-accent,
-        color-mix(
-          in srgb,
-          var(--color-accent-500) 9%,
-          color-mix(in srgb, var(--element-bg-soft) 68%, transparent)
-        )
-      );
+      background: transparent;
       border-color: transparent;
     }
 
     &.is-single {
       background: transparent;
       border-color: transparent;
-
-      &.is-active {
-        background: var(
-          --card-bg-accent,
-          color-mix(
-            in srgb,
-            var(--color-accent-500) 9%,
-            color-mix(in srgb, var(--element-bg-soft) 68%, transparent)
-          )
-        );
-        border-color: transparent;
-      }
     }
 
     &:not(.is-active) {
@@ -126,16 +107,21 @@
 
         &:hover {
           background: transparent;
+          color: var(--color-text-secondary);
 
           .bitfun-nav-panel__workspace-item-collapse-btn,
           .bitfun-nav-panel__workspace-item-name-btn {
-            background: color-mix(in srgb, var(--element-bg-soft) 72%, transparent);
+            background: transparent;
           }
         }
       }
 
       .bitfun-nav-panel__workspace-item-collapse-btn {
         border-radius: 6px 0 0 6px;
+
+        &:hover {
+          background: transparent;
+        }
       }
 
       .bitfun-nav-panel__workspace-item-name-btn {
@@ -170,6 +156,7 @@
     min-height: 30px;
     border-radius: 6px;
     color: var(--color-text-primary);
+    background: transparent;
     transition: color $motion-fast $easing-standard,
                 background $motion-fast $easing-standard;
 
@@ -178,9 +165,6 @@
     }
 
     &:hover {
-      color: var(--color-text-primary);
-      background: color-mix(in srgb, var(--element-bg-soft) 72%, transparent);
-
       .bitfun-nav-panel__workspace-item-icon-default {
         opacity: 0;
         transform: scale(0.7);
@@ -194,7 +178,27 @@
   }
 
   &__workspace-item:not(.is-active) &__workspace-item-card {
-    color: var(--color-text-secondary);
+    color: var(--color-text-muted);
+
+    &:hover {
+      color: var(--color-text-secondary);
+    }
+  }
+
+  &__workspace-item.is-active &__workspace-item-card {
+    color: var(--color-text-primary);
+
+    &:hover {
+      background: transparent;
+    }
+  }
+
+  &__workspace-item:not(.is-active) &__workspace-item-icon {
+    opacity: 0.65;
+  }
+
+  &__workspace-item.is-active &__workspace-item-icon {
+    opacity: 1;
   }
 
   &__workspace-item-collapse-btn {
@@ -240,6 +244,24 @@
     color: inherit;
     cursor: pointer;
     text-align: left;
+  }
+
+  &__workspace-item-active-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: inherit;
+  }
+
+  &__assistant-item-active-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: inherit;
+    transition: opacity $motion-fast $easing-standard,
+                transform $motion-fast $easing-standard;
+    opacity: 1;
+    transform: scale(1);
   }
 
   &__workspace-item-avatar {
@@ -334,6 +356,15 @@
     white-space: nowrap;
     font-size: var(--font-size-xs);
     font-weight: 600;
+  }
+
+  &__workspace-item:not(.is-active) &__workspace-item-label {
+    font-weight: 500;
+  }
+
+  &__workspace-item.is-active &__workspace-item-label {
+    font-weight: 700;
+    color: var(--color-text-primary);
   }
 
   &__workspace-item-title {
@@ -623,14 +654,7 @@
     }
 
     &.is-active {
-      background: var(
-        --card-bg-accent,
-        color-mix(
-          in srgb,
-          var(--color-accent-500) 9%,
-          color-mix(in srgb, var(--element-bg-soft) 68%, transparent)
-        )
-      );
+      background: transparent;
       border-color: transparent;
     }
 
@@ -642,9 +666,6 @@
       }
     }
 
-    &.is-active .bitfun-nav-panel__assistant-item-card {
-      color: var(--color-text-primary);
-    }
   }
 
   &__assistant-item-card {
@@ -654,6 +675,7 @@
     width: 100%;
     border-radius: 6px;
     color: var(--color-text-secondary);
+    background: transparent;
     transition: color $motion-fast $easing-standard,
                 background $motion-fast $easing-standard;
 
@@ -662,9 +684,6 @@
     }
 
     &:hover {
-      color: var(--color-text-primary);
-      background: color-mix(in srgb, var(--element-bg-soft) 72%, transparent);
-
       .bitfun-nav-panel__assistant-item-avatar-letter {
         opacity: 0;
         transform: scale(0.6);
@@ -674,6 +693,23 @@
         opacity: 1;
         transform: scale(1);
       }
+    }
+  }
+
+  &__assistant-item:not(.is-active) &__assistant-item-card {
+    color: var(--color-text-muted);
+
+    &:hover {
+      color: var(--color-text-secondary);
+      background: transparent;
+    }
+  }
+
+  &__assistant-item.is-active &__assistant-item-card {
+    color: var(--color-text-primary);
+
+    &:hover {
+      background: transparent;
     }
   }
 
@@ -694,7 +730,8 @@
     &:hover {
       background: color-mix(in srgb, var(--element-bg-medium) 60%, transparent);
 
-      .bitfun-nav-panel__assistant-item-avatar-letter {
+      .bitfun-nav-panel__assistant-item-avatar-letter,
+      .bitfun-nav-panel__assistant-item-active-icon {
         opacity: 0;
         transform: scale(0.6);
       }
@@ -704,6 +741,10 @@
         transform: scale(1);
       }
     }
+  }
+
+  &__assistant-item:not(.is-active) &__assistant-item-collapse-btn:hover {
+    background: transparent;
   }
 
   &__assistant-item-avatar {
@@ -775,6 +816,15 @@
     white-space: nowrap;
     font-size: var(--font-size-xs);
     font-weight: 600;
+  }
+
+  &__assistant-item:not(.is-active) &__assistant-item-label {
+    font-weight: 500;
+  }
+
+  &__assistant-item.is-active &__assistant-item-label {
+    font-weight: 700;
+    color: var(--color-text-primary);
   }
 
   &__assistant-item-badge {
