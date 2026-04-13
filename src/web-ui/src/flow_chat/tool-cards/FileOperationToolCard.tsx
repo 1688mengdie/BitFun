@@ -34,7 +34,8 @@ import { BaseToolCard, ToolCardHeader } from './BaseToolCard';
 import { useSnapshotState } from '../../tools/snapshot_system/hooks/useSnapshotState';
 import { SnapshotEventBus, SNAPSHOT_EVENTS } from '../../tools/snapshot_system/core/SnapshotEventBus';
 import { useCurrentWorkspace } from '../../infrastructure/contexts/WorkspaceContext';
-import { createCodeEditorTab, createDiffEditorTab } from '../../shared/utils/tabUtils';
+import { createDiffEditorTab } from '../../shared/utils/tabUtils';
+import { fileTabManager } from '../../shared/services/FileTabManager';
 import { CodePreview } from '../components/CodePreview';
 import { InlineDiffPreview } from '../components/InlineDiffPreview';
 import { Tooltip } from '@/component-library';
@@ -364,10 +365,9 @@ export const FileOperationToolCard: React.FC<FileOperationToolCardProps> = ({
       const diffData = await snapshotAPI.getOperationDiff(sessionId, currentFilePath, toolCall?.id);
       const jumpToLine = diffData.anchorLine ? Number(diffData.anchorLine) : undefined;
 
-      window.dispatchEvent(new CustomEvent('expand-right-panel'));
-
-      setTimeout(() => {
-        if (toolItem.toolName === 'Delete') {
+      if (toolItem.toolName === 'Delete') {
+        window.dispatchEvent(new CustomEvent('expand-right-panel'));
+        setTimeout(() => {
           createDiffEditorTab(
             currentFilePath,
             fileName,
@@ -378,27 +378,21 @@ export const FileOperationToolCard: React.FC<FileOperationToolCardProps> = ({
             undefined,
             jumpToLine
           );
-          return;
-        }
+        }, 250);
+        return;
+      }
 
-        createCodeEditorTab(
-          currentFilePath,
-          fileName,
-          {
-            readOnly: false,
-            showLineNumbers: true,
-            showMinimap: true,
-            theme: 'vs-dark',
-            jumpToLine
-          },
-          'agent'
-        );
-      }, 250);
+      fileTabManager.openFile({
+        filePath: currentFilePath,
+        fileName,
+        jumpToLine,
+        mode: 'agent',
+      });
     } catch (error) {
       log.error('Failed to open in CodeEditor', { sessionId, filePath: currentFilePath, error });
-      window.dispatchEvent(new CustomEvent('expand-right-panel'));
-      setTimeout(() => {
-        if (toolItem.toolName === 'Delete') {
+      if (toolItem.toolName === 'Delete') {
+        window.dispatchEvent(new CustomEvent('expand-right-panel'));
+        setTimeout(() => {
           createDiffEditorTab(
             currentFilePath,
             fileName,
@@ -407,15 +401,22 @@ export const FileOperationToolCard: React.FC<FileOperationToolCardProps> = ({
             true,
             'agent'
           );
-          return;
-        }
+        }, 250);
+        return;
+      }
 
-        createCodeEditorTab(currentFilePath, fileName, { theme: 'vs-dark' }, 'agent');
-      }, 250);
+      fileTabManager.openFile({
+        filePath: currentFilePath,
+        fileName,
+        mode: 'agent',
+      });
     }
   }, [sessionId, currentFilePath, toolCall?.id, fileName, toolItem.toolName]);
 
   const handleCardClick = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+
     if (
       (e.target as HTMLElement).closest(
         '.file-op-git-rail:not(.file-op-git-rail--disabled)',
