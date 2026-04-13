@@ -283,9 +283,9 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     [isAssistantWorkspace, modeState.available]
   );
 
-  /** Code session: only Plan and debug are optional on top of default agentic */
+  /** Code session: modes switchable on top of default agentic */
   const incrementalCodeModes = useMemo(
-    () => switchableModes.filter(m => m.id === 'Plan' || m.id === 'debug'),
+    () => switchableModes.filter(m => m.id === 'Plan' || m.id === 'debug' || m.id === 'DeepResearch'),
     [switchableModes]
   );
 

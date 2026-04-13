@@ -128,7 +128,7 @@ pub struct CustomSubagentDetail {
 
 fn default_model_id_for_builtin_agent(agent_type: &str) -> &'static str {
     match agent_type {
-        "agentic" | "Cowork" | "Plan" | "debug" | "Claw" => "auto",
+        "agentic" | "Cowork" | "Plan" | "debug" | "Claw" | "DeepResearch" => "auto",
         _ => "primary",
     }
 }
@@ -294,6 +294,7 @@ impl AgentRegistry {
             Arc::new(DebugMode::new()),
             Arc::new(PlanMode::new()),
             Arc::new(ClawMode::new()),
+            Arc::new(DeepResearchAgent::new()),
         ];
         for mode in modes {
             register(&mut agents, mode, AgentCategory::Mode, None);
@@ -303,7 +304,6 @@ impl AgentRegistry {
         let builtin_subagents: Vec<Arc<dyn Agent>> = vec![
             Arc::new(ExploreAgent::new()),
             Arc::new(FileFinderAgent::new()),
-            Arc::new(DeepResearchAgent::new()),
         ];
         for subagent in builtin_subagents {
             register(
@@ -458,6 +458,7 @@ impl AgentRegistry {
                     "Cowork" => 1,
                     "Plan" => 2,
                     "debug" => 3,
+                    "DeepResearch" => 4,
                     _ => 99,
                 }
             };
@@ -1069,7 +1070,7 @@ mod tests {
 
     #[test]
     fn top_level_modes_default_to_auto() {
-        for agent_type in ["agentic", "Cowork", "Plan", "debug", "Claw"] {
+        for agent_type in ["agentic", "Cowork", "Plan", "debug", "Claw", "DeepResearch"] {
             assert_eq!(default_model_id_for_builtin_agent(agent_type), "auto");
         }
     }
