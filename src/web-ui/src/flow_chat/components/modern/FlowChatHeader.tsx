@@ -5,11 +5,12 @@
  */
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronDown, ChevronUp, CornerUpLeft, List } from 'lucide-react';
+import { ChevronDown, ChevronUp, CornerUpLeft, List, GitBranch } from 'lucide-react';
 import { Tooltip, IconButton } from '@/component-library';
 import { useTranslation } from 'react-i18next';
 import { globalEventBus } from '@/infrastructure/event-bus';
 import { SessionFilesBadge } from './SessionFilesBadge';
+import { useGitBasicInfo } from '@/tools/git/hooks/useGitState';
 import type { Session } from '../../types/flow-chat';
 import { FLOWCHAT_FOCUS_ITEM_EVENT, type FlowChatFocusItemRequest } from '../../events/flowchatNavigation';
 import './FlowChatHeader.scss';
@@ -31,6 +32,8 @@ export interface FlowChatHeaderProps {
   visible: boolean;
   /** Session ID. */
   sessionId?: string;
+  /** Workspace root path, used to display the current git branch. */
+  workspacePath?: string;
   /** BTW child-session origin metadata. */
   btwOrigin?: Session['btwOrigin'] | null;
   /** BTW parent session title. */
@@ -50,6 +53,7 @@ export const FlowChatHeader: React.FC<FlowChatHeaderProps> = ({
   currentUserMessage,
   visible,
   sessionId,
+  workspacePath,
   btwOrigin,
   btwParentTitle = '',
   turns = [],
@@ -58,6 +62,7 @@ export const FlowChatHeader: React.FC<FlowChatHeaderProps> = ({
   onJumpToNextTurn,
 }) => {
   const { t } = useTranslation('flow-chat');
+  const { currentBranch, isRepository } = useGitBasicInfo(workspacePath ?? '');
   const [isTurnListOpen, setIsTurnListOpen] = useState(false);
   const turnListRef = useRef<HTMLDivElement | null>(null);
   const activeTurnItemRef = useRef<HTMLButtonElement | null>(null);
@@ -172,6 +177,12 @@ export const FlowChatHeader: React.FC<FlowChatHeaderProps> = ({
   return (
     <div className="flowchat-header">
       <div className="flowchat-header__actions flowchat-header__actions--left">
+        {isRepository && currentBranch ? (
+          <span className="flowchat-header__git-branch">
+            <GitBranch size={12} aria-hidden />
+            <span>{currentBranch}</span>
+          </span>
+        ) : null}
         <SessionFilesBadge sessionId={sessionId} />
       </div>
 
