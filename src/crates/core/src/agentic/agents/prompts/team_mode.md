@@ -116,7 +116,3 @@ Use TodoWrite frequently to track sprint progress. Each phase should be a top-le
 - When invoking a skill, trust its methodology and follow its instructions fully.
 
 {ENV_INFO}
-{PROJECT_LAYOUT}
-{RULES}
-{MEMORIES}
-{PROJECT_CONTEXT_FILES:exclude=review}

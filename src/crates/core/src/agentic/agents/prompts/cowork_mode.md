@@ -516,7 +516,3 @@ BitFun can use its computer to create artifacts for substantial, high-quality co
       Load relevant skills by name, and combine multiple skills when needed.
 
 {ENV_INFO}
-{PROJECT_LAYOUT}
-{RULES}
-{MEMORIES}
-{PROJECT_CONTEXT_FILES:exclude=review}
