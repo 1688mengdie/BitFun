@@ -27,6 +27,8 @@ impl AgenticMode {
                 "WebSearch".to_string(),
                 "TodoWrite".to_string(),
                 "MermaidInteractive".to_string(),
+                "VisualizeReadMe".to_string(),
+                "GenerativeUI".to_string(),
                 "Skill".to_string(),
                 "AskUserQuestion".to_string(),
                 "Git".to_string(),
