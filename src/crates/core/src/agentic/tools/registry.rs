@@ -125,7 +125,6 @@ impl ToolRegistry {
 
         // Mermaid interactive chart tool
         self.register_tool(Arc::new(MermaidInteractiveTool::new()));
-        self.register_tool(Arc::new(VisualizeReadMeTool::new()));
         self.register_tool(Arc::new(GenerativeUITool::new()));
 
         // GetFileDiff tool
