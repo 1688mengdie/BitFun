@@ -1,6 +1,7 @@
 //! Detect and launch the user's default browser with CDP debug port enabled.
 
 use crate::util::errors::{BitFunError, BitFunResult};
+#[allow(unused_imports)]
 use log::{debug, info};
 use serde::{Deserialize, Serialize};
 use std::process::Command;
@@ -197,7 +198,8 @@ impl BrowserLauncher {
                     r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe".into()
                 }
                 BrowserKind::Chromium => "chromium.exe".into(),
-                BrowserKind::Arc | BrowserKind::Unknown(name) => name.clone(),
+                BrowserKind::Arc => "arc.exe".into(),
+                BrowserKind::Unknown(name) => name.clone(),
             }
         }
 
@@ -208,7 +210,8 @@ impl BrowserLauncher {
                 BrowserKind::Edge => "microsoft-edge".into(),
                 BrowserKind::Brave => "brave-browser".into(),
                 BrowserKind::Chromium => "chromium-browser".into(),
-                BrowserKind::Arc | BrowserKind::Unknown(name) => name.clone(),
+                BrowserKind::Arc => "arc".into(),
+                BrowserKind::Unknown(name) => name.clone(),
             }
         }
     }

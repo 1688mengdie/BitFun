@@ -534,13 +534,48 @@ impl ControlHubTool {
                         }
                         #[cfg(not(target_os = "macos"))]
                         {
+                            let _ = script;
                             Err(BitFunError::tool(
                                 "AppleScript is only available on macOS".to_string(),
                             ))
                         }
                     }
+                    "shell" => {
+                        #[cfg(target_os = "windows")]
+                        let output = std::process::Command::new("cmd")
+                            .args(["/C", script])
+                            .output()
+                            .map_err(|e| {
+                                BitFunError::tool(format!("Failed to run script: {}", e))
+                            })?;
+                        #[cfg(not(target_os = "windows"))]
+                        let output = std::process::Command::new("sh")
+                            .args(["-c", script])
+                            .output()
+                            .map_err(|e| {
+                                BitFunError::tool(format!("Failed to run script: {}", e))
+                            })?;
+                        let stdout = String::from_utf8_lossy(&output.stdout)
+                            .trim()
+                            .to_string();
+                        let stderr = String::from_utf8_lossy(&output.stderr)
+                            .trim()
+                            .to_string();
+                        if output.status.success() {
+                            Ok(vec![ToolResult::ok(
+                                json!({ "success": true, "output": stdout }),
+                                Some(if stdout.is_empty() {
+                                    "Script executed".to_string()
+                                } else {
+                                    stdout
+                                }),
+                            )])
+                        } else {
+                            Err(BitFunError::tool(format!("Script error: {}", stderr)))
+                        }
+                    }
                     other => Err(BitFunError::tool(format!(
-                        "Unknown script_type: '{}'. Valid: applescript",
+                        "Unknown script_type: '{}'. Valid: applescript, shell",
                         other
                     ))),
                 }
