@@ -64,6 +64,13 @@ const SessionConfig: React.FC = () => {
   const [computerUseScreen, setComputerUseScreen] = useState(false);
   const [computerUseBusy, setComputerUseBusy] = useState(false);
 
+  // ── Browser control state ───────────────────────────────────────────────
+  const [browserCdpAvailable, setBrowserCdpAvailable] = useState(false);
+  const [browserKind, setBrowserKind] = useState('');
+  const [browserVersion, setBrowserVersion] = useState<string | null>(null);
+  const [browserPageCount, setBrowserPageCount] = useState(0);
+  const [browserControlBusy, setBrowserControlBusy] = useState(false);
+
   // ── Debug mode config state ──────────────────────────────────────────────
   const [debugConfig, setDebugConfig] = useState<DebugModeConfig>(DEFAULT_DEBUG_MODE_CONFIG);
   const [debugHasChanges, setDebugHasChanges] = useState(false);
@@ -83,6 +90,26 @@ const SessionConfig: React.FC = () => {
     } catch (error) {
       log.error('computer_use_get_status failed', error);
       return false;
+    }
+  }, []);
+
+  const refreshBrowserControlStatus = useCallback(async () => {
+    if (!IS_TAURI_DESKTOP) return;
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const s = await invoke<{
+        cdpAvailable: boolean;
+        browserKind: string;
+        browserVersion: string | null;
+        port: number;
+        pageCount: number;
+      }>('browser_control_get_status', { request: { port: 9222 } });
+      setBrowserCdpAvailable(s.cdpAvailable);
+      setBrowserKind(s.browserKind);
+      setBrowserVersion(s.browserVersion);
+      setBrowserPageCount(s.pageCount);
+    } catch (error) {
+      log.error('browser_control_get_status failed', error);
     }
   }, []);
 
@@ -120,6 +147,7 @@ const SessionConfig: React.FC = () => {
       if (IS_TAURI_DESKTOP) {
         const ok = await refreshComputerUseStatus();
         if (!ok) setComputerUseEnabled(computerUseCfg ?? false);
+        await refreshBrowserControlStatus();
       } else {
         setComputerUseEnabled(computerUseCfg ?? false);
       }
@@ -129,7 +157,7 @@ const SessionConfig: React.FC = () => {
     } finally {
       setIsLoading(false);
     }
-  }, [refreshComputerUseStatus]);
+  }, [refreshComputerUseStatus, refreshBrowserControlStatus]);
 
   useEffect(() => {
     loadAllData();
@@ -235,6 +263,50 @@ const SessionConfig: React.FC = () => {
     } catch (error) {
       log.error('computer_use_open_system_settings failed', error);
       notificationService.error(t('messages.saveFailed'));
+    }
+  };
+
+  const handleBrowserControlLaunch = async () => {
+    setBrowserControlBusy(true);
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const result = await invoke<{
+        success: boolean;
+        status: string;
+        message: string | null;
+        browserKind: string;
+      }>('browser_control_launch', { request: { port: 9222 } });
+      if (result.success) {
+        notificationService.success(
+          t('browserControl.connectSuccess', { browser: result.browserKind }),
+          { duration: 3000 }
+        );
+      } else if (result.message) {
+        notificationService.info(result.message, { duration: 8000 });
+      }
+      await refreshBrowserControlStatus();
+    } catch (error) {
+      log.error('browser_control_launch failed', error);
+      notificationService.error(t('browserControl.connectFailed'));
+    } finally {
+      setBrowserControlBusy(false);
+    }
+  };
+
+  const handleBrowserControlCreateLauncher = async () => {
+    setBrowserControlBusy(true);
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const path = await invoke<string>('browser_control_create_launcher');
+      notificationService.success(
+        t('browserControl.createLauncherSuccess', { path }),
+        { duration: 5000 }
+      );
+    } catch (error) {
+      log.error('browser_control_create_launcher failed', error);
+      notificationService.error(t('browserControl.createLauncherFailed'));
+    } finally {
+      setBrowserControlBusy(false);
     }
   };
 
@@ -603,6 +675,84 @@ const SessionConfig: React.FC = () => {
                     onClick={() => void handleComputerUseOpenSettings('screen_capture')}
                   >
                     {t('computerUse.openSettings')}
+                  </Button>
+                </div>
+              </ConfigPageRow>
+            </>
+          ) : null}
+        </ConfigPageSection>
+
+        {/* ── Browser control (CDP) ──────────────────────────────── */}
+        <ConfigPageSection
+          title={t('browserControl.sectionTitle')}
+          description={
+            IS_TAURI_DESKTOP ? t('browserControl.sectionDescription') : t('browserControl.desktopOnly')
+          }
+        >
+          {IS_TAURI_DESKTOP ? (
+            <>
+              <ConfigPageRow
+                label={t('browserControl.status')}
+                description={t('browserControl.statusDesc')}
+                align="center"
+                balanced
+              >
+                <div
+                  className="bitfun-func-agent-config__row-control"
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'row',
+                    flexWrap: 'nowrap',
+                    alignItems: 'center',
+                    justifyContent: 'flex-end',
+                    gap: 8,
+                  }}
+                >
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                    <span className={browserCdpAvailable ? 'bitfun-func-agent-config__perm-status--granted' : undefined}>
+                      {browserCdpAvailable
+                        ? `${browserKind}${browserVersion ? ` (${browserVersion})` : ''} — ${browserPageCount} ${t('browserControl.tabs')}`
+                        : t('browserControl.notConnected')}
+                    </span>
+                    <IconButton
+                      type="button"
+                      size="small"
+                      variant="ghost"
+                      aria-label={t('browserControl.refreshStatus')}
+                      tooltip={t('browserControl.refreshStatus')}
+                      disabled={browserControlBusy}
+                      onClick={() => void refreshBrowserControlStatus()}
+                    >
+                      <RefreshCw size={14} />
+                    </IconButton>
+                  </span>
+                  {!browserCdpAvailable && (
+                    <Button
+                      className="bitfun-func-agent-config__row-action-btn"
+                      size="small"
+                      variant="secondary"
+                      disabled={browserControlBusy}
+                      onClick={() => void handleBrowserControlLaunch()}
+                    >
+                      {t('browserControl.connect')}
+                    </Button>
+                  )}
+                </div>
+              </ConfigPageRow>
+              <ConfigPageRow
+                label={t('browserControl.createLauncher')}
+                description={t('browserControl.createLauncherDesc')}
+                align="center"
+              >
+                <div className="bitfun-func-agent-config__row-control">
+                  <Button
+                    className="bitfun-func-agent-config__row-action-btn"
+                    size="small"
+                    variant="secondary"
+                    disabled={browserControlBusy}
+                    onClick={() => void handleBrowserControlCreateLauncher()}
+                  >
+                    {t('browserControl.createLauncher')}
                   </Button>
                 </div>
               </ConfigPageRow>

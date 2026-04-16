@@ -95,6 +95,8 @@ impl ToolRegistry {
         self.register_tool(Arc::new(FileEditTool::new()));
         self.register_tool(Arc::new(DeleteFileTool::new()));
         self.register_tool(Arc::new(BashTool::new()));
+        // TerminalControl is now accessible via ControlHub's "terminal" domain,
+        // but we keep it registered separately for backward compatibility.
         self.register_tool(Arc::new(TerminalControlTool::new()));
         self.register_tool(Arc::new(SessionControlTool::new()));
         self.register_tool(Arc::new(SessionMessageTool::new()));
@@ -145,13 +147,19 @@ impl ToolRegistry {
         // MiniApp Agent tool (single InitMiniApp)
         self.register_tool(Arc::new(InitMiniAppTool::new()));
 
-        // Self-control tool for operating BitFun's own GUI
+        // SelfControl — operates BitFun's own GUI (kept for backward compatibility)
         self.register_tool(Arc::new(SelfControlTool::new()));
 
-        // All desktop automation consolidated into ComputerUse (click_element, click, mouse_move,
-        // scroll, drag, screenshot, locate, key_chord, type_text, pointer_move_rel, wait).
-        // The separate ComputerUseMousePrecise/Step/Click tools are no longer registered.
+        // ComputerUse — desktop automation (kept for backward compatibility)
         self.register_tool(Arc::new(ComputerUseTool::new()));
+
+        // ControlHub — unified control tool that aggregates all control capabilities
+        // (desktop, browser, app, terminal, system) into a single entry point.
+        // New agents should prefer ControlHub over the separate tools above.
+        self.register_tool(Arc::new(ControlHubTool::new()));
+
+        // Playbook — predefined step-by-step operation guides for common tasks.
+        self.register_tool(Arc::new(PlaybookTool::new()));
     }
 
     /// Register a single tool

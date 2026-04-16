@@ -683,9 +683,13 @@ pub async fn run() {
             api::miniapp_api::miniapp_ai_chat,
             api::miniapp_api::miniapp_ai_cancel,
             api::miniapp_api::miniapp_ai_list_models,
-            // Browser API
+            // Browser API (embedded webview)
             api::browser_api::browser_webview_eval,
             api::browser_api::browser_get_url,
+            // Browser Control API (CDP-based user browser control)
+            api::browser_control_api::browser_control_get_status,
+            api::browser_control_api::browser_control_launch,
+            api::browser_control_api::browser_control_create_launcher,
             api::self_control_api::submit_self_control_response,
             // Insights API
             api::insights_api::generate_insights,

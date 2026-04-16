@@ -33,6 +33,23 @@
     "desktopOnly": "Computer use settings are only available in the BitFun desktop app.",
     "platformNote": "Note"
   },
+  "browserControl": {
+    "sectionTitle": "Browser control (CDP)",
+    "sectionDescription": "Control your default browser (Chrome, Edge, etc.) through the Chrome DevTools Protocol. Preserves your login sessions, cookies, and extensions.",
+    "desktopOnly": "Browser control settings are only available in the BitFun desktop app.",
+    "status": "CDP connection",
+    "statusDesc": "Status of the Chrome DevTools Protocol connection to your browser.",
+    "notConnected": "Not connected",
+    "refreshStatus": "Refresh status",
+    "connect": "Connect browser",
+    "connectSuccess": "{{browser}} connected with CDP",
+    "connectFailed": "Failed to launch browser with CDP",
+    "createLauncher": "Create launcher app",
+    "createLauncherSuccess": "Launcher created at {{path}}",
+    "createLauncherFailed": "Failed to create launcher app",
+    "createLauncherDesc": "Create a shortcut app that always starts the browser with CDP debug port enabled.",
+    "tabs": "tab(s)"
+  },
   "model": {
     "label": "Model",
     "primary": "Primary Model",
