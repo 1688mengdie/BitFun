@@ -33,6 +33,23 @@
     "desktopOnly": "Computer use 仅在 BitFun 桌面应用中可用。",
     "platformNote": "说明"
   },
+  "browserControl": {
+    "sectionTitle": "浏览器控制（CDP）",
+    "sectionDescription": "通过 Chrome DevTools Protocol 控制用户默认浏览器（Chrome、Edge 等），保留你的登录状态、Cookie 和扩展。",
+    "desktopOnly": "浏览器控制设置仅在 BitFun 桌面应用中可用。",
+    "status": "CDP 连接",
+    "statusDesc": "与浏览器的 Chrome DevTools Protocol 连接状态。",
+    "notConnected": "未连接",
+    "refreshStatus": "刷新状态",
+    "connect": "连接浏览器",
+    "connectSuccess": "{{browser}} 已通过 CDP 连接",
+    "connectFailed": "启动浏览器 CDP 失败",
+    "createLauncher": "创建启动器",
+    "createLauncherSuccess": "启动器已创建：{{path}}",
+    "createLauncherFailed": "创建启动器失败",
+    "createLauncherDesc": "创建一个快捷应用，每次打开都自动带 CDP 调试端口。",
+    "tabs": "个标签页"
+  },
   "model": {
     "label": "模型",
     "primary": "主力模型",
