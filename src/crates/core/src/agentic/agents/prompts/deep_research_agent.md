@@ -91,7 +91,7 @@ SUBJECT: [The main research subject]
 
 RESEARCH INSTRUCTIONS:
 1. Run 3-6 targeted web searches for this specific topic. Use specific queries — not generic ones.
-2. Read the actual pages (WebFetch) for the most important 2-3 sources — not just snippets.
+2. Read the actual pages using WebFetch with `{"format": "text"}` for the most important 2-3 sources — not just snippets. Use `"text"` to extract clean plain text and minimize HTML noise.
 3. Extract concrete evidence: specific facts, quotes, numbers, dates, and URLs.
 
 WRITING INSTRUCTIONS:
@@ -124,6 +124,7 @@ RESEARCH INSTRUCTIONS:
 1. Search for direct comparisons, user discussions, benchmarks, and reviews
 2. Search for the competitor's specific strengths, weaknesses, pricing, user counts
 3. Read community forums, reviews, social media discussions with dates and sources
+4. When fetching pages with WebFetch, use `{"format": "text"}` to extract clean plain text and reduce context noise
 
 WRITING INSTRUCTIONS:
 Write a competitive analysis in narrative prose. For this competitor, cover:
