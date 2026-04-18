@@ -6,12 +6,16 @@
 
 pub mod command_router;
 pub mod feishu;
+pub mod locale;
+pub mod menu;
 pub mod telegram;
 pub mod weixin;
 
 use serde::{Deserialize, Serialize};
 
 pub use command_router::{BotChatState, ForwardRequest, ForwardedTurnResult, HandleResult};
+pub use locale::BotLanguage;
+pub use menu::{MenuItem, MenuItemStyle, MenuView};
 
 /// Configuration for a bot-based connection.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -498,23 +502,28 @@ pub fn prepare_file_download_actions(
     text: &str,
     state: &mut command_router::BotChatState,
     workspace_root: Option<&std::path::Path>,
+    language: BotLanguage,
 ) -> Option<command_router::HandleResult> {
     use command_router::BotAction;
+    use locale::{fmt_count, strings_for};
 
     let file_paths = extract_downloadable_file_paths(text, workspace_root);
     if file_paths.is_empty() {
         return None;
     }
 
+    let strings = strings_for(language);
+
     let mut actions: Vec<BotAction> = Vec::new();
+    let mut menu_items: Vec<MenuItem> = Vec::new();
     for path in &file_paths {
         if let Some((name, size)) = get_file_metadata(path, workspace_root) {
             let token = generate_download_token(&state.chat_id);
             state.pending_files.insert(token.clone(), path.clone());
-            actions.push(BotAction::secondary(
-                format!("📥 {} ({})", name, format_file_size(size)),
-                format!("download_file:{token}"),
-            ));
+            let label = format!("{} ({})", name, format_file_size(size));
+            let command = format!("download_file:{token}");
+            actions.push(BotAction::secondary(label.clone(), command.clone()));
+            menu_items.push(MenuItem::default(label, command));
         }
     }
 
@@ -523,15 +532,19 @@ pub fn prepare_file_download_actions(
     }
 
     let intro = if actions.len() == 1 {
-        "📎 1 file ready to download:".to_string()
+        strings.file_intro_one.to_string()
     } else {
-        format!("📎 {} files ready to download:", actions.len())
+        fmt_count(strings.file_intro_many_fmt, actions.len())
     };
+
+    let menu = MenuView::plain(intro.clone()).with_items(menu_items);
+    state.last_menu_commands = menu.numeric_commands();
 
     Some(command_router::HandleResult {
         reply: intro,
         actions,
         forward_to_session: None,
+        menu,
     })
 }
 

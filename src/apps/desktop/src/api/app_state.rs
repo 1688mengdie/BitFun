@@ -3,7 +3,9 @@
 use bitfun_core::agentic::side_question::SideQuestionRuntime;
 use bitfun_core::agentic::{agents, tools};
 use bitfun_core::infrastructure::ai::{AIClient, AIClientFactory};
-use bitfun_core::miniapp::{initialize_global_miniapp_manager, JsWorkerPool, MiniAppManager};
+use bitfun_core::miniapp::{
+    initialize_global_miniapp_manager, seed_builtin_miniapps, JsWorkerPool, MiniAppManager,
+};
 use bitfun_core::service::remote_ssh::{
     init_remote_workspace_manager, RemoteFileService, RemoteTerminalManager, SSHConnectionManager,
 };
@@ -152,6 +154,9 @@ impl AppState {
 
         let miniapp_manager = Arc::new(MiniAppManager::new(path_manager.clone()));
         initialize_global_miniapp_manager(miniapp_manager.clone());
+        if let Err(e) = seed_builtin_miniapps(&miniapp_manager).await {
+            log::warn!("Failed to seed built-in miniapps: {}", e);
+        }
 
         let worker_host_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("resources")

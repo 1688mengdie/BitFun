@@ -13,6 +13,13 @@ export interface SessionTitleGeneratedEvent {
   timestamp: number;
 }
 
+export interface SessionModelAutoMigratedEvent {
+  sessionId: string;
+  previousModelId: string;
+  newModelId: string;
+  reason: string;
+}
+
  
 export interface SessionConfig {
   modelName?: string;
@@ -351,6 +358,15 @@ export class AgentAPI {
 
   onSessionStateChanged(callback: (event: AgenticEvent) => void): () => void {
     return api.listen<AgenticEvent>('agentic://session-state-changed', callback);
+  }
+
+  onSessionModelAutoMigrated(
+    callback: (event: SessionModelAutoMigratedEvent) => void
+  ): () => void {
+    return api.listen<SessionModelAutoMigratedEvent>(
+      'agentic://session-model-auto-migrated',
+      callback
+    );
   }
 
    

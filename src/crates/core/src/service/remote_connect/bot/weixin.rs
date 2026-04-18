@@ -22,7 +22,7 @@ use tokio::sync::RwLock;
 
 use super::command_router::{
     complete_im_bot_pairing, current_bot_language, execute_forwarded_turn, handle_command,
-    parse_command, welcome_message, BotAction, BotChatState, BotInteractionHandler,
+    parse_command, welcome_message, BotChatState, BotInteractionHandler,
     BotInteractiveRequest, BotLanguage, BotMessageSender, HandleResult,
 };
 use super::{load_bot_persistence, save_bot_persistence, BotConfig, SavedBotConnection};
@@ -1332,56 +1332,23 @@ impl WeixinBot {
         false
     }
 
-    fn format_actions_footer(language: BotLanguage, actions: &[BotAction]) -> String {
-        if actions.is_empty() {
-            return String::new();
-        }
-        let header = if language.is_chinese() {
-            "\n\n——\n快捷操作（可发送对应命令或回复数字）：\n"
-        } else {
-            "\n\n——\nQuick actions (send the command or reply with the number):\n"
-        };
-        let mut s = header.to_string();
-        for (i, a) in actions.iter().enumerate() {
-            let n = i + 1;
-            s.push_str(&format!("{n}. {} → {}\n", a.label, a.command));
-        }
-        s
-    }
-
-    fn clean_reply_text(language: BotLanguage, text: &str, has_actions: bool) -> String {
-        let mut lines: Vec<String> = Vec::new();
-        let mut replaced_cancel = false;
-        for line in text.lines() {
-            let trimmed = line.trim();
-            if trimmed.contains("/cancel_task ") {
-                if has_actions && !replaced_cancel {
-                    let hint = if language.is_chinese() {
-                        "如需停止本次请求，请发送命令 /cancel_task 或下方列出的取消命令。"
-                    } else {
-                        "To stop this request, send /cancel_task or the cancel command listed below."
-                    };
-                    lines.push(hint.to_string());
-                    replaced_cancel = true;
-                }
-                continue;
-            }
-            lines.push(line.to_string());
-        }
-        lines.join("\n").trim().to_string()
-    }
-
     async fn send_handle_result(&self, peer_id: &str, result: &HandleResult) {
         let language = current_bot_language().await;
-        let footer = Self::format_actions_footer(language, &result.actions);
-        let body = Self::clean_reply_text(language, &result.reply, !result.actions.is_empty());
-        let combined = format!("{body}{footer}");
-        if let Err(e) = self.send_text(peer_id, &combined).await {
+        let text = if result.menu.items.is_empty() && result.menu.title.is_empty() {
+            result.reply.clone()
+        } else {
+            result.menu.render_plain_text(language)
+        };
+        if text.trim().is_empty() {
+            return;
+        }
+        if let Err(e) = self.send_text(peer_id, &text).await {
             warn!("weixin send_handle_result: {e}");
         }
     }
 
     async fn notify_files_ready(&self, peer_id: &str, text: &str) {
+        let language = super::locale::current_bot_language().await;
         let result = {
             let mut states = self.chat_states.write().await;
             let state = states.entry(peer_id.to_string()).or_insert_with(|| {
@@ -1394,6 +1361,7 @@ impl WeixinBot {
                 text,
                 state,
                 workspace_root.as_deref().map(std::path::Path::new),
+                language,
             )
         };
         if let Some(result) = result {
@@ -1498,10 +1466,7 @@ impl WeixinBot {
                                 .insert(peer.clone(), state.clone());
                             self.persist_chat_state(&peer, &state).await;
 
-                            let footer = Self::format_actions_footer(language, &result.actions);
-                            let _ = self
-                                .send_text(&peer, &format!("{}{}", result.reply, footer))
-                                .await;
+                            self.send_handle_result(&peer, &result).await;
                             return Ok(peer);
                         } else {
                             let err = if language.is_chinese() {
@@ -1654,10 +1619,7 @@ impl WeixinBot {
                     let result = complete_im_bot_pairing(state).await;
                     self.persist_chat_state(&peer_id, state).await;
                     drop(states);
-                    let footer = Self::format_actions_footer(language, &result.actions);
-                    let _ = self
-                        .send_text(&peer_id, &format!("{}{}", result.reply, footer))
-                        .await;
+                    self.send_handle_result(&peer_id, &result).await;
                     return;
                 } else {
                     let err = if language.is_chinese() {
@@ -1741,7 +1703,7 @@ impl WeixinBot {
             s.paired = true;
             s
         });
-        state.pending_action = Some(interaction.pending_action.clone());
+        super::command_router::apply_interactive_request(state, &interaction);
         self.persist_chat_state(&peer_id, state).await;
         drop(states);
 
@@ -1749,6 +1711,7 @@ impl WeixinBot {
             reply: interaction.reply,
             actions: interaction.actions,
             forward_to_session: None,
+            menu: interaction.menu,
         };
         self.send_handle_result(&peer_id, &result).await;
     }

@@ -171,6 +171,14 @@ impl AIClientFactory {
             })
             .ok_or_else(|| anyhow!("Model configuration not found: {}", normalized_model_id))?;
 
+        if !model_config.enabled {
+            return Err(anyhow!(
+                "Model '{}' (id={}) is currently disabled; enable it in settings or pick another model",
+                model_config.name,
+                model_config.id
+            ));
+        }
+
         let mut ai_config = AIConfig::try_from(model_config.clone())
             .map_err(|e| anyhow!("AI configuration conversion failed: {}", e))?;
         apply_cli_credential(&model_config.auth, &mut ai_config).await?;

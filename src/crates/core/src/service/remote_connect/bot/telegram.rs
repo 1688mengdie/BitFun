@@ -77,14 +77,6 @@ impl TelegramBot {
         }
     }
 
-    fn cancel_button_hint(language: BotLanguage) -> &'static str {
-        if language.is_chinese() {
-            "如需停止本次请求，请点击下方的“取消任务”按钮。"
-        } else {
-            "If needed, tap the Cancel Task button below to stop this request."
-        }
-    }
-
     pub fn new(config: TelegramConfig) -> Self {
         Self {
             config,
@@ -205,6 +197,7 @@ impl TelegramBot {
     /// markdown hyperlinks to local files), store them as pending downloads and
     /// send a notification with one inline-keyboard button per file.
     async fn notify_files_ready(&self, chat_id: i64, text: &str) {
+        let language = super::locale::current_bot_language().await;
         let result = {
             let mut states = self.chat_states.write().await;
             let state = states.entry(chat_id).or_insert_with(|| {
@@ -217,6 +210,7 @@ impl TelegramBot {
                 text,
                 state,
                 workspace_root.as_deref().map(std::path::Path::new),
+                language,
             )
         };
         if let Some(result) = result {
@@ -292,40 +286,20 @@ impl TelegramBot {
     /// text is replaced with a friendlier prompt, and a Cancel Task button is
     /// added via the inline keyboard.
     async fn send_handle_result(&self, chat_id: i64, result: &HandleResult) {
-        let language = current_bot_language().await;
-        let text = Self::clean_reply_text(language, &result.reply, !result.actions.is_empty());
+        let text = if result.menu.items.is_empty() && result.menu.title.is_empty() {
+            result.reply.clone()
+        } else {
+            result.menu.render_text_block()
+        };
         if result.actions.is_empty() {
             self.send_message(chat_id, &text).await.ok();
-        } else {
-            if let Err(e) = self
-                .send_message_with_keyboard(chat_id, &text, &result.actions)
-                .await
-            {
-                warn!("Failed to send Telegram keyboard message: {e}; falling back to plain text");
-                self.send_message(chat_id, &result.reply).await.ok();
-            }
+        } else if let Err(e) = self
+            .send_message_with_keyboard(chat_id, &text, &result.actions)
+            .await
+        {
+            warn!("Failed to send Telegram keyboard message: {e}; falling back to plain text");
+            self.send_message(chat_id, &result.reply).await.ok();
         }
-    }
-
-    /// Remove raw `/cancel_task <turn_id>` instruction lines and replace them
-    /// with a short hint that the button below can be used instead.
-    fn clean_reply_text(language: BotLanguage, text: &str, has_actions: bool) -> String {
-        let mut lines: Vec<String> = Vec::new();
-        let mut replaced_cancel = false;
-
-        for line in text.lines() {
-            let trimmed = line.trim();
-            if trimmed.contains("/cancel_task ") {
-                if has_actions && !replaced_cancel {
-                    lines.push(Self::cancel_button_hint(language).to_string());
-                    replaced_cancel = true;
-                }
-                continue;
-            }
-            lines.push(line.to_string());
-        }
-
-        lines.join("\n").trim().to_string()
     }
 
     /// Register the bot command menu visible in Telegram's "/" menu.
@@ -333,15 +307,15 @@ impl TelegramBot {
         let client = reqwest::Client::new();
         let commands = serde_json::json!({
             "commands": [
-                { "command": "switch_workspace", "description": "List and switch workspaces" },
-                { "command": "pro", "description": "Switch to Expert mode (Code/Cowork)" },
-                { "command": "assistant", "description": "Switch to Assistant mode (Claw)" },
-                { "command": "resume_session", "description": "Resume an existing session" },
-                { "command": "new_code_session", "description": "Create coding session (Expert)" },
-                { "command": "new_cowork_session", "description": "Create cowork session (Expert)" },
-                { "command": "new_claw_session", "description": "Create claw session (Assistant)" },
-                { "command": "cancel_task", "description": "Cancel the current task" },
-                { "command": "help", "description": "Show available commands" },
+                { "command": "menu", "description": "Show the main menu" },
+                { "command": "new", "description": "Create a new session" },
+                { "command": "resume", "description": "Resume an existing session" },
+                { "command": "switch", "description": "Switch assistant or workspace" },
+                { "command": "cancel", "description": "Cancel the current task" },
+                { "command": "expert", "description": "Switch to Expert mode" },
+                { "command": "assistant", "description": "Switch to Assistant mode" },
+                { "command": "settings", "description": "Open settings" },
+                { "command": "help", "description": "Show help" },
             ]
         });
         let resp = client
@@ -722,7 +696,7 @@ impl TelegramBot {
             s.paired = true;
             s
         });
-        state.pending_action = Some(interaction.pending_action.clone());
+        super::command_router::apply_interactive_request(state, &interaction);
         self.persist_chat_state(chat_id, state).await;
         drop(states);
 
@@ -730,6 +704,7 @@ impl TelegramBot {
             reply: interaction.reply,
             actions: interaction.actions,
             forward_to_session: None,
+            menu: interaction.menu,
         };
         self.send_handle_result(chat_id, &result).await;
     }
