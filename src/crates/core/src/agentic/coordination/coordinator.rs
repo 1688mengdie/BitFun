@@ -2159,6 +2159,31 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             .await;
     }
 
+    /// Emit a `SessionModelAutoMigrated` event with `High` priority so the
+    /// frontend can refresh its model selector and surface a notice promptly.
+    ///
+    /// Callers (e.g. `SessionManager`) reach this method via
+    /// [`get_global_coordinator`] so they don't need to thread an
+    /// `Arc<EventQueue>` through every constructor.
+    pub async fn emit_session_model_auto_migrated(
+        &self,
+        session_id: &str,
+        previous_model_id: &str,
+        new_model_id: &str,
+        reason: &str,
+    ) {
+        let event = AgenticEvent::SessionModelAutoMigrated {
+            session_id: session_id.to_string(),
+            previous_model_id: previous_model_id.to_string(),
+            new_model_id: new_model_id.to_string(),
+            reason: reason.to_string(),
+        };
+        let _ = self
+            .event_queue
+            .enqueue(event, Some(EventPriority::High))
+            .await;
+    }
+
     /// Get SessionManager reference (for advanced features like mode management)
     pub fn get_session_manager(&self) -> &Arc<SessionManager> {
         &self.session_manager

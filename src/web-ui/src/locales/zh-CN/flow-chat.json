@@ -160,7 +160,12 @@
     "temperature": "温度",
     "maxTokens": "最大令牌数",
     "topP": "Top P",
-    "streaming": "流式输出"
+    "streaming": "流式输出",
+    "autoMigrated": {
+      "title": "模型已自动切换",
+      "description": "会话原模型\"{{previous}}\"不可用，已切换为\"{{next}}\"。",
+      "reason": "原因：{{reason}}"
+    }
   },
   "toolbar": {
     "newSession": "新建会话",

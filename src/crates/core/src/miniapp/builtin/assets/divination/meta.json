@@ -1,0 +1,18 @@
+{
+  "id": "builtin-daily-divination",
+  "name": "每日占卜",
+  "description": "每日一卡程序员塔罗：综合/工作/灵感/财运四维运势，含今日宜忌与机缘提示，每天 0 点焕新。",
+  "icon": "Sparkles",
+  "category": "lifestyle",
+  "tags": ["占卜", "运势", "趣味", "内置"],
+  "version": 1,
+  "created_at": 0,
+  "updated_at": 0,
+  "permissions": {
+    "fs": { "read": ["{appdata}"], "write": ["{appdata}"] },
+    "shell": { "allow": [] },
+    "net": { "allow": [] },
+    "node": { "enabled": true, "max_memory_mb": 128, "timeout_ms": 5000 }
+  },
+  "ai_context": null
+}

@@ -563,10 +563,15 @@ impl FeishuBot {
 
     async fn send_handle_result(&self, chat_id: &str, result: &HandleResult) -> Result<()> {
         let language = current_bot_language().await;
-        if result.actions.is_empty() {
-            self.send_message(chat_id, &result.reply).await
+        let text = if result.menu.items.is_empty() && result.menu.title.is_empty() {
+            result.reply.clone()
         } else {
-            self.send_action_card(chat_id, language, &result.reply, &result.actions)
+            result.menu.render_text_block()
+        };
+        if result.actions.is_empty() {
+            self.send_message(chat_id, &text).await
+        } else {
+            self.send_action_card(chat_id, language, &text, &result.actions)
                 .await
         }
     }
@@ -654,6 +659,7 @@ impl FeishuBot {
     /// markdown hyperlinks to local files), store them as pending downloads and
     /// send an interactive card with one download button per file.
     async fn notify_files_ready(&self, chat_id: &str, text: &str) {
+        let language = super::locale::current_bot_language().await;
         let result = {
             let mut states = self.chat_states.write().await;
             let state = states.entry(chat_id.to_string()).or_insert_with(|| {
@@ -666,6 +672,7 @@ impl FeishuBot {
                 text,
                 state,
                 workspace_root.as_deref().map(std::path::Path::new),
+                language,
             )
         };
         if let Some(result) = result {
@@ -1577,7 +1584,7 @@ impl FeishuBot {
             s.paired = true;
             s
         });
-        state.pending_action = Some(interaction.pending_action.clone());
+        super::command_router::apply_interactive_request(state, &interaction);
         self.persist_chat_state(chat_id, state).await;
         drop(states);
 
@@ -1585,6 +1592,7 @@ impl FeishuBot {
             reply: interaction.reply,
             actions: interaction.actions,
             forward_to_session: None,
+            menu: interaction.menu,
         };
         self.send_handle_result(chat_id, &result).await.ok();
     }

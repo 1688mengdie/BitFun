@@ -447,20 +447,55 @@ pub struct AIConfig {
 
 impl AIConfig {
     /// Resolves a configured model reference by `id`, `name`, or `model_name`.
+    ///
+    /// Returns the model id only when the matched model is `enabled`. This is the
+    /// single source of truth for "is this model usable right now?" and is the
+    /// variant every runtime path (client factory, execution engine, etc.) should
+    /// use. UI / migration code that needs to look up disabled entries should call
+    /// [`Self::resolve_model_reference_any`] instead.
     pub fn resolve_model_reference(&self, model_ref: &str) -> Option<String> {
+        self.models
+            .iter()
+            .find(|m| {
+                m.enabled
+                    && (m.id == model_ref || m.name == model_ref || m.model_name == model_ref)
+            })
+            .map(|m| m.id.clone())
+    }
+
+    /// Resolves a model reference regardless of `enabled` state. UI / migration
+    /// only — never use this on the runtime model-selection path.
+    pub fn resolve_model_reference_any(&self, model_ref: &str) -> Option<String> {
         self.models
             .iter()
             .find(|m| m.id == model_ref || m.name == model_ref || m.model_name == model_ref)
             .map(|m| m.id.clone())
     }
 
+    /// Returns true if the given reference points to a model that exists and is
+    /// currently enabled.
+    pub fn is_model_reference_active(&self, model_ref: &str) -> bool {
+        self.resolve_model_reference(model_ref).is_some()
+    }
+
+    /// Returns the id of the first enabled model, if any. Used as a final
+    /// fallback when a configured default points to a disabled / missing model.
+    pub fn first_enabled_model_id(&self) -> Option<String> {
+        self.models
+            .iter()
+            .find(|m| m.enabled)
+            .map(|m| m.id.clone())
+    }
+
     /// Resolves a model selector value.
     ///
     /// Special values:
-    /// - `primary`: must resolve to a valid primary model
+    /// - `primary`: must resolve to a valid (enabled) primary model
     /// - `fast`: first tries the configured fast model, then falls back to primary
     ///
-    /// Regular values are resolved by `id`, `name`, or `model_name`.
+    /// Regular values are resolved by `id`, `name`, or `model_name`. All lookups
+    /// require the target model to be enabled — disabled models are treated as if
+    /// they did not exist.
     pub fn resolve_model_selection(&self, model_ref: &str) -> Option<String> {
         match model_ref {
             "primary" => self

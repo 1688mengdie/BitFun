@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme-type="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>正则游乐场</title>
+</head>
+<body>
+  <div id="app" class="rx">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand__icon">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M17 3v6"/><path d="M14 6h6"/>
+            <circle cx="6.5" cy="17.5" r="1.5"/>
+            <path d="M14 12l-4 4"/><path d="M14 16l-4-4"/>
+          </svg>
+        </div>
+        <div class="brand__text">
+          <h1 class="brand__title">正则游乐场</h1>
+          <p class="brand__subtitle">RegExp 实时调试 · ECMAScript 风格</p>
+        </div>
+      </div>
+      <div class="topbar__status">
+        <span class="status status--ok" id="status-pill">就绪</span>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="main-col">
+        <div class="card pattern-card">
+          <div class="pattern-row">
+            <span class="slash">/</span>
+            <input
+              id="pattern"
+              type="text"
+              class="pattern-input"
+              spellcheck="false"
+              autocomplete="off"
+              placeholder="\b[A-Z][a-zA-Z0-9_]*\b"
+            />
+            <span class="slash">/</span>
+            <div class="flags" id="flags">
+              <button type="button" class="flag" data-flag="g" title="全局匹配 (global)">g</button>
+              <button type="button" class="flag" data-flag="i" title="忽略大小写 (ignore case)">i</button>
+              <button type="button" class="flag" data-flag="m" title="多行模式 (multiline)">m</button>
+              <button type="button" class="flag" data-flag="s" title="dotAll · . 匹配换行">s</button>
+              <button type="button" class="flag" data-flag="u" title="Unicode 模式">u</button>
+              <button type="button" class="flag" data-flag="y" title="粘连匹配 (sticky)">y</button>
+            </div>
+          </div>
+          <div class="pattern-error" id="pattern-error" hidden></div>
+        </div>
+
+        <div class="card test-card">
+          <div class="test-card__header">
+            <div class="card__title">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="2" y="3" width="12" height="10" rx="1"/><path d="M4 7h8M4 10h5"/></svg>
+              测试文本
+            </div>
+            <div class="test-card__actions">
+              <span class="match-count" id="match-count">0 处匹配</span>
+              <button id="btn-clear" class="link-btn" type="button" title="清空">
+                <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 4h10M6 4V3a1 1 0 011-1h2a1 1 0 011 1v1M5 4l1 9h4l1-9"/></svg>
+                清空
+              </button>
+            </div>
+          </div>
+          <div class="editor">
+            <textarea id="test-text" spellcheck="false" autocomplete="off" autocorrect="off"
+              placeholder="把要匹配的文本粘贴到这里…"></textarea>
+            <pre id="highlight" class="highlight" aria-hidden="true"></pre>
+          </div>
+        </div>
+
+        <div class="card matches-card">
+          <div class="matches-card__header">
+            <div class="card__title" style="margin: 0;">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M2 8l3 3 9-9"/></svg>
+              匹配明细
+              <span class="hint" id="matches-summary">尚未匹配</span>
+            </div>
+            <div class="matches-card__actions">
+              <button id="btn-prev-match" class="link-btn" type="button" title="上一处" disabled>
+                <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 3l-5 5 5 5"/></svg>
+              </button>
+              <button id="btn-next-match" class="link-btn" type="button" title="下一处" disabled>
+                <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3l5 5-5 5"/></svg>
+              </button>
+            </div>
+          </div>
+          <div class="matches" id="matches">
+            <div class="empty">输入正则与文本，匹配结果将在这里展示。</div>
+          </div>
+        </div>
+
+        <div class="card replace-card">
+          <div class="card__title">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 4h6a3 3 0 010 6H7"/><path d="M9 8L7 10l2 2"/></svg>
+            替换预览
+            <span class="hint">支持 $1 $2 $&lt;name&gt; 反向引用</span>
+          </div>
+          <input id="replace-input" type="text" class="replace-input" placeholder="替换为…（留空则不展示预览）" spellcheck="false" autocomplete="off"/>
+          <pre id="replace-output" class="replace-output" hidden></pre>
+        </div>
+      </section>
+
+      <aside class="side-col">
+        <div class="card library-card">
+          <div class="card__title">常用模式</div>
+          <div class="library" id="library"></div>
+        </div>
+
+        <div class="card ref-card">
+          <div class="card__title">速查</div>
+          <ul class="ref">
+            <li><code>\d</code> 数字 · <code>\D</code> 非数字</li>
+            <li><code>\w</code> 字母数字下划线 · <code>\W</code> 反之</li>
+            <li><code>\s</code> 空白 · <code>\S</code> 非空白</li>
+            <li><code>^ $</code> 行首/行尾（配合 m）</li>
+            <li><code>(?:…)</code> 非捕获 · <code>(?&lt;n&gt;…)</code> 命名捕获</li>
+            <li><code>(?=…)</code> 正向先行 · <code>(?!…)</code> 反向先行</li>
+            <li><code>{n,m}</code> 区间量词 · <code>?</code> 非贪婪</li>
+          </ul>
+        </div>
+      </aside>
+    </main>
+  </div>
+</body>
+</html>

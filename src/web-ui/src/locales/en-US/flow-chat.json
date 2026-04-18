@@ -160,7 +160,12 @@
     "temperature": "Temperature",
     "maxTokens": "Max Tokens",
     "topP": "Top P",
-    "streaming": "Streaming"
+    "streaming": "Streaming",
+    "autoMigrated": {
+      "title": "Model auto-switched",
+      "description": "Session model \"{{previous}}\" is no longer available. Switched to \"{{next}}\".",
+      "reason": "Reason: {{reason}}"
+    }
   },
   "toolbar": {
     "newSession": "New Session",
