@@ -51,7 +51,7 @@ pub const BUILTIN_APPS: &[BuiltinApp] = &[
     },
     BuiltinApp {
         id: "builtin-regex-playground",
-        version: 2,
+        version: 3,
         meta_json: include_str!("assets/regex-playground/meta.json"),
         html: include_str!("assets/regex-playground/index.html"),
         css: include_str!("assets/regex-playground/style.css"),

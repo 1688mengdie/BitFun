@@ -73,6 +73,27 @@
           </div>
         </div>
 
+        <div class="card matches-card">
+          <div class="matches-card__header">
+            <div class="card__title" style="margin: 0;">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M2 8l3 3 9-9"/></svg>
+              匹配明细
+              <span class="hint" id="matches-summary">尚未匹配</span>
+            </div>
+            <div class="matches-card__actions">
+              <button id="btn-prev-match" class="link-btn" type="button" title="上一处" disabled>
+                <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 3l-5 5 5 5"/></svg>
+              </button>
+              <button id="btn-next-match" class="link-btn" type="button" title="下一处" disabled>
+                <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3l5 5-5 5"/></svg>
+              </button>
+            </div>
+          </div>
+          <div class="matches" id="matches">
+            <div class="empty">输入正则与文本，匹配结果将在这里展示。</div>
+          </div>
+        </div>
+
         <div class="card replace-card">
           <div class="card__title">
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 4h6a3 3 0 010 6H7"/><path d="M9 8L7 10l2 2"/></svg>
@@ -85,13 +106,6 @@
       </section>
 
       <aside class="side-col">
-        <div class="card matches-card">
-          <div class="card__title">匹配明细</div>
-          <div class="matches" id="matches">
-            <div class="empty">输入正则与文本，匹配结果将在这里展示。</div>
-          </div>
-        </div>
-
         <div class="card library-card">
           <div class="card__title">常用模式</div>
           <div class="library" id="library"></div>

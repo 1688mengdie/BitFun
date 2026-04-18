@@ -41,11 +41,16 @@ const dom = {
   matchCount: document.getElementById('match-count'),
   btnClear: document.getElementById('btn-clear'),
   matches: document.getElementById('matches'),
+  matchesSummary: document.getElementById('matches-summary'),
+  btnPrevMatch: document.getElementById('btn-prev-match'),
+  btnNextMatch: document.getElementById('btn-next-match'),
   library: document.getElementById('library'),
   replaceInput: document.getElementById('replace-input'),
   replaceOutput: document.getElementById('replace-output'),
   statusPill: document.getElementById('status-pill'),
 };
+
+let lastMatches = [];
 
 const state = {
   flags: new Set(['g', 'm']),
@@ -114,6 +119,16 @@ function bindEditorSync() {
     recompute();
     dom.testText.focus();
   });
+  dom.btnPrevMatch.addEventListener('click', () => stepActiveMatch(-1));
+  dom.btnNextMatch.addEventListener('click', () => stepActiveMatch(1));
+}
+
+function stepActiveMatch(delta) {
+  if (lastMatches.length === 0) return;
+  const next = state.activeMatchIndex < 0
+    ? (delta > 0 ? 0 : lastMatches.length - 1)
+    : (state.activeMatchIndex + delta + lastMatches.length) % lastMatches.length;
+  selectMatch(next, true);
 }
 
 async function restore() {
@@ -206,7 +221,11 @@ function recompute() {
     dom.statusPill.textContent = '语法错误';
     dom.statusPill.className = 'status status--err';
     dom.matchCount.textContent = '— 处匹配';
+    dom.matchesSummary.textContent = '正则语法错误';
     dom.matches.innerHTML = `<div class="empty">${escapeHtml(compiled.error)}</div>`;
+    lastMatches = [];
+    state.activeMatchIndex = -1;
+    updateNavButtons();
     renderHighlight([]);
     renderReplace();
     return;
@@ -216,18 +235,31 @@ function recompute() {
 
   const text = dom.testText.value;
   const matches = findAllMatches(compiled.regex, text);
+  lastMatches = matches;
   dom.matchCount.textContent = `${matches.length} 处匹配`;
   if (matches.length === 0) {
     dom.statusPill.textContent = '无匹配';
     dom.statusPill.className = 'status status--idle';
+    dom.matchesSummary.textContent = text ? '无匹配' : '尚未匹配';
   } else {
     dom.statusPill.textContent = `命中 ${matches.length} 处`;
     dom.statusPill.className = 'status status--ok';
+    const totalGroups = matches.reduce((acc, m) => acc + m.groups.length + m.namedGroups.length, 0);
+    dom.matchesSummary.textContent = totalGroups > 0
+      ? `${matches.length} 处 · ${totalGroups} 个分组`
+      : `${matches.length} 处`;
   }
   state.activeMatchIndex = -1;
+  updateNavButtons();
   renderHighlight(matches);
   renderMatches(matches);
   renderReplace();
+}
+
+function updateNavButtons() {
+  const has = lastMatches.length > 0;
+  dom.btnPrevMatch.disabled = !has;
+  dom.btnNextMatch.disabled = !has;
 }
 
 // ── Render helpers ───────────────────────────────────
@@ -255,44 +287,69 @@ function renderMatches(matches) {
     return;
   }
   dom.matches.innerHTML = '';
+  const text = dom.testText.value;
   matches.forEach((m, i) => {
     const el = document.createElement('div');
     el.className = 'match';
-    let groupsHtml = '';
+    el.dataset.idx = String(i);
     const allGroups = [...m.groups, ...m.namedGroups];
+    let groupsHtml = '';
     if (allGroups.length > 0) {
       groupsHtml = '<div class="match__groups">' + allGroups.map((g) => {
         const tag = g.name != null ? `&lt;${escapeHtml(g.name)}&gt;` : `$${g.idx}`;
-        const val = g.value === undefined ? '<i style="opacity:.5">undefined</i>' : escapeHtml(g.value);
-        return `<div class="match__group"><b>${tag}</b> = ${val}</div>`;
+        const val = g.value === undefined || g.value === ''
+          ? `<span class="match__group-val match__group-val--empty">${g.value === undefined ? 'undefined' : '(空)'}</span>`
+          : `<span class="match__group-val">${escapeHtml(g.value)}</span>`;
+        return `<div class="match__group"><span class="match__group-tag">${tag}</span>${val}</div>`;
       }).join('') + '</div>';
     }
+    const { line, col } = lineColAt(text, m.index);
+    const isEmpty = m.text === '';
+    const matchTextHtml = isEmpty
+      ? '<div class="match__text match__text--empty">空匹配（零宽）</div>'
+      : `<div class="match__text" title="${escapeHtml(m.text)}">${escapeHtml(m.text)}</div>`;
     el.innerHTML = `
       <div class="match__head">
         <span class="match__index">#${i + 1}</span>
-        <span>idx ${m.index}–${m.end}</span>
+        <span class="match__loc">L${line}:${col} · ${m.index}–${m.end}</span>
       </div>
-      <div class="match__text">${escapeHtml(m.text) || '<i style="opacity:.5">空匹配</i>'}</div>
+      ${matchTextHtml}
       ${groupsHtml}
     `;
-    el.addEventListener('click', () => {
-      state.activeMatchIndex = i;
-      for (const node of dom.matches.querySelectorAll('.match')) node.classList.remove('is-active');
-      el.classList.add('is-active');
-      // Highlight active mark in overlay
-      for (const mk of dom.highlight.querySelectorAll('mark')) mk.classList.remove('is-active');
-      const target = dom.highlight.querySelector(`mark[data-idx="${i}"]`);
-      if (target) target.classList.add('is-active');
-      // Scroll textarea to the match
-      const before = dom.testText.value.slice(0, m.index);
-      const lineNo = before.split('\n').length - 1;
-      const lineHeight = 13 * 1.55;
-      dom.testText.scrollTop = Math.max(0, lineNo * lineHeight - 60);
-      dom.testText.setSelectionRange(m.index, m.end);
-      dom.testText.focus();
-    });
+    el.addEventListener('click', () => selectMatch(i, true));
     dom.matches.appendChild(el);
   });
+}
+
+function selectMatch(i, scrollIntoText) {
+  state.activeMatchIndex = i;
+  const m = lastMatches[i];
+  if (!m) return;
+  for (const node of dom.matches.querySelectorAll('.match')) {
+    node.classList.toggle('is-active', node.dataset.idx === String(i));
+  }
+  const activeCard = dom.matches.querySelector(`.match[data-idx="${i}"]`);
+  if (activeCard) activeCard.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  for (const mk of dom.highlight.querySelectorAll('mark')) mk.classList.remove('is-active');
+  const target = dom.highlight.querySelector(`mark[data-idx="${i}"]`);
+  if (target) target.classList.add('is-active');
+  if (scrollIntoText) {
+    const before = dom.testText.value.slice(0, m.index);
+    const lineNo = before.split('\n').length - 1;
+    const lineHeight = 13 * 1.55;
+    dom.testText.scrollTop = Math.max(0, lineNo * lineHeight - 60);
+    dom.testText.setSelectionRange(m.index, m.end);
+    dom.testText.focus();
+  }
+}
+
+function lineColAt(text, offset) {
+  let line = 1;
+  let lastBreak = -1;
+  for (let i = 0; i < offset; i++) {
+    if (text.charCodeAt(i) === 10) { line += 1; lastBreak = i; }
+  }
+  return { line, col: offset - lastBreak };
 }
 
 function renderReplace() {
