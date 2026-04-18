@@ -31,7 +31,7 @@ pub struct BuiltinApp {
 pub const BUILTIN_APPS: &[BuiltinApp] = &[
     BuiltinApp {
         id: "builtin-gomoku",
-        version: 2,
+        version: 3,
         meta_json: include_str!("assets/gomoku/meta.json"),
         html: include_str!("assets/gomoku/index.html"),
         css: include_str!("assets/gomoku/style.css"),

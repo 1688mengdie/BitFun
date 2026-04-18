@@ -19,7 +19,7 @@ const state = {
   board: createBoard(),
   history: [],
   current: BLACK,
-  mode: 'pvp', // 'pvp' | 'pve'
+  mode: 'pve', // 'pvp' | 'pve'
   winner: 0,
   winLine: null,
   hover: null,
