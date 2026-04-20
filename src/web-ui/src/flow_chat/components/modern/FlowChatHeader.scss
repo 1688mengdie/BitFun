@@ -71,6 +71,103 @@
     }
   }
 
+  &__search-btn,
+  &__search-close {
+    flex: 0 0 auto;
+
+    &:not(:disabled):hover {
+      background: color-mix(in srgb, var(--element-bg-soft) 82%, transparent);
+    }
+  }
+
+  &__search {
+    display: flex;
+    align-items: center;
+    gap: $size-gap-1;
+    min-width: min(320px, 38vw);
+    max-width: min(420px, 42vw);
+  }
+
+  &__search-field {
+    flex: 1;
+    min-width: 0;
+
+    &.bitfun-input-wrapper {
+      gap: 0;
+    }
+
+    .bitfun-input-container {
+      padding-right: 2px;
+    }
+
+    .bitfun-input-suffix {
+      display: flex;
+      align-items: center;
+      padding: 0;
+    }
+  }
+
+  &__search-prefix-icon {
+    flex-shrink: 0;
+    color: var(--color-text-secondary);
+    opacity: 0.75;
+  }
+
+  &__search-inline-controls {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    padding-left: 2px;
+    margin-left: 2px;
+    border-left: 1px solid var(--color-border-subtle, rgba(128, 128, 128, 0.2));
+  }
+
+  &__search-count {
+    flex-shrink: 0;
+    padding: 0 3px;
+    color: var(--color-text-secondary);
+    font-size: var(--flowchat-font-size-xs);
+    white-space: nowrap;
+
+    &:empty {
+      display: none;
+    }
+  }
+
+  &__search-nav {
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+    overflow: hidden;
+    border-radius: 3px;
+  }
+
+  &__search-nav-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 10px;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: var(--color-text-secondary);
+    cursor: pointer;
+    opacity: 0.8;
+    transition: opacity $motion-base $easing-standard, background $motion-base $easing-standard;
+    line-height: 0;
+
+    &:hover:not(:disabled) {
+      opacity: 1;
+      background: var(--element-bg-soft, rgba(128, 128, 128, 0.1));
+    }
+
+    &:disabled {
+      opacity: 0.25;
+      cursor: default;
+    }
+  }
+
   &__turn-list-panel {
     position: absolute;
     top: calc(100% + 8px);
@@ -228,6 +325,13 @@
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+    }
+  }
+
+  @media (max-width: 900px) {
+    &__search {
+      min-width: min(220px, 52vw);
+      max-width: min(300px, 56vw);
     }
   }
 }

@@ -51,6 +51,11 @@ export interface FlowChatContextValue {
    * Collapse the specified explore group.
    */
   onCollapseGroup?: (groupId: string) => void;
+
+  // Message search state
+  searchQuery?: string;
+  searchMatchIndices?: ReadonlySet<number>;
+  searchCurrentMatchVirtualIndex?: number;
 }
 
 export const FlowChatContext = createContext<FlowChatContextValue>({});
