@@ -331,7 +331,14 @@
     "turnBadge": "Turn {{current}}",
     "btwBackTooltipWithTurn": "Go back to the source session: {{title}} (Turn {{turn}})",
     "btwBackTooltipWithoutTurn": "Go back to the source session: {{title}}",
-    "btwCreateTooltip": "Start a quick side question"
+    "btwCreateTooltip": "Start a quick side question",
+    "searchPlaceholder": "Search messages",
+    "searchResult": "{{current}} / {{total}}",
+    "searchNoResults": "No results",
+    "searchPrevious": "Previous match",
+    "searchNext": "Next match",
+    "searchClose": "Close search",
+    "searchOpen": "Search messages"
   },
   "sessionFilesBadge": {
     "files": "files",

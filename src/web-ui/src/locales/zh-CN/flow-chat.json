@@ -331,7 +331,14 @@
     "turnBadge": "第 {{current}} 轮",
     "btwBackTooltipWithTurn": "返回到来源会话：{{title}}（第 {{turn}} 轮）",
     "btwBackTooltipWithoutTurn": "返回到来源会话：{{title}}",
-    "btwCreateTooltip": "快速发起一个侧问"
+    "btwCreateTooltip": "快速发起一个侧问",
+    "searchPlaceholder": "搜索对话消息",
+    "searchResult": "{{current}} / {{total}}",
+    "searchNoResults": "没有匹配结果",
+    "searchPrevious": "上一个匹配结果",
+    "searchNext": "下一个匹配结果",
+    "searchClose": "关闭搜索",
+    "searchOpen": "搜索消息"
   },
   "sessionFilesBadge": {
     "files": "文件",
