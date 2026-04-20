@@ -209,7 +209,9 @@ impl ConversationCoordinator {
                 binding.root_path_string(),
             ))
         } else {
-            Some(crate::agentic::workspace::local_workspace_services())
+            Some(crate::agentic::workspace::local_workspace_services(
+                binding.root_path_string(),
+            ))
         }
     }
 
@@ -333,6 +335,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                 parent_task_tool_id: None,
                 subagent_session_id: None,
                 status: Some("completed".to_string()),
+                interruption_reason: None,
             }],
             thinking_items: Vec::new(),
             start_time: started_at,
@@ -389,6 +392,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                 parent_task_tool_id: None,
                 subagent_session_id: None,
                 status: Some("error".to_string()),
+                interruption_reason: None,
             }],
             thinking_items: Vec::new(),
             start_time: timestamp,

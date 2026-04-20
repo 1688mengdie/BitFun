@@ -6,6 +6,7 @@
 import { createLogger } from '@/shared/utils/logger';
 import type { FlowChatContext, DialogTurn } from './types';
 import { buildSessionMetadata } from '../../utils/sessionMetadata';
+import { settleInterruptedDialogTurn } from '../../utils/dialogTurnStability';
 
 const log = createLogger('PersistenceModule');
 
@@ -267,16 +268,17 @@ export async function saveAllInProgressTurns(context: FlowChatContext): Promise<
       }
       
       if (
-        lastTurn.status === 'processing' ||
-        lastTurn.status === 'finishing' ||
-        lastTurn.status === 'pending' ||
-        lastTurn.status === 'image_analyzing'
+        lastTurn.status !== 'completed' &&
+        lastTurn.status !== 'cancelled' &&
+        lastTurn.status !== 'error'
       ) {
-        context.flowChatStore.updateDialogTurn(sessionId, lastTurn.id, turn => ({
-          ...turn,
-          status: 'cancelled' as const,
-          endTime: Date.now()
-        }));
+        const settledAt = Date.now();
+        context.flowChatStore.updateDialogTurn(sessionId, lastTurn.id, turn =>
+          settleInterruptedDialogTurn(turn, settledAt, {
+            preservePendingConfirmation: true,
+            interruptionReason: 'app_restart',
+          })
+        );
         
         savePromises.push(
           saveDialogTurnToDisk(context, sessionId, lastTurn.id).catch(error => {
@@ -355,6 +357,7 @@ export function convertDialogTurnToBackendFormat(dialogTurn: DialogTurn, turnInd
             return {
               id: item.id,
               toolName: toolItem.toolName || '',
+              interruptionReason: toolItem.interruptionReason,
               toolCall: toolItem.toolCall || { input: {}, id: item.id },
               toolResult: toolItem.toolResult,
               aiIntent: toolItem.aiIntent,
