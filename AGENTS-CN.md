@@ -1,70 +1,122 @@
-# AGENTS.md
+**中文** | [English](AGENTS.md)
 
-## 项目概述
+# AGENTS-CN.md
 
-BitFun 是 AI 代理驱动的编程环境，使用 Rust 和 TypeScript 构建，采用多平台架构（桌面端/CLI/服务器）共享核心库。
+## 概览
 
-### 架构
+BitFun 是一个由 Rust workspace 与共享 React 前端组成的项目。
 
-- **src/crates/events** - 事件定义（平台无关）
-- **src/crates/core** - 核心业务逻辑（95%+ 代码复用）
-  - `agentic/` - 代理系统（会话、工具、执行）
-  - `service/` - 工作区、配置、文件系统、终端、Git
-  - `infrastructure/` - AI 客户端、存储、日志、事件
-- **src/crates/transport** - 传输适配器（CLI、Tauri、WebSocket）
-- **src/crates/api-layer** - 平台无关处理器
-- **src/apps/desktop** - Tauri 2.0 桌面应用
-- **src/apps/cli** - 终端 UI（WIP）
-- **src/apps/server** - Web 服务器（Axum + WebSocket）（WIP）
-- **src/web-ui** - React 前端
-  - `infrastructure/` - 主题、国际化、配置、状态管理、API 适配器
-  - `component-library/` - 共享 UI 组件
-  - `tools/` - 功能模块（编辑器、Git、终端、Mermaid...）
-  - `flow_chat/` - 聊天界面
-  - `locales/` - 翻译文件（en-US、zh-CN）
+仓库核心原则：**先保持产品逻辑平台无关，再通过平台适配层对外暴露能力**。
 
-### 核心设计原则
+- `src/crates/core`：共享产品逻辑中心
+- `src/crates/transport`：Tauri / WebSocket / CLI 适配层
+- `src/crates/api-layer`：共享处理器与 DTO
+- `src/apps/desktop`：Tauri 桌面宿主应用
+- `src/apps/server`：web 后端运行时
+- `src/apps/cli`：CLI 运行时
+- `src/web-ui`：桌面端与 server/web 共享前端
+- `BitFun-Installer`：独立安装器应用
+- `tests/e2e`：桌面端 E2E 测试
 
-1. **依赖注入** - 服务通过构造函数接收依赖
-2. **EventEmitter 模式** - 使用 `Arc<dyn EventEmitter>` 而非 `AppHandle`
-3. **TransportAdapter 模式** - 跨平台抽象通信
-4. **平台无关核心** - Core 不包含平台特定依赖
+## 3 步快速上手
 
-### 技术栈
+1. 在修改架构敏感代码前，先阅读 `README.md`、`CONTRIBUTING.md` 和本文件。
+2. 常规本地开发使用 `pnpm run desktop:dev`；仅前端改动使用 `pnpm run dev:web`。
+3. 改完后按下方最小验证集合执行检查。
 
-- **后端**: Rust 2021, Tokio, Tauri 2.0, Axum
-- **前端**: React 18, TypeScript, Vite, Zustand
-
-## 开发命令
+## 核心命令
 
 ```bash
-# 桌面端
-pnpm run desktop:dev             # 开发模式
+# 安装
+pnpm install
+pnpm run e2e:install
 
-# E2E
-pnpm run e2e:test
+# 主要开发流程
+pnpm run desktop:dev
+pnpm run dev:web
+pnpm run cli:dev
+pnpm run installer:dev
+
+# 前端
+pnpm run lint:web
+pnpm run type-check:web
+pnpm --dir src/web-ui run test:run
+pnpm run build:web
+
+# Rust
+cargo check --workspace
+cargo test --workspace
+cargo test -p bitfun-core <test_name> -- --nocapture
+
+# Desktop / E2E
+cargo build -p bitfun-desktop
+pnpm run e2e:test:l0
+pnpm --dir tests/e2e exec wdio run ./config/wdio.conf.ts --spec "./specs/<file>.spec.ts"
 ```
 
-## 关键规则
+## 架构
 
-### 日志规范
+### 后端链路
 
-**规则：** 仅英文、禁止 emoji、结构化数据、避免冗余日志
+大多数功能建议按这个顺序追踪：
 
-- **前端**: `src/web-ui/LOGGING.md` - 使用 `createLogger('ModuleName')`
-- **后端**: `src/crates/LOGGING.md` - 使用 `log::{info, debug, ...}` 宏
+1. `src/web-ui` 或应用入口
+2. `src/apps/desktop/src/api/*` 或 server routes
+3. `src/crates/api-layer`
+4. `src/crates/transport`
+5. `src/crates/core`
 
-### 传输层
+### `bitfun-core`
 
-**核心代码中禁止使用平台特定 API：**
-- ❌ `use tauri::AppHandle`
-- ✅ `use bitfun_events::EventEmitter`
+`src/crates/core` 是代码库中心。
 
-### Tauri 命令
+重要区域：
 
-**命名规范：** 命令 `snake_case`，Rust `snake_case`，TypeScript `camelCase`
+- `agentic/`：agents、prompts、tools、sessions、execution、persistence
+- `service/`：config、filesystem、terminal、git、LSP、MCP、remote connect、project context、AI memory
+- `infrastructure/`：AI clients、app paths、event system、storage、debug log server
 
-**始终使用结构化请求格式：**
+Agent 运行时心智模型：
+
+```text
+SessionManager → Session → DialogTurn → ModelRound
+```
+
+会话数据保存在 `.bitfun/sessions/{session_id}/`。
+
+### 前端与桌面端边界
+
+- `src/web-ui` 同时服务 Tauri 桌面端和 server/web
+- 不要在 UI 组件里直接调用 Tauri API；应通过 adapter / infrastructure 层访问
+- 仅桌面端集成应放在 `src/apps/desktop`，再通过 transport / API layer 回流到共享逻辑
+- 在共享 core 中避免使用 `tauri::AppHandle` 等宿主 API；优先使用 `bitfun_events::EventEmitter` 等共享抽象
+
+## 仓库规则
+
+### 日志
+
+日志必须只用英文，且不能使用 emoji。
+
+- 前端：`src/web-ui/LOGGING.md`
+- 后端：`src/crates/LOGGING.md`
+
+示例：
+
+```ts
+const log = createLogger('ModuleName');
+log.info('Loaded items', { count });
+```
+
+```rust
+use log::{debug, error, info, trace, warn};
+info!("Registered adapter for session {}", session_id);
+```
+
+### Tauri command
+
+- command 名称：`snake_case`
+- Rust 侧：`snake_case`
+- TypeScript 可以用 `camelCase` 包装，但调用 Rust 时要传结构化 `request`
 
 ```rust
 #[tauri::command]
@@ -74,44 +126,50 @@ pub async fn your_command(
 ) -> Result<YourResponse, String>
 ```
 
-```typescript
+```ts
 await api.invoke('your_command', { request: { ... } });
 ```
 
-### 前端复用
+### 更细粒度规则
 
-开发前端功能时，复用现有基础设施：
-- **主题**: `infrastructure/theme/` - useTheme, useThemeToggle
-- **国际化**: `infrastructure/i18n/` + `locales/` - useI18n, t()
-- **组件**: `component-library/` - 共享 UI 组件
-- **状态**: 各模块内的 Zustand Store
+- 如果修改 `src/crates/ai-adapters`，需要运行 `src/crates/core/tests` 中的 stream integration tests
+- 如果修改 `src/crates/core/src/agentic/execution/stream_processor.rs`，结束前需要运行 stream integration tests
 
-## 核心组件
+## 先看哪里
 
-### 代理系统
+- Agent mode：`src/crates/core/src/agentic/agents/`、`src/crates/core/src/agentic/agents/prompts/`、`src/web-ui/src/locales/*/scenes/agents.json`
+- Tool：`src/crates/core/src/agentic/tools/implementations/`、`src/crates/core/src/agentic/tools/registry.rs`
+- MCP / LSP / remote：`src/crates/core/src/service/mcp/`、`src/crates/core/src/service/lsp/`、`src/crates/core/src/service/remote_connect/`、`src/crates/core/src/service/remote_ssh/`
+- 桌面端 API：`src/apps/desktop/src/api/`、`src/crates/api-layer/src/`、`src/crates/transport/src/adapters/tauri.rs`
+- Web/server 通信：`src/web-ui/src/infrastructure/api/`、`src/crates/transport/src/adapters/websocket.rs`、`src/apps/server/src/routes/`、`src/apps/server/src/main.rs`
 
-```
-SessionManager → Session → DialogTurn → ModelRound
-```
+## 验证
 
-- `ConversationCoordinator` - 协调轮次
-- `ExecutionEngine` - 多轮循环
-- `ToolPipeline` - 工具并发执行
+| 改动类型 | 最低验证要求 |
+| --- | --- |
+| 前端 UI、状态、适配层或多语言文案 | `pnpm run lint:web && pnpm run type-check:web && pnpm --dir src/web-ui run test:run` |
+| `core`、`transport`、`api-layer` 或共享服务中的 Rust 逻辑 | `cargo check --workspace && cargo test --workspace` |
+| 桌面端集成、Tauri API、browser/computer-use 或桌面专属行为 | `cargo check -p bitfun-desktop && cargo test -p bitfun-desktop` |
+| 被桌面端 smoke/functional 流覆盖的行为 | `cargo build -p bitfun-desktop` 后运行最接近的 E2E spec，或 `pnpm run e2e:test:l0` |
+| `src/crates/ai-adapters` | 运行上面相关 Rust 检查，**并且**运行 `src/crates/core/tests` 中的 stream integration tests |
+| 安装器应用 | `pnpm run installer:build` |
 
-### 会话持久化
+## Agent 文档覆盖
 
-位置：`.bitfun/sessions/{session_id}/`
+这是仓库级总指南。
 
-### 工具开发
+规则优先级：
 
-在 `agentic/tools/registry.rs` 注册：
-1. 实现 `Tool` trait
-2. 定义输入/输出类型
-3. 处理流式传输（如适用）
+- 进入具体目录后，优先遵循离目标文件最近的 `AGENTS.md` / `AGENTS-CN.md`
+- 如果局部文档与本文件冲突，以更具体、更近的文档为准
 
-### 添加代理
+进入具体模块后，优先看最近的 agent 文档：
 
-在 `agentic/agents/`：
-1. 创建代理文件
-2. 在 `prompts/` 定义提示词
-3. 在 `registry.rs` 注册
+- `src/web-ui/AGENTS.md`
+- `src/crates/core/AGENTS.md`
+- `src/apps/desktop/AGENTS.md`
+- `tests/e2e/AGENTS.md`
+- `BitFun-Installer/AGENTS.md`
+- `src/crates/ai-adapters/AGENTS.md`
+- `src/crates/core/src/agentic/execution/AGENTS.md`
+

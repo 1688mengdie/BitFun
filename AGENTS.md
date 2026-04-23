@@ -1,70 +1,122 @@
+[中文](AGENTS-CN.md) | **English**
+
 # AGENTS.md
 
-## Project Overview
+## Overview
 
-BitFun is an AI agent-driven programming environment built with Rust and TypeScript, using multi-platform architecture (Desktop/CLI/Server) sharing a common core library.
+BitFun is a Rust workspace plus a shared React frontend.
 
-### Architecture
+Repository rule: **keep product logic platform-agnostic, then expose it through platform adapters**.
 
-- **src/crates/events** - Event definitions (platform-agnostic)
-- **src/crates/core** - Core business logic (95%+ code reuse)
-  - `agentic/` - Agent system (session, tools, execution)
-  - `service/` - Workspace, Config, FileSystem, Terminal, Git
-  - `infrastructure/` - AI client, storage, logging, events
-- **src/crates/transport** - Transport adapters (CLI, Tauri, WebSocket)
-- **src/crates/api-layer** - Platform-agnostic handlers
-- **src/apps/desktop** - Tauri 2.0 desktop app
-- **src/apps/cli** - Terminal UI（WIP）
-- **src/apps/server** - Web server (Axum + WebSocket)（WIP）
-- **src/web-ui** - React frontend
-  - `infrastructure/` - Theme, I18n, Config, State management, API adapters
-  - `component-library/` - Shared UI components
-  - `tools/` - Feature modules (editor, git, terminal, mermaid...)
-  - `flow_chat/` - Chat UI
-  - `locales/` - Translation files (en-US, zh-CN)
+- `src/crates/core`: shared product logic center
+- `src/crates/transport`: Tauri / WebSocket / CLI adapters
+- `src/crates/api-layer`: shared handlers and DTOs
+- `src/apps/desktop`: Tauri host app
+- `src/apps/server`: web backend runtime
+- `src/apps/cli`: CLI runtime
+- `src/web-ui`: shared frontend for desktop and server/web
+- `BitFun-Installer`: separate installer app
+- `tests/e2e`: desktop E2E tests
 
-### Key Design Principles
+## 3-step onboarding
 
-1. **Dependency Injection** - Services receive dependencies via constructors
-2. **EventEmitter Pattern** - Use `Arc<dyn EventEmitter>` not `AppHandle`
-3. **TransportAdapter Pattern** - Abstract communication across platforms
-4. **Platform Agnostic Core** - No platform-specific dependencies in core
+1. Read `README.md`, `CONTRIBUTING.md`, and this file before architecture-sensitive changes.
+2. Use `pnpm run desktop:dev` for normal local development, or `pnpm run dev:web` for frontend-only work.
+3. After changes, run the smallest matching verification set below.
 
-### Tech Stack
-
-- **Backend**: Rust 2021, Tokio, Tauri 2.0, Axum
-- **Frontend**: React 18, TypeScript, Vite, Zustand
-
-## Development Commands
+## Core commands
 
 ```bash
-# Desktop
-pnpm run desktop:dev             # Dev mode
+# Install
+pnpm install
+pnpm run e2e:install
 
-# E2E
-pnpm run e2e:test
+# Main dev flows
+pnpm run desktop:dev
+pnpm run dev:web
+pnpm run cli:dev
+pnpm run installer:dev
+
+# Frontend
+pnpm run lint:web
+pnpm run type-check:web
+pnpm --dir src/web-ui run test:run
+pnpm run build:web
+
+# Rust
+cargo check --workspace
+cargo test --workspace
+cargo test -p bitfun-core <test_name> -- --nocapture
+
+# Desktop / E2E
+cargo build -p bitfun-desktop
+pnpm run e2e:test:l0
+pnpm --dir tests/e2e exec wdio run ./config/wdio.conf.ts --spec "./specs/<file>.spec.ts"
 ```
 
-## Critical Rules
+## Architecture
+
+### Backend flow
+
+Trace most features in this order:
+
+1. `src/web-ui` or app entrypoint
+2. `src/apps/desktop/src/api/*` or server routes
+3. `src/crates/api-layer`
+4. `src/crates/transport`
+5. `src/crates/core`
+
+### `bitfun-core`
+
+`src/crates/core` is the center of the codebase.
+
+Important areas:
+
+- `agentic/`: agents, prompts, tools, sessions, execution, persistence
+- `service/`: config, filesystem, terminal, git, LSP, MCP, remote connect, project context, AI memory
+- `infrastructure/`: AI clients, app paths, event system, storage, debug log server
+
+Agent runtime mental model:
+
+```text
+SessionManager → Session → DialogTurn → ModelRound
+```
+
+Session data is stored under `.bitfun/sessions/{session_id}/`.
+
+### Frontend and desktop boundaries
+
+- `src/web-ui` serves both Tauri desktop and server/web
+- Do not call Tauri APIs directly from UI components; go through the adapter/infrastructure layer
+- Desktop-only integrations belong in `src/apps/desktop`, then flow back through transport/API layers
+- In shared core, avoid host-specific APIs such as `tauri::AppHandle`; use shared abstractions such as `bitfun_events::EventEmitter`
+
+## Repository-specific rules
 
 ### Logging
 
-**Rules:** English only, no emojis, structured data, avoid verbose logging
+Logs must be English-only, with no emojis.
 
-- **Frontend**: `src/web-ui/LOGGING.md` - Use `createLogger('ModuleName')`
-- **Backend**: `src/crates/LOGGING.md` - Use `log::{info, debug, ...}` macros
+- Frontend: `src/web-ui/LOGGING.md`
+- Backend: `src/crates/LOGGING.md`
 
-### Transport Layer
+Patterns:
 
-**Never use platform-specific APIs in core code:**
-- ❌ `use tauri::AppHandle`
-- ✅ `use bitfun_events::EventEmitter`
+```ts
+const log = createLogger('ModuleName');
+log.info('Loaded items', { count });
+```
 
-### Tauri Commands
+```rust
+use log::{debug, error, info, trace, warn};
+info!("Registered adapter for session {}", session_id);
+```
 
-**Naming:** Commands `snake_case`, Rust `snake_case`, TypeScript `camelCase`
+### Tauri commands
 
-**Always use structured request format:**
+- command names: `snake_case`
+- Rust side: `snake_case`
+- TypeScript may wrap with `camelCase`, but invoke Rust with a structured `request`
 
 ```rust
 #[tauri::command]
@@ -74,67 +126,50 @@ pub async fn your_command(
 ) -> Result<YourResponse, String>
 ```
 
-```typescript
+```ts
 await api.invoke('your_command', { request: { ... } });
 ```
 
-### Frontend Reuse
+### Extra narrow rules
 
-When developing frontend features, reuse existing infrastructure:
-- **Theme**: `infrastructure/theme/` - useTheme, useThemeToggle
-- **I18n**: `infrastructure/i18n/` + `locales/` - useI18n, t()
-- **Components**: `component-library/` - shared UI components
-- **State**: Zustand stores in each module
+- If you modify `src/crates/ai-adapters`, run the stream integration tests in `src/crates/core/tests`
+- If you modify `src/crates/core/src/agentic/execution/stream_processor.rs`, run the stream integration tests before finishing
 
-## Key Components
+## Where to look first
 
-### Agentic System
+- Agent modes: `src/crates/core/src/agentic/agents/`, `src/crates/core/src/agentic/agents/prompts/`, `src/web-ui/src/locales/*/scenes/agents.json`
+- Tools: `src/crates/core/src/agentic/tools/implementations/`, `src/crates/core/src/agentic/tools/registry.rs`
+- MCP / LSP / remote: `src/crates/core/src/service/mcp/`, `src/crates/core/src/service/lsp/`, `src/crates/core/src/service/remote_connect/`, `src/crates/core/src/service/remote_ssh/`
+- Desktop APIs: `src/apps/desktop/src/api/`, `src/crates/api-layer/src/`, `src/crates/transport/src/adapters/tauri.rs`
+- Web/server communication: `src/web-ui/src/infrastructure/api/`, `src/crates/transport/src/adapters/websocket.rs`, `src/apps/server/src/routes/`, `src/apps/server/src/main.rs`
 
-```
-SessionManager → Session → DialogTurn → ModelRound
-```
+## Verification
 
-- `ConversationCoordinator` - Orchestrates turns
-- `ExecutionEngine` - Multi-round loop
-- `ToolPipeline` - Tool execution with concurrency
+| Change type | Minimum verification |
+| --- | --- |
+| Frontend UI, state, adapters, or locales | `pnpm run lint:web && pnpm run type-check:web && pnpm --dir src/web-ui run test:run` |
+| Shared Rust logic in `core`, `transport`, `api-layer`, or services | `cargo check --workspace && cargo test --workspace` |
+| Desktop integration, Tauri APIs, browser/computer-use, or desktop-only behavior | `cargo check -p bitfun-desktop && cargo test -p bitfun-desktop` |
+| Behavior covered by desktop smoke/functional flows | `cargo build -p bitfun-desktop` then the nearest E2E spec or `pnpm run e2e:test:l0` |
+| `src/crates/ai-adapters` | Relevant Rust checks above **and** stream integration tests in `src/crates/core/tests` |
+| Installer app | `pnpm run installer:build` |
 
-### Session Persistence
+## Agent-doc coverage
 
-Location: `.bitfun/sessions/{session_id}/`
+This is the repository-wide guide.
 
-### Tool Development
+Rule priority:
 
-Register in `agentic/tools/registry.rs`:
-1. Implement `Tool` trait
-2. Define input/output types
-3. Handle streaming if applicable
+- prefer the nearest matching `AGENTS.md` / `AGENTS-CN.md` for the directory you are changing
+- if local guidance conflicts with this file, follow the more specific, nearer document
 
-### Adding Agents
+Prefer the nearest matching agent doc when present:
 
-In `agentic/agents/`:
-1. Create agent file
-2. Define prompt in `prompts/`
-3. Register in `registry.rs`
+- `src/web-ui/AGENTS.md`
+- `src/crates/core/AGENTS.md`
+- `src/apps/desktop/AGENTS.md`
+- `tests/e2e/AGENTS.md`
+- `BitFun-Installer/AGENTS.md`
+- `src/crates/ai-adapters/AGENTS.md`
+- `src/crates/core/src/agentic/execution/AGENTS.md`
 
-## Frontend Debugging
-
-A local log receiver server is available at `scripts/debug-log-server.mjs`.
-
-**Start the server:**
-```bash
-node scripts/debug-log-server.mjs
-# Listens on http://127.0.0.1:7469, writes logs to debug-agent.log
-```
-
-**Instrument code (one-liner fetch):**
-```typescript
-fetch('http://127.0.0.1:7469/log',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'file.ts:LINE',message:'desc',data:{k:v},timestamp:Date.now()})}).catch(()=>{});
-```
-
-**Clear logs between runs:**
-```bash
-# Via HTTP
-curl -X POST http://127.0.0.1:7469/clear
-```
-
-Logs are written to `debug-agent.log` in project root as NDJSON. The agent reads this file directly — no copy-paste needed.
