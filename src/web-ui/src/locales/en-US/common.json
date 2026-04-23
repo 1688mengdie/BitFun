@@ -176,6 +176,9 @@
       "showAll": "{{count}} more (show all)",
       "showLess": "Show less",
       "assistantOwner": "Assistant: {{name}}",
+      "parentSession": "Parent session",
+      "childSourceWithoutTurn": "From {{parentTitle}}",
+      "childSourceWithTurn": "From {{parentTitle}} · Turn {{turnIndex}}",
       "needProjectWorkspaceForSession": "Open or add a project workspace first. Code and Cowork sessions cannot be created in the assistant area."
     },
     "scheduledJobs": {
@@ -351,6 +354,11 @@
     "maximize": "Maximize",
     "restore": "Restore",
     "close": "Close"
+  },
+  "browserView": {
+    "addressPlaceholder": "Enter a URL, for example {{exampleUrl}}",
+    "startElementSelection": "Select element",
+    "stopElementSelection": "Exit element selection"
   },
   "newProject": {
     "title": "New Project",

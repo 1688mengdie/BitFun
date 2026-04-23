@@ -398,7 +398,14 @@ const SessionsSection: React.FC<SessionsSectionProps> = ({
               ) : null}
               {isBtwChild ? (
                 <div className="bitfun-nav-panel__inline-item-tooltip-meta">
-                  {`来自 ${parentTitle || '父会话'}${parentTurnIndex ? ` · 第 ${parentTurnIndex} 轮` : ''}`}
+                  {parentTurnIndex
+                    ? t('nav.sessions.childSourceWithTurn', {
+                        parentTitle: parentTitle || t('nav.sessions.parentSession'),
+                        turnIndex: parentTurnIndex,
+                      })
+                    : t('nav.sessions.childSourceWithoutTurn', {
+                        parentTitle: parentTitle || t('nav.sessions.parentSession'),
+                      })}
                 </div>
               ) : null}
             </div>

@@ -60,6 +60,14 @@
       "skills": "{{count}} 個 Skills"
     }
   },
+  "capabilityCategories": {
+    "coding": "編碼",
+    "docs": "文檔",
+    "analysis": "分析",
+    "testing": "測試",
+    "creative": "創意",
+    "ops": "運維"
+  },
   "agentsOverview": {
     "filterUser": "用戶級",
     "filterProject": "項目級",
@@ -70,6 +78,7 @@
     "toolsSave": "保存",
     "toolsEdit": "管理工具",
     "toolsResetSuccess": "已重置為默認工具",
+    "toolsResetFailed": "重置工具失敗",
     "toolToggleFailed": "工具切換失敗",
     "skills": "Skills",
     "skillsCancel": "取消編輯",
@@ -117,6 +126,7 @@
       "readonly": "只讀模式",
       "tools": "工具",
       "toolsOptional": "可選",
+      "toolsHint": "（{{optionalLabel}}，不選則使用預設）",
       "noWorkspace": "需要先打開項目",
       "cancel": "取消",
       "submit": "創建",

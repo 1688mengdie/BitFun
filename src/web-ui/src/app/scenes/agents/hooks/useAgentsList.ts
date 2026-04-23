@@ -158,7 +158,7 @@ export function useAgentsList({
       const nextTools = Array.from(new Set(toolNames));
       await saveModeConfig(agentId, { enabled_tools: nextTools });
     } catch {
-      notification.error(t('agentsOverview.toolToggleFailed', '工具切换失败'));
+      notification.error(t('agentsOverview.toolToggleFailed'));
     }
   }, [notification, saveModeConfig, t]);
 
@@ -172,7 +172,7 @@ export function useAgentsList({
       });
       setModeConfigs(updated as Record<string, ModeConfigItem>);
       setModeSkills((prev) => ({ ...prev, [agentId]: updatedSkills }));
-      notification.success(t('agentsOverview.toolsResetSuccess', '已重置为默认工具'));
+      notification.success(t('agentsOverview.toolsResetSuccess'));
 
       try {
         const { globalEventBus } = await import('@/infrastructure/event-bus');
@@ -181,7 +181,7 @@ export function useAgentsList({
         // ignore
       }
     } catch {
-      notification.error(t('agentsOverview.toolToggleFailed', '重置失败'));
+      notification.error(t('agentsOverview.toolsResetFailed'));
     }
   }, [notification, t, workspacePath]);
 
@@ -206,7 +206,7 @@ export function useAgentsList({
         // ignore
       }
     } catch {
-      notification.error(t('agentsOverview.skillToggleFailed', 'Skill 切换失败'));
+      notification.error(t('agentsOverview.skillToggleFailed'));
     }
   }, [notification, t, workspacePath]);
 

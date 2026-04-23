@@ -60,6 +60,14 @@
       "skills": "{{count}} skills"
     }
   },
+  "capabilityCategories": {
+    "coding": "Coding",
+    "docs": "Docs",
+    "analysis": "Analysis",
+    "testing": "Testing",
+    "creative": "Creative",
+    "ops": "Ops"
+  },
   "agentsOverview": {
     "filterUser": "User",
     "filterProject": "Project",
@@ -70,6 +78,7 @@
     "toolsSave": "Save",
     "toolsEdit": "Manage tools",
     "toolsResetSuccess": "Reset to default tools",
+    "toolsResetFailed": "Failed to reset tools",
     "toolToggleFailed": "Failed to toggle tool",
     "skills": "Skills",
     "skillsCancel": "Cancel editing",
@@ -117,6 +126,7 @@
       "readonly": "Readonly mode",
       "tools": "Tools",
       "toolsOptional": "optional",
+      "toolsHint": "({{optionalLabel}}, uses default when none selected)",
       "noWorkspace": "Open a workspace first",
       "cancel": "Cancel",
       "submit": "Create",

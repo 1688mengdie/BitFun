@@ -272,6 +272,14 @@
     },
     "previewApp": {
       "title": "BitFun 組件庫",
+      "themeLabel": "主題",
+      "themeTypeLight": "淺色",
+      "themeTypeDark": "深色",
+      "themeDescriptionLight": "淺色主題",
+      "themeDescriptionDark": "深色主題",
+      "sidebarTitle": "組件導覽",
+      "expandSidebar": "展開導覽",
+      "collapseSidebar": "收起導覽",
       "emptyState": "請從左側選擇一個分類查看組件"
     },
     "layouts": {
