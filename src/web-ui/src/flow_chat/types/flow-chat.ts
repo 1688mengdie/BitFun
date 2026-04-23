@@ -3,7 +3,11 @@
  * Supports mixed streaming output.
  */
 
-import type { DialogTurnKind, SessionKind } from '@/shared/types/session-history';
+import type {
+  DialogTurnKind,
+  SessionKind,
+  SessionTitleSource,
+} from '@/shared/types/session-history';
 
 // Base type for streaming items.
 export interface FlowItem {
@@ -158,6 +162,13 @@ export interface TodoItem {
 export interface Session {
   sessionId: string;
   title?: string;
+  /**
+   * Untouched default sessions keep an i18n key so locale changes can re-render
+   * their title. Once a real title is generated or renamed, we freeze it as text.
+   */
+  titleSource?: SessionTitleSource;
+  titleI18nKey?: string;
+  titleI18nParams?: Record<string, unknown>;
   titleStatus?: 'generating' | 'generated' | 'failed';
   dialogTurns: DialogTurn[];
   

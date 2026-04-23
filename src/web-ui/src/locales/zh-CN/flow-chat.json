@@ -162,8 +162,12 @@
     "streaming": "流式输出",
     "autoMigrated": {
       "title": "模型已自动切换",
-      "description": "会话原模型\"{{previous}}\"不可用，已切换为\"{{next}}\"。",
-      "reason": "原因：{{reason}}"
+      "description": "当前会话之前使用的模型配置已不可用，系统已切换为自动选择模型。",
+      "reasons": {
+        "modelUnavailableOnRestore": "这是恢复历史会话时的自动处理，你可以继续使用，或稍后重新指定模型。",
+        "modelReconciled": "模型配置刚发生过调整，系统已为当前会话自动切换到可用模型。",
+        "fallback": "系统已为当前会话自动选择可用模型。"
+      }
     }
   },
   "toolbar": {
@@ -398,9 +402,17 @@
     "toolCallLabel": "🔧 工具调用: {{name}}"
   },
   "exploreRegion": {
+    "readFiles_one": "读取了 {{count}} 个文件",
+    "readFiles_other": "读取了 {{count}} 个文件",
     "readFiles": "读取了 {{count}} 个文件",
+    "searchCount_one": "进行了 {{count}} 次搜索",
+    "searchCount_other": "进行了 {{count}} 次搜索",
     "searchCount": "进行了 {{count}} 次搜索",
+    "thinkingCount_one": "思考了 {{count}} 次",
+    "thinkingCount_other": "思考了 {{count}} 次",
     "thinkingCount": "思考了 {{count}} 次",
+    "exploreCount_one": "执行了 {{count}} 次探索",
+    "exploreCount_other": "执行了 {{count}} 次探索",
     "exploreCount": "执行了 {{count}} 次探索",
     "separator": "，",
     "collapse": "收起探索过程"

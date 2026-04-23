@@ -207,6 +207,27 @@ describe('sessionMetadata', () => {
     expect(deriveLastFinishedAtFromMetadata(metadata)).toBe(4321);
   });
 
+  it('persists locale-aware default title metadata before the first message', () => {
+    const session = createSession({
+      title: 'flow-chat:session.newCodeWithIndex',
+      titleSource: 'i18n',
+      titleI18nKey: 'flow-chat:session.newCodeWithIndex',
+      titleI18nParams: { count: 2 },
+      titleStatus: undefined,
+    });
+
+    const metadata = buildSessionMetadata(session);
+
+    expect(metadata.sessionName).toBe('flow-chat:session.newCodeWithIndex');
+    expect(metadata.customMetadata).toEqual({
+      kind: 'normal',
+      lastFinishedAt: null,
+      titleSource: 'i18n',
+      titleKey: 'flow-chat:session.newCodeWithIndex',
+      titleParams: { count: 2 },
+    });
+  });
+
   it('round-trips btw identity through persistence and UI selectors', () => {
     const metadata: SessionMetadata = {
       sessionId: 'child-1',

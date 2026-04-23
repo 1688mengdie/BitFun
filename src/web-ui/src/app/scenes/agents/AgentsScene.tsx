@@ -32,7 +32,7 @@ import {
 import { useAgentsList } from './hooks/useAgentsList';
 import { AGENT_ICON_MAP, CAPABILITY_ACCENT } from './agentsIcons';
 import { getCardGradient } from '@/shared/utils/cardGradients';
-import { getAgentBadge } from './utils';
+import { getAgentBadge, getCapabilityLabel } from './utils';
 import './AgentsView.scss';
 import './AgentsScene.scss';
 import { useGallerySceneAutoRefresh } from '@/app/hooks/useGallerySceneAutoRefresh';
@@ -586,7 +586,7 @@ const AgentsHomeView: React.FC = () => {
                     className="agent-card__cap-label"
                     style={{ color: CAPABILITY_ACCENT[cap.category] }}
                   >
-                    {cap.category}
+                    {getCapabilityLabel(t, cap.category)}
                   </span>
                   <div className="agent-card__cap-bar">
                     {Array.from({ length: 5 }).map((_, i) => (

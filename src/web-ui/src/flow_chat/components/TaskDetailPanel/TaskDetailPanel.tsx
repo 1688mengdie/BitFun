@@ -215,7 +215,7 @@ export const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({ data }) => {
           </span>
         </div>
         <div className="task-detail-panel__empty-content">
-          {t('toolCards.taskDetailPanel.noData', 'Unable to load task data')}
+          {t('toolCards.taskDetailPanel.noData')}
         </div>
       </div>
     );

@@ -4,7 +4,7 @@
 import { create } from 'zustand';
 import type { SubagentInfo } from '@/infrastructure/api/service-api/SubagentAPI';
 
-export const CAPABILITY_CATEGORIES = ['编码', '文档', '分析', '测试', '创意', '运维'] as const;
+export const CAPABILITY_CATEGORIES = ['coding', 'docs', 'analysis', 'testing', 'creative', 'ops'] as const;
 export type CapabilityCategory = (typeof CAPABILITY_CATEGORIES)[number];
 
 /** 'mode' = primary agent mode (e.g. Agentic/Plan/Debug); 'subagent' = sub-agent */
@@ -23,12 +23,12 @@ export interface AgentWithCapabilities extends SubagentInfo {
 }
 
 export const CAPABILITY_COLORS: Record<CapabilityCategory, string> = {
-  编码: '#60a5fa',
-  文档: '#6eb88c',
-  分析: '#8b5cf6',
-  测试: '#c9944d',
-  创意: '#e879a0',
-  运维: '#5ea3a3',
+  coding: '#60a5fa',
+  docs: '#6eb88c',
+  analysis: '#8b5cf6',
+  testing: '#c9944d',
+  creative: '#e879a0',
+  ops: '#5ea3a3',
 };
 
 export type AgentsScenePage = 'home' | 'createAgent';

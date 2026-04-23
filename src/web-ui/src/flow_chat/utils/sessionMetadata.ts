@@ -5,6 +5,7 @@ import type {
   SessionMetadata,
 } from '@/shared/types/session-history';
 import type { Session } from '../types/flow-chat';
+import { resolveSessionTitle } from './sessionTitle';
 
 const BTW_TAG = 'btw';
 const RELATIONSHIP_METADATA_KEYS = new Set([
@@ -13,6 +14,11 @@ const RELATIONSHIP_METADATA_KEYS = new Set([
   'parentRequestId',
   'parentDialogTurnId',
   'parentTurnIndex',
+]);
+const TITLE_METADATA_KEYS = new Set([
+  'titleSource',
+  'titleKey',
+  'titleParams',
 ]);
 
 type SessionRelationshipInput = Pick<Session, 'sessionKind' | 'parentSessionId' | 'btwOrigin'>;
@@ -144,14 +150,23 @@ export function calculateSessionStats(
 }
 
 function buildSessionCustomMetadata(
-  session: Pick<Session, 'sessionKind' | 'parentSessionId' | 'btwOrigin' | 'lastFinishedAt'>,
+  session: Pick<
+    Session,
+    | 'sessionKind'
+    | 'parentSessionId'
+    | 'btwOrigin'
+    | 'lastFinishedAt'
+    | 'titleSource'
+    | 'titleI18nKey'
+    | 'titleI18nParams'
+  >,
   existingCustomMetadata?: SessionCustomMetadata
 ): SessionCustomMetadata {
   const normalized = normalizeSessionRelationship(session);
   const nextCustomMetadata: SessionCustomMetadata = {};
 
   for (const [key, value] of Object.entries(existingCustomMetadata || {})) {
-    if (!RELATIONSHIP_METADATA_KEYS.has(key)) {
+    if (!RELATIONSHIP_METADATA_KEYS.has(key) && !TITLE_METADATA_KEYS.has(key)) {
       nextCustomMetadata[key] = value;
     }
   }
@@ -168,6 +183,14 @@ function buildSessionCustomMetadata(
   }
 
   nextCustomMetadata.lastFinishedAt = session.lastFinishedAt ?? null;
+
+  // Default untitled sessions persist their title template so locale changes can
+  // re-render them until the first real title is generated or the user renames it.
+  if (session.titleSource === 'i18n' && normalizeString(session.titleI18nKey)) {
+    nextCustomMetadata.titleSource = 'i18n';
+    nextCustomMetadata.titleKey = session.titleI18nKey;
+    nextCustomMetadata.titleParams = session.titleI18nParams ?? null;
+  }
 
   return nextCustomMetadata;
 }
@@ -202,6 +225,9 @@ export function buildSessionMetadata(
     | 'parentSessionId'
     | 'btwOrigin'
     | 'lastFinishedAt'
+    | 'titleSource'
+    | 'titleI18nKey'
+    | 'titleI18nParams'
   >,
   existingMetadata?: SessionMetadata | null
 ): SessionMetadata {
@@ -211,10 +237,9 @@ export function buildSessionMetadata(
   return {
     ...existingMetadata,
     sessionId: session.sessionId,
-    sessionName:
-      session.title ||
-      existingMetadata?.sessionName ||
-      i18nService.t('flow-chat:session.new'),
+    sessionName: resolveSessionTitle(session, (key, options) =>
+      i18nService.t(key, options)
+    ),
     agentType:
       session.mode ||
       session.config.agentType ||
@@ -242,6 +267,9 @@ export function buildSessionMetadata(
         parentSessionId: session.parentSessionId,
         btwOrigin: session.btwOrigin,
         lastFinishedAt: session.lastFinishedAt,
+        titleSource: session.titleSource,
+        titleI18nKey: session.titleI18nKey,
+        titleI18nParams: session.titleI18nParams,
       },
       existingMetadata?.customMetadata
     ),

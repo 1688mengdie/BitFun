@@ -81,8 +81,8 @@ const CreateAgentPage: React.FC = () => {
   }, [isEdit, editingAgentId, workspacePath]);
 
   const validateName = useCallback((v: string) => {
-    if (!v.trim()) return t('agentsOverview.form.nameRequired', '名称不能为空');
-    if (!NAME_REGEX.test(v.trim())) return t('agentsOverview.form.nameFormat', '只能以字母开头，包含字母/数字/下划线/连字符');
+    if (!v.trim()) return t('agentsOverview.form.nameRequired');
+    if (!NAME_REGEX.test(v.trim())) return t('agentsOverview.form.nameFormat');
     return null;
   }, [t]);
 
@@ -103,10 +103,10 @@ const CreateAgentPage: React.FC = () => {
       const err = validateName(name);
       if (err) { setNameError(err); return; }
     }
-    if (!description.trim()) { notification.error(t('agentsOverview.form.descRequired', '描述不能为空')); return; }
-    if (!prompt.trim()) { notification.error(t('agentsOverview.form.promptRequired', '系统提示词不能为空')); return; }
+    if (!description.trim()) { notification.error(t('agentsOverview.form.descRequired')); return; }
+    if (!prompt.trim()) { notification.error(t('agentsOverview.form.promptRequired')); return; }
     if (level === 'project' && !workspacePath) {
-      notification.error(t('agentsOverview.form.noWorkspace', '需要先打开项目'));
+      notification.error(t('agentsOverview.form.noWorkspace'));
       return;
     }
     if (isEdit && !editingAgentId) {
@@ -140,7 +140,7 @@ const CreateAgentPage: React.FC = () => {
       openHome();
     } catch (err) {
       notification.error(
-        (isEdit ? t('agentsOverview.form.updateFailed', '保存失败：') : t('agentsOverview.form.createFailed', '创建失败：')) +
+        (isEdit ? t('agentsOverview.form.updateFailed') : t('agentsOverview.form.createFailed')) +
         (err instanceof Error ? err.message : String(err))
       );
     } finally {
@@ -149,14 +149,14 @@ const CreateAgentPage: React.FC = () => {
   };
 
   const formTitle = isEdit
-    ? t('agentsOverview.form.titleEdit', '编辑 Sub-Agent')
-    : t('agentsOverview.form.title', '新建 Sub-Agent');
+    ? t('agentsOverview.form.titleEdit')
+    : t('agentsOverview.form.title');
   const formSubtitle = isEdit
-    ? t('agentsOverview.form.subtitleEdit', '修改描述、提示词、工具与只读设置。名称与级别不可更改。')
-    : t('agentsOverview.form.subtitle', '创建一个自定义的用户级或项目级 Sub-Agent');
+    ? t('agentsOverview.form.subtitleEdit')
+    : t('agentsOverview.form.subtitle');
   const submitLabel = isEdit
-    ? t('agentsOverview.form.save', '保存')
-    : t('agentsOverview.form.submit', '创建');
+    ? t('agentsOverview.form.save')
+    : t('agentsOverview.form.submit');
 
   if (isEdit && detailLoading) {
     return (
@@ -164,12 +164,12 @@ const CreateAgentPage: React.FC = () => {
         <div className="tv__editor-bar">
           <button className="tv__back-btn" onClick={openHome} type="button">
             <ArrowLeft size={14} />
-            <span>{t('agentsOverview.backToOverview', '返回总览')}</span>
+            <span>{t('agentsOverview.backToOverview')}</span>
           </button>
         </div>
         <div className="th__list-body">
           <div className="th__list-inner">
-            <p className="th__title-sub">{t('agentsOverview.form.loadingDetail', '加载中…')}</p>
+            <p className="th__title-sub">{t('agentsOverview.form.loadingDetail')}</p>
           </div>
         </div>
       </div>
@@ -182,13 +182,13 @@ const CreateAgentPage: React.FC = () => {
         <div className="tv__editor-bar">
           <button className="tv__back-btn" onClick={openHome} type="button">
             <ArrowLeft size={14} />
-            <span>{t('agentsOverview.backToOverview', '返回总览')}</span>
+            <span>{t('agentsOverview.backToOverview')}</span>
           </button>
         </div>
         <div className="th__list-body">
           <div className="th__list-inner">
             <p className="th-create-panel__error">{detailError}</p>
-            <Button variant="secondary" size="small" onClick={openHome}>{t('agentsOverview.form.cancel', '取消')}</Button>
+            <Button variant="secondary" size="small" onClick={openHome}>{t('agentsOverview.form.cancel')}</Button>
           </div>
         </div>
       </div>
@@ -200,7 +200,7 @@ const CreateAgentPage: React.FC = () => {
       <div className="tv__editor-bar">
         <button className="tv__back-btn" onClick={openHome} type="button">
           <ArrowLeft size={14} />
-          <span>{t('agentsOverview.backToOverview', '返回总览')}</span>
+          <span>{t('agentsOverview.backToOverview')}</span>
         </button>
       </div>
 
@@ -213,12 +213,12 @@ const CreateAgentPage: React.FC = () => {
 
           <div className="th-create-page__form">
             <div className="th-create-panel__field">
-              <label className="th-create-panel__label">{t('agentsOverview.form.name', '名称')}</label>
+              <label className="th-create-panel__label">{t('agentsOverview.form.name')}</label>
               <Input
                 value={name}
                 onChange={(e) => { setName(e.target.value); setNameError(validateName(e.target.value)); }}
                 onBlur={() => setNameError(validateName(name))}
-                placeholder={t('agentsOverview.form.namePlaceholder', '字母开头，可含字母/数字/下划线')}
+                placeholder={t('agentsOverview.form.namePlaceholder')}
                 inputSize="small"
                 error={!!nameError}
                 disabled={isEdit}
@@ -227,11 +227,11 @@ const CreateAgentPage: React.FC = () => {
             </div>
 
             <div className="th-create-panel__field">
-              <label className="th-create-panel__label">{t('agentsOverview.form.description', '描述')}</label>
+              <label className="th-create-panel__label">{t('agentsOverview.form.description')}</label>
               <Input
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
-                placeholder={t('agentsOverview.form.descPlaceholder', '简要描述该 Agent 的用途')}
+                placeholder={t('agentsOverview.form.descPlaceholder')}
                 inputSize="small"
               />
             </div>
@@ -247,15 +247,15 @@ const CreateAgentPage: React.FC = () => {
                       disabled={disabled}
                       className={`th-create-panel__level-btn${level === lv ? ' is-active' : ''}`}
                       onClick={() => setLevel(lv)}
-                      title={disabled && !isEdit ? t('agentsOverview.form.noWorkspace', '需要先打开项目') : undefined}
+                      title={disabled && !isEdit ? t('agentsOverview.form.noWorkspace') : undefined}
                     >
-                      {lv === 'user' ? t('agentsOverview.filterUser', '用户级') : t('agentsOverview.filterProject', '项目级')}
+                      {lv === 'user' ? t('agentsOverview.filterUser') : t('agentsOverview.filterProject')}
                     </button>
                   );
                 })}
               </div>
               <div className="th-create-panel__readonly-row">
-                <label className="th-create-panel__label">{t('agentsOverview.form.readonly', '只读模式')}</label>
+                <label className="th-create-panel__label">{t('agentsOverview.form.readonly')}</label>
                 <Switch checked={readonly} onChange={(e) => setReadonly(e.target.checked)} size="small" />
               </div>
             </div>
@@ -263,9 +263,11 @@ const CreateAgentPage: React.FC = () => {
             {toolNames.length > 0 && (
               <div className="th-create-panel__field">
                 <label className="th-create-panel__label">
-                  {t('agentsOverview.form.tools', '工具')}
+                  {t('agentsOverview.form.tools')}
                   <span className="th-create-panel__label-hint">
-                    （{t('agentsOverview.form.toolsOptional', '可选')}，不选则使用默认）
+                    {t('agentsOverview.form.toolsHint', {
+                      optionalLabel: t('agentsOverview.form.toolsOptional'),
+                    })}
                   </span>
                 </label>
                 <div className="th-create-panel__tools">
@@ -284,18 +286,18 @@ const CreateAgentPage: React.FC = () => {
             )}
 
             <div className="th-create-panel__field">
-              <label className="th-create-panel__label">{t('agentsOverview.form.prompt', '系统提示词')}</label>
+              <label className="th-create-panel__label">{t('agentsOverview.form.prompt')}</label>
               <Textarea
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
-                placeholder={t('agentsOverview.form.promptPlaceholder', '输入系统提示词，定义 Agent 的行为…')}
+                placeholder={t('agentsOverview.form.promptPlaceholder')}
                 rows={8}
               />
             </div>
 
             <div className="th-create-page__actions">
               <Button variant="secondary" size="small" onClick={openHome} disabled={submitting}>
-                {t('agentsOverview.form.cancel', '取消')}
+                {t('agentsOverview.form.cancel')}
               </Button>
               <Button variant="primary" size="small" onClick={handleSubmit} disabled={submitting}>
                 {submitting ? '…' : submitLabel}

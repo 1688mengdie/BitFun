@@ -27,8 +27,15 @@ import { i18nService } from '@/infrastructure/i18n';
 import { MCPAPI } from '@/infrastructure/api/service-api/MCPAPI';
 import { globalEventBus } from '@/infrastructure/event-bus';
 import type { FlowChatContext, DialogTurn, ModelRound, FlowToolItem } from './types';
+import {
+  buildSessionModelMigrationNotice,
+  shouldSuppressSessionModelMigrationNotice,
+} from '../../utils/sessionModelMigrationNotice';
 
 const pendingImageAnalysisTurns = new Map<string, string>();
+// `restore_session` and assistant bootstrap can race on the same historical
+// session, so collapse identical auto-migration toasts into one short-lived UX notice.
+const recentSessionModelMigrationNoticeTimestamps = new Map<string, number>();
 import { 
   debouncedSaveDialogTurn, 
   immediateSaveDialogTurn, 
@@ -532,23 +539,32 @@ function handleSessionTitleGenerated(event: any): void {
 }
 
 function handleSessionModelAutoMigrated(event: SessionModelAutoMigratedEvent): void {
-  const { sessionId, previousModelId, newModelId, reason } = event;
+  const { sessionId, newModelId, reason } = event;
   if (!sessionId || !newModelId) return;
 
   const store = FlowChatStore.getInstance();
   store.updateSessionModelName(sessionId, newModelId);
 
-  const description = i18nService.t('flow-chat:model.autoMigrated.description', {
-    previous: previousModelId || 'unknown',
-    next: newModelId,
-  });
-  const reasonText = reason
-    ? ' ' + i18nService.t('flow-chat:model.autoMigrated.reason', { reason })
-    : '';
+  const notice = buildSessionModelMigrationNotice(event, (key, options) =>
+    i18nService.t(key, options)
+  );
+  if (
+    shouldSuppressSessionModelMigrationNotice(
+      recentSessionModelMigrationNoticeTimestamps,
+      notice.dedupeKey
+    )
+  ) {
+    return;
+  }
 
-  notificationService.warning(description + reasonText, {
-    title: i18nService.t('flow-chat:model.autoMigrated.title'),
+  notificationService.warning(notice.message, {
+    title: notice.title,
     duration: 6000,
+    metadata: {
+      sessionId,
+      reason,
+      newModelId,
+    },
   });
 }
 
