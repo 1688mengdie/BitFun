@@ -8,6 +8,9 @@ use crate::bootstrap::ServerAppState;
 use anyhow::{anyhow, Result};
 use bitfun_core::agentic::coordination::{DialogSubmissionPolicy, DialogTriggerSource};
 use bitfun_core::agentic::core::SessionConfig;
+use bitfun_core::service::i18n::{
+    sync_global_i18n_service_locale, LocaleId, LocaleMetadata,
+};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -328,22 +331,105 @@ pub async fn dispatch(
                 .get_config(Some("app.language"))
                 .await
                 .unwrap_or_else(|_| "zh-CN".to_string());
+            let lang = LocaleId::from_str(&lang)
+                .unwrap_or_default()
+                .as_str()
+                .to_string();
             Ok(serde_json::json!(lang))
         }
         "i18n_set_language" => {
             let request = extract_request(&params)?;
             let language = get_string(&request, "language")?;
+            let Some(locale_id) = LocaleId::from_str(&language) else {
+                return Err(anyhow!("Unsupported language: {}", language));
+            };
             state
                 .config_service
-                .set_config("app.language", language.clone())
+                .set_config("app.language", locale_id.as_str())
                 .await
                 .map_err(|e| anyhow!("{}", e))?;
-            Ok(serde_json::json!(language))
+            match sync_global_i18n_service_locale(locale_id).await {
+                Ok(true) => {}
+                Ok(false) => {
+                    log::warn!(
+                        "Global I18nService not initialized after server language change: language={}",
+                        locale_id.as_str()
+                    );
+                }
+                Err(e) => {
+                    log::warn!(
+                        "Failed to sync global I18nService after server language change: language={}, error={}",
+                        locale_id.as_str(),
+                        e
+                    );
+                }
+            }
+            Ok(serde_json::json!(locale_id.as_str()))
         }
-        "i18n_get_supported_languages" => Ok(serde_json::json!([
-            {"id": "zh-CN", "name": "Chinese (Simplified)", "englishName": "Chinese (Simplified)", "nativeName": "简体中文", "rtl": false},
-            {"id": "en-US", "name": "English", "englishName": "English", "nativeName": "English", "rtl": false}
-        ])),
+        "i18n_get_config" => {
+            let current_language = match state
+                .config_service
+                .get_config::<String>(Some("app.language"))
+                .await
+            {
+                Ok(language) => LocaleId::from_str(&language)
+                    .unwrap_or_default()
+                    .as_str()
+                    .to_string(),
+                Err(_) => "zh-CN".to_string(),
+            };
+
+            Ok(serde_json::json!({
+                "currentLanguage": current_language,
+                "fallbackLanguage": "en-US",
+                "autoDetect": false
+            }))
+        }
+        "i18n_set_config" => {
+            let config = params.get("config").unwrap_or(&params);
+            if let Some(language) = config.get("currentLanguage").and_then(|v| v.as_str()) {
+                let Some(locale_id) = LocaleId::from_str(language) else {
+                    return Err(anyhow!("Unsupported language: {}", language));
+                };
+                state
+                    .config_service
+                    .set_config("app.language", locale_id.as_str())
+                    .await
+                    .map_err(|e| anyhow!("{}", e))?;
+                match sync_global_i18n_service_locale(locale_id).await {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        log::warn!(
+                            "Global I18nService not initialized after server i18n config save: language={}",
+                            locale_id.as_str()
+                        );
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "Failed to sync global I18nService after server i18n config save: language={}, error={}",
+                            locale_id.as_str(),
+                            e
+                        );
+                    }
+                }
+            }
+            Ok(serde_json::json!("i18n config saved"))
+        }
+        "i18n_get_supported_languages" => {
+            let locales: Vec<_> = LocaleMetadata::all()
+                .into_iter()
+                .map(|locale| {
+                    serde_json::json!({
+                        "id": locale.id.as_str(),
+                        "name": locale.name,
+                        "englishName": locale.english_name,
+                        "nativeName": locale.native_name,
+                        "rtl": locale.rtl,
+                    })
+                })
+                .collect();
+            Ok(serde_json::json!(locales))
+        }
 
         // ── Tools ────────────────────────────────────────────
         "get_all_tools_info" => {
