@@ -8,6 +8,7 @@ import type { CanvasTab } from '@/app/components/panels/content-canvas/types';
 import { flowChatStore } from '../store/FlowChatStore';
 import { flowChatManager } from './FlowChatManager';
 import { syncSessionToModernStore } from './storeSync';
+import { resolveSessionTitle } from '../utils/sessionTitle';
 
 export const BTW_SESSION_PANEL_TYPE = 'btw-session' as const;
 
@@ -30,7 +31,9 @@ const getBtwSessionDuplicateKey = (childSessionId: string) => `btw-session-${chi
 
 const resolveBtwSessionTitle = (childSessionId: string): string => {
   const session = flowChatStore.getState().sessions.get(childSessionId);
-  const title = session?.title?.trim();
+  const title = session
+    ? resolveSessionTitle(session, (key, options) => i18nService.t(key, options))
+    : undefined;
   if (title) return title;
   return i18nService.t('flow-chat:btw.threadLabel', { defaultValue: 'Side thread' });
 };

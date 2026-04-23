@@ -12,6 +12,10 @@ import { normalizeRemoteWorkspacePath } from '@/shared/utils/pathUtils';
 import { WorkspaceKind, type WorkspaceInfo } from '@/shared/types';
 import type { FlowChatContext, SessionConfig } from './types';
 import { touchSessionActivity, cleanupSaveState } from './PersistenceModule';
+import {
+  createDefaultSessionTitleDescriptor,
+  resolveSessionTitle,
+} from '../../utils/sessionTitle';
 
 const log = createLogger('SessionModule');
 const pendingSessionCreations = new Map<string, Promise<string>>();
@@ -242,12 +246,12 @@ export async function createChatSession(
       Array.from(context.flowChatStore.getState().sessions.values()).filter(
         session => normalizeSessionDisplayMode(session.mode) === sessionMode
       ).length + 1;
-    const sessionName =
-      sessionMode === 'cowork'
-        ? i18nService.t('flow-chat:session.newCoworkWithIndex', { count: sameModeCount })
-        : sessionMode === 'claw'
-          ? i18nService.t('flow-chat:session.newClawWithIndex', { count: sameModeCount })
-          : i18nService.t('flow-chat:session.newCodeWithIndex', { count: sameModeCount });
+    const titleDescriptor = createDefaultSessionTitleDescriptor(
+      sessionMode,
+      sameModeCount,
+      (key, options) => i18nService.t(key, options),
+    );
+    const sessionName = titleDescriptor.text;
     
     const maxContextTokens = await getModelMaxTokens(config.modelName);
 
@@ -284,7 +288,8 @@ export async function createChatSession(
         agentType,
         workspacePath,
         remoteConnectionId,
-        remoteSshHost
+        remoteSshHost,
+        titleDescriptor,
       );
 
       return response.sessionId;
@@ -452,7 +457,9 @@ export async function ensureBackendSession(
     log.debug('Coordinator session missing, creating backend session', { sessionId, error: e });
     await agentAPI.createSession({
       sessionId: sessionId,
-      sessionName: latestSession.title || `Session ${sessionId.slice(0, 8)}`,
+      sessionName:
+        resolveSessionTitle(latestSession, (key, options) => i18nService.t(key, options)) ||
+        `Session ${sessionId.slice(0, 8)}`,
       agentType: latestSession.mode || 'agentic',
       workspacePath,
       remoteConnectionId: latestSession.remoteConnectionId,
@@ -485,7 +492,9 @@ export async function retryCreateBackendSession(
   
   await agentAPI.createSession({
     sessionId: sessionId,
-    sessionName: session.title || `Session ${sessionId.slice(0, 8)}`,
+    sessionName:
+      resolveSessionTitle(session, (key, options) => i18nService.t(key, options)) ||
+      `Session ${sessionId.slice(0, 8)}`,
     agentType: session.mode || 'agentic',
     workspacePath,
     remoteConnectionId: session.remoteConnectionId,

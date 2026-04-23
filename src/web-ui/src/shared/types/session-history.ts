@@ -6,6 +6,7 @@
 
 export type SessionKind = 'normal' | 'btw';
 export type PersistedSessionKind = 'standard' | 'subagent';
+export type SessionTitleSource = 'text' | 'i18n';
 
 export interface SessionCustomMetadata extends Record<string, unknown> {
   kind?: SessionKind;
@@ -14,6 +15,9 @@ export interface SessionCustomMetadata extends Record<string, unknown> {
   parentDialogTurnId?: string | null;
   parentTurnIndex?: number | null;
   lastFinishedAt?: number | null;
+  titleSource?: SessionTitleSource | null;
+  titleKey?: string | null;
+  titleParams?: Record<string, unknown> | null;
 }
 
 export interface SessionMetadata {

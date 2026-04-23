@@ -30,6 +30,8 @@ import {
 } from '@/flow_chat/utils/sessionOrdering';
 import { stateMachineManager } from '@/flow_chat/state-machine';
 import { SessionExecutionState } from '@/flow_chat/state-machine/types';
+import { i18nService } from '@/infrastructure/i18n';
+import { resolveSessionTitle } from '@/flow_chat/utils/sessionTitle';
 import './SessionsSection.scss';
 
 /** Top-level parent sessions shown at each expand step (children still nest under visible parents). */
@@ -40,6 +42,9 @@ const AGENT_SCENE: SceneTabId = 'session';
 
 type SessionMode = 'code' | 'cowork' | 'claw';
 
+const escapeRegExp = (value: string): string =>
+  value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 const resolveSessionModeType = (session: Session): SessionMode => {
   const normalizedMode = session.mode?.toLowerCase();
   if (normalizedMode === 'cowork') return 'cowork';
@@ -48,7 +53,7 @@ const resolveSessionModeType = (session: Session): SessionMode => {
 };
 
 const getTitle = (session: Session): string =>
-  session.title?.trim() || `Session ${session.sessionId.slice(0, 6)}`;
+  resolveSessionTitle(session, (key, options) => i18nService.t(key, options));
 
 interface SessionsSectionProps {
   workspaceId?: string;
@@ -264,7 +269,17 @@ const SessionsSection: React.FC<SessionsSectionProps> = ({
   const resolveSessionTitle = useCallback(
     (session: Session): string => {
       const rawTitle = getTitle(session);
-      const matched = rawTitle.match(/^(?:新建会话|New Session)\s*(\d+)$/i);
+      const newSessionPrefixes = Array.from(
+        new Set([
+          t('nav.sessions.newSession'),
+          i18nService.t('nav.sessions.newSession', { lng: 'en-US' }),
+          i18nService.t('nav.sessions.newSession', { lng: 'zh-CN' }),
+          i18nService.t('nav.sessions.newSession', { lng: 'zh-TW' }),
+        ].filter((value): value is string => Boolean(value)))
+      );
+      const matched = rawTitle.match(
+        new RegExp(`^(?:${newSessionPrefixes.map(escapeRegExp).join('|')})\\s*(\\d+)$`, 'i')
+      );
       if (!matched) return rawTitle;
 
       const mode = resolveSessionModeType(session);
