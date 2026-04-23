@@ -164,7 +164,7 @@ Design principle: **keep product logic platform-agnostic and expose it through a
 
 ## Contributing
 
-We welcome great ideas and code; we are maximally open to AI-generated code. Please submit PRs to the `dev` branch first; we review periodically and sync to the main branch.
+We welcome great ideas and code; we are maximally open to AI-generated code. Please submit PRs directly to the `main` branch; we review and merge there.
 
 **Contribution directions we care about most:**
 
