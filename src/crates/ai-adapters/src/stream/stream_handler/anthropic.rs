@@ -63,7 +63,7 @@ pub async fn handle_anthropic_stream(
             }
         };
 
-        trace!(target: AI_STREAM_RESPONSE_TARGET, "Anthropic SSE: {:?}", sse);
+        trace!(target: AI_STREAM_RESPONSE_TARGET, "Anthropic SSE event: {}", sse.event);
         let event_type = sse.event;
         let data = sse.data;
         stats.record_sse_event(&event_type);
@@ -97,9 +97,14 @@ pub async fn handle_anthropic_stream(
                         continue;
                     }
                 };
+                // Emit for Thinking and ToolUse content_block_start events.
+                // Note: For Thinking blocks, the Anthropic protocol sends signature=null
+                // in content_block_start and the actual signature in a subsequent
+                // signature_delta event. Both emit a UnifiedResponse; the downstream
+                // processor correctly overwrites the initial null signature.
                 if matches!(
                     content_block_start.content_block,
-                    ContentBlock::ToolUse { .. }
+                    ContentBlock::Thinking { .. } | ContentBlock::ToolUse { .. }
                 ) {
                     emit_normalized_response(
                         &mut inline_think_parser,
