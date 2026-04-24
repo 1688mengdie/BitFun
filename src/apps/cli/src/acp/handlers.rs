@@ -284,20 +284,23 @@ async fn execute_prompt_turn(
             None,
             None,
             agent_type.clone(),
-            None,
+            Some(acp_session.cwd.clone()),
             DialogSubmissionPolicy::for_source(DialogTriggerSource::Cli),
         )
         .await?;
 
-    // Monitor EventQueue for events and send notifications
     let event_queue = agentic_system.event_queue.clone();
-    let mut stop_reason = StopReason::EndTurn;
+let mut stop_reason: Option<StopReason> = None;
     let mut accumulated_text = String::new();
 
     loop {
         let events = event_queue.dequeue_batch(10).await;
 
         if events.is_empty() {
+            if stop_reason.is_some() {
+                break;
+            }
+
             tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
             continue;
         }
@@ -305,19 +308,13 @@ async fn execute_prompt_turn(
         for envelope in events {
             let event = envelope.event;
 
-            // Filter events for this session
             if event.session_id() != Some(&session_id) {
                 continue;
             }
 
-            tracing::debug!("Received event: {:?}", event);
-
             match event {
-                // Text streaming
                 CoreEvent::TextChunk { text, .. } => {
                     accumulated_text.push_str(&text);
-                    
-                    // Send session/update notification
                     let notification = SessionUpdateNotification {
                         session_id: acp_session.acp_session_id.clone(),
                         update: SessionUpdate::AgentMessageChunk {
@@ -327,7 +324,6 @@ async fn execute_prompt_turn(
                     send_notification(&mut stdout, "session/update", &notification).await?;
                 }
 
-                // Tool events
                 CoreEvent::ToolEvent { tool_event, .. } => {
                     handle_tool_event(
                         &mut stdout,
@@ -336,19 +332,15 @@ async fn execute_prompt_turn(
                     ).await?;
                 }
 
-                // Dialog turn completed
                 CoreEvent::DialogTurnCompleted { .. } => {
-                    tracing::info!("Dialog turn completed");
-                    stop_reason = StopReason::EndTurn;
+                    tracing::info!("Dialog turn completed in ACP handler");
+                    stop_reason = Some(StopReason::EndTurn);
                     break;
                 }
 
-                // Dialog turn failed
                 CoreEvent::DialogTurnFailed { error, .. } => {
                     tracing::error!("Dialog turn failed: {}", error);
-                    stop_reason = StopReason::Error;
-                    
-                    // Send error notification
+                    stop_reason = Some(StopReason::Error);
                     let notification = SessionUpdateNotification {
                         session_id: acp_session.acp_session_id.clone(),
                         update: SessionUpdate::AgentMessageChunk {
@@ -361,27 +353,28 @@ async fn execute_prompt_turn(
                     break;
                 }
 
-                // System error
                 CoreEvent::SystemError { error, .. } => {
                     tracing::error!("System error: {}", error);
-                    stop_reason = StopReason::Error;
+                    stop_reason = Some(StopReason::Error);
                     break;
                 }
 
-                // Ignore other events
                 _ => {
                     tracing::debug!("Ignoring event: {:?}", event);
                 }
             }
         }
-
-        // Exit loop when turn completes or errors
-        if matches!(stop_reason, StopReason::EndTurn | StopReason::Error) {
-            break;
-        }
     }
 
-    Ok(SessionPromptResult { stop_reason })
+    tracing::info!(
+        "Dialog turn finished: stop_reason={:?}, text_len={}",
+        stop_reason,
+        accumulated_text.len(),
+    );
+
+    Ok(SessionPromptResult {
+        stop_reason: stop_reason.unwrap_or(StopReason::EndTurn),
+    })
 }
 
 /// Handle tool event and send appropriate notification
