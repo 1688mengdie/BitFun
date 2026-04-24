@@ -240,6 +240,18 @@ export const GENERATIVE_WIDGET_SHELL_HTML = `<!DOCTYPE html>
     .bf-panel {
       background: color-mix(in srgb, var(--color-bg-secondary, #1c1c1f) 74%, var(--element-bg-subtle, rgba(255, 255, 255, 0.05)));
     }
+    [data-bitfun-prompt-selected="true"],
+    [data-bitfun-context-selected="true"] {
+      position: relative;
+      outline: 2px solid var(--color-accent-500, #60a5fa);
+      outline-offset: 2px;
+      box-shadow:
+        0 0 0 4px color-mix(in srgb, var(--color-accent-500, #60a5fa) 18%, transparent),
+        0 10px 24px color-mix(in srgb, var(--color-accent-500, #60a5fa) 14%, transparent);
+      border-radius: min(var(--radius-base, 8px), 12px);
+      transition: outline-color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
+      transform: translateY(-1px);
+    }
     .bf-card-accent {
       background: color-mix(in srgb, var(--color-accent-500, #60a5fa) 10%, var(--color-bg-secondary, #1c1c1f));
       border-color: color-mix(in srgb, var(--color-accent-500, #60a5fa) 30%, var(--border-subtle, rgba(255, 255, 255, 0.1)));
