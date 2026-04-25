@@ -519,7 +519,7 @@ export const GENERATIVE_WIDGET_SHELL_HTML = `<!DOCTYPE html>
       }
 
       function normalizeSpace(value) {
-        return String(value || '').replace(/\s+/g, ' ').trim();
+        return String(value || '').replace(/\\s+/g, ' ').trim();
       }
 
       function truncateText(value, maxLength) {
@@ -593,7 +593,7 @@ export const GENERATIVE_WIDGET_SHELL_HTML = `<!DOCTYPE html>
         }
         var className = normalizeSpace(element.getAttribute('class'));
         if (className) {
-          parts.push('.' + className.split(/\s+/).slice(0, 2).join('.'));
+          parts.push('.' + className.split(/\\s+/).slice(0, 2).join('.'));
         }
         return truncateText(parts.join(' '), 96);
       }
