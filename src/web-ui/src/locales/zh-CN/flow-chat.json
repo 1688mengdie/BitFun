@@ -442,7 +442,11 @@
     "searchPrevious": "上一个匹配结果",
     "searchNext": "下一个匹配结果",
     "searchClose": "关闭搜索",
-    "searchOpen": "搜索消息"
+    "searchOpen": "搜索消息",
+    "jumpToCurrentTurn": "跳转到第 {{turn}} 轮"
+  },
+  "stickyTaskIndicator": {
+    "tooltip": "跳转到当前任务"
   },
   "sessionFilesBadge": {
     "files": "文件",
@@ -785,6 +789,11 @@
         "completed": "已完成",
         "failed": "执行失败"
       }
+    },
+    "timeout": {
+      "disableTooltip": "关闭超时限制",
+      "enableTooltip": "恢复超时限制",
+      "restoreShort": "恢复（剩余 {{seconds}} 秒）"
     },
     "diagram": {
       "interactive": "交互图表:",

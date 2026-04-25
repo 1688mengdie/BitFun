@@ -495,7 +495,7 @@ export const TerminalToolCard: React.FC<TerminalToolCardProps> = ({
         <>
           <ToolTimeoutIndicator
             startTime={toolItem.startTime}
-            isRunning={isRunning}
+            isRunning={status === 'preparing' || status === 'streaming' || status === 'running'}
             timeoutMs={
               typeof toolCall?.input?.timeout_ms === 'number' && toolCall.input.timeout_ms > 0
                 ? toolCall.input.timeout_ms

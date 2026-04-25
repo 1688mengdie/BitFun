@@ -10,6 +10,7 @@ use crate::api::session_storage_path::desktop_effective_session_storage_path;
 use bitfun_core::agentic::coordination::{
     AssistantBootstrapBlockReason, AssistantBootstrapEnsureOutcome, AssistantBootstrapSkipReason,
     ConversationCoordinator, DialogScheduler, DialogSubmissionPolicy, DialogTriggerSource,
+    SubagentTimeoutAction,
 };
 use bitfun_core::agentic::core::*;
 use bitfun_core::agentic::image_analysis::ImageContextData;
@@ -612,6 +613,52 @@ pub async fn cancel_session(
         })?;
 
     Ok(())
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetSubagentTimeoutRequest {
+    pub session_id: String,
+    pub action: SetSubagentTimeoutActionDTO,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type", content = "payload")]
+pub enum SetSubagentTimeoutActionDTO {
+    Disable,
+    Restore,
+    Extend { seconds: u64 },
+}
+
+impl From<SetSubagentTimeoutActionDTO> for SubagentTimeoutAction {
+    fn from(dto: SetSubagentTimeoutActionDTO) -> Self {
+        match dto {
+            SetSubagentTimeoutActionDTO::Disable => SubagentTimeoutAction::Disable,
+            SetSubagentTimeoutActionDTO::Restore => SubagentTimeoutAction::Restore,
+            SetSubagentTimeoutActionDTO::Extend { seconds } => {
+                SubagentTimeoutAction::Extend { seconds }
+            }
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn set_subagent_timeout(
+    coordinator: State<'_, Arc<ConversationCoordinator>>,
+    request: SetSubagentTimeoutRequest,
+) -> Result<(), String> {
+    let action: SubagentTimeoutAction = request.action.into();
+    coordinator
+        .set_subagent_timeout(&request.session_id, action)
+        .await
+        .map_err(|e| {
+            log::error!(
+                "Failed to set subagent timeout: session_id={}, error={}",
+                request.session_id,
+                e
+            );
+            format!("Failed to set subagent timeout: {}", e)
+        })
 }
 
 #[tauri::command]

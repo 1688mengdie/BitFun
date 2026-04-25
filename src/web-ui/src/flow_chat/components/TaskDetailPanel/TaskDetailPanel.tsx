@@ -7,7 +7,6 @@ import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { 
   Split,
-  Clock,
   AlertCircle,
   Square
 } from 'lucide-react';
@@ -16,6 +15,7 @@ import { FlowChatStore } from '../../store/FlowChatStore';
 import { FlowTextBlock } from '../FlowTextBlock';
 import { FlowToolCard } from '../FlowToolCard';
 import { ModelThinkingDisplay } from '../../tool-cards/ModelThinkingDisplay';
+import { ToolTimeoutIndicator } from '../../tool-cards/ToolTimeoutIndicator';
 import { Button, Tooltip, DotMatrixLoader } from '@/component-library';
 import { createLogger } from '@/shared/utils/logger';
 import { agentAPI } from '@/infrastructure/api/service-api/AgentAPI';
@@ -152,14 +152,6 @@ export const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({ data }) => {
     }
   }, [isRunning]);
 
-  const formatDuration = (ms: number) => {
-    if (ms < 1000) return `${ms}ms`;
-    if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
-    const minutes = Math.floor(ms / 60000);
-    const seconds = ((ms % 60000) / 1000).toFixed(0);
-    return `${minutes}m ${seconds}s`;
-  };
-
   // Open files in a split editor layout.
   const handleOpenInEditor = useCallback(async (filePath: string) => {
     if (!filePath) return;
@@ -271,12 +263,22 @@ export const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({ data }) => {
             {taskInput.agentType}
           </span>
         )}
-        {isCompleted && toolResult?.result?.duration && (
-          <span className="task-detail-panel__header-duration">
-            <Clock size={11} />
-            {formatDuration(toolResult.result.duration)}
-          </span>
-        )}
+        <ToolTimeoutIndicator
+          startTime={toolItem?.startTime}
+          isRunning={isRunning}
+          timeoutMs={
+            typeof toolItem?.toolCall?.input?.timeout_seconds === 'number' && toolItem.toolCall.input.timeout_seconds > 0
+              ? toolItem.toolCall.input.timeout_seconds * 1000
+              : undefined
+          }
+          showControls={true}
+          subagentSessionId={subagentSessionId}
+          completedDurationMs={
+            isCompleted && toolResult?.result?.duration
+              ? toolResult.result.duration
+              : undefined
+          }
+        />
         {isRunning && (
           <span className="task-detail-panel__header-loading">
             <DotMatrixLoader size="small" />

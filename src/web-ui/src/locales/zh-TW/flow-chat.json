@@ -433,7 +433,11 @@
     "searchPrevious": "上一個匹配結果",
     "searchNext": "下一個匹配結果",
     "searchClose": "關閉搜索",
-    "searchOpen": "搜索消息"
+    "searchOpen": "搜索消息",
+    "jumpToCurrentTurn": "跳轉到第 {{turn}} 輪"
+  },
+  "stickyTaskIndicator": {
+    "tooltip": "跳轉到當前任務"
   },
   "sessionFilesBadge": {
     "files": "文件",
