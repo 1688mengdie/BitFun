@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildReviewRemediationItems,
   buildSelectedRemediationPrompt,
+  buildSelectedReviewRemediationPrompt,
   getDefaultSelectedRemediationIds,
 } from './codeReviewRemediation';
 import type { CodeReviewRemediationData } from './codeReviewRemediation';
@@ -142,6 +143,32 @@ describe('buildReviewRemediationItems', () => {
     expect(items[0].issue?.title).toBe('Issue 0');
     expect(items[1].issue?.title).toBe('Issue 1');
   });
+
+  it('builds structured remediation items from report sections', () => {
+    const items = buildReviewRemediationItems(
+      createReviewData({
+        remediation_plan: ['Legacy fallback should not duplicate'],
+        report_sections: {
+          remediation_groups: {
+            must_fix: ['Fix the blocking bug'],
+            should_improve: ['Clean up the helper'],
+            needs_decision: ['Confirm the desired product behavior'],
+            verification: ['Run the focused regression test'],
+          },
+        },
+      }),
+    );
+
+    expect(items.map((item) => item.plan)).toEqual([
+      'Fix the blocking bug',
+      'Clean up the helper',
+      'Confirm the desired product behavior',
+      'Run the focused regression test',
+    ]);
+    expect(items.find((item) => item.groupId === 'needs_decision')?.defaultSelected).toBe(false);
+    expect(items.find((item) => item.groupId === 'needs_decision')?.requiresDecision).toBe(true);
+    expect(items.find((item) => item.groupId === 'verification')?.defaultSelected).toBe(false);
+  });
 });
 
 describe('getDefaultSelectedRemediationIds', () => {
@@ -234,5 +261,19 @@ describe('buildSelectedRemediationPrompt', () => {
     expect(prompt).toContain('src/main.ts:42');
     expect(prompt).toContain('Memory leak');
     expect(prompt).toContain('Use WeakRef');
+  });
+
+  it('uses Code Review wording for standard review remediation prompts', () => {
+    const prompt = buildSelectedReviewRemediationPrompt({
+      reviewData: createReviewData({ remediation_plan: ['Fix standard issue'] }),
+      selectedIds: new Set(['remediation-0']),
+      rerunReview: true,
+      reviewMode: 'standard',
+    });
+
+    expect(prompt).toContain('selected Code Review findings only');
+    expect(prompt).toContain('follow-up standard code review');
+    expect(prompt).not.toContain('Deep Review findings only');
+    expect(prompt).not.toContain('parallel, followed by ReviewJudge');
   });
 });

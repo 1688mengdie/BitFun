@@ -1,7 +1,7 @@
 import React, { act } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createRoot, type Root } from 'react-dom/client';
-import { useDeepReviewActionBarStore } from '../../store/deepReviewActionBarStore';
+import { useReviewActionBarStore } from '../../store/deepReviewActionBarStore';
 
 const sendMessageMock = vi.hoisted(() => vi.fn());
 
@@ -98,7 +98,7 @@ describeWithJsdom('DeepReviewActionBar', () => {
     document.body.appendChild(container);
     root = createRoot(container);
     sendMessageMock.mockResolvedValue(undefined);
-    useDeepReviewActionBarStore.getState().reset();
+    useReviewActionBarStore.getState().reset();
   });
 
   afterEach(() => {
@@ -109,13 +109,13 @@ describeWithJsdom('DeepReviewActionBar', () => {
     dom.window.close();
     vi.unstubAllGlobals();
     vi.clearAllMocks();
-    useDeepReviewActionBarStore.getState().reset();
+    useReviewActionBarStore.getState().reset();
   });
 
   it('keeps remediation in progress after submitting a fix turn', async () => {
     const { DeepReviewActionBar } = await import('./DeepReviewActionBar');
 
-    useDeepReviewActionBarStore.getState().showActionBar({
+    useReviewActionBarStore.getState().showActionBar({
       childSessionId: 'child-session',
       parentSessionId: 'parent-session',
       reviewData: {
@@ -148,6 +148,45 @@ describeWithJsdom('DeepReviewActionBar', () => {
     });
 
     expect(sendMessageMock).toHaveBeenCalledTimes(1);
-    expect(useDeepReviewActionBarStore.getState().phase).toBe('fix_running');
+    expect(useReviewActionBarStore.getState().phase).toBe('fix_running');
+  });
+
+  it('uses standard review mode when starting Code Review remediation', async () => {
+    const { ReviewActionBar } = await import('./DeepReviewActionBar');
+
+    useReviewActionBarStore.getState().showActionBar({
+      childSessionId: 'review-session',
+      parentSessionId: 'parent-session',
+      reviewMode: 'standard',
+      reviewData: {
+        summary: {
+          recommended_action: 'request_changes',
+        },
+        remediation_plan: ['Fix the standard review finding.'],
+      },
+      phase: 'review_completed',
+    });
+
+    await act(async () => {
+      root.render(<ReviewActionBar />);
+    });
+
+    const fixAndReviewButton = Array.from(container.querySelectorAll('button'))
+      .find((button) => button.textContent?.includes('Fix and re-review'));
+
+    expect(fixAndReviewButton).toBeTruthy();
+
+    await act(async () => {
+      fixAndReviewButton!.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+      await Promise.resolve();
+    });
+
+    expect(sendMessageMock).toHaveBeenCalledTimes(1);
+    const [prompt, sessionId, displayMessage, agentType] = sendMessageMock.mock.calls[0];
+    expect(prompt).toContain('selected Code Review findings only');
+    expect(prompt).toContain('follow-up standard code review');
+    expect(sessionId).toBe('review-session');
+    expect(displayMessage).toBe('Fix Code Review findings and re-review');
+    expect(agentType).toBe('CodeReview');
   });
 });

@@ -395,6 +395,15 @@
     "copyDiagnostics": "复制诊断信息",
     "diagnosticsCopied": "诊断信息已复制"
   },
+  "reviewActionBar": {
+    "reviewCompletedStandard": "审查已完成",
+    "reviewCompletedDeep": "深度审查已完成",
+    "fixRequestDisplayStandard": "开始修复代码审查问题",
+    "fixAndReviewRequestDisplayStandard": "修复代码审查问题并重新审查",
+    "fixRequestDisplayDeep": "开始修复深度审查问题",
+    "fixAndReviewRequestDisplayDeep": "修复深度审查问题并重新审查",
+    "needsDecisionTag": "需决策"
+  },
   "deepReviewConsent": {
     "windowTitle": "深度审查",
     "eyebrow": "代码审核团队",
