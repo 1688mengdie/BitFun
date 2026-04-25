@@ -48,7 +48,7 @@ impl Agent for DeepReviewAgent {
     }
 
     fn description(&self) -> &str {
-        r#"Local deep-review orchestrator that builds a parallel Code Review Team for substantial changes. It dispatches independent specialist reviewers for business logic, performance, and security, can trigger bounded auto-fix remediation plus incremental re-review, and then runs a quality-inspector pass before producing a consolidated report."#
+        r#"Local deep-review orchestrator that builds a parallel Code Review Team for substantial changes. It dispatches independent specialist reviewers for business logic, performance, and security, can perform user-approved remediation plus incremental re-review, and then runs a quality-inspector pass before producing a consolidated report."#
     }
 
     fn prompt_template_name(&self, _model_name: Option<&str>) -> &str {

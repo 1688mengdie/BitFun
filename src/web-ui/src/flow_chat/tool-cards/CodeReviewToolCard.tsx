@@ -15,14 +15,13 @@ import {
   ChevronUp,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { Checkbox, Tooltip } from '@/component-library';
+import { Tooltip } from '@/component-library';
 import type { ToolCardProps } from '../types/flow-chat';
 import { BaseToolCard, ToolCardHeader } from './BaseToolCard';
 import { createLogger } from '@/shared/utils/logger';
 import { useToolCardHeightContract } from './useToolCardHeightContract';
 import {
   buildReviewRemediationItems,
-  getDefaultSelectedRemediationIds,
 } from '../utils/codeReviewRemediation';
 import {
   buildCodeReviewReportSections,
@@ -137,7 +136,6 @@ export const CodeReviewToolCard: React.FC<ToolCardProps> = React.memo(({
   const { t } = useTranslation('flow-chat');
   const { toolResult, status } = toolItem;
   const [isExpanded, setIsExpanded] = useState(false);
-  const [selectedRemediationIds, setSelectedRemediationIds] = useState<Set<string>>(new Set());
   const [expandedRemediationIds, setExpandedRemediationIds] = useState<Set<string>>(new Set());
   const [expandedReportSectionIds, setExpandedReportSectionIds] = useState<Set<ReviewSectionId>>(new Set());
   const autoExpandedResultRef = useRef<string | null>(null);
@@ -185,12 +183,6 @@ export const CodeReviewToolCard: React.FC<ToolCardProps> = React.memo(({
   useEffect(() => {
     setExpandedRemediationIds(new Set());
     setExpandedReportSectionIds(new Set(reviewData ? getDefaultExpandedCodeReviewSectionIds(reviewData) : []));
-    if (!reviewData) {
-      setSelectedRemediationIds(new Set());
-      return;
-    }
-    const remediationItems = buildReviewRemediationItems(reviewData);
-    setSelectedRemediationIds(new Set(getDefaultSelectedRemediationIds(remediationItems)));
   }, [reviewData, toolResult?.result]);
 
   const issueStats = useMemo(() => {
@@ -252,13 +244,6 @@ export const CodeReviewToolCard: React.FC<ToolCardProps> = React.memo(({
     () => reviewData ? buildReviewRemediationItems(reviewData) : [],
     [reviewData],
   );
-  const selectedRemediationCount = selectedRemediationIds.size;
-  const allRemediationSelected =
-    remediationItems.length > 0 &&
-    selectedRemediationCount === remediationItems.length;
-  const someRemediationSelected =
-    selectedRemediationCount > 0 &&
-    selectedRemediationCount < remediationItems.length;
 
   useEffect(() => {
     const resultKey = typeof toolResult?.result === 'string'
@@ -267,7 +252,7 @@ export const CodeReviewToolCard: React.FC<ToolCardProps> = React.memo(({
     const shouldAutoExpand =
       status === 'completed' &&
       reviewData?.review_mode === 'deep' &&
-      (reviewData.remediation_plan ?? []).length > 0 &&
+      buildReviewRemediationItems(reviewData).length > 0 &&
       autoExpandedResultRef.current !== resultKey;
 
     if (shouldAutoExpand) {
@@ -295,26 +280,6 @@ export const CodeReviewToolCard: React.FC<ToolCardProps> = React.memo(({
     e.stopPropagation();
     toggleExpanded();
   }, [toggleExpanded]);
-
-  const handleToggleAllRemediation = useCallback((checked: boolean) => {
-    setSelectedRemediationIds(
-      checked
-        ? new Set(remediationItems.map((item) => item.id))
-        : new Set(),
-    );
-  }, [remediationItems]);
-
-  const handleToggleRemediation = useCallback((itemId: string, checked: boolean) => {
-    setSelectedRemediationIds((current) => {
-      const next = new Set(current);
-      if (checked) {
-        next.add(itemId);
-      } else {
-        next.delete(itemId);
-      }
-      return next;
-    });
-  }, []);
 
   const handleToggleRemediationDetails = useCallback((itemId: string) => {
     setExpandedRemediationIds((current) => {
@@ -584,28 +549,7 @@ export const CodeReviewToolCard: React.FC<ToolCardProps> = React.memo(({
                 <div className="remediation-header">
                   {t('toolCards.codeReview.remediationPlan', { defaultValue: 'Remediation Plan' })}
                 </div>
-                {review_mode !== 'deep' && (
-                  <div className="remediation-selection-count">
-                    {t('toolCards.codeReview.remediationActions.selectionCount', {
-                      selected: selectedRemediationCount,
-                      total: remediationItems.length,
-                      defaultValue: '{{selected}}/{{total}} selected',
-                    })}
-                  </div>
-                )}
               </div>
-              {review_mode !== 'deep' && (
-                <Checkbox
-                  className="remediation-select-all"
-                  size="small"
-                  checked={allRemediationSelected}
-                  indeterminate={someRemediationSelected}
-                  onChange={(event) => handleToggleAllRemediation(event.target.checked)}
-                  label={t('toolCards.codeReview.remediationActions.selectAll', {
-                    defaultValue: 'Select all',
-                  })}
-                />
-              )}
             </div>
             {review_mode === 'deep' ? (
               <div className="review-remediation__groups">
@@ -619,7 +563,6 @@ export const CodeReviewToolCard: React.FC<ToolCardProps> = React.memo(({
                 {remediationItems.map((item) => {
                 const issue = item.issue;
                 const expanded = expandedRemediationIds.has(item.id);
-                const selected = selectedRemediationIds.has(item.id);
                 const location = issue?.file
                   ? `${issue.file}${issue.line ? `:${issue.line}` : ''}`
                   : null;
@@ -627,21 +570,13 @@ export const CodeReviewToolCard: React.FC<ToolCardProps> = React.memo(({
                 return (
                   <div
                     key={item.id}
-                    className={`remediation-item ${selected ? 'is-selected' : ''}`}
+                    className="remediation-item"
                   >
                     <div className="remediation-item__topline">
-                      <Checkbox
-                        className="remediation-item__checkbox"
-                        size="small"
-                        checked={selected}
-                        onChange={(event) => handleToggleRemediation(item.id, event.target.checked)}
-                        label={(
-                          <span className="remediation-item__label">
-                            <span className="remediation-index">{item.index + 1}</span>
-                            <span>{item.plan}</span>
-                          </span>
-                        )}
-                      />
+                      <span className="remediation-item__label">
+                        <span className="remediation-index">{item.index + 1}</span>
+                        <span>{item.plan}</span>
+                      </span>
                       <button
                         type="button"
                         className="remediation-item__expand"
@@ -718,9 +653,8 @@ export const CodeReviewToolCard: React.FC<ToolCardProps> = React.memo(({
               })}
               </div>
             )}
-            {/* Deep review remediation actions are now rendered as a floating bar at the
-                bottom of the BtwSessionPanel. The inline action bar is only rendered for
-                non-deep review mode (review_mode !== 'deep'). */}
+            {/* Review remediation actions are rendered as the shared floating bar at
+                the bottom of the BtwSessionPanel. */}
             </div>
           </ReviewReportSection>
         )}
@@ -800,18 +734,12 @@ export const CodeReviewToolCard: React.FC<ToolCardProps> = React.memo(({
       </div>
     );
   }, [
-    allRemediationSelected,
     expandedRemediationIds,
     expandedReportSectionIds,
-    handleToggleAllRemediation,
-    handleToggleRemediation,
     handleToggleRemediationDetails,
     handleToggleReportSection,
     remediationItems,
     reviewData,
-    selectedRemediationCount,
-    selectedRemediationIds,
-    someRemediationSelected,
     t,
   ]);
 

@@ -386,6 +386,15 @@
     "copyDiagnostics": "複製診斷信息",
     "diagnosticsCopied": "診斷信息已複製"
   },
+  "reviewActionBar": {
+    "reviewCompletedStandard": "審查已完成",
+    "reviewCompletedDeep": "深度審查已完成",
+    "fixRequestDisplayStandard": "開始修復程式碼審查問題",
+    "fixAndReviewRequestDisplayStandard": "修復程式碼審查問題並重新審查",
+    "fixRequestDisplayDeep": "開始修復深度審查問題",
+    "fixAndReviewRequestDisplayDeep": "修復深度審查問題並重新審查",
+    "needsDecisionTag": "需決策"
+  },
   "deepReviewConsent": {
     "windowTitle": "深度審查",
     "eyebrow": "程式碼審核團隊",
@@ -719,6 +728,7 @@
       "noData": "無法加載任務數據",
       "executionContent": "執行內容",
       "duration": "耗時",
+      "waitingForModelResponse": "等待模型回應...",
       "status": {
         "pending": "等待中",
         "running": "執行中",

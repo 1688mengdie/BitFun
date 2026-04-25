@@ -1,6 +1,9 @@
 /**
- * DeepReviewActionBar store — shared state for the floating action bar
- * rendered at the bottom of the BtwSessionPanel during deep review.
+ * Shared review action bar state rendered at the bottom of BtwSessionPanel.
+ *
+ * The legacy DeepReview exports are intentionally kept as aliases so existing
+ * callers can migrate incrementally while standard Code Review starts using
+ * the same confirmation surface.
  */
 
 import { create } from 'zustand';
@@ -14,7 +17,9 @@ import {
 } from '../utils/codeReviewRemediation';
 import type { DeepReviewInterruption } from '../utils/deepReviewContinuation';
 
-export type DeepReviewActionPhase =
+export type ReviewActionMode = 'standard' | 'deep';
+
+export type ReviewActionPhase =
   | 'idle'
   | 'review_completed'
   | 'fix_running'
@@ -27,13 +32,17 @@ export type DeepReviewActionPhase =
   | 'resume_failed'
   | 'review_error';
 
-export interface DeepReviewActionBarState {
+export type DeepReviewActionPhase = ReviewActionPhase;
+
+export interface ReviewActionBarState {
   /** Which child session this bar belongs to */
   childSessionId: string | null;
   /** Parent session (used to fill-back the input) */
   parentSessionId: string | null;
-  /** Current phase of the deep review lifecycle */
-  phase: DeepReviewActionPhase;
+  /** Which review mode owns this action bar */
+  reviewMode: ReviewActionMode;
+  /** Current phase of the review lifecycle */
+  phase: ReviewActionPhase;
   /** The raw review result data (remediation plan, issues, etc.) */
   reviewData: CodeReviewRemediationData | null;
   /** Pre-built remediation items derived from reviewData */
@@ -56,15 +65,16 @@ export interface DeepReviewActionBarState {
     childSessionId: string;
     parentSessionId: string | null;
     reviewData: CodeReviewRemediationData;
-    phase?: DeepReviewActionPhase;
+    reviewMode?: ReviewActionMode;
+    phase?: ReviewActionPhase;
   }) => void;
   showInterruptedActionBar: (params: {
     childSessionId: string;
     parentSessionId: string | null;
     interruption: DeepReviewInterruption;
-    phase?: Extract<DeepReviewActionPhase, 'review_interrupted' | 'resume_blocked' | 'resume_failed'>;
+    phase?: Extract<ReviewActionPhase, 'review_interrupted' | 'resume_blocked' | 'resume_failed'>;
   }) => void;
-  updatePhase: (phase: DeepReviewActionPhase, errorMessage?: string | null) => void;
+  updatePhase: (phase: ReviewActionPhase, errorMessage?: string | null) => void;
   toggleRemediation: (id: string) => void;
   toggleAllRemediation: () => void;
   setActiveAction: (action: 'fix' | 'fix-review' | 'resume' | null) => void;
@@ -73,10 +83,13 @@ export interface DeepReviewActionBarState {
   reset: () => void;
 }
 
+export type DeepReviewActionBarState = ReviewActionBarState;
+
 const initialState = {
   childSessionId: null as string | null,
   parentSessionId: null as string | null,
-  phase: 'idle' as DeepReviewActionPhase,
+  reviewMode: 'deep' as ReviewActionMode,
+  phase: 'idle' as ReviewActionPhase,
   reviewData: null as CodeReviewRemediationData | null,
   remediationItems: [] as ReviewRemediationItem[],
   selectedRemediationIds: new Set<string>(),
@@ -87,15 +100,16 @@ const initialState = {
   interruption: null as DeepReviewInterruption | null,
 };
 
-export const useDeepReviewActionBarStore = create<DeepReviewActionBarState>((set, get) => ({
+export const useReviewActionBarStore = create<ReviewActionBarState>((set, get) => ({
   ...initialState,
 
-  showActionBar: ({ childSessionId, parentSessionId, reviewData, phase }) => {
+  showActionBar: ({ childSessionId, parentSessionId, reviewData, reviewMode, phase }) => {
     const items = buildReviewRemediationItems(reviewData);
     const defaultIds = new Set(getDefaultSelectedRemediationIds(items));
     set({
       childSessionId,
       parentSessionId,
+      reviewMode: reviewMode ?? reviewData.review_mode ?? 'deep',
       reviewData,
       remediationItems: items,
       selectedRemediationIds: defaultIds,
@@ -112,6 +126,7 @@ export const useDeepReviewActionBarStore = create<DeepReviewActionBarState>((set
     set({
       childSessionId,
       parentSessionId,
+      reviewMode: 'deep',
       reviewData: null,
       remediationItems: [],
       selectedRemediationIds: new Set(),
@@ -154,3 +169,5 @@ export const useDeepReviewActionBarStore = create<DeepReviewActionBarState>((set
   dismiss: () => set({ dismissed: true }),
   reset: () => set({ ...initialState, selectedRemediationIds: new Set() }),
 }));
+
+export const useDeepReviewActionBarStore = useReviewActionBarStore;

@@ -21,9 +21,9 @@ import { createLogger } from '@/shared/utils/logger';
 import { settleStoppedReviewSessionState } from '../../utils/reviewSessionStop';
 import { findLatestCodeReviewResult } from '../../utils/reviewSessionSummary';
 import { deriveDeepReviewInterruption } from '../../utils/deepReviewContinuation';
-import type { CodeReviewRemediationData } from '../../utils/codeReviewRemediation';
-import { DeepReviewActionBar } from './DeepReviewActionBar';
-import { useDeepReviewActionBarStore } from '../../store/deepReviewActionBarStore';
+import { buildReviewRemediationItems, type CodeReviewRemediationData } from '../../utils/codeReviewRemediation';
+import { ReviewActionBar } from './DeepReviewActionBar';
+import { useReviewActionBarStore, type ReviewActionMode } from '../../store/deepReviewActionBarStore';
 import './BtwSessionPanel.scss';
 
 export interface BtwSessionPanelProps {
@@ -266,25 +266,33 @@ export const BtwSessionPanel: React.FC<BtwSessionPanelProps> = ({
     isTurnProcessing &&
     !stoppingReview;
 
-  // ---- Deep Review action bar integration ----
-  const actionBarPhase = useDeepReviewActionBarStore((s) => s.phase);
-  const actionBarDismissed = useDeepReviewActionBarStore((s) => s.dismissed);
+  // ---- Review action bar integration ----
+  const actionBarPhase = useReviewActionBarStore((s) => s.phase);
+  const actionBarDismissed = useReviewActionBarStore((s) => s.dismissed);
+  const actionBarChildSessionId = useReviewActionBarStore((s) => s.childSessionId);
   const isDeepReview = childKind === 'deep_review';
-  const showDeepReviewActionBar = isDeepReview && actionBarPhase !== 'idle' && !actionBarDismissed;
+  const isReviewSession = childKind === 'review' || childKind === 'deep_review';
+  const showReviewActionBar =
+    isReviewSession &&
+    actionBarChildSessionId === childSessionId &&
+    actionBarPhase !== 'idle' &&
+    !actionBarDismissed;
 
-  // Detect when a deep review completes with a remediation plan and auto-show the action bar
+  // Detect when a review completes with a remediation plan and auto-show the action bar.
   useEffect(() => {
-    if (!isDeepReview || !childSessionId || !childSession) return;
+    if (!isReviewSession || !childSessionId || !childSession) return;
 
     const latestReviewData = findLatestCodeReviewResult(childSession) as DeepReviewActionData | null;
+    const reviewMode: ReviewActionMode = isDeepReview ? 'deep' : 'standard';
+    const latestReviewMode = latestReviewData?.review_mode ?? 'standard';
     const lastTurn = childSession.dialogTurns[childSession.dialogTurns.length - 1];
     const turnStatus = lastTurn?.status;
     const isComplete = turnStatus === 'completed';
     const isError = turnStatus === 'error' || Boolean(childSession.error);
 
-    const store = useDeepReviewActionBarStore.getState();
+    const store = useReviewActionBarStore.getState();
 
-    if ((!latestReviewData || latestReviewData.review_mode !== 'deep') && isError) {
+    if (isDeepReview && (!latestReviewData || latestReviewMode !== 'deep') && isError) {
       const interruption = deriveDeepReviewInterruption(childSession);
       if (interruption) {
         store.showInterruptedActionBar({
@@ -296,9 +304,11 @@ export const BtwSessionPanel: React.FC<BtwSessionPanelProps> = ({
       return;
     }
 
-    if (!latestReviewData || latestReviewData.review_mode !== 'deep') return;
+    if (!latestReviewData) return;
+    if (isDeepReview && latestReviewMode !== 'deep') return;
+    if (!isDeepReview && latestReviewMode === 'deep') return;
 
-    const hasRemediationPlan = (latestReviewData.remediation_plan ?? []).length > 0;
+    const hasRemediationPlan = buildReviewRemediationItems(latestReviewData).length > 0;
 
     // Only activate if the action bar is idle or not yet shown for this session
     if (store.childSessionId === childSessionId && store.phase !== 'idle') {
@@ -314,6 +324,7 @@ export const BtwSessionPanel: React.FC<BtwSessionPanelProps> = ({
             childSessionId,
             parentSessionId: parentSessionId ?? null,
             reviewData: latestReviewData,
+            reviewMode,
             phase: 'review_completed',
           });
         } else {
@@ -330,6 +341,7 @@ export const BtwSessionPanel: React.FC<BtwSessionPanelProps> = ({
         childSessionId,
         parentSessionId: parentSessionId ?? null,
         reviewData: latestReviewData,
+        reviewMode,
         phase: 'review_error',
       });
       return;
@@ -340,10 +352,11 @@ export const BtwSessionPanel: React.FC<BtwSessionPanelProps> = ({
         childSessionId,
         parentSessionId: parentSessionId ?? null,
         reviewData: latestReviewData,
+        reviewMode,
         phase: 'review_completed',
       });
     }
-  }, [childSession, childSessionId, parentSessionId, isDeepReview]);
+  }, [childSession, childSessionId, parentSessionId, isReviewSession, isDeepReview]);
 
   const btwOrigin = childSession?.btwOrigin;
   const parentLabel = resolveSessionTitle(parentSession, t('btw.parent'));
@@ -444,7 +457,7 @@ export const BtwSessionPanel: React.FC<BtwSessionPanelProps> = ({
   return (
     <FlowChatContext.Provider value={contextValue}>
       {confirmStopDialog}
-      <div className={`btw-session-panel${showDeepReviewActionBar ? ' btw-session-panel--has-action-bar' : ''}`}>
+      <div className={`btw-session-panel${showReviewActionBar ? ' btw-session-panel--has-action-bar' : ''}`}>
         <div className="btw-session-panel__header">
           <div className="btw-session-panel__header-left">
             <span className="btw-session-panel__badge">{childBadgeLabel}</span>
@@ -516,7 +529,7 @@ export const BtwSessionPanel: React.FC<BtwSessionPanelProps> = ({
           onClick={handleScrollToBottom}
           className="btw-session-panel__scroll-to-bottom"
         />
-        {showDeepReviewActionBar && <DeepReviewActionBar />}
+        {showReviewActionBar && <ReviewActionBar />}
       </div>
     </FlowChatContext.Provider>
   );

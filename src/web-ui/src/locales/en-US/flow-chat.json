@@ -395,6 +395,15 @@
     "copyDiagnostics": "Copy diagnostics",
     "diagnosticsCopied": "Diagnostics copied"
   },
+  "reviewActionBar": {
+    "reviewCompletedStandard": "Review completed",
+    "reviewCompletedDeep": "Deep review completed",
+    "fixRequestDisplayStandard": "Start fixing Code Review findings",
+    "fixAndReviewRequestDisplayStandard": "Fix Code Review findings and re-review",
+    "fixRequestDisplayDeep": "Start fixing Deep Review findings",
+    "fixAndReviewRequestDisplayDeep": "Fix Deep Review findings and re-review",
+    "needsDecisionTag": "Decision"
+  },
   "deepReviewConsent": {
     "windowTitle": "Deep Review",
     "eyebrow": "Code review team",
@@ -749,6 +758,7 @@
       "noData": "Unable to load task data",
       "executionContent": "Execution Content",
       "duration": "Duration",
+      "waitingForModelResponse": "Waiting for model response...",
       "status": {
         "pending": "Pending",
         "running": "Running",

@@ -15,9 +15,9 @@ import {
   Copy,
 } from 'lucide-react';
 import { Button, Checkbox, Tooltip } from '@/component-library';
-import { useDeepReviewActionBarStore, type DeepReviewActionPhase } from '../../store/deepReviewActionBarStore';
+import { useReviewActionBarStore, type ReviewActionPhase } from '../../store/deepReviewActionBarStore';
 import type { ReviewRemediationItem } from '../../utils/codeReviewRemediation';
-import { buildSelectedRemediationPrompt } from '../../utils/codeReviewRemediation';
+import { buildSelectedReviewRemediationPrompt } from '../../utils/codeReviewRemediation';
 import { continueDeepReviewSession } from '../../services/DeepReviewContinuationService';
 import { flowChatManager } from '../../services/FlowChatManager';
 import { globalEventBus } from '@/infrastructure/event-bus';
@@ -28,7 +28,7 @@ import './DeepReviewActionBar.scss';
 
 const log = createLogger('DeepReviewActionBar');
 
-const PHASE_CONFIG: Record<DeepReviewActionPhase, {
+const PHASE_CONFIG: Record<ReviewActionPhase, {
   icon: React.ComponentType<{ size?: number | string; style?: React.CSSProperties; className?: string }>;
   iconClass: string;
   variant: 'success' | 'warning' | 'error' | 'info' | 'loading';
@@ -46,11 +46,12 @@ const PHASE_CONFIG: Record<DeepReviewActionPhase, {
   review_error: { icon: AlertTriangle, iconClass: 'deep-review-action-bar__icon--error', variant: 'error' },
 };
 
-export const DeepReviewActionBar: React.FC = () => {
+export const ReviewActionBar: React.FC = () => {
   const { t } = useTranslation('flow-chat');
-  const store = useDeepReviewActionBarStore();
+  const store = useReviewActionBarStore();
   const {
     childSessionId,
+    reviewMode,
     phase,
     reviewData,
     remediationItems,
@@ -69,7 +70,8 @@ export const DeepReviewActionBar: React.FC = () => {
   const totalCount = remediationItems.length;
   const allSelected = totalCount > 0 && selectedCount === totalCount;
   const isFixDisabled = activeAction !== null || selectedCount === 0;
-  const hasInterruption = Boolean(interruption);
+  const isDeepReview = reviewMode === 'deep';
+  const hasInterruption = isDeepReview && Boolean(interruption);
 
   const phaseConfig = PHASE_CONFIG[phase];
   const PhaseIcon = phaseConfig.icon;
@@ -86,10 +88,11 @@ export const DeepReviewActionBar: React.FC = () => {
     if (!reviewData || !childSessionId) return;
 
     const action = rerunReview ? 'fix-review' : 'fix';
-    let prompt = buildSelectedRemediationPrompt({
+    let prompt = buildSelectedReviewRemediationPrompt({
       reviewData,
       selectedIds: selectedRemediationIds,
       rerunReview,
+      reviewMode,
     });
 
     if (!prompt) return;
@@ -106,17 +109,25 @@ export const DeepReviewActionBar: React.FC = () => {
         prompt,
         childSessionId,
         rerunReview
-          ? t('toolCards.codeReview.remediationActions.fixAndReviewRequestDisplay', {
-              defaultValue: 'Fix Deep Review findings and re-review',
+          ? t(isDeepReview
+              ? 'reviewActionBar.fixAndReviewRequestDisplayDeep'
+              : 'reviewActionBar.fixAndReviewRequestDisplayStandard', {
+              defaultValue: isDeepReview
+                ? 'Fix Deep Review findings and re-review'
+                : 'Fix Code Review findings and re-review',
             })
-          : t('toolCards.codeReview.remediationActions.fixRequestDisplay', {
-              defaultValue: 'Start fixing Deep Review findings',
+          : t(isDeepReview
+              ? 'reviewActionBar.fixRequestDisplayDeep'
+              : 'reviewActionBar.fixRequestDisplayStandard', {
+              defaultValue: isDeepReview
+                ? 'Start fixing Deep Review findings'
+                : 'Start fixing Code Review findings',
             }),
-        'DeepReview',
+        isDeepReview ? 'DeepReview' : 'CodeReview',
         'agentic',
       );
     } catch (error) {
-      log.error('Failed to start Deep Review remediation', { childSessionId, rerunReview, error });
+      log.error('Failed to start review remediation', { childSessionId, reviewMode, rerunReview, error });
       const msg = error instanceof Error ? error.message : String(error);
       const isTimeout = /timeout/i.test(msg);
       store.updatePhase(isTimeout ? 'fix_timeout' : 'fix_failed', msg);
@@ -131,15 +142,16 @@ export const DeepReviewActionBar: React.FC = () => {
     } finally {
       store.setActiveAction(null);
     }
-  }, [reviewData, childSessionId, selectedRemediationIds, customInstructions, store, t]);
+  }, [reviewData, childSessionId, selectedRemediationIds, customInstructions, reviewMode, isDeepReview, store, t]);
 
   const handleFillBackInput = useCallback(() => {
     if (!reviewData) return;
 
-    let prompt = buildSelectedRemediationPrompt({
+    let prompt = buildSelectedReviewRemediationPrompt({
       reviewData,
       selectedIds: selectedRemediationIds,
       rerunReview: false,
+      reviewMode,
     });
 
     if (customInstructions.trim()) {
@@ -154,7 +166,7 @@ export const DeepReviewActionBar: React.FC = () => {
     });
 
     store.dismiss();
-  }, [reviewData, selectedRemediationIds, customInstructions, store]);
+  }, [reviewData, selectedRemediationIds, customInstructions, reviewMode, store]);
 
   const handleDismiss = useCallback(() => {
     store.dismiss();
@@ -208,8 +220,8 @@ export const DeepReviewActionBar: React.FC = () => {
   const phaseTitle = useMemo(() => {
     switch (phase) {
       case 'review_completed':
-        return t('deepReviewActionBar.reviewCompleted', {
-          defaultValue: 'Deep review completed',
+        return t(isDeepReview ? 'reviewActionBar.reviewCompletedDeep' : 'reviewActionBar.reviewCompletedStandard', {
+          defaultValue: isDeepReview ? 'Deep review completed' : 'Review completed',
         });
       case 'fix_running':
         return t('deepReviewActionBar.fixRunning', {
@@ -250,7 +262,7 @@ export const DeepReviewActionBar: React.FC = () => {
       default:
         return '';
     }
-  }, [phase, t]);
+  }, [phase, isDeepReview, t]);
 
   if (dismissed || phase === 'idle' || !childSessionId) {
     return null;
@@ -313,6 +325,11 @@ export const DeepReviewActionBar: React.FC = () => {
                     size="small"
                   />
                   <span className="deep-review-action-bar__remediation-text" title={item.plan}>
+                    {item.requiresDecision && (
+                      <span className="deep-review-action-bar__remediation-tag">
+                        {t('reviewActionBar.needsDecisionTag', { defaultValue: 'Decision' })}
+                      </span>
+                    )}
                     {item.plan}
                   </span>
                 </label>
@@ -442,3 +459,5 @@ export const DeepReviewActionBar: React.FC = () => {
     </div>
   );
 };
+
+export const DeepReviewActionBar = ReviewActionBar;
