@@ -285,6 +285,7 @@ impl ProjectContextService {
                 None,
                 Some(&cancel_token),
                 None,
+                None,
             )
             .await;
 

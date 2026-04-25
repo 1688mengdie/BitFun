@@ -73,6 +73,7 @@ Usage notes:
 - Provide clear, detailed prompt so the agent can work autonomously and return exactly the information you need.
 - If 'workspace_path' is omitted, the task inherits the current workspace by default.
 - The 'workspace_path' parameter must still be provided explicitly for the Explore and FileFinder agent.
+- Use 'model_id' when a caller needs a specific model or model slot for the subagent. Omit it to use the agent default.
 - Use 'timeout_seconds' when you need a hard deadline for the subagent. Omit it or set it to 0 to disable the timeout.
 - Launch multiple agents concurrently whenever possible, to maximize performance; to do that, use a single message with multiple tool calls
 - When the agent is done, it will return a single message back to you.
@@ -187,6 +188,10 @@ impl Tool for TaskTool {
                     "type": "string",
                     "description": "The absolute path of the workspace for this task. If omitted, inherits the current workspace. Explore/FileFinder must provide it explicitly."
                 },
+                "model_id": {
+                    "type": "string",
+                    "description": "Optional model ID or model slot alias for this subagent task. Omit it to use the agent default."
+                },
                 "timeout_seconds": {
                     "type": "integer",
                     "minimum": 0,
@@ -283,6 +288,16 @@ impl Tool for TaskTool {
             .get("workspace_path")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
+        let model_id = match input.get("model_id") {
+            Some(value) => {
+                let value = value
+                    .as_str()
+                    .ok_or_else(|| BitFunError::tool("model_id must be a string".to_string()))?;
+                let value = value.trim();
+                (!value.is_empty()).then(|| value.to_string())
+            }
+            None => None,
+        };
         let mut timeout_seconds = match input.get("timeout_seconds") {
             Some(value) => {
                 let parsed = value.as_u64().ok_or_else(|| {
@@ -447,6 +462,7 @@ impl Tool for TaskTool {
                 Some(effective_workspace_path.clone()),
                 None,
                 context.cancellation_token.as_ref(),
+                model_id,
                 timeout_seconds,
             )
             .await?;
@@ -466,10 +482,26 @@ impl Tool for TaskTool {
 
 #[cfg(test)]
 mod tests {
+    use super::TaskTool;
     use crate::agentic::deep_review_policy::{
         DeepReviewBudgetTracker, DeepReviewExecutionPolicy, DeepReviewSubagentRole,
     };
+    use crate::agentic::tools::framework::Tool;
     use serde_json::json;
+
+    #[test]
+    fn task_schema_accepts_optional_model_id() {
+        let schema = TaskTool::new().input_schema();
+
+        assert_eq!(schema["properties"]["model_id"]["type"], "string");
+        assert!(
+            !schema["required"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|value| value.as_str() == Some("model_id"))
+        );
+    }
 
     #[test]
     fn deep_review_policy_allows_only_configured_team_members() {

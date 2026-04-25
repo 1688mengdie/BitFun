@@ -2534,6 +2534,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
     /// - subagent_parent_info: Parent info (tool call context)
     /// - context: Additional context
     /// - cancel_token: Optional cancel token (for async cancellation)
+    /// - model_id: Optional model override for the subagent session
     ///
     /// Returns SubagentResult with the final text response
     pub async fn execute_subagent(
@@ -2544,6 +2545,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         workspace_path: Option<String>,
         context: Option<HashMap<String, String>>,
         cancel_token: Option<&CancellationToken>,
+        model_id: Option<String>,
         timeout_seconds: Option<u64>,
     ) -> BitFunResult<SubagentResult> {
         let workspace_path = workspace_path.ok_or_else(|| {
@@ -2551,6 +2553,9 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                 "workspace_path is required when creating a subagent session".to_string(),
             )
         })?;
+        let model_id = model_id
+            .map(|model_id| model_id.trim().to_string())
+            .filter(|model_id| !model_id.is_empty());
 
         self.execute_hidden_subagent_internal(
             HiddenSubagentExecutionRequest {
@@ -2558,6 +2563,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                 agent_type,
                 session_config: SessionConfig {
                     workspace_path: Some(workspace_path),
+                    model_id,
                     ..SessionConfig::default()
                 },
                 initial_messages: vec![Message::user(task_description)],

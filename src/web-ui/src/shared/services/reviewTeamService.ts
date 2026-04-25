@@ -22,7 +22,11 @@ export type ReviewMemberStrategyLevel = ReviewStrategyLevel | 'inherit';
 export type ReviewStrategySource = 'team' | 'member';
 export type ReviewModelFallbackReason = 'model_removed';
 
-export interface ReviewStrategyDefinition {
+export interface ReviewStrategyCommonRules {
+  reviewerPromptRules: string[];
+}
+
+export interface ReviewStrategyProfile {
   level: ReviewStrategyLevel;
   label: string;
   summary: string;
@@ -38,9 +42,17 @@ export const REVIEW_STRATEGY_LEVELS: ReviewStrategyLevel[] = [
   'deep',
 ];
 
-export const REVIEW_STRATEGY_DEFINITIONS: Record<
+export const REVIEW_STRATEGY_COMMON_RULES: ReviewStrategyCommonRules = {
+  reviewerPromptRules: [
+    'Each reviewer must follow its own strategy field.',
+    'Member-level strategy overrides take precedence over the team strategy.',
+    'The reviewer Task prompt must include the resolved prompt_directive.',
+  ],
+};
+
+export const REVIEW_STRATEGY_PROFILES: Record<
   ReviewStrategyLevel,
-  ReviewStrategyDefinition
+  ReviewStrategyProfile
 > = {
   quick: {
     level: 'quick',
@@ -76,6 +88,15 @@ export const REVIEW_STRATEGY_DEFINITIONS: Record<
       'Run a thorough role-specific pass. Inspect edge cases, cross-file interactions, failure modes, and remediation tradeoffs before finalizing findings.',
   },
 };
+
+export const REVIEW_STRATEGY_DEFINITIONS = REVIEW_STRATEGY_PROFILES;
+export type ReviewStrategyDefinition = ReviewStrategyProfile;
+
+export function getReviewStrategyProfile(
+  strategyLevel: ReviewStrategyLevel,
+): ReviewStrategyProfile {
+  return REVIEW_STRATEGY_PROFILES[strategyLevel];
+}
 
 export type ReviewTeamCoreRoleKey =
   | 'businessLogic'
@@ -152,8 +173,10 @@ export interface ReviewTeamManifestMember {
   model: string;
   configuredModel: string;
   modelFallbackReason?: ReviewModelFallbackReason;
+  defaultModelSlot: ReviewStrategyProfile['defaultModelSlot'];
   strategyLevel: ReviewStrategyLevel;
   strategySource: ReviewStrategySource;
+  strategyDirective: string;
   locked: boolean;
   source: ReviewTeamMember['source'];
   subagentSource: ReviewTeamMember['subagentSource'];
@@ -541,8 +564,7 @@ function resolveMemberModel(
   modelFallbackReason?: ReviewModelFallbackReason;
 } {
   const normalizedConfiguredModel = configuredModel?.trim() || '';
-  const defaultModelSlot =
-    REVIEW_STRATEGY_DEFINITIONS[strategyLevel].defaultModelSlot;
+  const defaultModelSlot = getReviewStrategyProfile(strategyLevel).defaultModelSlot;
 
   if (
     !normalizedConfiguredModel ||
@@ -755,6 +777,7 @@ function toManifestMember(
   member: ReviewTeamMember,
   reason?: ReviewTeamManifestMember['reason'],
 ): ReviewTeamManifestMember {
+  const strategyProfile = getReviewStrategyProfile(member.strategyLevel);
   return {
     subagentId: member.subagentId,
     displayName: member.displayName,
@@ -762,8 +785,10 @@ function toManifestMember(
     model: member.model || DEFAULT_REVIEW_TEAM_MODEL,
     configuredModel: member.configuredModel || member.model || DEFAULT_REVIEW_TEAM_MODEL,
     modelFallbackReason: member.modelFallbackReason,
+    defaultModelSlot: strategyProfile.defaultModelSlot,
     strategyLevel: member.strategyLevel,
     strategySource: member.strategySource,
+    strategyDirective: strategyProfile.promptDirective,
     locked: member.locked,
     source: member.source,
     subagentSource: member.subagentSource,
@@ -820,7 +845,7 @@ function formatResponsibilities(items: string[]): string {
 }
 
 function formatStrategyImpact(strategyLevel: ReviewStrategyLevel): string {
-  const definition = REVIEW_STRATEGY_DEFINITIONS[strategyLevel];
+  const definition = getReviewStrategyProfile(strategyLevel);
   return `Token/time impact: approximately ${definition.tokenImpact} token usage and ${definition.runtimeImpact} runtime.`;
 }
 
@@ -852,24 +877,39 @@ export function buildReviewTeamPromptBlock(
       ? [manifest.qualityGateReviewer.subagentId]
       : []),
   ]);
+  const activeManifestMembers = [
+    ...manifest.coreReviewers,
+    ...(manifest.qualityGateReviewer ? [manifest.qualityGateReviewer] : []),
+    ...manifest.enabledExtraReviewers,
+  ];
+  const manifestMemberBySubagentId = new Map(
+    activeManifestMembers.map((member) => [member.subagentId, member]),
+  );
   const members = team.members
     .filter((member) => member.available && activeSubagentIds.has(member.subagentId))
-    .map((member) => [
-      `- ${member.displayName}`,
-      `  - subagent_type: ${member.subagentId}`,
-      `  - preferred_task_label: ${member.displayName}`,
-      `  - role: ${member.roleName}`,
-      `  - locked_core_role: ${member.locked ? 'yes' : 'no'}`,
-      `  - strategy: ${member.strategyLevel}`,
-      `  - strategy_source: ${member.strategySource}`,
-      `  - model: ${member.model || DEFAULT_REVIEW_TEAM_MODEL}`,
-      `  - configured_model: ${member.configuredModel || member.model || DEFAULT_REVIEW_TEAM_MODEL}`,
-      ...(member.modelFallbackReason
-        ? [`  - model_fallback: ${member.modelFallbackReason}`]
-        : []),
-      '  - responsibilities:',
-      formatResponsibilities(member.responsibilities),
-    ].join('\n'))
+    .map((member) => {
+      const manifestMember =
+        manifestMemberBySubagentId.get(member.subagentId) ?? toManifestMember(member);
+      return [
+        `- ${manifestMember.displayName}`,
+        `  - subagent_type: ${manifestMember.subagentId}`,
+        `  - preferred_task_label: ${manifestMember.displayName}`,
+        `  - role: ${manifestMember.roleName}`,
+        `  - locked_core_role: ${manifestMember.locked ? 'yes' : 'no'}`,
+        `  - strategy: ${manifestMember.strategyLevel}`,
+        `  - strategy_source: ${manifestMember.strategySource}`,
+        `  - default_model_slot: ${manifestMember.defaultModelSlot}`,
+        `  - model: ${manifestMember.model || DEFAULT_REVIEW_TEAM_MODEL}`,
+        `  - model_id: ${manifestMember.model || DEFAULT_REVIEW_TEAM_MODEL}`,
+        `  - configured_model: ${manifestMember.configuredModel || manifestMember.model || DEFAULT_REVIEW_TEAM_MODEL}`,
+        ...(manifestMember.modelFallbackReason
+          ? [`  - model_fallback: ${manifestMember.modelFallbackReason}`]
+          : []),
+        `  - prompt_directive: ${manifestMember.strategyDirective}`,
+        '  - responsibilities:',
+        formatResponsibilities(member.responsibilities),
+      ].join('\n');
+    })
     .join('\n');
   const executionPolicy = [
     `- reviewer_timeout_seconds: ${team.executionPolicy.reviewerTimeoutSeconds}`,
@@ -894,7 +934,7 @@ export function buildReviewTeamPromptBlock(
       : ['  - none']),
   ].join('\n');
   const strategyRules = REVIEW_STRATEGY_LEVELS.map((level) => {
-    const definition = REVIEW_STRATEGY_DEFINITIONS[level];
+    const definition = getReviewStrategyProfile(level);
     return [
       `- ${level}: ${definition.summary}`,
       `  - ${formatStrategyImpact(level)}`,
@@ -902,6 +942,9 @@ export function buildReviewTeamPromptBlock(
       `  - Prompt directive: ${definition.promptDirective}`,
     ].join('\n');
   }).join('\n');
+  const commonStrategyRules = REVIEW_STRATEGY_COMMON_RULES.reviewerPromptRules
+    .map((rule) => `- ${rule}`)
+    .join('\n');
 
   return [
     manifestBlock,
@@ -913,6 +956,7 @@ export function buildReviewTeamPromptBlock(
     '- Always run the three locked reviewer roles first: ReviewBusinessLogic, ReviewPerformance, and ReviewSecurity.',
     '- Run ReviewJudge only after the reviewer batch finishes, as the quality-gate pass.',
     '- If extra reviewers are configured and enabled, run them in parallel with the three locked reviewers whenever possible.',
+    '- When a configured member entry provides model_id, pass model_id with that value to the matching Task call.',
     '- If reviewer_timeout_seconds is greater than 0, pass timeout_seconds with that value to every reviewer Task call.',
     '- If judge_timeout_seconds is greater than 0, pass timeout_seconds with that value to the ReviewJudge Task call.',
     '- If reviewer_file_split_threshold is greater than 0 and the target file count exceeds it, split files across multiple same-role reviewer instances (up to max_same_role_instances per role). Launch all split instances in the same parallel message.',
@@ -922,7 +966,8 @@ export function buildReviewTeamPromptBlock(
     '- The Review Quality Inspector must validate findings from every reviewer (including all same-role instances) before the final report.',
     'Review strategy rules:',
     `- Team strategy: ${team.strategyLevel}. ${formatStrategyImpact(team.strategyLevel)}`,
-    '- Each reviewer must follow its own strategy field. Member-level strategy overrides take precedence over the team strategy.',
+    commonStrategyRules,
+    'Review strategy profiles:',
     strategyRules,
   ].join('\n');
 }
