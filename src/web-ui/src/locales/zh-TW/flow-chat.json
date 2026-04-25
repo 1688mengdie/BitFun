@@ -512,6 +512,7 @@
       "cancelled": "已取消",
       "completed": "已完成",
       "failed": "執行失敗",
+      "receivingParams": "接收參數中...",
       "executingCommand": "正在執行命令...",
       "workingDirectory": "工作目錄:",
       "exitCode": "退出碼: {{code}}",

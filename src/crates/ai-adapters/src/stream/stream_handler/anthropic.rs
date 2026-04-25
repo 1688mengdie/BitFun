@@ -63,7 +63,7 @@ pub async fn handle_anthropic_stream(
             }
         };
 
-        trace!(target: AI_STREAM_RESPONSE_TARGET, "Anthropic SSE event: {}", sse.event);
+        trace!(target: AI_STREAM_RESPONSE_TARGET, "Anthropic SSE: {:?}", sse);
         let event_type = sse.event;
         let data = sse.data;
         stats.record_sse_event(&event_type);
