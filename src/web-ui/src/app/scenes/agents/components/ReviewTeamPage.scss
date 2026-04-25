@@ -423,7 +423,7 @@
 
   &__member-card-detail {
     overflow: hidden;
-    animation: review-team-card-expand $motion-normal $easing-standard forwards;
+    animation: review-team-card-expand $motion-base $easing-standard forwards;
     border-top: 1px solid var(--border-subtle);
   }
 

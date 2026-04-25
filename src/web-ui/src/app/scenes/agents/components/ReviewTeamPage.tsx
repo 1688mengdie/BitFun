@@ -547,8 +547,8 @@ const ReviewTeamPage: React.FC = () => {
                             {t('reviewTeams.detail.responsibilities', { defaultValue: 'Responsibilities' })}
                           </span>
                           <ul className="review-team-page__responsibility-list">
-                            {responsibilities.map((item) => (
-                              <li key={item} className="review-team-page__responsibility-item">
+                            {responsibilities.map((item, index) => (
+                              <li key={`${member.id}-${index}`} className="review-team-page__responsibility-item">
                                 {item}
                               </li>
                             ))}

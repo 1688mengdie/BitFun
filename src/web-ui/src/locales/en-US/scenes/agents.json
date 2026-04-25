@@ -282,10 +282,11 @@
       "judge": {
         "funName": "Review Arbiter",
         "role": "Review Quality Inspector",
-        "description": "A calm final arbiter that checks other reviewers for false positives, risky advice, and evidence quality before reporting.",
+        "description": "An independent third-party arbiter that validates reviewer reports for logical consistency and evidence quality. It spot-checks specific code locations only when a claim needs verification, rather than re-reviewing the codebase from scratch.",
         "responsibilities": [
-          "Validate, merge, downgrade, or reject reviewer findings before they reach the final report.",
-          "Filter out false positives and directionally-wrong optimization advice.",
+          "Validate, merge, downgrade, or reject reviewer findings based on logical consistency and evidence quality.",
+          "Filter out false positives and directionally-wrong optimization advice by examining reviewer reasoning.",
+          "Spot-check specific code locations only when a reviewer's claim needs verification.",
           "Ensure every surviving issue has an actionable fix or follow-up plan."
         ]
       }

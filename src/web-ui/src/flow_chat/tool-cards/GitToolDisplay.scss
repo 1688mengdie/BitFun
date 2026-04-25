@@ -4,7 +4,6 @@
  */
 
 @use './CompactToolCard.scss';
-@use '../../component-library/styles/_extended-mixins' as mixins;
 
 /* ========== Git card specific styles ========== */
 
@@ -32,7 +31,16 @@
 /* ========== Fix scrollbar visibility on card hover ========== */
 .compact-tool-card.git-tool-display:hover {
   .git-result-output {
-    @include mixins.visible-scrollbar;
+    &::-webkit-scrollbar-thumb {
+      background: var(--scrollbar-thumb, rgba(255, 255, 255, 0.12));
+    }
+
+    &::-webkit-scrollbar-thumb:hover {
+      background: var(--scrollbar-thumb-hover, rgba(255, 255, 255, 0.22));
+    }
+
+    /* Firefox */
+    scrollbar-color: var(--scrollbar-thumb, rgba(255, 255, 255, 0.12)) transparent;
   }
 }
 
