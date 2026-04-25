@@ -5,17 +5,6 @@ vi.mock('./ToolEventModule', () => ({
   processToolEvent: vi.fn(),
 }));
 
-vi.mock('@/infrastructure/i18n/core/I18nService', () => ({
-  i18nService: {
-    getT: () => (key: string, options?: { defaultValue?: string }) => {
-      if (key === 'toolCards.taskDetailPanel.waitingForModelResponse') {
-        return '等待模型响应...';
-      }
-      return options?.defaultValue ?? key;
-    },
-  },
-}));
-
 const testStoreState = vi.hoisted(() => ({
   sessions: new Map<string, any>(),
 }));
@@ -153,24 +142,22 @@ describe('SubagentModule', () => {
     resetStore();
   });
 
-  it('shows a waiting placeholder when a subagent model round starts and replaces it on first text chunk', () => {
+  it('creates text item directly from first text chunk without placeholder', () => {
     seedParentTaskTool();
 
+    // ModelRoundStarted no longer creates a placeholder.
     routeModelRoundStartedToToolCard(context, parentSessionId, parentToolId, {
       sessionId: subagentSessionId,
       turnId: subagentTurnId,
       roundId: subagentRoundId,
     });
 
+    // Verify no placeholder was created — the item should not exist yet.
     const itemId = `subagent-text-${parentToolId}-${subagentSessionId}-${subagentRoundId}`;
-    const placeholder = getParentRoundTextItem(itemId);
-    expect(placeholder?.content).toBe('等待模型响应...');
-    expect(placeholder?.status).toBe('running');
-    expect(placeholder?.isStreaming).toBe(true);
-    expect(placeholder?.isSubagentItem).toBe(true);
-    expect(placeholder?.parentTaskToolId).toBe(parentToolId);
-    expect(placeholder?.subagentSessionId).toBe(subagentSessionId);
+    const beforeChunk = getParentRoundTextItem(itemId);
+    expect(beforeChunk).toBeUndefined();
 
+    // First text chunk creates the item directly.
     routeTextChunkToToolCard(context, parentSessionId, parentToolId, {
       sessionId: subagentSessionId,
       turnId: subagentTurnId,
@@ -179,9 +166,12 @@ describe('SubagentModule', () => {
       contentType: 'text',
     });
 
-    const updatedItem = getParentRoundTextItem(itemId);
-    expect(updatedItem?.content).toBe('Review started.');
-    expect(updatedItem?.status).toBe('streaming');
-    expect(updatedItem?.isStreaming).toBe(true);
+    const item = getParentRoundTextItem(itemId);
+    expect(item?.content).toBe('Review started.');
+    expect(item?.status).toBe('streaming');
+    expect(item?.isStreaming).toBe(true);
+    expect(item?.isSubagentItem).toBe(true);
+    expect(item?.parentTaskToolId).toBe(parentToolId);
+    expect(item?.subagentSessionId).toBe(subagentSessionId);
   });
 });

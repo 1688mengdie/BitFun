@@ -749,7 +749,6 @@
       "noData": "Unable to load task data",
       "executionContent": "Execution Content",
       "duration": "Duration",
-      "waitingForModelResponse": "Waiting for model response...",
       "status": {
         "pending": "Pending",
         "running": "Running",
