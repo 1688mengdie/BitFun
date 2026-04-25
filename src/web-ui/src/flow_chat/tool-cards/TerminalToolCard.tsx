@@ -24,15 +24,13 @@ import { TerminalOutputRenderer } from '@/tools/terminal/components';
 import { createLogger } from '@/shared/utils/logger';
 import { useToolCardHeightContract, type ToolCardCollapseReason } from './useToolCardHeightContract';
 import { getTerminalViewState, type TerminalViewState } from './terminalToolCardState';
+import { ToolTimeoutIndicator } from './ToolTimeoutIndicator';
 import './TerminalToolCard.scss';
 
 const log = createLogger('TerminalToolCard');
 const TERMINAL_COLLAPSED_STATUSES = new Set(['completed', 'cancelled', 'error', 'rejected']);
-const TERMINAL_OUTPUT_PREVIEW_ROWS = 4;
-const TERMINAL_OUTPUT_ESTIMATED_LINE_HEIGHT = 18;
-const TERMINAL_OUTPUT_VERTICAL_PADDING = 16;
-const TERMINAL_OUTPUT_PREVIEW_MAX_HEIGHT =
-  TERMINAL_OUTPUT_PREVIEW_ROWS * TERMINAL_OUTPUT_ESTIMATED_LINE_HEIGHT + TERMINAL_OUTPUT_VERTICAL_PADDING;
+const TERMINAL_OUTPUT_STREAMING_MAX_HEIGHT = 4 * 18 + 16;  // 88px – compact while streaming/executing
+const TERMINAL_OUTPUT_EXPANDED_MAX_HEIGHT = 15 * 18 + 16;  // 286px – comfortable reading when manually expanded
 
 interface TerminalToolCardProps extends ToolCardProps {
   terminalSessionId?: string;
@@ -84,6 +82,15 @@ function renderTerminalExpandedContent(params: {
 }): React.ReactNode {
   const { viewState, liveOutput, parsedResult, waitingMessage, t } = params;
 
+  const isStreamingPhase =
+    viewState.displayPhase === 'live_output' ||
+    viewState.displayPhase === 'receiving_params' ||
+    viewState.displayPhase === 'executing';
+
+  const maxHeight = isStreamingPhase
+    ? TERMINAL_OUTPUT_STREAMING_MAX_HEIGHT
+    : TERMINAL_OUTPUT_EXPANDED_MAX_HEIGHT;
+
   return (
     <>
       {viewState.displayPhase === 'live_output' && (
@@ -91,7 +98,7 @@ function renderTerminalExpandedContent(params: {
           <TerminalOutputRenderer
             content={liveOutput}
             className="terminal-xterm-output"
-            maxHeight={TERMINAL_OUTPUT_PREVIEW_MAX_HEIGHT}
+            maxHeight={maxHeight}
           />
         </div>
       )}
@@ -109,7 +116,7 @@ function renderTerminalExpandedContent(params: {
               <TerminalOutputRenderer
                 content={parsedResult.output}
                 className="terminal-xterm-output"
-                maxHeight={TERMINAL_OUTPUT_PREVIEW_MAX_HEIGHT}
+                maxHeight={maxHeight}
               />
             </div>
           )}
@@ -138,7 +145,7 @@ function renderTerminalExpandedContent(params: {
             <TerminalOutputRenderer
               content={liveOutput}
               className="terminal-xterm-output"
-              maxHeight={TERMINAL_OUTPUT_PREVIEW_MAX_HEIGHT}
+              maxHeight={maxHeight}
             />
           </div>
           <div className="terminal-result-footer">
@@ -484,9 +491,24 @@ export const TerminalToolCard: React.FC<TerminalToolCardProps> = ({
       statusIcon={<Terminal size={14} className="terminal-card-icon" />}
       action={t('toolCards.terminal.executeCommand')}
       content={renderCommandContent()}
-      extra={viewState.hasHeaderExtra ? (
+      extra={(
         <>
-          {renderStatusText()}
+          <ToolTimeoutIndicator
+            startTime={toolItem.startTime}
+            isRunning={isRunning}
+            timeoutMs={
+              typeof toolCall?.input?.timeout_ms === 'number' && toolCall.input.timeout_ms > 0
+                ? toolCall.input.timeout_ms
+                : undefined
+            }
+            showControls={false}
+            completedDurationMs={
+              status === 'completed' && parsedResult?.executionTimeMs
+                ? parsedResult.executionTimeMs
+                : undefined
+            }
+          />
+          {viewState.hasHeaderExtra && renderStatusText()}
 
           {showConfirmButtons && (
             <div className="terminal-confirm-actions" onClick={(e) => e.stopPropagation()}>
@@ -528,7 +550,7 @@ export const TerminalToolCard: React.FC<TerminalToolCardProps> = ({
             </IconButton>
           )}
         </>
-      ) : undefined}
+      )}
       rightIcon={renderStatusIcon()}
     />
   );
