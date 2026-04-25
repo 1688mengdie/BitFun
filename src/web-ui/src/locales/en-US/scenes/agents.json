@@ -250,7 +250,7 @@
     },
     "members": {
       "businessLogic": {
-        "funName": "Logic Detective Locke",
+        "funName": "Logic Reviewer",
         "role": "Business Logic Reviewer",
         "description": "A workflow sleuth that inspects business rules, state transitions, recovery paths, and real-user correctness.",
         "responsibilities": [
@@ -260,7 +260,7 @@
         ]
       },
       "performance": {
-        "funName": "Turbo Trace Bolt",
+        "funName": "Performance Reviewer",
         "role": "Performance Reviewer",
         "description": "A speed-focused profiler that hunts hot paths, unnecessary work, blocking calls, and scale-sensitive regressions.",
         "responsibilities": [
@@ -270,7 +270,7 @@
         ]
       },
       "security": {
-        "funName": "Aegis Sentinel Nova",
+        "funName": "Security Reviewer",
         "role": "Security Reviewer",
         "description": "A boundary guardian that scans for injection risks, trust leaks, privilege mistakes, and unsafe file or command handling.",
         "responsibilities": [
@@ -280,7 +280,7 @@
         ]
       },
       "judge": {
-        "funName": "Quality Judge Echo",
+        "funName": "Review Arbiter",
         "role": "Review Quality Inspector",
         "description": "A calm final arbiter that checks other reviewers for false positives, risky advice, and evidence quality before reporting.",
         "responsibilities": [

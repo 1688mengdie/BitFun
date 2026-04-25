@@ -211,7 +211,7 @@ export const DEFAULT_REVIEW_TEAM_CORE_ROLES: ReviewTeamCoreRoleDefinition[] = [
   {
     key: 'businessLogic',
     subagentId: 'ReviewBusinessLogic',
-    funName: 'Logic Detective Locke',
+    funName: 'Logic Reviewer',
     roleName: 'Business Logic Reviewer',
     description:
       'A workflow sleuth that inspects business rules, state transitions, recovery paths, and real-user correctness.',
@@ -225,7 +225,7 @@ export const DEFAULT_REVIEW_TEAM_CORE_ROLES: ReviewTeamCoreRoleDefinition[] = [
   {
     key: 'performance',
     subagentId: 'ReviewPerformance',
-    funName: 'Turbo Trace Bolt',
+    funName: 'Performance Reviewer',
     roleName: 'Performance Reviewer',
     description:
       'A speed-focused profiler that hunts hot paths, unnecessary work, blocking calls, and scale-sensitive regressions.',
@@ -239,7 +239,7 @@ export const DEFAULT_REVIEW_TEAM_CORE_ROLES: ReviewTeamCoreRoleDefinition[] = [
   {
     key: 'security',
     subagentId: 'ReviewSecurity',
-    funName: 'Aegis Sentinel Nova',
+    funName: 'Security Reviewer',
     roleName: 'Security Reviewer',
     description:
       'A boundary guardian that scans for injection risks, trust leaks, privilege mistakes, and unsafe file or command handling.',
@@ -253,7 +253,7 @@ export const DEFAULT_REVIEW_TEAM_CORE_ROLES: ReviewTeamCoreRoleDefinition[] = [
   {
     key: 'judge',
     subagentId: 'ReviewJudge',
-    funName: 'Quality Judge Echo',
+    funName: 'Review Arbiter',
     roleName: 'Review Quality Inspector',
     description:
       'A calm final arbiter that checks other reviewers for false positives, risky advice, and evidence quality before reporting.',

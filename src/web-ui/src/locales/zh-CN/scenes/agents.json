@@ -250,7 +250,7 @@
     },
     "members": {
       "businessLogic": {
-        "funName": "逻辑神探 Locke",
+        "funName": "逻辑审查员",
         "role": "业务逻辑审核员",
         "description": "专门追踪业务规则、状态流转、回滚路径和真实用户正确性的流程侦探。",
         "responsibilities": [
@@ -260,7 +260,7 @@
         ]
       },
       "performance": {
-        "funName": "涡轮追踪 Bolt",
+        "funName": "性能审查员",
         "role": "性能审核员",
         "description": "专盯热点路径、无效工作、阻塞调用和规模化回退问题的速度分析员。",
         "responsibilities": [
@@ -270,7 +270,7 @@
         ]
       },
       "security": {
-        "funName": "圣盾哨兵 Nova",
+        "funName": "安全审查员",
         "role": "安全审核员",
         "description": "专门盯住注入风险、信任边界、权限错误以及危险文件或命令处理的边界守卫。",
         "responsibilities": [
@@ -280,7 +280,7 @@
         ]
       },
       "judge": {
-        "funName": "终审质检官 Echo",
+        "funName": "审核仲裁员",
         "role": "审核质检员",
         "description": "负责给其他审核员做二次质检，过滤误报、危险建议和证据不足结论的最终裁判。",
         "responsibilities": [
