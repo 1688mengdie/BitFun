@@ -685,7 +685,7 @@ export const SessionFilesBadge: React.FC<SessionFilesBadgeProps> = ({
     }
   };
 
-  const activeReviewMode = launchingReviewMode ?? reviewActivity?.kind ?? null;
+  const activeReviewMode = launchingReviewMode ?? (reviewActivity?.isBlocking ? reviewActivity.kind : null) ?? null;
   const activeReviewLabel = activeReviewMode === 'deep_review'
     ? t('sessionFilesBadge.reviewRunningDeep', {
         defaultValue: 'Deep review in progress',
