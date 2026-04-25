@@ -4,27 +4,15 @@
 
 import { FlowChatStore } from '../../store/FlowChatStore';
 import { createLogger } from '@/shared/utils/logger';
-import { i18nService } from '@/infrastructure/i18n/core/I18nService';
 import type { FlowChatContext, FlowTextItem, SubagentTextChunkData, SubagentToolEventData } from './types';
 import type { FlowThinkingItem } from '../../types/flow-chat';
 import { processToolEvent } from './ToolEventModule';
 import type { ToolEventData } from '../EventBatcher';
 
 const log = createLogger('SubagentModule');
-const SUBAGENT_WAITING_PLACEHOLDER_FLAG = '_subagentWaitingPlaceholder';
-
-function getSubagentWaitingText(): string {
-  return i18nService.getT()('toolCards.taskDetailPanel.waitingForModelResponse', {
-    defaultValue: 'Waiting for model response...',
-  });
-}
 
 function getSubagentTextItemId(parentToolId: string, sessionId: string, roundId: string): string {
   return `subagent-text-${parentToolId}-${sessionId}-${roundId}`;
-}
-
-function isSubagentWaitingPlaceholder(item: unknown): boolean {
-  return !!(item as any)?.[SUBAGENT_WAITING_PLACEHOLDER_FLAG];
 }
 
 function findParentTurnId(parentSession: { dialogTurns: Array<{ id: string; modelRounds: Array<{ items: Array<{ id: string }> }> }> }, parentToolId: string): string | null {
@@ -41,58 +29,20 @@ function findParentTurnId(parentSession: { dialogTurns: Array<{ id: string; mode
 }
 
 /**
- * Show early progress inside the parent Task card before the first subagent token arrives.
+ * Subagent text items are now created on the first real text chunk only.
+ * The TaskDetailPanel loading state handles the waiting period.
  */
 export function routeModelRoundStartedToToolCard(
   _context: FlowChatContext,
-  parentSessionId: string,
-  parentToolId: string,
-  data: {
+  _parentSessionId: string,
+  _parentToolId: string,
+  _data: {
     sessionId: string;
     turnId: string;
     roundId: string;
   }
 ): void {
-  const store = FlowChatStore.getInstance();
-  const parentSession = store.getState().sessions.get(parentSessionId);
-
-  if (!parentSession) {
-    log.debug('Parent session not found (Subagent ModelRoundStarted)', { parentSessionId });
-    return;
-  }
-
-  const parentTurnId = findParentTurnId(parentSession, parentToolId);
-  if (!parentTurnId) {
-    log.debug('Parent tool DialogTurn not found', { parentSessionId, parentToolId });
-    return;
-  }
-
-  const itemId = getSubagentTextItemId(parentToolId, data.sessionId, data.roundId);
-  const parentTurn = parentSession.dialogTurns.find(turn => turn.id === parentTurnId);
-  const existingItem = parentTurn?.modelRounds.some(round =>
-    round.items.some(item => item.id === itemId)
-  );
-  if (existingItem) {
-    return;
-  }
-
-  const parentTool = store.findToolItem(parentSessionId, parentTurnId, parentToolId);
-  const parentTimestamp = parentTool?.timestamp || Date.now();
-  const newTextItem: FlowTextItem = {
-    id: itemId,
-    type: 'text',
-    content: getSubagentWaitingText(),
-    timestamp: parentTimestamp + 1,
-    isStreaming: true,
-    status: 'running',
-    isMarkdown: false,
-    isSubagentItem: true,
-    parentTaskToolId: parentToolId,
-    subagentSessionId: data.sessionId,
-    [SUBAGENT_WAITING_PLACEHOLDER_FLAG]: true,
-  } as any;
-
-  store.insertModelRoundItemAfterTool(parentSessionId, parentTurnId, parentToolId, newTextItem);
+  // No-op: placeholder items are no longer created.
 }
 
 /**
@@ -143,9 +93,7 @@ export function routeTextChunkToToolCard(
   }
   
   if (existingItem) {
-    const wasWaitingPlaceholder = isSubagentWaitingPlaceholder(existingItem);
-    const existingContent = wasWaitingPlaceholder ? '' : existingItem.content;
-    const content = existingContent + textContent;
+    const content = existingItem.content + textContent;
 
     if (isThinkingEnd) {
       store.updateModelRoundItem(parentSessionId, parentTurnId, itemId, {
@@ -154,7 +102,6 @@ export function routeTextChunkToToolCard(
         isCollapsed: true,
         status: 'completed',
         timestamp: Date.now(),
-        [SUBAGENT_WAITING_PLACEHOLDER_FLAG]: false,
       } as any);
       
     } else {
@@ -164,7 +111,6 @@ export function routeTextChunkToToolCard(
         isMarkdown: !isThinking,
         status: 'streaming',
         timestamp: Date.now(),
-        [SUBAGENT_WAITING_PLACEHOLDER_FLAG]: false,
       } as any);
     }
   } else {
