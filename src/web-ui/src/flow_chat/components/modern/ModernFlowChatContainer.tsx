@@ -324,6 +324,10 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
           btwParentTitle={btwParentTitle}
           turns={turnSummaries}
           onJumpToTurn={handleJumpToTurn}
+          onJumpToCurrentTurn={() => {
+            const turnId = effectiveVisibleTurnInfo?.turnId;
+            if (turnId) handleJumpToTurn(turnId);
+          }}
           onJumpToPreviousTurn={handleJumpToPreviousTurn}
           onJumpToNextTurn={handleJumpToNextTurn}
           searchQuery={searchQuery}

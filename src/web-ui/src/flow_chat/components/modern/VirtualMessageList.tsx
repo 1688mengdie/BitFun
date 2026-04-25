@@ -18,6 +18,8 @@ import { VirtualItemRenderer } from './VirtualItemRenderer';
 import { ScrollToLatestBar } from '../ScrollToLatestBar';
 import { ScrollToTurnHeaderButton } from '../ScrollToTurnHeaderButton';
 import { useScrollToTurnHeader } from '../../hooks/useScrollToTurnHeader';
+import { useVisibleTaskInfo } from '../../hooks/useVisibleTaskInfo';
+import { StickyTaskIndicator } from '../StickyTaskIndicator';
 import { ProcessingIndicator } from './ProcessingIndicator';
 import { ScrollAnchor } from './ScrollAnchor';
 import { useFlowChatFollowOutput } from './useFlowChatFollowOutput';
@@ -1673,6 +1675,15 @@ export const VirtualMessageList = forwardRef<VirtualMessageListRef>((_, ref) => 
         turnId: latestTurnId,
         sawPositiveFloor: false,
       };
+
+      const hasUnread = activeSession?.hasUnreadCompletion;
+      const isFinished = !isStreamingOutput;
+      if (hasUnread && isFinished && virtuosoRef.current) {
+        requestAnimationFrame(() => {
+          virtuosoRef.current?.scrollTo({ top: 999999999, behavior: 'auto' });
+        });
+      }
+
       return;
     }
 
@@ -1695,8 +1706,10 @@ export const VirtualMessageList = forwardRef<VirtualMessageListRef>((_, ref) => 
     armFollowOutputForNewTurn();
   }, [
     activeSession?.sessionId,
+    activeSession?.hasUnreadCompletion,
     armFollowOutputForNewTurn,
     cancelPendingAutoFollowArm,
+    isStreamingOutput,
     latestTurnId,
   ]);
 
@@ -1821,6 +1834,11 @@ export const VirtualMessageList = forwardRef<VirtualMessageListRef>((_, ref) => 
     currentTurnIndex: visibleTurnInfo?.turnIndex ?? 0,
     visibleTurnInfo,
     onJumpToCurrentTurn: handleJumpToCurrentTurn,
+  });
+
+  const { visibleTaskInfo, scrollToTask } = useVisibleTaskInfo({
+    scrollerRef: scrollerElementRef,
+    virtualItems,
   });
 
   const scrollToPhysicalBottomAndClearPin = useCallback(() => {
@@ -2007,6 +2025,12 @@ export const VirtualMessageList = forwardRef<VirtualMessageListRef>((_, ref) => 
         visible={shouldShowTurnHeaderButton}
         onClick={handleTurnHeaderClick}
         turnLabel={visibleTurnInfo ? `Turn ${visibleTurnInfo.turnIndex}` : undefined}
+      />
+
+      <StickyTaskIndicator
+        visible={!!visibleTaskInfo}
+        taskInfo={visibleTaskInfo}
+        onClick={scrollToTask}
       />
 
       <ScrollToLatestBar

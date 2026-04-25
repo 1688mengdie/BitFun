@@ -29,7 +29,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::OnceLock;
-use tokio::sync::{OwnedSemaphorePermit, RwLock, Semaphore, mpsc};
+use tokio::sync::{OwnedSemaphorePermit, RwLock, Semaphore, mpsc, watch};
 use tokio::time::{Duration, Instant, sleep};
 use tokio_util::sync::CancellationToken;
 
@@ -169,6 +169,80 @@ fn normalize_subagent_max_concurrency(raw: usize) -> usize {
     raw.clamp(1, MAX_SUBAGENT_MAX_CONCURRENCY)
 }
 
+/// Actions for dynamically adjusting a subagent's timeout.
+#[derive(Debug, Clone)]
+pub enum SubagentTimeoutAction {
+    /// Disable timeout (run without limit).
+    Disable,
+    /// Restore timeout using the remaining time captured at disable.
+    Restore,
+    /// Extend timeout by specified seconds from now.
+    Extend { seconds: u64 },
+}
+
+/// Shared handle for dynamically adjusting a subagent's timeout deadline.
+pub(crate) struct SubagentTimeoutHandle {
+    /// watch sender: None = no timeout, Some(instant) = deadline.
+    deadline_tx: watch::Sender<Option<Instant>>,
+    /// Session ID this handle belongs to.
+    #[allow(dead_code)]
+    session_id: String,
+    /// Original timeout in seconds (for restore calculations).
+    original_timeout_seconds: Option<u64>,
+    /// Remaining seconds at the moment timeout was disabled.
+    remaining_at_pause: std::sync::Mutex<Option<u64>>,
+}
+
+impl SubagentTimeoutHandle {
+    fn disable_timeout(&self) {
+        let remaining = match *self.deadline_tx.borrow() {
+            Some(deadline) => {
+                let now = Instant::now();
+                if deadline > now {
+                    deadline.duration_since(now).as_secs()
+                } else {
+                    0
+                }
+            }
+            None => self.original_timeout_seconds.unwrap_or(0),
+        };
+        let _ = self.remaining_at_pause.lock().map(|mut guard| {
+            *guard = Some(remaining);
+        });
+        let _ = self.deadline_tx.send(None);
+    }
+
+    fn restore_timeout(&self) {
+        let remaining = self
+            .remaining_at_pause
+            .lock()
+            .ok()
+            .and_then(|guard| *guard)
+            .unwrap_or_else(|| self.original_timeout_seconds.unwrap_or(0));
+        let new_deadline = Instant::now() + Duration::from_secs(remaining);
+        let _ = self.deadline_tx.send(Some(new_deadline));
+        let _ = self.remaining_at_pause.lock().map(|mut guard| {
+            *guard = None;
+        });
+    }
+
+    fn extend_timeout(&self, seconds: u64) {
+        let new_deadline = Instant::now() + Duration::from_secs(seconds);
+        let _ = self.deadline_tx.send(Some(new_deadline));
+        let _ = self.remaining_at_pause.lock().map(|mut guard| {
+            *guard = None;
+        });
+    }
+
+    fn apply_action(&self, action: SubagentTimeoutAction) {
+        match action {
+            SubagentTimeoutAction::Disable => self.disable_timeout(),
+            SubagentTimeoutAction::Restore => self.restore_timeout(),
+            SubagentTimeoutAction::Extend { seconds } => self.extend_timeout(seconds),
+        }
+    }
+}
+
 /// Conversation coordinator
 pub struct ConversationCoordinator {
     session_manager: Arc<SessionManager>,
@@ -177,6 +251,8 @@ pub struct ConversationCoordinator {
     event_queue: Arc<EventQueue>,
     event_router: Arc<EventRouter>,
     subagent_concurrency_limiter: Arc<RwLock<Option<SubagentConcurrencyLimiter>>>,
+    /// Registry for dynamically adjusting subagent timeouts.
+    subagent_timeout_registry: Arc<RwLock<HashMap<String, Arc<SubagentTimeoutHandle>>>>,
     /// Notifies DialogScheduler of turn outcomes; injected after construction
     scheduler_notify_tx: OnceLock<mpsc::Sender<(String, TurnOutcome)>>,
     /// Round-boundary yield (same source as scheduler's yield flags); injected after construction
@@ -486,6 +562,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             event_queue,
             event_router,
             subagent_concurrency_limiter: Arc::new(RwLock::new(None)),
+            subagent_timeout_registry: Arc::new(RwLock::new(HashMap::new())),
             scheduler_notify_tx: OnceLock::new(),
             round_preempt_source: OnceLock::new(),
         }
@@ -500,6 +577,29 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
     /// Wire round-boundary preempt (typically the scheduler's [`SessionRoundYieldFlags`](crate::agentic::round_preempt::SessionRoundYieldFlags)).
     pub fn set_round_preempt_source(&self, source: Arc<dyn DialogRoundPreemptSource>) {
         let _ = self.round_preempt_source.set(source);
+    }
+
+    /// Dynamically adjust a running subagent's timeout.
+    pub async fn set_subagent_timeout(
+        &self,
+        session_id: &str,
+        action: SubagentTimeoutAction,
+    ) -> BitFunResult<()> {
+        let registry = self.subagent_timeout_registry.read().await;
+        let handle = registry.get(session_id).cloned().ok_or_else(|| {
+            BitFunError::tool(format!(
+                "No active subagent timeout handle for session {}",
+                session_id
+            ))
+        })?;
+        drop(registry);
+        handle.apply_action(action.clone());
+        info!(
+            "Subagent timeout adjusted: session_id={}, action={:?}",
+            session_id,
+            std::mem::discriminant(&action)
+        );
+        Ok(())
     }
 
     /// Create a new session
@@ -2126,7 +2226,11 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             ),
             None => format!("Subagent '{}' timed out", agent_type),
         };
-        let deadline = timeout_seconds.map(|seconds| Instant::now() + Duration::from_secs(seconds));
+
+        // Create dynamic deadline via watch channel so it can be adjusted at runtime.
+        let initial_deadline = timeout_seconds
+            .map(|seconds| Instant::now() + Duration::from_secs(seconds));
+        let (deadline_tx, mut deadline_rx) = watch::channel(initial_deadline);
 
         // Check cancel token (before creating session)
         if let Some(token) = cancel_token {
@@ -2143,7 +2247,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         // event is emitted to the transport layer — subagent sessions are internal
         // implementation details and must not appear in the UI session list.
         let (permit, limiter, wait_ms) = self
-            .acquire_subagent_concurrency_permit(&agent_type, cancel_token, deadline)
+            .acquire_subagent_concurrency_permit(&agent_type, cancel_token, initial_deadline)
             .await?;
         let _permit_guard =
             SubagentConcurrencyPermitGuard::new(permit, limiter, agent_type.clone());
@@ -2159,7 +2263,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                 ));
             }
         }
-        if deadline.is_some_and(|expires_at| Instant::now() >= expires_at) {
+        if initial_deadline.is_some_and(|expires_at| Instant::now() >= expires_at) {
             warn!(
                 "Subagent timed out before session creation after waiting for concurrency slot: agent_type={}, wait_ms={}",
                 agent_type, wait_ms
@@ -2177,22 +2281,38 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             .await?;
         let session_id = session.session_id.clone();
 
+        // Register timeout handle so it can be adjusted at runtime.
+        let timeout_handle = Arc::new(SubagentTimeoutHandle {
+            deadline_tx: deadline_tx.clone(),
+            session_id: session_id.clone(),
+            original_timeout_seconds: timeout_seconds,
+            remaining_at_pause: std::sync::Mutex::new(None),
+        });
+        {
+            let mut registry = self.subagent_timeout_registry.write().await;
+            registry.insert(session_id.clone(), timeout_handle);
+        }
+
         // Check cancel token (after creating session, before execution)
         if let Some(token) = cancel_token {
             if token.is_cancelled() {
                 debug!("Subagent task cancelled before AI call, cleaning up resources");
                 let _ = self.cleanup_subagent_resources(&session_id).await;
+                let mut registry = self.subagent_timeout_registry.write().await;
+                registry.remove(&session_id);
                 return Err(BitFunError::Cancelled(
                     "Subagent task has been cancelled".to_string(),
                 ));
             }
         }
-        if deadline.is_some_and(|expires_at| Instant::now() >= expires_at) {
+        if initial_deadline.is_some_and(|expires_at| Instant::now() >= expires_at) {
             warn!(
                 "Subagent timed out before AI call after session creation: agent_type={}, session={}, wait_ms={}",
                 agent_type, session_id, wait_ms
             );
             let _ = self.cleanup_subagent_resources(&session_id).await;
+            let mut registry = self.subagent_timeout_registry.write().await;
+            registry.remove(&session_id);
             return Err(BitFunError::Timeout(timeout_error_message.clone()));
         }
 
@@ -2259,19 +2379,52 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             TimedOut,
         }
 
-        let execution_outcome = if let Some(expires_at) = deadline {
-            let sleep_until_timeout = tokio::time::sleep_until(expires_at);
-            tokio::pin!(sleep_until_timeout);
-
-            tokio::select! {
-                join_result = &mut execution_task => SubagentExecutionOutcome::Completed(join_result),
-                _ = subagent_cancel_token.cancelled() => SubagentExecutionOutcome::Cancelled,
-                _ = &mut sleep_until_timeout => SubagentExecutionOutcome::TimedOut,
-            }
-        } else {
-            tokio::select! {
-                join_result = &mut execution_task => SubagentExecutionOutcome::Completed(join_result),
-                _ = subagent_cancel_token.cancelled() => SubagentExecutionOutcome::Cancelled,
+        // Dynamic timeout loop: deadline can be adjusted via watch channel.
+        let execution_outcome = loop {
+            let current_deadline = *deadline_rx.borrow();
+            match current_deadline {
+                Some(expires_at) if Instant::now() >= expires_at => {
+                    break SubagentExecutionOutcome::TimedOut;
+                }
+                Some(expires_at) => {
+                    let sleep = tokio::time::sleep_until(expires_at);
+                    tokio::pin!(sleep);
+                    tokio::select! {
+                        join_result = &mut execution_task => {
+                            break SubagentExecutionOutcome::Completed(join_result);
+                        }
+                        _ = subagent_cancel_token.cancelled() => {
+                            break SubagentExecutionOutcome::Cancelled;
+                        }
+                        _ = &mut sleep => {
+                            // Sleep expired; check if deadline was updated.
+                            continue;
+                        }
+                        _ = deadline_rx.changed() => {
+                            // Deadline changed externally; re-evaluate.
+                            // If sender was dropped, treat as no timeout and
+                            // let execution_task/cancel_token branches handle it.
+                            continue;
+                        }
+                    }
+                }
+                None => {
+                    // No timeout (disabled).
+                    tokio::select! {
+                        join_result = &mut execution_task => {
+                            break SubagentExecutionOutcome::Completed(join_result);
+                        }
+                        _ = subagent_cancel_token.cancelled() => {
+                            break SubagentExecutionOutcome::Cancelled;
+                        }
+                        _ = deadline_rx.changed() => {
+                            // Deadline was set; re-evaluate.
+                            // If sender was dropped, remain in no-timeout mode
+                            // and let execution_task/cancel_token branches handle it.
+                            continue;
+                        }
+                    }
+                }
             }
         };
 
@@ -2290,6 +2443,8 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                             session_id, cleanup_err
                         );
                     }
+                    let mut registry = self.subagent_timeout_registry.write().await;
+                    registry.remove(&session_id);
 
                     return Err(BitFunError::tool(format!(
                         "Subagent '{}' failed to join: {}",
@@ -2350,6 +2505,8 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                         session_id, cleanup_err
                     );
                 }
+                let mut registry = self.subagent_timeout_registry.write().await;
+                registry.remove(&session_id);
 
                 return Err(BitFunError::Cancelled(
                     "Subagent task has been cancelled".to_string(),
@@ -2408,6 +2565,8 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                         session_id, cleanup_err
                     );
                 }
+                let mut registry = self.subagent_timeout_registry.write().await;
+                registry.remove(&session_id);
 
                 return Err(BitFunError::Timeout(timeout_error_message.clone()));
             }
@@ -2434,6 +2593,8 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                         session_id, cleanup_err
                     );
                 }
+                let mut registry = self.subagent_timeout_registry.write().await;
+                registry.remove(&session_id);
 
                 return Err(e);
             }
@@ -2452,6 +2613,8 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                 session_id
             );
         }
+        let mut registry = self.subagent_timeout_registry.write().await;
+        registry.remove(&session_id);
 
         Ok(SubagentResult {
             text: response_text,

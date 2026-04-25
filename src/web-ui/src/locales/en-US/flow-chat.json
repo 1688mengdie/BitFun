@@ -442,7 +442,11 @@
     "searchPrevious": "Previous match",
     "searchNext": "Next match",
     "searchClose": "Close search",
-    "searchOpen": "Search messages"
+    "searchOpen": "Search messages",
+    "jumpToCurrentTurn": "Jump to Turn {{turn}}"
+  },
+  "stickyTaskIndicator": {
+    "tooltip": "Jump to current task"
   },
   "sessionFilesBadge": {
     "files": "files",
@@ -785,6 +789,11 @@
         "completed": "Completed",
         "failed": "Failed"
       }
+    },
+    "timeout": {
+      "disableTooltip": "Disable timeout",
+      "enableTooltip": "Re-enable timeout",
+      "restoreShort": "Restore ({{seconds}}s left)"
     },
     "diagram": {
       "interactive": "Interactive diagram:",

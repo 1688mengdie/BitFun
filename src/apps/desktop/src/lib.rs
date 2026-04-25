@@ -353,6 +353,7 @@ pub async fn run() {
             api::agentic_api::ensure_assistant_bootstrap,
             api::agentic_api::cancel_dialog_turn,
             api::agentic_api::cancel_session,
+            api::agentic_api::set_subagent_timeout,
             api::agentic_api::delete_session,
             api::agentic_api::restore_session,
             webdriver_bridge_result,
