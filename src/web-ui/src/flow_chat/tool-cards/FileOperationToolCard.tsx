@@ -442,7 +442,12 @@ export const FileOperationToolCard: React.FC<FileOperationToolCardProps> = ({
       return;
     }
     
-    if (currentFilePath && sessionId && status === 'completed') {
+    if (status !== 'completed') {
+      applyContentExpandedState(!isContentExpanded, 'manual');
+      return;
+    }
+
+    if (currentFilePath && sessionId) {
       handleOpenInCodeEditor();
       return;
     }
@@ -451,9 +456,11 @@ export const FileOperationToolCard: React.FC<FileOperationToolCardProps> = ({
       onOpenInEditor(currentFilePath);
     }
   }, [
+    applyContentExpandedState,
     applyErrorExpandedState,
     currentFilePath,
     handleOpenInCodeEditor,
+    isContentExpanded,
     isErrorExpanded,
     isFailed,
     onOpenInEditor,
@@ -691,7 +698,6 @@ export const FileOperationToolCard: React.FC<FileOperationToolCardProps> = ({
 
   const expandedContent = renderExpandedContent();
   const hasExpandableContent =
-    status === 'completed' &&
     !isFailed &&
     !isDeleteTool &&
     Boolean(expandedContent);
@@ -699,7 +705,7 @@ export const FileOperationToolCard: React.FC<FileOperationToolCardProps> = ({
   const isCardContentExpanded =
     !isDeleteTool &&
     !isFailed &&
-    (status === 'completed' ? isContentExpanded : true);
+    isContentExpanded;
 
   const opensPanelOnClick =
     !isFailed &&
