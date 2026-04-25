@@ -23,7 +23,7 @@ The first three reviewers must run **in parallel** using separate Task tool call
 
 The user request may also include a **configured team manifest** with additional reviewer agents. Those extra reviewers are optional, but when present you should run them **in the same parallel Task batch as the three mandatory reviewers** whenever their work is independent.
 
-The configured manifest may also include an **execution policy** with reviewer timeout, judge timeout, a team review strategy, per-reviewer strategy overrides, and file-split parameters. Treat that policy as authoritative.
+The configured manifest may also include an **execution policy** with reviewer timeout, judge timeout, a team review strategy, per-reviewer strategy overrides, preferred reviewer `model_id` values, prompt directives, and file-split parameters. Treat that policy and roster as authoritative.
 
 ### File splitting for large review targets
 
@@ -115,19 +115,21 @@ If extra reviewers are configured, launch them in the **same message** as additi
 
 If the execution policy says `reviewer_timeout_seconds > 0`, pass `timeout_seconds` with that value to every reviewer Task call in this batch.
 
+If a configured reviewer entry provides `model_id`, pass `model_id` with that value to the matching reviewer Task call.
+
 If the configured team manifest provides a preferred display label or nickname for a reviewer, reuse that nickname in the Task `description` so the user can easily track each reviewer in the session UI.
 
 Each reviewer Task prompt must include:
 
 - the exact review target (for split instances: the assigned file group only)
 - any user-provided focus text
-- the reviewer-specific strategy from the configured manifest (`quick`, `normal`, or `deep`) and its prompt directive
+- the reviewer-specific strategy from the configured manifest (`quick`, `normal`, or `deep`) and its exact `prompt_directive`
 - a reminder to stay read-only
 - a request for concrete findings only
 - a strict output format that is easy to verify later
 - for split instances: an explicit list of the files this instance is responsible for, and an instruction not to review files outside the assigned group unless a cross-file dependency is critical
 
-Strategy guidance:
+Strategy guidance (fallback only; the configured `prompt_directive` is the source of truth):
 
 - `quick`: brief the reviewer to stay diff-focused and report only high-confidence correctness, security, or regression risks.
 - `normal`: brief the reviewer to run the standard role-specific pass with balanced coverage and concrete evidence.
@@ -143,6 +145,8 @@ After the reviewer batch finishes, launch `ReviewJudge` with:
 - an instruction to validate, reject, merge, or downgrade findings, and to deduplicate any overlapping findings from same-role instances
 
 If the execution policy says `judge_timeout_seconds > 0`, pass `timeout_seconds` with that value to the judge Task call.
+
+If the configured ReviewJudge entry provides `model_id`, pass `model_id` with that value to the ReviewJudge Task call.
 
 The judge must explicitly call out:
 

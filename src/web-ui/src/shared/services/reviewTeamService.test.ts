@@ -3,6 +3,7 @@ import { configAPI } from '@/infrastructure/api/service-api/ConfigAPI';
 import {
   DEFAULT_REVIEW_TEAM_EXECUTION_POLICY,
   DEFAULT_REVIEW_TEAM_STRATEGY_LEVEL,
+  REVIEW_STRATEGY_DEFINITIONS,
   buildEffectiveReviewTeamManifest,
   buildReviewTeamPromptBlock,
   canUseSubagentAsReviewTeamMember,
@@ -278,28 +279,40 @@ describe('reviewTeamService', () => {
         subagentId: 'ReviewBusinessLogic',
         strategyLevel: 'quick',
         strategySource: 'team',
+        defaultModelSlot: 'fast',
+        strategyDirective: REVIEW_STRATEGY_DEFINITIONS.quick.promptDirective,
       }),
       expect.objectContaining({
         subagentId: 'ReviewPerformance',
         strategyLevel: 'quick',
         strategySource: 'team',
+        defaultModelSlot: 'fast',
+        strategyDirective: REVIEW_STRATEGY_DEFINITIONS.quick.promptDirective,
       }),
       expect.objectContaining({
         subagentId: 'ReviewSecurity',
         strategyLevel: 'deep',
         strategySource: 'member',
+        model: 'primary',
+        defaultModelSlot: 'primary',
+        strategyDirective: REVIEW_STRATEGY_DEFINITIONS.deep.promptDirective,
       }),
     ]);
     expect(manifest.enabledExtraReviewers[0]).toMatchObject({
       subagentId: 'ExtraEnabled',
       strategyLevel: 'normal',
       strategySource: 'member',
+      defaultModelSlot: 'fast',
+      strategyDirective: REVIEW_STRATEGY_DEFINITIONS.normal.promptDirective,
     });
 
     const promptBlock = buildReviewTeamPromptBlock(team, manifest);
     expect(promptBlock).toContain('- team_strategy: quick');
     expect(promptBlock).toContain('subagent_type: ReviewSecurity');
     expect(promptBlock).toContain('strategy: deep');
+    expect(promptBlock).toContain('model_id: primary');
+    expect(promptBlock).toContain(`prompt_directive: ${REVIEW_STRATEGY_DEFINITIONS.deep.promptDirective}`);
+    expect(promptBlock).toContain('pass model_id with that value to the matching Task call');
     expect(promptBlock).toContain('Token/time impact: approximately 1.8-2.5x token usage and 1.5-2.5x runtime.');
   });
 
