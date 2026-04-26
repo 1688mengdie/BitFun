@@ -397,6 +397,7 @@
     "openModelSettings": "Open model settings",
     "copyDiagnostics": "Copy diagnostics",
     "diagnosticsCopied": "Diagnostics copied",
+    "diagnosticsCopyFailed": "Failed to copy diagnostics",
     "diagnosticsTitle": "=== Deep Review Interruption Diagnostics ===",
     "diagnosticsErrorType": "Error type",
     "diagnosticsDescription": "Description",
@@ -777,6 +778,7 @@
       "untitled": "Untitled Task",
       "statusLabel": "Status",
       "promptLabel": "Task Prompt",
+      "reviewerContextLabel": "Reviewer",
       "errorLabel": "Error",
       "resultLabel": "Result",
       "noData": "Unable to load task data",
@@ -792,8 +794,8 @@
     },
     "timeout": {
       "disableTooltip": "Disable timeout",
-      "enableTooltip": "Re-enable timeout",
       "disableLabel": "Ignore limit",
+      "enableTooltip": "Re-enable timeout",
       "enableLabel": "Restore limit",
       "restoreShort": "Restore ({{seconds}}s left)"
     },
@@ -1143,6 +1145,7 @@
         "certainty": "Certainty",
         "location": "Location",
         "noSelectionHint": "Select at least one remediation item to start fixing.",
+        "ungrouped": "Other",
         "startFix": "Start fixing",
         "fixAndReview": "Fix and re-review",
         "cancel": "Cancel",

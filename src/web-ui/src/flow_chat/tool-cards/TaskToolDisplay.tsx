@@ -18,6 +18,8 @@ import { BaseToolCard } from './BaseToolCard';
 import { taskCollapseStateManager } from '../store/TaskCollapseStateManager';
 import { useToolCardHeightContract } from './useToolCardHeightContract';
 import { ToolTimeoutIndicator } from './ToolTimeoutIndicator';
+import { getReviewerContextBySubagentId } from '@/shared/services/reviewTeamService';
+import type { ReviewerContext } from '@/shared/services/reviewTeamService';
 import './TaskToolDisplay.scss';
 import './ModelThinkingDisplay.scss';
 
@@ -114,22 +116,32 @@ export const TaskToolDisplay: React.FC<ToolCardProps> = ({
 
   const getTaskInput = () => {
     if (!toolCall?.input) return null;
-    
+
     const isEarlyDetection = toolCall.input._early_detection === true;
     const isPartialParams = toolCall.input._partial_params === true;
-    
+
     if (isEarlyDetection || isPartialParams) {
       return null;
     }
-    
+
     const inputKeys = Object.keys(toolCall.input).filter(key => !key.startsWith('_'));
     if (inputKeys.length === 0) return null;
-    
+
     const { description, prompt, subagent_type } = toolCall.input;
+    const agentType = subagent_type || 'Not provided';
+
+    // For built-in review-team reviewers, surface role context instead of
+    // the raw prompt so internal directives stay private.
+    const reviewerContext: ReviewerContext | null =
+      agentType !== 'Not provided'
+        ? getReviewerContextBySubagentId(agentType)
+        : null;
+
     return {
       description: description || (prompt ? truncateByVisualWidth(prompt, 70) : 'Not provided'),
       prompt: prompt || 'Not provided',
-      agentType: subagent_type || 'Not provided'
+      agentType,
+      reviewerContext,
     };
   };
 
@@ -191,7 +203,11 @@ export const TaskToolDisplay: React.FC<ToolCardProps> = ({
   }, [isFailed, isExpanded, updateCardExpandedState]);
 
   const showHeaderExpandHint =
-    !isFailed && (hasInterruptionNote || hasRealPrompt || needsConfirmation);
+    !isFailed &&
+    (hasInterruptionNote ||
+      hasRealPrompt ||
+      needsConfirmation ||
+      Boolean(taskInput?.reviewerContext));
 
   const taskHeaderLine = useMemo(() => {
     const desc =
@@ -311,7 +327,12 @@ export const TaskToolDisplay: React.FC<ToolCardProps> = ({
       return null;
     }
 
-    if (!hasInterruptionNote && !hasRealPrompt && !needsConfirmation) {
+    if (
+      !hasInterruptionNote &&
+      !hasRealPrompt &&
+      !needsConfirmation &&
+      !taskInput?.reviewerContext
+    ) {
       return null;
     }
 
@@ -323,10 +344,27 @@ export const TaskToolDisplay: React.FC<ToolCardProps> = ({
               <AlertTriangle size={14} strokeWidth={2} aria-hidden />
               <span>{interruptionNote}</span>
             </div>
-            {(hasRealPrompt || needsConfirmation) && <div className="task-interruption-divider" aria-hidden />}
+            {(hasRealPrompt || needsConfirmation || taskInput?.reviewerContext) && (
+              <div className="task-interruption-divider" aria-hidden />
+            )}
           </>
         )}
-        {hasRealPrompt && (
+        {taskInput?.reviewerContext ? (
+          <div className="task-reviewer-context">
+            <div className="task-reviewer-context__role" style={{ color: taskInput.reviewerContext.accentColor }}>
+              {taskInput.reviewerContext.roleName}
+            </div>
+            <div className="task-reviewer-context__description">
+              {taskInput.reviewerContext.description}
+            </div>
+            <ul className="task-reviewer-context__responsibilities">
+              {taskInput.reviewerContext.responsibilities.map((resp, idx) => (
+                <li key={idx}>{resp}</li>
+              ))}
+            </ul>
+          </div>
+        ) : (
+          hasRealPrompt && (
           <div
             className={`thinking-content-wrapper task-prompt-wrapper${promptScrollState.hasScroll ? ' has-scroll' : ''}${
               promptScrollState.atTop ? ' at-top' : ''
@@ -344,6 +382,7 @@ export const TaskToolDisplay: React.FC<ToolCardProps> = ({
               />
             </div>
           </div>
+          )
         )}
         {needsConfirmation && (
           <div className="tool-actions">

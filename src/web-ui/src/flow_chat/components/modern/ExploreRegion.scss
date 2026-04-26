@@ -2,6 +2,7 @@
 
 .explore-region {
   position: relative;
+  overflow: hidden;
   padding: 0 3rem; // Match model-round-item horizontal padding.
 
   @media (max-width: 768px) {
