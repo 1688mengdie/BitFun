@@ -12,6 +12,7 @@ import {
   MessageSquare,
   Play,
   Copy,
+  Minimize2,
 } from 'lucide-react';
 import { Button, Checkbox, Tooltip } from '@/component-library';
 import { useReviewActionBarStore, type ReviewActionPhase } from '../../store/deepReviewActionBarStore';
@@ -40,6 +41,7 @@ const PHASE_CONFIG: Record<ReviewActionPhase, {
   fix_completed: { icon: CheckCircle, iconClass: 'deep-review-action-bar__icon--success', variant: 'success' },
   fix_failed: { icon: AlertCircle, iconClass: 'deep-review-action-bar__icon--error', variant: 'error' },
   fix_timeout: { icon: Clock, iconClass: 'deep-review-action-bar__icon--warning', variant: 'warning' },
+  fix_interrupted: { icon: AlertTriangle, iconClass: 'deep-review-action-bar__icon--warning', variant: 'warning' },
   review_interrupted: { icon: AlertTriangle, iconClass: 'deep-review-action-bar__icon--warning', variant: 'warning' },
   resume_blocked: { icon: AlertTriangle, iconClass: 'deep-review-action-bar__icon--error', variant: 'error' },
   resume_running: { icon: Loader2, iconClass: 'deep-review-action-bar__icon--loading', variant: 'loading' },
@@ -69,6 +71,8 @@ export const ReviewActionBar: React.FC = () => {
     customInstructions,
     errorMessage,
     interruption,
+    completedRemediationIds,
+    remainingFixIds,
   } = store;
 
   const [showCustomInput, setShowCustomInput] = useState(false);
@@ -117,15 +121,17 @@ export const ReviewActionBar: React.FC = () => {
     store.toggleGroupRemediation(groupId as RemediationGroupId);
   }, [store]);
 
-  const handleStartFixing = useCallback(async (rerunReview: boolean) => {
+  const handleStartFixing = useCallback(async (rerunReview: boolean, overrideSelectedIds?: Set<string>) => {
     if (!reviewData || !childSessionId) return;
 
+    const idsToFix = overrideSelectedIds ?? selectedRemediationIds;
     const action = rerunReview ? 'fix-review' : 'fix';
     let prompt = buildSelectedReviewRemediationPrompt({
       reviewData,
-      selectedIds: selectedRemediationIds,
+      selectedIds: idsToFix,
       rerunReview,
       reviewMode,
+      completedItems: [...completedRemediationIds],
     });
 
     if (!prompt) return;
@@ -175,7 +181,7 @@ export const ReviewActionBar: React.FC = () => {
     } finally {
       store.setActiveAction(null);
     }
-  }, [reviewData, childSessionId, selectedRemediationIds, customInstructions, reviewMode, isDeepReview, store, t]);
+  }, [reviewData, childSessionId, selectedRemediationIds, customInstructions, reviewMode, isDeepReview, store, t, completedRemediationIds]);
 
   const handleFillBackInput = useCallback(() => {
     if (!reviewData) return;
@@ -203,6 +209,10 @@ export const ReviewActionBar: React.FC = () => {
 
   const handleDismiss = useCallback(() => {
     store.dismiss();
+  }, [store]);
+
+  const handleMinimize = useCallback(() => {
+    store.minimize();
   }, [store]);
 
   const handleContinueReview = useCallback(async () => {
@@ -243,48 +253,76 @@ export const ReviewActionBar: React.FC = () => {
     }
   }, [childSessionId, interruption, store, t]);
 
-  const handleCopyDiagnostics = useCallback(() => {
+  const handleContinueFix = useCallback(async () => {
+    if (!reviewData || !childSessionId || remainingFixIds.length === 0) return;
+
+    const remainingSet = new Set(remainingFixIds);
+    store.setSelectedRemediationIds(remainingSet);
+
+    await handleStartFixing(false, remainingSet);
+  }, [reviewData, childSessionId, remainingFixIds, store, handleStartFixing]);
+
+  const handleCopyDiagnostics = useCallback(async () => {
     const detail = interruption?.errorDetail;
     if (!detail) return;
 
     const presentation = getAiErrorPresentation(detail);
 
-    const lines: string[] = [];
-    lines.push(t('deepReviewActionBar.diagnosticsTitle', { defaultValue: '=== Deep Review Interruption Diagnostics ===' }));
-    lines.push('');
-
-    const categoryLabel = t(presentation.titleKey, { defaultValue: presentation.category });
-    const categoryMessage = t(presentation.messageKey, { defaultValue: '' });
-    lines.push(`${t('deepReviewActionBar.diagnosticsErrorType', { defaultValue: 'Error type' })}: ${categoryLabel} (${presentation.category})`);
-    if (categoryMessage) {
-      lines.push(`${t('deepReviewActionBar.diagnosticsDescription', { defaultValue: 'Description' })}: ${categoryMessage}`);
-    }
-    lines.push('');
-
-    if (presentation.actions.length > 0) {
-      const actionLabels = presentation.actions.map((action) => {
-        return t(action.labelKey, { defaultValue: action.code });
-      });
-      lines.push(`${t('deepReviewActionBar.diagnosticsSuggestedActions', { defaultValue: 'Suggested actions' })}: ${actionLabels.join(', ')}`);
+    // Prefer the sanitized diagnostics from aiErrorPresenter if available
+    let diagnostics = presentation.diagnostics;
+    if (!diagnostics) {
+      const lines: string[] = [];
+      lines.push(t('deepReviewActionBar.diagnosticsTitle', { defaultValue: '=== Deep Review Interruption Diagnostics ===' }));
       lines.push('');
+
+      const categoryLabel = t(presentation.titleKey, { defaultValue: presentation.category });
+      const categoryMessage = t(presentation.messageKey, { defaultValue: '' });
+      lines.push(`${t('deepReviewActionBar.diagnosticsErrorType', { defaultValue: 'Error type' })}: ${categoryLabel} (${presentation.category})`);
+      if (categoryMessage) {
+        lines.push(`${t('deepReviewActionBar.diagnosticsDescription', { defaultValue: 'Description' })}: ${categoryMessage}`);
+      }
+      lines.push('');
+
+      if (presentation.actions.length > 0) {
+        const actionLabels = presentation.actions.map((action) => {
+          return t(action.labelKey, { defaultValue: action.code });
+        });
+        lines.push(`${t('deepReviewActionBar.diagnosticsSuggestedActions', { defaultValue: 'Suggested actions' })}: ${actionLabels.join(', ')}`);
+        lines.push('');
+      }
+
+      lines.push(`${t('deepReviewActionBar.diagnosticsTechnicalDetails', { defaultValue: 'Technical details' })}:`);
+      lines.push(`  - category: ${detail.category ?? 'unknown'}`);
+      if (detail.provider) lines.push(`  - provider: ${detail.provider}`);
+      if (detail.providerCode) lines.push(`  - provider code: ${detail.providerCode}`);
+      if (detail.providerMessage) {
+        const msg = detail.providerMessage.length > 500
+          ? `${detail.providerMessage.slice(0, 500)}... [truncated]`
+          : detail.providerMessage;
+        lines.push(`  - provider message: ${msg}`);
+      }
+      if (detail.httpStatus) lines.push(`  - HTTP status: ${detail.httpStatus}`);
+      if (detail.requestId) lines.push(`  - request ID: ${detail.requestId}`);
+      if (detail.rawMessage) {
+        const raw = detail.rawMessage.length > 500
+          ? `${detail.rawMessage.slice(0, 500)}... [truncated]`
+          : detail.rawMessage;
+        lines.push(`  - raw message: ${raw}`);
+      }
+
+      diagnostics = lines.join('\n');
     }
 
-    lines.push(`${t('deepReviewActionBar.diagnosticsTechnicalDetails', { defaultValue: 'Technical details' })}:`);
-    lines.push(`  - category: ${detail.category ?? 'unknown'}`);
-    if (detail.provider) lines.push(`  - provider: ${detail.provider}`);
-    if (detail.providerCode) lines.push(`  - provider code: ${detail.providerCode}`);
-    if (detail.providerMessage) lines.push(`  - provider message: ${detail.providerMessage}`);
-    if (detail.httpStatus) lines.push(`  - HTTP status: ${detail.httpStatus}`);
-    if (detail.requestId) lines.push(`  - request ID: ${detail.requestId}`);
-    if (detail.rawMessage) {
-      lines.push(`  - raw message: ${detail.rawMessage}`);
+    try {
+      await navigator.clipboard.writeText(diagnostics);
+      notificationService.success(t('deepReviewActionBar.diagnosticsCopied', {
+        defaultValue: 'Diagnostics copied',
+      }), { duration: 2500 });
+    } catch {
+      notificationService.error(t('deepReviewActionBar.diagnosticsCopyFailed', {
+        defaultValue: 'Failed to copy diagnostics',
+      }), { duration: 2500 });
     }
-
-    const diagnostics = lines.join('\n');
-    void navigator.clipboard?.writeText(diagnostics);
-    notificationService.success(t('deepReviewActionBar.diagnosticsCopied', {
-      defaultValue: 'Diagnostics copied',
-    }), { duration: 2500 });
   }, [interruption, t]);
 
   const phaseTitle = useMemo(() => {
@@ -343,8 +381,8 @@ export const ReviewActionBar: React.FC = () => {
       <button
         type="button"
         className="deep-review-action-bar__close"
-        onClick={handleDismiss}
-        aria-label={t('deepReviewActionBar.dismiss', { defaultValue: 'Dismiss' })}
+        onClick={handleMinimize}
+        aria-label={t('deepReviewActionBar.minimize', { defaultValue: 'Minimize' })}
       >
         <X size={16} />
       </button>
@@ -421,23 +459,35 @@ export const ReviewActionBar: React.FC = () => {
                       </span>
                     </button>
                     <div className="deep-review-action-bar__remediation-group-items">
-                      {items.map((item: ReviewRemediationItem) => (
-                        <label key={item.id} className="deep-review-action-bar__remediation-item">
-                          <Checkbox
-                            checked={selectedRemediationIds.has(item.id)}
-                            onChange={() => handleToggleRemediation(item.id)}
-                            size="small"
-                          />
-                          <span className="deep-review-action-bar__remediation-text" title={item.plan}>
-                            {item.requiresDecision && (
-                              <span className="deep-review-action-bar__remediation-tag">
-                                {t('reviewActionBar.needsDecisionTag', { defaultValue: 'Decision' })}
-                              </span>
-                            )}
-                            {item.plan}
-                          </span>
-                        </label>
-                      ))}
+                      {items.map((item: ReviewRemediationItem) => {
+                        const isCompleted = completedRemediationIds.has(item.id);
+                        return (
+                          <label
+                            key={item.id}
+                            className={`deep-review-action-bar__remediation-item ${
+                              isCompleted ? 'deep-review-action-bar__remediation-item--completed' : ''
+                            }`}
+                          >
+                            <Checkbox
+                              checked={selectedRemediationIds.has(item.id)}
+                              onChange={() => !isCompleted && handleToggleRemediation(item.id)}
+                              disabled={isCompleted}
+                              size="small"
+                            />
+                            <span className="deep-review-action-bar__remediation-text" title={item.plan}>
+                              {isCompleted && (
+                                <CheckCircle size={12} className="deep-review-action-bar__completed-icon" />
+                              )}
+                              {item.requiresDecision && (
+                                <span className="deep-review-action-bar__remediation-tag">
+                                  {t('reviewActionBar.needsDecisionTag', { defaultValue: 'Decision' })}
+                                </span>
+                              )}
+                              {item.plan}
+                            </span>
+                          </label>
+                        );
+                      })}
                     </div>
                   </div>
                 );
@@ -563,6 +613,38 @@ export const ReviewActionBar: React.FC = () => {
           </>
         )}
 
+        {phase === 'fix_interrupted' && (
+          <>
+            <div className="deep-review-action-bar__interruption-notice">
+              <AlertTriangle size={16} className="deep-review-action-bar__interruption-icon" />
+              <span>
+                {t('deepReviewActionBar.fixInterrupted', {
+                  defaultValue: 'Fix was interrupted. {{count}} items remain.',
+                  count: remainingFixIds.length,
+                })}
+              </span>
+            </div>
+            <Button
+              variant="primary"
+              size="small"
+              onClick={() => void handleContinueFix()}
+            >
+              <Play size={14} />
+              {t('deepReviewActionBar.continueFix', {
+                defaultValue: 'Continue fixing {{count}} items',
+                count: remainingFixIds.length,
+              })}
+            </Button>
+            <Button
+              variant="secondary"
+              size="small"
+              onClick={() => store.skipRemainingFixes()}
+            >
+              {t('deepReviewActionBar.skipRemaining', { defaultValue: 'Skip remaining' })}
+            </Button>
+          </>
+        )}
+
         {(phase === 'fix_completed' || phase === 'fix_failed' || phase === 'fix_timeout' || phase === 'review_error' || phase === 'resume_failed') && (
           <Button
             variant="ghost"
@@ -570,6 +652,17 @@ export const ReviewActionBar: React.FC = () => {
             onClick={handleDismiss}
           >
             {t('deepReviewActionBar.close', { defaultValue: 'Close' })}
+          </Button>
+        )}
+
+        {(phase === 'review_completed' || phase === 'fix_interrupted') && (
+          <Button
+            variant="ghost"
+            size="small"
+            onClick={handleMinimize}
+          >
+            <Minimize2 size={14} />
+            {t('deepReviewActionBar.minimize', { defaultValue: 'Minimize' })}
           </Button>
         )}
       </div>

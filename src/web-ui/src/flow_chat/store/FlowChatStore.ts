@@ -48,7 +48,7 @@ export class FlowChatStore {
   private state: FlowChatState;
   private listeners: Set<(state: FlowChatState) => void> = new Set();
   private silentMode = false;
-  private onPersistUnreadCompletion?: (sessionId: string, value: 'completed' | 'error' | undefined) => void;
+  private onPersistUnreadCompletion?: (sessionId: string, value: 'completed' | 'error' | 'interrupted' | undefined) => void;
 
   private constructor() {
     this.clearOldStorage();
@@ -201,7 +201,7 @@ export class FlowChatStore {
    * Called by FlowChatManager during initialization.
    */
   public registerPersistUnreadCompletionCallback(
-    callback: (sessionId: string, value: 'completed' | 'error' | undefined) => void
+    callback: (sessionId: string, value: 'completed' | 'error' | 'interrupted' | undefined) => void
   ): void {
     this.onPersistUnreadCompletion = callback;
   }
@@ -1270,6 +1270,7 @@ export class FlowChatStore {
 
       const updatedSession: Session = {
         ...session,
+        lastActiveAt: timestamp,
         lastFinishedAt: timestamp,
       };
 
@@ -1285,7 +1286,7 @@ export class FlowChatStore {
 
   public markSessionUnreadCompletion(
     sessionId: string,
-    completionKind: 'completed' | 'error'
+    completionKind: 'completed' | 'error' | 'interrupted'
   ): void {
     this.setState(prev => {
       const session = prev.sessions.get(sessionId);
@@ -1723,6 +1724,10 @@ export class FlowChatStore {
           sessions: newSessions,
         };
       });
+      
+      // Reset state machine to IDLE after loading history
+      // This handles the case where restoreSession triggered events that left the state machine in PROCESSING
+      stateMachineManager.reset(sessionId);
     } catch (error) {
       log.error('Failed to load session history', { sessionId, error });
       throw error;
@@ -1921,7 +1926,6 @@ export class FlowChatStore {
       const updatedSession = {
         ...session,
         todos: updatedTodos,
-        lastActiveAt: Date.now()
       };
 
       const newSessions = new Map(prev.sessions);
@@ -1966,7 +1970,6 @@ export class FlowChatStore {
       const updatedSession = {
         ...session,
         todos: [...todos],
-        lastActiveAt: Date.now()
       };
 
       const newSessions = new Map(prev.sessions);
