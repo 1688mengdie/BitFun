@@ -32,6 +32,7 @@ export const TaskToolDisplay: React.FC<ToolCardProps> = ({
   sessionId
 }) => {
   const { t } = useTranslation('flow-chat');
+  const { t: tAgents } = useTranslation('scenes/agents');
   const { toolCall, toolResult, status, requiresConfirmation, userConfirmed } = toolItem;
   const toolId = toolItem.id ?? toolCall?.id;
   
@@ -327,11 +328,13 @@ export const TaskToolDisplay: React.FC<ToolCardProps> = ({
       return null;
     }
 
+    const rc = taskInput?.reviewerContext;
+
     if (
       !hasInterruptionNote &&
       !hasRealPrompt &&
       !needsConfirmation &&
-      !taskInput?.reviewerContext
+      !rc
     ) {
       return null;
     }
@@ -349,17 +352,25 @@ export const TaskToolDisplay: React.FC<ToolCardProps> = ({
             )}
           </>
         )}
-        {taskInput?.reviewerContext ? (
+        {rc ? (
           <div className="task-reviewer-context">
-            <div className="task-reviewer-context__role" style={{ color: taskInput.reviewerContext.accentColor }}>
-              {taskInput.reviewerContext.roleName}
+            <div className="task-reviewer-context__role" style={{ color: rc.accentColor }}>
+              {tAgents(`reviewTeams.members.${rc.definitionKey}.role`, {
+                defaultValue: rc.roleName,
+              })}
             </div>
             <div className="task-reviewer-context__description">
-              {taskInput.reviewerContext.description}
+              {tAgents(`reviewTeams.members.${rc.definitionKey}.description`, {
+                defaultValue: rc.description,
+              })}
             </div>
             <ul className="task-reviewer-context__responsibilities">
-              {taskInput.reviewerContext.responsibilities.map((resp, idx) => (
-                <li key={idx}>{resp}</li>
+              {rc.responsibilities.map((resp, idx) => (
+                <li key={idx}>
+                  {tAgents(`reviewTeams.members.${rc.definitionKey}.responsibilities.${idx}`, {
+                    defaultValue: resp,
+                  })}
+                </li>
               ))}
             </ul>
           </div>
