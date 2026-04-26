@@ -7,6 +7,24 @@
   background: var(--color-bg-flowchat);
   overflow: hidden;
 
+  /* Remove inner card borders so terminal cards share the region border */
+  .base-tool-card-wrapper {
+    border: none;
+    background: transparent;
+    backdrop-filter: none;
+    margin: 0;
+    border-radius: 0;
+
+    &:hover {
+      border: none;
+      box-shadow: none;
+    }
+
+    &:active {
+      box-shadow: none;
+    }
+  }
+
   @media (max-width: 768px) {
     margin: 0 -1.5rem;
   }
@@ -19,7 +37,17 @@
 
   .terminal-region__content {
     position: relative;
-    padding: 0;
+    padding: 4px 0;
+
+    /* Tighter spacing for cards inside a terminal group */
+    .flowchat-tool-wrapper {
+      margin-bottom: 0.25rem;
+      padding: 0 10px;
+
+      &:last-child {
+        margin-bottom: 0;
+      }
+    }
 
     > :first-child {
       margin-top: 0;
@@ -77,19 +105,34 @@
     transform: rotate(0deg);
   }
 
-  .terminal-region__tool-icon {
+  .terminal-region__type-icon {
     flex-shrink: 0;
-    opacity: 0.6;
     color: var(--color-text-secondary);
+    opacity: 0.75;
   }
 
   .terminal-region__summary {
-    opacity: 0.8;
     flex: 1;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    transition: color 0.2s ease;
+
+    &--success {
+      color: var(--color-success, #22c55e);
+      opacity: 0.85;
+    }
+
+    &--failed {
+      color: var(--color-error, #ef4444);
+      opacity: 0.9;
+    }
+
+    &--running {
+      color: var(--color-accent-500, #3b82f6);
+      opacity: 0.9;
+    }
   }
 
   .terminal-region__status-dot {
@@ -125,11 +168,16 @@
 
   .terminal-region__content {
     position: relative;
-    padding: 4px 10px;
+    padding: 4px 0;
 
     /* Tighter spacing for cards inside a terminal group */
     .flowchat-tool-wrapper {
       margin-bottom: 0.25rem;
+      padding: 0 10px;
+
+      &:last-child {
+        margin-bottom: 0;
+      }
     }
 
     &::-webkit-scrollbar {

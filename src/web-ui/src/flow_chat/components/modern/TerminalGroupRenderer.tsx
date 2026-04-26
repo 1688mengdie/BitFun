@@ -4,7 +4,7 @@
  */
 
 import React, { useRef, useMemo, useCallback, useEffect, useState } from 'react';
-import { ChevronRight, Terminal } from 'lucide-react';
+import { ChevronRight } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { FlowToolItem } from '../../types/flow-chat';
 import { FlowToolCard } from '../FlowToolCard';
@@ -212,6 +212,13 @@ export const TerminalGroupRenderer: React.FC<TerminalGroupRendererProps> = React
     return 'terminal-region__status-dot--success';
   }, [stats]);
 
+  const statusSummaryClass = useMemo(() => {
+    const { failed, running } = stats;
+    if (running > 0) return 'terminal-region__summary--running';
+    if (failed > 0) return 'terminal-region__summary--failed';
+    return 'terminal-region__summary--success';
+  }, [stats]);
+
   const handleToggle = useCallback(() => {
     if (isCollapsed) {
       applyExpandedState(false, true, () => {
@@ -244,8 +251,43 @@ export const TerminalGroupRenderer: React.FC<TerminalGroupRendererProps> = React
       {allowManualToggle && (
         <div className="terminal-region__header" onClick={handleToggle}>
           <ChevronRight size={14} className="terminal-region__icon" />
-          <Terminal size={14} className="terminal-region__tool-icon" />
-          <span className="terminal-region__summary">{displaySummary}</span>
+          <svg
+            className="terminal-region__type-icon"
+            width="16"
+            height="16"
+            viewBox="0 0 16 16"
+            fill="none"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <rect
+              x="1.5"
+              y="2.5"
+              width="13"
+              height="11"
+              rx="1.5"
+              stroke="currentColor"
+              strokeWidth="1.2"
+              opacity="0.5"
+            />
+            <path
+              d="M4 6L6 8L4 10"
+              stroke="currentColor"
+              strokeWidth="1.2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              opacity="0.7"
+            />
+            <path
+              d="M8 10H11"
+              stroke="currentColor"
+              strokeWidth="1.2"
+              strokeLinecap="round"
+              opacity="0.5"
+            />
+          </svg>
+          <span className={`terminal-region__summary ${statusSummaryClass}`}>
+            {displaySummary}
+          </span>
           <span className={`terminal-region__status-dot ${statusDotClass}`} />
         </div>
       )}
