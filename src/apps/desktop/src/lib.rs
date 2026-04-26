@@ -770,6 +770,10 @@ pub async fn run() {
             api::announcement_api::never_show_announcement,
             api::announcement_api::trigger_announcement,
             api::announcement_api::get_announcement_tips,
+            // Debug API (no-op stubs in release builds)
+            api::debug_api::debug_element_picked,
+            api::debug_api::debug_open_devtools,
+            api::debug_api::debug_close_devtools,
         ])
         .run(tauri::generate_context!());
     if let Err(e) = run_result {
