@@ -73,6 +73,7 @@ pub struct AppState {
     pub ai_rules_service: Arc<ai_rules::AIRulesService>,
     pub agent_registry: Arc<agents::AgentRegistry>,
     pub mcp_service: Option<Arc<mcp::MCPService>>,
+    pub acp_client_service: Option<Arc<bitfun_acp::AcpClientService>>,
     pub token_usage_service: Arc<token_usage::TokenUsageService>,
     pub miniapp_manager: Arc<MiniAppManager>,
     pub js_worker_pool: Option<Arc<JsWorkerPool>>,
@@ -142,6 +143,7 @@ impl AppState {
                 None
             }
         };
+        let acp_client_service = Some(bitfun_acp::AcpClientService::new(config_service.clone()));
         let path_manager = workspace_service.path_manager().clone();
 
         let announcement_scheduler = Arc::new(
@@ -335,6 +337,7 @@ impl AppState {
             ai_rules_service,
             agent_registry,
             mcp_service,
+            acp_client_service,
             token_usage_service,
             miniapp_manager,
             js_worker_pool,
