@@ -587,6 +587,8 @@ pub async fn run() {
             api::mcp_api::cancel_mcp_remote_oauth,
             initialize_acp_clients,
             get_acp_clients,
+            probe_acp_client_requirements,
+            predownload_acp_client_adapter,
             start_acp_client,
             stop_acp_client,
             restart_acp_client,
