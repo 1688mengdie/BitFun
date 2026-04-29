@@ -5,6 +5,10 @@ import {CornerUpLeft, Link2, Square, Sparkles} from 'lucide-react';
 import {FlowChatContext} from '../modern/FlowChatContext';
 import {VirtualItemRenderer} from '../modern/VirtualItemRenderer';
 import {ProcessingIndicator} from '../modern/ProcessingIndicator';
+import {
+  shouldReserveProcessingIndicatorSpace,
+  shouldShowProcessingIndicator,
+} from '../modern/processingIndicatorVisibility';
 import {useExploreGroupState} from '../modern/useExploreGroupState';
 import {ScrollToBottomButton} from '@/flow_chat';
 import {flowChatStore} from '../../store/FlowChatStore';
@@ -266,24 +270,19 @@ export const BtwSessionPanel: React.FC<BtwSessionPanelProps> = ({
   }, [isTurnProcessing]);
 
   const showProcessingIndicator = useMemo(() => {
-    if (!isTurnProcessing) return false;
-    if (!lastItem) return true;
+    return shouldShowProcessingIndicator({
+      isTurnProcessing,
+      lastItem,
+      isContentGrowing,
+    });
+  }, [isTurnProcessing, lastItem, isContentGrowing]);
 
-    if (lastItem.type === 'text' || lastItem.type === 'thinking') {
-      const hasContent = 'content' in lastItem && Boolean((lastItem as any).content);
-      if (hasContent && isContentGrowing) {
-        return false;
-      }
-    }
-
-    if (lastItem.type === 'tool') {
-      const toolStatus = (lastItem as any).status;
-      if (toolStatus === 'running' || toolStatus === 'streaming' || toolStatus === 'preparing') {
-        return false;
-      }
-    }
-
-    return true;
+  const reserveProcessingIndicatorSpace = useMemo(() => {
+    return shouldReserveProcessingIndicatorSpace({
+      isTurnProcessing,
+      lastItem,
+      isContentGrowing,
+    });
   }, [isTurnProcessing, lastItem, isContentGrowing]);
 
   const canStopReviewSession =
@@ -298,6 +297,7 @@ export const BtwSessionPanel: React.FC<BtwSessionPanelProps> = ({
   const actionBarChildSessionId = useReviewActionBarStore((s) => s.childSessionId);
   const actionBarCompletedIds = useReviewActionBarStore((s) => s.completedRemediationIds);
   const actionBarRemediationItems = useReviewActionBarStore((s) => s.remediationItems);
+  const actionBarLastSubmittedAction = useReviewActionBarStore((s) => s.lastSubmittedAction);
   const isDeepReview = childKind === 'deep_review';
   const isReviewSession = childKind === 'review' || childKind === 'deep_review';
   const canReturnToParentSession = isReviewSession && Boolean(parentSessionId);
@@ -329,6 +329,46 @@ export const BtwSessionPanel: React.FC<BtwSessionPanelProps> = ({
 
   const remainingCount = actionBarRemediationItems.length - actionBarCompletedIds.size;
   const totalCount = actionBarRemediationItems.length;
+  const minimizedActionLabel = useMemo(() => {
+    switch (actionBarPhase) {
+      case 'fix_running':
+        return actionBarLastSubmittedAction === 'fix-review'
+          ? t('deepReviewActionBar.minimizedFixReview', {
+              defaultValue: 'Fixing and re-reviewing',
+            })
+          : t('deepReviewActionBar.minimizedFix', {
+              defaultValue: 'Fixing',
+            });
+      case 'fix_completed':
+        return t('deepReviewActionBar.minimizedFixCompleted', {
+          defaultValue: 'Fix completed',
+        });
+      case 'fix_failed':
+      case 'fix_timeout':
+      case 'review_error':
+        return t('deepReviewActionBar.minimizedFixFailed', {
+          defaultValue: 'Needs attention',
+        });
+      case 'review_interrupted':
+      case 'resume_blocked':
+      case 'resume_failed':
+        return t('deepReviewActionBar.minimizedReviewInterrupted', {
+          defaultValue: 'Review interrupted',
+        });
+      case 'resume_running':
+        return t('deepReviewActionBar.minimizedResume', {
+          defaultValue: 'Continuing review',
+        });
+      default:
+        return isDeepReview
+          ? t('deepReviewActionBar.minimizedDeep', {
+              defaultValue: 'Deep Review',
+            })
+          : t('deepReviewActionBar.minimizedStandard', {
+              defaultValue: 'Code Review',
+            });
+    }
+  }, [actionBarPhase, actionBarLastSubmittedAction, isDeepReview, t]);
 
   // Detect when a review completes with a remediation plan and auto-show the action bar.
   useEffect(() => {
@@ -494,6 +534,8 @@ export const BtwSessionPanel: React.FC<BtwSessionPanelProps> = ({
 
     const el = actionBarRef.current;
     if (!el) return;
+    const measuredEl =
+      el.querySelector<HTMLElement>('.deep-review-action-bar') ?? el;
 
     const observer = new ResizeObserver((entries) => {
       for (const entry of entries) {
@@ -502,9 +544,9 @@ export const BtwSessionPanel: React.FC<BtwSessionPanelProps> = ({
       }
     });
 
-    observer.observe(el);
+    observer.observe(measuredEl);
     // Initial measurement
-    setActionBarHeight(el.getBoundingClientRect().height);
+    setActionBarHeight(measuredEl.getBoundingClientRect().height);
 
     return () => {
       observer.disconnect();
@@ -632,7 +674,7 @@ export const BtwSessionPanel: React.FC<BtwSessionPanelProps> = ({
               ))}
               <ProcessingIndicator
                 visible={showProcessingIndicator}
-                reserveSpace={isTurnProcessing}
+                reserveSpace={reserveProcessingIndicatorSpace}
               />
             </>
           )}
@@ -645,22 +687,23 @@ export const BtwSessionPanel: React.FC<BtwSessionPanelProps> = ({
         {showMinimizedIndicator && (
           <div className="btw-session-panel__minimized-indicator">
             <button
+              type="button"
               onClick={() => useReviewActionBarStore.getState().restore()}
               className="btw-session-panel__minimized-button"
+              aria-label={t('deepReviewActionBar.restore', {
+                label: minimizedActionLabel,
+                defaultValue: `Open ${minimizedActionLabel}`,
+              })}
             >
               <Sparkles size={14} />
               <span className="btw-session-panel__minimized-text">
-                {isDeepReview
-                  ? t('deepReviewActionBar.minimizedDeep', {
-                      defaultValue: 'Deep Review',
-                    })
-                  : t('deepReviewActionBar.minimizedStandard', {
-                      defaultValue: 'Code Review',
-                    })}
+                {minimizedActionLabel}
               </span>
-              <span className="btw-session-panel__minimized-count">
-                {remainingCount}/{totalCount}
-              </span>
+              {totalCount > 0 && (
+                <span className="btw-session-panel__minimized-count">
+                  {remainingCount}/{totalCount}
+                </span>
+              )}
             </button>
           </div>
         )}

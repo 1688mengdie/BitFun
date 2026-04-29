@@ -41,7 +41,8 @@ export type VirtualItem =
   | { type: 'user-message'; data: DialogTurn['userMessage']; turnId: string }
   | { type: 'model-round'; data: ModelRound; turnId: string; isLastRound: boolean }
   | { type: 'explore-group'; data: ExploreGroupData; turnId: string }
-  | { type: 'image-analyzing'; turnId: string };
+  | { type: 'image-analyzing'; turnId: string }
+  | { type: 'turn-stopped'; turnId: string; finishReason: string };
 
 /**
  * Currently visible turn information
@@ -87,6 +88,10 @@ function hasActiveStreamingNarrative(round: ModelRound): boolean {
 
 function isExploreOnlyRound(round: ModelRound): boolean {
   if (!round.items || round.items.length === 0) return false;
+
+  if (round.renderHints?.disableExploreGrouping === true) {
+    return false;
+  }
 
   if (round.isStreaming && hasActiveStreamingNarrative(round)) {
     return false;
@@ -163,7 +168,6 @@ export function sessionToVirtualItems(session: Session | null): VirtualItem[] {
   
   cachedSession = session;
   cachedDialogTurnsRef = session.dialogTurns;
-  if (!session) return [];
 
   const items: VirtualItem[] = [];
 
@@ -181,7 +185,8 @@ export function sessionToVirtualItems(session: Session | null): VirtualItem[] {
       return;
     }
 
-    const nonEmptyRounds = turn.modelRounds.filter(round => round.items && round.items.length > 0);
+    const nonEmptyRounds = turn.modelRounds
+      .filter(round => round.items && round.items.length > 0);
     
     interface TempExploreGroup {
       rounds: ModelRound[];
@@ -269,6 +274,15 @@ export function sessionToVirtualItems(session: Session | null): VirtualItem[] {
         });
         roundIndex++;
       }
+    }
+
+    // If the turn was stopped abnormally, add a turn-stopped indicator
+    if (turn.finishReason && turn.finishReason !== 'complete' && turn.status === 'completed') {
+      items.push({
+        type: 'turn-stopped',
+        turnId: turn.id,
+        finishReason: turn.finishReason,
+      });
     }
   });
 
