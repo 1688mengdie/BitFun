@@ -192,7 +192,7 @@ export const GlobSearchDisplay: React.FC<ToolCardProps> = ({
         status={status}
         isExpanded={isExpanded}
         onClick={handleClick}
-        className="glob-search-card compact-tool-card-wrapper--dense-command"
+        className="glob-search-card"
         clickable={hasDetails}
         header={
           <CompactToolCardHeader

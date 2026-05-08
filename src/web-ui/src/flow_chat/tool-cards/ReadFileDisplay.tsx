@@ -130,7 +130,7 @@ export const ReadFileDisplay: React.FC<ToolCardProps> = React.memo(({
       status={status}
       isExpanded={false}
       onClick={() => canOpenFile && handleOpenInEditor()}
-      className="read-file-card compact-tool-card-wrapper--dense-command"
+      className="read-file-card"
       clickable={canOpenFile}
       header={
         <CompactToolCardHeader

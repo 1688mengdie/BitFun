@@ -626,7 +626,7 @@ export const TerminalToolCard: React.FC<TerminalToolCardProps> = ({
           status={status}
           isExpanded={false}
           onClick={handleCardClick}
-          className="terminal-tool-card terminal-tool-card--compact-collapsed compact-tool-card-wrapper--dense-command"
+          className="terminal-tool-card terminal-tool-card--compact-collapsed"
           clickable
           header={renderCompactHeader()}
         />

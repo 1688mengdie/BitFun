@@ -326,7 +326,7 @@ export const GitToolDisplay: React.FC<ToolCardProps> = ({
         status={status}
         isExpanded={isExpanded}
         onClick={handleCardClick}
-        className="git-tool-display compact-tool-card-wrapper--dense-command"
+        className="git-tool-display"
         clickable
         header={renderHeader()}
         expandedContent={expandedContent}

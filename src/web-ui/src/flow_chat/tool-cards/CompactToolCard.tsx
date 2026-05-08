@@ -70,7 +70,7 @@ export const CompactToolCard: React.FC<CompactToolCardProps> = ({
 
   return (
     <div
-      className={`compact-tool-card-wrapper${loadingShimmer ? ' compact-tool-card-wrapper--loading-shimmer' : ''} ${className}`.trim()}
+      className={`compact-tool-card-wrapper compact-tool-card-wrapper--dense-command${loadingShimmer ? ' compact-tool-card-wrapper--loading-shimmer' : ''} ${className}`.trim()}
     >
       <div
         className={`compact-tool-card status-${status} ${clickable ? 'clickable' : ''} ${isExpanded ? 'expanded' : ''}`}

@@ -188,7 +188,7 @@ export const LSDisplay: React.FC<ToolCardProps> = ({
         status={status}
         isExpanded={isExpanded}
         onClick={handleClick}
-        className="ls-display-card compact-tool-card-wrapper--dense-command"
+        className="ls-display-card"
         clickable={hasDetails}
         header={
           <CompactToolCardHeader
