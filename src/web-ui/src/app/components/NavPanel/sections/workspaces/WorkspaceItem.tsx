@@ -36,58 +36,7 @@ import {
 import { SSHContext } from '@/features/ssh-remote/SSHRemoteContext';
 import { useWorkspaceSearchIndex } from '@/tools/file-explorer';
 
-function useStickyObserver(ref: React.RefObject<HTMLDivElement | null>) {
-  const [isStuck, setIsStuck] = useState(false);
 
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-
-    // Find the nearest scrollable ancestor to use as the observer root.
-    // The sticky element is pinned relative to this scroll container.
-    let scrollContainer: Element | null = el.parentElement;
-    while (scrollContainer) {
-      const style = window.getComputedStyle(scrollContainer);
-      const isScrollable =
-        (style.overflowY === 'auto' || style.overflowY === 'scroll') &&
-        scrollContainer.scrollHeight > scrollContainer.clientHeight;
-      if (isScrollable) break;
-      scrollContainer = scrollContainer.parentElement;
-    }
-
-    // Place a sentinel element as a sibling right before the sticky element.
-    // When the sentinel scrolls out of the top of the container,
-    // the sticky element is considered "stuck".
-    const sentinel = document.createElement('div');
-    sentinel.style.position = 'static';
-    sentinel.style.height = '1px';
-    sentinel.style.width = '1px';
-    sentinel.style.pointerEvents = 'none';
-    sentinel.style.visibility = 'hidden';
-    el.parentElement?.insertBefore(sentinel, el);
-
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        // Sentinel is not intersecting → sticky element has been pushed to the top
-        setIsStuck(!entry.isIntersecting);
-      },
-      {
-        root: scrollContainer,
-        threshold: 0,
-        rootMargin: '-1px 0px 0px 0px',
-      }
-    );
-
-    observer.observe(sentinel);
-
-    return () => {
-      observer.disconnect();
-      sentinel.remove();
-    };
-  }, [ref]);
-
-  return isStuck;
-}
 interface WorkspaceItemProps {
   workspace: WorkspaceInfo;
   isActive: boolean;
@@ -144,7 +93,6 @@ const WorkspaceItem: React.FC<WorkspaceItemProps> = ({
   const menuAnchorRef = useRef<HTMLDivElement>(null);
   const menuPopoverRef = useRef<HTMLDivElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
-  const isCardStuck = useStickyObserver(cardRef);
   const [menuPosition, setMenuPosition] = useState<{ top: number; left: number } | null>(null);
   const isNamedAssistantWorkspace =
     workspace.workspaceKind === WorkspaceKind.Assistant &&
@@ -399,6 +347,7 @@ const WorkspaceItem: React.FC<WorkspaceItemProps> = ({
   const handleCardNameClick = useCallback(async () => {
     if (!isActive) {
       await setActiveWorkspace(workspace.id);
+      setSessionsCollapsed(false);
     } else {
       setSessionsCollapsed(prev => !prev);
     }
@@ -692,18 +641,17 @@ const WorkspaceItem: React.FC<WorkspaceItemProps> = ({
       aria-grabbed={draggable ? isDragging : undefined}>
         <div
           ref={cardRef}
-          className={[
-            'bitfun-nav-panel__assistant-item-card',
-            isCardStuck && 'is-stuck',
-          ].filter(Boolean).join(' ')}
+          className="bitfun-nav-panel__assistant-item-card"
           draggable={draggable}
           onDragStart={onDragStart}
           onDragEnd={onDragEnd}
+          onClick={() => { void handleCardNameClick(); }}
+          style={{ cursor: 'pointer' }}
         >
           <button
             type="button"
             className="bitfun-nav-panel__assistant-item-collapse-btn"
-            onClick={handleCollapseToggle}
+            onClick={e => { e.stopPropagation(); handleCollapseToggle(); }}
             aria-label={sessionsCollapsed ? t('nav.workspaces.expandSessions') : t('nav.workspaces.collapseSessions')}
             aria-expanded={!sessionsCollapsed}
           >
@@ -722,23 +670,25 @@ const WorkspaceItem: React.FC<WorkspaceItemProps> = ({
               </span>
             </span>
           </button>
-          <button
-            type="button"
-            className="bitfun-nav-panel__assistant-item-name-btn"
-            onClick={() => { void handleCardNameClick(); }}
-          >
-            <span className="bitfun-nav-panel__assistant-item-label">{workspaceDisplayName}</span>
-            {isDefaultAssistantWorkspace ? (
-              <span
-                className="bitfun-nav-panel__assistant-item-badge"
-                title={t('nav.workspaces.primaryAssistant')}
-              >
-                {t('nav.workspaces.primaryAssistant')}
-              </span>
-            ) : null}
-          </button>
+          <Tooltip content={workspace.rootPath} placement="right" followCursor>
+            <button
+              type="button"
+              className="bitfun-nav-panel__assistant-item-name-btn"
+              onClick={e => { e.stopPropagation(); void handleCardNameClick(); }}
+            >
+              <span className="bitfun-nav-panel__assistant-item-label">{workspaceDisplayName}</span>
+              {isDefaultAssistantWorkspace ? (
+                <span
+                  className="bitfun-nav-panel__assistant-item-badge"
+                  title={t('nav.workspaces.primaryAssistant')}
+                >
+                  {t('nav.workspaces.primaryAssistant')}
+                </span>
+              ) : null}
+            </button>
+          </Tooltip>
 
-          <div className="bitfun-nav-panel__assistant-item-menu" ref={menuRef}>
+          <div className="bitfun-nav-panel__assistant-item-menu" ref={menuRef} onClick={e => e.stopPropagation()}>
             <Tooltip content={t('nav.items.project')} placement="right" followCursor>
               <button
                 type="button"
@@ -870,18 +820,17 @@ const WorkspaceItem: React.FC<WorkspaceItemProps> = ({
     aria-grabbed={draggable ? isDragging : undefined}>
       <div
         ref={cardRef}
-        className={[
-          'bitfun-nav-panel__workspace-item-card',
-          isCardStuck && 'is-stuck',
-        ].filter(Boolean).join(' ')}
+        className="bitfun-nav-panel__workspace-item-card"
         draggable={draggable}
         onDragStart={onDragStart}
         onDragEnd={onDragEnd}
+        onClick={() => { void handleCardNameClick(); }}
+        style={{ cursor: 'pointer' }}
       >
         <button
           type="button"
           className="bitfun-nav-panel__workspace-item-collapse-btn"
-          onClick={handleCollapseToggle}
+          onClick={e => { e.stopPropagation(); handleCollapseToggle(); }}
           aria-label={sessionsCollapsed ? t('nav.workspaces.expandSessions') : t('nav.workspaces.collapseSessions')}
           aria-expanded={!sessionsCollapsed}
         >
@@ -903,15 +852,17 @@ const WorkspaceItem: React.FC<WorkspaceItemProps> = ({
         <div className="bitfun-nav-panel__workspace-item-name-cluster">
           <div className="bitfun-nav-panel__workspace-item-name-stack">
             <div className="bitfun-nav-panel__workspace-item-name-row">
-              <button
-                type="button"
-                className="bitfun-nav-panel__workspace-item-name-btn"
-                onClick={() => { void handleCardNameClick(); }}
-              >
-                <span className="bitfun-nav-panel__workspace-item-name-line">
-                  <span className="bitfun-nav-panel__workspace-item-label">{workspaceDisplayName}</span>
-                </span>
-              </button>
+              <Tooltip content={workspace.rootPath} placement="right" followCursor>
+                <button
+                  type="button"
+                  className="bitfun-nav-panel__workspace-item-name-btn"
+                  onClick={e => { e.stopPropagation(); void handleCardNameClick(); }}
+                >
+                  <span className="bitfun-nav-panel__workspace-item-name-line">
+                    <span className="bitfun-nav-panel__workspace-item-label">{workspaceDisplayName}</span>
+                  </span>
+                </button>
+              </Tooltip>
               {searchIndexIndicator && (
                 <>
                   <Tooltip
@@ -1037,7 +988,7 @@ const WorkspaceItem: React.FC<WorkspaceItemProps> = ({
           </div>
         </div>
 
-        <div className="bitfun-nav-panel__workspace-item-actions">
+        <div className="bitfun-nav-panel__workspace-item-actions" onClick={e => e.stopPropagation()}>
           <div className="bitfun-nav-panel__workspace-item-menu" ref={menuRef}>
             <Tooltip content={t('nav.items.project')} placement="right" followCursor>
               <button
