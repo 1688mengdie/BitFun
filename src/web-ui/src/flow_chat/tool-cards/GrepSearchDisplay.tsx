@@ -147,14 +147,13 @@ export const GrepSearchDisplay: React.FC<ToolCardProps> = ({
         status={status}
         isExpanded={isExpanded}
         onClick={handleClick}
-        className="grep-search-card"
+        className="grep-search-card compact-tool-card-wrapper--dense-command"
         clickable={hasDetails}
         header={
           <CompactToolCardHeader
             icon={<Search size={16} className="grep-search-card-icon" />}
             content={renderContent()}
             rightStatusIcon={getStatusIcon()}
-            rightStatusIconWithDivider
           />
         }
         expandedContent={hasDetails ? renderExpandedContent() : undefined}

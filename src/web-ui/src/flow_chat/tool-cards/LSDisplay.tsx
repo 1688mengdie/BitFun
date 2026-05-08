@@ -188,14 +188,13 @@ export const LSDisplay: React.FC<ToolCardProps> = ({
         status={status}
         isExpanded={isExpanded}
         onClick={handleClick}
-        className="ls-display-card"
+        className="ls-display-card compact-tool-card-wrapper--dense-command"
         clickable={hasDetails}
         header={
           <CompactToolCardHeader
             icon={<FolderOpen size={16} className="ls-display-card-icon" />}
             content={renderContent()}
             rightStatusIcon={getStatusIcon()}
-            rightStatusIconWithDivider
           />
         }
         expandedContent={hasDetails ? renderExpandedContent() : undefined}
