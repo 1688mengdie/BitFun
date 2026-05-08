@@ -2,6 +2,7 @@ use crate::agentic::tools::framework::{Tool, ToolResult, ToolUseContext};
 use crate::service::search::{
     get_global_workspace_search_service, workspace_search_runtime_available, GlobSearchRequest,
 };
+use crate::util::process_manager;
 use crate::util::errors::{BitFunError, BitFunResult};
 use async_trait::async_trait;
 use globset::{GlobBuilder, GlobMatcher};
@@ -11,7 +12,6 @@ use serde_json::{json, Value};
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 use std::path::{Component, Path, PathBuf};
-use std::process::Command;
 
 fn extract_glob_base_directory(pattern: &str) -> (String, String) {
     let glob_start = pattern.find(['*', '?', '[', '{']);
@@ -242,7 +242,7 @@ fn call_rg(search_path: &str, pattern: &str, limit: usize) -> Result<Vec<String>
     }
 
     let args = build_rg_args(&relative_pattern, apply_gitignore, ignore_hidden_files);
-    let output = Command::new("rg")
+    let output = process_manager::create_command("rg")
         .current_dir(&walk_root)
         .args(&args)
         .arg(".")
@@ -653,9 +653,9 @@ impl Tool for GlobTool {
 #[cfg(test)]
 mod tests {
     use super::{call_rg, derive_walk_root, extract_glob_base_directory};
+    use crate::util::process_manager;
     use std::fs;
     use std::path::PathBuf;
-    use std::process::Command;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn make_temp_dir(name: &str) -> PathBuf {
@@ -695,7 +695,11 @@ mod tests {
 
     #[test]
     fn keeps_shallowest_matches_from_rg_results() {
-        if Command::new("rg").arg("--version").output().is_err() {
+        if process_manager::create_command("rg")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
             return;
         }
 
@@ -721,7 +725,11 @@ mod tests {
 
     #[test]
     fn wildcard_search_now_returns_files_only() {
-        if Command::new("rg").arg("--version").output().is_err() {
+        if process_manager::create_command("rg")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
             return;
         }
 
