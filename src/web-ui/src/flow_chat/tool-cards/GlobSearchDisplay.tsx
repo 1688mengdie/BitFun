@@ -192,13 +192,13 @@ export const GlobSearchDisplay: React.FC<ToolCardProps> = ({
         status={status}
         isExpanded={isExpanded}
         onClick={handleClick}
+        className="glob-search-card compact-tool-card-wrapper--dense-command"
         clickable={hasDetails}
         header={
           <CompactToolCardHeader
             icon={<FolderSearch size={16} className="glob-search-card-icon" />}
             content={renderContent()}
             rightStatusIcon={getStatusIcon()}
-            rightStatusIconWithDivider
           />
         }
         expandedContent={hasDetails ? renderExpandedContent() : undefined}
