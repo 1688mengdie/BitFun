@@ -11,9 +11,6 @@ use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 use tokio::sync::RwLock;
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
-use std::process::Command;
-
 static REMOTE_CONNECT_SERVICE: OnceLock<Arc<RwLock<Option<RemoteConnectService>>>> =
     OnceLock::new();
 
@@ -240,7 +237,7 @@ pub struct LanNetworkInfo {
 fn detect_default_gateway_ip() -> Option<String> {
     #[cfg(target_os = "macos")]
     {
-        let output = Command::new("route")
+        let output = bitfun_core::util::process_manager::create_command("route")
             .args(["-n", "get", "default"])
             .output()
             .ok()?;
@@ -256,7 +253,7 @@ fn detect_default_gateway_ip() -> Option<String> {
 
     #[cfg(target_os = "linux")]
     {
-        let output = Command::new("ip")
+        let output = bitfun_core::util::process_manager::create_command("ip")
             .args(["route", "show", "default"])
             .output()
             .ok()?;
