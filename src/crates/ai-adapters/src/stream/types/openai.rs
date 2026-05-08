@@ -214,10 +214,11 @@ impl OpenAISSEData {
             ..
         } = delta;
 
-        // Treat empty strings the same as absent fields (MiniMax sends `content: ""` in
-        // reasoning-only chunks).
+        // Treat empty strings the same as absent fields for assistant text (MiniMax sends
+        // `content: ""` in reasoning-only chunks). Keep empty reasoning content so downstream
+        // can replay structurally present thinking blocks when a provider requires it.
         let content = content.filter(|s| !s.is_empty());
-        let reasoning_content = reasoning_content.filter(|s| !s.is_empty());
+        let reasoning_content = reasoning_content;
 
         // MiniMax uses `reasoning_details` instead of `reasoning_content`.
         // Collect all "reasoning.text" entries and join them as a fallback.
@@ -376,6 +377,29 @@ mod tests {
         assert!(responses[1].finish_reason.is_none());
         assert!(responses[0].usage.is_some());
         assert!(responses[1].usage.is_none());
+    }
+
+    #[test]
+    fn preserves_empty_reasoning_content_chunk() {
+        let raw = r#"{
+            "id": "chatcmpl_test",
+            "created": 123,
+            "model": "deepseek-test",
+            "choices": [{
+                "index": 0,
+                "delta": {
+                    "reasoning_content": ""
+                },
+                "finish_reason": "stop"
+            }]
+        }"#;
+
+        let sse_data: OpenAISSEData = serde_json::from_str(raw).expect("valid openai sse data");
+        let responses = sse_data.into_unified_responses();
+
+        assert_eq!(responses.len(), 1);
+        assert_eq!(responses[0].reasoning_content.as_deref(), Some(""));
+        assert_eq!(responses[0].finish_reason.as_deref(), Some("stop"));
     }
 
     #[test]

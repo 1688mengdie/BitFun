@@ -375,7 +375,11 @@ impl RoundExecutor {
 
             // Create assistant message (includes thinking content, supports interleaved thinking mode)
             let reasoning = if stream_result.full_thinking.is_empty() {
-                None
+                if stream_result.reasoning_content_present {
+                    Some(String::new())
+                } else {
+                    None
+                }
             } else {
                 Some(stream_result.full_thinking.clone())
             };
@@ -552,7 +556,11 @@ impl RoundExecutor {
 
         // Create assistant message (includes tool calls and thinking content, supports interleaved thinking mode)
         let reasoning = if stream_result.full_thinking.is_empty() {
-            None
+            if stream_result.reasoning_content_present {
+                Some(String::new())
+            } else {
+                None
+            }
         } else {
             Some(stream_result.full_thinking.clone())
         };
@@ -832,6 +840,7 @@ mod tests {
     fn detects_interrupted_invalid_tool_only_recovery() {
         let result = crate::agentic::execution::stream_processor::StreamResult {
             full_thinking: String::new(),
+            reasoning_content_present: false,
             thinking_signature: None,
             full_text: String::new(),
             tool_calls: vec![crate::agentic::core::ToolCall {
@@ -855,6 +864,7 @@ mod tests {
     fn keeps_partial_text_recovery_as_non_retryable_output() {
         let result = crate::agentic::execution::stream_processor::StreamResult {
             full_thinking: String::new(),
+            reasoning_content_present: false,
             thinking_signature: None,
             full_text: "I started answering before the stream failed.".to_string(),
             tool_calls: vec![crate::agentic::core::ToolCall {

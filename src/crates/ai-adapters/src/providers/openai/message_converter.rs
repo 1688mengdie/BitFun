@@ -308,13 +308,11 @@ impl OpenAIMessageConverter {
         }
 
         if let Some(reasoning) = msg.reasoning_content {
-            if !reasoning.is_empty() {
-                // Official OpenAI Chat Completions may ignore replayed reasoning_content, but
-                // many OpenAI-compatible providers require it to continue interleaved thinking.
-                // Replaying it here is therefore the compatibility default; at worst this only
-                // adds transport cost for providers that ignore the field.
-                openai_msg["reasoning_content"] = Value::String(reasoning);
-            }
+            // Official OpenAI Chat Completions may ignore replayed reasoning_content, but
+            // many OpenAI-compatible providers require it to continue interleaved thinking.
+            // Preserve even the empty-string case so providers like DeepSeek can validate the
+            // original assistant turn shape on follow-up requests.
+            openai_msg["reasoning_content"] = Value::String(reasoning);
         }
 
         if let Some(tool_calls) = msg.tool_calls {
@@ -496,5 +494,24 @@ mod tests {
         assert_eq!(content[0]["type"], json!("image_url"));
         assert_eq!(content[1]["type"], json!("text"));
         assert_eq!(content[1]["text"], json!("ok"));
+    }
+
+    #[test]
+    fn preserves_empty_reasoning_content_for_chat_completions() {
+        let msg = Message {
+            role: "assistant".to_string(),
+            content: Some("Answer".to_string()),
+            reasoning_content: Some(String::new()),
+            thinking_signature: None,
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+            is_error: None,
+            tool_image_attachments: None,
+        };
+
+        let openai = OpenAIMessageConverter::convert_messages(vec![msg]);
+
+        assert_eq!(openai[0]["reasoning_content"], json!(""));
     }
 }
