@@ -18,6 +18,7 @@ mod team_mode;
 mod deep_research_agent;
 mod explore_agent;
 mod file_finder_agent;
+mod research_specialist_agent;
 mod review_fixer_agent;
 mod review_specialist_agents;
 // Hidden agents
@@ -47,6 +48,7 @@ pub use prompt_builder::{
     RequestContextSection,
 };
 pub use readonly_subagent::ReadonlySubagent;
+pub use research_specialist_agent::ResearchSpecialistAgent;
 pub use registry::{
     get_agent_registry, AgentCategory, AgentInfo, AgentRegistry, CustomSubagentConfig,
     CustomSubagentDetail, SubAgentSource,

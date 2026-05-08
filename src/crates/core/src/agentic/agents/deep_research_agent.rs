@@ -33,6 +33,8 @@ impl DeepResearchAgent {
                 "ControlHub".to_string(),
                 // Task tracking
                 "TodoWrite".to_string(),
+                // Pro mode: Phase 0 ambiguity clarification + Phase 5 GAP confirmation
+                "AskUserQuestion".to_string(),
             ],
         }
     }
@@ -87,6 +89,10 @@ mod tests {
         assert!(tools.contains(&"Bash".to_string()));
         assert!(tools.contains(&"TerminalControl".to_string()));
         assert!(tools.contains(&"ControlHub".to_string()));
+        assert!(
+            tools.contains(&"AskUserQuestion".to_string()),
+            "AskUserQuestion required for Pro mode Phase 0/5 user confirmation"
+        );
     }
 
     #[test]

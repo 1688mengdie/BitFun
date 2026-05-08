@@ -23,6 +23,7 @@ const PLACEHOLDER_LANGUAGE_PREFERENCE: &str = "{LANGUAGE_PREFERENCE}";
 const PLACEHOLDER_AGENT_MEMORY: &str = "{AGENT_MEMORY}";
 const PLACEHOLDER_CLAW_WORKSPACE: &str = "{CLAW_WORKSPACE}";
 const PLACEHOLDER_VISUAL_MODE: &str = "{VISUAL_MODE}";
+const PLACEHOLDER_SESSION_ID: &str = "{SESSION_ID}";
 
 /// SSH remote host facts for system prompt (workspace tools run here, not on the local client).
 #[derive(Debug, Clone)]
@@ -449,6 +450,19 @@ Do not read from, modify, create, move, or delete files outside this workspace u
         if result.contains(PLACEHOLDER_VISUAL_MODE) {
             let visual_mode = self.get_visual_mode_instruction().await;
             result = result.replace(PLACEHOLDER_VISUAL_MODE, &visual_mode);
+        }
+
+        // Replace {SESSION_ID} — used by deep-research Pro mode to anchor a per-session
+        // work_dir under .bitfun/sessions/{SESSION_ID}/research/. Falls back to a
+        // timestamp slug when no session is bound (e.g. one-shot prompt builds in tests).
+        if result.contains(PLACEHOLDER_SESSION_ID) {
+            let session_id = self.context.session_id.clone().unwrap_or_else(|| {
+                format!(
+                    "unbound-{}",
+                    chrono::Local::now().format("%Y%m%d-%H%M%S")
+                )
+            });
+            result = result.replace(PLACEHOLDER_SESSION_ID, &session_id);
         }
 
         if self.context.supports_image_understanding == Some(false) {
