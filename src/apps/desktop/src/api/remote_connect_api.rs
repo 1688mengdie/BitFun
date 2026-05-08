@@ -11,6 +11,9 @@ use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 use tokio::sync::RwLock;
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+use std::process::Command;
+
 static REMOTE_CONNECT_SERVICE: OnceLock<Arc<RwLock<Option<RemoteConnectService>>>> =
     OnceLock::new();
 
