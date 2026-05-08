@@ -33,6 +33,7 @@ use crate::util::types::Message as AIMessage;
 use crate::util::types::ToolDefinition;
 use crate::util::{elapsed_ms_u64, truncate_at_char_boundary};
 use log::{debug, error, info, trace, warn};
+use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
@@ -112,10 +113,12 @@ impl ExecutionEngine {
             return args_str.to_string();
         }
 
+        let args_hash = hex::encode(Sha256::digest(args_str.as_bytes()));
         format!(
-            "{}..#{}",
+            "{}..#{}:sha256={}",
             truncate_at_char_boundary(args_str, 64),
-            args_str.len()
+            args_str.len(),
+            args_hash
         )
     }
 
@@ -1961,6 +1964,7 @@ mod tests {
     use crate::service::config::types::AIConfig;
     use crate::service::config::types::AIModelConfig;
     use serde_json::json;
+    use sha2::{Digest, Sha256};
 
     fn build_model(id: &str, name: &str, model_name: &str) -> AIModelConfig {
         AIModelConfig {
@@ -2008,10 +2012,14 @@ mod tests {
     #[test]
     fn tool_signature_args_summary_truncates_on_utf8_boundary() {
         let args = format!("{}{}", "a".repeat(62), "案".repeat(30));
+        let args_hash = hex::encode(Sha256::digest(args.as_bytes()));
 
         let summary = ExecutionEngine::tool_signature_args_summary(&args);
 
-        assert_eq!(summary, format!("{}..#{}", "a".repeat(62), args.len()));
+        assert_eq!(
+            summary,
+            format!("{}..#{}:sha256={}", "a".repeat(62), args.len(), args_hash)
+        );
     }
 
     #[test]
@@ -2021,6 +2029,19 @@ mod tests {
         let summary = ExecutionEngine::tool_signature_args_summary(args);
 
         assert_eq!(summary, args);
+    }
+
+    #[test]
+    fn tool_signature_args_summary_distinguishes_same_prefix_and_length() {
+        let first = format!("{}{}", "x".repeat(64), "a".repeat(80));
+        let second = format!("{}{}", "x".repeat(64), "b".repeat(80));
+
+        let first_summary = ExecutionEngine::tool_signature_args_summary(&first);
+        let second_summary = ExecutionEngine::tool_signature_args_summary(&second);
+
+        assert_eq!(first.len(), second.len());
+        assert_ne!(first, second);
+        assert_ne!(first_summary, second_summary);
     }
 
     #[test]
