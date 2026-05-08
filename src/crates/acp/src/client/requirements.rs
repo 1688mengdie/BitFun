@@ -250,7 +250,7 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    let mut command = Command::new(program);
+    let mut command = bitfun_core::util::process_manager::create_tokio_command(program);
     command.args(args);
     apply_command_environment(&mut command, None);
     match tokio::time::timeout(timeout, command.output()).await {
