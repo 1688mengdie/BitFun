@@ -1,6 +1,6 @@
 //! Detect and launch the user's default browser with CDP debug port enabled.
 
-use crate::util::errors::{BitFunError, BitFunResult};
+use crate::util::{errors::{BitFunError, BitFunResult}, process_manager};
 #[allow(unused_imports)]
 use log::{debug, info};
 use serde::{Deserialize, Serialize};
@@ -10,28 +10,10 @@ use std::time::Duration;
 /// Default CDP debug port.
 pub const DEFAULT_CDP_PORT: u16 = 9222;
 
-/// Windows: suppress the brief console window that flashes when a GUI process
-/// spawns a console subprocess (e.g. `reg.exe`, `tasklist.exe`).
-/// Equivalent to passing `CREATE_NO_WINDOW` (0x08000000) to CreateProcess.
-#[cfg(target_os = "windows")]
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-
-/// Build a `Command` that on Windows is configured with `CREATE_NO_WINDOW`
-/// so no console window briefly pops up. On other platforms behaves like
-/// `Command::new`.
+/// Build a `Command` that suppresses transient Windows console windows while
+/// preserving normal process behavior on other platforms.
 fn silent_command<S: AsRef<std::ffi::OsStr>>(program: S) -> Command {
-    let cmd = Command::new(program);
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        let mut cmd = cmd;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-        cmd
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        cmd
-    }
+    process_manager::create_command(program)
 }
 
 /// Known browser identifiers and their executable paths per platform.

@@ -12,6 +12,7 @@ use crate::agentic::tools::computer_use_host::{
 use crate::agentic::tools::framework::{Tool, ToolResult, ToolUseContext};
 use crate::util::elapsed_ms_u64;
 use crate::util::errors::{BitFunError, BitFunResult};
+use crate::util::process_manager;
 use serde_json::{json, Value};
 
 use super::control_hub::{err_response, ControlHubError, ErrorCode};
@@ -1643,7 +1644,7 @@ impl ComputerUseActions {
                 // the still-running child, leaking a thread + process per
                 // hung script.
                 let started = std::time::Instant::now();
-                let child = tokio::process::Command::new(&program)
+                let child = process_manager::create_tokio_command(&program)
                     .args(&args)
                     .stdout(std::process::Stdio::piped())
                     .stderr(std::process::Stdio::piped())
@@ -1910,7 +1911,7 @@ impl ComputerUseActions {
                     ),
                     _ => ("xdg-open".to_string(), vec![url.to_string()]),
                 };
-                let status = std::process::Command::new(&program)
+                let status = process_manager::create_command(&program)
                     .args(&args)
                     .status()
                     .map_err(|e| {
@@ -1973,7 +1974,7 @@ impl ComputerUseActions {
                     ),
                     _ => ("xdg-open".to_string(), vec![path_str.to_string()]),
                 };
-                let status = std::process::Command::new(&program)
+                let status = process_manager::create_command(&program)
                     .args(&args)
                     .status()
                     .map_err(|e| {
@@ -2111,7 +2112,7 @@ fn hostname() -> std::io::Result<String> {
             }
         }
     }
-    let out = std::process::Command::new("hostname").output()?;
+    let out = process_manager::create_command("hostname").output()?;
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
@@ -2225,7 +2226,7 @@ pub(crate) fn linux_session_info() -> (Option<String>, Option<String>) {
 async fn clipboard_read() -> Result<String, String> {
     #[cfg(target_os = "macos")]
     {
-        let out = tokio::process::Command::new("pbpaste")
+        let out = process_manager::create_tokio_command("pbpaste")
             .output()
             .await
             .map_err(|e| format!("spawn pbpaste: {}", e))?;
@@ -2236,11 +2237,12 @@ async fn clipboard_read() -> Result<String, String> {
     }
     #[cfg(target_os = "windows")]
     {
-        let out = tokio::process::Command::new("powershell")
-            .args(["-NoProfile", "-Command", "Get-Clipboard -Raw"])
+        let (program, args) = powershell_invocation("Get-Clipboard -Raw");
+        let out = process_manager::create_tokio_command(&program)
+            .args(&args)
             .output()
             .await
-            .map_err(|e| format!("spawn powershell: {}", e))?;
+            .map_err(|e| format!("spawn {}: {}", program, e))?;
         if !out.status.success() {
             return Err(format!("Get-Clipboard exit={:?}", out.status.code()));
         }
@@ -2271,7 +2273,11 @@ async fn clipboard_read() -> Result<String, String> {
             ]
         };
         for (bin, args) in candidates {
-            if let Ok(out) = tokio::process::Command::new(bin).args(*args).output().await {
+            if let Ok(out) = process_manager::create_tokio_command(bin)
+                .args(*args)
+                .output()
+                .await
+            {
                 if out.status.success() {
                     return Ok(String::from_utf8_lossy(&out.stdout).to_string());
                 }
@@ -2292,7 +2298,7 @@ async fn clipboard_write(text: &str) -> Result<(), String> {
     use tokio::io::AsyncWriteExt;
 
     async fn pipe(bin: &str, args: &[&str], text: &str) -> Result<(), String> {
-        let mut child = tokio::process::Command::new(bin)
+        let mut child = process_manager::create_tokio_command(bin)
             .args(args)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::null())

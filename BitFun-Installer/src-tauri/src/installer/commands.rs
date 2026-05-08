@@ -30,6 +30,17 @@ const INSTALLER_STATE_FILE: &str = "installer-state.json";
 const EMBEDDED_PAYLOAD_ZIP: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/embedded_payload.zip"));
 
+#[cfg(target_os = "windows")]
+fn create_windows_silent_command<S: AsRef<std::ffi::OsStr>>(program: S) -> std::process::Command {
+    use std::os::windows::process::CommandExt;
+
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+    let mut command = std::process::Command::new(program);
+    command.creation_flags(CREATE_NO_WINDOW);
+    command
+}
+
 struct InstallerAppLanguage {
     code: &'static str,
     aliases: &'static [&'static str],
@@ -566,14 +577,13 @@ exit /b 1
         log_path.display()
     ));
 
-    let child = std::process::Command::new("cmd")
+    let child = create_windows_silent_command("cmd")
         .arg("/C")
         .arg("call")
         .arg(&script_path)
         .arg(uninstall_exe_path)
         .arg(&log_path)
         .current_dir(&temp_dir)
-        .creation_flags(CREATE_NO_WINDOW)
         .spawn()
         .map_err(|e| format!("Failed to schedule uninstall cleanup: {}", e))?;
 
@@ -622,6 +632,13 @@ pub fn launch_application(install_path: String) -> Result<(), String> {
         PathBuf::from(&install_path).join("bitfun")
     };
 
+    #[cfg(target_os = "windows")]
+    create_windows_silent_command(&exe)
+        .current_dir(&install_path)
+        .spawn()
+        .map_err(|e| format!("Failed to launch BitFun: {}", e))?;
+
+    #[cfg(not(target_os = "windows"))]
     std::process::Command::new(&exe)
         .current_dir(&install_path)
         .spawn()

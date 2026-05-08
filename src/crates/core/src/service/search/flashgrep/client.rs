@@ -9,10 +9,11 @@ use std::{
     time::{Duration, Instant},
 };
 
+use crate::util::process_manager;
 use serde::Serialize;
 use tokio::{
     io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, BufWriter},
-    process::{Child, ChildStderr, ChildStdin, ChildStdout, Command},
+    process::{Child, ChildStderr, ChildStdin, ChildStdout},
     sync::{oneshot, Mutex},
     time::{sleep, timeout},
 };
@@ -395,7 +396,7 @@ impl AsyncDaemonClient {
             .or_else(|| std::env::var_os("FLASHGREP_DAEMON_BIN"))
             .unwrap_or_else(|| OsString::from("flashgrep"));
 
-        let mut command = Command::new(program);
+        let mut command = process_manager::create_tokio_command(program);
         command
             .arg("serve")
             .arg("--stdio")

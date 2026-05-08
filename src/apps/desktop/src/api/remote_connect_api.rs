@@ -8,7 +8,6 @@ use bitfun_core::service::remote_connect::{
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use std::process::Command;
 use std::sync::{Arc, OnceLock};
 use tokio::sync::RwLock;
 
@@ -270,7 +269,10 @@ fn detect_default_gateway_ip() -> Option<String> {
 
     #[cfg(target_os = "windows")]
     {
-        let output = Command::new("route").args(["print", "-4"]).output().ok()?;
+        let output = bitfun_core::util::process_manager::create_command("route")
+            .args(["print", "-4"])
+            .output()
+            .ok()?;
         if !output.status.success() {
             return None;
         }

@@ -331,6 +331,18 @@ impl ShellDetector {
 
     #[allow(dead_code)]
     fn get_shell_version(path: &str) -> Option<String> {
+        #[cfg(windows)]
+        let output = {
+            use std::os::windows::process::CommandExt;
+
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+            let mut command = std::process::Command::new(path);
+            command.creation_flags(CREATE_NO_WINDOW);
+            command.arg("--version").output().ok()?
+        };
+
+        #[cfg(not(windows))]
         let output = std::process::Command::new(path)
             .arg("--version")
             .output()
