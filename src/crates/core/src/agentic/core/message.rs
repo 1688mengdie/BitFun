@@ -273,7 +273,7 @@ impl From<Message> for AIMessage {
                 Self {
                     role: "assistant".to_string(),
                     content,
-                    reasoning_content: reasoning_content.filter(|r| !r.is_empty()),
+                    reasoning_content,
                     thinking_signature: thinking_signature.clone(),
                     tool_calls: converted_tool_calls,
                     tool_call_id: None,
@@ -607,6 +607,23 @@ impl Display for MessageContent {
                     .join(", ")
             ),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Message;
+    use crate::util::types::Message as AIMessage;
+
+    #[test]
+    fn preserves_empty_reasoning_content_for_provider_replay() {
+        let msg = Message::assistant_with_reasoning(Some(String::new()), String::new(), vec![])
+            .with_thinking_signature(Some("sig_1".to_string()));
+
+        let ai_msg = AIMessage::from(msg);
+
+        assert_eq!(ai_msg.reasoning_content.as_deref(), Some(""));
+        assert_eq!(ai_msg.thinking_signature.as_deref(), Some("sig_1"));
     }
 }
 

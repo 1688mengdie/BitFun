@@ -51,7 +51,7 @@
     "installDone": "Installation complete",
     "provider": "Provider",
     "config": "Connection",
-    "modelName": "Model name (e.g. deepseek-chat)",
+    "modelName": "Model name (e.g. deepseek-v4-flash)",
     "apiKey": "API key",
     "back": "Back",
     "skip": "Skip for now",

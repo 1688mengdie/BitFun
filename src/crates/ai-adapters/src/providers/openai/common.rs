@@ -36,7 +36,13 @@ pub(crate) fn apply_reasoning_fields(
     client: &AIClient,
     url: &str,
 ) {
-    apply_openai_compatible_reasoning_fields(request_body, client.config.reasoning_mode, url);
+    apply_openai_compatible_reasoning_fields(
+        request_body,
+        client.config.reasoning_mode,
+        client.config.reasoning_effort.as_deref(),
+        url,
+        &client.config.model,
+    );
 }
 
 pub(crate) fn resolve_models_url(client: &AIClient) -> String {

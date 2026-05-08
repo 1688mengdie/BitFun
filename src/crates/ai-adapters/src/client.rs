@@ -422,7 +422,80 @@ mod tests {
 
         assert_eq!(request_body["thinking"]["type"], "enabled");
         assert!(request_body.get("enable_thinking").is_none());
+        assert!(request_body.get("reasoning_effort").is_none());
         assert!(request_body.get("reasoning_split").is_none());
+    }
+
+    #[test]
+    fn build_openai_request_body_adds_deepseek_reasoning_effort() {
+        let client = AIClient::new(AIConfig {
+            name: "deepseek".to_string(),
+            base_url: "https://api.deepseek.com/v1".to_string(),
+            request_url: "https://api.deepseek.com/v1/chat/completions".to_string(),
+            api_key: "test-key".to_string(),
+            model: "deepseek-v4-pro".to_string(),
+            format: "openai".to_string(),
+            context_window: 128000,
+            max_tokens: Some(4096),
+            temperature: None,
+            top_p: None,
+            reasoning_mode: ReasoningMode::Enabled,
+            inline_think_in_text: false,
+            custom_headers: None,
+            custom_headers_mode: None,
+            skip_ssl_verify: false,
+            reasoning_effort: Some("xhigh".to_string()),
+            thinking_budget_tokens: None,
+            custom_request_body: None,
+            custom_request_body_mode: None,
+        });
+
+        let request_body = openai::chat::build_request_body(
+            &client,
+            &client.config.request_url,
+            vec![json!({ "role": "user", "content": "hello" })],
+            None,
+            None,
+        );
+
+        assert_eq!(request_body["thinking"]["type"], "enabled");
+        assert_eq!(request_body["reasoning_effort"], "max");
+    }
+
+    #[test]
+    fn build_openai_request_body_omits_deepseek_reasoning_effort_when_disabled() {
+        let client = AIClient::new(AIConfig {
+            name: "deepseek".to_string(),
+            base_url: "https://api.deepseek.com/v1".to_string(),
+            request_url: "https://api.deepseek.com/v1/chat/completions".to_string(),
+            api_key: "test-key".to_string(),
+            model: "deepseek-v4-flash".to_string(),
+            format: "openai".to_string(),
+            context_window: 128000,
+            max_tokens: Some(4096),
+            temperature: None,
+            top_p: None,
+            reasoning_mode: ReasoningMode::Disabled,
+            inline_think_in_text: false,
+            custom_headers: None,
+            custom_headers_mode: None,
+            skip_ssl_verify: false,
+            reasoning_effort: Some("max".to_string()),
+            thinking_budget_tokens: None,
+            custom_request_body: None,
+            custom_request_body_mode: None,
+        });
+
+        let request_body = openai::chat::build_request_body(
+            &client,
+            &client.config.request_url,
+            vec![json!({ "role": "user", "content": "hello" })],
+            None,
+            None,
+        );
+
+        assert_eq!(request_body["thinking"]["type"], "disabled");
+        assert!(request_body.get("reasoning_effort").is_none());
     }
 
     #[test]
@@ -537,9 +610,51 @@ mod tests {
     }
 
     #[test]
+    fn build_anthropic_request_body_adds_deepseek_reasoning_effort() {
+        let client = AIClient::new(AIConfig {
+            name: "deepseek".to_string(),
+            base_url: "https://api.deepseek.com/anthropic".to_string(),
+            request_url: "https://api.deepseek.com/anthropic/v1/messages".to_string(),
+            api_key: "test-key".to_string(),
+            model: "deepseek-v4-pro".to_string(),
+            format: "anthropic".to_string(),
+            context_window: 200000,
+            max_tokens: Some(8192),
+            temperature: None,
+            top_p: None,
+            reasoning_mode: ReasoningMode::Enabled,
+            inline_think_in_text: false,
+            custom_headers: None,
+            custom_headers_mode: None,
+            skip_ssl_verify: false,
+            reasoning_effort: Some("xhigh".to_string()),
+            thinking_budget_tokens: None,
+            custom_request_body: None,
+            custom_request_body_mode: None,
+        });
+
+        let request_body = anthropic::request::build_request_body(
+            &client,
+            &client.config.request_url,
+            None,
+            vec![json!({ "role": "user", "content": [{ "type": "text", "text": "hello" }] })],
+            None,
+            None,
+        );
+
+        assert_eq!(request_body["thinking"]["type"], "enabled");
+        assert_eq!(request_body["output_config"]["effort"], "max");
+    }
+
+    #[test]
     fn build_openai_request_body_trim_mode_preserves_essential_fields() {
         let mut client = make_trim_test_client("openai");
+        client.config.base_url = "https://api.deepseek.com/v1".to_string();
+        client.config.request_url = "https://api.deepseek.com/v1/chat/completions".to_string();
+        client.config.model = "deepseek-v4-pro".to_string();
         client.config.max_tokens = Some(8192);
+        client.config.reasoning_mode = ReasoningMode::Enabled;
+        client.config.reasoning_effort = Some("high".to_string());
         let messages = vec![json!({ "role": "user", "content": "hello" })];
 
         let request_body = openai::chat::build_request_body(
@@ -557,13 +672,14 @@ mod tests {
             })),
         );
 
-        assert_eq!(request_body["model"], "test-model");
+        assert_eq!(request_body["model"], "deepseek-v4-pro");
         assert_eq!(request_body["messages"], json!(messages));
         assert_eq!(request_body["stream"], true);
         assert_eq!(request_body["max_tokens"], 8192);
         assert_eq!(request_body["temperature"], 0.7);
         assert_eq!(request_body["response_format"]["type"], "json_object");
         assert!(request_body.get("thinking").is_none());
+        assert!(request_body.get("reasoning_effort").is_none());
     }
 
     #[test]
