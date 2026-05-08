@@ -249,7 +249,9 @@ mod tests {
         };
 
         let (_, messages) = AnthropicMessageConverter::convert_messages(vec![msg]);
-        let content = messages[0]["content"].as_array().expect("assistant content");
+        let content = messages[0]["content"]
+            .as_array()
+            .expect("assistant content");
 
         assert_eq!(content[0]["type"], json!("thinking"));
         assert_eq!(content[0]["thinking"], json!(""));

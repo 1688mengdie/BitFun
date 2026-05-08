@@ -51,7 +51,7 @@
     "installDone": "安裝完成",
     "provider": "服務商",
     "config": "連接信息",
-    "modelName": "模型名稱（如 deepseek-chat）",
+    "modelName": "模型名稱（如 deepseek-v4-flash）",
     "apiKey": "API Key",
     "back": "返回",
     "skip": "稍後配置",
