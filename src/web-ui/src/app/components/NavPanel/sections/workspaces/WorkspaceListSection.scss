@@ -168,9 +168,7 @@
   }
 
   &__workspace-item-card {
-    position: sticky;
-    top: 0;
-    z-index: 2;
+    position: relative;
     display: flex;
     align-items: center;
     width: 100%;
@@ -181,7 +179,6 @@
     border-radius: 6px;
     color: var(--color-text-primary);
     background: var(--color-bg-primary);
-    overflow: hidden;
     transition: color $motion-fast $easing-standard,
                 background $motion-fast $easing-standard,
                 box-shadow $motion-fast $easing-standard;
@@ -1060,9 +1057,7 @@
   }
 
   &__assistant-item-card {
-    position: sticky;
-    top: 0;
-    z-index: 2;
+    position: relative;
     display: flex;
     align-items: center;
     width: 100%;
