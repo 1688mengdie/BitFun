@@ -875,7 +875,7 @@ export const FileOperationToolCard: React.FC<FileOperationToolCardProps> = ({
       <CompactToolCard
         status={status}
         isExpanded={false}
-        className="read-file-card delete-file-card compact-tool-card-wrapper--dense-command"
+        className="read-file-card delete-file-card"
         clickable={false}
         header={
           <CompactToolCardHeader

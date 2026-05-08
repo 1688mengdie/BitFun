@@ -147,7 +147,7 @@ export const GrepSearchDisplay: React.FC<ToolCardProps> = ({
         status={status}
         isExpanded={isExpanded}
         onClick={handleClick}
-        className="grep-search-card compact-tool-card-wrapper--dense-command"
+        className="grep-search-card"
         clickable={hasDetails}
         header={
           <CompactToolCardHeader
