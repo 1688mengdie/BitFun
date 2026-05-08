@@ -353,7 +353,7 @@ impl AcpClientService {
 
         let program =
             resolve_configured_command(&connection.config.command, &connection.config.env);
-        let mut command = Command::new(&program);
+        let mut command = bitfun_core::util::process_manager::create_tokio_command(&program);
         command
             .args(&connection.config.args)
             .stdin(Stdio::piped())
@@ -1345,7 +1345,7 @@ async fn terminate_child_process_tree(client_id: &str, mut child: Child) {
     #[cfg(unix)]
     if let Some(pid) = pid {
         let process_group = format!("-{}", pid);
-        match Command::new("kill")
+        match bitfun_core::util::process_manager::create_tokio_command("kill")
             .arg("-TERM")
             .arg(&process_group)
             .status()
@@ -1377,7 +1377,7 @@ async fn terminate_child_process_tree(client_id: &str, mut child: Child) {
             Err(_) => {}
         }
 
-        if let Err(error) = Command::new("kill")
+        if let Err(error) = bitfun_core::util::process_manager::create_tokio_command("kill")
             .arg("-KILL")
             .arg(&process_group)
             .status()
@@ -1394,7 +1394,7 @@ async fn terminate_child_process_tree(client_id: &str, mut child: Child) {
 
     #[cfg(windows)]
     if let Some(pid) = pid {
-        match Command::new("taskkill")
+        match bitfun_core::util::process_manager::create_tokio_command("taskkill")
             .arg("/PID")
             .arg(pid.to_string())
             .arg("/T")
