@@ -2,9 +2,9 @@ use crate::api::app_state::AppState;
 use bitfun_core::infrastructure::{FileSearchResult, FileSearchResultGroup, SearchMatchType};
 use bitfun_core::service::remote_ssh::workspace_state::{is_remote_path, lookup_remote_connection};
 use bitfun_core::service::search::{
-    workspace_search_daemon_available, workspace_search_feature_enabled, ContentSearchRequest,
-    ContentSearchResult, RemoteWorkspaceSearchService, WorkspaceSearchBackend,
-    WorkspaceSearchRepoPhase,
+    remote_workspace_search_service_for_path, workspace_search_daemon_available,
+    workspace_search_feature_enabled, ContentSearchRequest, ContentSearchResult,
+    RemoteWorkspaceSearchService, WorkspaceSearchBackend, WorkspaceSearchRepoPhase,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -70,18 +70,7 @@ pub(crate) async fn remote_workspace_search_service(
             }
         });
 
-    Ok(RemoteWorkspaceSearchService::new(
-        state
-            .get_ssh_manager_async()
-            .await
-            .map_err(|error| format!("SSH manager unavailable: {error}"))?,
-        state
-            .get_remote_file_service_async()
-            .await
-            .map_err(|error| format!("Remote file service unavailable: {error}"))?,
-        state.config_service.clone(),
-    )
-    .with_preferred_connection_id(preferred_connection_id))
+    remote_workspace_search_service_for_path(root_path, preferred_connection_id).await
 }
 
 async fn workspace_search_unavailable_message(

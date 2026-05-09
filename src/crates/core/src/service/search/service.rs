@@ -2,8 +2,8 @@ use crate::infrastructure::{FileSearchOutcome, FileSearchResult, SearchMatchType
 use crate::service::bootstrap::ensure_workspace_gitignore_ignores_bitfun;
 use crate::service::config::{get_global_config_service, types::WorkspaceConfig};
 use crate::service::search::flashgrep::{
-    ConsistencyMode, GlobRequest, ManagedClient, OpenRepoParams, PathScope, QuerySpec,
-    RefreshPolicyConfig, RepoConfig, RepoSession, SearchRequest, SearchResults,
+    ConsistencyMode, FlashgrepRepoSession, GlobRequest, ManagedClient, OpenRepoParams, PathScope,
+    QuerySpec, RefreshPolicyConfig, RepoConfig, RepoSession, SearchRequest, SearchResults,
 };
 use crate::util::errors::{BitFunError, BitFunResult};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -83,8 +83,7 @@ impl WorkspaceSearchService {
 
     pub async fn build_index(&self, repo_root: impl AsRef<Path>) -> BitFunResult<IndexTaskHandle> {
         let session = self.get_or_open_session(repo_root.as_ref()).await?;
-        let task = session
-            .index_build()
+        let task = FlashgrepRepoSession::build_index(session.as_ref())
             .await
             .map_err(map_flashgrep_error("Failed to start index build"))?;
         let repo_status = session
@@ -102,8 +101,7 @@ impl WorkspaceSearchService {
         repo_root: impl AsRef<Path>,
     ) -> BitFunResult<IndexTaskHandle> {
         let session = self.get_or_open_session(repo_root.as_ref()).await?;
-        let task = session
-            .index_rebuild()
+        let task = FlashgrepRepoSession::rebuild_index(session.as_ref())
             .await
             .map_err(map_flashgrep_error("Failed to start index rebuild"))?;
         let repo_status = session
@@ -155,15 +153,15 @@ impl WorkspaceSearchService {
 
         let session = self.get_or_open_session(&repo_root).await?;
         let session_ready_at = Instant::now();
-        let search = session
-            .search(
-                SearchRequest::new(query)
-                    .with_scope(scope)
-                    .with_consistency(ConsistencyMode::WorkspaceEventual)
-                    .with_scan_fallback(true),
-            )
-            .await
-            .map_err(map_flashgrep_error("Content search failed"))?;
+        let search = FlashgrepRepoSession::search(
+            session.as_ref(),
+            SearchRequest::new(query)
+                .with_scope(scope)
+                .with_consistency(ConsistencyMode::WorkspaceEventual)
+                .with_scan_fallback(true),
+        )
+        .await
+        .map_err(map_flashgrep_error("Content search failed"))?;
         let search_completed_at = Instant::now();
 
         let mut results = convert_search_results(&search.results, request.output_mode);
@@ -240,10 +238,10 @@ impl WorkspaceSearchService {
             vec![],
         )?;
         let session = self.get_or_open_session(&repo_root).await?;
-        let mut outcome = session
-            .glob(GlobRequest::new().with_scope(scope))
-            .await
-            .map_err(map_flashgrep_error("Glob search failed"))?;
+        let mut outcome =
+            FlashgrepRepoSession::glob(session.as_ref(), GlobRequest::new().with_scope(scope))
+                .await
+                .map_err(map_flashgrep_error("Glob search failed"))?;
         outcome.paths.sort();
         if request.limit > 0 {
             outcome.paths.truncate(request.limit);
@@ -399,10 +397,13 @@ impl WorkspaceSearchService {
             .clone())
     }
 
-    async fn index_status_for_session(
+    async fn index_status_for_session<S>(
         &self,
-        session: Arc<RepoSession>,
-    ) -> BitFunResult<WorkspaceIndexStatus> {
+        session: Arc<S>,
+    ) -> BitFunResult<WorkspaceIndexStatus>
+    where
+        S: FlashgrepRepoSession + ?Sized,
+    {
         let repo_status = session
             .status()
             .await
@@ -451,7 +452,7 @@ impl WorkspaceSearchService {
                 "Releasing idle workspace search repository session: path={}",
                 repo_root.display()
             );
-            if let Err(error) = entry.session.close().await {
+            if let Err(error) = FlashgrepRepoSession::close(entry.session.as_ref()).await {
                 log::warn!(
                     "Failed to release idle workspace search repository session: path={}, error={}",
                     repo_root.display(),

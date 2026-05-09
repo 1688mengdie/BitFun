@@ -1,31 +1,42 @@
 use crate::infrastructure::{FileSearchOutcome, FileSearchResult, SearchMatchType};
-use crate::service::config::{types::WorkspaceConfig, ConfigService};
+use crate::service::config::{get_global_config_service, types::WorkspaceConfig, ConfigService};
 use crate::service::remote_ssh::workspace_state::{
-    lookup_remote_connection, lookup_remote_connection_with_hint, RemoteWorkspaceEntry,
+    get_remote_workspace_manager, lookup_remote_connection, lookup_remote_connection_with_hint,
+    RemoteWorkspaceEntry,
 };
 use crate::service::remote_ssh::{
     normalize_remote_workspace_path, RemoteFileService, SSHConnectionManager,
 };
-use crate::service::search::{
-    ContentSearchOutputMode, ContentSearchRequest, ContentSearchResult, IndexTaskHandle,
-    WorkspaceIndexStatus, WorkspaceSearchBackend, WorkspaceSearchContextLine,
-    WorkspaceSearchDirtyFiles, WorkspaceSearchFileCount, WorkspaceSearchHit, WorkspaceSearchLine,
-    WorkspaceSearchMatch, WorkspaceSearchMatchLocation, WorkspaceSearchOverlayStatus,
-    WorkspaceSearchRepoPhase, WorkspaceSearchRepoStatus, WorkspaceSearchTaskKind,
-    WorkspaceSearchTaskPhase, WorkspaceSearchTaskState, WorkspaceSearchTaskStatus,
+use crate::service::search::flashgrep::{
+    drain_content_length_messages, ClientCapabilities, ClientInfo, ConsistencyMode, GlobOutcome,
+    GlobParams, GlobRequest, InitializeParams, OpenRepoParams, PathScope, ProtocolClient,
+    QuerySpec, RefreshPolicyConfig, RepoConfig, RepoRef, RepoStatus, Request, Response,
+    SearchOutcome, SearchParams, SearchRequest, SearchResults, TaskRef, TaskStatus,
 };
-use serde::Deserialize;
-use std::collections::BTreeMap;
+use crate::service::search::flashgrep::{error::AppError, FlashgrepRepoSession};
+use crate::service::search::{
+    ContentSearchOutputMode, ContentSearchRequest, ContentSearchResult, GlobSearchRequest,
+    GlobSearchResult, IndexTaskHandle, WorkspaceIndexStatus, WorkspaceSearchFileCount,
+    WorkspaceSearchHit, WorkspaceSearchRepoStatus,
+};
+use async_trait::async_trait;
+use std::collections::{BTreeMap, HashMap};
+use std::ops::Deref;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tokio::time::sleep;
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc, LazyLock,
+};
+use std::time::Duration;
+use tokio::io::AsyncWriteExt;
+use tokio::sync::{mpsc, Mutex, RwLock};
+use tokio::time::{sleep, timeout};
 
 const REMOTE_FLASHGREP_INSTALL_DIR: &str = ".bitfun/bin";
-const REMOTE_FLASHGREP_STATE_FILE_NAME: &str = "daemon-state.json";
-const REMOTE_FLASHGREP_LOG_FILE_NAME: &str = "daemon.log";
-const REMOTE_FLASHGREP_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
-const REMOTE_FLASHGREP_STARTUP_POLL_INTERVAL: Duration = Duration::from_millis(200);
+const REMOTE_STDIO_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+const REMOTE_STDIO_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
+const REMOTE_STDIO_SESSION_IDLE_GRACE: Duration = Duration::from_secs(45);
+const CLIENT_NAME: &str = "bitfun-remote-workspace-search";
 const REMOTE_OS_PROBES: &[&str] = &["uname -s", "sh -c 'uname -s 2>/dev/null'"];
 const REMOTE_ARCHITECTURE_PROBES: &[&str] = &[
     "uname -m",
@@ -41,6 +52,459 @@ const LINUX_AARCH64_FLASHGREP_BUNDLES: &[&str] = &[
     "flashgrep-aarch64-unknown-linux-gnu",
 ];
 
+static REMOTE_STDIO_SESSIONS: LazyLock<RwLock<HashMap<String, RemoteStdioSessionEntry>>> =
+    LazyLock::new(|| RwLock::new(HashMap::new()));
+static REMOTE_STDIO_OPEN_GUARDS: LazyLock<Mutex<HashMap<String, Arc<Mutex<()>>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+#[derive(Clone)]
+struct RemoteStdioSessionEntry {
+    session: Arc<RemoteStdioRepoSession>,
+    activity_epoch: Arc<AtomicU64>,
+}
+
+struct RemoteStdioRepoSession {
+    repo_id: String,
+    client: Arc<RemoteStdioDaemonClient>,
+    activity_epoch: Arc<AtomicU64>,
+    active_operations: Arc<AtomicU64>,
+}
+
+struct RemoteStdioDaemonClient {
+    protocol: ProtocolClient,
+}
+
+struct RemoteStdioOperationLease {
+    activity_epoch: Arc<AtomicU64>,
+    active_operations: Arc<AtomicU64>,
+}
+
+struct RemoteStdioSessionLease {
+    session: Arc<RemoteStdioRepoSession>,
+    _operation: RemoteStdioOperationLease,
+}
+
+impl Drop for RemoteStdioOperationLease {
+    fn drop(&mut self) {
+        self.active_operations.fetch_sub(1, Ordering::Relaxed);
+        self.activity_epoch.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+impl RemoteStdioSessionLease {
+    fn new(session: Arc<RemoteStdioRepoSession>) -> Self {
+        let operation = session.acquire_operation();
+        Self {
+            session,
+            _operation: operation,
+        }
+    }
+}
+
+impl Deref for RemoteStdioSessionLease {
+    type Target = RemoteStdioRepoSession;
+
+    fn deref(&self) -> &Self::Target {
+        &self.session
+    }
+}
+
+impl RemoteStdioDaemonClient {
+    async fn spawn(
+        ssh_manager: SSHConnectionManager,
+        connection_id: String,
+        binary_path: String,
+    ) -> Result<Arc<Self>, String> {
+        let command = format!("{} serve --stdio", shell_escape(&binary_path));
+        let channel = ssh_manager
+            .open_exec_channel(&connection_id, &command)
+            .await
+            .map_err(|error| format!("Failed to start remote flashgrep stdio daemon: {error}"))?;
+
+        let (protocol, write_rx) = ProtocolClient::channel("remote flashgrep stdio daemon");
+        spawn_remote_stdio_owner(connection_id, channel, write_rx, protocol.clone());
+
+        let client = Arc::new(Self { protocol });
+        client.initialize().await?;
+        Ok(client)
+    }
+
+    async fn initialize(&self) -> Result<(), String> {
+        match self
+            .protocol
+            .send_request_with_timeout(
+                Request::Initialize {
+                    params: InitializeParams {
+                        client_info: Some(ClientInfo {
+                            name: CLIENT_NAME.to_string(),
+                            version: Some(env!("CARGO_PKG_VERSION").to_string()),
+                        }),
+                        capabilities: ClientCapabilities::default(),
+                    },
+                },
+                Some(REMOTE_STDIO_REQUEST_TIMEOUT),
+            )
+            .await
+            .map_err(|error| error.to_string())?
+        {
+            Response::InitializeResult { .. } => {
+                self.protocol
+                    .send_notification(Request::Initialized)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                Ok(())
+            }
+            other => Err(format!(
+                "Unexpected remote flashgrep initialize response: {other:?}"
+            )),
+        }
+    }
+
+    async fn open_repo(
+        self: &Arc<Self>,
+        params: OpenRepoParams,
+    ) -> Result<RemoteStdioRepoSession, String> {
+        match self.send_request(Request::OpenRepo { params }).await? {
+            Response::RepoOpened { repo_id, .. } => Ok(RemoteStdioRepoSession {
+                repo_id,
+                client: self.clone(),
+                activity_epoch: Arc::new(AtomicU64::new(1)),
+                active_operations: Arc::new(AtomicU64::new(0)),
+            }),
+            other => Err(format!(
+                "Unexpected remote flashgrep open_repo response: {other:?}"
+            )),
+        }
+    }
+
+    async fn send_request(&self, request: Request) -> Result<Response, String> {
+        self.protocol
+            .send_request_with_timeout(request, Some(REMOTE_STDIO_REQUEST_TIMEOUT))
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    async fn shutdown(&self) {
+        let _ = timeout(
+            REMOTE_STDIO_SHUTDOWN_TIMEOUT,
+            self.send_request(Request::Shutdown),
+        )
+        .await;
+        self.protocol
+            .close_with_message("remote flashgrep stdio daemon is shutting down")
+            .await;
+    }
+}
+
+impl RemoteStdioRepoSession {
+    fn acquire_operation(&self) -> RemoteStdioOperationLease {
+        self.active_operations.fetch_add(1, Ordering::Relaxed);
+        self.activity_epoch.fetch_add(1, Ordering::Relaxed);
+        RemoteStdioOperationLease {
+            activity_epoch: self.activity_epoch.clone(),
+            active_operations: self.active_operations.clone(),
+        }
+    }
+
+    async fn status(&self) -> Result<RepoStatus, String> {
+        let _lease = self.acquire_operation();
+        match self
+            .client
+            .send_request(Request::GetRepoStatus {
+                params: self.repo_ref(),
+            })
+            .await?
+        {
+            Response::RepoStatus { status } => Ok(status),
+            other => Err(format!(
+                "Unexpected remote flashgrep get_repo_status response: {other:?}"
+            )),
+        }
+    }
+
+    async fn task_status(&self, task_id: impl Into<String>) -> Result<TaskStatus, String> {
+        let _lease = self.acquire_operation();
+        match self
+            .client
+            .send_request(Request::TaskStatus {
+                params: TaskRef {
+                    task_id: task_id.into(),
+                },
+            })
+            .await?
+        {
+            Response::TaskStatus { task } => Ok(task),
+            other => Err(format!(
+                "Unexpected remote flashgrep task/status response: {other:?}"
+            )),
+        }
+    }
+
+    async fn build_index(&self) -> Result<TaskStatus, String> {
+        let _lease = self.acquire_operation();
+        match self
+            .client
+            .send_request(Request::BaseSnapshotBuild {
+                params: self.repo_ref(),
+            })
+            .await?
+        {
+            Response::TaskStarted { task } => Ok(task),
+            other => Err(format!(
+                "Unexpected remote flashgrep build response: {other:?}"
+            )),
+        }
+    }
+
+    async fn rebuild_index(&self) -> Result<TaskStatus, String> {
+        let _lease = self.acquire_operation();
+        match self
+            .client
+            .send_request(Request::BaseSnapshotRebuild {
+                params: self.repo_ref(),
+            })
+            .await?
+        {
+            Response::TaskStarted { task } => Ok(task),
+            other => Err(format!(
+                "Unexpected remote flashgrep rebuild response: {other:?}"
+            )),
+        }
+    }
+
+    async fn search(
+        &self,
+        query: QuerySpec,
+        scope: PathScope,
+    ) -> Result<
+        (
+            crate::service::search::flashgrep::SearchBackend,
+            RepoStatus,
+            SearchResults,
+        ),
+        String,
+    > {
+        let _lease = self.acquire_operation();
+        match self
+            .client
+            .send_request(Request::Search {
+                params: SearchParams {
+                    repo_id: self.repo_id.clone(),
+                    query,
+                    scope,
+                    consistency: ConsistencyMode::WorkspaceEventual,
+                    allow_scan_fallback: true,
+                },
+            })
+            .await?
+        {
+            Response::SearchCompleted {
+                backend,
+                status,
+                results,
+                ..
+            } => Ok((backend, status, results)),
+            other => Err(format!(
+                "Unexpected remote flashgrep search response: {other:?}"
+            )),
+        }
+    }
+
+    async fn glob(&self, scope: PathScope) -> Result<(RepoStatus, Vec<String>), String> {
+        let _lease = self.acquire_operation();
+        match self
+            .client
+            .send_request(Request::Glob {
+                params: GlobParams {
+                    repo_id: self.repo_id.clone(),
+                    scope,
+                },
+            })
+            .await?
+        {
+            Response::GlobCompleted { status, paths, .. } => Ok((status, paths)),
+            other => Err(format!(
+                "Unexpected remote flashgrep glob response: {other:?}"
+            )),
+        }
+    }
+
+    async fn close(&self) {
+        let _ = self
+            .client
+            .send_request(Request::CloseRepo {
+                params: self.repo_ref(),
+            })
+            .await;
+    }
+
+    fn repo_ref(&self) -> RepoRef {
+        RepoRef {
+            repo_id: self.repo_id.clone(),
+        }
+    }
+}
+
+#[async_trait]
+impl FlashgrepRepoSession for RemoteStdioRepoSession {
+    async fn status(&self) -> crate::service::search::flashgrep::error::Result<RepoStatus> {
+        RemoteStdioRepoSession::status(self)
+            .await
+            .map_err(AppError::Protocol)
+    }
+
+    async fn task_status(
+        &self,
+        task_id: String,
+    ) -> crate::service::search::flashgrep::error::Result<TaskStatus> {
+        RemoteStdioRepoSession::task_status(self, task_id)
+            .await
+            .map_err(AppError::Protocol)
+    }
+
+    async fn build_index(&self) -> crate::service::search::flashgrep::error::Result<TaskStatus> {
+        RemoteStdioRepoSession::build_index(self)
+            .await
+            .map_err(AppError::Protocol)
+    }
+
+    async fn rebuild_index(&self) -> crate::service::search::flashgrep::error::Result<TaskStatus> {
+        RemoteStdioRepoSession::rebuild_index(self)
+            .await
+            .map_err(AppError::Protocol)
+    }
+
+    async fn search(
+        &self,
+        request: SearchRequest,
+    ) -> crate::service::search::flashgrep::error::Result<SearchOutcome> {
+        let (backend, status, results) =
+            RemoteStdioRepoSession::search(self, request.query, request.scope)
+                .await
+                .map_err(AppError::Protocol)?;
+        Ok(SearchOutcome {
+            backend,
+            status,
+            results,
+        })
+    }
+
+    async fn glob(
+        &self,
+        request: GlobRequest,
+    ) -> crate::service::search::flashgrep::error::Result<GlobOutcome> {
+        let (status, paths) = RemoteStdioRepoSession::glob(self, request.scope)
+            .await
+            .map_err(AppError::Protocol)?;
+        Ok(GlobOutcome { status, paths })
+    }
+
+    async fn close(&self) -> crate::service::search::flashgrep::error::Result<()> {
+        RemoteStdioRepoSession::close(self).await;
+        Ok(())
+    }
+}
+
+fn spawn_remote_stdio_owner(
+    connection_id: String,
+    mut channel: russh::Channel<russh::client::Msg>,
+    mut write_rx: mpsc::Receiver<Vec<u8>>,
+    protocol: ProtocolClient,
+) {
+    tokio::spawn(async move {
+        let mut writer = channel.make_writer();
+        let mut read_buffer = Vec::<u8>::new();
+
+        loop {
+            tokio::select! {
+                outbound = write_rx.recv() => {
+                    let Some(outbound) = outbound else {
+                        let _ = channel.eof().await;
+                        let _ = channel.close().await;
+                        break;
+                    };
+                    if let Err(error) = writer.write_all(&outbound).await {
+                        log::warn!(
+                            "Failed to write remote flashgrep stdio request: connection_id={}, error={}",
+                            connection_id,
+                            error
+                        );
+                        protocol
+                            .close_with_message("remote flashgrep stdio daemon write failed")
+                            .await;
+                        break;
+                    }
+                    if let Err(error) = writer.flush().await {
+                        log::warn!(
+                            "Failed to flush remote flashgrep stdio request: connection_id={}, error={}",
+                            connection_id,
+                            error
+                        );
+                        protocol
+                            .close_with_message("remote flashgrep stdio daemon flush failed")
+                            .await;
+                        break;
+                    }
+                }
+
+                message = channel.wait() => {
+                    match message {
+                        Some(russh::ChannelMsg::Data { data }) => {
+                            read_buffer.extend_from_slice(&data);
+                            match drain_content_length_messages(&mut read_buffer) {
+                                Ok(messages) => {
+                                    for message in messages {
+                                        protocol.handle_server_message(message).await;
+                                    }
+                                }
+                                Err(error) => {
+                                    log::warn!(
+                                        "Failed to decode remote flashgrep stdio message: connection_id={}, error={}",
+                                        connection_id,
+                                        error
+                                    );
+                                    protocol
+                                        .close_with_message(format!(
+                                            "remote flashgrep stdio daemon decode failed: {error}"
+                                        ))
+                                        .await;
+                                    break;
+                                }
+                            }
+                        }
+                        Some(russh::ChannelMsg::ExtendedData { data, .. }) => {
+                            let text = String::from_utf8_lossy(&data);
+                            for line in text.lines() {
+                                log::debug!(
+                                    "remote flashgrep stdio daemon stderr: connection_id={}, line={}",
+                                    connection_id,
+                                    line
+                                );
+                            }
+                        }
+                        Some(russh::ChannelMsg::ExitStatus { exit_status }) => {
+                            log::debug!(
+                                "Remote flashgrep stdio daemon exited: connection_id={}, exit_status={}",
+                                connection_id,
+                                exit_status
+                            );
+                            break;
+                        }
+                        Some(russh::ChannelMsg::Eof) | Some(russh::ChannelMsg::Close) | None => {
+                            break;
+                        }
+                        Some(_) => {}
+                    }
+                }
+            }
+        }
+
+        protocol
+            .close_with_message("remote flashgrep stdio daemon closed before sending a response")
+            .await;
+    });
+}
+
 #[derive(Clone)]
 pub struct RemoteWorkspaceSearchService {
     ssh_manager: SSHConnectionManager,
@@ -55,198 +519,6 @@ struct RemoteSearchContext {
     binary_path: String,
     repo_root: String,
     storage_root: String,
-    state_file: String,
-}
-
-#[derive(Debug, Clone)]
-struct OpenedRemoteRepo {
-    daemon_addr: String,
-    repo_id: String,
-    repo_status: WorkspaceSearchRepoStatus,
-}
-
-#[derive(Debug, Deserialize)]
-struct RemoteDaemonStateFile {
-    addr: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-enum RemoteDaemonResponse {
-    RepoOpened {
-        repo_id: String,
-        status: RemoteRepoStatus,
-    },
-    RepoBaseSnapshotBuilt {
-        indexed_docs: usize,
-        status: RemoteRepoStatus,
-    },
-    RepoBaseSnapshotRebuilt {
-        indexed_docs: usize,
-        status: RemoteRepoStatus,
-    },
-    TaskStarted {
-        task: RemoteTaskStatus,
-    },
-    SearchCompleted {
-        backend: RemoteSearchBackend,
-        status: RemoteRepoStatus,
-        results: RemoteSearchResults,
-    },
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum RemoteSearchBackend {
-    IndexedSnapshot,
-    IndexedClean,
-    IndexedWorkspaceView,
-    RgFallback,
-    ScanFallback,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum RemoteRepoPhase {
-    Opening,
-    MissingBaseSnapshot,
-    BuildingBaseSnapshot,
-    ReadyClean,
-    ReadyDirty,
-    RebuildingBaseSnapshot,
-    Degraded,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum RemoteTaskKind {
-    BuildBaseSnapshot,
-    RebuildBaseSnapshot,
-    RefreshWorkspace,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum RemoteTaskState {
-    Queued,
-    Running,
-    Completed,
-    Failed,
-    Cancelled,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum RemoteTaskPhase {
-    Scanning,
-    Tokenizing,
-    Writing,
-    Finalizing,
-    RefreshingOverlay,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct RemoteDirtyFileStats {
-    modified: usize,
-    deleted: usize,
-    new: usize,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct RemoteWorkspaceOverlayStatus {
-    committed_seq_no: u64,
-    last_seq_no: u64,
-    uncommitted_ops: u64,
-    pending_docs: usize,
-    active_segments: usize,
-    active_delete_segments: usize,
-    merge_requested: bool,
-    merge_running: bool,
-    merge_attempts: u64,
-    merge_completed: u64,
-    merge_failed: u64,
-    last_merge_error: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct RemoteRepoStatus {
-    repo_id: String,
-    repo_path: String,
-    storage_root: String,
-    base_snapshot_root: String,
-    workspace_overlay_root: String,
-    phase: RemoteRepoPhase,
-    snapshot_key: Option<String>,
-    last_probe_unix_secs: Option<u64>,
-    last_rebuild_unix_secs: Option<u64>,
-    dirty_files: RemoteDirtyFileStats,
-    rebuild_recommended: bool,
-    active_task_id: Option<String>,
-    probe_healthy: bool,
-    last_error: Option<String>,
-    overlay: Option<RemoteWorkspaceOverlayStatus>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct RemoteTaskStatus {
-    task_id: String,
-    workspace_id: String,
-    kind: RemoteTaskKind,
-    state: RemoteTaskState,
-    phase: Option<RemoteTaskPhase>,
-    message: String,
-    processed: usize,
-    total: Option<usize>,
-    started_unix_secs: u64,
-    updated_unix_secs: u64,
-    finished_unix_secs: Option<u64>,
-    cancellable: bool,
-    error: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct RemoteSearchResults {
-    candidate_docs: usize,
-    matched_lines: usize,
-    matched_occurrences: usize,
-    #[serde(default)]
-    file_counts: Vec<RemoteFileCount>,
-    #[serde(default)]
-    hits: Vec<RemoteSearchHit>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct RemoteFileCount {
-    path: String,
-    matched_lines: usize,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct RemoteSearchHit {
-    path: String,
-    matches: Vec<RemoteFileMatch>,
-    lines: Vec<RemoteSearchLine>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct RemoteFileMatch {
-    location: RemoteMatchLocation,
-    snippet: String,
-    matched_text: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct RemoteMatchLocation {
-    line: usize,
-    column: usize,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-enum RemoteSearchLine {
-    Match { value: RemoteFileMatch },
-    Context { line_number: usize, snippet: String },
-    ContextBreak,
 }
 
 impl RemoteWorkspaceSearchService {
@@ -269,104 +541,45 @@ impl RemoteWorkspaceSearchService {
     }
 
     pub async fn get_index_status(&self, root_path: &str) -> Result<WorkspaceIndexStatus, String> {
-        let context = self.ensure_remote_search_context(root_path).await?;
-        let opened = self
-            .open_remote_repo(&context, self.max_file_size().await)
-            .await?;
+        let session = self.get_or_open_stdio_session(root_path).await?;
+        let repo_status: WorkspaceSearchRepoStatus = session.status().await?.into();
+        let active_task = match repo_status.active_task_id.clone() {
+            Some(task_id) => match session.task_status(task_id).await {
+                Ok(task) => Some(task.into()),
+                Err(error) => {
+                    log::warn!(
+                        "Failed to fetch active remote flashgrep task status: {}",
+                        error
+                    );
+                    None
+                }
+            },
+            None => None,
+        };
         Ok(WorkspaceIndexStatus {
-            active_task: synthesize_active_task(&opened.repo_status),
-            repo_status: opened.repo_status,
+            active_task,
+            repo_status,
         })
     }
 
     pub async fn build_index(&self, root_path: &str) -> Result<IndexTaskHandle, String> {
-        let context = self.ensure_remote_search_context(root_path).await?;
-        let opened = self
-            .open_remote_repo(&context, self.max_file_size().await)
-            .await?;
-        let response = self
-            .execute_flashgrep_json(
-                &context.connection.connection_id,
-                &format!(
-                    "{} daemon build --addr {} --repo-id {}",
-                    shell_escape(&context.binary_path),
-                    shell_escape(&opened.daemon_addr),
-                    shell_escape(&opened.repo_id),
-                ),
-            )
-            .await?;
-        match response {
-            RemoteDaemonResponse::TaskStarted { task } => {
-                let refreshed = self
-                    .open_remote_repo(&context, self.max_file_size().await)
-                    .await
-                    .unwrap_or(opened);
-                Ok(IndexTaskHandle {
-                    task: task.into(),
-                    repo_status: refreshed.repo_status,
-                })
-            }
-            RemoteDaemonResponse::RepoBaseSnapshotBuilt {
-                indexed_docs,
-                status,
-            } => {
-                let repo_status: WorkspaceSearchRepoStatus = status.into();
-                Ok(IndexTaskHandle {
-                    task: completed_remote_index_task(
-                        &repo_status,
-                        WorkspaceSearchTaskKind::Build,
-                        indexed_docs,
-                    ),
-                    repo_status,
-                })
-            }
-            _ => Err("Unexpected flashgrep response while starting remote build".to_string()),
-        }
+        let session = self.get_or_open_stdio_session(root_path).await?;
+        let task = session.build_index().await?;
+        let repo_status = session.status().await?;
+        Ok(IndexTaskHandle {
+            task: task.into(),
+            repo_status: repo_status.into(),
+        })
     }
 
     pub async fn rebuild_index(&self, root_path: &str) -> Result<IndexTaskHandle, String> {
-        let context = self.ensure_remote_search_context(root_path).await?;
-        let opened = self
-            .open_remote_repo(&context, self.max_file_size().await)
-            .await?;
-        let response = self
-            .execute_flashgrep_json(
-                &context.connection.connection_id,
-                &format!(
-                    "{} daemon rebuild --addr {} --repo-id {}",
-                    shell_escape(&context.binary_path),
-                    shell_escape(&opened.daemon_addr),
-                    shell_escape(&opened.repo_id),
-                ),
-            )
-            .await?;
-        match response {
-            RemoteDaemonResponse::TaskStarted { task } => {
-                let refreshed = self
-                    .open_remote_repo(&context, self.max_file_size().await)
-                    .await
-                    .unwrap_or(opened);
-                Ok(IndexTaskHandle {
-                    task: task.into(),
-                    repo_status: refreshed.repo_status,
-                })
-            }
-            RemoteDaemonResponse::RepoBaseSnapshotRebuilt {
-                indexed_docs,
-                status,
-            } => {
-                let repo_status: WorkspaceSearchRepoStatus = status.into();
-                Ok(IndexTaskHandle {
-                    task: completed_remote_index_task(
-                        &repo_status,
-                        WorkspaceSearchTaskKind::Rebuild,
-                        indexed_docs,
-                    ),
-                    repo_status,
-                })
-            }
-            _ => Err("Unexpected flashgrep response while starting remote rebuild".to_string()),
-        }
+        let session = self.get_or_open_stdio_session(root_path).await?;
+        let task = session.rebuild_index().await?;
+        let repo_status = session.status().await?;
+        Ok(IndexTaskHandle {
+            task: task.into(),
+            repo_status: repo_status.into(),
+        })
     }
 
     pub async fn search_content(
@@ -374,82 +587,39 @@ impl RemoteWorkspaceSearchService {
         request: ContentSearchRequest,
     ) -> Result<ContentSearchResult, String> {
         let repo_root = normalize_remote_workspace_path(&request.repo_root.to_string_lossy());
-        let context = self.ensure_remote_search_context(&repo_root).await?;
-        let opened = self
-            .open_remote_repo(&context, self.max_file_size().await)
-            .await?;
-
-        let mut command = format!(
-            "{} daemon search --addr {} --repo-id {}",
-            shell_escape(&context.binary_path),
-            shell_escape(&opened.daemon_addr),
-            shell_escape(&opened.repo_id),
-        );
-        if !request.use_regex {
-            command.push_str(" --fixed-strings");
-        }
-        if !request.case_sensitive {
-            command.push_str(" --ignore-case");
-        }
-        if request.multiline {
-            command.push_str(" --multiline --multiline-dotall");
-        }
-        if request.whole_word {
-            command.push_str(" --word-regexp");
-        }
-        if request.before_context > 0 {
-            command.push_str(&format!(" --before-context {}", request.before_context));
-        }
-        if request.after_context > 0 {
-            command.push_str(&format!(" --after-context {}", request.after_context));
-        }
-        if matches!(request.output_mode, ContentSearchOutputMode::Count) {
-            command.push_str(" --count");
-        }
-        if matches!(
-            request.output_mode,
-            ContentSearchOutputMode::FilesWithMatches
-        ) {
-            command.push_str(" --quiet");
-        }
-        command.push_str(" --allow-scan-fallback");
-        for glob in &request.globs {
-            command.push_str(&format!(" --glob {}", shell_escape(glob)));
-        }
-        for file_type in &request.file_types {
-            command.push_str(&format!(" --type {}", shell_escape(file_type)));
-        }
-        for file_type in &request.exclude_file_types {
-            command.push_str(&format!(" --type-not {}", shell_escape(file_type)));
-        }
-        command.push(' ');
-        command.push_str(&shell_escape(&request.pattern));
-        if let Some(search_path) = request.search_path.as_ref() {
-            command.push(' ');
-            command.push_str(&shell_escape(&search_path.to_string_lossy()));
-        }
-
-        let response = self
-            .execute_flashgrep_json(&context.connection.connection_id, &command)
-            .await?;
-        let (backend, repo_status, raw_results) = match response {
-            RemoteDaemonResponse::SearchCompleted {
-                backend,
-                status,
-                results,
-            } => (backend, status, results),
-            _ => {
-                return Err(
-                    "Unexpected flashgrep response while searching remote workspace".to_string(),
-                );
-            }
+        let session = self.get_or_open_stdio_session(&repo_root).await?;
+        let scope = build_remote_scope(
+            &repo_root,
+            request.search_path.as_deref(),
+            request.globs,
+            request.file_types,
+            request.exclude_file_types,
+        )?;
+        let max_results = request.max_results.filter(|limit| *limit > 0);
+        let query = QuerySpec {
+            pattern: request.pattern,
+            patterns: Vec::new(),
+            case_insensitive: !request.case_sensitive,
+            multiline: request.multiline,
+            dot_matches_new_line: request.multiline,
+            fixed_strings: !request.use_regex,
+            word_regexp: request.whole_word,
+            line_regexp: false,
+            before_context: request.before_context,
+            after_context: request.after_context,
+            top_k_tokens: 6,
+            max_count: None,
+            global_max_results: max_results,
+            search_mode: request.output_mode.search_mode(),
         };
 
-        let mut results = convert_search_results(&raw_results, request.output_mode);
-        let truncated = request
-            .max_results
-            .is_some_and(|limit| limit > 0 && results.len() >= limit);
-        if let Some(limit) = request.max_results.filter(|limit| *limit > 0) {
+        let output_mode = request.output_mode;
+        let (backend, repo_status, raw_results) = session.search(query, scope).await?;
+        let mut results = convert_stdio_search_results(&raw_results, output_mode);
+        let truncated = max_results
+            .map(|limit| results.len() >= limit)
+            .unwrap_or(false);
+        if let Some(limit) = max_results {
             results.truncate(limit);
         }
 
@@ -457,16 +627,114 @@ impl RemoteWorkspaceSearchService {
             outcome: FileSearchOutcome { results, truncated },
             file_counts: raw_results
                 .file_counts
+                .clone()
                 .into_iter()
-                .map(Into::into)
+                .map(WorkspaceSearchFileCount::from)
                 .collect(),
-            hits: raw_results.hits.into_iter().map(Into::into).collect(),
+            hits: raw_results
+                .hits
+                .clone()
+                .into_iter()
+                .map(WorkspaceSearchHit::from)
+                .collect(),
             backend: backend.into(),
             repo_status: repo_status.into(),
             candidate_docs: raw_results.candidate_docs,
             matched_lines: raw_results.matched_lines,
             matched_occurrences: raw_results.matched_occurrences,
         })
+    }
+
+    pub async fn glob(&self, request: GlobSearchRequest) -> Result<GlobSearchResult, String> {
+        let repo_root = normalize_remote_workspace_path(&request.repo_root.to_string_lossy());
+        let session = self.get_or_open_stdio_session(&repo_root).await?;
+        let scope = build_remote_scope(
+            &repo_root,
+            request.search_path.as_deref(),
+            vec![request.pattern],
+            Vec::new(),
+            Vec::new(),
+        )?;
+        let (repo_status, mut paths) = session.glob(scope).await?;
+
+        paths.sort();
+        if request.limit > 0 {
+            paths.truncate(request.limit);
+        } else {
+            paths.clear();
+        }
+
+        Ok(GlobSearchResult {
+            paths,
+            repo_status: repo_status.into(),
+        })
+    }
+
+    async fn get_or_open_stdio_session(
+        &self,
+        root_path: &str,
+    ) -> Result<RemoteStdioSessionLease, String> {
+        let context = self.ensure_remote_search_context(root_path).await?;
+        let key = remote_stdio_session_key(&context.connection.connection_id, &context.repo_root);
+
+        if let Some(entry) = REMOTE_STDIO_SESSIONS.read().await.get(&key).cloned() {
+            entry.activity_epoch.fetch_add(1, Ordering::Relaxed);
+            let lease = RemoteStdioSessionLease::new(entry.session.clone());
+            if lease.status().await.is_ok() {
+                return Ok(lease);
+            }
+            drop(lease);
+            log::warn!(
+                "Remote workspace search stdio session became unhealthy, reopening: connection_id={}, path={}",
+                context.connection.connection_id,
+                context.repo_root
+            );
+            REMOTE_STDIO_SESSIONS.write().await.remove(&key);
+            entry.session.close().await;
+            entry.session.client.shutdown().await;
+        }
+
+        let guard = {
+            let mut guards = REMOTE_STDIO_OPEN_GUARDS.lock().await;
+            guards
+                .entry(key.clone())
+                .or_insert_with(|| Arc::new(Mutex::new(())))
+                .clone()
+        };
+        let _guard = guard.lock().await;
+
+        if let Some(entry) = REMOTE_STDIO_SESSIONS.read().await.get(&key).cloned() {
+            entry.activity_epoch.fetch_add(1, Ordering::Relaxed);
+            return Ok(RemoteStdioSessionLease::new(entry.session));
+        }
+
+        let client = RemoteStdioDaemonClient::spawn(
+            self.ssh_manager.clone(),
+            context.connection.connection_id.clone(),
+            context.binary_path.clone(),
+        )
+        .await?;
+        let mut repo_config = RepoConfig::default();
+        repo_config.max_file_size = self.max_file_size().await;
+        let session = client
+            .open_repo(OpenRepoParams {
+                repo_path: PathBuf::from(&context.repo_root),
+                storage_root: Some(PathBuf::from(&context.storage_root)),
+                config: repo_config,
+                refresh: RefreshPolicyConfig::default(),
+            })
+            .await?;
+        let activity_epoch = session.activity_epoch.clone();
+        let session = Arc::new(session);
+        REMOTE_STDIO_SESSIONS.write().await.insert(
+            key.clone(),
+            RemoteStdioSessionEntry {
+                session: session.clone(),
+                activity_epoch: activity_epoch.clone(),
+            },
+        );
+        schedule_remote_stdio_session_release(key, activity_epoch);
+        Ok(RemoteStdioSessionLease::new(session))
     }
 
     pub async fn resolve_remote_workspace_entry(
@@ -523,104 +791,12 @@ impl RemoteWorkspaceSearchService {
             .ensure_remote_flashgrep_binary(&connection.connection_id, &repo_root, &remote_arch)
             .await?;
         let storage_root = join_remote_path(&repo_root, ".bitfun/search/flashgrep-index");
-        let state_file = join_remote_path(&storage_root, REMOTE_FLASHGREP_STATE_FILE_NAME);
 
         Ok(RemoteSearchContext {
             connection,
             binary_path,
             repo_root,
             storage_root,
-            state_file,
-        })
-    }
-
-    async fn open_remote_repo(
-        &self,
-        context: &RemoteSearchContext,
-        max_file_size: u64,
-    ) -> Result<OpenedRemoteRepo, String> {
-        let mut daemon_addr = self
-            .ensure_remote_daemon_addr(
-                &context.connection.connection_id,
-                &context.binary_path,
-                &context.state_file,
-            )
-            .await?;
-        match self
-            .open_remote_repo_once(context, &daemon_addr, max_file_size)
-            .await
-        {
-            Ok(opened) => Ok(opened),
-            Err(_) => {
-                daemon_addr = self
-                    .restart_remote_daemon(
-                        &context.connection.connection_id,
-                        &context.binary_path,
-                        &context.state_file,
-                    )
-                    .await?;
-                self.open_remote_repo_once(context, &daemon_addr, max_file_size)
-                    .await
-            }
-        }
-    }
-
-    async fn open_remote_repo_once(
-        &self,
-        context: &RemoteSearchContext,
-        daemon_addr: &str,
-        max_file_size: u64,
-    ) -> Result<OpenedRemoteRepo, String> {
-        let response = self
-            .execute_flashgrep_json(
-                &context.connection.connection_id,
-                &format!(
-                    "{} daemon open --addr {} --repo {} --storage-root {} --max-file-size {}",
-                    shell_escape(&context.binary_path),
-                    shell_escape(daemon_addr),
-                    shell_escape(&context.repo_root),
-                    shell_escape(&context.storage_root),
-                    max_file_size,
-                ),
-            )
-            .await?;
-        match response {
-            RemoteDaemonResponse::RepoOpened { repo_id, status } => Ok(OpenedRemoteRepo {
-                daemon_addr: daemon_addr.to_string(),
-                repo_id,
-                repo_status: status.into(),
-            }),
-            _ => Err("Unexpected flashgrep response while opening remote repo".to_string()),
-        }
-    }
-
-    async fn execute_flashgrep_json(
-        &self,
-        connection_id: &str,
-        command: &str,
-    ) -> Result<RemoteDaemonResponse, String> {
-        let (stdout, stderr, exit_code) = self
-            .ssh_manager
-            .execute_command(connection_id, command)
-            .await
-            .map_err(|error| format!("Failed to execute remote flashgrep command: {error}"))?;
-        if exit_code != 0 {
-            let detail = stderr.trim();
-            return if detail.is_empty() {
-                Err(format!(
-                    "Remote flashgrep command failed with exit code {exit_code}"
-                ))
-            } else {
-                Err(format!(
-                    "Remote flashgrep command failed with exit code {exit_code}: {detail}"
-                ))
-            };
-        }
-        serde_json::from_str(stdout.trim()).map_err(|error| {
-            format!(
-                "Failed to parse remote flashgrep response as JSON: {error}. Raw output: {}",
-                stdout.trim()
-            )
         })
     }
 
@@ -748,151 +924,6 @@ impl RemoteWorkspaceSearchService {
         Ok(remote_binary_path)
     }
 
-    async fn ensure_remote_daemon_addr(
-        &self,
-        connection_id: &str,
-        binary_path: &str,
-        state_file: &str,
-    ) -> Result<String, String> {
-        if let Some(addr) = self
-            .read_remote_daemon_addr(connection_id, state_file)
-            .await?
-        {
-            return Ok(addr);
-        }
-        self.restart_remote_daemon(connection_id, binary_path, state_file)
-            .await
-    }
-
-    async fn restart_remote_daemon(
-        &self,
-        connection_id: &str,
-        binary_path: &str,
-        state_file: &str,
-    ) -> Result<String, String> {
-        let state_dir = Path::new(state_file)
-            .parent()
-            .and_then(|parent| parent.to_str())
-            .ok_or_else(|| format!("Invalid remote flashgrep state file path: {state_file}"))?;
-        let log_file = remote_daemon_log_file_path(state_file)
-            .ok_or_else(|| format!("Invalid remote flashgrep log file path: {state_file}"))?;
-        self.remote_file_service
-            .create_dir_all(connection_id, state_dir)
-            .await
-            .map_err(|error| {
-                format!("Failed to create remote flashgrep storage directory: {error}")
-            })?;
-        let start_command = format!(
-            "rm -f {state_file} {log_file} && nohup {binary} serve --bind 127.0.0.1:0 --state-file {state_file} >{log_file} 2>&1 < /dev/null &",
-            state_file = shell_escape(state_file),
-            log_file = shell_escape(&log_file),
-            binary = shell_escape(binary_path),
-        );
-        let (_, stderr, exit_code) = self
-            .ssh_manager
-            .execute_command(connection_id, &start_command)
-            .await
-            .map_err(|error| format!("Failed to start remote flashgrep daemon: {error}"))?;
-        if exit_code != 0 {
-            return Err(format!(
-                "Failed to start remote flashgrep daemon: {}",
-                stderr.trim()
-            ));
-        }
-
-        let deadline = tokio::time::Instant::now() + REMOTE_FLASHGREP_STARTUP_TIMEOUT;
-        loop {
-            if let Some(addr) = self
-                .read_remote_daemon_addr(connection_id, state_file)
-                .await?
-            {
-                return Ok(addr);
-            }
-            if tokio::time::Instant::now() >= deadline {
-                let diagnostics = self
-                    .read_remote_daemon_log_tail(connection_id, &log_file)
-                    .await;
-                if let Some(classified_error) = diagnostics
-                    .as_deref()
-                    .and_then(|text| classify_remote_flashgrep_start_failure(binary_path, text))
-                {
-                    return Err(classified_error);
-                }
-                let diagnostic_suffix = diagnostics
-                    .as_deref()
-                    .filter(|text| !text.trim().is_empty())
-                    .map(|text| format!(" Daemon log tail: {text}"))
-                    .unwrap_or_default();
-                return Err(format!(
-                    "Timed out while waiting for remote flashgrep daemon to write its state file.{diagnostic_suffix}"
-                ));
-            }
-            sleep(REMOTE_FLASHGREP_STARTUP_POLL_INTERVAL).await;
-        }
-    }
-
-    async fn read_remote_daemon_addr(
-        &self,
-        connection_id: &str,
-        state_file: &str,
-    ) -> Result<Option<String>, String> {
-        if !self
-            .remote_file_service
-            .exists(connection_id, state_file)
-            .await
-            .map_err(|error| format!("Failed to inspect remote flashgrep state file: {error}"))?
-        {
-            return Ok(None);
-        }
-        let contents = self
-            .remote_file_service
-            .read_file(connection_id, state_file)
-            .await
-            .map_err(|error| format!("Failed to read remote flashgrep state file: {error}"))?;
-        let state: RemoteDaemonStateFile = serde_json::from_slice(&contents).map_err(|error| {
-            format!(
-                "Failed to parse remote flashgrep state file {}: {error}",
-                state_file
-            )
-        })?;
-        if state.addr.trim().is_empty() {
-            return Ok(None);
-        }
-        Ok(Some(state.addr))
-    }
-
-    async fn read_remote_daemon_log_tail(
-        &self,
-        connection_id: &str,
-        log_file: &str,
-    ) -> Option<String> {
-        if !self
-            .remote_file_service
-            .exists(connection_id, log_file)
-            .await
-            .ok()?
-        {
-            return None;
-        }
-
-        let bytes = self
-            .remote_file_service
-            .read_file(connection_id, log_file)
-            .await
-            .ok()?;
-        let text = String::from_utf8_lossy(&bytes);
-        let trimmed = text.trim();
-        if trimmed.is_empty() {
-            return None;
-        }
-
-        let mut lines: Vec<&str> = trimmed.lines().collect();
-        if lines.len() > 12 {
-            lines = lines.split_off(lines.len() - 12);
-        }
-        Some(lines.join(" | "))
-    }
-
     async fn max_file_size(&self) -> u64 {
         match self
             .config_service
@@ -911,17 +942,126 @@ impl RemoteWorkspaceSearchService {
     }
 }
 
+pub async fn remote_workspace_search_service_for_path(
+    root_path: &str,
+    preferred_connection_id: Option<String>,
+) -> Result<RemoteWorkspaceSearchService, String> {
+    let manager = get_remote_workspace_manager()
+        .ok_or_else(|| "Remote workspace manager is unavailable".to_string())?;
+    let preferred_connection_id = match preferred_connection_id {
+        Some(connection_id) => Some(connection_id),
+        None => lookup_remote_connection(root_path)
+            .await
+            .map(|entry| entry.connection_id),
+    };
+
+    Ok(RemoteWorkspaceSearchService::new(
+        manager
+            .get_ssh_manager()
+            .await
+            .ok_or_else(|| "SSH manager unavailable".to_string())?,
+        manager
+            .get_file_service()
+            .await
+            .ok_or_else(|| "Remote file service unavailable".to_string())?,
+        get_global_config_service()
+            .await
+            .map_err(|error| format!("Config service unavailable: {error}"))?,
+    )
+    .with_preferred_connection_id(preferred_connection_id))
+}
+
+fn remote_stdio_session_key(connection_id: &str, repo_root: &str) -> String {
+    format!(
+        "{connection_id}\0{}",
+        normalize_remote_workspace_path(repo_root)
+    )
+}
+
+fn schedule_remote_stdio_session_release(key: String, activity_epoch: Arc<AtomicU64>) {
+    tokio::spawn(async move {
+        sleep(REMOTE_STDIO_SESSION_IDLE_GRACE).await;
+        let expected_epoch = activity_epoch.load(Ordering::Relaxed);
+        let entry = {
+            let mut sessions = REMOTE_STDIO_SESSIONS.write().await;
+            let Some(entry) = sessions.get(&key) else {
+                return;
+            };
+            if entry.session.active_operations.load(Ordering::Relaxed) > 0 {
+                schedule_remote_stdio_session_release(key.clone(), entry.activity_epoch.clone());
+                return;
+            }
+            if entry.activity_epoch.load(Ordering::Relaxed) != expected_epoch {
+                schedule_remote_stdio_session_release(key.clone(), entry.activity_epoch.clone());
+                return;
+            }
+            sessions.remove(&key)
+        };
+
+        if let Some(entry) = entry {
+            log::info!(
+                "Releasing idle remote workspace search stdio session: key={}",
+                key.replace('\0', ":")
+            );
+            entry.session.close().await;
+            entry.session.client.shutdown().await;
+            REMOTE_STDIO_OPEN_GUARDS.lock().await.remove(&key);
+        }
+    });
+}
+
+fn build_remote_scope(
+    repo_root: &str,
+    search_path: Option<&Path>,
+    globs: Vec<String>,
+    file_types: Vec<String>,
+    exclude_file_types: Vec<String>,
+) -> Result<PathScope, String> {
+    let repo_root = normalize_remote_workspace_path(repo_root);
+    let roots = match search_path {
+        Some(path) => {
+            let normalized = normalize_remote_scope_path(&repo_root, path)?;
+            if normalized == repo_root {
+                Vec::new()
+            } else {
+                vec![PathBuf::from(normalized)]
+            }
+        }
+        None => Vec::new(),
+    };
+
+    Ok(PathScope {
+        roots,
+        globs,
+        iglobs: Vec::new(),
+        type_add: Vec::new(),
+        type_clear: Vec::new(),
+        types: file_types,
+        type_not: exclude_file_types,
+    })
+}
+
+fn normalize_remote_scope_path(repo_root: &str, search_path: &Path) -> Result<String, String> {
+    let raw_path = search_path.to_string_lossy();
+    let normalized = if raw_path.starts_with('/') {
+        normalize_remote_workspace_path(&raw_path)
+    } else {
+        join_remote_path(repo_root, &raw_path)
+    };
+    let repo_root_with_slash = format!("{}/", repo_root.trim_end_matches('/'));
+    if normalized != repo_root && !normalized.starts_with(&repo_root_with_slash) {
+        return Err(format!(
+            "Remote search path is outside workspace root: {normalized}"
+        ));
+    }
+    Ok(normalized)
+}
+
 fn remote_flashgrep_install_dir(repo_root: &str) -> String {
     join_remote_path(
         &normalize_remote_workspace_path(repo_root),
         REMOTE_FLASHGREP_INSTALL_DIR,
     )
-}
-
-fn remote_daemon_log_file_path(state_file: &str) -> Option<String> {
-    let state_path = Path::new(state_file);
-    let state_dir = state_path.parent()?.to_str()?;
-    Some(join_remote_path(state_dir, REMOTE_FLASHGREP_LOG_FILE_NAME))
 }
 
 fn looks_like_linux_workspace_root(path: &str) -> bool {
@@ -980,27 +1120,6 @@ fn parse_remote_os_output(stdout: &str, stderr: &str) -> Option<String> {
     None
 }
 
-fn classify_remote_flashgrep_start_failure(binary_path: &str, log_tail: &str) -> Option<String> {
-    let normalized = log_tail.to_ascii_lowercase();
-    if normalized.contains("glibc_") && normalized.contains("not found") {
-        let binary_name = Path::new(binary_path)
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or(binary_path);
-        let suggested_bundle = if binary_name.contains("aarch64") || binary_name.contains("arm64")
-        {
-            "flashgrep-aarch64-unknown-linux-musl"
-        } else {
-            "flashgrep-x86_64-unknown-linux-musl"
-        };
-        return Some(format!(
-            "Bundled remote flashgrep binary {binary_name} is incompatible with the remote Linux libc. The server is missing the GLIBC version required by that build. Install `flashgrep` on the remote PATH or bundle a musl build such as resources/flashgrep/{suggested_bundle}. Daemon log tail: {log_tail}"
-        ));
-    }
-
-    None
-}
-
 fn resolve_local_flashgrep_bundle(binary_name: &str) -> Option<PathBuf> {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let workspace_root = manifest_dir.join("../../../..");
@@ -1023,21 +1142,25 @@ fn resolve_local_flashgrep_bundle(binary_name: &str) -> Option<PathBuf> {
     candidates.into_iter().find(|candidate| candidate.exists())
 }
 
-fn convert_search_results(
-    search_results: &RemoteSearchResults,
+fn convert_stdio_search_results(
+    search_results: &SearchResults,
     output_mode: ContentSearchOutputMode,
 ) -> Vec<FileSearchResult> {
     match output_mode {
-        ContentSearchOutputMode::Content => convert_hits_to_file_search_results(search_results),
-        ContentSearchOutputMode::Count => convert_file_counts_to_search_results(search_results),
+        ContentSearchOutputMode::Content => {
+            convert_stdio_hits_to_file_search_results(search_results)
+        }
+        ContentSearchOutputMode::Count => {
+            convert_stdio_file_counts_to_search_results(search_results)
+        }
         ContentSearchOutputMode::FilesWithMatches => {
-            convert_hits_to_file_only_results(search_results)
+            convert_stdio_hits_to_file_only_results(search_results)
         }
     }
 }
 
-fn convert_file_counts_to_search_results(
-    search_results: &RemoteSearchResults,
+fn convert_stdio_file_counts_to_search_results(
+    search_results: &SearchResults,
 ) -> Vec<FileSearchResult> {
     search_results
         .file_counts
@@ -1060,8 +1183,8 @@ fn convert_file_counts_to_search_results(
         .collect()
 }
 
-fn convert_hits_to_file_search_results(
-    search_results: &RemoteSearchResults,
+fn convert_stdio_hits_to_file_search_results(
+    search_results: &SearchResults,
 ) -> Vec<FileSearchResult> {
     let mut file_results = Vec::new();
     for hit in &search_results.hits {
@@ -1097,8 +1220,8 @@ fn convert_hits_to_file_search_results(
     file_results
 }
 
-fn convert_hits_to_file_only_results(
-    search_results: &RemoteSearchResults,
+fn convert_stdio_hits_to_file_only_results(
+    search_results: &SearchResults,
 ) -> Vec<FileSearchResult> {
     search_results
         .hits
@@ -1143,89 +1266,6 @@ fn split_preview(
     (None, Some(snippet.to_string()), None)
 }
 
-fn synthesize_active_task(
-    repo_status: &WorkspaceSearchRepoStatus,
-) -> Option<WorkspaceSearchTaskStatus> {
-    let task_id = repo_status.active_task_id.clone()?;
-    let (kind, phase, message) = match repo_status.phase {
-        WorkspaceSearchRepoPhase::Preparing | WorkspaceSearchRepoPhase::NeedsIndex => (
-            WorkspaceSearchTaskKind::Build,
-            Some(WorkspaceSearchTaskPhase::Discovering),
-            "Preparing remote workspace index".to_string(),
-        ),
-        WorkspaceSearchRepoPhase::Building => (
-            WorkspaceSearchTaskKind::Build,
-            Some(WorkspaceSearchTaskPhase::Processing),
-            "Building remote workspace index".to_string(),
-        ),
-        WorkspaceSearchRepoPhase::Refreshing => (
-            WorkspaceSearchTaskKind::Rebuild,
-            Some(WorkspaceSearchTaskPhase::Refreshing),
-            "Refreshing remote workspace index".to_string(),
-        ),
-        WorkspaceSearchRepoPhase::TrackingChanges => (
-            WorkspaceSearchTaskKind::Refresh,
-            Some(WorkspaceSearchTaskPhase::Refreshing),
-            "Refreshing remote workspace changes".to_string(),
-        ),
-        WorkspaceSearchRepoPhase::Ready | WorkspaceSearchRepoPhase::Limited => (
-            WorkspaceSearchTaskKind::Refresh,
-            None,
-            "Remote workspace index task is active".to_string(),
-        ),
-    };
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    Some(WorkspaceSearchTaskStatus {
-        task_id,
-        workspace_id: repo_status.repo_id.clone(),
-        kind,
-        state: WorkspaceSearchTaskState::Running,
-        phase,
-        message,
-        processed: 0,
-        total: None,
-        started_unix_secs: now,
-        updated_unix_secs: now,
-        finished_unix_secs: None,
-        cancellable: false,
-        error: None,
-    })
-}
-
-fn completed_remote_index_task(
-    repo_status: &WorkspaceSearchRepoStatus,
-    kind: WorkspaceSearchTaskKind,
-    indexed_docs: usize,
-) -> WorkspaceSearchTaskStatus {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    let verb = match kind {
-        WorkspaceSearchTaskKind::Build => "Built",
-        WorkspaceSearchTaskKind::Rebuild => "Rebuilt",
-        WorkspaceSearchTaskKind::Refresh => "Refreshed",
-    };
-    WorkspaceSearchTaskStatus {
-        task_id: format!("remote-{}-{now}", repo_status.repo_id),
-        workspace_id: repo_status.repo_id.clone(),
-        kind,
-        state: WorkspaceSearchTaskState::Completed,
-        phase: Some(WorkspaceSearchTaskPhase::Finalizing),
-        message: format!("{verb} remote workspace index with {indexed_docs} documents"),
-        processed: indexed_docs,
-        total: Some(indexed_docs),
-        started_unix_secs: now,
-        updated_unix_secs: now,
-        finished_unix_secs: Some(now),
-        cancellable: false,
-        error: None,
-    }
-}
-
 fn join_remote_path(base: &str, child: &str) -> String {
     let base = normalize_remote_workspace_path(base);
     let child = child.trim_start_matches('/');
@@ -1247,203 +1287,13 @@ fn shell_escape(value: &str) -> String {
     }
 }
 
-impl From<RemoteSearchBackend> for WorkspaceSearchBackend {
-    fn from(value: RemoteSearchBackend) -> Self {
-        match value {
-            RemoteSearchBackend::IndexedSnapshot | RemoteSearchBackend::IndexedClean => {
-                Self::Indexed
-            }
-            RemoteSearchBackend::IndexedWorkspaceView => Self::IndexedWorkspace,
-            RemoteSearchBackend::RgFallback => Self::TextFallback,
-            RemoteSearchBackend::ScanFallback => Self::ScanFallback,
-        }
-    }
-}
-
-impl From<RemoteRepoPhase> for WorkspaceSearchRepoPhase {
-    fn from(value: RemoteRepoPhase) -> Self {
-        match value {
-            RemoteRepoPhase::Opening => Self::Preparing,
-            RemoteRepoPhase::MissingBaseSnapshot => Self::NeedsIndex,
-            RemoteRepoPhase::BuildingBaseSnapshot => Self::Building,
-            RemoteRepoPhase::ReadyClean => Self::Ready,
-            RemoteRepoPhase::ReadyDirty => Self::TrackingChanges,
-            RemoteRepoPhase::RebuildingBaseSnapshot => Self::Refreshing,
-            RemoteRepoPhase::Degraded => Self::Limited,
-        }
-    }
-}
-
-impl From<RemoteDirtyFileStats> for WorkspaceSearchDirtyFiles {
-    fn from(value: RemoteDirtyFileStats) -> Self {
-        Self {
-            modified: value.modified,
-            deleted: value.deleted,
-            new: value.new,
-        }
-    }
-}
-
-impl From<RemoteWorkspaceOverlayStatus> for WorkspaceSearchOverlayStatus {
-    fn from(value: RemoteWorkspaceOverlayStatus) -> Self {
-        Self {
-            committed_seq_no: value.committed_seq_no,
-            last_seq_no: value.last_seq_no,
-            uncommitted_ops: value.uncommitted_ops,
-            pending_docs: value.pending_docs,
-            active_segments: value.active_segments,
-            active_delete_segments: value.active_delete_segments,
-            merge_requested: value.merge_requested,
-            merge_running: value.merge_running,
-            merge_attempts: value.merge_attempts,
-            merge_completed: value.merge_completed,
-            merge_failed: value.merge_failed,
-            last_merge_error: value.last_merge_error,
-        }
-    }
-}
-
-impl From<RemoteRepoStatus> for WorkspaceSearchRepoStatus {
-    fn from(value: RemoteRepoStatus) -> Self {
-        Self {
-            repo_id: value.repo_id,
-            repo_path: value.repo_path,
-            storage_root: value.storage_root,
-            base_snapshot_root: value.base_snapshot_root,
-            workspace_overlay_root: value.workspace_overlay_root,
-            phase: value.phase.into(),
-            snapshot_key: value.snapshot_key,
-            last_probe_unix_secs: value.last_probe_unix_secs,
-            last_rebuild_unix_secs: value.last_rebuild_unix_secs,
-            dirty_files: value.dirty_files.into(),
-            rebuild_recommended: value.rebuild_recommended,
-            active_task_id: value.active_task_id,
-            probe_healthy: value.probe_healthy,
-            last_error: value.last_error,
-            overlay: value.overlay.map(Into::into),
-        }
-    }
-}
-
-impl From<RemoteTaskKind> for WorkspaceSearchTaskKind {
-    fn from(value: RemoteTaskKind) -> Self {
-        match value {
-            RemoteTaskKind::BuildBaseSnapshot => Self::Build,
-            RemoteTaskKind::RebuildBaseSnapshot => Self::Rebuild,
-            RemoteTaskKind::RefreshWorkspace => Self::Refresh,
-        }
-    }
-}
-
-impl From<RemoteTaskState> for WorkspaceSearchTaskState {
-    fn from(value: RemoteTaskState) -> Self {
-        match value {
-            RemoteTaskState::Queued => Self::Queued,
-            RemoteTaskState::Running => Self::Running,
-            RemoteTaskState::Completed => Self::Completed,
-            RemoteTaskState::Failed => Self::Failed,
-            RemoteTaskState::Cancelled => Self::Cancelled,
-        }
-    }
-}
-
-impl From<RemoteTaskPhase> for WorkspaceSearchTaskPhase {
-    fn from(value: RemoteTaskPhase) -> Self {
-        match value {
-            RemoteTaskPhase::Scanning => Self::Discovering,
-            RemoteTaskPhase::Tokenizing => Self::Processing,
-            RemoteTaskPhase::Writing => Self::Persisting,
-            RemoteTaskPhase::Finalizing => Self::Finalizing,
-            RemoteTaskPhase::RefreshingOverlay => Self::Refreshing,
-        }
-    }
-}
-
-impl From<RemoteTaskStatus> for WorkspaceSearchTaskStatus {
-    fn from(value: RemoteTaskStatus) -> Self {
-        Self {
-            task_id: value.task_id,
-            workspace_id: value.workspace_id,
-            kind: value.kind.into(),
-            state: value.state.into(),
-            phase: value.phase.map(Into::into),
-            message: value.message,
-            processed: value.processed,
-            total: value.total,
-            started_unix_secs: value.started_unix_secs,
-            updated_unix_secs: value.updated_unix_secs,
-            finished_unix_secs: value.finished_unix_secs,
-            cancellable: value.cancellable,
-            error: value.error,
-        }
-    }
-}
-
-impl From<RemoteFileCount> for WorkspaceSearchFileCount {
-    fn from(value: RemoteFileCount) -> Self {
-        Self {
-            path: value.path,
-            matched_lines: value.matched_lines,
-        }
-    }
-}
-
-impl From<RemoteMatchLocation> for WorkspaceSearchMatchLocation {
-    fn from(value: RemoteMatchLocation) -> Self {
-        Self {
-            line: value.line,
-            column: value.column,
-        }
-    }
-}
-
-impl From<RemoteFileMatch> for WorkspaceSearchMatch {
-    fn from(value: RemoteFileMatch) -> Self {
-        Self {
-            location: value.location.into(),
-            snippet: value.snippet,
-            matched_text: value.matched_text,
-        }
-    }
-}
-
-impl From<RemoteSearchLine> for WorkspaceSearchLine {
-    fn from(value: RemoteSearchLine) -> Self {
-        match value {
-            RemoteSearchLine::Match { value } => Self::Match {
-                value: value.into(),
-            },
-            RemoteSearchLine::Context {
-                line_number,
-                snippet,
-            } => Self::Context {
-                value: WorkspaceSearchContextLine {
-                    line_number,
-                    snippet,
-                },
-            },
-            RemoteSearchLine::ContextBreak => Self::ContextBreak,
-        }
-    }
-}
-
-impl From<RemoteSearchHit> for WorkspaceSearchHit {
-    fn from(value: RemoteSearchHit) -> Self {
-        Self {
-            path: value.path,
-            matches: value.matches.into_iter().map(Into::into).collect(),
-            lines: value.lines.into_iter().map(Into::into).collect(),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_remote_flashgrep_start_failure, looks_like_linux_workspace_root,
-        parse_remote_architecture_output, parse_remote_os_output, remote_daemon_log_file_path,
-        remote_flashgrep_install_dir, RemoteDaemonResponse,
+        looks_like_linux_workspace_root, parse_remote_architecture_output, parse_remote_os_output,
+        remote_flashgrep_install_dir,
     };
+    use crate::service::search::flashgrep::drain_content_length_messages;
 
     #[test]
     fn parses_plain_uname_architecture_output() {
@@ -1483,19 +1333,6 @@ mod tests {
     }
 
     #[test]
-    fn resolves_remote_daemon_log_as_sibling_of_state_file() {
-        assert_eq!(
-            remote_daemon_log_file_path(
-                "/home/wgq/workspace/bot_detection/.bitfun/search/flashgrep-index/daemon-state.json"
-            ),
-            Some(
-                "/home/wgq/workspace/bot_detection/.bitfun/search/flashgrep-index/daemon.log"
-                    .to_string()
-            )
-        );
-    }
-
-    #[test]
     fn parses_remote_os_from_uname_output() {
         assert_eq!(
             parse_remote_os_output("Linux\n", ""),
@@ -1526,52 +1363,13 @@ mod tests {
     }
 
     #[test]
-    fn classifies_glibc_incompatibility_as_bundle_issue() {
-        let error = classify_remote_flashgrep_start_failure(
-            "/home/wgq/workspace/bot_detection/.bitfun/bin/flashgrep-x86_64-unknown-linux-gnu",
-            "/home/wgq/workspace/bot_detection/.bitfun/bin/flashgrep-x86_64-unknown-linux-gnu: /lib64/libc.so.6: version `GLIBC_2.33' not found",
-        )
-        .expect("expected glibc classification");
+    fn drains_remote_stdio_content_length_messages() {
+        let body = r#"{"jsonrpc":"2.0","id":7,"result":{"kind":"pong","now_unix_secs":1}}"#;
+        let mut buffer = format!("Content-Length: {}\r\n\r\n{}", body.len(), body).into_bytes();
+        let messages = drain_content_length_messages(&mut buffer)
+            .expect("expected content-length message to decode");
 
-        assert!(error.contains("incompatible with the remote Linux libc"));
-        assert!(error.contains("flashgrep-x86_64-unknown-linux-musl"));
-    }
-
-    #[test]
-    fn deserializes_sync_build_response_from_flashgrep() {
-        let response = serde_json::from_str::<RemoteDaemonResponse>(
-            r#"{
-                "kind": "repo_base_snapshot_built",
-                "indexed_docs": 7,
-                "status": {
-                    "repo_id": "/home/wgq/workspace/original_performance_takehome",
-                    "repo_path": "/home/wgq/workspace/original_performance_takehome",
-                    "storage_root": "/home/wgq/workspace/original_performance_takehome/.bitfun/search/flashgrep-index",
-                    "base_snapshot_root": "/home/wgq/workspace/original_performance_takehome/.bitfun/search/flashgrep-index/base-snapshot",
-                    "workspace_overlay_root": "/home/wgq/workspace/original_performance_takehome/.bitfun/search/flashgrep-index/workspace-overlay",
-                    "phase": "ready_clean",
-                    "snapshot_key": "base-git-demo",
-                    "last_probe_unix_secs": 1778294098,
-                    "last_rebuild_unix_secs": 1778294098,
-                    "dirty_files": { "modified": 0, "deleted": 0, "new": 0 },
-                    "rebuild_recommended": false,
-                    "active_task_id": null,
-                    "probe_healthy": true,
-                    "last_error": null
-                }
-            }"#,
-        )
-        .expect("expected sync build response to deserialize");
-
-        match response {
-            RemoteDaemonResponse::RepoBaseSnapshotBuilt {
-                indexed_docs,
-                status,
-            } => {
-                assert_eq!(indexed_docs, 7);
-                assert_eq!(status.repo_id, "/home/wgq/workspace/original_performance_takehome");
-            }
-            other => panic!("unexpected response variant: {:?}", other),
-        }
+        assert_eq!(messages.len(), 1);
+        assert!(buffer.is_empty());
     }
 }

@@ -1516,7 +1516,9 @@ impl SSHConnectionManager {
     /// concurrent SFTP/exec calls hit a dead session at the same time.
     /// Idempotent: returns Ok(()) immediately when the session is already alive.
     async fn ensure_alive_or_reconnect(&self, connection_id: &str) -> anyhow::Result<()> {
-        let missing_config = self.load_connection_config_from_saved(connection_id).await?;
+        let missing_config = self
+            .load_connection_config_from_saved(connection_id)
+            .await?;
 
         let (alive_flag, reconnect_lock, mut config) = {
             let guard = self.connections.read().await;
@@ -1664,6 +1666,33 @@ impl SSHConnectionManager {
         Self::execute_command_internal(&handle, command, options)
             .await
             .map_err(|e| anyhow!("Command execution failed: {}", e))
+    }
+
+    /// Open a long-lived non-PTY exec channel for streaming stdin/stdout protocols.
+    pub async fn open_exec_channel(
+        &self,
+        connection_id: &str,
+        command: &str,
+    ) -> anyhow::Result<russh::Channel<Msg>> {
+        self.ensure_alive_or_reconnect(connection_id).await?;
+        let handle = {
+            let guard = self.connections.read().await;
+            guard
+                .get(connection_id)
+                .ok_or_else(|| anyhow!("Connection {} not found", connection_id))?
+                .handle
+                .clone()
+        };
+
+        let channel = handle
+            .channel_open_session()
+            .await
+            .map_err(|e| anyhow!("Failed to open SSH exec channel: {}", e))?;
+        channel
+            .exec(true, command)
+            .await
+            .map_err(|e| anyhow!("Failed to start remote command: {}", e))?;
+        Ok(channel)
     }
 
     /// Get server info for a connection
