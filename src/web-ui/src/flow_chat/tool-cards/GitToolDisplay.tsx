@@ -9,6 +9,7 @@ import { CubeLoading, IconButton } from '../../component-library';
 import type { ToolCardProps } from '../types/flow-chat';
 import { BaseToolCard, ToolCardHeader } from './BaseToolCard';
 import { CompactToolCard, CompactToolCardHeader } from './CompactToolCard';
+import { ToolCardStatusSlot } from './ToolCardStatusSlot';
 import { ToolCardCopyAction, ToolCardHeaderActions } from './ToolCardHeaderActions';
 import { ToolCommandPreview } from './ToolCommandPreview';
 import { createLogger } from '@/shared/utils/logger';
@@ -167,23 +168,20 @@ export const GitToolDisplay: React.FC<ToolCardProps> = ({
     />
   );
 
-  const headerExtra = (useTerminalLayout: boolean) => (
-    <span className={useTerminalLayout ? 'terminal-header-extra git-header-extra' : 'git-header-extra'}>
+  // Used only for the expanded header (BaseToolCard layout)
+  const expandedHeaderExtra = () => (
+    <span className="terminal-header-extra git-header-extra">
       {!isFailed && outputSummary && status === 'completed' && (
-        <span className="output-summary">
-          {outputSummary}
-        </span>
+        <span className="output-summary">{outputSummary}</span>
       )}
-
       {isFailed && (
         <span className="error-indicator">
           <span className="error-text">{t('toolCards.git.failed')}</span>
         </span>
       )}
-
-      <ToolCardHeaderActions className={useTerminalLayout ? 'terminal-header-actions git-action-buttons' : 'git-action-buttons'}>
+      <ToolCardHeaderActions className="terminal-header-actions git-action-buttons">
         <ToolCardCopyAction
-          className={useTerminalLayout ? 'terminal-action-btn copy-command-btn git-copy-btn' : 'git-copy-btn'}
+          className="terminal-action-btn copy-command-btn git-copy-btn"
           getText={getCopyCommandText}
           tooltip={t('toolCards.git.copyCommand', { defaultValue: 'Copy git command' })}
           copiedTooltip={t('toolCards.git.commandCopied', { defaultValue: 'Git command copied' })}
@@ -191,17 +189,13 @@ export const GitToolDisplay: React.FC<ToolCardProps> = ({
           failureMessage={t('toolCards.git.copyCommandFailed', { defaultValue: 'Failed to copy git command' })}
           ariaLabel={t('toolCards.git.copyCommand', { defaultValue: 'Copy git command' })}
         />
-
         {requiresConfirmation && !userConfirmed && status !== 'completed' && (
           <>
             <IconButton
               className="tool-card-header-action git-confirm-btn"
               variant="success"
               size="xs"
-              onClick={(e) => {
-                e.stopPropagation();
-                onConfirm?.(toolCall?.input);
-              }}
+              onClick={(e) => { e.stopPropagation(); onConfirm?.(toolCall?.input); }}
               disabled={status === 'streaming'}
               tooltip={t('toolCards.git.confirmExecute')}
             >
@@ -211,10 +205,7 @@ export const GitToolDisplay: React.FC<ToolCardProps> = ({
               className="tool-card-header-action git-reject-btn"
               variant="danger"
               size="xs"
-              onClick={(e) => {
-                e.stopPropagation();
-                onReject?.();
-              }}
+              onClick={(e) => { e.stopPropagation(); onReject?.(); }}
               disabled={status === 'streaming'}
               tooltip={t('toolCards.git.cancel')}
             >
@@ -231,21 +222,68 @@ export const GitToolDisplay: React.FC<ToolCardProps> = ({
       icon={<GitBranch size={16} className="git-card-icon terminal-card-icon" />}
       action={isFailed ? t('toolCards.git.commandFailed') : `${t('toolCards.git.title')}:`}
       content={renderCommandPreview('expanded')}
-      extra={headerExtra(true)}
+      extra={expandedHeaderExtra()}
       statusIcon={renderStatusIcon()}
     />
   );
 
   const renderCompactHeader = () => (
     <CompactToolCardHeader
-      icon={<GitBranch size={16} className="git-card-icon" />}
+      icon={<ToolCardStatusSlot status={status} toolIcon={<GitBranch size={13} strokeWidth={1.5} className="git-card-icon" />} defaultIcon="tool" />}
       action={isFailed ? t('toolCards.git.commandFailed') : undefined}
       content={
         <span className="git-tool-info">
           {renderCommandPreview('compact')}
+          {!isFailed && outputSummary && status === 'completed' && (
+            <span className="output-summary git-output-summary-inline">{outputSummary}</span>
+          )}
+          {/* Hover-only: error label + copy — inline after the command text */}
+          <span className="compact-extra-on-hover git-hover-actions">
+            {isFailed && (
+              <span className="error-indicator">
+                <span className="error-text">{t('toolCards.git.failed')}</span>
+              </span>
+            )}
+            <ToolCardHeaderActions className="git-action-buttons">
+              <ToolCardCopyAction
+                className="git-copy-btn"
+                getText={getCopyCommandText}
+                tooltip={t('toolCards.git.copyCommand', { defaultValue: 'Copy git command' })}
+                copiedTooltip={t('toolCards.git.commandCopied', { defaultValue: 'Git command copied' })}
+                successMessage={t('toolCards.git.commandCopied', { defaultValue: 'Git command copied' })}
+                failureMessage={t('toolCards.git.copyCommandFailed', { defaultValue: 'Failed to copy git command' })}
+                ariaLabel={t('toolCards.git.copyCommand', { defaultValue: 'Copy git command' })}
+              />
+            </ToolCardHeaderActions>
+          </span>
         </span>
       }
-      extra={headerExtra(false)}
+      extra={
+        requiresConfirmation && !userConfirmed && status !== 'completed' ? (
+          <span className="git-confirm-actions">
+            <IconButton
+              className="tool-card-header-action git-confirm-btn"
+              variant="success"
+              size="xs"
+              onClick={(e) => { e.stopPropagation(); onConfirm?.(toolCall?.input); }}
+              disabled={status === 'streaming'}
+              tooltip={t('toolCards.git.confirmExecute')}
+            >
+              <Check size={12} />
+            </IconButton>
+            <IconButton
+              className="tool-card-header-action git-reject-btn"
+              variant="danger"
+              size="xs"
+              onClick={(e) => { e.stopPropagation(); onReject?.(); }}
+              disabled={status === 'streaming'}
+              tooltip={t('toolCards.git.cancel')}
+            >
+              <X size={12} />
+            </IconButton>
+          </span>
+        ) : undefined
+      }
       rightStatusIcon={renderStatusIcon()}
     />
   );

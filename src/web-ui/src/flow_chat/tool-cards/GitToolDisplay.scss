@@ -11,6 +11,10 @@
   .git-card-icon {
     color: var(--color-text-secondary);
     flex-shrink: 0;
+    width: 14px;
+    height: 14px;
+    display: block;
+    transform: translateY(1.5px);
   }
 }
 
@@ -96,6 +100,28 @@
     flex-wrap: nowrap;
     min-width: 0;
     flex: 1;
+    gap: 0;
+
+    // Prevent command preview from consuming all flex space so the inline
+    // summary can sit right next to the command text instead of being
+    // pushed to the far right.
+    .tool-command-preview {
+      flex: 0 1 auto;
+      max-width: 50%;
+    }
+  }
+
+  .git-output-summary-inline {
+    font-size: 11px;
+    color: var(--tool-card-text-secondary, var(--color-text-muted));
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex: 1 1 0;
+    min-width: 0;
+    margin-left: 6px;
+    font-family: var(--tool-card-font-mono);
+    opacity: 0.7;
   }
 
   /* Collapsed row only — expanded uses `.terminal-command` from TerminalToolCard.scss. */
@@ -109,6 +135,18 @@
     align-items: center;
     gap: 4px;
     min-width: 0;
+  }
+
+  .git-hover-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .git-confirm-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
   }
 
   .output-summary {

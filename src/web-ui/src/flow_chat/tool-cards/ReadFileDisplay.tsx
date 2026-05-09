@@ -3,10 +3,11 @@
  */
 
 import React, { useMemo } from 'react';
-import { FileText, Loader2, Clock, Check } from 'lucide-react';
+import { FileText } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { ToolCardProps } from '../types/flow-chat';
 import { CompactToolCard, CompactToolCardHeader } from './CompactToolCard';
+import { ToolCardStatusSlot } from './ToolCardStatusSlot';
 
 export const ReadFileDisplay: React.FC<ToolCardProps> = React.memo(({
   toolItem,
@@ -14,19 +15,6 @@ export const ReadFileDisplay: React.FC<ToolCardProps> = React.memo(({
 }) => {
   const { t } = useTranslation('flow-chat');
   const { toolCall, toolResult, status } = toolItem;
-
-  const getStatusIcon = () => {
-    switch (status) {
-      case 'running':
-      case 'streaming':
-        return <Loader2 className="animate-spin" size={14} />;
-      case 'completed':
-        return <Check size={14} className="icon-check-done" />;
-      case 'pending':
-      default:
-        return <Clock size={14} />;
-    }
-  };
 
   const filePath = useMemo(() => {
     const path = toolCall?.input?.file_path || toolCall?.input?.target_file || toolCall?.input?.path;
@@ -134,9 +122,8 @@ export const ReadFileDisplay: React.FC<ToolCardProps> = React.memo(({
       clickable={canOpenFile}
       header={
         <CompactToolCardHeader
-          icon={<FileText size={16} className="read-file-card-icon" />}
+          icon={<ToolCardStatusSlot status={status} toolIcon={<FileText size={16} className="read-file-card-icon" />} />}
           content={renderContent()}
-          rightStatusIcon={getStatusIcon()}
         />
       }
     />

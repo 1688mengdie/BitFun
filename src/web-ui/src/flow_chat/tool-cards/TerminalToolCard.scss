@@ -261,6 +261,35 @@
   margin-right: 0;
 }
 
+/* ========== Compact content row (command + inline hover actions) ========== */
+.terminal-compact-content {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  flex: 1;
+  gap: 0;
+
+  .tool-command-preview {
+    flex: 0 1 auto;
+    max-width: 60%;
+  }
+}
+
+/* ========== Hover-only actions wrapper (compact collapsed state) ========== */
+.terminal-hover-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* ========== Always-visible critical actions (compact collapsed state) ========== */
+.terminal-critical-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
 /* ========== Confirmation action button group ========== */
 .terminal-confirm-actions {
   display: inline-flex;
