@@ -2,8 +2,8 @@ use super::{
     Agent, AgenticMode, ArchitectureReviewerAgent, BusinessLogicReviewerAgent, ClawMode,
     CodeReviewAgent, ComputerUseMode, CoworkMode, DebugMode, DeepResearchAgent, DeepReviewAgent,
     ExploreAgent, FileFinderAgent, FrontendReviewerAgent, GenerateDocAgent, InitAgent,
-    PerformanceReviewerAgent, PlanMode, ReviewFixerAgent, ReviewJudgeAgent, SecurityReviewerAgent,
-    TeamMode,
+    PerformanceReviewerAgent, PlanMode, ResearchSpecialistAgent, ReviewFixerAgent,
+    ReviewJudgeAgent, SecurityReviewerAgent, TeamMode,
 };
 use crate::agentic::agents::custom_subagents::{
     CustomSubagent, CustomSubagentKind, CustomSubagentLoader,
@@ -341,6 +341,7 @@ impl AgentRegistry {
         let builtin_subagents: Vec<Arc<dyn Agent>> = vec![
             Arc::new(ComputerUseMode::new()),
             Arc::new(ExploreAgent::new()),
+            Arc::new(ResearchSpecialistAgent::new()),
             Arc::new(FileFinderAgent::new()),
             Arc::new(BusinessLogicReviewerAgent::new()),
             Arc::new(PerformanceReviewerAgent::new()),
