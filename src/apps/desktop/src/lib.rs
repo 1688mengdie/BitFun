@@ -71,6 +71,116 @@ struct WebdriverBridgeResultRequest {
     payload: serde_json::Value,
 }
 
+#[cfg(target_os = "macos")]
+static MAIN_WINDOW_HIDDEN_ON_MACOS: AtomicBool = AtomicBool::new(false);
+
+#[cfg(target_os = "macos")]
+static MAIN_WINDOW_CLOSE_PENDING_ON_MACOS: AtomicBool = AtomicBool::new(false);
+
+#[cfg(target_os = "macos")]
+const MAIN_WINDOW_CLOSE_REQUESTED_EVENT: &str = "bitfun_main_window_close_requested";
+
+#[cfg(target_os = "macos")]
+const MAIN_WINDOW_CLOSE_FALLBACK_HIDE_MS: u64 = 2_500;
+
+#[cfg(target_os = "macos")]
+pub(crate) fn mark_main_window_hidden_on_macos(hidden: bool) {
+    MAIN_WINDOW_HIDDEN_ON_MACOS.store(hidden, Ordering::SeqCst);
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn cancel_main_window_close_request_on_macos() {
+    MAIN_WINDOW_CLOSE_PENDING_ON_MACOS.store(false, Ordering::SeqCst);
+}
+
+#[cfg(target_os = "macos")]
+fn begin_main_window_close_request_on_macos() -> bool {
+    MAIN_WINDOW_CLOSE_PENDING_ON_MACOS
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_ok()
+}
+
+#[cfg(target_os = "macos")]
+fn take_main_window_close_request_on_macos() -> bool {
+    MAIN_WINDOW_CLOSE_PENDING_ON_MACOS
+        .compare_exchange(true, false, Ordering::SeqCst, Ordering::SeqCst)
+        .is_ok()
+}
+
+#[cfg(target_os = "macos")]
+fn hide_main_window_on_macos(app: &tauri::AppHandle, reason: &str) -> Result<(), String> {
+    let Some(main_window) = app.get_webview_window("main") else {
+        mark_main_window_hidden_on_macos(false);
+        return Err("Main window not found".to_string());
+    };
+
+    main_window.hide().map_err(|error| {
+        mark_main_window_hidden_on_macos(false);
+        log::warn!(
+            "Failed to hide main window on macOS close request: reason={}, error={}",
+            reason,
+            error
+        );
+        format!("Failed to hide main window: {}", error)
+    })?;
+
+    mark_main_window_hidden_on_macos(true);
+    log::info!(
+        "Main window close requested on macOS; hid window instead of exiting: reason={}",
+        reason
+    );
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn show_main_window_on_macos(app: &tauri::AppHandle, reason: &str) {
+    cancel_main_window_close_request_on_macos();
+
+    let Some(main_window) = app.get_webview_window("main") else {
+        log::warn!(
+            "Failed to show main window on macOS reopen event: reason={}, error=main window not found",
+            reason
+        );
+        return;
+    };
+
+    let _ = main_window.unminimize();
+    if let Err(error) = main_window.show() {
+        mark_main_window_hidden_on_macos(false);
+        log::warn!(
+            "Failed to show main window on macOS reopen event: reason={}, error={}",
+            reason,
+            error
+        );
+        return;
+    }
+
+    mark_main_window_hidden_on_macos(false);
+    if let Err(error) = main_window.set_focus() {
+        log::warn!(
+            "Failed to focus main window on macOS reopen event: reason={}, error={}",
+            reason,
+            error
+        );
+    }
+}
+
+#[tauri::command]
+async fn hide_main_window_after_close_request(app: tauri::AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        if take_main_window_close_request_on_macos() {
+            hide_main_window_on_macos(&app, "frontend_ack")?;
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+    }
+
+    Ok(())
+}
+
 #[tauri::command]
 async fn webdriver_bridge_result(request: WebdriverBridgeResultRequest) -> Result<(), String> {
     log::debug!("webdriver_bridge_result command invoked");
@@ -376,11 +486,48 @@ pub async fn run() {
         })
         .on_window_event({
             move |window, event| {
-                if let tauri::WindowEvent::CloseRequested { .. } = event {
+                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                     if window.label() == "main" {
-                        if perform_process_exit_cleanup() {
-                            log::info!("Main window close requested, cleaning up");
-                            window.app_handle().exit(0);
+                        #[cfg(target_os = "macos")]
+                        {
+                            api.prevent_close();
+                            if !begin_main_window_close_request_on_macos() {
+                                return;
+                            }
+
+                            if let Err(error) = window.emit(MAIN_WINDOW_CLOSE_REQUESTED_EVENT, ()) {
+                                log::warn!(
+                                    "Failed to emit macOS main window close request event: {}",
+                                    error
+                                );
+                            }
+
+                            let app_handle = window.app_handle().clone();
+                            tauri::async_runtime::spawn(async move {
+                                tokio::time::sleep(std::time::Duration::from_millis(
+                                    MAIN_WINDOW_CLOSE_FALLBACK_HIDE_MS,
+                                ))
+                                .await;
+
+                                if take_main_window_close_request_on_macos() {
+                                    if let Err(error) =
+                                        hide_main_window_on_macos(&app_handle, "frontend_timeout")
+                                    {
+                                        log::warn!(
+                                            "macOS close fallback hide failed after frontend timeout: {}",
+                                            error
+                                        );
+                                    }
+                                }
+                            });
+                        }
+
+                        #[cfg(not(target_os = "macos"))]
+                        {
+                            if perform_process_exit_cleanup() {
+                                log::info!("Main window close requested, cleaning up");
+                                window.app_handle().exit(0);
+                            }
                         }
                     }
                 }
@@ -388,6 +535,7 @@ pub async fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             theme::show_main_window,
+            hide_main_window_after_close_request,
             api::agentic_api::create_session,
             api::agentic_api::update_session_model,
             api::agentic_api::update_session_title,
@@ -848,13 +996,23 @@ pub async fn run() {
 
     match app {
         Ok(app) => {
-            app.run(|_app_handle, event| {
-                if matches!(
-                    event,
-                    tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
-                ) {
+            app.run(|app_handle, event| match event {
+                tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => {
                     perform_process_exit_cleanup();
                 }
+                #[cfg(target_os = "macos")]
+                tauri::RunEvent::Reopen {
+                    has_visible_windows,
+                    ..
+                } => {
+                    let reason = if has_visible_windows {
+                        "dock_reopen_with_visible_aux_window"
+                    } else {
+                        "dock_reopen_no_visible_windows"
+                    };
+                    show_main_window_on_macos(app_handle, reason);
+                }
+                _ => {}
             });
         }
         Err(e) => {
@@ -1056,33 +1214,7 @@ fn perform_process_exit_cleanup() -> bool {
     }
 
     if let Some(search_service) = get_global_workspace_search_service() {
-        let shutdown_thread = std::thread::Builder::new()
-            .name("workspace-search-shutdown".to_string())
-            .spawn(move || {
-                match tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                {
-                    Ok(runtime) => {
-                        runtime.block_on(async move {
-                            search_service.shutdown_all_daemons().await;
-                        });
-                    }
-                    Err(error) => {
-                        log::warn!(
-                            "Failed to create runtime for workspace search shutdown: {}",
-                            error
-                        );
-                    }
-                }
-            });
-
-        if let Err(error) = shutdown_thread {
-            log::warn!(
-                "Failed to spawn workspace search shutdown thread: {}",
-                error
-            );
-        }
+        search_service.shutdown_blocking();
     }
     bitfun_core::util::process_manager::cleanup_all_processes();
     api::remote_connect_api::cleanup_on_exit();
