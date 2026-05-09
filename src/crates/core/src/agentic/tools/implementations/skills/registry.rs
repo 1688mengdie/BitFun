@@ -2,15 +2,14 @@
 //!
 //! Manages skill discovery, mode-specific filtering, and loading.
 
-use super::builtin::{
-    builtin_skill_group_key, ensure_builtin_skills_installed,
-};
-use super::default_profiles::{is_enabled_by_default_for_mode, is_skill_enabled_for_mode};
+use super::builtin::ensure_builtin_skills_installed;
+use super::catalog::builtin_skill_group_key;
 use super::mode_overrides::{
     UserModeSkillOverrides, load_disabled_mode_skills_local, load_disabled_mode_skills_remote,
     load_user_mode_skill_overrides,
 };
-use super::types::{SkillData, SkillInfo, SkillLocation};
+use super::resolver::{resolve_skill_default_enabled_for_mode, resolve_skill_state_for_mode};
+use super::types::{ModeSkillInfo, SkillData, SkillInfo, SkillLocation};
 use crate::agentic::workspace::WorkspaceFileSystem;
 use crate::infrastructure::get_path_manager_arc;
 use crate::util::errors::{BitFunError, BitFunResult};
@@ -188,6 +187,26 @@ fn resolve_visible_skills(candidates: Vec<SkillCandidate>) -> Vec<SkillInfo> {
     resolved
         .into_iter()
         .map(|candidate| candidate.info)
+        .collect()
+}
+
+fn filter_candidates_for_mode(
+    candidates: Vec<SkillCandidate>,
+    mode_id: &str,
+    user_overrides: &UserModeSkillOverrides,
+    disabled_project_skills: &HashSet<String>,
+) -> Vec<SkillCandidate> {
+    candidates
+        .into_iter()
+        .filter(|candidate| {
+            resolve_skill_state_for_mode(
+                &candidate.info,
+                mode_id,
+                user_overrides,
+                disabled_project_skills,
+            )
+            .effective_enabled
+        })
         .collect()
 }
 
@@ -500,17 +519,7 @@ impl SkillRegistry {
             .into_iter()
             .collect();
 
-        candidates
-            .into_iter()
-            .filter(|candidate| {
-                is_skill_enabled_for_mode(
-                    &candidate.info,
-                    mode_id,
-                    &user_overrides,
-                    &disabled_project,
-                )
-            })
-            .collect()
+        filter_candidates_for_mode(candidates, mode_id, &user_overrides, &disabled_project)
     }
 
     async fn apply_mode_filters_for_remote_workspace(
@@ -535,15 +544,38 @@ impl SkillRegistry {
             .into_iter()
             .collect();
 
-        candidates
+        filter_candidates_for_mode(candidates, mode_id, &user_overrides, &disabled_project)
+    }
+
+    fn build_mode_skill_infos(
+        all_skills: Vec<SkillInfo>,
+        resolved_skills: Vec<SkillInfo>,
+        mode_id: &str,
+        user_overrides: &UserModeSkillOverrides,
+        disabled_project_skills: &HashSet<String>,
+    ) -> Vec<ModeSkillInfo> {
+        let resolved_keys: HashSet<String> =
+            resolved_skills.into_iter().map(|skill| skill.key).collect();
+
+        all_skills
             .into_iter()
-            .filter(|candidate| {
-                is_skill_enabled_for_mode(
-                    &candidate.info,
+            .map(|skill| {
+                let state = resolve_skill_state_for_mode(
+                    &skill,
                     mode_id,
-                    &user_overrides,
-                    &disabled_project,
-                )
+                    user_overrides,
+                    disabled_project_skills,
+                );
+                let selected_for_runtime = resolved_keys.contains(&skill.key);
+
+                ModeSkillInfo {
+                    skill,
+                    default_enabled: state.default_enabled,
+                    effective_enabled: state.effective_enabled,
+                    disabled_by_mode: !state.effective_enabled,
+                    selected_for_runtime,
+                    state_reason: state.reason,
+                }
             })
             .collect()
     }
@@ -568,7 +600,7 @@ impl SkillRegistry {
         if info.level == SkillLocation::User
             && info.is_builtin
             && info.group_key.as_deref() == Some("team")
-            && !is_enabled_by_default_for_mode(&info, mode_id)
+            && !resolve_skill_default_enabled_for_mode(&info, mode_id)
         {
             return Ok(info);
         }
@@ -707,6 +739,78 @@ impl SkillRegistry {
             .apply_mode_filters_for_remote_workspace(candidates, fs, remote_root, agent_type)
             .await;
         resolve_visible_skills(filtered)
+    }
+
+    pub async fn get_mode_skill_infos_for_workspace(
+        &self,
+        workspace_root: Option<&Path>,
+        mode_id: &str,
+    ) -> Vec<ModeSkillInfo> {
+        let candidates = self.scan_skill_candidates_for_workspace(workspace_root).await;
+        let all_skills = sort_skills(annotate_shadowed_skills(candidates.clone()));
+        let user_overrides = load_user_mode_skill_overrides(mode_id)
+            .await
+            .unwrap_or_else(|_| UserModeSkillOverrides::default());
+        let disabled_project = match workspace_root {
+            Some(root) => load_disabled_mode_skills_local(root, mode_id)
+                .await
+                .unwrap_or_default(),
+            None => Vec::new(),
+        };
+        let disabled_project: HashSet<String> = dedupe_preserving_order(disabled_project)
+            .into_iter()
+            .collect();
+        let filtered = filter_candidates_for_mode(
+            candidates,
+            mode_id,
+            &user_overrides,
+            &disabled_project,
+        );
+        let resolved = resolve_visible_skills(filtered);
+
+        Self::build_mode_skill_infos(
+            all_skills,
+            resolved,
+            mode_id,
+            &user_overrides,
+            &disabled_project,
+        )
+    }
+
+    pub async fn get_mode_skill_infos_for_remote_workspace(
+        &self,
+        fs: &dyn WorkspaceFileSystem,
+        remote_root: &str,
+        mode_id: &str,
+    ) -> Vec<ModeSkillInfo> {
+        let candidates = self
+            .scan_skill_candidates_for_remote_workspace(fs, remote_root)
+            .await;
+        let all_skills = sort_skills(annotate_shadowed_skills(candidates.clone()));
+        let user_overrides = load_user_mode_skill_overrides(mode_id)
+            .await
+            .unwrap_or_else(|_| UserModeSkillOverrides::default());
+        let disabled_project = load_disabled_mode_skills_remote(fs, remote_root, mode_id)
+            .await
+            .unwrap_or_default();
+        let disabled_project: HashSet<String> = dedupe_preserving_order(disabled_project)
+            .into_iter()
+            .collect();
+        let filtered = filter_candidates_for_mode(
+            candidates,
+            mode_id,
+            &user_overrides,
+            &disabled_project,
+        );
+        let resolved = resolve_visible_skills(filtered);
+
+        Self::build_mode_skill_infos(
+            all_skills,
+            resolved,
+            mode_id,
+            &user_overrides,
+            &disabled_project,
+        )
     }
 
     pub async fn find_skill_by_key_for_workspace(

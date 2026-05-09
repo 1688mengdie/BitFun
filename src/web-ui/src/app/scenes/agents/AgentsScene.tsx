@@ -64,7 +64,7 @@ interface SkillGroup {
 }
 
 function getConfiguredEnabledSkillKeys(skills: ModeSkillInfo[]): string[] {
-  return skills.filter((skill) => !skill.disabledByMode).map((skill) => skill.key);
+  return skills.filter((skill) => skill.effectiveEnabled).map((skill) => skill.key);
 }
 
 function modeHasSkillTool(enabledTools: string[]): boolean {
@@ -117,7 +117,7 @@ function getSkillTitle(skill: ModeSkillInfo, t: TFunction<'scenes/agents'>): str
   return [
     skill.description || skill.name,
     `key: ${skill.key}`,
-    !skill.disabledByMode && !skill.selectedForRuntime
+    skill.effectiveEnabled && !skill.selectedForRuntime
       ? t('agentsOverview.skillShadowed')
       : null,
   ].filter(Boolean).join('\n');
@@ -308,7 +308,7 @@ const AgentsHomeView: React.FC = () => {
     [selectedAgentModeSkills],
   );
   const selectedAgentSkillItems = useMemo(
-    () => selectedAgentModeSkills.filter((skill) => !skill.disabledByMode),
+    () => selectedAgentModeSkills.filter((skill) => skill.effectiveEnabled),
     [selectedAgentModeSkills],
   );
   const selectedAgentSkillGroups = useMemo(
@@ -976,7 +976,7 @@ const AgentsHomeView: React.FC = () => {
                             </div>
                             <div className="agent-card__chip-grid">
                               {group.skills
-                                .filter((skill) => !skill.disabledByMode)
+                                .filter((skill) => skill.effectiveEnabled)
                                 .map((skill) => (
                                   <span
                                     key={skill.key}

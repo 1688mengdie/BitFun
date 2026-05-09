@@ -51,6 +51,7 @@ notify = { workspace = true }
 dirs = { workspace = true }
 dunce = { workspace = true }
 filetime = { workspace = true }
+fs2 = { workspace = true }
 zip = { workspace = true }
 flate2 = { workspace = true }
 include_dir = { workspace = true }
