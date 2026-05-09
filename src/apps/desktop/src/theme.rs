@@ -533,6 +533,12 @@ pub async fn show_main_window(app: tauri::AppHandle) -> Result<(), String> {
             format!("Failed to show main window: {}", e)
         })?;
 
+        #[cfg(target_os = "macos")]
+        {
+            crate::cancel_main_window_close_request_on_macos();
+            crate::mark_main_window_hidden_on_macos(false);
+        }
+
         main_window.set_focus().map_err(|e| {
             error!("Failed to focus main window: {}", e);
             format!("Failed to focus main window: {}", e)

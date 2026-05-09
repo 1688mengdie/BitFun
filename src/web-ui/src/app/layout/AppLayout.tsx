@@ -74,6 +74,7 @@ const AppLayout: React.FC<AppLayoutProps> = ({ className = '' }) => {
     useWindowControls({ isToolbarMode });
 
   const { state, switchLeftPanelTab, toggleLeftPanel, toggleRightPanel } = useApp();
+  const allowNextNativeCloseRef = useRef(false);
 
   // ── Load user keybinding overrides from config on startup ────────────────
   useEffect(() => {
@@ -298,26 +299,65 @@ const AppLayout: React.FC<AppLayoutProps> = ({ className = '' }) => {
     t,
   ]);
 
-  // Save in-progress conversations on window close
+  // Save in-progress conversations before the native window is closed/hidden.
   React.useEffect(() => {
     let unlistenFn: (() => void) | null = null;
+    let handlingMacOSClose = false;
 
     const setupWindowCloseListener = async () => {
       if (!canUseNativeWindowControls) return;
 
       try {
+        if (isMacOS) {
+          const [{ listen }, { invoke }] = await Promise.all([
+            import('@tauri-apps/api/event'),
+            import('@tauri-apps/api/core'),
+          ]);
+
+          unlistenFn = await listen('bitfun_main_window_close_requested', async () => {
+            if (handlingMacOSClose) return;
+            handlingMacOSClose = true;
+            try {
+              const flowChatManager = FlowChatManager.getInstance();
+              await flowChatManager.saveAllInProgressTurns();
+            } catch (error) {
+              log.error('Failed to save conversations before hiding main window', error);
+            } finally {
+              try {
+                await invoke('hide_main_window_after_close_request');
+              } catch (error) {
+                log.error('Failed to hide main window after close request', error);
+              } finally {
+                handlingMacOSClose = false;
+              }
+            }
+          });
+          return;
+        }
+
         const { getCurrentWindow } = await import('@tauri-apps/api/window');
         const currentWindow = getCurrentWindow();
 
         unlistenFn = await currentWindow.onCloseRequested(async (event: { preventDefault: () => void }) => {
+          if (allowNextNativeCloseRef.current) {
+            allowNextNativeCloseRef.current = false;
+            return;
+          }
+
           try {
             event.preventDefault();
             const flowChatManager = FlowChatManager.getInstance();
             await flowChatManager.saveAllInProgressTurns();
-            await currentWindow.close();
           } catch (error) {
             log.error('Failed to save conversations, closing anyway', error);
+          }
+
+          try {
+            allowNextNativeCloseRef.current = true;
             await currentWindow.close();
+          } catch (error) {
+            allowNextNativeCloseRef.current = false;
+            throw error;
           }
         });
       } catch (error) {
@@ -327,7 +367,7 @@ const AppLayout: React.FC<AppLayoutProps> = ({ className = '' }) => {
 
     setupWindowCloseListener();
     return () => { if (unlistenFn) unlistenFn(); };
-  }, [canUseNativeWindowControls]);
+  }, [canUseNativeWindowControls, isMacOS]);
 
   // Handle switch-to-files-panel event
   React.useEffect(() => {
