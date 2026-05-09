@@ -495,9 +495,15 @@ pub fn workspace_search_daemon_binary_names() -> &'static [&'static str] {
     } else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
         &["flashgrep-aarch64-apple-darwin"]
     } else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
-        &["flashgrep-x86_64-unknown-linux-gnu"]
+        &[
+            "flashgrep-x86_64-unknown-linux-musl",
+            "flashgrep-x86_64-unknown-linux-gnu",
+        ]
     } else if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
-        &["flashgrep-aarch64-unknown-linux-gnu"]
+        &[
+            "flashgrep-aarch64-unknown-linux-musl",
+            "flashgrep-aarch64-unknown-linux-gnu",
+        ]
     } else if cfg!(windows) {
         &["flashgrep.exe"]
     } else {

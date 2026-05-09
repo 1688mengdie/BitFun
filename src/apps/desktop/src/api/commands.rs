@@ -9,8 +9,9 @@ use crate::api::path_target::{
     write_text_file, DesktopPathTarget,
 };
 use crate::api::search_api::{
-    group_search_results, search_file_contents_via_workspace_search,
-    search_metadata_from_content_result, should_use_workspace_search, SearchMetadataResponse,
+    group_search_results, prepare_content_search_runner,
+    search_file_contents_via_workspace_search, search_metadata_from_content_result,
+    should_use_workspace_search, SearchMetadataResponse,
 };
 use crate::api::workspace_activation::spawn_workspace_background_warmup;
 use bitfun_core::infrastructure::{
@@ -2551,7 +2552,7 @@ pub async fn search_files(
     };
 
     let use_workspace_search =
-        request.search_content && should_use_workspace_search(&request.root_path).await;
+        request.search_content && should_use_workspace_search(&state, &request.root_path).await;
     let result = if request.search_content {
         let filename_outcome = state
             .filesystem_service
@@ -2710,7 +2711,7 @@ pub async fn search_file_contents(
         include_directories: false,
     };
 
-    let result = if should_use_workspace_search(&request.root_path).await {
+    let result = if should_use_workspace_search(&state, &request.root_path).await {
         search_file_contents_via_workspace_search(
             &state,
             &request.root_path,
@@ -2876,14 +2877,18 @@ pub async fn start_search_file_contents_stream(
     };
 
     let filesystem_service = state.filesystem_service.clone();
-    let workspace_search_service = state.workspace_search_service.clone();
     let active_searches = state.active_searches.clone();
     let root_path = request.root_path.clone();
     let pattern = request.pattern.clone();
     let case_sensitive = request.case_sensitive;
     let use_regex = request.use_regex;
     let whole_word = request.whole_word;
-    let use_workspace_search = should_use_workspace_search(&root_path).await;
+    let use_workspace_search = should_use_workspace_search(&state, &root_path).await;
+    let workspace_search_runner = if use_workspace_search {
+        Some(prepare_content_search_runner(&state, &root_path).await?)
+    } else {
+        None
+    };
     let response_search_id = search_id.clone();
     let progress_search_id = search_id.clone();
     let progress_app_handle = app_handle.clone();
@@ -2902,7 +2907,8 @@ pub async fn start_search_file_contents_stream(
 
     tokio::spawn(async move {
         let result = if use_workspace_search {
-            let result = workspace_search_service
+            let result = workspace_search_runner
+                .expect("workspace search runner should exist when workspace search is enabled")
                 .search_content(bitfun_core::service::search::ContentSearchRequest {
                     repo_root: root_path.clone().into(),
                     search_path: None,
