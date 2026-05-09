@@ -1337,6 +1337,10 @@ fn configure_process_group(command: &mut Command) {
     {
         command.process_group(0);
     }
+    #[cfg(not(unix))]
+    {
+        let _ = command;
+    }
 }
 
 async fn terminate_child_process_tree(client_id: &str, mut child: Child) {

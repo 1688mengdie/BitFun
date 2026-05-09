@@ -2061,8 +2061,7 @@ impl ExecutionEngine {
             ("TodoWrite", 12),
             ("Skill", 13),
             ("Log", 14),
-            ("MermaidInteractive", 15),
-            ("ControlHub", 16),
+            ("ControlHub", 15),
         ]
         .into_iter()
         .map(|(k, v)| (k.to_string(), v))

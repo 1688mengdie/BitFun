@@ -883,12 +883,6 @@
       "enableLabel": "啟用",
       "restoreShort": "恢復（剩餘 {{seconds}} 秒）"
     },
-    "diagram": {
-      "interactive": "交互圖表:",
-      "preparing": "準備中",
-      "creating": "創建中",
-      "mermaidInteractive": "Mermaid 交互圖表"
-    },
     "template": {
       "get": "獲取模板:",
       "getTemplate": "獲取模板",

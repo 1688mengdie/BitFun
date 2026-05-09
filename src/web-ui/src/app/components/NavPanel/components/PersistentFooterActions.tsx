@@ -8,7 +8,6 @@ import {
   Terminal,
   Smartphone,
   Globe,
-  Network,
   Layers,
   PanelsTopLeft,
   BarChart3,
@@ -34,8 +33,6 @@ import {
   getRemoteConnectDisclaimerAgreed,
   setRemoteConnectDisclaimerAgreed,
 } from '../../RemoteConnectDialog/remoteConnectDisclaimerStorage';
-import { MERMAID_INTERACTIVE_EXAMPLE } from '@/flow_chat/constants/mermaidExamples';
-
 const PersistentFooterActions: React.FC = () => {
   const { t } = useI18n('common');
   const { openScene } = useSceneManager();
@@ -49,10 +46,6 @@ const PersistentFooterActions: React.FC = () => {
   const isBrowserPanelActiveInCanvas = useCanvasStore((s) => {
     const activeTab = s.primaryGroup.tabs.find((t) => t.id === s.primaryGroup.activeTabId);
     return activeTab?.content.type === 'browser';
-  });
-  const isMermaidPanelActiveInCanvas = useCanvasStore((s) => {
-    const activeTab = s.primaryGroup.tabs.find((t) => t.id === s.primaryGroup.activeTabId);
-    return activeTab?.content.type === 'mermaid-editor';
   });
   const { enableToolbarMode } = useToolbarModeContext();
   const { hasWorkspace } = useCurrentWorkspace();
@@ -110,27 +103,6 @@ const PersistentFooterActions: React.FC = () => {
       }));
     } else {
       openScene('browser');
-    }
-  }, [activeTabId, openScene, t]);
-
-  const handleOpenMermaidEditor = useCallback(() => {
-    const title = t('scenes.mermaidEditor');
-    const detail = {
-      type: 'mermaid-editor' as const,
-      title,
-      data: { ...MERMAID_INTERACTIVE_EXAMPLE, title },
-      metadata: {
-        duplicateCheckKey: 'mermaid-dual-mode-demo',
-      },
-      checkDuplicate: true,
-      duplicateCheckKey: 'mermaid-dual-mode-demo',
-      replaceExisting: false,
-    };
-
-    if (activeTabId === 'session') {
-      window.dispatchEvent(new CustomEvent('agent-create-tab', { detail }));
-    } else {
-      openScene('mermaid');
     }
   }, [activeTabId, openScene, t]);
 
@@ -291,8 +263,7 @@ const PersistentFooterActions: React.FC = () => {
         >
           {(() => {
             const isBrowserActive = activeTabId === 'browser' || (activeTabId === 'session' && isBrowserPanelActiveInCanvas);
-            const isMermaidActive = activeTabId === 'mermaid' || (activeTabId === 'session' && isMermaidPanelActiveInCanvas);
-            const isAnyActive = isBrowserActive || isMermaidActive;
+            const isAnyActive = isBrowserActive;
             return (
               <>
                 <button
@@ -323,17 +294,6 @@ const PersistentFooterActions: React.FC = () => {
                     >
                       <Globe size={13} className="bitfun-nav-panel__footer-multimodal-item-icon" />
                       <span className="bitfun-nav-panel__footer-multimodal-item-label">{t('scenes.browser')}</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      className={`bitfun-nav-panel__footer-multimodal-item${isMermaidActive ? ' is-active' : ''}`}
-                      role="menuitem"
-                      aria-pressed={isMermaidActive}
-                      onClick={handleOpenMermaidEditor}
-                    >
-                      <Network size={13} className="bitfun-nav-panel__footer-multimodal-item-icon" />
-                      <span className="bitfun-nav-panel__footer-multimodal-item-label">{t('scenes.mermaidEditor')}</span>
                     </button>
                   </div>
                 )}

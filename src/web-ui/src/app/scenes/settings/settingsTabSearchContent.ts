@@ -45,11 +45,19 @@ export const SETTINGS_TAB_SEARCH_CONTENT: Record<ConfigTab, readonly SettingsTab
     { ns: 'settings/ai-model', key: 'proxy.enableHint' },
   ],
 
-  'session-config': [
-    { ns: 'settings/session-config', key: 'title' },
-    { ns: 'settings/session-config', key: 'subtitle' },
+  'session-personalization': [
+    { ns: 'settings/session-config', key: 'personalizationPage.title' },
+    { ns: 'settings/session-config', key: 'personalizationPage.subtitle' },
     { ns: 'settings/session-config', key: 'features.sessionTitle.title' },
     { ns: 'settings/session-config', key: 'features.sessionTitle.subtitle' },
+    { ns: 'settings/session-config', key: 'features.agentCompanion.title' },
+    { ns: 'settings/session-config', key: 'features.agentCompanion.subtitle' },
+    { ns: 'settings/session-config', key: 'models.empty' },
+  ],
+
+  'session-permissions': [
+    { ns: 'settings/session-config', key: 'permissionsPage.title' },
+    { ns: 'settings/session-config', key: 'permissionsPage.subtitle' },
     { ns: 'settings/session-config', key: 'features.workspaceSearch.title' },
     { ns: 'settings/session-config', key: 'features.workspaceSearch.subtitle' },
     { ns: 'settings/session-config', key: 'features.workspaceSearch.enable' },
@@ -59,6 +67,8 @@ export const SETTINGS_TAB_SEARCH_CONTENT: Record<ConfigTab, readonly SettingsTab
     { ns: 'settings/session-config', key: 'computerUse.sectionDescription' },
     { ns: 'settings/session-config', key: 'computerUse.enable' },
     { ns: 'settings/session-config', key: 'computerUse.enableDesc' },
+    { ns: 'settings/session-config', key: 'browserControl.sectionTitle' },
+    { ns: 'settings/session-config', key: 'browserControl.sectionDescription' },
     { ns: 'settings/agentic-tools', key: 'config.autoExecute' },
     { ns: 'settings/agentic-tools', key: 'config.autoExecuteDesc' },
     { ns: 'settings/agentic-tools', key: 'config.confirmTimeout' },

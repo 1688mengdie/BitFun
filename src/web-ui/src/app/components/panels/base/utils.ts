@@ -70,14 +70,6 @@ export const PANEL_CONTENT_CONFIGS: Record<PanelContentType, PanelContentConfig>
     supportsDownload: true,
     showHeader: false
   },
-  'mermaid-editor': {
-    type: 'mermaid-editor',
-    displayName: 'Mermaid Editor',
-    icon: Edit3,
-    supportsCopy: true,
-    supportsDownload: true,
-    showHeader: false
-  },
   'text-viewer': {
     type: 'text-viewer',
     displayName: 'Text Viewer',
@@ -325,8 +317,6 @@ export const generateFileName = (type: PanelContentType, title: string): string 
       return `${baseName}.md`;
     case 'code-preview':
       return `${baseName}.txt`;
-    case 'mermaid-editor':
-      return `${baseName}.mmd`;
     default:
       return `${baseName}.txt`;
   }

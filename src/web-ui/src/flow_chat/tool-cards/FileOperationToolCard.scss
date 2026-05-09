@@ -74,8 +74,16 @@
     align-self: stretch;
     display: flex;
     flex-direction: row;
-    align-items: center;
+    align-items: stretch;
     gap: 2px;
+    min-height: 0;
+  }
+
+  /* Extra rail fills header height so .file-op-open-full-button stretch + hover::before bleed match the full row */
+  .file-op-header-actions {
+    align-self: stretch;
+    display: flex;
+    align-items: center;
     min-height: 0;
   }
 }

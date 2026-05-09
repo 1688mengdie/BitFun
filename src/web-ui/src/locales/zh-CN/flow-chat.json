@@ -883,12 +883,6 @@
       "enableLabel": "恢复限时",
       "restoreShort": "恢复（剩余 {{seconds}} 秒）"
     },
-    "diagram": {
-      "interactive": "交互图表:",
-      "preparing": "准备中",
-      "creating": "创建中",
-      "mermaidInteractive": "Mermaid 交互图表"
-    },
     "template": {
       "get": "获取模板:",
       "getTemplate": "获取模板",

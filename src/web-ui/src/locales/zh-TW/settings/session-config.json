@@ -1,6 +1,12 @@
 {
-  "title": "會話配置",
-  "subtitle": "會話相關 AI 功能與工具執行行為",
+  "personalizationPage": {
+    "title": "個性化",
+    "subtitle": "會話標題自動生成、Agent 夥伴"
+  },
+  "permissionsPage": {
+    "title": "權限管理",
+    "subtitle": "加速工作區搜尋、工具執行、Computer use、瀏覽器控制與偵錯模式"
+  },
   "features": {
     "sessionTitle": {
       "title": "會話標題自動生成",

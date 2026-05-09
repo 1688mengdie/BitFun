@@ -20,7 +20,7 @@ import { Terminal, Play, X, ExternalLink, Square } from 'lucide-react';
 import { createTerminalTab } from '@/shared/utils/tabUtils';
 import { BaseToolCard, ToolCardHeader } from './BaseToolCard';
 import { CompactToolCard, CompactToolCardHeader } from './CompactToolCard';
-import { CubeLoading, IconButton } from '../../component-library';
+import { DotMatrixLoader, IconButton } from '../../component-library';
 import { TerminalOutputRenderer } from '@/tools/terminal/components';
 import { createLogger } from '@/shared/utils/logger';
 import { useToolCardHeightContract, type ToolCardCollapseReason } from './useToolCardHeightContract';
@@ -437,7 +437,7 @@ export const TerminalToolCard: React.FC<TerminalToolCardProps> = ({
 
   const renderLoadingStatusIcon = () => {
     if (viewState.isLoading) {
-      return <CubeLoading size="small" />;
+      return <DotMatrixLoader size="medium" />;
     }
 
     return null;
