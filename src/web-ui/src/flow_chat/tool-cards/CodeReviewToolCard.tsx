@@ -10,12 +10,11 @@ import {
   AlertTriangle,
   AlertCircle,
   Info,
-  Clock,
   ChevronDown,
   ChevronUp,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { Tooltip } from '@/component-library';
+import { Tooltip, ToolProcessingDots } from '@/component-library';
 import type { ToolCardProps } from '../types/flow-chat';
 import { BaseToolCard, ToolCardHeader } from './BaseToolCard';
 import { createLogger } from '@/shared/utils/logger';
@@ -168,7 +167,7 @@ export const CodeReviewToolCard: React.FC<ToolCardProps> = React.memo(({
         return null;
       case 'pending':
       default:
-        return <Clock size={12} />;
+        return <ToolProcessingDots size={12} />;
     }
   };
 

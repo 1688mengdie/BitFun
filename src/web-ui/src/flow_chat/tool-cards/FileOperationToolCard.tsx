@@ -24,11 +24,10 @@ import {
   FileX2,
   ChevronRight,
   Loader2,
-  Clock,
   Check,
   X,
 } from 'lucide-react';
-import { CubeLoading, IconButton } from '../../component-library';
+import { CubeLoading, IconButton, ToolProcessingDots } from '../../component-library';
 import type { ToolCardProps } from '../types/flow-chat';
 import { BaseToolCard, ToolCardHeader } from './BaseToolCard';
 import { useSnapshotState } from '../../tools/snapshot_system/hooks/useSnapshotState';
@@ -737,7 +736,7 @@ export const FileOperationToolCard: React.FC<FileOperationToolCardProps> = ({
       case 'pending_confirmation':
       case 'analyzing':
       default:
-        return <Clock size={16} />;
+        return <ToolProcessingDots size={16} />;
     }
   };
 

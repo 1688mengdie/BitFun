@@ -30,6 +30,26 @@ import './Markdown.scss';
 const log = createLogger('Markdown');
 const COMPUTER_LINK_PREFIX = 'computer://';
 
+// Module-level cache so that all simultaneously-mounting Markdown instances
+// (e.g. dozens of history blocks after a workspace switch) share a single
+// IPC round-trip for the workspace path. The in-flight deduplication in
+// GlobalAPI already coalesces concurrent calls into one; this cache avoids
+// even triggering a new IPC call while the result is still fresh.
+let _cachedWorkspacePathResult: string | undefined;
+let _cachedWorkspacePathAt = 0;
+const WORKSPACE_PATH_CACHE_MS = 5000;
+
+async function getWorkspacePathCached(): Promise<string | undefined> {
+  const now = Date.now();
+  if (_cachedWorkspacePathResult !== undefined && now - _cachedWorkspacePathAt < WORKSPACE_PATH_CACHE_MS) {
+    return _cachedWorkspacePathResult;
+  }
+  const result = await globalAPI.getCurrentWorkspacePath();
+  _cachedWorkspacePathResult = result;
+  _cachedWorkspacePathAt = Date.now();
+  return result;
+}
+
 /** Catches render errors from react-markdown/remark-gfm (e.g. RegExp in transformGfmAutolinkLiterals) and shows plain text fallback. */
 class MarkdownErrorBoundary extends Component<
   { children: ReactNode; fallbackContent: string },
@@ -577,7 +597,7 @@ export const Markdown = React.memo<MarkdownProps>(({
   useEffect(() => {
     let cancelled = false;
 
-    void globalAPI.getCurrentWorkspacePath()
+    void getWorkspacePathCached()
       .then((workspacePath) => {
         if (!cancelled && workspacePath) {
           setCurrentWorkspacePath(workspacePath);
