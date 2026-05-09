@@ -9,7 +9,7 @@ use crate::api::path_target::{
     write_text_file, DesktopPathTarget,
 };
 use crate::api::search_api::{
-    group_search_results, prepare_content_search_runner,
+    build_content_search_request, group_search_results, prepare_content_search_runner,
     search_file_contents_via_workspace_search, search_metadata_from_content_result,
     should_use_workspace_search, SearchMetadataResponse,
 };
@@ -2554,26 +2554,10 @@ pub async fn search_files(
     let use_workspace_search =
         request.search_content && should_use_workspace_search(&state, &request.root_path).await;
     let result = if request.search_content {
-        let filename_outcome = state
-            .filesystem_service
-            .search_file_names(
-                &request.root_path,
-                &request.pattern,
-                FileSearchOptions {
-                    include_content: false,
-                    include_directories: request.include_directories,
-                    ..options.clone()
-                },
-                cancel_flag.clone(),
-            )
-            .await?;
-        let mut filename_results = filename_outcome.results;
-
-        if filename_results.len() >= max_results {
-            Ok(filename_results)
-        } else {
-            let remaining = max_results - filename_results.len();
-            let mut content_outcome = if use_workspace_search {
+        if is_remote_path(request.root_path.trim()).await {
+            if !use_workspace_search {
+                Err("Remote content search requires workspace search support".to_string())
+            } else {
                 search_file_contents_via_workspace_search(
                     &state,
                     &request.root_path,
@@ -2581,37 +2565,71 @@ pub async fn search_files(
                     request.case_sensitive,
                     request.use_regex,
                     request.whole_word,
-                    remaining,
+                    max_results,
                 )
                 .await
-                .map(|result| result.outcome)?
+                .map(|result| result.outcome.results)
+            }
+        } else {
+            let filename_outcome = state
+                .filesystem_service
+                .search_file_names(
+                    &request.root_path,
+                    &request.pattern,
+                    FileSearchOptions {
+                        include_content: false,
+                        include_directories: request.include_directories,
+                        ..options.clone()
+                    },
+                    cancel_flag.clone(),
+                )
+                .await?;
+            let mut filename_results = filename_outcome.results;
+
+            if filename_results.len() >= max_results {
+                Ok(filename_results)
             } else {
-                state
-                    .filesystem_service
-                    .search_file_contents(
+                let remaining = max_results - filename_results.len();
+                let mut content_outcome = if use_workspace_search {
+                    search_file_contents_via_workspace_search(
+                        &state,
                         &request.root_path,
                         &request.pattern,
-                        FileSearchOptions {
-                            include_content: true,
-                            include_directories: false,
-                            max_results: Some(remaining),
-                            ..options
-                        },
-                        cancel_flag,
+                        request.case_sensitive,
+                        request.use_regex,
+                        request.whole_word,
+                        remaining,
                     )
-                    .await?
-            };
-            if filename_outcome.truncated || content_outcome.truncated {
-                debug!(
-                    "Legacy search truncated: root_path={}, pattern={}, search_content={}, limit={}",
-                    request.root_path,
-                    request.pattern,
-                    request.search_content,
-                    max_results
-                );
+                    .await
+                    .map(|result| result.outcome)?
+                } else {
+                    state
+                        .filesystem_service
+                        .search_file_contents(
+                            &request.root_path,
+                            &request.pattern,
+                            FileSearchOptions {
+                                include_content: true,
+                                include_directories: false,
+                                max_results: Some(remaining),
+                                ..options
+                            },
+                            cancel_flag,
+                        )
+                        .await?
+                };
+                if filename_outcome.truncated || content_outcome.truncated {
+                    debug!(
+                        "Legacy search truncated: root_path={}, pattern={}, search_content={}, limit={}",
+                        request.root_path,
+                        request.pattern,
+                        request.search_content,
+                        max_results
+                    );
+                }
+                filename_results.append(&mut content_outcome.results);
+                Ok(filename_results)
             }
-            filename_results.append(&mut content_outcome.results);
-            Ok(filename_results)
         }
     } else {
         state
@@ -2619,6 +2637,7 @@ pub async fn search_files(
             .search_file_names(&request.root_path, &request.pattern, options, cancel_flag)
             .await
             .map(|outcome| outcome.results)
+            .map_err(|error| format!("Failed to search filenames: {}", error))
     };
     unregister_search(&state, search_id.as_deref());
 
@@ -2885,7 +2904,11 @@ pub async fn start_search_file_contents_stream(
     let whole_word = request.whole_word;
     let use_workspace_search = should_use_workspace_search(&state, &root_path).await;
     let workspace_search_runner = if use_workspace_search {
-        Some(prepare_content_search_runner(&state, &root_path).await?)
+        Some(
+            prepare_content_search_runner(&state, &root_path)
+                .await
+                .map_err(|error| format!("Failed to prepare workspace search: {}", error))?,
+        )
     } else {
         None
     };
@@ -2908,23 +2931,16 @@ pub async fn start_search_file_contents_stream(
     tokio::spawn(async move {
         let result = if use_workspace_search {
             let result = workspace_search_runner
-                .expect("workspace search runner should exist when workspace search is enabled")
-                .search_content(bitfun_core::service::search::ContentSearchRequest {
-                    repo_root: root_path.clone().into(),
-                    search_path: None,
-                    pattern: pattern.clone(),
-                    output_mode: bitfun_core::service::search::ContentSearchOutputMode::Content,
+                .as_ref()
+                .expect("workspace search runner should exist when enabled")
+                .search_content(build_content_search_request(
+                    &root_path,
+                    &pattern,
                     case_sensitive,
                     use_regex,
                     whole_word,
-                    multiline: false,
-                    before_context: 0,
-                    after_context: 0,
-                    max_results: Some(limit),
-                    globs: Vec::new(),
-                    file_types: Vec::new(),
-                    exclude_file_types: Vec::new(),
-                })
+                    limit,
+                ))
                 .await
                 .map(|result| {
                     let search_metadata = search_metadata_from_content_result(&result);
@@ -2947,7 +2963,6 @@ pub async fn start_search_file_contents_stream(
                     );
                 }
             }
-
             result.map_err(|error| {
                 bitfun_core::util::errors::BitFunError::service(format!(
                     "Failed to search file contents via workspace search: {}",
