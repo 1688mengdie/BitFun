@@ -26,7 +26,7 @@ use bitfun_core::util::errors::{BitFunError, BitFunResult};
 use enigo::{Axis, Button, Coordinate, Direction, Enigo, Key, Keyboard, Mouse, Settings};
 use image::codecs::jpeg::JpegEncoder;
 use image::{DynamicImage, Rgb, RgbImage};
-use log::{debug, warn};
+use log::{debug, info, warn};
 use resvg::tiny_skia::{Pixmap, Transform};
 use resvg::usvg;
 use screenshots::display_info::DisplayInfo;
