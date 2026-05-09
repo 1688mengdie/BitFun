@@ -41,7 +41,7 @@ import { createLogger } from '@/shared/utils/logger';
 import './AIFeaturesConfig.scss';
 import './DebugConfig.scss';
 
-const log = createLogger('SessionConfig');
+const log = createLogger('SessionSettingsPanels');
 
 const IS_TAURI_DESKTOP = typeof window !== 'undefined' && '__TAURI__' in window;
 
@@ -63,7 +63,13 @@ type BrowserControlLaunchResponse = {
 
 const DEFAULT_COMPANION_PET_VALUE = '__default_panda__';
 
-const SessionConfig: React.FC = () => {
+export type SessionSettingsPanelVariant = 'personalization' | 'permissions';
+
+interface SessionSettingsPanelsProps {
+  variant: SessionSettingsPanelVariant;
+}
+
+const SessionSettingsPanels: React.FC<SessionSettingsPanelsProps> = ({ variant }) => {
   const { t } = useTranslation('settings/session-config');
   const { t: tTools } = useTranslation('settings/agentic-tools');
   const { t: tDebug } = useTranslation('settings/debug');
@@ -663,10 +669,17 @@ const SessionConfig: React.FC = () => {
     ? `${browserKind} · ${browserPageCount} ${t('browserControl.tabs')}`
     : browserStatusLoading ? t('loading.text') : t('browserControl.notConnected');
 
+  const pageTitle = variant === 'personalization'
+    ? t('personalizationPage.title')
+    : t('permissionsPage.title');
+  const pageSubtitle = variant === 'personalization'
+    ? t('personalizationPage.subtitle')
+    : t('permissionsPage.subtitle');
+
   if (isLoading || !settings) {
     return (
       <ConfigPageLayout className="bitfun-func-agent-config">
-        <ConfigPageHeader title={t('title')} subtitle={t('subtitle')} />
+        <ConfigPageHeader title={pageTitle} subtitle={pageSubtitle} />
         <ConfigPageContent className="bitfun-func-agent-config__content">
           <ConfigPageLoading text={t('loading.text')} />
         </ConfigPageContent>
@@ -676,9 +689,12 @@ const SessionConfig: React.FC = () => {
 
   return (
     <ConfigPageLayout className="bitfun-func-agent-config">
-      <ConfigPageHeader title={t('title')} subtitle={t('subtitle')} />
+      <ConfigPageHeader title={pageTitle} subtitle={pageSubtitle} />
 
       <ConfigPageContent className="bitfun-func-agent-config__content">
+
+        {variant === 'personalization' ? (
+          <>
 
         {/* ── Auto session title ─────────────────────────────────── */}
         <ConfigPageSection
@@ -842,6 +858,12 @@ const SessionConfig: React.FC = () => {
             </div>
           </ConfigPageRow>
         </ConfigPageSection>
+
+          </>
+        ) : null}
+
+        {variant === 'permissions' ? (
+          <>
 
         {/* ── Accelerated workspace search ───────────────────────── */}
         <ConfigPageSection
@@ -1358,9 +1380,18 @@ const SessionConfig: React.FC = () => {
           </div>
         </Modal>
 
+          </>
+        ) : null}
+
       </ConfigPageContent>
     </ConfigPageLayout>
   );
 };
 
-export default SessionConfig;
+export function SessionPersonalizationConfig(): React.ReactElement {
+  return <SessionSettingsPanels variant="personalization" />;
+}
+
+export function SessionPermissionsConfig(): React.ReactElement {
+  return <SessionSettingsPanels variant="permissions" />;
+}

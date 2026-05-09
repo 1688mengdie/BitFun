@@ -53,7 +53,6 @@
     "renderFailed": "圖表渲染失敗",
     "codeIncomplete": "代碼不完整，等待更多內容...",
     "rendering": "正在渲染圖表...",
-    "openInEditor": "在編輯器中打開",
     "showCode": "查看源碼",
     "hideCode": "隱藏源碼",
     "copyCode": "複製代碼"
@@ -606,8 +605,6 @@
       "close": "關閉"
     },
     "loading": {
-      "mermaidPanel": "加載Mermaid雙模式面板...",
-      "mermaidEditor": "加載Mermaid編輯器...",
       "gitDiff": "加載Git差異...",
       "gitGraph": "加載Git圖表...",
       "gitBranchHistory": "加載分支提交歷史...",
@@ -629,9 +626,7 @@
       "fileOperations": "文件操作"
     },
     "fallback": {
-      "noCodeContent": "無代碼內容",
-      "mermaidChartTitle": "Mermaid圖表",
-      "mermaidDefaultCode": "flowchart TD\n    A[開始] --> B[結束]"
+      "noCodeContent": "無代碼內容"
     }
   }
 }

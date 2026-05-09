@@ -582,7 +582,6 @@ pub async fn run() {
             set_agent_model,
             get_agent_models,
             refresh_model_client,
-            fix_mermaid_code,
             get_app_state,
             update_app_status,
             theme::show_agent_companion_desktop_pet,

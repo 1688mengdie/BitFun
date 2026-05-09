@@ -27,7 +27,6 @@ pub mod grep_tool;
 pub mod log_tool;
 pub mod ls_tool;
 pub mod mcp_tools;
-pub mod mermaid_interactive_tool;
 pub mod miniapp_init_tool;
 pub mod playbook_tool;
 pub mod session_control_tool;
@@ -65,7 +64,6 @@ pub use ls_tool::LSTool;
 pub use mcp_tools::{
     GetMCPPromptTool, ListMCPPromptsTool, ListMCPResourcesTool, ReadMCPResourceTool,
 };
-pub use mermaid_interactive_tool::MermaidInteractiveTool;
 pub use miniapp_init_tool::InitMiniAppTool;
 pub use playbook_tool::PlaybookTool;
 pub use session_control_tool::SessionControlTool;

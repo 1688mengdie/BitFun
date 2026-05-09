@@ -771,7 +771,6 @@
     "fileBrowser": "文件瀏覽器",
     "editor": "編輯器",
     "markdown": "Markdown",
-    "mermaidChart": "Mermaid 圖表",
     "settings": "設置",
     "settingsWithSection": "設置 - {{section}}"
   },
@@ -813,7 +812,6 @@
     "skills": "技能",
     "miniApps": "小應用",
     "browser": "瀏覽器",
-    "mermaidEditor": "Mermaid 圖表",
     "insights": "洞察",
     "assistant": "助理",
     "shell": "Shell",

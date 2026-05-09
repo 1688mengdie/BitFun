@@ -9,7 +9,6 @@ export const ALL_NAMESPACES = [
   'components',
   'errors',
   'flow-chat',
-  'mermaid-editor',
   'notifications',
   'panels/files',
   'panels/git',

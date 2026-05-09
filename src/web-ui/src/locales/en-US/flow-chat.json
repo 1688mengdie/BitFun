@@ -883,12 +883,6 @@
       "enableLabel": "Restore limit",
       "restoreShort": "Restore ({{seconds}}s left)"
     },
-    "diagram": {
-      "interactive": "Interactive diagram:",
-      "preparing": "Preparing",
-      "creating": "Creating",
-      "mermaidInteractive": "Mermaid Interactive Chart"
-    },
     "template": {
       "get": "Get Template:",
       "getTemplate": "Get Template",

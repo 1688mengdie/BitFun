@@ -1,5 +1,7 @@
 //! Cross-platform `ComputerUseHost` via `screenshots` + `enigo`.
 
+#![allow(dead_code)]
+
 use async_trait::async_trait;
 use bitfun_core::agentic::tools::computer_use_host::{
     clamp_point_crop_half_extent, ActionRecord, AppClickParams, AppInfo, AppSelector,
@@ -24,7 +26,7 @@ use bitfun_core::util::errors::{BitFunError, BitFunResult};
 use enigo::{Axis, Button, Coordinate, Direction, Enigo, Key, Keyboard, Mouse, Settings};
 use image::codecs::jpeg::JpegEncoder;
 use image::{DynamicImage, Rgb, RgbImage};
-use log::{debug, info, warn};
+use log::{debug, warn};
 use resvg::tiny_skia::{Pixmap, Transform};
 use resvg::usvg;
 use screenshots::display_info::DisplayInfo;

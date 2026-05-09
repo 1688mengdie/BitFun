@@ -380,6 +380,10 @@ fn push_system_bin_paths(paths: &mut Vec<PathBuf>, seen: &mut HashSet<OsString>)
             }
         }
     }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (paths, seen);
+    }
 }
 
 fn push_existing_search_path(

@@ -771,7 +771,6 @@
     "fileBrowser": "File Browser",
     "editor": "Editor",
     "markdown": "Markdown",
-    "mermaidChart": "Mermaid Chart",
     "settings": "Settings",
     "settingsWithSection": "Settings - {{section}}"
   },
@@ -813,7 +812,6 @@
     "skills": "Skills",
     "miniApps": "Mini App",
     "browser": "Browser",
-    "mermaidEditor": "Mermaid",
     "insights": "Insights",
     "assistant": "Assistant",
     "shell": "Shell",

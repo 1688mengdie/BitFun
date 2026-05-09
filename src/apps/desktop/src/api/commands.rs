@@ -412,13 +412,6 @@ pub struct ListAIModelsByConfigRequest {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct FixMermaidCodeRequest {
-    pub source_code: String,
-    pub error_message: String,
-}
-
-#[derive(Debug, Deserialize)]
 pub struct UpdateAppStatusRequest {
     pub status: String,
     pub message: Option<String>,
@@ -968,78 +961,6 @@ pub async fn list_ai_models_by_config(
         );
         format!("Failed to list models: {}", e)
     })
-}
-
-#[tauri::command]
-pub async fn fix_mermaid_code(
-    state: State<'_, AppState>,
-    request: FixMermaidCodeRequest,
-) -> Result<String, String> {
-    use bitfun_core::util::types::message::Message;
-
-    let ai_client_guard = state.ai_client.read().await;
-    let ai_client = ai_client_guard.as_ref().ok_or_else(|| {
-        "AI client not initialized, please configure AI model in settings first".to_string()
-    })?;
-
-    const MERMAID_FIX_PROMPT: &str = r#"role:
-
-You are a Mermaid diagram syntax expert specialized in fixing erroneous Mermaid code.
-
-mission:
-
-Fix syntax errors in the provided Mermaid diagram code to ensure it renders correctly.
-
-workflow:
-
-1. Analyze the provided Mermaid code and error message
-2. Identify and fix the syntax errors
-3. Preserve the original diagram structure and content
-4. Return ONLY the fixed Mermaid code without any wrapper or explanation
-
-context:
-
-**Original Mermaid Code:**
-```
-{source_code}
-```
-
-**Error Message:**
-```
-{error_message}
-```
-
-**Output Requirements:**
-- Return ONLY the fixed Mermaid code as plain text
-- Do NOT wrap the code in markdown code blocks (no ```)
-- Do NOT add any explanations or comments
-- Preserve the original diagram type, direction, and node content
-- Only fix syntax errors
-"#;
-    let prompt = MERMAID_FIX_PROMPT
-        .replace("{source_code}", &request.source_code)
-        .replace("{error_message}", &request.error_message);
-
-    let messages = vec![Message::user(prompt)];
-
-    let response = ai_client.send_message(messages, None).await.map_err(|e| {
-        error!("Failed to call AI for Mermaid code fix: {}", e);
-        format!("AI call failed: {}", e)
-    })?;
-
-    let fixed_code = response.text.trim().to_string();
-
-    if fixed_code.is_empty() {
-        error!("AI returned empty fix code for Mermaid diagram");
-        return Err("AI returned empty fix code, please try again".to_string());
-    }
-
-    info!(
-        "Mermaid code fixed successfully: original_length={}, fixed_length={}",
-        request.source_code.len(),
-        fixed_code.len()
-    );
-    Ok(fixed_code)
 }
 
 #[tauri::command]
