@@ -120,6 +120,15 @@ pub struct AppSessionConfig {
     pub default_mode: String,
 }
 
+/// A user-defined quick action for the FlowChat post-coding actions menu.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AiExperienceQuickAction {
+    pub id: String,
+    pub label: String,
+    pub prompt: String,
+    pub enabled: bool,
+}
+
 /// AI experience configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -139,6 +148,9 @@ pub struct AIExperienceConfig {
     pub agent_companion_pet: Option<AgentCompanionPetSelection>,
     /// Whether to enable flashgrep-backed accelerated workspace search.
     pub enable_workspace_search: bool,
+    /// User-defined quick actions (post-coding menu); persisted for the web UI.
+    #[serde(default)]
+    pub quick_actions: Vec<AiExperienceQuickAction>,
 }
 
 /// User-selected Agent companion pet package.
@@ -1285,6 +1297,7 @@ impl Default for AIExperienceConfig {
             agent_companion_display_mode: "desktop".to_string(),
             agent_companion_pet: None,
             enable_workspace_search: false,
+            quick_actions: Vec::new(),
         }
     }
 }
@@ -1783,6 +1796,56 @@ mod tests {
             serialized["agent_companion_pet"]["spritesheetPath"],
             "/agent-companion-pets/boxcat/spritesheet.webp"
         );
+    }
+
+    #[test]
+    fn ai_experience_quick_actions_round_trip_through_global_config() {
+        let config: GlobalConfig = serde_json::from_value(serde_json::json!({
+            "app": {
+                "language": "en-US",
+                "auto_update": true,
+                "telemetry": true,
+                "startup_behavior": "default",
+                "confirm_on_exit": true,
+                "restore_windows": false,
+                "zoom_level": 100,
+                "sidebar": { "width": 260, "collapsed": false },
+                "right_panel": { "width": 400, "collapsed": true },
+                "notifications": {
+                    "enabled": true,
+                    "position": "top-right",
+                    "duration": 4000,
+                    "dialog_completion_notify": true,
+                    "enable_startup_tips": true
+                },
+                "session_config": { "default_mode": "code" },
+                "ai_experience": {
+                    "enable_session_title_generation": true,
+                    "enable_welcome_panel_ai_analysis": false,
+                    "enable_visual_mode": false,
+                    "enable_agent_companion": true,
+                    "agent_companion_display_mode": "desktop",
+                    "enable_workspace_search": false,
+                    "quick_actions": [
+                        {
+                            "id": "custom_1",
+                            "label": "Run tests",
+                            "prompt": "Run the test suite",
+                            "enabled": true
+                        }
+                    ]
+                }
+            }
+        }))
+        .expect("minimal app config with quick_actions should deserialize");
+
+        let actions = &config.app.ai_experience.quick_actions;
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].id, "custom_1");
+        assert_eq!(actions[0].label, "Run tests");
+
+        let serialized = serde_json::to_value(&config).expect("config should serialize");
+        assert_eq!(serialized["app"]["ai_experience"]["quick_actions"][0]["id"], "custom_1");
     }
 
     #[test]
