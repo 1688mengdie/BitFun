@@ -1,5 +1,9 @@
 Place the prebuilt `flashgrep` daemon binary in this directory.
 
+Pinned release:
+
+- `v0.2.2` from `wgqqqqq/flashgrep`
+
 Expected filenames:
 
 - macOS x86_64: `flashgrep-x86_64-apple-darwin`
