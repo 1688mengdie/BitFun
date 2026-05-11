@@ -770,7 +770,7 @@ fn convert_search_results(
         ContentSearchOutputMode::Content => convert_hits_to_file_search_results(search_results),
         ContentSearchOutputMode::Count => convert_file_counts_to_search_results(search_results),
         ContentSearchOutputMode::FilesWithMatches => {
-            convert_hits_to_file_only_results(search_results)
+            convert_matched_paths_to_file_only_results(search_results)
         }
     }
 }
@@ -832,16 +832,18 @@ fn convert_hits_to_file_search_results(search_results: &SearchResults) -> Vec<Fi
     file_results
 }
 
-fn convert_hits_to_file_only_results(search_results: &SearchResults) -> Vec<FileSearchResult> {
+fn convert_matched_paths_to_file_only_results(
+    search_results: &SearchResults,
+) -> Vec<FileSearchResult> {
     search_results
-        .hits
+        .matched_paths
         .iter()
-        .map(|hit| FileSearchResult {
-            path: hit.path.clone(),
-            name: Path::new(&hit.path)
+        .map(|path| FileSearchResult {
+            path: path.clone(),
+            name: Path::new(path)
                 .file_name()
                 .and_then(|file_name| file_name.to_str())
-                .unwrap_or(&hit.path)
+                .unwrap_or(path)
                 .to_string(),
             is_directory: false,
             match_type: SearchMatchType::Content,

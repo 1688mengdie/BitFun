@@ -58,6 +58,8 @@ static REMOTE_STDIO_SESSIONS: LazyLock<RwLock<HashMap<String, RemoteStdioSession
     LazyLock::new(|| RwLock::new(HashMap::new()));
 static REMOTE_STDIO_OPEN_GUARDS: LazyLock<Mutex<HashMap<String, Arc<Mutex<()>>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
+static REMOTE_SEARCH_CONTEXTS: LazyLock<RwLock<HashMap<String, RemoteSearchContext>>> =
+    LazyLock::new(|| RwLock::new(HashMap::new()));
 
 #[derive(Clone)]
 struct RemoteStdioSessionEntry {
@@ -195,6 +197,10 @@ impl RemoteStdioDaemonClient {
         self.protocol
             .close_with_message("remote flashgrep stdio daemon is shutting down")
             .await;
+    }
+
+    fn is_closed(&self) -> bool {
+        self.protocol.is_closed()
     }
 }
 
@@ -525,6 +531,15 @@ struct RemoteSearchContext {
     binary_path: String,
     repo_root: String,
     storage_root: String,
+    remote_arch: String,
+    local_binary_sha256: String,
+}
+
+struct LocalFlashgrepBundle {
+    binary_name: String,
+    path: PathBuf,
+    bytes: Vec<u8>,
+    sha256: String,
 }
 
 impl RemoteWorkspaceSearchService {
@@ -685,11 +700,9 @@ impl RemoteWorkspaceSearchService {
 
         if let Some(entry) = REMOTE_STDIO_SESSIONS.read().await.get(&key).cloned() {
             entry.activity_epoch.fetch_add(1, Ordering::Relaxed);
-            let lease = RemoteStdioSessionLease::new(entry.session.clone());
-            if lease.status().await.is_ok() {
-                return Ok(lease);
+            if !entry.session.client.is_closed() {
+                return Ok(RemoteStdioSessionLease::new(entry.session.clone()));
             }
-            drop(lease);
             log::warn!(
                 "Remote workspace search stdio session became unhealthy, reopening: connection_id={}, path={}",
                 context.connection.connection_id,
@@ -763,6 +776,30 @@ impl RemoteWorkspaceSearchService {
         root_path: &str,
     ) -> Result<RemoteSearchContext, String> {
         let repo_root = normalize_remote_workspace_path(root_path);
+        let cache_key =
+            remote_search_context_key(self.preferred_connection_id.as_deref(), &repo_root);
+        if let Some(context) = REMOTE_SEARCH_CONTEXTS.read().await.get(&cache_key).cloned() {
+            let local_bundle = local_flashgrep_bundle_for_arch(&context.remote_arch).await?;
+            if local_bundle.sha256 == context.local_binary_sha256 {
+                return Ok(context);
+            }
+
+            log::info!(
+                "Bundled remote flashgrep binary changed; reopening remote search session: connection_id={}, path={}, old_sha256={}, new_sha256={}",
+                context.connection.connection_id,
+                context.repo_root,
+                context.local_binary_sha256,
+                local_bundle.sha256
+            );
+            REMOTE_SEARCH_CONTEXTS.write().await.remove(&cache_key);
+            let session_key =
+                remote_stdio_session_key(&context.connection.connection_id, &context.repo_root);
+            if let Some(entry) = REMOTE_STDIO_SESSIONS.write().await.remove(&session_key) {
+                entry.session.close().await;
+                entry.session.client.shutdown().await;
+            }
+        }
+
         let connection = self.resolve_remote_workspace_entry(&repo_root).await?;
         let cached_server_info = self
             .ssh_manager
@@ -793,17 +830,25 @@ impl RemoteWorkspaceSearchService {
         let remote_arch = self
             .detect_remote_architecture(&connection.connection_id)
             .await?;
+        let local_bundle = local_flashgrep_bundle_for_arch(&remote_arch).await?;
         let binary_path = self
-            .ensure_remote_flashgrep_binary(&connection.connection_id, &repo_root, &remote_arch)
+            .ensure_remote_flashgrep_binary(&connection.connection_id, &repo_root, &local_bundle)
             .await?;
         let storage_root = join_remote_path(&repo_root, ".bitfun/search/flashgrep-index");
 
-        Ok(RemoteSearchContext {
+        let context = RemoteSearchContext {
             connection,
             binary_path,
             repo_root,
             storage_root,
-        })
+            remote_arch,
+            local_binary_sha256: local_bundle.sha256,
+        };
+        REMOTE_SEARCH_CONTEXTS
+            .write()
+            .await
+            .insert(cache_key, context.clone());
+        Ok(context)
     }
 
     async fn detect_remote_architecture(&self, connection_id: &str) -> Result<String, String> {
@@ -851,42 +896,10 @@ impl RemoteWorkspaceSearchService {
         &self,
         connection_id: &str,
         repo_root: &str,
-        remote_arch: &str,
+        local_bundle: &LocalFlashgrepBundle,
     ) -> Result<String, String> {
-        let bundled_binary_names = match remote_arch {
-            "x86_64" | "amd64" => LINUX_X86_64_FLASHGREP_BUNDLES,
-            "aarch64" | "arm64" => LINUX_AARCH64_FLASHGREP_BUNDLES,
-            arch => {
-                return Err(format!(
-                    "Remote workspace search does not support Linux architecture: {arch}"
-                ));
-            }
-        };
-
-        let (bundled_binary_name, local_binary_path) = bundled_binary_names
-            .iter()
-            .find_map(|binary_name| {
-                resolve_local_flashgrep_bundle(binary_name).map(|path| (*binary_name, path))
-            })
-            .ok_or_else(|| {
-                format!(
-                    "Bundled Linux flashgrep binary is missing. Expected one of: {}",
-                    bundled_binary_names
-                        .iter()
-                        .map(|name| format!("resources/flashgrep/{name}"))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
-            })?;
         let install_dir = remote_flashgrep_install_dir(repo_root);
-        let remote_binary_path = join_remote_path(&install_dir, bundled_binary_name);
-        let bytes = tokio::fs::read(&local_binary_path).await.map_err(|error| {
-            format!(
-                "Failed to read bundled flashgrep binary {}: {error}",
-                local_binary_path.display()
-            )
-        })?;
-        let local_sha256 = hex::encode(Sha256::digest(&bytes));
+        let remote_binary_path = join_remote_path(&install_dir, &local_bundle.binary_name);
 
         self.remote_file_service
             .create_dir_all(connection_id, &install_dir)
@@ -897,17 +910,18 @@ impl RemoteWorkspaceSearchService {
         let remote_sha256 = self
             .remote_flashgrep_sha256(connection_id, &remote_binary_path)
             .await?;
-        if remote_sha256.as_deref() != Some(local_sha256.as_str()) {
+        if remote_sha256.as_deref() != Some(local_bundle.sha256.as_str()) {
             log::info!(
-                "Uploading bundled remote flashgrep binary: connection_id={}, path={}, bundle={}, local_sha256={}, remote_sha256={}",
+                "Uploading bundled remote flashgrep binary: connection_id={}, path={}, bundle={}, local_path={}, local_sha256={}, remote_sha256={}",
                 connection_id,
                 remote_binary_path,
-                bundled_binary_name,
-                local_sha256,
+                local_bundle.binary_name,
+                local_bundle.path.display(),
+                local_bundle.sha256,
                 remote_sha256.as_deref().unwrap_or("missing")
             );
             self.remote_file_service
-                .write_file(connection_id, &remote_binary_path, &bytes)
+                .write_file(connection_id, &remote_binary_path, &local_bundle.bytes)
                 .await
                 .map_err(|error| format!("Failed to upload flashgrep to remote host: {error}"))?;
         }
@@ -998,6 +1012,14 @@ pub async fn remote_workspace_search_service_for_path(
 fn remote_stdio_session_key(connection_id: &str, repo_root: &str) -> String {
     format!(
         "{connection_id}\0{}",
+        normalize_remote_workspace_path(repo_root)
+    )
+}
+
+fn remote_search_context_key(preferred_connection_id: Option<&str>, repo_root: &str) -> String {
+    format!(
+        "{}\0{}",
+        preferred_connection_id.unwrap_or(""),
         normalize_remote_workspace_path(repo_root)
     )
 }
@@ -1191,7 +1213,7 @@ fn parse_remote_os_output(stdout: &str, stderr: &str) -> Option<String> {
 
 fn resolve_local_flashgrep_bundle(binary_name: &str) -> Option<PathBuf> {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let workspace_root = manifest_dir.join("../../../..");
+    let workspace_root = manifest_dir.join("../../..");
     let mut candidates = vec![workspace_root.join("resources/flashgrep").join(binary_name)];
 
     if let Ok(current_exe) = std::env::current_exe() {
@@ -1208,7 +1230,55 @@ fn resolve_local_flashgrep_bundle(binary_name: &str) -> Option<PathBuf> {
         }
     }
 
-    candidates.into_iter().find(|candidate| candidate.exists())
+    candidates
+        .into_iter()
+        .find(|candidate| candidate.exists())
+        .map(|candidate| candidate.canonicalize().unwrap_or(candidate))
+}
+
+async fn local_flashgrep_bundle_for_arch(
+    remote_arch: &str,
+) -> Result<LocalFlashgrepBundle, String> {
+    let bundled_binary_names = match remote_arch {
+        "x86_64" | "amd64" => LINUX_X86_64_FLASHGREP_BUNDLES,
+        "aarch64" | "arm64" => LINUX_AARCH64_FLASHGREP_BUNDLES,
+        arch => {
+            return Err(format!(
+                "Remote workspace search does not support Linux architecture: {arch}"
+            ));
+        }
+    };
+
+    let (binary_name, path) = bundled_binary_names
+        .iter()
+        .find_map(|binary_name| {
+            resolve_local_flashgrep_bundle(binary_name)
+                .map(|path| ((*binary_name).to_string(), path))
+        })
+        .ok_or_else(|| {
+            format!(
+                "Bundled Linux flashgrep binary is missing. Expected one of: {}",
+                bundled_binary_names
+                    .iter()
+                    .map(|name| format!("resources/flashgrep/{name}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        })?;
+    let bytes = tokio::fs::read(&path).await.map_err(|error| {
+        format!(
+            "Failed to read bundled flashgrep binary {}: {error}",
+            path.display()
+        )
+    })?;
+    let sha256 = hex::encode(Sha256::digest(&bytes));
+
+    Ok(LocalFlashgrepBundle {
+        binary_name,
+        path,
+        bytes,
+        sha256,
+    })
 }
 
 fn convert_stdio_search_results(
@@ -1223,7 +1293,7 @@ fn convert_stdio_search_results(
             convert_stdio_file_counts_to_search_results(search_results)
         }
         ContentSearchOutputMode::FilesWithMatches => {
-            convert_stdio_hits_to_file_only_results(search_results)
+            convert_stdio_matched_paths_to_file_only_results(search_results)
         }
     }
 }
@@ -1297,18 +1367,18 @@ fn convert_stdio_hits_to_file_search_results(
     file_results
 }
 
-fn convert_stdio_hits_to_file_only_results(
+fn convert_stdio_matched_paths_to_file_only_results(
     search_results: &SearchResults,
 ) -> Vec<FileSearchResult> {
     search_results
-        .hits
+        .matched_paths
         .iter()
-        .map(|hit| FileSearchResult {
-            path: hit.path.clone(),
-            name: Path::new(&hit.path)
+        .map(|path| FileSearchResult {
+            path: path.clone(),
+            name: Path::new(path)
                 .file_name()
                 .and_then(|file_name| file_name.to_str())
-                .unwrap_or(&hit.path)
+                .unwrap_or(path)
                 .to_string(),
             is_directory: false,
             match_type: SearchMatchType::Content,
