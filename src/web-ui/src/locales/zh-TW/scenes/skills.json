@@ -41,8 +41,17 @@
   },
   "filters": {
     "all": "全部",
+    "builtin": "內建",
     "user": "用戶級",
-    "project": "項目級"
+    "project": "項目級",
+    "suite": "套件"
+  },
+  "categories": {
+    "all": "查看所有已安裝的技能，包含內建、用戶與項目級。",
+    "builtin": "系統出廠內建的核心技能，不可刪除。",
+    "user": "為目前帳戶全域安裝的用戶級技能。",
+    "project": "目前工作區底下的項目級技能。",
+    "suite": "精選技能套件將多個相關技能打包提供（敬請期待）。"
   },
   "section": {
     "user": {
@@ -64,6 +73,7 @@
       "noMatch": "沒有找到匹配的市場技能",
       "noSkills": "暫時沒有可展示的市場技能"
     },
+    "resultsInfo": "關鍵詞「{{query}}」共 {{count}} 筆相關結果",
     "item": {
       "sourceLabel": "來源: ",
       "installs": "安裝量: {{count}}",
@@ -98,7 +108,8 @@
       "user": "用戶級（全局）",
       "project": "項目級（當前工作空間）",
       "projectDisabled": " - 需要先打開工作區",
-      "currentWorkspace": "當前工作區: {{path}}"
+      "currentWorkspace": "當前工作區: {{path}}",
+      "selectedProjectPath": "所選項目路徑: {{path}}"
     },
     "path": {
       "label": "技能文件夾路徑",
@@ -123,6 +134,9 @@
     "item": {
       "user": "用戶級",
       "project": "項目級",
+      "builtin": "內建",
+      "userInstalled": "已安裝",
+      "detail": "詳情",
       "deleteTooltip": "刪除",
       "pathLabel": "路徑:",
       "openPathInExplorer": "在資源管理器中打開此文件夾",
