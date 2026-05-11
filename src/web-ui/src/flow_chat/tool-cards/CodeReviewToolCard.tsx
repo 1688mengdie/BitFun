@@ -145,6 +145,7 @@ function getReliabilityNoticeLabel(notice: ReviewReliabilityNotice, t: Translate
       cache_miss: 'Incremental cache missed or refreshed',
       concurrency_limited: 'Reviewer launch was concurrency-limited',
       partial_reviewer: 'Reviewer timed out with partial result',
+      reduced_scope: 'Reduced-depth coverage',
       retry_guidance: 'Retry guidance emitted',
       skipped_reviewers: 'Skipped reviewers',
       token_budget_limited: 'Token budget limited reviewer coverage',
@@ -167,6 +168,7 @@ function getReliabilityNoticeDetail(notice: ReviewReliabilityNotice, t: Translat
       cache_miss: '{{count}} reviewer packet ran fresh or refreshed stale cache.',
       concurrency_limited: '{{count}} reviewer launch hit a concurrency cap.',
       partial_reviewer: '{{count}} reviewer result is partial; confidence is reduced.',
+      reduced_scope: 'This review used a reduced-depth scope profile.',
       retry_guidance: '{{count}} retry guidance item was emitted for partial review coverage.',
       skipped_reviewers: '{{count}} reviewer was skipped by applicability, configuration, or budget.',
       token_budget_limited: '{{count}} reviewer was skipped by token budget mode.',
@@ -243,6 +245,16 @@ function formatRunManifestSummary(
     skipped: manifest.skippedReviewers.length,
     calls: manifest.tokenBudget.estimatedReviewerCalls,
     defaultValue: '{{active}} active / {{skipped}} skipped / {{calls}} calls',
+  });
+}
+
+function formatReviewDepthLabel(reviewDepth: string, t: Translate): string {
+  return t(`toolCards.codeReview.runManifest.reviewDepthLabels.${reviewDepth}`, {
+    defaultValue: {
+      high_risk_only: 'High-risk-only',
+      risk_expanded: 'Risk-expanded',
+      full_depth: 'Full-depth',
+    }[reviewDepth] ?? reviewDepth,
   });
 }
 
@@ -754,6 +766,16 @@ export const CodeReviewToolCard: React.FC<ToolCardProps> = React.memo(({
                       })}
                     </span>
                     <strong>{runManifest.strategyRecommendation.strategyLevel}</strong>
+                  </div>
+                )}
+                {runManifest.scopeProfile && (
+                  <div className="run-manifest__fact">
+                    <span>
+                      {t('toolCards.codeReview.runManifest.reviewDepth', {
+                        defaultValue: 'Review depth',
+                      })}
+                    </span>
+                    <strong>{formatReviewDepthLabel(runManifest.scopeProfile.reviewDepth, t)}</strong>
                   </div>
                 )}
               </div>

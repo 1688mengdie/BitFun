@@ -188,6 +188,20 @@ function buildRetryRunManifest(
   };
 }
 
+function buildReducedScopeRunManifest(): ReviewTeamRunManifest {
+  return {
+    ...buildRunManifest(),
+    scopeProfile: {
+      reviewDepth: 'high_risk_only',
+      riskFocusTags: ['security', 'cross_boundary_api_contracts'],
+      maxDependencyHops: 0,
+      optionalReviewerPolicy: 'risk_matched_only',
+      allowBroadToolExploration: false,
+      coverageExpectation: 'High-risk-only pass; changed files remain visible.',
+    },
+  };
+}
+
 describe('codeReviewReport', () => {
   it('uses structured report sections when present', () => {
     const report = {
@@ -530,6 +544,109 @@ describe('codeReviewReport', () => {
 
     expect(markdown).toContain('- Skipped reviewers [info/manifest]: Count: 2');
     expect(markdown).toContain('- Token budget limited reviewer coverage [warning/manifest]: Count: 1');
+  });
+
+  it('surfaces reduced-depth scope profile in reliability notices and markdown export', () => {
+    const report = {
+      summary: {
+        overall_assessment: 'No blocking issues found in the high-risk pass.',
+        risk_level: 'low' as const,
+        recommended_action: 'approve' as const,
+      },
+      review_mode: 'deep' as const,
+      reviewers: [],
+    };
+    const runManifest = buildReducedScopeRunManifest();
+
+    const notices = buildCodeReviewReliabilityNotices(report, runManifest);
+
+    expect(notices).toContainEqual({
+      kind: 'reduced_scope',
+      severity: 'info',
+      source: 'manifest',
+      detail: 'High-risk-only pass; changed files remain visible.',
+    });
+
+    const markdown = formatCodeReviewReportMarkdown(report, undefined, { runManifest });
+
+    expect(markdown).toContain('- Review depth: high_risk_only');
+    expect(markdown).toContain('- Coverage expectation: High-risk-only pass; changed files remain visible.');
+    expect(markdown).toContain(
+      '- Reduced-depth coverage [info/manifest]: High-risk-only pass; changed files remain visible.',
+    );
+  });
+
+  it('exports a compact metadata-only evidence pack summary without content', () => {
+    const report = {
+      summary: {
+        overall_assessment: 'Review completed.',
+        risk_level: 'low' as const,
+        recommended_action: 'approve' as const,
+      },
+      review_mode: 'deep' as const,
+      reviewers: [],
+    };
+    const runManifest: ReviewTeamRunManifest = {
+      ...buildRunManifest(),
+      evidencePack: {
+        version: 1,
+        source: 'target_manifest',
+        changedFiles: ['src/App.tsx'],
+        diffStat: {
+          fileCount: 1,
+          totalChangedLines: 12,
+          lineCountSource: 'diff_stat',
+        },
+        domainTags: ['frontend'],
+        riskFocusTags: ['cross_boundary_api_contracts'],
+        packetIds: ['reviewer:ReviewBusinessLogic', 'judge:ReviewJudge'],
+        hunkHints: [
+          {
+            filePath: 'src/App.tsx',
+            changedLineCount: 12,
+            lineCountSource: 'diff_stat',
+          },
+        ],
+        contractHints: [
+          {
+            kind: 'api_contract',
+            filePath: 'src/App.tsx',
+            source: 'path_classifier',
+          },
+        ],
+        budget: {
+          maxChangedFiles: 80,
+          maxHunkHints: 80,
+          maxContractHints: 40,
+          omittedChangedFileCount: 0,
+          omittedHunkHintCount: 0,
+          omittedContractHintCount: 0,
+        },
+        privacy: {
+          content: 'metadata_only',
+          excludes: [
+            'source_text',
+            'full_diff',
+            'model_output',
+            'provider_raw_body',
+            'full_file_contents',
+          ],
+        },
+      },
+    };
+
+    const markdown = formatCodeReviewReportMarkdown(report, undefined, { runManifest });
+
+    expect(markdown).toContain('### Evidence pack');
+    expect(markdown).toContain('- Source: target_manifest; privacy: metadata_only');
+    expect(markdown).toContain('- Changed files: 1; hunk hints: 1; contract hints: 1; packet ids: 2');
+    expect(markdown).toContain('- Omitted metadata: changed files 0, hunk hints 0, contract hints 0');
+    expect(markdown).toContain('- Hints are orientation only and require tool confirmation before findings.');
+    expect(markdown).not.toContain('source_text');
+    expect(markdown).not.toContain('full_diff');
+    expect(markdown).not.toContain('model_output');
+    expect(markdown).not.toContain('provider_raw_body');
+    expect(markdown).not.toContain('full_file_contents');
   });
 
   it('keeps team and issue details collapsed by default while leaving remediation visible', () => {

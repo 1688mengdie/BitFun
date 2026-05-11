@@ -88,6 +88,16 @@ function getFallbackTargetTagLabel(tag: string): string {
     .join(' ');
 }
 
+function getReviewDepthLabel(reviewDepth: string, t: ReturnType<typeof useTranslation>['t']): string {
+  return t(`deepReviewConsent.reviewDepthLabels.${reviewDepth}`, {
+    defaultValue: {
+      high_risk_only: 'High-risk-only',
+      risk_expanded: 'Risk-expanded',
+      full_depth: 'Full-depth',
+    }[reviewDepth] ?? reviewDepth,
+  });
+}
+
 export function useDeepReviewConsent(): DeepReviewConsentControls {
   const { t } = useTranslation('flow-chat');
   const [pendingConsent, setPendingConsent] = useState<PendingConsent | null>(null);
@@ -285,6 +295,14 @@ export function useDeepReviewConsent(): DeepReviewConsentControls {
               defaultValue: 'Run strategy: {{strategy}}',
             })}
           </span>
+          {preview.scopeProfile && (
+            <span>
+              {t('deepReviewConsent.reviewDepth', {
+                depth: getReviewDepthLabel(preview.scopeProfile.reviewDepth, t),
+                defaultValue: 'Review depth: {{depth}}',
+              })}
+            </span>
+          )}
         </div>
 
         {preview.workspacePath && (

@@ -760,6 +760,12 @@
     "estimatedTokens": "預計消耗：{{min}} - {{max}} tokens",
     "runStrategy": "運行策略：{{strategy}}",
     "recommendedStrategy": "推薦策略：{{strategy}}",
+    "reviewDepth": "審查深度：{{depth}}",
+    "reviewDepthLabels": {
+      "high_risk_only": "僅高風險",
+      "risk_expanded": "風險擴展",
+      "full_depth": "完整深度"
+    },
     "recommendationTitle": "風險推薦",
     "strategyOverrideTitle": "運行策略",
     "strategyOverrideBody": "為本專案的本次啟動選擇審核策略。",
@@ -1525,7 +1531,13 @@
       },
       "runManifest": {
         "recommendedStrategy": "推薦策略",
-        "riskRecommendationTitle": "風險推薦"
+        "riskRecommendationTitle": "風險推薦",
+        "reviewDepth": "審查深度",
+        "reviewDepthLabels": {
+          "high_risk_only": "僅高風險",
+          "risk_expanded": "風險擴展",
+          "full_depth": "完整深度"
+        }
       },
       "sectionItemCount": "{{count}} 項",
       "remediationPlan": "修復計劃",
@@ -1554,6 +1566,10 @@
         "partial_reviewer": {
           "label": "審核者逾時但有部分結果",
           "detail": "{{count}} 個審核者結果是部分結果，信心已降低。"
+        },
+        "reduced_scope": {
+          "label": "降深度覆蓋",
+          "detail": "本次審核使用了降深度範圍設定。"
         },
         "retry_guidance": {
           "label": "已給出重試指引",

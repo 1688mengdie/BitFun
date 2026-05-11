@@ -760,6 +760,12 @@
     "estimatedTokens": "Estimated: {{min}} - {{max}} tokens",
     "runStrategy": "Run strategy: {{strategy}}",
     "recommendedStrategy": "Recommended strategy: {{strategy}}",
+    "reviewDepth": "Review depth: {{depth}}",
+    "reviewDepthLabels": {
+      "high_risk_only": "High-risk-only",
+      "risk_expanded": "Risk-expanded",
+      "full_depth": "Full-depth"
+    },
     "recommendationTitle": "Risk recommendation",
     "strategyOverrideTitle": "Run strategy",
     "strategyOverrideBody": "Choose a project-specific strategy for this launch.",
@@ -1525,7 +1531,13 @@
       },
       "runManifest": {
         "recommendedStrategy": "Recommended strategy",
-        "riskRecommendationTitle": "Risk recommendation"
+        "riskRecommendationTitle": "Risk recommendation",
+        "reviewDepth": "Review depth",
+        "reviewDepthLabels": {
+          "high_risk_only": "High-risk-only",
+          "risk_expanded": "Risk-expanded",
+          "full_depth": "Full-depth"
+        }
       },
       "sectionItemCount": "{{count}} items",
       "remediationPlan": "Remediation Plan",
@@ -1554,6 +1566,10 @@
         "partial_reviewer": {
           "label": "Reviewer timed out with partial result",
           "detail": "{{count}} reviewer result is partial; confidence is reduced."
+        },
+        "reduced_scope": {
+          "label": "Reduced-depth coverage",
+          "detail": "This review used a reduced-depth scope profile."
         },
         "retry_guidance": {
           "label": "Retry guidance emitted",

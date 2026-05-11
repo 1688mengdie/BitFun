@@ -9,6 +9,95 @@ export type ReviewMemberStrategyLevel = ReviewStrategyLevel | 'inherit';
 export type ReviewStrategySource = 'team' | 'member';
 export type ReviewModelFallbackReason = 'model_removed';
 
+export type DeepReviewScopeReviewDepth =
+  | 'high_risk_only'
+  | 'risk_expanded'
+  | 'full_depth';
+export type DeepReviewScopeDependencyHops = number | 'policy_limited';
+export type DeepReviewOptionalReviewerPolicy =
+  | 'risk_matched_only'
+  | 'configured'
+  | 'full';
+export type DeepReviewRiskFocusTag =
+  | 'security'
+  | 'data_loss'
+  | 'migrations'
+  | 'authentication_authorization'
+  | 'cross_boundary_api_contracts'
+  | 'concurrency'
+  | 'persistence'
+  | 'configuration_changes'
+  | 'platform_boundary_violations';
+
+export interface DeepReviewScopeProfile {
+  reviewDepth: DeepReviewScopeReviewDepth;
+  riskFocusTags: DeepReviewRiskFocusTag[];
+  maxDependencyHops: DeepReviewScopeDependencyHops;
+  optionalReviewerPolicy: DeepReviewOptionalReviewerPolicy;
+  allowBroadToolExploration: boolean;
+  coverageExpectation: string;
+}
+
+export type DeepReviewEvidencePackSource = 'target_manifest';
+export type DeepReviewEvidencePackContentBoundary = 'metadata_only';
+export type DeepReviewEvidencePackContractHintKind =
+  | 'i18n_key'
+  | 'tauri_command'
+  | 'api_contract'
+  | 'config_key';
+
+export interface DeepReviewEvidencePackDiffStat {
+  fileCount: number;
+  totalChangedLines?: number;
+  lineCountSource: ReviewTeamChangeStats['lineCountSource'];
+}
+
+export interface DeepReviewEvidencePackHunkHint {
+  filePath: string;
+  changedLineCount: number;
+  lineCountSource: ReviewTeamChangeStats['lineCountSource'];
+}
+
+export interface DeepReviewEvidencePackContractHint {
+  kind: DeepReviewEvidencePackContractHintKind;
+  filePath: string;
+  source: 'path_classifier';
+}
+
+export interface DeepReviewEvidencePackBudget {
+  maxChangedFiles: number;
+  maxHunkHints: number;
+  maxContractHints: number;
+  omittedChangedFileCount: number;
+  omittedHunkHintCount: number;
+  omittedContractHintCount: number;
+}
+
+export interface DeepReviewEvidencePackPrivacyBoundary {
+  content: DeepReviewEvidencePackContentBoundary;
+  excludes: [
+    'source_text',
+    'full_diff',
+    'model_output',
+    'provider_raw_body',
+    'full_file_contents',
+  ];
+}
+
+export interface DeepReviewEvidencePack {
+  version: 1;
+  source: DeepReviewEvidencePackSource;
+  changedFiles: string[];
+  diffStat: DeepReviewEvidencePackDiffStat;
+  domainTags: ReviewDomainTag[];
+  riskFocusTags: DeepReviewRiskFocusTag[];
+  packetIds: string[];
+  hunkHints: DeepReviewEvidencePackHunkHint[];
+  contractHints: DeepReviewEvidencePackContractHint[];
+  budget: DeepReviewEvidencePackBudget;
+  privacy: DeepReviewEvidencePackPrivacyBoundary;
+}
+
 export interface ReviewStrategyCommonRules {
   reviewerPromptRules: string[];
 }
@@ -337,12 +426,14 @@ export interface ReviewTeamRunManifest {
   policySource: 'default-review-team-config';
   target: ReviewTargetClassification;
   strategyLevel: ReviewStrategyLevel;
+  scopeProfile?: DeepReviewScopeProfile;
   strategyRecommendation?: ReviewTeamStrategyRecommendation;
   strategyDecision: ReviewTeamStrategyDecision;
   executionPolicy: ReviewTeamExecutionPolicy;
   concurrencyPolicy: ReviewTeamConcurrencyPolicy;
   changeStats?: ReviewTeamChangeStats;
   preReviewSummary: ReviewTeamPreReviewSummary;
+  evidencePack?: DeepReviewEvidencePack;
   sharedContextCache: ReviewTeamSharedContextCachePlan;
   incrementalReviewCache: ReviewTeamIncrementalReviewCachePlan;
   tokenBudget: ReviewTeamTokenBudgetPlan;

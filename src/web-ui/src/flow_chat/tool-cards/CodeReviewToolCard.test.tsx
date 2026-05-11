@@ -378,4 +378,65 @@ describe('CodeReviewToolCard', () => {
     expect(container.textContent).toContain('Reviewer timed out with partial result');
     expect(container.textContent).toContain('1 reviewer result is partial; confidence is reduced.');
   });
+
+  it('renders reduced-depth reliability status from structured report signals', () => {
+    const toolItem: FlowToolItem = {
+      id: 'tool-1',
+      type: 'tool',
+      timestamp: Date.now(),
+      toolName: 'submit_code_review',
+      status: 'completed',
+      toolCall: {
+        id: 'call-1',
+        input: {},
+      },
+      toolResult: {
+        success: true,
+        result: {
+          review_mode: 'deep',
+          summary: {
+            overall_assessment: 'High-risk pass completed.',
+            risk_level: 'low',
+            recommended_action: 'approve',
+          },
+          issues: [],
+          reviewers: [],
+          reliability_signals: [
+            {
+              kind: 'reduced_scope',
+              severity: 'info',
+              source: 'manifest',
+              detail: 'High-risk-only pass; changed files remain visible.',
+            },
+          ],
+        },
+      },
+    };
+    const config: ToolCardConfig = {
+      toolName: 'submit_code_review',
+      displayName: 'Code Review',
+      icon: 'REVIEW',
+      requiresConfirmation: false,
+      resultDisplayType: 'detailed',
+    };
+
+    act(() => {
+      root.render(
+        <CodeReviewToolCard
+          toolItem={toolItem}
+          config={config}
+          sessionId="review-session"
+        />,
+      );
+    });
+
+    act(() => {
+      container.querySelector('.preview-toggle-btn')?.dispatchEvent(
+        new window.Event('click', { bubbles: true }),
+      );
+    });
+
+    expect(container.textContent).toContain('Reduced-depth coverage');
+    expect(container.textContent).toContain('High-risk-only pass; changed files remain visible.');
+  });
 });

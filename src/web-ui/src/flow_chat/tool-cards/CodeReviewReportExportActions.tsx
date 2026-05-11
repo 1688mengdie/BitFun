@@ -107,6 +107,9 @@ export const CodeReviewReportExportActions: React.FC<CodeReviewReportExportActio
       partial_reviewer: t('toolCards.codeReview.reliabilityStatus.partial_reviewer.label', {
         defaultValue: 'Reviewer timed out with partial result',
       }),
+      reduced_scope: t('toolCards.codeReview.reliabilityStatus.reduced_scope.label', {
+        defaultValue: 'Reduced-depth coverage',
+      }),
       retry_guidance: t('toolCards.codeReview.reliabilityStatus.retry_guidance.label', {
         defaultValue: 'Retry guidance emitted',
       }),

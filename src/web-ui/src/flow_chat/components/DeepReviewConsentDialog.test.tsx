@@ -116,6 +116,14 @@ function buildPreview(): ReviewTeamRunManifest {
       warnings: [],
     },
     strategyLevel: 'normal',
+    scopeProfile: {
+      reviewDepth: 'risk_expanded',
+      riskFocusTags: ['security', 'cross_boundary_api_contracts'],
+      maxDependencyHops: 1,
+      optionalReviewerPolicy: 'configured',
+      allowBroadToolExploration: false,
+      coverageExpectation: 'Risk-expanded pass; changed files remain visible.',
+    },
     strategyRecommendation: {
       strategyLevel: 'deep',
       score: 24,
@@ -284,6 +292,7 @@ describeWithJsdom('DeepReviewConsentDialog', () => {
     expect(container.textContent).toContain('1 optional reviewer');
     expect(container.textContent).toContain('2 skipped');
     expect(container.textContent).toContain('Run strategy: Normal');
+    expect(container.textContent).toContain('Review depth: Risk-expanded');
     expect(container.textContent).toContain('Frontend reviewer');
     expect(container.textContent).toContain('Not applicable to this target');
     expect(container.textContent).toContain('Custom invalid reviewer');

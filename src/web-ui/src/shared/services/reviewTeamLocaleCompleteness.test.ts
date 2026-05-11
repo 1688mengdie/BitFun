@@ -18,8 +18,18 @@ const REVIEW_TEAM_FLOW_CHAT_KEYS = [
   'deepReviewConsent.strategyLabels.quick',
   'deepReviewConsent.strategyLabels.normal',
   'deepReviewConsent.strategyLabels.deep',
+  'deepReviewConsent.reviewDepth',
+  'deepReviewConsent.reviewDepthLabels.high_risk_only',
+  'deepReviewConsent.reviewDepthLabels.risk_expanded',
+  'deepReviewConsent.reviewDepthLabels.full_depth',
   'toolCards.codeReview.runManifest.recommendedStrategy',
   'toolCards.codeReview.runManifest.riskRecommendationTitle',
+  'toolCards.codeReview.runManifest.reviewDepth',
+  'toolCards.codeReview.runManifest.reviewDepthLabels.high_risk_only',
+  'toolCards.codeReview.runManifest.reviewDepthLabels.risk_expanded',
+  'toolCards.codeReview.runManifest.reviewDepthLabels.full_depth',
+  'toolCards.codeReview.reliabilityStatus.reduced_scope.label',
+  'toolCards.codeReview.reliabilityStatus.reduced_scope.detail',
 ] as const;
 
 function readLocaleJson(

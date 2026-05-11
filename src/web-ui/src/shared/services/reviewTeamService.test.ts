@@ -690,6 +690,82 @@ describe('reviewTeamService', () => {
     ]);
   });
 
+  it('maps review strategies to explicit scope profiles in the run manifest', () => {
+    const team = resolveDefaultReviewTeam(
+      coreSubagents(),
+      storedConfigWithExtra(),
+    );
+
+    expect(buildEffectiveReviewTeamManifest(team, { strategyOverride: 'quick' }).scopeProfile)
+      .toMatchObject({
+        reviewDepth: 'high_risk_only',
+        maxDependencyHops: 0,
+        optionalReviewerPolicy: 'risk_matched_only',
+        allowBroadToolExploration: false,
+      });
+    expect(buildEffectiveReviewTeamManifest(team, { strategyOverride: 'normal' }).scopeProfile)
+      .toMatchObject({
+        reviewDepth: 'risk_expanded',
+        maxDependencyHops: 1,
+        optionalReviewerPolicy: 'configured',
+        allowBroadToolExploration: false,
+      });
+    expect(buildEffectiveReviewTeamManifest(team, { strategyOverride: 'deep' }).scopeProfile)
+      .toMatchObject({
+        reviewDepth: 'full_depth',
+        maxDependencyHops: 'policy_limited',
+        optionalReviewerPolicy: 'full',
+        allowBroadToolExploration: true,
+      });
+  });
+
+  it('keeps changed-file coverage metadata visible for reduced-depth scope profiles', () => {
+    const team = resolveDefaultReviewTeam(
+      coreSubagents(),
+      storedConfigWithExtra([], { strategy_level: 'quick' }),
+    );
+    const files = [
+      'src/crates/core/src/agentic/deep_review/report.rs',
+      'src/apps/desktop/src/api/agentic_api.rs',
+      'src/web-ui/src/app/scenes/agents/components/ReviewTeamPage.tsx',
+    ];
+
+    const manifest = buildEffectiveReviewTeamManifest(team, {
+      target: classifyReviewTargetFromFiles(files, 'workspace_diff'),
+    });
+
+    expect(manifest.scopeProfile.reviewDepth).toBe('high_risk_only');
+    expect(manifest.target.files.map((file) => file.normalizedPath)).toEqual(files);
+    expect(
+      manifest.workPackets
+        ?.filter((packet) => packet.phase === 'reviewer')
+        .every((packet) => packet.assignedScope.files.every((file) => files.includes(file))),
+    ).toBe(true);
+    expect(
+      manifest.workPackets
+        ?.filter((packet) => packet.phase === 'reviewer')
+        .some((packet) => files.every((file) => packet.assignedScope.files.includes(file))),
+    ).toBe(true);
+  });
+
+  it('includes reduced-depth scope profile guidance in the prompt block', () => {
+    const team = resolveDefaultReviewTeam(
+      coreSubagents(),
+      storedConfigWithExtra([], { strategy_level: 'quick' }),
+    );
+
+    const promptBlock = buildReviewTeamPromptBlock(team);
+
+    expect(promptBlock).toContain('Scope profile:');
+    expect(promptBlock).toContain('- review_depth: high_risk_only');
+    expect(promptBlock).toContain('- max_dependency_hops: 0');
+    expect(promptBlock).toContain('- optional_reviewer_policy: risk_matched_only');
+    expect(promptBlock).toContain('- allow_broad_tool_exploration: no');
+    expect(promptBlock).toContain('- coverage_expectation: High-risk-only pass.');
+    expect(promptBlock).toContain('Reduced-depth profiles are not full-depth coverage.');
+    expect(promptBlock).toContain('populate reliability_signals with reduced_scope');
+  });
+
   it('generates structured work packets for active reviewers and the judge', () => {
     const team = resolveDefaultReviewTeam(
       [
@@ -859,6 +935,116 @@ describe('reviewTeamService', () => {
     expect(promptBlock).toContain('Shared context cache plan:');
     expect(promptBlock).toContain('"cache_key": "shared-context:1"');
     expect(promptBlock).toContain('Use shared_context_cache entries');
+  });
+
+  it('builds a metadata-only evidence pack without source, diff, or model output', () => {
+    const team = resolveDefaultReviewTeam(
+      [
+        ...coreSubagents(),
+        subagent('ExtraEnabled', true, 'user', 'fast', true, true),
+      ],
+      storedConfigWithExtra(['ExtraEnabled']),
+    );
+    const files = [
+      'src/web-ui/src/locales/en-US/flow-chat.json',
+      'src/apps/desktop/src/api/agentic_api.rs',
+      'src/crates/api-layer/src/review.rs',
+      'package.json',
+    ];
+
+    const manifest = buildEffectiveReviewTeamManifest(team, {
+      target: classifyReviewTargetFromFiles(files, 'workspace_diff'),
+      changeStats: {
+        fileCount: files.length,
+        totalLinesChanged: 120,
+        lineCountSource: 'diff_stat',
+      },
+      strategyOverride: 'quick',
+    });
+
+    expect(manifest.evidencePack).toMatchObject({
+      version: 1,
+      source: 'target_manifest',
+      changedFiles: files,
+      diffStat: {
+        fileCount: files.length,
+        totalChangedLines: 120,
+        lineCountSource: 'diff_stat',
+      },
+      riskFocusTags: manifest.scopeProfile?.riskFocusTags,
+      packetIds: expect.arrayContaining([
+        'reviewer:ReviewBusinessLogic',
+        'judge:ReviewJudge',
+      ]),
+      privacy: {
+        content: 'metadata_only',
+      },
+    });
+    expect(manifest.evidencePack?.contractHints).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'i18n_key',
+          filePath: 'src/web-ui/src/locales/en-US/flow-chat.json',
+        }),
+        expect.objectContaining({
+          kind: 'tauri_command',
+          filePath: 'src/apps/desktop/src/api/agentic_api.rs',
+        }),
+        expect.objectContaining({
+          kind: 'api_contract',
+          filePath: 'src/crates/api-layer/src/review.rs',
+        }),
+        expect.objectContaining({
+          kind: 'config_key',
+          filePath: 'package.json',
+        }),
+      ]),
+    );
+    expect(manifest.evidencePack?.hunkHints).toEqual(
+      files.map((filePath) => ({
+        filePath,
+        changedLineCount: 30,
+        lineCountSource: 'diff_stat',
+      })),
+    );
+
+    const serializedEvidencePack = JSON.stringify(manifest.evidencePack);
+    expect(serializedEvidencePack).not.toContain('promptDirective');
+    expect(serializedEvidencePack).not.toContain('allowedTools');
+    expect(serializedEvidencePack).not.toContain('fullDiff');
+    expect(serializedEvidencePack).not.toContain('sourceText');
+    expect(serializedEvidencePack).not.toContain('modelOutput');
+  });
+
+  it('injects the metadata-only evidence pack into the prompt as verifiable orientation', () => {
+    const team = resolveDefaultReviewTeam(
+      coreSubagents(),
+      storedConfigWithExtra(),
+    );
+    const files = [
+      'src/web-ui/src/locales/en-US/flow-chat.json',
+      'src/crates/api-layer/src/review.rs',
+    ];
+    const manifest = buildEffectiveReviewTeamManifest(team, {
+      target: classifyReviewTargetFromFiles(files, 'workspace_diff'),
+      changeStats: {
+        fileCount: files.length,
+        totalLinesChanged: 20,
+        lineCountSource: 'diff_stat',
+      },
+    });
+
+    const promptBlock = buildReviewTeamPromptBlock(team, manifest);
+
+    expect(promptBlock).toContain('Evidence pack:');
+    expect(promptBlock).toContain('"content": "metadata_only"');
+    expect(promptBlock).toContain('"changed_files"');
+    expect(promptBlock).toContain('"contract_hints"');
+    expect(promptBlock).toContain('Evidence pack hunk_hints and contract_hints are orientation only');
+    expect(promptBlock).toContain('verify each hinted claim with GetFileDiff, Read, Grep, or Git before reporting it');
+    expect(promptBlock).not.toContain('sourceText');
+    expect(promptBlock).not.toContain('fullDiff');
+    expect(promptBlock).not.toContain('modelOutput');
   });
 
   it('builds an incremental review cache plan for follow-up reviews', () => {

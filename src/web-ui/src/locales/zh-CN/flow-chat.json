@@ -760,6 +760,12 @@
     "estimatedTokens": "预计消耗：{{min}} - {{max}} tokens",
     "runStrategy": "运行策略：{{strategy}}",
     "recommendedStrategy": "推荐策略：{{strategy}}",
+    "reviewDepth": "审查深度：{{depth}}",
+    "reviewDepthLabels": {
+      "high_risk_only": "仅高风险",
+      "risk_expanded": "风险扩展",
+      "full_depth": "完整深度"
+    },
     "recommendationTitle": "风险推荐",
     "strategyOverrideTitle": "运行策略",
     "strategyOverrideBody": "为本项目的本次启动选择审核策略。",
@@ -1525,7 +1531,13 @@
       },
       "runManifest": {
         "recommendedStrategy": "推荐策略",
-        "riskRecommendationTitle": "风险推荐"
+        "riskRecommendationTitle": "风险推荐",
+        "reviewDepth": "审查深度",
+        "reviewDepthLabels": {
+          "high_risk_only": "仅高风险",
+          "risk_expanded": "风险扩展",
+          "full_depth": "完整深度"
+        }
       },
       "sectionItemCount": "{{count}} 项",
       "remediationPlan": "修复计划",
@@ -1554,6 +1566,10 @@
         "partial_reviewer": {
           "label": "审核者超时但有部分结果",
           "detail": "{{count}} 个审核者结果是部分结果，置信度已降低。"
+        },
+        "reduced_scope": {
+          "label": "降深度覆盖",
+          "detail": "本次审核使用了降深度范围配置。"
         },
         "retry_guidance": {
           "label": "已给出重试指引",
