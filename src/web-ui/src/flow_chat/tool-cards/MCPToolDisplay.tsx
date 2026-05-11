@@ -15,7 +15,8 @@ import { systemAPI } from '@/infrastructure/api/service-api/SystemAPI';
 import { globalEventBus } from '@/infrastructure/event-bus';
 import { isMcpToolName, parseMcpToolName } from '@/infrastructure/mcp/toolName';
 import { useToolCardHeightContract } from './useToolCardHeightContract';
-import { AcpPermissionActions, hasAcpPermissionOptions } from './AcpPermissionActions';
+import { hasAcpPermissionOptions } from './AcpPermissionActions.utils';
+import { AcpPermissionActions } from './AcpPermissionActions';
 import './MCPToolDisplay.scss';
 
 const log = createLogger('MCPToolDisplay');

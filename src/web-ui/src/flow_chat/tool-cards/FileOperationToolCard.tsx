@@ -46,7 +46,8 @@ import { hasNonFileUriScheme } from '@/shared/utils/pathUtils';
 import { notificationService } from '@/shared/notification-system';
 import { useGitState } from '@/tools/git/hooks/useGitState';
 import { ToolCardHeaderActions } from './ToolCardHeaderActions';
-import { AcpPermissionActions, hasAcpPermissionOptions } from './AcpPermissionActions';
+import { hasAcpPermissionOptions } from './AcpPermissionActions.utils';
+import { AcpPermissionActions } from './AcpPermissionActions';
 import './FileOperationToolCard.scss';
 
 const log = createLogger('FileOperationToolCard');

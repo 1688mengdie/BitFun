@@ -25,10 +25,6 @@ interface AcpPermissionActionsProps {
   onReject?: ToolCardProps['onReject'];
 }
 
-export function hasAcpPermissionOptions(toolItem: FlowToolItem): boolean {
-  return Boolean(toolItem.acpPermission?.options?.length);
-}
-
 function isApprovalKind(kind: AcpPermissionOption['kind']): boolean {
   return kind === 'allow_once' || kind === 'allow_always';
 }

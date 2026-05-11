@@ -21,7 +21,8 @@ import { useToolCardHeightContract } from './useToolCardHeightContract';
 import { ToolTimeoutIndicator } from './ToolTimeoutIndicator';
 import { getReviewerContextBySubagentId } from '@/shared/services/reviewTeamService';
 import type { ReviewerContext } from '@/shared/services/reviewTeamService';
-import { AcpPermissionActions, hasAcpPermissionOptions } from './AcpPermissionActions';
+import { hasAcpPermissionOptions } from './AcpPermissionActions.utils';
+import { AcpPermissionActions } from './AcpPermissionActions';
 import './TaskToolDisplay.scss';
 import './ModelThinkingDisplay.scss';
 

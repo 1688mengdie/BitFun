@@ -29,7 +29,8 @@ import { getTerminalViewState, type TerminalViewState } from './terminalToolCard
 import { ToolTimeoutIndicator } from './ToolTimeoutIndicator';
 import { ToolCardCopyAction, ToolCardHeaderActions } from './ToolCardHeaderActions';
 import { ToolCommandPreview } from './ToolCommandPreview';
-import { AcpPermissionActions, hasAcpPermissionOptions } from './AcpPermissionActions';
+import { hasAcpPermissionOptions } from './AcpPermissionActions.utils';
+import { AcpPermissionActions } from './AcpPermissionActions';
 import './TerminalToolCard.scss';
 
 const log = createLogger('TerminalToolCard');

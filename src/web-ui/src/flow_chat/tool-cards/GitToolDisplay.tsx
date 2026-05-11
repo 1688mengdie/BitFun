@@ -14,7 +14,8 @@ import { ToolCardCopyAction, ToolCardHeaderActions } from './ToolCardHeaderActio
 import { ToolCommandPreview } from './ToolCommandPreview';
 import { createLogger } from '@/shared/utils/logger';
 import { useToolCardHeightContract } from './useToolCardHeightContract';
-import { AcpPermissionActions, hasAcpPermissionOptions } from './AcpPermissionActions';
+import { hasAcpPermissionOptions } from './AcpPermissionActions.utils';
+import { AcpPermissionActions } from './AcpPermissionActions';
 import './GitToolDisplay.scss';
 
 const log = createLogger('GitToolDisplay');
