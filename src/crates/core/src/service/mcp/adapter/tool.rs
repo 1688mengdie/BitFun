@@ -17,6 +17,7 @@ use std::sync::Arc;
 pub struct MCPToolWrapper {
     mcp_tool: MCPTool,
     connection: Arc<MCPConnection>,
+    provider_id: String,
     server_name: String,
     full_name: String,
 }
@@ -35,6 +36,7 @@ impl MCPToolWrapper {
         Self {
             mcp_tool,
             connection,
+            provider_id: server_id,
             server_name,
             full_name,
         }
@@ -122,6 +124,10 @@ impl Tool for MCPToolWrapper {
             .as_ref()
             .and_then(|m| m.ui.as_ref())
             .and_then(|u| u.resource_uri.clone())
+    }
+
+    fn dynamic_provider_id(&self) -> Option<&str> {
+        Some(&self.provider_id)
     }
 
     fn user_facing_name(&self) -> String {

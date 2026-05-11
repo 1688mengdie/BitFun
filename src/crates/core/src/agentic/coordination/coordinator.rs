@@ -3666,6 +3666,25 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
     }
 }
 
+fn resolve_agent_submission_turn_id(
+    request: &bitfun_runtime_ports::AgentSubmissionRequest,
+) -> String {
+    request
+        .turn_id
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            request
+                .metadata
+                .get("turnId")
+                .and_then(|value| value.as_str())
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+        })
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string())
+}
+
 #[async_trait::async_trait]
 impl bitfun_runtime_ports::AgentSubmissionPort for ConversationCoordinator {
     async fn create_session(
@@ -3725,13 +3744,7 @@ impl bitfun_runtime_ports::AgentSubmissionPort for ConversationCoordinator {
                 )
             })?;
 
-        let turn_id = request
-            .metadata
-            .get("turnId")
-            .and_then(|value| value.as_str())
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned)
-            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        let turn_id = resolve_agent_submission_turn_id(&request);
 
         let trigger_source = match request
             .source
@@ -3864,14 +3877,59 @@ pub fn get_global_coordinator() -> Option<Arc<ConversationCoordinator>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_subagent_max_concurrency, ConversationCoordinator};
+    use super::{
+        normalize_subagent_max_concurrency, resolve_agent_submission_turn_id,
+        ConversationCoordinator,
+    };
     use crate::service::remote_ssh::workspace_state::init_remote_workspace_manager;
+    use bitfun_runtime_ports::{AgentSubmissionRequest, AgentSubmissionSource};
 
     #[test]
     fn clamps_subagent_max_concurrency_into_safe_range() {
         assert_eq!(normalize_subagent_max_concurrency(0), 1);
         assert_eq!(normalize_subagent_max_concurrency(5), 5);
         assert_eq!(normalize_subagent_max_concurrency(usize::MAX), 64);
+    }
+
+    #[test]
+    fn agent_submission_turn_id_prefers_explicit_field_over_metadata() {
+        let mut metadata = serde_json::Map::new();
+        metadata.insert(
+            "turnId".to_string(),
+            serde_json::Value::String("legacy_metadata_turn".to_string()),
+        );
+        let request = AgentSubmissionRequest {
+            session_id: "session_1".to_string(),
+            message: "hello".to_string(),
+            turn_id: Some("explicit_turn".to_string()),
+            source: Some(AgentSubmissionSource::RemoteRelay),
+            attachments: Vec::new(),
+            metadata,
+        };
+
+        assert_eq!(resolve_agent_submission_turn_id(&request), "explicit_turn");
+    }
+
+    #[test]
+    fn agent_submission_turn_id_keeps_metadata_fallback() {
+        let mut metadata = serde_json::Map::new();
+        metadata.insert(
+            "turnId".to_string(),
+            serde_json::Value::String("legacy_metadata_turn".to_string()),
+        );
+        let request = AgentSubmissionRequest {
+            session_id: "session_1".to_string(),
+            message: "hello".to_string(),
+            turn_id: None,
+            source: Some(AgentSubmissionSource::RemoteRelay),
+            attachments: Vec::new(),
+            metadata,
+        };
+
+        assert_eq!(
+            resolve_agent_submission_turn_id(&request),
+            "legacy_metadata_turn"
+        );
     }
 
     #[tokio::test]

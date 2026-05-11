@@ -850,8 +850,8 @@ cargo check --workspace
 - [x] 为 `ConfigService` 提供 `ConfigReadPort` adapter，先建立读取边界，不移动 config service。
 - [ ] remote connect / cron / MCP 的 concrete call-site 替换尚未完成；这不是当前第一批 ports adapter 的完成条件，必须在 P2 service 迁移中逐步接入并补 regression。
 - [ ] `AgentSubmissionPort` 当前只接受纯文本消息；通用 attachment / image context 需要在 remote bot 或桌面 API 接入前单独设计和验证，避免丢失多模态行为。
-- [ ] P2 concrete call-site 迁移前，把 `AgentSubmissionRequest.turn_id` 提升为显式可选 DTO 字段（序列化为 `turnId`），coordinator 兼容期先读显式字段再回退 `metadata["turnId"]`，并补充序列化与 adapter 回归测试。
-- [ ] P2/P3 tool owner 迁移前，避免 `DynamicToolProvider` 从 `mcp__server__tool` 注册名反推 `provider_id`；MCP wrapper 或 registry entry 应显式携带 provider metadata，并用多 server / 特殊 server id 测试证明 provider 身份不依赖命名格式。
+- [x] P2 concrete call-site 迁移前，已把 `AgentSubmissionRequest.turn_id` 提升为显式可选 DTO 字段（序列化为 `turnId`）；coordinator 兼容期先读显式字段再回退 `metadata["turnId"]`，并补充序列化与 adapter 回归测试。
+- [x] P2/P3 tool owner 迁移前，`DynamicToolProvider` 已停止从 `mcp__server__tool` 注册名反推 `provider_id`；MCP wrapper 显式携带 provider metadata，并用特殊 provider id / MCP-like 名称测试证明 provider 身份不依赖注册名格式。
 
 示例：
 
@@ -1276,9 +1276,9 @@ git diff -- package.json scripts/dev.cjs scripts/desktop-tauri-build.mjs scripts
 | 产品 feature set 被意外改变 | 中 | 高 | `product-full` 先行；产品 crate 显式启用；产品矩阵验证 |
 | 新 crate 依赖回 `bitfun-core` | 高 | 高 | boundary script；code review；`core-types` 先行 |
 | service-agentic 循环阻塞拆分 | 高 | 高 | 先引入 ports，再移动 crate |
-| port DTO 仍依赖非结构化 metadata | 中 | 中 | P2 concrete call-site 迁移前显式化 `turnId` 等跨边界字段；保留 metadata fallback 只作为兼容期 |
+| port DTO 仍依赖非结构化 metadata | 中 | 中 | `turnId` 已显式化；后续新增跨边界字段继续优先进入 DTO，metadata fallback 只作为兼容期 |
 | tool registry 行为变化 | 中 | 高 | 完整工具清单基线；provider 等价性测试 |
-| 动态工具 provider 身份耦合注册名 | 中 | 中 | MCP wrapper / registry entry 显式携带 provider metadata；不要从 `mcp__...` 名称反推身份 |
+| 动态工具 provider 身份耦合注册名 | 中 | 中 | MCP wrapper / registry entry 已显式携带 provider metadata；后续 provider owner 迁移继续禁止从 `mcp__...` 名称反推身份 |
 | remote SSH 行为变化 | 中 | 高 | workspace identity DTO 稳定后再拆；保留 `ssh-remote` 语义 |
 | MCP 动态工具丢失 | 中 | 高 | `DynamicToolProvider` contract；MCP regression test |
 | desktop 构建脚本被误改 | 低 | 高 | 每 PR 执行 build script guard |
@@ -1372,13 +1372,17 @@ git diff -- package.json scripts/dev.cjs scripts/desktop-tauri-build.mjs scripts
 **P1 退出审查补充（2026-05-11）：**
 
 - 审查当前 `origin/main..HEAD` 的 P1 相关变更后，未发现需要阻塞 P1 退出的产品正确性回归。
-- `AgentSubmissionRequest.source` 已显式化，但 `turnId` 仍藏在 metadata 中。该问题不推翻第一批
-  port 边界已经建立的 P1 结论，但必须作为 P2 迁移 remote connect / cron / MCP concrete
-  call-site 前的 contract hardening。
-- `DynamicToolProvider` 已过滤为 MCP 动态工具，但 provider 身份仍从 `mcp__server__tool` 注册名反推。
-  该问题属于 P2/P3 tool owner 迁移前的维护性债务；在抽出 `agent-tools` 或调整 MCP 命名策略前必须改为
-  显式 provider metadata。
-- 当前验证通过：`cargo test -p bitfun-runtime-ports`、`cargo test -p bitfun-agent-stream`、
+- `AgentSubmissionRequest.source` 已显式化；`turnId` 也已作为 P2 前置 contract hardening 提升为显式可选 DTO 字段。
+  coordinator 在兼容期优先读取 `request.turn_id`，再回退 `metadata["turnId"]`，避免影响旧调用方。
+- `DynamicToolProvider` 已过滤为显式声明 provider metadata 的动态工具；MCP wrapper 通过 `Tool::dynamic_provider_id`
+  暴露 server id，registry 不再从 `mcp__server__tool` 注册名反推 provider 身份。
+- remote connect / cron / MCP 的 concrete call-site 迁移，以及 `AgentSubmissionPort` 的 attachment / image context 设计，
+  仍属于后续 P2 service owner crate 迁移范围；当前回合不改变这些路径的产品逻辑或边界行为。
+- 本次 P2 前置 contract hardening 验证通过：`cargo test -p bitfun-runtime-ports`、
+  `cargo test -p bitfun-core agent_submission_turn_id -- --nocapture`、
+  `cargo test -p bitfun-core dynamic_tool_provider_uses_explicit_provider_metadata -- --nocapture`、
+  `cargo check -p bitfun-core --features product-full`、`cargo check --workspace`、`cargo test --workspace`。
+- P1 退出验证通过：`cargo test -p bitfun-runtime-ports`、`cargo test -p bitfun-agent-stream`、
   `cargo check -p bitfun-core --features product-full`、`cargo check -p bitfun-desktop`、
   `cargo check -p bitfun-cli`、`cargo check -p bitfun-server`、`cargo check --workspace`、
   `cargo test --workspace`、`pnpm run lint:web`、`pnpm run type-check:web`、

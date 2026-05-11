@@ -68,6 +68,8 @@ pub struct AgentSubmissionRequest {
     pub session_id: String,
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<AgentSubmissionSource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<AgentInputAttachment>,
@@ -196,6 +198,7 @@ mod tests {
         let request = AgentSubmissionRequest {
             session_id: "session_1".to_string(),
             message: "hello".to_string(),
+            turn_id: None,
             source: None,
             attachments: Vec::new(),
             metadata: serde_json::Map::new(),
@@ -214,6 +217,7 @@ mod tests {
         let request = AgentSubmissionRequest {
             session_id: "session_1".to_string(),
             message: "hello".to_string(),
+            turn_id: None,
             source: Some(AgentSubmissionSource::RemoteRelay),
             attachments: Vec::new(),
             metadata: serde_json::Map::new(),
@@ -223,6 +227,28 @@ mod tests {
 
         assert_eq!(json["source"], "remote_relay");
         assert!(json.get("turnId").is_none());
+    }
+
+    #[test]
+    fn agent_submission_request_serializes_explicit_turn_id_contract() {
+        let mut metadata = serde_json::Map::new();
+        metadata.insert(
+            "turnId".to_string(),
+            serde_json::Value::String("legacy_metadata_turn".to_string()),
+        );
+        let request = AgentSubmissionRequest {
+            session_id: "session_1".to_string(),
+            message: "hello".to_string(),
+            turn_id: Some("explicit_turn".to_string()),
+            source: Some(AgentSubmissionSource::RemoteRelay),
+            attachments: Vec::new(),
+            metadata,
+        };
+
+        let json = serde_json::to_value(request).expect("serialize request");
+
+        assert_eq!(json["turnId"], "explicit_turn");
+        assert_eq!(json["metadata"]["turnId"], "legacy_metadata_turn");
     }
 
     #[test]

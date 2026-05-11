@@ -211,12 +211,6 @@ impl ToolRegistry {
         );
         self.tools.values().cloned().collect()
     }
-
-    fn mcp_server_id_from_tool_name(tool_name: &str) -> Option<String> {
-        let rest = tool_name.strip_prefix("mcp__")?;
-        let (server_id, _) = rest.split_once("__")?;
-        (!server_id.is_empty()).then(|| server_id.to_string())
-    }
 }
 
 #[async_trait::async_trait]
@@ -226,8 +220,12 @@ impl DynamicToolProvider for ToolRegistry {
     ) -> bitfun_runtime_ports::PortResult<Vec<DynamicToolDescriptor>> {
         let mut descriptors = Vec::new();
 
-        for (name, tool) in self.tools.iter() {
-            let Some(server_id) = Self::mcp_server_id_from_tool_name(name) else {
+        for tool in self.tools.values() {
+            let Some(provider_id) = tool
+                .dynamic_provider_id()
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+            else {
                 continue;
             };
             let description = tool.description().await.map_err(|error| {
@@ -241,7 +239,7 @@ impl DynamicToolProvider for ToolRegistry {
                 name: tool.name().to_string(),
                 description,
                 input_schema: tool.input_schema_for_model().await,
-                provider_id: Some(server_id),
+                provider_id: Some(provider_id),
             });
         }
 
@@ -252,8 +250,66 @@ impl DynamicToolProvider for ToolRegistry {
 #[cfg(test)]
 mod tests {
     use super::create_tool_registry;
+    use super::ToolRef;
     use super::ToolRegistry;
+    use crate::agentic::tools::framework::{Tool, ToolResult, ToolUseContext, ValidationResult};
+    use async_trait::async_trait;
+    use bitfun_runtime_ports::DynamicToolProvider;
     use serde_json::json;
+    use serde_json::Value;
+    use std::sync::Arc;
+
+    struct DynamicMetadataTool {
+        name: String,
+        provider_id: Option<String>,
+    }
+
+    #[async_trait]
+    impl Tool for DynamicMetadataTool {
+        fn name(&self) -> &str {
+            &self.name
+        }
+
+        async fn description(&self) -> crate::util::errors::BitFunResult<String> {
+            Ok("dynamic test tool".to_string())
+        }
+
+        fn input_schema(&self) -> Value {
+            json!({ "type": "object" })
+        }
+
+        fn dynamic_provider_id(&self) -> Option<&str> {
+            self.provider_id.as_deref()
+        }
+
+        async fn validate_input(
+            &self,
+            _input: &Value,
+            _context: Option<&ToolUseContext>,
+        ) -> ValidationResult {
+            ValidationResult {
+                result: true,
+                message: None,
+                error_code: None,
+                meta: None,
+            }
+        }
+
+        async fn call_impl(
+            &self,
+            _input: &Value,
+            _context: &ToolUseContext,
+        ) -> crate::util::errors::BitFunResult<Vec<ToolResult>> {
+            Ok(Vec::new())
+        }
+    }
+
+    fn dynamic_tool(name: &str, provider_id: Option<&str>) -> ToolRef {
+        Arc::new(DynamicMetadataTool {
+            name: name.to_string(),
+            provider_id: provider_id.map(ToOwned::to_owned),
+        })
+    }
 
     #[test]
     fn registry_includes_webfetch_tool() {
@@ -267,16 +323,25 @@ mod tests {
         assert!(registry.get_tool("Cron").is_some());
     }
 
-    #[test]
-    fn parses_mcp_dynamic_tool_provider_id() {
+    #[tokio::test]
+    async fn dynamic_tool_provider_uses_explicit_provider_metadata() {
+        let mut registry = ToolRegistry::new();
+        registry.register_tool(dynamic_tool(
+            "external_search",
+            Some("github__enterprise/prod"),
+        ));
+        registry.register_tool(dynamic_tool("mcp__encoded__without_metadata", None));
+
+        let descriptors = registry
+            .list_dynamic_tools()
+            .await
+            .expect("list dynamic tools");
+
+        assert_eq!(descriptors.len(), 1);
+        assert_eq!(descriptors[0].name, "external_search");
         assert_eq!(
-            ToolRegistry::mcp_server_id_from_tool_name("mcp__server_1__search").as_deref(),
-            Some("server_1")
-        );
-        assert_eq!(ToolRegistry::mcp_server_id_from_tool_name("WebFetch"), None);
-        assert_eq!(
-            ToolRegistry::mcp_server_id_from_tool_name("mcp____search"),
-            None
+            descriptors[0].provider_id.as_deref(),
+            Some("github__enterprise/prod")
         );
     }
 

@@ -677,6 +677,15 @@ pub trait Tool: Send + Sync {
         None
     }
 
+    /// Dynamic tool provider identity used by boundary adapters.
+    ///
+    /// Keep this as explicit metadata instead of deriving ownership from tool
+    /// names so future tool registries can change naming without breaking
+    /// provider routing.
+    fn dynamic_provider_id(&self) -> Option<&str> {
+        None
+    }
+
     /// User friendly name
     fn user_facing_name(&self) -> String {
         self.name().to_string()

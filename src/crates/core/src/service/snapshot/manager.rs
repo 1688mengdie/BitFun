@@ -385,6 +385,10 @@ impl Tool for WrappedTool {
         self.original_tool.input_json_schema()
     }
 
+    fn dynamic_provider_id(&self) -> Option<&str> {
+        self.original_tool.dynamic_provider_id()
+    }
+
     fn user_facing_name(&self) -> String {
         self.original_tool.user_facing_name().to_string()
     }
