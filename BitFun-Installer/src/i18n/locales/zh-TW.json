@@ -43,7 +43,13 @@
     "back": "返回",
     "install": "安裝",
     "installing": "準備中…",
-    "nextModel": "下一步：配置模型"
+    "nextModel": "下一步：配置模型",
+    "existingInstallTitle": "檢測到本機已安裝 BitFun",
+    "existingInstallVersion": "已安裝版本：{{version}}",
+    "existingInstallLocation": "安裝位置：{{path}}",
+    "existingInstallBinaryMissing": "該路徑下未找到主程序文件，可先運行卸載程序或重新安裝。",
+    "existingInstallHint": "直接點擊「安裝」可在原位置升級或修復。若需先卸載，可點擊下方按鈕運行卸載程序。",
+    "existingInstallRunUninstaller": "運行卸載程序"
   },
   "model": {
     "title": "模型",
