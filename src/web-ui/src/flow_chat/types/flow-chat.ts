@@ -400,8 +400,8 @@ export interface ToolCardProps {
   toolItem: FlowToolItem;
   config: ToolCardConfig;
   interruptionNote?: string | null;
-  onConfirm?: (updatedInput?: any) => void;  // toolId is known within the card.
-  onReject?: () => void;
+  onConfirm?: (updatedInput?: any, permissionOptionId?: string, approve?: boolean) => void;  // toolId is known within the card.
+  onReject?: (permissionOptionId?: string) => void;
   onOpenInEditor?: (filePath: string) => void;
   onOpenInPanel?: (panelType: string, data: any) => void;
   onExpand?: () => void;

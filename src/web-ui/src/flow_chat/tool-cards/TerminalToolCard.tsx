@@ -29,6 +29,7 @@ import { getTerminalViewState, type TerminalViewState } from './terminalToolCard
 import { ToolTimeoutIndicator } from './ToolTimeoutIndicator';
 import { ToolCardCopyAction, ToolCardHeaderActions } from './ToolCardHeaderActions';
 import { ToolCommandPreview } from './ToolCommandPreview';
+import { AcpPermissionActions, hasAcpPermissionOptions } from './AcpPermissionActions';
 import './TerminalToolCard.scss';
 
 const log = createLogger('TerminalToolCard');
@@ -514,29 +515,42 @@ export const TerminalToolCard: React.FC<TerminalToolCardProps> = ({
         <span className="terminal-critical-actions">
           {showConfirmButtons && (
             <span className="terminal-confirm-actions" onClick={(e) => e.stopPropagation()}>
-              <IconButton
-                className="terminal-action-btn execute-btn"
-                variant="success"
-                size="xs"
-                onClick={handleExecute}
-                disabled={!canExecuteCommand}
-                tooltip={
-                  canExecuteCommand
-                    ? t('toolCards.terminal.executeCommandTitle')
-                    : t('toolCards.terminal.commandEmptyWarning')
-                }
-              >
-                <Play size={12} fill="currentColor" />
-              </IconButton>
-              <IconButton
-                className="terminal-action-btn cancel-btn"
-                variant="danger"
-                size="xs"
-                onClick={handleReject}
-                tooltip={t('toolCards.terminal.cancel')}
-              >
-                <X size={14} />
-              </IconButton>
+              {hasAcpPermissionOptions(toolItem) ? (
+                <AcpPermissionActions
+                  toolItem={toolItem}
+                  input={toolCall?.input}
+                  disabled={!canExecuteCommand}
+                  buttonClassName="terminal-action-btn"
+                  onConfirm={onConfirm}
+                  onReject={onReject}
+                />
+              ) : (
+                <>
+                  <IconButton
+                    className="terminal-action-btn execute-btn"
+                    variant="success"
+                    size="xs"
+                    onClick={handleExecute}
+                    disabled={!canExecuteCommand}
+                    tooltip={
+                      canExecuteCommand
+                        ? t('toolCards.terminal.executeCommandTitle')
+                        : t('toolCards.terminal.commandEmptyWarning')
+                    }
+                  >
+                    <Play size={12} fill="currentColor" />
+                  </IconButton>
+                  <IconButton
+                    className="terminal-action-btn cancel-btn"
+                    variant="danger"
+                    size="xs"
+                    onClick={handleReject}
+                    tooltip={t('toolCards.terminal.cancel')}
+                  >
+                    <X size={14} />
+                  </IconButton>
+                </>
+              )}
             </span>
           )}
           {includeInterrupt && viewState.showInterruptButton && (

@@ -15,8 +15,8 @@ interface FlowItemRendererProps {
   item: FlowItem;
   onFileViewRequest?: (filePath: string) => void;
   onTabOpen?: (tabInfo: any) => void;
-  onConfirm?: (toolId: string, updatedInput?: any) => void;
-  onReject?: (toolId: string) => void;
+  onConfirm?: (toolId: string, updatedInput?: any, permissionOptionId?: string, approve?: boolean) => void;
+  onReject?: (toolId: string, permissionOptionId?: string) => void;
   sessionId?: string;
 }
 
@@ -85,6 +85,7 @@ export const FlowItemRenderer = React.memo(
       // Compare streaming params to re-render when they update
       return prevTool.toolResult === nextTool.toolResult &&
              prevTool.interruptionReason === nextTool.interruptionReason &&
+             prevTool.acpPermission === nextTool.acpPermission &&
              prevTool.isParamsStreaming === nextTool.isParamsStreaming &&
              JSON.stringify(prevTool.partialParams) === JSON.stringify(nextTool.partialParams);
     }
@@ -94,4 +95,3 @@ export const FlowItemRenderer = React.memo(
 );
 
 FlowItemRenderer.displayName = 'FlowItemRenderer';
-

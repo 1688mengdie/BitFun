@@ -1096,6 +1096,13 @@
       "failedLabel": "MCP failed",
       "executionFailed": "MCP execution failed"
     },
+    "acpPermission": {
+      "allowOnce": "Allow once",
+      "allowAlways": "Always allow",
+      "reject": "Reject once",
+      "rejectAlways": "Always reject",
+      "selectOption": "Select option"
+    },
     "default": {
       "waitingConfirm": "Waiting for confirmation",
       "executing": "Executing...",

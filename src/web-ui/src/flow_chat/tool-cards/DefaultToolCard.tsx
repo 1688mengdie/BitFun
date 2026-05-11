@@ -10,6 +10,7 @@ import type { ToolCardProps } from '../types/flow-chat';
 import { CompactToolCard, CompactToolCardHeader } from './CompactToolCard';
 import { ToolCardStatusSlot } from './ToolCardStatusSlot';
 import { useToolCardHeightContract } from './useToolCardHeightContract';
+import { AcpPermissionActions, hasAcpPermissionOptions } from './AcpPermissionActions';
 import './DefaultToolCard.scss';
 
 const MAX_PREVIEW_CHARS = 4000;
@@ -240,22 +241,35 @@ export const DefaultToolCard: React.FC<ToolCardProps> = ({
 
           {showConfirmationActions && (
             <div className="default-tool-card__actions">
-              <button
-                type="button"
-                className="default-tool-card__button default-tool-card__button--confirm"
-                onClick={handleConfirm}
-                disabled={status === 'streaming'}
-              >
-                {t('toolCards.mcp.confirmExecute')}
-              </button>
-              <button
-                type="button"
-                className="default-tool-card__button default-tool-card__button--reject"
-                onClick={handleReject}
-                disabled={status === 'streaming'}
-              >
-                {t('toolCards.mcp.cancel')}
-              </button>
+              {hasAcpPermissionOptions(toolItem) ? (
+                <AcpPermissionActions
+                  toolItem={toolItem}
+                  input={toolCall?.input}
+                  presentation="text"
+                  disabled={status === 'streaming'}
+                  onConfirm={onConfirm}
+                  onReject={onReject}
+                />
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    className="default-tool-card__button default-tool-card__button--confirm"
+                    onClick={handleConfirm}
+                    disabled={status === 'streaming'}
+                  >
+                    {t('toolCards.mcp.confirmExecute')}
+                  </button>
+                  <button
+                    type="button"
+                    className="default-tool-card__button default-tool-card__button--reject"
+                    onClick={handleReject}
+                    disabled={status === 'streaming'}
+                  >
+                    {t('toolCards.mcp.cancel')}
+                  </button>
+                </>
+              )}
             </div>
           )}
 
@@ -275,5 +289,4 @@ export const DefaultToolCard: React.FC<ToolCardProps> = ({
     </div>
   );
 };
-
 
