@@ -532,17 +532,17 @@ const SubagentItemRenderer = React.memo<{ item: FlowItem; turnId: string; roundI
     sessionId,
   } = useFlowChatContext();
   
-  const handleConfirm = useCallback(async (toolId: string, updatedInput?: any) => {
+  const handleConfirm = useCallback(async (toolId: string, updatedInput?: any, permissionOptionId?: string, approve?: boolean) => {
     if (onToolConfirm) {
-      await onToolConfirm(toolId, updatedInput);
+      await onToolConfirm(toolId, updatedInput, permissionOptionId, approve);
     }
   }, [onToolConfirm]);
   
-  const handleReject = useCallback(async () => {
+  const handleReject = useCallback(async (toolId: string, permissionOptionId?: string) => {
     if (onToolReject) {
-      await onToolReject(item.id);
+      await onToolReject(toolId, permissionOptionId);
     }
-  }, [onToolReject, item.id]);
+  }, [onToolReject]);
   
   const handleOpenInEditor = useCallback((filePath: string) => {
     if (onFileViewRequest) {
@@ -664,14 +664,14 @@ const FlowItemRenderer: React.FC<FlowItemRendererProps> = ({ item, turnId, isLas
         <div className="flowchat-flow-item" data-flow-item-id={item.id} data-flow-item-type="tool">
           <FlowToolCard
             toolItem={item as FlowToolItem}
-            onConfirm={async (toolId: string, updatedInput?: any) => {
+            onConfirm={async (toolId: string, updatedInput?: any, permissionOptionId?: string, approve?: boolean) => {
               if (onToolConfirm) {
-                await onToolConfirm(toolId, updatedInput);
+                await onToolConfirm(toolId, updatedInput, permissionOptionId, approve);
               }
             }}
-            onReject={async () => {
+            onReject={async (_toolId: string, permissionOptionId?: string) => {
               if (onToolReject) {
-                await onToolReject(item.id);
+                await onToolReject(item.id, permissionOptionId);
               }
             }}
             onOpenInEditor={(filePath: string) => {

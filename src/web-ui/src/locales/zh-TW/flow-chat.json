@@ -1096,6 +1096,13 @@
       "failedLabel": "MCP 失敗",
       "executionFailed": "MCP 執行失敗"
     },
+    "acpPermission": {
+      "allowOnce": "允許一次",
+      "allowAlways": "始終允許",
+      "reject": "拒絕一次",
+      "rejectAlways": "始終拒絕",
+      "selectOption": "選擇操作"
+    },
     "default": {
       "waitingConfirm": "等待確認",
       "executing": "執行中...",

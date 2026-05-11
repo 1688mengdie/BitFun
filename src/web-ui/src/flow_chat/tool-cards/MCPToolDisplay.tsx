@@ -15,6 +15,8 @@ import { systemAPI } from '@/infrastructure/api/service-api/SystemAPI';
 import { globalEventBus } from '@/infrastructure/event-bus';
 import { isMcpToolName, parseMcpToolName } from '@/infrastructure/mcp/toolName';
 import { useToolCardHeightContract } from './useToolCardHeightContract';
+import { hasAcpPermissionOptions } from './AcpPermissionActions.utils';
+import { AcpPermissionActions } from './AcpPermissionActions';
 import './MCPToolDisplay.scss';
 
 const log = createLogger('MCPToolDisplay');
@@ -611,32 +613,45 @@ export const MCPToolDisplay: React.FC<ToolCardProps> = ({
           
           {requiresConfirmation && !userConfirmed && status !== 'completed' && (
             <div className="mcp-action-buttons">
-              <IconButton
-                className="mcp-icon-button mcp-confirm-btn"
-                variant="success"
-                size="xs"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onConfirm?.(toolCall?.input);
-                }}
-                disabled={status === 'streaming'}
-                tooltip={t('toolCards.mcp.confirmExecute')}
-              >
-                <Check size={14} />
-              </IconButton>
-              <IconButton
-                className="mcp-icon-button mcp-reject-btn"
-                variant="danger"
-                size="xs"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onReject?.();
-                }}
-                disabled={status === 'streaming'}
-                tooltip={t('toolCards.mcp.cancel')}
-              >
-                <X size={14} />
-              </IconButton>
+              {hasAcpPermissionOptions(toolItem) ? (
+                <AcpPermissionActions
+                  toolItem={toolItem}
+                  input={toolCall?.input}
+                  disabled={status === 'streaming'}
+                  buttonClassName="mcp-icon-button"
+                  onConfirm={onConfirm}
+                  onReject={onReject}
+                />
+              ) : (
+                <>
+                  <IconButton
+                    className="mcp-icon-button mcp-confirm-btn"
+                    variant="success"
+                    size="xs"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onConfirm?.(toolCall?.input);
+                    }}
+                    disabled={status === 'streaming'}
+                    tooltip={t('toolCards.mcp.confirmExecute')}
+                  >
+                    <Check size={14} />
+                  </IconButton>
+                  <IconButton
+                    className="mcp-icon-button mcp-reject-btn"
+                    variant="danger"
+                    size="xs"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onReject?.();
+                    }}
+                    disabled={status === 'streaming'}
+                    tooltip={t('toolCards.mcp.cancel')}
+                  >
+                    <X size={14} />
+                  </IconButton>
+                </>
+              )}
             </div>
           )}
           

@@ -242,17 +242,17 @@ const ExploreItemRenderer = React.memo<ExploreItemRendererProps>(({ item, turnId
     sessionId,
   } = useFlowChatContext();
   
-  const handleConfirm = useCallback(async (toolId: string, updatedInput?: any) => {
+  const handleConfirm = useCallback(async (toolId: string, updatedInput?: any, permissionOptionId?: string, approve?: boolean) => {
     if (onToolConfirm) {
-      await onToolConfirm(toolId, updatedInput);
+      await onToolConfirm(toolId, updatedInput, permissionOptionId, approve);
     }
   }, [onToolConfirm]);
   
-  const handleReject = useCallback(async () => {
+  const handleReject = useCallback(async (toolId: string, permissionOptionId?: string) => {
     if (onToolReject) {
-      await onToolReject(item.id);
+      await onToolReject(toolId, permissionOptionId);
     }
-  }, [onToolReject, item.id]);
+  }, [onToolReject]);
   
   const handleOpenInEditor = useCallback((filePath: string) => {
     if (onFileViewRequest) {

@@ -14,6 +14,8 @@ import { ToolCardCopyAction, ToolCardHeaderActions } from './ToolCardHeaderActio
 import { ToolCommandPreview } from './ToolCommandPreview';
 import { createLogger } from '@/shared/utils/logger';
 import { useToolCardHeightContract } from './useToolCardHeightContract';
+import { hasAcpPermissionOptions } from './AcpPermissionActions.utils';
+import { AcpPermissionActions } from './AcpPermissionActions';
 import './GitToolDisplay.scss';
 
 const log = createLogger('GitToolDisplay');
@@ -190,28 +192,38 @@ export const GitToolDisplay: React.FC<ToolCardProps> = ({
           ariaLabel={t('toolCards.git.copyCommand', { defaultValue: 'Copy git command' })}
         />
         {requiresConfirmation && !userConfirmed && status !== 'completed' && (
-          <>
-            <IconButton
-              className="tool-card-header-action git-confirm-btn"
-              variant="success"
-              size="xs"
-              onClick={(e) => { e.stopPropagation(); onConfirm?.(toolCall?.input); }}
+          hasAcpPermissionOptions(toolItem) ? (
+            <AcpPermissionActions
+              toolItem={toolItem}
+              input={toolCall?.input}
               disabled={status === 'streaming'}
-              tooltip={t('toolCards.git.confirmExecute')}
-            >
-              <Check size={12} />
-            </IconButton>
-            <IconButton
-              className="tool-card-header-action git-reject-btn"
-              variant="danger"
-              size="xs"
-              onClick={(e) => { e.stopPropagation(); onReject?.(); }}
-              disabled={status === 'streaming'}
-              tooltip={t('toolCards.git.cancel')}
-            >
-              <X size={12} />
-            </IconButton>
-          </>
+              onConfirm={onConfirm}
+              onReject={onReject}
+            />
+          ) : (
+            <>
+              <IconButton
+                className="tool-card-header-action git-confirm-btn"
+                variant="success"
+                size="xs"
+                onClick={(e) => { e.stopPropagation(); onConfirm?.(toolCall?.input); }}
+                disabled={status === 'streaming'}
+                tooltip={t('toolCards.git.confirmExecute')}
+              >
+                <Check size={12} />
+              </IconButton>
+              <IconButton
+                className="tool-card-header-action git-reject-btn"
+                variant="danger"
+                size="xs"
+                onClick={(e) => { e.stopPropagation(); onReject?.(); }}
+                disabled={status === 'streaming'}
+                tooltip={t('toolCards.git.cancel')}
+              >
+                <X size={12} />
+              </IconButton>
+            </>
+          )
         )}
       </ToolCardHeaderActions>
     </span>
@@ -261,26 +273,38 @@ export const GitToolDisplay: React.FC<ToolCardProps> = ({
       extra={
         requiresConfirmation && !userConfirmed && status !== 'completed' ? (
           <span className="git-confirm-actions">
-            <IconButton
-              className="tool-card-header-action git-confirm-btn"
-              variant="success"
-              size="xs"
-              onClick={(e) => { e.stopPropagation(); onConfirm?.(toolCall?.input); }}
-              disabled={status === 'streaming'}
-              tooltip={t('toolCards.git.confirmExecute')}
-            >
-              <Check size={12} />
-            </IconButton>
-            <IconButton
-              className="tool-card-header-action git-reject-btn"
-              variant="danger"
-              size="xs"
-              onClick={(e) => { e.stopPropagation(); onReject?.(); }}
-              disabled={status === 'streaming'}
-              tooltip={t('toolCards.git.cancel')}
-            >
-              <X size={12} />
-            </IconButton>
+            {hasAcpPermissionOptions(toolItem) ? (
+              <AcpPermissionActions
+                toolItem={toolItem}
+                input={toolCall?.input}
+                disabled={status === 'streaming'}
+                onConfirm={onConfirm}
+                onReject={onReject}
+              />
+            ) : (
+              <>
+                <IconButton
+                  className="tool-card-header-action git-confirm-btn"
+                  variant="success"
+                  size="xs"
+                  onClick={(e) => { e.stopPropagation(); onConfirm?.(toolCall?.input); }}
+                  disabled={status === 'streaming'}
+                  tooltip={t('toolCards.git.confirmExecute')}
+                >
+                  <Check size={12} />
+                </IconButton>
+                <IconButton
+                  className="tool-card-header-action git-reject-btn"
+                  variant="danger"
+                  size="xs"
+                  onClick={(e) => { e.stopPropagation(); onReject?.(); }}
+                  disabled={status === 'streaming'}
+                  tooltip={t('toolCards.git.cancel')}
+                >
+                  <X size={12} />
+                </IconButton>
+              </>
+            )}
           </span>
         ) : undefined
       }

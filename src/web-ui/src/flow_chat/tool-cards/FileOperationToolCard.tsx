@@ -46,6 +46,8 @@ import { hasNonFileUriScheme } from '@/shared/utils/pathUtils';
 import { notificationService } from '@/shared/notification-system';
 import { useGitState } from '@/tools/git/hooks/useGitState';
 import { ToolCardHeaderActions } from './ToolCardHeaderActions';
+import { hasAcpPermissionOptions } from './AcpPermissionActions.utils';
+import { AcpPermissionActions } from './AcpPermissionActions';
 import './FileOperationToolCard.scss';
 
 const log = createLogger('FileOperationToolCard');
@@ -829,26 +831,36 @@ export const FileOperationToolCard: React.FC<FileOperationToolCardProps> = ({
             </span>
           )}
           {showConfirmationActions && (
-            <>
-              <IconButton
-                className="tool-card-header-action file-op-header-action file-op-confirm-btn"
-                variant="success"
-                size="xs"
-                onClick={handleConfirmClick}
-                tooltip={t('toolCards.mcp.confirmExecute')}
-              >
-                <Check size={12} />
-              </IconButton>
-              <IconButton
-                className="tool-card-header-action file-op-header-action file-op-reject-btn"
-                variant="danger"
-                size="xs"
-                onClick={handleRejectClick}
-                tooltip={t('toolCards.mcp.cancel')}
-              >
-                <X size={12} />
-              </IconButton>
-            </>
+            hasAcpPermissionOptions(toolItem) ? (
+              <AcpPermissionActions
+                toolItem={toolItem}
+                input={toolCall?.input}
+                buttonClassName="file-op-header-action"
+                onConfirm={onConfirm}
+                onReject={onReject}
+              />
+            ) : (
+              <>
+                <IconButton
+                  className="tool-card-header-action file-op-header-action file-op-confirm-btn"
+                  variant="success"
+                  size="xs"
+                  onClick={handleConfirmClick}
+                  tooltip={t('toolCards.mcp.confirmExecute')}
+                >
+                  <Check size={12} />
+                </IconButton>
+                <IconButton
+                  className="tool-card-header-action file-op-header-action file-op-reject-btn"
+                  variant="danger"
+                  size="xs"
+                  onClick={handleRejectClick}
+                  tooltip={t('toolCards.mcp.cancel')}
+                >
+                  <X size={12} />
+                </IconButton>
+              </>
+            )
           )}
           {canOpenFullCode && (
             <Tooltip content={t('toolCards.file.openFullCodeHint')} placement="top">
@@ -882,24 +894,36 @@ export const FileOperationToolCard: React.FC<FileOperationToolCardProps> = ({
             content={renderDeleteContent()}
             extra={showConfirmationActions ? (
               <ToolCardHeaderActions className="file-op-header-actions">
-                <IconButton
-                  className="tool-card-header-action file-op-header-action file-op-confirm-btn"
-                  variant="success"
-                  size="xs"
-                  onClick={handleConfirmClick}
-                  tooltip={t('toolCards.mcp.confirmExecute')}
-                >
-                  <Check size={12} />
-                </IconButton>
-                <IconButton
-                  className="tool-card-header-action file-op-header-action file-op-reject-btn"
-                  variant="danger"
-                  size="xs"
-                  onClick={handleRejectClick}
-                  tooltip={t('toolCards.mcp.cancel')}
-                >
-                  <X size={12} />
-                </IconButton>
+                {hasAcpPermissionOptions(toolItem) ? (
+                  <AcpPermissionActions
+                    toolItem={toolItem}
+                    input={toolCall?.input}
+                    buttonClassName="file-op-header-action"
+                    onConfirm={onConfirm}
+                    onReject={onReject}
+                  />
+                ) : (
+                  <>
+                    <IconButton
+                      className="tool-card-header-action file-op-header-action file-op-confirm-btn"
+                      variant="success"
+                      size="xs"
+                      onClick={handleConfirmClick}
+                      tooltip={t('toolCards.mcp.confirmExecute')}
+                    >
+                      <Check size={12} />
+                    </IconButton>
+                    <IconButton
+                      className="tool-card-header-action file-op-header-action file-op-reject-btn"
+                      variant="danger"
+                      size="xs"
+                      onClick={handleRejectClick}
+                      tooltip={t('toolCards.mcp.cancel')}
+                    >
+                      <X size={12} />
+                    </IconButton>
+                  </>
+                )}
               </ToolCardHeaderActions>
             ) : undefined}
           />
