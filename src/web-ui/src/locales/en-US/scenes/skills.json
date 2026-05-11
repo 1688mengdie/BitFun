@@ -41,8 +41,17 @@
   },
   "filters": {
     "all": "All",
+    "builtin": "Built-in",
     "user": "User",
-    "project": "Project"
+    "project": "Project",
+    "suite": "Suites"
+  },
+  "categories": {
+    "all": "All installed skills, including built-in, user-level, and project-level.",
+    "builtin": "Core skills shipped with the app. They cannot be deleted.",
+    "user": "User-level skills installed globally for your account.",
+    "project": "Project-level skills for the current workspace.",
+    "suite": "Curated skill bundles that package related skills together (coming soon)."
   },
   "section": {
     "user": {
@@ -64,6 +73,7 @@
       "noMatch": "No matching marketplace skills found",
       "noSkills": "No marketplace skills available"
     },
+    "resultsInfo": "{{count}} results for \"{{query}}\"",
     "item": {
       "sourceLabel": "Source: ",
       "installs": "Installs: {{count}}",
@@ -98,7 +108,8 @@
       "user": "User-level (Global)",
       "project": "Project-level (Current Workspace)",
       "projectDisabled": " - Need to open workspace first",
-      "currentWorkspace": "Current workspace: {{path}}"
+      "currentWorkspace": "Current workspace: {{path}}",
+      "selectedProjectPath": "Selected project path: {{path}}"
     },
     "path": {
       "label": "Skill Folder Path",
@@ -123,6 +134,9 @@
     "item": {
       "user": "User",
       "project": "Project",
+      "builtin": "Built-in",
+      "userInstalled": "Installed",
+      "detail": "Details",
       "deleteTooltip": "Delete",
       "pathLabel": "Path:",
       "openPathInExplorer": "Open this folder in file explorer",
