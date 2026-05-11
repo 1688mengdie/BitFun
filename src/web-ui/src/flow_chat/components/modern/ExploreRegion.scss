@@ -95,16 +95,14 @@
     opacity: 0.8;
   }
 
-  // Animated content wrapper using the CSS Grid row technique.
-  // grid-template-rows: 0fr → 1fr smoothly animates height without needing
-  // to know the actual pixel height.
   .explore-region__content-wrapper {
-    display: grid;
-    grid-template-rows: 0fr;
-    transition: grid-template-rows 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+    transition:
+      height 0.32s cubic-bezier(0.4, 0, 0.2, 1),
+      opacity 0.18s ease,
+      transform 0.32s cubic-bezier(0.4, 0, 0.2, 1);
   }
 
-  // Inner div must have min-height: 0 for the 0fr trick to work.
+  // Inner div must have min-height: 0 for height animation clipping to work.
   .explore-region__content-inner {
     overflow: hidden;
     min-height: 0;
@@ -144,7 +142,7 @@
   }
 
   .explore-region__content-wrapper {
-    grid-template-rows: 1fr;
+    height: auto;
   }
 }
 
@@ -242,5 +240,18 @@
 
 // Hidden collapsed region (not the last one).
 .explore-region--hidden {
-  display: none;
+  max-height: 0;
+  margin: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  opacity: 0;
+  overflow: hidden;
+  pointer-events: none;
+  transform: translateY(-2px);
+  transition:
+    max-height 0.28s cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 0.18s ease,
+    transform 0.28s cubic-bezier(0.4, 0, 0.2, 1),
+    margin 0.28s cubic-bezier(0.4, 0, 0.2, 1),
+    padding 0.28s cubic-bezier(0.4, 0, 0.2, 1);
 }

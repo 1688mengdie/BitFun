@@ -3,6 +3,7 @@
  * Provides unified card styles and interaction logic
  */
 import React, { ReactNode } from 'react';
+import { SmoothHeightCollapse } from '../components/modern/SmoothHeightCollapse';
 import {
   ToolCardHeaderLayoutContext,
   useToolCardHeaderLayout,
@@ -105,17 +106,17 @@ export const BaseToolCard: React.FC<BaseToolCardProps> = ({
         </ToolCardHeaderLayoutContext.Provider>
       </div>
       
-      {hasExpandedContent && (
+      <SmoothHeightCollapse isOpen={Boolean(hasExpandedContent)} className="base-tool-card-expanded-collapse">
         <div className="base-tool-card-expanded">
           {expandedContent}
         </div>
-      )}
+      </SmoothHeightCollapse>
       
-      {isFailed && errorContent && (
+      <SmoothHeightCollapse isOpen={Boolean(isFailed && errorContent)} className="base-tool-card-error-collapse">
         <div className="base-tool-card-error">
           {errorContent}
         </div>
-      )}
+      </SmoothHeightCollapse>
     </div>
   );
 };

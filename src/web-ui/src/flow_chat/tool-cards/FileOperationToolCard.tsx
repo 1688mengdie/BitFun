@@ -166,6 +166,16 @@ export const FileOperationToolCard: React.FC<FileOperationToolCardProps> = ({
   const oldStringContent = getOldString();
   const newStringContent = getNewString();
   const contentPreview = getContent();
+  const writeContentCharCount = toolItem.toolName === 'Write' ? contentPreview.length : 0;
+  const writeContentStatusText = useMemo(() => {
+    if (toolItem.toolName !== 'Write' || writeContentCharCount <= 0) return null;
+
+    const formattedCount = writeContentCharCount.toLocaleString();
+    if (status === 'completed') {
+      return `${formattedCount} chars written`;
+    }
+    return `${formattedCount} chars received`;
+  }, [status, toolItem.toolName, writeContentCharCount]);
   
   const isFailed = status === 'error' || (toolResult && 'success' in toolResult && !toolResult.success);
   const showConfirmationActions = Boolean(
@@ -852,7 +862,12 @@ export const FileOperationToolCard: React.FC<FileOperationToolCardProps> = ({
       }
       extra={
         <ToolCardHeaderActions className="file-op-header-actions">
-          {isParamsStreaming && (status === 'preparing' || status === 'streaming') && (
+          {writeContentStatusText && (
+            <span className="params-streaming-indicator">
+              {writeContentStatusText}
+            </span>
+          )}
+          {isParamsStreaming && (status === 'preparing' || status === 'streaming') && !writeContentStatusText && (
             <span className="params-streaming-indicator">
               {currentFilePath ? t('toolCards.file.receivingParams') : t('toolCards.file.analyzing')}
             </span>

@@ -46,7 +46,7 @@ export type VirtualItem =
       steeringId: string;
       steeringStatus: FlowUserSteeringItem['status'];
     }
-  | { type: 'model-round'; data: ModelRound; turnId: string; isLastRound: boolean }
+  | { type: 'model-round'; data: ModelRound; turnId: string; isLastRound: boolean; isTurnComplete: boolean }
   | { type: 'explore-group'; data: ExploreGroupData; turnId: string }
   | { type: 'image-analyzing'; turnId: string };
 
@@ -222,7 +222,12 @@ export function sessionToVirtualItems(session: Session | null): VirtualItem[] {
         });
     });
     
-    const flushRoundEntries = (rounds: ModelRound[]) => {
+    const isTurnComplete = turn.status === 'completed' || turn.status === 'cancelled' || turn.status === 'error';
+
+    const flushRoundEntries = (
+      rounds: ModelRound[],
+      options: { collapseTrailingExploreGroup: boolean },
+    ) => {
       if (rounds.length === 0) return;
 
       interface TempExploreGroup {
@@ -268,7 +273,7 @@ export function sessionToVirtualItems(session: Session | null): VirtualItem[] {
         }
       });
 
-      if (currentGroup) {
+      if (currentGroup && options.collapseTrailingExploreGroup) {
         tempGroups.push(currentGroup);
       }
 
@@ -309,6 +314,7 @@ export function sessionToVirtualItems(session: Session | null): VirtualItem[] {
             data: round,
             turnId: turn.id,
             isLastRound,
+            isTurnComplete,
           });
           roundIndex++;
         }
@@ -323,7 +329,7 @@ export function sessionToVirtualItems(session: Session | null): VirtualItem[] {
         return;
       }
 
-      flushRoundEntries(pendingRounds);
+      flushRoundEntries(pendingRounds, { collapseTrailingExploreGroup: true });
       pendingRounds = [];
 
       items.push({
@@ -335,7 +341,7 @@ export function sessionToVirtualItems(session: Session | null): VirtualItem[] {
       });
     });
 
-    flushRoundEntries(pendingRounds);
+    flushRoundEntries(pendingRounds, { collapseTrailingExploreGroup: isTurnComplete });
 
   });
 

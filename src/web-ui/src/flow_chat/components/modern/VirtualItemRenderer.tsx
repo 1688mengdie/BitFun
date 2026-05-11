@@ -48,6 +48,7 @@ export const VirtualItemRenderer = React.memo<VirtualItemRendererProps>(
               round={item.data} 
               turnId={item.turnId} 
               isLastRound={item.isLastRound}
+              isTurnComplete={item.isTurnComplete}
             />
           );
         
