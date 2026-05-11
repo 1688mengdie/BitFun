@@ -16,6 +16,7 @@ pub enum DeepReviewCapacityQueueReason {
     ProviderConcurrencyLimit,
     RetryAfter,
     LocalConcurrencyCap,
+    LaunchBatchBlocked,
     TemporaryOverload,
 }
 
@@ -26,6 +27,7 @@ impl DeepReviewCapacityQueueReason {
             Self::ProviderConcurrencyLimit => "provider_concurrency_limit",
             Self::RetryAfter => "retry_after",
             Self::LocalConcurrencyCap => "local_concurrency_cap",
+            Self::LaunchBatchBlocked => "launch_batch_blocked",
             Self::TemporaryOverload => "temporary_overload",
         }
     }

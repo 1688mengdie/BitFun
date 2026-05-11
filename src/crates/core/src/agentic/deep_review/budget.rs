@@ -21,7 +21,7 @@ use super::shared_context::{
     DeepReviewSharedContextMeasurementSnapshot, DeepReviewSharedContextUseRecord,
 };
 use dashmap::DashMap;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -39,6 +39,7 @@ struct DeepReviewTurnBudget {
     reviewer_calls_by_subagent: HashMap<String, usize>,
     retries_used_by_subagent: HashMap<String, usize>,
     active_reviewers: usize,
+    active_reviewer_launch_batches: BTreeMap<u64, usize>,
     concurrency_cap_rejections: usize,
     capacity_skips: usize,
     shared_context_uses: HashMap<DeepReviewSharedContextKey, DeepReviewSharedContextUseRecord>,
@@ -56,6 +57,7 @@ impl DeepReviewTurnBudget {
             reviewer_calls_by_subagent: HashMap::new(),
             retries_used_by_subagent: HashMap::new(),
             active_reviewers: 0,
+            active_reviewer_launch_batches: BTreeMap::new(),
             concurrency_cap_rejections: 0,
             capacity_skips: 0,
             shared_context_uses: HashMap::new(),
@@ -81,6 +83,7 @@ impl DeepReviewTurnBudget {
 pub struct DeepReviewActiveReviewerGuard<'a> {
     tracker: &'a DeepReviewBudgetTracker,
     parent_dialog_turn_id: String,
+    launch_batch: Option<u64>,
     released: bool,
 }
 
@@ -88,7 +91,7 @@ impl Drop for DeepReviewActiveReviewerGuard<'_> {
     fn drop(&mut self) {
         if !self.released {
             self.tracker
-                .finish_active_reviewer(&self.parent_dialog_turn_id);
+                .finish_active_reviewer(&self.parent_dialog_turn_id, self.launch_batch);
             self.released = true;
         }
     }
@@ -519,6 +522,7 @@ impl DeepReviewBudgetTracker {
         DeepReviewActiveReviewerGuard {
             tracker: self,
             parent_dialog_turn_id: parent_dialog_turn_id.to_string(),
+            launch_batch: None,
             released: false,
         }
     }
@@ -542,13 +546,76 @@ impl DeepReviewBudgetTracker {
         Some(DeepReviewActiveReviewerGuard {
             tracker: self,
             parent_dialog_turn_id: parent_dialog_turn_id.to_string(),
+            launch_batch: None,
             released: false,
         })
     }
 
-    fn finish_active_reviewer(&self, parent_dialog_turn_id: &str) {
+    pub fn try_begin_active_reviewer_for_launch_batch<'a>(
+        &'a self,
+        parent_dialog_turn_id: &str,
+        max_active_reviewers: usize,
+        launch_batch: u64,
+        packet_id: Option<&str>,
+    ) -> Result<Option<DeepReviewActiveReviewerGuard<'a>>, DeepReviewPolicyViolation> {
+        let now = Instant::now();
+        let mut budget = self
+            .turns
+            .entry(parent_dialog_turn_id.to_string())
+            .or_insert_with(|| DeepReviewTurnBudget::new(now));
+
+        if let Some((&earliest_active_batch, _)) =
+            budget.active_reviewer_launch_batches.iter().next()
+        {
+            if earliest_active_batch < launch_batch {
+                let packet_label = packet_id
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or("unknown");
+                return Err(DeepReviewPolicyViolation::new(
+                    "deep_review_launch_batch_blocked",
+                    format!(
+                        "Reviewer packet '{}' is in launch_batch {}, but launch_batch {} still has active reviewer(s). Wait for earlier-batch reviewers to finish, timeout, or be cancelled before launching this packet. If the queue remains blocked, pause or cancel the queued reviewers from the Review Team action bar and retry with a lower max parallel reviewer setting.",
+                        packet_label, launch_batch, earliest_active_batch
+                    ),
+                ));
+            }
+        }
+
+        if budget.active_reviewers >= max_active_reviewers {
+            return Ok(None);
+        }
+
+        budget.active_reviewers = budget.active_reviewers.saturating_add(1);
+        *budget
+            .active_reviewer_launch_batches
+            .entry(launch_batch)
+            .or_insert(0) += 1;
+        budget.updated_at = now;
+        Ok(Some(DeepReviewActiveReviewerGuard {
+            tracker: self,
+            parent_dialog_turn_id: parent_dialog_turn_id.to_string(),
+            launch_batch: Some(launch_batch),
+            released: false,
+        }))
+    }
+
+    fn finish_active_reviewer(&self, parent_dialog_turn_id: &str, launch_batch: Option<u64>) {
         if let Some(mut budget) = self.turns.get_mut(parent_dialog_turn_id) {
             budget.active_reviewers = budget.active_reviewers.saturating_sub(1);
+            if let Some(launch_batch) = launch_batch {
+                let should_remove_batch = if let Some(count) =
+                    budget.active_reviewer_launch_batches.get_mut(&launch_batch)
+                {
+                    *count = (*count).saturating_sub(1);
+                    *count == 0
+                } else {
+                    false
+                };
+                if should_remove_batch {
+                    budget.active_reviewer_launch_batches.remove(&launch_batch);
+                }
+            }
             budget.updated_at = Instant::now();
         }
     }
@@ -748,4 +815,66 @@ fn normalize_budget_subagent_type(
     }
 
     Ok(normalized.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn launch_batch_admission_blocks_later_batch_while_earlier_batch_is_active() {
+        let tracker = DeepReviewBudgetTracker::default();
+        let turn_id = "turn-launch-batch-blocked";
+        let _first_batch = tracker
+            .try_begin_active_reviewer_for_launch_batch(turn_id, 2, 1, Some("packet-a"))
+            .expect("batch admission should not fail")
+            .expect("first reviewer should start");
+
+        let violation = match tracker.try_begin_active_reviewer_for_launch_batch(
+            turn_id,
+            2,
+            2,
+            Some("packet-b"),
+        ) {
+            Err(violation) => violation,
+            Ok(_) => panic!("later launch batch should wait while earlier batch is active"),
+        };
+
+        assert_eq!(violation.code, "deep_review_launch_batch_blocked");
+        assert!(violation.message.contains("packet-b"));
+        assert!(violation.message.contains("launch_batch 2"));
+        assert!(violation.message.contains("launch_batch 1"));
+        assert!(violation
+            .message
+            .contains("Wait for earlier-batch reviewers"));
+    }
+
+    #[test]
+    fn launch_batch_admission_allows_same_batch_and_next_batch_after_release() {
+        let tracker = DeepReviewBudgetTracker::default();
+        let turn_id = "turn-launch-batch-release";
+        let first = tracker
+            .try_begin_active_reviewer_for_launch_batch(turn_id, 2, 1, Some("packet-a"))
+            .expect("first batch should not violate launch order")
+            .expect("first reviewer should start");
+        let second = tracker
+            .try_begin_active_reviewer_for_launch_batch(turn_id, 2, 1, Some("packet-b"))
+            .expect("same batch should not violate launch order")
+            .expect("second reviewer should start");
+        assert!(
+            tracker
+                .try_begin_active_reviewer_for_launch_batch(turn_id, 2, 1, Some("packet-c"))
+                .expect("same batch should not violate launch order")
+                .is_none(),
+            "same-batch admission should still respect active reviewer capacity"
+        );
+
+        drop(first);
+        drop(second);
+
+        assert!(tracker
+            .try_begin_active_reviewer_for_launch_batch(turn_id, 2, 2, Some("packet-c"))
+            .expect("next batch should start after the previous batch releases")
+            .is_some());
+    }
 }

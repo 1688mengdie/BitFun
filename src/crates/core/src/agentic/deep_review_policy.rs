@@ -203,6 +203,20 @@ pub fn try_begin_deep_review_active_reviewer(
         .try_begin_active_reviewer(parent_dialog_turn_id, max_active_reviewers)
 }
 
+pub fn try_begin_deep_review_active_reviewer_for_launch_batch(
+    parent_dialog_turn_id: &str,
+    max_active_reviewers: usize,
+    launch_batch: u64,
+    packet_id: Option<&str>,
+) -> Result<Option<DeepReviewActiveReviewerGuard<'static>>, DeepReviewPolicyViolation> {
+    GLOBAL_DEEP_REVIEW_BUDGET_TRACKER.try_begin_active_reviewer_for_launch_batch(
+        parent_dialog_turn_id,
+        max_active_reviewers,
+        launch_batch,
+        packet_id,
+    )
+}
+
 pub fn deep_review_effective_concurrency_snapshot(
     parent_dialog_turn_id: &str,
     configured_max_parallel_instances: usize,

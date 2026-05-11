@@ -1,16 +1,15 @@
 use crate::agentic::agents::{get_agent_registry, AgentInfo};
 use crate::agentic::coordination::get_global_coordinator;
 use crate::agentic::deep_review::task_adapter::{
-    self as deep_review_task_adapter, DeepReviewProviderQueueWaitOutcome,
-    DeepReviewQueueWaitOutcome, DeepReviewQueueWaitSkipReason,
+    self as deep_review_task_adapter, DeepReviewLaunchBatchInfo,
+    DeepReviewProviderQueueWaitOutcome, DeepReviewQueueWaitOutcome, DeepReviewQueueWaitSkipReason,
 };
 use crate::agentic::deep_review_policy::{
-    deep_review_active_reviewer_count, deep_review_effective_concurrency_snapshot,
-    deep_review_effective_parallel_instances, deep_review_has_judge_been_launched,
-    deep_review_turn_elapsed_seconds, load_default_deep_review_policy,
-    record_deep_review_effective_concurrency_success, record_deep_review_runtime_auto_retry,
-    record_deep_review_runtime_auto_retry_suppressed, record_deep_review_runtime_manual_retry,
-    record_deep_review_task_budget, try_begin_deep_review_active_reviewer,
+    deep_review_active_reviewer_count, deep_review_effective_parallel_instances,
+    deep_review_has_judge_been_launched, deep_review_turn_elapsed_seconds,
+    load_default_deep_review_policy, record_deep_review_effective_concurrency_success,
+    record_deep_review_runtime_auto_retry, record_deep_review_runtime_auto_retry_suppressed,
+    record_deep_review_runtime_manual_retry, record_deep_review_task_budget,
     DeepReviewActiveReviewerGuard, DeepReviewCapacityQueueReason, DeepReviewConcurrencyPolicy,
     DeepReviewExecutionPolicy, DeepReviewIncrementalCache, DeepReviewPolicyViolation,
     DeepReviewRunManifestGate, DeepReviewSubagentRole, DEEP_REVIEW_AGENT_TYPE,
@@ -56,6 +55,18 @@ impl TaskTool {
         )
     }
 
+    fn deep_review_launch_batch_for_task(
+        subagent_type: &str,
+        description: Option<&str>,
+        run_manifest: Option<&Value>,
+    ) -> Option<DeepReviewLaunchBatchInfo> {
+        deep_review_task_adapter::deep_review_launch_batch_for_task(
+            subagent_type,
+            description,
+            run_manifest,
+        )
+    }
+
     fn attach_deep_review_cache(run_manifest: &mut Value, cache_value: Option<Value>) {
         deep_review_task_adapter::attach_deep_review_cache(run_manifest, cache_value);
     }
@@ -77,7 +88,10 @@ impl TaskTool {
     ) -> bool {
         is_partial_timeout
             && !is_retry
-            && matches!(deep_review_subagent_role, Some(DeepReviewSubagentRole::Reviewer))
+            && matches!(
+                deep_review_subagent_role,
+                Some(DeepReviewSubagentRole::Reviewer)
+            )
     }
 
     fn ensure_deep_review_retry_coverage(
@@ -285,48 +299,60 @@ impl TaskTool {
         .await
     }
 
+    fn try_begin_deep_review_reviewer_admission(
+        dialog_turn_id: &str,
+        effective_parallel_instances: usize,
+        launch_batch_info: Option<&DeepReviewLaunchBatchInfo>,
+    ) -> Result<Option<DeepReviewActiveReviewerGuard<'static>>, DeepReviewPolicyViolation> {
+        deep_review_task_adapter::try_begin_reviewer_admission(
+            dialog_turn_id,
+            effective_parallel_instances,
+            launch_batch_info,
+        )
+    }
+
+    async fn wait_for_deep_review_reviewer_admission(
+        session_id: &str,
+        dialog_turn_id: &str,
+        tool_id: &str,
+        subagent_type: &str,
+        conc_policy: &DeepReviewConcurrencyPolicy,
+        is_optional_reviewer: bool,
+        launch_batch_info: Option<&DeepReviewLaunchBatchInfo>,
+    ) -> BitFunResult<DeepReviewQueueWaitOutcome> {
+        deep_review_task_adapter::wait_for_reviewer_admission(
+            session_id,
+            dialog_turn_id,
+            tool_id,
+            subagent_type,
+            conc_policy,
+            is_optional_reviewer,
+            launch_batch_info,
+        )
+        .await
+    }
+
     fn deep_review_local_capacity_skip_tool_result(
         dialog_turn_id: &str,
         subagent_type: &str,
         conc_policy: &DeepReviewConcurrencyPolicy,
+        capacity_reason: DeepReviewCapacityQueueReason,
         skip_reason: DeepReviewQueueWaitSkipReason,
         queue_elapsed_ms: u64,
         duration_ms: u128,
     ) -> ToolResult {
-        let queue_skip_reason = match skip_reason {
-            DeepReviewQueueWaitSkipReason::QueueExpired => "queue_expired",
-            DeepReviewQueueWaitSkipReason::UserCancelled => "user_cancelled",
-            DeepReviewQueueWaitSkipReason::OptionalSkipped => "optional_skipped",
-        };
-        let assistant_message = match skip_reason {
-            DeepReviewQueueWaitSkipReason::QueueExpired => format!(
-                "Subagent '{}' was skipped because the DeepReview capacity queue reached its maximum wait ({}s).\n<queue_result status=\"capacity_skipped\" reason=\"local_concurrency_cap\" queue_elapsed_ms=\"{}\" />",
+        let (data, assistant_message) =
+            deep_review_task_adapter::capacity_skip_result_for_local_queue_outcome(
+                dialog_turn_id,
                 subagent_type,
-                conc_policy.max_queue_wait_seconds,
-                queue_elapsed_ms
-            ),
-            DeepReviewQueueWaitSkipReason::UserCancelled => format!(
-                "Subagent '{}' was skipped because the DeepReview capacity queue was cancelled by the user.\n<queue_result status=\"capacity_skipped\" reason=\"user_cancelled\" queue_elapsed_ms=\"{}\" />",
-                subagent_type, queue_elapsed_ms
-            ),
-            DeepReviewQueueWaitSkipReason::OptionalSkipped => format!(
-                "Subagent '{}' was skipped because optional DeepReview queued reviewers were skipped by the user.\n<queue_result status=\"capacity_skipped\" reason=\"optional_skipped\" queue_elapsed_ms=\"{}\" />",
-                subagent_type, queue_elapsed_ms
-            ),
-        };
-
+                conc_policy,
+                capacity_reason,
+                skip_reason,
+                queue_elapsed_ms,
+                duration_ms,
+            );
         ToolResult::Result {
-            data: json!({
-                "duration": duration_ms,
-                "status": "capacity_skipped",
-                "queue_elapsed_ms": queue_elapsed_ms,
-                "max_queue_wait_seconds": conc_policy.max_queue_wait_seconds,
-                "queue_skip_reason": queue_skip_reason,
-                "effective_parallel_instances": deep_review_effective_concurrency_snapshot(
-                    dialog_turn_id,
-                    conc_policy.max_parallel_instances,
-                ).effective_parallel_instances
-            }),
+            data,
             result_for_assistant: Some(assistant_message),
             image_attachments: None,
         }
@@ -527,7 +553,7 @@ impl Tool for TaskTool {
                         },
                         "capacity_reason": {
                             "type": "string",
-                            "description": "Required for capacity_skipped; must be a transient capacity reason such as local_concurrency_cap, provider_rate_limit, provider_concurrency_limit, retry_after, or temporary_overload."
+                            "description": "Required for capacity_skipped; must be a transient capacity reason such as local_concurrency_cap, launch_batch_blocked, provider_rate_limit, provider_concurrency_limit, retry_after, or temporary_overload."
                         },
                         "covered_files": {
                             "type": "array",
@@ -776,6 +802,7 @@ impl Tool for TaskTool {
         let mut deep_review_reviewer_configured_max_parallel_instances: Option<usize> = None;
         let mut deep_review_concurrency_policy: Option<DeepReviewConcurrencyPolicy> = None;
         let mut deep_review_is_optional_reviewer = false;
+        let mut deep_review_launch_batch_info: Option<DeepReviewLaunchBatchInfo> = None;
         let mut deep_review_retry_scope_files: Option<Vec<String>> = None;
         let mut deep_review_subagent_role: Option<DeepReviewSubagentRole> = None;
 
@@ -858,25 +885,27 @@ impl Tool for TaskTool {
                 .concurrency_policy_from_manifest(run_manifest.as_ref().unwrap_or(&Value::Null));
             deep_review_concurrency_policy = Some(conc_policy.clone());
             if is_retry && role == DeepReviewSubagentRole::Reviewer {
-                deep_review_retry_scope_files = Some(match Self::ensure_deep_review_retry_coverage(
-                    input,
-                    &subagent_type,
-                    run_manifest.as_ref(),
-                ) {
-                    Ok(retry_scope_files) => retry_scope_files,
-                    Err(violation) => {
-                        if is_auto_retry {
-                            record_deep_review_runtime_auto_retry_suppressed(
-                                &dialog_turn_id,
-                                Self::auto_retry_suppression_reason(violation.code),
-                            );
+                deep_review_retry_scope_files = Some(
+                    match Self::ensure_deep_review_retry_coverage(
+                        input,
+                        &subagent_type,
+                        run_manifest.as_ref(),
+                    ) {
+                        Ok(retry_scope_files) => retry_scope_files,
+                        Err(violation) => {
+                            if is_auto_retry {
+                                record_deep_review_runtime_auto_retry_suppressed(
+                                    &dialog_turn_id,
+                                    Self::auto_retry_suppression_reason(violation.code),
+                                );
+                            }
+                            return Err(BitFunError::tool(format!(
+                                "DeepReview Task policy violation: {}",
+                                violation.to_tool_error_message()
+                            )));
                         }
-                        return Err(BitFunError::tool(format!(
-                            "DeepReview Task policy violation: {}",
-                            violation.to_tool_error_message()
-                        )));
-                    }
-                });
+                    },
+                );
                 if is_auto_retry {
                     Self::ensure_deep_review_auto_retry_allowed(&conc_policy, &dialog_turn_id)
                         .map_err(|violation| {
@@ -965,40 +994,62 @@ impl Tool for TaskTool {
                         .iter()
                         .any(|id| id == &subagent_type);
                     deep_review_is_optional_reviewer = is_optional_reviewer;
-                    if let Some(guard) = try_begin_deep_review_active_reviewer(
+                    deep_review_launch_batch_info = Self::deep_review_launch_batch_for_task(
+                        &subagent_type,
+                        description.as_deref(),
+                        run_manifest.as_ref(),
+                    );
+                    match Self::try_begin_deep_review_reviewer_admission(
                         &dialog_turn_id,
                         effective_parallel_instances,
+                        deep_review_launch_batch_info.as_ref(),
                     ) {
-                        deep_review_active_guard = Some(guard);
-                    } else {
-                        match Self::wait_for_deep_review_reviewer_capacity(
-                            &session_id,
-                            &dialog_turn_id,
-                            &tool_call_id,
-                            &subagent_type,
-                            &conc_policy,
-                            is_optional_reviewer,
-                        )
-                        .await?
-                        {
-                            DeepReviewQueueWaitOutcome::Ready { guard } => {
-                                deep_review_active_guard = Some(guard);
+                        Ok(Some(guard)) => {
+                            deep_review_active_guard = Some(guard);
+                        }
+                        Ok(None)
+                        | Err(DeepReviewPolicyViolation {
+                            code: "deep_review_launch_batch_blocked",
+                            ..
+                        }) => {
+                            match Self::wait_for_deep_review_reviewer_admission(
+                                &session_id,
+                                &dialog_turn_id,
+                                &tool_call_id,
+                                &subagent_type,
+                                &conc_policy,
+                                is_optional_reviewer,
+                                deep_review_launch_batch_info.as_ref(),
+                            )
+                            .await?
+                            {
+                                DeepReviewQueueWaitOutcome::Ready { guard } => {
+                                    deep_review_active_guard = Some(guard);
+                                }
+                                DeepReviewQueueWaitOutcome::Skipped {
+                                    queue_elapsed_ms,
+                                    skip_reason,
+                                    capacity_reason,
+                                } => {
+                                    return Ok(vec![
+                                        Self::deep_review_local_capacity_skip_tool_result(
+                                            &dialog_turn_id,
+                                            &subagent_type,
+                                            &conc_policy,
+                                            capacity_reason,
+                                            skip_reason,
+                                            queue_elapsed_ms,
+                                            start_time.elapsed().as_millis(),
+                                        ),
+                                    ]);
+                                }
                             }
-                            DeepReviewQueueWaitOutcome::Skipped {
-                                queue_elapsed_ms,
-                                skip_reason,
-                            } => {
-                                return Ok(vec![
-                                    Self::deep_review_local_capacity_skip_tool_result(
-                                        &dialog_turn_id,
-                                        &subagent_type,
-                                        &conc_policy,
-                                        skip_reason,
-                                        queue_elapsed_ms,
-                                        start_time.elapsed().as_millis(),
-                                    ),
-                                ]);
-                            }
+                        }
+                        Err(violation) => {
+                            return Err(BitFunError::tool(format!(
+                                "DeepReview Task policy violation: {}",
+                                violation.to_tool_error_message()
+                            )));
                         }
                     }
                 }
@@ -1171,40 +1222,57 @@ impl Tool for TaskTool {
                                                     &dialog_turn_id,
                                                     conc_policy.max_parallel_instances,
                                                 );
-                                            if let Some(guard) =
-                                                try_begin_deep_review_active_reviewer(
-                                                    &dialog_turn_id,
-                                                    effective_parallel_instances,
-                                                )
-                                            {
-                                                deep_review_active_guard = Some(guard);
-                                            } else {
-                                                match Self::wait_for_deep_review_reviewer_capacity(
-                                                    &session_id,
-                                                    &dialog_turn_id,
-                                                    &tool_call_id,
-                                                    &subagent_type,
-                                                    conc_policy,
-                                                    deep_review_is_optional_reviewer,
-                                                )
-                                                .await?
-                                                {
-                                                    DeepReviewQueueWaitOutcome::Ready { guard } => {
-                                                        deep_review_active_guard = Some(guard);
-                                                    }
-                                                    DeepReviewQueueWaitOutcome::Skipped {
-                                                        queue_elapsed_ms,
-                                                        skip_reason,
-                                                    } => {
-                                                        return Ok(vec![Self::deep_review_local_capacity_skip_tool_result(
-                                                            &dialog_turn_id,
-                                                            &subagent_type,
-                                                            conc_policy,
-                                                            skip_reason,
+                                            match Self::try_begin_deep_review_reviewer_admission(
+                                                &dialog_turn_id,
+                                                effective_parallel_instances,
+                                                deep_review_launch_batch_info.as_ref(),
+                                            ) {
+                                                Ok(Some(guard)) => {
+                                                    deep_review_active_guard = Some(guard);
+                                                }
+                                                Ok(None)
+                                                | Err(DeepReviewPolicyViolation {
+                                                    code: "deep_review_launch_batch_blocked",
+                                                    ..
+                                                }) => {
+                                                    match Self::wait_for_deep_review_reviewer_admission(
+                                                        &session_id,
+                                                        &dialog_turn_id,
+                                                        &tool_call_id,
+                                                        &subagent_type,
+                                                        conc_policy,
+                                                        deep_review_is_optional_reviewer,
+                                                        deep_review_launch_batch_info.as_ref(),
+                                                    )
+                                                    .await?
+                                                    {
+                                                        DeepReviewQueueWaitOutcome::Ready { guard } => {
+                                                            deep_review_active_guard = Some(guard);
+                                                        }
+                                                        DeepReviewQueueWaitOutcome::Skipped {
                                                             queue_elapsed_ms,
-                                                            start_time.elapsed().as_millis(),
-                                                        )]);
+                                                            skip_reason,
+                                                            capacity_reason,
+                                                        } => {
+                                                            return Ok(vec![
+                                                                Self::deep_review_local_capacity_skip_tool_result(
+                                                                    &dialog_turn_id,
+                                                                    &subagent_type,
+                                                                    conc_policy,
+                                                                    capacity_reason,
+                                                                    skip_reason,
+                                                                    queue_elapsed_ms,
+                                                                    start_time.elapsed().as_millis(),
+                                                                ),
+                                                            ]);
+                                                        }
                                                     }
+                                                }
+                                                Err(violation) => {
+                                                    return Err(BitFunError::tool(format!(
+                                                        "DeepReview Task policy violation: {}",
+                                                        violation.to_tool_error_message()
+                                                    )));
                                                 }
                                             }
                                             provider_capacity_retry_reason = Some(reason);
@@ -1542,16 +1610,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn deep_review_capacity_queue_skips_after_max_wait() {
+    async fn deep_review_capacity_queue_waits_while_active_reviewer_is_running() {
         use crate::agentic::deep_review_policy::{
             deep_review_capacity_skip_count, deep_review_concurrency_cap_rejection_count,
             deep_review_effective_parallel_instances, try_begin_deep_review_active_reviewer,
             DeepReviewConcurrencyPolicy,
         };
 
-        let _occupied_a = try_begin_deep_review_active_reviewer("turn-queue-skip", 2)
+        let turn_id = "turn-queue-active-wait";
+        let tool_id = "tool-queue-active-wait";
+        let occupied_a = try_begin_deep_review_active_reviewer(turn_id, 2)
             .expect("precondition should occupy first reviewer capacity");
-        let _occupied_b = try_begin_deep_review_active_reviewer("turn-queue-skip", 2)
+        let occupied_b = try_begin_deep_review_active_reviewer(turn_id, 2)
             .expect("precondition should occupy second reviewer capacity");
         let policy = DeepReviewConcurrencyPolicy {
             max_parallel_instances: 2,
@@ -1561,37 +1631,110 @@ mod tests {
             allow_bounded_auto_retry: false,
             auto_retry_elapsed_guard_seconds: 180,
         };
+        let turn_id_owned = turn_id.to_string();
+        let tool_id_owned = tool_id.to_string();
 
-        let outcome = TaskTool::wait_for_deep_review_reviewer_capacity(
-            "session-queue-skip",
-            "turn-queue-skip",
-            "tool-queue-skip",
-            "ReviewSecurity",
-            &policy,
-            false,
-        )
-        .await
-        .expect("queue wait should resolve");
+        let handle = tokio::spawn(async move {
+            TaskTool::wait_for_deep_review_reviewer_capacity(
+                "session-queue-active-wait",
+                &turn_id_owned,
+                &tool_id_owned,
+                "ReviewSecurity",
+                &policy,
+                false,
+            )
+            .await
+        });
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(30)).await;
+        assert!(
+            !handle.is_finished(),
+            "active Deep Review reviewers should keep the queued reviewer alive"
+        );
+
+        drop(occupied_a);
+        drop(occupied_b);
+
+        let outcome = tokio::time::timeout(tokio::time::Duration::from_millis(500), handle)
+            .await
+            .expect("queue should become ready after active reviewers finish")
+            .expect("spawned wait should not panic")
+            .expect("queue wait should resolve");
 
         match outcome {
-            super::DeepReviewQueueWaitOutcome::Skipped {
-                queue_elapsed_ms, ..
-            } => {
-                assert!(queue_elapsed_ms < 100);
-            }
-            super::DeepReviewQueueWaitOutcome::Ready { .. } => {
-                panic!("occupied capacity should skip with maxQueueWaitSeconds=0");
+            super::DeepReviewQueueWaitOutcome::Ready { .. } => {}
+            super::DeepReviewQueueWaitOutcome::Skipped { .. } => {
+                panic!("active Deep Review reviewers should not cause a queue-expired skip");
             }
         }
-        assert_eq!(deep_review_capacity_skip_count("turn-queue-skip"), 1);
-        assert_eq!(
-            deep_review_concurrency_cap_rejection_count("turn-queue-skip"),
-            0
+        assert_eq!(deep_review_capacity_skip_count(turn_id), 0);
+        assert_eq!(deep_review_concurrency_cap_rejection_count(turn_id), 0);
+        assert_eq!(deep_review_effective_parallel_instances(turn_id, 2), 2);
+    }
+
+    #[tokio::test]
+    async fn deep_review_capacity_queue_waits_for_previous_launch_batch_without_lowering_cap() {
+        use crate::agentic::deep_review::task_adapter::DeepReviewLaunchBatchInfo;
+        use crate::agentic::deep_review_policy::{
+            deep_review_capacity_skip_count, deep_review_effective_parallel_instances,
+            try_begin_deep_review_active_reviewer_for_launch_batch, DeepReviewConcurrencyPolicy,
+        };
+
+        let turn_id = "turn-launch-batch-queue-wait";
+        let tool_id = "tool-launch-batch-queue-wait";
+        let occupied =
+            try_begin_deep_review_active_reviewer_for_launch_batch(turn_id, 2, 1, Some("packet-a"))
+                .expect("launch batch admission should not fail")
+                .expect("first batch reviewer should start");
+        let policy = DeepReviewConcurrencyPolicy {
+            max_parallel_instances: 2,
+            stagger_seconds: 0,
+            max_queue_wait_seconds: 0,
+            batch_extras_separately: true,
+            allow_bounded_auto_retry: false,
+            auto_retry_elapsed_guard_seconds: 180,
+        };
+        let launch_batch_info = DeepReviewLaunchBatchInfo {
+            packet_id: Some("packet-b".to_string()),
+            launch_batch: 2,
+        };
+        let turn_id_owned = turn_id.to_string();
+        let tool_id_owned = tool_id.to_string();
+
+        let handle = tokio::spawn(async move {
+            TaskTool::wait_for_deep_review_reviewer_admission(
+                "session-launch-batch-queue-wait",
+                &turn_id_owned,
+                &tool_id_owned,
+                "ReviewSecurity",
+                &policy,
+                false,
+                Some(&launch_batch_info),
+            )
+            .await
+        });
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(30)).await;
+        assert!(
+            !handle.is_finished(),
+            "later launch batch should wait while an earlier batch is active"
         );
-        assert_eq!(
-            deep_review_effective_parallel_instances("turn-queue-skip", 2),
-            1
-        );
+        drop(occupied);
+
+        let outcome = tokio::time::timeout(tokio::time::Duration::from_millis(500), handle)
+            .await
+            .expect("later launch batch should become ready after earlier batch finishes")
+            .expect("spawned wait should not panic")
+            .expect("queue wait should resolve");
+
+        match outcome {
+            super::DeepReviewQueueWaitOutcome::Ready { .. } => {}
+            super::DeepReviewQueueWaitOutcome::Skipped { .. } => {
+                panic!("later launch batch should not expire while an earlier batch is active");
+            }
+        }
+        assert_eq!(deep_review_capacity_skip_count(turn_id), 0);
+        assert_eq!(deep_review_effective_parallel_instances(turn_id, 2), 2);
     }
 
     #[tokio::test]
@@ -1707,7 +1850,7 @@ mod tests {
 
         let turn_id = "turn-queue-pause";
         let tool_id = "tool-queue-pause";
-        let _occupied = try_begin_deep_review_active_reviewer(turn_id, 1)
+        let occupied = try_begin_deep_review_active_reviewer(turn_id, 1)
             .expect("precondition should occupy reviewer capacity");
         apply_deep_review_queue_control(turn_id, tool_id, DeepReviewQueueControlAction::Pause);
         let policy = DeepReviewConcurrencyPolicy {
@@ -1740,19 +1883,22 @@ mod tests {
         );
 
         apply_deep_review_queue_control(turn_id, tool_id, DeepReviewQueueControlAction::Continue);
+        tokio::time::sleep(tokio::time::Duration::from_millis(30)).await;
+        assert!(
+            !handle.is_finished(),
+            "continued queue wait should stay alive while reviewer capacity is still active"
+        );
+        drop(occupied);
+
         let outcome = tokio::time::timeout(tokio::time::Duration::from_millis(500), handle)
             .await
             .expect("continued queue wait should finish")
             .expect("spawned wait should not panic")
             .expect("queue wait should resolve");
         match outcome {
-            super::DeepReviewQueueWaitOutcome::Skipped {
-                queue_elapsed_ms, ..
-            } => {
-                assert!(queue_elapsed_ms < 100);
-            }
-            super::DeepReviewQueueWaitOutcome::Ready { .. } => {
-                panic!("occupied capacity should skip after pause is continued");
+            super::DeepReviewQueueWaitOutcome::Ready { .. } => {}
+            super::DeepReviewQueueWaitOutcome::Skipped { .. } => {
+                panic!("continued queue wait should run after reviewer capacity frees");
             }
         }
     }

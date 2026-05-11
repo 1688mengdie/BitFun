@@ -9,6 +9,7 @@ pub mod framework;
 pub mod image_context;
 pub mod implementations;
 pub mod pipeline;
+pub(crate) mod post_call_hooks;
 pub mod registry;
 pub mod restrictions;
 pub mod user_input_manager;

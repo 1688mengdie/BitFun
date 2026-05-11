@@ -1,7 +1,7 @@
 //! Tool framework - Tool interface definition and execution context
 use crate::agentic::coordination::get_global_coordinator;
-use crate::agentic::deep_review::tool_measurement;
 use crate::agentic::session::EvidenceLedgerCheckpoint;
+use crate::agentic::tools::post_call_hooks;
 use crate::agentic::tools::restrictions::{
     is_local_path_within_root, is_remote_posix_path_within_root, ToolPathOperation,
     ToolRuntimeRestrictions,
@@ -703,7 +703,7 @@ pub trait Tool: Send + Sync {
             self.call_impl(input, context).await
         };
         if result.is_ok() {
-            tool_measurement::maybe_record_shared_context_tool_use(self.name(), input, context);
+            post_call_hooks::record_successful_tool_call(self.name(), input, context);
         }
         result
     }

@@ -10,17 +10,18 @@ use crate::agentic::coordination::get_global_coordinator;
 use crate::agentic::deep_review::queue::extract_retry_after_seconds;
 use crate::agentic::deep_review_policy::{
     classify_deep_review_capacity_error, clear_deep_review_queue_control_for_tool,
-    deep_review_active_reviewer_count, deep_review_effective_parallel_instances,
-    deep_review_max_retries_per_role, deep_review_queue_control_snapshot,
-    record_deep_review_capacity_skip_for_reason,
+    deep_review_active_reviewer_count, deep_review_effective_concurrency_snapshot,
+    deep_review_effective_parallel_instances, deep_review_max_retries_per_role,
+    deep_review_queue_control_snapshot, record_deep_review_capacity_skip_for_reason,
     record_deep_review_effective_concurrency_capacity_error,
     record_deep_review_runtime_provider_capacity_queue,
     record_deep_review_runtime_provider_capacity_retry,
     record_deep_review_runtime_provider_capacity_retry_success,
     record_deep_review_runtime_queue_wait, try_begin_deep_review_active_reviewer,
-    DeepReviewActiveReviewerGuard, DeepReviewCapacityFailFastReason,
-    DeepReviewCapacityQueueDecision, DeepReviewCapacityQueueReason, DeepReviewConcurrencyPolicy,
-    DeepReviewExecutionPolicy, DeepReviewPolicyViolation,
+    try_begin_deep_review_active_reviewer_for_launch_batch, DeepReviewActiveReviewerGuard,
+    DeepReviewCapacityFailFastReason, DeepReviewCapacityQueueDecision,
+    DeepReviewCapacityQueueReason, DeepReviewConcurrencyPolicy, DeepReviewExecutionPolicy,
+    DeepReviewPolicyViolation,
 };
 use crate::agentic::events::{
     DeepReviewQueueReason, DeepReviewQueueState, DeepReviewQueueStatus, ErrorCategory,
@@ -51,6 +52,7 @@ pub(crate) enum DeepReviewQueueWaitOutcome {
     Skipped {
         queue_elapsed_ms: u64,
         skip_reason: DeepReviewQueueWaitSkipReason,
+        capacity_reason: DeepReviewCapacityQueueReason,
     },
 }
 
@@ -62,6 +64,12 @@ pub(crate) enum DeepReviewProviderQueueWaitOutcome {
         queue_elapsed_ms: u64,
         skip_reason: DeepReviewQueueWaitSkipReason,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DeepReviewLaunchBatchInfo {
+    pub packet_id: Option<String>,
+    pub launch_batch: u64,
 }
 
 pub(crate) fn string_for_any_key<'a>(value: &'a Value, keys: &[&str]) -> Option<&'a str> {
@@ -204,6 +212,26 @@ pub(crate) fn manifest_packet_by_id<'a>(
         })
 }
 
+pub(crate) fn launch_batch_for_manifest_packet(packet: &Value) -> Option<u64> {
+    u64_for_any_key(packet, &["launchBatch", "launch_batch"])
+        .filter(|launch_batch| *launch_batch > 0)
+}
+
+pub(crate) fn deep_review_launch_batch_for_task(
+    subagent_type: &str,
+    description: Option<&str>,
+    run_manifest: Option<&Value>,
+) -> Option<DeepReviewLaunchBatchInfo> {
+    let packet_id = deep_review_packet_id_for_cache(subagent_type, description, run_manifest)?;
+    let packet = manifest_packet_by_id(run_manifest, &packet_id, subagent_type)?;
+    let launch_batch = launch_batch_for_manifest_packet(packet)?;
+
+    Some(DeepReviewLaunchBatchInfo {
+        packet_id: Some(packet_id),
+        launch_batch,
+    })
+}
+
 pub(crate) fn file_paths_for_manifest_packet(
     packet: &Value,
 ) -> Result<Vec<String>, DeepReviewPolicyViolation> {
@@ -220,6 +248,7 @@ pub(crate) fn is_retryable_capacity_reason(reason: &str) -> bool {
     matches!(
         reason,
         "local_concurrency_cap"
+            | "launch_batch_blocked"
             | "provider_rate_limit"
             | "provider_concurrency_limit"
             | "retry_after"
@@ -411,6 +440,9 @@ pub(crate) fn queue_reason_to_event_reason(
         DeepReviewCapacityQueueReason::LocalConcurrencyCap => {
             DeepReviewQueueReason::LocalConcurrencyCap
         }
+        DeepReviewCapacityQueueReason::LaunchBatchBlocked => {
+            DeepReviewQueueReason::LaunchBatchBlocked
+        }
         DeepReviewCapacityQueueReason::TemporaryOverload => {
             DeepReviewQueueReason::TemporaryOverload
         }
@@ -469,7 +501,8 @@ pub(crate) fn provider_capacity_queue_wait_seconds(
         | DeepReviewCapacityQueueReason::ProviderConcurrencyLimit
         | DeepReviewCapacityQueueReason::RetryAfter
         | DeepReviewCapacityQueueReason::TemporaryOverload => {}
-        DeepReviewCapacityQueueReason::LocalConcurrencyCap => return None,
+        DeepReviewCapacityQueueReason::LocalConcurrencyCap
+        | DeepReviewCapacityQueueReason::LaunchBatchBlocked => return None,
     }
 
     Some(
@@ -497,6 +530,76 @@ pub(crate) fn capacity_skip_result_for_provider_reason(
         0,
         None,
     )
+}
+
+pub(crate) fn capacity_skip_result_for_local_queue_outcome(
+    dialog_turn_id: &str,
+    subagent_type: &str,
+    conc_policy: &DeepReviewConcurrencyPolicy,
+    capacity_reason: DeepReviewCapacityQueueReason,
+    skip_reason: DeepReviewQueueWaitSkipReason,
+    queue_elapsed_ms: u64,
+    duration_ms: u128,
+) -> (Value, String) {
+    let queue_skip_reason = match skip_reason {
+        DeepReviewQueueWaitSkipReason::QueueExpired => "queue_expired",
+        DeepReviewQueueWaitSkipReason::UserCancelled => "user_cancelled",
+        DeepReviewQueueWaitSkipReason::OptionalSkipped => "optional_skipped",
+    };
+    let capacity_reason_code = queue_reason_to_snake_case(capacity_reason);
+    let assistant_message = match skip_reason {
+        DeepReviewQueueWaitSkipReason::QueueExpired => {
+            let reason_message = match capacity_reason {
+                DeepReviewCapacityQueueReason::LaunchBatchBlocked => {
+                    "the previous launch batch did not finish before the queue wait limit"
+                }
+                DeepReviewCapacityQueueReason::LocalConcurrencyCap => {
+                    "the local reviewer capacity queue reached its maximum wait"
+                }
+                _ => "the DeepReview capacity queue reached its maximum wait",
+            };
+            let recommended_action = match capacity_reason {
+                DeepReviewCapacityQueueReason::LaunchBatchBlocked => {
+                    "Wait for the earlier reviewer batch to finish or cancel stuck queued reviewers, then retry this packet with a lower max parallel reviewer setting if it repeats."
+                }
+                _ => {
+                    "Run the review again with a lower max parallel reviewer setting or wait for active reviewers to finish."
+                }
+            };
+            format!(
+                "Subagent '{}' was skipped because {} ({}s). Recommended action: {}\n<queue_result status=\"capacity_skipped\" reason=\"{}\" queue_elapsed_ms=\"{}\" />",
+                subagent_type,
+                reason_message,
+                conc_policy.max_queue_wait_seconds,
+                recommended_action,
+                capacity_reason_code,
+                queue_elapsed_ms
+            )
+        }
+        DeepReviewQueueWaitSkipReason::UserCancelled => format!(
+            "Subagent '{}' was skipped because the DeepReview capacity queue was cancelled by the user.\n<queue_result status=\"capacity_skipped\" reason=\"user_cancelled\" queue_elapsed_ms=\"{}\" />",
+            subagent_type, queue_elapsed_ms
+        ),
+        DeepReviewQueueWaitSkipReason::OptionalSkipped => format!(
+            "Subagent '{}' was skipped because optional DeepReview queued reviewers were skipped by the user.\n<queue_result status=\"capacity_skipped\" reason=\"optional_skipped\" queue_elapsed_ms=\"{}\" />",
+            subagent_type, queue_elapsed_ms
+        ),
+    };
+
+    let data = json!({
+        "duration": u64::try_from(duration_ms).unwrap_or(u64::MAX),
+        "status": "capacity_skipped",
+        "queue_elapsed_ms": queue_elapsed_ms,
+        "max_queue_wait_seconds": conc_policy.max_queue_wait_seconds,
+        "queue_skip_reason": queue_skip_reason,
+        "capacity_reason": capacity_reason_code,
+        "effective_parallel_instances": deep_review_effective_concurrency_snapshot(
+            dialog_turn_id,
+            conc_policy.max_parallel_instances,
+        ).effective_parallel_instances
+    });
+
+    (data, assistant_message)
 }
 
 pub(crate) fn capacity_skip_result_for_provider_queue_outcome(
@@ -734,17 +837,58 @@ pub(crate) async fn wait_for_reviewer_capacity(
     conc_policy: &DeepReviewConcurrencyPolicy,
     is_optional_reviewer: bool,
 ) -> BitFunResult<DeepReviewQueueWaitOutcome> {
+    wait_for_reviewer_admission(
+        session_id,
+        dialog_turn_id,
+        tool_id,
+        subagent_type,
+        conc_policy,
+        is_optional_reviewer,
+        None,
+    )
+    .await
+}
+
+pub(crate) fn try_begin_reviewer_admission(
+    dialog_turn_id: &str,
+    effective_parallel_instances: usize,
+    launch_batch_info: Option<&DeepReviewLaunchBatchInfo>,
+) -> Result<Option<DeepReviewActiveReviewerGuard<'static>>, DeepReviewPolicyViolation> {
+    match launch_batch_info {
+        Some(info) => try_begin_deep_review_active_reviewer_for_launch_batch(
+            dialog_turn_id,
+            effective_parallel_instances,
+            info.launch_batch,
+            info.packet_id.as_deref(),
+        ),
+        None => Ok(try_begin_deep_review_active_reviewer(
+            dialog_turn_id,
+            effective_parallel_instances,
+        )),
+    }
+}
+
+pub(crate) async fn wait_for_reviewer_admission(
+    session_id: &str,
+    dialog_turn_id: &str,
+    tool_id: &str,
+    subagent_type: &str,
+    conc_policy: &DeepReviewConcurrencyPolicy,
+    is_optional_reviewer: bool,
+    launch_batch_info: Option<&DeepReviewLaunchBatchInfo>,
+) -> BitFunResult<DeepReviewQueueWaitOutcome> {
     let decision = classify_deep_review_capacity_error(
         "deep_review_concurrency_cap_reached",
         "Maximum parallel reviewer instances reached",
         None,
     );
-    let reason = decision
+    let local_capacity_reason = decision
         .reason
         .unwrap_or(DeepReviewCapacityQueueReason::LocalConcurrencyCap);
     let mut queue_timer = QueueWaitTimer::start(Instant::now());
     let max_wait = Duration::from_secs(conc_policy.max_queue_wait_seconds);
     let optional_reviewer_count = is_optional_reviewer.then_some(1);
+    let mut last_wait_reason = local_capacity_reason;
 
     loop {
         let now = Instant::now();
@@ -756,11 +900,12 @@ pub(crate) async fn wait_for_reviewer_capacity(
             dialog_turn_id,
             conc_policy.max_parallel_instances,
         );
+        let mut current_reason = last_wait_reason;
 
         let control_snapshot = deep_review_queue_control_snapshot(dialog_turn_id, tool_id);
         if control_snapshot.cancelled || (is_optional_reviewer && control_snapshot.skip_optional) {
             record_deep_review_runtime_queue_wait(dialog_turn_id, queue_elapsed_ms);
-            record_deep_review_capacity_skip_for_reason(dialog_turn_id, reason);
+            record_deep_review_capacity_skip_for_reason(dialog_turn_id, current_reason);
             clear_deep_review_queue_control_for_tool(dialog_turn_id, tool_id);
             emit_queue_state(
                 session_id,
@@ -768,7 +913,7 @@ pub(crate) async fn wait_for_reviewer_capacity(
                 tool_id,
                 subagent_type,
                 DeepReviewQueueStatus::CapacitySkipped,
-                Some(reason),
+                Some(current_reason),
                 0,
                 active_reviewers,
                 optional_reviewer_count,
@@ -784,6 +929,7 @@ pub(crate) async fn wait_for_reviewer_capacity(
                 } else {
                     DeepReviewQueueWaitSkipReason::OptionalSkipped
                 },
+                capacity_reason: current_reason,
             });
         }
 
@@ -795,7 +941,7 @@ pub(crate) async fn wait_for_reviewer_capacity(
                 tool_id,
                 subagent_type,
                 DeepReviewQueueStatus::PausedByUser,
-                Some(reason),
+                Some(current_reason),
                 1,
                 active_reviewers,
                 optional_reviewer_count,
@@ -810,39 +956,65 @@ pub(crate) async fn wait_for_reviewer_capacity(
 
         queue_timer.continue_now(now);
 
-        if let Some(guard) =
-            try_begin_deep_review_active_reviewer(dialog_turn_id, effective_parallel_instances)
-        {
-            let active_reviewer_count = deep_review_active_reviewer_count(dialog_turn_id);
-            record_deep_review_runtime_queue_wait(dialog_turn_id, queue_elapsed_ms);
-            clear_deep_review_queue_control_for_tool(dialog_turn_id, tool_id);
-            emit_queue_state(
-                session_id,
-                dialog_turn_id,
-                tool_id,
-                subagent_type,
-                DeepReviewQueueStatus::Running,
-                None,
-                0,
-                active_reviewer_count,
-                optional_reviewer_count,
-                Some(effective_parallel_instances),
-                queue_elapsed_ms,
-                conc_policy.max_queue_wait_seconds,
-            )
-            .await;
-            return Ok(DeepReviewQueueWaitOutcome::Ready { guard });
+        match try_begin_reviewer_admission(
+            dialog_turn_id,
+            effective_parallel_instances,
+            launch_batch_info,
+        ) {
+            Ok(Some(guard)) => {
+                let active_reviewer_count = deep_review_active_reviewer_count(dialog_turn_id);
+                record_deep_review_runtime_queue_wait(dialog_turn_id, queue_elapsed_ms);
+                clear_deep_review_queue_control_for_tool(dialog_turn_id, tool_id);
+                emit_queue_state(
+                    session_id,
+                    dialog_turn_id,
+                    tool_id,
+                    subagent_type,
+                    DeepReviewQueueStatus::Running,
+                    None,
+                    0,
+                    active_reviewer_count,
+                    optional_reviewer_count,
+                    Some(effective_parallel_instances),
+                    queue_elapsed_ms,
+                    conc_policy.max_queue_wait_seconds,
+                )
+                .await;
+                return Ok(DeepReviewQueueWaitOutcome::Ready { guard });
+            }
+            Ok(None) => {
+                current_reason = local_capacity_reason;
+            }
+            Err(violation) if violation.code == "deep_review_launch_batch_blocked" => {
+                current_reason = DeepReviewCapacityQueueReason::LaunchBatchBlocked;
+            }
+            Err(violation) => {
+                return Err(BitFunError::tool(format!(
+                    "DeepReview Task policy violation: {}",
+                    violation.to_tool_error_message()
+                )));
+            }
         }
+        last_wait_reason = current_reason;
 
-        if queue_snapshot.is_expired(max_wait) {
-            let snapshot = record_deep_review_effective_concurrency_capacity_error(
-                dialog_turn_id,
-                conc_policy.max_parallel_instances,
-                reason,
-                decision.retry_after_seconds.map(Duration::from_secs),
-            );
+        let queue_expired_without_active_reviewer =
+            queue_snapshot.is_expired(max_wait) && active_reviewers == 0;
+
+        if queue_expired_without_active_reviewer {
+            let effective_parallel_instances =
+                if current_reason == DeepReviewCapacityQueueReason::LaunchBatchBlocked {
+                    effective_parallel_instances
+                } else {
+                    record_deep_review_effective_concurrency_capacity_error(
+                        dialog_turn_id,
+                        conc_policy.max_parallel_instances,
+                        current_reason,
+                        decision.retry_after_seconds.map(Duration::from_secs),
+                    )
+                    .effective_parallel_instances
+                };
             record_deep_review_runtime_queue_wait(dialog_turn_id, queue_elapsed_ms);
-            record_deep_review_capacity_skip_for_reason(dialog_turn_id, reason);
+            record_deep_review_capacity_skip_for_reason(dialog_turn_id, current_reason);
             clear_deep_review_queue_control_for_tool(dialog_turn_id, tool_id);
             emit_queue_state(
                 session_id,
@@ -850,11 +1022,11 @@ pub(crate) async fn wait_for_reviewer_capacity(
                 tool_id,
                 subagent_type,
                 DeepReviewQueueStatus::CapacitySkipped,
-                Some(reason),
+                Some(current_reason),
                 0,
                 active_reviewers,
                 optional_reviewer_count,
-                Some(snapshot.effective_parallel_instances),
+                Some(effective_parallel_instances),
                 queue_elapsed_ms,
                 conc_policy.max_queue_wait_seconds,
             )
@@ -862,6 +1034,7 @@ pub(crate) async fn wait_for_reviewer_capacity(
             return Ok(DeepReviewQueueWaitOutcome::Skipped {
                 queue_elapsed_ms,
                 skip_reason: DeepReviewQueueWaitSkipReason::QueueExpired,
+                capacity_reason: current_reason,
             });
         }
 
@@ -871,7 +1044,7 @@ pub(crate) async fn wait_for_reviewer_capacity(
             tool_id,
             subagent_type,
             DeepReviewQueueStatus::QueuedForCapacity,
-            Some(reason),
+            Some(current_reason),
             1,
             active_reviewers,
             optional_reviewer_count,
@@ -881,7 +1054,11 @@ pub(crate) async fn wait_for_reviewer_capacity(
         )
         .await;
 
-        let remaining = max_wait.saturating_sub(queue_elapsed);
-        sleep(DEEP_REVIEW_QUEUE_POLL_INTERVAL.min(remaining)).await;
+        let sleep_duration = if queue_snapshot.is_expired(max_wait) {
+            DEEP_REVIEW_QUEUE_POLL_INTERVAL
+        } else {
+            DEEP_REVIEW_QUEUE_POLL_INTERVAL.min(max_wait.saturating_sub(queue_elapsed))
+        };
+        sleep(sleep_duration).await;
     }
 }
