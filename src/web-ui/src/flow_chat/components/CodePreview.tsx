@@ -79,12 +79,24 @@ export const CodePreview: React.FC<CodePreviewProps> = memo(({
   // (maxHeight ≈ 88 px), we only need to tokenize the tail of the buffer.
   // After streaming ends, the full content is restored for the completed view.
   const STREAMING_TAIL_LINES = 60; // generous tail – more than enough for any maxHeight
-  const displayContent = useMemo(() => {
-    if (!isStreaming) return deferredContent;
+  const displayContentInfo = useMemo(() => {
+    if (!isStreaming) {
+      return { content: deferredContent, startingLineNumber: 1 };
+    }
+
     const lines = deferredContent.split('\n');
-    if (lines.length <= STREAMING_TAIL_LINES) return deferredContent;
-    return lines.slice(-STREAMING_TAIL_LINES).join('\n');
+    if (lines.length <= STREAMING_TAIL_LINES) {
+      return { content: deferredContent, startingLineNumber: 1 };
+    }
+
+    const startingLineNumber = lines.length - STREAMING_TAIL_LINES + 1;
+    return {
+      content: lines.slice(-STREAMING_TAIL_LINES).join('\n'),
+      startingLineNumber,
+    };
   }, [isStreaming, deferredContent]);
+
+  const displayContent = displayContentInfo.content;
 
   const [highlightedLine, setHighlightedLine] = useState<number | null>(null);
   
@@ -115,7 +127,8 @@ export const CodePreview: React.FC<CodePreviewProps> = memo(({
   }, [onLineClick, filePath]);
   
   const lineProps = useCallback((lineNumber: number): React.HTMLProps<HTMLElement> => {
-    const isHighlighted = highlightedLine === lineNumber;
+    const actualLineNumber = displayContentInfo.startingLineNumber + lineNumber - 1;
+    const isHighlighted = highlightedLine === actualLineNumber;
     return {
       style: {
         display: 'block',
@@ -125,10 +138,10 @@ export const CodePreview: React.FC<CodePreviewProps> = memo(({
         paddingLeft: '3px',
         transition: 'background-color 0.15s ease, border-color 0.15s ease',
       },
-      onClick: () => handleLineClick(lineNumber),
+      onClick: () => handleLineClick(actualLineNumber),
       className: isHighlighted ? 'code-line--highlighted' : '',
     };
-  }, [highlightedLine, handleLineClick]);
+  }, [highlightedLine, handleLineClick, displayContentInfo.startingLineNumber]);
   
   if (!content) {
     return (
@@ -153,6 +166,7 @@ export const CodePreview: React.FC<CodePreviewProps> = memo(({
           language={detectedLanguage}
           style={prismStyle}
           showLineNumbers={showLineNumbers}
+          startingLineNumber={displayContentInfo.startingLineNumber}
           wrapLines={true}
           wrapLongLines={true}
           lineProps={lineProps}

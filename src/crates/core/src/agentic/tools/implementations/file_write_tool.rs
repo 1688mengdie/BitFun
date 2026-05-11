@@ -10,9 +10,6 @@ use tokio::fs;
 
 pub struct FileWriteTool;
 
-const LARGE_WRITE_SOFT_LINE_LIMIT: usize = 200;
-const LARGE_WRITE_SOFT_BYTE_LIMIT: usize = 20 * 1024;
-
 impl Default for FileWriteTool {
     fn default() -> Self {
         Self::new()
@@ -39,10 +36,10 @@ Usage:
 - If this is an existing file, you MUST use the Read tool first to read the file's contents. This tool will fail if you did not read the file first.
 - The file_path parameter must be workspace-relative, an absolute path inside the current workspace, or an exact `bitfun://runtime/...` URI returned by another tool.
 - ALWAYS prefer editing existing files in the codebase. NEVER write new files unless explicitly required.
-- Keep writes focused. The 200-line / 20KB guideline is a soft reliability threshold, not a hard cap. If a task genuinely needs more content, preserve correctness and use a staged plan instead of truncating.
-- For existing files, prefer Read + targeted Edit calls. For large new files or rewrites, write the stable scaffold first, then fill or revise sections with focused Edit calls. Do not replace an entire existing file just to change a few sections.
+- For existing files, prefer Read + targeted Edit calls. For new files or rewrites, preserve correctness and provide the complete intended file content when this tool is appropriate.
 - NEVER proactively create documentation files (*.md) or README files. Only create documentation files if explicitly requested by the User.
-- Only use emojis if the user explicitly requests it. Avoid writing emojis to files unless asked."#.to_string())
+- Only use emojis if the user explicitly requests it. Avoid writing emojis to files unless asked.
+- Do NOT include the file content in the tool call arguments. Only provide file_path. The system will prompt you separately to output the file content as plain text."#.to_string())
     }
 
     fn input_schema(&self) -> Value {
@@ -52,13 +49,9 @@ Usage:
                 "file_path": {
                     "type": "string",
                     "description": "The file to write. Use a workspace-relative path, an absolute path inside the current workspace, or an exact bitfun://runtime URI returned by another tool."
-                },
-                "content": {
-                    "type": "string",
-                    "description": "The content to write to the file. 200 lines / 20KB is a soft reliability threshold, not a hard cap. For existing files prefer Read + focused Edit calls. For large new files, write a stable scaffold first, then add sections in follow-up focused edits unless a complete initial body is required."
                 }
             },
-            "required": ["file_path", "content"],
+            "required": ["file_path"],
             "additionalProperties": false
         })
     }
@@ -92,31 +85,6 @@ Usage:
             }
         };
 
-        if input.get("content").is_none() {
-            return ValidationResult {
-                result: false,
-                message: Some("content is required".to_string()),
-                error_code: Some(400),
-                meta: None,
-            };
-        }
-
-        let large_write_warning =
-            input
-                .get("content")
-                .and_then(|v| v.as_str())
-                .and_then(|content| {
-                    let line_count = content.lines().count();
-                    let byte_count = content.len();
-                    if line_count > LARGE_WRITE_SOFT_LINE_LIMIT
-                        || byte_count > LARGE_WRITE_SOFT_BYTE_LIMIT
-                    {
-                        Some((line_count, byte_count))
-                    } else {
-                        None
-                    }
-                });
-
         if let Some(ctx) = context {
             let resolved = match ctx.resolve_tool_path(file_path) {
                 Ok(resolved) => resolved,
@@ -138,24 +106,6 @@ Usage:
                     meta: None,
                 };
             }
-        }
-
-        if let Some((line_count, byte_count)) = large_write_warning {
-            return ValidationResult {
-                result: true,
-                message: Some(format!(
-                    "Large Write payload: {} lines, {} bytes. This is allowed when necessary, but prefer a staged approach: for existing files use Read + focused Edit calls; for large new files write a stable scaffold first, then add sections in follow-up edits unless a complete initial body is required.",
-                    line_count, byte_count
-                )),
-                error_code: None,
-                meta: Some(json!({
-                    "large_write": true,
-                    "line_count": line_count,
-                    "byte_count": byte_count,
-                    "soft_line_limit": LARGE_WRITE_SOFT_LINE_LIMIT,
-                    "soft_byte_limit": LARGE_WRITE_SOFT_BYTE_LIMIT
-                })),
-            };
         }
 
         ValidationResult::default()

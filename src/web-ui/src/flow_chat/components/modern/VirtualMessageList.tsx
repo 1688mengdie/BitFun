@@ -1194,6 +1194,7 @@ export const VirtualMessageList = forwardRef<VirtualMessageListRef>((_, ref) => 
     const handleWheel = (event: WheelEvent) => {
       if (event.deltaY < 0) {
         followOutputControllerRef.current.handleUserScrollIntent();
+        releaseAnchorLock('wheel-up');
       }
     };
 
@@ -1211,6 +1212,7 @@ export const VirtualMessageList = forwardRef<VirtualMessageListRef>((_, ref) => 
       if (currentY - startY > TOUCH_SCROLL_INTENT_EXIT_THRESHOLD_PX) {
         touchScrollIntentStartYRef.current = currentY;
         followOutputControllerRef.current.handleUserScrollIntent();
+        releaseAnchorLock('touch-scroll-up');
       }
     };
 
@@ -1224,6 +1226,7 @@ export const VirtualMessageList = forwardRef<VirtualMessageListRef>((_, ref) => 
       }
 
       followOutputControllerRef.current.handleUserScrollIntent();
+      releaseAnchorLock('keyboard-scroll-up');
     };
 
     const handlePointerDown = (event: PointerEvent) => {
@@ -1237,6 +1240,7 @@ export const VirtualMessageList = forwardRef<VirtualMessageListRef>((_, ref) => 
 
       scrollbarPointerInteractionActiveRef.current = true;
       followOutputControllerRef.current.handleUserScrollIntent();
+      releaseAnchorLock('scrollbar-pointer-down');
     };
 
     const handlePointerMove = (event: PointerEvent) => {
@@ -1250,6 +1254,7 @@ export const VirtualMessageList = forwardRef<VirtualMessageListRef>((_, ref) => 
       }
 
       followOutputControllerRef.current.handleUserScrollIntent();
+      releaseAnchorLock('scrollbar-pointer-move');
     };
 
     const endScrollbarPointerInteraction = () => {

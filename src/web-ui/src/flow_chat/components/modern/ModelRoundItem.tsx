@@ -23,6 +23,7 @@ import { ForkSessionButton } from './ForkSessionButton';
 import { buildModelRoundItemGroups } from './modelRoundItemGrouping';
 import { Tooltip } from '@/component-library';
 import { createLogger } from '@/shared/utils/logger';
+import { SmoothHeightCollapse } from './SmoothHeightCollapse';
 import './ModelRoundItem.scss';
 import './SubagentItems.scss';
 
@@ -32,6 +33,7 @@ interface ModelRoundItemProps {
   round: ModelRound;
   turnId: string;
   isLastRound?: boolean;
+  isTurnComplete?: boolean;
 }
 
 function useTaskCollapsed(toolId: string): boolean {
@@ -99,7 +101,7 @@ const TaskWithSubagentWrapper: React.FC<TaskWithSubagentWrapperProps> = React.me
 });
 
 export const ModelRoundItem = React.memo<ModelRoundItemProps>(
-  ({ round, turnId, isLastRound = false }) => {
+  ({ round, turnId, isLastRound = false, isTurnComplete = false }) => {
     const { t } = useTranslation('flow-chat');
     const { sessionId } = useFlowChatContext();
     const [copied, setCopied] = useState(false);
@@ -301,7 +303,7 @@ export const ModelRoundItem = React.memo<ModelRoundItemProps>(
           }
         })}
         
-        {isLastRound && hasContent && !round.isStreaming && (
+        {isTurnComplete && isLastRound && hasContent && !round.isStreaming && (
           <div className="model-round-item__footer">
             <ForkSessionButton sessionId={sessionId} turnId={turnId} />
 
@@ -330,7 +332,9 @@ export const ModelRoundItem = React.memo<ModelRoundItemProps>(
     // In complete state, compare items array reference to detect tool state changes.
     return (
       prev.round.id === next.round.id &&
-      prev.round.items === next.round.items
+      prev.round.items === next.round.items &&
+      prev.isLastRound === next.isLastRound &&
+      prev.isTurnComplete === next.isTurnComplete
     );
   }
 );
@@ -438,21 +442,23 @@ const SubagentItemsContainer = React.memo<SubagentItemsContainerProps>(({
 
   return (
     <div className={`subagent-items-wrapper ${isCollapsed ? 'subagent-items-wrapper--collapsed' : 'subagent-items-wrapper--expanded'}`}>
-      <div
-        ref={containerRef}
-        className={`subagent-items-container ${isCollapsed ? 'subagent-items-container--collapsed' : 'subagent-items-container--expanded'}`}
-        data-parent-tool-id={parentTaskToolId}
-      >
-        {items.map((item, idx) => (
-          <SubagentItemRenderer
-            key={item.id}
-            item={item}
-            turnId={turnId}
-            roundId={roundId}
-            isLastItem={idx === items.length - 1}
-          />
-        ))}
-      </div>
+      <SmoothHeightCollapse isOpen={!isCollapsed} className="subagent-items-collapse">
+        <div
+          ref={containerRef}
+          className={`subagent-items-container ${isCollapsed ? 'subagent-items-container--collapsed' : 'subagent-items-container--expanded'}`}
+          data-parent-tool-id={parentTaskToolId}
+        >
+          {items.map((item, idx) => (
+            <SubagentItemRenderer
+              key={item.id}
+              item={item}
+              turnId={turnId}
+              roundId={roundId}
+              isLastItem={idx === items.length - 1}
+            />
+          ))}
+        </div>
+      </SmoothHeightCollapse>
     </div>
   );
 });

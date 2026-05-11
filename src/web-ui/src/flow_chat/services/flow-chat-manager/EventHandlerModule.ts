@@ -96,6 +96,19 @@ function isStreamingExecutionState(state: SessionExecutionState): boolean {
   return state === SessionExecutionState.PROCESSING || state === SessionExecutionState.FINISHING;
 }
 
+export function isAppWindowFocused(): boolean {
+  if (typeof document === 'undefined') {
+    return true;
+  }
+
+  return document.visibilityState === 'visible' && document.hasFocus();
+}
+
+function shouldMarkUnreadCompletion(sessionId: string): boolean {
+  const activeSessionId = FlowChatStore.getInstance().getState().activeSessionId;
+  return sessionId !== activeSessionId || !isAppWindowFocused();
+}
+
 function logDroppedDataEvent(
   eventName: string,
   sessionId: string,
@@ -718,9 +731,7 @@ function finalizeTurnCompletionState(
     log.warn('Failed to save dialog turn (non-critical)', { sessionId, turnId, error });
   });
 
-  // Mark unread completion for non-active sessions
-  const activeSessionId = store.getState().activeSessionId;
-  if (sessionId !== activeSessionId) {
+  if (shouldMarkUnreadCompletion(sessionId)) {
     const pending = context.pendingTurnCompletions.get(sessionId);
     const isPartialRecovery = !!pending?.partialRecoveryReason;
     // Partial recovery after retry failure is treated as an error state (red dot)
@@ -2143,9 +2154,7 @@ function handleDialogTurnFailed(context: FlowChatContext, event: any): void {
     notificationService.error(formatted.message, options);
   }
 
-  // Mark unread error completion for non-active sessions
-  const activeSessionIdForError = store.getState().activeSessionId;
-  if (sessionId !== activeSessionIdForError) {
+  if (shouldMarkUnreadCompletion(sessionId)) {
     context.flowChatStore.markSessionUnreadCompletion(sessionId, 'error');
   }
 }
@@ -2251,9 +2260,7 @@ function handleDialogTurnCancelled(
       });
   }
 
-  // Mark unread completion for non-active sessions (skip if user explicitly cancelled)
-  const activeSessionIdForCancelled = store.getState().activeSessionId;
-  if (sessionId !== activeSessionIdForCancelled && !context.userCancelledSessionIds.has(sessionId)) {
+  if (shouldMarkUnreadCompletion(sessionId) && !context.userCancelledSessionIds.has(sessionId)) {
     context.flowChatStore.markSessionUnreadCompletion(sessionId, 'completed');
   }
   context.userCancelledSessionIds.delete(sessionId);

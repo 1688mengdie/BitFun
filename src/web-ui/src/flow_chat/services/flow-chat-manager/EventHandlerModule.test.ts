@@ -5,6 +5,7 @@ import {
   handleDialogTurnComplete,
   handleSessionStateChanged,
   insertSteeringItemIfAbsent,
+  isAppWindowFocused,
   shouldProcessEvent,
 } from './EventHandlerModule';
 import { stateMachineManager } from '../../state-machine';
@@ -32,6 +33,12 @@ vi.mock('../../../shared/notification-system/services/NotificationService', () =
     success: vi.fn(),
   },
 }));
+
+describe('isAppWindowFocused', () => {
+  it('returns true when no document is available', () => {
+    expect(isAppWindowFocused()).toBe(true);
+  });
+});
 
 describe('normalizeSubagentParentInfo', () => {
   it('normalizes snake_case subagent parent metadata from backend events', () => {

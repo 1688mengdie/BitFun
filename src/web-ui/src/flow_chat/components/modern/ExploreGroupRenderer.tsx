@@ -14,6 +14,7 @@ import { FlowToolCard } from '../FlowToolCard';
 import { ModelThinkingDisplay } from '../../tool-cards/ModelThinkingDisplay';
 import { useToolCardHeightContract } from '../../tool-cards/useToolCardHeightContract';
 import { useFlowChatContext } from './FlowChatContext';
+import { SmoothHeightCollapse } from './SmoothHeightCollapse';
 import './ExploreRegion.scss';
 
 export interface ExploreGroupRendererProps {
@@ -205,20 +206,23 @@ export const ExploreGroupRenderer: React.FC<ExploreGroupRendererProps> = React.m
           <span className="explore-region__summary">{displaySummary}</span>
         </div>
       )}
-      <div className="explore-region__content-wrapper">
-        <div className="explore-region__content-inner">
-          <div ref={containerRef} className="explore-region__content" onScroll={checkScrollState}>
-            {allItems.map((item, idx) => (
-              <ExploreItemRenderer
-                key={item.id}
-                item={item}
-                turnId={turnId}
-                isLastItem={isLastGroupInTurn && idx === allItems.length - 1}
-              />
-            ))}
-          </div>
+      <SmoothHeightCollapse
+        isOpen={isExpanded}
+        className="explore-region__content-wrapper"
+        innerClassName="explore-region__content-inner"
+        durationMs={320}
+      >
+        <div ref={containerRef} className="explore-region__content" onScroll={checkScrollState}>
+          {allItems.map((item, idx) => (
+            <ExploreItemRenderer
+              key={item.id}
+              item={item}
+              turnId={turnId}
+              isLastItem={isLastGroupInTurn && idx === allItems.length - 1}
+            />
+          ))}
         </div>
-      </div>
+      </SmoothHeightCollapse>
     </div>
   );
 });

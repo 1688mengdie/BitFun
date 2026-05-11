@@ -175,7 +175,10 @@ function applyParamsPartial(
     }
 
     const prevBuffer = existingToolItem._paramsBuffer || '';
-    const newBuffer = prevBuffer + (toolEvent.params || '');
+    const isWriteTool = isWriteLikeToolName(toolEvent.tool_name);
+    const incomingParams = toolEvent.params || '';
+    const isWriteFullParamsSnapshot = isWriteTool && incomingParams.trimStart().startsWith('{');
+    const newBuffer = isWriteFullParamsSnapshot ? incomingParams : prevBuffer + incomingParams;
     
     let parsedParams: Record<string, any> = {};
     try {
@@ -183,7 +186,6 @@ function applyParamsPartial(
     } catch {
     }
     
-    const isWriteTool = isWriteLikeToolName(toolEvent.tool_name);
     const isEditTool = ['edit', 'search_replace', 'Edit'].includes(toolEvent.tool_name);
     const hasContentField = parsedParams && ('content' in parsedParams || 'contents' in parsedParams);
     const hasNewString = parsedParams && 'new_string' in parsedParams;
