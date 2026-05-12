@@ -217,7 +217,7 @@ export class FlowChatManager {
     }
 
     window.dispatchEvent(new CustomEvent('bitfun:acp-session-creation', {
-      detail: { phase: 'start', clientId },
+      detail: { phase: 'start', clientId, action: 'create' },
     }));
 
     try {
@@ -248,7 +248,7 @@ export class FlowChatManager {
       return response.sessionId;
     } finally {
       window.dispatchEvent(new CustomEvent('bitfun:acp-session-creation', {
-        detail: { phase: 'finish', clientId },
+        detail: { phase: 'finish', clientId, action: 'create' },
       }));
     }
   }

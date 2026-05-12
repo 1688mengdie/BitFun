@@ -130,6 +130,8 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   const [acpOptions, setAcpOptions] = useState<AcpSessionOptions | null>(null);
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [loading, setLoading] = useState(false);
+  const acpRestoreToastShownRef = useRef<string | null>(null);
+  const acpOptionsRef = useRef<AcpSessionOptions | null>(null);
 
   const dropdownRef = useRef<HTMLDivElement>(null);
   const activeSession = sessionId ? FlowChatStore.getInstance().getState().sessions.get(sessionId) : undefined;
@@ -188,6 +190,14 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
       return;
     }
 
+    const shouldShowRestoreToast = !acpOptionsRef.current && acpRestoreToastShownRef.current !== sessionId;
+    if (shouldShowRestoreToast) {
+      acpRestoreToastShownRef.current = sessionId;
+      window.dispatchEvent(new CustomEvent('bitfun:acp-session-creation', {
+        detail: { phase: 'start', clientId: acpClientId, action: 'restore' },
+      }));
+    }
+
     try {
       const options = await ACPClientAPI.getSessionOptions({
         sessionId,
@@ -200,6 +210,12 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     } catch (error) {
       log.warn('Failed to load ACP session model options', { sessionId, acpClientId, error });
       setAcpOptions(null);
+    } finally {
+      if (shouldShowRestoreToast) {
+        window.dispatchEvent(new CustomEvent('bitfun:acp-session-creation', {
+          detail: { phase: 'finish', clientId: acpClientId, action: 'restore' },
+        }));
+      }
     }
   }, [
     activeSession?.config.workspacePath,
@@ -210,6 +226,16 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     isAcpSession,
     sessionId,
   ]);
+
+  useEffect(() => {
+    acpOptionsRef.current = null;
+    acpRestoreToastShownRef.current = null;
+    setAcpOptions(null);
+  }, [sessionId]);
+
+  useEffect(() => {
+    acpOptionsRef.current = acpOptions;
+  }, [acpOptions]);
 
   useEffect(() => {
     loadAcpOptions();

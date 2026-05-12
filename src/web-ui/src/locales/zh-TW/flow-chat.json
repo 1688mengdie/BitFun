@@ -1321,6 +1321,7 @@
       "parsingParams": "解析參數中...",
       "noFileSpecified": "未指定文件",
       "readFile": "讀取文件",
+      "permissionRequest": "請求讀取權限：",
       "readingFile": "正在讀取",
       "preparingRead": "準備讀取"
     },
