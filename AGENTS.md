@@ -18,6 +18,7 @@ Repository rule: **keep product logic platform-agnostic, then expose it through 
 |---|---|---|
 | Core (product logic) | `src/crates/core` | [AGENTS.md](src/crates/core/AGENTS.md) |
 | Extracted core support | `src/crates/{core-types,agent-stream,runtime-ports,terminal,tool-runtime}` | (use core guide) |
+| Core owner crates | `src/crates/{services-core,services-integrations,agent-tools,tool-packs,product-domains}` | (use core guide + decomposition guardrails) |
 | Transport adapters | `src/crates/transport` | (use core guide) |
 | API layer | `src/crates/api-layer` | (use core guide) |
 | AI adapters | `src/crates/ai-adapters` | [AGENTS.md](src/crates/ai-adapters/AGENTS.md) |

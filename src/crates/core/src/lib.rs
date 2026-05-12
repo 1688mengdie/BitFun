@@ -1,15 +1,18 @@
 #![allow(non_snake_case)]
 #![recursion_limit = "256"]
-// BitFun Core Library - Platform-agnostic business logic
-// Four-layer architecture: Util -> Infrastructure -> Service -> Agentic
+//! Compatibility facade and full product runtime assembly.
+//!
+//! New implementation code should live in owner crates under `src/crates/*`.
+//! This crate re-exports legacy paths and wires the full BitFun product runtime.
 
-pub mod agentic; // Agentic service layer - Agent system, tool system
-pub mod function_agents; // Function Agents - Function-based agents
-pub mod infrastructure; // Infrastructure layer - AI clients, storage, logging, events
-pub mod miniapp;
-pub mod service; // Service layer - Workspace, Config, FileSystem, Terminal, Git
-pub mod util; // Utility layer - General types, errors, helper functions // MiniApp - AI-generated instant apps (Zero-Dialect Runtime)
-              // Re-export debug_log from infrastructure for backward compatibility
+pub mod agentic; // Agent system, tool system, and product runtime orchestration
+pub mod function_agents; // Function-based agents
+pub mod infrastructure; // AI clients, storage, logging, events
+pub mod miniapp; // AI-generated instant apps (Zero-Dialect Runtime)
+pub mod service; // Workspace, Config, FileSystem, Terminal, Git
+pub mod util; // General types, errors, helper functions
+
+// Re-export debug_log from infrastructure for backward compatibility.
 pub use infrastructure::debug_log as debug;
 
 // Export main types

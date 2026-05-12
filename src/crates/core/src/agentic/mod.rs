@@ -1,6 +1,7 @@
-//! Agentic Module
+//! Agentic facade and product runtime assembly.
 //!
-//! Core AI Agent service system
+//! Portable contracts move to owner crates first; concrete orchestration stays
+//! here until it can be split without changing tool, session, or review flows.
 
 // Core module
 pub mod core;

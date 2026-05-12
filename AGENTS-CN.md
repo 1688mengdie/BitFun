@@ -18,6 +18,7 @@ BitFun 是一个由 Rust workspace 与共享 React 前端组成的项目。
 |---|---|---|
 | Core（产品逻辑） | `src/crates/core` | [AGENTS.md](src/crates/core/AGENTS.md) |
 | 已拆出的 core 支撑 crate | `src/crates/{core-types,agent-stream,runtime-ports,terminal,tool-runtime}` | （使用 core 指南） |
+| Core owner crate | `src/crates/{services-core,services-integrations,agent-tools,tool-packs,product-domains}` | （使用 core 指南 + 拆解护栏） |
 | Transport 适配层 | `src/crates/transport` | （使用 core 指南） |
 | API layer | `src/crates/api-layer` | （使用 core 指南） |
 | AI adapters | `src/crates/ai-adapters` | [AGENTS.md](src/crates/ai-adapters/AGENTS.md) |

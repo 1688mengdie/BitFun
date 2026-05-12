@@ -1,6 +1,8 @@
-//! Service layer module
+//! Service facade and core-owned product service assembly.
 //!
-//! Contains core business logic: Workspace, Config, FileSystem, Git, Agentic, MCP.
+//! Owner-crate implementations are re-exported here when they are safely
+//! isolated. High-coupling runtime services stay here until their port
+//! contracts and equivalence tests are explicit.
 
 pub(crate) mod agent_memory; // Agent memory prompt helpers
 pub mod announcement; // Announcement / feature-demo / tips system
