@@ -1321,6 +1321,7 @@
       "parsingParams": "Parsing parameters...",
       "noFileSpecified": "No file specified",
       "readFile": "Read file",
+      "permissionRequest": "Requesting read permission:",
       "readingFile": "Reading",
       "preparingRead": "Preparing to read"
     },

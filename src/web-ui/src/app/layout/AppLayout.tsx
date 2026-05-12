@@ -51,6 +51,7 @@ interface AppLayoutProps {
 interface AcpSessionCreationEventDetail {
   phase?: 'start' | 'finish';
   clientId?: string;
+  action?: 'create' | 'restore';
 }
 
 const AppLayout: React.FC<AppLayoutProps> = ({ className = '' }) => {
@@ -126,7 +127,10 @@ const AppLayout: React.FC<AppLayoutProps> = ({ className = '' }) => {
   const [showNewProjectDialog, setShowNewProjectDialog] = useState(false);
   const [showAboutDialog, setShowAboutDialog] = useState(false);
   const [showWorkspaceStatus, setShowWorkspaceStatus] = useState(false);
-  const [pendingAcpSessionClients, setPendingAcpSessionClients] = useState<string[]>([]);
+  const [pendingAcpSessionClients, setPendingAcpSessionClients] = useState<Array<{
+    clientId: string;
+    action: 'create' | 'restore';
+  }>>([]);
   const handleOpenProject = useCallback(async () => {
     try {
       const selected = await open({
@@ -506,11 +510,12 @@ const AppLayout: React.FC<AppLayoutProps> = ({ className = '' }) => {
     const handler = (event: Event) => {
       const detail = (event as CustomEvent<AcpSessionCreationEventDetail>).detail;
       const clientId = detail?.clientId?.trim() || 'ACP';
+      const action = detail?.action === 'restore' ? 'restore' : 'create';
       if (detail?.phase === 'start') {
-        setPendingAcpSessionClients(prev => [...prev, clientId]);
+        setPendingAcpSessionClients(prev => [...prev, { clientId, action }]);
       } else if (detail?.phase === 'finish') {
         setPendingAcpSessionClients(prev => {
-          const index = prev.indexOf(clientId);
+          const index = prev.findIndex(item => item.clientId === clientId && item.action === action);
           if (index === -1) return prev;
           return prev.filter((_, currentIndex) => currentIndex !== index);
         });
@@ -583,9 +588,13 @@ const AppLayout: React.FC<AppLayoutProps> = ({ className = '' }) => {
           <div className="bitfun-app-acp-session-loading" role="status" aria-live="polite">
             <LoaderCircle size={18} className="bitfun-app-acp-session-loading__spinner" />
             <span>
-              {tCommon('nav.workspaces.creatingAcpSession', {
-                agentName: pendingAcpSessionClients[pendingAcpSessionClients.length - 1],
-              })}
+              {pendingAcpSessionClients[pendingAcpSessionClients.length - 1].action === 'restore'
+                ? tCommon('nav.workspaces.restoringAcpSession', {
+                  agentName: pendingAcpSessionClients[pendingAcpSessionClients.length - 1].clientId,
+                })
+                : tCommon('nav.workspaces.creatingAcpSession', {
+                  agentName: pendingAcpSessionClients[pendingAcpSessionClients.length - 1].clientId,
+                })}
             </span>
           </div>
         )}

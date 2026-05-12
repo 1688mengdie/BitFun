@@ -297,6 +297,7 @@
       "copyPathFailed": "Failed to copy path",
       "createSessionFailed": "Failed to create session",
       "creatingAcpSession": "Starting {{agentName}} session...",
+      "restoringAcpSession": "Restoring {{agentName}} session...",
       "initSessionFailed": "Failed to start AGENTS.md initialization session",
       "worktreeCreated": "Worktree created",
       "worktreeCreatedAndOpened": "Worktree created and opened",
