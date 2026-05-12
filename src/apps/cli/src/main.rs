@@ -149,6 +149,40 @@ fn setup_workspace() -> Option<String> {
     workspace_path.map(|p| p.to_string_lossy().to_string())
 }
 
+fn terminal_scripts_dir() -> std::path::PathBuf {
+    CliConfig::config_dir()
+        .ok()
+        .unwrap_or_else(|| std::env::temp_dir().join("bitfun-cli"))
+        .join("temp")
+        .join("scripts")
+}
+
+async fn initialize_terminal_service() {
+    use bitfun_core::service::runtime::RuntimeManager;
+    use bitfun_core::service::terminal::{TerminalApi, TerminalConfig};
+
+    let mut terminal_config = TerminalConfig::default();
+    terminal_config.shell_integration.scripts_dir = Some(terminal_scripts_dir());
+
+    if let Ok(runtime_manager) = RuntimeManager::new() {
+        let current_path = std::env::var("PATH").ok();
+        if let Some(merged_path) = runtime_manager.merged_path_env(current_path.as_deref()) {
+            terminal_config
+                .env
+                .insert("PATH".to_string(), merged_path.clone());
+            #[cfg(windows)]
+            {
+                terminal_config.env.insert("Path".to_string(), merged_path);
+            }
+        }
+    } else {
+        tracing::warn!("Failed to initialize runtime manager for terminal PATH");
+    }
+
+    let _terminal_api = TerminalApi::new(terminal_config).await;
+    tracing::info!("Terminal service initialized");
+}
+
 /// Initialize all core services (config, AI client, agentic system).
 /// Returns (agentic_system, original_skip_confirmation).
 async fn initialize_core_services(
@@ -182,6 +216,8 @@ async fn initialize_core_services(
         .await
         .expect("Failed to initialize global AIClientFactory");
     tracing::info!("Global AI client factory initialized");
+
+    initialize_terminal_service().await;
 
     let agentic_system = agent::agentic_system::init_agentic_system()
         .await
@@ -434,6 +470,8 @@ async fn main() -> Result<()> {
                 .await
                 .context("Failed to initialize global AIClientFactory")?;
             tracing::info!("Global AI client factory initialized");
+
+            initialize_terminal_service().await;
 
             let agentic_system = agent::agentic_system::init_agentic_system()
                 .await
