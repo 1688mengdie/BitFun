@@ -400,6 +400,51 @@ mod tests {
         assert!(registry.get_tool("Cron").is_some());
     }
 
+    #[test]
+    fn registry_preserves_builtin_tool_manifest_for_owner_migration() {
+        let registry = create_tool_registry();
+
+        assert_eq!(
+            registry.get_tool_names(),
+            vec![
+                "LS",
+                "Read",
+                "Glob",
+                "Grep",
+                "Write",
+                "Edit",
+                "Delete",
+                "Bash",
+                "TerminalControl",
+                "SessionControl",
+                "SessionMessage",
+                "SessionHistory",
+                "TodoWrite",
+                "Cron",
+                "Task",
+                "Skill",
+                "AskUserQuestion",
+                "WebSearch",
+                "WebFetch",
+                "ListMCPResources",
+                "ReadMCPResource",
+                "ListMCPPrompts",
+                "GetMCPPrompt",
+                "GenerativeUI",
+                "GetFileDiff",
+                "Log",
+                "Git",
+                "CreatePlan",
+                "submit_code_review",
+                "InitMiniApp",
+                "ControlHub",
+                "ComputerUse",
+                "Playbook",
+            ],
+            "builtin tool manifest must stay stable before moving registry ownership"
+        );
+    }
+
     #[tokio::test]
     async fn dynamic_tool_provider_uses_explicit_provider_metadata() {
         let mut registry = ToolRegistry::new();

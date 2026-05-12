@@ -1,0 +1,477 @@
+#!/usr/bin/env node
+
+import { readdirSync, readFileSync, statSync } from 'fs';
+import { join, relative } from 'path';
+import { fileURLToPath } from 'url';
+import { dirname } from 'path';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const ROOT = join(__dirname, '..');
+
+const noCoreDependencyCrates = [
+  'core-types',
+  'events',
+  'ai-adapters',
+  'agent-stream',
+  'runtime-ports',
+  'services-core',
+  'services-integrations',
+  'agent-tools',
+  'tool-packs',
+  'product-domains',
+  'terminal',
+  'tool-runtime',
+  'transport',
+  'api-layer',
+  'webdriver',
+];
+
+const lightweightBoundaryRules = [
+  {
+    crateName: 'core-types',
+    reason: 'core-types must stay low-level DTO-only',
+    forbiddenDeps: [
+      'bitfun-core',
+      'bitfun-events',
+      'bitfun-ai-adapters',
+      'bitfun-agent-stream',
+      'bitfun-runtime-ports',
+      'bitfun-services-core',
+      'bitfun-services-integrations',
+      'bitfun-agent-tools',
+      'bitfun-tool-packs',
+      'bitfun-product-domains',
+      'bitfun-transport',
+      'terminal-core',
+      'tool-runtime',
+      'tauri',
+      'reqwest',
+      'git2',
+      'rmcp',
+      'image',
+      'tokio-tungstenite',
+    ],
+  },
+  {
+    crateName: 'runtime-ports',
+    reason: 'runtime-ports must stay DTO/trait-only',
+    forbiddenDeps: [
+      'bitfun-core',
+      'bitfun-agent-stream',
+      'bitfun-services-core',
+      'bitfun-services-integrations',
+      'bitfun-agent-tools',
+      'bitfun-tool-packs',
+      'bitfun-product-domains',
+      'bitfun-transport',
+      'terminal-core',
+      'tool-runtime',
+      'tauri',
+      'reqwest',
+      'git2',
+      'rmcp',
+      'image',
+      'tokio-tungstenite',
+    ],
+  },
+  {
+    crateName: 'agent-tools',
+    reason: 'agent-tools must not depend on concrete service or product runtime implementations',
+    forbiddenDeps: [
+      'bitfun-core',
+      'bitfun-services-core',
+      'bitfun-services-integrations',
+      'bitfun-tool-packs',
+      'bitfun-product-domains',
+      'bitfun-transport',
+      'terminal-core',
+      'tool-runtime',
+      'tauri',
+      'reqwest',
+      'git2',
+      'rmcp',
+      'tokio-tungstenite',
+    ],
+  },
+];
+
+const facadeOnlyFiles = [
+  {
+    path: 'src/crates/core/src/service/git/git_service.rs',
+    importPrefix: 'bitfun_services_integrations::git',
+    reason: 'core git service facade must only re-export the integrations owner crate',
+  },
+  {
+    path: 'src/crates/core/src/service/git/git_types.rs',
+    importPrefix: 'bitfun_services_integrations::git',
+    reason: 'core git types facade must only re-export the integrations owner crate',
+  },
+  {
+    path: 'src/crates/core/src/service/git/git_utils.rs',
+    importPrefix: 'bitfun_services_integrations::git',
+    reason: 'core git utils facade must only re-export the integrations owner crate',
+  },
+  {
+    path: 'src/crates/core/src/service/git/graph.rs',
+    importPrefix: 'bitfun_services_integrations::git',
+    reason: 'core git graph facade must only re-export the integrations owner crate',
+  },
+  {
+    path: 'src/crates/core/src/service/remote_ssh/types.rs',
+    importPrefix: 'bitfun_services_integrations::remote_ssh',
+    reason: 'core remote SSH types facade must only re-export the integrations owner crate',
+  },
+  {
+    path: 'src/crates/core/src/service/mcp/tool_info.rs',
+    importPrefix: 'bitfun_services_integrations::mcp',
+    reason: 'core MCP tool info facade must only re-export the integrations owner crate',
+  },
+  {
+    path: 'src/crates/core/src/service/mcp/tool_name.rs',
+    importPrefix: 'bitfun_services_integrations::mcp',
+    reason: 'core MCP tool name facade must only re-export the integrations owner crate',
+  },
+  {
+    path: 'src/crates/core/src/service/mcp/protocol/types.rs',
+    importPrefix: 'bitfun_services_integrations::mcp',
+    reason: 'core MCP protocol types facade must only re-export the integrations owner crate',
+  },
+  {
+    path: 'src/crates/core/src/service/mcp/config/location.rs',
+    importPrefix: 'bitfun_services_integrations::mcp',
+    reason: 'core MCP config location facade must only re-export the integrations owner crate',
+  },
+  {
+    path: 'src/crates/core/src/service/announcement/types.rs',
+    importPrefix: 'bitfun_services_integrations::announcement',
+    reason: 'core announcement types facade must only re-export the integrations owner crate',
+  },
+];
+
+const forbiddenContentRules = [
+  {
+    path: 'src/crates/core/src/service/mcp/server/process.rs',
+    patterns: [
+      {
+        regex: /\bpub enum MCPServerType\b/,
+        message: 'core MCP server process runtime must not redefine MCPServerType; use the integrations contract',
+      },
+      {
+        regex: /\bpub enum MCPServerStatus\b/,
+        message: 'core MCP server process runtime must not redefine MCPServerStatus; use the integrations contract',
+      },
+    ],
+  },
+];
+
+const failures = [];
+
+function toRepoPath(path) {
+  return relative(ROOT, path).replace(/\\/g, '/');
+}
+
+function readText(path) {
+  return readFileSync(path, 'utf8');
+}
+
+function walkFiles(dir, visit) {
+  for (const entry of readdirSync(dir)) {
+    const path = join(dir, entry);
+    const stat = statSync(path);
+    if (stat.isDirectory()) {
+      walkFiles(path, visit);
+      continue;
+    }
+    visit(path);
+  }
+}
+
+function rustImportName(depName) {
+  return depName.replace(/-/g, '_');
+}
+
+function escapeRegex(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function manifestDependencyHeaderPattern(depName) {
+  const depPattern = `(?:${escapeRegex(depName)}|"${escapeRegex(depName)}")`;
+  return new RegExp(
+    `^\\[(?:target\\.[^\\]]+\\.)?(?:dependencies|dev-dependencies|build-dependencies)\\.${depPattern}\\]$`,
+  );
+}
+
+function isManifestDependencyDeclaration(trimmedLine, depName) {
+  const isInlineDependency = new RegExp(`^${escapeRegex(depName)}\\s*=`).test(trimmedLine);
+  const isDependencyTable = manifestDependencyHeaderPattern(depName).test(trimmedLine);
+  return isInlineDependency || isDependencyTable;
+}
+
+function runManifestParserSelfTest() {
+  const positiveCases = [
+    'bitfun-core = { path = "../core" }',
+    '[dependencies.bitfun-core]',
+    '[dev-dependencies."bitfun-core"]',
+    "[target.'cfg(windows)'.dependencies.bitfun-core]",
+    "[target.'cfg(unix)'.build-dependencies.\"bitfun-core\"]",
+  ];
+  const negativeCases = [
+    '# bitfun-core = { path = "../core" }',
+    '[dependencies]',
+    '[workspace.dependencies.bitfun-core]',
+    '[dependencies.bitfun-core-extra]',
+  ];
+
+  for (const line of positiveCases) {
+    if (!isManifestDependencyDeclaration(line, 'bitfun-core')) {
+      throw new Error(`manifest parser missed dependency declaration: ${line}`);
+    }
+  }
+  for (const line of negativeCases) {
+    if (isManifestDependencyDeclaration(line, 'bitfun-core')) {
+      throw new Error(`manifest parser matched non-dependency declaration: ${line}`);
+    }
+  }
+
+  const acceptsGitFacadeLine = createFacadeLineChecker('bitfun_services_integrations::git');
+  const facadePositiveCases = [
+    '',
+    '//! Compatibility facade.',
+    'pub use bitfun_services_integrations::git::GitService;',
+    'pub use bitfun_services_integrations::git::types::*;',
+    'pub use bitfun_services_integrations::git::{',
+    '    build_git_graph, build_git_graph_for_branch,',
+    '};',
+    'pub use bitfun_services_integrations::git::{build_git_graph, build_git_graph_for_branch};',
+  ];
+  for (const line of facadePositiveCases) {
+    if (!acceptsGitFacadeLine(line)) {
+      throw new Error(`facade parser rejected allowed line: ${line}`);
+    }
+  }
+
+  const rejectsGitImplementationLine = createFacadeLineChecker('bitfun_services_integrations::git');
+  const facadeNegativeCases = [
+    'pub mod service;',
+    'use bitfun_services_integrations::git::GitService;',
+    'fn parse_git_status() {}',
+  ];
+  for (const line of facadeNegativeCases) {
+    if (rejectsGitImplementationLine(line)) {
+      throw new Error(`facade parser accepted implementation line: ${line}`);
+    }
+  }
+}
+
+function checkCargoManifest(crateDir) {
+  checkForbiddenManifestDeps(crateDir, ['bitfun-core'], () => {
+    return 'extracted crate must not depend on bitfun-core';
+  });
+}
+
+function checkForbiddenManifestDeps(crateDir, forbiddenDeps, messageForDep) {
+  const manifestPath = join(crateDir, 'Cargo.toml');
+  const lines = readText(manifestPath).split(/\r?\n/);
+  lines.forEach((line, index) => {
+    const trimmed = line.trim();
+    if (trimmed.startsWith('#')) {
+      return;
+    }
+    for (const dep of forbiddenDeps) {
+      if (isManifestDependencyDeclaration(trimmed, dep)) {
+        failures.push({
+          path: manifestPath,
+          line: index + 1,
+          message: messageForDep(dep),
+        });
+      }
+    }
+  });
+}
+
+function checkRustImports(crateDir) {
+  const srcDir = join(crateDir, 'src');
+  try {
+    if (!statSync(srcDir).isDirectory()) {
+      return;
+    }
+  } catch {
+    return;
+  }
+
+  walkFiles(srcDir, (path) => {
+    if (!path.endsWith('.rs')) {
+      return;
+    }
+    const lines = readText(path).split(/\r?\n/);
+    lines.forEach((line, index) => {
+      if (/\bbitfun_core::/.test(line)) {
+        failures.push({
+          path,
+          line: index + 1,
+          message: 'extracted crate must not import bitfun_core',
+        });
+      }
+    });
+  });
+}
+
+function checkForbiddenRustImports(crateDir, forbiddenDeps, messageForDep) {
+  const srcDir = join(crateDir, 'src');
+  try {
+    if (!statSync(srcDir).isDirectory()) {
+      return;
+    }
+  } catch {
+    return;
+  }
+
+  const forbiddenImports = forbiddenDeps.map((dep) => ({
+    dep,
+    pattern: new RegExp(`\\b${escapeRegex(rustImportName(dep))}::`),
+  }));
+
+  walkFiles(srcDir, (path) => {
+    if (!path.endsWith('.rs')) {
+      return;
+    }
+    const lines = readText(path).split(/\r?\n/);
+    lines.forEach((line, index) => {
+      for (const forbidden of forbiddenImports) {
+        if (forbidden.pattern.test(line)) {
+          failures.push({
+            path,
+            line: index + 1,
+            message: messageForDep(forbidden.dep),
+          });
+        }
+      }
+    });
+  });
+}
+
+function createFacadeLineChecker(importPrefix) {
+  let inPubUseBlock = false;
+  const escapedPrefix = escapeRegex(importPrefix);
+  const singleReexportPattern = new RegExp(
+    `^pub use ${escapedPrefix}(?:::[A-Za-z_][A-Za-z0-9_]*)*(?:::\\*)?;$`,
+  );
+  const blockItemPattern = /^[A-Za-z_][A-Za-z0-9_]*(?:,\s*[A-Za-z_][A-Za-z0-9_]*)*,?$/;
+  const blockStart = `pub use ${importPrefix}::{`;
+
+  const checker = (line) => {
+    const trimmed = line.trim();
+    if (
+      trimmed === '' ||
+      trimmed.startsWith('//') ||
+      trimmed.startsWith('/*') ||
+      trimmed.startsWith('*') ||
+      trimmed.startsWith('*/')
+    ) {
+      return true;
+    }
+
+    if (inPubUseBlock) {
+      if (trimmed === '};') {
+        inPubUseBlock = false;
+        return true;
+      }
+      return blockItemPattern.test(trimmed);
+    }
+
+    if (singleReexportPattern.test(trimmed)) {
+      return true;
+    }
+
+    if (trimmed.startsWith(blockStart)) {
+      if (trimmed.endsWith('};')) {
+        return true;
+      }
+      if (trimmed.endsWith('{')) {
+        inPubUseBlock = true;
+        return true;
+      }
+    }
+
+    return false;
+  };
+
+  checker.isComplete = () => !inPubUseBlock;
+  return checker;
+}
+
+function checkFacadeOnlyFile(repoPath, importPrefix, reason) {
+  const path = join(ROOT, ...repoPath.split('/'));
+  const acceptsLine = createFacadeLineChecker(importPrefix);
+  const lines = readText(path).split(/\r?\n/);
+  lines.forEach((line, index) => {
+    if (!acceptsLine(line)) {
+      failures.push({
+        path,
+        line: index + 1,
+        message: reason,
+      });
+    }
+  });
+
+  if (!acceptsLine.isComplete()) {
+    failures.push({
+      path,
+      line: lines.length,
+      message: `${reason}; unterminated pub use block`,
+    });
+  }
+}
+
+function checkForbiddenContent(repoPath, patterns) {
+  const path = join(ROOT, ...repoPath.split('/'));
+  const lines = readText(path).split(/\r?\n/);
+  lines.forEach((line, index) => {
+    for (const pattern of patterns) {
+      if (pattern.regex.test(line)) {
+        failures.push({
+          path,
+          line: index + 1,
+          message: pattern.message,
+        });
+      }
+    }
+  });
+}
+
+if (process.env.BITFUN_BOUNDARY_CHECK_SELF_TEST === '1') {
+  runManifestParserSelfTest();
+  console.log('Core boundary check self-test passed.');
+  process.exit(0);
+}
+
+for (const crateName of noCoreDependencyCrates) {
+  const crateDir = join(ROOT, 'src', 'crates', crateName);
+  checkCargoManifest(crateDir);
+  checkRustImports(crateDir);
+}
+
+for (const rule of lightweightBoundaryRules) {
+  const crateDir = join(ROOT, 'src', 'crates', rule.crateName);
+  const messageForDep = (dep) => `${rule.reason}; forbidden dependency: ${dep}`;
+  checkForbiddenManifestDeps(crateDir, rule.forbiddenDeps, messageForDep);
+  checkForbiddenRustImports(crateDir, rule.forbiddenDeps, messageForDep);
+}
+
+for (const facade of facadeOnlyFiles) {
+  checkFacadeOnlyFile(facade.path, facade.importPrefix, facade.reason);
+}
+
+for (const rule of forbiddenContentRules) {
+  checkForbiddenContent(rule.path, rule.patterns);
+}
+
+if (failures.length > 0) {
+  console.error('Core boundary check failed.');
+  for (const failure of failures) {
+    console.error(`${toRepoPath(failure.path)}:${failure.line}: ${failure.message}`);
+  }
+  process.exit(1);
+}
+
+console.log('Core boundary check passed.');
