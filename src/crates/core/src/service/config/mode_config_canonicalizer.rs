@@ -460,6 +460,7 @@ mod tests {
     use super::{
         canonicalize_mode_config, normalize_skill_override_lists, stored_mode_from_overrides,
     };
+    use serde_json::Value;
     use std::collections::HashSet;
 
     #[test]
