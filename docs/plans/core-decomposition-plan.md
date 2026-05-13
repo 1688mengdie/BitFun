@@ -1531,6 +1531,7 @@ cargo check --workspace
 - 已将 `ToolImageAttachment` 提升到 `bitfun-core-types`，并由 `bitfun-ai-adapters`、`bitfun-agent-tools` 和 `bitfun-core::util::types` 保留旧路径兼容；`bitfun-agent-tools` 不再依赖 `bitfun-ai-adapters`。
 - 已将 `product-domains` 的 `dirs` 依赖限制到 `miniapp` feature，默认 profile 保持轻量。
 - 已补充 `ToolResult` image attachment 序列化 round-trip 测试，以及 tool registry readonly 工具清单快照测试；后续迁移 `ToolUseContext`、registry/provider 或 concrete tool implementation 前必须保持这些基线。
+- PR 1 已开始执行：remote-SSH workspace registry / ambiguous root resolution / legacy state snapshot 已迁入 `bitfun-services-integrations::remote_ssh::RemoteWorkspaceRegistry`，core 仅保留 local assistant path guard 与 SSH manager / file service / terminal manager 组装；announcement state persistence 已迁入 `bitfun-services-integrations::announcement::AnnouncementStateStore`，core 旧 `PathManager` 构造 API 继续委托并映射原错误类型。
 - 本批 dependency profile 基线已验证：
   - `cargo tree -p bitfun-core-types --depth 1 --edges features` 运行时依赖仅显示 `serde`，测试依赖显示 `serde_json`。
   - `cargo tree -p bitfun-runtime-ports --depth 1 --edges features` 仅显示 `async-trait`、`serde`、`serde_json`。
@@ -1561,6 +1562,16 @@ cargo check --workspace
 - `services-integrations` 的 feature group 互相强耦合，无法单独 check。
 - tool registry 迁移后工具清单无法证明等价。
 - 新 owner crate 反向依赖 core。
+
+**剩余工作压缩为 5 个 PR（2026-05-13）：**
+
+1. `services-integrations` runtime 收口：迁移 remote-SSH 中不直接持有 SSH channel / SFTP / terminal handle 的 workspace registry、session mirror 与轻量 runtime helper；继续保留 SSH manager / remote FS / remote terminal 的 core-owned assembly，直到 port/provider 合约明确。`file-watch` 已由 `services-integrations` 拥有，只做 contract 复核；announcement 只迁移不依赖 config service / embedded content / remote fetch 的 state 或 eligibility helper。验收重点是 owner crate contract test、旧路径 facade、boundary check、workspace check/test。
+2. MCP runtime 与 dynamic tools：迁移 MCP config service orchestration、server process / transport lifecycle、adapter、dynamic tool/resource/prompt provider；不混入 remote-connect 或 tool registry owner 化。验收重点是 MCP wire shape、auth/config merge、dynamic manifest 快照和 core registry 集成等价。
+3. remote-connect runtime：通过 `AgentSubmissionPort`、`SessionTranscriptReader`、`EventSink` 等 port 合约迁移 remote-connect / relay-facing runtime。验收重点是 message contract、session submission、remote control 同步与无真实网络依赖的 integration test。
+4. agent tools + `tool-packs` owner 化：`ToolUseContext` port 化、tool registry/provider 化、concrete tool implementation 按 feature group 迁移；必须保持 builtin/readonly/dynamic manifest、snapshot wrapping、runtime restrictions、cancellation 与 Deep Review tool flow 等价。
+5. `product-domains` runtime + core facade finalization：迁移 miniapp runtime/compiler/builtin 与 function-agent 运行逻辑，最后把 `bitfun-core` 收敛为 facade + product runtime assembly；不在本 PR 中修改 `bitfun-core default = []` 或 per-product feature matrix。
+
+`bitfun-core default = []`、per-product feature set、构建矩阵和 release 能力调整仍作为重构完成后的独立评估，不计入上述 5 个 PR。
 
 ### 里程碑三：facade 收敛、边界强制与可选默认轻量化评估
 
@@ -1640,20 +1651,21 @@ git diff -- package.json scripts/dev.cjs scripts/desktop-tauri-build.mjs scripts
 
 ## 11. 推荐 PR 顺序
 
-1. 文档与基线护栏。
-2. `product-full` feature 安全网，不改变 default 行为。
-3. 移动 nested `terminal-core` 和 `tool-runtime` 到 workspace 顶层。
-4. 抽取 `bitfun-core-types`，先放错误和第一批稳定 DTO。
-5. 抽取 `bitfun-agent-stream`，迁移 stream processor 测试。
-6. 引入 runtime ports 初始边界；后续在 service 迁移中逐步打断 `service <-> agentic` concrete 循环。
-7. 抽取 `bitfun-services-core`。
-8. 抽取 `bitfun-services-integrations` 的低风险 feature group 和纯 helper，先闭环 `git`、remote-SSH contract/helper、MCP 纯 protocol/config/auth helper；不把 remote-connect 或 MCP dynamic runtime 顺带迁入。
-9. 前移低风险保护项：dependency profile / feature graph 基线、轻量 contract crate 依赖瘦身、feature group 说明、boundary check 扩展、迁移前快照测试。
-10. 拆解 agent tools 为 `bitfun-agent-tools` 和 `bitfun-tool-packs` 的 contract/provider 前置层；先锁定工具清单、dynamic provider metadata、snapshot wrapper 等价，再评估 `ToolUseContext` 和具体工具实现外移。
-11. 抽取 `bitfun-product-domains` 的纯 DTO / policy / builder 层；miniapp runtime/compiler/builtin 和 function-agent 运行逻辑必须作为单独高风险迁移评审。
-12. 分批迁移高风险 runtime：remote-SSH runtime、MCP runtime、remote-connect、tool registry/provider、miniapp/function-agent runtime、agent registry。每批只处理一个 owner，先补 port/provider 设计和等价测试。
-13. 将 `bitfun-core` 收敛为 facade + product runtime assembly，并验证它不再承载新的业务实现。
-14. 只有在全产品显式启用完整 runtime、dependency profile 证明收益、完整门禁通过后，单独评估 `bitfun-core default = []` 或 per-product feature set。
+1. 已完成：文档与基线护栏。
+2. 已完成：`product-full` feature 安全网，不改变 default 行为。
+3. 已完成：移动 nested `terminal-core` 和 `tool-runtime` 到 workspace 顶层。
+4. 已完成：抽取 `bitfun-core-types`，先放错误和第一批稳定 DTO。
+5. 已完成：抽取 `bitfun-agent-stream`，迁移 stream processor 测试。
+6. 已完成：引入 runtime ports 初始边界；后续在 service 迁移中逐步打断 `service <-> agentic` concrete 循环。
+7. 已完成：抽取 `bitfun-services-core`。
+8. 已完成：抽取 `bitfun-services-integrations` 的低风险 feature group 和纯 helper，闭环 `git`、remote-SSH contract/helper、MCP 纯 protocol/config/auth helper；未把 remote-connect 或 MCP dynamic runtime 顺带迁入。
+9. 已完成：前移低风险保护项：dependency profile / feature graph 基线、轻量 contract crate 依赖瘦身、feature group 说明、boundary check 扩展、迁移前快照测试。
+10. 进行中：PR 1 `services-integrations` runtime 收口，先处理 remote-SSH workspace registry / session mirror helper 和已迁移 file-watch 的 contract 复核；announcement 仅迁移无 config/content/remote fetch 依赖的 helper。
+11. 待执行：PR 2 MCP runtime 与 dynamic tools。
+12. 待执行：PR 3 remote-connect runtime。
+13. 待执行：PR 4 agent tools + `tool-packs` owner 化。
+14. 待执行：PR 5 `product-domains` runtime + core facade finalization。
+15. 后续独立评估：`bitfun-core default = []` 或 per-product feature set。
 
 冗余清理 PR 不进入上述主线序号。只有在满足 `0A.6` 的绝对等价要求时，才可以插入到相邻里程碑之间，并且不得与主线拆分 PR 混合。
 

@@ -12,7 +12,7 @@ pub use bitfun_services_integrations::remote_ssh::{
     remote_root_to_mirror_subpath, remote_workspace_stable_id,
     sanitize_remote_mirror_path_component, sanitize_ssh_connection_id_for_local_dir,
     sanitize_ssh_hostname_for_mirror, unresolved_remote_session_storage_key, workspace_logical_key,
-    LOCAL_WORKSPACE_SSH_HOST,
+    RemoteWorkspaceEntry, RemoteWorkspaceRegistry, RemoteWorkspaceState, LOCAL_WORKSPACE_SSH_HOST,
 };
 use dunce::canonicalize;
 use std::path::{Path, PathBuf};
@@ -180,59 +180,12 @@ pub fn unresolved_remote_session_storage_dir(
         .join("sessions")
 }
 
-fn remote_path_is_under_root(path: &str, root: &str) -> bool {
-    if path == root {
-        return true;
-    }
-    if root == "/" {
-        return path.starts_with('/') && path != "/";
-    }
-    path.starts_with(&format!("{}/", root))
-}
-
-fn registration_matches_path(reg: &RegisteredRemoteWorkspace, path_norm: &str) -> bool {
-    path_norm == reg.remote_root || remote_path_is_under_root(path_norm, &reg.remote_root)
-}
-
-/// A single registered remote workspace entry.
-#[derive(Debug, Clone)]
-pub struct RemoteWorkspaceEntry {
-    pub connection_id: String,
-    pub connection_name: String,
-    /// SSH `host` from connection config (or best-effort label for mirror paths).
-    pub ssh_host: String,
-    /// Normalized remote workspace root this registration applies to.
-    pub remote_root: String,
-}
-
-// ── Legacy compat alias (used by a handful of call-sites that still read
-//    the old struct shape).  Will be removed once every consumer is migrated.
-/// Legacy alias – prefer `RemoteWorkspaceEntry` + `lookup_connection`.
-#[derive(Clone)]
-pub struct RemoteWorkspaceState {
-    pub is_active: bool,
-    pub connection_id: Option<String>,
-    pub remote_path: Option<String>,
-    pub connection_name: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-struct RegisteredRemoteWorkspace {
-    connection_id: String,
-    remote_root: String,
-    connection_name: String,
-    ssh_host: String,
-}
-
 /// Global remote workspace state manager.
 ///
 /// Registrations are keyed logically by **`(connection_id, remote_root)`** so the same
 /// POSIX path on different SSH hosts never collides.
 pub struct RemoteWorkspaceStateManager {
-    registrations: Arc<RwLock<Vec<RegisteredRemoteWorkspace>>>,
-    /// Disambiguates file APIs when multiple registrations share the same remote root
-    /// (e.g. two servers at `/`). Updated when the user focuses a remote workspace tab.
-    active_connection_hint: Arc<RwLock<Option<String>>>,
+    registry: RemoteWorkspaceRegistry,
     /// SSH connection manager (shared across all workspaces).
     ssh_manager: Arc<RwLock<Option<SSHConnectionManager>>>,
     /// Remote file service (shared).
@@ -250,8 +203,7 @@ impl Default for RemoteWorkspaceStateManager {
 impl RemoteWorkspaceStateManager {
     pub fn new() -> Self {
         Self {
-            registrations: Arc::new(RwLock::new(Vec::new())),
-            active_connection_hint: Arc::new(RwLock::new(None)),
+            registry: RemoteWorkspaceRegistry::new(),
             ssh_manager: Arc::new(RwLock::new(None)),
             file_service: Arc::new(RwLock::new(None)),
             terminal_manager: Arc::new(RwLock::new(None)),
@@ -274,7 +226,9 @@ impl RemoteWorkspaceStateManager {
 
     /// Prefer this SSH `connection_id` when resolving an ambiguous remote path.
     pub async fn set_active_connection_hint(&self, connection_id: Option<String>) {
-        *self.active_connection_hint.write().await = connection_id;
+        self.registry
+            .set_active_connection_hint(connection_id)
+            .await;
     }
 
     // ── Registry API ───────────────────────────────────────────────
@@ -287,23 +241,16 @@ impl RemoteWorkspaceStateManager {
         connection_name: String,
         ssh_host: String,
     ) {
-        let remote_root = normalize_remote_workspace_path(&remote_path);
-        let ssh_host = ssh_host.trim().to_string();
-        let mut guard = self.registrations.write().await;
-        guard.retain(|r| !(r.connection_id == connection_id && r.remote_root == remote_root));
-        guard.push(RegisteredRemoteWorkspace {
-            connection_id,
-            remote_root,
-            connection_name,
-            ssh_host,
-        });
+        self.registry
+            .register_remote_workspace(remote_path, connection_id, connection_name, ssh_host)
+            .await;
     }
 
     /// Remove the registration for this **exact** SSH connection + remote root.
     pub async fn unregister_remote_workspace(&self, connection_id: &str, remote_path: &str) {
-        let remote_root = normalize_remote_workspace_path(remote_path);
-        let mut guard = self.registrations.write().await;
-        guard.retain(|r| !(r.connection_id == connection_id && r.remote_root == remote_root));
+        self.registry
+            .unregister_remote_workspace(connection_id, remote_path)
+            .await;
     }
 
     /// Look up the connection info for a given remote path.
@@ -323,59 +270,15 @@ impl RemoteWorkspaceStateManager {
             get_path_manager_arc().is_local_assistant_workspace_path(path);
         if is_local_assistant_path {
             let preferred_connection_id = preferred_connection_id?;
-            let guard = self.registrations.read().await;
-            let registration = guard
-                .iter()
-                .find(|r| r.connection_id == preferred_connection_id)?;
-            return Some(RemoteWorkspaceEntry {
-                connection_id: registration.connection_id.clone(),
-                connection_name: registration.connection_name.clone(),
-                ssh_host: registration.ssh_host.clone(),
-                remote_root: registration.remote_root.clone(),
-            });
+            return self
+                .registry
+                .lookup_by_connection_id(preferred_connection_id)
+                .await;
         }
 
-        let path_norm = normalize_remote_workspace_path(path);
-        let hint = self.active_connection_hint.read().await.clone();
-        let guard = self.registrations.read().await;
-
-        let mut candidates: Vec<&RegisteredRemoteWorkspace> = guard
-            .iter()
-            .filter(|r| registration_matches_path(r, &path_norm))
-            .collect();
-
-        if let Some(pref) = preferred_connection_id {
-            candidates.retain(|r| r.connection_id == pref);
-        }
-
-        let best_len = candidates.iter().map(|r| r.remote_root.len()).max()?;
-        candidates.retain(|r| r.remote_root.len() == best_len);
-
-        if candidates.is_empty() {
-            return None;
-        }
-        if candidates.len() == 1 {
-            let r = candidates[0];
-            return Some(RemoteWorkspaceEntry {
-                connection_id: r.connection_id.clone(),
-                connection_name: r.connection_name.clone(),
-                ssh_host: r.ssh_host.clone(),
-                remote_root: r.remote_root.clone(),
-            });
-        }
-
-        if let Some(ref h) = hint {
-            if let Some(r) = candidates.iter().find(|r| r.connection_id == *h) {
-                return Some(RemoteWorkspaceEntry {
-                    connection_id: r.connection_id.clone(),
-                    connection_name: r.connection_name.clone(),
-                    ssh_host: r.ssh_host.clone(),
-                    remote_root: r.remote_root.clone(),
-                });
-            }
-        }
-
-        None
+        self.registry
+            .lookup_connection(path, preferred_connection_id)
+            .await
     }
 
     /// True if `path` could belong to **any** registered remote root (before disambiguation).
@@ -383,16 +286,12 @@ impl RemoteWorkspaceStateManager {
         if get_path_manager_arc().is_local_assistant_workspace_path(path) {
             return false;
         }
-        let path_norm = normalize_remote_workspace_path(path);
-        let guard = self.registrations.read().await;
-        guard
-            .iter()
-            .any(|r| registration_matches_path(r, &path_norm))
+        self.registry.is_remote_path(path).await
     }
 
     /// Returns `true` if at least one remote workspace is registered.
     pub async fn has_any(&self) -> bool {
-        !self.registrations.read().await.is_empty()
+        self.registry.has_any().await
     }
 
     // ── Legacy compat ──────────────────────────────────────────────
@@ -412,29 +311,13 @@ impl RemoteWorkspaceStateManager {
     /// **Compat** — old code calls `deactivate_remote_workspace`.
     /// Clears all registrations and the active hint (use sparingly).
     pub async fn deactivate_remote_workspace(&self) {
-        self.registrations.write().await.clear();
-        *self.active_connection_hint.write().await = None;
+        self.registry.clear().await;
     }
 
     /// **Compat** — returns a snapshot shaped like the old single-workspace
     /// state.  Picks the *first* registered workspace.
     pub async fn get_state(&self) -> RemoteWorkspaceState {
-        let guard = self.registrations.read().await;
-        if let Some(r) = guard.first() {
-            RemoteWorkspaceState {
-                is_active: true,
-                connection_id: Some(r.connection_id.clone()),
-                remote_path: Some(r.remote_root.clone()),
-                connection_name: Some(r.connection_name.clone()),
-            }
-        } else {
-            RemoteWorkspaceState {
-                is_active: false,
-                connection_id: None,
-                remote_path: None,
-                connection_name: None,
-            }
-        }
+        self.registry.get_state().await
     }
 
     /// **Compat** — returns true if any workspace is registered.

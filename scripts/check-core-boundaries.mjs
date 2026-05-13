@@ -583,6 +583,39 @@ const forbiddenContentRules = [
         regex: /\bpub fn unresolved_remote_session_storage_key\b/,
         message: 'core remote SSH workspace runtime must not redefine unresolved session keys; use the integrations contract',
       },
+      {
+        regex: /\bstruct RegisteredRemoteWorkspace\b/,
+        message: 'core remote SSH workspace runtime must not own workspace registrations; use the integrations registry',
+      },
+      {
+        regex: /\bpub struct RemoteWorkspaceEntry\b/,
+        message: 'core remote SSH workspace runtime must not redefine workspace entries; use the integrations registry',
+      },
+      {
+        regex: /\bpub struct RemoteWorkspaceState\b/,
+        message: 'core remote SSH workspace runtime must not redefine legacy workspace state; use the integrations registry',
+      },
+      {
+        regex: /\bregistration_matches_path\b/,
+        message: 'core remote SSH workspace runtime must not own path-to-registration matching; use the integrations registry',
+      },
+    ],
+  },
+  {
+    path: 'src/crates/core/src/service/announcement/state_store.rs',
+    patterns: [
+      {
+        regex: /\btokio::fs\b/,
+        message: 'core announcement state store facade must not own filesystem persistence; use the integrations state store',
+      },
+      {
+        regex: /\bserde_json::to_string_pretty\b/,
+        message: 'core announcement state store facade must not own state serialization; use the integrations state store',
+      },
+      {
+        regex: /\bserde_json::from_str\b/,
+        message: 'core announcement state store facade must not own state deserialization; use the integrations state store',
+      },
     ],
   },
 ];
@@ -854,12 +887,23 @@ function runManifestParserSelfTest() {
     'local_workspace_stable_storage_id',
     'remote_workspace_stable_id',
     'unresolved_remote_session_storage_key',
+    'RegisteredRemoteWorkspace',
+    'RemoteWorkspaceEntry',
+    'RemoteWorkspaceState',
+    'registration_matches_path',
   ];
   const ruleText = remoteWorkspaceRule.patterns.map((pattern) => pattern.regex.source).join('\n');
   for (const helper of remoteWorkspaceHelpers) {
     if (!ruleText.includes(helper)) {
       throw new Error(`remote SSH workspace boundary rule must forbid helper: ${helper}`);
     }
+  }
+
+  const announcementStateStoreRule = forbiddenContentRules.find(
+    (rule) => rule.path === 'src/crates/core/src/service/announcement/state_store.rs',
+  );
+  if (!announcementStateStoreRule) {
+    throw new Error('missing announcement state store boundary rule');
   }
 
   const mcpProcessRule = forbiddenContentRules.find(

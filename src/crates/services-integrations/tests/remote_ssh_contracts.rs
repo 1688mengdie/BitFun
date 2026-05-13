@@ -5,8 +5,8 @@ use bitfun_services_integrations::remote_ssh::{
     remote_root_to_mirror_subpath, remote_workspace_stable_id,
     sanitize_remote_mirror_path_component, sanitize_ssh_connection_id_for_local_dir,
     sanitize_ssh_hostname_for_mirror, unresolved_remote_session_storage_key, workspace_logical_key,
-    RemoteWorkspace, SSHAuthMethod, SSHConnectionConfig, SavedAuthType, SavedConnection,
-    LOCAL_WORKSPACE_SSH_HOST,
+    RemoteWorkspace, RemoteWorkspaceRegistry, SSHAuthMethod, SSHConnectionConfig, SavedAuthType,
+    SavedConnection, LOCAL_WORKSPACE_SSH_HOST,
 };
 
 #[test]
@@ -114,4 +114,69 @@ fn remote_workspace_path_helpers_preserve_current_identity_contract() {
 
     let unresolved_key = unresolved_remote_session_storage_key(" conn-1 ", "/home/u/p");
     assert_eq!(unresolved_key, "d1c72f60fc1b7cb99599cf21");
+}
+
+#[tokio::test]
+async fn remote_workspace_registry_preserves_ambiguous_root_resolution_contract() {
+    let registry = RemoteWorkspaceRegistry::new();
+    registry
+        .register_remote_workspace(
+            "/".to_string(),
+            "conn-a".to_string(),
+            "Server A".to_string(),
+            "host-a".to_string(),
+        )
+        .await;
+    registry
+        .register_remote_workspace(
+            "/".to_string(),
+            "conn-b".to_string(),
+            "Server B".to_string(),
+            "host-b".to_string(),
+        )
+        .await;
+
+    assert!(registry.lookup_connection("/tmp", None).await.is_none());
+
+    registry
+        .set_active_connection_hint(Some("conn-a".to_string()))
+        .await;
+    let hinted = registry.lookup_connection("/tmp", None).await.unwrap();
+    assert_eq!(hinted.connection_id, "conn-a");
+    assert_eq!(hinted.ssh_host, "host-a");
+
+    let preferred = registry
+        .lookup_connection("/tmp", Some("conn-b"))
+        .await
+        .unwrap();
+    assert_eq!(preferred.connection_id, "conn-b");
+    assert_eq!(preferred.ssh_host, "host-b");
+}
+
+#[tokio::test]
+async fn remote_workspace_registry_preserves_legacy_state_and_clear_contract() {
+    let registry = RemoteWorkspaceRegistry::new();
+    assert!(!registry.has_any().await);
+    assert!(!registry.get_state().await.is_active);
+
+    registry
+        .register_remote_workspace(
+            "/repo".to_string(),
+            "conn-1".to_string(),
+            "Dev Server".to_string(),
+            "dev.example.com".to_string(),
+        )
+        .await;
+
+    let state = registry.get_state().await;
+    assert!(state.is_active);
+    assert_eq!(state.connection_id.as_deref(), Some("conn-1"));
+    assert_eq!(state.remote_path.as_deref(), Some("/repo"));
+    assert_eq!(state.connection_name.as_deref(), Some("Dev Server"));
+
+    registry
+        .unregister_remote_workspace("conn-1", "/repo")
+        .await;
+    assert!(!registry.has_any().await);
+    assert!(!registry.get_state().await.is_active);
 }

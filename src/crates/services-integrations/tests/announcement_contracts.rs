@@ -1,8 +1,9 @@
 #![cfg(feature = "announcement")]
 
 use bitfun_services_integrations::announcement::{
-    AnnouncementCard, AnnouncementState, CardSource, CardType, CompletionAction, ModalConfig,
-    ModalPage, ModalSize, PageLayout, ToastConfig, TriggerCondition, TriggerRule,
+    AnnouncementCard, AnnouncementState, AnnouncementStateStore, CardSource, CardType,
+    CompletionAction, ModalConfig, ModalPage, ModalSize, PageLayout, ToastConfig, TriggerCondition,
+    TriggerRule,
 };
 
 #[test]
@@ -100,4 +101,38 @@ fn announcement_state_and_trigger_defaults_preserve_runtime_assumptions() {
         auto_dismiss_ms: None,
     };
     assert!(toast.dismissible);
+}
+
+#[tokio::test]
+async fn announcement_state_store_round_trips_state_and_defaults_missing_file() {
+    let root = std::env::temp_dir().join(format!(
+        "bitfun-announcement-state-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    let store = AnnouncementStateStore::new(&root);
+
+    let missing = store.load().await.expect("load missing state");
+    assert_eq!(missing.last_seen_version, "");
+    assert_eq!(missing.app_open_count, 0);
+    assert!(missing.seen_ids.is_empty());
+    assert!(missing.dismissed_ids.is_empty());
+    assert!(missing.never_show_ids.is_empty());
+    assert_eq!(missing.last_remote_fetch_at, None);
+
+    let mut state = AnnouncementState::default();
+    state.app_open_count = 7;
+    state.seen_ids.insert("feature-a".to_string());
+    state.dismissed_ids.insert("tip-b".to_string());
+    store.save(&state).await.expect("save state");
+
+    let loaded = store.load().await.expect("load saved state");
+    assert_eq!(loaded.app_open_count, 7);
+    assert!(loaded.seen_ids.contains("feature-a"));
+    assert!(loaded.dismissed_ids.contains("tip-b"));
+
+    let _ = std::fs::remove_dir_all(root);
 }
