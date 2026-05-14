@@ -1724,6 +1724,12 @@ impl ChatMode {
             "/mcps" => {
                 self.show_mcp_selector(chat_view, chat_state, rt_handle);
             }
+            "/acp" => {
+                chat_state.add_system_message(crate::acp_cli::acp_help_text("bitfun-cli"));
+                chat_view.set_status(Some(
+                    "ACP setup added to the conversation. You can keep typing.".to_string(),
+                ));
+            }
             "/init" => match crate::prompts::get_cli_prompt("init") {
                 Some(prompt) => {
                     self.send_message_to_agent(

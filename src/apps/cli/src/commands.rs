@@ -53,6 +53,10 @@ pub const COMMAND_SPECS: &[CommandSpec] = &[
         description: "Manage MCP servers",
     },
     CommandSpec {
+        name: "/acp",
+        description: "Show ACP server setup",
+    },
+    CommandSpec {
         name: "/init",
         description: "Explore repo and generate AGENTS.md",
     },
@@ -99,6 +103,10 @@ pub const STARTUP_COMMAND_SPECS: &[CommandSpec] = &[
     CommandSpec {
         name: "/mcps",
         description: "Manage MCP servers",
+    },
+    CommandSpec {
+        name: "/acp",
+        description: "Show ACP server setup",
     },
     CommandSpec {
         name: "/init",
