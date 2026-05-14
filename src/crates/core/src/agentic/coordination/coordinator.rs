@@ -1859,6 +1859,14 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                 run_manifest.to_string(),
             );
         }
+        if user_message_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("acp_transport"))
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false)
+        {
+            context_vars.insert("acp_transport".to_string(), "true".to_string());
+        }
         let session_workspace_path = session_workspace
             .as_ref()
             .map(|workspace| workspace.root_path_string());

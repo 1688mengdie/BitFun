@@ -50,6 +50,12 @@ impl AskUserQuestionTool {
         Self
     }
 
+    fn is_acp_context(context: Option<&ToolUseContext>) -> bool {
+        context
+            .and_then(|ctx| ctx.custom_data.get("acp_transport"))
+            .is_some_and(|value| value == "true" || value == &json!(true))
+    }
+
     /// Validate question format (supports multiple questions)
     fn validate_input(input: &AskUserQuestionInput) -> Result<(), String> {
         // Validate question count
@@ -279,6 +285,10 @@ Usage notes:
         true
     }
 
+    async fn is_available_in_context(&self, context: Option<&ToolUseContext>) -> bool {
+        !Self::is_acp_context(context)
+    }
+
     async fn call_impl(
         &self,
         input: &Value,
@@ -378,5 +388,49 @@ Usage notes:
                 }])
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AskUserQuestionTool;
+    use crate::agentic::tools::framework::{Tool, ToolUseContext};
+    use std::collections::HashMap;
+
+    fn context_with_custom_data(custom_data: HashMap<String, serde_json::Value>) -> ToolUseContext {
+        ToolUseContext {
+            tool_call_id: None,
+            agent_type: None,
+            session_id: None,
+            dialog_turn_id: None,
+            workspace: None,
+            unlocked_collapsed_tools: Vec::new(),
+            custom_data,
+            computer_use_host: None,
+            cancellation_token: None,
+            runtime_tool_restrictions: Default::default(),
+            workspace_services: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn ask_user_question_is_hidden_for_acp_transport() {
+        let tool = AskUserQuestionTool::new();
+        let mut custom_data = HashMap::new();
+        custom_data.insert(
+            "acp_transport".to_string(),
+            serde_json::Value::String("true".to_string()),
+        );
+        let context = context_with_custom_data(custom_data);
+
+        assert!(!tool.is_available_in_context(Some(&context)).await);
+    }
+
+    #[tokio::test]
+    async fn ask_user_question_remains_available_without_acp_transport() {
+        let tool = AskUserQuestionTool::new();
+        let context = context_with_custom_data(HashMap::new());
+
+        assert!(tool.is_available_in_context(Some(&context)).await);
     }
 }
