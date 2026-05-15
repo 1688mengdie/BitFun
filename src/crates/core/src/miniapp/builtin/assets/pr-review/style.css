@@ -467,9 +467,16 @@ button:disabled {
 }
 
 .pr-token-badge.is-ready,
+.pr-chip.is-ready,
 .pr-chip.is-ok {
   color: var(--pr-green);
   border-color: color-mix(in srgb, var(--pr-green) 32%, var(--pr-line));
+}
+
+.pr-chip.is-draft {
+  color: var(--pr-amber);
+  border-color: color-mix(in srgb, var(--pr-amber) 34%, var(--pr-line));
+  background: color-mix(in srgb, var(--pr-amber) 10%, transparent);
 }
 
 .pr-chip.is-bad {
@@ -965,7 +972,10 @@ button:disabled {
 }
 
 .pr-file-list {
-  overflow: visible;
+  max-height: min(320px, 45vh);
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding-right: 4px;
   display: grid;
   align-content: start;
   gap: 6px;
@@ -1079,6 +1089,25 @@ button:disabled {
   color: var(--pr-muted);
   font-size: 11px;
   font-weight: 400;
+}
+
+.pr-overview-fold summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.pr-overview-fold summary span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-left: 0;
+}
+
+.pr-overview-fold .pr-description {
+  margin-top: 10px;
 }
 
 .pr-review-row {

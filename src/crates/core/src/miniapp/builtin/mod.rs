@@ -463,6 +463,38 @@ mod tests {
     }
 
     #[test]
+    fn bundled_pr_review_file_switch_preserves_detail_scroll() {
+        let app = BUILTIN_APPS
+            .iter()
+            .find(|app| app.id == "builtin-pr-review")
+            .expect("PR Review must be delivered as a built-in MiniApp");
+
+        assert!(app.ui_js.contains("function readReviewWorkspaceScroll"));
+        assert!(app.ui_js.contains("function restoreReviewWorkspaceScroll"));
+        assert!(app.ui_js.contains("function render(options = {})"));
+        assert!(app.ui_js.contains("options.preserveReviewWorkspaceScroll"));
+        assert!(app.ui_js.contains("render({ preserveReviewWorkspaceScroll: true })"));
+    }
+
+    #[test]
+    fn bundled_pr_review_keeps_review_output_actionable_and_detail_compact() {
+        let app = BUILTIN_APPS
+            .iter()
+            .find(|app| app.id == "builtin-pr-review")
+            .expect("PR Review must be delivered as a built-in MiniApp");
+
+        assert!(app.ui_js.contains("function buildReviewOperations"));
+        assert!(app.ui_js.contains("Do not create a general summary comment"));
+        assert!(app.ui_js.contains("summaryComment only when"));
+        assert!(!app.ui_js.contains("id: `summary-${snapshot.headSha || Date.now()}`"));
+        assert!(app.ui_js.contains("function renderDraftStateChip"));
+        assert!(app.ui_js.contains("pr-overview-fold"));
+        assert!(app.css.contains(".pr-chip.is-draft"));
+        assert!(app.css.contains(".pr-chip.is-ready"));
+        assert!(app.css.contains("max-height: min(320px, 45vh)"));
+    }
+
+    #[test]
     fn builtin_app_content_hash_changes_when_assets_change() {
         let app = BUILTIN_APPS
             .iter()

@@ -162,6 +162,10 @@ const I18N = {
     newHeadTitle: 'New commits on reviewed PR',
     publicRead: 'Public read',
     privateAction: 'Private and write actions',
+    draftStatus: 'Draft',
+    readyStatus: 'Ready',
+    overviewHint: 'Expand for full description.',
+    noActionableFindings: 'No actionable findings were generated. Add a manual comment or edit this review decision before publishing.',
     binary: 'binary',
     large: 'large',
     stale: 'stale',
@@ -314,6 +318,10 @@ const I18N = {
     newHeadTitle: '已审 PR 有新提交',
     publicRead: '公开读取',
     privateAction: '私有与写入操作',
+    draftStatus: '草稿',
+    readyStatus: '可审',
+    overviewHint: '展开查看完整描述。',
+    noActionableFindings: '没有生成可操作问题。发布前可以添加手写评论，或编辑这条 Review 结论。',
     binary: '二进制',
     large: '过大',
     stale: '已过期',
@@ -466,6 +474,10 @@ const I18N = {
     newHeadTitle: '已審 PR 有新提交',
     publicRead: '公開讀取',
     privateAction: '私有與寫入操作',
+    draftStatus: '草稿',
+    readyStatus: '可審',
+    overviewHint: '展開查看完整描述。',
+    noActionableFindings: '沒有生成可操作問題。發布前可以新增手寫評論，或編輯這條 Review 結論。',
     binary: '二進位',
     large: '過大',
     stale: '已過期',
@@ -533,6 +545,25 @@ const state = {
 };
 
 const root = document.getElementById('app');
+
+function readReviewWorkspaceScroll() {
+  const workspace = document.querySelector('.pr-review-workspace');
+  if (!(workspace instanceof HTMLElement)) return null;
+  return {
+    top: workspace.scrollTop,
+    left: workspace.scrollLeft,
+  };
+}
+
+function restoreReviewWorkspaceScroll(position) {
+  if (!position) return;
+  window.requestAnimationFrame(() => {
+    const workspace = document.querySelector('.pr-review-workspace');
+    if (!(workspace instanceof HTMLElement)) return;
+    workspace.scrollTop = position.top;
+    workspace.scrollLeft = position.left;
+  });
+}
 
 function t(key, params = {}) {
   const table = I18N[state.locale] || I18N['en-US'];
@@ -1515,9 +1546,12 @@ function reviewPrompt(snapshot, mode) {
     patch: (file.patch || '').slice(0, mode === 'deep_review' ? 12000 : 5000),
   }));
   return [
-    'You are reviewing a pull request. Produce a concise review comment that can be posted to the PR.',
-    `Depth: ${modeLabel(mode)}. Prefer direct actionable findings over long explanation.`,
-    'Include: summary, key risks, and suggested tests. Do not invent issues not supported by the diff.',
+    'You are reviewing a pull request. Return JSON only with actionable review items.',
+    'Do not create a general summary comment. The reviewed author does not need a recap unless there is a principle-level concern about the PR direction.',
+    'Use summaryComment only when the issue is a principle-level PR direction concern that cannot be tied to a specific file or diff line.',
+    `Depth: ${modeLabel(mode)}. Prefer concrete functionality direction, implementation risks, and missing tests.`,
+    'Schema: {"findings":[{"path":"src/file.ts","position":12,"body":"specific issue"}],"summaryComment":"","decision":"comment","decisionBody":""}.',
+    'Use a 1-based diff position only when you can identify it from the patch. Omit findings that are not supported by the diff.',
     '',
     JSON.stringify({
       title: snapshot.title,
@@ -1532,6 +1566,92 @@ function reviewPrompt(snapshot, mode) {
   ].join('\n');
 }
 
+function extractJsonObject(value) {
+  const text = String(value || '').trim();
+  if (!text) return null;
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  if (start < 0 || end <= start) return null;
+  try {
+    return JSON.parse(text.slice(start, end + 1));
+  } catch {
+    return null;
+  }
+}
+
+function normalizeDecision(value) {
+  return ['approve', 'request_changes', 'comment'].includes(value) ? value : 'comment';
+}
+
+function buildReviewOperations(snapshot, aiText, mode) {
+  const parsed = extractJsonObject(aiText);
+  const timestamp = snapshot.headSha || Date.now();
+  const validPaths = new Set(snapshot.files.map((file) => file.path));
+  const operations = [];
+
+  if (parsed && typeof parsed === 'object') {
+    const summaryComment = String(parsed.summaryComment || '').trim();
+    if (summaryComment) {
+      operations.push({
+        id: `principle-${timestamp}`,
+        kind: 'summary_comment',
+        body: summaryComment,
+        selected: true,
+        stale: false,
+        published: false,
+      });
+    }
+
+    const findings = Array.isArray(parsed.findings) ? parsed.findings : [];
+    for (const finding of findings.slice(0, 12)) {
+      const path = String(finding?.path || '').trim();
+      const body = String(finding?.body || '').trim();
+      const position = Number(finding?.position || 0);
+      if (!path || !body || !validPaths.has(path) || !Number.isFinite(position) || position <= 0) {
+        continue;
+      }
+      operations.push({
+        id: `inline-${timestamp}-${operations.length}`,
+        kind: 'inline_comment',
+        path,
+        position,
+        body,
+        selected: true,
+        stale: false,
+        published: false,
+      });
+    }
+
+    const decisionBody = String(parsed.decisionBody || '').trim();
+    if (decisionBody) {
+      operations.push({
+        id: `decision-${timestamp}`,
+        kind: 'review_decision',
+        body: decisionBody,
+        decision: normalizeDecision(parsed.decision),
+        selected: false,
+        stale: false,
+        published: false,
+      });
+    }
+  }
+
+  if (!operations.length) {
+    operations.push({
+      id: `decision-${timestamp}`,
+      kind: 'review_decision',
+      body: String(aiText || t('noActionableFindings')).trim() || t('noActionableFindings'),
+      decision: 'comment',
+      selected: false,
+      stale: false,
+      published: false,
+      mode,
+    });
+  }
+
+  return operations;
+}
+
 async function generateDraft() {
   const snapshot = selectedSnapshot();
   if (!snapshot) return;
@@ -1540,7 +1660,7 @@ async function generateDraft() {
   try {
     const mode = state.data.mode || recommendMode(snapshot);
     setReviewProgress('reviewStageRead', `${snapshot.files.length} ${t('files')} · ${t('reviewDetailRead')}`, 18);
-    let body = localSummary(snapshot);
+    let reviewText = localSummary(snapshot);
     try {
       const result = await withReviewProgressTicker(
         'reviewStageAi',
@@ -1559,13 +1679,13 @@ async function generateDraft() {
         await finish('reviewCancelled');
         return;
       }
-      if (result?.text) body = result.text.trim();
+      if (result?.text) reviewText = result.text.trim();
     } catch (error) {
       if (state.ui.cancelReviewRequested) {
         await finish('reviewCancelled');
         return;
       }
-      body = `${body}\n\nAI generation was unavailable: ${String(error?.message || error)}`;
+      reviewText = `${reviewText}\n\nAI generation was unavailable: ${String(error?.message || error)}`;
     }
     setReviewProgress('reviewStageBuild', t('reviewDetailBuild'), 92);
     const draft = {
@@ -1573,25 +1693,7 @@ async function generateDraft() {
       headSha: snapshot.headSha,
       mode,
       createdAt: new Date().toISOString(),
-      operations: [
-        {
-          id: `summary-${snapshot.headSha || Date.now()}`,
-          kind: 'summary_comment',
-          body,
-          selected: true,
-          stale: false,
-          published: false,
-        },
-        {
-          id: `decision-${snapshot.headSha || Date.now()}`,
-          kind: 'review_decision',
-          body: 'Reviewed with BitFun PR Review Inbox.',
-          decision: 'comment',
-          selected: false,
-          stale: false,
-          published: false,
-        },
-      ],
+      operations: buildReviewOperations(snapshot, reviewText, mode),
     };
     state.data.drafts[snapshotKey(snapshot)] = draft;
     await finish('statusReady');
@@ -2050,12 +2152,28 @@ function renderInboxItem(item) {
       </span>
       ${excerpt ? `<span class="pr-queue-excerpt">${esc(excerpt)}</span>` : ''}
       <span class="pr-queue-signals">
+        ${renderDraftStateChip(item)}
         <span class="pr-chip">${esc(item.files.length)} ${esc(t('files'))}</span>
         <span class="pr-chip">${esc(lines)} ${esc(t('changedLines'))}</span>
         ${checks.length ? `<span class="pr-chip ${failed ? 'is-bad' : ok ? 'is-ok' : ''}">CI ${esc(failed ? t('failed') : t('success'))}</span>` : ''}
         ${item.stale ? `<span class="pr-chip is-warn">${esc(t('stale'))}</span>` : ''}
       </span>
     </button>
+  `;
+}
+
+function renderDraftStateChip(item) {
+  return `<span class="pr-chip ${item.isDraft ? 'is-draft' : 'is-ready'}">${esc(t(item.isDraft ? 'draftStatus' : 'readyStatus'))}</span>`;
+}
+
+function renderOverviewSection(snapshot) {
+  const body = snapshot.body || t('noBody');
+  const summary = textSnippet(body, 160) || t('overviewHint');
+  return `
+    <details class="pr-review-section pr-fold pr-overview-fold">
+      <summary>${esc(t('overview'))}<span>${esc(summary)}</span></summary>
+      <div class="pr-description">${esc(body)}</div>
+    </details>
   `;
 }
 
@@ -2096,10 +2214,7 @@ function renderReviewWorkspace() {
         <div><strong>${summary.comments}</strong><span>${esc(t('existingReview'))}</span></div>
         <div><strong>${snapshot.checks.length}</strong><span>${esc(t('ciDetails'))}</span></div>
       </div>
-      <section class="pr-review-section">
-        <h3>${esc(t('overview'))}</h3>
-        <div class="pr-description">${esc(snapshot.body || t('noBody'))}</div>
-      </section>
+      ${renderOverviewSection(snapshot)}
       ${renderFilesExplorer(snapshot)}
       <details class="pr-review-section pr-fold">
         <summary>${esc(t('ciDetails'))}<span>${esc(t('ciFolded'))}</span></summary>
@@ -2339,7 +2454,10 @@ function renderConfirm() {
   `;
 }
 
-function render() {
+function render(options = {}) {
+  const reviewWorkspaceScroll = options.preserveReviewWorkspaceScroll
+    ? readReviewWorkspaceScroll()
+    : null;
   root.innerHTML = `
     <main class="pr-shell">
       ${renderCommandBar()}
@@ -2351,6 +2469,9 @@ function render() {
       ${renderConfirm()}
     </main>
   `;
+  if (options.preserveReviewWorkspaceScroll) {
+    restoreReviewWorkspaceScroll(reviewWorkspaceScroll);
+  }
 }
 
 function formatDate(value) {
@@ -2471,7 +2592,7 @@ document.addEventListener('click', (event) => {
     state.ui.focusedDiffPath = null;
     state.ui.focusedDiffPosition = null;
     void saveStorage();
-    render();
+    render({ preserveReviewWorkspaceScroll: true });
   }
   if (action === 'jump-file-target') void jumpToFileTarget(target.dataset.path, target.dataset.position);
   if (action === 'set-mode') {
