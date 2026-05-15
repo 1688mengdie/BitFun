@@ -103,6 +103,125 @@ pub fn build_remote_image_submission_request(
     }
 }
 
+/// Portable image context produced from legacy remote image payloads.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RemoteImageContext {
+    pub id: String,
+    pub image_path: Option<String>,
+    pub data_url: Option<String>,
+    pub mime_type: String,
+    pub metadata: Option<serde_json::Value>,
+}
+
+pub fn build_remote_image_contexts(images: Option<&[ImageAttachment]>) -> Vec<RemoteImageContext> {
+    let Some(images) = images.filter(|images| !images.is_empty()) else {
+        return Vec::new();
+    };
+
+    images
+        .iter()
+        .map(|image| {
+            let mime_type = image
+                .data_url
+                .split_once(',')
+                .and_then(|(header, _)| {
+                    header
+                        .strip_prefix("data:")
+                        .and_then(|rest| rest.split(';').next())
+                })
+                .unwrap_or("image/png")
+                .to_string();
+
+            RemoteImageContext {
+                id: format!("remote_img_{}", uuid::Uuid::new_v4()),
+                image_path: None,
+                data_url: Some(image.data_url.clone()),
+                mime_type,
+                metadata: Some(serde_json::json!({
+                    "name": image.name,
+                    "source": "remote"
+                })),
+            }
+        })
+        .collect()
+}
+
+pub fn resolve_remote_execution_image_contexts<T>(
+    legacy_images: Option<&[ImageAttachment]>,
+    image_contexts: Option<Vec<T>>,
+    legacy_contexts: impl FnOnce(Option<&[ImageAttachment]>) -> Vec<T>,
+) -> Vec<T> {
+    image_contexts.unwrap_or_else(|| legacy_contexts(legacy_images))
+}
+
+pub fn remote_session_restore_target<'a>(
+    session_exists: bool,
+    binding_workspace: Option<&'a str>,
+) -> Option<&'a str> {
+    if session_exists {
+        None
+    } else {
+        binding_workspace
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RemoteCancelDecision {
+    CancelCurrent(String),
+    StaleRequestedTurn,
+    AlreadyFinished,
+    NoRunningTask,
+}
+
+pub fn resolve_remote_cancel_decision(
+    running_turn_id: Option<&str>,
+    requested_turn_id: Option<&str>,
+) -> RemoteCancelDecision {
+    match (running_turn_id, requested_turn_id) {
+        (Some(current_turn_id), Some(req_id)) if req_id != current_turn_id => {
+            RemoteCancelDecision::StaleRequestedTurn
+        }
+        (Some(current_turn_id), _) => {
+            RemoteCancelDecision::CancelCurrent(current_turn_id.to_string())
+        }
+        (None, Some(_)) => RemoteCancelDecision::AlreadyFinished,
+        (None, None) => RemoteCancelDecision::NoRunningTask,
+    }
+}
+
+pub const REMOTE_FILE_MAX_READ_BYTES: u64 = 30 * 1024 * 1024;
+pub const REMOTE_FILE_MAX_CHUNK_BYTES: u64 = 3 * 1024 * 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RemoteFileChunkRange {
+    pub start: usize,
+    pub end: usize,
+    pub chunk_size: u64,
+}
+
+pub fn resolve_remote_file_chunk_range(
+    file_len: usize,
+    offset: u64,
+    limit: u64,
+) -> RemoteFileChunkRange {
+    let actual_limit = limit.min(REMOTE_FILE_MAX_CHUNK_BYTES);
+    let start = (offset as usize).min(file_len);
+    let end = start.saturating_add(actual_limit as usize).min(file_len);
+
+    RemoteFileChunkRange {
+        start,
+        end,
+        chunk_size: (end - start) as u64,
+    }
+}
+
+pub fn remote_file_display_name(name: Option<&str>) -> String {
+    match name {
+        Some(name) if !name.is_empty() => name.to_string(),
+        _ => "file".to_string(),
+    }
+}
+
 pub fn resolve_remote_agent_type(mobile_type: Option<&str>) -> &'static str {
     match mobile_type {
         Some("code") | Some("agentic") | Some("Agentic") => "agentic",

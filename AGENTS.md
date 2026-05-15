@@ -153,11 +153,15 @@ and milestone verification gates.
   reviewed runtime migration exists.
 - Remote-connect port baselines live in `bitfun-runtime-ports` and
   `bitfun-services-integrations`; tracker state and tracker event reduction
-  belong in `bitfun-services-integrations`, while core still owns dispatcher
-  assembly, session restore, terminal pre-warm, and product execution routing.
-  Remote runtime owner migration must preserve the existing migration snapshots
-  for command/response shape, restore, active-turn polling, cancel decisions,
-  image context fallback/preference, tracker fanout, and RemoteRelay/Bot queue
+  belong in `bitfun-services-integrations`. Pure remote image-context
+  fallback/preference, restore-target, cancel-decision, and remote file-transfer
+  size/chunk/name helpers also belong in `bitfun-services-integrations`, while
+  core still owns the adapter back to `ImageContextData`, dispatcher assembly,
+  session restore execution, file IO/path resolution, terminal pre-warm, and
+  product execution routing. Further remote runtime owner migration must
+  preserve the existing migration snapshots for command/response shape,
+  restore, active-turn polling, cancel decisions, image context
+  fallback/preference, tracker fanout, file transfer, and RemoteRelay/Bot queue
   policy.
   `AgentSubmissionPort` still rejects generic attachments until
   image/multimodal equivalence tests and a runtime migration plan are reviewed.

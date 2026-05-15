@@ -40,6 +40,7 @@ sha2 = { workspace = true, optional = true }
 sse-stream = { version = "0.2.1", optional = true }
 thiserror = { workspace = true, optional = true }
 tokio-util = { workspace = true, optional = true }
+uuid = { workspace = true, optional = true }
 
 [target.'cfg(not(windows))'.dependencies]
 git2 = { workspace = true, features = ["vendored-openssl"], optional = true }
@@ -62,7 +63,7 @@ mcp = [
     "rmcp/transport-streamable-http-client-reqwest",
     "sse-stream",
 ]
-remote-connect = ["bitfun-runtime-ports"]
+remote-connect = ["bitfun-runtime-ports", "uuid"]
 remote-ssh = ["dunce", "sha2", "tokio-util"]
 product-full = [
     "announcement",

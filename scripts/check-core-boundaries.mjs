@@ -842,6 +842,34 @@ const forbiddenContentRules = [
         regex: /\bmatch mobile_type\b/,
         message: 'core remote-connect server must not own remote agent type alias mapping; use the integrations helper',
       },
+      {
+        regex: /\bfn resolve_remote_cancel_decision\b/,
+        message: 'core remote-connect server must not own cancel decision policy; use the integrations helper',
+      },
+      {
+        regex: /\benum RemoteCancelDecision\b/,
+        message: 'core remote-connect server must not own cancel decision types; use the integrations contract',
+      },
+      {
+        regex: /\bfn remote_session_restore_target\b/,
+        message: 'core remote-connect server must not own restore-target policy; use the integrations helper',
+      },
+      {
+        regex: /\bfn resolve_remote_execution_image_contexts\b/,
+        message: 'core remote-connect server must not own image-context preference policy; use the integrations helper',
+      },
+      {
+        regex: /\bconst MAX_SIZE\b/,
+        message: 'core remote-connect server must not own remote file max-read policy; use the integrations helper',
+      },
+      {
+        regex: /\bconst MAX_CHUNK\b/,
+        message: 'core remote-connect server must not own remote file chunk policy; use the integrations helper',
+      },
+      {
+        regex: /unwrap_or\("file"\)/,
+        message: 'core remote-connect server must not own remote file display-name fallback; use the integrations helper',
+      },
     ],
   },
   {
@@ -1835,11 +1863,26 @@ function runManifestParserSelfTest() {
         'make_slim_tool_params',
         'handle_agentic_event',
         'resolve_remote_agent_type',
+        'RemoteImageContext',
+        'build_remote_image_contexts',
+        'resolve_remote_execution_image_contexts',
+        'remote_session_restore_target',
+        'RemoteCancelDecision',
+        'resolve_remote_cancel_decision',
+        'REMOTE_FILE_MAX_READ_BYTES',
+        'REMOTE_FILE_MAX_CHUNK_BYTES',
+        'resolve_remote_file_chunk_range',
+        'remote_file_display_name',
       ],
     },
     {
       path: 'src/crates/services-integrations/tests/remote_connect_contracts.rs',
       contracts: [
+        'remote_connect_image_context_policy_preserves_legacy_fallback_shape',
+        'remote_connect_image_context_policy_prefers_explicit_contexts',
+        'remote_connect_cancel_and_restore_policy_preserve_runtime_decisions',
+        'remote_connect_file_transfer_policy_preserves_limits_and_chunk_ranges',
+        'remote_connect_file_transfer_policy_preserves_name_fallback',
         'remote_connect_tracker_keeps_finished_turn_snapshot_until_persistence_finalizes',
         'remote_connect_tracker_ignores_unrelated_direct_session_events',
         'remote_connect_tool_preview_slimming_keeps_short_fields_and_drops_large_strings',
@@ -2284,6 +2327,13 @@ function runManifestParserSelfTest() {
     'RemoteSessionStateTracker',
     'make_slim_params',
     'match mobile_type',
+    'RemoteCancelDecision',
+    'resolve_remote_cancel_decision',
+    'remote_session_restore_target',
+    'resolve_remote_execution_image_contexts',
+    'MAX_SIZE',
+    'MAX_CHUNK',
+    'unwrap_or\\("file"\\)',
   ];
   const remoteConnectRuleText = remoteConnectRule.patterns
     .map((pattern) => pattern.regex.source)

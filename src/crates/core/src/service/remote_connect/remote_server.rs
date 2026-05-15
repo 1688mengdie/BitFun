@@ -21,6 +21,12 @@ pub use bitfun_services_integrations::remote_connect::{
     ImageAttachment, RecentWorkspaceEntry, RemoteSessionStateTracker, RemoteToolStatus,
     SessionInfo, TrackerEvent,
 };
+use bitfun_services_integrations::remote_connect::{
+    REMOTE_FILE_MAX_READ_BYTES, RemoteCancelDecision, RemoteImageContext,
+    build_remote_image_contexts, remote_file_display_name, remote_session_restore_target,
+    resolve_remote_cancel_decision, resolve_remote_execution_image_contexts,
+    resolve_remote_file_chunk_range,
+};
 
 fn current_workspace_path() -> Option<std::path::PathBuf> {
     crate::service::workspace::get_global_workspace_service()
@@ -793,75 +799,27 @@ fn resolve_agent_type(mobile_type: Option<&str>) -> &'static str {
 pub fn images_to_contexts(
     images: Option<&Vec<ImageAttachment>>,
 ) -> Vec<crate::agentic::image_analysis::ImageContextData> {
-    let Some(imgs) = images.filter(|v| !v.is_empty()) else {
-        return Vec::new();
-    };
-    imgs.iter()
-        .map(|img| {
-            let mime_type = img
-                .data_url
-                .split_once(',')
-                .and_then(|(header, _)| {
-                    header
-                        .strip_prefix("data:")
-                        .and_then(|rest| rest.split(';').next())
-                })
-                .unwrap_or("image/png")
-                .to_string();
+    build_core_image_contexts(images.map(Vec::as_slice))
+}
 
-            crate::agentic::image_analysis::ImageContextData {
-                id: format!("remote_img_{}", uuid::Uuid::new_v4()),
-                image_path: None,
-                data_url: Some(img.data_url.clone()),
-                mime_type,
-                metadata: Some(serde_json::json!({
-                    "name": img.name,
-                    "source": "remote"
-                })),
-            }
-        })
+fn build_core_image_contexts(
+    images: Option<&[ImageAttachment]>,
+) -> Vec<crate::agentic::image_analysis::ImageContextData> {
+    build_remote_image_contexts(images)
+        .into_iter()
+        .map(remote_image_context_to_core)
         .collect()
 }
 
-fn resolve_remote_execution_image_contexts(
-    legacy_images: Option<&Vec<ImageAttachment>>,
-    image_contexts: Option<Vec<crate::agentic::image_analysis::ImageContextData>>,
-) -> Vec<crate::agentic::image_analysis::ImageContextData> {
-    image_contexts.unwrap_or_else(|| images_to_contexts(legacy_images))
-}
-
-fn remote_session_restore_target<'a>(
-    session_exists: bool,
-    binding_workspace: Option<&'a str>,
-) -> Option<&'a str> {
-    if session_exists {
-        None
-    } else {
-        binding_workspace
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum RemoteCancelDecision {
-    CancelCurrent(String),
-    StaleRequestedTurn,
-    AlreadyFinished,
-    NoRunningTask,
-}
-
-fn resolve_remote_cancel_decision(
-    running_turn_id: Option<&str>,
-    requested_turn_id: Option<&str>,
-) -> RemoteCancelDecision {
-    match (running_turn_id, requested_turn_id) {
-        (Some(current_turn_id), Some(req_id)) if req_id != current_turn_id => {
-            RemoteCancelDecision::StaleRequestedTurn
-        }
-        (Some(current_turn_id), _) => {
-            RemoteCancelDecision::CancelCurrent(current_turn_id.to_string())
-        }
-        (None, Some(_)) => RemoteCancelDecision::AlreadyFinished,
-        (None, None) => RemoteCancelDecision::NoRunningTask,
+fn remote_image_context_to_core(
+    context: RemoteImageContext,
+) -> crate::agentic::image_analysis::ImageContextData {
+    crate::agentic::image_analysis::ImageContextData {
+        id: context.id,
+        image_path: context.image_path,
+        data_url: context.data_url,
+        mime_type: context.mime_type,
+        metadata: context.metadata,
     }
 }
 
@@ -1450,9 +1408,14 @@ impl RemoteServer {
     async fn handle_read_file(&self, raw_path: &str, session_id: Option<&str>) -> RemoteResponse {
         use crate::service::remote_connect::bot::{WorkspaceFileContent, read_workspace_file};
 
-        const MAX_SIZE: u64 = 30 * 1024 * 1024; // Unified 30 MB cap (Feishu API hard limit)
         let workspace_root = resolve_file_workspace_root(session_id).await;
-        match read_workspace_file(raw_path, MAX_SIZE, workspace_root.as_deref()).await {
+        match read_workspace_file(
+            raw_path,
+            REMOTE_FILE_MAX_READ_BYTES,
+            workspace_root.as_deref(),
+        )
+        .await
+        {
             Ok(WorkspaceFileContent {
                 name,
                 bytes,
@@ -1507,12 +1470,6 @@ impl RemoteServer {
             }
         };
 
-        // Must be divisible by 3 so each intermediate chunk's base64 has no
-        // padding; the client joins chunk base64 strings and `atob()` requires
-        // padding only at the very end.
-        const MAX_CHUNK: u64 = 3 * 1024 * 1024; // 3 MB raw → 4 MB base64
-        let actual_limit = limit.min(MAX_CHUNK);
-
         let bytes = match tokio::fs::read(&abs).await {
             Ok(b) => b,
             Err(e) => {
@@ -1522,24 +1479,19 @@ impl RemoteServer {
             }
         };
 
-        let start = (offset as usize).min(bytes.len());
-        let end = (start + actual_limit as usize).min(bytes.len());
-        let chunk = &bytes[start..end];
+        let range = resolve_remote_file_chunk_range(bytes.len(), offset, limit);
+        let chunk = &bytes[range.start..range.end];
 
         use base64::Engine as _;
         let chunk_base64 = base64::engine::general_purpose::STANDARD.encode(chunk);
 
-        let name = abs
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("file")
-            .to_string();
+        let name = remote_file_display_name(abs.file_name().and_then(|n| n.to_str()));
 
         RemoteResponse::FileChunk {
             name,
             chunk_base64,
             offset,
-            chunk_size: (end - start) as u64,
+            chunk_size: range.chunk_size,
             total_size,
             mime_type: detect_mime_type(&abs).to_string(),
         }
@@ -1582,11 +1534,7 @@ impl RemoteServer {
             }
         };
 
-        let name = abs
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("file")
-            .to_string();
+        let name = remote_file_display_name(abs.file_name().and_then(|n| n.to_str()));
 
         RemoteResponse::FileInfo {
             name,
@@ -2107,8 +2055,9 @@ impl RemoteServer {
             } => {
                 // Unified: prefer image_contexts (new format), fall back to legacy images
                 let resolved_contexts = resolve_remote_execution_image_contexts(
-                    images.as_ref(),
+                    images.as_ref().map(Vec::as_slice),
                     image_contexts.clone(),
+                    build_core_image_contexts,
                 );
                 info!(
                     "Remote send_message: session={session_id}, agent_type={}, image_contexts={}",
@@ -2305,8 +2254,9 @@ mod tests {
         }];
 
         let resolved = resolve_remote_execution_image_contexts(
-            Some(&legacy_images),
+            Some(legacy_images.as_slice()),
             Some(vec![explicit_context.clone()]),
+            build_core_image_contexts,
         );
 
         assert_eq!(resolved.len(), 1);
@@ -2322,7 +2272,11 @@ mod tests {
             data_url: "data:image/png;base64,abc".to_string(),
         }];
 
-        let resolved = resolve_remote_execution_image_contexts(Some(&legacy_images), None);
+        let resolved = resolve_remote_execution_image_contexts(
+            Some(legacy_images.as_slice()),
+            None,
+            build_core_image_contexts,
+        );
 
         assert_eq!(resolved.len(), 1);
         assert!(resolved[0].id.starts_with("remote_img_"));

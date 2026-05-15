@@ -4,10 +4,13 @@ use bitfun_events::{AgenticEvent, ToolEventData};
 use bitfun_runtime_ports::AgentSubmissionSource;
 use bitfun_services_integrations::remote_connect::{
     ChatImageAttachment, ChatMessage, ChatMessageItem, ImageAttachment,
-    RemoteConnectSubmissionSource, RemoteSessionStateTracker, RemoteToolStatus, TrackerEvent,
-    build_remote_image_attachment, build_remote_image_submission_request,
-    build_remote_session_create_request, build_remote_submission_request, make_slim_tool_params,
-    resolve_remote_agent_type,
+    REMOTE_FILE_MAX_CHUNK_BYTES, REMOTE_FILE_MAX_READ_BYTES, RemoteCancelDecision,
+    RemoteConnectSubmissionSource, RemoteImageContext, RemoteSessionStateTracker, RemoteToolStatus,
+    TrackerEvent, build_remote_image_attachment, build_remote_image_contexts,
+    build_remote_image_submission_request, build_remote_session_create_request,
+    build_remote_submission_request, make_slim_tool_params, remote_file_display_name,
+    remote_session_restore_target, resolve_remote_agent_type, resolve_remote_cancel_decision,
+    resolve_remote_execution_image_contexts, resolve_remote_file_chunk_range,
 };
 
 #[test]
@@ -81,6 +84,120 @@ fn remote_connect_image_submission_request_preserves_existing_source_and_turn_sh
         request.attachments[0].metadata["dataUrl"],
         "data:image/png;base64,abc"
     );
+}
+
+#[test]
+fn remote_connect_image_context_policy_preserves_legacy_fallback_shape() {
+    let images = vec![
+        ImageAttachment {
+            name: "clip.png".to_string(),
+            data_url: "data:image/png;base64,abc".to_string(),
+        },
+        ImageAttachment {
+            name: "raw".to_string(),
+            data_url: "not-a-data-url".to_string(),
+        },
+    ];
+
+    let contexts = build_remote_image_contexts(Some(&images));
+
+    assert_eq!(contexts.len(), 2);
+    assert!(contexts[0].id.starts_with("remote_img_"));
+    assert_eq!(contexts[0].image_path, None);
+    assert_eq!(
+        contexts[0].data_url.as_deref(),
+        Some("data:image/png;base64,abc")
+    );
+    assert_eq!(contexts[0].mime_type, "image/png");
+    assert_eq!(contexts[0].metadata.as_ref().unwrap()["name"], "clip.png");
+    assert_eq!(contexts[0].metadata.as_ref().unwrap()["source"], "remote");
+    assert_eq!(contexts[1].mime_type, "image/png");
+}
+
+#[test]
+fn remote_connect_image_context_policy_prefers_explicit_contexts() {
+    let legacy_images = vec![ImageAttachment {
+        name: "legacy.png".to_string(),
+        data_url: "data:image/png;base64,legacy".to_string(),
+    }];
+    let explicit = RemoteImageContext {
+        id: "ctx-1".to_string(),
+        image_path: Some("D:/workspace/project/screenshot.png".to_string()),
+        data_url: None,
+        mime_type: "image/png".to_string(),
+        metadata: Some(serde_json::json!({ "source": "desktop" })),
+    };
+
+    let contexts = resolve_remote_execution_image_contexts(
+        Some(&legacy_images),
+        Some(vec![explicit.clone()]),
+        build_remote_image_contexts,
+    );
+
+    assert_eq!(contexts, vec![explicit]);
+}
+
+#[test]
+fn remote_connect_cancel_and_restore_policy_preserve_runtime_decisions() {
+    assert_eq!(
+        remote_session_restore_target(false, Some("D:/workspace/project")),
+        Some("D:/workspace/project")
+    );
+    assert_eq!(
+        remote_session_restore_target(true, Some("D:/workspace/project")),
+        None
+    );
+    assert_eq!(remote_session_restore_target(false, None), None);
+
+    assert_eq!(
+        resolve_remote_cancel_decision(Some("turn-current"), Some("turn-current")),
+        RemoteCancelDecision::CancelCurrent("turn-current".to_string())
+    );
+    assert_eq!(
+        resolve_remote_cancel_decision(Some("turn-current"), None),
+        RemoteCancelDecision::CancelCurrent("turn-current".to_string())
+    );
+    assert_eq!(
+        resolve_remote_cancel_decision(Some("turn-current"), Some("turn-stale")),
+        RemoteCancelDecision::StaleRequestedTurn
+    );
+    assert_eq!(
+        resolve_remote_cancel_decision(None, Some("turn-finished")),
+        RemoteCancelDecision::AlreadyFinished
+    );
+    assert_eq!(
+        resolve_remote_cancel_decision(None, None),
+        RemoteCancelDecision::NoRunningTask
+    );
+}
+
+#[test]
+fn remote_connect_file_transfer_policy_preserves_limits_and_chunk_ranges() {
+    assert_eq!(REMOTE_FILE_MAX_READ_BYTES, 30 * 1024 * 1024);
+    assert_eq!(REMOTE_FILE_MAX_CHUNK_BYTES, 3 * 1024 * 1024);
+    assert_eq!(REMOTE_FILE_MAX_CHUNK_BYTES % 3, 0);
+
+    let range = resolve_remote_file_chunk_range(10_000_000, 5, REMOTE_FILE_MAX_CHUNK_BYTES + 99);
+    assert_eq!(range.start, 5);
+    assert_eq!(range.end, 5 + REMOTE_FILE_MAX_CHUNK_BYTES as usize);
+    assert_eq!(range.chunk_size, REMOTE_FILE_MAX_CHUNK_BYTES);
+
+    let tail = resolve_remote_file_chunk_range(100, 95, 30);
+    assert_eq!(tail.start, 95);
+    assert_eq!(tail.end, 100);
+    assert_eq!(tail.chunk_size, 5);
+
+    let past_end = resolve_remote_file_chunk_range(100, 150, 30);
+    assert_eq!(past_end.start, 100);
+    assert_eq!(past_end.end, 100);
+    assert_eq!(past_end.chunk_size, 0);
+}
+
+#[test]
+fn remote_connect_file_transfer_policy_preserves_name_fallback() {
+    assert_eq!(remote_file_display_name(Some("report.md")), "report.md");
+    assert_eq!(remote_file_display_name(None), "file");
+    assert_eq!(remote_file_display_name(Some("")), "file");
 }
 
 #[test]
