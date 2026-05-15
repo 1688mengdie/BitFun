@@ -859,6 +859,10 @@ const forbiddenContentRules = [
         message: 'core remote-connect server must not own tracker state; use the integrations tracker',
       },
       {
+        regex: /\bDashMap\b/,
+        message: 'core remote-connect server must not own tracker storage; use the integrations registry',
+      },
+      {
         regex: /\bfn make_slim_params\b/,
         message: 'core remote-connect server must not own remote tool preview slimming; use the integrations helper',
       },
@@ -1968,6 +1972,8 @@ function runManifestParserSelfTest() {
       contracts: [
         'RemoteSessionStateTracker',
         'TrackerEvent',
+        'RemoteSessionTrackerHost',
+        'RemoteSessionTrackerRegistry',
         'make_slim_tool_params',
         'handle_agentic_event',
         'resolve_remote_agent_type',
@@ -2007,6 +2013,7 @@ function runManifestParserSelfTest() {
         'remote_connect_file_transfer_policy_preserves_limits_and_chunk_ranges',
         'remote_connect_file_transfer_policy_preserves_name_fallback',
         'remote_connect_tracker_keeps_finished_turn_snapshot_until_persistence_finalizes',
+        'remote_connect_tracker_registry_owns_lifecycle_without_core_state',
         'remote_connect_tracker_ignores_unrelated_direct_session_events',
         'remote_connect_tool_preview_slimming_keeps_short_fields_and_drops_large_strings',
       ],
@@ -2478,6 +2485,7 @@ function runManifestParserSelfTest() {
     'TrackerState',
     'TrackerEvent',
     'RemoteSessionStateTracker',
+    'DashMap',
     'make_slim_params',
     'match mobile_type',
     'RemoteCancelDecision',

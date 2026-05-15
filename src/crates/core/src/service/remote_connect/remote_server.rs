@@ -9,7 +9,6 @@
 //! incremental updates (new messages + current active turn snapshot).
 
 use anyhow::{anyhow, Result};
-use dashmap::DashMap;
 use log::{debug, error, info};
 use serde_json::Value;
 use std::sync::{Arc, OnceLock};
@@ -20,7 +19,8 @@ use bitfun_services_integrations::remote_connect::{
     remote_no_change_poll_response, remote_persisted_poll_response, remote_session_restore_target,
     remote_snapshot_poll_response, resolve_remote_cancel_decision,
     resolve_remote_execution_image_contexts, resolve_remote_file_chunk_range, RemoteCancelDecision,
-    RemoteImageContext, REMOTE_FILE_MAX_READ_BYTES,
+    RemoteImageContext, RemoteSessionTrackerHost, RemoteSessionTrackerRegistry,
+    REMOTE_FILE_MAX_READ_BYTES,
 };
 pub use bitfun_services_integrations::remote_connect::{
     ActiveTurnSnapshot, AssistantEntry, ChatImageAttachment, ChatMessage, ChatMessageItem,
@@ -583,13 +583,50 @@ impl crate::agentic::events::EventSubscriber for Arc<RemoteSessionStateTracker> 
     }
 }
 
+struct CoreRemoteSessionTrackerHost;
+
+impl RemoteSessionTrackerHost for CoreRemoteSessionTrackerHost {
+    fn subscribe_tracker(&self, session_id: &str, tracker: Arc<RemoteSessionStateTracker>) {
+        if let Some(coordinator) = crate::agentic::coordination::get_global_coordinator() {
+            let sub_id = format!("remote_tracker_{}", session_id);
+            coordinator.subscribe_internal(sub_id, tracker);
+            info!("Registered state tracker for session {session_id}");
+        }
+    }
+
+    fn unsubscribe_tracker(&self, session_id: &str) {
+        if let Some(coordinator) = crate::agentic::coordination::get_global_coordinator() {
+            let sub_id = format!("remote_tracker_{}", session_id);
+            coordinator.unsubscribe_internal(&sub_id);
+        }
+    }
+
+    fn active_turn_id(&self, session_id: &str) -> Option<String> {
+        let coordinator = crate::agentic::coordination::get_global_coordinator()?;
+        let session_mgr = coordinator.get_session_manager();
+        let session = session_mgr.get_session(session_id)?;
+        match &session.state {
+            crate::agentic::core::SessionState::Processing {
+                current_turn_id, ..
+            } => {
+                info!(
+                    "Seeded tracker with existing active turn {} for session {}",
+                    current_turn_id, session_id
+                );
+                Some(current_turn_id.clone())
+            }
+            _ => None,
+        }
+    }
+}
+
 // ── RemoteExecutionDispatcher (global singleton) ────────────────────
 
 /// Shared dispatch layer that owns the session state trackers.
 /// Both `RemoteServer` (mobile relay) and the bot use this to
 /// dispatch commands through the same path.
 pub struct RemoteExecutionDispatcher {
-    state_trackers: Arc<DashMap<String, Arc<RemoteSessionStateTracker>>>,
+    tracker_registry: RemoteSessionTrackerRegistry,
 }
 
 static GLOBAL_DISPATCHER: OnceLock<Arc<RemoteExecutionDispatcher>> = OnceLock::new();
@@ -598,7 +635,7 @@ pub fn get_or_init_global_dispatcher() -> Arc<RemoteExecutionDispatcher> {
     GLOBAL_DISPATCHER
         .get_or_init(|| {
             Arc::new(RemoteExecutionDispatcher {
-                state_trackers: Arc::new(DashMap::new()),
+                tracker_registry: RemoteSessionTrackerRegistry::new(),
             })
         })
         .clone()
@@ -618,48 +655,17 @@ impl RemoteExecutionDispatcher {
     /// `DialogTurnStarted` event and the mobile would see no active-turn
     /// overlay until the turn completes.
     pub fn ensure_tracker(&self, session_id: &str) -> Arc<RemoteSessionStateTracker> {
-        if let Some(tracker) = self.state_trackers.get(session_id) {
-            return tracker.clone();
-        }
-
-        let tracker = Arc::new(RemoteSessionStateTracker::new(session_id.to_string()));
-        self.state_trackers
-            .insert(session_id.to_string(), tracker.clone());
-
-        if let Some(coordinator) = crate::agentic::coordination::get_global_coordinator() {
-            let sub_id = format!("remote_tracker_{}", session_id);
-            coordinator.subscribe_internal(sub_id, tracker.clone());
-            info!("Registered state tracker for session {session_id}");
-
-            let session_mgr = coordinator.get_session_manager();
-            if let Some(session) = session_mgr.get_session(session_id) {
-                if let crate::agentic::core::SessionState::Processing {
-                    current_turn_id, ..
-                } = &session.state
-                {
-                    tracker.initialize_active_turn(current_turn_id.clone());
-                    info!(
-                        "Seeded tracker with existing active turn {} for session {}",
-                        current_turn_id, session_id
-                    );
-                }
-            }
-        }
-
-        tracker
+        self.tracker_registry
+            .ensure_tracker_with_host(session_id, &CoreRemoteSessionTrackerHost)
     }
 
     pub fn get_tracker(&self, session_id: &str) -> Option<Arc<RemoteSessionStateTracker>> {
-        self.state_trackers.get(session_id).map(|t| t.clone())
+        self.tracker_registry.get_tracker(session_id)
     }
 
     pub fn remove_tracker(&self, session_id: &str) {
-        if let Some((_, _)) = self.state_trackers.remove(session_id) {
-            if let Some(coordinator) = crate::agentic::coordination::get_global_coordinator() {
-                let sub_id = format!("remote_tracker_{}", session_id);
-                coordinator.unsubscribe_internal(&sub_id);
-            }
-        }
+        self.tracker_registry
+            .remove_tracker_with_host(session_id, &CoreRemoteSessionTrackerHost);
     }
 
     /// Dispatch a SendMessage command: ensure tracker, restore session, submit via

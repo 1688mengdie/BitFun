@@ -9,8 +9,9 @@ use bitfun_runtime_ports::{
     AgentInputAttachment, AgentSessionCreateRequest, AgentSubmissionRequest, AgentSubmissionSource,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -1218,6 +1219,71 @@ impl RemoteSessionStateTracker {
             }
             _ => {}
         }
+    }
+}
+
+/// Host callbacks required to bind tracker lifecycle to the owning product runtime.
+///
+/// `services-integrations` owns tracker storage and lifecycle shape, while core
+/// remains responsible for subscribing to concrete agent events and reading
+/// in-memory active-turn state.
+pub trait RemoteSessionTrackerHost {
+    fn subscribe_tracker(&self, session_id: &str, tracker: Arc<RemoteSessionStateTracker>);
+    fn unsubscribe_tracker(&self, session_id: &str);
+    fn active_turn_id(&self, session_id: &str) -> Option<String>;
+}
+
+#[derive(Default)]
+pub struct RemoteSessionTrackerRegistry {
+    state_trackers: RwLock<HashMap<String, Arc<RemoteSessionStateTracker>>>,
+}
+
+impl RemoteSessionTrackerRegistry {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn ensure_tracker_with_host<H: RemoteSessionTrackerHost>(
+        &self,
+        session_id: &str,
+        host: &H,
+    ) -> Arc<RemoteSessionStateTracker> {
+        if let Some(tracker) = self.get_tracker(session_id) {
+            return tracker;
+        }
+
+        let tracker = {
+            let mut trackers = self.state_trackers.write().unwrap();
+            if let Some(tracker) = trackers.get(session_id) {
+                return tracker.clone();
+            }
+            let tracker = Arc::new(RemoteSessionStateTracker::new(session_id.to_string()));
+            trackers.insert(session_id.to_string(), tracker.clone());
+            tracker
+        };
+
+        host.subscribe_tracker(session_id, tracker.clone());
+        if let Some(active_turn_id) = host.active_turn_id(session_id) {
+            tracker.initialize_active_turn(active_turn_id);
+        }
+
+        tracker
+    }
+
+    pub fn get_tracker(&self, session_id: &str) -> Option<Arc<RemoteSessionStateTracker>> {
+        self.state_trackers.read().unwrap().get(session_id).cloned()
+    }
+
+    pub fn remove_tracker_with_host<H: RemoteSessionTrackerHost>(
+        &self,
+        session_id: &str,
+        host: &H,
+    ) -> Option<Arc<RemoteSessionStateTracker>> {
+        let removed = self.state_trackers.write().unwrap().remove(session_id);
+        if removed.is_some() {
+            host.unsubscribe_tracker(session_id);
+        }
+        removed
     }
 }
 

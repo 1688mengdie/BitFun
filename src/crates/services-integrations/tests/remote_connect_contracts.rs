@@ -14,8 +14,10 @@ use bitfun_services_integrations::remote_connect::{
     ChatMessageItem, ImageAttachment, RemoteCancelDecision, RemoteCommand,
     RemoteConnectSubmissionSource, RemoteDefaultModelsConfig, RemoteImageContext,
     RemoteModelCatalog, RemoteModelConfig, RemoteResponse, RemoteSessionStateTracker,
-    RemoteToolStatus, TrackerEvent, REMOTE_FILE_MAX_CHUNK_BYTES, REMOTE_FILE_MAX_READ_BYTES,
+    RemoteSessionTrackerHost, RemoteSessionTrackerRegistry, RemoteToolStatus, TrackerEvent,
+    REMOTE_FILE_MAX_CHUNK_BYTES, REMOTE_FILE_MAX_READ_BYTES,
 };
+use std::sync::{Arc, Mutex};
 
 #[test]
 fn remote_connect_submission_contract_preserves_relay_source_and_turn_id() {
@@ -414,6 +416,71 @@ fn sample_remote_model_catalog(version: u64) -> RemoteModelCatalog {
         },
         session_model_id: Some("model-1".to_string()),
     }
+}
+
+#[derive(Default)]
+struct RecordingTrackerHost {
+    subscribed: Mutex<Vec<String>>,
+    unsubscribed: Mutex<Vec<String>>,
+    active_turn_id: Mutex<Option<String>>,
+}
+
+impl RecordingTrackerHost {
+    fn with_active_turn(turn_id: impl Into<String>) -> Self {
+        Self {
+            active_turn_id: Mutex::new(Some(turn_id.into())),
+            ..Self::default()
+        }
+    }
+}
+
+impl RemoteSessionTrackerHost for RecordingTrackerHost {
+    fn subscribe_tracker(&self, session_id: &str, _tracker: Arc<RemoteSessionStateTracker>) {
+        self.subscribed.lock().unwrap().push(session_id.to_string());
+    }
+
+    fn unsubscribe_tracker(&self, session_id: &str) {
+        self.unsubscribed
+            .lock()
+            .unwrap()
+            .push(session_id.to_string());
+    }
+
+    fn active_turn_id(&self, _session_id: &str) -> Option<String> {
+        self.active_turn_id.lock().unwrap().clone()
+    }
+}
+
+#[test]
+fn remote_connect_tracker_registry_owns_lifecycle_without_core_state() {
+    let registry = RemoteSessionTrackerRegistry::new();
+    let host = RecordingTrackerHost::with_active_turn("turn-1");
+
+    let tracker = registry.ensure_tracker_with_host("session-1", &host);
+    assert_eq!(
+        host.subscribed.lock().unwrap().as_slice(),
+        &["session-1".to_string()]
+    );
+    assert_eq!(
+        tracker
+            .snapshot_active_turn()
+            .expect("active turn seeded")
+            .turn_id,
+        "turn-1"
+    );
+
+    let reused = registry.ensure_tracker_with_host("session-1", &host);
+    assert!(Arc::ptr_eq(&tracker, &reused));
+    assert_eq!(host.subscribed.lock().unwrap().len(), 1);
+    assert!(registry.get_tracker("session-1").is_some());
+
+    let removed = registry.remove_tracker_with_host("session-1", &host);
+    assert!(removed.is_some());
+    assert!(registry.get_tracker("session-1").is_none());
+    assert_eq!(
+        host.unsubscribed.lock().unwrap().as_slice(),
+        &["session-1".to_string()]
+    );
 }
 
 #[test]
