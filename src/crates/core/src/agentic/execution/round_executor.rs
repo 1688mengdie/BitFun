@@ -38,6 +38,7 @@ pub struct RoundExecutor {
 impl RoundExecutor {
     const MAX_STREAM_ATTEMPTS: usize = 10;
     const RETRY_BASE_DELAY_MS: u64 = 500;
+    const WRITE_CONTENT_STREAM_IDLE_TIMEOUT_SECS: u64 = 60;
 
     fn has_user_visible_assistant_text(text: &str) -> bool {
         !text.trim().is_empty()
@@ -940,11 +941,31 @@ impl RoundExecutor {
                 Ok(response) => {
                     let mut text = String::new();
                     let mut stream = response.stream;
+                    let watchdog_timeout =
+                        StreamProcessor::derive_watchdog_timeout(ai_client.stream_idle_timeout())
+                            .unwrap_or_else(|| {
+                                Duration::from_secs(Self::WRITE_CONTENT_STREAM_IDLE_TIMEOUT_SECS)
+                            });
                     use futures::StreamExt;
-                    while let Some(chunk) = stream.next().await {
+                    loop {
                         if cancel_token.is_cancelled() {
                             return Err(BitFunError::Cancelled("Execution cancelled".to_string()));
                         }
+
+                        let chunk = match tokio::time::timeout(watchdog_timeout, stream.next())
+                            .await
+                        {
+                            Ok(Some(chunk)) => chunk,
+                            Ok(None) => break,
+                            Err(_) => {
+                                return Err(BitFunError::Timeout(format!(
+                                        "Write content generation timed out for {} after {} seconds without stream progress",
+                                        file_path,
+                                        watchdog_timeout.as_secs()
+                                    )));
+                            }
+                        };
+
                         match chunk {
                             Ok(resp) => {
                                 let chunk_text = resp.text.unwrap_or_default();

@@ -125,6 +125,7 @@ const TIPS: &[&str] = &[
     "Use /sessions to list and continue previous conversations",
     "Press Ctrl+O to expand/collapse tool output",
     "Use /skills to browse and execute available skills",
+    "Use /acp to copy editor setup commands for ACP hosts",
     "Press Up/Down to cycle through input history",
     "Use /new to start a fresh conversation session",
 ];
@@ -1057,6 +1058,11 @@ impl StartupPage {
                 // Enter chat mode and auto-trigger /mcps command
                 return Some(StartupResult::NewSession {
                     prompt: Some("/mcps".to_string()),
+                });
+            }
+            "/acp" => {
+                return Some(StartupResult::NewSession {
+                    prompt: Some("/acp".to_string()),
                 });
             }
             "/init" => {

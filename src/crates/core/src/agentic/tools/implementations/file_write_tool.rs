@@ -85,6 +85,30 @@ impl FileWriteTool {
             image_attachments: None,
         }
     }
+
+    fn is_acp_context(context: Option<&ToolUseContext>) -> bool {
+        context
+            .and_then(|ctx| ctx.custom_data.get("acp_transport"))
+            .is_some_and(|value| value == "true" || value == &json!(true))
+    }
+
+    fn schema_with_content() -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "file_path": {
+                    "type": "string",
+                    "description": "The file to write. Use a workspace-relative path, an absolute path inside the current workspace, or an exact bitfun://runtime URI returned by another tool."
+                },
+                "content": {
+                    "type": "string",
+                    "description": "The complete file content to write."
+                }
+            },
+            "required": ["file_path", "content"],
+            "additionalProperties": false
+        })
+    }
 }
 
 #[cfg(test)]
@@ -106,6 +130,22 @@ mod tests {
             workspace: Some(WorkspaceBinding::new(None, root)),
             unlocked_collapsed_tools: Vec::new(),
             custom_data: HashMap::new(),
+            computer_use_host: None,
+            cancellation_token: None,
+            runtime_tool_restrictions: ToolRuntimeRestrictions::default(),
+            workspace_services: None,
+        }
+    }
+
+    fn context_with_custom_data(custom_data: HashMap<String, serde_json::Value>) -> ToolUseContext {
+        ToolUseContext {
+            tool_call_id: None,
+            agent_type: None,
+            session_id: None,
+            dialog_turn_id: None,
+            workspace: None,
+            unlocked_collapsed_tools: Vec::new(),
+            custom_data,
             computer_use_host: None,
             cancellation_token: None,
             runtime_tool_restrictions: ToolRuntimeRestrictions::default(),
@@ -192,6 +232,40 @@ mod tests {
         assert!(error.to_string().contains("already exists"));
         assert!(error.to_string().contains("Edit tool"));
     }
+
+    #[tokio::test]
+    async fn acp_schema_requires_inline_content() {
+        let tool = FileWriteTool::new();
+        let mut custom_data = HashMap::new();
+        custom_data.insert(
+            "acp_transport".to_string(),
+            serde_json::Value::String("true".to_string()),
+        );
+        let context = context_with_custom_data(custom_data);
+
+        let schema = tool
+            .input_schema_for_model_with_context(Some(&context))
+            .await;
+
+        assert_eq!(
+            schema["required"],
+            serde_json::json!(["file_path", "content"])
+        );
+        assert!(schema["properties"].get("content").is_some());
+    }
+
+    #[tokio::test]
+    async fn default_schema_keeps_two_stage_write_contract() {
+        let tool = FileWriteTool::new();
+        let context = context_with_custom_data(HashMap::new());
+
+        let schema = tool
+            .input_schema_for_model_with_context(Some(&context))
+            .await;
+
+        assert_eq!(schema["required"], serde_json::json!(["file_path"]));
+        assert!(schema["properties"].get("content").is_none());
+    }
 }
 
 #[async_trait]
@@ -216,7 +290,28 @@ Usage:
     }
 
     fn short_description(&self) -> String {
-        "Write a new file or fully replace an existing file.".to_string()
+        "Write a new file.".to_string()
+    }
+
+    async fn description_with_context(
+        &self,
+        context: Option<&ToolUseContext>,
+    ) -> BitFunResult<String> {
+        if Self::is_acp_context(context) {
+            return Ok(r#"Writes a file to the local filesystem.
+
+Usage:
+- This tool is for creating NEW files only. Calling Write on a path that already exists will be REJECTED with an error unless the existing content is identical, in which case the retry is treated as already successful.
+- To MODIFY an existing file, use the Edit tool. To fully rewrite an existing file, first call the Delete tool on that path, then call Write to create the new version.
+- The file_path parameter must be workspace-relative, an absolute path inside the current workspace, or an exact `bitfun://runtime/...` URI returned by another tool.
+- ALWAYS prefer editing existing files in the codebase. NEVER write new files unless explicitly required.
+- For new files, preserve correctness and provide the complete intended file content when this tool is appropriate.
+- NEVER proactively create documentation files (*.md) or README files. Only create documentation files if explicitly requested by the User.
+- Only use emojis if the user explicitly requests it. Avoid writing emojis to files unless asked.
+- Include the complete file content in the `content` argument."#.to_string());
+        }
+
+        self.description().await
     }
 
     fn input_schema(&self) -> Value {
@@ -231,6 +326,14 @@ Usage:
             "required": ["file_path"],
             "additionalProperties": false
         })
+    }
+
+    async fn input_schema_for_model_with_context(&self, context: Option<&ToolUseContext>) -> Value {
+        if Self::is_acp_context(context) {
+            Self::schema_with_content()
+        } else {
+            self.input_schema()
+        }
     }
 
     fn is_readonly(&self) -> bool {

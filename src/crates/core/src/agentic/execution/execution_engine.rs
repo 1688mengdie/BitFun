@@ -1547,6 +1547,7 @@ impl ExecutionEngine {
                     context.workspace_services.as_ref(),
                     &agent_type,
                     primary_supports_image_understanding,
+                    &context.context,
                 )
                 .await,
             )
@@ -2493,12 +2494,16 @@ impl ExecutionEngine {
         workspace_services: Option<&crate::agentic::workspace::WorkspaceServices>,
         agent_type: &str,
         primary_supports_image_understanding: bool,
+        context_vars: &HashMap<String, String>,
     ) -> ResolvedToolManifest {
         let mut tool_opts_custom = HashMap::new();
         tool_opts_custom.insert(
             "primary_model_supports_image_understanding".to_string(),
             serde_json::Value::Bool(primary_supports_image_understanding),
         );
+        for (key, value) in context_vars {
+            tool_opts_custom.insert(key.clone(), serde_json::Value::String(value.clone()));
+        }
         let description_context = crate::agentic::tools::framework::ToolUseContext {
             tool_call_id: None,
             agent_type: Some(agent_type.to_string()),

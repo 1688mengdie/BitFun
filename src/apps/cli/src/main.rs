@@ -5,6 +5,7 @@
 /// - Single command execution
 /// - Batch task processing
 
+mod acp_cli;
 mod config;
 #[allow(dead_code)]
 mod chat_state;
@@ -110,8 +111,90 @@ enum Commands {
     /// Health check
     Health,
 
-    /// Start Agent Client Protocol (ACP) server over stdio
-    Acp,
+    /// Start or inspect the Agent Client Protocol (ACP) server
+    Acp {
+        #[command(subcommand)]
+        action: Option<AcpAction>,
+    },
+}
+
+#[derive(Subcommand)]
+enum AcpAction {
+    /// Start the ACP server over stdio
+    Serve,
+    /// Show ACP server status and capabilities
+    Status {
+        /// Command name or path to show in generated examples
+        #[arg(long, default_value = "bitfun-cli")]
+        command: String,
+    },
+    /// Check local readiness for ACP clients
+    Doctor {
+        /// Command name or path to show in generated examples
+        #[arg(long, default_value = "bitfun-cli")]
+        command: String,
+    },
+    /// Print editor/client integration snippets
+    Config {
+        /// ACP client/editor to generate config for
+        #[arg(long, value_enum, default_value_t = acp_cli::AcpConfigClient::Zed)]
+        client: acp_cli::AcpConfigClient,
+
+        /// Command name or path your editor should execute
+        #[arg(long, default_value = "bitfun-cli")]
+        command: String,
+    },
+    /// Manage external ACP agents that BitFun can launch
+    Clients {
+        #[command(subcommand)]
+        action: AcpClientsAction,
+    },
+    /// Run a prompt through an external ACP agent
+    Run {
+        /// External ACP agent to launch
+        #[arg(value_enum)]
+        client: acp_cli::ExternalAcpClient,
+
+        /// Prompt to send to the external ACP agent
+        prompt: String,
+
+        /// Workspace directory for the external agent
+        #[arg(long)]
+        workspace: Option<String>,
+
+        /// Timeout in seconds
+        #[arg(long, default_value_t = 600)]
+        timeout: u64,
+
+        /// Permission handling for ACP tool permission requests
+        #[arg(long, value_enum, default_value_t = acp_cli::CliAcpPermissionMode::AllowOnce)]
+        permission: acp_cli::CliAcpPermissionMode,
+    },
+}
+
+#[derive(Subcommand)]
+enum AcpClientsAction {
+    /// List configured and built-in external ACP agents
+    List,
+    /// Check whether external ACP agent CLIs and adapters are available
+    Doctor,
+    /// Enable a built-in external ACP agent
+    Enable {
+        /// Built-in external ACP agent
+        #[arg(value_enum)]
+        client: acp_cli::ExternalAcpClient,
+
+        /// Permission handling to store for this client
+        #[arg(long, value_enum, default_value_t = acp_cli::CliAcpPermissionMode::Ask)]
+        permission: acp_cli::CliAcpPermissionMode,
+    },
+    /// Disable an external ACP agent by id
+    Disable {
+        /// External ACP client id, for example opencode
+        client_id: String,
+    },
+    /// Print the stored ACP client JSON
+    Config,
 }
 
 #[derive(Subcommand)]
@@ -352,14 +435,24 @@ async fn run_interactive(
 async fn main() -> Result<()> {
     let cli = Cli::parse();
     
+    let is_tui_mode = matches!(cli.command, None | Some(Commands::Chat { .. }));
+    let is_acp_command = matches!(cli.command, Some(Commands::Acp { .. }));
+    let is_acp_serve = matches!(
+        cli.command,
+        Some(Commands::Acp { action: None })
+            | Some(Commands::Acp {
+                action: Some(AcpAction::Serve),
+            })
+    );
     let log_level = if cli.verbose {
         tracing::Level::DEBUG
+    } else if is_acp_serve {
+        tracing::Level::WARN
+    } else if is_acp_command {
+        tracing::Level::ERROR
     } else {
         tracing::Level::INFO
     };
-    
-    let is_tui_mode = matches!(cli.command, None | Some(Commands::Chat { .. }));
-    let is_acp_mode = matches!(cli.command, Some(Commands::Acp { .. }));
     
     if is_tui_mode {
         use std::fs::OpenOptions;
@@ -388,7 +481,7 @@ async fn main() -> Result<()> {
                 .with_target(false)
                 .init();
         }
-    } else if is_acp_mode {
+    } else if is_acp_command {
         tracing_subscriber::fmt()
             .with_max_level(log_level)
             .with_writer(std::io::stderr)
@@ -457,7 +550,9 @@ async fn main() -> Result<()> {
             println!("Config directory: {:?}", CliConfig::config_dir()?);
         }
 
-        Some(Commands::Acp) => {
+        Some(Commands::Acp {
+            action: None | Some(AcpAction::Serve),
+        }) => {
             setup_workspace();
 
             bitfun_core::service::config::initialize_global_config()
@@ -479,6 +574,59 @@ async fn main() -> Result<()> {
             tracing::info!("Agentic system initialized");
 
             bitfun_acp::BitfunAcpRuntime::serve_stdio(agentic_system).await?;
+        }
+
+        Some(Commands::Acp {
+            action: Some(AcpAction::Status { command }),
+        }) => {
+            acp_cli::print_status(&command)?;
+        }
+
+        Some(Commands::Acp {
+            action: Some(AcpAction::Doctor { command }),
+        }) => {
+            if !acp_cli::print_doctor(&command).await? {
+                std::process::exit(1);
+            }
+        }
+
+        Some(Commands::Acp {
+            action: Some(AcpAction::Config { client, command }),
+        }) => {
+            acp_cli::print_config(client, &command)?;
+        }
+
+        Some(Commands::Acp {
+            action: Some(AcpAction::Clients { action }),
+        }) => {
+            match action {
+                AcpClientsAction::List => acp_cli::list_external_clients().await?,
+                AcpClientsAction::Doctor => {
+                    if !acp_cli::doctor_external_clients().await? {
+                        std::process::exit(1);
+                    }
+                }
+                AcpClientsAction::Enable { client, permission } => {
+                    acp_cli::enable_external_client(client, permission).await?;
+                }
+                AcpClientsAction::Disable { client_id } => {
+                    acp_cli::disable_external_client(&client_id).await?;
+                }
+                AcpClientsAction::Config => acp_cli::print_external_client_config().await?,
+            }
+        }
+
+        Some(Commands::Acp {
+            action:
+                Some(AcpAction::Run {
+                    client,
+                    prompt,
+                    workspace,
+                    timeout,
+                    permission,
+                }),
+        }) => {
+            acp_cli::run_external_client(client, prompt, workspace, timeout, permission).await?;
         }
         
         None => {
