@@ -307,7 +307,7 @@ const AcpAgentsConfig: React.FC = () => {
       const status = getAgentRowStatus({
         configured,
         enabled,
-        runnable: probe?.runnable === true,
+        runnable: probe?.runnable,
         probePending,
       });
       if (registryFilter === 'installed' && status !== 'enabled' && status !== 'ready') return false;
@@ -336,7 +336,7 @@ const AcpAgentsConfig: React.FC = () => {
       const status = getAgentRowStatus({
         configured,
         enabled,
-        runnable: requirementProbe?.runnable === true,
+        runnable: requirementProbe?.runnable,
         probePending,
       });
       if (registryFilter === 'installed' && status !== 'enabled' && status !== 'ready') return false;
@@ -387,7 +387,7 @@ const AcpAgentsConfig: React.FC = () => {
     options: { showLoading?: boolean; refreshRequirements?: boolean } = {}
   ) => {
     const showLoading = options.showLoading ?? true;
-    const refreshRequirements = options.refreshRequirements ?? false;
+    const refreshRequirements = options.refreshRequirements ?? true;
     try {
       if (showLoading) {
         setLoading(true);
@@ -710,7 +710,7 @@ const AcpAgentsConfig: React.FC = () => {
                 const hasConfigEntry = Boolean(config.acpClients[preset.id]);
                 const configured = hasConfigEntry;
                 const enabled = clientConfig.enabled;
-                const runnable = requirementProbe?.runnable === true;
+                const runnable = requirementProbe?.runnable;
                 const status = getAgentRowStatus({ configured, enabled, runnable, probePending });
                 const installing = installingClientIds.has(preset.id);
 
@@ -783,7 +783,7 @@ const AcpAgentsConfig: React.FC = () => {
 
                 const requirementProbe = probesById.get(clientId);
                 const probePending = probingRequirements && !requirementProbe;
-                const runnable = requirementProbe?.runnable === true;
+                const runnable = requirementProbe?.runnable;
                 const status = getAgentRowStatus({
                   configured: true,
                   enabled: clientConfig.enabled !== false,

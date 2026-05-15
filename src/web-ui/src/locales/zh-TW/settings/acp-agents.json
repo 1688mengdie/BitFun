@@ -21,7 +21,7 @@
   },
   "registry": {
     "title": "Agent 列表",
-    "description": "安裝完成且依賴就緒後，ACP Agent 會出現在工作區操作菜單裡。",
+    "description": "安裝完成且依賴就緒後，ACP Agent 會出現在工作區操作菜單裡。遠端工作區會複用這裡的本地配置，並在遠端主機檢測命令。",
     "searchPlaceholder": "搜尋 Agent...",
     "filterLabel": "ACP Agent 篩選",
     "filters": {

@@ -21,7 +21,7 @@
   },
   "registry": {
     "title": "Agent 列表",
-    "description": "安装完成且依赖就绪后，ACP Agent 会出现在工作区操作菜单里。",
+    "description": "安装完成且依赖就绪后，ACP Agent 会出现在工作区操作菜单里。远程工作区会复用这里的本地配置，并在远端主机检测命令。",
     "searchPlaceholder": "搜索 Agent...",
     "filterLabel": "ACP Agent 筛选",
     "filters": {

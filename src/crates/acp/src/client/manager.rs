@@ -33,17 +33,14 @@ use tokio::process::{Child, Command};
 use tokio::sync::{oneshot, Mutex, RwLock};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
-use super::builtin_clients::{
-    builtin_acp_client_preset, builtin_client_ids, default_config_for_builtin_client,
-    remote_command_for_builtin_client, remote_command_for_builtin_client_in_workspace,
-    supported_remote_acp_clients,
-};
+use super::builtin_clients::{builtin_client_ids, default_config_for_builtin_client};
 use super::config::{
     AcpClientConfig, AcpClientConfigFile, AcpClientInfo, AcpClientPermissionMode,
     AcpClientRequirementProbe, AcpClientStatus, RemoteAcpClientRequirementSnapshot,
 };
 use super::remote_capability_store::RemoteAcpCapabilityStore;
 use super::remote_session::{preferred_resume_strategies, AcpRemoteSessionStrategy};
+use super::remote_shell::{remote_user_shell_command, render_remote_env_assignments, shell_escape};
 use super::requirements::{
     acp_requirement_spec, apply_command_environment, install_npm_cli_package,
     predownload_npm_adapter, probe_executable, probe_npm_adapter, probe_remote_executable,
@@ -362,21 +359,35 @@ impl AcpClientService {
             BitFunError::service("SSH manager is not available for remote ACP".to_string())
         })?;
 
-        let mut ids = builtin_client_ids()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>();
+        let configs = self.load_configs().await?;
+        let mut ids = configs.keys().cloned().collect::<Vec<_>>();
+        for id in builtin_client_ids() {
+            if !ids.iter().any(|candidate| candidate == id) {
+                ids.push(id.to_string());
+            }
+        }
         ids.sort();
 
         let mut probes = Vec::with_capacity(ids.len());
         for id in ids {
-            let spec = acp_requirement_spec(&id, None);
-            let tool =
-                probe_remote_executable(&ssh_manager, remote_connection_id, spec.tool_command)
-                    .await;
+            let config = configs.get(&id);
+            let spec = acp_requirement_spec(&id, config);
+            let tool = probe_remote_executable(
+                &ssh_manager,
+                remote_connection_id,
+                spec.tool_command,
+                config.map(|config| &config.env),
+            )
+            .await;
             let adapter = match spec.adapter {
                 Some(adapter) => Some(
-                    probe_remote_npx_adapter(&ssh_manager, remote_connection_id, adapter.package)
-                        .await,
+                    probe_remote_npx_adapter(
+                        &ssh_manager,
+                        remote_connection_id,
+                        adapter.package,
+                        config.map(|config| &config.env),
+                    )
+                    .await,
                 ),
                 None => None,
             };
@@ -769,6 +780,7 @@ impl AcpClientService {
         self.config_service
             .set_config(CONFIG_PATH, canonical_value)
             .await?;
+        self.remote_capability_store.clear().await?;
         self.initialize_all().await
     }
 
@@ -1533,7 +1545,7 @@ impl AcpClientService {
     )> {
         match remote_connection_id {
             Some(remote_connection_id) => self
-                .start_remote_transport(client_id, workspace_path, remote_connection_id)
+                .start_remote_transport(client_id, config, workspace_path, remote_connection_id)
                 .await
                 .map(|transport| (transport, None)),
             None => self
@@ -1546,22 +1558,11 @@ impl AcpClientService {
     async fn start_remote_transport(
         &self,
         client_id: &str,
+        config: &AcpClientConfig,
         workspace_path: Option<&str>,
         remote_connection_id: &str,
     ) -> BitFunResult<ByteStreams<AcpOutgoingStream, AcpIncomingStream>> {
-        let command = workspace_path
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .and_then(|workspace_path| {
-                remote_command_for_builtin_client_in_workspace(client_id, workspace_path)
-            })
-            .or_else(|| remote_command_for_builtin_client(client_id))
-            .ok_or_else(|| {
-                BitFunError::config(format!(
-                    "Remote ACP currently supports only built-in clients: {}",
-                    supported_remote_acp_clients()
-                ))
-            })?;
+        let command = render_remote_client_command(config, workspace_path)?;
         let remote_manager = get_remote_workspace_manager().ok_or_else(|| {
             BitFunError::service("Remote workspace manager is not initialized".to_string())
         })?;
@@ -1595,16 +1596,15 @@ impl AcpClientService {
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(ToOwned::to_owned);
-        let remote_builtin = remote_connection_id
-            .as_deref()
-            .and_then(|_| builtin_acp_client_preset(client_id))
-            .is_some();
+        let is_remote = remote_connection_id.is_some();
+        let mut used_remote_default = false;
         let mut config = self
             .load_configs()
             .await?
             .remove(client_id)
             .or_else(|| {
-                if remote_connection_id.is_some() {
+                if is_remote {
+                    used_remote_default = true;
                     default_config_for_builtin_client(client_id)
                 } else {
                     None
@@ -1612,8 +1612,14 @@ impl AcpClientService {
             })
             .ok_or_else(|| BitFunError::NotFound(format!("ACP client not found: {}", client_id)))?;
 
-        if remote_builtin {
+        if used_remote_default {
             config.enabled = true;
+        }
+        if config.command.trim().is_empty() {
+            return Err(BitFunError::config(format!(
+                "ACP client command is empty: {}",
+                client_id
+            )));
         }
         if !config.enabled {
             return Err(BitFunError::config(format!(
@@ -1622,7 +1628,7 @@ impl AcpClientService {
             )));
         }
 
-        if remote_connection_id.is_some() {
+        if is_remote {
             ensure_remote_client_supported(client_id, workspace_path)?;
         }
 
@@ -1634,7 +1640,7 @@ impl AcpClientService {
 }
 
 fn ensure_remote_client_supported(
-    client_id: &str,
+    _client_id: &str,
     workspace_path: Option<&str>,
 ) -> BitFunResult<()> {
     if workspace_path
@@ -1646,14 +1652,41 @@ fn ensure_remote_client_supported(
         ));
     }
 
-    if builtin_acp_client_preset(client_id).is_none() {
-        return Err(BitFunError::config(format!(
-            "Remote ACP currently supports only built-in clients: {}",
-            supported_remote_acp_clients()
-        )));
+    Ok(())
+}
+
+fn render_remote_client_command(
+    config: &AcpClientConfig,
+    workspace_path: Option<&str>,
+) -> BitFunResult<String> {
+    let command = config.command.trim();
+    if command.is_empty() {
+        return Err(BitFunError::config(
+            "ACP client command is empty".to_string(),
+        ));
     }
 
-    Ok(())
+    let mut command_parts = Vec::new();
+    command_parts.push(shell_escape(command));
+    command_parts.extend(config.args.iter().map(|arg| shell_escape(arg)));
+
+    let mut parts = Vec::new();
+    parts.push("exec".to_string());
+    let env_assignments = render_remote_env_assignments(&config.env);
+    if !env_assignments.is_empty() {
+        parts.push("env".to_string());
+        parts.extend(env_assignments);
+    }
+    parts.extend(command_parts);
+
+    let command = parts.join(" ");
+    let workspace_path = workspace_path.map(str::trim).unwrap_or_default();
+    let body = if workspace_path.is_empty() {
+        command
+    } else {
+        format!("cd {} && {}", shell_escape(workspace_path), command)
+    };
+    Ok(remote_user_shell_command(&body))
 }
 
 fn current_unix_timestamp_ms() -> u64 {
@@ -2064,5 +2097,28 @@ mod tests {
             startup_timeout_error_message("codex", "initialize"),
             "ACP startup timed out: client 'codex' exceeded 60s during initialize and was terminated. Please try again after the client is ready."
         );
+    }
+
+    #[test]
+    fn renders_remote_client_command_from_config() {
+        let config = AcpClientConfig {
+            name: Some("Custom".to_string()),
+            command: "custom-acp".to_string(),
+            args: vec!["--stdio".to_string(), "with space".to_string()],
+            env: HashMap::from([
+                ("PATH".to_string(), "/remote/bin:/usr/bin".to_string()),
+                ("INVALID-NAME".to_string(), "ignored".to_string()),
+            ]),
+            enabled: true,
+            readonly: false,
+            permission_mode: AcpClientPermissionMode::Ask,
+        };
+
+        let command = render_remote_client_command(&config, Some("/srv/my repo")).expect("command");
+        assert!(command.starts_with("bash -lc "));
+        assert!(command.contains(".nvm/nvm.sh"));
+        assert!(command.contains(
+            "cd '\\''/srv/my repo'\\'' && exec env PATH=/remote/bin:/usr/bin custom-acp --stdio '\\''with space'\\''"
+        ));
     }
 }

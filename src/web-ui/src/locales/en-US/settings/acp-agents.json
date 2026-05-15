@@ -21,7 +21,7 @@
   },
   "registry": {
     "title": "Agents",
-    "description": "Installed ACP agents with ready dependencies appear in the workspace action menu.",
+    "description": "Installed ACP agents with ready dependencies appear in the workspace action menu. Remote workspaces reuse this local config and check commands on the remote host.",
     "searchPlaceholder": "Search agents...",
     "filterLabel": "ACP agent filter",
     "filters": {

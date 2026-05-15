@@ -168,7 +168,7 @@ describe('AcpAgentsConfig', () => {
     vi.clearAllMocks();
   });
 
-  it('does not probe external ACP CLIs just by opening the settings tab', async () => {
+  it('probes requirements when opened and does not treat missing probe data as invalid config', async () => {
     await act(async () => {
       root.render(<AcpAgentsConfig />);
     });
@@ -179,6 +179,7 @@ describe('AcpAgentsConfig', () => {
 
     expect(loadJsonConfigMock).toHaveBeenCalledTimes(1);
     expect(getClientsMock).toHaveBeenCalledTimes(1);
-    expect(probeClientRequirementsMock).not.toHaveBeenCalled();
+    expect(probeClientRequirementsMock).toHaveBeenCalledTimes(1);
+    expect(container.textContent).not.toContain('registry.configInvalid');
   });
 });
