@@ -8,7 +8,6 @@ use ratatui::{
 use std::collections::{HashMap, HashSet, VecDeque};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use super::text_input::TextInput;
 use super::agent_selector::{AgentItem, AgentSelectorState};
 use super::command_menu::CommandMenuState;
 use super::command_palette::{CommandPaletteState, PaletteAction};
@@ -22,8 +21,9 @@ use super::provider_selector::{ProviderSelection, ProviderSelectorState};
 use super::question::render_question_overlay;
 use super::session_selector::{SessionAction, SessionItem, SessionSelectorState};
 use super::skill_selector::{SkillItem, SkillSelectorAction, SkillSelectorState};
-use super::subagent_selector::{SubagentItem, SubagentSelectorState};
-use super::theme::{Theme, StyleKind};
+use super::subagent_selector::{SubagentItem, SubagentSelectorAction, SubagentSelectorState};
+use super::text_input::TextInput;
+use super::theme::{StyleKind, Theme};
 use super::theme_selector::{ThemeItem, ThemeSelectorState};
 use super::widgets::Spinner;
 use crate::chat_state::{ChatMessage, ChatState, FlowItem, MessageRole};
@@ -179,14 +179,12 @@ pub struct ChatView {
     theme_selector: ThemeSelectorState,
 
     // -- Tool card expand/collapse state --
-
     /// Set of collapsed tool IDs (block tools default to expanded; this tracks manually collapsed ones)
     pub collapsed_tools: HashSet<String>,
     /// Currently focused block tool ID (for Ctrl+O toggle)
     pub focused_block_tool: Option<String>,
 
     // -- Thinking expand/collapse state --
-
     /// Set of assistant message IDs whose thinking blocks are collapsed
     collapsed_thinking: HashSet<String>,
     /// Tracks which messages have been auto-collapsed (so user re-expands won't be overridden)
@@ -195,7 +193,6 @@ pub struct ChatView {
     thinking_user_overrides: HashSet<String>,
 
     // -- Mouse click tracking --
-
     /// Pending command from mouse click on command menu (consumed by caller)
     pending_command: Option<String>,
     /// Pending theme preview selection (consumed by caller)
@@ -207,6 +204,8 @@ pub struct ChatView {
     pending_mcp_toggle: Option<String>,
     /// Pending skill selector action from mouse click (consumed by caller)
     pending_skill_action: Option<SkillSelectorAction>,
+    /// Pending subagent selector action from mouse click (consumed by caller)
+    pending_subagent_action: Option<SubagentSelectorAction>,
 
     /// Info popup message (rendered as overlay, dismissed by any key)
     info_popup: Option<String>,
@@ -238,7 +237,6 @@ pub struct ChatView {
     pub popup_stack: PopupStack,
 
     // -- Render cache state (performance optimization) --
-
     /// Cached total rendered line count (updated each render frame)
     cached_total_lines: usize,
     /// Message count when cache was last updated
@@ -283,6 +281,7 @@ impl ChatView {
             pending_command: None,
             pending_mcp_toggle: None,
             pending_skill_action: None,
+            pending_subagent_action: None,
             pending_theme_preview: None,
             theme_preview_original: None,
             info_popup: None,

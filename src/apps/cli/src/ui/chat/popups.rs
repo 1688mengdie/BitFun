@@ -38,10 +38,7 @@ impl ChatView {
         self.command_palette.is_visible()
     }
 
-    pub fn command_palette_handle_key(
-        &mut self,
-        key: crossterm::event::KeyEvent,
-    ) -> PaletteAction {
+    pub fn command_palette_handle_key(&mut self, key: crossterm::event::KeyEvent) -> PaletteAction {
         self.command_palette.handle_key_event(key)
     }
 
@@ -52,10 +49,7 @@ impl ChatView {
         self.command_palette.handle_mouse_event(mouse)
     }
 
-    pub fn command_palette_captures_mouse(
-        &self,
-        mouse: &crossterm::event::MouseEvent,
-    ) -> bool {
+    pub fn command_palette_captures_mouse(&self, mouse: &crossterm::event::MouseEvent) -> bool {
         self.command_palette.captures_mouse(mouse)
     }
 
@@ -211,8 +205,18 @@ impl ChatView {
 
     // ============ Subagent selector methods ============
 
-    pub fn show_subagent_selector(&mut self, subagents: Vec<SubagentItem>) {
-        self.subagent_selector.show(subagents);
+    pub fn show_subagent_menu(&mut self) {
+        self.subagent_selector.show_menu();
+        self.popup_stack.push(PopupType::SubagentSelector);
+    }
+
+    pub fn show_subagent_list(&mut self, subagents: Vec<SubagentItem>) {
+        self.subagent_selector.show_list(subagents);
+        self.popup_stack.push(PopupType::SubagentSelector);
+    }
+
+    pub fn show_subagent_config(&mut self, subagents: Vec<SubagentItem>) {
+        self.subagent_selector.show_config(subagents);
         self.popup_stack.push(PopupType::SubagentSelector);
     }
 
@@ -236,7 +240,7 @@ impl ChatView {
         self.subagent_selector.move_down();
     }
 
-    pub fn subagent_selector_confirm(&self) -> Option<SubagentItem> {
+    pub fn subagent_selector_confirm(&self) -> Option<SubagentSelectorAction> {
         self.subagent_selector.confirm_selection()
     }
 
@@ -307,10 +311,7 @@ impl ChatView {
         self.mcp_add_dialog.is_visible()
     }
 
-    pub fn mcp_add_dialog_handle_key(
-        &mut self,
-        key: crossterm::event::KeyEvent,
-    ) -> McpAddAction {
+    pub fn mcp_add_dialog_handle_key(&mut self, key: crossterm::event::KeyEvent) -> McpAddAction {
         self.mcp_add_dialog.handle_key_event(key)
     }
 
@@ -393,10 +394,7 @@ impl ChatView {
         self.provider_selector.handle_mouse_event(mouse)
     }
 
-    pub fn provider_selector_captures_mouse(
-        &self,
-        mouse: &crossterm::event::MouseEvent,
-    ) -> bool {
+    pub fn provider_selector_captures_mouse(&self, mouse: &crossterm::event::MouseEvent) -> bool {
         self.provider_selector.captures_mouse(mouse)
     }
 
@@ -447,4 +445,3 @@ impl ChatView {
         self.model_config_form.handle_key_event(key)
     }
 }
-
