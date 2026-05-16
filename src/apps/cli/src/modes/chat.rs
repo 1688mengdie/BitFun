@@ -30,7 +30,7 @@ use crate::ui::permission::PermissionAction;
 use crate::ui::provider_selector::ProviderSelection;
 use crate::ui::question::QuestionAction;
 use crate::ui::session_selector::{SessionAction, SessionItem};
-use crate::ui::skill_selector::SkillItem;
+use crate::ui::skill_selector::{SkillItem, SkillSelectorAction};
 use crate::ui::subagent_selector::SubagentItem;
 use crate::ui::theme::{
     builtin_theme_ids, builtin_theme_json, resolve_appearance, resolve_effective_color_scheme,
@@ -39,7 +39,14 @@ use crate::ui::theme::{
 use crate::ui::theme_selector::ThemeItem;
 use crate::ui::{init_terminal, restore_terminal};
 use bitfun_core::agentic::agents::{get_agent_registry, AgentInfo};
-use bitfun_core::agentic::tools::implementations::skills::registry::SkillRegistry;
+use bitfun_core::agentic::tools::implementations::skills::{
+    mode_overrides::{
+        load_project_mode_skills_document_local, save_project_mode_skills_document_local,
+        set_mode_skill_disabled_in_document, set_user_mode_skill_state,
+    },
+    registry::SkillRegistry,
+    ModeSkillInfo, SkillInfo,
+};
 use bitfun_core::service::config::GlobalConfigManager;
 
 fn event_subagent_parent_info(
@@ -1068,10 +1075,11 @@ impl ChatMode {
             match key.code {
                 KeyCode::Up => chat_view.skill_selector_up(),
                 KeyCode::Down => chat_view.skill_selector_down(),
-                KeyCode::Enter => {
-                    if let Some(selected) = chat_view.skill_selector_confirm() {
-                        chat_view.hide_skill_selector();
-                        self.apply_skill_selection(&selected, chat_view);
+                KeyCode::Enter | KeyCode::Char(' ') => {
+                    if let Some(action) = chat_view.skill_selector_confirm() {
+                        self.handle_skill_selector_action(
+                            action, chat_view, chat_state, rt_handle,
+                        );
                     }
                 }
                 // Note: Esc is handled globally for navigation back
@@ -1482,7 +1490,13 @@ impl ChatMode {
                     if let Some(selection) = chat_view.provider_selector_handle_mouse(&mouse) {
                         this.handle_provider_selection(selection, chat_view);
                     }
-                } else if !chat_view.handle_mouse_event(&mouse) {
+                } else if chat_view.handle_mouse_event(&mouse) {
+                    if let Some(action) = chat_view.take_pending_skill_action() {
+                        this.handle_skill_selector_action(
+                            action, chat_view, chat_state, rt_handle,
+                        );
+                    }
+                } else {
                     match mouse.kind {
                         MouseEventKind::ScrollUp => {
                             let total = chat_view.count_message_lines(chat_state);
@@ -2793,33 +2807,47 @@ impl ChatMode {
         Ok(())
     }
 
-    /// Show skill selector popup with all available skills
+    /// Show skill list/configuration menu.
     fn show_skill_selector(
+        &self,
+        chat_view: &mut ChatView,
+        _chat_state: &mut ChatState,
+        _rt_handle: &tokio::runtime::Handle,
+    ) {
+        chat_view.show_skill_menu();
+    }
+
+    fn show_available_skill_list(
         &self,
         chat_view: &mut ChatView,
         chat_state: &mut ChatState,
         rt_handle: &tokio::runtime::Handle,
     ) {
         let skills = tokio::task::block_in_place(|| {
+            let workspace = self.agent.workspace_path_buf();
+            let agent_type = self.agent_type.clone();
             rt_handle.block_on(async {
                 let registry = SkillRegistry::global();
-                registry.refresh().await;
-                registry.get_all_skills().await
+                registry
+                    .get_resolved_skills_for_workspace(
+                        Some(workspace.as_path()),
+                        Some(&agent_type),
+                    )
+                    .await
             })
         });
 
         if skills.is_empty() {
-            chat_state.add_system_message("No skills found. Add skills in .bitfun/skills/, .cursor/skills/, or ~/.cursor/skills/".to_string());
+            chat_state.add_system_message(format!(
+                "No enabled skills found for agent mode '{}'. Add skills in .bitfun/skills/, .cursor/skills/, or ~/.cursor/skills/, or enable built-in skills for this mode.",
+                self.agent_type
+            ));
             return;
         }
 
         let skill_items: Vec<SkillItem> = skills
             .into_iter()
-            .map(|s| SkillItem {
-                name: s.name,
-                description: s.description,
-                level: s.level.as_str().to_string(),
-            })
+            .map(Self::skill_item_from_info)
             .collect();
 
         if skill_items.is_empty() {
@@ -2827,12 +2855,155 @@ impl ChatMode {
             return;
         }
 
-        chat_view.show_skill_selector(skill_items);
+        chat_view.show_skill_list(skill_items);
+    }
+
+    fn show_skill_config_selector(
+        &self,
+        chat_view: &mut ChatView,
+        chat_state: &mut ChatState,
+        rt_handle: &tokio::runtime::Handle,
+    ) {
+        let skills = tokio::task::block_in_place(|| {
+            let workspace = self.agent.workspace_path_buf();
+            let agent_type = self.agent_type.clone();
+            rt_handle.block_on(async {
+                let registry = SkillRegistry::global();
+                registry
+                    .get_mode_skill_infos_for_workspace(Some(workspace.as_path()), &agent_type)
+                    .await
+            })
+        });
+
+        let skill_items: Vec<SkillItem> = skills
+            .into_iter()
+            .map(Self::skill_item_from_mode_info)
+            .collect();
+
+        if skill_items.is_empty() {
+            chat_state.add_system_message("No skills found.".to_string());
+            return;
+        }
+
+        chat_view.show_skill_config(skill_items);
+    }
+
+    fn handle_skill_selector_action(
+        &self,
+        action: SkillSelectorAction,
+        chat_view: &mut ChatView,
+        chat_state: &mut ChatState,
+        rt_handle: &tokio::runtime::Handle,
+    ) {
+        match action {
+            SkillSelectorAction::ListSkills => {
+                self.show_available_skill_list(chat_view, chat_state, rt_handle);
+            }
+            SkillSelectorAction::ConfigureSkills => {
+                self.show_skill_config_selector(chat_view, chat_state, rt_handle);
+            }
+            SkillSelectorAction::Execute(selected) => {
+                chat_view.hide_skill_selector();
+                self.apply_skill_selection(&selected, chat_view);
+            }
+            SkillSelectorAction::Toggle(selected) => {
+                self.set_skill_enabled(&selected, !selected.enabled, chat_state, rt_handle);
+                self.show_skill_config_selector(chat_view, chat_state, rt_handle);
+            }
+        }
     }
 
     /// Apply skill selection: fill input box with execution command
     fn apply_skill_selection(&self, selected: &SkillItem, chat_view: &mut ChatView) {
         chat_view.set_input(&format!("Execute the {} skill.", selected.name));
+    }
+
+    fn set_skill_enabled(
+        &self,
+        selected: &SkillItem,
+        enabled: bool,
+        chat_state: &mut ChatState,
+        rt_handle: &tokio::runtime::Handle,
+    ) {
+        let workspace = self.agent.workspace_path_buf();
+        let mode_id = self.agent_type.clone();
+        let skill = selected.clone();
+
+        let result: Result<(), String> = tokio::task::block_in_place(|| {
+            rt_handle.block_on(async {
+                match skill.level.as_str() {
+                    "user" => {
+                        set_user_mode_skill_state(
+                            &mode_id,
+                            &skill.key,
+                            enabled,
+                            skill.default_enabled,
+                        )
+                        .await
+                        .map_err(|error| error.to_string())?;
+                    }
+                    "project" => {
+                        let mut document = load_project_mode_skills_document_local(&workspace)
+                            .await
+                            .map_err(|error| error.to_string())?;
+                        set_mode_skill_disabled_in_document(
+                            &mut document,
+                            &mode_id,
+                            &skill.key,
+                            !enabled,
+                        )
+                        .map_err(|error| error.to_string())?;
+                        save_project_mode_skills_document_local(&workspace, &document)
+                            .await
+                            .map_err(|error| error.to_string())?;
+                    }
+                    other => {
+                        return Err(format!("Unsupported skill level '{}'", other));
+                    }
+                }
+
+                Ok(())
+            })
+        });
+
+        match result {
+            Ok(()) => chat_state.add_system_message(format!(
+                "Skill '{}' {} for mode '{}'.",
+                selected.name,
+                if enabled { "enabled" } else { "disabled" },
+                self.agent_type
+            )),
+            Err(error) => chat_state.add_system_message(format!(
+                "Failed to update skill '{}': {}",
+                selected.name, error
+            )),
+        }
+    }
+
+    fn skill_item_from_info(info: SkillInfo) -> SkillItem {
+        SkillItem {
+            key: info.key,
+            name: info.name,
+            description: info.description,
+            level: info.level.as_str().to_string(),
+            enabled: true,
+            selected_for_runtime: true,
+            default_enabled: true,
+            is_shadowed: info.is_shadowed,
+        }
+    }
+
+    fn skill_item_from_mode_info(info: ModeSkillInfo) -> SkillItem {
+        SkillItem {
+            key: info.skill.key,
+            name: info.skill.name,
+            description: info.skill.description,
+            level: info.skill.level.as_str().to_string(),
+            enabled: info.effective_enabled,
+            selected_for_runtime: info.selected_for_runtime,
+            default_enabled: info.default_enabled,
+            is_shadowed: info.skill.is_shadowed,
+        }
     }
 
     /// Show subagent selector popup with all available subagents

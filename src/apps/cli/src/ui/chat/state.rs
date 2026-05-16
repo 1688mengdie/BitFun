@@ -21,7 +21,7 @@ use super::permission::render_permission_overlay;
 use super::provider_selector::{ProviderSelection, ProviderSelectorState};
 use super::question::render_question_overlay;
 use super::session_selector::{SessionAction, SessionItem, SessionSelectorState};
-use super::skill_selector::{SkillItem, SkillSelectorState};
+use super::skill_selector::{SkillItem, SkillSelectorAction, SkillSelectorState};
 use super::subagent_selector::{SubagentItem, SubagentSelectorState};
 use super::theme::{Theme, StyleKind};
 use super::theme_selector::{ThemeItem, ThemeSelectorState};
@@ -205,6 +205,8 @@ pub struct ChatView {
 
     /// Pending MCP toggle from mouse click (consumed by caller)
     pending_mcp_toggle: Option<String>,
+    /// Pending skill selector action from mouse click (consumed by caller)
+    pending_skill_action: Option<SkillSelectorAction>,
 
     /// Info popup message (rendered as overlay, dismissed by any key)
     info_popup: Option<String>,
@@ -280,6 +282,7 @@ impl ChatView {
             theme_selector: ThemeSelectorState::new(),
             pending_command: None,
             pending_mcp_toggle: None,
+            pending_skill_action: None,
             pending_theme_preview: None,
             theme_preview_original: None,
             info_popup: None,

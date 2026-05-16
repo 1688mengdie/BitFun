@@ -15,6 +15,10 @@ impl ChatView {
         self.pending_theme_preview.take()
     }
 
+    pub fn take_pending_skill_action(&mut self) -> Option<SkillSelectorAction> {
+        self.pending_skill_action.take()
+    }
+
     pub fn handle_mouse_event(&mut self, mouse: &crossterm::event::MouseEvent) -> bool {
         // Popups take priority when visible
         if self.model_selector.captures_mouse(mouse) {
@@ -35,9 +39,8 @@ impl ChatView {
             return true;
         }
         if self.skill_selector.captures_mouse(mouse) {
-            if let Some(selected) = self.skill_selector.handle_mouse_event(mouse) {
-                self.skill_selector.hide();
-                self.set_input(&format!("Execute the {} skill.", selected.name));
+            if let Some(action) = self.skill_selector.handle_mouse_event(mouse) {
+                self.pending_skill_action = Some(action);
             }
             return true;
         }

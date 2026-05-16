@@ -170,8 +170,18 @@ impl ChatView {
 
     // ============ Skill selector methods ============
 
-    pub fn show_skill_selector(&mut self, skills: Vec<SkillItem>) {
-        self.skill_selector.show(skills);
+    pub fn show_skill_menu(&mut self) {
+        self.skill_selector.show_menu();
+        self.popup_stack.push(PopupType::SkillSelector);
+    }
+
+    pub fn show_skill_list(&mut self, skills: Vec<SkillItem>) {
+        self.skill_selector.show_list(skills);
+        self.popup_stack.push(PopupType::SkillSelector);
+    }
+
+    pub fn show_skill_config(&mut self, skills: Vec<SkillItem>) {
+        self.skill_selector.show_config(skills);
         self.popup_stack.push(PopupType::SkillSelector);
     }
 
@@ -195,7 +205,7 @@ impl ChatView {
         self.skill_selector.move_down();
     }
 
-    pub fn skill_selector_confirm(&self) -> Option<SkillItem> {
+    pub fn skill_selector_confirm(&self) -> Option<SkillSelectorAction> {
         self.skill_selector.confirm_selection()
     }
 

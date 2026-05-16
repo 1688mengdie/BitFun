@@ -26,7 +26,7 @@ use super::model_selector::{ModelItem, ModelSelectorState};
 use super::provider_selector::{ProviderSelection, ProviderSelectorState};
 use super::agent_selector::{AgentItem, AgentSelectorState};
 use super::session_selector::{SessionAction, SessionItem, SessionSelectorState};
-use super::skill_selector::{SkillItem, SkillSelectorState};
+use super::skill_selector::{SkillItem, SkillSelectorAction, SkillSelectorState};
 use super::subagent_selector::{SubagentItem, SubagentSelectorState};
 use super::theme::{
     builtin_theme_json, resolve_appearance, resolve_effective_color_scheme, EffectiveColorScheme,
@@ -37,7 +37,14 @@ use crate::config::CliConfig;
 
 use bitfun_core::agentic::coordination::ConversationCoordinator;
 use bitfun_core::agentic::agents::{get_agent_registry, AgentInfo};
-use bitfun_core::agentic::tools::implementations::skills::registry::SkillRegistry;
+use bitfun_core::agentic::tools::implementations::skills::{
+    mode_overrides::{
+        load_project_mode_skills_document_local, save_project_mode_skills_document_local,
+        set_mode_skill_disabled_in_document, set_user_mode_skill_state,
+    },
+    registry::SkillRegistry,
+    ModeSkillInfo, SkillInfo,
+};
 use bitfun_core::service::config::GlobalConfigManager;
 
 /// Types of popups that can be shown on the startup page
@@ -776,10 +783,9 @@ impl StartupPage {
             match key.code {
                 KeyCode::Up => self.skill_selector.move_up(),
                 KeyCode::Down => self.skill_selector.move_down(),
-                KeyCode::Enter => {
-                    if let Some(selected) = self.skill_selector.confirm_selection() {
-                        self.skill_selector.hide();
-                        self.set_input(&format!("Execute the {} skill.", selected.name));
+                KeyCode::Enter | KeyCode::Char(' ') => {
+                    if let Some(action) = self.skill_selector.confirm_selection() {
+                        self.handle_skill_selector_action(action);
                     }
                 }
                 KeyCode::Esc => self.navigate_back(),
@@ -1538,27 +1544,35 @@ impl StartupPage {
 
     fn show_skill_selector(&mut self) {
         self.push_current_popup_to_stack();
+        self.skill_selector.show_menu();
+    }
 
+    fn show_available_skill_list(&mut self) {
         let skills = tokio::task::block_in_place(|| {
+            let workspace = self.workspace_path_buf();
+            let agent_type = self.agent_type.clone();
             tokio::runtime::Handle::current().block_on(async {
                 let registry = SkillRegistry::global();
-                registry.refresh().await;
-                registry.get_all_skills().await
+                registry
+                    .get_resolved_skills_for_workspace(
+                        Some(workspace.as_path()),
+                        Some(&agent_type),
+                    )
+                    .await
             })
         });
 
         if skills.is_empty() {
-            self.status = Some("No skills found.".to_string());
+            self.status = Some(format!(
+                "No enabled skills found for agent mode '{}'.",
+                self.agent_type
+            ));
             return;
         }
 
         let skill_items: Vec<SkillItem> = skills
             .into_iter()
-            .map(|s| SkillItem {
-                name: s.name,
-                description: s.description,
-                level: s.level.as_str().to_string(),
-            })
+            .map(Self::skill_item_from_info)
             .collect();
 
         if skill_items.is_empty() {
@@ -1566,7 +1580,126 @@ impl StartupPage {
             return;
         }
 
-        self.skill_selector.show(skill_items);
+        self.skill_selector.show_list(skill_items);
+    }
+
+    fn show_skill_config_selector(&mut self) {
+        let skills = tokio::task::block_in_place(|| {
+            let workspace = self.workspace_path_buf();
+            let agent_type = self.agent_type.clone();
+            tokio::runtime::Handle::current().block_on(async {
+                let registry = SkillRegistry::global();
+                registry
+                    .get_mode_skill_infos_for_workspace(Some(workspace.as_path()), &agent_type)
+                    .await
+            })
+        });
+
+        let skill_items: Vec<SkillItem> = skills
+            .into_iter()
+            .map(Self::skill_item_from_mode_info)
+            .collect();
+
+        if skill_items.is_empty() {
+            self.status = Some("No skills found.".to_string());
+            return;
+        }
+
+        self.skill_selector.show_config(skill_items);
+    }
+
+    fn handle_skill_selector_action(&mut self, action: SkillSelectorAction) {
+        match action {
+            SkillSelectorAction::ListSkills => self.show_available_skill_list(),
+            SkillSelectorAction::ConfigureSkills => self.show_skill_config_selector(),
+            SkillSelectorAction::Execute(selected) => {
+                self.skill_selector.hide();
+                self.set_input(&format!("Execute the {} skill.", selected.name));
+            }
+            SkillSelectorAction::Toggle(selected) => {
+                self.set_skill_enabled(&selected, !selected.enabled);
+                self.show_skill_config_selector();
+            }
+        }
+    }
+
+    fn set_skill_enabled(&mut self, selected: &SkillItem, enabled: bool) {
+        let workspace = self.workspace_path_buf();
+        let mode_id = self.agent_type.clone();
+        let skill = selected.clone();
+
+        let result: Result<(), String> = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                match skill.level.as_str() {
+                    "user" => {
+                        set_user_mode_skill_state(
+                            &mode_id,
+                            &skill.key,
+                            enabled,
+                            skill.default_enabled,
+                        )
+                        .await
+                        .map_err(|error| error.to_string())?;
+                    }
+                    "project" => {
+                        let mut document = load_project_mode_skills_document_local(&workspace)
+                            .await
+                            .map_err(|error| error.to_string())?;
+                        set_mode_skill_disabled_in_document(
+                            &mut document,
+                            &mode_id,
+                            &skill.key,
+                            !enabled,
+                        )
+                        .map_err(|error| error.to_string())?;
+                        save_project_mode_skills_document_local(&workspace, &document)
+                            .await
+                            .map_err(|error| error.to_string())?;
+                    }
+                    other => {
+                        return Err(format!("Unsupported skill level '{}'", other));
+                    }
+                }
+
+                Ok(())
+            })
+        });
+
+        self.status = Some(match result {
+            Ok(()) => format!(
+                "Skill '{}' {} for mode '{}'.",
+                selected.name,
+                if enabled { "enabled" } else { "disabled" },
+                self.agent_type
+            ),
+            Err(error) => format!("Failed to update skill '{}': {}", selected.name, error),
+        });
+    }
+
+    fn skill_item_from_info(info: SkillInfo) -> SkillItem {
+        SkillItem {
+            key: info.key,
+            name: info.name,
+            description: info.description,
+            level: info.level.as_str().to_string(),
+            enabled: true,
+            selected_for_runtime: true,
+            default_enabled: true,
+            is_shadowed: info.is_shadowed,
+        }
+    }
+
+    fn skill_item_from_mode_info(info: ModeSkillInfo) -> SkillItem {
+        SkillItem {
+            key: info.skill.key,
+            name: info.skill.name,
+            description: info.skill.description,
+            level: info.skill.level.as_str().to_string(),
+            enabled: info.effective_enabled,
+            selected_for_runtime: info.selected_for_runtime,
+            default_enabled: info.default_enabled,
+            is_shadowed: info.skill.is_shadowed,
+        }
     }
 
     fn show_subagent_selector(&mut self) {

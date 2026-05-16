@@ -42,7 +42,7 @@ pub const COMMAND_SPECS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "/skills",
-        description: "Browse and execute skills",
+        description: "List and configure skills",
     },
     CommandSpec {
         name: "/subagents",
@@ -94,7 +94,7 @@ pub const STARTUP_COMMAND_SPECS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "/skills",
-        description: "Browse and execute skills",
+        description: "List and configure skills",
     },
     CommandSpec {
         name: "/subagents",
