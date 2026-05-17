@@ -35,6 +35,8 @@ const SESSION_TRANSCRIPT_PREVIEW_CHAR_LIMIT: usize = 120;
 
 static JSON_FILE_WRITE_LOCKS: OnceLock<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>> = OnceLock::new();
 static SESSION_INDEX_LOCKS: OnceLock<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>> = OnceLock::new();
+static SESSION_METADATA_UPDATE_LOCKS: OnceLock<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>> =
+    OnceLock::new();
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct StoredDialogTurnFile {
@@ -544,6 +546,20 @@ impl PersistenceManager {
         let mut registry_guard = registry.lock().await;
         registry_guard
             .entry(index_path)
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone()
+    }
+
+    async fn get_session_metadata_update_lock(
+        &self,
+        workspace_path: &Path,
+        session_id: &str,
+    ) -> Arc<Mutex<()>> {
+        let metadata_path = self.metadata_path(workspace_path, session_id);
+        let registry = SESSION_METADATA_UPDATE_LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
+        let mut registry_guard = registry.lock().await;
+        registry_guard
+            .entry(metadata_path)
             .or_insert_with(|| Arc::new(Mutex::new(())))
             .clone()
     }
@@ -1928,12 +1944,74 @@ impl PersistenceManager {
         1 + assistant_text_count
     }
 
+    fn refresh_metadata_from_turns(
+        metadata: &mut SessionMetadata,
+        workspace_path: &Path,
+        turns: &[DialogTurnData],
+        last_active_at: u64,
+    ) {
+        metadata.turn_count = turns.len();
+        metadata.message_count = turns.iter().map(Self::estimate_turn_message_count).sum();
+        metadata.tool_call_count = turns.iter().map(DialogTurnData::count_tool_calls).sum();
+        metadata.last_active_at = last_active_at;
+        if metadata.workspace_path.is_none() {
+            metadata.workspace_path = Some(workspace_path.to_string_lossy().to_string());
+        }
+    }
+
+    fn try_refresh_metadata_for_saved_turn(
+        metadata: &mut SessionMetadata,
+        workspace_path: &Path,
+        previous_turn: Option<&DialogTurnData>,
+        turn: &DialogTurnData,
+        last_active_at: u64,
+    ) -> bool {
+        let new_message_count = Self::estimate_turn_message_count(turn);
+        let new_tool_call_count = turn.count_tool_calls();
+
+        match previous_turn {
+            Some(previous)
+                if previous.session_id == turn.session_id
+                    && previous.turn_index == turn.turn_index
+                    && turn.turn_index < metadata.turn_count =>
+            {
+                metadata.message_count = metadata
+                    .message_count
+                    .saturating_sub(Self::estimate_turn_message_count(previous))
+                    .saturating_add(new_message_count);
+                metadata.tool_call_count = metadata
+                    .tool_call_count
+                    .saturating_sub(previous.count_tool_calls())
+                    .saturating_add(new_tool_call_count);
+            }
+            None if turn.turn_index == metadata.turn_count => {
+                metadata.turn_count += 1;
+                metadata.message_count = metadata.message_count.saturating_add(new_message_count);
+                metadata.tool_call_count =
+                    metadata.tool_call_count.saturating_add(new_tool_call_count);
+            }
+            _ => return false,
+        }
+
+        metadata.last_active_at = last_active_at;
+        if metadata.workspace_path.is_none() {
+            metadata.workspace_path = Some(workspace_path.to_string_lossy().to_string());
+        }
+
+        true
+    }
+
     pub async fn save_dialog_turn(
         &self,
         workspace_path: &Path,
         turn: &DialogTurnData,
     ) -> BitFunResult<()> {
+        let save_started_at = Instant::now();
         self.ensure_runtime_for_write(workspace_path).await?;
+        let metadata_update_lock = self
+            .get_session_metadata_update_lock(workspace_path, &turn.session_id)
+            .await;
+        let _metadata_update_guard = metadata_update_lock.lock().await;
         let mut metadata = self
             .load_session_metadata(workspace_path, &turn.session_id)
             .await?
@@ -1944,32 +2022,81 @@ impl PersistenceManager {
         self.ensure_turns_dir(workspace_path, &turn.session_id)
             .await?;
 
+        let previous_turn = match self
+            .load_dialog_turn(workspace_path, &turn.session_id, turn.turn_index)
+            .await
+        {
+            Ok(turn) => turn,
+            Err(error) => {
+                warn!(
+                    "Failed to load existing dialog turn before save; falling back to full metadata refresh: session_id={} turn_index={} error={}",
+                    turn.session_id,
+                    turn.turn_index,
+                    error
+                );
+                None
+            }
+        };
+        let previous_turn_load_failed = previous_turn.is_none()
+            && self
+                .turn_path(workspace_path, &turn.session_id, turn.turn_index)
+                .exists();
+
         let file = StoredDialogTurnFile {
             schema_version: SESSION_STORAGE_SCHEMA_VERSION,
             turn: turn.clone(),
         };
+        let write_started_at = Instant::now();
         self.write_json_atomic(
             &self.turn_path(workspace_path, &turn.session_id, turn.turn_index),
             &file,
         )
         .await?;
+        let write_duration = write_started_at.elapsed();
 
-        let turns = self
-            .load_session_turns(workspace_path, &turn.session_id)
-            .await?;
-        metadata.turn_count = turns.len();
-        metadata.message_count = turns.iter().map(Self::estimate_turn_message_count).sum();
-        metadata.tool_call_count = turns.iter().map(DialogTurnData::count_tool_calls).sum();
-        metadata.last_active_at = turn
+        let last_active_at = turn
             .end_time
             .unwrap_or_else(|| Self::system_time_to_unix_ms(SystemTime::now()));
-        metadata.workspace_path = metadata.workspace_path.clone().or_else(|| {
-            turns
-                .first()
-                .and(None::<String>)
-                .or_else(|| Some(workspace_path.to_string_lossy().to_string()))
-        });
-        self.save_session_metadata(workspace_path, &metadata).await
+        let mut metadata_refresh_mode = "incremental";
+        if previous_turn_load_failed
+            || !Self::try_refresh_metadata_for_saved_turn(
+                &mut metadata,
+                workspace_path,
+                previous_turn.as_ref(),
+                turn,
+                last_active_at,
+            )
+        {
+            metadata_refresh_mode = "full_scan";
+            let turns = self
+                .load_session_turns(workspace_path, &turn.session_id)
+                .await?;
+            Self::refresh_metadata_from_turns(
+                &mut metadata,
+                workspace_path,
+                &turns,
+                last_active_at,
+            );
+        }
+
+        let metadata_started_at = Instant::now();
+        self.save_session_metadata(workspace_path, &metadata)
+            .await?;
+        let metadata_duration = metadata_started_at.elapsed();
+        let total_duration = save_started_at.elapsed();
+        if total_duration >= Duration::from_millis(80) || metadata_refresh_mode == "full_scan" {
+            debug!(
+                "Saved dialog turn: session_id={} turn_index={} metadata_refresh={} write_duration_ms={} metadata_duration_ms={} total_duration_ms={}",
+                turn.session_id,
+                turn.turn_index,
+                metadata_refresh_mode,
+                write_duration.as_millis(),
+                metadata_duration.as_millis(),
+                total_duration.as_millis()
+            );
+        }
+
+        Ok(())
     }
 
     pub async fn load_dialog_turn(
@@ -2422,7 +2549,8 @@ mod tests {
     use crate::agentic::core::{Message, Session, SessionConfig, SessionKind, ToolResult};
     use crate::infrastructure::PathManager;
     use crate::service::session::{
-        DialogTurnData, SessionMetadata, SessionTranscriptExportOptions, UserMessageData,
+        DialogTurnData, ModelRoundData, SessionMetadata, SessionTranscriptExportOptions,
+        TextItemData, UserMessageData,
     };
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
@@ -2583,6 +2711,213 @@ mod tests {
         assert_eq!(loaded_session.dialog_turn_ids, vec!["turn-1".to_string()]);
         assert_eq!(loaded_turns.len(), 1);
         assert_eq!(loaded_turns[0].turn_id, "turn-1");
+    }
+
+    fn user_message(content: &str) -> UserMessageData {
+        UserMessageData {
+            id: format!("user-{}", content),
+            content: content.to_string(),
+            timestamp: 0,
+            metadata: None,
+        }
+    }
+
+    fn text_item(id: &str, content: &str) -> TextItemData {
+        TextItemData {
+            id: id.to_string(),
+            content: content.to_string(),
+            is_streaming: false,
+            timestamp: 0,
+            is_markdown: true,
+            order_index: None,
+            is_subagent_item: None,
+            parent_task_tool_id: None,
+            subagent_session_id: None,
+            status: None,
+        }
+    }
+
+    fn round_with_text(turn_id: &str, text_items: Vec<TextItemData>) -> ModelRoundData {
+        ModelRoundData {
+            id: format!("round-{}", turn_id),
+            turn_id: turn_id.to_string(),
+            round_index: 0,
+            timestamp: 0,
+            text_items,
+            tool_items: Vec::new(),
+            thinking_items: Vec::new(),
+            start_time: 0,
+            end_time: Some(0),
+            duration_ms: Some(0),
+            provider_id: None,
+            model_id: None,
+            model_alias: None,
+            first_chunk_ms: None,
+            first_visible_output_ms: None,
+            stream_duration_ms: None,
+            attempt_count: None,
+            failure_category: None,
+            token_details: None,
+            status: "completed".to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn save_dialog_turn_updates_metadata_without_scanning_unrelated_turn_files() {
+        let workspace = TestWorkspace::new();
+        let manager = PersistenceManager::new(Arc::new(PathManager::new().expect("path manager")))
+            .expect("persistence manager");
+        let session_id = Uuid::new_v4().to_string();
+        let session = Session::new_with_id(
+            session_id.clone(),
+            "Incremental metadata".to_string(),
+            "agent".to_string(),
+            SessionConfig {
+                workspace_path: Some(workspace.path().to_string_lossy().to_string()),
+                ..Default::default()
+            },
+        );
+
+        manager
+            .save_session(workspace.path(), &session)
+            .await
+            .expect("session should save");
+
+        let mut turn_0 = DialogTurnData::new(
+            "turn-0".to_string(),
+            0,
+            session_id.clone(),
+            user_message("first"),
+        );
+        turn_0.model_rounds.push(round_with_text(
+            "turn-0",
+            vec![text_item("text-0", "first response")],
+        ));
+        turn_0.mark_completed();
+        manager
+            .save_dialog_turn(workspace.path(), &turn_0)
+            .await
+            .expect("first turn should save");
+
+        let mut turn_1 = DialogTurnData::new(
+            "turn-1".to_string(),
+            1,
+            session_id.clone(),
+            user_message("second"),
+        );
+        turn_1.model_rounds.push(round_with_text(
+            "turn-1",
+            vec![text_item("text-1", "second response")],
+        ));
+        turn_1.mark_completed();
+        manager
+            .save_dialog_turn(workspace.path(), &turn_1)
+            .await
+            .expect("second turn should save");
+
+        std::fs::write(
+            manager.turn_path(workspace.path(), &session_id, 0),
+            "{ not valid json",
+        )
+        .expect("old turn file should be replaceable for test");
+
+        turn_1.model_rounds[0]
+            .text_items
+            .push(text_item("text-2", "additional response"));
+        manager
+            .save_dialog_turn(workspace.path(), &turn_1)
+            .await
+            .expect("saving current turn should not scan unrelated old turn files");
+
+        let metadata = manager
+            .load_session_metadata(workspace.path(), &session_id)
+            .await
+            .expect("metadata should load")
+            .expect("metadata should exist");
+        assert_eq!(metadata.turn_count, 2);
+        assert_eq!(metadata.message_count, 5);
+    }
+
+    #[tokio::test]
+    async fn concurrent_dialog_turn_saves_keep_metadata_counts_consistent() {
+        let workspace = TestWorkspace::new();
+        let manager = PersistenceManager::new(Arc::new(PathManager::new().expect("path manager")))
+            .expect("persistence manager");
+        let session_id = Uuid::new_v4().to_string();
+        let session = Session::new_with_id(
+            session_id.clone(),
+            "Concurrent metadata".to_string(),
+            "agent".to_string(),
+            SessionConfig {
+                workspace_path: Some(workspace.path().to_string_lossy().to_string()),
+                ..Default::default()
+            },
+        );
+
+        manager
+            .save_session(workspace.path(), &session)
+            .await
+            .expect("session should save");
+
+        let mut turn_0 = DialogTurnData::new(
+            "turn-0".to_string(),
+            0,
+            session_id.clone(),
+            user_message("first"),
+        );
+        turn_0.model_rounds.push(round_with_text(
+            "turn-0",
+            vec![text_item("text-0", "first response")],
+        ));
+        turn_0.mark_completed();
+        manager
+            .save_dialog_turn(workspace.path(), &turn_0)
+            .await
+            .expect("first turn should save");
+
+        let mut turn_1 = DialogTurnData::new(
+            "turn-1".to_string(),
+            1,
+            session_id.clone(),
+            user_message("second"),
+        );
+        turn_1.model_rounds.push(round_with_text(
+            "turn-1",
+            vec![text_item("text-1", "second response")],
+        ));
+        turn_1.mark_completed();
+        manager
+            .save_dialog_turn(workspace.path(), &turn_1)
+            .await
+            .expect("second turn should save");
+
+        let mut updated_turn_0 = turn_0.clone();
+        updated_turn_0.model_rounds[0]
+            .text_items
+            .push(text_item("text-0b", "first follow-up"));
+
+        let mut updated_turn_1 = turn_1.clone();
+        updated_turn_1.model_rounds[0]
+            .text_items
+            .push(text_item("text-1b", "second follow-up"));
+        updated_turn_1.model_rounds[0]
+            .text_items
+            .push(text_item("text-1c", "second final"));
+
+        let (first_result, second_result) = tokio::join!(
+            manager.save_dialog_turn(workspace.path(), &updated_turn_0),
+            manager.save_dialog_turn(workspace.path(), &updated_turn_1)
+        );
+        first_result.expect("first concurrent save should succeed");
+        second_result.expect("second concurrent save should succeed");
+
+        let metadata = manager
+            .load_session_metadata(workspace.path(), &session_id)
+            .await
+            .expect("metadata should load")
+            .expect("metadata should exist");
+        assert_eq!(metadata.turn_count, 2);
+        assert_eq!(metadata.message_count, 7);
     }
 
     #[test]

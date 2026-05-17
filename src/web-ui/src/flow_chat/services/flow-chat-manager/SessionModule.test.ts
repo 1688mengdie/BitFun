@@ -185,4 +185,45 @@ describe('SessionModule historical session coordination', () => {
       contextRestoreState: 'ready',
     });
   });
+
+  it('does not recreate a view-restored session with loaded turns when context restore fails', async () => {
+    const { context } = createContext(createSession({
+      isHistorical: false,
+      historyState: 'ready',
+      contextRestoreState: 'pending',
+      dialogTurns: [{ id: 'turn-1' } as any],
+    } as any));
+    agentApiMocks.ensureCoordinatorSession.mockRejectedValueOnce(
+      new Error('Session metadata not found')
+    );
+
+    await expect(ensureBackendSession(context, 'history-1')).rejects.toThrow();
+
+    expect(agentApiMocks.ensureCoordinatorSession).toHaveBeenCalledTimes(1);
+    expect(agentApiMocks.createSession).not.toHaveBeenCalled();
+    expect(context.flowChatStore.getState().sessions.get('history-1')).toMatchObject({
+      contextRestoreState: 'failed',
+    });
+  });
+
+  it('keeps recreate fallback for empty pending context sessions', async () => {
+    const { context } = createContext(createSession({
+      isHistorical: false,
+      historyState: 'ready',
+      contextRestoreState: 'pending',
+      dialogTurns: [],
+    } as any));
+    agentApiMocks.ensureCoordinatorSession.mockRejectedValueOnce(
+      new Error('Session metadata not found')
+    );
+    agentApiMocks.createSession.mockResolvedValueOnce(undefined);
+
+    await ensureBackendSession(context, 'history-1');
+
+    expect(agentApiMocks.ensureCoordinatorSession).toHaveBeenCalledTimes(1);
+    expect(agentApiMocks.createSession).toHaveBeenCalledTimes(1);
+    expect(context.flowChatStore.getState().sessions.get('history-1')).toMatchObject({
+      contextRestoreState: 'ready',
+    });
+  });
 });

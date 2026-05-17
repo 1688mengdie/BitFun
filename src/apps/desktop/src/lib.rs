@@ -671,6 +671,7 @@ pub async fn run() {
             get_clipboard_files,
             paste_files,
             get_config,
+            get_configs,
             computer_use_get_status,
             computer_use_request_permissions,
             computer_use_open_system_settings,

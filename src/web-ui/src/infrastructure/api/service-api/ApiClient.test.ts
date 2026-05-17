@@ -63,7 +63,7 @@ describe('ApiClient startup trace classification', () => {
     expect(loggerMocks.error).not.toHaveBeenCalled();
   });
 
-  it('uses the large response estimate cap for session view restore', async () => {
+  it('uses a bounded response estimate cap for session view restore', async () => {
     adapterMocks.request.mockResolvedValueOnce({ turns: [] });
     const client = new ApiClient({ enableLogging: false, retries: 0 });
 
@@ -76,7 +76,7 @@ describe('ApiClient startup trace classification', () => {
 
     expect(traceMocks.estimateJsonBytes).toHaveBeenCalledWith(
       { turns: [] },
-      32 * 1024 * 1024
+      2 * 1024 * 1024
     );
   });
 });

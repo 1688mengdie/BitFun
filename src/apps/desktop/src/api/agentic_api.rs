@@ -20,6 +20,12 @@ use bitfun_core::agentic::deep_review_policy::{
 use bitfun_core::agentic::image_analysis::ImageContextData;
 use bitfun_core::agentic::tools::image_context::get_image_context;
 use bitfun_core::service::session::DialogTurnData;
+
+const SESSION_VIEW_TOOL_RESULT_TOTAL_CHAR_BUDGET: usize = 512 * 1024;
+const SESSION_VIEW_TOOL_RESULT_STRING_CHAR_LIMIT: usize = 16 * 1024;
+const SESSION_VIEW_TRUNCATED_MARKER: &str = "\n...[truncated for session view]";
+const SESSION_VIEW_OMITTED_MARKER: &str = "[truncated for session view]";
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateSessionRequest {
@@ -301,16 +307,73 @@ fn restore_turn_payload_stats(turns: &[DialogTurnData]) -> RestoreTurnPayloadSta
     stats
 }
 
-fn omit_assistant_only_tool_results_for_session_view(turns: &mut [DialogTurnData]) {
+fn truncate_string_for_session_view(text: &str, remaining_budget: &mut usize) -> Option<String> {
+    let char_count = text.chars().count();
+    let available = SESSION_VIEW_TOOL_RESULT_STRING_CHAR_LIMIT.min(*remaining_budget);
+
+    if char_count <= available {
+        *remaining_budget = remaining_budget.saturating_sub(char_count);
+        return None;
+    }
+
+    let omitted_chars = SESSION_VIEW_OMITTED_MARKER.chars().count();
+    if available <= omitted_chars {
+        *remaining_budget = remaining_budget.saturating_sub(omitted_chars.min(*remaining_budget));
+        return Some(SESSION_VIEW_OMITTED_MARKER.to_string());
+    }
+
+    let suffix_chars = SESSION_VIEW_TRUNCATED_MARKER.chars().count();
+    if available <= suffix_chars {
+        *remaining_budget = remaining_budget.saturating_sub(omitted_chars.min(*remaining_budget));
+        return Some(SESSION_VIEW_OMITTED_MARKER.to_string());
+    }
+
+    let keep_chars = available - suffix_chars;
+    let mut preview = text.chars().take(keep_chars).collect::<String>();
+    preview.push_str(SESSION_VIEW_TRUNCATED_MARKER);
+    let preview_chars = preview.chars().count();
+    *remaining_budget = remaining_budget.saturating_sub(preview_chars);
+    Some(preview)
+}
+
+fn compact_json_for_session_view(value: &mut serde_json::Value, remaining_budget: &mut usize) {
+    match value {
+        serde_json::Value::String(text) => {
+            if let Some(preview) = truncate_string_for_session_view(text, remaining_budget) {
+                *text = preview;
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                compact_json_for_session_view(item, remaining_budget);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            for item in map.values_mut() {
+                compact_json_for_session_view(item, remaining_budget);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn compact_tool_results_for_session_view(turns: &mut [DialogTurnData]) {
+    let mut remaining_budget = SESSION_VIEW_TOOL_RESULT_TOTAL_CHAR_BUDGET;
     for turn in turns {
         for round in &mut turn.model_rounds {
             for tool in &mut round.tool_items {
                 if let Some(result) = tool.tool_result.as_mut() {
                     result.result_for_assistant = None;
+                    compact_json_for_session_view(&mut result.result, &mut remaining_budget);
                 }
             }
         }
     }
+}
+
+#[cfg(test)]
+fn omit_assistant_only_tool_results_for_session_view(turns: &mut [DialogTurnData]) {
+    compact_tool_results_for_session_view(turns);
 }
 
 #[derive(Debug, Deserialize)]
@@ -1089,7 +1152,7 @@ pub async fn restore_session_view(
         }
     }
 
-    omit_assistant_only_tool_results_for_session_view(&mut turns);
+    compact_tool_results_for_session_view(&mut turns);
 
     debug!(
         "restore_session_view completed: trace_id={}, session_id={}, turn_count={}, context_restore_state=pending, duration_ms={}",
@@ -1511,6 +1574,68 @@ mod tests {
             .as_ref()
             .expect("tool result should remain present");
         assert_eq!(tool_result.result["output"], "visible output");
+        assert_eq!(tool_result.result_for_assistant, None);
+    }
+
+    #[test]
+    fn session_view_tool_result_compaction_truncates_large_visible_results() {
+        let large_output = "x".repeat(80 * 1024);
+        let mut turns = vec![DialogTurnData {
+            turn_id: "turn-1".to_string(),
+            turn_index: 0,
+            session_id: "session-1".to_string(),
+            timestamp: 1,
+            kind: Default::default(),
+            user_message: UserMessageData {
+                id: "user-1".to_string(),
+                content: "hello".to_string(),
+                timestamp: 1,
+                metadata: None,
+            },
+            model_rounds: vec![ModelRoundData {
+                id: "round-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                round_index: 0,
+                timestamp: 1,
+                text_items: vec![],
+                tool_items: vec![tool_item(
+                    "Bash",
+                    json!({ "output": large_output, "exit_code": 0 }),
+                    Some("assistant-only payload"),
+                )],
+                thinking_items: vec![],
+                start_time: 1,
+                end_time: Some(2),
+                duration_ms: Some(1),
+                provider_id: None,
+                model_id: None,
+                model_alias: None,
+                first_chunk_ms: None,
+                first_visible_output_ms: None,
+                stream_duration_ms: None,
+                attempt_count: None,
+                failure_category: None,
+                token_details: None,
+                status: "completed".to_string(),
+            }],
+            start_time: 1,
+            end_time: Some(2),
+            duration_ms: Some(1),
+            status: TurnStatus::Completed,
+        }];
+
+        omit_assistant_only_tool_results_for_session_view(&mut turns);
+
+        let tool_result = turns[0].model_rounds[0].tool_items[0]
+            .tool_result
+            .as_ref()
+            .expect("tool result should remain present");
+        let output = tool_result.result["output"]
+            .as_str()
+            .expect("output should remain a visible string preview");
+        assert!(output.len() < 80 * 1024);
+        assert!(output.contains("truncated for session view"));
+        assert_eq!(tool_result.result["exit_code"], 0);
         assert_eq!(tool_result.result_for_assistant, None);
     }
 }

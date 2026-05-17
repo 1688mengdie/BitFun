@@ -659,11 +659,12 @@ export async function ensureBackendSession(
     latestSession.contextRestoreState === 'pending' ||
     latestSession.contextRestoreState === 'failed';
   const needsBackendSetup = isHistoricalSession || isFirstTurn || requiresContextRestore;
+  const hasLoadedTurns = latestSession.dialogTurns.length > 0;
   /** Avoid createSession when historical data is already loaded but backend files are missing (e.g. new SSH connection id). */
   const allowRecreateOnCoordinatorFailure =
     needsBackendSetup &&
-    !requiresContextRestore &&
-    !(isHistoricalSession && session.dialogTurns.length > 1);
+    !(requiresContextRestore && hasLoadedTurns) &&
+    !(isHistoricalSession && hasLoadedTurns);
 
   const markBackendContextReady = () => {
     if (!isHistoricalSession && !requiresContextRestore) return;
@@ -704,7 +705,7 @@ export async function ensureBackendSession(
     markBackendContextReady();
   };
 
-  if (requiresContextRestore) {
+  const restorePendingBackendContext = async () => {
     if (!context.pendingContextRestores) {
       context.pendingContextRestores = new Map();
     }
@@ -730,10 +731,14 @@ export async function ensureBackendSession(
     });
     context.pendingContextRestores.set(restoreKey, restorePromise);
     await restorePromise;
-    return;
-  }
+  };
 
   try {
+    if (requiresContextRestore) {
+      await restorePendingBackendContext();
+      return;
+    }
+
     await ensureCoordinator();
   } catch (e: any) {
     if (!allowRecreateOnCoordinatorFailure) {

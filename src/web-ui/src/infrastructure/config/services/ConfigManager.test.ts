@@ -3,6 +3,7 @@ import { configManager } from './ConfigManager';
 
 const configApiMocks = vi.hoisted(() => ({
   getConfig: vi.fn(),
+  getConfigs: vi.fn(),
   setConfig: vi.fn(),
   resetConfig: vi.fn(),
   exportConfig: vi.fn(),
@@ -53,5 +54,26 @@ describe('ConfigManager', () => {
 
     await expect(Promise.all([first, second])).resolves.toEqual(['debug', 'debug']);
     expect(configApiMocks.getConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it('reloads startup config paths through one batch call', async () => {
+    configApiMocks.getConfigs.mockResolvedValueOnce({
+      'ai.models': [],
+      'ai.agent_models': { coder: 'gpt-5' },
+      'ai.func_agent_models': { title: 'gpt-5-mini' },
+      'ai.default_models': { chat: 'gpt-5' },
+    });
+
+    await configManager.reload();
+
+    expect(configApiMocks.getConfigs).toHaveBeenCalledTimes(1);
+    expect(configApiMocks.getConfigs).toHaveBeenCalledWith([
+      'ai.models',
+      'ai.agent_models',
+      'ai.func_agent_models',
+      'ai.default_models',
+    ]);
+    expect(configApiMocks.getConfig).not.toHaveBeenCalled();
+    expect(configManager.get('ai.default_models')).toEqual({ chat: 'gpt-5' });
   });
 });

@@ -89,6 +89,18 @@ function isUnsupportedTauriCommandError(error: unknown, command: string): boolea
     normalizedMessage.includes('is not a function');
 }
 
+function restoreCommandSupportKey(
+  command: string,
+  remoteConnectionId?: string,
+  remoteSshHost?: string
+): string {
+  return JSON.stringify([
+    command,
+    remoteConnectionId?.trim() || 'local',
+    remoteSshHost?.trim().toLowerCase() || '',
+  ]);
+}
+
 function isValidPersistedAgentType(agentType: string): boolean {
   return VALID_AGENT_TYPES.has(agentType) || agentType.startsWith('acp:');
 }
@@ -2095,10 +2107,20 @@ export class FlowChatStore {
         startupTrace.markPhase('historical_session_restore_start', { remote, sessionTraceId });
         try {
           const { agentAPI } = await import('@/infrastructure/api');
+          const restoreSessionViewSupportKey = restoreCommandSupportKey(
+            'restore_session_view',
+            remoteConnectionId,
+            remoteSshHost
+          );
+          const restoreSessionWithTurnsSupportKey = restoreCommandSupportKey(
+            'restore_session_with_turns',
+            remoteConnectionId,
+            remoteSshHost
+          );
           const restoreWithTurnsOrSession = async (): Promise<void> => {
             if (
               typeof agentAPI.restoreSessionWithTurns === 'function' &&
-              !this.unsupportedRestoreCommands.has('restore_session_with_turns')
+              !this.unsupportedRestoreCommands.has(restoreSessionWithTurnsSupportKey)
             ) {
               try {
                 const restored = await agentAPI.restoreSessionWithTurns(
@@ -2115,7 +2137,7 @@ export class FlowChatStore {
                 if (!isUnsupportedTauriCommandError(error, 'restore_session_with_turns')) {
                   throw error;
                 }
-                this.unsupportedRestoreCommands.add('restore_session_with_turns');
+                this.unsupportedRestoreCommands.add(restoreSessionWithTurnsSupportKey);
                 startupTrace.markPhase('historical_session_restore_fallback', {
                   remote,
                   sessionTraceId,
@@ -2138,7 +2160,7 @@ export class FlowChatStore {
 
           if (
             typeof agentAPI.restoreSessionView === 'function' &&
-            !this.unsupportedRestoreCommands.has('restore_session_view')
+            !this.unsupportedRestoreCommands.has(restoreSessionViewSupportKey)
           ) {
             try {
               const restored = await agentAPI.restoreSessionView(
@@ -2155,7 +2177,7 @@ export class FlowChatStore {
               if (!isUnsupportedTauriCommandError(error, 'restore_session_view')) {
                 throw error;
               }
-              this.unsupportedRestoreCommands.add('restore_session_view');
+              this.unsupportedRestoreCommands.add(restoreSessionViewSupportKey);
               startupTrace.markPhase('historical_session_restore_fallback', {
                 remote,
                 sessionTraceId,

@@ -28,4 +28,22 @@ describe('snapshot refresh policy', () => {
     })).toBe(true);
     expect(shouldRefreshSnapshotForSession(null)).toBe(true);
   });
+
+  it('defers snapshot refresh while backend context restore is pending', () => {
+    expect(shouldRefreshSnapshotForSession({
+      isHistorical: false,
+      historyState: 'ready',
+      contextRestoreState: 'pending',
+    })).toBe(false);
+    expect(shouldRefreshSnapshotForSession({
+      isHistorical: true,
+      historyState: 'ready',
+      contextRestoreState: 'pending',
+    })).toBe(false);
+    expect(shouldRefreshSnapshotForSession({
+      isHistorical: false,
+      historyState: 'ready',
+      contextRestoreState: 'ready',
+    })).toBe(true);
+  });
 });

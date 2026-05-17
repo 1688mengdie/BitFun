@@ -762,6 +762,72 @@ describe('FlowChatStore historical session hydration state', () => {
     expect(apiMocks.loadSessionTurns).not.toHaveBeenCalled();
   });
 
+  it('scopes unsupported restore command caching by remote identity', async () => {
+    const restoredTurn = (sessionId: string) => ({
+      turnId: `${sessionId}-turn-1`,
+      turnIndex: 0,
+      sessionId,
+      timestamp: 1,
+      userMessage: { id: `${sessionId}-user-1`, content: 'hello', timestamp: 1 },
+      modelRounds: [],
+      startTime: 1,
+      status: 'completed',
+    });
+    apiMocks.restoreSessionView
+      .mockRejectedValueOnce(new Error('unknown command restore_session_view'))
+      .mockResolvedValueOnce({
+        session: {
+          sessionId: 'history-2',
+          sessionName: 'History 2',
+          agentType: 'agentic',
+          state: 'Idle',
+          turnCount: 1,
+          createdAt: 1,
+        },
+        turns: [restoredTurn('history-2')],
+        contextRestoreState: 'pending',
+      });
+    apiMocks.restoreSessionWithTurns.mockResolvedValueOnce({
+      session: {
+        sessionId: 'history-1',
+        sessionName: 'History 1',
+        agentType: 'agentic',
+        state: 'Idle',
+        turnCount: 1,
+        createdAt: 1,
+      },
+      turns: [restoredTurn('history-1')],
+    });
+    flowChatStore.setState(() => ({
+      sessions: new Map([
+        ['history-1', createSession({
+          sessionId: 'history-1',
+          isHistorical: true,
+          historyState: 'metadata-only',
+        })],
+        ['history-2', createSession({
+          sessionId: 'history-2',
+          isHistorical: true,
+          historyState: 'metadata-only',
+        })],
+      ]),
+      activeSessionId: 'history-1',
+    }));
+
+    await flowChatStore.loadSessionHistory(
+      'history-1',
+      '/remote/workspace',
+      undefined,
+      'remote-1',
+      'old.example'
+    );
+    await flowChatStore.loadSessionHistory('history-2', 'D:/workspace/BitFun');
+
+    expect(apiMocks.restoreSessionView).toHaveBeenCalledTimes(2);
+    expect(apiMocks.restoreSessionWithTurns).toHaveBeenCalledTimes(1);
+    expect(apiMocks.loadSessionTurns).not.toHaveBeenCalled();
+  });
+
   it('falls back to legacy restore and turn loading when restoreSessionWithTurns is unavailable on the backend', async () => {
     (apiMocks as any).restoreSessionView = undefined;
     const restoredTurn = {

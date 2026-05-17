@@ -20,13 +20,13 @@ import { sanitizeErrorForLog, sanitizeLogValue, sanitizeTextForLog } from '../lo
 
 const log = createLogger('ApiClient');
 const sanitizeForLog = sanitizeLogValue;
-const LARGE_SESSION_RESPONSE_ESTIMATE_MAX_BYTES = 32 * 1024 * 1024;
+const SESSION_RESPONSE_ESTIMATE_MAX_BYTES = 2 * 1024 * 1024;
 
 function responseEstimateMaxBytes(command: string): number | undefined {
   return command === 'restore_session_view' ||
     command === 'restore_session_with_turns' ||
     command === 'load_session_turns'
-    ? LARGE_SESSION_RESPONSE_ESTIMATE_MAX_BYTES
+    ? SESSION_RESPONSE_ESTIMATE_MAX_BYTES
     : undefined;
 }
 

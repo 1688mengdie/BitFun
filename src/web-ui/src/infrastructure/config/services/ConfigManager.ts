@@ -85,6 +85,22 @@ class ConfigManagerImpl implements IConfigManager {
     return resolvedConfig as T;
   }
 
+  private async readConfigs(paths: string[]): Promise<Record<string, unknown>> {
+    const configs = await configAPI.getConfigs(paths);
+    const resolvedConfigs: Record<string, unknown> = {};
+
+    for (const path of paths) {
+      const resolvedConfig = path === 'ai.models'
+        ? await this.migrateLegacyAiModelsIfNeeded(configs[path])
+        : configs[path];
+
+      this.configCache.set(path, resolvedConfig);
+      resolvedConfigs[path] = resolvedConfig;
+    }
+
+    return resolvedConfigs;
+  }
+
   async getConfig<T = any>(path?: string): Promise<T> {
     try {
       
@@ -286,11 +302,13 @@ class ConfigManagerImpl implements IConfigManager {
     try {
       this.configCache.clear();
       this.inFlightReads.clear();
-      
-      await this.getConfig('ai.models');
-      await this.getConfig('ai.agent_models');
-      await this.getConfig('ai.func_agent_models');
-      await this.getConfig('ai.default_models');
+
+      await this.readConfigs([
+        'ai.models',
+        'ai.agent_models',
+        'ai.func_agent_models',
+        'ai.default_models',
+      ]);
     } catch (error) {
       log.error('Failed to reload config', error);
       throw error;
