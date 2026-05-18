@@ -1469,6 +1469,7 @@ mod tests {
             session_id: "session-1".to_string(),
             timestamp: 1,
             kind: Default::default(),
+            agent_type: None,
             user_message: UserMessageData {
                 id: "user-1".to_string(),
                 content: "hello".to_string(),
@@ -1529,6 +1530,7 @@ mod tests {
             session_id: "session-1".to_string(),
             timestamp: 1,
             kind: Default::default(),
+            agent_type: None,
             user_message: UserMessageData {
                 id: "user-1".to_string(),
                 content: "hello".to_string(),
@@ -1586,6 +1588,7 @@ mod tests {
             session_id: "session-1".to_string(),
             timestamp: 1,
             kind: Default::default(),
+            agent_type: None,
             user_message: UserMessageData {
                 id: "user-1".to_string(),
                 content: "hello".to_string(),
