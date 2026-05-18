@@ -1,26 +1,26 @@
 //! Tool framework - Tool interface definition and execution context
+use crate::agentic::WorkspaceBinding;
 use crate::agentic::coordination::get_global_coordinator;
 use crate::agentic::session::EvidenceLedgerCheckpoint;
 use crate::agentic::tools::post_call_hooks;
 use crate::agentic::tools::restrictions::{
-    is_local_path_within_root, is_remote_posix_path_within_root, ToolPathOperation,
-    ToolRuntimeRestrictions,
+    ToolPathOperation, ToolRuntimeRestrictions, is_local_path_within_root,
+    is_remote_posix_path_within_root,
 };
 use crate::agentic::tools::workspace_paths::{
     build_bitfun_runtime_uri, is_bitfun_runtime_uri, normalize_runtime_relative_path,
     parse_bitfun_runtime_uri,
 };
 use crate::agentic::workspace::WorkspaceServices;
-use crate::agentic::WorkspaceBinding;
 use crate::infrastructure::get_path_manager_arc;
 use crate::service::git::{GitDiffParams, GitService};
 use crate::service::remote_ssh::workspace_state::remote_workspace_runtime_root;
-use crate::service::{get_workspace_runtime_service_arc, WorkspaceRuntimeContext};
+use crate::service::{WorkspaceRuntimeContext, get_workspace_runtime_service_arc};
 use crate::util::errors::BitFunResult;
 use async_trait::async_trait;
 pub use bitfun_agent_tools::{
-    DynamicMcpToolInfo, DynamicToolInfo, ToolPathBackend, ToolPathResolution, ToolRenderOptions,
-    ToolResult, ValidationResult,
+    DynamicMcpToolInfo, DynamicToolInfo, ToolExposure, ToolPathBackend, ToolPathResolution,
+    ToolRenderOptions, ToolResult, ValidationResult,
 };
 use log::warn;
 use serde_json::Value;
@@ -29,11 +29,6 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tokio_util::sync::CancellationToken;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ToolExposure {
-    Expanded,
-    Collapsed,
-}
 /// Tool use context
 #[derive(Debug, Clone)]
 pub struct ToolUseContext {
@@ -442,8 +437,8 @@ impl ToolUseContext {
 #[cfg(test)]
 mod path_resolution_tests {
     use super::ToolUseContext;
-    use crate::agentic::tools::ToolRuntimeRestrictions;
     use crate::agentic::WorkspaceBinding;
+    use crate::agentic::tools::ToolRuntimeRestrictions;
     use std::collections::HashMap;
     use std::path::PathBuf;
 
@@ -715,7 +710,7 @@ mod shared_context_tests {
     use crate::agentic::tools::ToolRuntimeRestrictions;
     use crate::util::errors::BitFunResult;
     use async_trait::async_trait;
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
     use std::collections::HashMap;
 
     struct MeasurementReadTool;

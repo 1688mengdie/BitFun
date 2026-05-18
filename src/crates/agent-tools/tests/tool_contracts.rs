@@ -1,6 +1,9 @@
 use bitfun_agent_tools::{
-    DynamicMcpToolInfo, DynamicToolInfo, InputValidator, ToolImageAttachment, ToolPathBackend,
+    DynamicMcpToolInfo, DynamicToolInfo, GET_TOOL_SPEC_TOOL_NAME, InputValidator, ToolExposure,
+    ToolImageAttachment, ToolManifestDefinition, ToolManifestPolicyTool, ToolPathBackend,
     ToolPathResolution, ToolRenderOptions, ToolResult, ToolRuntimeRestrictions, ValidationResult,
+    build_collapsed_tool_stub_definition, resolve_tool_manifest_policy,
+    sort_tool_manifest_definitions,
 };
 use bitfun_agent_tools::{
     DynamicToolDescriptor, DynamicToolProvider, PortResult, ToolDecorator, ToolRegistry,
@@ -222,6 +225,181 @@ fn dynamic_tool_provider_contract_is_available_from_agent_tools_boundary() {
 
     assert_provider_contract::<MarkerProvider>();
     assert_decorator_contract::<MarkerDecorator>();
+}
+
+#[test]
+fn tool_exposure_contract_keeps_lightweight_wire_shape() {
+    let collapsed = ToolExposure::Collapsed;
+    let value = serde_json::to_value(collapsed).expect("serialize exposure");
+
+    assert_eq!(value, json!("Collapsed"));
+    assert_eq!(
+        serde_json::from_value::<ToolExposure>(value).expect("deserialize exposure"),
+        ToolExposure::Collapsed
+    );
+}
+
+#[test]
+fn tool_manifest_definition_keeps_lightweight_wire_shape() {
+    let definition = ToolManifestDefinition::new(
+        "Read",
+        "Read a file",
+        json!({
+            "type": "object",
+            "properties": {
+                "file_path": { "type": "string" }
+            },
+            "required": ["file_path"]
+        }),
+    );
+
+    let value = serde_json::to_value(&definition).expect("serialize definition");
+
+    assert_eq!(value["name"], json!("Read"));
+    assert_eq!(value["description"], json!("Read a file"));
+    assert_eq!(value["parameters"]["required"], json!(["file_path"]));
+    assert_eq!(
+        serde_json::from_value::<ToolManifestDefinition>(value).expect("deserialize definition"),
+        definition
+    );
+}
+
+#[test]
+fn tool_manifest_policy_keeps_get_tool_spec_insertion_and_registry_order() {
+    let tools = vec![
+        ToolManifestPolicyTool {
+            name: "Read".to_string(),
+            default_exposure: ToolExposure::Expanded,
+            available: true,
+        },
+        ToolManifestPolicyTool {
+            name: "WebSearch".to_string(),
+            default_exposure: ToolExposure::Collapsed,
+            available: true,
+        },
+        ToolManifestPolicyTool {
+            name: "WebFetch".to_string(),
+            default_exposure: ToolExposure::Collapsed,
+            available: true,
+        },
+        ToolManifestPolicyTool {
+            name: GET_TOOL_SPEC_TOOL_NAME.to_string(),
+            default_exposure: ToolExposure::Expanded,
+            available: true,
+        },
+        ToolManifestPolicyTool {
+            name: "HiddenUnavailable".to_string(),
+            default_exposure: ToolExposure::Expanded,
+            available: false,
+        },
+    ];
+    let allowed_tools = vec![
+        "WebFetch".to_string(),
+        "Read".to_string(),
+        "WebSearch".to_string(),
+        "HiddenUnavailable".to_string(),
+    ];
+    let overrides = Default::default();
+
+    let policy =
+        resolve_tool_manifest_policy(&tools, &allowed_tools, &overrides, GET_TOOL_SPEC_TOOL_NAME);
+
+    assert_eq!(
+        policy.allowed_tool_names,
+        vec![
+            "WebFetch",
+            "Read",
+            "WebSearch",
+            "HiddenUnavailable",
+            GET_TOOL_SPEC_TOOL_NAME,
+        ]
+    );
+    assert_eq!(
+        policy.expanded_tool_names,
+        vec!["Read", GET_TOOL_SPEC_TOOL_NAME]
+    );
+    assert_eq!(policy.collapsed_tool_names, vec!["WebSearch", "WebFetch"]);
+}
+
+#[test]
+fn tool_manifest_policy_preserves_explicit_get_tool_spec_duplicate_runtime_contract() {
+    let tools = vec![
+        ToolManifestPolicyTool {
+            name: GET_TOOL_SPEC_TOOL_NAME.to_string(),
+            default_exposure: ToolExposure::Expanded,
+            available: true,
+        },
+        ToolManifestPolicyTool {
+            name: "WebFetch".to_string(),
+            default_exposure: ToolExposure::Collapsed,
+            available: true,
+        },
+    ];
+    let allowed_tools = vec![GET_TOOL_SPEC_TOOL_NAME.to_string(), "WebFetch".to_string()];
+    let overrides = Default::default();
+
+    let policy =
+        resolve_tool_manifest_policy(&tools, &allowed_tools, &overrides, GET_TOOL_SPEC_TOOL_NAME);
+
+    assert_eq!(
+        policy.allowed_tool_names,
+        vec![GET_TOOL_SPEC_TOOL_NAME, "WebFetch"]
+    );
+    assert_eq!(
+        policy.expanded_tool_names,
+        vec![GET_TOOL_SPEC_TOOL_NAME, GET_TOOL_SPEC_TOOL_NAME],
+        "core currently appends the runtime GetToolSpec entry whenever collapsed tools exist"
+    );
+    assert_eq!(policy.collapsed_tool_names, vec!["WebFetch"]);
+}
+
+#[test]
+fn collapsed_tool_stub_definition_preserves_prompt_visible_guardrail() {
+    let stub = build_collapsed_tool_stub_definition(
+        "WebFetch",
+        "Fetch a URL and return readable content.",
+    );
+
+    assert_eq!(stub.name, "WebFetch");
+    assert!(stub.description.contains("Fetch a URL"));
+    assert!(
+        stub.description
+            .contains("First call `GetToolSpec` with {\"tool_name\":\"WebFetch\"}")
+    );
+    assert_eq!(
+        stub.parameters,
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "tool_name": {
+                    "type": "string",
+                    "description": "Do not supply WebFetch arguments here while the tool is collapsed. Use GetToolSpec with {\"tool_name\":\"WebFetch\"} first."
+                }
+            }
+        })
+    );
+}
+
+#[test]
+fn tool_manifest_sorting_preserves_prompt_visible_order() {
+    let mut definitions = vec![
+        ToolManifestDefinition::new("ControlHub", "control", json!({ "type": "object" })),
+        ToolManifestDefinition::new("Read", "read", json!({ "type": "object" })),
+        ToolManifestDefinition::new("ExternalTool", "external", json!({ "type": "object" })),
+        ToolManifestDefinition::new("GetToolSpec", "spec", json!({ "type": "object" })),
+        ToolManifestDefinition::new("Task", "task", json!({ "type": "object" })),
+    ];
+
+    sort_tool_manifest_definitions(&mut definitions);
+
+    assert_eq!(
+        definitions
+            .iter()
+            .map(|definition| definition.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["Task", "Read", "GetToolSpec", "ControlHub", "ExternalTool"]
+    );
 }
 
 struct RegistryMarkerTool {

@@ -31,10 +31,11 @@ SessionManager → Session → DialogTurn → ModelRound
 - During core decomposition, `bitfun-core` is a compatibility facade and full
   product runtime assembly point. New modules should prefer the extracted owner
   crate listed in `docs/architecture/core-decomposition.md`.
-- For tools, keep lightweight contracts and generic registry/provider container
-  logic in `bitfun-agent-tools`. Core tool runtime should assemble product
-  tools, adapt `dyn Tool`, apply snapshot decoration, and own tool exposure /
-  manifest resolution plus on-demand spec discovery (`GetToolSpec`) for now.
+- For tools, keep lightweight contracts, pure manifest/exposure contracts, and
+  generic registry/provider container logic in `bitfun-agent-tools`. Core tool
+  runtime should assemble product tools, adapt `dyn Tool`, apply snapshot
+  decoration, and own runtime manifest assembly / context filtering plus
+  on-demand spec discovery execution (`GetToolSpec`) for now.
 - Keep `ToolUseContext` and concrete tool implementations in core unless a
   reviewed port/provider plan and equivalence tests exist.
 - Any tool migration must preserve expanded/collapsed exposure, prompt-visible

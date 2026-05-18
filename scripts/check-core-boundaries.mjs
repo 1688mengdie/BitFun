@@ -1004,15 +1004,11 @@ const forbiddenContentUnderRules = [
   {
     path: 'src/crates/agent-tools/src',
     reason:
-      'agent-tools must not own product tool manifest/exposure or GetToolSpec runtime without an approved provider migration',
+      'agent-tools may own pure tool manifest contracts, but not product manifest runtime or GetToolSpec execution without an approved provider migration',
     patterns: [
       {
         regex: /\bGetToolSpecTool\b/,
         message: 'GetToolSpec implementation stays in core product tool runtime',
-      },
-      {
-        regex: /\bGET_TOOL_SPEC_TOOL_NAME\b/,
-        message: 'GetToolSpec manifest insertion stays in core product tool runtime',
       },
       {
         regex: /\bmanifest_resolver\b/,
@@ -1021,10 +1017,6 @@ const forbiddenContentUnderRules = [
       {
         regex: /\bunlocked_collapsed_tools\b/,
         message: 'collapsed-tool unlock state stays in core ToolUseContext/runtime',
-      },
-      {
-        regex: /\bToolExposure\b/,
-        message: 'expanded/collapsed exposure policy stays in core until provider migration',
       },
       {
         regex: /\bToolUseContext\b/,
@@ -1086,6 +1078,37 @@ const requiredContentRules = [
     ],
   },
   {
+    path: 'src/crates/agent-tools/src/framework.rs',
+    reason:
+      'agent-tools may own pure prompt-visible tool manifest contracts without owning product runtime execution',
+    patterns: [
+      {
+        regex: /\bpub const GET_TOOL_SPEC_TOOL_NAME\b/,
+        message: 'missing shared GetToolSpec manifest name contract',
+      },
+      {
+        regex: /\bpub enum ToolExposure\b/,
+        message: 'missing lightweight tool exposure contract',
+      },
+      {
+        regex: /\bpub struct ToolManifestPolicyTool\b/,
+        message: 'missing pure tool manifest policy input contract',
+      },
+      {
+        regex: /\bpub fn resolve_tool_manifest_policy\b/,
+        message: 'missing pure tool manifest policy resolver',
+      },
+      {
+        regex: /\bpub fn build_collapsed_tool_stub_definition\b/,
+        message: 'missing collapsed-tool prompt stub contract',
+      },
+      {
+        regex: /\bpub fn sort_tool_manifest_definitions\b/,
+        message: 'missing prompt-visible manifest ordering helper',
+      },
+    ],
+  },
+  {
     path: 'src/crates/core/src/agentic/coordination/coordinator.rs',
     reason:
       'core must keep current coordinator port adapters and attachment guard until remote runtime migration is reviewed',
@@ -1138,7 +1161,7 @@ const requiredContentRules = [
   {
     path: 'src/crates/core/src/agentic/tools/manifest_resolver.rs',
     reason:
-      'core must continue owning prompt-visible tool manifest assembly until an approved provider migration exists',
+      'core must continue owning prompt-visible tool manifest assembly and runtime context filtering until an approved provider migration exists',
     patterns: [
       {
         regex: /\bpub async fn resolve_tool_manifest\b/,
@@ -1149,16 +1172,16 @@ const requiredContentRules = [
         message: 'missing GetToolSpec manifest insertion anchor',
       },
       {
-        regex: /\bToolExposure::Collapsed\b/,
-        message: 'missing collapsed exposure branch',
+        regex: /\bresolve_tool_manifest_policy\b/,
+        message: 'missing agent-tools manifest policy contract use',
       },
       {
         regex: /\bcollapsed_tool_names\b/,
         message: 'missing collapsed-tool name tracking',
       },
       {
-        regex: /First call `GetToolSpec`|Use GetToolSpec.*first/,
-        message: 'missing collapsed-tool prompt stub',
+        regex: /\bbuild_collapsed_tool_stub_definition\b/,
+        message: 'missing collapsed-tool prompt stub contract use',
       },
     ],
   },
@@ -1184,11 +1207,11 @@ const requiredContentRules = [
   {
     path: 'src/crates/core/src/agentic/tools/framework.rs',
     reason:
-      'core must continue owning ToolUseContext and exposure policy until a portable context port is reviewed',
+      'core must continue owning ToolUseContext while re-exporting pure exposure contracts until a portable context port is reviewed',
     patterns: [
       {
-        regex: /\bpub enum ToolExposure\b/,
-        message: 'missing ToolExposure owner type',
+        regex: /\bToolExposure\b/,
+        message: 'missing ToolExposure compatibility re-export',
       },
       {
         regex: /\bpub struct ToolUseContext\b/,
@@ -2505,16 +2528,16 @@ function runManifestParserSelfTest() {
   if (!agentToolsManifestRule) {
     throw new Error('missing agent-tools manifest-owner boundary rule');
   }
-  const toolManifestContracts = [
+  const agentToolsRuntimeForbiddenContracts = [
     'GetToolSpecTool',
-    'GET_TOOL_SPEC_TOOL_NAME',
     'manifest_resolver',
     'unlocked_collapsed_tools',
+    'ToolUseContext',
   ];
   const agentToolsManifestRuleText = agentToolsManifestRule.patterns
     .map((pattern) => pattern.regex.source)
     .join('\n');
-  for (const contract of toolManifestContracts) {
+  for (const contract of agentToolsRuntimeForbiddenContracts) {
     if (!agentToolsManifestRuleText.includes(contract)) {
       throw new Error(`agent-tools manifest boundary rule must forbid: ${contract}`);
     }
@@ -2528,7 +2551,14 @@ function runManifestParserSelfTest() {
   const toolPacksManifestRuleText = toolPacksManifestRule.patterns
     .map((pattern) => pattern.regex.source)
     .join('\n');
-  for (const contract of toolManifestContracts) {
+  const toolPacksManifestContracts = [
+    'GetToolSpecTool',
+    'GET_TOOL_SPEC_TOOL_NAME',
+    'manifest_resolver',
+    'unlocked_collapsed_tools',
+    'ToolExposure',
+  ];
+  for (const contract of toolPacksManifestContracts) {
     if (!toolPacksManifestRuleText.includes(contract)) {
       throw new Error(`tool-packs manifest boundary rule must forbid: ${contract}`);
     }
@@ -2542,6 +2572,17 @@ function runManifestParserSelfTest() {
         'RemoteControlStatePort',
         'RuntimeEventSink',
         'remote_image',
+      ],
+    },
+    {
+      path: 'src/crates/agent-tools/src/framework.rs',
+      contracts: [
+        'GET_TOOL_SPEC_TOOL_NAME',
+        'ToolExposure',
+        'ToolManifestPolicyTool',
+        'resolve_tool_manifest_policy',
+        'build_collapsed_tool_stub_definition',
+        'sort_tool_manifest_definitions',
       ],
     },
     {
@@ -2625,7 +2666,13 @@ function runManifestParserSelfTest() {
     },
     {
       path: 'src/crates/core/src/agentic/tools/manifest_resolver.rs',
-      contracts: ['resolve_tool_manifest', 'GET_TOOL_SPEC_TOOL_NAME', 'ToolExposure', 'First call `GetToolSpec`'],
+      contracts: [
+        'resolve_tool_manifest',
+        'GET_TOOL_SPEC_TOOL_NAME',
+        'resolve_tool_manifest_policy',
+        'build_collapsed_tool_stub_definition',
+        'collapsed_tool_names',
+      ],
     },
     {
       path: 'src/crates/core/src/agentic/tools/implementations/get_tool_spec_tool.rs',

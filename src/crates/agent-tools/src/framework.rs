@@ -31,6 +31,149 @@ pub struct DynamicToolInfo {
     pub mcp: Option<DynamicMcpToolInfo>,
 }
 
+pub const GET_TOOL_SPEC_TOOL_NAME: &str = "GetToolSpec";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ToolExposure {
+    Expanded,
+    Collapsed,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ToolManifestDefinition {
+    pub name: String,
+    pub description: String,
+    pub parameters: Value,
+}
+
+impl ToolManifestDefinition {
+    pub fn new(name: impl Into<String>, description: impl Into<String>, parameters: Value) -> Self {
+        Self {
+            name: name.into(),
+            description: description.into(),
+            parameters,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolManifestPolicyTool {
+    pub name: String,
+    pub default_exposure: ToolExposure,
+    pub available: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolManifestPolicyResolution {
+    pub allowed_tool_names: Vec<String>,
+    pub expanded_tool_names: Vec<String>,
+    pub collapsed_tool_names: Vec<String>,
+}
+
+pub fn resolve_tool_manifest_policy(
+    tool_snapshot: &[ToolManifestPolicyTool],
+    allowed_tools: &[String],
+    exposure_overrides: &IndexMap<String, ToolExposure>,
+    get_tool_spec_tool_name: &str,
+) -> ToolManifestPolicyResolution {
+    let allowed_set = allowed_tools
+        .iter()
+        .map(String::as_str)
+        .collect::<std::collections::HashSet<_>>();
+    let mut allowed_tool_names = allowed_tools.to_vec();
+    let mut expanded_tool_names = Vec::new();
+    let mut collapsed_tool_names = Vec::new();
+
+    for tool in tool_snapshot {
+        if !tool.available || !allowed_set.contains(tool.name.as_str()) {
+            continue;
+        }
+
+        let exposure = exposure_overrides
+            .get(&tool.name)
+            .copied()
+            .unwrap_or(tool.default_exposure);
+        match exposure {
+            ToolExposure::Expanded => expanded_tool_names.push(tool.name.clone()),
+            ToolExposure::Collapsed => collapsed_tool_names.push(tool.name.clone()),
+        }
+    }
+
+    if !collapsed_tool_names.is_empty() {
+        if !allowed_tool_names
+            .iter()
+            .any(|name| name == get_tool_spec_tool_name)
+        {
+            allowed_tool_names.push(get_tool_spec_tool_name.to_string());
+        }
+        if tool_snapshot
+            .iter()
+            .any(|tool| tool.name == get_tool_spec_tool_name)
+        {
+            expanded_tool_names.push(get_tool_spec_tool_name.to_string());
+        }
+    }
+
+    ToolManifestPolicyResolution {
+        allowed_tool_names,
+        expanded_tool_names,
+        collapsed_tool_names,
+    }
+}
+
+pub fn build_collapsed_tool_stub_definition(
+    tool_name: &str,
+    short_description: &str,
+) -> ToolManifestDefinition {
+    ToolManifestDefinition::new(
+        tool_name,
+        format!(
+            "{} [This tool is collapsed. Do not call `{}` directly yet. First call `GetToolSpec` with {{\"tool_name\":\"{}\"}} to load its full description and input schema, then retry `{}` using the returned schema.]",
+            short_description, tool_name, tool_name, tool_name
+        ),
+        serde_json::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "tool_name": {
+                    "type": "string",
+                    "description": format!(
+                        "Do not supply {} arguments here while the tool is collapsed. Use GetToolSpec with {{\"tool_name\":\"{}\"}} first.",
+                        tool_name,
+                        tool_name
+                    )
+                }
+            }
+        }),
+    )
+}
+
+pub fn tool_manifest_sort_rank(tool_name: &str) -> usize {
+    match tool_name {
+        "Task" => 1,
+        "Bash" => 2,
+        "TerminalControl" => 3,
+        "Glob" => 4,
+        "Grep" => 5,
+        "Read" => 6,
+        "Edit" => 7,
+        "Write" => 8,
+        "Delete" => 9,
+        "WebFetch" => 10,
+        "WebSearch" => 11,
+        "TodoWrite" => 12,
+        "Skill" => 13,
+        "Log" => 14,
+        GET_TOOL_SPEC_TOOL_NAME => 15,
+        "ControlHub" => 16,
+        _ => 100,
+    }
+}
+
+pub fn sort_tool_manifest_definitions(tool_definitions: &mut [ToolManifestDefinition]) {
+    tool_definitions.sort_by_key(|tool| tool_manifest_sort_rank(&tool.name));
+}
+
 #[async_trait]
 pub trait ToolRegistryItem: Send + Sync {
     fn name(&self) -> &str;

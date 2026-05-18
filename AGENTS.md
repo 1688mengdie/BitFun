@@ -120,11 +120,13 @@ and milestone verification gates.
 
 ### Tool ownership guardrails
 
-- `src/crates/agent-tools` owns lightweight tool contracts and the generic
-  registry / dynamic-provider container.
+- `src/crates/agent-tools` owns lightweight tool contracts, pure
+  manifest/exposure contracts, and the generic registry / dynamic-provider
+  container.
 - `src/crates/core/src/agentic/tools` owns product tool assembly, `dyn Tool`
-  adaptation, snapshot decoration, tool exposure / manifest resolution, and
-  on-demand tool spec discovery (`GetToolSpec`) for now.
+  adaptation, snapshot decoration, runtime manifest assembly / context
+  filtering, and on-demand tool spec discovery execution (`GetToolSpec`) for
+  now.
 - Keep `ToolUseContext` and concrete tool implementations in core until a
   reviewed port/provider design and equivalence tests exist.
 - Tool migrations must preserve expanded/collapsed exposure, prompt-visible

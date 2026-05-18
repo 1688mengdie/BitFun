@@ -14,7 +14,7 @@ use std::sync::Arc;
 type ToolRef = Arc<dyn Tool>;
 type ToolDecoratorRef = Arc<dyn ToolDecorator<ToolRef>>;
 
-pub const GET_TOOL_SPEC_TOOL_NAME: &str = "GetToolSpec";
+pub use bitfun_agent_tools::GET_TOOL_SPEC_TOOL_NAME;
 
 #[derive(Debug, Clone)]
 struct SnapshotToolDecorator;
@@ -279,16 +279,16 @@ impl ToolRegistryItem for dyn Tool {
 
 #[cfg(test)]
 mod tests {
-    use super::create_tool_registry;
     use super::ToolRef;
     use super::ToolRegistry;
+    use super::create_tool_registry;
     use crate::agentic::tools::framework::{
         DynamicMcpToolInfo, DynamicToolInfo, Tool, ToolResult, ToolUseContext, ValidationResult,
     };
     use async_trait::async_trait;
     use bitfun_agent_tools::DynamicToolProvider;
-    use serde_json::json;
     use serde_json::Value;
+    use serde_json::json;
     use std::sync::Arc;
 
     struct DynamicMetadataTool {
