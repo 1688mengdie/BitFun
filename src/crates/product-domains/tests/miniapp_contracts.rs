@@ -3,15 +3,15 @@
 use bitfun_product_domains::miniapp::bridge_builder::{build_bridge_script, build_csp_content};
 use bitfun_product_domains::miniapp::compiler::compile;
 use bitfun_product_domains::miniapp::customization::{
-    MAX_DECLINED_BUILTIN_UPDATES, MiniAppCustomizationBaseline, MiniAppCustomizationLocalSnapshot,
-    MiniAppCustomizationMetadata, MiniAppCustomizationOrigin, MiniAppCustomizationOriginKind,
     apply_draft_customization_metadata, decline_builtin_update_metadata,
     declined_builtin_update_needs_local_snapshot, is_current_declined_builtin_update,
-    mark_builtin_update_available_metadata,
+    mark_builtin_update_available_metadata, MiniAppCustomizationBaseline,
+    MiniAppCustomizationLocalSnapshot, MiniAppCustomizationMetadata, MiniAppCustomizationOrigin,
+    MiniAppCustomizationOriginKind, MAX_DECLINED_BUILTIN_UPDATES,
 };
 use bitfun_product_domains::miniapp::draft::{
-    MINIAPP_DRAFT_STATUS_APPLIED, MINIAPP_DRAFT_STATUS_DRAFT, build_draft_manifest,
-    build_draft_response,
+    build_draft_manifest, build_draft_response, MINIAPP_DRAFT_STATUS_APPLIED,
+    MINIAPP_DRAFT_STATUS_DRAFT,
 };
 use bitfun_product_domains::miniapp::exporter::{ExportCheckResult, ExportTarget};
 use bitfun_product_domains::miniapp::host_routing::{
@@ -19,8 +19,10 @@ use bitfun_product_domains::miniapp::host_routing::{
     is_host_primitive,
 };
 use bitfun_product_domains::miniapp::lifecycle::{
+    apply_import_runtime_state, apply_recompile_result, apply_sync_from_fs_result,
     build_deps_revision, build_runtime_state, build_source_revision, build_worker_revision,
-    ensure_runtime_state, workspace_dir_string,
+    clear_worker_restart_required_state, ensure_runtime_state, mark_deps_installed_state,
+    prepare_rollback_app, workspace_dir_string,
 };
 use bitfun_product_domains::miniapp::permission_policy::resolve_policy;
 use bitfun_product_domains::miniapp::ports::{
@@ -28,20 +30,21 @@ use bitfun_product_domains::miniapp::ports::{
     MiniAppRuntimePort,
 };
 use bitfun_product_domains::miniapp::runtime::{
-    RuntimeKind, candidate_dirs, candidate_executable_path, runtime_lookup_order,
-    version_manager_roots, versioned_executable_candidate,
+    candidate_dirs, candidate_executable_path, runtime_lookup_order, version_manager_roots,
+    versioned_executable_candidate, RuntimeKind,
 };
 use bitfun_product_domains::miniapp::storage::{
-    COMPILED_HTML, CUSTOMIZATION_JSON, DRAFT_JSON, DRAFTS_CLEANUP_MARKER, DRAFTS_CLEANUP_PREFIX,
-    DRAFTS_DIR, ESM_DEPS_JSON, INDEX_HTML, META_JSON, MiniAppStorageLayout, PACKAGE_JSON,
-    SOURCE_DIR, STORAGE_JSON, STYLE_CSS, UI_JS, VERSIONS_DIR, WORKER_JS, build_package_json,
-    parse_npm_dependencies,
+    build_import_fallbacks, build_package_json, parse_npm_dependencies, MiniAppImportLayout,
+    MiniAppStorageLayout, COMPILED_HTML, CUSTOMIZATION_JSON, DRAFTS_CLEANUP_MARKER,
+    DRAFTS_CLEANUP_PREFIX, DRAFTS_DIR, DRAFT_JSON, EMPTY_ESM_DEPENDENCIES_JSON, EMPTY_STORAGE_JSON,
+    ESM_DEPS_JSON, INDEX_HTML, META_JSON, PACKAGE_JSON, PLACEHOLDER_COMPILED_HTML,
+    REQUIRED_SOURCE_FILES, SOURCE_DIR, STORAGE_JSON, STYLE_CSS, UI_JS, VERSIONS_DIR, WORKER_JS,
 };
 use bitfun_product_domains::miniapp::types::{
     FsPermissions, MiniApp, MiniAppPermissions, MiniAppRuntimeState, MiniAppSource, NetPermissions,
     NotificationPermissions, NpmDep,
 };
-use bitfun_product_domains::miniapp::worker::{InstallResult, install_command_for_runtime};
+use bitfun_product_domains::miniapp::worker::{install_command_for_runtime, InstallResult};
 use std::path::{Path, PathBuf};
 
 struct RuntimePortStub;
@@ -377,6 +380,60 @@ fn miniapp_lifecycle_helpers_preserve_runtime_revision_contract() {
 }
 
 #[test]
+fn miniapp_lifecycle_manager_state_helpers_preserve_core_transitions() {
+    let source = MiniAppSource {
+        npm_dependencies: vec![NpmDep {
+            name: "lodash".to_string(),
+            version: "^4.17.21".to_string(),
+        }],
+        ..MiniAppSource::default()
+    };
+    let mut app = sample_miniapp_for_lifecycle(source.clone());
+
+    mark_deps_installed_state(&mut app);
+    assert_eq!(app.runtime.source_revision, "src:3:1234");
+    assert_eq!(app.runtime.deps_revision, "lodash@^4.17.21");
+    assert!(!app.runtime.deps_dirty);
+    assert!(app.runtime.worker_restart_required);
+
+    assert!(clear_worker_restart_required_state(&mut app));
+    assert!(!app.runtime.worker_restart_required);
+    assert!(!clear_worker_restart_required_state(&mut app));
+
+    apply_recompile_result(&mut app, "<html>fresh</html>".to_string(), 2000);
+    assert_eq!(app.compiled_html, "<html>fresh</html>");
+    assert_eq!(app.updated_at, 2000);
+    assert!(!app.runtime.ui_recompile_required);
+    assert_eq!(app.runtime.source_revision, "src:3:1234");
+
+    let current = sample_miniapp_for_lifecycle(MiniAppSource::default());
+    let rollback_target = sample_miniapp_for_lifecycle(source.clone());
+    let rolled_back = prepare_rollback_app(&current, rollback_target, 3000);
+    assert_eq!(rolled_back.version, current.version + 1);
+    assert_eq!(rolled_back.updated_at, 3000);
+    assert!(rolled_back.runtime.deps_dirty);
+    assert!(rolled_back.runtime.worker_restart_required);
+    assert_eq!(rolled_back.runtime.deps_revision, "lodash@^4.17.21");
+
+    let synced =
+        apply_sync_from_fs_result(&current, source, "<html>synced</html>".to_string(), 4000);
+    assert_eq!(synced.version, current.version + 1);
+    assert_eq!(synced.updated_at, 4000);
+    assert_eq!(synced.compiled_html, "<html>synced</html>");
+    assert!(synced.runtime.deps_dirty);
+    assert!(synced.runtime.worker_restart_required);
+
+    let mut imported = synced.clone();
+    imported.runtime.worker_restart_required = false;
+    imported.runtime.deps_dirty = false;
+    apply_import_runtime_state(&mut imported);
+    assert!(imported.runtime.deps_dirty);
+    assert!(imported.runtime.worker_restart_required);
+    assert_eq!(imported.runtime.source_revision, "src:4:4000");
+    assert_eq!(imported.runtime.deps_revision, "lodash@^4.17.21");
+}
+
+#[test]
 fn miniapp_storage_package_json_contract_remains_stable() {
     let deps = parse_npm_dependencies(
         r#"{
@@ -409,6 +466,56 @@ fn miniapp_storage_package_json_contract_remains_stable() {
     assert_eq!(package["name"], "miniapp-demo");
     assert_eq!(package["private"], true);
     assert_eq!(package["dependencies"]["lodash"], "^4.17.21");
+}
+
+#[test]
+fn miniapp_storage_import_fallback_contract_remains_stable() {
+    let root = PathBuf::from("/miniapps/incoming");
+    let layout = MiniAppImportLayout::new(&root);
+
+    assert_eq!(layout.meta_path(), root.join(META_JSON));
+    assert_eq!(layout.source_dir(), root.join(SOURCE_DIR));
+    assert_eq!(
+        layout.source_file_path(INDEX_HTML),
+        root.join(SOURCE_DIR).join(INDEX_HTML)
+    );
+    assert_eq!(
+        layout.required_source_file_paths(),
+        vec![
+            (INDEX_HTML, root.join(SOURCE_DIR).join(INDEX_HTML)),
+            (STYLE_CSS, root.join(SOURCE_DIR).join(STYLE_CSS)),
+            (UI_JS, root.join(SOURCE_DIR).join(UI_JS)),
+            (WORKER_JS, root.join(SOURCE_DIR).join(WORKER_JS)),
+        ]
+    );
+    assert_eq!(
+        layout.esm_dependencies_path(),
+        root.join(SOURCE_DIR).join(ESM_DEPS_JSON)
+    );
+    assert_eq!(layout.package_json_path(), root.join(PACKAGE_JSON));
+    assert_eq!(layout.storage_json_path(), root.join(STORAGE_JSON));
+
+    assert_eq!(
+        REQUIRED_SOURCE_FILES,
+        &[INDEX_HTML, STYLE_CSS, UI_JS, WORKER_JS]
+    );
+    assert_eq!(EMPTY_ESM_DEPENDENCIES_JSON, "[]");
+    assert_eq!(EMPTY_STORAGE_JSON, "{}");
+    assert_eq!(
+        PLACEHOLDER_COMPILED_HTML,
+        "<!DOCTYPE html><html><head><meta charset=\"utf-8\"></head><body>Loading...</body></html>"
+    );
+
+    let package = build_package_json("imported-app", &[]);
+    assert_eq!(package["name"], "miniapp-imported-app");
+    assert_eq!(package["private"], true);
+    assert_eq!(package["dependencies"], serde_json::json!({}));
+
+    let fallbacks = build_import_fallbacks("imported-app");
+    assert_eq!(fallbacks.esm_dependencies_json, "[]");
+    assert_eq!(fallbacks.storage_json, "{}");
+    assert_eq!(fallbacks.compiled_html, PLACEHOLDER_COMPILED_HTML);
+    assert_eq!(fallbacks.package_json, package);
 }
 
 #[test]
@@ -652,12 +759,10 @@ fn miniapp_customization_decline_policy_updates_existing_and_trims_old_records()
         metadata.declined_builtin_updates.len(),
         MAX_DECLINED_BUILTIN_UPDATES
     );
-    assert!(
-        !metadata
-            .declined_builtin_updates
-            .iter()
-            .any(|record| record.source_hash == "hash-v5")
-    );
+    assert!(!metadata
+        .declined_builtin_updates
+        .iter()
+        .any(|record| record.source_hash == "hash-v5"));
 }
 
 fn sample_miniapp_for_lifecycle(source: MiniAppSource) -> MiniApp {

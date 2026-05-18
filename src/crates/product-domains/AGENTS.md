@@ -33,13 +33,14 @@ moves here gradually.
 
 ## Current owners
 
-- `miniapp` owns MiniApp DTOs, compiler/bridge helpers, storage and draft file
-  shapes, runtime search-plan helpers, worker install command selection,
-  lifecycle/revision helpers, host-routing string policy, customization
-  metadata policy including built-in update/decline decisions, and port traits.
+- `miniapp` owns MiniApp DTOs, compiler/bridge helpers, storage/draft/import
+  file shapes, import fallback payloads, runtime search-plan helpers, worker
+  install command selection, lifecycle/revision and manager state-transition
+  helpers, host-routing string policy, customization metadata policy including
+  built-in update/decline decisions, and port traits.
 - `function-agents` owns pure function-agent DTOs, prompt assembly helpers,
-  AI-response parsing policy, diff truncation policy, local file-shape analysis,
-  and Git/AI port traits.
+  commit prompt preparation, AI-response parsing policy, diff truncation policy,
+  local file-shape analysis, and Git/AI port traits.
 - Core still owns MiniApp filesystem IO, worker process execution, host dispatch
   execution, built-in asset seeding/source-hash lookup, `PathManager`
   integration, function-agent Git/AI calls, prompt templates, JSON extraction,

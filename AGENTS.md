@@ -159,12 +159,13 @@ and milestone verification gates.
 - Remote-SSH path, session identity, mirror path, and unresolved-session layout
   helpers belong in `bitfun-services-integrations`; core may inject
   `PathManager` and hold SSH manager / remote FS / terminal assembly.
-- MiniApp storage/draft shape, runtime search-plan helpers, customization
-  metadata policy including built-in update/decline decisions, and
-  function-agent pure prompt/diff parsing helpers belong in
-  `bitfun-product-domains`; core keeps filesystem IO, worker runtime,
-  built-in source-hash lookup, `PathManager`, Git/AI calls, and port adapters
-  until reviewed runtime migrations exist.
+- MiniApp storage/draft/import file shape, import fallback payload, lifecycle
+  state-transition helpers, runtime search-plan helpers, customization metadata
+  policy including built-in update/decline decisions, and function-agent pure
+  prompt/diff preparation helpers belong in `bitfun-product-domains`; core
+  keeps filesystem IO, worker runtime, built-in source-hash lookup,
+  `PathManager`, Git/AI calls, prompt templates, JSON extraction, error
+  mapping, and port adapters until reviewed runtime migrations exist.
 - Remote-connect port baselines live in `bitfun-runtime-ports` and
   `bitfun-services-integrations`; tracker state and tracker event reduction
   belong in `bitfun-services-integrations`. Remote command/response wire DTOs,

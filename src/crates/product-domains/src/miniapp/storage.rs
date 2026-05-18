@@ -9,16 +9,65 @@ pub const INDEX_HTML: &str = "index.html";
 pub const STYLE_CSS: &str = "style.css";
 pub const UI_JS: &str = "ui.js";
 pub const WORKER_JS: &str = "worker.js";
+pub const REQUIRED_SOURCE_FILES: &[&str] = &[INDEX_HTML, STYLE_CSS, UI_JS, WORKER_JS];
 pub const PACKAGE_JSON: &str = "package.json";
 pub const ESM_DEPS_JSON: &str = "esm_dependencies.json";
 pub const COMPILED_HTML: &str = "compiled.html";
 pub const STORAGE_JSON: &str = "storage.json";
+pub const EMPTY_ESM_DEPENDENCIES_JSON: &str = "[]";
+pub const EMPTY_STORAGE_JSON: &str = "{}";
+pub const PLACEHOLDER_COMPILED_HTML: &str =
+    "<!DOCTYPE html><html><head><meta charset=\"utf-8\"></head><body>Loading...</body></html>";
 pub const VERSIONS_DIR: &str = "versions";
 pub const DRAFTS_DIR: &str = ".drafts";
 pub const DRAFTS_CLEANUP_PREFIX: &str = ".drafts.cleanup-";
 pub const DRAFTS_CLEANUP_MARKER: &str = ".cleanup-pending";
 pub const DRAFT_JSON: &str = "draft.json";
 pub const CUSTOMIZATION_JSON: &str = ".customization.json";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MiniAppImportLayout {
+    root: PathBuf,
+}
+
+impl MiniAppImportLayout {
+    pub fn new(root: impl AsRef<Path>) -> Self {
+        Self {
+            root: root.as_ref().to_path_buf(),
+        }
+    }
+
+    pub fn meta_path(&self) -> PathBuf {
+        self.root.join(META_JSON)
+    }
+
+    pub fn source_dir(&self) -> PathBuf {
+        self.root.join(SOURCE_DIR)
+    }
+
+    pub fn source_file_path(&self, file_name: &str) -> PathBuf {
+        self.source_dir().join(file_name)
+    }
+
+    pub fn required_source_file_paths(&self) -> Vec<(&'static str, PathBuf)> {
+        REQUIRED_SOURCE_FILES
+            .iter()
+            .map(|file_name| (*file_name, self.source_file_path(file_name)))
+            .collect()
+    }
+
+    pub fn esm_dependencies_path(&self) -> PathBuf {
+        self.source_file_path(ESM_DEPS_JSON)
+    }
+
+    pub fn package_json_path(&self) -> PathBuf {
+        self.root.join(PACKAGE_JSON)
+    }
+
+    pub fn storage_json_path(&self) -> PathBuf {
+        self.root.join(STORAGE_JSON)
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MiniAppStorageLayout {
@@ -143,4 +192,21 @@ pub fn build_package_json(app_id: &str, deps: &[NpmDep]) -> serde_json::Value {
         "private": true,
         "dependencies": dependencies
     })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MiniAppImportFallbacks {
+    pub esm_dependencies_json: &'static str,
+    pub storage_json: &'static str,
+    pub compiled_html: &'static str,
+    pub package_json: serde_json::Value,
+}
+
+pub fn build_import_fallbacks(app_id: &str) -> MiniAppImportFallbacks {
+    MiniAppImportFallbacks {
+        esm_dependencies_json: EMPTY_ESM_DEPENDENCIES_JSON,
+        storage_json: EMPTY_STORAGE_JSON,
+        compiled_html: PLACEHOLDER_COMPILED_HTML,
+        package_json: build_package_json(app_id, &[]),
+    }
 }

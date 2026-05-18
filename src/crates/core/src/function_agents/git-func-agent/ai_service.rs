@@ -7,7 +7,7 @@ use crate::util::types::Message;
  *
  * Handles AI client interaction and provides intelligent analysis for commit message generation
  */
-use bitfun_product_domains::function_agents::git_func_agent::truncate_diff_for_commit_prompt;
+use bitfun_product_domains::function_agents::git_func_agent::prepare_commit_prompt;
 use log::{debug, error, warn};
 use std::sync::Arc;
 
@@ -47,11 +47,22 @@ impl AIAnalysisService {
             return Err(AgentError::invalid_input("Code changes are empty"));
         }
 
-        let processed_diff = self.truncate_diff_if_needed(diff_content, 50000);
+        let prepared_prompt = prepare_commit_prompt(
+            COMMIT_MESSAGE_PROMPT,
+            diff_content,
+            project_context,
+            options,
+            50000,
+        );
+        if prepared_prompt.truncated {
+            warn!(
+                "Diff too large ({} chars), truncating to {} chars",
+                diff_content.len(),
+                50000
+            );
+        }
 
-        let prompt = self.build_commit_prompt(&processed_diff, project_context, options);
-
-        let ai_response = self.call_ai(&prompt).await?;
+        let ai_response = self.call_ai(&prepared_prompt.prompt).await?;
 
         self.parse_commit_response(&ai_response)
     }
@@ -84,20 +95,6 @@ impl AIAnalysisService {
         }
     }
 
-    fn build_commit_prompt(
-        &self,
-        diff_content: &str,
-        project_context: &ProjectContext,
-        options: &CommitMessageOptions,
-    ) -> String {
-        super::utils::build_commit_prompt(
-            COMMIT_MESSAGE_PROMPT,
-            diff_content,
-            project_context,
-            options,
-        )
-    }
-
     fn parse_commit_response(&self, response: &str) -> AgentResult<AICommitAnalysis> {
         let json_str = crate::util::extract_json_from_ai_response(response)
             .ok_or_else(|| AgentError::analysis_error("Cannot extract JSON from response"))?;
@@ -107,19 +104,5 @@ impl AIAnalysisService {
         })?;
 
         super::utils::parse_commit_analysis_value(&value).map_err(AgentError::analysis_error)
-    }
-
-    fn truncate_diff_if_needed(&self, diff: &str, max_chars: usize) -> String {
-        if diff.len() <= max_chars {
-            return diff.to_string();
-        }
-
-        warn!(
-            "Diff too large ({} chars), truncating to {} chars",
-            diff.len(),
-            max_chars
-        );
-
-        truncate_diff_for_commit_prompt(diff, max_chars)
     }
 }

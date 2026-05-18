@@ -6,7 +6,8 @@ use bitfun_product_domains::function_agents::{
         ChangePattern, CommitFormat, CommitMessageOptions, CommitType, FileChange, FileChangeType,
         ProjectContext, assemble_commit_message, build_changes_summary_from_paths,
         build_commit_prompt, detect_change_patterns, extract_module_name, infer_file_type,
-        parse_commit_analysis_value, parse_commit_type_label, truncate_diff_for_commit_prompt,
+        parse_commit_analysis_value, parse_commit_type_label, prepare_commit_prompt,
+        truncate_diff_for_commit_prompt,
     },
     ports::{
         CommitAiAnalysisRequest, FunctionAgentAiPort, FunctionAgentFuture, FunctionAgentGitPort,
@@ -214,6 +215,32 @@ fn git_function_agent_diff_truncation_preserves_legacy_marker() {
     let truncated = truncate_diff_for_commit_prompt(&long, 120);
     assert!(truncated.starts_with(&"a".repeat(20)));
     assert!(truncated.ends_with("\n\n... [content truncated] ..."));
+}
+
+#[test]
+fn git_function_agent_commit_prompt_preparation_preserves_truncation_boundary() {
+    let context = ProjectContext {
+        project_type: "library".to_string(),
+        tech_stack: vec!["Rust".to_string(), "Cargo".to_string()],
+        project_docs: Some("Use conventional commits.".to_string()),
+        code_standards: Some("Keep modules small.".to_string()),
+    };
+    let options = CommitMessageOptions::default();
+    let template = "Project: {project_type}\nStack: {tech_stack}\nDiff: {diff_content}\nLanguage: {language_desc}\n";
+    let prepared = prepare_commit_prompt(template, &"x".repeat(140), &context, &options, 120);
+
+    assert!(prepared.truncated);
+    assert!(
+        prepared
+            .diff_content
+            .ends_with("\n\n... [content truncated] ...")
+    );
+    assert!(prepared.prompt.contains("Diff: "));
+    assert!(prepared.prompt.contains("library"));
+
+    let short = prepare_commit_prompt(template, "short diff", &context, &options, 120);
+    assert!(!short.truncated);
+    assert_eq!(short.diff_content, "short diff");
 }
 
 #[test]

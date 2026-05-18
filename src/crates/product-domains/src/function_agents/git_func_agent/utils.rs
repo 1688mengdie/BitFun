@@ -236,6 +236,31 @@ pub fn truncate_diff_for_commit_prompt(diff: &str, max_chars: usize) -> String {
     truncated
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreparedCommitPrompt {
+    pub prompt: String,
+    pub diff_content: String,
+    pub truncated: bool,
+}
+
+pub fn prepare_commit_prompt(
+    template: &str,
+    diff_content: &str,
+    project_context: &ProjectContext,
+    options: &CommitMessageOptions,
+    max_chars: usize,
+) -> PreparedCommitPrompt {
+    let truncated = diff_content.len() > max_chars;
+    let diff_content = truncate_diff_for_commit_prompt(diff_content, max_chars);
+    let prompt = build_commit_prompt(template, &diff_content, project_context, options);
+
+    PreparedCommitPrompt {
+        prompt,
+        diff_content,
+        truncated,
+    }
+}
+
 pub fn parse_commit_type_label(label: &str) -> CommitType {
     match label.to_lowercase().as_str() {
         "feat" | "feature" => CommitType::Feat,

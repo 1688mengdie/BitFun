@@ -8,17 +8,24 @@ use crate::miniapp::types::{
 };
 use crate::util::errors::{BitFunError, BitFunResult};
 use bitfun_product_domains::miniapp::customization::{
-    MiniAppCustomizationBaseline, MiniAppCustomizationLocalSnapshot, MiniAppCustomizationMetadata,
-    MiniAppPermissionDiff, apply_draft_customization_metadata, decline_builtin_update_metadata,
+    apply_draft_customization_metadata, decline_builtin_update_metadata,
     declined_builtin_update_needs_local_snapshot, diff_permissions,
     is_current_declined_builtin_update, mark_builtin_update_available_metadata,
+    MiniAppCustomizationBaseline, MiniAppCustomizationLocalSnapshot, MiniAppCustomizationMetadata,
+    MiniAppPermissionDiff,
 };
 use bitfun_product_domains::miniapp::draft::{
-    MiniAppDraft, MiniAppDraftManifest, build_draft_manifest, build_draft_response,
+    build_draft_manifest, build_draft_response, MiniAppDraft, MiniAppDraftManifest,
 };
 use bitfun_product_domains::miniapp::lifecycle::{
+    apply_import_runtime_state, apply_recompile_result, apply_sync_from_fs_result,
     build_deps_revision, build_runtime_state, build_source_revision, build_worker_revision,
-    ensure_runtime_state, workspace_dir_string,
+    clear_worker_restart_required_state, ensure_runtime_state, mark_deps_installed_state,
+    prepare_rollback_app, workspace_dir_string,
+};
+use bitfun_product_domains::miniapp::storage::{
+    build_import_fallbacks, MiniAppImportLayout, COMPILED_HTML, ESM_DEPS_JSON, META_JSON,
+    PACKAGE_JSON, REQUIRED_SOURCE_FILES, SOURCE_DIR, STORAGE_JSON,
 };
 use chrono::Utc;
 use std::collections::HashMap;
@@ -665,18 +672,14 @@ impl MiniAppManager {
 
     pub async fn mark_deps_installed(&self, app_id: &str) -> BitFunResult<MiniApp> {
         let mut app = self.storage.load(app_id).await?;
-        ensure_runtime_state(&mut app);
-        app.runtime.deps_dirty = false;
-        app.runtime.worker_restart_required = true;
+        mark_deps_installed_state(&mut app);
         self.storage.save(&app).await?;
         Ok(app)
     }
 
     pub async fn clear_worker_restart_required(&self, app_id: &str) -> BitFunResult<MiniApp> {
         let mut app = self.storage.load(app_id).await?;
-        ensure_runtime_state(&mut app);
-        if app.runtime.worker_restart_required {
-            app.runtime.worker_restart_required = false;
+        if clear_worker_restart_required_state(&mut app) {
             self.storage.save(&app).await?;
         }
         Ok(app)
@@ -690,17 +693,9 @@ impl MiniAppManager {
     /// Rollback app to a previous version (loads version snapshot, saves as current).
     pub async fn rollback(&self, app_id: &str, version: u32) -> BitFunResult<MiniApp> {
         let current = self.storage.load(app_id).await?;
-        let mut app = self.storage.load_version(app_id, version).await?;
+        let app = self.storage.load_version(app_id, version).await?;
         let now = Utc::now().timestamp_millis();
-        app.version = current.version + 1;
-        app.updated_at = now;
-        app.runtime = build_runtime_state(
-            app.version,
-            app.updated_at,
-            &app.source,
-            !app.source.npm_dependencies.is_empty(),
-            true,
-        );
+        let app = prepare_rollback_app(&current, app, now);
         self.storage
             .save_version(app_id, current.version, &current)
             .await?;
@@ -716,11 +711,9 @@ impl MiniAppManager {
         workspace_root: Option<&Path>,
     ) -> BitFunResult<MiniApp> {
         let mut app = self.storage.load(app_id).await?;
-        app.compiled_html =
+        let compiled_html =
             self.compile_source(app_id, &app.source, &app.permissions, theme, workspace_root)?;
-        app.updated_at = Utc::now().timestamp_millis();
-        ensure_runtime_state(&mut app);
-        app.runtime.ui_recompile_required = false;
+        apply_recompile_result(&mut app, compiled_html, Utc::now().timestamp_millis());
         self.storage.save(&app).await?;
         Ok(app)
     }
@@ -732,19 +725,19 @@ impl MiniAppManager {
         workspace_root: Option<&Path>,
     ) -> BitFunResult<MiniApp> {
         let previous_app = self.storage.load(app_id).await?;
-        let mut app = previous_app.clone();
-        app.source = self.storage.load_source_only(app_id).await?;
-        app.version += 1;
-        app.updated_at = Utc::now().timestamp_millis();
-
-        app.compiled_html =
-            self.compile_source(app_id, &app.source, &app.permissions, theme, workspace_root)?;
-        app.runtime = build_runtime_state(
-            app.version,
-            app.updated_at,
-            &app.source,
-            !app.source.npm_dependencies.is_empty(),
-            true,
+        let source = self.storage.load_source_only(app_id).await?;
+        let compiled_html = self.compile_source(
+            app_id,
+            &source,
+            &previous_app.permissions,
+            theme,
+            workspace_root,
+        )?;
+        let app = apply_sync_from_fs_result(
+            &previous_app,
+            source,
+            compiled_html,
+            Utc::now().timestamp_millis(),
         );
         self.storage
             .save_version(app_id, previous_app.version, &previous_app)
@@ -769,8 +762,9 @@ impl MiniAppManager {
             )));
         }
 
-        let meta_path = src.join("meta.json");
-        let source_dir = src.join("source");
+        let import_layout = MiniAppImportLayout::new(src);
+        let meta_path = import_layout.meta_path();
+        let source_dir = import_layout.source_dir();
         if !meta_path.exists() {
             return Err(BitFunError::validation(format!(
                 "Missing meta.json in {}",
@@ -783,8 +777,8 @@ impl MiniAppManager {
                 src.display()
             )));
         }
-        for required in &["index.html", "style.css", "ui.js", "worker.js"] {
-            if !source_dir.join(required).exists() {
+        for (required, path) in import_layout.required_source_file_paths() {
+            if !path.exists() {
                 return Err(BitFunError::validation(format!(
                     "Missing source/{} in {}",
                     required,
@@ -805,18 +799,19 @@ impl MiniAppManager {
         meta.created_at = now;
         meta.updated_at = now;
 
+        let fallbacks = build_import_fallbacks(&id);
         let dest_dir = self.path_manager.miniapp_dir(&id);
-        let dest_source = dest_dir.join("source");
+        let dest_source = dest_dir.join(SOURCE_DIR);
         tokio::fs::create_dir_all(&dest_source)
             .await
             .map_err(|e| BitFunError::io(format!("Failed to create app dir: {}", e)))?;
 
         let meta_json = serde_json::to_string_pretty(&meta).map_err(BitFunError::from)?;
-        tokio::fs::write(dest_dir.join("meta.json"), meta_json)
+        tokio::fs::write(dest_dir.join(META_JSON), meta_json)
             .await
             .map_err(|e| BitFunError::io(format!("Failed to write meta.json: {}", e)))?;
 
-        for name in &["index.html", "style.css", "ui.js", "worker.js"] {
+        for name in REQUIRED_SOURCE_FILES {
             let from = source_dir.join(name);
             let to = dest_source.join(name);
             if from.exists() {
@@ -825,62 +820,53 @@ impl MiniAppManager {
                     .map_err(|e| BitFunError::io(format!("Failed to copy {}: {}", name, e)))?;
             }
         }
-        let esm_path = source_dir.join("esm_dependencies.json");
+        let esm_path = import_layout.esm_dependencies_path();
         if esm_path.exists() {
-            tokio::fs::copy(&esm_path, dest_source.join("esm_dependencies.json"))
+            tokio::fs::copy(&esm_path, dest_source.join(ESM_DEPS_JSON))
                 .await
                 .map_err(|e| {
                     BitFunError::io(format!("Failed to copy esm_dependencies.json: {}", e))
                 })?;
         } else {
-            tokio::fs::write(dest_source.join("esm_dependencies.json"), "[]")
-                .await
-                .map_err(|_e| BitFunError::io("Failed to write esm_dependencies.json"))?;
+            tokio::fs::write(
+                dest_source.join(ESM_DEPS_JSON),
+                fallbacks.esm_dependencies_json,
+            )
+            .await
+            .map_err(|_e| BitFunError::io("Failed to write esm_dependencies.json"))?;
         }
 
-        let pkg_src = src.join("package.json");
+        let pkg_src = import_layout.package_json_path();
         if pkg_src.exists() {
-            tokio::fs::copy(&pkg_src, dest_dir.join("package.json"))
+            tokio::fs::copy(&pkg_src, dest_dir.join(PACKAGE_JSON))
                 .await
                 .map_err(|e| BitFunError::io(format!("Failed to copy package.json: {}", e)))?;
         } else {
-            let pkg = serde_json::json!({
-                "name": format!("miniapp-{}", id),
-                "private": true,
-                "dependencies": {}
-            });
             tokio::fs::write(
-                dest_dir.join("package.json"),
-                serde_json::to_string_pretty(&pkg).map_err(BitFunError::from)?,
+                dest_dir.join(PACKAGE_JSON),
+                serde_json::to_string_pretty(&fallbacks.package_json).map_err(BitFunError::from)?,
             )
             .await
             .map_err(|_e| BitFunError::io("Failed to write package.json"))?;
         }
 
-        let storage_src = src.join("storage.json");
+        let storage_src = import_layout.storage_json_path();
         if storage_src.exists() {
-            tokio::fs::copy(&storage_src, dest_dir.join("storage.json"))
+            tokio::fs::copy(&storage_src, dest_dir.join(STORAGE_JSON))
                 .await
                 .map_err(|e| BitFunError::io(format!("Failed to copy storage.json: {}", e)))?;
         } else {
-            tokio::fs::write(dest_dir.join("storage.json"), "{}")
+            tokio::fs::write(dest_dir.join(STORAGE_JSON), fallbacks.storage_json)
                 .await
                 .map_err(|_e| BitFunError::io("Failed to write storage.json"))?;
         }
 
-        let placeholder_html = "<!DOCTYPE html><html><head><meta charset=\"utf-8\"></head><body>Loading...</body></html>";
-        tokio::fs::write(dest_dir.join("compiled.html"), placeholder_html)
+        tokio::fs::write(dest_dir.join(COMPILED_HTML), fallbacks.compiled_html)
             .await
             .map_err(|_e| BitFunError::io("Failed to write placeholder compiled.html"))?;
 
         let mut app = self.recompile(&id, "dark", workspace_root).await?;
-        app.runtime = build_runtime_state(
-            app.version,
-            app.updated_at,
-            &app.source,
-            !app.source.npm_dependencies.is_empty(),
-            true,
-        );
+        apply_import_runtime_state(&mut app);
         self.storage.save(&app).await?;
         Ok(app)
     }

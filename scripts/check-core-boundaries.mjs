@@ -1839,12 +1839,59 @@ const requiredContentRules = [
         message: 'missing MiniApp draft manifest filename contract',
       },
       {
+        regex: /\bpub const REQUIRED_SOURCE_FILES\b/,
+        message: 'missing MiniApp import source file list contract',
+      },
+      {
+        regex: /\bpub const PLACEHOLDER_COMPILED_HTML\b/,
+        message: 'missing MiniApp placeholder compiled HTML contract',
+      },
+      {
+        regex: /\bpub struct MiniAppImportLayout\b/,
+        message: 'missing MiniApp import layout contract',
+      },
+      {
+        regex: /\bpub fn build_import_fallbacks\b/,
+        message: 'missing MiniApp import fallback payload helper',
+      },
+      {
         regex: /\bpub fn draft_dir\b/,
         message: 'missing MiniApp draft directory layout helper',
       },
       {
         regex: /\bpub fn customization_path\b/,
         message: 'missing MiniApp customization metadata path helper',
+      },
+    ],
+  },
+  {
+    path: 'src/crates/product-domains/src/miniapp/lifecycle.rs',
+    reason:
+      'product-domains owns pure MiniApp lifecycle state transitions while core keeps compile, storage IO, and runtime execution',
+    patterns: [
+      {
+        regex: /\bpub fn mark_deps_installed_state\b/,
+        message: 'missing MiniApp deps-installed state helper',
+      },
+      {
+        regex: /\bpub fn clear_worker_restart_required_state\b/,
+        message: 'missing MiniApp worker-restart clear state helper',
+      },
+      {
+        regex: /\bpub fn prepare_rollback_app\b/,
+        message: 'missing MiniApp rollback state helper',
+      },
+      {
+        regex: /\bpub fn apply_recompile_result\b/,
+        message: 'missing MiniApp recompile result state helper',
+      },
+      {
+        regex: /\bpub fn apply_sync_from_fs_result\b/,
+        message: 'missing MiniApp sync-from-fs state helper',
+      },
+      {
+        regex: /\bpub fn apply_import_runtime_state\b/,
+        message: 'missing MiniApp import runtime state helper',
       },
     ],
   },
@@ -1951,7 +1998,7 @@ const requiredContentRules = [
   {
     path: 'src/crates/core/src/miniapp/manager.rs',
     reason:
-      'core MiniApp manager must use product-domain customization metadata policy while retaining storage IO and built-in source-hash lookup',
+      'core MiniApp manager must use product-domain pure policy helpers while retaining compile, storage IO, and built-in source-hash lookup',
     patterns: [
       {
         regex: /\bapply_draft_customization_metadata\b/,
@@ -1964,6 +2011,30 @@ const requiredContentRules = [
       {
         regex: /\bdecline_builtin_update_metadata\b/,
         message: 'missing product-domain built-in update decline helper use',
+      },
+      {
+        regex: /\bmark_deps_installed_state\b/,
+        message: 'missing product-domain MiniApp deps-installed state helper use',
+      },
+      {
+        regex: /\bapply_sync_from_fs_result\b/,
+        message: 'missing product-domain MiniApp sync-from-fs state helper use',
+      },
+      {
+        regex: /\bREQUIRED_SOURCE_FILES\b/,
+        message: 'missing product-domain MiniApp import file-shape contract use',
+      },
+      {
+        regex: /\bMiniAppImportLayout\b/,
+        message: 'missing product-domain MiniApp import layout helper use',
+      },
+      {
+        regex: /\bbuild_import_fallbacks\b/,
+        message: 'missing product-domain MiniApp import fallback helper use',
+      },
+      {
+        regex: /\bapply_import_runtime_state\b/,
+        message: 'missing product-domain MiniApp import runtime state helper use',
       },
       {
         regex: /\bstorage\.load_customization_metadata\b/,
@@ -1998,6 +2069,10 @@ const requiredContentRules = [
       {
         regex: /\bpub fn truncate_diff_for_commit_prompt\b/,
         message: 'missing Git function-agent diff truncation helper',
+      },
+      {
+        regex: /\bpub fn prepare_commit_prompt\b/,
+        message: 'missing Git function-agent prompt preparation helper',
       },
     ],
   },
@@ -2692,6 +2767,21 @@ function runManifestParserSelfTest() {
         'DRAFT_JSON',
         'draft_dir',
         'customization_path',
+        'REQUIRED_SOURCE_FILES',
+        'PLACEHOLDER_COMPILED_HTML',
+        'MiniAppImportLayout',
+        'build_import_fallbacks',
+      ],
+    },
+    {
+      path: 'src/crates/product-domains/src/miniapp/lifecycle.rs',
+      contracts: [
+        'mark_deps_installed_state',
+        'clear_worker_restart_required_state',
+        'prepare_rollback_app',
+        'apply_recompile_result',
+        'apply_sync_from_fs_result',
+        'apply_import_runtime_state',
       ],
     },
     {
@@ -2730,6 +2820,12 @@ function runManifestParserSelfTest() {
         'mark_builtin_update_available_metadata',
         'decline_builtin_update_metadata',
         'storage.load_customization_metadata',
+        'mark_deps_installed_state',
+        'apply_sync_from_fs_result',
+        'REQUIRED_SOURCE_FILES',
+        'MiniAppImportLayout',
+        'build_import_fallbacks',
+        'apply_import_runtime_state',
       ],
     },
     {
@@ -2738,7 +2834,7 @@ function runManifestParserSelfTest() {
     },
     {
       path: 'src/crates/product-domains/src/function_agents/git_func_agent/utils.rs',
-      contracts: ['parse_commit_analysis_value', 'truncate_diff_for_commit_prompt'],
+      contracts: ['parse_commit_analysis_value', 'truncate_diff_for_commit_prompt', 'prepare_commit_prompt'],
     },
     {
       path: 'src/crates/core/src/miniapp/runtime_detect.rs',
