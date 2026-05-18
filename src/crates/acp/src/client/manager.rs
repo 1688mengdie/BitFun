@@ -36,15 +36,16 @@ use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 use super::builtin_clients::{builtin_client_ids, default_config_for_builtin_client};
 use super::config::{
     AcpClientConfig, AcpClientConfigFile, AcpClientInfo, AcpClientPermissionMode,
-    AcpClientRequirementProbe, AcpClientStatus, RemoteAcpClientRequirementSnapshot,
+    AcpClientRequirementProbe, AcpClientStatus, AcpRemoteClientOverride, AcpRemoteOverrideConfig,
+    RemoteAcpClientRequirementSnapshot,
 };
 use super::remote_capability_store::RemoteAcpCapabilityStore;
 use super::remote_session::{preferred_resume_strategies, AcpRemoteSessionStrategy};
 use super::remote_shell::{remote_user_shell_command, render_remote_env_assignments, shell_escape};
 use super::requirements::{
     acp_requirement_spec, apply_command_environment, install_npm_cli_package,
-    predownload_npm_adapter, probe_executable, probe_npm_adapter, probe_remote_executable,
-    probe_remote_npx_adapter, resolve_configured_command,
+    install_remote_npm_cli_package, predownload_npm_adapter, probe_executable, probe_npm_adapter,
+    probe_remote_executable, probe_remote_npx_adapter, resolve_configured_command,
 };
 use super::session_options::{model_config_id, session_options_from_state, AcpSessionOptions};
 use super::session_persistence::AcpSessionPersistence;
@@ -359,24 +360,31 @@ impl AcpClientService {
             BitFunError::service("SSH manager is not available for remote ACP".to_string())
         })?;
 
-        let configs = self.load_configs().await?;
-        let mut ids = configs.keys().cloned().collect::<Vec<_>>();
+        let config_file = self.load_config_file().await?;
+        let mut ids = config_file.acp_clients.keys().cloned().collect::<Vec<_>>();
         for id in builtin_client_ids() {
             if !ids.iter().any(|candidate| candidate == id) {
                 ids.push(id.to_string());
+            }
+        }
+        if let Some(remote_override) = config_file.remote_overrides.get(remote_connection_id) {
+            for id in remote_override.clients.keys() {
+                if !ids.iter().any(|candidate| candidate == id) {
+                    ids.push(id.clone());
+                }
             }
         }
         ids.sort();
 
         let mut probes = Vec::with_capacity(ids.len());
         for id in ids {
-            let config = configs.get(&id);
-            let spec = acp_requirement_spec(&id, config);
+            let config = resolve_config_for_client(&config_file, &id, Some(remote_connection_id));
+            let spec = acp_requirement_spec(&id, config.as_ref());
             let tool = probe_remote_executable(
                 &ssh_manager,
                 remote_connection_id,
                 spec.tool_command,
-                config.map(|config| &config.env),
+                config.as_ref().map(|config| &config.env),
             )
             .await;
             let adapter = match spec.adapter {
@@ -385,7 +393,7 @@ impl AcpClientService {
                         &ssh_manager,
                         remote_connection_id,
                         adapter.package,
-                        config.map(|config| &config.env),
+                        config.as_ref().map(|config| &config.env),
                     )
                     .await,
                 ),
@@ -443,9 +451,17 @@ impl AcpClientService {
         predownload_npm_adapter(adapter.package, adapter.bin).await
     }
 
-    pub async fn install_client_cli(self: &Arc<Self>, client_id: &str) -> BitFunResult<()> {
-        let configs = self.load_configs().await?;
-        let spec = acp_requirement_spec(client_id, configs.get(client_id));
+    pub async fn install_client_cli(
+        self: &Arc<Self>,
+        client_id: &str,
+        remote_connection_id: Option<&str>,
+    ) -> BitFunResult<()> {
+        let remote_connection_id = remote_connection_id
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let config_file = self.load_config_file().await?;
+        let config = resolve_config_for_client(&config_file, client_id, remote_connection_id);
+        let spec = acp_requirement_spec(client_id, config.as_ref());
         let package = spec.install_package.ok_or_else(|| {
             BitFunError::config(format!(
                 "ACP client '{}' does not have a known CLI installer",
@@ -453,7 +469,17 @@ impl AcpClientService {
             ))
         })?;
 
-        install_npm_cli_package(package).await
+        if let Some(remote_connection_id) = remote_connection_id {
+            let remote_manager = get_remote_workspace_manager().ok_or_else(|| {
+                BitFunError::service("Remote workspace manager is not initialized".to_string())
+            })?;
+            let ssh_manager = remote_manager.get_ssh_manager().await.ok_or_else(|| {
+                BitFunError::service("SSH manager is not available for remote ACP".to_string())
+            })?;
+            install_remote_npm_cli_package(&ssh_manager, remote_connection_id, package).await
+        } else {
+            install_npm_cli_package(package).await
+        }
     }
 
     pub async fn start_client_for_session(
@@ -1377,7 +1403,11 @@ impl AcpClientService {
     }
 
     async fn load_configs(&self) -> BitFunResult<HashMap<String, AcpClientConfig>> {
-        Ok(parse_config_value(self.load_config_value().await?)?.acp_clients)
+        Ok(self.load_config_file().await?.acp_clients)
+    }
+
+    async fn load_config_file(&self) -> BitFunResult<AcpClientConfigFile> {
+        parse_config_value(self.load_config_value().await?)
     }
 
     async fn load_config_value(&self) -> BitFunResult<serde_json::Value> {
@@ -1597,24 +1627,13 @@ impl AcpClientService {
             .filter(|value| !value.is_empty())
             .map(ToOwned::to_owned);
         let is_remote = remote_connection_id.is_some();
-        let mut used_remote_default = false;
-        let mut config = self
-            .load_configs()
-            .await?
-            .remove(client_id)
-            .or_else(|| {
-                if is_remote {
-                    used_remote_default = true;
-                    default_config_for_builtin_client(client_id)
-                } else {
-                    None
-                }
-            })
-            .ok_or_else(|| BitFunError::NotFound(format!("ACP client not found: {}", client_id)))?;
+        let config_file = self.load_config_file().await?;
+        let config =
+            resolve_config_for_client(&config_file, client_id, remote_connection_id.as_deref())
+                .ok_or_else(|| {
+                    BitFunError::NotFound(format!("ACP client not found: {}", client_id))
+                })?;
 
-        if used_remote_default {
-            config.enabled = true;
-        }
         if config.command.trim().is_empty() {
             return Err(BitFunError::config(format!(
                 "ACP client command is empty: {}",
@@ -1636,6 +1655,64 @@ impl AcpClientService {
             remote_connection_id,
             config,
         })
+    }
+}
+
+fn resolve_config_for_client(
+    config_file: &AcpClientConfigFile,
+    client_id: &str,
+    remote_connection_id: Option<&str>,
+) -> Option<AcpClientConfig> {
+    let mut config = config_file
+        .acp_clients
+        .get(client_id)
+        .cloned()
+        .or_else(|| {
+            remote_connection_id.and_then(|_| default_config_for_builtin_client(client_id))
+        })?;
+    if let Some(connection_id) = remote_connection_id {
+        apply_remote_override(
+            &mut config,
+            config_file.remote_overrides.get(connection_id),
+            client_id,
+        );
+    }
+    Some(config)
+}
+
+fn apply_remote_override(
+    config: &mut AcpClientConfig,
+    remote_override: Option<&AcpRemoteOverrideConfig>,
+    client_id: &str,
+) {
+    let Some(remote_override) = remote_override else {
+        return;
+    };
+
+    config.env.extend(remote_override.env.clone());
+    if let Some(client_override) = remote_override.clients.get(client_id) {
+        apply_remote_client_override(config, client_override);
+    }
+}
+
+fn apply_remote_client_override(
+    config: &mut AcpClientConfig,
+    client_override: &AcpRemoteClientOverride,
+) {
+    if let Some(command) = client_override
+        .command
+        .as_deref()
+        .map(str::trim)
+        .filter(|command| !command.is_empty())
+    {
+        config.command = command.to_string();
+    }
+    if let Some(args) = client_override.args.as_ref() {
+        config.args = args.clone();
+    }
+    config.env.extend(client_override.env.clone());
+    if let Some(enabled) = client_override.enabled {
+        config.enabled = enabled;
     }
 }
 
@@ -2120,5 +2197,51 @@ mod tests {
         assert!(command.contains(
             "cd '\\''/srv/my repo'\\'' && exec env PATH=/remote/bin:/usr/bin custom-acp --stdio '\\''with space'\\''"
         ));
+    }
+
+    #[test]
+    fn resolves_remote_client_config_with_remote_overrides() {
+        let config_file = AcpClientConfigFile {
+            acp_clients: HashMap::from([(
+                "codex".to_string(),
+                AcpClientConfig {
+                    name: Some("Codex".to_string()),
+                    command: "npx".to_string(),
+                    args: vec![
+                        "--yes".to_string(),
+                        "@zed-industries/codex-acp@latest".to_string(),
+                    ],
+                    env: HashMap::from([("BASE".to_string(), "1".to_string())]),
+                    enabled: true,
+                    readonly: false,
+                    permission_mode: AcpClientPermissionMode::Ask,
+                },
+            )]),
+            remote_overrides: HashMap::from([(
+                "huawei-server".to_string(),
+                AcpRemoteOverrideConfig {
+                    env: HashMap::from([("REMOTE".to_string(), "1".to_string())]),
+                    clients: HashMap::from([(
+                        "codex".to_string(),
+                        AcpRemoteClientOverride {
+                            command: Some("codex".to_string()),
+                            args: Some(vec!["acp".to_string()]),
+                            env: HashMap::from([("CLIENT".to_string(), "1".to_string())]),
+                            enabled: Some(false),
+                        },
+                    )]),
+                },
+            )]),
+        };
+
+        let resolved = resolve_config_for_client(&config_file, "codex", Some("huawei-server"))
+            .expect("config");
+
+        assert_eq!(resolved.command, "codex");
+        assert_eq!(resolved.args, vec!["acp"]);
+        assert_eq!(resolved.env.get("BASE").map(String::as_str), Some("1"));
+        assert_eq!(resolved.env.get("REMOTE").map(String::as_str), Some("1"));
+        assert_eq!(resolved.env.get("CLIENT").map(String::as_str), Some("1"));
+        assert!(!resolved.enabled);
     }
 }

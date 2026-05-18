@@ -43,6 +43,14 @@
   "clients": {
     "loading": "Loading ACP agents…"
   },
+  "remote": {
+    "title": "Remote Servers",
+    "description": "Each saved SSH server reuses the ACP agent config above and checks requirements on the remote host. Use JSON remoteOverrides only when a server needs different runtime details.",
+    "empty": "No saved SSH servers.",
+    "noAgents": "Add an ACP agent before configuring remote overrides.",
+    "configureJson": "Configure JSON",
+    "refresh": "Refresh remote"
+  },
   "fields": {
     "name": "Name",
     "command": "Command",

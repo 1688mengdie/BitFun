@@ -4,7 +4,7 @@ use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use bitfun_core::service::remote_ssh::SSHConnectionManager;
+use bitfun_core::service::remote_ssh::{SSHCommandOptions, SSHConnectionManager};
 use bitfun_core::util::errors::{BitFunError, BitFunResult};
 use tokio::process::Command;
 
@@ -308,6 +308,45 @@ pub(crate) async fn install_npm_cli_package(package: &str) -> BitFunResult<()> {
         ))),
         Err(error) => Err(BitFunError::service(format!(
             "Failed to install ACP agent CLI '{}': {}",
+            package, error
+        ))),
+    }
+}
+
+pub(crate) async fn install_remote_npm_cli_package(
+    ssh_manager: &SSHConnectionManager,
+    connection_id: &str,
+    package: &str,
+) -> BitFunResult<()> {
+    let command = remote_user_shell_command(&format!("npm install -g {}", shell_escape(package)));
+    let timeout_ms = u64::try_from(CLI_INSTALL_TIMEOUT.as_millis()).unwrap_or(u64::MAX);
+    match ssh_manager
+        .execute_command_with_options(
+            connection_id,
+            &command,
+            SSHCommandOptions {
+                timeout_ms: Some(timeout_ms),
+                cancellation_token: None,
+            },
+        )
+        .await
+    {
+        Ok(output) if output.exit_code == 0 && !output.timed_out && !output.interrupted => Ok(()),
+        Ok(output) if output.timed_out => Err(BitFunError::service(format!(
+            "Failed to install remote ACP agent CLI '{}': command timed out",
+            package
+        ))),
+        Ok(output) if output.interrupted => Err(BitFunError::service(format!(
+            "Failed to install remote ACP agent CLI '{}': command was cancelled",
+            package
+        ))),
+        Ok(output) => Err(BitFunError::service(format!(
+            "Failed to install remote ACP agent CLI '{}': {}",
+            package,
+            remote_command_error_summary(&output.stderr, &output.stdout)
+        ))),
+        Err(error) => Err(BitFunError::service(format!(
+            "Failed to install remote ACP agent CLI '{}': {}",
             package, error
         ))),
     }

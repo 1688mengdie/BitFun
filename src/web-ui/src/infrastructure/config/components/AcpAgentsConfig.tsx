@@ -10,6 +10,7 @@ import {
   RefreshCw,
   Save,
   Search,
+  Server,
   Terminal,
 } from 'lucide-react';
 import { Button, Input, Select, Textarea } from '@/component-library';
@@ -27,6 +28,8 @@ import {
   type AcpRequirementProbeItem,
 } from '../../api/service-api/ACPClientAPI';
 import { systemAPI } from '../../api/service-api/SystemAPI';
+import { sshApi } from '@/features/ssh-remote/sshApi';
+import type { SavedConnection } from '@/features/ssh-remote/types';
 import { useNotification } from '@/shared/notification-system';
 import { createLogger } from '@/shared/utils/logger';
 import './AcpAgentsConfig.scss';
@@ -45,6 +48,19 @@ interface AcpClientConfig {
 
 interface AcpClientConfigFile {
   acpClients: Record<string, AcpClientConfig>;
+  remoteOverrides: Record<string, AcpRemoteOverrideConfig>;
+}
+
+interface AcpRemoteOverrideConfig {
+  env: Record<string, string>;
+  clients: Record<string, AcpRemoteClientOverride>;
+}
+
+interface AcpRemoteClientOverride {
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  enabled?: boolean;
 }
 
 interface AcpClientPreset {
@@ -148,7 +164,37 @@ function normalizeConfigValue(value: unknown): AcpClientConfigFile {
     };
   }
 
-  return { acpClients };
+  return { acpClients, remoteOverrides: normalizeRemoteOverrides(candidate.remoteOverrides) };
+}
+
+function normalizeRemoteOverrides(value: unknown): Record<string, AcpRemoteOverrideConfig> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const remoteOverrides: Record<string, AcpRemoteOverrideConfig> = {};
+  for (const [connectionId, rawOverride] of Object.entries(value as Record<string, unknown>)) {
+    if (!rawOverride || typeof rawOverride !== 'object' || Array.isArray(rawOverride)) continue;
+    const item = rawOverride as Record<string, unknown>;
+    remoteOverrides[connectionId] = {
+      env: normalizeEnvObject(item.env),
+      clients: normalizeRemoteClientOverrides(item.clients),
+    };
+  }
+  return remoteOverrides;
+}
+
+function normalizeRemoteClientOverrides(value: unknown): Record<string, AcpRemoteClientOverride> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const clients: Record<string, AcpRemoteClientOverride> = {};
+  for (const [clientId, rawOverride] of Object.entries(value as Record<string, unknown>)) {
+    if (!rawOverride || typeof rawOverride !== 'object' || Array.isArray(rawOverride)) continue;
+    const item = rawOverride as Record<string, unknown>;
+    clients[clientId] = {
+      command: typeof item.command === 'string' ? item.command : undefined,
+      args: Array.isArray(item.args) ? item.args.map(String) : undefined,
+      env: normalizeEnvObject(item.env),
+      enabled: typeof item.enabled === 'boolean' ? item.enabled : undefined,
+    };
+  }
+  return clients;
 }
 
 function normalizeEnvObject(value: unknown): Record<string, string> {
@@ -264,8 +310,9 @@ const AcpAgentsConfig: React.FC = () => {
   const { error: notifyError, success: notifySuccess } = useNotification();
   const jsonEditorRef = useRef<HTMLTextAreaElement>(null);
 
-  const [config, setConfig] = useState<AcpClientConfigFile>({ acpClients: {} });
+  const [config, setConfig] = useState<AcpClientConfigFile>({ acpClients: {}, remoteOverrides: {} });
   const [clients, setClients] = useState<AcpClientInfo[]>([]);
+  const [savedConnections, setSavedConnections] = useState<SavedConnection[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
@@ -275,13 +322,38 @@ const AcpAgentsConfig: React.FC = () => {
   const [requirementProbes, setRequirementProbes] = useState<AcpClientRequirementProbe[]>(
     requirementProbeCache ?? []
   );
+  const [remoteRequirementProbes, setRemoteRequirementProbes] = useState<Record<string, AcpClientRequirementProbe[]>>({});
+  const [probingRemoteRequirements, setProbingRemoteRequirements] = useState<Set<string>>(() => new Set());
   const [probingRequirements, setProbingRequirements] = useState(false);
   const [registrySearch, setRegistrySearch] = useState('');
   const [registryFilter, setRegistryFilter] = useState<RegistryFilter>('all');
   const [installingClientIds, setInstallingClientIds] = useState<Set<string>>(() => new Set());
+  const [installingRemoteClientIds, setInstallingRemoteClientIds] = useState<Set<string>>(() => new Set());
   const requirementProbeRequestIdRef = useRef(0);
+  const loadedRemoteProbeIdsRef = useRef<Set<string>>(new Set());
 
   const clientsById = useMemo(() => new Map(clients.map(client => [client.id, client])), [clients]);
+  const remoteConnectionRows = useMemo(() => {
+    const byId = new Map(savedConnections.map(connection => [connection.id, connection]));
+    for (const connectionId of Object.keys(config.remoteOverrides)) {
+      if (!byId.has(connectionId)) {
+        byId.set(connectionId, {
+          id: connectionId,
+          name: connectionId,
+          host: '',
+          port: 22,
+          username: '',
+          authType: { type: 'Password' },
+        });
+      }
+    }
+    return Array.from(byId.values()).sort((left, right) => {
+      const leftTime = left.lastConnected ?? 0;
+      const rightTime = right.lastConnected ?? 0;
+      if (leftTime !== rightTime) return rightTime - leftTime;
+      return (left.name || left.id).localeCompare(right.name || right.id);
+    });
+  }, [config.remoteOverrides, savedConnections]);
   const probesById = useMemo(
     () => new Map(requirementProbes.map(probe => [probe.id, probe])),
     [requirementProbes]
@@ -383,6 +455,45 @@ const AcpAgentsConfig: React.FC = () => {
     }
   }, [notifyError, t]);
 
+  const refreshRemoteRequirementProbes = useCallback(async (
+    connectionId: string,
+    options: { force?: boolean; notifyOnError?: boolean } = {}
+  ) => {
+    const normalizedConnectionId = connectionId.trim();
+    if (!normalizedConnectionId) return;
+    if (!options.force && loadedRemoteProbeIdsRef.current.has(normalizedConnectionId)) return;
+
+    setProbingRemoteRequirements(prev => {
+      const next = new Set(prev);
+      next.add(normalizedConnectionId);
+      return next;
+    });
+    try {
+      const nextRequirementProbes = await ACPClientAPI.probeClientRequirements({
+        remoteConnectionId: normalizedConnectionId,
+        force: options.force,
+      });
+      loadedRemoteProbeIdsRef.current.add(normalizedConnectionId);
+      setRemoteRequirementProbes(prev => ({
+        ...prev,
+        [normalizedConnectionId]: nextRequirementProbes,
+      }));
+    } catch (error) {
+      log.error('Failed to probe remote ACP agent requirements', error);
+      if (options.notifyOnError ?? true) {
+        notifyError(error instanceof Error ? error.message : String(error), {
+          title: t('notifications.probeFailed'),
+        });
+      }
+    } finally {
+      setProbingRemoteRequirements(prev => {
+        const next = new Set(prev);
+        next.delete(normalizedConnectionId);
+        return next;
+      });
+    }
+  }, [notifyError, t]);
+
   const loadConfig = useCallback(async (
     options: { showLoading?: boolean; refreshRequirements?: boolean } = {}
   ) => {
@@ -396,6 +507,10 @@ const AcpAgentsConfig: React.FC = () => {
         ACPClientAPI.loadJsonConfig(),
         ACPClientAPI.getClients(),
       ]);
+      const nextSavedConnections = await sshApi.listSavedConnections().catch((error) => {
+        log.warn('Failed to load saved SSH connections for ACP remote overrides', error);
+        return [] as SavedConnection[];
+      });
       const parsed = normalizeConfigValue(JSON.parse(rawConfig || '{}'));
       setConfig(parsed);
       setJsonConfig(formatConfig(parsed));
@@ -408,6 +523,7 @@ const AcpAgentsConfig: React.FC = () => {
         )
       );
       setClients(nextClients);
+      setSavedConnections(nextSavedConnections);
       setDirty(false);
       if (refreshRequirements) {
         void refreshRequirementProbes({ notifyOnError: false });
@@ -438,6 +554,13 @@ const AcpAgentsConfig: React.FC = () => {
     };
   }, [loadConfig]);
 
+  useEffect(() => {
+    if (loading) return;
+    for (const connection of remoteConnectionRows) {
+      void refreshRemoteRequirementProbes(connection.id, { notifyOnError: false });
+    }
+  }, [loading, refreshRemoteRequirementProbes, remoteConnectionRows]);
+
   const patchClientConfig = (clientId: string, patch: Partial<AcpClientConfig>) => {
     setConfig(prev => {
       const preset = PRESET_BY_ID.get(clientId);
@@ -446,6 +569,7 @@ const AcpAgentsConfig: React.FC = () => {
       if (!current) return prev;
 
       const next = {
+        ...prev,
         acpClients: {
           ...prev.acpClients,
           [clientId]: {
@@ -460,12 +584,26 @@ const AcpAgentsConfig: React.FC = () => {
     setDirty(true);
   };
 
-  const installPresetClient = async (preset: AcpClientPreset) => {
-    setInstallingClientIds(prev => new Set(prev).add(preset.id));
+  const installPresetClient = async (
+    preset: AcpClientPreset,
+    options: { remoteConnectionId?: string } = {}
+  ) => {
+    const remoteConnectionId = options.remoteConnectionId?.trim();
+    const installKey = remoteConnectionId ? `${remoteConnectionId}:${preset.id}` : preset.id;
+    const setInstalling = remoteConnectionId ? setInstallingRemoteClientIds : setInstallingClientIds;
+    setInstalling(prev => new Set(prev).add(installKey));
     try {
-      await ACPClientAPI.installClientCli({ clientId: preset.id });
-      requirementProbeCache = null;
-      await refreshRequirementProbes({ force: true, notifyOnError: false });
+      await ACPClientAPI.installClientCli({
+        clientId: preset.id,
+        remoteConnectionId,
+      });
+      if (remoteConnectionId) {
+        loadedRemoteProbeIdsRef.current.delete(remoteConnectionId);
+        await refreshRemoteRequirementProbes(remoteConnectionId, { force: true, notifyOnError: false });
+      } else {
+        requirementProbeCache = null;
+        await refreshRequirementProbes({ force: true, notifyOnError: false });
+      }
       notifySuccess(t('notifications.downloadSuccess'));
     } catch (error) {
       log.error('Failed to download ACP agent CLI', error);
@@ -473,9 +611,9 @@ const AcpAgentsConfig: React.FC = () => {
         title: t('notifications.downloadFailed'),
       });
     } finally {
-      setInstallingClientIds(prev => {
+      setInstalling(prev => {
         const next = new Set(prev);
-        next.delete(preset.id);
+        next.delete(installKey);
         return next;
       });
     }
@@ -493,6 +631,7 @@ const AcpAgentsConfig: React.FC = () => {
         },
       ])
     ),
+    remoteOverrides: baseConfig.remoteOverrides,
   });
 
   const saveConfig = async (nextConfig = config, options: { mergeEnvDrafts?: boolean } = {}) => {
@@ -509,6 +648,8 @@ const AcpAgentsConfig: React.FC = () => {
       setDirty(false);
       requirementProbeCache = null;
       setRequirementProbes([]);
+      loadedRemoteProbeIdsRef.current.clear();
+      setRemoteRequirementProbes({});
       notifySuccess(t('notifications.saveSuccess'));
     } catch (error) {
       log.error('Failed to save ACP agent config', error);
@@ -523,6 +664,7 @@ const AcpAgentsConfig: React.FC = () => {
   const addPresetClient = async (preset: AcpClientPreset) => {
     const nextClient = defaultConfigForPreset(preset);
     const next = {
+      ...config,
       acpClients: {
         ...config.acpClients,
         [preset.id]: nextClient,
@@ -588,6 +730,32 @@ const AcpAgentsConfig: React.FC = () => {
       });
     });
   }, [notifyError, t]);
+
+  const openJsonEditor = useCallback(() => {
+    setShowJsonEditor(true);
+    requestAnimationFrame(() => {
+      jsonEditorRef.current?.focus();
+    });
+  }, []);
+
+  const remoteAgentIdsForConnection = useCallback((connectionId: string) => {
+    const remoteOverride = config.remoteOverrides[connectionId];
+    const ids = new Set<string>([
+      ...PRESETS.map(preset => preset.id),
+      ...Object.keys(config.acpClients),
+      ...Object.keys(remoteOverride?.clients ?? {}),
+    ]);
+    return Array.from(ids).sort((left, right) => {
+      const leftPresetIndex = PRESETS.findIndex(preset => preset.id === left);
+      const rightPresetIndex = PRESETS.findIndex(preset => preset.id === right);
+      if (leftPresetIndex !== -1 || rightPresetIndex !== -1) {
+        if (leftPresetIndex === -1) return 1;
+        if (rightPresetIndex === -1) return -1;
+        return leftPresetIndex - rightPresetIndex;
+      }
+      return left.localeCompare(right);
+    });
+  }, [config.acpClients, config.remoteOverrides]);
 
   return (
     <ConfigPageLayout className="bitfun-acp-agents">
@@ -838,6 +1006,173 @@ const AcpAgentsConfig: React.FC = () => {
               })}
             </div>
           )}
+          </ConfigPageSection>
+
+          <ConfigPageSection title={t('remote.title')} description={t('remote.description')}>
+            {remoteConnectionRows.length === 0 ? (
+              <div className="bitfun-acp-agents__empty">{t('remote.empty')}</div>
+            ) : (
+              <div className="bitfun-acp-agents__remote-list">
+                {remoteConnectionRows.map(connection => {
+                  const remoteOverride = config.remoteOverrides[connection.id] ?? { env: {}, clients: {} };
+                  const hostLabel = [connection.username, connection.host]
+                    .filter(Boolean)
+                    .join('@');
+                  const remoteProbes = remoteRequirementProbes[connection.id] ?? [];
+                  const remoteProbesById = new Map(remoteProbes.map(probe => [probe.id, probe]));
+                  const probingRemote = probingRemoteRequirements.has(connection.id);
+                  const remoteAgentIds = remoteAgentIdsForConnection(connection.id);
+
+                  return (
+                    <div key={connection.id} className="bitfun-acp-agents__remote-server">
+                      <div className="bitfun-acp-agents__remote-head">
+                        <div className="bitfun-acp-agents__registry-main">
+                          <span className="bitfun-acp-agents__registry-icon">
+                            <Server size={16} />
+                          </span>
+                          <div className="bitfun-acp-agents__registry-copy">
+                            <span className="bitfun-acp-agents__registry-name">
+                              {connection.name || connection.id}
+                            </span>
+                            <p className="bitfun-acp-agents__registry-description">
+                              {hostLabel || connection.id}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="bitfun-acp-agents__remote-actions">
+                          <Button
+                            variant="secondary"
+                            size="small"
+                            onClick={openJsonEditor}
+                          >
+                            <FileJson size={14} />
+                            {t('remote.configureJson')}
+                          </Button>
+                          <Button
+                            variant="secondary"
+                            size="small"
+                            onClick={() => {
+                              loadedRemoteProbeIdsRef.current.delete(connection.id);
+                              void refreshRemoteRequirementProbes(connection.id, {
+                                force: true,
+                              });
+                            }}
+                            isLoading={probingRemote}
+                          >
+                            <RefreshCw size={14} />
+                            {t('remote.refresh')}
+                          </Button>
+                        </div>
+                      </div>
+                      <div className="bitfun-acp-agents__remote-agent-list">
+                        {remoteAgentIds.map(clientId => {
+                          const preset = PRESET_BY_ID.get(clientId);
+                          const clientConfig = config.acpClients[clientId];
+                          const clientOverride = remoteOverride.clients[clientId] ?? {};
+                          const requirementProbe = remoteProbesById.get(clientId);
+                          const probePending = probingRemote && !requirementProbe;
+                          const hasConfigEntry = Boolean(clientConfig);
+                          const hasRemoteOverride = Boolean(remoteOverride.clients[clientId]);
+                          const effectiveConfig = clientConfig ?? (preset ? defaultConfigForPreset(preset) : undefined);
+                          const enabled = clientOverride.enabled ?? effectiveConfig?.enabled ?? true;
+                          const runnable = requirementProbe?.runnable;
+                          const missingRemoteTool = requirementProbe?.tool.installed === false;
+                          const status = getAgentRowStatus({
+                            configured: hasConfigEntry || hasRemoteOverride,
+                            enabled,
+                            runnable,
+                            probePending,
+                          });
+                          const displayName = effectiveConfig?.name || preset?.name || clientId;
+                          const description = preset?.description ??
+                            (effectiveConfig ? [effectiveConfig.command, ...effectiveConfig.args].join(' ') : clientId);
+                          const installingRemote = installingRemoteClientIds.has(`${connection.id}:${clientId}`);
+
+                          return (
+                            <div key={clientId} className="bitfun-acp-agents__registry-row">
+                              <div className="bitfun-acp-agents__registry-main">
+                                <span className="bitfun-acp-agents__registry-icon">
+                                  <Bot size={16} />
+                                </span>
+                                <div className="bitfun-acp-agents__registry-copy">
+                                  <span className="bitfun-acp-agents__registry-name">{displayName}</span>
+                                  <p className="bitfun-acp-agents__registry-description">{description}</p>
+                                </div>
+                              </div>
+                              <div className="bitfun-acp-agents__capabilities">
+                                <CapabilityBadge
+                                  icon={<Terminal size={12} />}
+                                  item={requirementProbe?.tool}
+                                  label={t('requirements.tool')}
+                                  installedText={t('requirements.installed')}
+                                  missingText={t('requirements.missing')}
+                                  checking={probePending}
+                                  checkingText={t('requirements.checking')}
+                                />
+                                {requirementProbe?.adapter && (
+                                  <CapabilityBadge
+                                    icon={<FileJson size={12} />}
+                                    item={requirementProbe.adapter}
+                                    label={t('requirements.adapter')}
+                                    installedText={t('requirements.installed')}
+                                    missingText={t('requirements.missing')}
+                                    checking={probePending}
+                                    checkingText={t('requirements.checking')}
+                                  />
+                                )}
+                              </div>
+                              <div className="bitfun-acp-agents__status-cell">
+                                <AgentStatusBadge status={status} label={getStatusLabel(status)} />
+                              </div>
+                              <div className="bitfun-acp-agents__confirmation-cell">
+                                {preset && (status === 'not_installed' || missingRemoteTool) ? (
+                                  <Button
+                                    className="bitfun-acp-agents__add-button"
+                                    variant="secondary"
+                                    size="small"
+                                    onClick={() => {
+                                      void installPresetClient(preset, {
+                                        remoteConnectionId: connection.id,
+                                      });
+                                    }}
+                                    isLoading={installingRemote}
+                                  >
+                                    <Download size={14} />
+                                    {t('actions.download')}
+                                  </Button>
+                                ) : hasConfigEntry && clientConfig ? (
+                                  <Select
+                                    className="bitfun-acp-agents__confirmation-select"
+                                    options={permissionOptions}
+                                    value={clientConfig.permissionMode}
+                                    onChange={(value) => patchClientConfig(clientId, {
+                                      permissionMode: normalizePermissionMode(value),
+                                    })}
+                                    size="small"
+                                  />
+                                ) : preset ? (
+                                  <Button
+                                    className="bitfun-acp-agents__add-button"
+                                    variant="secondary"
+                                    size="small"
+                                    onClick={() => addPresetClient(preset)}
+                                  >
+                                    <Plus size={14} />
+                                    {t('actions.add')}
+                                  </Button>
+                                ) : (
+                                  null
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </ConfigPageSection>
         </div>
       </ConfigPageContent>

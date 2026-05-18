@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 pub struct AcpClientConfigFile {
     #[serde(default)]
     pub acp_clients: HashMap<String, AcpClientConfig>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub remote_overrides: HashMap<String, AcpRemoteOverrideConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -25,6 +27,28 @@ pub struct AcpClientConfig {
     pub readonly: bool,
     #[serde(default)]
     pub permission_mode: AcpClientPermissionMode,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpRemoteOverrideConfig {
+    #[serde(default)]
+    pub env: HashMap<String, String>,
+    #[serde(default)]
+    pub clients: HashMap<String, AcpRemoteClientOverride>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpRemoteClientOverride {
+    #[serde(default)]
+    pub command: Option<String>,
+    #[serde(default)]
+    pub args: Option<Vec<String>>,
+    #[serde(default)]
+    pub env: HashMap<String, String>,
+    #[serde(default)]
+    pub enabled: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

@@ -43,6 +43,14 @@
   "clients": {
     "loading": "正在加載 ACP Agent…"
   },
+  "remote": {
+    "title": "遠端伺服器",
+    "description": "每台已保存的 SSH 伺服器會複用上面的 ACP Agent 配置，並在遠端檢測依賴。需要為某台伺服器覆蓋運行細節時，通過 JSON 編輯 remoteOverrides。",
+    "empty": "沒有已保存的 SSH 伺服器。",
+    "noAgents": "請先添加 ACP Agent，再配置遠端覆蓋。",
+    "configureJson": "配置 JSON",
+    "refresh": "刷新遠端"
+  },
   "fields": {
     "name": "名稱",
     "command": "命令",

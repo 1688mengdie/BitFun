@@ -13,8 +13,8 @@ mod tool_card_bridge;
 
 pub use config::{
     AcpClientConfig, AcpClientConfigFile, AcpClientInfo, AcpClientPermissionMode,
-    AcpClientRequirementProbe, AcpClientStatus, AcpRequirementProbeItem,
-    RemoteAcpClientRequirementSnapshot,
+    AcpClientRequirementProbe, AcpClientStatus, AcpRemoteClientOverride, AcpRemoteOverrideConfig,
+    AcpRequirementProbeItem, RemoteAcpClientRequirementSnapshot,
 };
 pub use manager::{
     AcpClientPermissionResponse, AcpClientService, CreateAcpFlowSessionRecordResponse,
