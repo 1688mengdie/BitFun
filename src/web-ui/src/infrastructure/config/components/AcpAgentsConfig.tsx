@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next';
 import {
   Bot,
+  CircleAlert,
   Download,
   ExternalLink,
   FileJson,
@@ -48,19 +49,6 @@ interface AcpClientConfig {
 
 interface AcpClientConfigFile {
   acpClients: Record<string, AcpClientConfig>;
-  remoteOverrides: Record<string, AcpRemoteOverrideConfig>;
-}
-
-interface AcpRemoteOverrideConfig {
-  env: Record<string, string>;
-  clients: Record<string, AcpRemoteClientOverride>;
-}
-
-interface AcpRemoteClientOverride {
-  command?: string;
-  args?: string[];
-  env?: Record<string, string>;
-  enabled?: boolean;
 }
 
 interface AcpClientPreset {
@@ -76,21 +64,21 @@ const PRESETS: AcpClientPreset[] = [
   {
     id: 'opencode',
     name: 'opencode',
-    description: 'AI coding agent with native ACP support.',
+    description: 'Native ACP coding agent.',
     command: 'opencode',
     args: ['acp'],
   },
   {
     id: 'claude-code',
     name: 'Claude Code',
-    description: 'Claude Code connected through the Zed ACP adapter.',
+    description: 'Claude Code via the Zed ACP adapter.',
     command: 'npx',
     args: ['--yes', '@zed-industries/claude-code-acp@latest'],
   },
   {
     id: 'codex',
     name: 'Codex',
-    description: 'OpenAI Codex CLI connected through the Zed ACP adapter.',
+    description: 'OpenAI Codex via the Zed ACP adapter.',
     command: 'npx',
     args: ['--yes', '@zed-industries/codex-acp@latest'],
   },
@@ -164,37 +152,7 @@ function normalizeConfigValue(value: unknown): AcpClientConfigFile {
     };
   }
 
-  return { acpClients, remoteOverrides: normalizeRemoteOverrides(candidate.remoteOverrides) };
-}
-
-function normalizeRemoteOverrides(value: unknown): Record<string, AcpRemoteOverrideConfig> {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
-  const remoteOverrides: Record<string, AcpRemoteOverrideConfig> = {};
-  for (const [connectionId, rawOverride] of Object.entries(value as Record<string, unknown>)) {
-    if (!rawOverride || typeof rawOverride !== 'object' || Array.isArray(rawOverride)) continue;
-    const item = rawOverride as Record<string, unknown>;
-    remoteOverrides[connectionId] = {
-      env: normalizeEnvObject(item.env),
-      clients: normalizeRemoteClientOverrides(item.clients),
-    };
-  }
-  return remoteOverrides;
-}
-
-function normalizeRemoteClientOverrides(value: unknown): Record<string, AcpRemoteClientOverride> {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
-  const clients: Record<string, AcpRemoteClientOverride> = {};
-  for (const [clientId, rawOverride] of Object.entries(value as Record<string, unknown>)) {
-    if (!rawOverride || typeof rawOverride !== 'object' || Array.isArray(rawOverride)) continue;
-    const item = rawOverride as Record<string, unknown>;
-    clients[clientId] = {
-      command: typeof item.command === 'string' ? item.command : undefined,
-      args: Array.isArray(item.args) ? item.args.map(String) : undefined,
-      env: normalizeEnvObject(item.env),
-      enabled: typeof item.enabled === 'boolean' ? item.enabled : undefined,
-    };
-  }
-  return clients;
+  return { acpClients };
 }
 
 function normalizeEnvObject(value: unknown): Record<string, string> {
@@ -236,23 +194,79 @@ function requirementTone(item?: AcpRequirementProbeItem): 'ok' | 'error' | 'mute
 }
 
 type RegistryFilter = 'all' | 'installed' | 'not_installed' | 'invalid';
-type AgentRowStatus = 'enabled' | 'ready' | 'not_installed' | 'invalid' | 'checking';
+type AgentRowStatus = 'enabled' | 'ready' | 'partial' | 'not_installed' | 'invalid' | 'checking';
+
+type RequirementIssueKind =
+  | 'none'
+  | 'cli_missing'
+  | 'adapter_missing'
+  | 'connection_failed'
+  | 'permission_denied'
+  | 'path_invalid'
+  | 'version_mismatch'
+  | 'config_invalid';
+
+function classifyRequirementError(error?: string): Exclude<RequirementIssueKind, 'none' | 'adapter_missing'> {
+  const lower = error?.toLowerCase() ?? '';
+  if (!lower) {
+    return 'config_invalid';
+  }
+  if (
+    lower.includes('permission denied') ||
+    lower.includes('operation not permitted') ||
+    lower.includes('access denied')
+  ) {
+    return 'permission_denied';
+  }
+  if (
+    lower.includes('ssh') ||
+    lower.includes('connection refused') ||
+    lower.includes('timed out') ||
+    lower.includes('timeout') ||
+    lower.includes('network') ||
+    lower.includes('host key')
+  ) {
+    return 'connection_failed';
+  }
+  if (
+    lower.includes('version') ||
+    lower.includes('mismatch') ||
+    lower.includes('incompatible')
+  ) {
+    return 'version_mismatch';
+  }
+  if (
+    lower.includes('not found') ||
+    lower.includes('no such file or directory') ||
+    lower.includes('command -v') ||
+    lower.includes('path')
+  ) {
+    return 'path_invalid';
+  }
+  return 'config_invalid';
+}
 
 function getAgentRowStatus({
   configured,
   enabled,
-  runnable,
+  toolInstalled,
+  adapterInstalled,
+  requiresAdapter,
   probePending,
 }: {
   configured: boolean;
   enabled: boolean;
-  runnable?: boolean;
+  toolInstalled?: boolean;
+  adapterInstalled?: boolean;
+  requiresAdapter: boolean;
   probePending: boolean;
 }): AgentRowStatus {
   if (probePending) return 'checking';
-  if (!configured) return runnable ? 'ready' : 'not_installed';
+  if (toolInstalled === false) return 'not_installed';
+  if (requiresAdapter && adapterInstalled === false) return 'partial';
+  if (!configured) return 'ready';
   if (!enabled) return 'invalid';
-  return runnable === false ? 'invalid' : 'enabled';
+  return 'enabled';
 }
 
 function CapabilityBadge({
@@ -293,12 +307,14 @@ function CapabilityBadge({
 function AgentStatusBadge({
   status,
   label,
+  title,
 }: {
   status: AgentRowStatus;
   label: string;
+  title?: string;
 }) {
   return (
-    <span className={`bitfun-acp-agents__status is-${status}`}>
+    <span className={`bitfun-acp-agents__status is-${status}`} title={title}>
       {status === 'checking' && <LoaderCircle size={12} />}
       <span>{label}</span>
     </span>
@@ -310,7 +326,7 @@ const AcpAgentsConfig: React.FC = () => {
   const { error: notifyError, success: notifySuccess } = useNotification();
   const jsonEditorRef = useRef<HTMLTextAreaElement>(null);
 
-  const [config, setConfig] = useState<AcpClientConfigFile>({ acpClients: {}, remoteOverrides: {} });
+  const [config, setConfig] = useState<AcpClientConfigFile>({ acpClients: {} });
   const [clients, setClients] = useState<AcpClientInfo[]>([]);
   const [savedConnections, setSavedConnections] = useState<SavedConnection[]>([]);
   const [loading, setLoading] = useState(true);
@@ -331,29 +347,17 @@ const AcpAgentsConfig: React.FC = () => {
   const [installingRemoteClientIds, setInstallingRemoteClientIds] = useState<Set<string>>(() => new Set());
   const requirementProbeRequestIdRef = useRef(0);
   const loadedRemoteProbeIdsRef = useRef<Set<string>>(new Set());
+  const [remoteProbeRefreshNonce, setRemoteProbeRefreshNonce] = useState(0);
 
   const clientsById = useMemo(() => new Map(clients.map(client => [client.id, client])), [clients]);
   const remoteConnectionRows = useMemo(() => {
-    const byId = new Map(savedConnections.map(connection => [connection.id, connection]));
-    for (const connectionId of Object.keys(config.remoteOverrides)) {
-      if (!byId.has(connectionId)) {
-        byId.set(connectionId, {
-          id: connectionId,
-          name: connectionId,
-          host: '',
-          port: 22,
-          username: '',
-          authType: { type: 'Password' },
-        });
-      }
-    }
-    return Array.from(byId.values()).sort((left, right) => {
+    return [...savedConnections].sort((left, right) => {
       const leftTime = left.lastConnected ?? 0;
       const rightTime = right.lastConnected ?? 0;
       if (leftTime !== rightTime) return rightTime - leftTime;
       return (left.name || left.id).localeCompare(right.name || right.id);
     });
-  }, [config.remoteOverrides, savedConnections]);
+  }, [savedConnections]);
   const probesById = useMemo(
     () => new Map(requirementProbes.map(probe => [probe.id, probe])),
     [requirementProbes]
@@ -379,7 +383,9 @@ const AcpAgentsConfig: React.FC = () => {
       const status = getAgentRowStatus({
         configured,
         enabled,
-        runnable: probe?.runnable,
+        toolInstalled: probe?.tool.installed,
+        adapterInstalled: probe?.adapter?.installed,
+        requiresAdapter: Boolean(probe?.adapter || preset.id !== 'opencode'),
         probePending,
       });
       if (registryFilter === 'installed' && status !== 'enabled' && status !== 'ready') return false;
@@ -408,7 +414,9 @@ const AcpAgentsConfig: React.FC = () => {
       const status = getAgentRowStatus({
         configured,
         enabled,
-        runnable: requirementProbe?.runnable,
+        toolInstalled: requirementProbe?.tool.installed,
+        adapterInstalled: requirementProbe?.adapter?.installed,
+        requiresAdapter: Boolean(requirementProbe?.adapter),
         probePending,
       });
       if (registryFilter === 'installed' && status !== 'enabled' && status !== 'ready') return false;
@@ -559,7 +567,7 @@ const AcpAgentsConfig: React.FC = () => {
     for (const connection of remoteConnectionRows) {
       void refreshRemoteRequirementProbes(connection.id, { notifyOnError: false });
     }
-  }, [loading, refreshRemoteRequirementProbes, remoteConnectionRows]);
+  }, [loading, refreshRemoteRequirementProbes, remoteConnectionRows, remoteProbeRefreshNonce]);
 
   const patchClientConfig = (clientId: string, patch: Partial<AcpClientConfig>) => {
     setConfig(prev => {
@@ -604,14 +612,38 @@ const AcpAgentsConfig: React.FC = () => {
         requirementProbeCache = null;
         await refreshRequirementProbes({ force: true, notifyOnError: false });
       }
-      notifySuccess(t('notifications.downloadSuccess'));
+      notifySuccess(t('notifications.installSuccess'));
     } catch (error) {
-      log.error('Failed to download ACP agent CLI', error);
+      log.error('Failed to install ACP agent CLI', error);
       notifyError(error instanceof Error ? error.message : String(error), {
-        title: t('notifications.downloadFailed'),
+        title: t('notifications.installFailed'),
       });
     } finally {
       setInstalling(prev => {
+        const next = new Set(prev);
+        next.delete(installKey);
+        return next;
+      });
+    }
+  };
+
+  const configurePresetClient = async (preset: AcpClientPreset) => {
+    const installKey = preset.id;
+    setInstallingClientIds(prev => new Set(prev).add(installKey));
+    try {
+      await ACPClientAPI.predownloadClientAdapter({
+        clientId: preset.id,
+      });
+      requirementProbeCache = null;
+      await refreshRequirementProbes({ force: true, notifyOnError: false });
+      notifySuccess(t('notifications.configureSuccess'));
+    } catch (error) {
+      log.error('Failed to predownload ACP adapter', error);
+      notifyError(error instanceof Error ? error.message : String(error), {
+        title: t('notifications.configureFailed'),
+      });
+    } finally {
+      setInstallingClientIds(prev => {
         const next = new Set(prev);
         next.delete(installKey);
         return next;
@@ -631,7 +663,6 @@ const AcpAgentsConfig: React.FC = () => {
         },
       ])
     ),
-    remoteOverrides: baseConfig.remoteOverrides,
   });
 
   const saveConfig = async (nextConfig = config, options: { mergeEnvDrafts?: boolean } = {}) => {
@@ -650,6 +681,7 @@ const AcpAgentsConfig: React.FC = () => {
       setRequirementProbes([]);
       loadedRemoteProbeIdsRef.current.clear();
       setRemoteRequirementProbes({});
+      setRemoteProbeRefreshNonce(prev => prev + 1);
       notifySuccess(t('notifications.saveSuccess'));
     } catch (error) {
       log.error('Failed to save ACP agent config', error);
@@ -714,12 +746,116 @@ const AcpAgentsConfig: React.FC = () => {
     { value: 'invalid', label: t('registry.filters.configInvalid') },
   ], [t]);
 
-  const getStatusLabel = useCallback((status: AgentRowStatus) => {
+  const getIssueKind = useCallback((args: {
+    probe?: AcpClientRequirementProbe;
+    requiresAdapter: boolean;
+  }): RequirementIssueKind => {
+    const { probe, requiresAdapter } = args;
+    if (!probe) return 'config_invalid';
+
+    const toolIssue = classifyRequirementError(probe.tool.error);
+    if (toolIssue !== 'config_invalid') {
+      return toolIssue;
+    }
+
+    if (!probe.tool.installed) {
+      return 'cli_missing';
+    }
+
+    if (requiresAdapter) {
+      if (probe.adapter?.error) {
+        const adapterIssue = classifyRequirementError(probe.adapter.error);
+        if (adapterIssue !== 'config_invalid') {
+          return adapterIssue;
+        }
+      }
+      if (probe.adapter && !probe.adapter.installed) {
+        return 'adapter_missing';
+      }
+    }
+
+    return probe.runnable ? 'none' : 'config_invalid';
+  }, []);
+
+  const getStatusLabel = useCallback((args: {
+    status: AgentRowStatus;
+    issueKind: RequirementIssueKind;
+    probe?: AcpClientRequirementProbe;
+    requiresAdapter: boolean;
+  }) => {
+    const { status, issueKind, probe, requiresAdapter } = args;
     if (status === 'enabled') return t('registry.enabled');
     if (status === 'ready') return t('registry.ready');
-    if (status === 'not_installed') return t('registry.notInstalled');
+    if (status === 'partial') return t('registry.partial');
     if (status === 'checking') return t('registry.checking');
+
+    if (issueKind === 'connection_failed') return t('registry.connectionFailed');
+    if (issueKind === 'permission_denied') return t('registry.permissionDenied');
+    if (issueKind === 'path_invalid') return t('registry.pathInvalid');
+    if (issueKind === 'version_mismatch') return t('registry.versionMismatch');
+    if (issueKind === 'adapter_missing' || (requiresAdapter && probe?.adapter && !probe.adapter.installed)) {
+      return t('registry.acpMissing');
+    }
+    if (issueKind === 'cli_missing' || probe?.tool.installed === false) {
+      return t('registry.cliMissing');
+    }
     return t('registry.configInvalid');
+  }, [t]);
+
+  const getStatusTitle = useCallback((args: {
+    status: AgentRowStatus;
+    issueKind: RequirementIssueKind;
+    probe?: AcpClientRequirementProbe;
+    requiresAdapter: boolean;
+  }) => {
+    const { status, issueKind, probe, requiresAdapter } = args;
+    const lines: string[] = [];
+    if (status === 'enabled') {
+      lines.push(t('registry.enabled'));
+    } else if (status === 'ready') {
+      lines.push(t('registry.ready'));
+    } else if (status === 'partial') {
+      lines.push(t('registry.partialDetail'));
+    } else if (status === 'checking') {
+      lines.push(t('registry.checking'));
+    }
+
+    if (issueKind === 'connection_failed') {
+      lines.push(t('registry.connectionFailedDetail'));
+    } else if (issueKind === 'permission_denied') {
+      lines.push(t('registry.permissionDeniedDetail'));
+    } else if (issueKind === 'path_invalid') {
+      lines.push(t('registry.pathInvalidDetail'));
+    } else if (issueKind === 'version_mismatch') {
+      lines.push(t('registry.versionMismatchDetail'));
+    } else if (issueKind === 'adapter_missing' || (requiresAdapter && probe?.adapter && !probe.adapter.installed)) {
+      lines.push(t('registry.acpMissingDetail'));
+    } else if (issueKind === 'cli_missing' || probe?.tool.installed === false) {
+      lines.push(t('registry.cliMissingDetail'));
+    } else if (status === 'invalid') {
+      lines.push(t('registry.configInvalidDetail'));
+    }
+
+    if (probe?.tool.path) {
+      lines.push(`${t('registry.toolPath')}: ${probe.tool.path}`);
+    }
+    if (probe?.tool.version) {
+      lines.push(`${t('registry.toolVersion')}: ${probe.tool.version}`);
+    }
+    if (probe?.tool.error) {
+      lines.push(probe.tool.error);
+    }
+    if (probe?.adapter?.error) {
+      lines.push(probe.adapter.error);
+    }
+    if (probe?.notes.length) {
+      lines.push(...probe.notes);
+    }
+    return lines.filter(Boolean).join('\n');
+  }, [t]);
+
+  const getRemoteSummary = useCallback((available: number, total: number) => {
+    return t('remote.summary', { available, total });
   }, [t]);
 
   const openLearnMore = useCallback(() => {
@@ -731,19 +867,10 @@ const AcpAgentsConfig: React.FC = () => {
     });
   }, [notifyError, t]);
 
-  const openJsonEditor = useCallback(() => {
-    setShowJsonEditor(true);
-    requestAnimationFrame(() => {
-      jsonEditorRef.current?.focus();
-    });
-  }, []);
-
-  const remoteAgentIdsForConnection = useCallback((connectionId: string) => {
-    const remoteOverride = config.remoteOverrides[connectionId];
+  const remoteAgentIds = useMemo(() => {
     const ids = new Set<string>([
       ...PRESETS.map(preset => preset.id),
       ...Object.keys(config.acpClients),
-      ...Object.keys(remoteOverride?.clients ?? {}),
     ]);
     return Array.from(ids).sort((left, right) => {
       const leftPresetIndex = PRESETS.findIndex(preset => preset.id === left);
@@ -755,7 +882,7 @@ const AcpAgentsConfig: React.FC = () => {
       }
       return left.localeCompare(right);
     });
-  }, [config.acpClients, config.remoteOverrides]);
+  }, [config.acpClients]);
 
   return (
     <ConfigPageLayout className="bitfun-acp-agents">
@@ -878,9 +1005,40 @@ const AcpAgentsConfig: React.FC = () => {
                 const hasConfigEntry = Boolean(config.acpClients[preset.id]);
                 const configured = hasConfigEntry;
                 const enabled = clientConfig.enabled;
-                const runnable = requirementProbe?.runnable;
-                const status = getAgentRowStatus({ configured, enabled, runnable, probePending });
+                const requiresAdapter = preset.id !== 'opencode' || Boolean(requirementProbe?.adapter);
+                const issueKind = getIssueKind({ probe: requirementProbe, requiresAdapter });
+                const status = getAgentRowStatus({
+                  configured,
+                  enabled,
+                  toolInstalled: requirementProbe?.tool.installed,
+                  adapterInstalled: requirementProbe?.adapter?.installed,
+                  requiresAdapter,
+                  probePending,
+                });
+                const statusLabel = getStatusLabel({
+                  status,
+                  issueKind,
+                  probe: requirementProbe,
+                  requiresAdapter,
+                });
+                const statusTitle = getStatusTitle({
+                  status,
+                  issueKind,
+                  probe: requirementProbe,
+                  requiresAdapter,
+                });
                 const installing = installingClientIds.has(preset.id);
+                const configuring = installingClientIds.has(preset.id);
+                const showSelect = hasConfigEntry && (status === 'enabled' || status === 'ready');
+                const canInstallCli = status === 'not_installed' && issueKind !== 'connection_failed';
+                const canConfigureAcp = !requiresAdapter
+                  ? false
+                  : issueKind === 'adapter_missing' || (status === 'partial' && issueKind === 'config_invalid');
+                const canViewError = status === 'invalid'
+                  || issueKind === 'connection_failed'
+                  || issueKind === 'permission_denied'
+                  || issueKind === 'path_invalid'
+                  || issueKind === 'version_mismatch';
 
                 return (
                   <div key={preset.id} className="bitfun-acp-agents__registry-row">
@@ -905,10 +1063,10 @@ const AcpAgentsConfig: React.FC = () => {
                       />
                     </div>
                     <div className="bitfun-acp-agents__status-cell">
-                      <AgentStatusBadge status={status} label={getStatusLabel(status)} />
+                      <AgentStatusBadge status={status} label={statusLabel} title={statusTitle} />
                     </div>
                     <div className="bitfun-acp-agents__confirmation-cell">
-                      {hasConfigEntry ? (
+                      {showSelect ? (
                         <Select
                           className="bitfun-acp-agents__confirmation-select"
                           options={permissionOptions}
@@ -918,7 +1076,7 @@ const AcpAgentsConfig: React.FC = () => {
                           })}
                           size="small"
                         />
-                      ) : status === 'not_installed' ? (
+                      ) : canInstallCli ? (
                         <Button
                           className="bitfun-acp-agents__add-button"
                           variant="secondary"
@@ -927,7 +1085,33 @@ const AcpAgentsConfig: React.FC = () => {
                           isLoading={installing}
                         >
                           <Download size={14} />
-                          {t('actions.download')}
+                          {t('actions.installCli')}
+                        </Button>
+                      ) : canConfigureAcp ? (
+                        <Button
+                          className="bitfun-acp-agents__add-button"
+                          variant="secondary"
+                          size="small"
+                          onClick={() => { void configurePresetClient(preset); }}
+                          isLoading={configuring}
+                        >
+                          <FileJson size={14} />
+                          {t('actions.configureAcp')}
+                        </Button>
+                      ) : canViewError ? (
+                        <Button
+                          className="bitfun-acp-agents__add-button"
+                          variant="secondary"
+                          size="small"
+                          onClick={() => {
+                            notifyError(
+                              statusTitle || t('registry.configInvalidDetail'),
+                              { title: statusLabel }
+                            );
+                          }}
+                        >
+                          <CircleAlert size={14} />
+                          {t('actions.viewError')}
                         </Button>
                       ) : (
                         <Button
@@ -951,14 +1135,34 @@ const AcpAgentsConfig: React.FC = () => {
 
                 const requirementProbe = probesById.get(clientId);
                 const probePending = probingRequirements && !requirementProbe;
-                const runnable = requirementProbe?.runnable;
+                const requiresAdapter = Boolean(requirementProbe?.adapter);
+                const issueKind = getIssueKind({ probe: requirementProbe, requiresAdapter });
                 const status = getAgentRowStatus({
                   configured: true,
                   enabled: clientConfig.enabled !== false,
-                  runnable,
+                  toolInstalled: requirementProbe?.tool.installed,
+                  adapterInstalled: requirementProbe?.adapter?.installed,
+                  requiresAdapter,
                   probePending,
                 });
+                const statusLabel = getStatusLabel({
+                  status,
+                  issueKind,
+                  probe: requirementProbe,
+                  requiresAdapter,
+                });
+                const statusTitle = getStatusTitle({
+                  status,
+                  issueKind,
+                  probe: requirementProbe,
+                  requiresAdapter,
+                });
                 const displayName = clientConfig.name || clientInfo?.name || clientId;
+                const canViewError = status === 'invalid'
+                  || issueKind === 'connection_failed'
+                  || issueKind === 'permission_denied'
+                  || issueKind === 'path_invalid'
+                  || issueKind === 'version_mismatch';
 
                 return (
                   <div
@@ -988,18 +1192,35 @@ const AcpAgentsConfig: React.FC = () => {
                       />
                     </div>
                     <div className="bitfun-acp-agents__status-cell">
-                      <AgentStatusBadge status={status} label={getStatusLabel(status)} />
+                      <AgentStatusBadge status={status} label={statusLabel} title={statusTitle} />
                     </div>
                     <div className="bitfun-acp-agents__confirmation-cell">
-                      <Select
-                        className="bitfun-acp-agents__confirmation-select"
-                        options={permissionOptions}
-                        value={clientConfig.permissionMode}
-                        onChange={(value) => patchClientConfig(clientId, {
-                          permissionMode: normalizePermissionMode(value),
-                        })}
-                        size="small"
-                      />
+                      {status === 'enabled' || status === 'ready' ? (
+                        <Select
+                          className="bitfun-acp-agents__confirmation-select"
+                          options={permissionOptions}
+                          value={clientConfig.permissionMode}
+                          onChange={(value) => patchClientConfig(clientId, {
+                            permissionMode: normalizePermissionMode(value),
+                          })}
+                          size="small"
+                        />
+                      ) : canViewError ? (
+                        <Button
+                          className="bitfun-acp-agents__add-button"
+                          variant="secondary"
+                          size="small"
+                          onClick={() => {
+                            notifyError(
+                              statusTitle || t('registry.configInvalidDetail'),
+                              { title: statusLabel }
+                            );
+                          }}
+                        >
+                          <CircleAlert size={14} />
+                          {t('actions.viewError')}
+                        </Button>
+                      ) : null}
                     </div>
                   </div>
                 );
@@ -1014,14 +1235,61 @@ const AcpAgentsConfig: React.FC = () => {
             ) : (
               <div className="bitfun-acp-agents__remote-list">
                 {remoteConnectionRows.map(connection => {
-                  const remoteOverride = config.remoteOverrides[connection.id] ?? { env: {}, clients: {} };
                   const hostLabel = [connection.username, connection.host]
                     .filter(Boolean)
                     .join('@');
                   const remoteProbes = remoteRequirementProbes[connection.id] ?? [];
                   const remoteProbesById = new Map(remoteProbes.map(probe => [probe.id, probe]));
+                  const remoteProbeLoaded = Object.prototype.hasOwnProperty.call(
+                    remoteRequirementProbes,
+                    connection.id
+                  );
                   const probingRemote = probingRemoteRequirements.has(connection.id);
-                  const remoteAgentIds = remoteAgentIdsForConnection(connection.id);
+                  const remoteRows = remoteAgentIds.map(clientId => {
+                    const preset = PRESET_BY_ID.get(clientId);
+                    const clientConfig = config.acpClients[clientId];
+                    const requirementProbe = remoteProbesById.get(clientId);
+                    const probePending = probingRemote || !remoteProbeLoaded || !requirementProbe;
+                    const hasConfigEntry = Boolean(clientConfig);
+                    const effectiveConfig = clientConfig ?? (preset ? defaultConfigForPreset(preset) : undefined);
+                    const enabled = effectiveConfig?.enabled ?? true;
+                    const requiresAdapter = Boolean(requirementProbe?.adapter || preset?.id !== 'opencode');
+                    const issueKind = getIssueKind({ probe: requirementProbe, requiresAdapter });
+                    const status = getAgentRowStatus({
+                      configured: hasConfigEntry,
+                      enabled,
+                      toolInstalled: requirementProbe?.tool.installed,
+                      adapterInstalled: requirementProbe?.adapter?.installed,
+                      requiresAdapter,
+                      probePending,
+                    });
+                    const displayName = effectiveConfig?.name || preset?.name || clientId;
+                    const description = preset?.description ??
+                      (effectiveConfig ? [effectiveConfig.command, ...effectiveConfig.args].join(' ') : clientId);
+                    const installingRemote = installingRemoteClientIds.has(`${connection.id}:${clientId}`);
+
+                    return {
+                      clientId,
+                      preset,
+                      clientConfig,
+                      requirementProbe,
+                      probePending,
+                      hasConfigEntry,
+                      enabled,
+                      requiresAdapter,
+                      issueKind,
+                      status,
+                      displayName,
+                      description,
+                      installingRemote,
+                    };
+                  });
+                  const availableCount = remoteRows.filter(row => row.status === 'enabled' || row.status === 'ready').length;
+                  const issueCount = remoteRows.filter(row => (
+                    row.status === 'partial' ||
+                    row.status === 'not_installed' ||
+                    row.status === 'invalid'
+                  )).length;
 
                   return (
                     <div key={connection.id} className="bitfun-acp-agents__remote-server">
@@ -1037,17 +1305,19 @@ const AcpAgentsConfig: React.FC = () => {
                             <p className="bitfun-acp-agents__registry-description">
                               {hostLabel || connection.id}
                             </p>
+                            <div className="bitfun-acp-agents__remote-summary">
+                              <span className="bitfun-acp-agents__summary-pill is-success">
+                                {getRemoteSummary(availableCount, remoteRows.length)}
+                              </span>
+                              {issueCount > 0 && (
+                                <span className="bitfun-acp-agents__summary-pill is-warning">
+                                  {t('remote.issueSummary', { count: issueCount })}
+                                </span>
+                              )}
+                            </div>
                           </div>
                         </div>
                         <div className="bitfun-acp-agents__remote-actions">
-                          <Button
-                            variant="secondary"
-                            size="small"
-                            onClick={openJsonEditor}
-                          >
-                            <FileJson size={14} />
-                            {t('remote.configureJson')}
-                          </Button>
                           <Button
                             variant="secondary"
                             size="small"
@@ -1060,105 +1330,120 @@ const AcpAgentsConfig: React.FC = () => {
                             isLoading={probingRemote}
                           >
                             <RefreshCw size={14} />
-                            {t('remote.refresh')}
+                            {t('remote.refreshDetection')}
                           </Button>
                         </div>
                       </div>
                       <div className="bitfun-acp-agents__remote-agent-list">
-                        {remoteAgentIds.map(clientId => {
-                          const preset = PRESET_BY_ID.get(clientId);
-                          const clientConfig = config.acpClients[clientId];
-                          const clientOverride = remoteOverride.clients[clientId] ?? {};
-                          const requirementProbe = remoteProbesById.get(clientId);
-                          const probePending = probingRemote && !requirementProbe;
-                          const hasConfigEntry = Boolean(clientConfig);
-                          const hasRemoteOverride = Boolean(remoteOverride.clients[clientId]);
-                          const effectiveConfig = clientConfig ?? (preset ? defaultConfigForPreset(preset) : undefined);
-                          const enabled = clientOverride.enabled ?? effectiveConfig?.enabled ?? true;
-                          const runnable = requirementProbe?.runnable;
-                          const missingRemoteTool = requirementProbe?.tool.installed === false;
-                          const status = getAgentRowStatus({
-                            configured: hasConfigEntry || hasRemoteOverride,
-                            enabled,
-                            runnable,
-                            probePending,
+                        {remoteRows.map(row => {
+                          const statusLabel = getStatusLabel({
+                            status: row.status,
+                            issueKind: row.issueKind,
+                            probe: row.requirementProbe,
+                            requiresAdapter: row.requiresAdapter,
                           });
-                          const displayName = effectiveConfig?.name || preset?.name || clientId;
-                          const description = preset?.description ??
-                            (effectiveConfig ? [effectiveConfig.command, ...effectiveConfig.args].join(' ') : clientId);
-                          const installingRemote = installingRemoteClientIds.has(`${connection.id}:${clientId}`);
+                          const statusTitle = getStatusTitle({
+                            status: row.status,
+                            issueKind: row.issueKind,
+                            probe: row.requirementProbe,
+                            requiresAdapter: row.requiresAdapter,
+                          });
+                          const canInstallCli = row.preset && row.status === 'not_installed' && row.issueKind === 'cli_missing';
+                          const canViewError = row.status === 'invalid' || row.status === 'partial'
+                            || row.issueKind === 'connection_failed'
+                            || row.issueKind === 'permission_denied'
+                            || row.issueKind === 'path_invalid'
+                            || row.issueKind === 'version_mismatch'
+                            || row.issueKind === 'adapter_missing';
 
                           return (
-                            <div key={clientId} className="bitfun-acp-agents__registry-row">
+                            <div key={row.clientId} className="bitfun-acp-agents__registry-row bitfun-acp-agents__registry-row--remote">
                               <div className="bitfun-acp-agents__registry-main">
                                 <span className="bitfun-acp-agents__registry-icon">
                                   <Bot size={16} />
                                 </span>
                                 <div className="bitfun-acp-agents__registry-copy">
-                                  <span className="bitfun-acp-agents__registry-name">{displayName}</span>
-                                  <p className="bitfun-acp-agents__registry-description">{description}</p>
+                                  <span className="bitfun-acp-agents__registry-name">{row.displayName}</span>
+                                  <p className="bitfun-acp-agents__registry-description">{row.description}</p>
                                 </div>
                               </div>
                               <div className="bitfun-acp-agents__capabilities">
                                 <CapabilityBadge
                                   icon={<Terminal size={12} />}
-                                  item={requirementProbe?.tool}
+                                  item={row.requirementProbe?.tool}
                                   label={t('requirements.tool')}
                                   installedText={t('requirements.installed')}
                                   missingText={t('requirements.missing')}
-                                  checking={probePending}
+                                  checking={row.probePending}
                                   checkingText={t('requirements.checking')}
                                 />
-                                {requirementProbe?.adapter && (
+                                {row.requirementProbe?.adapter && (
                                   <CapabilityBadge
                                     icon={<FileJson size={12} />}
-                                    item={requirementProbe.adapter}
+                                    item={row.requirementProbe.adapter}
                                     label={t('requirements.adapter')}
                                     installedText={t('requirements.installed')}
                                     missingText={t('requirements.missing')}
-                                    checking={probePending}
+                                    checking={row.probePending}
                                     checkingText={t('requirements.checking')}
                                   />
                                 )}
                               </div>
                               <div className="bitfun-acp-agents__status-cell">
-                                <AgentStatusBadge status={status} label={getStatusLabel(status)} />
+                                <AgentStatusBadge status={row.status} label={statusLabel} title={statusTitle} />
                               </div>
                               <div className="bitfun-acp-agents__confirmation-cell">
-                                {preset && (status === 'not_installed' || missingRemoteTool) ? (
+                                {canInstallCli ? (
                                   <Button
                                     className="bitfun-acp-agents__add-button"
                                     variant="secondary"
                                     size="small"
                                     onClick={() => {
-                                      void installPresetClient(preset, {
+                                      void installPresetClient(row.preset!, {
                                         remoteConnectionId: connection.id,
                                       });
                                     }}
-                                    isLoading={installingRemote}
+                                    isLoading={row.installingRemote}
                                   >
                                     <Download size={14} />
-                                    {t('actions.download')}
+                                    {t('actions.installCli')}
                                   </Button>
-                                ) : hasConfigEntry && clientConfig ? (
-                                  <Select
-                                    className="bitfun-acp-agents__confirmation-select"
-                                    options={permissionOptions}
-                                    value={clientConfig.permissionMode}
-                                    onChange={(value) => patchClientConfig(clientId, {
-                                      permissionMode: normalizePermissionMode(value),
-                                    })}
-                                    size="small"
-                                  />
-                                ) : preset ? (
+                                ) : row.status === 'enabled' || row.status === 'ready' ? (
+                                  row.clientConfig ? (
+                                    <Select
+                                      className="bitfun-acp-agents__confirmation-select"
+                                      options={permissionOptions}
+                                      value={row.clientConfig.permissionMode}
+                                      onChange={(value) => patchClientConfig(row.clientId, {
+                                        permissionMode: normalizePermissionMode(value),
+                                      })}
+                                      size="small"
+                                    />
+                                  ) : row.preset ? (
                                   <Button
                                     className="bitfun-acp-agents__add-button"
                                     variant="secondary"
                                     size="small"
-                                    onClick={() => addPresetClient(preset)}
+                                    onClick={() => addPresetClient(row.preset!)}
                                   >
                                     <Plus size={14} />
                                     {t('actions.add')}
+                                  </Button>
+                                  ) : null
+                                ) : canViewError ? (
+                                  <Button
+                                    className="bitfun-acp-agents__add-button"
+                                    variant="secondary"
+                                    size="small"
+                                    onClick={() => {
+                                      notifyError(
+                                        statusTitle || t('registry.configInvalidDetail'),
+                                        { title: statusLabel }
+                                      );
+                                    }}
+                                  >
+                                    <CircleAlert size={14} />
+                                    {t('actions.viewError')}
                                   </Button>
                                 ) : (
                                   null

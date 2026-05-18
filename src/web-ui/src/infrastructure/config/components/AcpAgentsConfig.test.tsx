@@ -9,6 +9,7 @@ const loadJsonConfigMock = vi.hoisted(() => vi.fn());
 const getClientsMock = vi.hoisted(() => vi.fn());
 const probeClientRequirementsMock = vi.hoisted(() => vi.fn());
 const installClientCliMock = vi.hoisted(() => vi.fn());
+const predownloadClientAdapterMock = vi.hoisted(() => vi.fn());
 const listSavedConnectionsMock = vi.hoisted(() => vi.fn());
 const notifyErrorMock = vi.hoisted(() => vi.fn());
 const notifySuccessMock = vi.hoisted(() => vi.fn());
@@ -99,6 +100,7 @@ vi.mock('../../api/service-api/ACPClientAPI', () => ({
     getClients: getClientsMock,
     probeClientRequirements: probeClientRequirementsMock,
     installClientCli: installClientCliMock,
+    predownloadClientAdapter: predownloadClientAdapterMock,
     saveJsonConfig: vi.fn(),
   },
 }));
@@ -163,6 +165,7 @@ describe('AcpAgentsConfig', () => {
     listSavedConnectionsMock.mockResolvedValue([]);
     probeClientRequirementsMock.mockResolvedValue([]);
     installClientCliMock.mockResolvedValue(undefined);
+    predownloadClientAdapterMock.mockResolvedValue(undefined);
 
     container = document.createElement('div');
     document.body.appendChild(container);
@@ -194,7 +197,7 @@ describe('AcpAgentsConfig', () => {
     expect(container.textContent).not.toContain('registry.configInvalid');
   });
 
-  it('renders saved remote servers as agent rows without low-level override fields', async () => {
+  it('renders saved remote servers as global agent rows without override controls', async () => {
     listSavedConnectionsMock.mockResolvedValue([{
       id: 'huawei-server',
       name: 'huawei-server',
@@ -215,9 +218,7 @@ describe('AcpAgentsConfig', () => {
 
     expect(container.textContent).toContain('huawei-server');
     expect(container.textContent).toContain('ssh-root@119.8.182.138');
-    expect(container.textContent).toContain('remote.configureJson');
-    expect(container.textContent?.split('remote.configureJson').length).toBe(2);
-    expect(container.textContent).toContain('remote.refresh');
+    expect(container.textContent).toContain('remote.refreshDetection');
     expect(container.textContent).not.toContain('remote.env');
     expect(probeClientRequirementsMock).toHaveBeenCalledWith({
       remoteConnectionId: 'huawei-server',
@@ -225,7 +226,64 @@ describe('AcpAgentsConfig', () => {
     });
   });
 
-  it('downloads a missing remote preset on that remote server', async () => {
+  it('configures a preset adapter when the CLI is ready but the ACP layer is missing', async () => {
+    probeClientRequirementsMock.mockResolvedValue([
+      {
+        id: 'opencode',
+        tool: { name: 'opencode', installed: true },
+        runnable: true,
+        notes: [],
+      },
+      {
+        id: 'claude-code',
+        tool: { name: 'claude', installed: true },
+        adapter: { name: '@zed-industries/claude-code-acp', installed: false },
+        runnable: false,
+        notes: [],
+      },
+      {
+        id: 'codex',
+        tool: { name: 'codex', installed: true },
+        adapter: { name: '@zed-industries/codex-acp', installed: false },
+        runnable: false,
+        notes: [],
+      },
+    ]);
+
+    await act(async () => {
+      root.render(<AcpAgentsConfig />);
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const refreshButtons = Array.from(container.querySelectorAll('button'))
+      .filter(button => button.textContent?.includes('actions.refresh'));
+    expect(refreshButtons.length).toBeGreaterThan(0);
+
+    await act(async () => {
+      refreshButtons[0].click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const configureButtons = Array.from(container.querySelectorAll('button'))
+      .filter(button => button.textContent?.includes('actions.configureAcp'));
+    expect(configureButtons.length).toBeGreaterThan(0);
+
+    await act(async () => {
+      configureButtons[configureButtons.length - 1].click();
+      await Promise.resolve();
+    });
+
+    expect(predownloadClientAdapterMock).toHaveBeenCalledWith({
+      clientId: 'codex',
+    });
+  });
+
+  it('installs a missing remote preset CLI on that remote server', async () => {
     listSavedConnectionsMock.mockResolvedValue([{
       id: 'huawei-server',
       name: 'huawei-server',
@@ -269,12 +327,12 @@ describe('AcpAgentsConfig', () => {
       await Promise.resolve();
     });
 
-    const downloadButtons = Array.from(container.querySelectorAll('button'))
-      .filter(button => button.textContent?.includes('actions.download'));
-    expect(downloadButtons.length).toBeGreaterThan(0);
+    const installButtons = Array.from(container.querySelectorAll('button'))
+      .filter(button => button.textContent?.includes('actions.installCli'));
+    expect(installButtons.length).toBeGreaterThan(0);
 
     await act(async () => {
-      downloadButtons[downloadButtons.length - 1].click();
+      installButtons[installButtons.length - 1].click();
       await Promise.resolve();
     });
 

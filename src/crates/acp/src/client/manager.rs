@@ -36,8 +36,7 @@ use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 use super::builtin_clients::{builtin_client_ids, default_config_for_builtin_client};
 use super::config::{
     AcpClientConfig, AcpClientConfigFile, AcpClientInfo, AcpClientPermissionMode,
-    AcpClientRequirementProbe, AcpClientStatus, AcpRemoteClientOverride, AcpRemoteOverrideConfig,
-    RemoteAcpClientRequirementSnapshot,
+    AcpClientRequirementProbe, AcpClientStatus, RemoteAcpClientRequirementSnapshot,
 };
 use super::remote_capability_store::RemoteAcpCapabilityStore;
 use super::remote_session::{preferred_resume_strategies, AcpRemoteSessionStrategy};
@@ -365,13 +364,6 @@ impl AcpClientService {
         for id in builtin_client_ids() {
             if !ids.iter().any(|candidate| candidate == id) {
                 ids.push(id.to_string());
-            }
-        }
-        if let Some(remote_override) = config_file.remote_overrides.get(remote_connection_id) {
-            for id in remote_override.clients.keys() {
-                if !ids.iter().any(|candidate| candidate == id) {
-                    ids.push(id.clone());
-                }
             }
         }
         ids.sort();
@@ -1663,57 +1655,11 @@ fn resolve_config_for_client(
     client_id: &str,
     remote_connection_id: Option<&str>,
 ) -> Option<AcpClientConfig> {
-    let mut config = config_file
+    config_file
         .acp_clients
         .get(client_id)
         .cloned()
-        .or_else(|| {
-            remote_connection_id.and_then(|_| default_config_for_builtin_client(client_id))
-        })?;
-    if let Some(connection_id) = remote_connection_id {
-        apply_remote_override(
-            &mut config,
-            config_file.remote_overrides.get(connection_id),
-            client_id,
-        );
-    }
-    Some(config)
-}
-
-fn apply_remote_override(
-    config: &mut AcpClientConfig,
-    remote_override: Option<&AcpRemoteOverrideConfig>,
-    client_id: &str,
-) {
-    let Some(remote_override) = remote_override else {
-        return;
-    };
-
-    config.env.extend(remote_override.env.clone());
-    if let Some(client_override) = remote_override.clients.get(client_id) {
-        apply_remote_client_override(config, client_override);
-    }
-}
-
-fn apply_remote_client_override(
-    config: &mut AcpClientConfig,
-    client_override: &AcpRemoteClientOverride,
-) {
-    if let Some(command) = client_override
-        .command
-        .as_deref()
-        .map(str::trim)
-        .filter(|command| !command.is_empty())
-    {
-        config.command = command.to_string();
-    }
-    if let Some(args) = client_override.args.as_ref() {
-        config.args = args.clone();
-    }
-    config.env.extend(client_override.env.clone());
-    if let Some(enabled) = client_override.enabled {
-        config.enabled = enabled;
-    }
+        .or_else(|| remote_connection_id.and_then(|_| default_config_for_builtin_client(client_id)))
 }
 
 fn ensure_remote_client_supported(
@@ -2200,7 +2146,7 @@ mod tests {
     }
 
     #[test]
-    fn resolves_remote_client_config_with_remote_overrides() {
+    fn resolves_remote_client_config_from_global_config() {
         let config_file = AcpClientConfigFile {
             acp_clients: HashMap::from([(
                 "codex".to_string(),
@@ -2217,31 +2163,17 @@ mod tests {
                     permission_mode: AcpClientPermissionMode::Ask,
                 },
             )]),
-            remote_overrides: HashMap::from([(
-                "huawei-server".to_string(),
-                AcpRemoteOverrideConfig {
-                    env: HashMap::from([("REMOTE".to_string(), "1".to_string())]),
-                    clients: HashMap::from([(
-                        "codex".to_string(),
-                        AcpRemoteClientOverride {
-                            command: Some("codex".to_string()),
-                            args: Some(vec!["acp".to_string()]),
-                            env: HashMap::from([("CLIENT".to_string(), "1".to_string())]),
-                            enabled: Some(false),
-                        },
-                    )]),
-                },
-            )]),
         };
 
         let resolved = resolve_config_for_client(&config_file, "codex", Some("huawei-server"))
             .expect("config");
 
-        assert_eq!(resolved.command, "codex");
-        assert_eq!(resolved.args, vec!["acp"]);
+        assert_eq!(resolved.command, "npx");
+        assert_eq!(
+            resolved.args,
+            vec!["--yes", "@zed-industries/codex-acp@latest"]
+        );
         assert_eq!(resolved.env.get("BASE").map(String::as_str), Some("1"));
-        assert_eq!(resolved.env.get("REMOTE").map(String::as_str), Some("1"));
-        assert_eq!(resolved.env.get("CLIENT").map(String::as_str), Some("1"));
-        assert!(!resolved.enabled);
+        assert!(resolved.enabled);
     }
 }
