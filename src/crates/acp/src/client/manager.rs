@@ -52,7 +52,10 @@ use super::requirements::{
 use super::session_options::{model_config_id, session_options_from_state, AcpSessionOptions};
 use super::session_persistence::AcpSessionPersistence;
 pub use super::session_persistence::CreateAcpFlowSessionRecordResponse;
-use super::stream::{acp_dispatch_to_stream_events, AcpClientStreamEvent, AcpStreamRoundTracker};
+use super::stream::{
+    acp_dispatch_to_stream_events_with_tracker, AcpClientStreamEvent, AcpStreamRoundTracker,
+    AcpToolCallTracker,
+};
 use super::tool::AcpAgentTool;
 
 const CONFIG_PATH: &str = "acp_clients";
@@ -1018,11 +1021,17 @@ impl AcpClientService {
                 .ok_or_else(|| BitFunError::service("ACP session was not initialized"))?;
             active.send_prompt(prompt).map_err(protocol_error)?;
             let mut round_tracker = AcpStreamRoundTracker::new();
+            let mut tool_call_tracker = AcpToolCallTracker::new();
 
             loop {
                 match active.read_update().await.map_err(protocol_error)? {
                     SessionMessage::SessionMessage(dispatch) => {
-                        for event in acp_dispatch_to_stream_events(dispatch).await? {
+                        for event in acp_dispatch_to_stream_events_with_tracker(
+                            dispatch,
+                            &mut tool_call_tracker,
+                        )
+                        .await?
+                        {
                             for event in round_tracker.apply(event) {
                                 on_event(event)?;
                             }
