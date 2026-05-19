@@ -13,6 +13,7 @@ pub mod pipeline;
 pub(crate) mod post_call_hooks;
 pub mod registry;
 pub mod restrictions;
+pub(crate) mod runtime_assembly;
 pub(crate) mod static_providers;
 pub mod user_input_manager;
 pub mod workspace_paths;
@@ -25,7 +26,7 @@ pub use framework::{
 pub use image_context::{ImageContextData, ImageContextProvider, ImageContextProviderRef};
 pub use input_validator::InputValidator;
 pub use manifest_resolver::{
-    resolve_tool_manifest, resolve_visible_tools, ResolvedToolManifest, ResolvedVisibleTools,
+    ResolvedToolManifest, ResolvedVisibleTools, resolve_tool_manifest, resolve_visible_tools,
 };
 pub use pipeline::*;
 pub use registry::{
