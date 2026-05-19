@@ -520,6 +520,21 @@ const forbiddenContentRules = [
     ],
   },
   {
+    path: 'src/crates/core/src/function_agents/startchat-func-agent/work_state_analyzer.rs',
+    patterns: [
+      {
+        regex: /\bAIWorkStateService::new_with_agent_config\b/,
+        message:
+          'Startchat work-state analyzer must use CoreFunctionAgentAiAdapter through FunctionAgentRuntimeFacade',
+      },
+      {
+        regex: /\bcreate_command\("git"\)/,
+        message:
+          'Startchat work-state analyzer must use CoreFunctionAgentGitAdapter through FunctionAgentRuntimeFacade',
+      },
+    ],
+  },
+  {
     path: 'src/crates/core/src/service/mcp/server/config.rs',
     patterns: [
       {
@@ -2259,6 +2274,25 @@ const requiredContentRules = [
     ],
   },
   {
+    path: 'src/crates/core/src/function_agents/startchat-func-agent/work_state_analyzer.rs',
+    reason:
+      'Startchat work-state analysis must route through the product-domain runtime facade while core keeps concrete adapters',
+    patterns: [
+      {
+        regex: /\bFunctionAgentRuntimeFacade\b/,
+        message: 'missing product-domain function-agent runtime facade routing',
+      },
+      {
+        regex: /\bCoreFunctionAgentGitAdapter\b/,
+        message: 'missing core-owned Git adapter wiring',
+      },
+      {
+        regex: /\bCoreFunctionAgentAiAdapter\b/,
+        message: 'missing core-owned AI adapter wiring',
+      },
+    ],
+  },
+  {
     path: 'src/crates/product-domains/src/function_agents/ports.rs',
     reason:
       'product-domains owns port-backed function-agent facade orchestration while core keeps concrete Git/AI runtime calls',
@@ -2381,6 +2415,10 @@ const requiredContentRules = [
       {
         regex: /\bgit_adapter_commit_snapshot_keeps_staged_diff_and_unstaged_count_separate\b/,
         message: 'missing function-agent Git snapshot boundary regression test',
+      },
+      {
+        regex: /\bgit_adapter_startchat_snapshot_preserves_git_state_when_diff_has_no_head\b/,
+        message: 'missing Startchat Git diff fallback regression test',
       },
     ],
   },

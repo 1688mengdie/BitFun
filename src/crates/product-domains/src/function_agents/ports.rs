@@ -98,9 +98,9 @@ pub trait FunctionAgentAiPort: Send + Sync {
 ///
 /// It owns only pure orchestration over function-agent ports and DTO helpers.
 /// Core still owns Git/AI service calls, prompt templates, JSON extraction,
-/// and concrete error mapping. Startchat product-path rewiring must remain
-/// blocked until its Git state, diff fallback, and time-info behavior are
-/// equivalence-locked.
+/// and concrete error mapping. Startchat product-path rewiring depends on core
+/// adapters preserving legacy Git state, diff fallback, time-info, and
+/// `analyzed_at` timing semantics.
 pub struct FunctionAgentRuntimeFacade<'a> {
     git: &'a dyn FunctionAgentGitPort,
     ai: &'a dyn FunctionAgentAiPort,

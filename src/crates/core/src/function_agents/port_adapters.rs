@@ -77,12 +77,12 @@ impl CoreFunctionAgentGitAdapter {
     }
 
     async fn build_startchat_git_snapshot(repo_path: PathBuf) -> AgentResult<StartchatGitSnapshot> {
-        let current_branch = git_stdout(&repo_path, &["branch", "--show-current"])?
+        let current_branch = git_stdout_lenient(&repo_path, &["branch", "--show-current"])?
             .trim()
             .to_string();
-        let status_porcelain = git_stdout(&repo_path, &["status", "--porcelain"])?;
-        let unstaged_diff = git_stdout(&repo_path, &["diff", "HEAD"])?;
-        let staged_diff = git_stdout(&repo_path, &["diff", "--cached"])?;
+        let status_porcelain = git_stdout_lenient(&repo_path, &["status", "--porcelain"])?;
+        let unstaged_diff = git_stdout_lenient(&repo_path, &["diff", "HEAD"])?;
+        let staged_diff = git_stdout_lenient(&repo_path, &["diff", "--cached"])?;
         let unpushed_commits = git_unpushed_commits(&repo_path);
         let ahead_behind = git_ahead_behind(&repo_path);
         let last_commit_timestamp = git_last_commit_timestamp(&repo_path);
@@ -155,26 +155,12 @@ impl FunctionAgentAiPort for CoreFunctionAgentAiAdapter {
     }
 }
 
-fn git_stdout(repo_path: &Path, args: &[&str]) -> AgentResult<String> {
+fn git_stdout_lenient(repo_path: &Path, args: &[&str]) -> AgentResult<String> {
     let output = crate::util::process_manager::create_command("git")
         .args(args)
         .current_dir(repo_path)
         .output()
         .map_err(|e| AgentError::git_error(format!("Failed to run git {:?}: {}", args, e)))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let detail = if !stderr.trim().is_empty() {
-            stderr.trim()
-        } else {
-            stdout.trim()
-        };
-        return Err(AgentError::git_error(format!(
-            "git {:?} failed with status {}: {}",
-            args, output.status, detail
-        )));
-    }
 
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
@@ -357,15 +343,43 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn git_adapter_rejects_startchat_snapshot_when_git_command_fails() {
+    async fn git_adapter_startchat_snapshot_preserves_git_state_when_diff_has_no_head() {
+        let repo = TestTempDir::new("startchat-no-head-diff");
+        init_git_repo(repo.path());
+        fs::write(repo.path().join("new.txt"), "new\n").unwrap();
+
+        let adapter = CoreFunctionAgentGitAdapter::default();
+        let snapshot = adapter
+            .startchat_git_snapshot(repo.path().to_path_buf())
+            .await
+            .unwrap();
+
+        assert_eq!(snapshot.current_branch, "main");
+        assert!(snapshot.status_porcelain.contains("?? new.txt"));
+        assert!(snapshot.unstaged_diff.is_empty());
+        assert!(snapshot.staged_diff.is_empty());
+        assert_eq!(snapshot.unpushed_commits, 0);
+        assert!(snapshot.ahead_behind.is_none());
+        assert!(snapshot.last_commit_timestamp.is_none());
+    }
+
+    #[tokio::test]
+    async fn git_adapter_startchat_snapshot_matches_legacy_empty_state_when_not_git_repo() {
         let repo = TestTempDir::new("not-a-git-repo");
 
         let adapter = CoreFunctionAgentGitAdapter::default();
-        let result = adapter
+        let snapshot = adapter
             .startchat_git_snapshot(repo.path().to_path_buf())
-            .await;
+            .await
+            .unwrap();
 
-        assert!(result.is_err());
+        assert!(snapshot.current_branch.is_empty());
+        assert!(snapshot.status_porcelain.is_empty());
+        assert!(snapshot.unstaged_diff.is_empty());
+        assert!(snapshot.staged_diff.is_empty());
+        assert_eq!(snapshot.unpushed_commits, 0);
+        assert!(snapshot.ahead_behind.is_none());
+        assert!(snapshot.last_commit_timestamp.is_none());
     }
 
     fn init_git_repo(repo: &std::path::Path) {
