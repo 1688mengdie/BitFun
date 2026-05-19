@@ -80,9 +80,9 @@ pub trait FunctionAgentGitPort: Send + Sync {
 
 /// Future AI boundary for function agents.
 ///
-/// This PR only defines the contract. Core still owns AI client selection,
-/// prompt templates, response parsing, and error mapping; a concrete adapter
-/// must add equivalence tests before any call site is wired through this trait.
+/// Core still owns AI client selection, prompt templates, response parsing, and
+/// error mapping. Product call sites may route through this trait only after
+/// focused equivalence tests cover the specific facade path.
 pub trait FunctionAgentAiPort: Send + Sync {
     fn analyze_commit(
         &self,
@@ -98,8 +98,9 @@ pub trait FunctionAgentAiPort: Send + Sync {
 ///
 /// It owns only pure orchestration over function-agent ports and DTO helpers.
 /// Core still owns Git/AI service calls, prompt templates, JSON extraction,
-/// and concrete error mapping until the existing runtime path is explicitly
-/// rewired with equivalence tests.
+/// and concrete error mapping. Startchat product-path rewiring must remain
+/// blocked until its Git state, diff fallback, and time-info behavior are
+/// equivalence-locked.
 pub struct FunctionAgentRuntimeFacade<'a> {
     git: &'a dyn FunctionAgentGitPort,
     ai: &'a dyn FunctionAgentAiPort,
