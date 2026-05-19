@@ -1,10 +1,11 @@
 use bitfun_agent_tools::{
-    DynamicMcpToolInfo, DynamicToolInfo, GET_TOOL_SPEC_TOOL_NAME, InputValidator, ToolContextFacts,
-    ToolExposure, ToolImageAttachment, ToolManifestDefinition, ToolManifestPolicyTool,
-    ToolPathBackend, ToolPathResolution, ToolRenderOptions, ToolResult, ToolRuntimeRestrictions,
-    ToolWorkspaceKind, ValidationResult, build_collapsed_tool_stub_definition,
-    build_get_tool_spec_assistant_detail, build_get_tool_spec_collapsed_tool_entry,
-    build_get_tool_spec_description, build_get_tool_spec_duplicate_load_hint,
+    DynamicMcpToolInfo, DynamicToolInfo, GET_TOOL_SPEC_TOOL_NAME, GetToolSpecLoadObservation,
+    InputValidator, ToolContextFacts, ToolExposure, ToolImageAttachment, ToolManifestDefinition,
+    ToolManifestPolicyTool, ToolPathBackend, ToolPathResolution, ToolRenderOptions, ToolResult,
+    ToolRuntimeRestrictions, ToolWorkspaceKind, ValidationResult,
+    build_collapsed_tool_stub_definition, build_get_tool_spec_assistant_detail,
+    build_get_tool_spec_collapsed_tool_entry, build_get_tool_spec_description,
+    build_get_tool_spec_duplicate_load_hint, collect_loaded_collapsed_tool_names,
     get_tool_spec_input_schema, resolve_tool_manifest_policy, sort_tool_manifest_definitions,
     validate_get_tool_spec_input,
 };
@@ -417,6 +418,46 @@ fn tool_manifest_policy_preserves_explicit_get_tool_spec_duplicate_runtime_contr
         "core currently appends the runtime GetToolSpec entry whenever collapsed tools exist"
     );
     assert_eq!(policy.collapsed_tool_names, vec!["WebFetch"]);
+}
+
+#[test]
+fn get_tool_spec_load_collector_preserves_collapsed_runtime_contract() {
+    let collapsed_tools = vec!["WebFetch".to_string(), "GetFileDiff".to_string()];
+    let observations = vec![
+        GetToolSpecLoadObservation {
+            tool_name: GET_TOOL_SPEC_TOOL_NAME,
+            loaded_tool_name: Some("WebFetch"),
+            is_error: false,
+        },
+        GetToolSpecLoadObservation {
+            tool_name: GET_TOOL_SPEC_TOOL_NAME,
+            loaded_tool_name: Some("Read"),
+            is_error: false,
+        },
+        GetToolSpecLoadObservation {
+            tool_name: GET_TOOL_SPEC_TOOL_NAME,
+            loaded_tool_name: Some("GetFileDiff"),
+            is_error: true,
+        },
+        GetToolSpecLoadObservation {
+            tool_name: "Read",
+            loaded_tool_name: Some("WebFetch"),
+            is_error: false,
+        },
+        GetToolSpecLoadObservation {
+            tool_name: GET_TOOL_SPEC_TOOL_NAME,
+            loaded_tool_name: Some("WebFetch"),
+            is_error: false,
+        },
+    ];
+
+    let loaded = collect_loaded_collapsed_tool_names(
+        &observations,
+        &collapsed_tools,
+        GET_TOOL_SPEC_TOOL_NAME,
+    );
+
+    assert_eq!(loaded, vec!["WebFetch".to_string()]);
 }
 
 #[test]

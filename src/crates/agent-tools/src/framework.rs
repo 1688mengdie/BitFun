@@ -6,7 +6,7 @@ use bitfun_core_types::ToolImageAttachment;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -257,6 +257,38 @@ pub fn build_get_tool_spec_duplicate_load_hint(tool_name: &str) -> String {
         "Tool '{}' is already loaded in the current conversation. Do not call GetToolSpec again for it. Use '{}' directly.",
         tool_name, tool_name
     )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GetToolSpecLoadObservation<'a> {
+    pub tool_name: &'a str,
+    pub loaded_tool_name: Option<&'a str>,
+    pub is_error: bool,
+}
+
+pub fn collect_loaded_collapsed_tool_names(
+    observations: &[GetToolSpecLoadObservation<'_>],
+    collapsed_tool_names: &[String],
+    get_tool_spec_tool_name: &str,
+) -> Vec<String> {
+    let collapsed_set: HashSet<&str> = collapsed_tool_names.iter().map(String::as_str).collect();
+    let mut loaded = BTreeSet::new();
+
+    for observation in observations {
+        if observation.is_error || observation.tool_name != get_tool_spec_tool_name {
+            continue;
+        }
+
+        let Some(tool_name) = observation.loaded_tool_name else {
+            continue;
+        };
+
+        if collapsed_set.contains(tool_name) {
+            loaded.insert(tool_name.to_string());
+        }
+    }
+
+    loaded.into_iter().collect()
 }
 
 pub fn build_get_tool_spec_assistant_detail(description: &str, input_schema: &Value) -> String {

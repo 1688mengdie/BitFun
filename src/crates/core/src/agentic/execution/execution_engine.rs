@@ -5,23 +5,23 @@
 use super::round_executor::RoundExecutor;
 use super::types::{ExecutionContext, ExecutionResult, RoundContext, RoundResult};
 use crate::agentic::agents::{
-    get_agent_registry, PromptBuilder, PromptBuilderContext, RemoteExecutionHints,
+    PromptBuilder, PromptBuilderContext, RemoteExecutionHints, get_agent_registry,
 };
 use crate::agentic::context_profile::{ContextProfilePolicy, ModelCapabilityProfile};
 use crate::agentic::core::{
-    render_system_reminder, Message, MessageContent, MessageHelper, MessageRole,
-    MessageSemanticKind, RequestReasoningTokenPolicy, Session,
+    Message, MessageContent, MessageHelper, MessageRole, MessageSemanticKind,
+    RequestReasoningTokenPolicy, Session, render_system_reminder,
 };
 use crate::agentic::events::{AgenticEvent, EventPriority, EventQueue};
 use crate::agentic::execution::types::FinishReason;
 use crate::agentic::image_analysis::{
-    build_multimodal_message_with_images, process_image_contexts_for_provider, ImageContextData,
-    ImageLimits,
+    ImageContextData, ImageLimits, build_multimodal_message_with_images,
+    process_image_contexts_for_provider,
 };
 use crate::agentic::round_preempt::RoundInjectionKind;
 use crate::agentic::session::{CompressionTailPolicy, ContextCompressor, SessionManager};
 use crate::agentic::tools::{
-    resolve_tool_manifest, ResolvedToolManifest, SubagentParentInfo, ToolRuntimeRestrictions,
+    ResolvedToolManifest, SubagentParentInfo, ToolRuntimeRestrictions, resolve_tool_manifest,
 };
 use crate::agentic::util::build_remote_workspace_layout_preview;
 use crate::agentic::{WorkspaceBackend, WorkspaceBinding};
@@ -34,9 +34,10 @@ use crate::util::token_counter::TokenCounter;
 use crate::util::types::Message as AIMessage;
 use crate::util::types::ToolDefinition;
 use crate::util::{elapsed_ms_u64, truncate_at_char_boundary};
+use bitfun_agent_tools::{GetToolSpecLoadObservation, collect_loaded_collapsed_tool_names};
 use log::{debug, error, info, trace, warn};
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
@@ -501,34 +502,32 @@ impl ExecutionEngine {
         messages: &[Message],
         collapsed_tools: &[String],
     ) -> Vec<String> {
-        let collapsed_set: HashSet<&str> = collapsed_tools.iter().map(String::as_str).collect();
-        let mut unlocked = BTreeSet::new();
+        let observations = messages
+            .iter()
+            .filter_map(|message| {
+                let MessageContent::ToolResult {
+                    tool_name,
+                    result,
+                    is_error,
+                    ..
+                } = &message.content
+                else {
+                    return None;
+                };
 
-        for message in messages {
-            let MessageContent::ToolResult {
-                tool_name,
-                result,
-                is_error,
-                ..
-            } = &message.content
-            else {
-                continue;
-            };
+                Some(GetToolSpecLoadObservation {
+                    tool_name,
+                    loaded_tool_name: result.get("tool_name").and_then(|v| v.as_str()),
+                    is_error: *is_error,
+                })
+            })
+            .collect::<Vec<_>>();
 
-            if *is_error || tool_name != "GetToolSpec" {
-                continue;
-            }
-
-            let Some(tool_name) = result.get("tool_name").and_then(|v| v.as_str()) else {
-                continue;
-            };
-
-            if collapsed_set.contains(tool_name) {
-                unlocked.insert(tool_name.to_string());
-            }
-        }
-
-        unlocked.into_iter().collect()
+        collect_loaded_collapsed_tool_names(
+            &observations,
+            collapsed_tools,
+            crate::agentic::tools::registry::GET_TOOL_SPEC_TOOL_NAME,
+        )
     }
 
     async fn build_prompt_context(

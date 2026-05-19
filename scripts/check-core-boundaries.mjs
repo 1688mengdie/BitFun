@@ -1162,6 +1162,14 @@ const requiredContentRules = [
         message: 'missing pure GetToolSpec assistant detail rendering contract',
       },
       {
+        regex: /\bpub struct GetToolSpecLoadObservation\b/,
+        message: 'missing pure GetToolSpec load observation contract',
+      },
+      {
+        regex: /\bpub fn collect_loaded_collapsed_tool_names\b/,
+        message: 'missing pure collapsed-tool load collection contract',
+      },
+      {
         regex: /\bpub fn sort_tool_manifest_definitions\b/,
         message: 'missing prompt-visible manifest ordering helper',
       },
@@ -1214,6 +1222,10 @@ const requiredContentRules = [
       {
         regex: /\bget_collapsed_tool_names\b/,
         message: 'missing collapsed-tool catalog owner',
+      },
+      {
+        regex: /\bregistry_preserves_collapsed_tool_manifest_for_owner_migration\b/,
+        message: 'missing collapsed-tool manifest migration baseline',
       },
       {
         regex: /\bToolExposure::Collapsed\b/,
@@ -1326,6 +1338,10 @@ const requiredContentRules = [
         regex: /\bbuild_collapsed_tool_stub_definition\b/,
         message: 'missing collapsed-tool prompt stub contract use',
       },
+      {
+        regex: /\bmanifest_preserves_explicit_get_tool_spec_runtime_contract\b/,
+        message: 'missing core GetToolSpec manifest insertion regression',
+      },
     ],
   },
   {
@@ -1390,6 +1406,10 @@ const requiredContentRules = [
       {
         regex: /\bunlocked_collapsed_tools\b/,
         message: 'missing collapsed-tool unlock state propagation',
+      },
+      {
+        regex: /\bpipeline_preserves_core_owned_tool_context_without_portable_runtime_leak\b/,
+        message: 'missing ToolUseContext runtime boundary regression',
       },
       {
         regex: /\bGetToolSpec\b/,
@@ -2991,6 +3011,8 @@ function runManifestParserSelfTest() {
         'get_tool_spec_input_schema',
         'validate_get_tool_spec_input',
         'build_get_tool_spec_assistant_detail',
+        'GetToolSpecLoadObservation',
+        'collect_loaded_collapsed_tool_names',
         'sort_tool_manifest_definitions',
       ],
     },

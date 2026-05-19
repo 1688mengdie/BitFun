@@ -430,6 +430,37 @@ mod tests {
         assert!(registry.is_tool_collapsed("Git"));
     }
 
+    #[test]
+    fn registry_preserves_collapsed_tool_manifest_for_owner_migration() {
+        let registry = create_tool_registry();
+
+        assert_eq!(
+            registry.get_collapsed_tool_names(),
+            vec![
+                "GetFileDiff",
+                "Log",
+                "TerminalControl",
+                "SessionControl",
+                "SessionMessage",
+                "SessionHistory",
+                "Cron",
+                "WebSearch",
+                "WebFetch",
+                "ListMCPResources",
+                "ReadMCPResource",
+                "ListMCPPrompts",
+                "GetMCPPrompt",
+                "GenerativeUI",
+                "Git",
+                "InitMiniApp",
+                "ControlHub",
+                "ComputerUse",
+                "Playbook",
+            ],
+            "collapsed tool manifest must stay stable before moving registry or manifest ownership"
+        );
+    }
+
     #[tokio::test]
     async fn registry_preserves_readonly_tool_manifest_for_owner_migration() {
         let readonly_names = super::get_readonly_tools()

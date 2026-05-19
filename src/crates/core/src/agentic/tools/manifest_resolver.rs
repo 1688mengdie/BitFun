@@ -317,6 +317,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn manifest_preserves_explicit_get_tool_spec_runtime_contract() {
+        let allowed_tools = vec![GET_TOOL_SPEC_TOOL_NAME.to_string(), "WebFetch".to_string()];
+
+        let manifest = resolve_tool_manifest(
+            &allowed_tools,
+            &AgentToolPolicyOverrides::default(),
+            &tool_context(),
+        )
+        .await;
+
+        assert_eq!(manifest.allowed_tool_names, allowed_tools);
+        assert_eq!(manifest.collapsed_tool_names, vec!["WebFetch".to_string()]);
+        assert_eq!(
+            manifest
+                .tool_definitions
+                .iter()
+                .map(|tool| tool.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["WebFetch", "GetToolSpec", "GetToolSpec"],
+            "core runtime currently mirrors the pure policy contract when GetToolSpec is already allowed"
+        );
+    }
+
+    #[tokio::test]
     async fn manifest_expands_tool_when_agent_override_requests_it() {
         let allowed_tools = vec!["Read".to_string(), "WebFetch".to_string()];
         let mut overrides = AgentToolPolicyOverrides::default();
