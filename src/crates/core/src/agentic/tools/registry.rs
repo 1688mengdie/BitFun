@@ -1,29 +1,19 @@
 //! Tool registry
 
 use crate::agentic::tools::framework::{DynamicToolInfo, Tool, ToolExposure};
-use crate::agentic::tools::static_providers::builtin_static_tool_providers;
 use crate::util::errors::BitFunResult;
 use bitfun_agent_tools::{
-    DynamicToolDescriptor, DynamicToolProvider, PortResult, ToolDecorator,
+    DynamicToolDescriptor, DynamicToolProvider, PortResult, StaticToolProvider, ToolDecorator,
     ToolRegistry as AgentToolRegistry, ToolRegistryItem,
 };
 use log::{debug, info, trace, warn};
 use serde_json::Value;
 use std::sync::Arc;
 
-type ToolRef = Arc<dyn Tool>;
-type ToolDecoratorRef = Arc<dyn ToolDecorator<ToolRef>>;
+pub(in crate::agentic::tools) type ToolRef = Arc<dyn Tool>;
+pub(in crate::agentic::tools) type ToolDecoratorRef = Arc<dyn ToolDecorator<ToolRef>>;
 
 pub use bitfun_agent_tools::GET_TOOL_SPEC_TOOL_NAME;
-
-#[derive(Debug, Clone)]
-struct SnapshotToolDecorator;
-
-impl ToolDecorator<ToolRef> for SnapshotToolDecorator {
-    fn decorate(&self, tool: ToolRef) -> ToolRef {
-        crate::service::snapshot::wrap_tool_for_snapshot_tracking(tool)
-    }
-}
 
 /// Tool registry - manages all available tools (using IndexMap to maintain registration order)
 pub struct ToolRegistry {
@@ -39,7 +29,8 @@ impl Default for ToolRegistry {
 impl ToolRegistry {
     /// Create a new tool registry
     pub fn new() -> Self {
-        Self::with_tool_decorator(Arc::new(SnapshotToolDecorator))
+        crate::agentic::tools::runtime_assembly::ProductToolRuntimeAssembly::default()
+            .create_registry()
     }
 
     /// Create a registry with an injected decoration boundary.
@@ -48,13 +39,27 @@ impl ToolRegistry {
     /// allowing future owner crates to replace this concrete service coupling
     /// through the `bitfun-runtime-ports` interface.
     pub fn with_tool_decorator(tool_decorator: ToolDecoratorRef) -> Self {
-        let mut registry = Self {
-            inner: AgentToolRegistry::with_tool_decorator(tool_decorator),
-        };
+        crate::agentic::tools::runtime_assembly::ProductToolRuntimeAssembly::with_tool_decorator(
+            tool_decorator,
+        )
+        .create_registry()
+    }
 
-        // Register all tools
-        registry.register_all_tools();
-        registry
+    pub(in crate::agentic::tools) fn empty_with_tool_decorator(
+        tool_decorator: ToolDecoratorRef,
+    ) -> Self {
+        Self {
+            inner: AgentToolRegistry::with_tool_decorator(tool_decorator),
+        }
+    }
+
+    pub(in crate::agentic::tools) fn install_static_provider<Provider>(
+        &mut self,
+        provider: &Provider,
+    ) where
+        Provider: StaticToolProvider<dyn Tool> + ?Sized,
+    {
+        self.inner.install_static_provider(provider);
     }
 
     /// Dynamically register MCP tools
@@ -128,13 +133,6 @@ impl ToolRegistry {
         }
 
         count
-    }
-
-    /// Register all tools
-    fn register_all_tools(&mut self) {
-        for provider in builtin_static_tool_providers() {
-            self.inner.install_static_provider(&provider);
-        }
     }
 
     /// Register a single tool
@@ -222,6 +220,7 @@ mod tests {
     use crate::agentic::tools::framework::{
         DynamicMcpToolInfo, DynamicToolInfo, Tool, ToolResult, ToolUseContext, ValidationResult,
     };
+    use crate::agentic::tools::runtime_assembly::ProductToolRuntimeAssembly;
     use crate::agentic::tools::static_providers::builtin_static_tool_providers;
     use async_trait::async_trait;
     use bitfun_agent_tools::{DynamicToolProvider, StaticToolProvider};
@@ -417,6 +416,51 @@ mod tests {
             ],
             "provider groups must stay stable until concrete tool-pack owners exist"
         );
+    }
+
+    #[test]
+    fn product_tool_runtime_assembly_preserves_core_owned_registry_contract() {
+        let assembly = ProductToolRuntimeAssembly::default();
+
+        assert_eq!(
+            assembly.provider_group_ids(),
+            vec![
+                "core.basic",
+                "core.agent",
+                "core.session",
+                "core.integration"
+            ],
+            "runtime assembly must keep core-owned provider group order explicit"
+        );
+
+        let assembled_registry = assembly.create_registry();
+        let compatibility_registry = create_tool_registry();
+
+        assert_eq!(
+            assembled_registry.get_tool_names(),
+            compatibility_registry.get_tool_names(),
+            "runtime assembly must preserve legacy create_tool_registry output"
+        );
+        assert_eq!(
+            assembled_registry.get_collapsed_tool_names(),
+            compatibility_registry.get_collapsed_tool_names(),
+            "runtime assembly must preserve product collapsed-tool catalog"
+        );
+
+        for tool_name in ["Write", "Edit", "Delete"] {
+            let tool = assembled_registry
+                .get_tool(tool_name)
+                .unwrap_or_else(|| panic!("{tool_name} tool should be registered"));
+            let assistant_text = tool.render_result_for_assistant(&json!({
+                "success": true,
+                "file_path": "E:/Projects/demo.txt"
+            }));
+
+            assert!(
+                assistant_text.contains("snapshot system"),
+                "runtime assembly must preserve snapshot wrapping for {tool_name}"
+            );
+        }
     }
 
     #[test]

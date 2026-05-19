@@ -1241,15 +1241,15 @@ const requiredContentRules = [
   {
     path: 'src/crates/core/src/agentic/tools/registry.rs',
     reason:
-      'core must continue installing product tool providers until portable tool context and concrete tool-pack migration exist',
+      'core registry must stay a compatibility container that delegates product tool runtime assembly to the core owner module',
     patterns: [
       {
         regex: /\binstall_static_provider\b/,
-        message: 'missing provider-based registry installation',
+        message: 'missing provider-based registry installer hook',
       },
       {
-        regex: /\bfn register_all_tools\b/,
-        message: 'missing product tool registration owner',
+        regex: /\bProductToolRuntimeAssembly\b/,
+        message: 'missing product tool runtime assembly delegation',
       },
       {
         regex: /\bget_collapsed_tool_names\b/,
@@ -1262,6 +1262,33 @@ const requiredContentRules = [
       {
         regex: /\binner\.is_tool_collapsed\b/,
         message: 'missing collapsed exposure lookup delegation',
+      },
+    ],
+  },
+  {
+    path: 'src/crates/core/src/agentic/tools/runtime_assembly.rs',
+    reason:
+      'core must keep product tool runtime assembly explicit until ToolUseContext and concrete tool-pack migration are reviewed',
+    patterns: [
+      {
+        regex: /\bProductToolRuntimeAssembly\b/,
+        message: 'missing core product tool runtime assembly owner',
+      },
+      {
+        regex: /\bSnapshotToolDecorator\b/,
+        message: 'missing snapshot decorator owner',
+      },
+      {
+        regex: /\bbuiltin_static_tool_providers\b/,
+        message: 'missing builtin provider assembly input',
+      },
+      {
+        regex: /\binstall_static_provider\b/,
+        message: 'missing static provider installation in runtime assembly',
+      },
+      {
+        regex: /\bwrap_tool_for_snapshot_tracking\b/,
+        message: 'missing snapshot wrapper boundary',
       },
     ],
   },
@@ -3143,8 +3170,18 @@ function runManifestParserSelfTest() {
       path: 'src/crates/core/src/agentic/tools/registry.rs',
       contracts: [
         'install_static_provider',
-        'register_all_tools',
+        'ProductToolRuntimeAssembly',
         'get_collapsed_tool_names',
+      ],
+    },
+    {
+      path: 'src/crates/core/src/agentic/tools/runtime_assembly.rs',
+      contracts: [
+        'ProductToolRuntimeAssembly',
+        'SnapshotToolDecorator',
+        'builtin_static_tool_providers',
+        'install_static_provider',
+        'wrap_tool_for_snapshot_tracking',
       ],
     },
     {
