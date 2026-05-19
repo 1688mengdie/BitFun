@@ -1146,6 +1146,22 @@ const requiredContentRules = [
         message: 'missing collapsed-tool prompt stub contract',
       },
       {
+        regex: /\bpub fn build_get_tool_spec_description\b/,
+        message: 'missing pure GetToolSpec prompt description contract',
+      },
+      {
+        regex: /\bpub fn get_tool_spec_input_schema\b/,
+        message: 'missing pure GetToolSpec input schema contract',
+      },
+      {
+        regex: /\bpub fn validate_get_tool_spec_input\b/,
+        message: 'missing pure GetToolSpec input validation contract',
+      },
+      {
+        regex: /\bpub fn build_get_tool_spec_assistant_detail\b/,
+        message: 'missing pure GetToolSpec assistant detail rendering contract',
+      },
+      {
         regex: /\bpub fn sort_tool_manifest_definitions\b/,
         message: 'missing prompt-visible manifest ordering helper',
       },
@@ -1324,6 +1340,14 @@ const requiredContentRules = [
       {
         regex: /\balready_loaded\b/,
         message: 'missing duplicate-load assistant result contract',
+      },
+      {
+        regex: /\bbuild_get_tool_spec_assistant_detail\b/,
+        message: 'missing agent-tools GetToolSpec assistant detail helper delegation',
+      },
+      {
+        regex: /\bvalidate_get_tool_spec_input\b/,
+        message: 'missing agent-tools GetToolSpec validation helper delegation',
       },
     ],
   },
@@ -2872,6 +2896,10 @@ function runManifestParserSelfTest() {
         'ToolManifestPolicyTool',
         'resolve_tool_manifest_policy',
         'build_collapsed_tool_stub_definition',
+        'build_get_tool_spec_description',
+        'get_tool_spec_input_schema',
+        'validate_get_tool_spec_input',
+        'build_get_tool_spec_assistant_detail',
         'sort_tool_manifest_definitions',
       ],
     },
@@ -3000,7 +3028,13 @@ function runManifestParserSelfTest() {
     },
     {
       path: 'src/crates/core/src/agentic/tools/implementations/get_tool_spec_tool.rs',
-      contracts: ['GetToolSpecTool', 'unlocked_collapsed_tools', 'already_loaded'],
+      contracts: [
+        'GetToolSpecTool',
+        'unlocked_collapsed_tools',
+        'already_loaded',
+        'build_get_tool_spec_assistant_detail',
+        'validate_get_tool_spec_input',
+      ],
     },
     {
       path: 'src/crates/core/src/agentic/tools/framework.rs',

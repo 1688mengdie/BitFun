@@ -178,6 +178,102 @@ pub fn build_collapsed_tool_stub_definition(
     )
 }
 
+pub fn build_get_tool_spec_collapsed_tool_entry(
+    tool_name: &str,
+    short_description: &str,
+) -> String {
+    format!("- {}: {}", tool_name, short_description)
+}
+
+pub fn build_get_tool_spec_description(collapsed_tools_list: &str) -> String {
+    format!(
+        r#"Read usage instructions for additional tools.
+
+You have access to the additional tools listed below. These tools are collapsed:
+their names may appear in the tool list, but you must not call them directly
+until you have loaded their definition with GetToolSpec.
+
+<collapsed_tools>
+{}
+</collapsed_tools>
+
+Before using one of these tools, first call GetToolSpec with its exact tool name
+to read its full description and input schema. If a direct call to a collapsed
+tool fails with a message like "Tool 'Git' is collapsed", make the next tool
+call `GetToolSpec` with `{{"tool_name":"Git"}}`, then retry the real tool after
+reading the returned schema.
+
+After reading the returned definition, call the real tool directly using its own name.
+
+Do not call GetToolSpec again for a tool whose definition is already loaded in the current conversation.
+
+Example:
+- Suppose the catalog includes a tool named `GetWeather` and you need to use it.
+- First call `GetToolSpec` with `{{"tool_name":"GetWeather"}}`
+- Then read the returned schema and call `GetWeather` itself with the appropriate arguments
+"#,
+        collapsed_tools_list
+    )
+}
+
+pub fn get_tool_spec_input_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["tool_name"],
+        "properties": {
+            "tool_name": {
+                "type": "string",
+                "description": "Exact collapsed tool name to load, using the tool's canonical casing from the catalog (for example, \"Git\"). Do not pass a command such as \"git status\" or an operation such as \"status\" here."
+            }
+        }
+    })
+}
+
+pub fn validate_get_tool_spec_input(input: &Value) -> ValidationResult {
+    let Some(tool_name) = input.get("tool_name").and_then(|value| value.as_str()) else {
+        return ValidationResult {
+            result: false,
+            message: Some("tool_name is required and cannot be empty".to_string()),
+            error_code: Some(400),
+            meta: None,
+        };
+    };
+
+    if tool_name.is_empty() {
+        return ValidationResult {
+            result: false,
+            message: Some("tool_name is required and cannot be empty".to_string()),
+            error_code: Some(400),
+            meta: None,
+        };
+    }
+
+    ValidationResult::default()
+}
+
+pub fn build_get_tool_spec_duplicate_load_hint(tool_name: &str) -> String {
+    format!(
+        "Tool '{}' is already loaded in the current conversation. Do not call GetToolSpec again for it. Use '{}' directly.",
+        tool_name, tool_name
+    )
+}
+
+pub fn build_get_tool_spec_assistant_detail(description: &str, input_schema: &Value) -> String {
+    format!(
+        "<description>\n{}\n</description>\n<input_schema>\n{}\n</input_schema>",
+        escape_get_tool_spec_xml_text(description),
+        escape_get_tool_spec_xml_text(&input_schema.to_string())
+    )
+}
+
+fn escape_get_tool_spec_xml_text(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
 pub fn tool_manifest_sort_rank(tool_name: &str) -> usize {
     match tool_name {
         "Task" => 1,

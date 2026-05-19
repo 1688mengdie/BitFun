@@ -1,9 +1,12 @@
 use bitfun_agent_tools::{
-    build_collapsed_tool_stub_definition, resolve_tool_manifest_policy,
-    sort_tool_manifest_definitions, DynamicMcpToolInfo, DynamicToolInfo, InputValidator,
-    ToolContextFacts, ToolExposure, ToolImageAttachment, ToolManifestDefinition,
-    ToolManifestPolicyTool, ToolPathBackend, ToolPathResolution, ToolRenderOptions, ToolResult,
-    ToolRuntimeRestrictions, ToolWorkspaceKind, ValidationResult, GET_TOOL_SPEC_TOOL_NAME,
+    build_collapsed_tool_stub_definition, build_get_tool_spec_assistant_detail,
+    build_get_tool_spec_collapsed_tool_entry, build_get_tool_spec_description,
+    build_get_tool_spec_duplicate_load_hint, get_tool_spec_input_schema,
+    resolve_tool_manifest_policy, sort_tool_manifest_definitions, validate_get_tool_spec_input,
+    DynamicMcpToolInfo, DynamicToolInfo, InputValidator, ToolContextFacts, ToolExposure,
+    ToolImageAttachment, ToolManifestDefinition, ToolManifestPolicyTool, ToolPathBackend,
+    ToolPathResolution, ToolRenderOptions, ToolResult, ToolRuntimeRestrictions, ToolWorkspaceKind,
+    ValidationResult, GET_TOOL_SPEC_TOOL_NAME,
 };
 use bitfun_agent_tools::{
     DynamicToolDescriptor, DynamicToolProvider, PortResult, PortableToolContextProvider,
@@ -461,6 +464,81 @@ fn tool_manifest_sorting_preserves_prompt_visible_order() {
             .map(|definition| definition.name.as_str())
             .collect::<Vec<_>>(),
         vec!["Task", "Read", "GetToolSpec", "ControlHub", "ExternalTool"]
+    );
+}
+
+#[test]
+fn get_tool_spec_contract_preserves_input_schema_and_validation() {
+    let schema = get_tool_spec_input_schema();
+
+    assert_eq!(schema["type"], "object");
+    assert_eq!(schema["additionalProperties"], false);
+    assert_eq!(schema["required"], json!(["tool_name"]));
+    assert_eq!(schema["properties"]["tool_name"]["type"], "string");
+    assert!(schema["properties"]["tool_name"]["description"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("canonical casing"));
+
+    let missing = validate_get_tool_spec_input(&json!({}));
+    assert!(!missing.result);
+    assert_eq!(
+        missing.message.as_deref(),
+        Some("tool_name is required and cannot be empty")
+    );
+    assert_eq!(missing.error_code, Some(400));
+
+    let empty = validate_get_tool_spec_input(&json!({ "tool_name": "" }));
+    assert!(!empty.result);
+    assert_eq!(
+        empty.message.as_deref(),
+        Some("tool_name is required and cannot be empty")
+    );
+    assert_eq!(empty.error_code, Some(400));
+
+    assert!(validate_get_tool_spec_input(&json!({ "tool_name": "Git" })).result);
+}
+
+#[test]
+fn get_tool_spec_contract_preserves_collapsed_prompt_description() {
+    let collapsed_tools_list = [
+        build_get_tool_spec_collapsed_tool_entry("Git", "Inspect the repository."),
+        build_get_tool_spec_collapsed_tool_entry("WebFetch", "Fetch readable web content."),
+    ]
+    .join("\n");
+
+    let description = build_get_tool_spec_description(&collapsed_tools_list);
+
+    assert!(description.contains("<collapsed_tools>\n- Git: Inspect the repository."));
+    assert!(description.contains("- WebFetch: Fetch readable web content."));
+    assert!(description.contains("Do not call GetToolSpec again"));
+    assert!(description.contains("call `GetToolSpec` with `{\"tool_name\":\"Git\"}`"));
+}
+
+#[test]
+fn get_tool_spec_contract_escapes_assistant_detail_for_xml_sections() {
+    let detail = build_get_tool_spec_assistant_detail(
+        "Use <danger> & keep output valid.",
+        &json!({
+            "type": "object",
+            "properties": {
+                "query": {
+                    "description": "Match <tag> & symbols"
+                }
+            }
+        }),
+    );
+
+    assert!(detail.contains("<description>\nUse &lt;danger&gt; &amp; keep output valid."));
+    assert!(detail.contains("\"description\":\"Match &lt;tag&gt; &amp; symbols\""));
+    assert!(!detail.contains("Use <danger> & keep output valid."));
+}
+
+#[test]
+fn get_tool_spec_contract_preserves_duplicate_load_hint() {
+    assert_eq!(
+        build_get_tool_spec_duplicate_load_hint("WebFetch"),
+        "Tool 'WebFetch' is already loaded in the current conversation. Do not call GetToolSpec again for it. Use 'WebFetch' directly."
     );
 }
 

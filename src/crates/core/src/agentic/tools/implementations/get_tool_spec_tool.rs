@@ -8,6 +8,11 @@ use crate::agentic::tools::registry::get_global_tool_registry;
 use crate::agentic::tools::resolve_visible_tools;
 use crate::util::errors::{BitFunError, BitFunResult};
 use async_trait::async_trait;
+use bitfun_agent_tools::{
+    build_get_tool_spec_assistant_detail, build_get_tool_spec_collapsed_tool_entry,
+    build_get_tool_spec_description, build_get_tool_spec_duplicate_load_hint,
+    get_tool_spec_input_schema, validate_get_tool_spec_input, GET_TOOL_SPEC_TOOL_NAME,
+};
 use log::debug;
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -17,44 +22,6 @@ pub struct GetToolSpecTool;
 impl GetToolSpecTool {
     pub fn new() -> Self {
         Self
-    }
-
-    fn escape_xml_text(value: &str) -> String {
-        value
-            .replace('&', "&amp;")
-            .replace('<', "&lt;")
-            .replace('>', "&gt;")
-    }
-
-    fn render_collapsed_tools_description(&self, collapsed_tools_list: String) -> String {
-        format!(
-            r#"Read usage instructions for additional tools.
-
-You have access to the additional tools listed below. These tools are collapsed:
-their names may appear in the tool list, but you must not call them directly
-until you have loaded their definition with GetToolSpec.
-
-<collapsed_tools>
-{}
-</collapsed_tools>
-
-Before using one of these tools, first call GetToolSpec with its exact tool name
-to read its full description and input schema. If a direct call to a collapsed
-tool fails with a message like "Tool 'Git' is collapsed", make the next tool
-call `GetToolSpec` with `{{"tool_name":"Git"}}`, then retry the real tool after
-reading the returned schema.
-
-After reading the returned definition, call the real tool directly using its own name.
-
-Do not call GetToolSpec again for a tool whose definition is already loaded in the current conversation.
-
-Example:
-- Suppose the catalog includes a tool named `GetWeather` and you need to use it.
-- First call `GetToolSpec` with `{{"tool_name":"GetWeather"}}`
-- Then read the returned schema and call `GetWeather` itself with the appropriate arguments
-"#,
-            collapsed_tools_list
-        )
     }
 
     async fn get_contextual_collapsed_tools(
@@ -80,7 +47,10 @@ Example:
         if let Some(context) = context {
             if let Ok(collapsed_tools) = self.get_contextual_collapsed_tools(context).await {
                 for tool in collapsed_tools {
-                    entries.push(format!("- {}: {}", tool.name(), tool.short_description()));
+                    entries.push(build_get_tool_spec_collapsed_tool_entry(
+                        tool.name(),
+                        &tool.short_description(),
+                    ));
                 }
             }
         } else {
@@ -99,7 +69,10 @@ Example:
             };
 
             for (tool_name, short_description) in collapsed_tools {
-                entries.push(format!("- {}: {}", tool_name, short_description));
+                entries.push(build_get_tool_spec_collapsed_tool_entry(
+                    &tool_name,
+                    &short_description,
+                ));
             }
         }
 
@@ -109,7 +82,7 @@ Example:
             entries.join("\n")
         };
 
-        self.render_collapsed_tools_description(collapsed_tools_list)
+        build_get_tool_spec_description(&collapsed_tools_list)
     }
 
     async fn build_tool_detail(
@@ -163,7 +136,7 @@ impl Default for GetToolSpecTool {
 #[async_trait]
 impl Tool for GetToolSpecTool {
     fn name(&self) -> &str {
-        "GetToolSpec"
+        GET_TOOL_SPEC_TOOL_NAME
     }
 
     async fn description(&self) -> BitFunResult<String> {
@@ -182,17 +155,7 @@ impl Tool for GetToolSpecTool {
     }
 
     fn input_schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["tool_name"],
-            "properties": {
-                "tool_name": {
-                    "type": "string",
-                    "description": "Exact collapsed tool name to load, using the tool's canonical casing from the catalog (for example, \"Git\"). Do not pass a command such as \"git status\" or an operation such as \"status\" here."
-                }
-            }
-        })
+        get_tool_spec_input_schema()
     }
 
     fn is_readonly(&self) -> bool {
@@ -220,25 +183,7 @@ impl Tool for GetToolSpecTool {
         input: &Value,
         _context: Option<&ToolUseContext>,
     ) -> ValidationResult {
-        let Some(tool_name) = input.get("tool_name").and_then(|v| v.as_str()) else {
-            return ValidationResult {
-                result: false,
-                message: Some("tool_name is required and cannot be empty".to_string()),
-                error_code: Some(400),
-                meta: None,
-            };
-        };
-
-        if tool_name.is_empty() {
-            return ValidationResult {
-                result: false,
-                message: Some("tool_name is required and cannot be empty".to_string()),
-                error_code: Some(400),
-                meta: None,
-            };
-        }
-
-        ValidationResult::default()
+        validate_get_tool_spec_input(input)
     }
 
     async fn call_impl(
@@ -261,10 +206,7 @@ impl Tool for GetToolSpecTool {
                     "tool_name": tool_name,
                     "already_loaded": true
                 }),
-                result_for_assistant: Some(format!(
-                    "Tool '{}' is already loaded in the current conversation. Do not call GetToolSpec again for it. Use '{}' directly.",
-                    tool_name, tool_name
-                )),
+                result_for_assistant: Some(build_get_tool_spec_duplicate_load_hint(tool_name)),
                 image_attachments: None,
             }]);
         }
@@ -277,13 +219,9 @@ impl Tool for GetToolSpecTool {
             .unwrap_or("");
         let input_schema = detail
             .get("input_schema")
-            .map(|value| value.to_string())
-            .unwrap_or_else(|| "{}".to_string());
-        let assistant_detail = format!(
-            "<description>\n{}\n</description>\n<input_schema>\n{}\n</input_schema>",
-            Self::escape_xml_text(description),
-            Self::escape_xml_text(&input_schema)
-        );
+            .cloned()
+            .unwrap_or_else(|| json!({}));
+        let assistant_detail = build_get_tool_spec_assistant_detail(description, &input_schema);
 
         Ok(vec![ToolResult::Result {
             data: detail,
