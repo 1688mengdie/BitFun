@@ -97,7 +97,7 @@ export const FlowTextBlock = React.memo<FlowTextBlockProps>(({
   }
 
   return (
-    <div className={`flow-text-block ${className} ${isActivelyStreaming ? 'streaming' : ''}`}>
+    <div className={`flow-text-block ${className} ${isActivelyStreaming ? 'streaming flow-text-block--streaming' : ''}`}>
       {textItem.isMarkdown ? (
         <MarkdownRenderer
           content={displayContent}

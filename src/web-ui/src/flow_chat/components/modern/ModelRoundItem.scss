@@ -15,6 +15,14 @@
   &--streaming {
     opacity: 1;
     margin-bottom: 0;
+    animation: none;
+
+    .flowchat-flow-item--tool-transition,
+    .flowchat-flow-item--tool-active,
+    .flowchat-flow-item--tool-completed {
+      animation: none;
+      will-change: auto;
+    }
   }
 
   // Complete state

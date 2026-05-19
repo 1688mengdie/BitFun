@@ -42,7 +42,7 @@ export function buildModelRoundItemGroups({
   isCollapsibleTool,
   nowMs = Date.now(),
 }: BuildModelRoundItemGroupsInput): ModelRoundItemGroup[] {
-  const deferExploreGrouping = disableExploreGrouping || (isStreaming && hasActiveStreamingNarrative(items));
+  const deferExploreGrouping = disableExploreGrouping || isStreaming || hasActiveStreamingNarrative(items);
   const intermediateGroups: Array<
     | { type: 'normal'; item: FlowItem }
     | { type: 'subagent'; parentTaskToolId: string; items: FlowItem[] }

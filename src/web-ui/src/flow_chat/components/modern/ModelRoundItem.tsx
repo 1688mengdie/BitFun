@@ -469,7 +469,20 @@ const SubagentItemsContainer = React.memo<SubagentItemsContainerProps>(({
 
   return (
     <div className={`subagent-items-wrapper ${isCollapsed ? 'subagent-items-wrapper--collapsed' : 'subagent-items-wrapper--expanded'}`}>
-      <SmoothHeightCollapse isOpen={!isCollapsed} className="subagent-items-collapse">
+      <SmoothHeightCollapse
+        isOpen={!isCollapsed}
+        className="subagent-items-collapse"
+        disableAnimation={items.some(item => {
+          if (item.type === 'text' || item.type === 'thinking') {
+            const streamingItem = item as FlowTextItem | FlowThinkingItem;
+            return streamingItem.isStreaming === true && (streamingItem.status === 'streaming' || streamingItem.status === 'running');
+          }
+          if (item.type === 'tool') {
+            return item.status !== 'completed' && item.status !== 'cancelled' && item.status !== 'error';
+          }
+          return false;
+        })}
+      >
         <div
           ref={containerRef}
           className={`subagent-items-container ${isCollapsed ? 'subagent-items-container--collapsed' : 'subagent-items-container--expanded'}`}
