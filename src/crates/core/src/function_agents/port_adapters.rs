@@ -1,29 +1,49 @@
 //! Core adapters for product-domain function-agent ports.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use bitfun_product_domains::function_agents::ports::{
-    FunctionAgentFuture, FunctionAgentGitPort, GitCommitSnapshot, StartchatGitSnapshot,
+    CommitAiAnalysisRequest, FunctionAgentAiPort, FunctionAgentFuture, FunctionAgentGitPort,
+    GitCommitSnapshot, StartchatGitSnapshot, StartchatTimeSnapshot, WorkStateAiAnalysisRequest,
 };
 use bitfun_product_domains::function_agents::startchat_func_agent::AheadBehind;
+use bitfun_product_domains::function_agents::{
+    git_func_agent::AICommitAnalysis, startchat_func_agent::AIGeneratedAnalysis,
+};
 
 use crate::function_agents::common::{AgentError, AgentResult};
 use crate::function_agents::git_func_agent::ContextAnalyzer;
+use crate::infrastructure::ai::AIClientFactory;
 use crate::service::git::{GitDiffParams, GitService};
 
 #[derive(Debug, Default, Clone)]
 pub struct CoreFunctionAgentGitAdapter;
 
 impl FunctionAgentGitPort for CoreFunctionAgentGitAdapter {
-    fn git_commit_snapshot(&self, repo_path: String) -> FunctionAgentFuture<'_, GitCommitSnapshot> {
-        Box::pin(async move { Self::build_git_commit_snapshot(PathBuf::from(repo_path)).await })
+    fn git_commit_snapshot(
+        &self,
+        repo_path: PathBuf,
+    ) -> FunctionAgentFuture<'_, GitCommitSnapshot> {
+        Box::pin(async move { Self::build_git_commit_snapshot(repo_path).await })
     }
 
     fn startchat_git_snapshot(
         &self,
-        repo_path: String,
+        repo_path: PathBuf,
     ) -> FunctionAgentFuture<'_, StartchatGitSnapshot> {
-        Box::pin(async move { Self::build_startchat_git_snapshot(PathBuf::from(repo_path)).await })
+        Box::pin(async move { Self::build_startchat_git_snapshot(repo_path).await })
+    }
+
+    fn startchat_time_snapshot(
+        &self,
+        repo_path: PathBuf,
+    ) -> FunctionAgentFuture<'_, StartchatTimeSnapshot> {
+        Box::pin(async move {
+            Ok(StartchatTimeSnapshot {
+                last_commit_timestamp: git_last_commit_timestamp(&repo_path),
+            })
+        })
     }
 }
 
@@ -75,6 +95,62 @@ impl CoreFunctionAgentGitAdapter {
             unpushed_commits,
             ahead_behind,
             last_commit_timestamp,
+        })
+    }
+}
+
+#[derive(Clone)]
+pub struct CoreFunctionAgentAiAdapter {
+    factory: Arc<AIClientFactory>,
+}
+
+impl CoreFunctionAgentAiAdapter {
+    pub fn new(factory: Arc<AIClientFactory>) -> Self {
+        Self { factory }
+    }
+}
+
+impl FunctionAgentAiPort for CoreFunctionAgentAiAdapter {
+    fn analyze_commit(
+        &self,
+        request: CommitAiAnalysisRequest,
+    ) -> FunctionAgentFuture<'_, AICommitAnalysis> {
+        let factory = self.factory.clone();
+        Box::pin(async move {
+            let service =
+                crate::function_agents::git_func_agent::AIAnalysisService::new_with_agent_config(
+                    factory,
+                    "git-func-agent",
+                )
+                .await?;
+            service
+                .generate_commit_message_ai(
+                    &request.diff_content,
+                    &request.project_context,
+                    &request.options,
+                )
+                .await
+        })
+    }
+
+    fn analyze_work_state(
+        &self,
+        request: WorkStateAiAnalysisRequest,
+    ) -> FunctionAgentFuture<'_, AIGeneratedAnalysis> {
+        let factory = self.factory.clone();
+        Box::pin(async move {
+            let service = crate::function_agents::startchat_func_agent::AIWorkStateService::new_with_agent_config(
+                factory,
+                "startchat-func-agent",
+            )
+            .await?;
+            service
+                .generate_complete_analysis(
+                    &request.git_state,
+                    &request.git_diff,
+                    &request.language,
+                )
+                .await
         })
     }
 }
@@ -215,7 +291,7 @@ mod tests {
 
         let adapter = CoreFunctionAgentGitAdapter::default();
         let snapshot = adapter
-            .git_commit_snapshot(repo.path().to_string_lossy().to_string())
+            .git_commit_snapshot(repo.path().to_path_buf())
             .await
             .unwrap();
 
@@ -241,7 +317,7 @@ mod tests {
 
         let adapter = CoreFunctionAgentGitAdapter::default();
         let snapshot = adapter
-            .git_commit_snapshot(repo.path().to_string_lossy().to_string())
+            .git_commit_snapshot(repo.path().to_path_buf())
             .await
             .unwrap();
 
@@ -266,7 +342,7 @@ mod tests {
 
         let adapter = CoreFunctionAgentGitAdapter::default();
         let snapshot = adapter
-            .startchat_git_snapshot(repo.path().to_string_lossy().to_string())
+            .startchat_git_snapshot(repo.path().to_path_buf())
             .await
             .unwrap();
 
@@ -286,7 +362,7 @@ mod tests {
 
         let adapter = CoreFunctionAgentGitAdapter::default();
         let result = adapter
-            .startchat_git_snapshot(repo.path().to_string_lossy().to_string())
+            .startchat_git_snapshot(repo.path().to_path_buf())
             .await;
 
         assert!(result.is_err());

@@ -46,6 +46,16 @@ SessionManager → Session → DialogTurn → ModelRound
 - Any tool migration must preserve expanded/collapsed exposure, prompt-visible
   manifests, `ToolUseContext.unlocked_collapsed_tools`, and desktop/MCP/ACP
   tool catalog behavior.
+- Do not encode provider-specific OpenAI Responses / Codex ChatGPT flat tool
+  schema behavior in core tool contracts; AI adapters own provider
+  serialization while core keeps provider-neutral manifests.
+- When touching session/token usage paths, keep `cached_content_token_count`
+  as cache reads/hits and `cache_creation_token_count` as a separate provider
+  fact.
+- Function-agent commit-message orchestration may route through
+  `bitfun-product-domains`; keep Git/AI service adapters, prompt templates,
+  JSON extraction, and error mapping core-owned until a reviewed migration
+  proves equivalence.
 - Do not add new cross-layer references from `service` to `agentic` without a
   small port/interface boundary.
 - Do not move platform-specific logic, build-script behavior, or product

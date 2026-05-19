@@ -22,6 +22,7 @@ Repository rule: **keep product logic platform-agnostic, then expose it through 
 | Product domains | `src/crates/product-domains` | [AGENTS.md](src/crates/product-domains/AGENTS.md) |
 | Transport adapters | `src/crates/transport` | (use core guide) |
 | API layer | `src/crates/api-layer` | (use core guide) |
+| ACP integration | `src/crates/acp` | [AGENTS.md](src/crates/acp/AGENTS.md) |
 | AI adapters | `src/crates/ai-adapters` | [AGENTS.md](src/crates/ai-adapters/AGENTS.md) |
 | Desktop app | `src/apps/desktop` | [AGENTS.md](src/apps/desktop/AGENTS.md) |
 | Server | `src/apps/server` | (use core guide) |
@@ -114,83 +115,17 @@ await api.invoke('your_command', { request: { ... } });
 For any `bitfun-core` decomposition, feature-boundary, dependency-boundary, or
 Rust build-speed refactor, read
 [`docs/architecture/core-decomposition.md`](docs/architecture/core-decomposition.md)
-before editing. The guardrail document defines product-behavior invariants,
-crate ownership targets, forbidden dependency directions, feature safety rules,
-and milestone verification gates.
+before editing. Keep this file as an entry point; put module-specific ownership
+details in the nearest module `AGENTS.md`.
 
-### Tool ownership guardrails
+Repository-level decomposition rules:
 
-- `src/crates/agent-tools` owns lightweight tool contracts, portable tool
-  context facts/provider contracts, pure manifest/exposure contracts, and
-  generic registry / static-provider / dynamic-provider container contracts.
-- `src/crates/tool-packs` may expose planned tool-pack feature-group scaffold
-  metadata, but it must not own concrete tool implementations or product
-  manifest runtime until a reviewed provider migration exists.
-- `src/crates/core/src/agentic/tools` owns product tool provider assembly
-  (`static_providers.rs`), `dyn Tool` adaptation, snapshot decoration, runtime
-  manifest assembly / context filtering, and on-demand tool spec discovery
-  execution (`GetToolSpec`) for now.
-- Keep `ToolUseContext` and concrete tool implementations in core until a
-  reviewed port/provider design and equivalence tests exist. A portable
-  `ToolContextFacts` projection via `PortableToolContextProvider` may cross
-  crate boundaries, but runtime handles and service objects must stay in core.
-- Tool migrations must preserve expanded/collapsed exposure, prompt-visible
-  manifests, `ToolUseContext.unlocked_collapsed_tools`, and desktop/MCP/ACP
-  tool catalog behavior.
-
-### Latest-main runtime anchors
-
-- Agent registry migration must preserve mode-scoped subagent availability,
-  hidden/custom/review grouping, desktop subagent API semantics, and CLI
-  mode-aware `/subagents` list/config behavior, including `Multitask` mode
-  and the built-in `GeneralPurpose` subagent.
-- Background subagent task delivery remains core agent-runtime behavior:
-  `Task.run_in_background` must preserve parent metadata, workspace routing,
-  running-turn injection, and idle-session follow-up turn delivery.
-- DeepResearch report finalization currently relies on the core citation
-  renumber hook; do not move it without preserving `report.md`,
-  `citations.md`, `display_map.json`, and rejected-citation handling.
-- Workspace/search refactors must preserve remote workspace startup guards,
-  remote flashgrep fallback, and search preview/context mapping.
-- ACP timeout handling and Web operation-diff fallback are product-surface
-  behavior; share facts through contracts, not UI/protocol implementation.
-- Web startup trace, deferred background scheduling, narrow tool startup, and
-  non-blocking Flow Chat history hydration are Web product-surface behavior;
-  do not move those orchestration paths into core contract crates.
-- Built-in MiniApp seeding, content-hash update markers, customization-update
-  metadata, and host dispatch execution remain core-owned runtime behavior
-  until a reviewed MiniApp runtime migration exists.
-
-### Services/product owner closure
-
-- Remote-SSH path, session identity, mirror path, and unresolved-session layout
-  helpers belong in `bitfun-services-integrations`; core may inject
-  `PathManager` and hold SSH manager / remote FS / terminal assembly.
-- MiniApp storage/draft/import file shape, import fallback payload, lifecycle
-  state-transition helpers, runtime search-plan helpers, customization metadata
-  policy including built-in update/decline decisions, and function-agent pure
-  prompt/diff preparation helpers belong in `bitfun-product-domains`; core
-  keeps filesystem IO, worker runtime, built-in source-hash lookup,
-  `PathManager`, Git/AI calls, prompt templates, JSON extraction, error
-  mapping, and port adapters until reviewed runtime migrations exist.
-  Before moving those runtime owners, keep the core-owned MiniApp manager and
-  function-agent Git/AI boundary snapshots passing.
-- Remote-connect port baselines live in `bitfun-runtime-ports` and
-  `bitfun-services-integrations`; tracker state and tracker event reduction
-  belong in `bitfun-services-integrations`. Remote command/response wire DTOs,
-  remote model catalog DTOs, poll-response assembly helpers, and model-catalog
-  poll delta policy also belong there. Pure remote image-context
-  fallback/preference, restore-target, cancel-decision, and remote file-transfer
-  size/chunk/name helpers also belong in `bitfun-services-integrations`, while
-  core still owns the adapter back to `ImageContextData`, dispatcher assembly,
-  session restore execution, file IO/path resolution, terminal pre-warm, and
-  product execution routing. Further remote runtime owner migration must
-  preserve the existing migration snapshots for command/response shape,
-  restore, active-turn polling, cancel decisions, image context
-  fallback/preference, tracker fanout, file transfer, and RemoteRelay/Bot queue
-  policy.
-  `AgentSubmissionPort` still rejects generic attachments until
-  image/multimodal equivalence tests and a runtime migration plan are reviewed.
+- Do not confuse DTO/contract extraction with runtime owner migration.
+- Product surfaces may diverge; share stable facts or ports, not UI, protocol,
+  lifecycle, or platform implementation.
+- Moving runtime ownership requires a reviewed port/provider design, old-path
+  compatibility, behavior equivalence tests, and explicit confirmation when a
+  behavior boundary could change.
 
 ### DeepReview guardrails
 

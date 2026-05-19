@@ -3,15 +3,15 @@
 use bitfun_product_domains::miniapp::bridge_builder::{build_bridge_script, build_csp_content};
 use bitfun_product_domains::miniapp::compiler::compile;
 use bitfun_product_domains::miniapp::customization::{
-    MAX_DECLINED_BUILTIN_UPDATES, MiniAppCustomizationBaseline, MiniAppCustomizationLocalSnapshot,
-    MiniAppCustomizationMetadata, MiniAppCustomizationOrigin, MiniAppCustomizationOriginKind,
     apply_draft_customization_metadata, decline_builtin_update_metadata,
     declined_builtin_update_needs_local_snapshot, is_current_declined_builtin_update,
-    mark_builtin_update_available_metadata,
+    mark_builtin_update_available_metadata, MiniAppCustomizationBaseline,
+    MiniAppCustomizationLocalSnapshot, MiniAppCustomizationMetadata, MiniAppCustomizationOrigin,
+    MiniAppCustomizationOriginKind, MAX_DECLINED_BUILTIN_UPDATES,
 };
 use bitfun_product_domains::miniapp::draft::{
-    MINIAPP_DRAFT_STATUS_APPLIED, MINIAPP_DRAFT_STATUS_DRAFT, build_draft_manifest,
-    build_draft_response,
+    build_draft_manifest, build_draft_response, MINIAPP_DRAFT_STATUS_APPLIED,
+    MINIAPP_DRAFT_STATUS_DRAFT,
 };
 use bitfun_product_domains::miniapp::exporter::{ExportCheckResult, ExportTarget};
 use bitfun_product_domains::miniapp::host_routing::{
@@ -27,25 +27,30 @@ use bitfun_product_domains::miniapp::lifecycle::{
 use bitfun_product_domains::miniapp::permission_policy::resolve_policy;
 use bitfun_product_domains::miniapp::ports::{
     MiniAppInstallDepsRequest, MiniAppPortError, MiniAppPortErrorKind, MiniAppPortFuture,
-    MiniAppRuntimePort,
+    MiniAppRuntimeFacade, MiniAppRuntimePort, MiniAppStoragePort,
 };
 use bitfun_product_domains::miniapp::runtime::{
-    RuntimeKind, candidate_dirs, candidate_executable_path, runtime_lookup_order,
-    version_manager_roots, versioned_executable_candidate,
+    candidate_dirs, candidate_executable_path, runtime_lookup_order, version_manager_roots,
+    versioned_executable_candidate, RuntimeKind,
 };
 use bitfun_product_domains::miniapp::storage::{
-    COMPILED_HTML, CUSTOMIZATION_JSON, DRAFT_JSON, DRAFTS_CLEANUP_MARKER, DRAFTS_CLEANUP_PREFIX,
-    DRAFTS_DIR, EMPTY_ESM_DEPENDENCIES_JSON, EMPTY_STORAGE_JSON, ESM_DEPS_JSON, INDEX_HTML,
-    META_JSON, MiniAppImportLayout, MiniAppStorageLayout, PACKAGE_JSON, PLACEHOLDER_COMPILED_HTML,
+    build_import_fallbacks, build_package_json, parse_npm_dependencies, MiniAppImportLayout,
+    MiniAppStorageLayout, COMPILED_HTML, CUSTOMIZATION_JSON, DRAFTS_CLEANUP_MARKER,
+    DRAFTS_CLEANUP_PREFIX, DRAFTS_DIR, DRAFT_JSON, EMPTY_ESM_DEPENDENCIES_JSON, EMPTY_STORAGE_JSON,
+    ESM_DEPS_JSON, INDEX_HTML, META_JSON, PACKAGE_JSON, PLACEHOLDER_COMPILED_HTML,
     REQUIRED_SOURCE_FILES, SOURCE_DIR, STORAGE_JSON, STYLE_CSS, UI_JS, VERSIONS_DIR, WORKER_JS,
-    build_import_fallbacks, build_package_json, parse_npm_dependencies,
 };
 use bitfun_product_domains::miniapp::types::{
     FsPermissions, MiniApp, MiniAppPermissions, MiniAppRuntimeState, MiniAppSource, NetPermissions,
     NotificationPermissions, NpmDep,
 };
-use bitfun_product_domains::miniapp::worker::{InstallResult, install_command_for_runtime};
+use bitfun_product_domains::miniapp::worker::{install_command_for_runtime, InstallResult};
+use std::collections::BTreeMap;
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::pin::pin;
+use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 
 struct RuntimePortStub;
 
@@ -69,6 +74,193 @@ impl MiniAppRuntimePort for RuntimePortStub {
             })
         })
     }
+}
+
+#[derive(Clone)]
+struct StoragePortStub {
+    state: Arc<Mutex<StoragePortStubState>>,
+}
+
+struct StoragePortStubState {
+    current: MiniApp,
+    versions: BTreeMap<u32, MiniApp>,
+    save_count: usize,
+    saved_version_numbers: Vec<u32>,
+}
+
+impl StoragePortStub {
+    fn new(current: MiniApp) -> Self {
+        Self {
+            state: Arc::new(Mutex::new(StoragePortStubState {
+                current,
+                versions: BTreeMap::new(),
+                save_count: 0,
+                saved_version_numbers: Vec::new(),
+            })),
+        }
+    }
+
+    fn current(&self) -> MiniApp {
+        self.state.lock().unwrap().current.clone()
+    }
+
+    fn save_count(&self) -> usize {
+        self.state.lock().unwrap().save_count
+    }
+
+    fn saved_version_numbers(&self) -> Vec<u32> {
+        self.state.lock().unwrap().saved_version_numbers.clone()
+    }
+}
+
+impl MiniAppStoragePort for StoragePortStub {
+    fn list_app_ids(&self) -> MiniAppPortFuture<'_, Vec<String>> {
+        let app_id = self.state.lock().unwrap().current.id.clone();
+        Box::pin(async move { Ok(vec![app_id]) })
+    }
+
+    fn load(&self, app_id: String) -> MiniAppPortFuture<'_, MiniApp> {
+        let result = {
+            let state = self.state.lock().unwrap();
+            if state.current.id == app_id {
+                Ok(state.current.clone())
+            } else {
+                Err(MiniAppPortError::new(
+                    MiniAppPortErrorKind::NotFound,
+                    format!("App not found: {app_id}"),
+                ))
+            }
+        };
+        Box::pin(async move { result })
+    }
+
+    fn load_meta(
+        &self,
+        app_id: String,
+    ) -> MiniAppPortFuture<'_, bitfun_product_domains::miniapp::types::MiniAppMeta> {
+        let result = {
+            let state = self.state.lock().unwrap();
+            if state.current.id == app_id {
+                Ok((&state.current).into())
+            } else {
+                Err(MiniAppPortError::new(
+                    MiniAppPortErrorKind::NotFound,
+                    format!("App not found: {app_id}"),
+                ))
+            }
+        };
+        Box::pin(async move { result })
+    }
+
+    fn load_source(&self, app_id: String) -> MiniAppPortFuture<'_, MiniAppSource> {
+        let result = {
+            let state = self.state.lock().unwrap();
+            if state.current.id == app_id {
+                Ok(state.current.source.clone())
+            } else {
+                Err(MiniAppPortError::new(
+                    MiniAppPortErrorKind::NotFound,
+                    format!("App not found: {app_id}"),
+                ))
+            }
+        };
+        Box::pin(async move { result })
+    }
+
+    fn save(&self, app: MiniApp) -> MiniAppPortFuture<'_, ()> {
+        let state = self.state.clone();
+        Box::pin(async move {
+            let mut state = state.lock().unwrap();
+            state.current = app;
+            state.save_count += 1;
+            Ok(())
+        })
+    }
+
+    fn save_version(
+        &self,
+        _app_id: String,
+        version: u32,
+        app: MiniApp,
+    ) -> MiniAppPortFuture<'_, ()> {
+        let state = self.state.clone();
+        Box::pin(async move {
+            let mut state = state.lock().unwrap();
+            state.versions.insert(version, app);
+            state.saved_version_numbers.push(version);
+            Ok(())
+        })
+    }
+
+    fn load_app_storage(&self, _app_id: String) -> MiniAppPortFuture<'_, serde_json::Value> {
+        Box::pin(async { Ok(serde_json::json!({})) })
+    }
+
+    fn save_app_storage(
+        &self,
+        _app_id: String,
+        _key: String,
+        _value: serde_json::Value,
+    ) -> MiniAppPortFuture<'_, ()> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn delete(&self, _app_id: String) -> MiniAppPortFuture<'_, ()> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn list_versions(&self, _app_id: String) -> MiniAppPortFuture<'_, Vec<u32>> {
+        let versions = self
+            .state
+            .lock()
+            .unwrap()
+            .versions
+            .keys()
+            .copied()
+            .collect();
+        Box::pin(async move { Ok(versions) })
+    }
+
+    fn load_version(&self, _app_id: String, version: u32) -> MiniAppPortFuture<'_, MiniApp> {
+        let result = self
+            .state
+            .lock()
+            .unwrap()
+            .versions
+            .get(&version)
+            .cloned()
+            .ok_or_else(|| {
+                MiniAppPortError::new(
+                    MiniAppPortErrorKind::NotFound,
+                    format!("Version v{version} not found"),
+                )
+            });
+        Box::pin(async move { result })
+    }
+}
+
+fn block_on<F: Future>(future: F) -> F::Output {
+    let waker = noop_waker();
+    let mut context = Context::from_waker(&waker);
+    let mut future = pin!(future);
+    loop {
+        match Future::poll(future.as_mut(), &mut context) {
+            Poll::Ready(value) => return value,
+            Poll::Pending => std::thread::yield_now(),
+        }
+    }
+}
+
+fn noop_waker() -> Waker {
+    unsafe fn clone(_: *const ()) -> RawWaker {
+        RawWaker::new(std::ptr::null(), &VTABLE)
+    }
+    unsafe fn wake(_: *const ()) {}
+    unsafe fn wake_by_ref(_: *const ()) {}
+    unsafe fn drop(_: *const ()) {}
+
+    static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, wake, wake_by_ref, drop);
+    unsafe { Waker::from_raw(RawWaker::new(std::ptr::null(), &VTABLE)) }
 }
 
 #[test]
@@ -551,6 +743,96 @@ fn miniapp_ports_keep_runtime_boundary_lightweight() {
 }
 
 #[test]
+fn miniapp_runtime_facade_persists_port_backed_lifecycle_transitions() {
+    let mut app = sample_miniapp_for_lifecycle(MiniAppSource {
+        css: "body { color: black; }".to_string(),
+        npm_dependencies: vec![NpmDep {
+            name: "lodash".to_string(),
+            version: "^4.17.21".to_string(),
+        }],
+        ..MiniAppSource::default()
+    });
+    app.runtime = build_runtime_state(app.version, app.updated_at, &app.source, true, false);
+    let storage = StoragePortStub::new(app);
+    let facade = MiniAppRuntimeFacade::new(&storage);
+
+    let installed = block_on(facade.mark_deps_installed("demo".to_string())).unwrap();
+    assert!(!installed.runtime.deps_dirty);
+    assert!(installed.runtime.worker_restart_required);
+
+    let cleared = block_on(facade.clear_worker_restart_required("demo".to_string())).unwrap();
+    assert!(!cleared.runtime.worker_restart_required);
+
+    let recompiled = block_on(facade.persist_recompile_result(
+        "demo".to_string(),
+        "<html>fresh</html>".to_string(),
+        2000,
+    ))
+    .unwrap();
+    assert_eq!(recompiled.version, 3);
+    assert_eq!(recompiled.compiled_html, "<html>fresh</html>");
+    assert!(!recompiled.runtime.ui_recompile_required);
+
+    let synced_source = MiniAppSource {
+        css: "body { color: red; }".to_string(),
+        npm_dependencies: vec![NpmDep {
+            name: "lodash".to_string(),
+            version: "^4.17.21".to_string(),
+        }],
+        ..MiniAppSource::default()
+    };
+    let synced = block_on(facade.persist_sync_from_fs_result(
+        "demo".to_string(),
+        synced_source,
+        "<html>synced</html>".to_string(),
+        3000,
+    ))
+    .unwrap();
+    assert_eq!(synced.version, 4);
+    assert_eq!(synced.source.css, "body { color: red; }");
+    assert!(synced.runtime.deps_dirty);
+    assert!(synced.runtime.worker_restart_required);
+    assert_eq!(storage.saved_version_numbers(), vec![3]);
+
+    let rolled_back = block_on(facade.rollback("demo".to_string(), 3, 4000)).unwrap();
+    assert_eq!(rolled_back.version, 5);
+    assert_eq!(rolled_back.compiled_html, "<html>fresh</html>");
+    assert!(rolled_back.runtime.worker_restart_required);
+    assert_eq!(storage.saved_version_numbers(), vec![3, 4]);
+}
+
+#[test]
+fn miniapp_runtime_facade_skips_save_when_restart_flag_already_clear() {
+    let mut app = sample_miniapp_for_lifecycle(MiniAppSource::default());
+    app.runtime = build_runtime_state(app.version, app.updated_at, &app.source, false, false);
+    let storage = StoragePortStub::new(app);
+    let facade = MiniAppRuntimeFacade::new(&storage);
+
+    let unchanged = block_on(facade.clear_worker_restart_required("demo".to_string())).unwrap();
+
+    assert!(!unchanged.runtime.worker_restart_required);
+    assert_eq!(storage.save_count(), 0);
+    assert_eq!(storage.current().version, 3);
+}
+
+#[test]
+fn miniapp_runtime_facade_preserves_storage_errors_without_state_writes() {
+    let app = sample_miniapp_for_lifecycle(MiniAppSource::default());
+    let storage = StoragePortStub::new(app);
+    let facade = MiniAppRuntimeFacade::new(&storage);
+
+    let missing_app = block_on(facade.mark_deps_installed("missing".to_string())).unwrap_err();
+    assert_eq!(missing_app.kind, MiniAppPortErrorKind::NotFound);
+    assert_eq!(storage.save_count(), 0);
+    assert!(storage.saved_version_numbers().is_empty());
+
+    let missing_version = block_on(facade.rollback("demo".to_string(), 99, 4000)).unwrap_err();
+    assert_eq!(missing_version.kind, MiniAppPortErrorKind::NotFound);
+    assert_eq!(storage.save_count(), 0);
+    assert!(storage.saved_version_numbers().is_empty());
+}
+
+#[test]
 fn miniapp_draft_contract_preserves_manifest_and_response_shape() {
     let app = sample_miniapp_for_lifecycle(MiniAppSource::default());
     let manifest = build_draft_manifest("app-1", "draft-1", 7, 1234);
@@ -759,12 +1041,10 @@ fn miniapp_customization_decline_policy_updates_existing_and_trims_old_records()
         metadata.declined_builtin_updates.len(),
         MAX_DECLINED_BUILTIN_UPDATES
     );
-    assert!(
-        !metadata
-            .declined_builtin_updates
-            .iter()
-            .any(|record| record.source_hash == "hash-v5")
-    );
+    assert!(!metadata
+        .declined_builtin_updates
+        .iter()
+        .any(|record| record.source_hash == "hash-v5"));
 }
 
 fn sample_miniapp_for_lifecycle(source: MiniAppSource) -> MiniApp {
