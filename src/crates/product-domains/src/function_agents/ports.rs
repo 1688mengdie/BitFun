@@ -16,6 +16,7 @@ use crate::function_agents::startchat_func_agent::{
 };
 use serde::{Deserialize, Serialize};
 use std::future::Future;
+use std::path::PathBuf;
 use std::pin::Pin;
 
 pub type FunctionAgentFuture<'a, T> = Pin<Box<dyn Future<Output = AgentResult<T>> + Send + 'a>>;
@@ -52,6 +53,12 @@ pub struct StartchatGitSnapshot {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct StartchatTimeSnapshot {
+    pub last_commit_timestamp: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WorkStateAiAnalysisRequest {
     pub git_state: Option<GitWorkState>,
     pub git_diff: String,
@@ -59,11 +66,16 @@ pub struct WorkStateAiAnalysisRequest {
 }
 
 pub trait FunctionAgentGitPort: Send + Sync {
-    fn git_commit_snapshot(&self, repo_path: String) -> FunctionAgentFuture<'_, GitCommitSnapshot>;
+    fn git_commit_snapshot(&self, repo_path: PathBuf)
+        -> FunctionAgentFuture<'_, GitCommitSnapshot>;
     fn startchat_git_snapshot(
         &self,
-        repo_path: String,
+        repo_path: PathBuf,
     ) -> FunctionAgentFuture<'_, StartchatGitSnapshot>;
+    fn startchat_time_snapshot(
+        &self,
+        repo_path: PathBuf,
+    ) -> FunctionAgentFuture<'_, StartchatTimeSnapshot>;
 }
 
 /// Future AI boundary for function agents.
@@ -100,7 +112,7 @@ impl<'a> FunctionAgentRuntimeFacade<'a> {
 
     pub async fn generate_commit_message(
         &self,
-        repo_path: String,
+        repo_path: PathBuf,
         options: CommitMessageOptions,
     ) -> AgentResult<CommitMessage> {
         let snapshot = self.git.git_commit_snapshot(repo_path).await?;
@@ -147,12 +159,17 @@ impl<'a> FunctionAgentRuntimeFacade<'a> {
 
     pub async fn analyze_work_state(
         &self,
-        repo_path: String,
+        repo_path: PathBuf,
         options: WorkStateOptions,
         now_timestamp: i64,
         current_hour: u32,
         analyzed_at: String,
     ) -> AgentResult<WorkStateAnalysis> {
+        let time_snapshot = self
+            .git
+            .startchat_time_snapshot(repo_path.clone())
+            .await
+            .ok();
         let snapshot = if options.analyze_git {
             self.git.startchat_git_snapshot(repo_path).await.ok()
         } else {
@@ -170,7 +187,8 @@ impl<'a> FunctionAgentRuntimeFacade<'a> {
         } else {
             String::new()
         };
-        let time_info = time_info_from_snapshot(snapshot.as_ref(), now_timestamp, current_hour);
+        let time_info =
+            time_info_from_snapshot(time_snapshot.as_ref(), now_timestamp, current_hour);
 
         let ai_analysis = self
             .ai
@@ -222,7 +240,7 @@ pub fn git_work_state_from_snapshot(snapshot: &StartchatGitSnapshot) -> GitWorkS
 }
 
 pub fn time_info_from_snapshot(
-    snapshot: Option<&StartchatGitSnapshot>,
+    snapshot: Option<&StartchatTimeSnapshot>,
     now_timestamp: i64,
     current_hour: u32,
 ) -> TimeInfo {

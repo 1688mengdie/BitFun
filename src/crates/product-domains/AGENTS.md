@@ -42,12 +42,12 @@ moves here gradually.
 - `function-agents` owns pure function-agent DTOs, prompt assembly helpers,
   commit prompt preparation, AI-response parsing policy, diff truncation policy,
   local file-shape analysis, Git/AI port traits, and port-backed runtime facade
-  orchestration.
+  orchestration, including the commit-message facade used by core adapters.
 - Core still owns MiniApp filesystem IO, worker process execution, host dispatch
   execution, built-in asset seeding/source-hash lookup, `PathManager`
-  integration, function-agent Git/AI calls, prompt templates, JSON extraction,
-  error mapping, and any product call-path rewiring not covered by equivalence
-  tests.
+  integration, function-agent Git/AI service adapters, prompt templates, JSON
+  extraction, error mapping, and Startchat work-state product path wiring until
+  equivalence tests cover that migration.
 
 ## Verification
 

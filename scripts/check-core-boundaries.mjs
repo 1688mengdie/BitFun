@@ -500,6 +500,26 @@ const forbiddenContentRules = [
     ],
   },
   {
+    path: 'src/crates/core/src/function_agents/git-func-agent/commit_generator.rs',
+    patterns: [
+      {
+        regex: /\bGitService::get_status\b/,
+        message:
+          'Git function-agent commit generator must use CoreFunctionAgentGitAdapter through FunctionAgentRuntimeFacade',
+      },
+      {
+        regex: /\bAIAnalysisService::new_with_agent_config\b/,
+        message:
+          'Git function-agent commit generator must use CoreFunctionAgentAiAdapter through FunctionAgentRuntimeFacade',
+      },
+      {
+        regex: /\bto_string_lossy\b/,
+        message:
+          'Git function-agent commit generator must preserve PathBuf paths when routing through the facade',
+      },
+    ],
+  },
+  {
     path: 'src/crates/core/src/service/mcp/server/config.rs',
     patterns: [
       {
@@ -2220,6 +2240,25 @@ const requiredContentRules = [
     ],
   },
   {
+    path: 'src/crates/core/src/function_agents/git-func-agent/commit_generator.rs',
+    reason:
+      'Git function-agent commit generation must route through the product-domain runtime facade while core keeps concrete adapters',
+    patterns: [
+      {
+        regex: /\bFunctionAgentRuntimeFacade\b/,
+        message: 'missing product-domain function-agent runtime facade routing',
+      },
+      {
+        regex: /\bCoreFunctionAgentGitAdapter\b/,
+        message: 'missing core-owned Git adapter wiring',
+      },
+      {
+        regex: /\bCoreFunctionAgentAiAdapter\b/,
+        message: 'missing core-owned AI adapter wiring',
+      },
+    ],
+  },
+  {
     path: 'src/crates/product-domains/src/function_agents/ports.rs',
     reason:
       'product-domains owns port-backed function-agent facade orchestration while core keeps concrete Git/AI runtime calls',
@@ -2239,6 +2278,14 @@ const requiredContentRules = [
       {
         regex: /\bgit_work_state_from_snapshot\b/,
         message: 'missing Startchat Git snapshot projection helper',
+      },
+      {
+        regex: /\bStartchatTimeSnapshot\b/,
+        message: 'missing Startchat time snapshot contract',
+      },
+      {
+        regex: /\bstartchat_time_snapshot\b/,
+        message: 'missing Startchat time snapshot port',
       },
     ],
   },
@@ -3132,12 +3179,22 @@ function runManifestParserSelfTest() {
       ],
     },
     {
+      path: 'src/crates/core/src/function_agents/git-func-agent/commit_generator.rs',
+      contracts: [
+        'FunctionAgentRuntimeFacade',
+        'CoreFunctionAgentGitAdapter',
+        'CoreFunctionAgentAiAdapter',
+      ],
+    },
+    {
       path: 'src/crates/product-domains/src/function_agents/ports.rs',
       contracts: [
         'FunctionAgentRuntimeFacade',
         'generate_commit_message',
         'analyze_work_state',
         'git_work_state_from_snapshot',
+        'StartchatTimeSnapshot',
+        'startchat_time_snapshot',
       ],
     },
     {

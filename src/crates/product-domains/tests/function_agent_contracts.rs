@@ -10,7 +10,7 @@ use bitfun_product_domains::function_agents::{
     },
     ports::{
         CommitAiAnalysisRequest, FunctionAgentAiPort, FunctionAgentFuture, FunctionAgentGitPort,
-        FunctionAgentRuntimeFacade, GitCommitSnapshot, StartchatGitSnapshot,
+        FunctionAgentRuntimeFacade, GitCommitSnapshot, StartchatGitSnapshot, StartchatTimeSnapshot,
         WorkStateAiAnalysisRequest,
     },
     startchat_func_agent::{
@@ -22,6 +22,7 @@ use bitfun_product_domains::function_agents::{
     AgentErrorType, Language,
 };
 use std::future::Future;
+use std::path::PathBuf;
 use std::pin::pin;
 use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 
@@ -30,7 +31,7 @@ struct FunctionAgentPortStub;
 impl FunctionAgentGitPort for FunctionAgentPortStub {
     fn git_commit_snapshot(
         &self,
-        _repo_path: String,
+        _repo_path: PathBuf,
     ) -> FunctionAgentFuture<'_, GitCommitSnapshot> {
         Box::pin(async {
             Ok(GitCommitSnapshot {
@@ -45,7 +46,7 @@ impl FunctionAgentGitPort for FunctionAgentPortStub {
 
     fn startchat_git_snapshot(
         &self,
-        _repo_path: String,
+        _repo_path: PathBuf,
     ) -> FunctionAgentFuture<'_, StartchatGitSnapshot> {
         Box::pin(async {
             Ok(StartchatGitSnapshot {
@@ -58,6 +59,17 @@ impl FunctionAgentGitPort for FunctionAgentPortStub {
                     ahead: 1,
                     behind: 0,
                 }),
+                last_commit_timestamp: Some(900),
+            })
+        })
+    }
+
+    fn startchat_time_snapshot(
+        &self,
+        _repo_path: PathBuf,
+    ) -> FunctionAgentFuture<'_, StartchatTimeSnapshot> {
+        Box::pin(async {
+            Ok(StartchatTimeSnapshot {
                 last_commit_timestamp: Some(900),
             })
         })
@@ -112,7 +124,7 @@ struct EmptyCommitPortStub;
 impl FunctionAgentGitPort for EmptyCommitPortStub {
     fn git_commit_snapshot(
         &self,
-        _repo_path: String,
+        _repo_path: PathBuf,
     ) -> FunctionAgentFuture<'_, GitCommitSnapshot> {
         Box::pin(async {
             Ok(GitCommitSnapshot {
@@ -127,27 +139,45 @@ impl FunctionAgentGitPort for EmptyCommitPortStub {
 
     fn startchat_git_snapshot(
         &self,
-        _repo_path: String,
+        _repo_path: PathBuf,
     ) -> FunctionAgentFuture<'_, StartchatGitSnapshot> {
         FunctionAgentPortStub.startchat_git_snapshot(_repo_path)
     }
+
+    fn startchat_time_snapshot(
+        &self,
+        _repo_path: PathBuf,
+    ) -> FunctionAgentFuture<'_, StartchatTimeSnapshot> {
+        FunctionAgentPortStub.startchat_time_snapshot(_repo_path)
+    }
 }
 
-struct NoGitExpectedPortStub;
+struct NoGitStateExpectedPortStub;
 
-impl FunctionAgentGitPort for NoGitExpectedPortStub {
+impl FunctionAgentGitPort for NoGitStateExpectedPortStub {
     fn git_commit_snapshot(
         &self,
-        _repo_path: String,
+        _repo_path: PathBuf,
     ) -> FunctionAgentFuture<'_, GitCommitSnapshot> {
         panic!("git_commit_snapshot should not be called")
     }
 
     fn startchat_git_snapshot(
         &self,
-        _repo_path: String,
+        _repo_path: PathBuf,
     ) -> FunctionAgentFuture<'_, StartchatGitSnapshot> {
         panic!("startchat_git_snapshot should not be called")
+    }
+
+    fn startchat_time_snapshot(
+        &self,
+        _repo_path: PathBuf,
+    ) -> FunctionAgentFuture<'_, StartchatTimeSnapshot> {
+        Box::pin(async {
+            Ok(StartchatTimeSnapshot {
+                last_commit_timestamp: Some(900),
+            })
+        })
     }
 }
 
@@ -471,7 +501,7 @@ fn function_agent_ports_keep_ai_and_git_boundaries_explicit() {
     assert_eq!(json["language"], "English");
 
     let port: &dyn FunctionAgentGitPort = &FunctionAgentPortStub;
-    let _future = port.git_commit_snapshot(".".to_string());
+    let _future = port.git_commit_snapshot(PathBuf::from("."));
 
     let ai_port: &dyn FunctionAgentAiPort = &FunctionAgentPortStub;
     let _future = ai_port.analyze_work_state(work_state_request);
@@ -483,7 +513,7 @@ fn function_agent_runtime_facade_generates_commit_message_from_ports() {
     let facade = FunctionAgentRuntimeFacade::new(&ports, &ports);
 
     let message = block_on(
-        facade.generate_commit_message("repo".to_string(), CommitMessageOptions::default()),
+        facade.generate_commit_message(PathBuf::from("repo"), CommitMessageOptions::default()),
     )
     .unwrap();
 
@@ -502,7 +532,7 @@ fn function_agent_runtime_facade_preserves_empty_staging_error() {
     let facade = FunctionAgentRuntimeFacade::new(&git, &ai);
 
     let error = block_on(
-        facade.generate_commit_message("repo".to_string(), CommitMessageOptions::default()),
+        facade.generate_commit_message(PathBuf::from("repo"), CommitMessageOptions::default()),
     )
     .unwrap_err();
 
@@ -524,7 +554,7 @@ fn function_agent_runtime_facade_builds_work_state_from_ports_without_surface_lo
     };
 
     let analysis = block_on(facade.analyze_work_state(
-        "repo".to_string(),
+        PathBuf::from("repo"),
         options,
         960,
         14,
@@ -553,8 +583,8 @@ fn function_agent_runtime_facade_builds_work_state_from_ports_without_surface_lo
 }
 
 #[test]
-fn function_agent_runtime_facade_honors_disabled_git_analysis_boundary() {
-    let git = NoGitExpectedPortStub;
+fn function_agent_runtime_facade_honors_disabled_git_state_boundary_and_preserves_time_info() {
+    let git = NoGitStateExpectedPortStub;
     let ai = FunctionAgentPortStub;
     let facade = FunctionAgentRuntimeFacade::new(&git, &ai);
     let options = WorkStateOptions {
@@ -565,7 +595,7 @@ fn function_agent_runtime_facade_honors_disabled_git_analysis_boundary() {
     };
 
     let analysis = block_on(facade.analyze_work_state(
-        "repo".to_string(),
+        PathBuf::from("repo"),
         options,
         960,
         9,
@@ -575,11 +605,10 @@ fn function_agent_runtime_facade_honors_disabled_git_analysis_boundary() {
 
     assert_eq!(analysis.current_state.summary, "stub");
     assert!(analysis.current_state.git_state.is_none());
-    assert!(analysis
-        .current_state
-        .time_info
-        .minutes_since_last_commit
-        .is_none());
+    assert_eq!(
+        analysis.current_state.time_info.minutes_since_last_commit,
+        Some(1)
+    );
     assert_eq!(
         analysis.current_state.time_info.time_of_day,
         TimeOfDay::Morning
