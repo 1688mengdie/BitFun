@@ -8,23 +8,25 @@ use crate::miniapp::types::{
 };
 use crate::util::errors::{BitFunError, BitFunResult};
 use bitfun_product_domains::miniapp::customization::{
-    MiniAppCustomizationBaseline, MiniAppCustomizationLocalSnapshot, MiniAppCustomizationMetadata,
-    MiniAppPermissionDiff, apply_draft_customization_metadata, decline_builtin_update_metadata,
+    apply_draft_customization_metadata, decline_builtin_update_metadata,
     declined_builtin_update_needs_local_snapshot, diff_permissions,
     is_current_declined_builtin_update, mark_builtin_update_available_metadata,
+    MiniAppCustomizationBaseline, MiniAppCustomizationLocalSnapshot, MiniAppCustomizationMetadata,
+    MiniAppPermissionDiff,
 };
 use bitfun_product_domains::miniapp::draft::{
-    MiniAppDraft, MiniAppDraftManifest, build_draft_manifest, build_draft_response,
+    build_draft_manifest, build_draft_response, MiniAppDraft, MiniAppDraftManifest,
 };
 use bitfun_product_domains::miniapp::lifecycle::{
-    apply_import_runtime_state, apply_recompile_result, apply_sync_from_fs_result,
-    build_deps_revision, build_runtime_state, build_source_revision, build_worker_revision,
-    clear_worker_restart_required_state, ensure_runtime_state, mark_deps_installed_state,
-    prepare_rollback_app, workspace_dir_string,
+    apply_import_runtime_state, build_deps_revision, build_runtime_state, build_source_revision,
+    build_worker_revision, ensure_runtime_state, workspace_dir_string,
+};
+use bitfun_product_domains::miniapp::ports::{
+    MiniAppPortError, MiniAppPortErrorKind, MiniAppRuntimeFacade,
 };
 use bitfun_product_domains::miniapp::storage::{
-    COMPILED_HTML, ESM_DEPS_JSON, META_JSON, MiniAppImportLayout, PACKAGE_JSON,
-    REQUIRED_SOURCE_FILES, SOURCE_DIR, STORAGE_JSON, build_import_fallbacks,
+    build_import_fallbacks, MiniAppImportLayout, COMPILED_HTML, ESM_DEPS_JSON, META_JSON,
+    PACKAGE_JSON, REQUIRED_SOURCE_FILES, SOURCE_DIR, STORAGE_JSON,
 };
 use chrono::Utc;
 use std::collections::HashMap;
@@ -65,6 +67,10 @@ impl MiniAppManager {
 
     pub fn build_worker_revision(&self, app: &MiniApp, policy_json: &str) -> String {
         build_worker_revision(app, policy_json)
+    }
+
+    fn runtime_facade(&self) -> MiniAppRuntimeFacade<'_> {
+        MiniAppRuntimeFacade::new(&self.storage)
     }
 
     pub fn compile_source(
@@ -670,18 +676,17 @@ impl MiniAppManager {
     }
 
     pub async fn mark_deps_installed(&self, app_id: &str) -> BitFunResult<MiniApp> {
-        let mut app = self.storage.load(app_id).await?;
-        mark_deps_installed_state(&mut app);
-        self.storage.save(&app).await?;
-        Ok(app)
+        self.runtime_facade()
+            .mark_deps_installed(app_id.to_string())
+            .await
+            .map_err(map_miniapp_port_error)
     }
 
     pub async fn clear_worker_restart_required(&self, app_id: &str) -> BitFunResult<MiniApp> {
-        let mut app = self.storage.load(app_id).await?;
-        if clear_worker_restart_required_state(&mut app) {
-            self.storage.save(&app).await?;
-        }
-        Ok(app)
+        self.runtime_facade()
+            .clear_worker_restart_required(app_id.to_string())
+            .await
+            .map_err(map_miniapp_port_error)
     }
 
     /// List version numbers for an app.
@@ -691,15 +696,11 @@ impl MiniAppManager {
 
     /// Rollback app to a previous version (loads version snapshot, saves as current).
     pub async fn rollback(&self, app_id: &str, version: u32) -> BitFunResult<MiniApp> {
-        let current = self.storage.load(app_id).await?;
-        let app = self.storage.load_version(app_id, version).await?;
         let now = Utc::now().timestamp_millis();
-        let app = prepare_rollback_app(&current, app, now);
-        self.storage
-            .save_version(app_id, current.version, &current)
-            .await?;
-        self.storage.save(&app).await?;
-        Ok(app)
+        self.runtime_facade()
+            .rollback(app_id.to_string(), version, now)
+            .await
+            .map_err(map_miniapp_port_error)
     }
 
     /// Recompile app (e.g. after workspace or theme change). Updates compiled_html and saves.
@@ -709,12 +710,13 @@ impl MiniAppManager {
         theme: &str,
         workspace_root: Option<&Path>,
     ) -> BitFunResult<MiniApp> {
-        let mut app = self.storage.load(app_id).await?;
+        let app = self.storage.load(app_id).await?;
         let compiled_html =
             self.compile_source(app_id, &app.source, &app.permissions, theme, workspace_root)?;
-        apply_recompile_result(&mut app, compiled_html, Utc::now().timestamp_millis());
-        self.storage.save(&app).await?;
-        Ok(app)
+        self.runtime_facade()
+            .persist_recompile_result_for_app(app, compiled_html, Utc::now().timestamp_millis())
+            .await
+            .map_err(map_miniapp_port_error)
     }
 
     pub async fn sync_from_fs(
@@ -732,17 +734,16 @@ impl MiniAppManager {
             theme,
             workspace_root,
         )?;
-        let app = apply_sync_from_fs_result(
-            &previous_app,
-            source,
-            compiled_html,
-            Utc::now().timestamp_millis(),
-        );
-        self.storage
-            .save_version(app_id, previous_app.version, &previous_app)
-            .await?;
-        self.storage.save(&app).await?;
-        Ok(app)
+        self.runtime_facade()
+            .persist_sync_from_fs_result_for_app(
+                app_id.to_string(),
+                previous_app,
+                source,
+                compiled_html,
+                Utc::now().timestamp_millis(),
+            )
+            .await
+            .map_err(map_miniapp_port_error)
     }
 
     /// Import a MiniApp from a directory (e.g. miniapps/git-graph). Copies meta, source, package.json, storage into a new app id and recompiles.
@@ -871,6 +872,39 @@ impl MiniAppManager {
     }
 }
 
+fn map_miniapp_port_error(error: MiniAppPortError) -> BitFunError {
+    let message = strip_bitfun_error_prefix(error.message);
+    match error.kind {
+        MiniAppPortErrorKind::NotFound => BitFunError::NotFound(message),
+        MiniAppPortErrorKind::InvalidInput => BitFunError::validation(message),
+        MiniAppPortErrorKind::PermissionDenied => BitFunError::Io(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            message,
+        )),
+        MiniAppPortErrorKind::RuntimeUnavailable => BitFunError::ProcessError(message),
+        MiniAppPortErrorKind::Io => BitFunError::io(message),
+        MiniAppPortErrorKind::Backend => BitFunError::service(message),
+    }
+}
+
+fn strip_bitfun_error_prefix(message: String) -> String {
+    const PREFIXES: &[&str] = &[
+        "Not found: ",
+        "Validation error: ",
+        "Deserialization error: ",
+        "IO error: ",
+        "Process error: ",
+        "Service error: ",
+    ];
+
+    for prefix in PREFIXES {
+        if let Some(stripped) = message.strip_prefix(prefix) {
+            return stripped.to_string();
+        }
+    }
+    message
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -919,6 +953,30 @@ mod tests {
             )
             .await
             .unwrap()
+    }
+
+    #[test]
+    fn miniapp_port_error_mapping_preserves_manager_error_shape() {
+        let not_found = map_miniapp_port_error(MiniAppPortError::new(
+            MiniAppPortErrorKind::NotFound,
+            "Not found: MiniApp not found: missing",
+        ));
+        assert_eq!(
+            not_found.to_string(),
+            "Not found: MiniApp not found: missing"
+        );
+
+        let permission_denied = map_miniapp_port_error(MiniAppPortError::new(
+            MiniAppPortErrorKind::PermissionDenied,
+            "IO error: access denied",
+        ));
+        match permission_denied {
+            BitFunError::Io(error) => {
+                assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+                assert_eq!(error.to_string(), "access denied");
+            }
+            other => panic!("expected permission denied IO error, got {other:?}"),
+        }
     }
 
     async fn write_import_source(root: &std::path::Path) {
@@ -1060,12 +1118,10 @@ mod tests {
         .unwrap();
         assert_eq!(package_json["name"], format!("miniapp-{}", imported.id));
         assert_eq!(package_json["dependencies"], serde_json::json!({}));
-        assert!(
-            tokio::fs::read_to_string(app_dir.join(COMPILED_HTML))
-                .await
-                .unwrap()
-                .contains("textContent = 'imported'")
-        );
+        assert!(tokio::fs::read_to_string(app_dir.join(COMPILED_HTML))
+            .await
+            .unwrap()
+            .contains("textContent = 'imported'"));
 
         let _ = tokio::fs::remove_dir_all(import_root).await;
     }

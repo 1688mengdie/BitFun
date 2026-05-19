@@ -2113,7 +2113,7 @@ const requiredContentRules = [
   {
     path: 'src/crates/core/src/miniapp/manager.rs',
     reason:
-      'core MiniApp manager must use product-domain pure policy helpers while retaining compile, storage IO, and built-in source-hash lookup',
+      'core MiniApp manager must use product-domain policy/facade helpers while retaining compile, storage IO, and built-in source-hash lookup',
     patterns: [
       {
         regex: /\bapply_draft_customization_metadata\b/,
@@ -2128,12 +2128,16 @@ const requiredContentRules = [
         message: 'missing product-domain built-in update decline helper use',
       },
       {
-        regex: /\bmark_deps_installed_state\b/,
-        message: 'missing product-domain MiniApp deps-installed state helper use',
+        regex: /\bMiniAppRuntimeFacade\b/,
+        message: 'missing product-domain MiniApp runtime-state facade use',
       },
       {
-        regex: /\bapply_sync_from_fs_result\b/,
-        message: 'missing product-domain MiniApp sync-from-fs state helper use',
+        regex: /\bpersist_sync_from_fs_result_for_app\b/,
+        message: 'missing product-domain MiniApp sync-from-fs facade delegation',
+      },
+      {
+        regex: /\bcompile_source\b/,
+        message: 'missing core-owned MiniApp compile orchestration',
       },
       {
         regex: /\bREQUIRED_SOURCE_FILES\b/,
@@ -2166,6 +2170,25 @@ const requiredContentRules = [
     ],
   },
   {
+    path: 'src/crates/product-domains/src/miniapp/ports.rs',
+    reason:
+      'product-domains owns MiniApp runtime-state port facade while core keeps concrete storage IO, compile, worker, and host execution',
+    patterns: [
+      {
+        regex: /\bpub struct MiniAppRuntimeFacade\b/,
+        message: 'missing MiniApp runtime-state facade',
+      },
+      {
+        regex: /\bmark_deps_installed_state\b/,
+        message: 'missing MiniApp deps-installed state transition in facade',
+      },
+      {
+        regex: /\bpersist_sync_from_fs_result_for_app\b/,
+        message: 'missing MiniApp sync-from-fs preloaded snapshot facade path',
+      },
+    ],
+  },
+  {
     path: 'src/crates/core/src/function_agents/git-func-agent/ai_service.rs',
     reason:
       'core must continue owning Git function-agent prompt template, AI call, JSON extraction, and error mapping until AI runtime migration is reviewed',
@@ -2193,6 +2216,29 @@ const requiredContentRules = [
       {
         regex: /\bparse_commit_response_preserves_core_json_extraction_and_error_mapping\b/,
         message: 'missing Git function-agent AI response boundary regression test',
+      },
+    ],
+  },
+  {
+    path: 'src/crates/product-domains/src/function_agents/ports.rs',
+    reason:
+      'product-domains owns port-backed function-agent facade orchestration while core keeps concrete Git/AI runtime calls',
+    patterns: [
+      {
+        regex: /\bpub struct FunctionAgentRuntimeFacade\b/,
+        message: 'missing function-agent runtime facade',
+      },
+      {
+        regex: /\bgenerate_commit_message\b/,
+        message: 'missing function-agent commit facade orchestration',
+      },
+      {
+        regex: /\banalyze_work_state\b/,
+        message: 'missing function-agent work-state facade orchestration',
+      },
+      {
+        regex: /\bgit_work_state_from_snapshot\b/,
+        message: 'missing Startchat Git snapshot projection helper',
       },
     ],
   },
@@ -2267,7 +2313,7 @@ const requiredContentRules = [
   {
     path: 'src/crates/core/src/function_agents/port_adapters.rs',
     reason:
-      'core must continue owning function-agent Git runtime adapter until Git/AI service migration is reviewed',
+      'core must continue owning function-agent Git/AI runtime adapters until Git/AI service migration is reviewed',
     patterns: [
       {
         regex: /\bpub struct CoreFunctionAgentGitAdapter\b/,
@@ -2276,6 +2322,14 @@ const requiredContentRules = [
       {
         regex: /\bimpl FunctionAgentGitPort for CoreFunctionAgentGitAdapter\b/,
         message: 'missing function-agent Git port adapter owner',
+      },
+      {
+        regex: /\bpub struct CoreFunctionAgentAiAdapter\b/,
+        message: 'missing core function-agent AI adapter type',
+      },
+      {
+        regex: /\bimpl FunctionAgentAiPort for CoreFunctionAgentAiAdapter\b/,
+        message: 'missing function-agent AI port adapter owner',
       },
       {
         regex: /\bgit_adapter_commit_snapshot_keeps_staged_diff_and_unstaged_count_separate\b/,
@@ -2968,6 +3022,8 @@ function runManifestParserSelfTest() {
       contracts: [
         'CoreFunctionAgentGitAdapter',
         'FunctionAgentGitPort',
+        'CoreFunctionAgentAiAdapter',
+        'FunctionAgentAiPort',
         'git_adapter_commit_snapshot_keeps_staged_diff_and_unstaged_count_separate',
       ],
     },
@@ -2980,6 +3036,14 @@ function runManifestParserSelfTest() {
         'normalize_local_workspace_root_for_stable_id',
         'local_workspace_roots_equal',
         'unresolved_remote_session_storage_dir',
+      ],
+    },
+    {
+      path: 'src/crates/product-domains/src/miniapp/ports.rs',
+      contracts: [
+        'MiniAppRuntimeFacade',
+        'mark_deps_installed_state',
+        'persist_sync_from_fs_result_for_app',
       ],
     },
     {
@@ -3045,8 +3109,9 @@ function runManifestParserSelfTest() {
         'mark_builtin_update_available_metadata',
         'decline_builtin_update_metadata',
         'storage.load_customization_metadata',
-        'mark_deps_installed_state',
-        'apply_sync_from_fs_result',
+        'MiniAppRuntimeFacade',
+        'persist_sync_from_fs_result_for_app',
+        'compile_source',
         'REQUIRED_SOURCE_FILES',
         'MiniAppImportLayout',
         'build_import_fallbacks',
@@ -3064,6 +3129,15 @@ function runManifestParserSelfTest() {
         'extract_json_from_ai_response',
         'AgentError::analysis_error',
         'parse_commit_response_preserves_core_json_extraction_and_error_mapping',
+      ],
+    },
+    {
+      path: 'src/crates/product-domains/src/function_agents/ports.rs',
+      contracts: [
+        'FunctionAgentRuntimeFacade',
+        'generate_commit_message',
+        'analyze_work_state',
+        'git_work_state_from_snapshot',
       ],
     },
     {

@@ -1,25 +1,29 @@
 #![cfg(feature = "function-agents")]
 
 use bitfun_product_domains::function_agents::{
-    Language,
     git_func_agent::{
+        assemble_commit_message, build_changes_summary_from_paths, build_commit_prompt,
+        detect_change_patterns, extract_module_name, infer_file_type, parse_commit_analysis_value,
+        parse_commit_type_label, prepare_commit_prompt, truncate_diff_for_commit_prompt,
         ChangePattern, CommitFormat, CommitMessageOptions, CommitType, FileChange, FileChangeType,
-        ProjectContext, assemble_commit_message, build_changes_summary_from_paths,
-        build_commit_prompt, detect_change_patterns, extract_module_name, infer_file_type,
-        parse_commit_analysis_value, parse_commit_type_label, prepare_commit_prompt,
-        truncate_diff_for_commit_prompt,
+        ProjectContext,
     },
     ports::{
         CommitAiAnalysisRequest, FunctionAgentAiPort, FunctionAgentFuture, FunctionAgentGitPort,
-        GitCommitSnapshot, StartchatGitSnapshot, WorkStateAiAnalysisRequest,
+        FunctionAgentRuntimeFacade, GitCommitSnapshot, StartchatGitSnapshot,
+        WorkStateAiAnalysisRequest,
     },
     startchat_func_agent::{
-        ActionPriority, GitWorkState, QuickActionType, TimeOfDay, WorkStateOptions,
         build_complete_analysis_prompt, combine_git_diffs, limit_quick_actions,
         normalize_predicted_actions, parse_complete_analysis_value, parse_git_status_porcelain,
         parse_predicted_actions_from_values, parse_quick_actions_from_values, time_of_day_for_hour,
+        ActionPriority, AheadBehind, GitWorkState, QuickActionType, TimeOfDay, WorkStateOptions,
     },
+    AgentErrorType, Language,
 };
+use std::future::Future;
+use std::pin::pin;
+use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 
 struct FunctionAgentPortStub;
 
@@ -46,12 +50,15 @@ impl FunctionAgentGitPort for FunctionAgentPortStub {
         Box::pin(async {
             Ok(StartchatGitSnapshot {
                 current_branch: "main".to_string(),
-                status_porcelain: String::new(),
-                unstaged_diff: String::new(),
-                staged_diff: String::new(),
-                unpushed_commits: 0,
-                ahead_behind: None,
-                last_commit_timestamp: None,
+                status_porcelain: " M src/lib.rs\nA  staged.rs\n".to_string(),
+                unstaged_diff: "unstaged".to_string(),
+                staged_diff: "staged".to_string(),
+                unpushed_commits: 2,
+                ahead_behind: Some(AheadBehind {
+                    ahead: 1,
+                    behind: 0,
+                }),
+                last_commit_timestamp: Some(900),
             })
         })
     }
@@ -98,6 +105,74 @@ impl FunctionAgentAiPort for FunctionAgentPortStub {
             )
         })
     }
+}
+
+struct EmptyCommitPortStub;
+
+impl FunctionAgentGitPort for EmptyCommitPortStub {
+    fn git_commit_snapshot(
+        &self,
+        _repo_path: String,
+    ) -> FunctionAgentFuture<'_, GitCommitSnapshot> {
+        Box::pin(async {
+            Ok(GitCommitSnapshot {
+                staged_paths: Vec::new(),
+                staged_count: 0,
+                unstaged_count: 1,
+                diff_content: String::new(),
+                project_context: ProjectContext::default(),
+            })
+        })
+    }
+
+    fn startchat_git_snapshot(
+        &self,
+        _repo_path: String,
+    ) -> FunctionAgentFuture<'_, StartchatGitSnapshot> {
+        FunctionAgentPortStub.startchat_git_snapshot(_repo_path)
+    }
+}
+
+struct NoGitExpectedPortStub;
+
+impl FunctionAgentGitPort for NoGitExpectedPortStub {
+    fn git_commit_snapshot(
+        &self,
+        _repo_path: String,
+    ) -> FunctionAgentFuture<'_, GitCommitSnapshot> {
+        panic!("git_commit_snapshot should not be called")
+    }
+
+    fn startchat_git_snapshot(
+        &self,
+        _repo_path: String,
+    ) -> FunctionAgentFuture<'_, StartchatGitSnapshot> {
+        panic!("startchat_git_snapshot should not be called")
+    }
+}
+
+fn block_on<F: Future>(future: F) -> F::Output {
+    let waker = noop_waker();
+    let mut context = Context::from_waker(&waker);
+    let mut future = pin!(future);
+    loop {
+        match Future::poll(future.as_mut(), &mut context) {
+            Poll::Ready(value) => return value,
+            Poll::Pending => std::thread::yield_now(),
+        }
+    }
+}
+
+fn noop_waker() -> Waker {
+    unsafe fn clone(_: *const ()) -> RawWaker {
+        RawWaker::new(std::ptr::null(), &VTABLE)
+    }
+    unsafe fn wake(_: *const ()) {}
+    unsafe fn wake_by_ref(_: *const ()) {}
+    unsafe fn drop(_: *const ()) {}
+
+    static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, wake, wake_by_ref, drop);
+    unsafe { Waker::from_raw(RawWaker::new(std::ptr::null(), &VTABLE)) }
 }
 
 #[test]
@@ -155,11 +230,9 @@ fn git_function_agent_summary_helpers_preserve_commit_shape() {
     assert_eq!(summary.file_changes[0].path, "src/crates/core/lib.rs");
     assert_eq!(summary.file_changes[0].file_type, "rs");
     assert!(summary.affected_modules.contains(&"core".to_string()));
-    assert!(
-        summary
-            .change_patterns
-            .contains(&ChangePattern::DocumentationUpdate)
-    );
+    assert!(summary
+        .change_patterns
+        .contains(&ChangePattern::DocumentationUpdate));
 
     let message = assemble_commit_message(
         "feat(core): add boundary helper",
@@ -230,11 +303,9 @@ fn git_function_agent_commit_prompt_preparation_preserves_truncation_boundary() 
     let prepared = prepare_commit_prompt(template, &"x".repeat(140), &context, &options, 120);
 
     assert!(prepared.truncated);
-    assert!(
-        prepared
-            .diff_content
-            .ends_with("\n\n... [content truncated] ...")
-    );
+    assert!(prepared
+        .diff_content
+        .ends_with("\n\n... [content truncated] ..."));
     assert!(prepared.prompt.contains("Diff: "));
     assert!(prepared.prompt.contains("library"));
 
@@ -404,6 +475,117 @@ fn function_agent_ports_keep_ai_and_git_boundaries_explicit() {
 
     let ai_port: &dyn FunctionAgentAiPort = &FunctionAgentPortStub;
     let _future = ai_port.analyze_work_state(work_state_request);
+}
+
+#[test]
+fn function_agent_runtime_facade_generates_commit_message_from_ports() {
+    let ports = FunctionAgentPortStub;
+    let facade = FunctionAgentRuntimeFacade::new(&ports, &ports);
+
+    let message = block_on(
+        facade.generate_commit_message("repo".to_string(), CommitMessageOptions::default()),
+    )
+    .unwrap();
+
+    assert_eq!(message.title, "chore: test");
+    assert_eq!(message.full_message, "chore: test");
+    assert_eq!(message.commit_type, CommitType::Chore);
+    assert_eq!(message.confidence, 1.0);
+    assert_eq!(message.changes_summary.files_changed, 1);
+    assert_eq!(message.changes_summary.file_changes[0].path, "src/lib.rs");
+}
+
+#[test]
+fn function_agent_runtime_facade_preserves_empty_staging_error() {
+    let git = EmptyCommitPortStub;
+    let ai = FunctionAgentPortStub;
+    let facade = FunctionAgentRuntimeFacade::new(&git, &ai);
+
+    let error = block_on(
+        facade.generate_commit_message("repo".to_string(), CommitMessageOptions::default()),
+    )
+    .unwrap_err();
+
+    assert_eq!(error.error_type, AgentErrorType::InvalidInput);
+    assert_eq!(
+        error.message,
+        "Staging area is empty, please stage files first"
+    );
+}
+
+#[test]
+fn function_agent_runtime_facade_builds_work_state_from_ports_without_surface_logic() {
+    let ports = FunctionAgentPortStub;
+    let facade = FunctionAgentRuntimeFacade::new(&ports, &ports);
+    let options = WorkStateOptions {
+        predict_next_actions: false,
+        include_quick_actions: false,
+        ..WorkStateOptions::default()
+    };
+
+    let analysis = block_on(facade.analyze_work_state(
+        "repo".to_string(),
+        options,
+        960,
+        14,
+        "2026-05-19T12:00:00+08:00".to_string(),
+    ))
+    .unwrap();
+
+    let git_state = analysis.current_state.git_state.unwrap();
+    assert_eq!(analysis.current_state.summary, "stub");
+    assert_eq!(git_state.current_branch, "main");
+    assert_eq!(git_state.unstaged_files, 1);
+    assert_eq!(git_state.staged_files, 1);
+    assert_eq!(git_state.unpushed_commits, 2);
+    assert_eq!(git_state.ahead_behind.unwrap().ahead, 1);
+    assert_eq!(
+        analysis.current_state.time_info.minutes_since_last_commit,
+        Some(1)
+    );
+    assert_eq!(
+        analysis.current_state.time_info.time_of_day,
+        TimeOfDay::Afternoon
+    );
+    assert!(analysis.predicted_actions.is_empty());
+    assert!(analysis.quick_actions.is_empty());
+    assert_eq!(analysis.analyzed_at, "2026-05-19T12:00:00+08:00");
+}
+
+#[test]
+fn function_agent_runtime_facade_honors_disabled_git_analysis_boundary() {
+    let git = NoGitExpectedPortStub;
+    let ai = FunctionAgentPortStub;
+    let facade = FunctionAgentRuntimeFacade::new(&git, &ai);
+    let options = WorkStateOptions {
+        analyze_git: false,
+        predict_next_actions: false,
+        include_quick_actions: false,
+        ..WorkStateOptions::default()
+    };
+
+    let analysis = block_on(facade.analyze_work_state(
+        "repo".to_string(),
+        options,
+        960,
+        9,
+        "2026-05-19T09:00:00+08:00".to_string(),
+    ))
+    .unwrap();
+
+    assert_eq!(analysis.current_state.summary, "stub");
+    assert!(analysis.current_state.git_state.is_none());
+    assert!(analysis
+        .current_state
+        .time_info
+        .minutes_since_last_commit
+        .is_none());
+    assert_eq!(
+        analysis.current_state.time_info.time_of_day,
+        TimeOfDay::Morning
+    );
+    assert!(analysis.predicted_actions.is_empty());
+    assert!(analysis.quick_actions.is_empty());
 }
 
 #[test]
