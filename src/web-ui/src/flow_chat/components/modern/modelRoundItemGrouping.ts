@@ -42,7 +42,7 @@ export function buildModelRoundItemGroups({
   isCollapsibleTool,
   nowMs = Date.now(),
 }: BuildModelRoundItemGroupsInput): ModelRoundItemGroup[] {
-  const deferExploreGrouping = disableExploreGrouping || isStreaming || hasActiveStreamingNarrative(items);
+  const deferExploreGrouping = disableExploreGrouping || hasActiveStreamingNarrative(items);
   const intermediateGroups: Array<
     | { type: 'normal'; item: FlowItem }
     | { type: 'subagent'; parentTaskToolId: string; items: FlowItem[] }
@@ -125,7 +125,12 @@ export function buildModelRoundItemGroups({
       const isExploreTool = isCollapsibleTool(toolName);
 
       if (isExploreTool) {
-        if (deferExploreGrouping || isActiveToolItem(item) || isRecentlyCompletedToolItem(item, nowMs)) {
+        const keepTransientlyCritical =
+          deferExploreGrouping ||
+          isActiveToolItem(item) ||
+          (isStreaming && isRecentlyCompletedToolItem(item, nowMs));
+
+        if (keepTransientlyCritical) {
           flushExploreBuffer(false);
           flushPendingAsCritical();
           finalGroups.push({ type: 'critical', item });

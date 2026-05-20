@@ -524,7 +524,7 @@ function formatCodeLanguageLabel(lang: string): string {
   return raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase();
 }
 
-interface StreamingCodeFallbackProps {
+export interface FlowCodeBlockFallbackProps {
   code: string;
   language: string;
   bodyStyle: React.CSSProperties;
@@ -540,7 +540,7 @@ interface StreamingCodeFallbackProps {
  * same padding. This keeps the code block from visibly jumping when streaming
  * completes and the heavy Prism highlighter takes over.
  */
-const StreamingCodeFallback: React.FC<StreamingCodeFallbackProps> = ({
+const CodeBlockFallback: React.FC<FlowCodeBlockFallbackProps> = ({
   code,
   language,
   bodyStyle,
@@ -954,7 +954,7 @@ export const Markdown = React.memo<MarkdownProps>(({
             // gutter width and line indentation stay visually stable
             // across the eventual fallback -> Prism swap when streaming
             // completes.
-            <StreamingCodeFallback
+            <CodeBlockFallback
               code={code}
               language={normalizedLang}
               bodyStyle={codeBodyStyle}
@@ -974,6 +974,14 @@ export const Markdown = React.memo<MarkdownProps>(({
                 textAlign: 'right',
                 userSelect: 'none',
                 minWidth: '3em'
+              }}
+              fallback={CodeBlockFallback}
+              fallbackProps={{
+                code,
+                language: normalizedLang,
+                bodyStyle: codeBodyStyle,
+                codeTagStyle,
+                gutterColor: isLight ? '#999' : '#666',
               }}
             >
               {code}
