@@ -1,13 +1,12 @@
 //! Tool registry
 
-use crate::agentic::tools::framework::{DynamicToolInfo, Tool, ToolExposure};
+use crate::agentic::tools::framework::{DynamicToolInfo, Tool};
 use crate::util::errors::BitFunResult;
 use bitfun_agent_tools::{
     DynamicToolDescriptor, DynamicToolProvider, PortResult, StaticToolProvider, ToolDecorator,
-    ToolRegistry as AgentToolRegistry, ToolRegistryItem,
+    ToolRegistry as AgentToolRegistry,
 };
 use log::{debug, info, trace, warn};
-use serde_json::Value;
 use std::sync::Arc;
 
 pub(in crate::agentic::tools) type ToolRef = Arc<dyn Tool>;
@@ -179,48 +178,11 @@ impl DynamicToolProvider for ToolRegistry {
     }
 }
 
-#[async_trait::async_trait]
-impl ToolRegistryItem for dyn Tool {
-    fn name(&self) -> &str {
-        Tool::name(self)
-    }
-
-    async fn description(&self) -> Result<String, String> {
-        Tool::description(self)
-            .await
-            .map_err(|error| error.to_string())
-    }
-
-    fn input_schema(&self) -> Value {
-        Tool::input_schema(self)
-    }
-
-    fn short_description(&self) -> String {
-        Tool::short_description(self)
-    }
-
-    fn default_exposure(&self) -> ToolExposure {
-        Tool::default_exposure(self)
-    }
-
-    async fn input_schema_for_model(&self) -> Value {
-        Tool::input_schema_for_model(self).await
-    }
-
-    fn dynamic_provider_id(&self) -> Option<&str> {
-        Tool::dynamic_provider_id(self)
-    }
-
-    fn dynamic_tool_info(&self) -> Option<DynamicToolInfo> {
-        Tool::dynamic_tool_info(self)
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use super::create_tool_registry;
     use super::ToolRef;
     use super::ToolRegistry;
-    use super::create_tool_registry;
     use crate::agentic::tools::framework::{
         DynamicMcpToolInfo, DynamicToolInfo, Tool, ToolResult, ToolUseContext, ValidationResult,
     };
@@ -228,8 +190,8 @@ mod tests {
     use crate::agentic::tools::static_providers::builtin_static_tool_providers;
     use async_trait::async_trait;
     use bitfun_agent_tools::{DynamicToolProvider, StaticToolProvider, ToolDecorator};
-    use serde_json::Value;
     use serde_json::json;
+    use serde_json::Value;
     use std::sync::Arc;
 
     struct DynamicMetadataTool {

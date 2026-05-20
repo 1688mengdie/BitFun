@@ -1,6 +1,7 @@
 //! Tool system - includes Tool interface, tool registry and tool executor
 
 pub mod browser_control;
+pub(crate) mod catalog_provider;
 pub mod computer_use_capability;
 pub mod computer_use_host;
 pub mod computer_use_optimizer;
@@ -15,6 +16,7 @@ pub mod registry;
 pub mod restrictions;
 pub(crate) mod runtime_assembly;
 pub(crate) mod static_providers;
+pub(crate) mod tool_adapter;
 pub mod user_input_manager;
 pub mod workspace_paths;
 pub use bitfun_agent_tools::input_validator;
@@ -26,7 +28,7 @@ pub use framework::{
 pub use image_context::{ImageContextData, ImageContextProvider, ImageContextProviderRef};
 pub use input_validator::InputValidator;
 pub use manifest_resolver::{
-    ResolvedToolManifest, ResolvedVisibleTools, resolve_tool_manifest, resolve_visible_tools,
+    resolve_tool_manifest, resolve_visible_tools, ResolvedToolManifest, ResolvedVisibleTools,
 };
 pub use pipeline::*;
 pub use registry::{

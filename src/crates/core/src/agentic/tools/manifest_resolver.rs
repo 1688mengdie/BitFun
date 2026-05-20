@@ -1,12 +1,10 @@
 use crate::agentic::agents::AgentToolPolicyOverrides;
-use crate::agentic::tools::framework::{Tool, ToolUseContext};
-use crate::agentic::tools::registry::{GET_TOOL_SPEC_TOOL_NAME, get_global_tool_registry};
-use crate::util::types::ToolDefinition;
-use bitfun_agent_tools::{
-    ContextualToolManifest, ContextualToolManifestItem, ContextualVisibleTools,
-    ToolCatalogSnapshotProvider, ToolManifestDefinition,
-    resolve_contextual_tool_manifest_from_provider, resolve_contextual_visible_tools_from_provider,
+use crate::agentic::tools::catalog_provider::{
+    resolve_product_tool_manifest, resolve_product_visible_tools,
 };
+use crate::agentic::tools::framework::{Tool, ToolUseContext};
+use crate::util::types::ToolDefinition;
+use bitfun_agent_tools::{ContextualToolManifest, ContextualVisibleTools, ToolManifestDefinition};
 use std::sync::Arc;
 
 #[derive(Debug, Clone)]
@@ -53,49 +51,12 @@ impl From<ContextualToolManifest<dyn Tool>> for ResolvedToolManifest {
     }
 }
 
-#[async_trait::async_trait]
-impl ContextualToolManifestItem<ToolUseContext> for dyn Tool {
-    async fn is_available_in_context(&self, context: &ToolUseContext) -> bool {
-        Tool::is_available_in_context(self, Some(context)).await
-    }
-
-    async fn description_with_context(&self, context: &ToolUseContext) -> Result<String, String> {
-        Tool::description_with_context(self, Some(context))
-            .await
-            .map_err(|error| error.to_string())
-    }
-
-    async fn input_schema_for_model_with_context(
-        &self,
-        context: &ToolUseContext,
-    ) -> serde_json::Value {
-        Tool::input_schema_for_model_with_context(self, Some(context)).await
-    }
-}
-
-struct GlobalToolRegistrySnapshotProvider;
-
-#[async_trait::async_trait]
-impl ToolCatalogSnapshotProvider<dyn Tool> for GlobalToolRegistrySnapshotProvider {
-    async fn tool_snapshot(&self) -> Vec<Arc<dyn Tool>> {
-        let registry = get_global_tool_registry();
-        let registry = registry.read().await;
-        registry.get_all_tools()
-    }
-}
-
 pub async fn resolve_visible_tools(
     allowed_tools: &[String],
     exposure_overrides: &AgentToolPolicyOverrides,
     context: &ToolUseContext,
 ) -> ResolvedVisibleTools {
-    resolve_contextual_visible_tools_from_provider(
-        &GlobalToolRegistrySnapshotProvider,
-        allowed_tools,
-        exposure_overrides,
-        context,
-        GET_TOOL_SPEC_TOOL_NAME,
-    )
+    resolve_product_visible_tools(allowed_tools, exposure_overrides, context)
     .await
     .into()
 }
@@ -105,13 +66,7 @@ pub async fn resolve_tool_manifest(
     exposure_overrides: &AgentToolPolicyOverrides,
     context: &ToolUseContext,
 ) -> ResolvedToolManifest {
-    resolve_contextual_tool_manifest_from_provider(
-        &GlobalToolRegistrySnapshotProvider,
-        allowed_tools,
-        exposure_overrides,
-        context,
-        GET_TOOL_SPEC_TOOL_NAME,
-    )
+    resolve_product_tool_manifest(allowed_tools, exposure_overrides, context)
     .await
     .into()
 }
@@ -122,7 +77,7 @@ mod tests {
     use crate::agentic::agents::AgentToolPolicyOverrides;
     use crate::agentic::tools::ToolRuntimeRestrictions;
     use crate::agentic::tools::framework::{ToolExposure, ToolUseContext};
-    use crate::agentic::tools::registry::GET_TOOL_SPEC_TOOL_NAME;
+    use bitfun_agent_tools::GET_TOOL_SPEC_TOOL_NAME;
     use serde_json::json;
     use std::collections::HashMap;
 
