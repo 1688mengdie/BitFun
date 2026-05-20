@@ -4,16 +4,16 @@
 //! registry while concrete tools, `ToolUseContext`, runtime manifest assembly,
 //! and snapshot decoration remain core-owned.
 
-use crate::agentic::tools::registry::{ToolDecoratorRef, ToolRef, ToolRegistry};
+use crate::agentic::tools::registry::{ProductToolDecoratorRef, ToolRef, ToolRegistry};
 use crate::agentic::tools::static_providers::builtin_static_tool_providers;
 #[cfg(test)]
 use bitfun_agent_tools::StaticToolProvider;
-use bitfun_agent_tools::ToolDecorator;
+use bitfun_agent_tools::{SnapshotToolDecorator, SnapshotToolWrapper, ToolRuntimeAssembly};
 use std::sync::Arc;
 
 #[derive(Clone)]
 pub(in crate::agentic::tools) struct ProductToolRuntimeAssembly {
-    tool_decorator: ToolDecoratorRef,
+    tool_decorator: ProductToolDecoratorRef,
 }
 
 impl Default for ProductToolRuntimeAssembly {
@@ -24,10 +24,14 @@ impl Default for ProductToolRuntimeAssembly {
 
 impl ProductToolRuntimeAssembly {
     pub(in crate::agentic::tools) fn new() -> Self {
-        Self::with_tool_decorator(Arc::new(SnapshotToolDecorator))
+        Self::with_tool_decorator(Arc::new(SnapshotToolDecorator::new(Arc::new(
+            ProductSnapshotToolWrapper,
+        ))))
     }
 
-    pub(in crate::agentic::tools) fn with_tool_decorator(tool_decorator: ToolDecoratorRef) -> Self {
+    pub(in crate::agentic::tools) fn with_tool_decorator(
+        tool_decorator: ProductToolDecoratorRef,
+    ) -> Self {
         Self { tool_decorator }
     }
 
@@ -40,19 +44,20 @@ impl ProductToolRuntimeAssembly {
     }
 
     pub(in crate::agentic::tools) fn create_registry(&self) -> ToolRegistry {
-        let mut registry = ToolRegistry::empty_with_tool_decorator(self.tool_decorator.clone());
-        for provider in builtin_static_tool_providers() {
-            registry.install_static_provider(&provider);
-        }
-        registry
+        let providers = builtin_static_tool_providers();
+        let inner = ToolRuntimeAssembly::with_tool_decorator(self.tool_decorator.clone())
+            .create_registry_from_static_providers(&providers);
+        ToolRegistry::from_inner(inner)
     }
 }
 
 #[derive(Debug, Clone)]
-struct SnapshotToolDecorator;
+struct ProductSnapshotToolWrapper;
 
-impl ToolDecorator<ToolRef> for SnapshotToolDecorator {
-    fn decorate(&self, tool: ToolRef) -> ToolRef {
+impl SnapshotToolWrapper<dyn crate::agentic::tools::framework::Tool>
+    for ProductSnapshotToolWrapper
+{
+    fn wrap_for_snapshot_tracking(&self, tool: ToolRef) -> ToolRef {
         crate::service::snapshot::wrap_tool_for_snapshot_tracking(tool)
     }
 }

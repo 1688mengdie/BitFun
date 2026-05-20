@@ -9,20 +9,21 @@ use bitfun_agent_tools::{
     get_tool_spec_short_description, render_get_tool_spec_tool_use_message,
     resolve_contextual_tool_manifest, resolve_contextual_tool_manifest_from_provider,
     resolve_get_tool_spec_detail, resolve_get_tool_spec_detail_from_provider,
-    resolve_get_tool_spec_execution_result_from_provider, resolve_tool_manifest_policy,
-    sort_tool_manifest_definitions, summarize_get_tool_spec_collapsed_tools,
-    validate_get_tool_spec_input, DynamicMcpToolInfo, DynamicToolInfo,
-    GetToolSpecCollapsedToolSummary, GetToolSpecExecutionError, GetToolSpecExecutionPlan,
-    GetToolSpecLoadObservation, InputValidator, PromptVisibleToolManifestItem, ToolContextFacts,
-    ToolExposure, ToolImageAttachment, ToolManifestDefinition, ToolManifestPolicyTool,
-    ToolPathBackend, ToolPathResolution, ToolRenderOptions, ToolResult, ToolRuntimeRestrictions,
-    ToolWorkspaceKind, ValidationResult, GET_TOOL_SPEC_TOOL_NAME,
+    resolve_get_tool_spec_execution_result_from_provider, resolve_readonly_enabled_tools,
+    resolve_tool_manifest_policy, sort_tool_manifest_definitions,
+    summarize_get_tool_spec_collapsed_tools, validate_get_tool_spec_input, DynamicMcpToolInfo,
+    DynamicToolInfo, GetToolSpecCollapsedToolSummary, GetToolSpecExecutionError,
+    GetToolSpecExecutionPlan, GetToolSpecLoadObservation, InputValidator,
+    PromptVisibleToolManifestItem, ToolContextFacts, ToolExposure, ToolImageAttachment,
+    ToolManifestDefinition, ToolManifestPolicyTool, ToolPathBackend, ToolPathResolution,
+    ToolRenderOptions, ToolResult, ToolRuntimeRestrictions, ToolWorkspaceKind, ValidationResult,
+    GET_TOOL_SPEC_TOOL_NAME,
 };
 use bitfun_agent_tools::{
     ContextualToolManifestItem, DynamicToolDescriptor, DynamicToolProvider,
     GetToolSpecCatalogProvider, PortResult, PortableToolContextProvider, StaticToolProvider,
-    StaticToolProviderGroup, ToolCatalogSnapshotProvider, ToolDecorator, ToolRegistry,
-    ToolRegistryItem,
+    StaticToolProviderGroup, ToolCatalogSnapshotProvider, ToolDecorator, ToolDecoratorRef,
+    ToolRegistry, ToolRegistryItem, ToolRuntimeAssembly,
 };
 use serde_json::json;
 use std::path::PathBuf;
@@ -789,6 +790,8 @@ struct RegistryMarkerTool {
     name: String,
     provider_id: Option<String>,
     exposure: ToolExposure,
+    readonly: bool,
+    enabled: bool,
 }
 
 #[async_trait::async_trait]
@@ -807,6 +810,14 @@ impl ToolRegistryItem for RegistryMarkerTool {
 
     fn default_exposure(&self) -> ToolExposure {
         self.exposure
+    }
+
+    fn is_readonly(&self) -> bool {
+        self.readonly
+    }
+
+    async fn is_enabled(&self) -> bool {
+        self.enabled
     }
 
     async fn input_schema_for_model(&self) -> serde_json::Value {
@@ -897,10 +908,22 @@ fn registry_marker_tool_with_exposure(
     provider_id: Option<&str>,
     exposure: ToolExposure,
 ) -> Arc<RegistryMarkerTool> {
+    registry_marker_tool_with_access(name, provider_id, exposure, false, true)
+}
+
+fn registry_marker_tool_with_access(
+    name: &str,
+    provider_id: Option<&str>,
+    exposure: ToolExposure,
+    readonly: bool,
+    enabled: bool,
+) -> Arc<RegistryMarkerTool> {
     Arc::new(RegistryMarkerTool {
         name: name.to_string(),
         provider_id: provider_id.map(str::to_string),
         exposure,
+        readonly,
+        enabled,
     })
 }
 
@@ -1017,6 +1040,22 @@ impl ToolDecorator<Arc<RegistryMarkerTool>> for RegistryMarkerDecorator {
             name: format!("decorated_{}", tool.name),
             provider_id: tool.provider_id.clone(),
             exposure: tool.exposure,
+            readonly: tool.readonly,
+            enabled: tool.enabled,
+        })
+    }
+}
+
+struct RegistryMarkerSnapshotWrapper;
+
+impl bitfun_agent_tools::SnapshotToolWrapper<RegistryMarkerTool> for RegistryMarkerSnapshotWrapper {
+    fn wrap_for_snapshot_tracking(&self, tool: Arc<RegistryMarkerTool>) -> Arc<RegistryMarkerTool> {
+        Arc::new(RegistryMarkerTool {
+            name: format!("snapshot_{}", tool.name),
+            provider_id: tool.provider_id.clone(),
+            exposure: tool.exposure,
+            readonly: tool.readonly,
+            enabled: tool.enabled,
         })
     }
 }
@@ -1058,6 +1097,59 @@ fn generic_tool_registry_applies_decorator_to_static_provider_tools() {
 }
 
 #[test]
+fn generic_snapshot_tool_decorator_delegates_to_snapshot_wrapper_port() {
+    let decorator: ToolDecoratorRef<RegistryMarkerTool> = Arc::new(
+        bitfun_agent_tools::SnapshotToolDecorator::new(Arc::new(RegistryMarkerSnapshotWrapper)),
+    );
+    let providers = vec![StaticToolProviderGroup::new(
+        "core-basic",
+        vec![registry_marker_tool("Write", None)],
+    )];
+
+    let registry = ToolRuntimeAssembly::with_tool_decorator(decorator)
+        .create_registry_from_static_providers(&providers);
+
+    assert_eq!(
+        registry.get_tool_names(),
+        vec!["snapshot_Write".to_string()],
+        "snapshot decorator must delegate wrapping through the portable wrapper port"
+    );
+}
+
+#[test]
+fn generic_tool_runtime_assembly_installs_static_providers_with_decorator() {
+    let decorator: ToolDecoratorRef<RegistryMarkerTool> = Arc::new(RegistryMarkerDecorator);
+    let providers = vec![
+        StaticToolProviderGroup::new("core-basic", vec![registry_marker_tool("Read", None)]),
+        StaticToolProviderGroup::new(
+            "core-integration",
+            vec![registry_marker_tool_with_exposure(
+                "WebFetch",
+                None,
+                ToolExposure::Collapsed,
+            )],
+        ),
+    ];
+
+    let registry = ToolRuntimeAssembly::with_tool_decorator(decorator)
+        .create_registry_from_static_providers(&providers);
+
+    assert_eq!(
+        registry.get_tool_names(),
+        vec![
+            "decorated_Read".to_string(),
+            "decorated_WebFetch".to_string()
+        ],
+        "runtime assembly must preserve static provider order while applying the decorator"
+    );
+    assert_eq!(
+        registry.get_collapsed_tool_names(),
+        vec!["decorated_WebFetch".to_string()],
+        "runtime assembly must preserve collapsed exposure after decoration"
+    );
+}
+
+#[test]
 fn generic_tool_registry_preserves_exposure_catalog_contract() {
     let mut registry = ToolRegistry::new();
     registry.register_tool(registry_marker_tool("Read", None));
@@ -1077,6 +1169,34 @@ fn generic_tool_registry_preserves_exposure_catalog_contract() {
     assert_eq!(
         registry.get_collapsed_tool_names(),
         vec!["WebFetch".to_string(), "Git".to_string()]
+    );
+}
+
+#[tokio::test]
+async fn generic_readonly_enabled_filter_preserves_registry_order() {
+    let tools = vec![
+        registry_marker_tool_with_access("Read", None, ToolExposure::Expanded, true, true),
+        registry_marker_tool_with_access("Write", None, ToolExposure::Expanded, false, true),
+        registry_marker_tool_with_access(
+            "DisabledReadonly",
+            None,
+            ToolExposure::Expanded,
+            true,
+            false,
+        ),
+        registry_marker_tool_with_access("WebFetch", None, ToolExposure::Collapsed, true, true),
+    ];
+
+    let readonly_names = resolve_readonly_enabled_tools(&tools)
+        .await
+        .iter()
+        .map(|tool| tool.name().to_string())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        readonly_names,
+        vec!["Read".to_string(), "WebFetch".to_string()],
+        "readonly filtering must keep registry order and skip disabled or mutating tools"
     );
 }
 

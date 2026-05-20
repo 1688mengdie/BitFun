@@ -1302,12 +1302,36 @@ const requiredContentRules = [
         message: 'missing generic static provider group container',
       },
       {
+        regex: /\bpub struct ToolRuntimeAssembly\b/,
+        message: 'missing generic tool runtime assembly owner',
+      },
+      {
+        regex: /\bpub type ToolDecoratorRef\b/,
+        message: 'missing generic tool decorator reference contract',
+      },
+      {
+        regex: /\bpub trait SnapshotToolWrapper\b/,
+        message: 'missing generic snapshot wrapper port',
+      },
+      {
+        regex: /\bpub struct SnapshotToolDecorator\b/,
+        message: 'missing generic snapshot decorator adapter',
+      },
+      {
+        regex: /\bcreate_registry_from_static_providers\b/,
+        message: 'missing generic static-provider runtime assembly helper',
+      },
+      {
         regex: /\bpub fn is_tool_collapsed\b/,
         message: 'missing generic collapsed-tool registry query',
       },
       {
         regex: /\bpub fn get_collapsed_tool_names\b/,
         message: 'missing generic collapsed-tool registry catalog query',
+      },
+      {
+        regex: /\bpub async fn resolve_readonly_enabled_tools\b/,
+        message: 'missing generic readonly enabled tool filter',
       },
     ],
   },
@@ -1341,11 +1365,15 @@ const requiredContentRules = [
   {
     path: 'src/crates/core/src/agentic/tools/registry.rs',
     reason:
-      'core registry must stay a compatibility container that delegates product tool runtime assembly to the core owner module',
+      'core registry must stay a compatibility container that delegates product tool runtime assembly through the core owner module',
     patterns: [
       {
-        regex: /\binstall_static_provider\b/,
-        message: 'missing provider-based registry installer hook',
+        regex: /\bfrom_inner\b/,
+        message: 'missing generic agent-tools registry adapter hook',
+      },
+      {
+        regex: /\bProductToolDecoratorRef\b/,
+        message: 'missing product decorator ref alias using agent-tools contract',
       },
       {
         regex: /\bProductToolRuntimeAssembly\b/,
@@ -1354,6 +1382,10 @@ const requiredContentRules = [
       {
         regex: /\bget_collapsed_tool_names\b/,
         message: 'missing collapsed-tool catalog owner',
+      },
+      {
+        regex: /\bresolve_readonly_enabled_tools\b/,
+        message: 'missing agent-tools readonly enabled filter delegation',
       },
       {
         regex: /\bregistry_preserves_collapsed_tool_manifest_for_owner_migration\b/,
@@ -1376,15 +1408,23 @@ const requiredContentRules = [
       },
       {
         regex: /\bSnapshotToolDecorator\b/,
-        message: 'missing snapshot decorator owner',
+        message: 'missing generic snapshot decorator injection',
+      },
+      {
+        regex: /\bProductSnapshotToolWrapper\b/,
+        message: 'missing core product snapshot wrapper adapter',
       },
       {
         regex: /\bbuiltin_static_tool_providers\b/,
         message: 'missing builtin provider assembly input',
       },
       {
-        regex: /\binstall_static_provider\b/,
-        message: 'missing static provider installation in runtime assembly',
+        regex: /\bToolRuntimeAssembly\b/,
+        message: 'missing generic agent-tools runtime assembly delegation',
+      },
+      {
+        regex: /\bcreate_registry_from_static_providers\b/,
+        message: 'missing generic static provider assembly delegation',
       },
       {
         regex: /\bwrap_tool_for_snapshot_tracking\b/,
@@ -1443,6 +1483,14 @@ const requiredContentRules = [
       {
         regex: /\bTool::dynamic_tool_info\b/,
         message: 'missing dynamic tool metadata adapter',
+      },
+      {
+        regex: /\bTool::is_readonly\b/,
+        message: 'missing readonly metadata adapter',
+      },
+      {
+        regex: /\bTool::is_enabled\b/,
+        message: 'missing enabled-state metadata adapter',
       },
       {
         regex: /\bTool::description_with_context\b/,
@@ -1536,6 +1584,26 @@ const requiredContentRules = [
       {
         regex: /\bpub trait StaticToolProvider\b/,
         message: 'missing static tool provider contract',
+      },
+      {
+        regex: /\bpub struct ToolRuntimeAssembly\b/,
+        message: 'missing generic runtime assembly contract',
+      },
+      {
+        regex: /\bpub type ToolDecoratorRef\b/,
+        message: 'missing generic decorator ref contract',
+      },
+      {
+        regex: /\bpub trait SnapshotToolWrapper\b/,
+        message: 'missing generic snapshot wrapper contract',
+      },
+      {
+        regex: /\bpub struct SnapshotToolDecorator\b/,
+        message: 'missing generic snapshot decorator contract',
+      },
+      {
+        regex: /\bcreate_registry_from_static_providers\b/,
+        message: 'missing generic static-provider assembly helper',
       },
       {
         regex: /\bpub fn install_static_provider\b/,
@@ -3416,9 +3484,11 @@ function runManifestParserSelfTest() {
     {
       path: 'src/crates/core/src/agentic/tools/registry.rs',
       contracts: [
-        'install_static_provider',
+        'from_inner',
+        'ProductToolDecoratorRef',
         'ProductToolRuntimeAssembly',
         'get_collapsed_tool_names',
+        'resolve_readonly_enabled_tools',
       ],
     },
     {
@@ -3426,8 +3496,10 @@ function runManifestParserSelfTest() {
       contracts: [
         'ProductToolRuntimeAssembly',
         'SnapshotToolDecorator',
+        'ProductSnapshotToolWrapper',
         'builtin_static_tool_providers',
-        'install_static_provider',
+        'ToolRuntimeAssembly',
+        'create_registry_from_static_providers',
         'wrap_tool_for_snapshot_tracking',
       ],
     },
@@ -3451,7 +3523,13 @@ function runManifestParserSelfTest() {
         'ToolWorkspaceKind',
         'StaticToolProvider',
         'StaticToolProviderGroup',
+        'ToolRuntimeAssembly',
+        'ToolDecoratorRef',
+        'SnapshotToolWrapper',
+        'SnapshotToolDecorator',
+        'create_registry_from_static_providers',
         'install_static_provider',
+        'resolve_readonly_enabled_tools',
         'build_get_tool_spec_duplicate_load_result',
         'build_get_tool_spec_detail_result',
         'resolve_get_tool_spec_execution_plan',
@@ -3472,6 +3550,8 @@ function runManifestParserSelfTest() {
         'ToolRegistryItem',
         'ContextualToolManifestItem',
         'Tool::dynamic_tool_info',
+        'Tool::is_readonly',
+        'Tool::is_enabled',
         'Tool::description_with_context',
         'Tool::input_schema_for_model_with_context',
       ],

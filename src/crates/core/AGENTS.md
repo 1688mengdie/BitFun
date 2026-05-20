@@ -36,7 +36,9 @@ SessionManager → Session → DialogTurn → ModelRound
   snapshot provider contracts, generic GetToolSpec catalog provider/detail/
   summary/static metadata/tool-use message/execution-plan/provider-backed execution-result/
   result-assembly helpers, and portable tool context facts/provider plus generic registry / static-provider / dynamic-provider container
-  contracts in `bitfun-agent-tools`. Core tool runtime should assemble product tool providers through
+  contracts in `bitfun-agent-tools`. Generic decorator references, snapshot decorator adapters, static-provider runtime assembly, and readonly/enabled
+  registry-snapshot filtering belong in
+  `bitfun-agent-tools`; core tool runtime should keep concrete provider groups and product snapshot wrapper adapter injection in
   `runtime_assembly.rs` + `static_providers.rs`, adapt core `Tool` into
   provider-neutral contracts through `tool_adapter.rs`, keep product catalog
   access and product manifest / GetToolSpec facade wiring in

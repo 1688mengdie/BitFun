@@ -3,14 +3,14 @@
 use crate::agentic::tools::framework::{DynamicToolInfo, Tool};
 use crate::util::errors::BitFunResult;
 use bitfun_agent_tools::{
-    DynamicToolDescriptor, DynamicToolProvider, PortResult, StaticToolProvider, ToolDecorator,
-    ToolRegistry as AgentToolRegistry,
+    resolve_readonly_enabled_tools, DynamicToolDescriptor, DynamicToolProvider, PortResult,
+    ToolDecoratorRef, ToolRegistry as AgentToolRegistry,
 };
 use log::{debug, info, trace, warn};
 use std::sync::Arc;
 
 pub(in crate::agentic::tools) type ToolRef = Arc<dyn Tool>;
-pub(in crate::agentic::tools) type ToolDecoratorRef = Arc<dyn ToolDecorator<ToolRef>>;
+pub(in crate::agentic::tools) type ProductToolDecoratorRef = ToolDecoratorRef<dyn Tool>;
 
 pub use bitfun_agent_tools::GET_TOOL_SPEC_TOOL_NAME;
 
@@ -37,28 +37,15 @@ impl ToolRegistry {
     /// The default production decorator preserves snapshot-aware wrapping while
     /// allowing future owner crates to replace this concrete service coupling
     /// through the `bitfun-runtime-ports` interface.
-    pub fn with_tool_decorator(tool_decorator: ToolDecoratorRef) -> Self {
+    pub fn with_tool_decorator(tool_decorator: ProductToolDecoratorRef) -> Self {
         crate::agentic::tools::runtime_assembly::ProductToolRuntimeAssembly::with_tool_decorator(
             tool_decorator,
         )
         .create_registry()
     }
 
-    pub(in crate::agentic::tools) fn empty_with_tool_decorator(
-        tool_decorator: ToolDecoratorRef,
-    ) -> Self {
-        Self {
-            inner: AgentToolRegistry::with_tool_decorator(tool_decorator),
-        }
-    }
-
-    pub(in crate::agentic::tools) fn install_static_provider<Provider>(
-        &mut self,
-        provider: &Provider,
-    ) where
-        Provider: StaticToolProvider<dyn Tool> + ?Sized,
-    {
-        self.inner.install_static_provider(provider);
+    pub(in crate::agentic::tools) fn from_inner(inner: AgentToolRegistry<dyn Tool>) -> Self {
+        Self { inner }
     }
 
     /// Dynamically register MCP tools
@@ -783,15 +770,7 @@ pub async fn get_all_tools() -> Vec<Arc<dyn Tool>> {
 /// Get readonly tools
 pub async fn get_readonly_tools() -> BitFunResult<Vec<Arc<dyn Tool>>> {
     let all_tools = get_all_tools().await;
-    let mut readonly_tools = Vec::new();
-
-    for tool in all_tools {
-        if tool.is_readonly() && tool.is_enabled().await {
-            readonly_tools.push(tool);
-        }
-    }
-
-    Ok(readonly_tools)
+    Ok(resolve_readonly_enabled_tools(&all_tools).await)
 }
 
 /// Create default tool registry - factory function

@@ -32,6 +32,14 @@ impl ToolRegistryItem for dyn Tool {
         Tool::default_exposure(self)
     }
 
+    fn is_readonly(&self) -> bool {
+        Tool::is_readonly(self)
+    }
+
+    async fn is_enabled(&self) -> bool {
+        Tool::is_enabled(self).await
+    }
+
     async fn input_schema_for_model(&self) -> Value {
         Tool::input_schema_for_model(self).await
     }

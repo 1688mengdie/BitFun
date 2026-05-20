@@ -554,6 +554,14 @@ pub trait ToolRegistryItem: Send + Sync {
         ToolExposure::Expanded
     }
 
+    fn is_readonly(&self) -> bool {
+        false
+    }
+
+    async fn is_enabled(&self) -> bool {
+        true
+    }
+
     async fn input_schema_for_model(&self) -> Value {
         self.input_schema()
     }
@@ -616,6 +624,20 @@ pub fn summarize_get_tool_spec_collapsed_tools<Tool: ToolRegistryItem + ?Sized>(
             short_description: tool.short_description(),
         })
         .collect()
+}
+
+pub async fn resolve_readonly_enabled_tools<Tool: ToolRegistryItem + ?Sized>(
+    tool_snapshot: &[ToolRef<Tool>],
+) -> Vec<ToolRef<Tool>> {
+    let mut readonly_tools = Vec::new();
+
+    for tool in tool_snapshot {
+        if tool.is_readonly() && tool.is_enabled().await {
+            readonly_tools.push(tool.clone());
+        }
+    }
+
+    readonly_tools
 }
 
 pub async fn resolve_get_tool_spec_detail<Tool, Context>(
@@ -873,6 +895,28 @@ impl<Tool> ToolDecorator<Tool> for IdentityToolDecorator {
 pub type ToolRef<Tool> = Arc<Tool>;
 pub type ToolDecoratorRef<Tool> = Arc<dyn ToolDecorator<ToolRef<Tool>>>;
 
+pub trait SnapshotToolWrapper<Tool: ?Sized>: Send + Sync {
+    fn wrap_for_snapshot_tracking(&self, tool: ToolRef<Tool>) -> ToolRef<Tool>;
+}
+
+pub type SnapshotToolWrapperRef<Tool> = Arc<dyn SnapshotToolWrapper<Tool>>;
+
+pub struct SnapshotToolDecorator<Tool: ?Sized> {
+    wrapper: SnapshotToolWrapperRef<Tool>,
+}
+
+impl<Tool: ?Sized> SnapshotToolDecorator<Tool> {
+    pub fn new(wrapper: SnapshotToolWrapperRef<Tool>) -> Self {
+        Self { wrapper }
+    }
+}
+
+impl<Tool: ?Sized> ToolDecorator<ToolRef<Tool>> for SnapshotToolDecorator<Tool> {
+    fn decorate(&self, tool: ToolRef<Tool>) -> ToolRef<Tool> {
+        self.wrapper.wrap_for_snapshot_tracking(tool)
+    }
+}
+
 pub trait StaticToolProvider<Tool: ?Sized>: Send + Sync {
     fn provider_id(&self) -> &'static str;
 
@@ -897,6 +941,40 @@ impl<Tool: ?Sized + Send + Sync> StaticToolProvider<Tool> for StaticToolProvider
 
     fn tools(&self) -> Vec<ToolRef<Tool>> {
         self.tools.clone()
+    }
+}
+
+pub struct ToolRuntimeAssembly<Tool: ToolRegistryItem + ?Sized> {
+    tool_decorator: ToolDecoratorRef<Tool>,
+}
+
+impl<Tool: ToolRegistryItem + ?Sized> Default for ToolRuntimeAssembly<Tool> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<Tool: ToolRegistryItem + ?Sized> ToolRuntimeAssembly<Tool> {
+    pub fn new() -> Self {
+        Self::with_tool_decorator(Arc::new(IdentityToolDecorator))
+    }
+
+    pub fn with_tool_decorator(tool_decorator: ToolDecoratorRef<Tool>) -> Self {
+        Self { tool_decorator }
+    }
+
+    pub fn create_registry_from_static_providers<Provider>(
+        &self,
+        providers: &[Provider],
+    ) -> ToolRegistry<Tool>
+    where
+        Provider: StaticToolProvider<Tool>,
+    {
+        let mut registry = ToolRegistry::with_tool_decorator(self.tool_decorator.clone());
+        for provider in providers {
+            registry.install_static_provider(provider);
+        }
+        registry
     }
 }
 
