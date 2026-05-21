@@ -16,12 +16,14 @@ mod ui;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use std::io::IsTerminal;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::OnceLock;
 
 use config::CliConfig;
 use modes::chat::ChatMode;
-use modes::exec::ExecMode;
+use modes::exec::{ExecMode, ExecOutputFormat, ExecSessionOptions};
 
 // ======================== Global MCP Service ========================
 
@@ -77,12 +79,36 @@ enum Commands {
 
     /// Execute single command
     Exec {
-        /// User message
-        message: String,
+        /// User message. If omitted, stdin is used when piped.
+        message: Option<String>,
 
         /// Agent type
         #[arg(short, long, default_value = "agentic")]
         agent: String,
+
+        /// Continue the most recent session in the current workspace
+        #[arg(short = 'c', long = "continue")]
+        continue_last: bool,
+
+        /// Resume a session by ID, or use "last" for the most recent session
+        #[arg(short = 'r', long)]
+        resume: Option<String>,
+
+        /// Alias for --resume, compatible with opencode-style CLIs
+        #[arg(short = 's', long)]
+        session: Option<String>,
+
+        /// Create a new session with a fixed session ID
+        #[arg(long)]
+        session_id: Option<String>,
+
+        /// Fork the resumed session before executing the prompt
+        #[arg(long = "fork-session")]
+        fork_session: bool,
+
+        /// Output format for automation
+        #[arg(long, value_enum, default_value_t = ExecOutputFormat::Text)]
+        output_format: ExecOutputFormat,
 
         /// Output git diff patch after execution (for SWE-bench evaluation)
         /// Without path outputs to terminal, with path saves to file
@@ -209,6 +235,21 @@ enum SessionAction {
     Delete {
         /// Session ID
         id: String,
+    },
+    /// Resume a session in the interactive TUI
+    Resume {
+        /// Session ID (or "last" for the most recent)
+        id: String,
+    },
+    /// Continue the most recent session in the interactive TUI
+    Continue,
+    /// Fork a session at the latest persisted turn
+    Fork {
+        /// Session ID (or "last" for the most recent)
+        id: String,
+        /// Print only the new session ID
+        #[arg(long)]
+        id_only: bool,
     },
 }
 
@@ -506,6 +547,12 @@ async fn main() -> Result<()> {
         Some(Commands::Exec {
             message,
             agent,
+            continue_last,
+            resume,
+            session,
+            session_id,
+            fork_session,
+            output_format,
             output_patch,
             confirm,
         }) => {
@@ -513,6 +560,21 @@ async fn main() -> Result<()> {
 
             if let Some(ref ws_path) = workspace_path_resolved {
                 tracing::info!("Workspace path set: {:?}", ws_path);
+            }
+
+            let message = resolve_exec_message(message)?;
+            let resume = match (resume, session) {
+                (Some(_), Some(_)) => {
+                    anyhow::bail!("Use only one of --resume or --session");
+                }
+                (Some(value), None) | (None, Some(value)) => Some(value),
+                (None, None) => None,
+            };
+            if session_id.is_some() && (continue_last || resume.is_some()) {
+                anyhow::bail!("--session-id cannot be combined with --continue, --resume, or --session");
+            }
+            if fork_session && session_id.is_some() {
+                anyhow::bail!("--fork-session cannot be combined with --session-id");
             }
 
             let skip_confirmation = !confirm;
@@ -526,6 +588,13 @@ async fn main() -> Result<()> {
                 &agentic_system,
                 workspace_path_resolved,
                 output_patch,
+                output_format,
+                ExecSessionOptions {
+                    resume,
+                    continue_last,
+                    session_id,
+                    fork_session,
+                },
             );
             let run_result = exec_mode.run().await;
 
@@ -536,7 +605,9 @@ async fn main() -> Result<()> {
         }
 
         Some(Commands::Sessions { action }) => {
-            handle_session_action(action).await?;
+            if let Some(session_id) = handle_session_action(action).await? {
+                run_interactive_with_session(config, session_id).await?;
+            }
         }
 
         Some(Commands::Config { action }) => {
@@ -638,7 +709,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn handle_session_action(action: SessionAction) -> Result<()> {
+async fn handle_session_action(action: SessionAction) -> Result<Option<String>> {
     // Initialize core services for session management
     bitfun_core::service::config::initialize_global_config()
         .await
@@ -660,7 +731,7 @@ async fn handle_session_action(action: SessionAction) -> Result<()> {
                     "No history sessions for current project: {}",
                     workspace_path.display()
                 );
-                return Ok(());
+                return Ok(None);
             }
 
             println!(
@@ -767,9 +838,124 @@ async fn handle_session_action(action: SessionAction) -> Result<()> {
             coordinator.delete_session(&workspace_path, &id).await?;
             println!("Deleted session from current project: {}", id);
         }
+
+        SessionAction::Resume { id } => {
+            let session_id = resolve_cli_session_id(&coordinator, &workspace_path, &id).await?;
+            return Ok(Some(session_id));
+        }
+
+        SessionAction::Continue => {
+            let session_id = resolve_cli_session_id(&coordinator, &workspace_path, "last").await?;
+            return Ok(Some(session_id));
+        }
+
+        SessionAction::Fork { id, id_only } => {
+            let session_id = resolve_cli_session_id(&coordinator, &workspace_path, &id).await?;
+            let (_session, turns) = coordinator
+                .restore_session_view(&workspace_path, &session_id)
+                .await?;
+            let source_turn_id = turns
+                .last()
+                .map(|turn| turn.turn_id.clone())
+                .ok_or_else(|| anyhow::anyhow!("Session has no persisted turns to fork"))?;
+            let path_manager = bitfun_core::infrastructure::try_get_path_manager_arc()
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            let persistence_manager = bitfun_core::agentic::persistence::PersistenceManager::new(
+                path_manager,
+            )
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            let result = persistence_manager
+                .branch_session(
+                    &workspace_path,
+                    &bitfun_core::agentic::persistence::session_branch::SessionBranchRequest {
+                        source_session_id: session_id.clone(),
+                        source_turn_id,
+                    },
+                )
+                .await?;
+
+            if id_only {
+                println!("{}", result.session_id);
+            } else {
+                println!("Forked session");
+                println!("Source ID: {}", session_id);
+                println!("New ID: {}", result.session_id);
+                println!("Name: {}", result.session_name);
+                println!("Agent: {}", result.agent_type);
+            }
+        }
     }
 
+    Ok(None)
+}
+
+async fn resolve_cli_session_id(
+    coordinator: &std::sync::Arc<bitfun_core::agentic::coordination::ConversationCoordinator>,
+    workspace_path: &Path,
+    id: &str,
+) -> Result<String> {
+    if id == "last" {
+        let sessions = coordinator.list_sessions(workspace_path).await?;
+        return sessions
+            .first()
+            .map(|session| session.session_id.clone())
+            .ok_or_else(|| anyhow::anyhow!("No history sessions"));
+    }
+
+    Ok(id.to_string())
+}
+
+async fn run_interactive_with_session(config: CliConfig, session_id: String) -> Result<()> {
+    let mut terminal = ui::init_terminal()?;
+    ui::render_loading(&mut terminal, "Initializing system, please wait...")?;
+
+    let workspace = setup_workspace();
+    let (agentic_system, original_skip_confirmation) = initialize_core_services(true).await?;
+    let workspace_path = workspace
+        .clone()
+        .map(PathBuf::from)
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| PathBuf::from("."));
+    let session = agentic_system
+        .coordinator
+        .restore_session(&workspace_path, &session_id)
+        .await?;
+
+    let mut chat_mode = ChatMode::new(config, session.agent_type, workspace, &agentic_system)
+        .with_restore_session(session_id);
+    let run_result = chat_mode.run(Some(terminal));
+
+    shutdown_mcp_servers().await;
+    restore_tool_confirmation(original_skip_confirmation).await;
+    println!("Goodbye!");
+
+    run_result?;
     Ok(())
+}
+
+fn resolve_exec_message(message: Option<String>) -> Result<String> {
+    let mut combined = message.unwrap_or_default();
+    if !std::io::stdin().is_terminal() {
+        use std::io::Read;
+        let mut stdin_content = String::new();
+        std::io::stdin().read_to_string(&mut stdin_content)?;
+        let stdin_content = stdin_content.trim_end().to_string();
+        if !stdin_content.is_empty() {
+            if combined.is_empty() {
+                combined = stdin_content;
+            } else {
+                combined.push('\n');
+                combined.push_str(&stdin_content);
+            }
+        }
+    }
+
+    let message = combined.trim().to_string();
+    if message.is_empty() {
+        anyhow::bail!("Prompt cannot be empty");
+    }
+
+    Ok(message)
 }
 
 fn handle_config_action(action: ConfigAction, config: &CliConfig) -> Result<()> {
