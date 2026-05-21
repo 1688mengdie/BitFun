@@ -21,6 +21,8 @@ impl GeneralPurposeAgent {
                 "Grep".to_string(),
                 "Write".to_string(),
                 "Edit".to_string(),
+                "Delete".to_string(),
+                "TerminalControl".to_string(),
                 "WebSearch".to_string(),
                 "WebFetch".to_string(),
             ],
