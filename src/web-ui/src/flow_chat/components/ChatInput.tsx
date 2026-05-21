@@ -20,7 +20,7 @@ import {
 import { SessionExecutionEvent } from '../state-machine/types';
 import { ModelSelector } from './ModelSelector';
 import { FlowChatStore } from '../store/FlowChatStore';
-import type { FlowChatState } from '../types/flow-chat';
+import type { FlowChatState, Session } from '../types/flow-chat';
 import type { FileContext, DirectoryContext, ImageContext } from '@/types/context.ts';
 import { SmartRecommendations } from './smart-recommendations';
 import { useCurrentWorkspace } from '@/infrastructure/contexts/WorkspaceContext';
@@ -198,6 +198,24 @@ function renderMcpPromptMessages(messages: MCPPromptMessage[]): string {
     })
     .filter(Boolean)
     .join('\n\n');
+}
+
+function getSessionContextUsageDisplay(session?: Session): { current: number; max: number } {
+  if (!session) {
+    return { current: 0, max: 128128 };
+  }
+
+  if (session.currentAcpContextUsage) {
+    return {
+      current: session.currentAcpContextUsage.used,
+      max: session.currentAcpContextUsage.size,
+    };
+  }
+
+  return {
+    current: session.currentTokenUsage?.totalTokens || 0,
+    max: session.maxContextTokens || 128128,
+  };
 }
 
 export const ChatInput: React.FC<ChatInputProps> = ({
@@ -593,10 +611,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       if (effectiveTargetSessionId) {
         const session = state.sessions.get(effectiveTargetSessionId);
         if (session) {
-          setTokenUsage({
-            current: session.currentTokenUsage?.totalTokens || 0,
-            max: session.maxContextTokens || 128128
-          });
+          setTokenUsage(getSessionContextUsageDisplay(session));
         }
       }
     });
@@ -605,10 +620,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       const state = store.getState();
       const session = state.sessions.get(effectiveTargetSessionId);
       if (session) {
-        setTokenUsage({
-          current: session.currentTokenUsage?.totalTokens || 0,
-          max: session.maxContextTokens || 128128
-        });
+        setTokenUsage(getSessionContextUsageDisplay(session));
       }
     }
 

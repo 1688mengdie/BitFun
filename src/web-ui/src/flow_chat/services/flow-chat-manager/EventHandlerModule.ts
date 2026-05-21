@@ -25,6 +25,7 @@ import type {
   DeepReviewQueueStateChangedEvent,
   ImageAnalysisEvent,
   ModelRoundCompletedEvent,
+  AcpContextUsageUpdatedEvent,
   SessionModelAutoMigratedEvent,
   SubagentSessionLinkedEvent,
 } from '@/infrastructure/api/service-api/AgentAPI';
@@ -624,6 +625,9 @@ export async function initializeEventListeners(
     },
     onTokenUsageUpdated: (event) => {
       handleTokenUsageUpdate(event);
+    },
+    onAcpContextUsageUpdated: (event) => {
+      handleAcpContextUsageUpdate(event);
     },
     onContextCompressionStarted: (event) => {
       handleCompressionStarted(context, event);
@@ -1763,6 +1767,28 @@ function handleTokenUsageUpdate(event: any): void {
   if (maxContextTokens !== undefined && maxContextTokens !== null) {
     store.updateSessionMaxContextTokens(sessionId, maxContextTokens);
   }
+}
+
+function handleAcpContextUsageUpdate(event: AcpContextUsageUpdatedEvent): void {
+  const { sessionId, used, size, cost } = event;
+
+  if (!sessionId || typeof used !== 'number' || typeof size !== 'number') {
+    log.debug('Dropped invalid ACP context usage update', { event });
+    return;
+  }
+
+  const store = FlowChatStore.getInstance();
+  const session = store.getState().sessions.get(sessionId);
+
+  if (!session) {
+    log.debug('Session not found (ACP context usage update)', { sessionId });
+    return;
+  }
+
+  store.updateAcpContextUsage(
+    sessionId,
+    cost ? { used, size, cost } : { used, size },
+  );
 }
 
 /**
