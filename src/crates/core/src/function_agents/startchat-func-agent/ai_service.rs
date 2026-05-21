@@ -2,7 +2,9 @@ use super::types::*;
 use crate::function_agents::common::{AgentError, AgentResult, Language};
 use crate::infrastructure::ai::AIClient;
 use crate::util::types::Message;
-use bitfun_product_domains::function_agents::startchat_func_agent::parse_complete_analysis_json;
+use bitfun_product_domains::function_agents::startchat_func_agent::{
+    build_work_state_analysis_prompt, parse_work_state_analysis_response,
+};
 /**
  * AI analysis service
  *
@@ -10,9 +12,6 @@ use bitfun_product_domains::function_agents::startchat_func_agent::parse_complet
  */
 use log::{debug, error, warn};
 use std::sync::Arc;
-
-/// Prompt template constants (embedded at compile time)
-const WORK_STATE_ANALYSIS_PROMPT: &str = include_str!("prompts/work_state_analysis.md");
 
 pub struct AIWorkStateService {
     ai_client: Arc<AIClient>,
@@ -89,28 +88,13 @@ impl AIWorkStateService {
         git_diff: &str,
         language: &Language,
     ) -> String {
-        super::utils::build_complete_analysis_prompt(
-            WORK_STATE_ANALYSIS_PROMPT,
-            git_state,
-            git_diff,
-            language,
-        )
+        build_work_state_analysis_prompt(git_state, git_diff, language)
     }
 
     fn parse_complete_analysis(&self, response: &str) -> AgentResult<AIGeneratedAnalysis> {
-        let json_str = crate::util::extract_json_from_ai_response(response).ok_or_else(|| {
-            error!(
-                "Failed to extract JSON from analysis response: {}",
-                response
-            );
-            AgentError::internal_error("Failed to extract JSON from analysis response")
-        })?;
-
-        debug!("Parsing JSON response: length={}", json_str.len());
-
-        let parsed_analysis = parse_complete_analysis_json(&json_str).map_err(|message| {
-            error!("{}, response: {}", message, response);
-            AgentError::internal_error(message)
+        let parsed_analysis = parse_work_state_analysis_response(response).map_err(|error| {
+            error!("{}, response: {}", error.message, response);
+            error
         })?;
 
         if parsed_analysis.predicted_actions_count < 3 {
@@ -182,7 +166,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_complete_analysis_preserves_core_json_extraction_and_error_mapping() {
+    fn parse_complete_analysis_preserves_product_domain_response_policy() {
         let service = test_service();
         let analysis = service
             .parse_complete_analysis(

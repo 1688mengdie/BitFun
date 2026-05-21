@@ -2683,34 +2683,26 @@ const requiredContentRules = [
   {
     path: 'src/crates/core/src/function_agents/git-func-agent/ai_service.rs',
     reason:
-      'core must continue owning Git function-agent prompt template, AI call, JSON extraction, and error mapping until AI runtime migration is reviewed',
+      'core must continue owning Git function-agent AI client calls while product-domains owns prompt and response policy',
     patterns: [
       {
-        regex: /\bconst COMMIT_MESSAGE_PROMPT\b/,
-        message: 'missing core-owned Git function-agent prompt template',
+        regex: /\bprepare_commit_ai_prompt\b/,
+        message: 'missing product-domain Git function-agent prompt policy use',
       },
       {
-        regex: /\bprepare_commit_prompt\b/,
-        message: 'missing product-domain prompt preparation helper use',
+        regex: /\bparse_commit_ai_response\b/,
+        message: 'missing product-domain Git function-agent response policy use',
       },
       {
         regex: /\bai_client\s*\.\s*send_message\b/,
         message: 'missing core-owned function-agent AI call',
       },
       {
-        regex: /\bextract_json_from_ai_response\b/,
-        message: 'missing core-owned AI response JSON extraction',
+        regex: /\bAgentError::internal_error\b/,
+        message: 'missing core-owned function-agent AI transport error mapping',
       },
       {
-        regex: /\bparse_commit_analysis_json\b/,
-        message: 'missing product-domain Git function-agent JSON parser use',
-      },
-      {
-        regex: /\bAgentError::analysis_error\b/,
-        message: 'missing core-owned AI response error mapping',
-      },
-      {
-        regex: /\bparse_commit_response_preserves_core_json_extraction_and_error_mapping\b/,
+        regex: /\bparse_commit_response_preserves_product_domain_response_policy\b/,
         message: 'missing Git function-agent AI response boundary regression test',
       },
     ],
@@ -2718,30 +2710,26 @@ const requiredContentRules = [
   {
     path: 'src/crates/core/src/function_agents/startchat-func-agent/ai_service.rs',
     reason:
-      'core must continue owning Startchat prompt template, AI call, JSON extraction, and error mapping until AI runtime migration is reviewed',
+      'core must continue owning Startchat AI client calls while product-domains owns prompt and response policy',
     patterns: [
       {
-        regex: /\bconst WORK_STATE_ANALYSIS_PROMPT\b/,
-        message: 'missing core-owned Startchat prompt template',
+        regex: /\bbuild_work_state_analysis_prompt\b/,
+        message: 'missing product-domain Startchat prompt policy use',
+      },
+      {
+        regex: /\bparse_work_state_analysis_response\b/,
+        message: 'missing product-domain Startchat response policy use',
       },
       {
         regex: /\bai_client\s*\.\s*send_message\b/,
         message: 'missing core-owned Startchat AI call',
       },
       {
-        regex: /\bextract_json_from_ai_response\b/,
-        message: 'missing core-owned Startchat JSON extraction',
-      },
-      {
-        regex: /\bparse_complete_analysis_json\b/,
-        message: 'missing product-domain Startchat JSON parser use',
-      },
-      {
         regex: /\bAgentError::internal_error\b/,
-        message: 'missing core-owned Startchat error mapping',
+        message: 'missing core-owned Startchat AI transport error mapping',
       },
       {
-        regex: /\bparse_complete_analysis_preserves_core_json_extraction_and_error_mapping\b/,
+        regex: /\bparse_complete_analysis_preserves_product_domain_response_policy\b/,
         message: 'missing Startchat AI response boundary regression test',
       },
     ],
@@ -2883,10 +2871,33 @@ const requiredContentRules = [
     ],
   },
   {
+    path: 'src/crates/product-domains/src/function_agents/common.rs',
+    reason:
+      'product-domains owns function-agent AI response JSON extraction while core keeps concrete AI clients',
+    patterns: [
+      {
+        regex: /\bfn extract_json_from_ai_response\b/,
+        message: 'missing function-agent AI response JSON extraction helper',
+      },
+      {
+        regex: /\bfn try_repair_json\b/,
+        message: 'missing function-agent AI response JSON repair helper',
+      },
+    ],
+  },
+  {
     path: 'src/crates/product-domains/src/function_agents/startchat_func_agent/utils.rs',
     reason:
-      'product-domains owns pure Startchat function-agent parsing policy while core keeps AI calls and error mapping',
+      'product-domains owns Startchat function-agent prompt and response policy while core keeps AI calls',
     patterns: [
+      {
+        regex: /\bpub const WORK_STATE_ANALYSIS_PROMPT\b/,
+        message: 'missing product-domain Startchat prompt template',
+      },
+      {
+        regex: /\bpub fn build_work_state_analysis_prompt\b/,
+        message: 'missing product-domain Startchat prompt builder',
+      },
       {
         regex: /\bpub struct ParsedCompleteAnalysis\b/,
         message: 'missing Startchat complete-analysis parse result contract',
@@ -2899,13 +2910,25 @@ const requiredContentRules = [
         regex: /\bpub fn parse_complete_analysis_json\b/,
         message: 'missing Startchat complete-analysis JSON parser',
       },
+      {
+        regex: /\bpub fn parse_work_state_analysis_response\b/,
+        message: 'missing Startchat AI response policy',
+      },
+      {
+        regex: /\bwork_state_ai_response_policy_extracts_json_and_maps_domain_errors\b/,
+        message: 'missing Startchat AI response policy regression test',
+      },
     ],
   },
   {
     path: 'src/crates/product-domains/src/function_agents/git_func_agent/utils.rs',
     reason:
-      'product-domains owns pure Git function-agent response parsing policy while core keeps AI calls and error mapping',
+      'product-domains owns Git function-agent prompt and response policy while core keeps AI calls',
     patterns: [
+      {
+        regex: /\bpub const COMMIT_MESSAGE_PROMPT\b/,
+        message: 'missing product-domain Git function-agent prompt template',
+      },
       {
         regex: /\bpub fn parse_commit_analysis_value\b/,
         message: 'missing Git function-agent commit analysis value parser',
@@ -2921,6 +2944,18 @@ const requiredContentRules = [
       {
         regex: /\bpub fn prepare_commit_prompt\b/,
         message: 'missing Git function-agent prompt preparation helper',
+      },
+      {
+        regex: /\bpub fn prepare_commit_ai_prompt\b/,
+        message: 'missing Git function-agent AI prompt policy',
+      },
+      {
+        regex: /\bpub fn parse_commit_ai_response\b/,
+        message: 'missing Git function-agent AI response policy',
+      },
+      {
+        regex: /\bcommit_ai_response_policy_extracts_json_and_maps_domain_errors\b/,
+        message: 'missing Git function-agent AI response policy regression test',
       },
     ],
   },
@@ -3921,24 +3956,21 @@ function runManifestParserSelfTest() {
     {
       path: 'src/crates/core/src/function_agents/git-func-agent/ai_service.rs',
       contracts: [
-        'COMMIT_MESSAGE_PROMPT',
-        'prepare_commit_prompt',
+        'prepare_commit_ai_prompt',
+        'parse_commit_ai_response',
         'send_message',
-        'extract_json_from_ai_response',
-        'parse_commit_analysis_json',
-        'AgentError::analysis_error',
-        'parse_commit_response_preserves_core_json_extraction_and_error_mapping',
+        'AgentError::internal_error',
+        'parse_commit_response_preserves_product_domain_response_policy',
       ],
     },
     {
       path: 'src/crates/core/src/function_agents/startchat-func-agent/ai_service.rs',
       contracts: [
-        'WORK_STATE_ANALYSIS_PROMPT',
+        'build_work_state_analysis_prompt',
+        'parse_work_state_analysis_response',
         'send_message',
-        'extract_json_from_ai_response',
-        'parse_complete_analysis_json',
         'AgentError::internal_error',
-        'parse_complete_analysis_preserves_core_json_extraction_and_error_mapping',
+        'parse_complete_analysis_preserves_product_domain_response_policy',
       ],
     },
     {
@@ -3961,16 +3993,30 @@ function runManifestParserSelfTest() {
       ],
     },
     {
+      path: 'src/crates/product-domains/src/function_agents/common.rs',
+      contracts: ['extract_json_from_ai_response', 'try_repair_json'],
+    },
+    {
       path: 'src/crates/product-domains/src/function_agents/startchat_func_agent/utils.rs',
-      contracts: ['ParsedCompleteAnalysis', 'parse_complete_analysis_value', 'parse_complete_analysis_json'],
+      contracts: [
+        'WORK_STATE_ANALYSIS_PROMPT',
+        'build_work_state_analysis_prompt',
+        'ParsedCompleteAnalysis',
+        'parse_complete_analysis_value',
+        'parse_complete_analysis_json',
+        'parse_work_state_analysis_response',
+      ],
     },
     {
       path: 'src/crates/product-domains/src/function_agents/git_func_agent/utils.rs',
       contracts: [
+        'COMMIT_MESSAGE_PROMPT',
         'parse_commit_analysis_value',
         'parse_commit_analysis_json',
         'truncate_diff_for_commit_prompt',
         'prepare_commit_prompt',
+        'prepare_commit_ai_prompt',
+        'parse_commit_ai_response',
       ],
     },
     {

@@ -2,19 +2,16 @@ use super::types::{AICommitAnalysis, CommitMessageOptions, ProjectContext};
 use crate::function_agents::common::{AgentError, AgentResult};
 use crate::infrastructure::ai::AIClient;
 use crate::util::types::Message;
+use bitfun_product_domains::function_agents::git_func_agent::{
+    parse_commit_ai_response, prepare_commit_ai_prompt,
+};
 /**
  * AI service layer
  *
  * Handles AI client interaction and provides intelligent analysis for commit message generation
  */
-use bitfun_product_domains::function_agents::git_func_agent::{
-    parse_commit_analysis_json, prepare_commit_prompt,
-};
 use log::{debug, error, warn};
 use std::sync::Arc;
-
-/// Prompt template constants (embedded at compile time)
-const COMMIT_MESSAGE_PROMPT: &str = include_str!("prompts/commit_message.md");
 
 pub struct AIAnalysisService {
     ai_client: Arc<AIClient>,
@@ -49,18 +46,12 @@ impl AIAnalysisService {
             return Err(AgentError::invalid_input("Code changes are empty"));
         }
 
-        let prepared_prompt = prepare_commit_prompt(
-            COMMIT_MESSAGE_PROMPT,
-            diff_content,
-            project_context,
-            options,
-            50000,
-        );
+        let prepared_prompt = prepare_commit_ai_prompt(diff_content, project_context, options);
         if prepared_prompt.truncated {
             warn!(
                 "Diff too large ({} chars), truncating to {} chars",
                 diff_content.len(),
-                50000
+                50_000
             );
         }
 
@@ -98,10 +89,7 @@ impl AIAnalysisService {
     }
 
     fn parse_commit_response(&self, response: &str) -> AgentResult<AICommitAnalysis> {
-        let json_str = crate::util::extract_json_from_ai_response(response)
-            .ok_or_else(|| AgentError::analysis_error("Cannot extract JSON from response"))?;
-
-        parse_commit_analysis_json(&json_str).map_err(AgentError::analysis_error)
+        parse_commit_ai_response(response)
     }
 }
 
@@ -139,7 +127,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_commit_response_preserves_core_json_extraction_and_error_mapping() {
+    fn parse_commit_response_preserves_product_domain_response_policy() {
         let service = test_service();
         let parsed = service
             .parse_commit_response(
