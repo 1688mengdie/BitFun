@@ -2399,6 +2399,10 @@ const ChatPage: React.FC<ChatPageProps> = ({ sessionMgr, sessionId, sessionName,
       e.preventDefault();
       handleSend();
     }
+    if (e.key === 'Tab' && e.shiftKey) {
+      e.preventDefault();
+      cycleAgentMode();
+    }
   };
 
   const handleCancel = async () => {
