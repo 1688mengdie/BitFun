@@ -238,6 +238,36 @@ describe('FlowChatStore local usage reports', () => {
   });
 });
 
+describe('FlowChatStore ACP context usage', () => {
+  afterEach(() => {
+    resetStore();
+  });
+
+  it('stores ACP context usage separately from token usage reports', () => {
+    const session = createSession({
+      config: { agentType: 'acp:codex' },
+    });
+    flowChatStore.setState(() => ({
+      sessions: new Map([[session.sessionId, session]]),
+      activeSessionId: session.sessionId,
+    }));
+
+    flowChatStore.updateAcpContextUsage(session.sessionId, {
+      used: 42_000,
+      size: 128_000,
+      cost: { amount: 0.12, currency: 'USD' },
+    });
+
+    const stored = flowChatStore.getState().sessions.get(session.sessionId);
+    expect(stored?.currentAcpContextUsage).toMatchObject({
+      used: 42_000,
+      size: 128_000,
+      cost: { amount: 0.12, currency: 'USD' },
+    });
+    expect(stored?.currentTokenUsage).toBeUndefined();
+  });
+});
+
 describe('FlowChatStore historical session hydration state', () => {
   afterEach(() => {
     resetStore();

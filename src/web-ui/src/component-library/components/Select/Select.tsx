@@ -2,7 +2,14 @@
  * Select dropdown component
  */
 
-import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
+import React, {
+  useState,
+  useRef,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useCallback,
+} from 'react';
 import { useI18n } from '@/infrastructure/i18n';
 import './Select.scss';
 
@@ -80,6 +87,7 @@ export const Select: React.FC<SelectProps> = ({
   const resolvedEmptyText = emptyText ?? t('select.emptyText');
   const resolvedCustomValueHint = customValueHint ?? t('select.customValueHint');
   const [isOpen, setIsOpen] = useState(false);
+  const [resolvedPlacement, setResolvedPlacement] = useState<'bottom' | 'top'>(placement);
   const [selectedValue, setSelectedValue] = useState<string | number | (string | number)[]>(
     value !== undefined ? value : defaultValue !== undefined ? defaultValue : multiple ? [] : ''
   );
@@ -106,6 +114,44 @@ export const Select: React.FC<SelectProps> = ({
       opt.description?.toLowerCase().includes(query)
     );
   }, [options, searchQuery, searchable]);
+
+  useLayoutEffect(() => {
+    if (!isOpen) {
+      setResolvedPlacement(placement);
+      return;
+    }
+
+    const selectElement = selectRef.current;
+    const dropdownElement = dropdownRef.current;
+    if (!selectElement || !dropdownElement || typeof window === 'undefined') {
+      setResolvedPlacement(placement);
+      return;
+    }
+
+    const triggerRect = selectElement.getBoundingClientRect();
+    const dropdownHeight = dropdownElement.offsetHeight || dropdownElement.scrollHeight || 240;
+    const spaceBelow = window.innerHeight - triggerRect.bottom;
+    const spaceAbove = triggerRect.top;
+
+    let nextPlacement: 'bottom' | 'top' = placement;
+    if (placement === 'bottom' && spaceBelow < dropdownHeight && spaceAbove > spaceBelow) {
+      nextPlacement = 'top';
+    } else if (placement === 'top' && spaceAbove < dropdownHeight && spaceBelow > spaceAbove) {
+      nextPlacement = 'bottom';
+    }
+
+    setResolvedPlacement(nextPlacement);
+  }, [
+    isOpen,
+    placement,
+    options.length,
+    searchable,
+    multiple,
+    showSelectAll,
+    allowCustomValue,
+    searchQuery,
+    filteredOptions.length,
+  ]);
 
   const groupedOptions = useMemo(() => {
     const groups: { [key: string]: SelectOption[] } = {};
@@ -322,7 +368,7 @@ export const Select: React.FC<SelectProps> = ({
   const classNames = [
     'select',
     `select--${size}`,
-    `select--placement-${placement}`,
+    `select--placement-${resolvedPlacement}`,
     isOpen && 'select--open',
     disabled && 'select--disabled',
     error && 'select--error',
@@ -463,7 +509,7 @@ export const Select: React.FC<SelectProps> = ({
       </div>
 
       {isOpen && (
-        <div className={`select__dropdown select__dropdown--${placement}`} ref={dropdownRef} role="listbox">
+        <div className={`select__dropdown select__dropdown--${resolvedPlacement}`} ref={dropdownRef} role="listbox">
           {searchable && (
             <div className="select__search">
               <input

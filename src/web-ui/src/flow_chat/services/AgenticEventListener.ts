@@ -19,6 +19,7 @@ import type {
   ModelRoundCompletedEvent,
   UserSteeringInjectedEvent,
   DeepReviewQueueStateChangedEvent,
+  AcpContextUsageUpdatedEvent,
 } from '@/infrastructure/api/service-api/AgentAPI';
 import { createLogger } from '@/shared/utils/logger';
 
@@ -43,6 +44,7 @@ export interface AgenticEventCallbacks {
   onDialogTurnFailed?: (event: AgenticEvent) => void;
   onDialogTurnCancelled?: (event: AgenticEvent) => void;
   onTokenUsageUpdated?: (event: AgenticEvent) => void;
+  onAcpContextUsageUpdated?: (event: AcpContextUsageUpdatedEvent) => void;
   onContextCompressionStarted?: (event: AgenticEvent) => void;
   onContextCompressionCompleted?: (event: AgenticEvent) => void;
   onContextCompressionFailed?: (event: AgenticEvent) => void;
@@ -186,6 +188,14 @@ export class AgenticEventListener {
         const unlisten = agentAPI.onTokenUsageUpdated((event) => {
           logger.debug('Token usage updated:', event);
           callbacks.onTokenUsageUpdated?.(event);
+        });
+        this.unlistenFunctions.push(unlisten);
+      }
+
+      if (callbacks.onAcpContextUsageUpdated) {
+        const unlisten = agentAPI.onAcpContextUsageUpdated((event) => {
+          logger.debug('ACP context usage updated:', event);
+          callbacks.onAcpContextUsageUpdated?.(event);
         });
         this.unlistenFunctions.push(unlisten);
       }

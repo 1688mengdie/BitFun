@@ -13,6 +13,7 @@ import {
   FlowImageAnalysisItem,
   ImageAnalysisResult,
   AnyFlowItem,
+  AcpContextUsage,
   SessionConfig,
   SessionContextRestoreState,
   SessionHistoryState,
@@ -1390,6 +1391,49 @@ export class FlowChatStore {
       return {
         ...prev,
         sessions: newSessions
+      };
+    });
+  }
+
+  public updateAcpContextUsage(
+    sessionId: string,
+    contextUsage: { used: number; size: number; cost?: { amount: number; currency: string } }
+  ): void {
+    this.setState(prev => {
+      const session = prev.sessions.get(sessionId);
+      if (!session) return prev;
+
+      const nextUsage: AcpContextUsage = {
+        used: contextUsage.used,
+        size: contextUsage.size,
+        timestamp: Date.now(),
+      };
+      if (contextUsage.cost) {
+        nextUsage.cost = contextUsage.cost;
+      }
+
+      const currentUsage = session.currentAcpContextUsage;
+      if (
+        currentUsage &&
+        currentUsage.used === nextUsage.used &&
+        currentUsage.size === nextUsage.size &&
+        currentUsage.cost?.amount === nextUsage.cost?.amount &&
+        currentUsage.cost?.currency === nextUsage.cost?.currency
+      ) {
+        return prev;
+      }
+
+      const updatedSession = {
+        ...session,
+        currentAcpContextUsage: nextUsage,
+      };
+
+      const newSessions = new Map(prev.sessions);
+      newSessions.set(sessionId, updatedSession);
+
+      return {
+        ...prev,
+        sessions: newSessions,
       };
     });
   }

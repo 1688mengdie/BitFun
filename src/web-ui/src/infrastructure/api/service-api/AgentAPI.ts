@@ -256,6 +256,16 @@ export interface ModelRoundCompletedEvent extends AgenticEvent {
   tokenDetails?: unknown;
 }
 
+export interface AcpContextUsageUpdatedEvent extends AgenticEvent {
+  clientId?: string;
+  used: number;
+  size: number;
+  cost?: {
+    amount: number;
+    currency: string;
+  };
+}
+
 export interface CompressionEvent extends AgenticEvent {
   compressionId: string;          
   
@@ -615,6 +625,15 @@ export class AgentAPI {
    
   onTokenUsageUpdated(callback: (event: AgenticEvent) => void): () => void {
     return api.listen<AgenticEvent>('agentic://token-usage-updated', callback);
+  }
+
+  onAcpContextUsageUpdated(
+    callback: (event: AcpContextUsageUpdatedEvent) => void
+  ): () => void {
+    return api.listen<AcpContextUsageUpdatedEvent>(
+      'agentic://acp-context-usage-updated',
+      callback
+    );
   }
 
    
