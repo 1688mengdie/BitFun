@@ -221,6 +221,18 @@ async fn write_once(path: &Path, content: &str) -> BitFunResult<()> {
                     path.display(),
                     error
                 ))
+            })?;
+            // tokio::fs::File buffers writes and does NOT guarantee a flush on
+            // drop, so without an explicit flush a subsequent (possibly
+            // synchronous) read can observe an empty or partial file. This was
+            // an intermittent failure on macOS CI. flush() drains the buffer to
+            // the OS so the persisted output is visible to later readers.
+            file.flush().await.map_err(|error| {
+                BitFunError::io(format!(
+                    "Failed to flush tool result file {}: {}",
+                    path.display(),
+                    error
+                ))
             })
         }
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
