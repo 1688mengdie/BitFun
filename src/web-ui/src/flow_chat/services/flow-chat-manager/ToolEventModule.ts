@@ -10,6 +10,7 @@ import type { FlowChatContext, FlowToolItem, ToolEventOptions, DialogTurn } from
 import { immediateSaveDialogTurn } from './PersistenceModule';
 import { applyPendingAcpPermissionForTool } from './AcpPermissionToolCardModule';
 import { normalizeParamsPartialFragment } from '../EventBatcher';
+import type { FlowItem } from '../../types/flow-chat';
 import type {
   CancelledToolEvent,
   CompletedToolEvent,
@@ -267,6 +268,28 @@ function handleEarlyDetected(
   options?: ToolEventOptions
 ): void {
   flushPendingBatchedEvents(context);
+
+  // AskUserQuestion cards are rendered by the streaming engine before the tool
+  // is validated. When a stream retry regenerates the question after a parse
+  // failure, the previous card lingers. Remove any previously failed
+  // AskUserQuestion cards from all rounds so the retry replaces them cleanly.
+  if (toolEvent.tool_name === 'AskUserQuestion') {
+    store.updateDialogTurn(sessionId, turnId, (turn) => ({
+      ...turn,
+      modelRounds: turn.modelRounds.map((round) => ({
+        ...round,
+        items: round.items.filter(
+          (item: FlowItem) =>
+            !(
+              item.type === 'tool' &&
+              (item as FlowToolItem).toolName === 'AskUserQuestion' &&
+              ((item as FlowToolItem).status === 'error' ||
+                (item as FlowToolItem).status === 'cancelled')
+            ),
+        ),
+      })),
+    }));
+  }
   
   const preparingToolItem: FlowToolItem = {
     id: toolEvent.tool_id,
