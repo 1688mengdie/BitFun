@@ -570,51 +570,7 @@ impl ConfigProviderRegistry {
 
     /// Builds the default configuration.
     pub fn get_default_config(&self) -> GlobalConfig {
-        let mut config = GlobalConfig::default();
-
-        if let Some(provider) = self.get_provider("app") {
-            if let Ok(app_config) = serde_json::from_value(provider.get_default_config()) {
-                config.app = app_config;
-            }
-        }
-
-        if let Some(provider) = self.get_provider("theme") {
-            if let Ok(theme_config) = serde_json::from_value(provider.get_default_config()) {
-                config.theme = theme_config;
-            }
-        }
-
-        if let Some(provider) = self.get_provider("themes") {
-            if let Ok(themes_config) = serde_json::from_value(provider.get_default_config()) {
-                config.themes = Some(themes_config);
-            }
-        }
-
-        if let Some(provider) = self.get_provider("editor") {
-            if let Ok(editor_config) = serde_json::from_value(provider.get_default_config()) {
-                config.editor = editor_config;
-            }
-        }
-
-        if let Some(provider) = self.get_provider("terminal") {
-            if let Ok(terminal_config) = serde_json::from_value(provider.get_default_config()) {
-                config.terminal = terminal_config;
-            }
-        }
-
-        if let Some(provider) = self.get_provider("workspace") {
-            if let Ok(workspace_config) = serde_json::from_value(provider.get_default_config()) {
-                config.workspace = workspace_config;
-            }
-        }
-
-        if let Some(provider) = self.get_provider("ai") {
-            if let Ok(ai_config) = serde_json::from_value(provider.get_default_config()) {
-                config.ai = ai_config;
-            }
-        }
-
-        config
+        GlobalConfig::default()
     }
 
     /// Validates the full configuration.
