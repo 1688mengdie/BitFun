@@ -37,6 +37,7 @@ const AppContent: React.FC = () => {
   const [isReconnecting, setIsReconnecting] = useState(false);
   const clientRef = useRef<RelayHttpClient | null>(null);
   const sessionMgrRef = useRef<RemoteSessionManager | null>(null);
+  const [sessionMgr, setSessionMgr] = useState<RemoteSessionManager | null>(null);
 
   const [navDir, setNavDir] = useState<NavDirection>(null);
   const [prevPage, setPrevPage] = useState<Page | null>(null);
@@ -104,6 +105,7 @@ const AppContent: React.FC = () => {
     (client: RelayHttpClient, sessionMgr: RemoteSessionManager) => {
       clientRef.current = client;
       sessionMgrRef.current = sessionMgr;
+      setSessionMgr(sessionMgr);
       pageStackRef.current = ['pairing', 'sessions'];
       history.pushState({ page: 'sessions' }, '');
       setPage('sessions');
@@ -113,25 +115,43 @@ const AppContent: React.FC = () => {
 
   // Periodic connection health check
   useEffect(() => {
-    const mgr = sessionMgrRef.current;
-    if (!mgr) {
+    const shouldMonitor = page === 'sessions' || page === 'chat';
+    if (!shouldMonitor || !sessionMgr) {
       setIsReconnecting(false);
       return;
     }
 
-    let timer: ReturnType<typeof setInterval>;
-    const check = async () => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+
+    const pingWithTimeout = (ms: number): Promise<void> =>
+      Promise.race([
+        sessionMgr.ping(),
+        new Promise<void>((_, reject) =>
+          setTimeout(() => reject(new Error('ping timeout')), ms),
+        ),
+      ]);
+
+    const loop = async () => {
       try {
-        await mgr.ping();
-        setIsReconnecting(false);
+        await pingWithTimeout(10000);
+        if (!cancelled) setIsReconnecting(false);
       } catch {
-        setIsReconnecting(true);
+        if (!cancelled) setIsReconnecting(true);
+      }
+
+      if (!cancelled) {
+        timer = setTimeout(loop, 15000);
       }
     };
-    check();
-    timer = setInterval(check, 15000);
-    return () => clearInterval(timer);
-  }, [page === 'sessions' || page === 'chat' ? sessionMgrRef.current : null]);
+
+    loop();
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [sessionMgr, page]);
 
   // Pop navigation handlers that can be called from both UI buttons and popstate
   const doPopFromChat = useCallback(() => {
