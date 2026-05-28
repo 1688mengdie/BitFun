@@ -213,6 +213,7 @@ export class RemoteSessionManager {
     workspacePath?: string,
     limit = 30,
     offset = 0,
+    query?: string,
   ): Promise<{ sessions: SessionInfo[]; has_more: boolean }> {
     const resp = await this.request<{
       resp: string;
@@ -223,6 +224,7 @@ export class RemoteSessionManager {
       workspace_path: workspacePath ?? null,
       limit,
       offset,
+      query: query?.trim() || null,
     });
     return {
       sessions: resp.sessions || [],
@@ -329,6 +331,14 @@ export class RemoteSessionManager {
 
   async deleteSession(sessionId: string): Promise<void> {
     await this.request({ cmd: 'delete_session', session_id: sessionId });
+  }
+
+  async renameSession(sessionId: string, title: string): Promise<void> {
+    await this.request({
+      cmd: 'update_session_title',
+      session_id: sessionId,
+      title,
+    });
   }
 
   async answerQuestion(toolId: string, answers: any): Promise<void> {
