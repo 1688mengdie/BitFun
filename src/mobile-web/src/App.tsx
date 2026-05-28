@@ -172,10 +172,16 @@ const AppContent: React.FC = () => {
     clientRef.current = null;
     sessionMgrRef.current = null;
     setActiveSessionId(null);
+    localStorage.removeItem('bitfun.mobile.user_id');
     const store = useMobileStore.getState();
     store.setConnectionStatus('idle');
     store.setSessions([]);
     store.setCurrentWorkspace(null);
+    store.setCurrentAssistant(null);
+    store.setPairedDisplayMode(null);
+    store.setAuthenticatedUserId(null);
+    store.setActiveTurn(null);
+    store.setError(null);
     pageStackRef.current = ['pairing'];
     setPage('pairing');
   }, []);

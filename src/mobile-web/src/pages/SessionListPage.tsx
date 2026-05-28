@@ -1015,7 +1015,16 @@ const SessionListPage: React.FC<SessionListPageProps> = ({ sessionMgr, onSelectS
 
       {/* Disconnect Confirmation */}
       {showDisconnectConfirm && (
-        <div className="session-list__picker-overlay" onClick={() => setShowDisconnectConfirm(false)}>
+        <div
+          className="session-list__picker-overlay"
+          role="alertdialog"
+          aria-modal="true"
+          onClick={() => setShowDisconnectConfirm(false)}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') setShowDisconnectConfirm(false);
+            if (e.key === 'Enter') { setShowDisconnectConfirm(false); onDisconnect(); }
+          }}
+        >
           <div className="session-list__confirm-modal" onClick={(e) => e.stopPropagation()}>
             <div className="session-list__confirm-icon">
               <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
@@ -1030,6 +1039,7 @@ const SessionListPage: React.FC<SessionListPageProps> = ({ sessionMgr, onSelectS
               <button
                 className="session-list__confirm-btn session-list__confirm-btn--cancel"
                 onClick={() => setShowDisconnectConfirm(false)}
+                autoFocus
               >
                 {t('common.cancel')}
               </button>
