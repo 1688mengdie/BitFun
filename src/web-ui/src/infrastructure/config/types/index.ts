@@ -560,6 +560,19 @@ export interface RuntimeLoggingInfo {
   aiLogPath: string;
   flashgrepLogPath: string;
   webviewLogPath: string;
+  previousUnexpectedExit?: UnexpectedExitInfo | null;
+}
+
+export interface UnexpectedExitInfo {
+  detected: boolean;
+  startedAt?: string;
+  sessionLogDir?: string;
+  crashReportPath?: string;
+  reason: string;
+}
+
+export interface DiagnosticsBundleInfo {
+  bundlePath: string;
 }
 
 export interface DefaultModels {

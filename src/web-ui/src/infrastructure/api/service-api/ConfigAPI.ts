@@ -3,6 +3,7 @@
 import { api } from './ApiClient';
 import { createTauriCommandError } from '../errors/TauriCommandError';
 import type {
+  DiagnosticsBundleInfo,
   ModeSkillInfo,
   ModeConfigItem,
   RuntimeLoggingInfo,
@@ -180,6 +181,16 @@ export class ConfigAPI {
       });
     } catch (error) {
       throw createTauriCommandError('get_runtime_logging_info', error);
+    }
+  }
+
+  async exportDiagnosticsBundle(): Promise<DiagnosticsBundleInfo> {
+    try {
+      return await api.invoke('export_diagnostics_bundle', {
+        request: {},
+      });
+    } catch (error) {
+      throw createTauriCommandError('export_diagnostics_bundle', error);
     }
   }
 

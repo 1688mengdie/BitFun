@@ -3,6 +3,7 @@
 
 pub mod api;
 pub mod computer_use;
+pub mod crash_diagnostics;
 pub mod logging;
 pub mod macos_menubar;
 pub mod theme;
@@ -204,6 +205,8 @@ pub async fn run() {
     let log_config = logging::LogConfig::new(in_debug);
     let log_targets = logging::build_log_targets(&log_config);
     let session_log_dir = log_config.session_log_dir.clone();
+    crash_diagnostics::initialize_run_state(session_log_dir.clone(), &startup_trace_id);
+    setup_panic_hook();
 
     eprintln!("=== BitFun Desktop Starting ===");
 
@@ -285,8 +288,6 @@ pub async fn run() {
 
     let path_manager = get_path_manager_arc();
 
-    setup_panic_hook();
-
     let app = tauri::Builder::default()
         .plugin(logging::build_log_plugin(log_targets))
         .plugin(tauri_plugin_opener::init())
@@ -326,6 +327,7 @@ pub async fn run() {
             }
 
             logging::register_runtime_log_state(startup_log_level, session_log_dir.clone());
+            crash_diagnostics::log_previous_unexpected_exit_if_any();
             for step in startup_timings.steps() {
                 log::debug!(
                     "Desktop startup step completed: step={}, duration_ms={}",
@@ -687,6 +689,7 @@ pub async fn run() {
             sync_config_to_global,
             get_global_config_health,
             get_runtime_logging_info,
+            export_diagnostics_bundle,
             get_runtime_capabilities,
             get_mode_configs,
             get_mode_config,
@@ -1064,6 +1067,7 @@ pub async fn run() {
         Ok(app) => {
             app.run(|_app_handle, event| match event {
                 tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => {
+                    crash_diagnostics::mark_clean_shutdown("tauri_run_exit");
                     perform_process_exit_cleanup();
                 }
                 #[cfg(target_os = "macos")]
@@ -1244,6 +1248,9 @@ fn init_acp_clients(app_handle: tauri::AppHandle) {
 
 fn setup_panic_hook() {
     std::panic::set_hook(Box::new(move |panic_info| {
+        let thread = std::thread::current();
+        let thread_name = thread.name().map(str::to_string);
+        let thread_id = format!("{:?}", thread.id());
         let location = panic_info
             .location()
             .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
@@ -1262,6 +1269,12 @@ fn setup_panic_hook() {
             .unwrap_or("unknown panic message");
 
         log::error!("Application panic at {}: {}", location, message);
+        crate::crash_diagnostics::write_panic_report(
+            location.clone(),
+            message.to_string(),
+            thread_name,
+            thread_id,
+        );
 
         // Known wry bug: WKWebView.URL() returns nil after navigating to an
         // invalid address, causing url_from_webview to panic on unwrap().
