@@ -104,6 +104,7 @@ export const messages: Record<MobileLanguage, MessageTree> = {
       renameFailed: 'Rename failed',
       disconnect: 'Disconnect',
       disconnectConfirm: 'Disconnect from current desktop? You can re-pair later.',
+      reconnecting: 'Reconnecting...',
     },
     workspace: {
       title: 'Workspace',
@@ -280,6 +281,7 @@ export const messages: Record<MobileLanguage, MessageTree> = {
       renameFailed: '重命名失败',
       disconnect: '断开连接',
       disconnectConfirm: '断开当前桌面连接？之后可重新配对。',
+      reconnecting: '正在重新连接...',
     },
     workspace: {
       title: '工作区',
@@ -456,6 +458,7 @@ export const messages: Record<MobileLanguage, MessageTree> = {
       renameFailed: '重新命名失敗',
       disconnect: '斷開連接',
       disconnectConfirm: '斷開當前桌面連接？之後可重新配對。',
+      reconnecting: '正在重新連接...',
     },
     workspace: {
       title: '工作區',
@@ -535,4 +538,3 @@ export const messages: Record<MobileLanguage, MessageTree> = {
     },
   }
 };
-
