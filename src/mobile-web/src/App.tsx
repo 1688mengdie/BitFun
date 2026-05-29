@@ -8,6 +8,7 @@ import { I18nProvider } from './i18n';
 import { RelayHttpClient } from './services/RelayHttpClient';
 import { RemoteSessionManager } from './services/RemoteSessionManager';
 import { ThemeProvider } from './theme';
+import { useMobileStore } from './services/store';
 import './styles/index.scss';
 
 type Page = 'pairing' | 'workspace' | 'sessions' | 'chat';
@@ -168,6 +169,21 @@ const AppContent: React.FC = () => {
     setTimeout(() => setActiveSessionId(null), NAV_DURATION);
   }, [navigateTo]);
 
+  const handleDisconnect = useCallback(() => {
+    clientRef.current = null;
+    sessionMgrRef.current = null;
+    setActiveSessionId(null);
+    setActiveSessionName('Session');
+    setChatAutoFocus(false);
+    setPrevPage(null);
+    setNavDir(null);
+    clearTimeout(timerRef.current);
+    localStorage.removeItem('bitfun.mobile.user_id');
+    useMobileStore.getState().resetConnectionState();
+    pageStackRef.current = ['pairing'];
+    setPage('pairing');
+  }, []);
+
   const isAnimating = navDir !== null;
   const currentPage: Page = page;
 
@@ -190,6 +206,7 @@ const AppContent: React.FC = () => {
             sessionMgr={sessionMgrRef.current}
             onSelectSession={handleSelectSession}
             onOpenWorkspace={handleOpenWorkspace}
+            onDisconnect={handleDisconnect}
           />
         </div>
       )}
@@ -210,11 +227,11 @@ const AppContent: React.FC = () => {
 
 const App: React.FC = () => (
   <ThemeProvider>
-    <I18nProvider>
-      <ErrorBoundary>
+    <ErrorBoundary>
+      <I18nProvider>
         <AppContent />
-      </ErrorBoundary>
-    </I18nProvider>
+      </I18nProvider>
+    </ErrorBoundary>
   </ThemeProvider>
 );
 
