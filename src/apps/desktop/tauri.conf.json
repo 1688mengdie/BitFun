@@ -11,6 +11,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "publisher": "BitFun Team",
     "icon": [
       "icons/icon.icns",
       "icons/icon.ico",
