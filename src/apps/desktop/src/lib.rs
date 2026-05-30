@@ -328,6 +328,54 @@ pub async fn run() {
 
             logging::register_runtime_log_state(startup_log_level, session_log_dir.clone());
             crash_diagnostics::log_previous_unexpected_exit_if_any();
+
+            // Ensure the Tauri NSIS registry install-location key points to the
+            // actual install directory, so that auto-updates respect the custom
+            // install path chosen during initial installation.
+            #[cfg(target_os = "windows")]
+            {
+                use std::os::windows::process::CommandExt;
+                const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+                if let Ok(exe) = std::env::current_exe() {
+                    if let Some(install_dir) = exe.parent() {
+                        let dir_str = install_dir.to_string_lossy();
+                        let need_update =
+                            match std::process::Command::new("reg")
+                                .args([
+                                    "query",
+                                    r"HKCU\Software\BitFun Team\BitFun",
+                                    "/ve",
+                                ])
+                                .creation_flags(CREATE_NO_WINDOW)
+                                .output()
+                            {
+                                Ok(output) => {
+                                    let stdout = String::from_utf8_lossy(&output.stdout);
+                                    !stdout.contains(dir_str.as_ref())
+                                }
+                                Err(_) => true,
+                            };
+                        if need_update {
+                            let _ = std::process::Command::new("reg")
+                                .args([
+                                    "add",
+                                    r"HKCU\Software\BitFun Team\BitFun",
+                                    "/ve",
+                                    "/d",
+                                    &dir_str,
+                                    "/f",
+                                ])
+                                .creation_flags(CREATE_NO_WINDOW)
+                                .status();
+                            log::info!(
+                                "Synced Tauri install-location registry to: {}",
+                                install_dir.display()
+                            );
+                        }
+                    }
+                }
+            }
             for step in startup_timings.steps() {
                 log::debug!(
                     "Desktop startup step completed: step={}, duration_ms={}",
