@@ -29,6 +29,7 @@ use crate::util::types::ToolDefinition;
 use bitfun_ai_adapters::types::ReasoningMode;
 use dashmap::DashMap;
 use log::{debug, error, info, warn};
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
@@ -47,6 +48,7 @@ impl RoundExecutor {
     const MAX_WRITE_CONTENT_QUALITY_ATTEMPTS: usize = 2;
     const RETRY_BASE_DELAY_MS: u64 = 500;
     const WRITE_CONTENT_STREAM_IDLE_TIMEOUT_SECS: u64 = 45;
+    const AUTO_READ_AFTER_WRITE_MARKER: &'static str = "__read_after_write";
 
     fn has_user_visible_assistant_text(text: &str) -> bool {
         !text.trim().is_empty()
@@ -615,6 +617,14 @@ impl RoundExecutor {
         } else {
             tool_calls
         };
+        let assistant_tool_calls = if matches!(
+            Self::write_tool_mode(&context),
+            WriteToolMode::PlaintextFollowup
+        ) {
+            Self::strip_plaintext_followup_write_content_for_history(tool_calls.clone())
+        } else {
+            tool_calls.clone()
+        };
 
         // Execute tool calls
         debug!(
@@ -625,6 +635,8 @@ impl RoundExecutor {
         let tool_phase_started_at = Instant::now();
         let tool_results = if let Some(tool_pipeline) = &self.tool_pipeline {
             // Create tool execution context
+            let allowed_tools =
+                Self::allowed_tools_for_execution(&context.available_tools, &tool_calls);
             let tool_context = ToolExecutionContext {
                 session_id: context.session_id.clone(),
                 dialog_turn_id: context.dialog_turn_id.clone(),
@@ -636,7 +648,7 @@ impl RoundExecutor {
                 delegation_policy: context.delegation_policy,
                 collapsed_tools: context.collapsed_tools.clone(),
                 unlocked_collapsed_tools: context.unlocked_collapsed_tools.clone(),
-                allowed_tools: context.available_tools.clone(),
+                allowed_tools,
                 runtime_tool_restrictions: context.runtime_tool_restrictions.clone(),
                 steering_interrupt: context.steering_interrupt.clone(),
                 workspace_services: context.workspace_services.clone(),
@@ -768,7 +780,7 @@ impl RoundExecutor {
         let assistant_message = Message::assistant_with_reasoning(
             reasoning,
             stream_result.full_text.clone(),
-            tool_calls.clone(),
+            assistant_tool_calls.clone(),
         )
         .with_turn_id(context.dialog_turn_id.clone())
         .with_round_id(round_id.clone())
@@ -824,7 +836,7 @@ impl RoundExecutor {
 
         Ok(RoundResult {
             assistant_message,
-            tool_calls: tool_calls.clone(),
+            tool_calls: assistant_tool_calls,
             tool_result_messages,
             has_more_rounds,
             finish_reason: if has_more_rounds {
@@ -897,7 +909,9 @@ impl RoundExecutor {
     /// separate AI request with the full session history and a directive to
     /// output the file content as plain text inside `<bitfun_contents>` tags.
     /// The extracted content is then injected into the tool call arguments so
-    /// the downstream Write tool execution proceeds as normal.
+    /// the downstream Write tool execution proceeds as normal. A synthetic Read
+    /// call is added after each generated Write so the next model round sees
+    /// the written file through the normal file-reading contract.
     async fn generate_write_tool_contents(
         &self,
         ai_client: Arc<AIClient>,
@@ -927,10 +941,16 @@ impl RoundExecutor {
             return Ok(tool_calls);
         }
 
+        // PlaintextFollowup injects a synthetic Read after each generated Write.
+        // Fail fast before the slow content-generation requests if Read cannot run.
+        Self::ensure_auto_read_after_write_executable(context).await?;
+
         info!(
             "Generating content for {} Write tool call(s) via separate AI request",
             write_indices.len()
         );
+
+        let mut generated_write_reads: Vec<(String, String)> = Vec::new();
 
         for idx in &write_indices {
             if cancel_token.is_cancelled() {
@@ -1168,6 +1188,7 @@ impl RoundExecutor {
                 .as_object_mut()
                 .expect("Write tool arguments must be a JSON object")
                 .insert("content".to_string(), serde_json::Value::String(content));
+            generated_write_reads.push((tool_id.clone(), file_path.clone()));
 
             debug!(
                 "Write content generated: file_path={}, content_len={}",
@@ -1181,7 +1202,146 @@ impl RoundExecutor {
             );
         }
 
+        if !generated_write_reads.is_empty() {
+            tool_calls = Self::insert_auto_read_calls_after_generated_writes(
+                tool_calls,
+                &generated_write_reads,
+            );
+        }
+
         Ok(tool_calls)
+    }
+
+    async fn ensure_auto_read_after_write_executable(context: &RoundContext) -> BitFunResult<()> {
+        context
+            .runtime_tool_restrictions
+            .ensure_tool_allowed("Read")
+            .map_err(BitFunError::from)?;
+
+        let registry = get_global_tool_registry();
+        let tool_registry = registry.read().await;
+        if tool_registry.get_tool("Read").is_none() {
+            return Err(BitFunError::tool(
+                "PlaintextFollowup Write requires the Read tool to be registered so the system can inspect the file after writing.".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+
+    fn allowed_tools_for_execution(
+        available_tools: &[String],
+        tool_calls: &[ToolCall],
+    ) -> Vec<String> {
+        let mut allowed_tools = available_tools.to_vec();
+        if allowed_tools.is_empty()
+            || !Self::contains_auto_read_after_write(tool_calls)
+            || allowed_tools.iter().any(|tool| tool == "Read")
+        {
+            return allowed_tools;
+        }
+
+        // The post-Write Read is injected by the runtime, not selected by the
+        // model from the visible manifest. Permit that synthetic Read through
+        // the execution allow-list while keeping runtime restrictions enforced.
+        allowed_tools.push("Read".to_string());
+        allowed_tools
+    }
+
+    fn contains_auto_read_after_write(tool_calls: &[ToolCall]) -> bool {
+        tool_calls.iter().any(|tool_call| {
+            tool_call.tool_name == "Read"
+                && tool_call
+                    .tool_id
+                    .contains(Self::AUTO_READ_AFTER_WRITE_MARKER)
+        })
+    }
+
+    fn insert_auto_read_calls_after_generated_writes(
+        tool_calls: Vec<ToolCall>,
+        generated_write_reads: &[(String, String)],
+    ) -> Vec<ToolCall> {
+        if generated_write_reads.is_empty() {
+            return tool_calls;
+        }
+
+        let generated_by_tool_id: HashMap<String, String> =
+            generated_write_reads.iter().cloned().collect();
+        let mut existing_ids: HashSet<String> = tool_calls
+            .iter()
+            .map(|tool_call| tool_call.tool_id.clone())
+            .collect();
+        let original_tool_calls = tool_calls.clone();
+        let mut expanded =
+            Vec::with_capacity(tool_calls.len().saturating_add(generated_write_reads.len()));
+
+        for tool_call in tool_calls {
+            let write_tool_id = tool_call.tool_id.clone();
+            let read_file_path = generated_by_tool_id.get(&write_tool_id).cloned();
+            expanded.push(tool_call);
+
+            let Some(file_path) = read_file_path else {
+                continue;
+            };
+
+            if Self::has_later_read_for_file(&original_tool_calls, &write_tool_id, &file_path) {
+                continue;
+            }
+
+            let read_tool_id = Self::unique_auto_read_tool_id(&write_tool_id, &mut existing_ids);
+            expanded.push(ToolCall {
+                tool_id: read_tool_id,
+                tool_name: "Read".to_string(),
+                arguments: serde_json::json!({ "file_path": file_path }),
+                raw_arguments: None,
+                is_error: false,
+                recovered_from_truncation: false,
+            });
+        }
+
+        expanded
+    }
+
+    fn has_later_read_for_file(
+        tool_calls: &[ToolCall],
+        write_tool_id: &str,
+        file_path: &str,
+    ) -> bool {
+        let mut after_write = false;
+        for tool_call in tool_calls {
+            if after_write
+                && tool_call.tool_name == "Read"
+                && tool_call
+                    .arguments
+                    .get("file_path")
+                    .and_then(|value| value.as_str())
+                    == Some(file_path)
+            {
+                return true;
+            }
+            if tool_call.tool_id == write_tool_id {
+                after_write = true;
+            }
+        }
+        false
+    }
+
+    fn unique_auto_read_tool_id(write_tool_id: &str, existing_ids: &mut HashSet<String>) -> String {
+        let base = format!("{write_tool_id}{}", Self::AUTO_READ_AFTER_WRITE_MARKER);
+        let mut candidate = base.clone();
+        let mut suffix = 2usize;
+        while !existing_ids.insert(candidate.clone()) {
+            candidate = format!("{base}_{suffix}");
+            suffix += 1;
+        }
+        candidate
+    }
+
+    fn strip_plaintext_followup_write_content_for_history(
+        mut tool_calls: Vec<ToolCall>,
+    ) -> Vec<ToolCall> {
+        FileWriteTool::strip_plaintext_followup_inline_content_from_tool_calls(&mut tool_calls);
+        tool_calls
     }
 
     /// Build the message list for Write content generation.
@@ -2067,11 +2227,168 @@ mod tests {
         assert_eq!(messages[3].role, "user");
         assert_eq!(messages[4].role, "assistant");
         assert_eq!(messages[4].content.as_deref(), Some("<bitfun_contents>"));
-        assert!(
-            messages[4]
-                .content
-                .as_deref()
-                .is_some_and(|content| !content.ends_with(char::is_whitespace))
+        assert!(messages[4]
+            .content
+            .as_deref()
+            .is_some_and(|content| !content.ends_with(char::is_whitespace)));
+    }
+
+    #[test]
+    fn generated_write_gets_followup_read_call() {
+        let tool_calls = vec![
+            crate::agentic::core::ToolCall {
+                tool_id: "write-1".to_string(),
+                tool_name: "Write".to_string(),
+                arguments: serde_json::json!({
+                    "file_path": "notes.md",
+                    "content": "hello"
+                }),
+                raw_arguments: None,
+                is_error: false,
+                recovered_from_truncation: false,
+            },
+            crate::agentic::core::ToolCall {
+                tool_id: "bash-1".to_string(),
+                tool_name: "Bash".to_string(),
+                arguments: serde_json::json!({ "command": "pwd" }),
+                raw_arguments: None,
+                is_error: false,
+                recovered_from_truncation: false,
+            },
+        ];
+
+        let expanded = RoundExecutor::insert_auto_read_calls_after_generated_writes(
+            tool_calls,
+            &[("write-1".to_string(), "notes.md".to_string())],
+        );
+
+        assert_eq!(
+            expanded
+                .iter()
+                .map(|tool_call| tool_call.tool_name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Write", "Read", "Bash"]
+        );
+        assert_eq!(expanded[1].tool_id, "write-1__read_after_write".to_string());
+        assert_eq!(
+            expanded[1].arguments,
+            serde_json::json!({ "file_path": "notes.md" })
+        );
+    }
+
+    #[test]
+    fn generated_write_does_not_duplicate_existing_later_read() {
+        let tool_calls = vec![
+            crate::agentic::core::ToolCall {
+                tool_id: "write-1".to_string(),
+                tool_name: "Write".to_string(),
+                arguments: serde_json::json!({
+                    "file_path": "notes.md",
+                    "content": "hello"
+                }),
+                raw_arguments: None,
+                is_error: false,
+                recovered_from_truncation: false,
+            },
+            crate::agentic::core::ToolCall {
+                tool_id: "read-1".to_string(),
+                tool_name: "Read".to_string(),
+                arguments: serde_json::json!({ "file_path": "notes.md" }),
+                raw_arguments: None,
+                is_error: false,
+                recovered_from_truncation: false,
+            },
+        ];
+
+        let expanded = RoundExecutor::insert_auto_read_calls_after_generated_writes(
+            tool_calls,
+            &[("write-1".to_string(), "notes.md".to_string())],
+        );
+
+        assert_eq!(expanded.len(), 2);
+        assert_eq!(expanded[1].tool_id, "read-1");
+    }
+
+    #[test]
+    fn synthetic_post_write_read_is_allowed_for_execution_when_hidden_from_model() {
+        let tool_calls = vec![
+            crate::agentic::core::ToolCall {
+                tool_id: "write-1".to_string(),
+                tool_name: "Write".to_string(),
+                arguments: serde_json::json!({
+                    "file_path": "notes.md",
+                    "content": "hello"
+                }),
+                raw_arguments: None,
+                is_error: false,
+                recovered_from_truncation: false,
+            },
+            crate::agentic::core::ToolCall {
+                tool_id: "write-1__read_after_write".to_string(),
+                tool_name: "Read".to_string(),
+                arguments: serde_json::json!({ "file_path": "notes.md" }),
+                raw_arguments: None,
+                is_error: false,
+                recovered_from_truncation: false,
+            },
+        ];
+
+        let allowed =
+            RoundExecutor::allowed_tools_for_execution(&["Write".to_string()], &tool_calls);
+
+        assert_eq!(allowed, vec!["Write".to_string(), "Read".to_string()]);
+    }
+
+    #[test]
+    fn regular_read_is_not_added_to_execution_allow_list() {
+        let tool_calls = vec![crate::agentic::core::ToolCall {
+            tool_id: "read-1".to_string(),
+            tool_name: "Read".to_string(),
+            arguments: serde_json::json!({ "file_path": "notes.md" }),
+            raw_arguments: None,
+            is_error: false,
+            recovered_from_truncation: false,
+        }];
+
+        let allowed =
+            RoundExecutor::allowed_tools_for_execution(&["Write".to_string()], &tool_calls);
+
+        assert_eq!(allowed, vec!["Write".to_string()]);
+    }
+
+    #[test]
+    fn plaintext_followup_history_strips_generated_write_content() {
+        let tool_calls = vec![
+            crate::agentic::core::ToolCall {
+                tool_id: "write-1".to_string(),
+                tool_name: "Write".to_string(),
+                arguments: serde_json::json!({
+                    "file_path": "notes.md",
+                    "content": "system generated body"
+                }),
+                raw_arguments: None,
+                is_error: false,
+                recovered_from_truncation: false,
+            },
+            crate::agentic::core::ToolCall {
+                tool_id: "write-1__read_after_write".to_string(),
+                tool_name: "Read".to_string(),
+                arguments: serde_json::json!({ "file_path": "notes.md" }),
+                raw_arguments: None,
+                is_error: false,
+                recovered_from_truncation: false,
+            },
+        ];
+
+        let history = RoundExecutor::strip_plaintext_followup_write_content_for_history(tool_calls);
+
+        assert_eq!(
+            history[0].arguments,
+            serde_json::json!({ "file_path": "notes.md" })
+        );
+        assert_eq!(
+            history[1].arguments,
+            serde_json::json!({ "file_path": "notes.md" })
         );
     }
 

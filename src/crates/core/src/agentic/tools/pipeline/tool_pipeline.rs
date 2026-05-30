@@ -62,7 +62,7 @@ fn is_write_like_tool_name(tool_name: &str) -> bool {
 fn build_truncation_recovery_notice(tool_name: &str) -> String {
     if is_write_like_tool_name(tool_name) {
         return format!(
-            "[Your previous {tool_name} call was truncated mid-stream by max_tokens and was auto-repaired before execution; the file was written with the partial content. The full truncated content — including the exact stopping point — is visible in the `input` of your previous tool_use message, so you do NOT need to read the file again. To finish it, issue ONE Edit call where `old_string` is the final unique substring of your truncated content and `new_string` is that same substring plus the continuation. If you do not have a concrete plan for the continuation, stop tool-calling and tell the user the output was truncated (suggest raising max_tokens). Do NOT call Read on this file and do NOT rewrite the whole file with Write.]\n\nOriginal tool result follows.\n\n"
+            "[Your previous {tool_name} call was truncated mid-stream by max_tokens and was auto-repaired before execution; the file may have been written with partial content. Use the latest Read result for that file (or call Read once if no current Read result is available) to inspect what is on disk. To finish it, issue ONE Edit call where `old_string` is a final unique substring from the current file and `new_string` is that same substring plus the continuation. If you do not have a concrete plan for the continuation, stop tool-calling and tell the user the output was truncated (suggest raising max_tokens). Do NOT rewrite the whole file with Write.]\n\nOriginal tool result follows.\n\n"
         );
     }
 
@@ -658,7 +658,7 @@ impl ToolPipeline {
         // identical call within the per-session sliding window.
         if self.check_and_record_tool_call(&task.context.session_id, &tool_name, &tool_args) {
             let error_msg = format!(
-                "Tool-call loop blocked: '{}' was already called {} times in a row in this session with identical arguments. Refusing to execute this {}th identical call. Issue a different tool call, or stop tool-calling and respond to the user. If you wrote a file recently and want to continue it, its full content is already visible in your earlier tool_use message — use Edit with `old_string` taken from the end of that content; do not Read the file again.",
+                "Tool-call loop blocked: '{}' was already called {} times in a row in this session with identical arguments. Refusing to execute this {}th identical call. Issue a different tool call, or stop tool-calling and respond to the user. If you wrote a file recently and want to continue or modify it, do not call Write again for the same path; use the latest Read result for that file, or call Read once if no current Read result is available, then use Edit with `old_string` taken from the current file content.",
                 tool_name,
                 TOOL_CALL_LOOP_THRESHOLD,
                 TOOL_CALL_LOOP_THRESHOLD + 1
@@ -1580,7 +1580,8 @@ mod tests {
     fn truncation_notice_for_write_tools_keeps_write_continuation_guidance() {
         let notice = build_truncation_recovery_notice("Write");
 
-        assert!(notice.contains("file was written with the partial content"));
+        assert!(notice.contains("file may have been written with partial content"));
+        assert!(notice.contains("latest Read result"));
         assert!(notice.contains("issue ONE Edit call"));
     }
 

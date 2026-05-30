@@ -539,10 +539,6 @@ impl ExecutionEngine {
             .unwrap_or_else(|| "auto".to_string())
     }
 
-    fn should_use_fast_auto_model(turn_index: usize, original_user_input: &str) -> bool {
-        turn_index == 0 && original_user_input.chars().count() <= 10
-    }
-
     fn collect_unlocked_collapsed_tools(
         messages: &[Message],
         collapsed_tools: &[String],
@@ -822,9 +818,11 @@ impl ExecutionEngine {
         let resolved_configured_model_id =
             Self::resolve_configured_model_id(&ai_config, &configured_model_id);
 
-        let model_id = if configured_model_id == "auto" || resolved_configured_model_id == "auto" {
-            let use_fast_model = Self::should_use_fast_auto_model(turn_index, original_user_input);
-            let fallback_model = if use_fast_model { "fast" } else { "primary" };
+        let model_id = if configured_model_id == "auto"
+            || configured_model_id == "default"
+            || resolved_configured_model_id == "auto"
+        {
+            let fallback_model = "primary";
             let resolved_model_id = ai_config.resolve_model_selection(fallback_model);
 
             if let Some(resolved_model_id) = resolved_model_id {
@@ -3167,25 +3165,6 @@ mod tests {
             enabled: true,
             ..Default::default()
         }
-    }
-
-    #[test]
-    fn auto_model_uses_fast_for_short_first_message() {
-        assert!(ExecutionEngine::should_use_fast_auto_model(0, "你好"));
-        assert!(ExecutionEngine::should_use_fast_auto_model(0, "1234567890"));
-    }
-
-    #[test]
-    fn auto_model_uses_primary_for_long_first_message() {
-        assert!(!ExecutionEngine::should_use_fast_auto_model(
-            0,
-            "12345678901"
-        ));
-    }
-
-    #[test]
-    fn auto_model_uses_primary_after_first_turn() {
-        assert!(!ExecutionEngine::should_use_fast_auto_model(1, "短消息"));
     }
 
     #[test]

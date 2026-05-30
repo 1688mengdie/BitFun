@@ -1,4 +1,7 @@
 use crate::agentic::core::ToolCall;
+use crate::agentic::execution::write_content_sanitizer::{
+    contains_tool_invocation_artifacts, strip_tool_invocation_artifacts,
+};
 use crate::agentic::tools::file_read_state_runtime::{
     assert_file_not_unexpectedly_modified, file_mutation_timestamp_ms, get_stored_file_read_state,
     local_file_modification_time_ms, read_current_file_content, read_state_tracking_enabled,
@@ -7,9 +10,6 @@ use crate::agentic::tools::file_read_state_runtime::{
 };
 use crate::agentic::tools::file_tool_guidance::{
     file_tool_guidance_message, is_file_tool_guidance_message,
-};
-use crate::agentic::execution::write_content_sanitizer::{
-    contains_tool_invocation_artifacts, strip_tool_invocation_artifacts,
 };
 use crate::agentic::tools::framework::{
     Tool, ToolPathResolution, ToolRenderOptions, ToolResult, ToolUseContext, ValidationResult,
@@ -186,25 +186,29 @@ impl FileWriteTool {
     fn write_success_result(
         logical_path: &str,
         bytes_written: usize,
+        lines_written: usize,
         status: &str,
         assistant_message: String,
-        content: &str,
     ) -> ToolResult {
-        let result_for_assistant = format!(
-            "{assistant_message}\n\nWritten content:\n<bitfun_contents>\n{content}</bitfun_contents>"
-        );
-
         ToolResult::Result {
             data: json!({
                 "file_path": logical_path,
                 "bytes_written": bytes_written,
+                "lines_written": lines_written,
                 "success": true,
                 "status": status,
                 "message": assistant_message,
-                "content": content,
             }),
-            result_for_assistant: Some(result_for_assistant),
+            result_for_assistant: Some(assistant_message),
             image_attachments: None,
+        }
+    }
+
+    fn count_written_lines(content: &str) -> usize {
+        if content.is_empty() {
+            0
+        } else {
+            content.lines().count().max(1)
         }
     }
 
@@ -280,6 +284,7 @@ Usage:
 - ALWAYS prefer editing existing files in the codebase. NEVER write new files unless explicitly required.
 - Keep writes focused. The 200-line / 20KB guideline is a soft reliability threshold, not a hard cap. If a task genuinely needs more content, preserve correctness and use a staged plan instead of truncating.
 - For existing files, prefer Read + targeted Edit calls. For large new files or rewrites, write the stable scaffold first, then fill or revise sections with focused Edit calls. Do not replace an entire existing file just to change a few sections.
+- After a successful Write, do not call Write again for the same path to continue, refine, or patch the file. Use Read + Edit instead.
 - NEVER proactively create documentation files (*.md) or README files. Only create documentation files if explicitly requested by the User.
 - Only use emojis if the user explicitly requests it. Avoid writing emojis to files unless asked.
 - Include the complete file content in the `content` argument."#
@@ -296,6 +301,7 @@ Usage:
 - The file_path parameter must be workspace-relative, an absolute path inside the current workspace, or an exact `bitfun://runtime/...` URI returned by another tool.
 - ALWAYS prefer editing existing files in the codebase. NEVER write new files unless explicitly required.
 - Keep writes focused. For existing files, prefer Read + targeted Edit calls. Use Write only when you need to replace the entire file or create a new one.
+- After a successful Write, the system reads the file back. Use that post-write Read result for any follow-up Edit. Do not call Write again for the same path to continue, refine, or patch the file.
 - NEVER proactively create documentation files (*.md) or README files. Only create documentation files if explicitly requested by the User.
 - Only use emojis if the user explicitly requests it. Avoid writing emojis to files unless asked.
 - IMPORTANT — two-step protocol: This tool's schema accepts ONLY `file_path`. Do NOT include a `content` field; any inline content will be discarded. After your tool call, the system automatically issues a separate follow-up request that asks you to output the complete file body inside `<bitfun_contents>` tags, and that text is then written to disk.
@@ -427,12 +433,12 @@ Usage:
             let result = Self::write_success_result(
                 &resolved.logical_path,
                 0,
+                0,
                 "already_exists_same_content",
                 format!(
                     "Write skipped because {} already exists with identical content.",
                     resolved.logical_path
                 ),
-                content,
             );
             return Ok(vec![result]);
         }
@@ -489,9 +495,9 @@ Usage:
         let result = Self::write_success_result(
             &resolved.logical_path,
             content.len(),
+            Self::count_written_lines(content),
             status,
             assistant_message,
-            content,
         );
 
         Ok(vec![result])
@@ -625,16 +631,17 @@ mod tests {
         };
         assert_eq!(data["success"], true);
         assert_eq!(data["bytes_written"], 0);
+        assert_eq!(data["lines_written"], 0);
         assert_eq!(data["status"], "already_exists_same_content");
-        assert_eq!(data["content"], "same content");
         assert!(result_for_assistant
             .as_deref()
             .unwrap_or_default()
             .contains("identical content"));
-        assert!(result_for_assistant
+        assert!(!data.as_object().unwrap().contains_key("content"));
+        assert!(!result_for_assistant
             .as_deref()
             .unwrap_or_default()
-            .contains("<bitfun_contents>\nsame content</bitfun_contents>"));
+            .contains("<bitfun_contents>"));
     }
 
     #[tokio::test]
@@ -661,7 +668,9 @@ mod tests {
             panic!("expected result");
         };
         assert_eq!(data["status"], "overwritten");
-        assert_eq!(data["content"], "new content");
+        assert_eq!(data["bytes_written"], "new content".len());
+        assert_eq!(data["lines_written"], 1);
+        assert!(!data.as_object().unwrap().contains_key("content"));
     }
 
     #[tokio::test]
@@ -903,11 +912,13 @@ mod tests {
         else {
             panic!("expected result");
         };
-        assert_eq!(data["content"], body);
-        assert!(result_for_assistant
+        assert_eq!(data["bytes_written"], body.len());
+        assert_eq!(data["lines_written"], 1);
+        assert!(!data.as_object().unwrap().contains_key("content"));
+        assert!(!result_for_assistant
             .as_deref()
             .unwrap_or_default()
-            .contains("<bitfun_contents>\nsystem generated body</bitfun_contents>"));
+            .contains("<bitfun_contents>"));
     }
 }
 
