@@ -266,6 +266,74 @@
       "workspacePath": "專案路徑"
     }
   },
+  "threadGoal": {
+    "replaceConfirmTitle": "替換執行緒目標？",
+    "replaceConfirmMessage": "是否替換當前目標？\n\n當前：{{existing}}\n\n新目標：{{next}}",
+    "menuTitle": "執行緒目標",
+    "objectiveLabel": "目標描述",
+    "updatedUserMessage": "執行緒目標已更新：{{objective}}",
+    "kickoffUserMessage": "繼續推進執行緒目標：{{objective}}",
+    "continuationCheckHeader": "目標完成檢查",
+    "continuationCheckHeaderWithAttempt": "目標完成檢查（自動續跑 {{attempt}}/{{max}}）",
+    "continuationCheckUserMessage": "目標完成檢查：{{objective}}",
+    "menuEmpty": "尚未設定執行緒目標。填寫目標描述後，代理會在閒置時持續朝該方向推進。",
+    "workflow": {
+      "title": "完成檢查",
+      "steps": {
+        "continue": "每輪對話結束後自動續跑，朝目標繼續推進",
+        "audit": "依目前證據逐項核對目標是否真正達成（非表面完成）",
+        "complete": "證據充分後由代理呼叫 update_goal 標記為「已完成」"
+      },
+      "note": {
+        "active": "目標仍為進行中時，每輪對話結束會自動續跑（最多 100 次），直到代理呼叫 update_goal 標為已完成或達到上限。",
+        "complete": "目標已標記完成。如需繼續其他工作，可編輯或清除目標。",
+        "paused": "目標已暫停，續跑與完成檢查已停止。",
+        "blocked": "目標已阻塞，需你介入或環境變化後再 /goal resume。",
+        "usageLimited": "因用量限制暫停，恢復額度後可 /goal resume。",
+        "budgetLimited": "已達 token 預算上限，可編輯目標或清除後重新設定。"
+      }
+    },
+    "editTitleCreate": "設定執行緒目標",
+    "editTitleUpdate": "編輯執行緒目標",
+    "editHint": "輸入目標描述並儲存；工作階段閒置時會繼續朝該目標推進。",
+    "editPlaceholder": "目標描述…",
+    "editCancel": "返回",
+    "editSave": "儲存",
+    "resumeTitle": "恢復已暫停的目標？",
+    "resumeSubtitle": "目標：{{objective}}",
+    "resumeHint": "標記為進行中後，工作階段閒置時會繼續執行。也可保持暫停，稍後用 /goal resume。",
+    "resumeConfirm": "恢復目標",
+    "resumeLeavePaused": "保持暫停",
+    "stripTooltipEmpty": "設定或檢視執行緒目標",
+    "stripTooltipWithGoal": "{{status}}：{{objective}}",
+    "stripOpenEmpty": "開啟執行緒目標",
+    "stripOpenWithGoal": "開啟執行緒目標選單",
+    "usageTokens": "Token {{used}} / {{budget}}",
+    "usageTime": "已耗時 {{seconds}} 秒",
+    "status": {
+      "active": "進行中",
+      "paused": "已暫停",
+      "blocked": "已阻擋",
+      "usageLimited": "用量已觸上限",
+      "budgetLimited": "預算受限"
+    },
+    "action": {
+      "pause": "暫停",
+      "resume": "恢復",
+      "clear": "移除",
+      "set": "設定目標"
+    },
+    "commandHint": {
+      "none": "指令：/goal <目標描述>",
+      "default": "指令：/goal edit、/goal pause、/goal clear",
+      "active": "指令：/goal edit、/goal pause、/goal clear",
+      "paused": "指令：/goal edit、/goal resume、/goal clear",
+      "blocked": "指令：/goal edit、/goal resume、/goal clear",
+      "usageLimited": "指令：/goal edit、/goal resume、/goal clear",
+      "budgetLimited": "指令：/goal edit、/goal clear",
+      "complete": "指令：/goal edit、/goal clear"
+    }
+  },
   "agentCompanion": {
     "activity": {
       "starting": "啟動中",
@@ -494,15 +562,16 @@
     "compactUsage": "請直接使用 /compact，不要附加額外參數。",
     "compactFailed": "會話壓縮失敗",
     "goalAction": "會話目標",
-    "goalGenerating": "正在生成目標…",
-    "goalVerifying": "正在驗證目標是否達成…",
     "goalAchieved": "會話目標已達成",
     "goalVerifyFailed": "目標驗證失敗，請檢查模型設定後重試。",
     "goalNoSession": "目前沒有可用於 /goal 的會話",
     "goalUsage": "使用 /goal 並可選擇附加目標描述，例如 /goal 修復登入問題。",
-    "goalFailed": "目標模式啟用失敗",
-    "goalAiFailed": "目標模式 AI 請求失敗，請檢查模型設定後重試。",
-    "goalActivated": "會話目標已啟用",
+    "goalFailed": "執行緒目標操作失敗",
+    "goalActivated": "執行緒目標已設定",
+    "goalCleared": "執行緒目標已清除",
+    "goalPaused": "執行緒目標已暫停",
+    "goalResumed": "執行緒目標已恢復",
+    "goalEdited": "執行緒目標已更新",
     "goalNestedDisabled": "目標模式只能從主會話啟動。",
     "initAction": "生成 AGENTS.md",
     "initNoSession": "目前沒有可用於 /init 的會話",

@@ -69,9 +69,13 @@ export const UserMessageItem = React.memo<UserMessageItemProps>(
     const messageContent = typeof message?.content === 'string' ? message.content : String(message?.content || '');
     const messageImages = useMemo(() => message?.images ?? [], [message?.images]);
     const isUsageReportMessage = message?.metadata?.localCommandKind === 'usage_report';
-    const isGoalPendingMessage = message?.metadata?.localCommandKind === 'goal_pending';
-    const isGoalVerifyingMessage = message?.metadata?.localCommandKind === 'goal_verifying';
-    const isGoalLoadingMessage = isGoalPendingMessage || isGoalVerifyingMessage;
+    const isGoalLoadingMessage = Boolean(message?.metadata?.threadGoalKickoff);
+    const isThreadGoalContinuationCheck = Boolean(message?.metadata?.threadGoalContinuation);
+    const isThreadGoalSystemMessage = Boolean(
+      message?.metadata?.threadGoalKickoff
+      || message?.metadata?.threadGoalObjectiveUpdated
+      || message?.metadata?.threadGoalContinuation
+    );
     const isUsageReportLoading = message?.metadata?.usageReportStatus === 'loading';
     const usageReport = coerceSessionUsageReport(message?.metadata?.usageReport);
     const sessionRelationship = useMemo(
@@ -102,10 +106,11 @@ export const UserMessageItem = React.memo<UserMessageItemProps>(
       allowUserMessageEdit &&
       !!resolvedSessionId &&
       turnIndex >= 0 &&
+      !isThreadGoalSystemMessage &&
       !isSystemTriggered &&
       !steeringStatus;
     const canEdit = canEditBase && !isEditSubmitting && !isRollingBack;
-    const canShowEditAction = allowUserMessageEdit && !isFailed;
+    const canShowEditAction = allowUserMessageEdit && !isFailed && !isThreadGoalSystemMessage;
     const editDisabledReason = isSystemTriggered
       ? t('message.cannotEdit')
       : steeringStatus
@@ -126,6 +131,9 @@ export const UserMessageItem = React.memo<UserMessageItemProps>(
       const reproduction = reproductionMatch ? reproductionMatch[1].trim() : null;
 
       let cleaned = messageContent.replace(reproductionRegex, '').trim();
+      if (isThreadGoalContinuationCheck) {
+        cleaned = cleaned.replace(/\s*\n+\s*/g, ' ').trim();
+      }
 
       // Strip [Image: ...] context lines when images are shown as thumbnails.
       if (messageImages.length > 0) {
@@ -135,7 +143,7 @@ export const UserMessageItem = React.memo<UserMessageItemProps>(
       }
 
       return { displayText: cleaned, reproductionSteps: reproduction };
-    }, [messageContent, messageImages]);
+    }, [isThreadGoalContinuationCheck, messageContent, messageImages]);
     
     // Check whether content overflows.
     useEffect(() => {

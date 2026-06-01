@@ -35,7 +35,9 @@ import { useChatInputState } from '../store/chatInputStateStore';
 import { useInputHistoryStore } from '../store/inputHistoryStore';
 import { startBtwThread } from '../services/BtwThreadService';
 import { runUsageReportCommand } from '../services/usageReportService';
-import { isGoalSlashCommand, parseGoalCommand, runGoalCommandSafely } from '../services/goalService';
+import { isGoalSlashCommand, parseGoalCommand } from '../services/goalService';
+import { useThreadGoalController } from '../hooks/useThreadGoalController';
+import { ThreadGoalDialogs } from './thread-goal/ThreadGoalDialogs';
 import { FlowChatManager } from '@/flow_chat';
 import {
   DEEP_REVIEW_SLASH_COMMAND,
@@ -269,6 +271,9 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     : undefined;
   const effectiveTargetRelationship = resolveSessionRelationship(effectiveTargetSession);
   const isBtwSession = effectiveTargetRelationship.displayAsChild;
+  const threadGoalController = useThreadGoalController(effectiveTargetSession, {
+    isBtwSession,
+  });
   const currentSessionTitle = currentSession?.title?.trim() || t('session.untitled');
   const activeBtwSession = activeBtwSessionId
     ? flowChatState.sessions.get(activeBtwSessionId)
@@ -1640,8 +1645,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     }
 
     const message = inputState.value.trim();
-    const parsed = parseGoalCommand(message);
-    if (!parsed) {
+    if (!isGoalSlashCommand(message)) {
       notificationService.warning(
         t('chatInput.goalUsage')
       );
@@ -1653,32 +1657,24 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     setQueuedInput(null);
     setSlashCommandState({ isActive: false, kind: 'modes', query: '', selectedIndex: 0 });
 
-    const result = await runGoalCommandSafely({
-      session: effectiveTargetSession,
-      userHint: parsed.userHint,
-      loadingMessage: t('chatInput.goalGenerating'),
-      failedTitle: t('chatInput.goalFailed'),
-      unknownErrorMessage: t('error.unknown'),
-      aiFailedMessage: t('chatInput.goalAiFailed'),
-      activatedTitle: t('chatInput.goalActivated'),
-    });
+    const parsed = parseGoalCommand(message);
+    const result = await threadGoalController.runSlashAction(message);
 
-    if (!result) {
+    if (!result && parsed?.kind === 'set') {
       dispatchInput({ type: 'ACTIVATE' });
       dispatchInput({ type: 'SET_VALUE', payload: originalMessage });
       return;
     }
 
-    onSendMessage?.(result.goalText);
     dispatchInput({ type: 'DEACTIVATE' });
   }, [
     effectiveTargetSession,
     effectiveTargetSessionId,
     inputState.value,
     isBtwSession,
-    onSendMessage,
     setQueuedInput,
     t,
+    threadGoalController,
   ]);
 
   const submitDeepreviewFromInput = useCallback(async () => {
@@ -3160,8 +3156,25 @@ export const ChatInput: React.FC<ChatInputProps> = ({
               ? { visible: true, onOpen: handleToolbarUsageReport }
               : undefined
           }
+          threadGoal={
+            effectiveTargetSessionId && effectiveTargetSession && !isBtwSession
+              ? {
+                  visible: true,
+                  goal: threadGoalController.goal,
+                  onOpen: () => {
+                    void threadGoalController.openGoalEntry();
+                  },
+                }
+              : undefined
+          }
         />
       )}
+      {effectiveTargetSession && !isBtwSession ? (
+        <ThreadGoalDialogs
+          controller={threadGoalController}
+          disabled={!effectiveTargetSession.workspacePath}
+        />
+      ) : null}
     </ContextDropZone>
     </>
   );

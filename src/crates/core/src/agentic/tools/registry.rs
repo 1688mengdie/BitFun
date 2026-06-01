@@ -348,6 +348,9 @@ mod tests {
             "Skill",
             "AskUserQuestion",
             "TodoWrite",
+            "get_goal",
+            "create_goal",
+            "update_goal",
             "CreatePlan",
             "submit_code_review",
             "GetToolSpec",
@@ -466,7 +469,7 @@ mod tests {
                 .unwrap_or_else(|| panic!("{tool_name} tool should be registered"));
             let assistant_text = tool.render_result_for_assistant(&json!({
                 "success": true,
-                "file_path": "E:/Projects/demo.txt"
+                "file_path": "workspace/demo.txt"
             }));
 
             assert!(
@@ -586,6 +589,7 @@ mod tests {
                 "Skill",
                 "AskUserQuestion",
                 "TodoWrite",
+                "get_goal",
                 "CreatePlan",
                 "submit_code_review",
                 "GetToolSpec",
@@ -763,7 +767,7 @@ mod tests {
 
             let assistant_text = tool.render_result_for_assistant(&json!({
                 "success": true,
-                "file_path": "E:/Projects/demo.txt"
+                "file_path": "workspace/demo.txt"
             }));
 
             assert!(
@@ -777,7 +781,7 @@ mod tests {
             .expect("Read tool should be registered")
             .render_result_for_assistant(&json!({
                 "content": "hello",
-                "file_path": "E:/Projects/demo.txt"
+                "file_path": "workspace/demo.txt"
             }));
         assert!(
             !read_text.contains("snapshot system"),

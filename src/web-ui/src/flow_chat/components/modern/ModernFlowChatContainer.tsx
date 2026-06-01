@@ -29,6 +29,11 @@ import { createReviewPlatformPullRequestDetailTab } from '@/shared/utils/tabUtil
 import { isAcpFlowSession } from '../../utils/acpSession';
 import { flowChatStore } from '../../store/FlowChatStore';
 import { openBtwSessionInAuxPane } from '../../services/openBtwSession';
+import { resolveThreadGoalHeaderTitle } from '../../utils/threadGoalDisplay';
+import {
+  findDialogTurn,
+  shouldUseStickyLatestPin,
+} from '../../utils/flowChatTurnScrollPolicy';
 import './ModernFlowChatContainer.scss';
 
 interface ModernFlowChatContainerProps {
@@ -280,11 +285,11 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     if (metadata?.localCommandKind === 'usage_report') {
       return t('usage.title');
     }
-    if (metadata?.localCommandKind === 'goal_pending') {
-      return t('chatInput.goalGenerating');
-    }
-    if (metadata?.localCommandKind === 'goal_verifying') {
-      return t('chatInput.goalVerifying');
+    const threadGoalTitle = resolveThreadGoalHeaderTitle(
+      metadata as Record<string, unknown> | undefined
+    );
+    if (threadGoalTitle) {
+      return threadGoalTitle;
     }
     return null;
   }, [t]);
@@ -363,22 +368,28 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     autoPinnedSessionIdRef.current = resolvedSessionId;
     setPendingHeaderTurnId(resolvedLatestTurnId);
 
+    const latestTurn = findDialogTurn(activeSession?.dialogTurns, resolvedLatestTurnId);
     const frameId = requestAnimationFrame(() => {
-      const accepted = virtualListRef.current?.pinTurnToTop(resolvedLatestTurnId, {
-        behavior: 'auto',
-        pinMode: 'sticky-latest',
-      }) ?? false;
+      if (shouldUseStickyLatestPin(latestTurn)) {
+        const accepted = virtualListRef.current?.pinTurnToTop(resolvedLatestTurnId, {
+          behavior: 'auto',
+          pinMode: 'sticky-latest',
+        }) ?? false;
 
-      if (!accepted) {
-        autoPinnedSessionIdRef.current = null;
-        setPendingHeaderTurnId(null);
+        if (!accepted) {
+          autoPinnedSessionIdRef.current = null;
+          setPendingHeaderTurnId(null);
+        }
+        return;
       }
+
+      virtualListRef.current?.scrollToPhysicalBottomAndClearPin();
     });
 
     return () => {
       cancelAnimationFrame(frameId);
     };
-  }, [activeSession?.sessionId, turnSummaries]);
+  }, [activeSession?.dialogTurns, activeSession?.sessionId, turnSummaries]);
 
   useEffect(() => {
     if (searchCurrentMatchVirtualIndex < 0) return;
@@ -394,14 +405,18 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     if (!turnId) return;
 
     const isLatestTurn = turnSummaries[turnSummaries.length - 1]?.turnId === turnId;
+    const targetTurn = findDialogTurn(activeSession?.dialogTurns, turnId);
+    const pinMode = isLatestTurn && shouldUseStickyLatestPin(targetTurn)
+      ? 'sticky-latest'
+      : 'transient';
 
     const accepted = virtualListRef.current?.pinTurnToTop(turnId, {
       behavior: 'smooth',
-      pinMode: isLatestTurn ? 'sticky-latest' : 'transient',
+      pinMode,
     }) ?? false;
 
     setPendingHeaderTurnId(accepted ? turnId : null);
-  }, [turnSummaries]);
+  }, [activeSession?.dialogTurns, turnSummaries]);
 
   const handleJumpToPreviousTurn = useCallback(() => {
     if (!effectiveVisibleTurnInfo || effectiveVisibleTurnInfo.turnIndex <= 1) return;

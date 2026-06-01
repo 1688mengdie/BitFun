@@ -2689,11 +2689,17 @@ impl ExecutionEngine {
                                 "<system_reminder>\nA background task has finished and returned new information while this turn was running. Incorporate it into your current work immediately when relevant. Do not wait for a separate future turn.\n\nBackground result:\n{}\n</system_reminder>",
                                 injection.content
                             ),
+                            RoundInjectionKind::ThreadGoalObjectiveUpdated => {
+                                injection.content.clone()
+                            }
                         };
                         let reminder_kind = match injection.kind {
                             RoundInjectionKind::UserSteering => InternalReminderKind::UserSteering,
                             RoundInjectionKind::BackgroundResult => {
                                 InternalReminderKind::BackgroundResult
+                            }
+                            RoundInjectionKind::ThreadGoalObjectiveUpdated => {
+                                InternalReminderKind::GoalObjectiveUpdated
                             }
                         };
                         let user_msg = Message::internal_reminder(reminder_kind, wrapped)

@@ -366,6 +366,18 @@ export interface Session {
   /** Whether `/goal` mode is active for this session. */
   goalModeActive?: boolean;
 
+  /** Latest thread goal snapshot for UI (/goal menu, edit, resume). */
+  threadGoal?: {
+    goalId: string;
+    objective: string;
+    status: string;
+    tokensUsed?: number;
+    tokenBudget?: number | null;
+    timeUsedSeconds?: number;
+    updatedAt?: number;
+    autoContinuationCount?: number;
+  };
+
   /**
    * Lightweight markers for /btw threads created from this session.
    * Stored only on the parent session for quick navigation.

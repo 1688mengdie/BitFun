@@ -8,6 +8,7 @@ use log::info;
 use crate::agentic::coordination;
 use crate::agentic::events;
 use crate::agentic::execution;
+use crate::agentic::goal_mode::ThreadGoalTokenSubscriber;
 use crate::agentic::persistence;
 use crate::agentic::session;
 use crate::agentic::tools;
@@ -37,6 +38,10 @@ pub async fn init_agentic_system() -> Result<AgenticSystem> {
     let token_usage_service = Arc::new(TokenUsageService::new(path_manager.clone()).await?);
     let token_usage_subscriber = Arc::new(TokenUsageSubscriber::new(token_usage_service.clone()));
     event_router.subscribe_internal("token_usage".to_string(), token_usage_subscriber);
+    event_router.subscribe_internal(
+        "thread_goal_tokens".to_string(),
+        Arc::new(ThreadGoalTokenSubscriber),
+    );
 
     let context_store = Arc::new(session::SessionContextStore::new());
     let context_compressor = Arc::new(session::ContextCompressor::new(Default::default()));
