@@ -197,13 +197,15 @@ pub struct AgentCompanionPetSelection {
 
 fn default_agent_companion_pet() -> Option<AgentCompanionPetSelection> {
     Some(AgentCompanionPetSelection {
-        id: "panda-pix".to_string(),
-        display_name: "Panda".to_string(),
-        description: Some("Codux bundled pet atlas.".to_string()),
+        id: "bitfun".to_string(),
+        display_name: "Bitfun".to_string(),
+        description: Some(
+            "BitFun's mascot — Bifang, a figure from Chinese mythology said to live on Mount Zhang'e. In the Classic of Mountains and Seas (Shan Hai Jing · Western Mountains), Bifang is described as crane-like with one foot, blue feathers marked with red, and a white beak.".to_string(),
+        ),
         source: "preset".to_string(),
-        package_path: "/agent-companion-pets/panda-pix".to_string(),
-        spritesheet_path: "/agent-companion-pets/panda-pix/spritesheet.png".to_string(),
-        spritesheet_mime_type: "image/png".to_string(),
+        package_path: "/agent-companion-pets/bitfun".to_string(),
+        spritesheet_path: "/agent-companion-pets/bitfun/spritesheet.webp".to_string(),
+        spritesheet_mime_type: "image/webp".to_string(),
     })
 }
 
@@ -1859,7 +1861,7 @@ mod tests {
     }
 
     #[test]
-    fn defaults_agent_companion_pet_to_panda() {
+    fn defaults_agent_companion_pet_to_bitfun() {
         let config: AIExperienceConfig =
             serde_json::from_value(serde_json::json!({})).expect("empty config should default");
 
@@ -1867,12 +1869,12 @@ mod tests {
             .agent_companion_pet
             .as_ref()
             .expect("default companion pet should be present");
-        assert_eq!(pet.id, "panda-pix");
-        assert_eq!(pet.display_name, "Panda");
-        assert_eq!(pet.package_path, "/agent-companion-pets/panda-pix");
+        assert_eq!(pet.id, "bitfun");
+        assert_eq!(pet.display_name, "Bitfun");
+        assert_eq!(pet.package_path, "/agent-companion-pets/bitfun");
         assert_eq!(
             pet.spritesheet_path,
-            "/agent-companion-pets/panda-pix/spritesheet.png"
+            "/agent-companion-pets/bitfun/spritesheet.webp"
         );
     }
 
@@ -2202,7 +2204,7 @@ mod tests {
                 "remaining": 2
             },
             "review_team_project_strategy_overrides": {
-                "d:/workspace/repo": "quick"
+                "workspace/repo": "quick"
             }
         }))
         .expect("review team auxiliary config should deserialize");
@@ -2216,7 +2218,7 @@ mod tests {
         assert_eq!(
             config
                 .review_team_project_strategy_overrides
-                .get("d:/workspace/repo"),
+                .get("workspace/repo"),
             Some(&"quick".to_string())
         );
 
@@ -2224,7 +2226,7 @@ mod tests {
             serde_json::to_value(&config).expect("review team auxiliary config should serialize");
         assert!(serialized["review_teams"]["rate_limit_status"].is_null());
         assert_eq!(
-            serialized["review_team_project_strategy_overrides"]["d:/workspace/repo"],
+            serialized["review_team_project_strategy_overrides"]["workspace/repo"],
             "quick"
         );
     }
