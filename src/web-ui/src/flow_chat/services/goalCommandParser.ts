@@ -1,4 +1,5 @@
-const GOAL_COMMAND_PATTERN = /^\/goal(?:\s+(.*))?$/i;
+/** Matches /goal with optional objective text (including newlines). Rejects `/goalie`. */
+const GOAL_COMMAND_PATTERN = /^\/goal(?=\s|$)(?:\s*([\s\S]*))?$/i;
 
 export type GoalCommandAction =
   | { kind: 'menu' }
@@ -7,6 +8,26 @@ export type GoalCommandAction =
   | { kind: 'clear' }
   | { kind: 'pause' }
   | { kind: 'resume' };
+
+function parseGoalControlCommand(args: string): GoalCommandAction | null {
+  if (!args || /\r?\n/.test(args)) {
+    return null;
+  }
+  const control = args.toLowerCase();
+  if (control === 'clear') {
+    return { kind: 'clear' };
+  }
+  if (control === 'pause') {
+    return { kind: 'pause' };
+  }
+  if (control === 'resume') {
+    return { kind: 'resume' };
+  }
+  if (control === 'edit') {
+    return { kind: 'edit' };
+  }
+  return null;
+}
 
 export function parseGoalCommand(message: string): GoalCommandAction | null {
   const trimmed = message.trim();
@@ -20,18 +41,9 @@ export function parseGoalCommand(message: string): GoalCommandAction | null {
     return { kind: 'menu' };
   }
 
-  const control = args.toLowerCase();
-  if (control === 'clear') {
-    return { kind: 'clear' };
-  }
-  if (control === 'pause') {
-    return { kind: 'pause' };
-  }
-  if (control === 'resume') {
-    return { kind: 'resume' };
-  }
-  if (control === 'edit') {
-    return { kind: 'edit' };
+  const control = parseGoalControlCommand(args);
+  if (control) {
+    return control;
   }
 
   return { kind: 'set', objective: args };
