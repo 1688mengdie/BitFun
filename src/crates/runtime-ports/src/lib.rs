@@ -492,6 +492,7 @@ pub enum DialogSteerOutcome {
 pub enum RoundInjectionKind {
     UserSteering,
     BackgroundResult,
+    ThreadGoalObjectiveUpdated,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -527,141 +528,113 @@ pub trait DialogRoundInjectionSource: Send + Sync {
     fn take_pending(&self, session_id: &str, turn_id: &str) -> Vec<RoundInjection>;
 }
 
+/// Legacy session metadata key for the pre-Codex goal mode experiment.
 pub const GOAL_MODE_METADATA_KEY: &str = "goal_mode";
-pub const MAX_GOAL_CONTINUATIONS: u32 = 100;
+
+/// Persisted thread goal stored in session custom metadata.
+pub const THREAD_GOAL_METADATA_KEY: &str = "thread_goal";
+
+pub const MAX_THREAD_GOAL_OBJECTIVE_CHARS: usize = 4_000;
+
 pub const MAX_CONTEXT_SUMMARY_CHARS: usize = 12_000;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Max automatic goal continuation dialog turns per objective (legacy goal_mode parity).
+pub const MAX_THREAD_GOAL_AUTO_CONTINUATIONS: u32 = 100;
+
+/// Alias retained for migration from legacy `goal_mode` metadata and docs.
+pub const MAX_GOAL_CONTINUATIONS: u32 = MAX_THREAD_GOAL_AUTO_CONTINUATIONS;
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct GoalModeInitialGoal {
-    pub goal_text: String,
-    #[serde(default)]
-    pub success_criteria: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub user_hint: Option<String>,
-    #[serde(default)]
-    pub created_at_ms: u64,
+pub enum ThreadGoalStatus {
+    Active,
+    Paused,
+    Blocked,
+    UsageLimited,
+    BudgetLimited,
+    Complete,
 }
 
-impl Default for GoalModeInitialGoal {
-    fn default() -> Self {
-        Self {
-            goal_text: String::new(),
-            success_criteria: Vec::new(),
-            user_hint: None,
-            created_at_ms: 0,
+impl ThreadGoalStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Paused => "paused",
+            Self::Blocked => "blocked",
+            Self::UsageLimited => "usageLimited",
+            Self::BudgetLimited => "budgetLimited",
+            Self::Complete => "complete",
         }
     }
 }
 
-impl GoalModeInitialGoal {
-    pub fn new(
-        goal_text: String,
-        success_criteria: Vec<String>,
-        user_hint: Option<String>,
-        created_at_ms: u64,
-    ) -> Self {
-        Self {
-            goal_text,
-            success_criteria,
-            user_hint,
-            created_at_ms,
-        }
+pub fn validate_thread_goal_objective(value: &str) -> Result<(), String> {
+    if value.trim().is_empty() {
+        return Err("goal objective must not be empty".to_string());
     }
-
-    pub fn is_set(&self) -> bool {
-        !self.goal_text.trim().is_empty()
+    if value.chars().count() > MAX_THREAD_GOAL_OBJECTIVE_CHARS {
+        return Err(format!(
+            "goal objective must be at most {MAX_THREAD_GOAL_OBJECTIVE_CHARS} characters"
+        ));
     }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct GoalModeState {
-    pub active: bool,
-    #[serde(default)]
-    pub initial_goal: GoalModeInitialGoal,
-    pub goal_text: String,
-    #[serde(default)]
-    pub success_criteria: Vec<String>,
+pub struct ThreadGoal {
+    pub goal_id: String,
+    pub session_id: String,
+    pub objective: String,
+    pub status: ThreadGoalStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub user_hint: Option<String>,
+    pub token_budget: Option<i64>,
     #[serde(default)]
-    pub activated_at_ms: u64,
+    pub tokens_used: i64,
     #[serde(default)]
-    pub continuation_count: u32,
+    pub time_used_seconds: i64,
+    pub created_at: i64,
+    pub updated_at: i64,
+    /// Auto-continuation dialog turns scheduled toward this goal (resets on new objective).
+    #[serde(default)]
+    pub auto_continuation_count: u32,
 }
 
-impl GoalModeState {
+impl ThreadGoal {
     pub fn is_active(&self) -> bool {
-        self.active && !self.initial_goal_text().trim().is_empty()
+        matches!(
+            self.status,
+            ThreadGoalStatus::Active | ThreadGoalStatus::BudgetLimited
+        )
     }
 
-    pub fn initial_goal_text(&self) -> &str {
-        if self.initial_goal.is_set() {
-            self.initial_goal.goal_text.as_str()
-        } else {
-            self.goal_text.as_str()
-        }
+    pub fn remaining_tokens(&self) -> Option<i64> {
+        self.token_budget
+            .map(|budget| (budget - self.tokens_used).max(0))
     }
-
-    pub fn initial_success_criteria(&self) -> &[String] {
-        if self.initial_goal.is_set() {
-            self.initial_goal.success_criteria.as_slice()
-        } else {
-            self.success_criteria.as_slice()
-        }
-    }
-
-    pub fn initial_user_hint(&self) -> Option<&str> {
-        self.initial_goal
-            .user_hint
-            .as_deref()
-            .or(self.user_hint.as_deref())
-    }
-
-    pub fn initial_goal_created_at_ms(&self) -> u64 {
-        if self.initial_goal.is_set() {
-            self.initial_goal.created_at_ms
-        } else {
-            self.activated_at_ms
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct GoalGenerationResult {
-    pub goal_text: String,
-    #[serde(default)]
-    pub success_criteria: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct GoalVerificationResult {
-    pub achieved: bool,
-    #[serde(default)]
-    pub confidence: f32,
-    #[serde(default)]
-    pub gaps: Vec<String>,
-    #[serde(default)]
-    pub guidance: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GoalActivationResult {
-    pub goal_text: String,
-    pub success_criteria: Vec<String>,
-    pub kickoff_message: String,
-    pub display_message: String,
+pub struct SetThreadGoalResult {
+    pub goal: ThreadGoal,
+    pub replaced_existing: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GoalContinuationPlan {
-    pub user_input: String,
+pub struct ThreadGoalContinuationPlan {
     pub prepended_reminders: Vec<String>,
     pub display_message: String,
     pub user_message_metadata: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadGoalToolResponse {
+    pub goal: Option<ThreadGoal>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remaining_tokens: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion_budget_report: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1321,54 +1294,46 @@ mod tests {
     }
 
     #[test]
-    fn goal_mode_state_requires_active_non_empty_goal() {
-        let active = GoalModeState {
-            active: true,
-            initial_goal: GoalModeInitialGoal::new(
-                "Initial HR-C".to_string(),
-                vec!["Initial check".to_string()],
-                Some("preserve main baseline".to_string()),
-                7,
-            ),
-            goal_text: "Ship HR-C".to_string(),
-            success_criteria: vec!["Checks pass".to_string()],
-            user_hint: None,
-            activated_at_ms: 42,
-            continuation_count: 1,
+    fn thread_goal_active_status_includes_budget_limited() {
+        let active = ThreadGoal {
+            goal_id: "goal_1".to_string(),
+            session_id: "session_1".to_string(),
+            objective: "Ship feature".to_string(),
+            status: ThreadGoalStatus::Active,
+            token_budget: Some(10_000),
+            tokens_used: 100,
+            time_used_seconds: 5,
+            created_at: 1,
+            updated_at: 2,
+            auto_continuation_count: 0,
         };
         assert!(active.is_active());
-        assert_eq!(active.initial_goal_text(), "Initial HR-C");
-        assert_eq!(
-            active.initial_success_criteria(),
-            &["Initial check".to_string()]
-        );
-        assert_eq!(active.initial_user_hint(), Some("preserve main baseline"));
-        assert_eq!(active.initial_goal_created_at_ms(), 7);
+        assert_eq!(active.remaining_tokens(), Some(9_900));
 
-        let empty = GoalModeState {
-            initial_goal: GoalModeInitialGoal::default(),
-            goal_text: "  ".to_string(),
+        let budget_limited = ThreadGoal {
+            status: ThreadGoalStatus::BudgetLimited,
+            ..active.clone()
+        };
+        assert!(budget_limited.is_active());
+
+        let paused = ThreadGoal {
+            status: ThreadGoalStatus::Paused,
             ..active
         };
-        assert!(!empty.is_active());
+        assert!(!paused.is_active());
     }
 
     #[test]
-    fn goal_verification_result_serializes_current_wire_shape() {
-        let result = GoalVerificationResult {
-            achieved: false,
-            confidence: 0.7,
-            gaps: vec!["missing docs".to_string()],
-            guidance: "update docs".to_string(),
+    fn thread_goal_tool_response_serializes_optional_fields() {
+        let response = ThreadGoalToolResponse {
+            goal: None,
+            remaining_tokens: Some(42),
+            completion_budget_report: None,
         };
-
-        let json = serde_json::to_value(result).expect("serialize goal verification");
-
-        assert_eq!(json["achieved"], false);
-        let confidence = json["confidence"].as_f64().expect("confidence number");
-        assert!((confidence - 0.7).abs() < 0.000_001);
-        assert_eq!(json["gaps"][0], "missing docs");
-        assert_eq!(json["guidance"], "update docs");
+        let json = serde_json::to_value(response).expect("serialize thread goal tool response");
+        assert!(json.get("goal").is_none());
+        assert_eq!(json["remainingTokens"], 42);
+        assert!(json.get("completionBudgetReport").is_none());
     }
 
     #[test]

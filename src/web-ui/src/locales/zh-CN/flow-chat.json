@@ -266,6 +266,76 @@
       "workspacePath": "项目路径"
     }
   },
+  "threadGoal": {
+    "replaceConfirmTitle": "替换线程目标？",
+    "replaceConfirmMessage": "是否替换当前目标？\n\n当前：{{existing}}\n\n新目标：{{next}}",
+    "menuTitle": "线程目标",
+    "objectiveLabel": "目标描述",
+    "updatedUserMessage": "线程目标已更新：{{objective}}",
+    "kickoffUserMessage": "继续推进线程目标：{{objective}}",
+    "continuationCheckHeader": "目标完成检查",
+    "continuationCheckHeaderWithAttempt": "目标完成检查（自动续跑 {{attempt}}/{{max}}）",
+    "continuationCheckUserMessage": "目标完成检查：{{objective}}",
+    "menuEmpty": "尚未设置线程目标。填写目标描述后，代理会在空闲时持续朝该方向推进。",
+    "workflow": {
+      "title": "完成检查",
+      "steps": {
+        "continue": "每轮对话结束后自动续跑，朝目标继续推进",
+        "audit": "按当前证据逐项核对目标是否真正达成（非表面完成）",
+        "complete": "证据充分后由代理调用 update_goal 标记为「已完成」"
+      },
+      "note": {
+        "active": "目标仍为进行中时，每轮对话结束会自动续跑（最多 100 次），直到代理调用 update_goal 标为已完成或达到上限。",
+        "complete": "目标已标记完成。如需继续其他工作，可编辑或清除目标。",
+        "paused": "目标已暂停，续跑与完成检查已停止。",
+        "blocked": "目标已阻塞，需你介入或环境变化后再 /goal resume。",
+        "usageLimited": "因用量限制暂停，恢复额度后可 /goal resume。",
+        "budgetLimited": "已达 token 预算上限，可编辑目标或清除后重新设置。"
+      }
+    },
+    "editTitleCreate": "设置线程目标",
+    "editTitleUpdate": "编辑线程目标",
+    "editHint": "输入目标描述并保存；会话空闲时会继续朝该目标推进。",
+    "editPlaceholder": "目标描述…",
+    "editCancel": "取消",
+    "editSave": "保存",
+    "resumeTitle": "恢复已暂停的目标？",
+    "resumeSubtitle": "目标：{{objective}}",
+    "resumeHint": "标记为进行中后，会话空闲时会继续执行。也可保持暂停，稍后用 /goal resume。",
+    "resumeConfirm": "恢复目标",
+    "resumeLeavePaused": "保持暂停",
+    "stripTooltipEmpty": "设置或查看线程目标",
+    "stripTooltipWithGoal": "{{status}}：{{objective}}",
+    "stripOpenEmpty": "打开线程目标",
+    "stripOpenWithGoal": "打开线程目标菜单",
+    "usageTokens": "Token {{used}} / {{budget}}",
+    "usageTime": "已用 {{seconds}} 秒",
+    "status": {
+      "active": "进行中",
+      "paused": "已暂停",
+      "blocked": "已阻塞",
+      "usageLimited": "用量受限",
+      "budgetLimited": "预算受限",
+      "complete": "已完成"
+    },
+    "action": {
+      "edit": "编辑",
+      "pause": "暂停",
+      "resume": "恢复",
+      "clear": "清除",
+      "set": "设置目标"
+    },
+    "commandHint": {
+      "none": "命令：/goal <目标描述>",
+      "default": "命令：/goal edit、/goal pause、/goal clear",
+      "active": "命令：/goal edit、/goal pause、/goal clear",
+      "paused": "命令：/goal edit、/goal resume、/goal clear",
+      "blocked": "命令：/goal edit、/goal resume、/goal clear",
+      "usageLimited": "命令：/goal edit、/goal resume、/goal clear",
+      "budgetLimited": "命令：/goal edit、/goal clear",
+      "complete": "命令：/goal edit、/goal clear"
+    }
+  },
   "agentCompanion": {
     "activity": {
       "starting": "启动中",
@@ -494,15 +564,16 @@
     "compactUsage": "请直接使用 /compact，不要附加额外参数。",
     "compactFailed": "会话压缩失败",
     "goalAction": "会话目标",
-    "goalGenerating": "正在生成目标…",
-    "goalVerifying": "正在验证目标是否达成…",
     "goalAchieved": "会话目标已达成",
     "goalVerifyFailed": "目标验证失败，请检查模型配置后重试。",
     "goalNoSession": "当前没有可用于 /goal 的会话",
     "goalUsage": "使用 /goal 并可选择附加目标描述，例如 /goal 修复登录问题。",
-    "goalFailed": "目标模式激活失败",
-    "goalAiFailed": "目标模式 AI 请求失败，请检查模型配置后重试。",
-    "goalActivated": "会话目标已激活",
+    "goalFailed": "线程目标操作失败",
+    "goalActivated": "线程目标已设置",
+    "goalCleared": "线程目标已清除",
+    "goalPaused": "线程目标已暂停",
+    "goalResumed": "线程目标已恢复",
+    "goalEdited": "线程目标已更新",
     "goalNestedDisabled": "目标模式只能从主会话启动。",
     "initAction": "生成 AGENTS.md",
     "initNoSession": "当前没有可用于 /init 的会话",

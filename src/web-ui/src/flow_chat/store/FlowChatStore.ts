@@ -53,6 +53,7 @@ import {
 import type { WorkspaceInfo } from '@/shared/types';
 import { sessionBelongsToWorkspaceNavRow } from '../utils/sessionOrdering';
 import { sessionMatchesWorkspace } from '../utils/workspaceScope';
+import { resolveThreadGoalUserMessageDisplay } from '../utils/threadGoalDisplay';
 
 const log = createLogger('FlowChatStore');
 const VALID_AGENT_TYPES = new Set([
@@ -750,6 +751,53 @@ export class FlowChatStore {
     });
   }
 
+  public setThreadGoal(
+    sessionId: string,
+    goal: Session['threadGoal'] | null
+  ): void {
+    this.setState(prev => {
+      const session = prev.sessions.get(sessionId);
+      if (!session) return prev;
+
+      const active =
+        Boolean(goal) &&
+        (goal!.status === 'active' || goal!.status === 'budgetLimited');
+
+      const prevGoal = session.threadGoal;
+      const sameGoal =
+        (prevGoal == null && goal == null) ||
+        (prevGoal != null &&
+          goal != null &&
+          prevGoal.goalId === goal.goalId &&
+          prevGoal.status === goal.status &&
+          prevGoal.objective === goal.objective &&
+          prevGoal.updatedAt === goal.updatedAt &&
+          prevGoal.tokensUsed === goal.tokensUsed &&
+          prevGoal.tokenBudget === goal.tokenBudget &&
+          prevGoal.timeUsedSeconds === goal.timeUsedSeconds &&
+          (prevGoal.autoContinuationCount ?? 0) === (goal.autoContinuationCount ?? 0));
+
+      if (sameGoal && Boolean(session.goalModeActive) === active) {
+        return prev;
+      }
+
+      const updatedSession = {
+        ...session,
+        threadGoal: goal ?? undefined,
+        goalModeActive: active,
+        lastActiveAt: Date.now(),
+      };
+
+      const newSessions = new Map(prev.sessions);
+      newSessions.set(sessionId, updatedSession);
+
+      return {
+        ...prev,
+        sessions: newSessions,
+      };
+    });
+  }
+
   public updateSessionModelName(sessionId: string, modelName: string): void {
     this.setState(prev => {
       const session = prev.sessions.get(sessionId);
@@ -1273,140 +1321,6 @@ export class FlowChatStore {
       };
     });
     return dialogTurn;
-  }
-
-  public addLocalGoalPendingTurn(params: {
-    sessionId: string;
-    message: string;
-    pendingId: string;
-  }): DialogTurn | null {
-    const session = this.state.sessions.get(params.sessionId);
-    if (!session) {
-      log.warn('Session not found, cannot add local goal pending turn', {
-        sessionId: params.sessionId,
-      });
-      return null;
-    }
-
-    const generatedAt = Date.now();
-    const metadata: LocalCommandMetadata = {
-      localCommandKind: 'goal_pending',
-      modelVisible: false,
-      goalPendingId: params.pendingId,
-      generatedAt,
-    };
-    const turnIndex = session.dialogTurns.length;
-    const dialogTurn: DialogTurn = {
-      id: `local-goal-${params.pendingId}`,
-      sessionId: params.sessionId,
-      kind: 'local_command',
-      userMessage: {
-        id: `local-goal-user-${params.pendingId}`,
-        content: params.message,
-        timestamp: generatedAt,
-        metadata,
-      },
-      modelRounds: [],
-      status: 'processing',
-      startTime: generatedAt,
-      endTime: generatedAt,
-      backendTurnIndex: turnIndex,
-    };
-
-    this.setState(prev => {
-      const currentSession = prev.sessions.get(params.sessionId);
-      if (!currentSession) return prev;
-
-      if (currentSession.dialogTurns.some(turn => turn.id === dialogTurn.id)) {
-        return prev;
-      }
-
-      const newSessions = new Map(prev.sessions);
-      newSessions.set(params.sessionId, {
-        ...currentSession,
-        dialogTurns: [...currentSession.dialogTurns, dialogTurn],
-      });
-
-      return {
-        ...prev,
-        sessions: newSessions,
-      };
-    });
-    return dialogTurn;
-  }
-
-  public addLocalGoalVerifyingTurn(params: {
-    sessionId: string;
-    message: string;
-    verifyingId: string;
-  }): DialogTurn | null {
-    this.removeLocalGoalVerifyingTurn(params.sessionId);
-
-    const session = this.state.sessions.get(params.sessionId);
-    if (!session) {
-      log.warn('Session not found, cannot add local goal verifying turn', {
-        sessionId: params.sessionId,
-      });
-      return null;
-    }
-
-    const generatedAt = Date.now();
-    const metadata: LocalCommandMetadata = {
-      localCommandKind: 'goal_verifying',
-      modelVisible: false,
-      goalVerifyingId: params.verifyingId,
-      generatedAt,
-    };
-    const turnIndex = session.dialogTurns.length;
-    const dialogTurn: DialogTurn = {
-      id: `local-goal-verify-${params.verifyingId}`,
-      sessionId: params.sessionId,
-      kind: 'local_command',
-      userMessage: {
-        id: `local-goal-verify-user-${params.verifyingId}`,
-        content: params.message,
-        timestamp: generatedAt,
-        metadata,
-      },
-      modelRounds: [],
-      status: 'processing',
-      startTime: generatedAt,
-      endTime: generatedAt,
-      backendTurnIndex: turnIndex,
-    };
-
-    this.setState(prev => {
-      const currentSession = prev.sessions.get(params.sessionId);
-      if (!currentSession) return prev;
-
-      if (currentSession.dialogTurns.some(turn => turn.id === dialogTurn.id)) {
-        return prev;
-      }
-
-      const newSessions = new Map(prev.sessions);
-      newSessions.set(params.sessionId, {
-        ...currentSession,
-        dialogTurns: [...currentSession.dialogTurns, dialogTurn],
-      });
-
-      return {
-        ...prev,
-        sessions: newSessions,
-      };
-    });
-    return dialogTurn;
-  }
-
-  public removeLocalGoalVerifyingTurn(sessionId: string): void {
-    const session = this.state.sessions.get(sessionId);
-    if (!session) return;
-
-    const verifyingTurn = session.dialogTurns.find(
-      turn => turn.userMessage?.metadata?.localCommandKind === 'goal_verifying',
-    );
-    if (!verifyingTurn) return;
-
-    this.deleteDialogTurn(sessionId, verifyingTurn.id);
   }
 
   public deleteDialogTurn(sessionId: string, dialogTurnId: string): void {
@@ -3122,12 +3036,17 @@ export class FlowChatStore {
           }))
         : undefined;
 
-      const displayContent =
+      const rawDisplay =
         metadata?.localCommandKind === 'usage_report'
-          || metadata?.localCommandKind === 'goal_pending'
-          || metadata?.localCommandKind === 'goal_verifying'
+          || metadata?.threadGoalKickoff
+          || metadata?.threadGoalObjectiveUpdated
+          || metadata?.threadGoalContinuation
           ? turn.userMessage.content
           : metadata?.original_text || this.cleanRemoteUserInput(turn.userMessage.content);
+      const displayContent = resolveThreadGoalUserMessageDisplay(
+        rawDisplay,
+        metadata as Record<string, unknown> | undefined
+      );
       const normalizedTurnStatus = normalizeRecoveredTurnStatus(turn.status, { error: undefined });
 
       return {

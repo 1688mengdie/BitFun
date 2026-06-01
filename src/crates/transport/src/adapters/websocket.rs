@@ -272,6 +272,13 @@ impl TransportAdapter for WebSocketTransportAdapter {
                     },
                 })
             }
+            AgenticEvent::ThreadGoalUpdated { session_id, goal } => {
+                json!({
+                    "type": "thread-goal-updated",
+                    "sessionId": session_id,
+                    "goal": goal,
+                })
+            }
             _ => return Ok(()),
         };
 

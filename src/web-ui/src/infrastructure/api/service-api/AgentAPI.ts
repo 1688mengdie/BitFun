@@ -355,15 +355,108 @@ export class AgentAPI {
     remoteSshHost?: string;
   }): Promise<{
     success: boolean;
-    goalText: string;
-    successCriteria: string[];
-    kickoffMessage: string;
-    displayMessage: string;
+    goal: {
+      goalId: string;
+      sessionId: string;
+      objective: string;
+      status: string;
+      tokenBudget?: number | null;
+      tokensUsed: number;
+      timeUsedSeconds: number;
+      createdAt: number;
+      updatedAt: number;
+    };
   }> {
     try {
       return await api.invoke('activate_session_goal', { request });
     } catch (error) {
       throw createTauriCommandError('activate_session_goal', error, request);
+    }
+  }
+
+  async getSessionThreadGoal(request: {
+    sessionId: string;
+    workspacePath?: string;
+    remoteConnectionId?: string;
+    remoteSshHost?: string;
+  }): Promise<{
+    goal: {
+      goalId: string;
+      sessionId: string;
+      objective: string;
+      status: string;
+      tokenBudget?: number | null;
+      tokensUsed: number;
+      timeUsedSeconds: number;
+      createdAt: number;
+      updatedAt: number;
+    } | null;
+  }> {
+    try {
+      return await api.invoke('get_session_thread_goal', { request });
+    } catch (error) {
+      throw createTauriCommandError('get_session_thread_goal', error, request);
+    }
+  }
+
+  async clearSessionThreadGoal(request: {
+    sessionId: string;
+    workspacePath?: string;
+    remoteConnectionId?: string;
+    remoteSshHost?: string;
+  }): Promise<void> {
+    try {
+      await api.invoke('clear_session_thread_goal', { request });
+    } catch (error) {
+      throw createTauriCommandError('clear_session_thread_goal', error, request);
+    }
+  }
+
+  async setSessionThreadGoalStatus(request: {
+    sessionId: string;
+    status: string;
+    workspacePath?: string;
+    remoteConnectionId?: string;
+    remoteSshHost?: string;
+  }): Promise<{
+    goalId: string;
+    sessionId: string;
+    objective: string;
+    status: string;
+    tokenBudget?: number | null;
+    tokensUsed: number;
+    timeUsedSeconds: number;
+    createdAt: number;
+    updatedAt: number;
+  }> {
+    try {
+      return await api.invoke('set_session_thread_goal_status', { request });
+    } catch (error) {
+      throw createTauriCommandError('set_session_thread_goal_status', error, request);
+    }
+  }
+
+  async updateSessionThreadGoalObjective(request: {
+    sessionId: string;
+    objective: string;
+    workspacePath?: string;
+    remoteConnectionId?: string;
+    remoteSshHost?: string;
+  }): Promise<{
+    goalId: string;
+    sessionId: string;
+    objective: string;
+    status: string;
+    tokenBudget?: number | null;
+    tokensUsed: number;
+    timeUsedSeconds: number;
+    createdAt: number;
+    updatedAt: number;
+  }> {
+    try {
+      return await api.invoke('update_session_thread_goal_objective', { request });
+    } catch (error) {
+      throw createTauriCommandError('update_session_thread_goal_objective', error, request);
     }
   }
 
@@ -714,12 +807,10 @@ export class AgentAPI {
     return api.listen<CompressionEvent>('agentic://context-compression-failed', callback);
   }
 
-  onGoalVerificationStarted(callback: (event: AgenticEvent) => void): () => void {
-    return api.listen<AgenticEvent>('agentic://goal-verification-started', callback);
-  }
-
-  onGoalVerificationFinished(callback: (event: AgenticEvent) => void): () => void {
-    return api.listen<AgenticEvent>('agentic://goal-verification-finished', callback);
+  onThreadGoalUpdated(
+    callback: (event: { sessionId: string; goal?: Record<string, unknown> | null }) => void
+  ): () => void {
+    return api.listen('agentic://thread-goal-updated', callback);
   }
 
   onImageAnalysisStarted(callback: (event: ImageAnalysisEvent) => void): () => void {

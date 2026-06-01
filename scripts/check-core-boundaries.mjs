@@ -932,20 +932,20 @@ const forbiddenContentRules = [
         message: 'core goal mode types must not redefine MAX_CONTEXT_SUMMARY_CHARS; use bitfun-runtime-ports',
       },
       {
-        regex: /\bstruct\s+GoalModeInitialGoal\b/,
-        message: 'core goal mode types must not redefine GoalModeInitialGoal; use bitfun-runtime-ports',
+        regex: /\bstruct\s+ThreadGoal\b/,
+        message: 'core goal mode types must not redefine ThreadGoal; use bitfun-runtime-ports',
       },
       {
-        regex: /\bstruct\s+GoalModeState\b/,
-        message: 'core goal mode types must not redefine GoalModeState; use bitfun-runtime-ports',
+        regex: /\benum\s+ThreadGoalStatus\b/,
+        message: 'core goal mode types must not redefine ThreadGoalStatus; use bitfun-runtime-ports',
       },
       {
         regex: /\bstruct\s+GoalGenerationResult\b/,
         message: 'core goal mode types must not redefine GoalGenerationResult; use bitfun-runtime-ports',
       },
       {
-        regex: /\bstruct\s+GoalVerificationResult\b/,
-        message: 'core goal mode types must not redefine GoalVerificationResult; use bitfun-runtime-ports',
+        regex: /\bstruct\s+ThreadGoalToolResponse\b/,
+        message: 'core goal mode types must not redefine ThreadGoalToolResponse; use bitfun-runtime-ports',
       },
       {
         regex: /\bstruct\s+GoalActivationResult\b/,
@@ -2656,36 +2656,32 @@ const requiredContentRules = [
         message: 'missing round injection source contract regression',
       },
       {
-        regex: /\bpub struct GoalModeInitialGoal\b/,
-        message: 'missing goal mode initial goal contract',
+        regex: /\bpub enum ThreadGoalStatus\b/,
+        message: 'missing thread goal status contract',
       },
       {
-        regex: /\bpub struct GoalModeState\b/,
-        message: 'missing goal mode state contract',
+        regex: /\bpub struct ThreadGoal\b/,
+        message: 'missing thread goal contract',
       },
       {
-        regex: /\bpub struct GoalGenerationResult\b/,
-        message: 'missing goal generation result contract',
+        regex: /\bpub struct SetThreadGoalResult\b/,
+        message: 'missing set thread goal result contract',
       },
       {
-        regex: /\bpub struct GoalVerificationResult\b/,
-        message: 'missing goal verification result contract',
+        regex: /\bpub struct ThreadGoalContinuationPlan\b/,
+        message: 'missing thread goal continuation plan contract',
       },
       {
-        regex: /\bpub struct GoalActivationResult\b/,
-        message: 'missing goal activation result contract',
+        regex: /\bpub struct ThreadGoalToolResponse\b/,
+        message: 'missing thread goal tool response contract',
       },
       {
-        regex: /\bpub struct GoalContinuationPlan\b/,
-        message: 'missing goal continuation plan contract',
+        regex: /\bthread_goal_active_status_includes_budget_limited\b/,
+        message: 'missing thread goal status contract regression',
       },
       {
-        regex: /\bgoal_mode_state_requires_active_non_empty_goal\b/,
-        message: 'missing goal mode state contract regression',
-      },
-      {
-        regex: /\bgoal_verification_result_serializes_current_wire_shape\b/,
-        message: 'missing goal verification wire-shape regression',
+        regex: /\bthread_goal_tool_response_serializes_optional_fields\b/,
+        message: 'missing thread goal tool response wire-shape regression',
       },
       {
         regex: /\bpub struct CompressionContract\b/,
@@ -3209,12 +3205,8 @@ const requiredContentRules = [
     patterns: [
       {
         regex:
-          /pub use bitfun_runtime_ports::\{[\s\S]*GoalActivationResult[\s\S]*GoalContinuationPlan[\s\S]*GoalGenerationResult[\s\S]*GoalModeInitialGoal[\s\S]*GoalModeState[\s\S]*GoalVerificationResult[\s\S]*GOAL_MODE_METADATA_KEY[\s\S]*MAX_CONTEXT_SUMMARY_CHARS[\s\S]*MAX_GOAL_CONTINUATIONS[\s\S]*\};/,
-        message: 'missing goal mode compatibility re-export',
-      },
-      {
-        regex: /\bpub const GOAL_MODE_FUNC_AGENT\b/,
-        message: 'goal mode function-agent marker must remain core-owned',
+          /pub use bitfun_runtime_ports::\{[\s\S]*SetThreadGoalResult[\s\S]*ThreadGoal[\s\S]*ThreadGoalContinuationPlan[\s\S]*ThreadGoalStatus[\s\S]*ThreadGoalToolResponse[\s\S]*GOAL_MODE_METADATA_KEY[\s\S]*MAX_CONTEXT_SUMMARY_CHARS[\s\S]*MAX_THREAD_GOAL_OBJECTIVE_CHARS[\s\S]*THREAD_GOAL_METADATA_KEY[\s\S]*\};/,
+        message: 'missing thread goal compatibility re-export',
       },
     ],
   },
@@ -6817,12 +6809,11 @@ function runManifestParserSelfTest() {
     .map((pattern) => pattern.regex.source)
     .join('\n');
   for (const contract of [
-    'GoalModeState',
-    'GoalModeInitialGoal',
-    'GoalGenerationResult',
-    'GoalVerificationResult',
-    'GoalActivationResult',
-    'GoalContinuationPlan',
+    'ThreadGoal',
+    'ThreadGoalStatus',
+    'SetThreadGoalResult',
+    'ThreadGoalContinuationPlan',
+    'ThreadGoalToolResponse',
   ]) {
     if (!coreGoalModeTypesRuleText.includes(contract)) {
       throw new Error(`core goal mode types boundary rule must forbid contract: ${contract}`);
@@ -7088,14 +7079,13 @@ function runManifestParserSelfTest() {
         'DialogRoundInjectionSource',
         'round_injection_contract_keeps_kind_and_target_identity',
         'round_injection_source_contract_drains_portable_injections',
-        'GoalModeState',
-        'GoalModeInitialGoal',
-        'GoalGenerationResult',
-        'GoalVerificationResult',
-        'GoalActivationResult',
-        'GoalContinuationPlan',
-        'goal_mode_state_requires_active_non_empty_goal',
-        'goal_verification_result_serializes_current_wire_shape',
+        'ThreadGoalStatus',
+        'ThreadGoal',
+        'SetThreadGoalResult',
+        'ThreadGoalContinuationPlan',
+        'ThreadGoalToolResponse',
+        'thread_goal_active_status_includes_budget_limited',
+        'thread_goal_tool_response_serializes_optional_fields',
         'CompressionContract',
         'CompressionContractItem',
         'compression_contract_renders_model_visible_fields',
@@ -7346,13 +7336,12 @@ function runManifestParserSelfTest() {
       path: 'src/crates/core/src/agentic/goal_mode/types.rs',
       contracts: [
         'bitfun_runtime_ports',
-        'GoalActivationResult',
-        'GoalContinuationPlan',
-        'GoalGenerationResult',
-        'GoalModeInitialGoal',
-        'GoalModeState',
-        'GoalVerificationResult',
-        'GOAL_MODE_FUNC_AGENT',
+        'SetThreadGoalResult',
+        'ThreadGoal',
+        'ThreadGoalContinuationPlan',
+        'ThreadGoalStatus',
+        'ThreadGoalToolResponse',
+        'THREAD_GOAL_METADATA_KEY',
       ],
     },
     {

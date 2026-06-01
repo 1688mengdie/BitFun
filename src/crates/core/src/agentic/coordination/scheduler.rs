@@ -13,6 +13,10 @@
 use super::coordinator::{ConversationCoordinator, DialogTriggerSource};
 use super::turn_outcome::{TurnOutcome, TurnOutcomeQueueAction, TurnOutcomeStatus};
 use crate::agentic::core::{InternalReminderKind, Message, SessionState};
+use crate::agentic::goal_mode::{
+    build_objective_updated_plan, goal_continuation_submit_retry_delay_ms,
+    goal_objective_updated_message, objective_updated_prompt,
+};
 use crate::agentic::image_analysis::ImageContextData;
 use crate::agentic::init_agents_md::build_init_agents_md_user_input;
 use crate::agentic::round_preempt::{
@@ -20,6 +24,8 @@ use crate::agentic::round_preempt::{
     RoundInjectionTarget, SessionRoundInjectionBuffer, SessionRoundYieldFlags,
 };
 use crate::agentic::session::SessionManager;
+use bitfun_runtime_ports::ThreadGoal;
+use bitfun_runtime_ports::MAX_THREAD_GOAL_AUTO_CONTINUATIONS;
 use dashmap::DashMap;
 use log::{debug, info, warn};
 use std::collections::VecDeque;
@@ -238,6 +244,71 @@ impl DialogScheduler {
             turn_id,
             steering_id,
         })
+    }
+
+    /// Inject objective-updated steering into the running turn, or start a follow-up turn when idle.
+    pub async fn deliver_thread_goal_objective_updated(
+        &self,
+        session_id: String,
+        agent_type: String,
+        workspace_path: Option<String>,
+        goal: ThreadGoal,
+    ) -> Result<(), String> {
+        let prompt = objective_updated_prompt(&goal);
+        let display = format!("Thread goal updated: {}", goal.objective.trim());
+        let state = self
+            .session_manager
+            .get_session(&session_id)
+            .map(|s| s.state.clone());
+
+        match resolve_background_delivery_action(BackgroundDeliveryFacts {
+            session_state: Self::session_state_fact(state.as_ref()),
+        }) {
+            BackgroundDeliveryAction::InjectIntoRunningTurn => {
+                self.round_injection_buffer.push(
+                    &session_id,
+                    RoundInjection {
+                        id: Uuid::new_v4().to_string(),
+                        kind: RoundInjectionKind::ThreadGoalObjectiveUpdated,
+                        target: RoundInjectionTarget::CurrentRunningTurn,
+                        content: prompt,
+                        display_content: display,
+                        created_at: SystemTime::now(),
+                    },
+                );
+                Ok(())
+            }
+            BackgroundDeliveryAction::SubmitAgentSessionFollowUp {
+                queue_priority,
+                skip_tool_confirmation,
+            } => {
+                let plan = build_objective_updated_plan(&goal);
+                let prepended = plan
+                    .prepended_reminders
+                    .into_iter()
+                    .map(goal_objective_updated_message)
+                    .collect();
+                self.submit_with_prepended_messages(
+                    session_id,
+                    "Adjust work to match the updated thread goal.".to_string(),
+                    Some(display),
+                    None,
+                    agent_type,
+                    workspace_path,
+                    DialogSubmissionPolicy::new(
+                        DialogTriggerSource::AgentSession,
+                        queue_priority,
+                        skip_tool_confirmation,
+                    ),
+                    None,
+                    Some(plan.user_message_metadata),
+                    prepended,
+                    None,
+                )
+                .await
+                .map(|_| ())
+            }
+        }
     }
 
     /// Deliver a completed background result back to the parent session.
@@ -872,20 +943,6 @@ Status: {status}"
         )]
     }
 
-    fn goal_verification_observation_text(outcome: &TurnOutcome) -> String {
-        match outcome {
-            TurnOutcome::Completed { final_response, .. } => final_response.clone(),
-            TurnOutcome::Cancelled { .. } => {
-                "The session turn was cancelled before producing a final answer.".to_string()
-            }
-            TurnOutcome::Failed { error, .. } => {
-                format!(
-                    "The session turn failed before the goal could be confirmed.\nError: {error}"
-                )
-            }
-        }
-    }
-
     async fn dispatch_next_if_idle(&self, session_id: &str) -> Result<(), String> {
         let _ = self.try_start_next_queued(session_id).await?;
         Ok(())
@@ -929,7 +986,7 @@ Status: {status}"
             }
 
             if let Some(active_turn) = active_turn.as_ref() {
-                let outcome_observation = Self::goal_verification_observation_text(&outcome);
+                let turn_completed = matches!(outcome, TurnOutcome::Completed { .. });
                 match self
                     .coordinator
                     .prepare_goal_continuation_after_turn(
@@ -937,39 +994,69 @@ Status: {status}"
                         &outcome.turn_id(),
                         &active_turn.user_input,
                         active_turn.user_message_metadata.as_ref(),
-                        &outcome_observation,
+                        turn_completed,
                     )
                     .await
                 {
                     Ok(Some(plan)) => {
-                        if let Err(error) = self
-                            .submit_with_prepended_messages(
-                                session_id.clone(),
-                                plan.user_input,
-                                Some(plan.display_message),
-                                None,
-                                active_turn.agent_type.clone(),
-                                active_turn.workspace_path.clone(),
-                                DialogSubmissionPolicy::for_source(
-                                    DialogTriggerSource::AgentSession,
-                                ),
-                                None,
-                                Some(plan.user_message_metadata),
-                                plan.prepended_reminders
-                                    .into_iter()
-                                    .map(|text| {
-                                        Message::internal_reminder(
-                                            InternalReminderKind::GoalContinuation,
-                                            text,
-                                        )
-                                    })
-                                    .collect(),
-                                None,
-                            )
-                            .await
-                        {
+                        let prepended: Vec<Message> = plan
+                            .prepended_reminders
+                            .into_iter()
+                            .map(|text| {
+                                Message::internal_reminder(
+                                    InternalReminderKind::GoalContinuation,
+                                    text,
+                                )
+                            })
+                            .collect();
+                        let mut last_error = None;
+                        for attempt in 1..=MAX_THREAD_GOAL_AUTO_CONTINUATIONS {
+                            match self
+                                .submit_with_prepended_messages(
+                                    session_id.clone(),
+                                    "Continue working toward the active thread goal.".to_string(),
+                                    Some(plan.display_message.clone()),
+                                    None,
+                                    active_turn.agent_type.clone(),
+                                    active_turn.workspace_path.clone(),
+                                    DialogSubmissionPolicy::for_source(
+                                        DialogTriggerSource::AgentSession,
+                                    ),
+                                    None,
+                                    Some(plan.user_message_metadata.clone()),
+                                    prepended.clone(),
+                                    None,
+                                )
+                                .await
+                            {
+                                Ok(_) => {
+                                    last_error = None;
+                                    break;
+                                }
+                                Err(error) => {
+                                    last_error = Some(error);
+                                    if attempt < MAX_THREAD_GOAL_AUTO_CONTINUATIONS {
+                                        let delay_ms =
+                                            goal_continuation_submit_retry_delay_ms(attempt);
+                                        warn!(
+                                            "Goal continuation submit failed; retrying: session_id={}, attempt={}/{}, delay_ms={}, error={}",
+                                            session_id,
+                                            attempt,
+                                            MAX_THREAD_GOAL_AUTO_CONTINUATIONS,
+                                            delay_ms,
+                                            last_error.as_ref().unwrap()
+                                        );
+                                        tokio::time::sleep(std::time::Duration::from_millis(
+                                            delay_ms,
+                                        ))
+                                        .await;
+                                    }
+                                }
+                            }
+                        }
+                        if let Some(error) = last_error {
                             warn!(
-                                "Failed to submit goal continuation turn: session_id={}, error={}",
+                                "Failed to submit goal continuation turn after retries: session_id={}, error={}",
                                 session_id, error
                             );
                         }
@@ -1079,15 +1166,9 @@ mod tests {
             error: "network offline".to_string(),
         };
 
-        assert_eq!(
-            DialogScheduler::goal_verification_observation_text(&completed),
-            "done"
-        );
-        assert!(
-            DialogScheduler::goal_verification_observation_text(&cancelled).contains("cancelled")
-        );
-        assert!(DialogScheduler::goal_verification_observation_text(&failed)
-            .contains("network offline"));
+        assert_eq!(completed.reply_text(), "done");
+        assert!(cancelled.reply_text().contains("cancelled"));
+        assert!(failed.reply_text().contains("network offline"));
     }
 
     #[test]

@@ -96,6 +96,9 @@ pub fn shared_coding_mode_tools() -> Vec<String> {
         "WebSearch".to_string(),
         "WebFetch".to_string(),
         "TodoWrite".to_string(),
+        "get_goal".to_string(),
+        "create_goal".to_string(),
+        "update_goal".to_string(),
         "GenerativeUI".to_string(),
         "Skill".to_string(),
         "AskUserQuestion".to_string(),
@@ -270,6 +273,8 @@ mod tests {
 
         assert!(tools.contains(&"CreatePlan".to_string()));
         assert!(tools.contains(&"Log".to_string()));
+        assert!(tools.contains(&"get_goal".to_string()));
+        assert!(tools.contains(&"update_goal".to_string()));
     }
 
     #[test]

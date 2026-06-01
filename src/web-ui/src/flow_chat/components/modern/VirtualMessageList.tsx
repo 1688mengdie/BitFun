@@ -31,6 +31,10 @@ import type { FlowChatPinTurnToTopMode } from '../../events/flowchatNavigation';
 import { useVirtualItems, useActiveSession, useModernFlowChatStore, type VisibleTurnInfo } from '../../store/modernFlowChatStore';
 import { useChatInputState } from '../../store/chatInputStateStore';
 import { computeFlowChatInputStackFooterPx } from '../../utils/flowChatScrollLayout';
+import {
+  findDialogTurn,
+  shouldUseStickyLatestPin,
+} from '../../utils/flowChatTurnScrollPolicy';
 import './VirtualMessageList.scss';
 
 const COMPENSATION_EPSILON_PX = 0.5;
@@ -282,6 +286,7 @@ export const VirtualMessageList = forwardRef<VirtualMessageListRef>((_, ref) => 
   // tracking the bottom without fighting the layout-stability machinery.
   const isFollowingOutputRef = useRef(false);
   const isStreamingOutputRef = useRef(false);
+  const previousIsStreamingOutputRef = useRef(false);
 
   const isInputActive = useChatInputState(state => state.isActive);
   const isInputExpanded = useChatInputState(state => state.isExpanded);
@@ -1054,6 +1059,10 @@ export const VirtualMessageList = forwardRef<VirtualMessageListRef>((_, ref) => 
   }, [activeSession?.sessionId, resetBottomReservations]);
 
   useEffect(() => {
+    previousIsStreamingOutputRef.current = false;
+  }, [activeSession?.sessionId]);
+
+  useEffect(() => {
     if (virtualItems.length === 0) {
       previousMeasuredHeightRef.current = null;
       setPendingTurnPin(null);
@@ -1623,6 +1632,35 @@ export const VirtualMessageList = forwardRef<VirtualMessageListRef>((_, ref) => 
     return lastDialogTurn.modelRounds.some(round => round.isStreaming);
   }, [activeSession, isProcessing]);
 
+  useEffect(() => {
+    const wasStreaming = previousIsStreamingOutputRef.current;
+    previousIsStreamingOutputRef.current = isStreamingOutput;
+    if (!wasStreaming || isStreamingOutput) {
+      return;
+    }
+
+    const pinReservation = bottomReservationStateRef.current.pin;
+    if (
+      pinReservation.mode !== 'sticky-latest' ||
+      !pinReservation.targetTurnId ||
+      getReservationTotalPx(pinReservation) <= COMPENSATION_EPSILON_PX
+    ) {
+      return;
+    }
+
+    clearPinReservationForUserNavigation();
+    requestAnimationFrame(() => {
+      const scroller = scrollerElementRef.current;
+      if (!scroller) {
+        return;
+      }
+      scroller.scrollTo({
+        top: Math.max(0, scroller.scrollHeight - scroller.clientHeight),
+        behavior: 'auto',
+      });
+    });
+  }, [clearPinReservationForUserNavigation, isStreamingOutput]);
+
   const scrollToLatestEndPositionInternal = useCallback((behavior: 'auto' | 'smooth') => {
     const scroller = scrollerElementRef.current;
     if (!scroller) return;
@@ -1662,8 +1700,12 @@ export const VirtualMessageList = forwardRef<VirtualMessageListRef>((_, ref) => 
   }, [clearAllBottomReservationsForUserNavigation, getTotalBottomCompensationPx]);
 
   const requestTurnPinToTop = useCallback((turnId: string, options?: { behavior?: ScrollBehavior; pinMode?: FlowChatPinTurnToTopMode }) => {
-    const requestedPinMode = options?.pinMode ?? 'transient';
+    let requestedPinMode = options?.pinMode ?? 'transient';
     const requestedBehavior = options?.behavior ?? 'auto';
+    const targetTurn = findDialogTurn(activeSession?.dialogTurns, turnId);
+    if (requestedPinMode === 'sticky-latest' && !shouldUseStickyLatestPin(targetTurn)) {
+      return false;
+    }
     const targetItem = userMessageItems.find(({ item }) => item.turnId === turnId);
     if (!targetItem || !virtuosoRef.current) {
       return false;
@@ -1686,7 +1728,7 @@ export const VirtualMessageList = forwardRef<VirtualMessageListRef>((_, ref) => 
       attempts: 0,
     });
     return true;
-  }, [userMessageItems]);
+  }, [activeSession?.dialogTurns, userMessageItems]);
 
   const performAutoFollowSync = useCallback(() => {
     scrollToLatestEndPositionInternal('auto');
@@ -1713,12 +1755,17 @@ export const VirtualMessageList = forwardRef<VirtualMessageListRef>((_, ref) => 
     },
     performAutoFollowScroll: performAutoFollowSync,
     performLatestTurnStickyPin: () => {
-      if (latestTurnId) {
-        requestTurnPinToTop(latestTurnId, {
-          behavior: 'auto',
-          pinMode: 'sticky-latest',
-        });
+      if (!latestTurnId) {
+        return;
       }
+      const latestTurn = findDialogTurn(activeSession?.dialogTurns, latestTurnId);
+      if (!shouldUseStickyLatestPin(latestTurn)) {
+        return;
+      }
+      requestTurnPinToTop(latestTurnId, {
+        behavior: 'auto',
+        pinMode: 'sticky-latest',
+      });
     },
     shouldSuspendAutoFollow,
     // Subtract the bottom-reservation footer so the follow controller treats

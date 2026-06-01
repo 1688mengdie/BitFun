@@ -637,6 +637,10 @@ pub async fn run() {
             api::agentic_api::start_dialog_turn,
             api::agentic_api::compact_session,
             api::agentic_api::activate_session_goal,
+            api::agentic_api::get_session_thread_goal,
+            api::agentic_api::clear_session_thread_goal,
+            api::agentic_api::set_session_thread_goal_status,
+            api::agentic_api::update_session_thread_goal_objective,
             api::agentic_api::ensure_assistant_bootstrap,
             api::agentic_api::run_init_agents_md,
             api::agentic_api::cancel_dialog_turn,
@@ -1239,6 +1243,10 @@ async fn init_agentic_system() -> anyhow::Result<(
         bitfun_core::service::token_usage::TokenUsageSubscriber::new(token_usage_service.clone()),
     );
     event_router.subscribe_internal("token_usage".to_string(), token_usage_subscriber);
+    event_router.subscribe_internal(
+        "thread_goal_tokens".to_string(),
+        Arc::new(bitfun_core::agentic::goal_mode::ThreadGoalTokenSubscriber),
+    );
 
     log::info!("Token usage service initialized and subscriber registered");
 

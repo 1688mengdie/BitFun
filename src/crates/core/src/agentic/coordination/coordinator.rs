@@ -17,13 +17,9 @@ use crate::agentic::execution::{
 };
 use crate::agentic::fork_agent::ForkAgentContextSnapshot;
 use crate::agentic::goal_mode::{
-    build_goal_continuation_plan, build_goal_kickoff_messages, build_goal_system_reminder,
-    clear_goal_mode_patch, effective_subagent_timeout_seconds,
-    ensure_final_response_in_goal_context, generate_goal_from_context,
-    goal_mode_from_custom_metadata, goal_mode_patch, now_ms,
-    should_skip_goal_verification_for_turn, user_facing_goal_mode_error, verify_goal_achievement,
-    GoalActivationResult, GoalContinuationPlan, GoalModeInitialGoal, GoalModeState,
-    MAX_GOAL_CONTINUATIONS,
+    effective_subagent_timeout_seconds, is_usage_limit_error, maybe_build_continuation_after_turn,
+    should_skip_goal_continuation_after_turn, should_skip_goal_for_turn,
+    user_facing_thread_goal_error, ThreadGoalRuntime, ThreadGoalStore,
 };
 use crate::agentic::image_analysis::ImageContextData;
 use crate::agentic::round_preempt::{DialogRoundInjectionSource, DialogRoundPreemptSource};
@@ -47,6 +43,7 @@ use crate::service::workspace::{
 };
 use crate::util::errors::{BitFunError, BitFunResult};
 use bitfun_runtime_ports::{DelegationPolicy, SubagentContextMode};
+use bitfun_runtime_ports::{ThreadGoal, ThreadGoalContinuationPlan, ThreadGoalStatus};
 use dashmap::DashMap;
 use log::{debug, error, info, warn};
 use std::collections::{HashMap, HashSet};
@@ -496,6 +493,7 @@ pub struct ConversationCoordinator {
     /// Map value is a counter shared between the coordinator and the spawn
     /// task; spawn task increments on entry and decrements on exit.
     active_turns_per_session: Arc<DashMap<String, Arc<AtomicUsize>>>,
+    thread_goal_runtime: Arc<ThreadGoalRuntime>,
 }
 
 impl ConversationCoordinator {
@@ -1010,7 +1008,12 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             round_preempt_source: OnceLock::new(),
             round_injection_source: OnceLock::new(),
             active_turns_per_session: Arc::new(DashMap::new()),
+            thread_goal_runtime: Arc::new(ThreadGoalRuntime::new()),
         }
+    }
+
+    pub fn thread_goal_runtime(&self) -> Arc<ThreadGoalRuntime> {
+        Arc::clone(&self.thread_goal_runtime)
     }
 
     /// Inject the DialogScheduler notification channel after construction.
@@ -1568,7 +1571,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                 session_id.to_string(),
                 TurnOutcome::Failed {
                     turn_id: turn_id.to_string(),
-                    error: error_text,
+                    error: error_text.clone(),
                 },
             )) {
                 error!(
@@ -1576,6 +1579,12 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                     session_id, turn_id, notify_error
                 );
             }
+        }
+
+        if let Some(coordinator) = get_global_coordinator() {
+            coordinator
+                .maybe_mark_thread_goal_usage_limited(session_id, error)
+                .await;
         }
 
         crate::service::session::TurnStatus::Error
@@ -2004,194 +2013,377 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         .await
     }
 
-    async fn load_active_goal_mode(&self, session_id: &str) -> BitFunResult<Option<GoalModeState>> {
+    fn thread_goal_store(&self) -> ThreadGoalStore<'_> {
+        ThreadGoalStore::new(self.session_manager.as_ref())
+    }
+
+    fn require_main_session_workspace(&self, session_id: &str) -> BitFunResult<PathBuf> {
         let session = self
             .session_manager
             .get_session(session_id)
             .ok_or_else(|| BitFunError::NotFound(format!("Session not found: {session_id}")))?;
-        let workspace_path = session.config.workspace_path.as_deref().ok_or_else(|| {
-            BitFunError::Validation(format!("Session workspace_path is missing: {session_id}"))
-        })?;
-        let metadata = self
-            .session_manager
-            .load_session_metadata(Path::new(workspace_path), session_id)
-            .await?;
-        Ok(goal_mode_from_custom_metadata(
-            metadata
-                .as_ref()
-                .and_then(|value| value.custom_metadata.as_ref()),
-        )
-        .filter(GoalModeState::is_active))
-    }
-
-    /// Activate `/goal` mode for a session by synthesizing a goal from context.
-    pub async fn activate_session_goal(
-        &self,
-        session_id: String,
-        user_hint: Option<String>,
-    ) -> BitFunResult<GoalActivationResult> {
-        let session = self
-            .session_manager
-            .get_session(&session_id)
-            .ok_or_else(|| BitFunError::NotFound(format!("Session not found: {session_id}")))?;
-
         if matches!(
             session.kind,
             SessionKind::Subagent | SessionKind::EphemeralChild
         ) {
             return Err(BitFunError::Validation(
-                "Goal mode is only available for main sessions".to_string(),
+                "Thread goals are only available for main sessions".to_string(),
             ));
         }
-
-        let context_messages = self
-            .session_manager
-            .get_context_messages(&session_id)
-            .await?;
-        let trimmed_hint = user_hint
+        session
+            .config
+            .workspace_path
             .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty());
-
-        let generation = generate_goal_from_context(&context_messages, trimmed_hint)
-            .await
-            .map_err(user_facing_goal_mode_error)?;
-        let activation = build_goal_kickoff_messages(&generation, trimmed_hint);
-        let activated_at_ms = now_ms();
-
-        let state = GoalModeState {
-            active: true,
-            initial_goal: GoalModeInitialGoal::new(
-                activation.goal_text.clone(),
-                activation.success_criteria.clone(),
-                trimmed_hint.map(str::to_string),
-                activated_at_ms,
-            ),
-            goal_text: activation.goal_text.clone(),
-            success_criteria: activation.success_criteria.clone(),
-            user_hint: trimmed_hint.map(str::to_string),
-            activated_at_ms,
-            continuation_count: 0,
-        };
-
-        self.session_manager
-            .merge_session_custom_metadata(&session_id, goal_mode_patch(&state))
-            .await?;
-
-        info!(
-            "Session goal mode activated: session_id={}, goal={}",
-            session_id, activation.goal_text
-        );
-
-        Ok(activation)
+            .map(Path::new)
+            .map(Path::to_path_buf)
+            .ok_or_else(|| {
+                BitFunError::Validation(format!("Session workspace_path is missing: {session_id}"))
+            })
     }
 
-    /// Verify the active session goal after a dialog turn stops.
+    pub async fn get_thread_goal(
+        &self,
+        session_id: &str,
+        workspace_path: &Path,
+    ) -> BitFunResult<Option<ThreadGoal>> {
+        self.thread_goal_store()
+            .get_thread_goal(session_id, workspace_path)
+            .await
+    }
+
+    pub async fn clear_thread_goal(
+        &self,
+        session_id: &str,
+        workspace_path: &Path,
+    ) -> BitFunResult<()> {
+        self.thread_goal_runtime.clear_active_goal(None).await;
+        self.thread_goal_store()
+            .clear_thread_goal(session_id, workspace_path)
+            .await?;
+        self.emit_thread_goal_updated(session_id, None).await;
+        Ok(())
+    }
+
+    pub async fn create_thread_goal(
+        &self,
+        session_id: &str,
+        workspace_path: &Path,
+        objective: String,
+        token_budget: Option<i64>,
+    ) -> BitFunResult<ThreadGoal> {
+        self.require_main_session_workspace(session_id)?;
+        let goal = self
+            .thread_goal_store()
+            .create_thread_goal(session_id, workspace_path, objective, token_budget)
+            .await?;
+        self.thread_goal_runtime
+            .mark_turn_started("", Some(&goal))
+            .await;
+        self.emit_thread_goal_updated(session_id, Some(goal.clone()))
+            .await;
+        Ok(goal)
+    }
+
+    pub async fn update_thread_goal_objective(
+        &self,
+        session_id: &str,
+        workspace_path: &Path,
+        objective: String,
+    ) -> BitFunResult<ThreadGoal> {
+        self.require_main_session_workspace(session_id)?;
+        let existing = self
+            .get_thread_goal(session_id, workspace_path)
+            .await?
+            .ok_or_else(|| {
+                BitFunError::NotFound(format!(
+                    "cannot edit goal for session {session_id}: no goal exists"
+                ))
+            })?;
+        let status = match existing.status {
+            ThreadGoalStatus::BudgetLimited | ThreadGoalStatus::Complete => {
+                Some(ThreadGoalStatus::Active)
+            }
+            _ => None,
+        };
+        let result = self
+            .thread_goal_store()
+            .set_thread_goal(
+                session_id,
+                workspace_path,
+                Some(objective),
+                status,
+                None,
+                false,
+            )
+            .await?;
+        let objective_changed = existing.objective != result.goal.objective;
+        if result.goal.is_active() {
+            self.thread_goal_runtime
+                .mark_turn_started("", Some(&result.goal))
+                .await;
+        }
+        self.emit_thread_goal_updated(session_id, Some(result.goal.clone()))
+            .await;
+        if objective_changed && result.goal.is_active() {
+            self.apply_objective_updated_steering(session_id, &result.goal)
+                .await;
+        }
+        Ok(result.goal)
+    }
+
+    pub async fn set_thread_goal_objective(
+        &self,
+        session_id: &str,
+        workspace_path: &Path,
+        objective: String,
+        replace_existing: bool,
+    ) -> BitFunResult<ThreadGoal> {
+        self.require_main_session_workspace(session_id)?;
+        let previous = self.get_thread_goal(session_id, workspace_path).await?;
+        let status = if previous.is_some() && !replace_existing {
+            None
+        } else {
+            Some(ThreadGoalStatus::Active)
+        };
+        let result = self
+            .thread_goal_store()
+            .set_thread_goal(
+                session_id,
+                workspace_path,
+                Some(objective),
+                status,
+                None,
+                replace_existing,
+            )
+            .await?;
+        let objective_changed = previous
+            .as_ref()
+            .map(|goal| goal.objective != result.goal.objective)
+            .unwrap_or(true);
+        if result.goal.is_active() {
+            self.thread_goal_runtime
+                .mark_turn_started("", Some(&result.goal))
+                .await;
+        }
+        self.emit_thread_goal_updated(session_id, Some(result.goal.clone()))
+            .await;
+        if objective_changed && result.goal.is_active() {
+            self.apply_objective_updated_steering(session_id, &result.goal)
+                .await;
+        }
+        Ok(result.goal)
+    }
+
+    async fn apply_objective_updated_steering(&self, session_id: &str, goal: &ThreadGoal) {
+        if !goal.is_active() {
+            return;
+        }
+        let Some(scheduler) = super::scheduler::get_global_scheduler() else {
+            warn!(
+                "Scheduler not initialized; objective_updated steering skipped: session_id={}",
+                session_id
+            );
+            return;
+        };
+        let agent_type = match self.session_manager.get_session(session_id) {
+            Some(session) => {
+                let agent_type = session.agent_type.trim();
+                if agent_type.is_empty() {
+                    "agentic".to_string()
+                } else {
+                    agent_type.to_string()
+                }
+            }
+            None => "agentic".to_string(),
+        };
+        let workspace_path = self
+            .require_main_session_workspace(session_id)
+            .ok()
+            .map(|path| path.to_string_lossy().to_string());
+        if let Err(error) = scheduler
+            .deliver_thread_goal_objective_updated(
+                session_id.to_string(),
+                agent_type,
+                workspace_path,
+                goal.clone(),
+            )
+            .await
+        {
+            warn!(
+                "Failed to deliver objective_updated steering: session_id={}, error={}",
+                session_id, error
+            );
+        }
+    }
+
+    pub async fn maybe_mark_thread_goal_usage_limited(
+        &self,
+        session_id: &str,
+        error: &BitFunError,
+    ) {
+        if !is_usage_limit_error(error) {
+            return;
+        }
+        let workspace_path = match self.require_main_session_workspace(session_id) {
+            Ok(path) => path,
+            Err(_) => return,
+        };
+        let Ok(Some(goal)) = self
+            .get_thread_goal(session_id, workspace_path.as_path())
+            .await
+        else {
+            return;
+        };
+        if !goal.is_active() {
+            return;
+        }
+        if let Err(error) = self
+            .set_thread_goal_status(
+                session_id,
+                workspace_path.as_path(),
+                ThreadGoalStatus::UsageLimited,
+            )
+            .await
+        {
+            warn!(
+                "Failed to mark thread goal usage limited: session_id={}, error={}",
+                session_id, error
+            );
+        }
+    }
+
+    pub async fn set_thread_goal_status(
+        &self,
+        session_id: &str,
+        workspace_path: &Path,
+        status: ThreadGoalStatus,
+    ) -> BitFunResult<ThreadGoal> {
+        self.require_main_session_workspace(session_id)?;
+        let result = self
+            .thread_goal_store()
+            .set_thread_goal(session_id, workspace_path, None, Some(status), None, false)
+            .await?;
+        if !result.goal.is_active() {
+            self.thread_goal_runtime.clear_active_goal(None).await;
+        }
+        self.emit_thread_goal_updated(session_id, Some(result.goal.clone()))
+            .await;
+        Ok(result.goal)
+    }
+
+    pub async fn update_thread_goal_status(
+        &self,
+        session_id: &str,
+        workspace_path: &Path,
+        status: ThreadGoalStatus,
+        turn_id: Option<&str>,
+    ) -> BitFunResult<ThreadGoal> {
+        let goal = self
+            .set_thread_goal_status(session_id, workspace_path, status)
+            .await?;
+        self.thread_goal_runtime.clear_active_goal(turn_id).await;
+        Ok(goal)
+    }
+
+    pub async fn emit_thread_goal_updated(&self, session_id: &str, goal: Option<ThreadGoal>) {
+        let goal = goal.and_then(|goal| serde_json::to_value(goal).ok());
+        self.emit_event(AgenticEvent::ThreadGoalUpdated {
+            session_id: session_id.to_string(),
+            goal,
+        })
+        .await;
+    }
+
+    async fn load_active_thread_goal(&self, session_id: &str) -> BitFunResult<Option<ThreadGoal>> {
+        let workspace_path = self.require_main_session_workspace(session_id)?;
+        Ok(self
+            .get_thread_goal(session_id, workspace_path.as_path())
+            .await?
+            .filter(ThreadGoal::is_active))
+    }
+
+    /// Set a thread goal from `/goal <objective>` (Codex-style direct objective).
+    pub async fn activate_session_goal(
+        &self,
+        session_id: String,
+        user_hint: Option<String>,
+    ) -> BitFunResult<ThreadGoal> {
+        let objective = user_hint.ok_or_else(|| {
+            BitFunError::Validation(
+                "Goal objective is required. Use /goal <objective>.".to_string(),
+            )
+        })?;
+        let workspace_path = self.require_main_session_workspace(&session_id)?;
+        let existing = self
+            .get_thread_goal(&session_id, workspace_path.as_path())
+            .await?;
+        let replace_existing = existing.is_some();
+        let goal = self
+            .set_thread_goal_objective(
+                &session_id,
+                workspace_path.as_path(),
+                objective,
+                replace_existing,
+            )
+            .await
+            .map_err(user_facing_thread_goal_error)?;
+        info!(
+            "Thread goal set from /goal: session_id={}, objective={}",
+            session_id, goal.objective
+        );
+        Ok(goal)
+    }
+
+    /// Continue an active thread goal after a dialog turn completes (Codex-style).
     pub async fn prepare_goal_continuation_after_turn(
         &self,
         session_id: &str,
         source_turn_id: &str,
         user_input: &str,
         user_message_metadata: Option<&serde_json::Value>,
-        turn_observation: &str,
-    ) -> BitFunResult<Option<GoalContinuationPlan>> {
-        if should_skip_goal_verification_for_turn(user_input, user_message_metadata) {
+        turn_completed: bool,
+    ) -> BitFunResult<Option<ThreadGoalContinuationPlan>> {
+        if should_skip_goal_continuation_after_turn(user_input, user_message_metadata) {
             return Ok(None);
         }
 
-        let session = self
-            .session_manager
-            .get_session(session_id)
-            .ok_or_else(|| BitFunError::NotFound(format!("Session not found: {session_id}")))?;
-        if matches!(
-            session.kind,
-            SessionKind::Subagent | SessionKind::EphemeralChild
-        ) {
-            return Ok(None);
-        }
-
-        let Some(mut goal_state) = self.load_active_goal_mode(session_id).await? else {
-            return Ok(None);
+        let workspace_path = match self.require_main_session_workspace(session_id) {
+            Ok(path) => path,
+            Err(_) => return Ok(None),
         };
 
-        if goal_state.continuation_count >= MAX_GOAL_CONTINUATIONS {
-            warn!(
-                "Session goal continuation limit reached; stopping auto-continue: session_id={}, goal={}",
-                session_id, goal_state.goal_text
-            );
-            self.session_manager
-                .merge_session_custom_metadata(session_id, clear_goal_mode_patch())
-                .await?;
-            self.emit_event(AgenticEvent::GoalVerificationFinished {
-                session_id: session_id.to_string(),
-                source_turn_id: source_turn_id.to_string(),
-                outcome: "limit_reached".to_string(),
-            })
+        let turn_tokens = self
+            .thread_goal_runtime
+            .turn_cumulative_billable_tokens(source_turn_id)
             .await;
-            return Ok(None);
-        }
 
-        self.emit_event(AgenticEvent::GoalVerificationStarted {
-            session_id: session_id.to_string(),
-            source_turn_id: source_turn_id.to_string(),
-        })
-        .await;
-
-        let context_messages = self
-            .session_manager
-            .get_context_messages(session_id)
+        let goal_before = self
+            .get_thread_goal(session_id, workspace_path.as_path())
             .await?;
-        let context_messages = ensure_final_response_in_goal_context(
-            context_messages,
-            turn_observation,
+
+        let plan = maybe_build_continuation_after_turn(
+            &self.thread_goal_store(),
+            self.thread_goal_runtime.as_ref(),
+            session_id,
+            workspace_path.as_path(),
             source_turn_id,
-        );
-        let verification = match verify_goal_achievement(&goal_state, &context_messages).await {
-            Ok(result) => result,
-            Err(error) => {
-                self.emit_event(AgenticEvent::GoalVerificationFinished {
-                    session_id: session_id.to_string(),
-                    source_turn_id: source_turn_id.to_string(),
-                    outcome: "failed".to_string(),
-                })
-                .await;
-                return Err(user_facing_goal_mode_error(error));
-            }
-        };
+            turn_tokens,
+            turn_completed,
+        )
+        .await?;
 
-        if verification.achieved {
-            info!(
-                "Session goal achieved: session_id={}, goal={}",
-                session_id, goal_state.goal_text
-            );
-            self.session_manager
-                .merge_session_custom_metadata(session_id, clear_goal_mode_patch())
-                .await?;
-            self.emit_event(AgenticEvent::GoalVerificationFinished {
-                session_id: session_id.to_string(),
-                source_turn_id: source_turn_id.to_string(),
-                outcome: "achieved".to_string(),
-            })
-            .await;
-            return Ok(None);
+        let goal_after = self
+            .get_thread_goal(session_id, workspace_path.as_path())
+            .await?;
+        if goal_before.as_ref().map(|goal| goal.status)
+            != goal_after.as_ref().map(|goal| goal.status)
+        {
+            if let Some(goal) = goal_after {
+                self.emit_thread_goal_updated(session_id, Some(goal)).await;
+            }
         }
 
-        goal_state.continuation_count = goal_state.continuation_count.saturating_add(1);
-        self.session_manager
-            .merge_session_custom_metadata(session_id, goal_mode_patch(&goal_state))
-            .await?;
-
-        self.emit_event(AgenticEvent::GoalVerificationFinished {
-            session_id: session_id.to_string(),
-            source_turn_id: source_turn_id.to_string(),
-            outcome: "continuing".to_string(),
-        })
-        .await;
-
-        Ok(Some(build_goal_continuation_plan(
-            &goal_state,
-            &verification,
-        )))
+        Ok(plan)
     }
 
     /// Compact the active session context as a persisted maintenance turn.
@@ -2691,18 +2883,6 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         let mut prepended_messages = additional_prepended_messages;
         prepended_messages.extend(wrapped_user_input_payload.prepended_messages.clone());
 
-        if let Ok(Some(goal_state)) = self.load_active_goal_mode(&session_id).await {
-            if !should_skip_goal_verification_for_turn(
-                &original_user_input,
-                user_message_metadata.as_ref(),
-            ) {
-                prepended_messages.push(Message::internal_reminder(
-                    InternalReminderKind::GoalMode,
-                    build_goal_system_reminder(&goal_state),
-                ));
-            }
-        }
-
         if original_user_input != effective_user_input {
             let mut metadata =
                 Self::ensure_user_message_metadata_object(user_message_metadata.take());
@@ -2729,6 +2909,13 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                 user_message_metadata.clone(),
             )
             .await?;
+        if let Ok(Some(goal)) = self.load_active_thread_goal(&session_id).await {
+            if !should_skip_goal_for_turn(&original_user_input, user_message_metadata.as_ref()) {
+                self.thread_goal_runtime
+                    .mark_turn_started(&turn_id, Some(&goal))
+                    .await;
+            }
+        }
         match wrapped_user_input_payload.snapshot_persistence {
             SkillAgentSnapshotPersistence::None => {}
             SkillAgentSnapshotPersistence::SaveCurrentTurn => {
@@ -3789,15 +3976,15 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         } = request;
 
         let requested_timeout_seconds = timeout_seconds.filter(|seconds| *seconds > 0);
-        let parent_goal_mode_active = if let Some(parent_info) = subagent_parent_info.as_ref() {
+        let parent_thread_goal_active = if let Some(parent_info) = subagent_parent_info.as_ref() {
             matches!(
-                self.load_active_goal_mode(&parent_info.session_id).await,
+                self.load_active_thread_goal(&parent_info.session_id).await,
                 Ok(Some(_))
             )
         } else {
             false
         };
-        if parent_goal_mode_active {
+        if parent_thread_goal_active {
             let parent_session_id = subagent_parent_info
                 .as_ref()
                 .map(|info| info.session_id.as_str())
@@ -3807,8 +3994,10 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                 agent_type, parent_session_id
             );
         }
-        let timeout_seconds =
-            effective_subagent_timeout_seconds(requested_timeout_seconds, parent_goal_mode_active);
+        let timeout_seconds = effective_subagent_timeout_seconds(
+            requested_timeout_seconds,
+            parent_thread_goal_active,
+        );
         let timeout_error_message = match timeout_seconds.or(requested_timeout_seconds) {
             Some(seconds) => format!(
                 "Subagent '{}' timed out after {} seconds",

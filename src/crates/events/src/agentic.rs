@@ -205,18 +205,11 @@ pub enum AgenticEvent {
         error: String,
     },
 
-    /// Emitted when `/goal` verification begins after a dialog turn completes.
-    GoalVerificationStarted {
+    /// Emitted when a persisted session thread goal is created or updated.
+    ThreadGoalUpdated {
         session_id: String,
-        source_turn_id: String,
-    },
-
-    /// Emitted when `/goal` verification finishes.
-    GoalVerificationFinished {
-        session_id: String,
-        source_turn_id: String,
-        /// One of: `achieved`, `continuing`, `failed`, `limit_reached`.
-        outcome: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        goal: Option<serde_json::Value>,
     },
 
     ModelRoundStarted {
@@ -680,8 +673,7 @@ impl AgenticEvent {
             | Self::ContextCompressionStarted { session_id, .. }
             | Self::ContextCompressionCompleted { session_id, .. }
             | Self::ContextCompressionFailed { session_id, .. }
-            | Self::GoalVerificationStarted { session_id, .. }
-            | Self::GoalVerificationFinished { session_id, .. }
+            | Self::ThreadGoalUpdated { session_id, .. }
             | Self::DialogTurnCancelled { session_id, .. }
             | Self::DialogTurnFailed { session_id, .. }
             | Self::ModelRoundStarted { session_id, .. }
@@ -719,8 +711,7 @@ impl AgenticEvent {
             | Self::TokenUsageUpdated { .. }
             | Self::DialogTurnCompleted { .. }
             | Self::ContextCompressionStarted { .. }
-            | Self::GoalVerificationStarted { .. }
-            | Self::GoalVerificationFinished { .. }
+            | Self::ThreadGoalUpdated { .. }
             | Self::UserSteeringInjected { .. }
             | Self::ContextCompressionCompleted { .. } => AgenticEventPriority::Normal,
 

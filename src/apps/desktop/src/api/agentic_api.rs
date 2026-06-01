@@ -2,6 +2,7 @@
 
 use log::{debug, warn};
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::{AppHandle, State};
 
@@ -17,6 +18,7 @@ use bitfun_core::agentic::deep_review_policy::{
     apply_deep_review_queue_control, default_review_team_definition, DeepReviewQueueControlAction,
     ReviewTeamDefinition,
 };
+use bitfun_core::agentic::goal_mode::{ThreadGoal, ThreadGoalStatus};
 use bitfun_core::agentic::image_analysis::ImageContextData;
 use bitfun_core::agentic::tools::image_context::get_image_context;
 use bitfun_core::service::session::{DialogTurnData, SessionRelationship};
@@ -142,10 +144,59 @@ pub struct ActivateSessionGoalRequest {
 #[serde(rename_all = "camelCase")]
 pub struct ActivateSessionGoalResponse {
     pub success: bool,
-    pub goal_text: String,
-    pub success_criteria: Vec<String>,
-    pub kickoff_message: String,
-    pub display_message: String,
+    pub goal: ThreadGoal,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetSessionThreadGoalRequest {
+    pub session_id: String,
+    pub workspace_path: Option<String>,
+    #[serde(default)]
+    pub remote_connection_id: Option<String>,
+    #[serde(default)]
+    pub remote_ssh_host: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetSessionThreadGoalResponse {
+    pub goal: Option<ThreadGoal>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClearSessionThreadGoalRequest {
+    pub session_id: String,
+    pub workspace_path: Option<String>,
+    #[serde(default)]
+    pub remote_connection_id: Option<String>,
+    #[serde(default)]
+    pub remote_ssh_host: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetSessionThreadGoalStatusRequest {
+    pub session_id: String,
+    pub status: String,
+    pub workspace_path: Option<String>,
+    #[serde(default)]
+    pub remote_connection_id: Option<String>,
+    #[serde(default)]
+    pub remote_ssh_host: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateSessionThreadGoalObjectiveRequest {
+    pub session_id: String,
+    pub objective: String,
+    pub workspace_path: Option<String>,
+    #[serde(default)]
+    pub remote_connection_id: Option<String>,
+    #[serde(default)]
+    pub remote_ssh_host: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -900,11 +951,162 @@ pub async fn activate_session_goal(
 
     Ok(ActivateSessionGoalResponse {
         success: true,
-        goal_text: activation.goal_text,
-        success_criteria: activation.success_criteria,
-        kickoff_message: activation.kickoff_message,
-        display_message: activation.display_message,
+        goal: activation,
     })
+}
+
+async fn ensure_session_for_thread_goal(
+    coordinator: &Arc<ConversationCoordinator>,
+    app_state: &AppState,
+    session_id: &str,
+    workspace_path: Option<&str>,
+    remote_connection_id: Option<&str>,
+    remote_ssh_host: Option<&str>,
+) -> Result<PathBuf, String> {
+    if coordinator
+        .get_session_manager()
+        .get_session(session_id)
+        .is_none()
+    {
+        let workspace_path = workspace_path
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                "workspace_path is required when the session is not loaded".to_string()
+            })?;
+        let effective = desktop_effective_session_storage_path(
+            app_state,
+            workspace_path,
+            remote_connection_id,
+            remote_ssh_host,
+        )
+        .await;
+        coordinator
+            .restore_session(&effective, session_id)
+            .await
+            .map_err(|e| format!("Failed to restore session before thread goal access: {e}"))?;
+    }
+
+    coordinator
+        .get_session_manager()
+        .get_session(session_id)
+        .and_then(|session| session.config.workspace_path.clone())
+        .map(PathBuf::from)
+        .ok_or_else(|| format!("Session workspace_path is missing: {session_id}"))
+}
+
+#[tauri::command]
+pub async fn get_session_thread_goal(
+    coordinator: State<'_, Arc<ConversationCoordinator>>,
+    app_state: State<'_, AppState>,
+    request: GetSessionThreadGoalRequest,
+) -> Result<GetSessionThreadGoalResponse, String> {
+    let session_id = request.session_id.trim();
+    if session_id.is_empty() {
+        return Err("session_id is required".to_string());
+    }
+    let workspace_path = ensure_session_for_thread_goal(
+        coordinator.inner(),
+        app_state.inner(),
+        session_id,
+        request.workspace_path.as_deref(),
+        request.remote_connection_id.as_deref(),
+        request.remote_ssh_host.as_deref(),
+    )
+    .await?;
+    let goal = coordinator
+        .get_thread_goal(session_id, workspace_path.as_path())
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(GetSessionThreadGoalResponse { goal })
+}
+
+#[tauri::command]
+pub async fn clear_session_thread_goal(
+    coordinator: State<'_, Arc<ConversationCoordinator>>,
+    app_state: State<'_, AppState>,
+    request: ClearSessionThreadGoalRequest,
+) -> Result<(), String> {
+    let session_id = request.session_id.trim();
+    if session_id.is_empty() {
+        return Err("session_id is required".to_string());
+    }
+    let workspace_path = ensure_session_for_thread_goal(
+        coordinator.inner(),
+        app_state.inner(),
+        session_id,
+        request.workspace_path.as_deref(),
+        request.remote_connection_id.as_deref(),
+        request.remote_ssh_host.as_deref(),
+    )
+    .await?;
+    coordinator
+        .clear_thread_goal(session_id, workspace_path.as_path())
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn set_session_thread_goal_status(
+    coordinator: State<'_, Arc<ConversationCoordinator>>,
+    app_state: State<'_, AppState>,
+    request: SetSessionThreadGoalStatusRequest,
+) -> Result<ThreadGoal, String> {
+    let session_id = request.session_id.trim();
+    if session_id.is_empty() {
+        return Err("session_id is required".to_string());
+    }
+    let status = match request.status.trim().to_ascii_lowercase().as_str() {
+        "active" => ThreadGoalStatus::Active,
+        "paused" => ThreadGoalStatus::Paused,
+        "blocked" => ThreadGoalStatus::Blocked,
+        "usageLimited" | "usage_limited" => ThreadGoalStatus::UsageLimited,
+        "budgetLimited" | "budget_limited" => ThreadGoalStatus::BudgetLimited,
+        "complete" => ThreadGoalStatus::Complete,
+        other => return Err(format!("unsupported thread goal status: {other}")),
+    };
+    let workspace_path = ensure_session_for_thread_goal(
+        coordinator.inner(),
+        app_state.inner(),
+        session_id,
+        request.workspace_path.as_deref(),
+        request.remote_connection_id.as_deref(),
+        request.remote_ssh_host.as_deref(),
+    )
+    .await?;
+    coordinator
+        .set_thread_goal_status(session_id, workspace_path.as_path(), status)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn update_session_thread_goal_objective(
+    coordinator: State<'_, Arc<ConversationCoordinator>>,
+    app_state: State<'_, AppState>,
+    request: UpdateSessionThreadGoalObjectiveRequest,
+) -> Result<ThreadGoal, String> {
+    let session_id = request.session_id.trim();
+    if session_id.is_empty() {
+        return Err("session_id is required".to_string());
+    }
+    let objective = request.objective.trim();
+    if objective.is_empty() {
+        return Err("objective is required".to_string());
+    }
+    let workspace_path = ensure_session_for_thread_goal(
+        coordinator.inner(),
+        app_state.inner(),
+        session_id,
+        request.workspace_path.as_deref(),
+        request.remote_connection_id.as_deref(),
+        request.remote_ssh_host.as_deref(),
+    )
+    .await?;
+    coordinator
+        .update_thread_goal_objective(session_id, workspace_path.as_path(), objective.to_string())
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]

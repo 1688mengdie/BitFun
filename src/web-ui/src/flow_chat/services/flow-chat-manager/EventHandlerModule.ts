@@ -21,11 +21,8 @@ import {
 import { notificationService } from '../../../shared/notification-system/services/NotificationService';
 import type { NotificationAction } from '../../../shared/notification-system/types';
 import { createLogger } from '@/shared/utils/logger';
-import {
-  handleGoalVerificationFinished,
-  handleGoalVerificationStarted,
-  type GoalVerificationOutcome,
-} from '../goalVerificationService';
+import { handleThreadGoalUpdated } from '../threadGoalEventService';
+import { resolveThreadGoalUserMessageDisplay } from '../../utils/threadGoalDisplay';
 import type {
   DeepReviewQueueStateChangedEvent,
   ImageAnalysisEvent,
@@ -109,14 +106,20 @@ export function isAppWindowFocused(): boolean {
 function resolveDialogTurnDisplayContent(
   userInput: unknown,
   originalUserInput: unknown,
-  _userMessageMetadata: unknown,
+  userMessageMetadata: unknown,
 ): string {
   const cleanedUserInput = cleanRemoteUserInput(typeof userInput === 'string' ? userInput : '');
   const cleanedOriginalUserInput = cleanRemoteUserInput(
     typeof originalUserInput === 'string' ? originalUserInput : ''
   );
 
-  return cleanedOriginalUserInput || cleanedUserInput;
+  const base = cleanedOriginalUserInput || cleanedUserInput;
+  const metadata =
+    userMessageMetadata && typeof userMessageMetadata === 'object'
+      ? (userMessageMetadata as Record<string, unknown>)
+      : null;
+
+  return resolveThreadGoalUserMessageDisplay(base, metadata);
 }
 
 export const __test_only__ = {
@@ -643,11 +646,8 @@ export async function initializeEventListeners(
     onContextCompressionFailed: (event) => {
       handleCompressionFailed(context, event);
     },
-    onGoalVerificationStarted: (event) => {
-      handleGoalVerificationStartedEvent(event);
-    },
-    onGoalVerificationFinished: (event) => {
-      handleGoalVerificationFinishedEvent(event);
+    onThreadGoalUpdated: (event) => {
+      handleThreadGoalUpdatedEvent(event);
     },
     onSessionTitleGenerated: (event) => {
       handleSessionTitleGenerated(event);
@@ -1320,8 +1320,6 @@ function cleanRemoteUserInput(raw: string): string {
 function handleDialogTurnStarted(context: FlowChatContext, event: any): void {
   const { sessionId, turnId, turnIndex, userInput, originalUserInput, userMessageMetadata } = event;
 
-  FlowChatStore.getInstance().removeLocalGoalVerifyingTurn(sessionId);
-
   finalizePendingTurnCompletionNow(context, sessionId);
   clearPendingTurnCompletion(context, sessionId, turnId);
 
@@ -1948,60 +1946,17 @@ function buildUnsuccessfulCompletionError(finishReason?: string): string {
     : 'Dialog turn ended without a usable result.';
 }
 
-function parseGoalVerificationEvent(event: any): {
-  sessionId?: string;
-  sourceTurnId?: string;
-  outcome?: GoalVerificationOutcome;
-} {
+function handleThreadGoalUpdatedEvent(event: any): void {
   const sessionId = event?.sessionId ?? event?.session_id;
-  const sourceTurnId = event?.sourceTurnId ?? event?.source_turn_id;
-  const rawOutcome = event?.outcome;
-  const outcome =
-    rawOutcome === 'achieved'
-      || rawOutcome === 'continuing'
-      || rawOutcome === 'failed'
-      || rawOutcome === 'limit_reached'
-      ? rawOutcome
-      : undefined;
-
-  return {
-    sessionId: typeof sessionId === 'string' ? sessionId : undefined,
-    sourceTurnId: typeof sourceTurnId === 'string' ? sourceTurnId : undefined,
-    outcome,
-  };
-}
-
-function handleGoalVerificationStartedEvent(event: any): void {
-  const payload = parseGoalVerificationEvent(event);
-  if (!payload.sessionId) {
-    log.warn('GoalVerificationStarted missing sessionId', { event });
+  if (typeof sessionId !== 'string' || !sessionId) {
+    log.warn('ThreadGoalUpdated missing sessionId', { event });
     return;
   }
 
-  handleGoalVerificationStarted(
-    { sessionId: payload.sessionId, sourceTurnId: payload.sourceTurnId },
-    i18nService.t('flow-chat:chatInput.goalVerifying'),
-  );
-}
-
-function handleGoalVerificationFinishedEvent(event: any): void {
-  const payload = parseGoalVerificationEvent(event);
-  if (!payload.sessionId) {
-    log.warn('GoalVerificationFinished missing sessionId', { event });
-    return;
-  }
-
-  handleGoalVerificationFinished(
-    {
-      sessionId: payload.sessionId,
-      sourceTurnId: payload.sourceTurnId,
-      outcome: payload.outcome,
-    },
-    {
-      achievedTitle: i18nService.t('flow-chat:chatInput.goalAchieved'),
-      failedMessage: i18nService.t('flow-chat:chatInput.goalVerifyFailed'),
-    },
-  );
+  handleThreadGoalUpdated({
+    sessionId,
+    goal: event?.goal ?? null,
+  });
 }
 
 export function handleDialogTurnComplete(

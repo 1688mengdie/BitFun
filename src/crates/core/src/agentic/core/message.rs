@@ -95,6 +95,7 @@ pub enum InternalReminderKind {
     ForkSubagent,
     GoalMode,
     GoalContinuation,
+    GoalObjectiveUpdated,
     SessionMessageRequest,
     SessionMessageReply,
     LoopRecovery,

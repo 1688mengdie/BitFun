@@ -266,6 +266,76 @@
       "modelCallUnknown": "Model call"
     }
   },
+  "threadGoal": {
+    "replaceConfirmTitle": "Replace thread goal?",
+    "replaceConfirmMessage": "Replace the current goal?\n\nCurrent: {{existing}}\n\nNew: {{next}}",
+    "menuTitle": "Thread goal",
+    "objectiveLabel": "Objective",
+    "updatedUserMessage": "Thread goal updated: {{objective}}",
+    "kickoffUserMessage": "Continue toward the thread goal: {{objective}}",
+    "continuationCheckHeader": "Goal completion check",
+    "continuationCheckHeaderWithAttempt": "Goal completion check (auto {{attempt}}/{{max}})",
+    "continuationCheckUserMessage": "Goal completion check: {{objective}}",
+    "menuEmpty": "No thread goal yet. Set an objective to keep the agent focused across turns.",
+    "workflow": {
+      "title": "Completion check",
+      "steps": {
+        "continue": "After each turn, auto-continue toward the objective",
+        "audit": "Verify every requirement against current evidence (not surface-level done)",
+        "complete": "When proven, the agent calls update_goal to mark Complete"
+      },
+      "note": {
+        "active": "While active, each finished turn auto-continues toward the goal (up to 100 times) until the agent calls update_goal(complete) or the limit is reached.",
+        "complete": "Marked complete. Edit or clear the goal to start different work.",
+        "paused": "Paused — continuation and completion checks are stopped.",
+        "blocked": "Blocked — resume with /goal resume after you unblock or the environment changes.",
+        "usageLimited": "Paused due to usage limits — /goal resume after quota recovers.",
+        "budgetLimited": "Token budget reached — edit the goal or clear and set a new one."
+      }
+    },
+    "editTitleCreate": "Set thread goal",
+    "editTitleUpdate": "Edit thread goal",
+    "editHint": "Type an objective and save. The agent will continue toward it when idle.",
+    "editPlaceholder": "Objective…",
+    "editCancel": "Cancel",
+    "editSave": "Save",
+    "resumeTitle": "Resume paused goal?",
+    "resumeSubtitle": "Goal: {{objective}}",
+    "resumeHint": "Mark it active and continue when the session is idle. You can leave it paused and use /goal resume later.",
+    "resumeConfirm": "Resume goal",
+    "resumeLeavePaused": "Leave paused",
+    "stripTooltipEmpty": "Set or view the thread goal",
+    "stripTooltipWithGoal": "{{status}}: {{objective}}",
+    "stripOpenEmpty": "Open thread goal",
+    "stripOpenWithGoal": "Open thread goal menu",
+    "usageTokens": "{{used}} / {{budget}} tokens",
+    "usageTime": "{{seconds}}s elapsed",
+    "status": {
+      "active": "Active",
+      "paused": "Paused",
+      "blocked": "Blocked",
+      "usageLimited": "Usage limited",
+      "budgetLimited": "Budget limited",
+      "complete": "Complete"
+    },
+    "action": {
+      "edit": "Edit",
+      "pause": "Pause",
+      "resume": "Resume",
+      "clear": "Clear",
+      "set": "Set goal"
+    },
+    "commandHint": {
+      "none": "Commands: /goal <objective>",
+      "default": "Commands: /goal edit, /goal pause, /goal clear",
+      "active": "Commands: /goal edit, /goal pause, /goal clear",
+      "paused": "Commands: /goal edit, /goal resume, /goal clear",
+      "blocked": "Commands: /goal edit, /goal resume, /goal clear",
+      "usageLimited": "Commands: /goal edit, /goal resume, /goal clear",
+      "budgetLimited": "Commands: /goal edit, /goal clear",
+      "complete": "Commands: /goal edit, /goal clear"
+    }
+  },
   "agentCompanion": {
     "activity": {
       "starting": "Starting",
@@ -500,15 +570,16 @@
     "usageNoWorkspace": "A workspace is required to build a usage report.",
     "usageFailed": "Usage report failed",
     "goalAction": "Session goal",
-    "goalGenerating": "Generating session goal...",
-    "goalVerifying": "Checking if the session goal is met...",
     "goalAchieved": "Session goal achieved",
     "goalVerifyFailed": "Goal verification failed. Check model configuration and try again.",
     "goalNoSession": "No active session for /goal",
     "goalUsage": "Use /goal with optional focus text, for example /goal fix the login bug.",
-    "goalFailed": "Goal mode activation failed",
-    "goalAiFailed": "Goal mode AI request failed. Check model configuration and try again.",
-    "goalActivated": "Session goal activated",
+    "goalFailed": "Thread goal command failed",
+    "goalActivated": "Thread goal set",
+    "goalCleared": "Thread goal cleared",
+    "goalPaused": "Thread goal paused",
+    "goalResumed": "Thread goal resumed",
+    "goalEdited": "Thread goal updated",
     "goalNestedDisabled": "Goal mode can only be started from the main session.",
     "initAction": "Generate AGENTS.md",
     "initNoSession": "No active session for /init",

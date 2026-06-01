@@ -96,11 +96,7 @@ pub fn is_write_like_tool_name(tool_name: &str) -> bool {
 }
 
 fn is_truncation_safe_to_recover(tool_name: &str) -> bool {
-    is_write_like_tool_name(tool_name)
-        || matches!(
-            tool_name,
-            "AskUserQuestion" | "TodoWrite"
-        )
+    is_write_like_tool_name(tool_name) || matches!(tool_name, "AskUserQuestion" | "TodoWrite")
 }
 
 /// Remove inline body fields that PlaintextFollowup Write must not carry in
@@ -223,8 +219,83 @@ fn repair_truncated_json(raw: &str) -> Option<String> {
 }
 
 impl PendingToolCall {
-    fn parse_arguments(_tool_name: &str, raw_arguments: &str) -> Result<Value, String> {
-        serde_json::from_str::<Value>(raw_arguments).map_err(|error| error.to_string())
+    fn strip_argument_wrapping(raw_arguments: &str) -> &str {
+        let trimmed = raw_arguments.trim();
+        let Some(stripped) = trimmed
+            .strip_prefix("```")
+            .and_then(|value| value.strip_suffix("```"))
+        else {
+            return trimmed.trim_matches('`').trim();
+        };
+
+        let stripped = stripped.trim();
+        if let Some((first_line, rest)) = stripped.split_once('\n') {
+            if first_line
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
+            {
+                return rest.trim();
+            }
+        }
+
+        stripped
+    }
+
+    /// Best-effort repair for Git tool calls whose arguments came back as a raw
+    /// shell-style command (e.g. `git status`, `"git diff --staged"`).
+    fn parse_git_command_arguments(raw_arguments: &str) -> Option<Value> {
+        let trimmed = Self::strip_argument_wrapping(raw_arguments);
+        let command = trimmed
+            .strip_prefix("git ")
+            .map(str::trim)
+            .unwrap_or(trimmed);
+        let mut parts = command.splitn(2, char::is_whitespace);
+        let operation = parts.next()?.trim();
+        if operation.is_empty()
+            || !operation
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
+        {
+            return None;
+        }
+
+        let args = parts.next().map(str::trim).filter(|args| !args.is_empty());
+        let mut value = json!({ "operation": operation });
+        if let Some(args) = args {
+            value["args"] = json!(args);
+        }
+        Some(value)
+    }
+
+    fn normalize_git_tool_arguments(arguments: Value) -> Value {
+        if let Value::String(raw) = &arguments {
+            if let Some(repaired) = Self::parse_git_command_arguments(raw) {
+                warn!("Git tool call arguments repaired from JSON string command");
+                return repaired;
+            }
+        }
+        arguments
+    }
+
+    fn parse_arguments(tool_name: &str, raw_arguments: &str) -> Result<Value, String> {
+        match serde_json::from_str::<Value>(raw_arguments) {
+            Ok(arguments) => {
+                if tool_name == "Git" {
+                    Ok(Self::normalize_git_tool_arguments(arguments))
+                } else {
+                    Ok(arguments)
+                }
+            }
+            Err(primary_error) => {
+                if tool_name == "Git" {
+                    if let Some(arguments) = Self::parse_git_command_arguments(raw_arguments) {
+                        warn!("Git tool call arguments repaired from raw command");
+                        return Ok(arguments);
+                    }
+                }
+                Err(primary_error.to_string())
+            }
+        }
     }
 
     pub fn has_pending(&self) -> bool {
@@ -269,7 +340,11 @@ impl PendingToolCall {
         &self.raw_arguments
     }
 
-    pub fn finalize(&mut self, boundary: ToolCallBoundary, strip_write_inline_content: bool) -> Option<FinalizedToolCall> {
+    pub fn finalize(
+        &mut self,
+        boundary: ToolCallBoundary,
+        strip_write_inline_content: bool,
+    ) -> Option<FinalizedToolCall> {
         if !self.has_pending() {
             return None;
         }
@@ -416,14 +491,13 @@ impl PendingToolCalls {
                     pending.append_arguments(&arguments);
                 }
                 let tool_name = pending.tool_name().to_string();
-                let params_chunk = if self.strip_write_inline_content
-                    && is_write_like_tool_name(&tool_name)
-                {
-                    write_plaintext_followup_params_snapshot(pending.raw_arguments())
-                        .unwrap_or_default()
-                } else {
-                    arguments
-                };
+                let params_chunk =
+                    if self.strip_write_inline_content && is_write_like_tool_name(&tool_name) {
+                        write_plaintext_followup_params_snapshot(pending.raw_arguments())
+                            .unwrap_or_default()
+                    } else {
+                        arguments
+                    };
                 if !params_chunk.is_empty() {
                     outcome.params_partial = Some(ToolCallParamsChunk {
                         tool_id: pending.tool_id().to_string(),
@@ -494,7 +568,7 @@ mod tests {
     }
 
     #[test]
-    fn git_raw_command_arguments_become_invalid_json_diagnostic() {
+    fn repairs_git_raw_command_arguments() {
         let mut pending = PendingToolCall::default();
         pending.start_new("call_1".to_string(), Some("Git".to_string()));
         pending.append_arguments("git status");
@@ -504,12 +578,12 @@ mod tests {
             .expect("finalized tool");
 
         assert_eq!(finalized.raw_arguments, "git status");
-        assert_eq!(finalized.arguments, json!({}));
-        assert!(finalized.is_error);
+        assert_eq!(finalized.arguments, json!({"operation": "status"}));
+        assert!(!finalized.is_error);
     }
 
     #[test]
-    fn git_json_string_command_arguments_are_not_rewritten() {
+    fn repairs_git_json_string_command_arguments() {
         let mut pending = PendingToolCall::default();
         pending.start_new("call_1".to_string(), Some("Git".to_string()));
         pending.append_arguments("\"git diff --staged\"");
@@ -518,7 +592,10 @@ mod tests {
             .finalize(ToolCallBoundary::FinishReason, false)
             .expect("finalized tool");
 
-        assert_eq!(finalized.arguments, json!("git diff --staged"));
+        assert_eq!(
+            finalized.arguments,
+            json!({"operation": "diff", "args": "--staged"})
+        );
         assert!(!finalized.is_error);
     }
 
@@ -955,8 +1032,7 @@ mod tests {
     }
 
     #[test]
-    fn write_truncated_mid_content_string_is_recovered_without_inline_content_when_strip_enabled(
-    ) {
+    fn write_truncated_mid_content_string_is_recovered_without_inline_content_when_strip_enabled() {
         let raw = "{\"file_path\": \"/tmp/report.md\", \"content\": \"# Report\\n\\nA long body that was cut";
         let mut pending = PendingToolCall::default();
         pending.start_new("call_1".to_string(), Some("Write".to_string()));
@@ -1084,7 +1160,8 @@ mod tests {
     fn ask_user_question_truncated_mid_chinese_string_is_recovered() {
         let raw = r#"{"questions": [{"header": "重试场景", "multiSelect": true, "options": [{"description": "当消息发送后后端返回失败（消息气泡显示为红色失败状态，有 model rounds 但 status='error'），在失败气泡旁增加重试按钮，点击后重新发送该消息", "label": "失败消息气泡上加重试按钮"}]}]}"#;
         // Truncate mid-Chinese-string, after a colon that opened the value
-        let truncated = &raw[..raw.find("消息气泡显示为红色失败状态").unwrap() + "消息气泡显示为红色失败状态".len()];
+        let truncated = &raw[..raw.find("消息气泡显示为红色失败状态").unwrap()
+            + "消息气泡显示为红色失败状态".len()];
         let mut pending = PendingToolCall::default();
         pending.start_new("call_1".to_string(), Some("AskUserQuestion".to_string()));
         pending.append_arguments(truncated);
