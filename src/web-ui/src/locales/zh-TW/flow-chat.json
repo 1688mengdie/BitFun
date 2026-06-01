@@ -297,7 +297,7 @@
     "editTitleUpdate": "編輯執行緒目標",
     "editHint": "輸入目標描述並儲存；工作階段閒置時會繼續朝該目標推進。",
     "editPlaceholder": "目標描述…",
-    "editCancel": "取消",
+    "editCancel": "返回",
     "editSave": "儲存",
     "resumeTitle": "恢復已暫停的目標？",
     "resumeSubtitle": "目標：{{objective}}",
@@ -309,31 +309,29 @@
     "stripOpenEmpty": "開啟執行緒目標",
     "stripOpenWithGoal": "開啟執行緒目標選單",
     "usageTokens": "Token {{used}} / {{budget}}",
-    "usageTime": "已用 {{seconds}} 秒",
+    "usageTime": "已耗時 {{seconds}} 秒",
     "status": {
       "active": "進行中",
       "paused": "已暫停",
-      "blocked": "已阻塞",
-      "usageLimited": "用量受限",
-      "budgetLimited": "預算受限",
-      "complete": "已完成"
+      "blocked": "已阻擋",
+      "usageLimited": "用量已觸上限",
+      "budgetLimited": "預算受限"
     },
     "action": {
-      "edit": "編輯",
       "pause": "暫停",
       "resume": "恢復",
-      "clear": "清除",
+      "clear": "移除",
       "set": "設定目標"
     },
     "commandHint": {
-      "none": "命令：/goal <目標描述>",
-      "default": "命令：/goal edit、/goal pause、/goal clear",
-      "active": "命令：/goal edit、/goal pause、/goal clear",
-      "paused": "命令：/goal edit、/goal resume、/goal clear",
-      "blocked": "命令：/goal edit、/goal resume、/goal clear",
-      "usageLimited": "命令：/goal edit、/goal resume、/goal clear",
-      "budgetLimited": "命令：/goal edit、/goal clear",
-      "complete": "命令：/goal edit、/goal clear"
+      "none": "指令：/goal <目標描述>",
+      "default": "指令：/goal edit、/goal pause、/goal clear",
+      "active": "指令：/goal edit、/goal pause、/goal clear",
+      "paused": "指令：/goal edit、/goal resume、/goal clear",
+      "blocked": "指令：/goal edit、/goal resume、/goal clear",
+      "usageLimited": "指令：/goal edit、/goal resume、/goal clear",
+      "budgetLimited": "指令：/goal edit、/goal clear",
+      "complete": "指令：/goal edit、/goal clear"
     }
   },
   "agentCompanion": {

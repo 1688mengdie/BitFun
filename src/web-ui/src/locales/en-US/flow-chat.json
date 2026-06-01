@@ -315,11 +315,9 @@
       "paused": "Paused",
       "blocked": "Blocked",
       "usageLimited": "Usage limited",
-      "budgetLimited": "Budget limited",
-      "complete": "Complete"
+      "budgetLimited": "Budget limited"
     },
     "action": {
-      "edit": "Edit",
       "pause": "Pause",
       "resume": "Resume",
       "clear": "Clear",

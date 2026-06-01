@@ -8,6 +8,10 @@ import {
   buildThreadGoalWorkflowSteps,
   shouldShowThreadGoalWorkflow,
 } from './threadGoalWorkflow';
+import {
+  resolveThreadGoalActionLabel,
+  resolveThreadGoalStatusLabel,
+} from '../../utils/threadGoalDisplay';
 import './ThreadGoalDialogs.scss';
 
 function formatUsageLine(
@@ -65,9 +69,7 @@ export const ThreadGoalDialogs: React.FC<ThreadGoalDialogsProps> = ({
     }
   }, [controller.editInitialObjective, controller.editOpen]);
 
-  const statusLabel = goal
-    ? t(`threadGoal.status.${goal.status}`, { defaultValue: goal.status })
-    : '';
+  const statusLabel = goal ? resolveThreadGoalStatusLabel(t, goal.status) : '';
 
   const usageLine = goal ? formatUsageLine(goal, t) : null;
 
@@ -184,7 +186,7 @@ export const ThreadGoalDialogs: React.FC<ThreadGoalDialogsProps> = ({
                     disabled={disabled}
                     onClick={() => void runAction(action)}
                   >
-                    {t(`threadGoal.action.${action}`)}
+                    {resolveThreadGoalActionLabel(t, action)}
                   </Button>
                 ))}
               </div>

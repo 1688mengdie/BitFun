@@ -315,11 +315,9 @@
       "paused": "已暂停",
       "blocked": "已阻塞",
       "usageLimited": "用量受限",
-      "budgetLimited": "预算受限",
-      "complete": "已完成"
+      "budgetLimited": "预算受限"
     },
     "action": {
-      "edit": "编辑",
       "pause": "暂停",
       "resume": "恢复",
       "clear": "清除",

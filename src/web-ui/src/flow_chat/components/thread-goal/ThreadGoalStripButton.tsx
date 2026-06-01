@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { Target } from 'lucide-react';
 import { IconButton, Tooltip } from '@/component-library';
 import type { ThreadGoalSnapshot } from '../../services/goalService';
+import { resolveThreadGoalStatusLabel } from '../../utils/threadGoalDisplay';
 
 export interface ThreadGoalStripButtonProps {
   goal: ThreadGoalSnapshot | null;
@@ -49,7 +50,7 @@ export const ThreadGoalStripButton: React.FC<ThreadGoalStripButtonProps> = ({
   const statusKey = goal?.status ?? 'none';
   const tooltip = goal
     ? t('threadGoal.stripTooltipWithGoal', {
-        status: t(`threadGoal.status.${statusKey}`, { defaultValue: statusKey }),
+        status: resolveThreadGoalStatusLabel(t, statusKey),
         objective: goal.objective,
       })
     : t('threadGoal.stripTooltipEmpty');

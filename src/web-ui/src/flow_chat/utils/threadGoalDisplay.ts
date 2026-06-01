@@ -1,4 +1,6 @@
 import { i18nService } from '@/infrastructure/i18n/core/I18nService';
+import type { TFunction } from 'i18next';
+import type { ThreadGoalUiAction } from '../services/threadGoalActions';
 
 const DEFAULT_AUTO_CONTINUATION_MAX = 100;
 
@@ -61,4 +63,21 @@ export function resolveThreadGoalHeaderTitle(
     return i18nService.t('flow-chat:threadGoal.menuTitle');
   }
   return null;
+}
+
+export function resolveThreadGoalStatusLabel(t: TFunction, status: string): string {
+  if (status === 'complete') {
+    return t('shared:statuses.done');
+  }
+  return t(`threadGoal.status.${status}`, { defaultValue: status });
+}
+
+export function resolveThreadGoalActionLabel(
+  t: TFunction,
+  action: ThreadGoalUiAction
+): string {
+  if (action === 'edit') {
+    return t('shared:tools.edit');
+  }
+  return t(`threadGoal.action.${action}`);
 }
