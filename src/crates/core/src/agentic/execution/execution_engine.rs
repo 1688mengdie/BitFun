@@ -28,7 +28,7 @@ use crate::agentic::tools::{resolve_tool_manifest, tool_context_runtime, Resolve
 use crate::agentic::WorkspaceBinding;
 use crate::infrastructure::ai::get_global_ai_client_factory;
 use crate::service::config::get_global_config_service;
-use crate::service::config::types::{ModelCapability, ModelCategory, WriteToolMode};
+use crate::service::config::types::{ModelCapability, ModelCategory};
 use crate::util::errors::{BitFunError, BitFunResult};
 use crate::util::token_counter::TokenCounter;
 use crate::util::types::Message as AIMessage;
@@ -1278,7 +1278,7 @@ impl ExecutionEngine {
                 ))
             })?;
 
-        let (resolved_primary_model_id, primary_supports_image_understanding, write_tool_mode) = {
+        let (resolved_primary_model_id, primary_supports_image_understanding) = {
             let config_service = get_global_config_service().await.ok();
             if let Some(service) = config_service {
                 let ai_config: crate::service::config::types::AIConfig =
@@ -1310,12 +1310,12 @@ impl ExecutionEngine {
                         || matches!(m.category, ModelCategory::Multimodal)
                 });
 
-                (resolved_id, supports, ai_config.write_tool_mode)
+                (resolved_id, supports)
             } else {
                 warn!(
                     "Config service unavailable, assuming compression model is text-only for image input gating"
                 );
-                (model_id.clone(), false, WriteToolMode::default())
+                (model_id.clone(), false)
             }
         };
 
@@ -1347,21 +1347,7 @@ impl ExecutionEngine {
             .get("enable_tools")
             .and_then(|value| value.parse::<bool>().ok())
             .unwrap_or(true);
-        let write_tool_mode = if context
-            .context
-            .get("acp_transport")
-            .is_some_and(|value| value == "true")
-        {
-            WriteToolMode::InlineContent
-        } else {
-            write_tool_mode
-        };
-
-        let mut tool_manifest_context_vars = context.context.clone();
-        tool_manifest_context_vars.insert(
-            "write_tool_mode".to_string(),
-            write_tool_mode.as_str().to_string(),
-        );
+        let tool_manifest_context_vars = context.context.clone();
 
         let tool_description_context = tool_context_runtime::build_tool_description_context(
             &context.agent_type,
@@ -1939,11 +1925,7 @@ impl ExecutionEngine {
             })?;
 
         // Primary model vision capability (tools + system prompt appendix; also used below for API message stripping).
-        let (
-            resolved_primary_model_id,
-            primary_supports_image_understanding,
-            configured_write_tool_mode,
-        ) = {
+        let (resolved_primary_model_id, primary_supports_image_understanding) = {
             let config_service = get_global_config_service().await.ok();
             if let Some(service) = config_service {
                 let ai_config: crate::service::config::types::AIConfig =
@@ -1976,12 +1958,12 @@ impl ExecutionEngine {
                         || matches!(m.category, ModelCategory::Multimodal)
                 });
 
-                (resolved_id, supports, ai_config.write_tool_mode)
+                (resolved_id, supports)
             } else {
                 warn!(
                     "Config service unavailable, assuming primary model is text-only for image input gating"
                 );
-                (model_id.clone(), false, WriteToolMode::default())
+                (model_id.clone(), false)
             }
         };
 
@@ -2035,21 +2017,7 @@ impl ExecutionEngine {
             .get("enable_tools")
             .and_then(|v| v.parse::<bool>().ok())
             .unwrap_or(true);
-        let write_tool_mode = if context
-            .context
-            .get("acp_transport")
-            .is_some_and(|value| value == "true")
-        {
-            WriteToolMode::InlineContent
-        } else {
-            configured_write_tool_mode
-        };
-
-        let mut tool_manifest_context_vars = context.context.clone();
-        tool_manifest_context_vars.insert(
-            "write_tool_mode".to_string(),
-            write_tool_mode.as_str().to_string(),
-        );
+        let tool_manifest_context_vars = context.context.clone();
 
         let tool_description_context = tool_context_runtime::build_tool_description_context(
             &agent_type,
@@ -2213,10 +2181,6 @@ impl ExecutionEngine {
         execution_context_vars.insert(
             "primary_model_supports_image_understanding".to_string(),
             primary_supports_image_understanding.to_string(),
-        );
-        execution_context_vars.insert(
-            "write_tool_mode".to_string(),
-            write_tool_mode.as_str().to_string(),
         );
         execution_context_vars.insert("turn_index".to_string(), context.turn_index.to_string());
 
