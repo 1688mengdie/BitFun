@@ -21,6 +21,7 @@ import { Tooltip } from '@/component-library';
 import { FlowChatStore } from '../store/FlowChatStore';
 import { getModelMaxTokens } from '../services/flow-chat-manager/SessionModule';
 import { createLogger } from '@/shared/utils/logger';
+import { acpClientIdFromAgentType } from '../utils/acpSession';
 import './ModelSelector.scss';
 
 const log = createLogger('ModelSelector');
@@ -147,9 +148,9 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
 
   const dropdownRef = useRef<HTMLDivElement>(null);
   const activeSession = sessionId ? FlowChatStore.getInstance().getState().sessions.get(sessionId) : undefined;
-  const acpClientId = activeSession?.config.agentType?.startsWith('acp:')
-    ? activeSession.config.agentType.slice('acp:'.length)
-    : null;
+  const acpClientId =
+    acpClientIdFromAgentType(activeSession?.config.agentType) ??
+    acpClientIdFromAgentType(activeSession?.mode);
   const isAcpSession = Boolean(acpClientId && sessionId);
 
   // Load configuration data.
@@ -253,6 +254,16 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   useEffect(() => {
     loadAcpOptions();
   }, [loadAcpOptions]);
+
+  useEffect(() => {
+    if (!isAcpSession || !sessionId || !acpClientId) return;
+
+    return ACPClientAPI.onSessionOptionsChanged((event) => {
+      if (event.sessionId === sessionId && event.clientId === acpClientId) {
+        loadAcpOptions();
+      }
+    });
+  }, [acpClientId, isAcpSession, loadAcpOptions, sessionId]);
   
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
