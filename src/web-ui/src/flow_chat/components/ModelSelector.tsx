@@ -20,11 +20,12 @@ import type { AIModelConfig } from '@/infrastructure/config/types';
 import { Tooltip } from '@/component-library';
 import { FlowChatStore } from '../store/FlowChatStore';
 import { getModelMaxTokens } from '../services/flow-chat-manager/SessionModule';
-import { createLogger } from '@/shared/utils/logger';
 import { acpClientIdFromAgentType } from '../utils/acpSession';
+import { createLogger } from '@/shared/utils/logger';
 import './ModelSelector.scss';
 
 const log = createLogger('ModelSelector');
+const ACP_SESSION_OPTIONS_TIMEOUT_MS = 65_000;
 
 interface ModelSelectorProps {
   /** Current mode ID. */
@@ -118,6 +119,22 @@ const buildAutoModelInfo = (
   provider: 'auto',
 });
 
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timeoutId = window.setTimeout(() => reject(new Error(message)), timeoutMs);
+    promise.then(
+      value => {
+        window.clearTimeout(timeoutId);
+        resolve(value);
+      },
+      error => {
+        window.clearTimeout(timeoutId);
+        reject(error);
+      },
+    );
+  });
+}
+
 const syncAcpContextUsageToStore = (
   sessionId: string | undefined,
   options: AcpSessionOptions,
@@ -204,21 +221,26 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     }
 
     const shouldShowRestoreToast = !acpOptionsRef.current && acpRestoreToastShownRef.current !== sessionId;
+    const restoreRequestId = `acp-options:${sessionId}:${acpClientId}`;
     if (shouldShowRestoreToast) {
       acpRestoreToastShownRef.current = sessionId;
       window.dispatchEvent(new CustomEvent('bitfun:acp-session-creation', {
-        detail: { phase: 'start', clientId: acpClientId, action: 'restore' },
+        detail: { phase: 'start', clientId: acpClientId, action: 'restore', requestId: restoreRequestId },
       }));
     }
 
     try {
-      const options = await ACPClientAPI.getSessionOptions({
-        sessionId,
-        clientId: acpClientId,
-        workspacePath: activeSession?.workspacePath || activeSession?.config.workspacePath,
-        remoteConnectionId: activeSession?.remoteConnectionId,
-        remoteSshHost: activeSession?.remoteSshHost,
-      });
+      const options = await withTimeout(
+        ACPClientAPI.getSessionOptions({
+          sessionId,
+          clientId: acpClientId,
+          workspacePath: activeSession?.workspacePath || activeSession?.config.workspacePath,
+          remoteConnectionId: activeSession?.remoteConnectionId,
+          remoteSshHost: activeSession?.remoteSshHost,
+        }),
+        ACP_SESSION_OPTIONS_TIMEOUT_MS,
+        `Timed out restoring ACP session options for ${acpClientId}`,
+      );
       setAcpOptions(options);
       syncAcpContextUsageToStore(sessionId, options);
     } catch (error) {
@@ -227,7 +249,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     } finally {
       if (shouldShowRestoreToast) {
         window.dispatchEvent(new CustomEvent('bitfun:acp-session-creation', {
-          detail: { phase: 'finish', clientId: acpClientId, action: 'restore' },
+          detail: { phase: 'finish', clientId: acpClientId, action: 'restore', requestId: restoreRequestId },
         }));
       }
     }

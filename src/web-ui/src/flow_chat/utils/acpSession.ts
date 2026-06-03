@@ -14,13 +14,20 @@ export function isAcpAgentType(agentType: string | null | undefined): boolean {
   return acpClientIdFromAgentType(agentType) !== null;
 }
 
+export function acpAgentTypeFromSession(
+  session: Pick<Session, 'config' | 'mode'> | null | undefined,
+): string | null {
+  const configClientId = acpClientIdFromAgentType(session?.config?.agentType);
+  if (configClientId) return `${ACP_AGENT_TYPE_PREFIX}${configClientId}`;
+
+  const modeClientId = acpClientIdFromAgentType(session?.mode);
+  return modeClientId ? `${ACP_AGENT_TYPE_PREFIX}${modeClientId}` : null;
+}
+
 export function isAcpFlowSession(
   session: Pick<Session, 'config' | 'mode'> | null | undefined,
 ): boolean {
-  return Boolean(
-    isAcpAgentType(session?.config?.agentType) ||
-    isAcpAgentType(session?.mode),
-  );
+  return acpAgentTypeFromSession(session) !== null;
 }
 
 export interface AcpSessionRef {
