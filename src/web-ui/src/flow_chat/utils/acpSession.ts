@@ -22,3 +22,40 @@ export function isAcpFlowSession(
     isAcpAgentType(session?.mode),
   );
 }
+
+export interface AcpSessionRef {
+  sessionId: string;
+  clientId: string;
+  workspacePath?: string;
+  remoteConnectionId?: string;
+  remoteSshHost?: string;
+}
+
+export function acpSessionRef(
+  session:
+    | Pick<
+        Session,
+        'sessionId' | 'config' | 'mode' | 'workspacePath' | 'remoteConnectionId' | 'remoteSshHost'
+      >
+    | null
+    | undefined,
+): AcpSessionRef | null {
+  if (!session?.sessionId) return null;
+
+  const clientId =
+    acpClientIdFromAgentType(session.config?.agentType) ??
+    acpClientIdFromAgentType(session.mode);
+  if (!clientId) return null;
+
+  return {
+    sessionId: session.sessionId,
+    clientId,
+    workspacePath: session.workspacePath ?? session.config?.workspacePath,
+    remoteConnectionId: session.remoteConnectionId ?? session.config?.remoteConnectionId,
+    remoteSshHost: session.remoteSshHost,
+  };
+}
+
+export function acpSlashCommandText(name: string): string {
+  return `/${name} `;
+}

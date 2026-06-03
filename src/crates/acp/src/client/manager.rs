@@ -47,7 +47,8 @@ use super::requirements::{
     probe_remote_executable, probe_remote_npx_adapter, resolve_configured_command,
 };
 use super::session_options::{
-    model_config_id, session_options_from_state, AcpSessionContextUsage, AcpSessionOptions,
+    model_config_id, session_options_from_state, AcpAvailableCommand, AcpSessionContextUsage,
+    AcpSessionOptions,
 };
 use super::session_persistence::AcpSessionPersistence;
 pub use super::session_persistence::CreateAcpFlowSessionRecordResponse;
@@ -132,6 +133,7 @@ struct AcpRemoteSession {
     models: Option<SessionModelState>,
     config_options: Vec<SessionConfigOption>,
     context_usage: Option<AcpSessionContextUsage>,
+    available_commands: Vec<AcpAvailableCommand>,
     discard_pending_updates_before_next_prompt: bool,
 }
 
@@ -160,6 +162,7 @@ impl AcpRemoteSession {
             models: None,
             config_options: Vec::new(),
             context_usage: None,
+            available_commands: Vec::new(),
             discard_pending_updates_before_next_prompt: false,
         }
     }
@@ -869,6 +872,36 @@ impl AcpClientService {
         ))
     }
 
+    pub async fn get_session_commands(
+        self: &Arc<Self>,
+        client_id: &str,
+        workspace_path: Option<String>,
+        remote_connection_id: Option<String>,
+        session_storage_path: Option<PathBuf>,
+        bitfun_session_id: String,
+    ) -> BitFunResult<Vec<AcpAvailableCommand>> {
+        let resolved = self
+            .resolve_or_create_client_session(
+                client_id,
+                workspace_path,
+                remote_connection_id.as_deref(),
+                &bitfun_session_id,
+            )
+            .await?;
+
+        let mut session = resolved.session.lock().await;
+        self.ensure_remote_session(
+            &resolved.client,
+            &resolved.session_key,
+            &resolved.cwd,
+            &bitfun_session_id,
+            session_storage_path.as_deref(),
+            &mut session,
+        )
+        .await?;
+        Ok(session.available_commands.clone())
+    }
+
     pub async fn set_session_model(
         self: &Arc<Self>,
         request: SetAcpSessionModelRequest,
@@ -1080,7 +1113,7 @@ impl AcpClientService {
                             &mut tool_call_tracker,
                         )
                         .await?;
-                        update_session_context_usage(&mut session, &events);
+                        update_session_from_events(&mut session, &events);
                         for event in events {
                             for event in round_tracker.apply(event) {
                                 on_event(event)?;
@@ -2035,7 +2068,7 @@ where
             Ok(Ok(SessionMessage::SessionMessage(dispatch))) => {
                 let events =
                     acp_dispatch_to_stream_events_with_tracker(dispatch, tool_call_tracker).await?;
-                update_session_context_usage(session, &events);
+                update_session_from_events(session, &events);
                 for event in events {
                     for event in round_tracker.apply(event) {
                         on_event(event)?;
@@ -2081,7 +2114,7 @@ async fn read_turn_to_string(session: &mut AcpRemoteSession) -> BitFunResult<Str
                 let events =
                     acp_dispatch_to_stream_events_with_tracker(dispatch, &mut tool_call_tracker)
                         .await?;
-                update_session_context_usage(session, &events);
+                update_session_from_events(session, &events);
                 append_agent_text(&mut output, events);
             }
             SessionMessage::StopReason(_) => {
@@ -2113,7 +2146,7 @@ async fn drain_pending_turn_text(
             Ok(Ok(SessionMessage::SessionMessage(dispatch))) => {
                 let events =
                     acp_dispatch_to_stream_events_with_tracker(dispatch, tool_call_tracker).await?;
-                update_session_context_usage(session, &events);
+                update_session_from_events(session, &events);
                 append_agent_text(output, events);
                 drained_count += 1;
             }
@@ -2168,7 +2201,7 @@ async fn discard_pending_session_updates_if_needed(session: &mut AcpRemoteSessio
                 if let Ok(events) =
                     acp_dispatch_to_stream_events_with_tracker(dispatch, &mut tracker).await
                 {
-                    update_session_context_usage(session, &events);
+                    update_session_from_events(session, &events);
                 }
                 discarded_count += 1;
             }
@@ -2197,6 +2230,12 @@ async fn discard_pending_session_updates_if_needed(session: &mut AcpRemoteSessio
     }
 }
 
+fn update_session_from_events(session: &mut AcpRemoteSession, events: &[AcpClientStreamEvent]) {
+    update_session_context_usage(session, events);
+    update_session_available_commands(session, events);
+    update_session_config_options(session, events);
+}
+
 fn update_session_context_usage(session: &mut AcpRemoteSession, events: &[AcpClientStreamEvent]) {
     let Some(usage) = events.iter().rev().find_map(|event| match event {
         AcpClientStreamEvent::ContextUsageUpdated(usage) => Some(usage.clone()),
@@ -2206,6 +2245,31 @@ fn update_session_context_usage(session: &mut AcpRemoteSession, events: &[AcpCli
     };
 
     session.context_usage = Some(usage);
+}
+
+fn update_session_available_commands(
+    session: &mut AcpRemoteSession,
+    events: &[AcpClientStreamEvent],
+) {
+    let Some(commands) = events.iter().rev().find_map(|event| match event {
+        AcpClientStreamEvent::AvailableCommandsUpdated(commands) => Some(commands.clone()),
+        _ => None,
+    }) else {
+        return;
+    };
+
+    session.available_commands = commands;
+}
+
+fn update_session_config_options(session: &mut AcpRemoteSession, events: &[AcpClientStreamEvent]) {
+    let Some(options) = events.iter().rev().find_map(|event| match event {
+        AcpClientStreamEvent::ConfigOptionsUpdated(options) => Some(options.clone()),
+        _ => None,
+    }) else {
+        return;
+    };
+
+    session.config_options = options;
 }
 
 fn protocol_error(error: impl std::fmt::Display) -> BitFunError {

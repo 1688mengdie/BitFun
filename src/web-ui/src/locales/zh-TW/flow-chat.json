@@ -556,6 +556,9 @@
     "promptCacheGuardCancel": "先不發送",
     "quickAction": "快捷操作",
     "commands": "指令",
+    "acpPlan": {
+      "title": "計畫"
+    },
     "compactAction": "壓縮會話",
     "compactNoSession": "目前沒有可用於 /compact 的會話",
     "compactBusy": "請等待目前會話空閒後再使用 /compact。",

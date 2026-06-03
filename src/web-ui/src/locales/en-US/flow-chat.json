@@ -556,6 +556,9 @@
     "promptCacheGuardCancel": "Stay here",
     "quickAction": "Quick action",
     "commands": "Commands",
+    "acpPlan": {
+      "title": "Plan"
+    },
     "compactAction": "Compact session",
     "compactNoSession": "No active session for /compact",
     "compactBusy": "Wait until the session is idle before using /compact.",

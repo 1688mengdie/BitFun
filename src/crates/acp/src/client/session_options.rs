@@ -23,6 +23,69 @@ impl From<agent_client_protocol::schema::UsageUpdate> for AcpSessionContextUsage
     }
 }
 
+/// A slash command advertised by an ACP agent via `AvailableCommandsUpdate`.
+///
+/// Invocation is plain prompt text: `/<name> <args>`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpAvailableCommand {
+    pub name: String,
+    pub description: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_hint: Option<String>,
+}
+
+impl From<agent_client_protocol::schema::AvailableCommand> for AcpAvailableCommand {
+    fn from(command: agent_client_protocol::schema::AvailableCommand) -> Self {
+        use agent_client_protocol::schema::AvailableCommandInput;
+
+        let input_hint = command.input.and_then(|input| match input {
+            AvailableCommandInput::Unstructured(unstructured) => Some(unstructured.hint),
+            _ => None,
+        });
+
+        Self {
+            name: command.name,
+            description: command.description,
+            input_hint,
+        }
+    }
+}
+
+/// One entry of an ACP agent execution plan.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpPlanEntry {
+    pub content: String,
+    pub priority: String,
+    pub status: String,
+}
+
+impl From<agent_client_protocol::schema::PlanEntry> for AcpPlanEntry {
+    fn from(entry: agent_client_protocol::schema::PlanEntry) -> Self {
+        use agent_client_protocol::schema::{PlanEntryPriority, PlanEntryStatus};
+
+        let priority = match entry.priority {
+            PlanEntryPriority::High => "high",
+            PlanEntryPriority::Medium => "medium",
+            PlanEntryPriority::Low => "low",
+            _ => "medium",
+        };
+        let status = match entry.status {
+            PlanEntryStatus::Pending => "pending",
+            PlanEntryStatus::InProgress => "in_progress",
+            PlanEntryStatus::Completed => "completed",
+            _ => "pending",
+        };
+
+        Self {
+            content: entry.content,
+            priority: priority.to_string(),
+            status: status.to_string(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct AcpSessionOptions {
@@ -197,5 +260,25 @@ mod tests {
                 .map(|cost| cost.currency.as_str()),
             Some("USD")
         );
+    }
+
+    #[test]
+    fn converts_available_command_with_and_without_input() {
+        use agent_client_protocol::schema::{
+            AvailableCommand, AvailableCommandInput, UnstructuredCommandInput,
+        };
+
+        let with_input = AvailableCommand::new("create_plan", "Draft an execution plan").input(
+            AvailableCommandInput::Unstructured(UnstructuredCommandInput::new("what to plan")),
+        );
+        let converted = AcpAvailableCommand::from(with_input);
+        assert_eq!(converted.name, "create_plan");
+        assert_eq!(converted.description, "Draft an execution plan");
+        assert_eq!(converted.input_hint.as_deref(), Some("what to plan"));
+
+        let converted =
+            AcpAvailableCommand::from(AvailableCommand::new("compact", "Compact the context"));
+        assert_eq!(converted.name, "compact");
+        assert!(converted.input_hint.is_none());
     }
 }
