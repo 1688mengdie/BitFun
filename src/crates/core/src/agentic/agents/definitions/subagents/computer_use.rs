@@ -27,6 +27,7 @@ impl ComputerUseMode {
                 "AskUserQuestion".to_string(),
                 "TodoWrite".to_string(),
                 "Skill".to_string(),
+                "view_image".to_string(),
                 "Bash".to_string(),
                 "TerminalControl".to_string(),
                 "ControlHub".to_string(),

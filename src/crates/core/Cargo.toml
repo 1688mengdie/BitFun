@@ -205,7 +205,7 @@ service-integrations = [
     "dep:x25519-dalek",
     "bitfun-services-integrations/product-full",
 ]
-tool-packs = ["dep:bitfun-tool-packs", "bitfun-tool-packs/product-full"]
+tool-packs = ["dep:bitfun-tool-packs", "bitfun-tool-packs/product-full", "dep:image"]
 tauri-support = ["tauri"]  # Optional tauri support
 ssh-remote = [
     "dep:aes-gcm",
@@ -216,6 +216,9 @@ ssh-remote = [
     "shellexpand",
     "ssh_config",
 ]  # russh-keys pure-Rust crypto backend (no openssl)
+
+[dev-dependencies]
+tempfile = { workspace = true }
 
 [build-dependencies]
 sha2 = { workspace = true }

@@ -115,7 +115,15 @@ const PRODUCT_TOOL_PROVIDER_GROUP_PLAN: &[ToolProviderGroupPlan] = &[
         provider_id: "core.basic",
         feature_groups: CORE_BASIC_FEATURE_GROUPS,
         tool_names: &[
-            "LS", "Read", "Glob", "Grep", "Write", "Edit", "Delete", "Bash",
+            "LS",
+            "Read",
+            "view_image",
+            "Glob",
+            "Grep",
+            "Write",
+            "Edit",
+            "Delete",
+            "Bash",
         ],
     },
     ToolProviderGroupPlan {
@@ -324,6 +332,7 @@ mod tests {
             vec![
                 "LS",
                 "Read",
+                "view_image",
                 "Glob",
                 "Grep",
                 "Write",
