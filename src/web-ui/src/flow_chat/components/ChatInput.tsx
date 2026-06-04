@@ -69,6 +69,7 @@ import { useDeepReviewConsent } from './DeepReviewConsentDialog';
 import { useSessionReviewActivity } from '../hooks/useSessionReviewActivity';
 import { shouldBlockDeepReviewCommand } from '../utils/deepReviewCommandGuard';
 import { deriveDeepReviewSessionConcurrencyGuard } from '../utils/deepReviewCapacityGuard';
+import { acpAgentTypeFromSession } from '../utils/acpSession';
 import { agentAPI } from '@/infrastructure/api/service-api/AgentAPI';
 import './ChatInput.scss';
 
@@ -609,10 +610,15 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const isAssistantWorkspace = workspace?.workspaceKind === WorkspaceKind.Assistant;
   const currentMode = modeState.current;
   const isModeDropdownOpen = modeState.dropdownOpen;
+  const acpTargetAgentType = useMemo(
+    () => acpAgentTypeFromSession(effectiveTargetSession),
+    [effectiveTargetSession]
+  );
+  const isAcpTargetSession = Boolean(acpTargetAgentType);
   const activeSessionMode = effectiveTargetSessionId
-    ? flowChatState.sessions.get(effectiveTargetSessionId)?.mode
+    ? acpTargetAgentType || flowChatState.sessions.get(effectiveTargetSessionId)?.mode
     : undefined;
-  const canSwitchModes = !isAssistantWorkspace && currentMode !== 'Cowork';
+  const canSwitchModes = !isAssistantWorkspace && currentMode !== 'Cowork' && !isAcpTargetSession;
 
   // Session-level mode policy: Cowork sessions are fixed; code sessions should not switch into Cowork.
   const switchableModes = useMemo(
@@ -717,7 +723,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     // Composer mode is authoritative (synced from session on switch, updated in
     // applyModeChange). Prefer it over session.mode so a stale store cannot force
     // agentic when the user selected Team or another mode.
-    currentAgentType: modeState.current,
+    currentAgentType: acpTargetAgentType || modeState.current,
   });
 
   const modeInfoById = useMemo(
@@ -3237,23 +3243,25 @@ export const ChatInput: React.FC<ChatInputProps> = ({
             <div className="bitfun-chat-input__actions">
               <div className="bitfun-chat-input__actions-left">
                 <div className="bitfun-chat-input__agent-boost" ref={agentBoostRef}>
-                  <Tooltip content={t('chatInput.addBoostTooltip')}>
-                    <IconButton
-                      className="bitfun-chat-input__agent-boost-add"
-                      variant="ghost"
-                      size="xs"
-                      aria-haspopup="menu"
-                      aria-expanded={modeState.dropdownOpen}
-                      onClick={e => {
-                        e.stopPropagation();
-                        dispatchMode({ type: 'TOGGLE_DROPDOWN' });
-                      }}
-                    >
-                      <Plus size={14} strokeWidth={2.25} />
-                    </IconButton>
-                  </Tooltip>
+                  {!isAcpTargetSession && (
+                    <Tooltip content={t('chatInput.addBoostTooltip')}>
+                      <IconButton
+                        className="bitfun-chat-input__agent-boost-add"
+                        variant="ghost"
+                        size="xs"
+                        aria-haspopup="menu"
+                        aria-expanded={modeState.dropdownOpen}
+                        onClick={e => {
+                          e.stopPropagation();
+                          dispatchMode({ type: 'TOGGLE_DROPDOWN' });
+                        }}
+                      >
+                        <Plus size={14} strokeWidth={2.25} />
+                      </IconButton>
+                    </Tooltip>
+                  )}
 
-                  {canSwitchModes && modeState.current !== 'agentic' && (
+                  {(canSwitchModes || isAcpTargetSession) && modeState.current !== 'agentic' && (
                     <div
                       className={`bitfun-chat-input__agent-capsule bitfun-chat-input__agent-capsule--${modeState.current === 'debug' ? 'debug' : modeState.current}`}
                     >
@@ -3262,18 +3270,20 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                           modeState.available.find(m => m.id === modeState.current)?.name ||
                           modeState.current}
                       </span>
-                      <button
-                        type="button"
-                        className="bitfun-chat-input__agent-capsule-close"
-                        aria-label={t('chatInput.resetToAgentic')}
-                        onClick={e => {
-                          e.stopPropagation();
-                          applyModeChange('agentic');
-                          dispatchMode({ type: 'CLOSE_DROPDOWN' });
-                        }}
-                      >
-                        <X size={12} strokeWidth={2.5} />
-                      </button>
+                      {!isAcpTargetSession && (
+                        <button
+                          type="button"
+                          className="bitfun-chat-input__agent-capsule-close"
+                          aria-label={t('chatInput.resetToAgentic')}
+                          onClick={e => {
+                            e.stopPropagation();
+                            applyModeChange('agentic');
+                            dispatchMode({ type: 'CLOSE_DROPDOWN' });
+                          }}
+                        >
+                          <X size={12} strokeWidth={2.5} />
+                        </button>
+                      )}
                     </div>
                   )}
 
