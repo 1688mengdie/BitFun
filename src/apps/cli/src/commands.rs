@@ -45,6 +45,10 @@ pub const COMMAND_SPECS: &[CommandSpec] = &[
         description: "List and configure skills",
     },
     CommandSpec {
+        name: "/reload-skills",
+        description: "Re-scan skill directories without restarting",
+    },
+    CommandSpec {
         name: "/subagents",
         description: "List and configure subagents",
     },
