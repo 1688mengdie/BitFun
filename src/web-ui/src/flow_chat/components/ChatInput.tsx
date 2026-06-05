@@ -1449,6 +1449,12 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         command: DEEP_REVIEW_SLASH_COMMAND,
         label: t('chatInput.deepreviewAction'),
       },
+      {
+        kind: 'action' as const,
+        id: 'reload-skills',
+        command: '/reload-skills',
+        label: t('chatInput.reloadSkillsAction'),
+      },
       ...(!derivedState?.isProcessing
         ? [
             {
@@ -1949,6 +1955,47 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     threadGoalController,
   ]);
 
+  const submitReloadSkillsFromInput = useCallback(async () => {
+    const message = inputState.value.trim();
+    if (!/^\/reload-skills\s*$/i.test(message)) {
+      notificationService.warning(t('chatInput.reloadSkillsUsage'));
+      return;
+    }
+
+    dispatchInput({ type: 'CLEAR_VALUE' });
+    setQueuedInput(null);
+    setSlashCommandState({ isActive: false, kind: 'modes', query: '', selectedIndex: 0 });
+
+    try {
+      // Re-fetch skill configs with forceRefresh=true. The Tauri command
+      // (skill_api.rs::get_skill_configs) calls SkillRegistry::global().refresh()
+      // before serializing the result, so this single call both refreshes
+      // the registry cache and returns the new view. Pass workspacePath so
+      // workspace-level skills (`.bitfun/skills/`, `.cursor/skills/`, etc.)
+      // are included in the count — without it, the registry falls back
+      // to user + built-in slots only and the toast would undercount.
+      const skills = await configAPI.getSkillConfigs({
+        forceRefresh: true,
+        workspacePath: workspacePath || undefined,
+      });
+      notificationService.success(
+        t('chatInput.reloadSkillsDone', { count: skills.length }),
+        { duration: 3000 }
+      );
+    } catch (error) {
+      log.error('Failed to trigger /reload-skills', { error });
+      dispatchInput({ type: 'ACTIVATE' });
+      dispatchInput({ type: 'SET_VALUE', payload: message });
+      notificationService.error(
+        error instanceof Error ? error.message : t('error.unknown'),
+        {
+          title: t('chatInput.reloadSkillsFailed'),
+          duration: 5000,
+        }
+      );
+    }
+  }, [inputState.value, setQueuedInput, t, workspacePath]);
+
   const submitDeepreviewFromInput = useCallback(async () => {
     if (!effectiveTargetSessionId || !effectiveTargetSession) {
       notificationService.error(
@@ -2211,6 +2258,11 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       return;
     }
 
+    if (localSlashCommandsEnabled && /^\/reload-skills\s*$/i.test(message)) {
+      await submitReloadSkillsFromInput();
+      return;
+    }
+
     if (localSlashCommandsEnabled && resolveTypedMcpPromptCommand(message)) {
       await submitMcpPromptFromInput();
       return;
@@ -2241,6 +2293,11 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       notificationService.warning(
         t('chatInput.goalUsage')
       );
+      return;
+    }
+
+    if (localSlashCommandsEnabled && message.toLowerCase().startsWith('/reload-skills')) {
+      notificationService.warning(t('chatInput.reloadSkillsUsage'));
       return;
     }
     
@@ -2310,6 +2367,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     submitInitFromInput,
     submitDeepreviewFromInput,
     submitMcpPromptFromInput,
+    submitReloadSkillsFromInput,
     confirmPromptCacheGuardIfNeeded,
     t,
     resolveTypedMcpPromptCommand,
@@ -2420,6 +2478,11 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       next = '/init';
     } else if (actionId === 'deepreview') {
       next = `${DEEP_REVIEW_SLASH_COMMAND} `;
+    } else if (actionId === 'reload-skills') {
+      // /reload-skills takes no arguments. Setting the value to the bare
+      // command lets the user immediately press Enter to dispatch it
+      // (which is the same path /usage and /init use).
+      next = '/reload-skills';
     } else {
       return;
     }
