@@ -7,8 +7,8 @@
  * confirmation dialog.
  */
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Trash2, RotateCcw, Inbox, RefreshCw } from 'lucide-react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Trash2, RotateCcw, Inbox, RefreshCw, ChevronRight, ChevronDown } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import {
   ConfigPageLayout,
@@ -114,6 +114,8 @@ const ArchivedSessionsConfig: React.FC = () => {
 
   const [loading, setLoading] = useState(true);
   const [entries, setEntries] = useState<ArchivedEntry[]>([]);
+  const [collapsedWorkspaces, setCollapsedWorkspaces] = useState<Set<string>>(new Set());
+  const prevLoadingRef = useRef(loading);
 
   // ── Load archived sessions from all open workspaces ──────────────────────
 
@@ -180,6 +182,14 @@ const ArchivedSessionsConfig: React.FC = () => {
     return map;
   }, [entries]);
 
+  // Collapse all workspace groups by default when data finishes loading
+  useEffect(() => {
+    if (prevLoadingRef.current && !loading && grouped.size > 0) {
+      setCollapsedWorkspaces(new Set(grouped.keys()));
+    }
+    prevLoadingRef.current = loading;
+  }, [loading, grouped]);
+
   // ── Remove an entry from local state after mutation ──────────────────────
 
   const removeEntry = useCallback((sessionId: string) => {
@@ -188,6 +198,18 @@ const ArchivedSessionsConfig: React.FC = () => {
 
   const removeAllEntries = useCallback(() => {
     setEntries([]);
+  }, []);
+
+  const toggleWorkspace = useCallback((workspacePath: string) => {
+    setCollapsedWorkspaces(prev => {
+      const next = new Set(prev);
+      if (next.has(workspacePath)) {
+        next.delete(workspacePath);
+      } else {
+        next.add(workspacePath);
+      }
+      return next;
+    });
   }, []);
 
   // ── Restore single session ───────────────────────────────────────────────
@@ -333,14 +355,26 @@ const ArchivedSessionsConfig: React.FC = () => {
             title={t('nav.sessions.archivedSessions')}
             extra={headerExtra}
           >
-            {Array.from(grouped.entries()).map(([workspacePath, group]) => (
+            {Array.from(grouped.entries()).map(([workspacePath, group]) => {
+              const isCollapsed = collapsedWorkspaces.has(workspacePath);
+              return (
               <div key={workspacePath} className="archived-sessions-config__group">
-                <div className="archived-sessions-config__group-header">
-                  <span className="archived-sessions-config__group-name">{group.name}</span>
+                <button
+                  type="button"
+                  className="archived-sessions-config__group-header"
+                  onClick={() => toggleWorkspace(workspacePath)}
+                >
+                  {isCollapsed ? (
+                    <ChevronRight size={14} className="archived-sessions-config__group-chevron" />
+                  ) : (
+                    <ChevronDown size={14} className="archived-sessions-config__group-chevron" />
+                  )}
+                  <span className="archived-sessions-config__group-name">{workspacePath}</span>
                   <span className="archived-sessions-config__group-count">
                     {group.entries.length}
                   </span>
-                </div>
+                </button>
+                {!isCollapsed && (
                 <div className="archived-sessions-config__group-list">
                   {group.entries.map(entry => (
                     <ArchivedRow
@@ -352,8 +386,10 @@ const ArchivedSessionsConfig: React.FC = () => {
                     />
                   ))}
                 </div>
+                )}
               </div>
-            ))}
+              );
+            })}
           </ConfigPageSection>
         )}
       </ConfigPageContent>
