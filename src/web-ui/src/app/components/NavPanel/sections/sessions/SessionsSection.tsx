@@ -355,6 +355,26 @@ const SessionsSection: React.FC<SessionsSectionProps> = ({
     workspacePath,
   ]);
 
+  // When sessions are archived, reset stale metadata so the expand toggle
+  // doesn't linger with old counts after all sessions are gone.
+  useEffect(() => {
+    const handler = () => {
+      metadataLoadRequestIdRef.current += 1;
+      setExpandLevel(0);
+      setMetadataPageState({
+        totalTopLevelCount: null,
+        nextCursor: undefined,
+        hasMore: false,
+        isLoading: false,
+      });
+      if (isVisible && workspacePath) {
+        void loadMetadataPage(SESSIONS_LEVEL_0, undefined, 'sessions_nav_post_archive');
+      }
+    };
+    window.addEventListener('bitfun:session-archived', handler);
+    return () => window.removeEventListener('bitfun:session-archived', handler);
+  }, [isVisible, workspacePath, loadMetadataPage]);
+
   useEffect(() => {
     if (!openMenuSessionId) return;
     const handleOutside = (event: MouseEvent) => {
