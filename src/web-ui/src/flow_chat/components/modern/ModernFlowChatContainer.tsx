@@ -289,6 +289,21 @@ function backgroundCommandSummaryFromActivity(activity: BackgroundCommandActivit
   };
 }
 
+function computeSubagentSnapshotKey(
+  sessions: Map<string, Session>,
+  parentSessionId: string,
+): string | null {
+  const parts: string[] = [];
+  for (const session of sessions.values()) {
+    if (session.sessionKind !== 'subagent' || session.parentSessionId !== parentSessionId) {
+      continue;
+    }
+    const status = readSubagentExecutionStatus(session);
+    parts.push(`${session.sessionId}:${status ?? 'none'}`);
+  }
+  return parts.length > 0 ? parts.join('|') : null;
+}
+
 export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = ({
   className = '',
   config,
@@ -965,9 +980,25 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     void FlowChatManager.getInstance().switchChatSession(sessionId);
   }, [activeSession?.sessionId]);
 
+  const backgroundSubagentsRef = useRef<string | null>(null);
+
   useEffect(() => {
     const syncBackgroundSubagents = () => {
-      setBackgroundSubagents(collectRunningBackgroundSubagents(activeSession?.sessionId));
+      const parentId = activeSession?.sessionId;
+      if (!parentId) {
+        setBackgroundSubagents([]);
+        backgroundSubagentsRef.current = null;
+        return;
+      }
+
+      const { sessions } = flowChatStore.getState();
+      const snapshot = computeSubagentSnapshotKey(sessions, parentId);
+      if (snapshot === backgroundSubagentsRef.current) {
+        return;
+      }
+      backgroundSubagentsRef.current = snapshot;
+
+      setBackgroundSubagents(collectRunningBackgroundSubagents(parentId));
     };
 
     syncBackgroundSubagents();
