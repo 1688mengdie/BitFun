@@ -76,6 +76,17 @@ function formatConsoleArgs(args: unknown[]): string {
   return args.map(formatConsoleArg).join(' ');
 }
 
+const CONSOLE_KIND_LEVEL: Record<string, LogLevel> = {
+  trace: LogLevel.TRACE,
+  debug: LogLevel.DEBUG,
+  log: LogLevel.INFO,
+  info: LogLevel.INFO,
+  warn: LogLevel.WARN,
+  error: LogLevel.ERROR,
+};
+
+let consoleForwardMinLevel: LogLevel = isTauri && !isDev ? LogLevel.WARN : LogLevel.TRACE;
+
 /**
  * Patch `console.*` so messages also go through `tauri_plugin_log` (webview target → webview.log).
  */
@@ -98,6 +109,7 @@ function installWebviewConsoleForward(): void {
     kind: 'log' | 'debug' | 'info' | 'warn' | 'error' | 'trace',
     args: unknown[]
   ) => {
+    if ((CONSOLE_KIND_LEVEL[kind] ?? LogLevel.INFO) < consoleForwardMinLevel) return;
     const msg = `[console] ${formatConsoleArgs(args)}`;
     switch (kind) {
       case 'log':
@@ -267,6 +279,9 @@ export class Logger {
 
   public setLevel(level: LogLevel): void {
     this.currentLevel = level;
+    if (level > consoleForwardMinLevel) {
+      consoleForwardMinLevel = level;
+    }
   }
 
   public getLevel(): LogLevel {
