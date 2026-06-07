@@ -418,7 +418,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const measureIsMultiLine = useCallback((source: 'value-effect' | 'mutation-observer' | 'collapse-confirmation' | 'layout-change' = 'value-effect') => {
     const hasNewline = inputState.value.includes('\n');
     const hasImages = imageContexts.length > 0;
-    if (hasNewline || hasImages) {
+    if (hasNewline || hasImages || showTargetSwitcher) {
       setIsMultiLine(true);
       return;
     }
@@ -502,7 +502,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     }
     lockedCapsuleInputWidthRef.current = nextLockedWidth;
     setIsMultiLine(nextIsMultiLine);
-  }, [inputState.value, imageContexts.length, isMultiLine, measureCapsuleInputWidth]);
+  }, [inputState.value, imageContexts.length, isMultiLine, measureCapsuleInputWidth, showTargetSwitcher]);
   measureIsMultiLineRef.current = measureIsMultiLine;
 
   // Re-measure when value or image count changes (handles typing / deleting)
