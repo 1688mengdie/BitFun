@@ -289,6 +289,21 @@ function backgroundCommandSummaryFromActivity(activity: BackgroundCommandActivit
   };
 }
 
+function computeSubagentSnapshotKey(
+  sessions: Map<string, Session>,
+  parentSessionId: string,
+): string | null {
+  const parts: string[] = [];
+  for (const session of sessions.values()) {
+    if (session.sessionKind !== 'subagent' || session.parentSessionId !== parentSessionId) {
+      continue;
+    }
+    const status = readSubagentExecutionStatus(session);
+    parts.push(`${session.sessionId}:${status ?? 'none'}`);
+  }
+  return parts.length > 0 ? parts.join('|') : null;
+}
+
 export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = ({
   className = '',
   config,
@@ -498,16 +513,36 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     return null;
   }, [t]);
 
+  const turnSummaryCacheRef = useRef<Map<string, FlowChatHeaderTurnSummary>>(new Map());
+
+  // Clear cache on session change
+  useEffect(() => {
+    turnSummaryCacheRef.current.clear();
+  }, [activeSession?.sessionId]);
+
   const turnSummaries = useMemo<FlowChatHeaderTurnSummary[]>(() => {
-    return (activeSession?.dialogTurns ?? [])
-      .filter(turn => !!turn.userMessage)
-      .map((turn, index) => ({
+    const cache = turnSummaryCacheRef.current;
+    const turns = activeSession?.dialogTurns ?? [];
+    const result: FlowChatHeaderTurnSummary[] = [];
+    for (let i = 0; i < turns.length; i++) {
+      const turn = turns[i];
+      if (!turn.userMessage) continue;
+      const cached = cache.get(turn.id);
+      if (cached) {
+        result.push({ ...cached, turnIndex: result.length + 1 });
+        continue;
+      }
+      const summary: FlowChatHeaderTurnSummary = {
         turnId: turn.id,
-        turnIndex: index + 1,
+        turnIndex: result.length + 1,
         backendTurnIndex: turn.backendTurnIndex,
         title: resolveLocalCommandHeaderTitle(turn.userMessage?.metadata)
           ?? turn.userMessage?.content ?? '',
-      }));
+      };
+      cache.set(turn.id, summary);
+      result.push(summary);
+    }
+    return result;
   }, [activeSession?.dialogTurns, resolveLocalCommandHeaderTitle]);
   const headerTotalTurns = activeSession?.isPartial === true
     ? Math.max(activeSession.totalTurnCount ?? turnSummaries.length, turnSummaries.length)
@@ -965,9 +1000,25 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     void FlowChatManager.getInstance().switchChatSession(sessionId);
   }, [activeSession?.sessionId]);
 
+  const backgroundSubagentsRef = useRef<string | null>(null);
+
   useEffect(() => {
     const syncBackgroundSubagents = () => {
-      setBackgroundSubagents(collectRunningBackgroundSubagents(activeSession?.sessionId));
+      const parentId = activeSession?.sessionId;
+      if (!parentId) {
+        setBackgroundSubagents([]);
+        backgroundSubagentsRef.current = null;
+        return;
+      }
+
+      const { sessions } = flowChatStore.getState();
+      const snapshot = computeSubagentSnapshotKey(sessions, parentId);
+      if (snapshot === backgroundSubagentsRef.current) {
+        return;
+      }
+      backgroundSubagentsRef.current = snapshot;
+
+      setBackgroundSubagents(collectRunningBackgroundSubagents(parentId));
     };
 
     syncBackgroundSubagents();
