@@ -704,6 +704,18 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     const pinMode = latestTurnUsesStickyPin
       ? 'sticky-latest'
       : null;
+    if (latestTurnUsesStickyPin) {
+      autoPinnedTurnKeyRef.current = resolvedLatestTurnKey;
+      setPendingHeaderTurnId(null);
+      startupTrace.markPhase('historical_session_latest_anchor_skipped', {
+        sessionId,
+        latestTurnId,
+        reason: 'streaming_follow_output',
+        mode: pinMode,
+        turnCount: turnSummaries.length,
+      });
+      return;
+    }
     const previousAnchoredLatestTurnKeyPrefix = `${sessionId}:${latestTurnId}:`;
     const hasPreviouslyAnchoredSameLatestTurn =
       autoPinnedTurnKeyRef.current?.startsWith(previousAnchoredLatestTurnKeyPrefix) === true;

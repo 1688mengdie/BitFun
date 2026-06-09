@@ -752,7 +752,7 @@ describe('ModernFlowChatContainer historical empty state', () => {
     expect(virtualListMock.pinTurnToTop).not.toHaveBeenCalled();
   });
 
-  it('retries sticky latest-turn anchoring when the virtual list rejects the first frame', async () => {
+  it('lets streaming restored sessions use follow-output instead of container sticky anchoring', async () => {
     stateMocks.activeSession = createSession({
       historyState: 'ready',
       dialogTurns: [
@@ -764,35 +764,16 @@ describe('ModernFlowChatContainer historical empty state', () => {
       { type: 'user-message', turnId: 'turn-1', data: { id: 'user-turn-1', content: 'Older restored prompt' } },
       { type: 'user-message', turnId: 'turn-2', data: { id: 'user-turn-2', content: 'Latest restored prompt' } },
     ];
-    virtualListMock.pinTurnToTop
-      .mockReturnValueOnce(false)
-      .mockReturnValueOnce(true);
 
     await act(async () => {
       root.render(<ModernFlowChatContainer />);
     });
 
     expect(container.querySelector('[data-testid="virtual-list"]')).not.toBeNull();
-    expect(virtualListMock.pinTurnToTop).toHaveBeenCalledTimes(1);
-    expect(virtualListMock.pinTurnToTop).toHaveBeenLastCalledWith('turn-2', {
-      behavior: 'auto',
-      pinMode: 'sticky-latest',
-    });
-    expect(rafCallbacks.length).toBeGreaterThan(0);
-
-    flushAnimationFrame();
-    expect(virtualListMock.pinTurnToTop).toHaveBeenCalledTimes(2);
-    expect(virtualListMock.pinTurnToTop).toHaveBeenLastCalledWith('turn-2', {
-      behavior: 'auto',
-      pinMode: 'sticky-latest',
-    });
+    expect(virtualListMock.pinTurnToTop).not.toHaveBeenCalled();
     expect(startupTraceMock.markPhase).toHaveBeenCalledWith(
-      'historical_session_latest_anchor_attempt',
-      expect.objectContaining({ accepted: false, attempt: 1, mode: 'sticky-latest' }),
-    );
-    expect(startupTraceMock.markPhase).toHaveBeenCalledWith(
-      'historical_session_latest_anchor_attempt',
-      expect.objectContaining({ accepted: true, attempt: 2, mode: 'sticky-latest' }),
+      'historical_session_latest_anchor_skipped',
+      expect.objectContaining({ reason: 'streaming_follow_output', mode: 'sticky-latest' }),
     );
   });
 

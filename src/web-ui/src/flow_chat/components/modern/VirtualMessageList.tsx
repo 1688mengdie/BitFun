@@ -312,7 +312,7 @@ function getReservationConsumablePx(reservation: BottomReservationBase): number 
   return Math.max(0, reservation.px - reservation.floorPx);
 }
 
-export const VirtualMessageList = forwardRef<VirtualMessageListRef>((_, ref) => {
+const VirtualMessageListSession = forwardRef<VirtualMessageListRef>((_, ref) => {
   const virtuosoRef = useRef<VirtuosoHandle>(null);
   const virtualItems = useVirtualItems();
   const activeSession = useActiveSession();
@@ -431,7 +431,19 @@ export const VirtualMessageList = forwardRef<VirtualMessageListRef>((_, ref) => 
   const inputHeight = useChatInputState(state => state.inputHeight);
 
   const inputStackFooterPxRef = useRef(0);
+  const previousInputStackFooterPxRef = useRef(0);
+  // Snapshot scrollTop during render, before React commits the new (smaller)
+  // footer height.  The browser has not yet clamped, so this is the accurate
+  // pre-clamp value.  Used by the useLayoutEffect below to restore scrollTop
+  // after footer-shrink compensation.
+  const footerShrinkPreScrollTopRef = useRef(0);
   const inputStackFooterPx = computeFlowChatInputStackFooterPx(inputHeight, isInputActive);
+  // Snapshot pre-commit scrollTop before we update the footer px ref.
+  // The scrollerElement may not be set on first mount; that's fine —
+  // useLayoutEffect checks scroller !== null before restoring.
+  if (scrollerElement) {
+    footerShrinkPreScrollTopRef.current = scrollerElement.scrollTop;
+  }
   inputStackFooterPxRef.current = inputStackFooterPx;
 
   const activeSessionState = useActiveSessionState();
@@ -546,6 +558,62 @@ export const VirtualMessageList = forwardRef<VirtualMessageListRef>((_, ref) => 
     void footer.offsetHeight;
     void scroller.scrollHeight;
   }, [getFooterHeightPx, getTotalBottomCompensationPx]);
+
+  // When the input collapses (e.g. user sends a message), the ResizeObserver
+  // fires synchronously, `inputHeight` drops, and `inputStackFooterPx` shrinks.
+  // React commits the smaller footer height, the browser clamps scrollTop
+  // upward, and the viewport shows blank space ("white screen").  The existing
+  // scroll-clamp protection in handleScroll is gated on isFollowingOutput
+  // which is false at this point (follow has been armed, not yet activated).
+  //
+  // Detect the footer shrink in a useLayoutEffect (fires synchronously after
+  // commit, before paint) and extend the bottom collapse reservation by the
+  // shrink amount so the total footer height stays unchanged.  The reservation
+  // is later consumed organically by the grow branch of measureHeightChange as
+  // streaming content arrives.
+  useLayoutEffect(() => {
+    const prevFooterPx = previousInputStackFooterPxRef.current;
+    const currFooterPx = inputStackFooterPx;
+    previousInputStackFooterPxRef.current = currFooterPx;
+
+    const shrinkAmount = prevFooterPx - currFooterPx;
+    if (shrinkAmount <= COMPENSATION_EPSILON_PX) {
+      return;
+    }
+
+    const scroller = scrollerElementRef.current;
+    // Use the pre-commit scrollTop captured during render (before React
+    // applied the smaller footer height and the browser clamped).
+    // This is the only reliable source of the pre-clamp value because
+    // by the time useLayoutEffect runs, scroller.scrollTop has already
+    // been reduced by the browser's clamp.
+    const preClampScrollTop = footerShrinkPreScrollTopRef.current;
+
+    const baseState = bottomReservationStateRef.current;
+    const currentCollapsePx = getReservationTotalPx(baseState.collapse);
+    const nextReservationState: BottomReservationState = {
+      ...baseState,
+      collapse: {
+        ...baseState.collapse,
+        px: currentCollapsePx + shrinkAmount,
+        floorPx: 0,
+      },
+    };
+    updateBottomReservationState(nextReservationState);
+    applyFooterCompensationNow(nextReservationState);
+
+    // Restore scrollTop to the pre-clamp position if the browser already
+    // clamped it during the commit.  After extending the footer via
+    // compensation, the total scrollHeight is back to its pre-shrink value,
+    // so restoring the old scrollTop is safe.
+    if (scroller && preClampScrollTop !== undefined) {
+      const maxScrollTop = Math.max(
+        0,
+        scroller.scrollHeight - scroller.clientHeight,
+      );
+      scroller.scrollTop = Math.min(preClampScrollTop, maxScrollTop);
+    }
+  }, [inputStackFooterPx, updateBottomReservationState, applyFooterCompensationNow]);
 
   const releaseAnchorLock = useCallback((_reason: string) => {
     if (!anchorLockRef.current.active) return;
@@ -1693,7 +1761,7 @@ export const VirtualMessageList = forwardRef<VirtualMessageListRef>((_, ref) => 
     followOutputControllerRef.current.scheduleFollowToLatest(reason);
   }, [shouldSuspendAutoFollow]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     previousMeasuredHeightRef.current = null;
     previousScrollTopRef.current = 0;
     clearTurnPinRequest();
@@ -2431,7 +2499,11 @@ export const VirtualMessageList = forwardRef<VirtualMessageListRef>((_, ref) => 
     schedulePinReservationReconcile(2);
     scheduleTransientTurnPinStabilization(2);
     scheduleFollowToLatestWithViewportState('range-changed');
-    scheduleHistoryProjectionHandoffRelease(1);
+    // Reset the handoff release timer rather than accelerating it.
+    // A session-open projection handoff needs the Virtuoso measurement
+    // to settle before releasing; calling with 3 resets the countdown
+    // so the handoff stays until 3 frames of stability pass.
+    scheduleHistoryProjectionHandoffRelease(3);
   }, [
     resolveLatestEndAnchorStabilization,
     scheduleFollowToLatestWithViewportState,
@@ -2686,6 +2758,10 @@ export const VirtualMessageList = forwardRef<VirtualMessageListRef>((_, ref) => 
     const scroller = scrollerElementRef.current;
     if (!scroller) return;
 
+    if (behavior === 'auto' && isStreamingOutputRef.current) {
+      clearPinReservationForUserNavigation();
+    }
+
     const compensationPx = getTotalBottomCompensationPx();
     // Auto-follow during streaming with active collapse compensation: scroll
     // to the EFFECTIVE bottom (the top edge of the footer reservation), and
@@ -2718,7 +2794,7 @@ export const VirtualMessageList = forwardRef<VirtualMessageListRef>((_, ref) => 
       top: Math.max(0, scroller.scrollHeight - scroller.clientHeight),
       behavior,
     });
-  }, [clearAllBottomReservationsForUserNavigation, getTotalBottomCompensationPx]);
+  }, [clearAllBottomReservationsForUserNavigation, clearPinReservationForUserNavigation, getTotalBottomCompensationPx]);
 
   const requestTurnPinToTop = useCallback((turnId: string, options?: { behavior?: ScrollBehavior; pinMode?: FlowChatPinTurnToTopMode }) => {
     const requestedPinMode = options?.pinMode ?? 'transient';
@@ -2887,6 +2963,18 @@ export const VirtualMessageList = forwardRef<VirtualMessageListRef>((_, ref) => 
         requestAnimationFrame(() => {
           requestAnimationFrame(scrollToBottom);
         });
+      }
+
+      // When switching to a streaming session, arm follow output so the
+      // viewport tracks new content as it arrives.  Without this, the
+      // Virtuoso stays at initialTopMostItemIndex (the user message),
+      // and if that position is not yet rendered or measured the
+      // viewport may show blank space.
+      if (isStreamingOutput) {
+        // Reset the one-shot streaming prime flag so arm-follow can
+        // fire again for the new session's latest turn.
+        hasPrimedMountedStreamingTurnFollowRef.current = false;
+        armFollowOutputForNewTurn();
       }
 
       return;
@@ -3559,7 +3647,11 @@ export const VirtualMessageList = forwardRef<VirtualMessageListRef>((_, ref) => 
       previousItemCount: 0,
       nextItemCount: virtualItems.length,
     });
-    scheduleHistoryProjectionHandoffRelease(2);
+    // Use a longer initial delay (5 frames).  rangeChanged accelerations
+    // have been removed so the handoff is only released once the Virtuoso
+    // has had enough time to measure and position items, preventing a
+    // blank viewport ("white screen") on session switches.
+    scheduleHistoryProjectionHandoffRelease(5);
   }, [
     scheduleHistoryProjectionHandoffRelease,
     sessionOpenProjectionHandoff,
@@ -3848,6 +3940,15 @@ export const VirtualMessageList = forwardRef<VirtualMessageListRef>((_, ref) => 
       />
     </div>
   );
+});
+
+VirtualMessageListSession.displayName = 'VirtualMessageListSession';
+
+export const VirtualMessageList = forwardRef<VirtualMessageListRef>((_, ref) => {
+  const activeSession = useActiveSession();
+  const sessionKey = activeSession?.sessionId ?? 'no-active-session';
+
+  return <VirtualMessageListSession key={sessionKey} ref={ref} />;
 });
 
 VirtualMessageList.displayName = 'VirtualMessageList';
