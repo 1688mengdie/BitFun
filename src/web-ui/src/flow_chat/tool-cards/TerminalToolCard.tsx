@@ -13,7 +13,7 @@
  * - Clicking "Open Terminal in right panel" opens the full Terminal tab
  */
 
-import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
+import React, { useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ToolCardProps } from '../types/flow-chat';
 import { Terminal, Play, X, ExternalLink, Square } from 'lucide-react';
@@ -36,8 +36,8 @@ import './TerminalToolCard.scss';
 
 const log = createLogger('TerminalToolCard');
 const TERMINAL_COLLAPSED_STATUSES = new Set(['completed', 'cancelled', 'error', 'rejected']);
-const TERMINAL_OUTPUT_STREAMING_MAX_HEIGHT = 4 * 18 + 16;  // 88px – compact while streaming/executing
-const TERMINAL_OUTPUT_EXPANDED_MAX_HEIGHT = 15 * 18 + 16;  // 286px – comfortable reading when manually expanded
+const TERMINAL_OUTPUT_STREAMING_MAX_ROWS = 4;  // Compact while streaming/executing
+const TERMINAL_OUTPUT_EXPANDED_MAX_ROWS = 15;  // Comfortable reading when manually expanded
 
 interface TerminalToolCardProps extends ToolCardProps {
   terminalSessionId?: string;
@@ -94,9 +94,9 @@ function renderTerminalExpandedContent(params: {
     viewState.displayPhase === 'receiving_params' ||
     viewState.displayPhase === 'executing';
 
-  const maxHeight = isStreamingPhase
-    ? TERMINAL_OUTPUT_STREAMING_MAX_HEIGHT
-    : TERMINAL_OUTPUT_EXPANDED_MAX_HEIGHT;
+  const maxRows = isStreamingPhase
+    ? TERMINAL_OUTPUT_STREAMING_MAX_ROWS
+    : TERMINAL_OUTPUT_EXPANDED_MAX_ROWS;
 
   return (
     <>
@@ -105,7 +105,7 @@ function renderTerminalExpandedContent(params: {
           <TerminalOutputRenderer
             content={liveOutput}
             className="terminal-xterm-output"
-            maxHeight={maxHeight}
+            maxRows={maxRows}
           />
         </div>
       )}
@@ -123,7 +123,7 @@ function renderTerminalExpandedContent(params: {
               <TerminalOutputRenderer
                 content={parsedResult.output}
                 className="terminal-xterm-output"
-                maxHeight={maxHeight}
+                maxRows={maxRows}
               />
             </div>
           )}
@@ -152,7 +152,7 @@ function renderTerminalExpandedContent(params: {
             <TerminalOutputRenderer
               content={liveOutput}
               className="terminal-xterm-output"
-              maxHeight={maxHeight}
+              maxRows={maxRows}
             />
           </div>
           <div className="terminal-result-footer">
@@ -301,7 +301,7 @@ export const TerminalToolCard: React.FC<TerminalToolCardProps> = ({
     }
   }, [status]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const prevStatus = previousStatusRef.current;
     previousStatusRef.current = status;
 

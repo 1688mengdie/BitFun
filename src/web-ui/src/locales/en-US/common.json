@@ -149,6 +149,7 @@
         "default": "Default"
       },
       "empty": {
+        "all": "No terminals yet",
         "manual": "No user terminals yet",
         "agent": "No agent terminals yet",
         "quickNew": "Quick new terminal"
@@ -682,10 +683,6 @@
     "globalMenu": {
       "name": "Global Menu",
       "description": "Provides global common menu items"
-    },
-    "projectContextDocumentMenu": {
-      "name": "Project Context Document Menu",
-      "description": "Provides deletion for project context documents"
     }
   },
   "status": {
@@ -893,7 +890,6 @@
     "terminal": "Terminal",
     "git": "Git",
     "fileViewer": "File Viewer",
-    "projectContext": "Profile",
     "agents": "Agents",
     "skills": "Skills",
     "miniApps": "Mini App",

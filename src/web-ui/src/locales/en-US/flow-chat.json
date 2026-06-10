@@ -32,6 +32,7 @@
       "leftAriaLabel": "Resize left panel",
       "centerAriaLabel": "Resize panel",
       "rightAriaLabel": "Resize right panel",
+      "terminalBottomAriaLabel": "Resize bottom terminal panel",
       "title": "Drag to resize | Double-click to switch mode | Current: {{mode}}"
     }
   },
@@ -108,7 +109,8 @@
       "modelNotRecorded": "Model not recorded",
       "legacyModel": "Legacy model not tracked",
       "inferredModel": "{{model}} (inferred)",
-      "p95SampleInsufficient": "Not enough samples"
+      "p95SampleInsufficient": "Not enough samples",
+      "timedOut": "Timed out"
     },
     "cacheCoverage": {
       "available": "Reported",
@@ -188,7 +190,8 @@
       "errorExampleRow": "Safe grouped label for a model/runtime error or failing tool type.",
       "errorExampleCount": "Number of matching errors in this report scope.",
       "slowestSpans": "Slow spans are derived from recorded turn, model-call, and tool timestamps. They help identify time sinks, not exact provider latency.",
-      "slowestModelCall": "Model call in this turn. Model: {{model}}."
+      "slowestModelCall": "Model call in this turn. Model: {{model}}.",
+      "slowestToolCall": "Tool call details identify whether time was spent waiting, confirming, or executing."
     },
     "meta": {
       "generatedAt": "Generated",
@@ -264,6 +267,16 @@
     "slowestLabels": {
       "modelCall": "Turn {{turn}} model call",
       "modelCallUnknown": "Model call"
+    },
+    "slowest": {
+      "details": {
+        "input": "Input",
+        "status": "Status",
+        "exitCode": "Exit code",
+        "timedOut": "Timed out",
+        "execution": "Execution",
+        "error": "Error"
+      }
     }
   },
   "threadGoal": {
@@ -595,6 +608,10 @@
     "deepreviewBusy": "A review is already running for this session. Stop or finish it before starting another Deep Review.",
     "deepreviewNestedDisabled": "Deep Review can only be started from the main session.",
     "deepreviewThreadTitle": "Deep review",
+    "reloadSkillsAction": "Reload skills",
+    "reloadSkillsUsage": "Use /reload-skills without extra arguments.",
+    "reloadSkillsDone": "Reloaded skills ({{count}} available)",
+    "reloadSkillsFailed": "Failed to reload skills",
     "currentMode": "Current mode: {{mode}}",
     "noMatchingMode": "No matching mode",
     "noMatchingCommand": "No matching command",
@@ -1008,11 +1025,59 @@
     "searchClose": "Close search",
     "searchOpen": "Search messages",
     "jumpToCurrentTurn": "Jump to Turn {{turn}}",
-    "backgroundSubagents": "Background subagents ({{count}})",
+    "backgroundActivities": "Background activity ({{count}})",
     "backgroundSubagentUntitled": "Background subagent",
+    "backgroundSubagentSection": "Background subagents ({{count}})",
+    "backgroundCommandSection": "Background commands ({{count}})",
+    "backgroundCommandUntitled": "Background command",
+    "backgroundCommandSession": "Session #{{id}}",
     "subagentStatusProcessing": "Running",
     "subagentStatusFinishing": "Finishing",
+    "backgroundCommandStatusRunning": "Active",
+    "backgroundCommandStatusFinished": "Finished",
+    "backgroundCommandActions": "Command actions",
+    "backgroundCommandSendInput": "Send input",
+    "backgroundCommandStop": "Stop command",
+    "backgroundCommandStopping": "Stopping command",
+    "backgroundCommandStopFailed": "Failed to stop background command.",
     "pullRequests": "Pull requests"
+  },
+  "backgroundCommandInput": {
+    "title": "Send command input",
+    "commandLabel": "Command",
+    "inputLabel": "Input",
+    "inputPlaceholder": "Enter text to send to the interactive process",
+    "appendEnter": "Send Enter",
+    "maskInput": "Mask input",
+    "privacyNote": "Input is sent directly to the running TTY process and is not added to the chat transcript.",
+    "cancel": "Cancel",
+    "send": "Send",
+    "sendSucceeded": "Input sent to background command.",
+    "sendFailed": "Failed to send input to background command."
+  },
+  "backgroundCommandOutput": {
+    "title": "Command output",
+    "sendInput": "Send input",
+    "sendInputUnavailable": "Input can only be sent to a running interactive command.",
+    "copy": "Copy output",
+    "copyCommand": "Copy command",
+    "simplifiedView": "Simplified view",
+    "simplifiedViewTooltip": "Hide terminal control characters to make the output easier to read.",
+    "loading": "Loading output...",
+    "empty": "No output captured yet.",
+    "remote": "Remote",
+    "session": "Session #{{id}}",
+    "exitCode": "Exit {{code}}",
+    "truncatedFromStart": "Command output is too long, so earlier output was discarded from the beginning.",
+    "error": "Unable to load output: {{message}}",
+    "status": {
+      "running": "Command running",
+      "exited": "Exited",
+      "interrupted": "Interrupted",
+      "killed": "Terminated",
+      "pruned": "Pruned",
+      "failed": "Command failed"
+    }
   },
   "stickyTaskIndicator": {
     "tooltip": "Jump to current task"
@@ -1261,6 +1326,27 @@
       "exitCode": "Exit code: {{code}}",
       "commandInterrupted": "Command interrupted",
       "executionFailed": "Command execution failed"
+    },
+    "execProcess": {
+      "executeCommand": "Run command:",
+      "writeStdin": "Write stdin:",
+      "pollProcess": "Poll process:",
+      "executingCommand": "Running command...",
+      "waitingForOutput": "Waiting for output...",
+      "pollingOutput": "Polling output...",
+      "pollSession": "Poll session #{{id}}",
+      "session": "Session:",
+      "wallTime": "{{seconds}}s",
+      "remote": "Remote",
+      "tty": "TTY",
+      "noOutput": "No output",
+      "sessionNotFound": "Session #{{id}} was not found",
+      "copyPrimary": "Copy",
+      "primaryCopied": "Copied",
+      "copyPrimaryFailed": "Failed to copy",
+      "copyOutput": "Copy output",
+      "outputCopied": "Output copied",
+      "copyOutputFailed": "Failed to copy output"
     },
     "plan": {
       "loadingPlan": "Loading plan...",

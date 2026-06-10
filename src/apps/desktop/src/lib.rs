@@ -219,6 +219,12 @@ pub async fn run() {
     crash_diagnostics::initialize_run_state(session_log_dir.clone(), &startup_trace_id);
     setup_panic_hook();
 
+    // Install the rustls ring CryptoProvider as the process-level default early,
+    // so that all subsequent TLS operations (relay_client, reqwest, tokio-tungstenite)
+    // reuse the same provider instead of each attempting their own install_default().
+    // This is a no-op on non-Windows platforms where tokio-tungstenite handles it.
+    bitfun_core::service::remote_connect::ensure_rustls_crypto_provider();
+
     eprintln!("=== BitFun Desktop Starting ===");
 
     let step_started = Instant::now();
@@ -660,7 +666,7 @@ pub async fn run() {
 
             // Set up system tray icon.
             let step_started = Instant::now();
-            if let Err(error) = crate::tray::setup_tray(app) {
+            if let Err(error) = crate::tray::setup_tray(app, &startup_trace) {
                 log::warn!("Failed to set up system tray: {}", error);
             }
             startup_trace.record_elapsed_step("native_setup", "setup_tray", step_started);
@@ -759,6 +765,10 @@ pub async fn run() {
             api::agentic_api::control_deep_review_queue,
             api::agentic_api::cancel_session,
             api::agentic_api::set_subagent_timeout,
+            api::agentic_api::control_background_command,
+            api::agentic_api::send_background_command_input,
+            api::agentic_api::read_background_command_output,
+            api::agentic_api::list_background_command_activities,
             api::agentic_api::delete_session,
             api::agentic_api::restore_session,
             api::agentic_api::restore_session_view,
@@ -972,20 +982,6 @@ pub async fn run() {
             archive_all_sessions,
             list_archived_sessions,
             delete_all_archived_sessions,
-            api::project_context_api::get_document_statuses,
-            api::project_context_api::toggle_document_enabled,
-            api::project_context_api::create_context_document,
-            api::project_context_api::generate_context_document,
-            api::project_context_api::cancel_context_document_generation,
-            api::project_context_api::get_project_context_config,
-            api::project_context_api::save_project_context_config,
-            api::project_context_api::create_project_category,
-            api::project_context_api::delete_project_category,
-            api::project_context_api::get_all_categories,
-            api::project_context_api::import_project_document,
-            api::project_context_api::delete_imported_document,
-            api::project_context_api::toggle_imported_document_enabled,
-            api::project_context_api::delete_context_document,
             initialize_mcp_servers,
             api::mcp_api::initialize_mcp_servers_non_destructive,
             get_mcp_servers,
@@ -1230,6 +1226,7 @@ pub async fn run() {
             api::announcement_api::trigger_announcement,
             api::announcement_api::get_announcement_tips,
             // Debug API (no-op stubs in release builds)
+            api::debug_api::debug_devtools_available,
             api::debug_api::debug_element_picked,
             api::debug_api::debug_open_devtools,
             api::debug_api::debug_close_devtools,
@@ -1431,6 +1428,9 @@ fn setup_panic_hook() {
         let thread = std::thread::current();
         let thread_name = thread.name().map(str::to_string);
         let thread_id = format!("{:?}", thread.id());
+        let is_main_thread = thread_name.as_deref() == Some("main")
+            || thread_name.is_none(); // unnamed threads in simple test contexts
+
         let location = panic_info
             .location()
             .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
@@ -1448,11 +1448,18 @@ fn setup_panic_hook() {
             })
             .unwrap_or("unknown panic message");
 
-        log::error!("Application panic at {}: {}", location, message);
+        log::error!(
+            "Application panic at {} (thread={:?}, id={}, main={}): {}",
+            location,
+            thread_name,
+            thread_id,
+            is_main_thread,
+            message,
+        );
         crate::crash_diagnostics::write_panic_report(
             location.clone(),
             message.to_string(),
-            thread_name,
+            thread_name.clone(),
             thread_id,
         );
 
@@ -1472,6 +1479,19 @@ fn setup_panic_hook() {
             log::error!("  1) Restart the application");
             log::error!("  2) Check Windows network service status");
             log::error!("  3) Run as administrator");
+        }
+
+        // ── Recovery strategy ──────────────────────────────────────────
+        // Main-thread panics are unrecoverable — the event loop is gone.
+        // Spawned-thread panics only kill that thread; the rest of the
+        // application can continue.  We log a clear message and skip the
+        // hard exit so the user isn't forced to restart.
+        if !is_main_thread {
+            log::warn!(
+                "Non-main thread panicked — application will continue. \
+                 The affected feature may be degraded until the next restart."
+            );
+            return;
         }
 
         perform_process_exit_cleanup();

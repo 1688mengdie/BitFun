@@ -32,6 +32,7 @@
       "leftAriaLabel": "調整左側面板大小",
       "centerAriaLabel": "調整面板大小",
       "rightAriaLabel": "調整右側面板大小",
+      "terminalBottomAriaLabel": "調整底部終端面板大小",
       "title": "拖拽調整面板大小 | 雙擊切換模式 | 目前: {{mode}}"
     }
   },
@@ -108,7 +109,8 @@
       "modelNotRecorded": "未記錄模型名稱",
       "legacyModel": "舊會話模型未統計",
       "inferredModel": "{{model}}（推測）",
-      "p95SampleInsufficient": "樣本不足"
+      "p95SampleInsufficient": "樣本不足",
+      "timedOut": "逾時"
     },
     "cacheCoverage": {
       "available": "已回報",
@@ -231,6 +233,16 @@
       "modelCall": "第 {{turn}} 回合模型呼叫",
       "modelCallUnknown": "模型呼叫"
     },
+    "slowest": {
+      "details": {
+        "input": "輸入",
+        "status": "狀態",
+        "exitCode": "退出碼",
+        "timedOut": "逾時",
+        "execution": "執行",
+        "error": "錯誤"
+      }
+    },
     "help": {
       "wall": "從第一回合開始到最後一回合結束的記錄跨度，可能包含回合之間的閒置間隔。",
       "active": "產生可統計活動的回合記錄時間段聯集，可能包含回合內的編排或等待時間。",
@@ -258,7 +270,8 @@
       "errorExampleRow": "模型/執行期錯誤或失敗工具類型的安全分組標籤。",
       "errorExampleCount": "目前報告範圍內符合該標籤的錯誤次數。",
       "slowestSpans": "慢耗時來自已記錄的回合、模型呼叫與工具時間戳，用於定位耗時來源，不代表精確服務商延遲。",
-      "slowestModelCall": "該列是目前回合內的一次模型呼叫。模型：{{model}}。"
+      "slowestModelCall": "該列是目前回合內的一次模型呼叫。模型：{{model}}。",
+      "slowestToolCall": "工具呼叫詳情用於區分耗時來自排隊、確認還是實際執行。"
     },
     "meta": {
       "generatedAt": "產生時間",
@@ -589,6 +602,10 @@
     "deepreviewBusy": "目前會話已有審核正在進行，請停止或等待完成後再開始新的深度審核。",
     "deepreviewNestedDisabled": "深度審核只能從主會話啟動。",
     "deepreviewThreadTitle": "深度審核",
+    "reloadSkillsAction": "重新載入技能",
+    "reloadSkillsUsage": "使用 /reload-skills 時不要帶額外參數。",
+    "reloadSkillsDone": "技能已重新載入（目前可用 {{count}} 個）",
+    "reloadSkillsFailed": "技能重新載入失敗",
     "currentMode": "目前模式: {{mode}}",
     "noMatchingMode": "沒有匹配的模式",
     "noMatchingCommand": "沒有匹配的命令",
@@ -1008,11 +1025,59 @@
     "searchClose": "關閉搜尋",
     "searchOpen": "搜尋消息",
     "jumpToCurrentTurn": "跳轉到第 {{turn}} 輪",
-    "backgroundSubagents": "背景子 Agent（{{count}}）",
+    "backgroundActivities": "背景活動（{{count}}）",
     "backgroundSubagentUntitled": "背景子 Agent",
+    "backgroundSubagentSection": "背景子 Agent（{{count}}）",
+    "backgroundCommandSection": "背景命令（{{count}}）",
+    "backgroundCommandUntitled": "背景命令",
+    "backgroundCommandSession": "會話 #{{id}}",
     "subagentStatusProcessing": "運行中",
     "subagentStatusFinishing": "收尾中",
+    "backgroundCommandStatusRunning": "進行中",
+    "backgroundCommandStatusFinished": "已結束",
+    "backgroundCommandActions": "命令操作",
+    "backgroundCommandSendInput": "輸入內容",
+    "backgroundCommandStop": "終止命令",
+    "backgroundCommandStopping": "正在終止命令",
+    "backgroundCommandStopFailed": "終止背景命令失敗。",
     "pullRequests": "拉取請求"
+  },
+  "backgroundCommandInput": {
+    "title": "輸入命令內容",
+    "commandLabel": "命令",
+    "inputLabel": "輸入內容",
+    "inputPlaceholder": "輸入要傳送給互動進程的內容",
+    "appendEnter": "傳送 Enter",
+    "maskInput": "隱藏輸入內容",
+    "privacyNote": "輸入內容會直接傳送給正在運行的 TTY 進程，不會加入聊天記錄。",
+    "cancel": "取消",
+    "send": "傳送",
+    "sendSucceeded": "已傳送給背景命令。",
+    "sendFailed": "傳送背景命令輸入失敗。"
+  },
+  "backgroundCommandOutput": {
+    "title": "命令輸出",
+    "sendInput": "傳送輸入",
+    "sendInputUnavailable": "只能向正在運行的互動式命令傳送輸入。",
+    "copy": "複製輸出",
+    "copyCommand": "複製命令",
+    "simplifiedView": "簡化顯示",
+    "simplifiedViewTooltip": "隱藏終端控制符，讓輸出更易讀。",
+    "loading": "正在載入輸出...",
+    "empty": "暫未擷取到輸出。",
+    "remote": "遠端",
+    "session": "會話 #{{id}}",
+    "exitCode": "退出碼 {{code}}",
+    "truncatedFromStart": "命令輸出過長，較早的輸出已從前部丟棄。",
+    "error": "無法載入輸出：{{message}}",
+    "status": {
+      "running": "命令運行中",
+      "exited": "已退出",
+      "interrupted": "已中斷",
+      "killed": "已終止",
+      "pruned": "已清理",
+      "failed": "命令失敗"
+    }
   },
   "stickyTaskIndicator": {
     "tooltip": "跳轉到目前任務"
@@ -1261,6 +1326,27 @@
       "exitCode": "退出碼: {{code}}",
       "commandInterrupted": "命令已被中斷",
       "executionFailed": "命令執行失敗"
+    },
+    "execProcess": {
+      "executeCommand": "執行命令:",
+      "writeStdin": "寫入標準輸入:",
+      "pollProcess": "輪詢進程:",
+      "executingCommand": "正在執行命令...",
+      "waitingForOutput": "等待輸出...",
+      "pollingOutput": "正在輪詢輸出...",
+      "pollSession": "輪詢會話 #{{id}}",
+      "session": "會話:",
+      "wallTime": "{{seconds}}秒",
+      "remote": "遠端",
+      "tty": "TTY",
+      "noOutput": "無輸出",
+      "sessionNotFound": "未找到會話 #{{id}}",
+      "copyPrimary": "複製",
+      "primaryCopied": "已複製",
+      "copyPrimaryFailed": "複製失敗",
+      "copyOutput": "複製輸出",
+      "outputCopied": "已複製輸出",
+      "copyOutputFailed": "複製輸出失敗"
     },
     "plan": {
       "loadingPlan": "正在載入計劃...",

@@ -22,6 +22,10 @@ import {
   openMainSession,
   selectActiveBtwSessionTab,
 } from '@/flow_chat/services/openBtwSession';
+import {
+  dispatchHistorySessionOpenIntent,
+  shouldShowHistorySessionOpenIntent,
+} from '@/flow_chat/services/sessionOpenIntent';
 import { resolveSessionRelationship } from '@/flow_chat/utils/sessionMetadata';
 import {
   compareSessionsForNavStable,
@@ -40,6 +44,15 @@ import { computeFixedPopoverPosition } from '@/shared/utils/fixedPopoverViewport
 import { sessionAPI } from '@/infrastructure/api/service-api/SessionAPI';
 import { confirmWarning } from '@/component-library/components/ConfirmDialog/confirmService';
 import ScheduledJobsModal from '@/app/components/scheduled-jobs/ScheduledJobsModal';
+import { scheduleAfterStartupPaint, scheduleAfterStartupSignal } from '@/shared/utils/startupTaskScheduling';
+import {
+  SESSION_METADATA_DEFERRED_FALLBACK_MS,
+  SESSION_METADATA_DEFERRED_FRAME_COUNT,
+  SESSION_METADATA_DEFERRED_SIGNAL,
+  getDeferredSessionMetadataDelayMs,
+  getInitialSessionMetadataLoadMode,
+  hasStartupOverlayHandedOff,
+} from './sessionMetadataStartup';
 import './SessionsSection.scss';
 
 /** Top-level parent sessions shown at each expand step (children still nest under visible parents). */
@@ -61,6 +74,18 @@ const resolveSessionModeType = (session: Session): SessionMode => {
 
 const getTitle = (session: Session): string =>
   resolveSessionTitle(session, (key, options) => i18nService.t(key, options));
+
+const waitForHistoryOpenIntentPaint = (): Promise<void> =>
+  new Promise(resolve => {
+    if (typeof window === 'undefined' || typeof window.requestAnimationFrame !== 'function') {
+      globalThis.setTimeout(resolve, 0);
+      return;
+    }
+
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => resolve());
+    });
+  });
 
 const getChildSessionBadge = (kind: Session['sessionKind']): string => {
   const normalizedKind =
@@ -111,7 +136,7 @@ const SessionsSection: React.FC<SessionsSectionProps> = ({
   workspacePath,
   remoteConnectionId = null,
   remoteSshHost = null,
-  isActiveWorkspace: _isActiveWorkspace = true,
+  isActiveWorkspace = true,
   assistantLabel,
   showSessionModeIcon = true,
   isVisible = true,
@@ -148,6 +173,7 @@ const SessionsSection: React.FC<SessionsSectionProps> = ({
   const sessionMenuPopoverRef = useRef<HTMLDivElement>(null);
   const sessionMenuAnchorRef = useRef<HTMLButtonElement>(null);
   const metadataLoadRequestIdRef = useRef(0);
+  const initialMetadataLoadKeyRef = useRef<string | null>(null);
 
   // Subscribe to state machine changes for running status
   useEffect(() => {
@@ -174,7 +200,20 @@ const SessionsSection: React.FC<SessionsSectionProps> = ({
   }, [flowChatState.sessions]);
 
   useEffect(() => {
-    const unsub = flowChatStore.subscribe(s => setFlowChatState(s));
+    const selector = (s: FlowChatState): string => {
+      const parts: string[] = [s.activeSessionId ?? ''];
+      for (const session of s.sessions.values()) {
+        parts.push(
+          `${session.sessionId}|${session.isTransient ? '1':'0'}|${session.sessionKind}|` +
+          `${session.workspacePath ?? ''}|${session.mode ?? ''}|${session.needsUserAttention ? '1':'0'}|` +
+          `${session.hasUnreadCompletion ? '1':'0'}|${session.title ?? ''}`
+        );
+      }
+      return parts.join(';');
+    };
+    const unsub = flowChatStore.subscribeSelector(selector, (() => {
+      setFlowChatState(flowChatStore.getState());
+    }), { isEqual: (a, b) => a === b });
     return () => unsub();
   }, []);
 
@@ -187,6 +226,7 @@ const SessionsSection: React.FC<SessionsSectionProps> = ({
 
   useEffect(() => {
     metadataLoadRequestIdRef.current += 1;
+    initialMetadataLoadKeyRef.current = null;
     setExpandLevel(0);
     setMetadataPageState({
       totalTopLevelCount: null,
@@ -235,13 +275,118 @@ const SessionsSection: React.FC<SessionsSectionProps> = ({
     [workspacePath, remoteConnectionId, remoteSshHost]
   );
 
+  const initialMetadataKey = useMemo(
+    () => [
+      workspacePath ?? '',
+      remoteConnectionId ?? '',
+      remoteSshHost ?? '',
+    ].join('\n'),
+    [workspacePath, remoteConnectionId, remoteSshHost],
+  );
+
+  const loadInitialMetadataPage = useCallback(
+    async (source: string) => {
+      if (!workspacePath) {
+        return;
+      }
+      if (initialMetadataLoadKeyRef.current === initialMetadataKey) {
+        return;
+      }
+
+      initialMetadataLoadKeyRef.current = initialMetadataKey;
+      const page = await loadMetadataPage(SESSIONS_LEVEL_0, undefined, source);
+      if (!page && initialMetadataLoadKeyRef.current === initialMetadataKey) {
+        initialMetadataLoadKeyRef.current = null;
+      }
+    },
+    [initialMetadataKey, loadMetadataPage, workspacePath],
+  );
+
   useEffect(() => {
     if (!isVisible || !workspacePath) {
       return;
     }
 
-    void loadMetadataPage(SESSIONS_LEVEL_0, undefined, 'sessions_nav_initial');
-  }, [isVisible, workspacePath, remoteConnectionId, remoteSshHost, loadMetadataPage]);
+    const loadMode = getInitialSessionMetadataLoadMode({
+      hasWorkspacePath: Boolean(workspacePath),
+      isActiveWorkspace,
+      isVisible,
+      startupOverlayHandedOff: hasStartupOverlayHandedOff(),
+    });
+
+    if (loadMode === 'skip') {
+      return;
+    }
+
+    if (loadMode === 'immediate') {
+      void loadInitialMetadataPage('sessions_nav_initial_active');
+      return;
+    }
+
+    let cancelled = false;
+    let delayTimer: number | null = null;
+    const scheduleDeferredMetadataLoad = () => {
+      if (cancelled) {
+        return;
+      }
+      const delayMs = getDeferredSessionMetadataDelayMs(workspaceId ?? workspacePath);
+      const runDeferredLoad = () => {
+        delayTimer = null;
+        if (!cancelled) {
+          void loadInitialMetadataPage('sessions_nav_initial_deferred');
+        }
+      };
+
+      if (delayMs > 0) {
+        delayTimer = window.setTimeout(runDeferredLoad, delayMs);
+        return;
+      }
+      runDeferredLoad();
+    };
+    const cancelStartupSchedule = loadMode === 'after-startup-paint'
+      ? scheduleAfterStartupPaint(scheduleDeferredMetadataLoad, {
+          frameCount: SESSION_METADATA_DEFERRED_FRAME_COUNT,
+        })
+      : scheduleAfterStartupSignal(scheduleDeferredMetadataLoad, {
+          signalName: SESSION_METADATA_DEFERRED_SIGNAL,
+          fallbackTimeoutMs: SESSION_METADATA_DEFERRED_FALLBACK_MS,
+          frameCount: SESSION_METADATA_DEFERRED_FRAME_COUNT,
+        });
+
+    return () => {
+      cancelled = true;
+      cancelStartupSchedule();
+      if (delayTimer !== null) {
+        window.clearTimeout(delayTimer);
+      }
+    };
+  }, [
+    isActiveWorkspace,
+    isVisible,
+    loadInitialMetadataPage,
+    workspaceId,
+    workspacePath,
+  ]);
+
+  // When sessions are archived, reset stale metadata so the expand toggle
+  // doesn't linger with old counts after all sessions are gone.
+  useEffect(() => {
+    const handler = () => {
+      metadataLoadRequestIdRef.current += 1;
+      setExpandLevel(0);
+      setMetadataPageState({
+        totalTopLevelCount: null,
+        nextCursor: undefined,
+        hasMore: false,
+        isLoading: false,
+      });
+      if (isVisible && workspacePath) {
+        void loadMetadataPage(SESSIONS_LEVEL_0, undefined, 'sessions_nav_post_archive');
+      }
+    };
+    window.addEventListener('bitfun:session-archived', handler);
+    return () => window.removeEventListener('bitfun:session-archived', handler);
+  }, [isVisible, workspacePath, loadMetadataPage]);
 
   useEffect(() => {
     if (!openMenuSessionId) return;
@@ -363,6 +508,12 @@ const SessionsSection: React.FC<SessionsSectionProps> = ({
   const totalTopLevelSessionCount = metadataPageState.totalTopLevelCount ?? topLevelSessions.length;
   const hasMoreUnloadedSessions =
     metadataPageState.hasMore || topLevelSessions.length < totalTopLevelSessionCount;
+  const expandToggleAction =
+    expandLevel === 0
+      ? 'show-more'
+      : expandLevel === 1 && totalTopLevelSessionCount > SESSIONS_LEVEL_1
+        ? 'show-all'
+        : 'show-less';
 
   const visibleItems = useMemo(() => {
     const visibleParents = topLevelSessions.slice(0, sessionDisplayLimit);
@@ -379,12 +530,48 @@ const SessionsSection: React.FC<SessionsSectionProps> = ({
   const scheduledJobsSession = scheduledJobsSessionId
     ? flowChatState.sessions.get(scheduledJobsSessionId) ?? null
     : null;
+  const lastHistoryOpenIntentRef = useRef<{ sessionId: string; atMs: number } | null>(null);
+
+  const dispatchHistoryOpenIntentForSession = useCallback(
+    (session: Session): boolean => {
+      const sessionId = session.sessionId;
+      if (
+        sessionId === activeSessionId ||
+        !shouldShowHistorySessionOpenIntent(session)
+      ) {
+        return false;
+      }
+
+      const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+      const lastIntent = lastHistoryOpenIntentRef.current;
+      if (
+        lastIntent &&
+        lastIntent.sessionId === sessionId &&
+        now - lastIntent.atMs < 250
+      ) {
+        return true;
+      }
+
+      lastHistoryOpenIntentRef.current = { sessionId, atMs: now };
+      dispatchHistorySessionOpenIntent(sessionId, getTitle(session));
+      return true;
+    },
+    [activeSessionId],
+  );
 
   const handleSwitch = useCallback(
     async (sessionId: string) => {
       if (editingSessionId) return;
       try {
         const session = flowChatStore.getState().sessions.get(sessionId);
+        const historyOpenIntentDispatched = session
+          ? dispatchHistoryOpenIntentForSession(session)
+          : false;
+        if (session) {
+          if (historyOpenIntentDispatched) {
+            await waitForHistoryOpenIntentPaint();
+          }
+        }
         const relationship = resolveSessionRelationship(session);
         const parentSessionId = relationship.parentSessionId;
         const mustActivateWorkspace =
@@ -429,11 +616,28 @@ const SessionsSection: React.FC<SessionsSectionProps> = ({
     },
     [
       activeSessionId,
+      dispatchHistoryOpenIntentForSession,
       editingSessionId,
       setActiveWorkspace,
       workspaceId,
       currentWorkspace?.id,
     ]
+  );
+
+  const handleSessionOpenPointerDown = useCallback(
+    (event: React.PointerEvent<HTMLElement>, session: Session) => {
+      if (editingSessionId || session.sessionId === activeSessionId) {
+        return;
+      }
+
+      const target = event.target as HTMLElement | null;
+      if (target?.closest('.bitfun-nav-panel__inline-item-actions, .bitfun-nav-panel__inline-item-edit')) {
+        return;
+      }
+
+      dispatchHistoryOpenIntentForSession(session);
+    },
+    [activeSessionId, dispatchHistoryOpenIntentForSession, editingSessionId],
   );
 
   const resolveSessionTitle = useCallback(
@@ -711,6 +915,7 @@ const SessionsSection: React.FC<SessionsSectionProps> = ({
               data-testid="session-nav-item"
               data-session-id={session.sessionId}
               data-session-title={sessionTitle}
+              onPointerDown={event => handleSessionOpenPointerDown(event, session)}
               onClick={() => handleSwitch(session.sessionId)}
             >
               {showSessionModeIcon ? (
@@ -891,6 +1096,7 @@ const SessionsSection: React.FC<SessionsSectionProps> = ({
           type="button"
           className={`bitfun-nav-panel__inline-toggle${metadataPageState.isLoading ? ' is-loading' : ''}`}
           data-testid="session-nav-show-more"
+          data-session-nav-toggle-action={expandToggleAction}
           disabled={metadataPageState.isLoading}
           onClick={() => { void handleExpandToggle(); }}
         >

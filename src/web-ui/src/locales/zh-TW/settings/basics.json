@@ -153,26 +153,25 @@
     "controls": {
       "refreshTooltip": "重新整理可用終端列表",
       "autoDetect": "自動檢測 (推薦)",
-      "description": "新增終端時使用的默認 Shell 類型",
+      "description": "新增終端以及本地工作區中 agent 執行命令時使用的默認 Shell 類型。",
+      "cmdFallbackMessage": "Agent 執行命令時實際使用 PowerShell。",
       "placeholder": "選擇默認終端",
       "noShells": "未檢測到可用的終端"
     },
-    "warnings": {
-      "cmd": "CMD 不支持 Shell 集成，AI 命令將通過 PowerShell 執行。",
-      "gitBash": "Git Bash 安裝 oh-my-zsh 後可能導致 Shell 集成失效，如遇異常建議切換至 PowerShell。"
-    },
-    "recommendations": {
-      "pwsh": {
-        "prefix": "推薦安裝使用",
-        "name": "PowerShell Core",
-        "suffix": "以獲得更好的跨平臺體驗和現代化功能",
-        "link": "前往下載"
+    "panelPosition": {
+      "label": "終端開啟位置",
+      "description": "在會話中從 Shell 導航開啟終端時顯示的位置",
+      "placeholder": "選擇終端顯示位置",
+      "options": {
+        "right": "右側面板",
+        "bottom": "底部面板"
       }
     },
     "messages": {
       "loading": "載入中...",
       "loadFailed": "載入設定失敗",
       "updated": "默認終端已更新",
+      "panelPositionUpdated": "終端顯示位置已更新",
       "saveFailed": "儲存設定失敗",
       "refreshed": "已重新整理可用終端列表"
     }

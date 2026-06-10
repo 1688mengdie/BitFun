@@ -30,6 +30,7 @@ import { SmartRecommendations } from './smart-recommendations';
 import { useCurrentWorkspace } from '@/infrastructure/contexts/WorkspaceContext';
 import { WorkspaceKind } from '@/shared/types';
 import { createImageContextFromFile, createImageContextFromClipboard } from '../utils/imageUtils';
+import { isSlashCommand, stripSlashCommand } from '../utils/slashCommand';
 import { notificationService } from '@/shared/notification-system';
 import { inputReducer, initialInputState } from '../reducers/inputReducer';
 import { modeReducer, initialModeState } from '../reducers/modeReducer';
@@ -69,6 +70,7 @@ import { useDeepReviewConsent } from './DeepReviewConsentDialog';
 import { useSessionReviewActivity } from '../hooks/useSessionReviewActivity';
 import { shouldBlockDeepReviewCommand } from '../utils/deepReviewCommandGuard';
 import { deriveDeepReviewSessionConcurrencyGuard } from '../utils/deepReviewCapacityGuard';
+import { acpAgentTypeFromSession } from '../utils/acpSession';
 import { agentAPI } from '@/infrastructure/api/service-api/AgentAPI';
 import './ChatInput.scss';
 
@@ -417,7 +419,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const measureIsMultiLine = useCallback((source: 'value-effect' | 'mutation-observer' | 'collapse-confirmation' | 'layout-change' = 'value-effect') => {
     const hasNewline = inputState.value.includes('\n');
     const hasImages = imageContexts.length > 0;
-    if (hasNewline || hasImages) {
+    if (hasNewline || hasImages || showTargetSwitcher) {
       setIsMultiLine(true);
       return;
     }
@@ -501,7 +503,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     }
     lockedCapsuleInputWidthRef.current = nextLockedWidth;
     setIsMultiLine(nextIsMultiLine);
-  }, [inputState.value, imageContexts.length, isMultiLine, measureCapsuleInputWidth]);
+  }, [inputState.value, imageContexts.length, isMultiLine, measureCapsuleInputWidth, showTargetSwitcher]);
   measureIsMultiLineRef.current = measureIsMultiLine;
 
   // Re-measure when value or image count changes (handles typing / deleting)
@@ -609,10 +611,15 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const isAssistantWorkspace = workspace?.workspaceKind === WorkspaceKind.Assistant;
   const currentMode = modeState.current;
   const isModeDropdownOpen = modeState.dropdownOpen;
+  const acpTargetAgentType = useMemo(
+    () => acpAgentTypeFromSession(effectiveTargetSession),
+    [effectiveTargetSession]
+  );
+  const isAcpTargetSession = Boolean(acpTargetAgentType);
   const activeSessionMode = effectiveTargetSessionId
-    ? flowChatState.sessions.get(effectiveTargetSessionId)?.mode
+    ? acpTargetAgentType || flowChatState.sessions.get(effectiveTargetSessionId)?.mode
     : undefined;
-  const canSwitchModes = !isAssistantWorkspace && currentMode !== 'Cowork';
+  const canSwitchModes = !isAssistantWorkspace && currentMode !== 'Cowork' && !isAcpTargetSession;
 
   // Session-level mode policy: Cowork sessions are fixed; code sessions should not switch into Cowork.
   const switchableModes = useMemo(
@@ -686,9 +693,55 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   );
 
   useEffect(() => {
-    const unsubscribe = FlowChatStore.getInstance().subscribe(setFlowChatState);
+    const store = FlowChatStore.getInstance();
+
+    const unsubscribe = store.subscribeSelector(
+      (state: FlowChatState): string => {
+        const parts: string[] = [state.activeSessionId ?? ''];
+        // Track sessions that ChatInput reads in render body (lines 278, 288, 304, 619)
+        const sessionIds = [
+          state.activeSessionId,
+          currentSessionId,
+          effectiveTargetSessionId,
+          activeBtwSessionId,
+        ].filter((id): id is string => !!id);
+        for (const id of sessionIds) {
+          const s = state.sessions.get(id);
+          if (s) {
+            parts.push(
+              `${id}|${s.mode ?? ''}|${s.title ?? ''}|${s.workspacePath ?? ''}|` +
+              `${s.remoteConnectionId ?? ''}|${s.remoteSshHost ?? ''}|${s.lastSubmittedMode ?? ''}|` +
+              `${s.currentAcpContextUsage?.used ?? ''}|${s.currentAcpContextUsage?.size ?? ''}|` +
+              `${s.currentTokenUsage?.totalTokens ?? ''}|${s.maxContextTokens ?? ''}|` +
+              `${s.needsUserAttention ? '1':'0'}`
+            );
+          }
+        }
+        return parts.join(';');
+      },
+      () => {
+        const state = store.getState();
+        setFlowChatState(state);
+        if (effectiveTargetSessionId) {
+          const session = state.sessions.get(effectiveTargetSessionId);
+          if (session) {
+            setTokenUsage(getSessionContextUsageDisplay(session));
+          }
+        }
+      },
+      { isEqual: (a: string, b: string) => a === b },
+    );
+
+    // Initial token usage sync
+    if (effectiveTargetSessionId) {
+      const session = store.getState().sessions.get(effectiveTargetSessionId);
+      if (session) {
+        setTokenUsage(getSessionContextUsageDisplay(session));
+      }
+    }
+
     return () => unsubscribe();
-  }, []);
+  }, [currentSessionId, effectiveTargetSessionId, activeBtwSessionId]);
 
   useEffect(() => {
     if (!showTargetSwitcher || !activeBtwSessionId) {
@@ -717,7 +770,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     // Composer mode is authoritative (synced from session on switch, updated in
     // applyModeChange). Prefer it over session.mode so a stale store cannot force
     // agentic when the user selected Team or another mode.
-    currentAgentType: modeState.current,
+    currentAgentType: acpTargetAgentType || modeState.current,
   });
 
   const modeInfoById = useMemo(
@@ -927,29 +980,6 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       clearPendingLargePastes();
     }
   }, [clearPendingLargePastes, inputState.value]);
-  
-  React.useEffect(() => {
-    const store = FlowChatStore.getInstance();
-    
-    const unsubscribe = store.subscribe((state: FlowChatState) => {
-      if (effectiveTargetSessionId) {
-        const session = state.sessions.get(effectiveTargetSessionId);
-        if (session) {
-          setTokenUsage(getSessionContextUsageDisplay(session));
-        }
-      }
-    });
-
-    if (effectiveTargetSessionId) {
-      const state = store.getState();
-      const session = state.sessions.get(effectiveTargetSessionId);
-      if (session) {
-        setTokenUsage(getSessionContextUsageDisplay(session));
-      }
-    }
-
-    return () => unsubscribe();
-  }, [effectiveTargetSessionId]);
 
   React.useEffect(() => {
     const handleFillInput = (event: Event) => {
@@ -1443,6 +1473,12 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         command: DEEP_REVIEW_SLASH_COMMAND,
         label: t('chatInput.deepreviewAction'),
       },
+      {
+        kind: 'action' as const,
+        id: 'reload-skills',
+        command: '/reload-skills',
+        label: t('chatInput.reloadSkillsAction'),
+      },
       ...(!derivedState?.isProcessing
         ? [
             {
@@ -1560,11 +1596,11 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     inputValueRef.current = text;
 
     const localSlashCommandsEnabled = !isAcpInputSession;
-    const trimmedLower = text.trim().toLowerCase();
-    const isBtwCommand = localSlashCommandsEnabled && trimmedLower.startsWith('/btw');
-    const isCompactCommand = localSlashCommandsEnabled && trimmedLower.startsWith('/compact');
+    const trimmed = text.trim();
+    const isBtwCommand = localSlashCommandsEnabled && isSlashCommand(trimmed, '/btw');
+    const isCompactCommand = localSlashCommandsEnabled && isSlashCommand(trimmed, '/compact');
     const isGoalCommand = localSlashCommandsEnabled && isGoalSlashCommand(text);
-    const isUsageCommand = localSlashCommandsEnabled && trimmedLower.startsWith('/usage');
+    const isUsageCommand = localSlashCommandsEnabled && isSlashCommand(trimmed, '/usage');
     const isDeepReviewCommand = localSlashCommandsEnabled && isDeepReviewSlashCommand(text);
     const isProcessing = !!derivedState?.isProcessing;
 
@@ -1650,7 +1686,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     const originalPendingLargePastes = { ...pendingLargePastesRef.current };
     const message = expandComposerSpecialTokens(originalMessage);
     const messageCharCount = getCharacterCount(message);
-    const question = message.replace(/^\/btw\b/i, '').trim();
+    const question = stripSlashCommand(message, '/btw').trim();
 
     // Clear input without adding to main history.
     dispatchInput({ type: 'CLEAR_VALUE' });
@@ -1943,6 +1979,47 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     threadGoalController,
   ]);
 
+  const submitReloadSkillsFromInput = useCallback(async () => {
+    const message = inputState.value.trim();
+    if (!/^\/reload-skills\s*$/i.test(message)) {
+      notificationService.warning(t('chatInput.reloadSkillsUsage'));
+      return;
+    }
+
+    dispatchInput({ type: 'CLEAR_VALUE' });
+    setQueuedInput(null);
+    setSlashCommandState({ isActive: false, kind: 'modes', query: '', selectedIndex: 0 });
+
+    try {
+      // Re-fetch skill configs with forceRefresh=true. The Tauri command
+      // (skill_api.rs::get_skill_configs) calls SkillRegistry::global().refresh()
+      // before serializing the result, so this single call both refreshes
+      // the registry cache and returns the new view. Pass workspacePath so
+      // workspace-level skills (`.bitfun/skills/`, `.cursor/skills/`, etc.)
+      // are included in the count — without it, the registry falls back
+      // to user + built-in slots only and the toast would undercount.
+      const skills = await configAPI.getSkillConfigs({
+        forceRefresh: true,
+        workspacePath: workspacePath || undefined,
+      });
+      notificationService.success(
+        t('chatInput.reloadSkillsDone', { count: skills.length }),
+        { duration: 3000 }
+      );
+    } catch (error) {
+      log.error('Failed to trigger /reload-skills', { error });
+      dispatchInput({ type: 'ACTIVATE' });
+      dispatchInput({ type: 'SET_VALUE', payload: message });
+      notificationService.error(
+        error instanceof Error ? error.message : t('error.unknown'),
+        {
+          title: t('chatInput.reloadSkillsFailed'),
+          duration: 5000,
+        }
+      );
+    }
+  }, [inputState.value, setQueuedInput, t, workspacePath]);
+
   const submitDeepreviewFromInput = useCallback(async () => {
     if (!effectiveTargetSessionId || !effectiveTargetSession) {
       notificationService.error(
@@ -2174,7 +2251,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     const messageCharCount = getCharacterCount(message);
     const localSlashCommandsEnabled = !isAcpInputSession;
 
-    if (localSlashCommandsEnabled && message.toLowerCase().startsWith('/btw')) {
+    if (localSlashCommandsEnabled && isSlashCommand(message, '/btw')) {
       // When idle, /btw can be sent via the normal send button.
       await submitBtwFromInput();
       return;
@@ -2205,36 +2282,39 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       return;
     }
 
+    if (localSlashCommandsEnabled && /^\/reload-skills\s*$/i.test(message)) {
+      await submitReloadSkillsFromInput();
+      return;
+    }
+
     if (localSlashCommandsEnabled && resolveTypedMcpPromptCommand(message)) {
       await submitMcpPromptFromInput();
       return;
     }
 
-    if (localSlashCommandsEnabled && message.toLowerCase().startsWith('/compact')) {
+    if (localSlashCommandsEnabled && isSlashCommand(message, '/compact')) {
       notificationService.warning(
         t('chatInput.compactUsage')
       );
       return;
     }
 
-    if (localSlashCommandsEnabled && message.toLowerCase().startsWith('/usage')) {
+    if (localSlashCommandsEnabled && isSlashCommand(message, '/usage')) {
       notificationService.warning(
         t('chatInput.usageCommandUsage')
       );
       return;
     }
 
-    if (localSlashCommandsEnabled && message.toLowerCase().startsWith('/init')) {
+    if (localSlashCommandsEnabled && isSlashCommand(message, '/init')) {
       notificationService.warning(
         t('chatInput.initUsage')
       );
       return;
     }
 
-    if (localSlashCommandsEnabled && message.toLowerCase().startsWith('/goal') && !isGoalSlashCommand(message)) {
-      notificationService.warning(
-        t('chatInput.goalUsage')
-      );
+    if (localSlashCommandsEnabled && isSlashCommand(message, '/reload-skills')) {
+      notificationService.warning(t('chatInput.reloadSkillsUsage'));
       return;
     }
     
@@ -2304,6 +2384,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     submitInitFromInput,
     submitDeepreviewFromInput,
     submitMcpPromptFromInput,
+    submitReloadSkillsFromInput,
     confirmPromptCacheGuardIfNeeded,
     t,
     resolveTypedMcpPromptCommand,
@@ -2380,7 +2461,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       if (isBtwSession) {
         return;
       }
-      if (!lower.startsWith('/btw')) {
+      if (!isSlashCommand(lower, '/btw')) {
         next = '/btw ';
       } else {
         // Normalize to "/btw " + rest, preserving any already typed question.
@@ -2396,7 +2477,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     } else if (actionId === 'compact') {
       next = '/compact';
     } else if (actionId === 'goal') {
-      if (!lower.startsWith('/goal')) {
+      if (!isSlashCommand(lower, '/goal')) {
         next = '/goal ';
       } else {
         const m = raw.match(/^(\s*)\/goal\b/i);
@@ -2414,6 +2495,11 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       next = '/init';
     } else if (actionId === 'deepreview') {
       next = `${DEEP_REVIEW_SLASH_COMMAND} `;
+    } else if (actionId === 'reload-skills') {
+      // /reload-skills takes no arguments. Setting the value to the bare
+      // command lets the user immediately press Enter to dispatch it
+      // (which is the same path /usage and /init use).
+      next = '/reload-skills';
     } else {
       return;
     }
@@ -2722,7 +2808,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       
       e.preventDefault();
 
-      const isBtwCommand = inputState.value.trim().toLowerCase().startsWith('/btw');
+      const isBtwCommand = isSlashCommand(inputState.value.trim(), '/btw');
       if (isBtwCommand) {
         // Allow /btw submission even while the main session is generating.
         void submitBtwFromInput();
@@ -3237,23 +3323,25 @@ export const ChatInput: React.FC<ChatInputProps> = ({
             <div className="bitfun-chat-input__actions">
               <div className="bitfun-chat-input__actions-left">
                 <div className="bitfun-chat-input__agent-boost" ref={agentBoostRef}>
-                  <Tooltip content={t('chatInput.addBoostTooltip')}>
-                    <IconButton
-                      className="bitfun-chat-input__agent-boost-add"
-                      variant="ghost"
-                      size="xs"
-                      aria-haspopup="menu"
-                      aria-expanded={modeState.dropdownOpen}
-                      onClick={e => {
-                        e.stopPropagation();
-                        dispatchMode({ type: 'TOGGLE_DROPDOWN' });
-                      }}
-                    >
-                      <Plus size={14} strokeWidth={2.25} />
-                    </IconButton>
-                  </Tooltip>
+                  {!isAcpTargetSession && (
+                    <Tooltip content={t('chatInput.addBoostTooltip')}>
+                      <IconButton
+                        className="bitfun-chat-input__agent-boost-add"
+                        variant="ghost"
+                        size="xs"
+                        aria-haspopup="menu"
+                        aria-expanded={modeState.dropdownOpen}
+                        onClick={e => {
+                          e.stopPropagation();
+                          dispatchMode({ type: 'TOGGLE_DROPDOWN' });
+                        }}
+                      >
+                        <Plus size={14} strokeWidth={2.25} />
+                      </IconButton>
+                    </Tooltip>
+                  )}
 
-                  {canSwitchModes && modeState.current !== 'agentic' && (
+                  {(canSwitchModes || isAcpTargetSession) && modeState.current !== 'agentic' && (
                     <div
                       className={`bitfun-chat-input__agent-capsule bitfun-chat-input__agent-capsule--${modeState.current === 'debug' ? 'debug' : modeState.current}`}
                     >
@@ -3262,18 +3350,20 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                           modeState.available.find(m => m.id === modeState.current)?.name ||
                           modeState.current}
                       </span>
-                      <button
-                        type="button"
-                        className="bitfun-chat-input__agent-capsule-close"
-                        aria-label={t('chatInput.resetToAgentic')}
-                        onClick={e => {
-                          e.stopPropagation();
-                          applyModeChange('agentic');
-                          dispatchMode({ type: 'CLOSE_DROPDOWN' });
-                        }}
-                      >
-                        <X size={12} strokeWidth={2.5} />
-                      </button>
+                      {!isAcpTargetSession && (
+                        <button
+                          type="button"
+                          className="bitfun-chat-input__agent-capsule-close"
+                          aria-label={t('chatInput.resetToAgentic')}
+                          onClick={e => {
+                            e.stopPropagation();
+                            applyModeChange('agentic');
+                            dispatchMode({ type: 'CLOSE_DROPDOWN' });
+                          }}
+                        >
+                          <X size={12} strokeWidth={2.5} />
+                        </button>
+                      )}
                     </div>
                   )}
 
