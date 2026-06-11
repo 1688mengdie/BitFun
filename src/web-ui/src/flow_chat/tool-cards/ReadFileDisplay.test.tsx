@@ -9,12 +9,16 @@ import type { FlowToolItem, ToolCardConfig } from '../types/flow-chat';
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
+const messages: Record<string, string> = {
+  'toolCards.readFile.permissionRequest': 'Requesting read permission:',
+};
+
 vi.mock('react-i18next', async () => {
   const actual = await vi.importActual<typeof import('react-i18next')>('react-i18next');
   return {
     ...actual,
     useTranslation: () => ({
-      t: (key: string, options?: { defaultValue?: string }) => options?.defaultValue ?? key,
+      t: (key: string, options?: { defaultValue?: string }) => messages[key] ?? options?.defaultValue ?? key,
     }),
   };
 });
@@ -137,5 +141,50 @@ describe('ReadFileDisplay', () => {
       actionButtons[1]?.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
     });
     expect(onReject).toHaveBeenCalledWith('reject');
+  });
+
+  it('does not report a file size for session preview truncation markers', () => {
+    const toolItem: FlowToolItem = {
+      id: 'tool-read-2',
+      type: 'tool',
+      toolName: 'Read',
+      status: 'completed',
+      timestamp: Date.now(),
+      toolCall: {
+        id: 'call-read-2',
+        input: {
+          file_path: 'src/main.rs',
+        },
+      },
+      toolResult: {
+        id: 'result-read-2',
+        result: {
+          content: '[truncated for session view]',
+        },
+        timestamp: Date.now(),
+      },
+    };
+
+    const config: ToolCardConfig = {
+      toolName: 'Read',
+      displayName: 'Read File',
+      icon: 'R',
+      requiresConfirmation: false,
+      resultDisplayType: 'summary',
+      description: 'Read file contents',
+      displayMode: 'compact',
+    };
+
+    act(() => {
+      root.render(
+        <ReadFileDisplay
+          toolItem={toolItem}
+          config={config}
+        />
+      );
+    });
+
+    expect(container.textContent).toContain('main.rs');
+    expect(container.textContent).not.toMatch(/\(\d+B\)/);
   });
 });

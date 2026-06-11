@@ -16,7 +16,6 @@
     "releaseToAdd": "释放以添加到此栏"
   },
   "layout": {
-    "noPanels": "BitFun",
     "noPanelsHint": "使用底部栏切换面板或按 <kbd>Ctrl+\\</kbd> <kbd>Ctrl+]</kbd> 展开面板",
     "chatHiddenTitle": "聊天已隐藏",
     "chatHiddenDesc": "你可以在右上角点击“聊天”重新打开。",
@@ -33,6 +32,7 @@
       "leftAriaLabel": "调整左侧面板大小",
       "centerAriaLabel": "调整面板大小",
       "rightAriaLabel": "调整右侧面板大小",
+      "terminalBottomAriaLabel": "调整底部终端面板大小",
       "title": "拖拽调整面板大小 | 双击切换模式 | 当前: {{mode}}"
     }
   },
@@ -44,6 +44,7 @@
     "loadingDescription": "正在准备该会话的历史内容。",
     "failedTitle": "历史会话加载失败",
     "failedDescription": "可以重新加载已保存的会话内容。",
+    "remoteSessionMissing": "在后端找不到该会话数据。若刚重新连接过 SSH 远程工作区，请关闭并重新打开该远程项目，或新建会话后再试。",
     "retry": "重试"
   },
   "usage": {
@@ -108,7 +109,8 @@
       "modelNotRecorded": "未记录模型名称",
       "legacyModel": "旧会话模型未统计",
       "inferredModel": "{{model}}（推测）",
-      "p95SampleInsufficient": "样本不足"
+      "p95SampleInsufficient": "样本不足",
+      "timedOut": "超时"
     },
     "cacheCoverage": {
       "available": "已上报",
@@ -231,6 +233,16 @@
       "modelCall": "第 {{turn}} 轮模型调用",
       "modelCallUnknown": "模型调用"
     },
+    "slowest": {
+      "details": {
+        "input": "输入",
+        "status": "状态",
+        "exitCode": "退出码",
+        "timedOut": "超时",
+        "execution": "执行",
+        "error": "错误"
+      }
+    },
     "help": {
       "wall": "从第一轮开始到最后一轮结束的记录跨度，可能包含轮次之间的空闲间隔。",
       "active": "产生可统计活动的轮次记录时间段并集，可能包含轮次内的编排或等待时间。",
@@ -258,12 +270,81 @@
       "errorExampleRow": "模型/运行时错误或失败工具类型的安全分组标签。",
       "errorExampleCount": "当前报告范围内匹配该标签的错误次数。",
       "slowestSpans": "慢耗时来自已记录的轮次、模型调用与工具时间戳，用于定位耗时来源，不代表精确服务商延迟。",
-      "slowestModelCall": "该行是当前轮次内的一次模型调用。模型：{{model}}。"
+      "slowestModelCall": "该行是当前轮次内的一次模型调用。模型：{{model}}。",
+      "slowestToolCall": "工具调用详情用于区分耗时来自排队、确认还是实际执行。"
     },
     "meta": {
       "generatedAt": "生成时间",
       "sessionId": "会话 ID",
       "workspacePath": "项目路径"
+    }
+  },
+  "threadGoal": {
+    "replaceConfirmTitle": "替换线程目标？",
+    "replaceConfirmMessage": "是否替换当前目标？\n\n当前：{{existing}}\n\n新目标：{{next}}",
+    "menuTitle": "线程目标",
+    "objectiveLabel": "目标描述",
+    "updatedUserMessage": "线程目标已更新：{{objective}}",
+    "kickoffUserMessage": "继续推进线程目标：{{objective}}",
+    "continuationCheckHeader": "目标完成检查",
+    "continuationCheckHeaderWithAttempt": "目标完成检查（自动续跑 {{attempt}}/{{max}}）",
+    "continuationCheckUserMessage": "目标完成检查：{{objective}}",
+    "menuEmpty": "尚未设置线程目标。填写目标描述后，代理会在空闲时持续朝该方向推进。",
+    "workflow": {
+      "title": "完成检查",
+      "steps": {
+        "continue": "每轮对话结束后自动续跑，朝目标继续推进",
+        "audit": "按当前证据逐项核对目标是否真正达成（非表面完成）",
+        "complete": "证据充分后由代理调用 update_goal 标记为「已完成」"
+      },
+      "note": {
+        "active": "目标仍为进行中时，每轮对话结束会自动续跑（最多 100 次），直到代理调用 update_goal 标为已完成或达到上限。",
+        "complete": "目标已标记完成。如需继续其他工作，可编辑或清除目标。",
+        "paused": "目标已暂停，续跑与完成检查已停止。",
+        "blocked": "目标已阻塞，需你介入或环境变化后再 /goal resume。",
+        "usageLimited": "因用量限制暂停，恢复额度后可 /goal resume。",
+        "budgetLimited": "已达 token 预算上限，可编辑目标或清除后重新设置。"
+      }
+    },
+    "editTitleCreate": "设置线程目标",
+    "editTitleUpdate": "编辑线程目标",
+    "editHint": "输入目标描述并保存；会话空闲时会继续朝该目标推进。",
+    "editPlaceholder": "目标描述…",
+    "editCancel": "取消",
+    "editSave": "保存",
+    "resumeTitle": "恢复已暂停的目标？",
+    "resumeSubtitle": "目标：{{objective}}",
+    "resumeHint": "标记为进行中后，会话空闲时会继续执行。也可保持暂停，稍后用 /goal resume。",
+    "resumeConfirm": "恢复目标",
+    "resumeLeavePaused": "保持暂停",
+    "stripTooltipEmpty": "设置或查看线程目标",
+    "stripTooltipWithGoal": "{{status}}：{{objective}}",
+    "stripOpenEmpty": "打开线程目标",
+    "stripOpenWithGoal": "打开线程目标菜单",
+    "usageTokens": "Token {{used}} / {{budget}}",
+    "usageTime": "已用 {{seconds}} 秒",
+    "status": {
+      "active": "进行中",
+      "paused": "已暂停",
+      "blocked": "已阻塞",
+      "usageLimited": "用量受限",
+      "budgetLimited": "预算受限"
+    },
+    "action": {
+      "pause": "暂停",
+      "resume": "恢复",
+      "clear": "清除",
+      "set": "设置目标"
+    },
+    "commandHint": {
+      "none": "命令：/goal <目标描述>",
+      "default": "命令：/goal edit、/goal pause、/goal clear",
+      "active": "命令：/goal edit、/goal pause、/goal clear",
+      "paused": "命令：/goal edit、/goal resume、/goal clear",
+      "blocked": "命令：/goal edit、/goal resume、/goal clear",
+      "usageLimited": "命令：/goal edit、/goal resume、/goal clear",
+      "budgetLimited": "命令：/goal edit、/goal clear",
+      "complete": "命令：/goal edit、/goal clear"
     }
   },
   "agentCompanion": {
@@ -402,7 +483,9 @@
     "messageTooLarge": "消息超过最大长度 {{max}} 个字符（当前 {{count}} 个字符）。",
     "openWorkspaceFolder": "打开工作区文件夹",
     "openWorkspaceFolderFailed": "打开工作区文件夹失败：{{error}}",
-    "spaceToActivate": "按<space>空格键</space>快速键入"
+    "spaceToActivate": "按<space>空格键</space>快速键入",
+    "assistantPlaceholder": "给 {{name}} 发送消息...",
+    "sendHint": "Enter 发送 / Shift+Enter 换行"
   },
   "workspaceStrip": {
     "branchTooltipUnavailable": "非 Git 仓库或当前无分支"
@@ -440,7 +523,6 @@
   "toolbar": {
     "newSession": "新建会话",
     "history": "历史记录",
-    "settings": "设置",
     "export": "导出对话",
     "clear": "清空对话",
     "fullscreen": "全屏",
@@ -462,7 +544,8 @@
     "modelError": "模型错误",
     "contextTooLong": "上下文过长",
     "rateLimited": "请求过于频繁",
-    "unknown": "未知错误"
+    "unknown": "未知错误",
+    "processingFailed": "处理失败"
   },
   "chatInput": {
     "addBoostTooltip": "智能体模式、图片或 Skill",
@@ -485,21 +568,26 @@
     "promptCacheGuardConfirm": "仍然发送",
     "promptCacheGuardCancel": "先不发送",
     "quickAction": "快捷操作",
+    "commands": "命令",
+    "acpPlan": {
+      "title": "计划"
+    },
     "compactAction": "压缩会话",
     "compactNoSession": "当前没有可用于 /compact 的会话",
     "compactBusy": "请等待当前会话空闲后再使用 /compact。",
     "compactUsage": "请直接使用 /compact，不要附加额外参数。",
     "compactFailed": "会话压缩失败",
     "goalAction": "会话目标",
-    "goalGenerating": "正在生成目标…",
-    "goalVerifying": "正在验证目标是否达成…",
     "goalAchieved": "会话目标已达成",
     "goalVerifyFailed": "目标验证失败，请检查模型配置后重试。",
     "goalNoSession": "当前没有可用于 /goal 的会话",
     "goalUsage": "使用 /goal 并可选择附加目标描述，例如 /goal 修复登录问题。",
-    "goalFailed": "目标模式激活失败",
-    "goalAiFailed": "目标模式 AI 请求失败，请检查模型配置后重试。",
-    "goalActivated": "会话目标已激活",
+    "goalFailed": "线程目标操作失败",
+    "goalActivated": "线程目标已设置",
+    "goalCleared": "线程目标已清除",
+    "goalPaused": "线程目标已暂停",
+    "goalResumed": "线程目标已恢复",
+    "goalEdited": "线程目标已更新",
     "goalNestedDisabled": "目标模式只能从主会话启动。",
     "initAction": "生成 AGENTS.md",
     "initNoSession": "当前没有可用于 /init 的会话",
@@ -514,6 +602,10 @@
     "deepreviewBusy": "当前会话已有审核正在进行，请停止或等待完成后再开始新的深度审核。",
     "deepreviewNestedDisabled": "深度审核只能从主会话启动。",
     "deepreviewThreadTitle": "深度审核",
+    "reloadSkillsAction": "重新加载技能",
+    "reloadSkillsUsage": "使用 /reload-skills 时不要带额外参数。",
+    "reloadSkillsDone": "技能已重新加载（当前可用 {{count}} 个）",
+    "reloadSkillsFailed": "技能重新加载失败",
     "currentMode": "当前模式: {{mode}}",
     "noMatchingMode": "没有匹配的模式",
     "noMatchingCommand": "没有匹配的命令",
@@ -558,7 +650,10 @@
     "usageCommandUsage": "请单独输入 /usage，不要附加其他内容。",
     "usageBusy": "请等待当前会话空闲后再使用 /usage。",
     "usageNoWorkspace": "生成用量报告需要先打开一个项目。",
-    "usageFailed": "用量报告生成失败"
+    "usageFailed": "用量报告生成失败",
+    "mcpPromptMissingArgs": "此 MCP 提示词需要参数：{{args}}",
+    "mcpPromptFailed": "MCP 提示词执行失败",
+    "loadingMcpPrompts": "正在加载 MCP 提示词..."
   },
   "planner": {
     "title": "任务规划",
@@ -671,7 +766,6 @@
     "minimize": "收起",
     "restore": "打开 {{label}}",
     "fixAndReviewRunning": "正在修复&准备重审...",
-    "minimizedDeep": "深度审核",
     "minimizedStandard": "代码审核",
     "minimizedReviewRunningDeep": "深度审核进行中",
     "minimizedReviewRunningStandard": "代码审核进行中",
@@ -884,24 +978,6 @@
     "optionalReviewers_one": "{{count}} 个额外专家",
     "optionalReviewers_other": "{{count}} 个额外专家",
     "summaryFirstReview": "先摘要再覆盖",
-    "targetTagLabels": {
-      "frontendUi": "前端 UI",
-      "frontendStyle": "前端样式",
-      "frontendI18n": "前端国际化",
-      "frontendContract": "前端契约",
-      "desktopContract": "桌面契约",
-      "webServerContract": "Web 服务契约",
-      "backendCore": "后端核心",
-      "transport": "传输层",
-      "apiLayer": "API 层",
-      "aiAdapter": "AI 适配器",
-      "installerUi": "安装器 UI",
-      "test": "测试",
-      "docs": "文档",
-      "config": "配置",
-      "generatedOrLock": "生成文件或锁文件",
-      "unknown": "未知区域"
-    },
     "estimatedCalls": "{{count}} 次审核调用",
     "estimatedCalls_one": "{{count}} 次审核调用",
     "estimatedCalls_other": "{{count}} 次审核调用",
@@ -949,10 +1025,59 @@
     "searchClose": "关闭搜索",
     "searchOpen": "搜索消息",
     "jumpToCurrentTurn": "跳转到第 {{turn}} 轮",
-    "backgroundSubagents": "后台子 Agent（{{count}}）",
+    "backgroundActivities": "后台活动（{{count}}）",
     "backgroundSubagentUntitled": "后台子 Agent",
+    "backgroundSubagentSection": "后台子 Agent（{{count}}）",
+    "backgroundCommandSection": "后台命令（{{count}}）",
+    "backgroundCommandUntitled": "后台命令",
+    "backgroundCommandSession": "会话 #{{id}}",
     "subagentStatusProcessing": "运行中",
-    "subagentStatusFinishing": "收尾中"
+    "subagentStatusFinishing": "收尾中",
+    "backgroundCommandStatusRunning": "进行中",
+    "backgroundCommandStatusFinished": "已结束",
+    "backgroundCommandActions": "命令操作",
+    "backgroundCommandSendInput": "输入内容",
+    "backgroundCommandStop": "终止命令",
+    "backgroundCommandStopping": "正在终止命令",
+    "backgroundCommandStopFailed": "终止后台命令失败。",
+    "pullRequests": "拉取请求"
+  },
+  "backgroundCommandInput": {
+    "title": "输入命令内容",
+    "commandLabel": "命令",
+    "inputLabel": "输入内容",
+    "inputPlaceholder": "输入要发送给交互进程的内容",
+    "appendEnter": "发送 Enter",
+    "maskInput": "隐藏输入内容",
+    "privacyNote": "输入内容会直接发送给正在运行的 TTY 进程，不会加入聊天记录。",
+    "cancel": "取消",
+    "send": "发送",
+    "sendSucceeded": "已发送给后台命令。",
+    "sendFailed": "发送后台命令输入失败。"
+  },
+  "backgroundCommandOutput": {
+    "title": "命令输出",
+    "sendInput": "发送输入",
+    "sendInputUnavailable": "只能向正在运行的交互式命令发送输入。",
+    "copy": "复制输出",
+    "copyCommand": "复制命令",
+    "simplifiedView": "简化显示",
+    "simplifiedViewTooltip": "隐藏终端控制符，让输出更易读。",
+    "loading": "正在加载输出...",
+    "empty": "暂未捕获到输出。",
+    "remote": "远程",
+    "session": "会话 #{{id}}",
+    "exitCode": "退出码 {{code}}",
+    "truncatedFromStart": "命令输出过长，较早的输出已从前部丢弃。",
+    "error": "无法加载输出：{{message}}",
+    "status": {
+      "running": "命令运行中",
+      "exited": "已退出",
+      "interrupted": "已中断",
+      "killed": "已终止",
+      "pruned": "已清理",
+      "failed": "命令失败"
+    }
   },
   "stickyTaskIndicator": {
     "tooltip": "跳转到当前任务"
@@ -1038,7 +1163,8 @@
     "feedbackThanks": "感谢您的反馈！",
     "feedbackDevVersion": "开发版本暂不提供反馈功能",
     "userLabel": "👤 用户:",
-    "toolCallLabel": "🔧 工具调用: {{name}}"
+    "toolCallLabel": "🔧 工具调用: {{name}}",
+    "loadingMoreHistory": "正在加载更多历史..."
   },
   "exploreRegion": {
     "readFiles_one": "读取了 {{count}} 个文件",
@@ -1078,6 +1204,7 @@
       "guidanceHint": "提示",
       "guidanceTitle": "提示",
       "parsingPath": "解析文件路径中...",
+      "receivingContent": "接收文件内容中...",
       "unknownFile": "未知文件",
       "receivingParams": "接收参数中...",
       "analyzing": "分析中...",
@@ -1200,10 +1327,33 @@
       "commandInterrupted": "命令已被中断",
       "executionFailed": "命令执行失败"
     },
+    "execProcess": {
+      "executeCommand": "运行命令:",
+      "writeStdin": "写入标准输入:",
+      "pollProcess": "轮询进程:",
+      "executingCommand": "正在运行命令...",
+      "waitingForOutput": "等待输出...",
+      "pollingOutput": "正在轮询输出...",
+      "pollSession": "轮询会话 #{{id}}",
+      "session": "会话:",
+      "wallTime": "{{seconds}}秒",
+      "remote": "远程",
+      "tty": "TTY",
+      "noOutput": "无输出",
+      "sessionNotFound": "未找到会话 #{{id}}",
+      "copyPrimary": "复制",
+      "primaryCopied": "已复制",
+      "copyPrimaryFailed": "复制失败",
+      "copyOutput": "复制输出",
+      "outputCopied": "已复制输出",
+      "copyOutputFailed": "复制输出失败"
+    },
     "plan": {
       "loadingPlan": "正在加载计划...",
       "generating": "生成中...",
       "clickToOpenPlan": "点击打开计划文件",
+      "revealPlanInExplorer": "在文件管理器中定位计划文件",
+      "revealPlanUnavailable": "仅本地工作区支持在文件管理器中定位计划文件",
       "remainingTodos": "剩余 {{count}} 个待办",
       "viewPlan": "查看计划",
       "build": "构建",
@@ -1260,6 +1410,29 @@
       "clickToOpenLink": "点击打开链接",
       "noTitle": "无标题",
       "summaryAvailable": "有搜索摘要"
+    },
+    "webFetch": {
+      "parsingUrl": "解析链接中...",
+      "readTitle": "读取网页: \"{{url}}\"",
+      "reading": "正在读取 \"{{url}}\"...",
+      "preparingRead": "准备读取 \"{{url}}\"",
+      "clickToOpenLink": "点击打开链接",
+      "contentAvailable": "有内容可预览",
+      "contentLength": "{{count}} 个字符",
+      "fetchFailed": "抓取内容失败",
+      "noContent": "未返回内容"
+    },
+    "getToolSpec": {
+      "title": "工具说明",
+      "readTitle": "读取工具说明：{{toolName}}",
+      "reading": "正在读取 {{toolName}} 的工具说明...",
+      "preparingRead": "准备读取 {{toolName}} 的工具说明",
+      "loaded": "已读取 {{toolName}} 的说明",
+      "alreadyLoaded": "{{toolName}} 已经加载",
+      "readFailed": "读取工具说明失败",
+      "unknownTool": "未知工具",
+      "descriptionLabel": "说明",
+      "schemaLabel": "输入 Schema"
     },
     "todoWrite": {
       "tasksCount": "{{count}} 项任务",
@@ -1324,7 +1497,9 @@
         "running": "执行中",
         "completed": "已完成",
         "failed": "执行失败"
-      }
+      },
+      "loadingMore": "正在加载更多输出...",
+      "loading": "正在加载任务详情..."
     },
     "timeout": {
       "disableTooltip": "关闭超时限制",
@@ -1337,29 +1512,6 @@
       "failedDurationTooltip": "执行失败，耗时 {{duration}}",
       "failedDurationTooltipWithReason": "执行失败，耗时 {{duration}}：{{reason}}",
       "cancelledDurationTooltip": "已取消，耗时 {{duration}}"
-    },
-    "template": {
-      "get": "获取模板:",
-      "getTemplate": "获取模板",
-      "loading": "加载中",
-      "loaded": "已加载",
-      "templateDetails": "模板详情",
-      "templateId": "模板 ID:",
-      "templateName": "模板名称:",
-      "contentSize": "内容大小:",
-      "characters": "{{count}} 字符",
-      "templateReady": "模板已就绪",
-      "templateReadyDesc": "模板结构已成功加载，可用于需求文档创建",
-      "templateLoadFailed": "模板加载失败",
-      "requirementFramework": "需求框架总览",
-      "productVision": "产品愿景",
-      "businessGoals": "业务目标",
-      "userPersonas": "用户画像",
-      "userStories": "用户故事",
-      "featureList": "功能清单",
-      "functionalSpecTemplate": "功能规格模板",
-      "nonFunctionalRequirements": "非功能需求",
-      "acceptanceCriteria": "验收标准"
     },
     "mcp": {
       "confirmExecute": "确认执行",
@@ -1431,7 +1583,6 @@
       "listingSessions": "正在列出会话",
       "listedSessions": "共找到 {{count}} 个会话",
       "actionFailed": "会话操作失败",
-      "workspace": "工作区",
       "sessionId": "会话ID",
       "sessionName": "会话名称",
       "agentType": "Agent 类型",
@@ -1453,22 +1604,8 @@
       "messageAccepted": "消息已提交给 {{session}}",
       "sendFailed": "向 {{session}} 发送消息失败",
       "targetSession": "目标会话",
-      "workspace": "工作区",
       "agentType": "Agent 类型",
       "message": "消息内容"
-    },
-    "imageAnalysis": {
-      "parsingAnalysisInfo": "解析分析信息中...",
-      "unknownImage": "未知图片",
-      "clipboardImage": "剪贴板图片",
-      "analyzeImageContent": "分析图片内容",
-      "imageAnalysis": "图片分析",
-      "completed": "已完成",
-      "analyzing": "正在分析",
-      "preparing": "准备分析",
-      "analysisPrompt": "分析提示",
-      "focusAreas": "关注点",
-      "analysisResult": "分析结果"
     },
     "contextCompression": {
       "beforeUserMessage": "用户消息前",
@@ -1511,26 +1648,6 @@
       "labelPattern": "模式",
       "labelPath": "路径",
       "labelStats": "统计"
-    },
-    "ideControl": {
-      "parsingOperation": "解析操作中...",
-      "configCenter": "配置中心",
-      "planner": "任务规划",
-      "terminal": "终端",
-      "fileViewer": "文件浏览器",
-      "codeEditor": "代码编辑器",
-      "navigateToPosition": "导航到指定位置",
-      "adjustIdeLayout": "调整IDE布局",
-      "manageTab": "管理标签页",
-      "focusView": "聚焦视图",
-      "executeIdeOperation": "执行IDE操作",
-      "operationType": "操作类型",
-      "panelType": "面板类型",
-      "configSection": "配置区域",
-      "sessionId": "会话ID",
-      "filePath": "文件路径",
-      "workspacePath": "工作区",
-      "panelPosition": "面板位置"
     },
     "linter": {
       "parsingParams": "解析参数中...",
@@ -1618,7 +1735,6 @@
       "riskLevel": "风险等级",
       "recommendedAction": "建议操作",
       "deepReviewResult": "深度审核结果",
-      "reviewMode": "审核模式",
       "reviewScope": "范围",
       "contextLimitations": "上下文限制",
       "issuesCount": "问题 ({{count}})",
@@ -1654,7 +1770,12 @@
           "high_risk_only": "仅高风险",
           "risk_expanded": "风险扩展",
           "full_depth": "完整深度"
-        }
+        },
+        "target": "目标",
+        "budget": "预算",
+        "estimatedCalls": "预计调用次数",
+        "activeGroupTitle": "将运行",
+        "skippedGroupTitle": "已跳过评审者"
       },
       "sectionItemCount": "{{count}} 项",
       "remediationPlan": "修复计划",
@@ -1711,7 +1832,8 @@
         "remediation": "修复计划",
         "strengths": "代码优点",
         "team": "代码审核团队",
-        "coverage": "覆盖与置信度"
+        "coverage": "覆盖与置信度",
+        "runManifest": "运行清单"
       },
       "groups": {
         "must_fix": "必须修复",
@@ -1839,7 +1961,6 @@
     "defaultAction2Command": "继续之前的工作",
     "defaultAction3": "开始新功能",
     "defaultAction3Command": "开始新功能",
-    "workspace": "工作区",
     "noWorkspace": "未打开工作区",
     "openOtherProject": "打开其他项目...",
     "noWorkspaceHint": "还没有选择项目",
@@ -2000,5 +2121,11 @@
     "injectedAt": "已在第 {{round}} 轮前插入",
     "statusPending": "等待触发",
     "statusInjected": "已触发"
+  },
+  "errors": {
+    "sendFailed": "发送消息失败"
+  },
+  "actions": {
+    "send": "发送"
   }
 }

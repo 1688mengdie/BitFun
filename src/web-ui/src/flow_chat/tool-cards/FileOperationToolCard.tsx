@@ -54,6 +54,8 @@ import {
   displayFileToolGuidanceMessage,
   isFileToolGuidanceMessage,
 } from './fileToolGuidance';
+import { extractFilePathFromJsonBuffer } from '@/shared/utils/partialJsonParser';
+import { i18nService } from '@/infrastructure/i18n';
 import './FileOperationToolCard.scss';
 
 const log = createLogger('FileOperationToolCard');
@@ -176,8 +178,8 @@ export const FileOperationToolCard: React.FC<FileOperationToolCardProps> = ({
       'targetFile',
       'path',
       'filename',
-    ]);
-  }, [toolCall, partialParams, toolResult]);
+    ]) || extractFilePathFromJsonBuffer(toolItem._paramsBuffer || '');
+  }, [toolCall, partialParams, toolResult, toolItem._paramsBuffer]);
 
   const currentFilePath = getFilePath();
   const openFilePath = useMemo(
@@ -210,7 +212,7 @@ export const FileOperationToolCard: React.FC<FileOperationToolCardProps> = ({
   const writeContentStatusText = useMemo(() => {
     if (toolItem.toolName !== 'Write' || writeContentCharCount <= 0) return null;
 
-    const formattedCount = writeContentCharCount.toLocaleString();
+    const formattedCount = i18nService.formatNumber(writeContentCharCount);
     if (status === 'completed') {
       return `${formattedCount} chars written`;
     }
@@ -238,9 +240,18 @@ export const FileOperationToolCard: React.FC<FileOperationToolCardProps> = ({
     status !== 'error'
   );
   
-  const fileName = currentFilePath ? 
-    (currentFilePath.split(/[/\\]/).pop() || t('context.file')) : 
-    (isFailed ? t('toolCards.file.unknownFile') : t('toolCards.file.parsingPath'));
+  const isWriteStreamingWithoutPath =
+    toolItem.toolName === 'Write'
+    && !currentFilePath
+    && Boolean(isParamsStreaming)
+    && (writeContentCharCount > 0 || status === 'receiving');
+
+  const fileName = currentFilePath ?
+    (currentFilePath.split(/[/\\]/).pop() || t('context.file')) :
+    (isFailed ? t('toolCards.file.unknownFile') :
+      (isWriteStreamingWithoutPath
+        ? t('toolCards.file.receivingContent')
+        : t('toolCards.file.parsingPath')));
   
   const currentFile = files.find(f => f.filePath === currentFilePath);
 
@@ -815,7 +826,7 @@ export const FileOperationToolCard: React.FC<FileOperationToolCardProps> = ({
                 isStreaming={isParamsStreaming}
                 showLineNumbers={isContentExpanded}
                 maxHeight={previewMaxHeight}
-                autoScrollToBottom={isParamsStreaming}
+                autoScrollToBottom={false}
                 onLineClick={handleCodeLineClick}
               />
             </div>
@@ -854,7 +865,7 @@ export const FileOperationToolCard: React.FC<FileOperationToolCardProps> = ({
                 isStreaming={isParamsStreaming}
                 showLineNumbers={isContentExpanded}
                 maxHeight={previewMaxHeight}
-                autoScrollToBottom={isParamsStreaming}
+                autoScrollToBottom={false}
                 onLineClick={handleCodeLineClick}
               />
             </div>

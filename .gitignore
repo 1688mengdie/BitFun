@@ -52,6 +52,7 @@ src/apps/desktop/.tauri/*.key
 !.vscode/extensions.json
 .idea
 .claude
+.codebuddy
 .DS_Store
 *.suo
 *.ntvs*
@@ -61,6 +62,10 @@ src/apps/desktop/.tauri/*.key
 
 # E2E test reports and screenshots
 tests/e2e/reports/
+
+# Eval job artifacts
+.eval/
+Cross.toml
 
 # BitFun sandbox data - auto managed
 .bitfun/

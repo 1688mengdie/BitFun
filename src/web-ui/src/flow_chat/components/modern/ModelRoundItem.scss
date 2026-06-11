@@ -51,6 +51,13 @@
   margin-top: var(--flowchat-inline-gap, 0.35rem);
 }
 
+.model-round-item__history-loader {
+  color: var(--color-text-muted, #999);
+  font-size: 12px;
+  line-height: 18px;
+  padding: var(--flowchat-inline-gap, 0.35rem) 0;
+}
+
 .model-round-item__action-btn {
   display: flex;
   align-items: center;
@@ -146,6 +153,14 @@
 
 .flowchat-flow-item--tool-completed {
   animation: flow-tool-completed-exit 1000ms ease-in-out both;
+}
+
+.flowchat-flow-item--tool-settled {
+  opacity: 0;
+  transform: translateY(-4px);
+  max-height: 0;
+  margin-bottom: 0;
+  pointer-events: none;
 }
 
 @keyframes flow-tool-active-enter {

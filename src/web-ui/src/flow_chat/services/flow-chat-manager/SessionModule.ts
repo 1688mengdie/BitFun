@@ -15,6 +15,7 @@ import { normalizeRemoteWorkspacePath } from '@/shared/utils/pathUtils';
 import { WorkspaceKind, type WorkspaceInfo } from '@/shared/types';
 import type { AIModelConfig, DefaultModelsConfig } from '@/infrastructure/config/types';
 import type { FlowChatContext, SessionConfig } from './types';
+import type { Session } from '../../types/flow-chat';
 import { touchSessionActivity, cleanupSaveState } from './PersistenceModule';
 import {
   createTextSessionTitleDescriptor,
@@ -26,6 +27,7 @@ import { buildCreateSessionRelationship } from '../../utils/sessionMetadata';
 
 const log = createLogger('SessionModule');
 const pendingSessionCreations = new Map<string, Promise<string>>();
+let latestSwitchRequestId = 0;
 
 const normalizeOptional = (value: string | undefined): string | undefined => {
   const trimmed = value?.trim();
@@ -144,7 +146,8 @@ async function hydrateHistoricalSession(
       workspacePath,
       undefined,
       effectiveConnectionId,
-      effectiveSshHost
+      effectiveSshHost,
+      { deferFullHistoryUntilActive: true },
     );
   })();
 
@@ -171,6 +174,14 @@ async function hydrateHistoricalSession(
       context.pendingHistoryLoads.delete(sessionId);
     }
   }
+}
+
+function hasRenderableSessionContent(session: Session): boolean {
+  return session.dialogTurns.some(turn =>
+    Boolean(turn.userMessage) ||
+    (turn.status === 'image_analyzing' && turn.modelRounds.length === 0) ||
+    turn.modelRounds.some(round => round.items.length > 0)
+  );
 }
 
 type SessionDisplayMode = 'code' | 'cowork' | 'claw';
@@ -475,25 +486,53 @@ export async function switchChatSession(
   sessionId: string
 ): Promise<void> {
   try {
+    const switchRequestId = ++latestSwitchRequestId;
     const session = context.flowChatStore.getState().sessions.get(sessionId);
+    const isRemoteSession = isRemoteTraceContext(session?.remoteConnectionId, session?.remoteSshHost);
+    const shouldHydrateBeforeSwitch =
+      session?.isHistorical === true &&
+      !isRemoteSession &&
+      !hasRenderableSessionContent(session);
 
-    // Switch UI immediately so the user sees the new session without waiting for history load.
+    const touchActiveSessionInBackground = () => {
+      touchSessionActivity(
+        sessionId,
+        session?.workspacePath,
+        session?.remoteConnectionId,
+        session?.remoteSshHost
+      ).catch(error => {
+        log.debug('Failed to touch session activity', { sessionId, error });
+      });
+    };
+
+    if (shouldHydrateBeforeSwitch) {
+      try {
+        await hydrateHistoricalSession(context, sessionId, true);
+      } catch {
+        // The hydrate path already marks the session failed and notifies the user.
+        // Continue with activation so the failed state is visible.
+      }
+
+      if (switchRequestId !== latestSwitchRequestId) {
+        startupTrace.markPhase('historical_session_switch_superseded', {
+          sessionId,
+        });
+        return;
+      }
+    }
+
+    // Avoid showing an empty loading page between two sessions. Historical
+    // sessions without a renderable tail are activated after their first
+    // visible content is restored; already-renderable sessions still switch
+    // immediately and continue full hydration in the background.
     context.flowChatStore.switchSession(sessionId);
+    touchActiveSessionInBackground();
     startupTrace.markPhase('historical_session_switch', {
       historical: Boolean(session?.isHistorical),
-      remote: isRemoteTraceContext(session?.remoteConnectionId, session?.remoteSshHost),
+      remote: isRemoteSession,
     });
 
-    touchSessionActivity(
-      sessionId,
-      session?.workspacePath,
-      session?.remoteConnectionId,
-      session?.remoteSshHost
-    ).catch(error => {
-      log.debug('Failed to touch session activity', { sessionId, error });
-    });
-
-    if (session?.isHistorical) {
+    if (session?.isHistorical && !shouldHydrateBeforeSwitch) {
       // Load history in the background — do not block the UI.
       void hydrateHistoricalSession(context, sessionId, true);
     }
@@ -612,7 +651,8 @@ export async function forkChatSession(
     workspacePath,
     undefined,
     sourceSession.remoteConnectionId,
-    sourceSession.remoteSshHost
+    sourceSession.remoteSshHost,
+    { deferFullHistoryUntilActive: true },
   );
   context.flowChatStore.switchSession(response.sessionId);
 
@@ -747,7 +787,7 @@ export async function ensureBackendSession(
       const raw = typeof e?.message === 'string' ? e.message : String(e);
       const hint =
         raw.includes('Session metadata not found') || raw.includes('Not found')
-          ? '在后端找不到该会话数据。若刚重新连接过 SSH 远程工作区，请关闭并重新打开该远程项目，或新建会话后再试。'
+          ? i18nService.t('flow-chat:historyState.remoteSessionMissing')
           : raw;
       throw new Error(hint);
     }

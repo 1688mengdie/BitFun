@@ -18,12 +18,12 @@ import { useAssistantBootstrap } from '../hooks/useAssistantBootstrap';
 import { useApp } from '../hooks/useApp';
 import { useSceneStore } from '../stores/sceneStore';
 import { useShortcut } from '@/infrastructure/hooks/useShortcut';
-import { configManager } from '@/infrastructure/config';
+import { configManager } from '@/infrastructure/config/services/ConfigManager';
 
 type TransitionDirection = 'entering' | 'returning' | null;
 import { FlowChatManager } from '../../flow_chat/services/FlowChatManager';
 import WorkspaceBody from './WorkspaceBody';
-import { ToolbarMode, useToolbarModeContext } from '../../flow_chat';
+import { ToolbarMode, useToolbarModeContext } from '../../flow_chat/components/toolbar-mode';
 import { FloatingMiniChat } from './FloatingMiniChat';
 import { NewProjectDialog } from '../components/NewProjectDialog';
 import { AboutDialog } from '../components/AboutDialog';
@@ -44,6 +44,7 @@ import { isMacOSDesktopRuntime } from '@/infrastructure/runtime';
 import './AppLayout.scss';
 
 const log = createLogger('AppLayout');
+const ACP_SESSION_PENDING_TIMEOUT_MS = 75_000;
 
 interface AppLayoutProps {
   className?: string;
@@ -53,6 +54,7 @@ interface AcpSessionCreationEventDetail {
   phase?: 'start' | 'finish';
   clientId?: string;
   action?: 'create' | 'restore';
+  requestId?: string;
 }
 
 interface WindowModeHint {
@@ -204,8 +206,10 @@ const AppLayout: React.FC<AppLayoutProps> = ({ className = '' }) => {
   const [showAboutDialog, setShowAboutDialog] = useState(false);
   const [showWorkspaceStatus, setShowWorkspaceStatus] = useState(false);
   const [pendingAcpSessionClients, setPendingAcpSessionClients] = useState<Array<{
+    id: string;
     clientId: string;
     action: 'create' | 'restore';
+    startedAt: number;
   }>>([]);
   const handleOpenProject = useCallback(async () => {
     try {
@@ -272,6 +276,7 @@ const AppLayout: React.FC<AppLayoutProps> = ({ className = '' }) => {
 
   // Initialize FlowChatManager
   React.useEffect(() => {
+    let cancelled = false;
     const initializeFlowChat = async () => {
       if (!currentWorkspace?.rootPath) return;
 
@@ -301,15 +306,24 @@ const AppLayout: React.FC<AppLayoutProps> = ({ className = '' }) => {
             ? currentWorkspace.sshHost
             : undefined
         );
+        if (cancelled) {
+          return;
+        }
 
         let sessionId: string | undefined;
         const { flowChatStore } = await import('@/flow_chat/store/FlowChatStore');
+        if (cancelled) {
+          return;
+        }
         if (!hasHistoricalSessions) {
           const initialSessionMode =
             currentWorkspace.workspaceKind === WorkspaceKind.Assistant
               ? 'Claw'
               : explicitPreferredMode || 'agentic';
           sessionId = await flowChatManager.createChatSession({}, initialSessionMode);
+          if (cancelled) {
+            return;
+          }
         }
 
         const activeSessionId = sessionId || flowChatStore.getState().activeSessionId;
@@ -322,6 +336,9 @@ const AppLayout: React.FC<AppLayoutProps> = ({ className = '' }) => {
           sessionStorage.removeItem('pendingProjectDescription');
 
           setTimeout(async () => {
+            if (cancelled) {
+              return;
+            }
             try {
               const targetSessionId = sessionId || flowChatStore.getState().activeSessionId;
 
@@ -349,6 +366,9 @@ const AppLayout: React.FC<AppLayoutProps> = ({ className = '' }) => {
         if (pendingSettings) {
           sessionStorage.removeItem('pendingOpenSettings');
           setTimeout(async () => {
+            if (cancelled) {
+              return;
+            }
             try {
               const { quickActions } = await import('@/shared/services/ide-control');
               await quickActions.openSettings(pendingSettings);
@@ -358,6 +378,9 @@ const AppLayout: React.FC<AppLayoutProps> = ({ className = '' }) => {
           }, 500);
         }
       } catch (error) {
+        if (cancelled) {
+          return;
+        }
         log.error('FlowChatManager initialization failed', error);
         import('@/shared/notification-system').then(({ notificationService }) => {
           notificationService.error(t('appLayout.flowChatInitFailed'), { duration: 5000 });
@@ -366,6 +389,9 @@ const AppLayout: React.FC<AppLayoutProps> = ({ className = '' }) => {
     };
 
     initializeFlowChat();
+    return () => {
+      cancelled = true;
+    };
   }, [
     currentWorkspace,
     currentWorkspace?.id,
@@ -583,11 +609,18 @@ const AppLayout: React.FC<AppLayoutProps> = ({ className = '' }) => {
       const detail = (event as CustomEvent<AcpSessionCreationEventDetail>).detail;
       const clientId = detail?.clientId?.trim() || 'ACP';
       const action = detail?.action === 'restore' ? 'restore' : 'create';
+      const id = detail?.requestId?.trim() || `${action}:${clientId}`;
       if (detail?.phase === 'start') {
-        setPendingAcpSessionClients(prev => [...prev, { clientId, action }]);
+        setPendingAcpSessionClients(prev => [
+          ...prev.filter(item => item.id !== id),
+          { id, clientId, action, startedAt: Date.now() },
+        ]);
       } else if (detail?.phase === 'finish') {
         setPendingAcpSessionClients(prev => {
-          const index = prev.findIndex(item => item.clientId === clientId && item.action === action);
+          const index = prev.findIndex(item =>
+            item.id === id ||
+            (!detail?.requestId && item.clientId === clientId && item.action === action)
+          );
           if (index === -1) return prev;
           return prev.filter((_, currentIndex) => currentIndex !== index);
         });
@@ -596,6 +629,19 @@ const AppLayout: React.FC<AppLayoutProps> = ({ className = '' }) => {
     window.addEventListener('bitfun:acp-session-creation', handler);
     return () => window.removeEventListener('bitfun:acp-session-creation', handler);
   }, []);
+
+  React.useEffect(() => {
+    if (pendingAcpSessionClients.length === 0) return undefined;
+
+    const intervalId = window.setInterval(() => {
+      const expiresBefore = Date.now() - ACP_SESSION_PENDING_TIMEOUT_MS;
+      setPendingAcpSessionClients(prev =>
+        prev.filter(item => item.startedAt >= expiresBefore)
+      );
+    }, 5_000);
+
+    return () => window.clearInterval(intervalId);
+  }, [pendingAcpSessionClients.length]);
 
   // Global drag-and-drop
   React.useEffect(() => {

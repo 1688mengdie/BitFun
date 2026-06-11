@@ -277,7 +277,7 @@ export function createConfigCenterTab(
 export function createReviewPlatformTab(workspacePath?: string): void {
   const detail = {
     type: 'review-platform',
-    title: i18nService.getT()('common:tabs.pullRequests', { defaultValue: 'Pull Requests' }),
+    title: i18nService.getT()('common:tabs.pullRequests'),
     data: { workspacePath },
     metadata: {
       workspacePath,
@@ -285,6 +285,50 @@ export function createReviewPlatformTab(workspacePath?: string): void {
     },
     checkDuplicate: true,
     duplicateCheckKey: `review-platform:${workspacePath || 'current'}`,
+    replaceExisting: true,
+  };
+
+  window.dispatchEvent(new CustomEvent(TAB_EVENTS.EXPAND_RIGHT_PANEL));
+
+  if (isRightPanelCollapsed()) {
+    window.setTimeout(() => {
+      window.dispatchEvent(new CustomEvent(TAB_EVENTS.AGENT_CREATE_TAB, { detail }));
+    }, 300);
+    return;
+  }
+
+  window.dispatchEvent(new CustomEvent(TAB_EVENTS.AGENT_CREATE_TAB, { detail }));
+}
+
+export function createBackgroundCommandOutputTab(options: {
+  execSessionKey: string;
+  execSessionId: number;
+  remote: boolean;
+  title?: string;
+  command?: string;
+  mockKind?: string;
+}): void {
+  const title = options.title || i18nService.getT()('flow-chat:backgroundCommandOutput.title');
+  const duplicateKey = `background-command-output:${options.execSessionKey}`;
+  const detail = {
+    type: 'background-command-output',
+    title,
+    data: {
+      execSessionKey: options.execSessionKey,
+      execSessionId: options.execSessionId,
+      remote: options.remote,
+      title,
+      command: options.command,
+      mockKind: options.mockKind,
+    },
+    metadata: {
+      execSessionKey: options.execSessionKey,
+      execSessionId: options.execSessionId,
+      duplicateCheckKey: duplicateKey,
+      contentRole: 'background-command-output',
+    },
+    checkDuplicate: true,
+    duplicateCheckKey: duplicateKey,
     replaceExisting: true,
   };
 
@@ -345,7 +389,7 @@ export function createReviewPlatformPullRequestDetailTab(options: CreateReviewPl
 export function createTerminalTab(
   sessionId: string,
   sessionName: string,
-  mode: 'agent' | 'project' = 'agent',
+  mode: 'agent' | 'project' | 'bottom-terminal' = 'agent',
   options: CreateTerminalTabOptions = {}
 ): void {
   const title = sessionName.length > 20 
@@ -382,6 +426,11 @@ export function createTerminalTab(
     }
 
     window.dispatchEvent(new CustomEvent(TAB_EVENTS.AGENT_CREATE_TAB, { detail }));
+    return;
+  }
+
+  if (mode === 'bottom-terminal') {
+    window.dispatchEvent(new CustomEvent(TAB_EVENTS.BOTTOM_TERMINAL_CREATE_TAB, { detail }));
     return;
   }
 

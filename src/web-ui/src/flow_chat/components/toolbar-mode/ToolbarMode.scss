@@ -75,6 +75,11 @@ $transition-timing: cubic-bezier(0.4, 0, 0.2, 1);
   animation: title-fade-in 0.2s $transition-timing;
 }
 
+// macOS overlay titlebar: reserve left space for traffic light buttons
+.bitfun-toolbar-mode--macos .bitfun-toolbar-mode__header {
+  padding-left: 78px;
+}
+
 .bitfun-toolbar-mode__header-left {
   flex: 0 0 auto;
   display: flex;

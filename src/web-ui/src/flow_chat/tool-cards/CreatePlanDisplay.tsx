@@ -7,7 +7,7 @@
 
 import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ClipboardList, Circle, Loader2, CheckCircle, CheckCircle2, PlayCircle, XCircle, ChevronsUpDown, ChevronsDownUp } from 'lucide-react';
+import { ClipboardList, Circle, Loader2, CheckCircle, CheckCircle2, PlayCircle, XCircle, ChevronsUpDown, ChevronsDownUp, FolderOpen } from 'lucide-react';
 import type { ToolCardProps } from '../types/flow-chat';
 import { ideControl } from '@/shared/services/ide-control/api';
 import { flowChatManager } from '@/flow_chat/services/FlowChatManager';
@@ -19,6 +19,9 @@ import { Tooltip } from '@/component-library';
 import { createLogger } from '@/shared/utils/logger';
 import { useToolCardHeightContract } from './useToolCardHeightContract';
 import { basenamePath, dirnameAbsolutePath } from '@/shared/utils/pathUtils';
+import { createTodoRenderItems } from './todoRenderItems';
+import { useOptionalCurrentWorkspace } from '@/infrastructure/contexts/WorkspaceContext';
+import { isRemoteWorkspace } from '@/shared/types';
 import './CreatePlanDisplay.scss';
 
 const log = createLogger('PlanDisplay');
@@ -68,6 +71,7 @@ export const PlanDisplay: React.FC<PlanDisplayProps> = ({
   cacheKey,
 }) => {
   const { t } = useTranslation('flow-chat');
+  const { workspace: currentWorkspace } = useOptionalCurrentWorkspace();
   const effectiveCacheKey = cacheKey || planFilePath;
   
   const [refreshedData, setRefreshedData] = useState<PlanData | null>(() => {
@@ -103,6 +107,12 @@ export const PlanDisplay: React.FC<PlanDisplayProps> = ({
   }, [planFilePath, initialName, initialOverview, initialTodos]);
 
   const planData = refreshedData || initialPlanData;
+  const todoRenderItems = useMemo(
+    () => createTodoRenderItems(planData?.todos ?? []),
+    [planData?.todos],
+  );
+  const planDirectoryPath = useMemo(() => dirnameAbsolutePath(planFilePath), [planFilePath]);
+  const isRevealPlanDisabled = !planFilePath || isRemoteWorkspace(currentWorkspace);
 
   // Subscribe to shared build state service for cross-component sync.
   useEffect(() => {
@@ -138,7 +148,6 @@ export const PlanDisplay: React.FC<PlanDisplayProps> = ({
     }
 
     const normalizedPlanPath = planFilePath.replace(/\\/g, '/');
-    const dirPath = dirnameAbsolutePath(planFilePath);
 
     const loadFromFile = async () => {
       // Skip refresh while writing to avoid feedback loops.
@@ -176,13 +185,13 @@ export const PlanDisplay: React.FC<PlanDisplayProps> = ({
       loadFromFile();
     }
 
-    if (!dirPath) {
+    if (!planDirectoryPath) {
       return;
     }
 
     let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
-    const unwatch = fileSystemService.watchFileChanges(dirPath, (event) => {
+    const unwatch = fileSystemService.watchFileChanges(planDirectoryPath, (event) => {
       const eventPath = event.path.replace(/\\/g, '/');
       if (eventPath !== normalizedPlanPath) {
         return;
@@ -207,7 +216,7 @@ export const PlanDisplay: React.FC<PlanDisplayProps> = ({
         clearTimeout(debounceTimer);
       }
     };
-  }, [effectiveCacheKey, planFilePath, initialName, initialOverview, initialTodos]);
+  }, [effectiveCacheKey, planFilePath, planDirectoryPath, initialName, initialOverview, initialTodos]);
 
   // Build button status transitions: build -> building -> built.
   const buildStatus = useMemo((): 'build' | 'building' | 'built' => {
@@ -240,6 +249,23 @@ export const PlanDisplay: React.FC<PlanDisplayProps> = ({
       ideControl.navigation.goToFile(planFilePath);
     }
   }, [planFilePath]);
+
+  const handleRevealPlanInExplorer = useCallback(async (event: React.MouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation();
+
+    if (isRevealPlanDisabled || !planFilePath) {
+      return;
+    }
+
+    try {
+      await workspaceAPI.revealInExplorer(planFilePath);
+    } catch (error) {
+      log.warn('Failed to reveal plan file in explorer', {
+        planFilePath,
+        error,
+      });
+    }
+  }, [isRevealPlanDisabled, planFilePath]);
 
   const handleBuild = useCallback(async () => {
     if (!planFilePath || buildStatus !== 'build') return;
@@ -301,6 +327,9 @@ ${JSON.stringify(simpleTodos, null, 2)}
   }, [applyExpandedState, isTodosExpanded]);
 
   const isLoading = status === 'preparing' || status === 'streaming' || status === 'running';
+  const revealPlanTooltip = isRevealPlanDisabled
+    ? t('toolCards.plan.revealPlanUnavailable')
+    : t('toolCards.plan.revealPlanInExplorer');
 
   if (!planData) {
     return (
@@ -318,19 +347,37 @@ ${JSON.stringify(simpleTodos, null, 2)}
       data-tool-card-id={toolCardId ?? ''}
       className={`create-plan-display status-${status}${isLoading ? ' create-plan-display--plan-generating' : ''}`}
     >
-      <Tooltip content={t('toolCards.plan.clickToOpenPlan')}>
-        <div 
-          className={`create-plan-header create-plan-header--clickable${isLoading ? ' create-plan-header--loading-shimmer' : ''}`}
-          onClick={handleViewPlan}
-        >
-          <div className="header-left">
-            <div className="file-icon-wrapper">
-              <ClipboardList size={14} />
+      <div
+        className={`create-plan-header${isLoading ? ' create-plan-header--loading-shimmer' : ''}`}
+      >
+        <Tooltip content={t('toolCards.plan.clickToOpenPlan')}>
+          <button
+            type="button"
+            className="create-plan-header-main create-plan-header-main--clickable"
+            onClick={handleViewPlan}
+          >
+            <div className="header-left">
+              <div className="file-icon-wrapper">
+                <ClipboardList size={14} />
+              </div>
+              <span className="file-name">{planFileName}</span>
             </div>
-            <span className="file-name">{planFileName}</span>
-          </div>
-        </div>
-      </Tooltip>
+          </button>
+        </Tooltip>
+        <Tooltip content={revealPlanTooltip}>
+          <span className="create-plan-header-folder-btn-wrapper">
+            <button
+              className="create-plan-header-folder-btn"
+              type="button"
+              onClick={handleRevealPlanInExplorer}
+              disabled={isRevealPlanDisabled}
+              aria-label={revealPlanTooltip}
+            >
+              <FolderOpen size={14} />
+            </button>
+          </span>
+        </Tooltip>
+      </div>
 
       <div className="create-plan-content">
         <div className="plan-content-left">
@@ -351,9 +398,9 @@ ${JSON.stringify(simpleTodos, null, 2)}
       {planData.todos && planData.todos.length > 0 && isTodosExpanded && (
         <div className="create-plan-todos create-plan-todos--expanded">
           <div className="todos-list">
-            {planData.todos.map((todo, index) => (
+            {todoRenderItems.map(({ todo, key }) => (
               <div
-                key={todo.id || index}
+                key={key}
                 className={`todo-item status-${todo.status || 'pending'}`}
               >
                 {todo.status === 'completed' && (
