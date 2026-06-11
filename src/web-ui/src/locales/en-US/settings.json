@@ -1,12 +1,18 @@
 {
-  "title": "Settings",
   "configCenter": {
-    "title": "Settings",
     "selectConfig": "Select Configuration",
     "searchPlaceholder": "Search settings…",
     "searchNoResults": "No matching settings",
     "searchClear": "Clear search",
     "beta": "Beta",
+    "searchAliases": {
+      "archivedSessions": [],
+      "keyboard": [],
+      "sessionPersonalization": [],
+      "sessionPermissions": [],
+      "quickActions": [],
+      "review": []
+    },
     "tabDescriptions": {
       "basics": "Logging, terminal shell, notifications, and launch at login.",
       "appearance": "Language, theme, and UI font size.",
@@ -137,7 +143,6 @@
     }
   },
   "workspace": {
-    "title": "Workspace",
     "files": {
       "title": "Files",
       "exclude": "Exclude Files",

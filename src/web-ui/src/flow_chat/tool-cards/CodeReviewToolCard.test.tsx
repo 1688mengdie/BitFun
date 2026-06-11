@@ -17,18 +17,18 @@ const flowState = vi.hoisted(() => ({
   listeners: new Set<(state: { sessions: Map<string, unknown>; activeSessionId: string | null }) => void>(),
 }));
 
-vi.mock('react-i18next', () => ({
-  initReactI18next: {
-    type: '3rdParty',
-    init: vi.fn(),
-  },
-  useTranslation: () => ({
-    t: (key: string, options?: Record<string, unknown>) => {
-      const value = typeof options?.defaultValue === 'string' ? options.defaultValue : key;
-      return value.replace(/\{\{(\w+)\}\}/g, (_match, name) => String(options?.[name] ?? ''));
+vi.mock('react-i18next', async () => {
+  const { createTestI18nT } = await import('@/test/i18nTestUtils');
+  return {
+    initReactI18next: {
+      type: '3rdParty',
+      init: vi.fn(),
     },
-  }),
-}));
+    useTranslation: () => ({
+      t: createTestI18nT('flow-chat'),
+    }),
+  };
+});
 
 vi.mock('@/component-library', () => ({
   Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,

@@ -1,6 +1,5 @@
 {
   "app": {
-    "name": "BitFun",
     "version": "Version",
     "loading": "Loading...",
     "welcome": "Welcome to BitFun"
@@ -52,7 +51,6 @@
     "showChatPanel": "Show Chat Panel",
     "hideChatPanel": "Hide Chat Panel",
     "switchToToolbar": "Floating window mode",
-    "remoteConnect": "Remote Control",
     "modeSwitchAriaLabel": "View mode switch",
     "modeCowork": "Cowork",
     "modeCoder": "Coder",
@@ -63,7 +61,8 @@
     "switchWorkspace": "Switch Workspace",
     "recentWorkspaces": "Recent Workspaces",
     "noRecentWorkspaces": "No Recent Workspaces",
-    "noWorkspaceOpen": "Select Workspace"
+    "noWorkspaceOpen": "Select Workspace",
+    "remoteConnectRequiresWorkspace": "Open a workspace before using remote control."
   },
   "nav": {
     "aria": {
@@ -94,7 +93,6 @@
       "addWorkspace": "Add workspace"
     },
     "sections": {
-      "workspace": "Workspace",
       "extensions": "Customize",
       "shell": "Shell",
       "assistantSessions": "Assistant Sessions"
@@ -151,6 +149,7 @@
         "default": "Default"
       },
       "empty": {
+        "all": "No terminals yet",
         "manual": "No user terminals yet",
         "agent": "No agent terminals yet",
         "quickNew": "Quick new terminal"
@@ -160,19 +159,16 @@
       "newSession": "New session",
       "newCodeSession": "New Code session",
       "newCoworkSession": "New Cowork session",
-      "newCodeSessionShort": "Code Session",
-      "newCoworkSessionShort": "Cowork Session",
       "newExternalAgentSessionShort": "{{agentName}} Session",
       "newClawSession": "New Claw session",
       "modeCode": "Code",
       "modeCowork": "Cowork",
-      "codeSessionMode": "Code Session",
-      "coworkSessionMode": "Cowork Session",
       "noSessions": "No sessions",
       "rename": "Rename",
       "delete": "Delete",
       "confirmEdit": "Confirm",
       "cancelEdit": "Cancel",
+      "loading": "Loading...",
       "showMore": "{{count}} more sessions",
       "showAll": "{{count}} more (show all)",
       "showLess": "Show less",
@@ -208,7 +204,6 @@
       "archivedSessions": "Archived Sessions",
       "noArchivedSessions": "No archived sessions",
       "archivedSessionsDescription": "View, restore, or permanently delete archived sessions.",
-      "loading": "Loading...",
       "untitled": "Untitled Session",
       "restore": "Restore",
       "archivedAll": "{{count}} sessions archived",
@@ -219,7 +214,7 @@
     },
     "scheduledJobs": {
       "title": "Scheduled Jobs",
-      "open": "Open scheduled jobs",
+      "open": "Scheduled jobs",
       "shortLabel": "Schedule",
       "listTitle": "Jobs",
       "assistantFallback": "Current assistant",
@@ -229,6 +224,7 @@
       "fields": {
         "workspacePath": "Workspace path",
         "session": "Session",
+        "agentType": "Agent type",
         "name": "Job name",
         "enabled": "Enabled",
         "enabledHint": "Enable this job",
@@ -243,10 +239,15 @@
       "placeholders": {
         "workspacePath": "Enter workspace path",
         "session": "Select or enter a session ID",
+        "optionalSession": "Leave blank to create a new session",
+        "agentType": "For example: agentic, Cowork, or Claw",
         "name": "For example: Daily global news briefing",
         "anchorMs": "Leave blank to use creation time",
         "timezone": "For example: Asia/Shanghai",
-        "prompt": "Enter the message that should be sent when the schedule fires"
+        "prompt": "Enter the message that should be sent to the agent when the schedule fires"
+      },
+      "hints": {
+        "cronExpr": "Cron format: minute hour day month weekday, for example 0 8 * * * runs every day at 08:00."
       },
       "scheduleKinds": {
         "at": "One-time",
@@ -257,6 +258,10 @@
         "every": "Every {{everyMinutes}} minutes",
         "cron": "Cron: {{expr}}",
         "cronWithTz": "Cron: {{expr}} · {{tz}}"
+      },
+      "targets": {
+        "session": "Session",
+        "newSession": "New session"
       },
       "status": {
         "idle": "Idle",
@@ -277,13 +282,9 @@
         "create": "Create job",
         "cancel": "Cancel"
       },
-      "editor": {
-        "editTitle": "Edit job",
-        "createTitle": "Create job"
-      },
       "empty": {
-        "title": "No scheduled jobs yet",
-        "description": "Click the plus button to create your first scheduled job."
+        "title": "This session has no scheduled jobs yet",
+        "workspaceTitle": "This workspace has no scheduled jobs yet. Runs will create a new session."
       },
       "deleteDialog": {
         "title": "Delete job \"{{name}}\"?"
@@ -440,9 +441,6 @@
     "errorCreateFailed": "Failed to create project"
   },
   "remoteConnect": {
-    "title": "Remote Control",
-    "tabLan": "LAN",
-    "tabBitfunServer": "BitFun Server",
     "tabNgrok": "NAT Traversal",
     "tabCustomServer": "Self-Hosted",
     "tabBot": "IM Bot",
@@ -685,10 +683,6 @@
     "globalMenu": {
       "name": "Global Menu",
       "description": "Provides global common menu items"
-    },
-    "projectContextDocumentMenu": {
-      "name": "Project Context Document Menu",
-      "description": "Provides deletion for project context documents"
     }
   },
   "status": {
@@ -857,11 +851,11 @@
     "fixPreview": "Fix Preview",
     "gitDiff": "Git Diff",
     "gitSettings": "Git Settings",
+    "pullRequests": "Pull Requests",
     "taskPlanner": "Task Planner",
     "fileBrowser": "File Browser",
     "editor": "Editor",
     "markdown": "Markdown",
-    "settings": "Settings",
     "settingsWithSection": "Settings - {{section}}"
   },
   "welcome": {
@@ -895,9 +889,7 @@
     "aiAgent": "Session",
     "terminal": "Terminal",
     "git": "Git",
-    "settings": "Settings",
     "fileViewer": "File Viewer",
-    "projectContext": "Profile",
     "agents": "Agents",
     "skills": "Skills",
     "miniApps": "Mini App",
@@ -908,7 +900,9 @@
     "panelView": "Panel View"
   },
   "loading": {
-    "scenes": "Loading scene"
+    "app": "Starting BitFun...",
+    "scenes": "Loading scene",
+    "workspace": "Loading workspace..."
   },
   "welcomeScene": {
     "tabLabel": "Welcome",
@@ -1102,5 +1096,15 @@
     "message": "Choose what happens when you click the close button: quit exits the app completely, or minimize to tray keeps it running in the background.",
     "quit": "Quit",
     "minimizeToTray": "Minimize to Tray"
-  }
+  },
+  "reviewPlatform": {
+    "relativeTime": {
+      "minutesAgo": "{{count}}m ago",
+      "hoursAgo": "{{count}}h ago",
+      "daysAgo": "{{count}}d ago"
+    }
+  },
+  "collapse": "Collapse",
+  "expand": "Expand",
+  "retry": "Retry"
 }

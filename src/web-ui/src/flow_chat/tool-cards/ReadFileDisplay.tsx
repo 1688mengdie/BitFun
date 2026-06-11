@@ -12,6 +12,7 @@ import { hasAcpPermissionOptions } from './AcpPermissionActions.utils';
 import { CompactToolCard, CompactToolCardHeader } from './CompactToolCard';
 import { ToolCardHeaderActions } from './ToolCardHeaderActions';
 import { ToolCardStatusSlot } from './ToolCardStatusSlot';
+import { isSessionViewPreviewText } from '../utils/sessionViewPreview';
 
 export const ReadFileDisplay: React.FC<ToolCardProps> = React.memo(({
   toolItem,
@@ -93,6 +94,7 @@ export const ReadFileDisplay: React.FC<ToolCardProps> = React.memo(({
     
     const content = toolResult.result.content || toolResult.result;
     if (typeof content === 'string') {
+      if (isSessionViewPreviewText(content)) return null;
       const bytes = new TextEncoder().encode(content).length;
       if (bytes < 1024) return `${bytes}B`;
       if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
@@ -136,7 +138,7 @@ export const ReadFileDisplay: React.FC<ToolCardProps> = React.memo(({
     if (showConfirmationActions || status === 'pending_confirmation') {
       return (
         <>
-          {t('toolCards.readFile.permissionRequest', { defaultValue: 'Requesting read permission:' })} {permissionTargetPath}
+          {t('toolCards.readFile.permissionRequest')} {permissionTargetPath}
           {lineRange && <span className="read-file-meta"> {lineRange}</span>}
         </>
       );

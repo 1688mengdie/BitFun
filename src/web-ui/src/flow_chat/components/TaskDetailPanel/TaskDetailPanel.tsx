@@ -424,9 +424,7 @@ export const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({ data }) => {
     } catch (error) {
       const message = error instanceof Error
         ? error.message
-        : t('toolCards.taskDetailPanel.stopSubagentFailed', {
-          defaultValue: 'Failed to stop this subagent.',
-        });
+        : t('toolCards.taskDetailPanel.stopSubagentFailed');
       setStopError(message);
       log.error('Failed to stop subagent session', {
         subagentSessionId,
@@ -544,18 +542,11 @@ export const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({ data }) => {
             >
               <Square size={12} style={{ marginRight: 6 }} />
               {stoppingSubagent
-                ? t('toolCards.taskDetailPanel.stoppingSubagent', {
-                  defaultValue: 'Stopping subagent...',
-                })
-                : t('toolCards.taskDetailPanel.stopSubagent', {
-                  defaultValue: 'Stop subagent',
-                })}
+                ? t('toolCards.taskDetailPanel.stoppingSubagent')
+                : t('toolCards.taskDetailPanel.stopSubagent')}
             </Button>
             <span className="task-detail-panel__actions-hint">
-              {t('toolCards.taskDetailPanel.stopSubagentHint', {
-                defaultValue:
-                  'Cancels only this reviewer/subagent. The parent review can keep going and still produce a summary.',
-              })}
+              {t('toolCards.taskDetailPanel.stopSubagentHint')}
             </span>
           </div>
         )}
@@ -574,7 +565,6 @@ export const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({ data }) => {
                 parentTaskToolId={toolItem.id}
                 subagentSessionId={subagentSessionId}
                 items={visibleSubagentItems}
-                isRunning={isRunning}
                 sessionId={subagentSessionId}
                 compactText={false}
               />
@@ -586,9 +576,7 @@ export const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({ data }) => {
           <div className="task-detail-panel__loading task-detail-panel__loading--inline">
             <DotMatrixLoader size="small" />
             <span>
-              {t('toolCards.taskDetailPanel.loadingMore', {
-                defaultValue: 'Loading more output...',
-              })}
+              {t('toolCards.taskDetailPanel.loadingMore')}
             </span>
           </div>
         )}
@@ -599,9 +587,7 @@ export const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({ data }) => {
             <span>
               {isSnapshotHydrated
                 ? t('toolCards.taskDetailPanel.status.running')
-                : t('toolCards.taskDetailPanel.loading', {
-                  defaultValue: 'Loading task details...',
-                })}
+                : t('toolCards.taskDetailPanel.loading')}
             </span>
           </div>
         )}

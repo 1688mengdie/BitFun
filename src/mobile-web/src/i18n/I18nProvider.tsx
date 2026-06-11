@@ -1,6 +1,7 @@
 import React, { createContext, useCallback, useLayoutEffect, useMemo, useState } from 'react';
 import { DEFAULT_LANGUAGE, messages, type MobileLanguage } from './messages';
 import {
+  getMobileFallbackChain,
   getNextMobileLanguage,
   isMobileLanguage,
   resolveMobileLanguage,
@@ -15,6 +16,7 @@ interface I18nContextValue {
   setLanguage: (language: MobileLanguage) => void;
   toggleLanguage: () => void;
   t: (key: string, params?: TranslateParams) => string;
+  formatDate: (date: Date | number, options?: Intl.DateTimeFormatOptions) => string;
 }
 
 const STORAGE_KEY = 'bitfun-mobile-language';
@@ -42,8 +44,9 @@ function interpolate(template: string, params?: TranslateParams): string {
 }
 
 export function translate(language: MobileLanguage, key: string, params?: TranslateParams): string {
-  const template = getByPath(messages[language], key)
-    ?? getByPath(messages[DEFAULT_LANGUAGE], key)
+  const template = getMobileFallbackChain(language, true)
+    .map(locale => getByPath(messages[locale], key))
+    .find((value): value is string => value !== null)
     ?? key;
   return interpolate(template, params);
 }
@@ -95,6 +98,7 @@ export const I18nContext = createContext<I18nContextValue>({
   setLanguage: () => {},
   toggleLanguage: () => {},
   t: (key) => key,
+  formatDate: (date, options) => new Intl.DateTimeFormat(DEFAULT_LANGUAGE, options).format(date),
 });
 
 export const I18nProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -122,6 +126,7 @@ export const I18nProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setLanguage,
     toggleLanguage,
     t: (key, params) => translate(language, key, params),
+    formatDate: (date, options) => new Intl.DateTimeFormat(language, options).format(date),
   }), [language, setLanguage, toggleLanguage]);
 
   return (
