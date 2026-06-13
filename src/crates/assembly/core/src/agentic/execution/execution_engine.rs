@@ -6,7 +6,7 @@ use super::model_exchange_trace::{
     prepare_model_exchange_trace_for_workspace, ModelExchangeTraceOperation,
 };
 use super::round_executor::RoundExecutor;
-use super::types::{ExecutionContext, ExecutionResult, RoundContext};
+use super::types::{ExecutionContext, ExecutionResult, RoundContext, RoundResult};
 use crate::agentic::agents::{
     build_prompt_context_for_workspace, get_agent_registry, PrependedPromptReminders,
     PromptBuilder, PromptBuilderContext, RuntimeContextNeeds, ToolListingSections,
@@ -399,6 +399,26 @@ impl ExecutionEngine {
         }
 
         counts.values().all(|&count| count >= 2)
+    }
+
+    fn assistant_has_tool_calls(message: &Message) -> bool {
+        matches!(
+            &message.content,
+            MessageContent::Mixed { tool_calls, .. } if !tool_calls.is_empty()
+        )
+    }
+
+    fn has_tool_result_after_last_assistant(messages: &[Message]) -> bool {
+        let Some(last_assistant_index) = messages
+            .iter()
+            .rposition(|message| message.role == MessageRole::Assistant)
+        else {
+            return false;
+        };
+
+        messages[last_assistant_index + 1..]
+            .iter()
+            .any(|message| matches!(message.content, MessageContent::ToolResult { .. }))
     }
 
     /// Emergency truncation: drop oldest API rounds (assistant+tool pairs)
@@ -846,6 +866,67 @@ impl ExecutionEngine {
             .iter()
             .copied()
             .collect()
+    }
+
+    async fn run_finalize_round(
+        &self,
+        ai_client: Arc<crate::infrastructure::ai::AIClient>,
+        context: &ExecutionContext,
+        agent_type: String,
+        round_number: usize,
+        execution_context_vars: &HashMap<String, String>,
+        primary_supports_image_understanding: bool,
+        prepended_reminders: &[&str],
+        messages: &[Message],
+        reminder_text: &str,
+        context_window: usize,
+    ) -> BitFunResult<RoundResult> {
+        let mut final_ai_messages = Self::build_ai_messages_for_send(
+            messages,
+            &ai_client.config.format,
+            context
+                .workspace
+                .as_ref()
+                .map(|workspace| workspace.root_path()),
+            &context.dialog_turn_id,
+            primary_supports_image_understanding,
+            prepended_reminders,
+        )
+        .await?;
+        final_ai_messages.push(AIMessage::user(reminder_text.to_string()));
+
+        let round_context = RoundContext {
+            session_id: context.session_id.clone(),
+            subagent_parent_info: context.subagent_parent_info.clone(),
+            dialog_turn_id: context.dialog_turn_id.clone(),
+            turn_index: context.turn_index,
+            round_number,
+            workspace: context.workspace.clone(),
+            messages: messages.to_vec(),
+            available_tools: Vec::new(),
+            collapsed_tools: Vec::new(),
+            unlocked_collapsed_tools: Vec::new(),
+            model_name: ai_client.config.model.clone(),
+            agent_type,
+            context_vars: execution_context_vars.clone(),
+            delegation_policy: context.delegation_policy,
+            runtime_tool_restrictions: context.runtime_tool_restrictions.clone(),
+            steering_interrupt: None,
+            cancellation_token: CancellationToken::new(),
+            workspace_services: context.workspace_services.clone(),
+            recover_partial_on_cancel: context.recover_partial_on_cancel,
+        };
+
+        // Tools are disabled here (None) — model must respond in plain text.
+        self.round_executor
+            .execute_round(
+                ai_client,
+                round_context,
+                final_ai_messages,
+                None,
+                Some(context_window),
+            )
+            .await
     }
 
     async fn build_ai_messages_for_send(
