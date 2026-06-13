@@ -1,16 +1,24 @@
 // BitFun backend adapter for PPT Live.
 //
-// Primary path: the MiniApp agent bridge (`app.agent.*`). Each `ppt.generate`
-// call becomes one full host agent turn in a hidden session — the agent loads
-// the built-in `ppt-design` skill and can use any host tools (WebSearch,
-// WebFetch, Read, ...) for research.
-//
-// Fallback path: raw single-call LLM access (`app.ai.chat`) for hosts where
-// the agent bridge or the `agent` permission is unavailable. The fallback has
-// no tools or skills; prompts inline a condensed design ruleset instead.
+// The MiniApp agent bridge (`app.agent.*`) is the only generation path. The
+// planning turn loads BitFun's pinned built-in `ppt-design` skill, reads the
+// required references, and writes a durable generation contract. Serial render,
+// repair, audit, and edit turns reuse the deck session and project directory.
 
-const ACTIVE_RUNS = new Map();
 const EVENT_LISTENERS = new Set();
+export const PPT_DESIGN_SKILL_KEY = 'user::bitfun-system::ppt-design';
+export const PPT_DESIGN_REQUIRED_REFERENCES = [
+  'references/editable-pptx.md',
+  'references/slide-decks.md',
+  'references/content-guidelines.md',
+];
+
+const EDITABLE_PPTX_HARD_RULES = `
+- Text must never be a direct child of a DIV. Put all visible text in p, h1-h6, or li; span is inline-only inside those text elements.
+- Do not use CSS gradients. Use solid fills and discrete solid-color shapes.
+- Backgrounds, borders, and shadows belong on DIV shapes, never on p, h1-h6, li, span, em, or strong.
+- Do not use background-image on DIV. Use an img element for images. Inline span/em/strong must not carry margin, padding, background, border, or shadow.
+`;
 
 function emitEvent(event) {
   EVENT_LISTENERS.forEach((listener) => {
@@ -133,7 +141,7 @@ function buildStyleAppendix(input) {
   const font = style.fontFamily || 'sans';
   const densityRaw = style.density || 'standard';
   const density = densityRaw === 'loose' ? 'spacious' : densityRaw;
-  const colorMode = style.colorMode || 'light';
+  const colorMode = style.colorMode || style.theme || 'light';
   const stylePreset = style.stylePreset || '';
   const palette = style.palette;
 
@@ -186,19 +194,114 @@ function buildStyleAppendix(input) {
   return styleRules;
 }
 
+// Prefixed to any turn that re-runs after an interrupted attempt, so the model
+// treats the rerun as a continuation instead of a contradictory new task.
+const CONTINUE_AFTER_INTERRUPTION_PREFIX = `Your previous response in this session was interrupted before it finished. Continue the task now. If your deliverable is a project file, first inspect what you already wrote (Read it) and rewrite that file completely if it could be incomplete. If your deliverable is a final JSON message, re-emit the complete JSON from scratch — do not assume any part of the interrupted output was received.
+
+`;
+
+function buildCompletionRecoveryPrefix(recovery) {
+  const issues = Array.isArray(recovery?.issues) ? recovery.issues.map(String).filter(Boolean) : [];
+  const previousFailure = String(recovery?.previousFailure || '').trim();
+  return `AUTOMATIC COMPLETION CONTINUATION ${recovery?.attempt || 1}/${recovery?.maxAttempts || 1}.
+
+The host has verified that the "${recovery?.stage || 'current'}" stage is still incomplete after its normal retry budget. Continue the unfinished task in this user turn; do not restart completed work and do not merely explain what remains.
+- Inspect the durable project files first and reuse every valid artifact already present.
+- Perform the missing tool calls or rewrites now.
+- Do not claim completion until the required artifact exists and satisfies the host checks.
+${previousFailure ? `- Previous verified failure: ${previousFailure}\n` : ''}${
+  issues.length ? `- Host verification issues:\n  - ${issues.join('\n  - ')}\n` : ''
+}
+`;
+}
+
+function buildAuditVerificationFeedback(input) {
+  const issues = Array.isArray(input?.auditIssues)
+    ? input.auditIssues.map(String).filter(Boolean)
+    : [];
+  if (!issues.length) return '';
+  return `The host rejected the previous audit turn because the audit artifact was not complete:
+- ${issues.join('\n- ')}
+
+Resolve every issue above in this turn. In particular, use the Write tool to create or completely rewrite \`quality-report.json\`; do not answer "DECK AUDIT PASSED" unless that file has been successfully written and covers every slide id.
+
+`;
+}
+
+function schemaPaletteBlock(input) {
+  const palette = input?.style?.palette || {};
+  return JSON.stringify(palette, null, 2)
+    .split('\n')
+    .map((line) => `      ${line}`)
+    .join('\n');
+}
+
 function buildPlanPrompt(input) {
-  const body = `Plan a PPT Live deck. This is the PLANNING phase of a staged pipeline: research the topic, lock the narrative, and write a per-slide brief. Slide HTML is produced later by separate render runs that follow your plan exactly, so the plan must be complete and self-sufficient.
+  const stylePreset = input?.style?.stylePreset || '';
+  const colorMode = input?.style?.colorMode || input?.style?.theme || 'light';
+  const presetReference = stylePreset
+    ? `references/style-presets/${stylePreset}.md`
+    : '';
+  const complianceRepair = Array.isArray(input?.complianceIssues) && input.complianceIssues.length
+    ? `The host rejected the previous plan because required Skill evidence was missing. Complete these exact missing actions before accepting or rewriting project.json:\n- ${input.complianceIssues.join('\n- ')}\n\n`
+    : '';
+  const body = `Plan a PPT Live deck. This is the PLANNING phase of a staged pipeline running in a dedicated deck project directory: the workspace root of this session is the deck's \`{{ppt_project_dir}}\`. Research the topic, lock the narrative, design the visual system, write a per-slide brief, and SAVE the complete plan to \`project.json\` at the workspace root. Later turns run in THIS SAME session, but must be able to recover from context compression using the self-contained generation contract in that file.
 
-1. Call \`Skill('ppt-design')\` — the BitFun built-in PPT design skill — and follow its narrative, density, and design-system rules when planning. Never substitute any other presentation or PPT skill.
-2. Use any BitFun tools you need (WebFetch, WebSearch, Read, etc.) when the user's prompt requires external facts. All research happens NOW; render runs are forbidden from re-researching.
-3. Finish with **only** one strict JSON object — no Markdown fences, no commentary, no tool calls in the final message.
-4. Do NOT generate any slide HTML in this phase.
+1. Call \`Skill('${PPT_DESIGN_SKILL_KEY}')\`. This exact stable key is mandatory. Check the tool result reports \`skill_key="${PPT_DESIGN_SKILL_KEY}"\`; if it does not, stop with an error. Never invoke or substitute a different PPT/presentation skill.
+2. From the skill directory returned by Skill, \`Read\` all mandatory references: \`${PPT_DESIGN_REQUIRED_REFERENCES.join('`, `')}\`.
+${presetReference ? `3. \`Read\` the selected style preset \`${presetReference}\` and apply its visual rules when planning.` : '3. No named style preset was supplied; derive one coherent visual system from the user intent and skill.'}
+4. If the deck is data-heavy, analytical, explanatory, or structurally complex, \`Read\` \`references/data-information-visualization.md\` before drafting slide plans.
+5. Use any BitFun research tools needed by the user's prompt. All external research happens NOW; render runs must not re-research.
+6. When the plan is final, \`Write\` it to \`project.json\` as one strict JSON object matching the schema below. Do not generate slide HTML in this phase.
+7. For a deck with at least 5 pages, choose two visually different \`showcaseSlideNumbers\` that later render first and establish the grammar for the remaining pages.
+8. End with one short status line such as "PLAN READY: N slides". Do not paste the JSON into the reply.
 
-Return JSON matching this shape:
+\`project.json\` schema:
 {
   "title": "deck title",
   "language": "zh-CN or en-US",
-  "outline": ["slide title"],
+  "outline": [
+    { "id": "slide-01", "title": "slide title", "bullets": [], "slide_id": "slide-01" }
+  ],
+  "slide_order": ["slide-01"],
+  "style": {
+    "stylePreset": "${stylePreset}",
+    "fontFamily": "exact input value",
+    "density": "exact input value",
+    "colorMode": "exact input value",
+    "palette": {}
+  },
+  "assumptions": ["one-shot assumptions"],
+  "generationContract": {
+    "version": 1,
+    "skillKey": "${PPT_DESIGN_SKILL_KEY}",
+    "skillName": "ppt-design",
+    "requiredReferences": [
+      ${PPT_DESIGN_REQUIRED_REFERENCES.map((ref) => `"${ref}"`).join(',\n      ')}${presetReference ? `,\n      "${presetReference}"` : ''}
+    ],
+    "deliveryTarget": "editable-pptx",
+    "userPrompt": "copy input.instruction exactly",
+    "userBrief": {},
+    "userStyle": {},
+    "hardRules": ["compact exact rules distilled from editable-pptx.md"],
+    "visualGrammar": {
+      "designRead": "one-line audience, task, visual language, structural grammar",
+      "visualThesis": "why this brief should look this way; not generic adjectives",
+      "signatureMove": "one theme-specific device used sparingly across the deck",
+      "typography": "hierarchy via weight, size, spacing — not decoration",
+      "paletteRoles": "semantic role of every supplied color",
+      "composition": "grid, margins, edge discipline, and dominant visual masses",
+      "layoutFamilies": ["deck-specific families with different silhouettes"],
+      "objectStyles": "tables, charts, diagrams, images, quotes, annotations, and sources",
+      "surfaces": "lines and whitespace first; cards and shadow only when hierarchy requires",
+      "dataAndDiagrams": "semantics over template shapes",
+      "densityCurve": "where the deck opens, builds, peaks, releases, and closes",
+      "copyRegister": "language tone, sentence style, label discipline, and evidence standard",
+      "antiDefaults": ["brief-specific defaults that would make this deck generic"],
+      "pageRhythm": "showcase grammar, adjacent-page contrast, and accent discipline"
+    }
+  },
+  "showcaseSlideNumbers": [1, 3],
   "researchReport": {
     "summary": "short internal summary safe to show as a product status detail",
     "verifiedFacts": ["fact with source note when available"],
@@ -207,14 +310,9 @@ Return JSON matching this shape:
   },
   "design": {
     "stylePhilosophy": "pentagram|muller-brockmann|build|kenya-hara|takram",
-    "theme": "light|dark",
+    "theme": "${colorMode === 'dark' ? 'dark' : 'light'}",
     "palette": {
-      "background": "#FAFAF7",
-      "ink": "#1A1A1A",
-      "muted": "#666666",
-      "primary": "#111111",
-      "accent": "#C84B31",
-      "panel": "#FFFFFF"
+${schemaPaletteBlock(input)}
     },
     "layoutPrinciples": ["specific visual rules every slide of this deck must share"]
   },
@@ -243,65 +341,207 @@ Return JSON matching this shape:
 
 Plan rules:
 - \`slidePlans\` must cover the full deck in final order; \`slideNumber\` is one-based and contiguous.
+- \`outline[].slide_id\`, \`slide_order[]\`, and \`slides/slide-XX.html\` numbering must agree.
+- Copy the user's original instruction, brief, and all style settings into \`generationContract\`; do not paraphrase away explicit requirements.
 - Every \`contentBrief\` must be concrete enough that a render run with no research access can produce an audience-ready slide from it. Put real numbers, names, and source notes into the briefs, not vague directions.
-- \`design.layoutPrinciples\` and \`design.palette\` are the consistency contract across parallel render runs — make them specific.
+- \`design.layoutPrinciples\` and \`design.palette\` are the consistency contract across render runs — make them specific.
+- Distill the skill, mandatory references, selected preset, and user style into \`generationContract.hardRules\` and \`generationContract.visualGrammar\` so later turns can recover after context compression.
+- The editable PPTX rules below are non-negotiable and must appear compactly in \`generationContract.hardRules\`:
+${EDITABLE_PPTX_HARD_RULES}
 
-Output budget (hard limits — the plan JSON is streamed over a connection that gets cut after several minutes, so an oversized plan ALWAYS fails and wastes the entire run):
+Plan density (quality bar, not a protocol limit):
 - Write dense, telegraphic notes, never prose paragraphs. Pack facts, numbers, and names; drop filler words.
 - \`contentBrief\`: at most ~400 characters per slide.
 - \`facts\`: at most 4 items; \`bullets\`: at most 4 items; each item one short line.
 - \`proofObject\`, \`supportNote\`, \`sourceNote\`, \`notes\`: one short sentence each.
 - \`researchReport.summary\`: at most ~600 characters; \`verifiedFacts\`/\`assumptions\`/\`warnings\`: at most 12 short items combined.
-- Total plan JSON must stay under ~25,000 characters even for large decks. If the deck is big, make each brief tighter instead of dropping slides.
 
 Input JSON:
 \`\`\`json
 ${serializeInput(input)}
 \`\`\``;
-  return body + buildStyleAppendix(input);
+  return complianceRepair + body + buildStyleAppendix(input);
 }
 
+/** Two-digit slide file name per the ppt-design skill convention. */
+function slideFileName(slideNumber) {
+  return `slides/slide-${String(slideNumber).padStart(2, '0')}.html`;
+}
+
+/**
+ * Render prompt for a turn that runs INSIDE the planning session. The turn
+ * receives a compact self-contained contract even though it reuses
+ * the planning session. This keeps page quality stable after compression.
+ */
+function buildSessionSlidePrompt(input) {
+  const slidePlan = (input?.assignedSlides || [])[0] || {};
+  const assigned = slidePlan?.slideNumber ?? '?';
+  const file = slideFileName(slidePlan?.slideNumber || 0);
+  return `Render PPT Live slide ${assigned}. This turn runs in the SAME deck Agent Session as planning, but you must rely on the durable project contract rather than assuming old context is still present.
+
+1. \`Read\` \`project.json\` on every page turn. Verify \`generationContract.skillKey\` is exactly \`${PPT_DESIGN_SKILL_KEY}\`, then follow its userPrompt, userBrief, userStyle, hardRules, visualGrammar, design system, and assigned slide plan together.
+2. If \`showcaseSlideNumbers\` contains already-rendered pages, \`Read\` those slide files before rendering a non-showcase page and reuse their visual grammar without copying their layout mechanically.
+3. Do not re-run research or change the planned title, claim, layout, or narrative role. Apply \`plan.design\` and the assigned slide plan together.
+4. \`Write\` exactly one complete document to \`${file}\`. Do not modify any other slide.
+5. End with "SLIDE ${assigned} READY"; do not paste HTML into the reply.
+
+Hard HTML/PPTX constraints:
+- The file must be a complete self-contained 960pt × 540pt document with inline CSS only and no remote assets.
+- \`body { overflow: hidden; }\`, flex-column root with \`height: 540pt\`, stretchable areas \`flex:1; min-height:0; overflow:hidden;\`.
+- Budget the vertical space before writing; body text >= 10px; keep a >=36pt bottom safety margin; never overflow the canvas.
+${EDITABLE_PPTX_HARD_RULES}
+- Slide copy must be audience-ready, never placeholder instructions.
+${buildStyleAppendix(input)}
+
+Current page contract:
+\`\`\`json
+${serializeInput({
+    generationContract: input?.generationContract || {},
+    design: input?.design || {},
+    style: input?.style || {},
+    showcaseSlideNumbers: input?.showcaseSlideNumbers || [],
+    assignedSlide: slidePlan,
+  })}
+\`\`\``;
+}
+
+/**
+ * Self-contained render prompt for a turn WITHOUT the planning session (the
+ * session was lost, e.g. after a webview reload or backend restart). The turn
+ * reloads the skill itself and receives the full plan in the input JSON, then
+ * writes the slide file exactly like the in-session variant.
+ */
 function buildSlidesPrompt(input) {
-  const assigned = (input?.assignedSlides || [])
-    .map((slide) => slide?.slideNumber)
-    .filter((number) => number != null)
-    .join(', ');
-  const body = `Render PPT Live slides. This is the RENDER phase of a staged pipeline. The plan (research, outline, design system, per-slide briefs) is already final and is provided in the input JSON as \`plan\`. Your batch must render ONLY the slides listed in \`assignedSlides\` (slide numbers: ${assigned}).
+  const slidePlan = (input?.assignedSlides || [])[0] || {};
+  const assigned = slidePlan?.slideNumber ?? '?';
+  const file = slideFileName(slidePlan?.slideNumber || 0);
+  const body = `Render one PPT Live slide. This is the RENDER phase of a staged pipeline running in a dedicated deck project directory: the workspace root of this session is the deck's \`{{ppt_project_dir}}\`. The plan (research, outline, design system, render guide, and per-slide briefs) is already final and is provided in the input JSON as \`plan\`. This turn must render ONLY slide ${assigned}.
 
-1. Call \`Skill('ppt-design')\` — the BitFun built-in PPT design skill — and follow it end-to-end for slide HTML quality. Never substitute any other presentation or PPT skill.
-2. Do NOT re-research. Do not call WebSearch or WebFetch. Trust \`plan.researchReport\` and each slide's \`contentBrief\` completely; they contain all verified facts.
-3. Do NOT change the plan: keep each assigned slide's \`slideNumber\`, title, claim, layout, and narrative role as planned. Apply \`plan.design\` (philosophy, theme, palette, layoutPrinciples) to every slide so parallel batches stay visually identical.
-4. Finish with **only** one strict JSON object — no Markdown fences, no commentary, no tool calls in the final message.
-
-Every slide must include complete \`html\`: self-contained 960pt × 540pt HTML with inline CSS (ppt-design editable PPTX rules). Slide copy must be audience-ready, never placeholder instructions.
-
-Return JSON matching this shape:
-{
-  "slides": [
-    ${SLIDE_SHAPE_JSON}
-  ]
-}
+1. Call \`Skill('${PPT_DESIGN_SKILL_KEY}')\`; verify the result reports the exact stable key. Never substitute another skill.
+2. \`Read\` every path in \`plan.generationContract.requiredReferences\`, including mandatory references \`${PPT_DESIGN_REQUIRED_REFERENCES.join('`, `')}\`, plus the selected style preset when listed.
+3. \`Read\` \`project.json\`, then follow \`generationContract\`, \`plan.design\`, and the assigned slide together. Do not re-research or change the planned title, claim, layout, or narrative role.
+4. \`Write\` exactly one complete document to \`${file}\`: self-contained 960pt × 540pt HTML with inline CSS and audience-ready copy.
+5. End with "SLIDE ${assigned} READY"; do not paste HTML into the reply.
 
 Render rules:
-- Return exactly the slides listed in \`assignedSlides\`, in ascending \`slideNumber\` order, and no others. If \`completedSlides\` is present in the input, those slides are already done — never regenerate them.
-- Emit each slide's JSON object completely before starting the next one, so partial output remains recoverable.
-- Keep the HTML compact: no HTML comments, no unused CSS rules, minimal whitespace and indentation. The response is streamed over a connection that gets cut after several minutes, so wasted characters risk failing the whole batch. Density of CONTENT is good; padding of MARKUP is not.
+- Apply every explicit user style setting from \`generationContract.userStyle\`.
+- Keep the HTML compact: no HTML comments, no unused CSS rules, minimal whitespace and indentation. Density of CONTENT is good; padding of MARKUP is not.
+${EDITABLE_PPTX_HARD_RULES}
 
 Input JSON:
 \`\`\`json
 ${serializeInput(input)}
 \`\`\``;
   return body + buildStyleAppendix(input);
+}
+
+function buildRepairPrompt(input) {
+  const slidePlan = input?.assignedSlide || (input?.assignedSlides || [])[0] || {};
+  const assigned = slidePlan?.slideNumber ?? '?';
+  const file = slideFileName(slidePlan?.slideNumber || 0);
+  return `Repair PPT Live slide ${assigned} in the existing deck Agent Session.
+
+The host validated \`${file}\` and rejected it for editable-PPTX export. Fix the slide on disk. Do not regenerate the deck, re-research, or replace the page with a generic template.
+
+You choose how to repair:
+1. \`Read\` \`project.json\` and \`${file}\` first.
+2. Treat the validator findings below as the acceptance checklist. Keep the planned content, claim, evidence, visual identity, and layout unless a finding requires a structural change.
+3. Make the smallest change that clears every finding. Prefer targeted \`Edit\` on \`${file}\` when a finding points at a specific element or block (for example move background/border/shadow from a text tag onto an enclosing DIV, fix one rule, adjust one section). Use \`Write\` for the whole file only when localized edits are impractical or would leave the file inconsistent.
+4. Do not call Skill again, do not re-read reference markdown, and do not modify other slides.
+5. When \`${file}\` satisfies every finding, end with "SLIDE ${assigned} REPAIRED".
+
+Editable-PPTX rules the validator enforces:
+${EDITABLE_PPTX_HARD_RULES}
+${buildStyleAppendix(input)}
+
+Validator findings:
+\`\`\`json
+${serializeInput(input?.validationIssues || [])}
+\`\`\`
+
+Assigned slide and contract:
+\`\`\`json
+${serializeInput({
+    generationContract: input?.generationContract || {},
+    design: input?.design || {},
+    style: input?.style || {},
+    assignedSlide: slidePlan,
+  })}
+\`\`\``;
+}
+
+/**
+ * In-session audit: skill, references, and generationContract were loaded during
+ * planning. Re-read only project artifacts; avoid redundant Skill/reference turns.
+ */
+function buildSessionAuditPrompt(input) {
+  return `Perform the FINAL whole-deck audit for this PPT Live project in the SAME deck Agent Session where planning and rendering already loaded Skill('${PPT_DESIGN_SKILL_KEY}') and distilled rules into \`project.json\`.
+
+Do NOT call Skill again and do NOT re-read reference markdown unless you must verify one specific rule. Treat \`generationContract.hardRules\`, \`visualGrammar\`, and \`design.renderGuide\` as authoritative.
+
+${buildAuditVerificationFeedback(input)}
+1. \`Read\` \`project.json\` and every \`slides/slide-XX.html\` listed in \`slide_order\`.
+2. Check every page against the generation contract, user prompt/style, narrative role, evidence, editable PPTX constraints, and taste guardrails already captured in the contract.
+3. Check deck-level quality using a thumbnail/contact-sheet pass: visual thesis, signature move discipline, distinct adjacent silhouettes, deliberate density curve, one dominant element per page, no SaaS card-template repetition, no filler labels or fake UI, no missed high-value visual explanation, accurate sources, readable density, and consistent typography/palette/object styles.
+4. Rewrite only slide files that need improvement. Preserve correct content and never invent facts.
+5. Write \`quality-report.json\` containing \`{"status":"passed","checkedSlides":["every slide_id from slide_order"],"fixedSlides":["only slide_ids you rewrote"],"notes":["specific deck-level findings and fixes, or a concise reason no fixes were needed"]}\`. \`checkedSlides\` must cover every slide id; \`fixedSlides\` must list only pages you changed.
+6. End with "DECK AUDIT PASSED".
+
+Editable PPTX rules:
+${EDITABLE_PPTX_HARD_RULES}
+${buildStyleAppendix(input)}
+
+Deck audit contract:
+\`\`\`json
+${serializeInput({
+    generationContract: input?.generationContract || {},
+    design: input?.design || {},
+    style: input?.style || {},
+    slideOrder: input?.slideOrder || [],
+    slidePlans: input?.slidePlans || [],
+  })}
+\`\`\``;
+}
+
+function buildAuditPrompt(input) {
+  return `Perform the FINAL whole-deck audit for this PPT Live project in the SAME Agent Session.
+
+${buildAuditVerificationFeedback(input)}
+1. Call \`Skill('${PPT_DESIGN_SKILL_KEY}')\` and verify the returned stable key is exact.
+2. \`Read\` mandatory references \`${PPT_DESIGN_REQUIRED_REFERENCES.join('`, `')}\`, then \`Read\` every additional style reference listed in \`generationContract.requiredReferences\`.
+3. \`Read\` \`project.json\` and every file named by \`slide_order\`.
+4. Check every page against \`generationContract\`, the pinned ppt-design skill, the selected style preset, user Prompt, user style/layout settings, narrative role, evidence, and editable PPTX constraints.
+5. Check deck-level quality using a thumbnail/contact-sheet pass: visual thesis, signature move discipline, distinct adjacent silhouettes, deliberate density curve, one dominant element per page, no SaaS card-template repetition, no filler labels or fake UI, no missed high-value visual explanation, accurate sources, readable density, and consistent typography/palette/object styles.
+6. Rewrite only slide files that need improvement. Preserve correct content and never invent facts.
+7. Write \`quality-report.json\` containing \`{"status":"passed","checkedSlides":["every slide_id from slide_order"],"fixedSlides":["only slide_ids you rewrote"],"notes":["specific deck-level findings and fixes, or a concise reason no fixes were needed"]}\`. The report is required and \`checkedSlides\` must cover every slide id.
+8. End with "DECK AUDIT PASSED".
+
+Editable PPTX rules:
+${EDITABLE_PPTX_HARD_RULES}
+${buildStyleAppendix(input)}
+
+Deck audit contract:
+\`\`\`json
+${serializeInput({
+    generationContract: input?.generationContract || {},
+    design: input?.design || {},
+    style: input?.style || {},
+    slideOrder: input?.slideOrder || [],
+    slidePlans: input?.slidePlans || [],
+  })}
+\`\`\``;
 }
 
 function buildLegacyPrompt(input) {
   const body = `Generate or revise a PPT Live deck. The user only sees the PPT Live app UI.
 
-1. Call \`Skill('ppt-design')\` — the BitFun built-in PPT design skill — and follow it end-to-end. Never substitute any other presentation or PPT skill, even if one appears in the available skills list; ignore user-installed PPT design skills entirely for this run.
-2. Use any BitFun tools you need (WebFetch, WebSearch, etc.) when the user's prompt requires external facts.
-3. Finish with **only** one strict JSON object — no Markdown fences, no commentary, no tool calls in the final message.
+1. Call \`Skill('${PPT_DESIGN_SKILL_KEY}')\` and verify the returned stable key. Never substitute a user or project skill.
+2. \`Read\` every mandatory reference \`${PPT_DESIGN_REQUIRED_REFERENCES.join('`, `')}\` and the selected style preset reference. If this deck has a project file, \`Read\` \`project.json\` and preserve its generationContract.
+3. Use research tools only when the edit introduces factual claims not already grounded by the deck.
+4. Finish with only one strict JSON object.
 
 Every slide must include complete \`slides[].html\`: self-contained 960pt × 540pt HTML with inline CSS (ppt-design editable PPTX rules). Slide copy must be audience-ready, never placeholder instructions.
+${EDITABLE_PPTX_HARD_RULES}
 
 Return JSON matching this shape:
 {
@@ -343,13 +583,32 @@ ${serializeInput(input)}
  * Build the full agent user prompt for a `ppt.generate` run.
  * `input.phase` selects the staged-pipeline protocol:
  * - "plan": research + outline + design system + per-slide briefs, no HTML.
- * - "slides": render the assigned slides from a finished plan, no research.
+ * - "slides": render the assigned slide. With `input.inSession` the turn runs
+ *   inside the planning session and relies on its context; otherwise it gets a
+ *   self-contained prompt that reloads the skill and reads the plan JSON.
+ * - "repair": rewrite one validator-failing slide in the deck session.
+ * - "audit": inspect and improve the completed deck before acceptance.
  * - absent: legacy single-shot protocol (full deck or incremental patch).
+ * `input.continueAfterInterruption` marks reruns of an interrupted turn.
+ * `input.completionRecovery` is a stronger host-verified continuation after
+ * the normal stage retry budget has been exhausted.
  */
 function buildAgentPrompt(input) {
-  if (input?.phase === 'plan') return buildPlanPrompt(input);
-  if (input?.phase === 'slides') return buildSlidesPrompt(input);
-  return buildLegacyPrompt(input);
+  let prompt;
+  if (input?.phase === 'plan') prompt = buildPlanPrompt(input);
+  else if (input?.phase === 'slides') {
+    prompt = input?.inSession ? buildSessionSlidePrompt(input) : buildSlidesPrompt(input);
+  }   else if (input?.phase === 'repair') prompt = buildRepairPrompt(input);
+  else if (input?.phase === 'audit') {
+    prompt = input?.inSession ? buildSessionAuditPrompt(input) : buildAuditPrompt(input);
+  }
+  else prompt = buildLegacyPrompt(input);
+  if (input?.completionRecovery) {
+    prompt = buildCompletionRecoveryPrefix(input.completionRecovery) + prompt;
+  } else if (input?.continueAfterInterruption) {
+    prompt = CONTINUE_AFTER_INTERRUPTION_PREFIX + prompt;
+  }
+  return prompt;
 }
 
 // ─── Agent-backed backend (primary path) ─────────────────────────────────────
@@ -368,6 +627,9 @@ function installAgentBackend(app) {
   };
 
   app.backend = {
+    // Staged generation delivers through project files written by the agent
+    // (ppt-design's native workflow); 'files' tells ui.js to read them back.
+    protocol: 'files',
     async call(action, input, options = {}) {
       if (action !== 'ppt.generate') {
         throw new Error(`Unsupported PPT Live action: ${action}`);
@@ -377,6 +639,12 @@ function installAgentBackend(app) {
       const result = await app.agent.run(prompt, {
         runId: options.idempotencyKey,
         sessionName: 'PPT Live',
+        // Reuse the planning session when the caller carries one, so render
+        // and continue turns see the loaded skill/preset/research context.
+        sessionId: options.sessionId,
+        // Staged turns work inside a dedicated deck project directory under
+        // the app's own appdata storage (never the user's workspace).
+        appDataWorkspace: options.appDataWorkspace,
       });
       if (!result?.sessionId || !result?.turnId) {
         throw new Error('PPT Live agent backend did not return sessionId/turnId');
@@ -406,226 +674,11 @@ function installAgentBackend(app) {
   };
 }
 
-// ─── Raw-LLM fallback backend (no tools, no skills) ──────────────────────────
-
-const COMMON_SYSTEM_PROMPT = `You are PPT Live, a presentation design engine embedded in BitFun.
-Return strict JSON only, without markdown fences or commentary.
-Use only the user brief, supplied source material, and clearly marked assumptions.
-Every rendered slide must be a self-contained HTML document sized for a 960pt by 540pt canvas.
-Do not use remote scripts, stylesheets, fonts, images, or other network assets in slide HTML.
-Prefer concise assertion-led copy, strong hierarchy, generous whitespace, and content-aware layouts.
-Avoid purple gradients, decorative emoji, generic illustration filler, fake citations, and text-heavy pages.
-Keep body text at least 10px and reserve a 36pt bottom safety margin.`;
-
-function emitRunEvent(run, sourceEvent, fields = {}) {
-  emitEvent({
-    sessionId: run.sessionId,
-    turnId: run.turnId,
-    sourceEvent,
-    ...fields,
-  });
-}
-
-function styleRules(input) {
-  const style = input?.style || {};
-  return [
-    `Color mode: ${style.colorMode || 'light'}.`,
-    `Font family: ${style.fontFamily || 'sans'}.`,
-    `Density: ${style.density || 'standard'}.`,
-    `Style preset: ${style.stylePreset || 'editorial'}.`,
-    `Palette: ${JSON.stringify(style.palette || {})}.`,
-    'Use flex or grid with min-height:0 and overflow:hidden.',
-    'Choose structure from the content: comparison, data, process, timeline, KPI, quote, or structured text.',
-    'Label quantitative visuals with values.',
-  ].join('\n');
-}
-
-function buildFallbackPrompt(input) {
-  const serializedInput = JSON.stringify(input);
-  if (input?.phase === 'plan') {
-    return {
-      systemPrompt: `${COMMON_SYSTEM_PROMPT}
-This is the planning phase. Do not generate slide HTML.
-Return:
-{"title":"","language":"zh-CN|en-US","outline":[],"researchReport":{"summary":"","verifiedFacts":[],"assumptions":[],"warnings":[]},"design":{"stylePhilosophy":"pentagram|muller-brockmann|build|kenya-hara|takram","theme":"light|dark","palette":{},"layoutPrinciples":[]},"slidePlans":[{"slideNumber":1,"role":"cover|content|data|transition|closing","narrativeStage":"hook|progression|climax|landing","title":"","kicker":"","claim":"","proofObject":"","supportNote":"","sourceNote":"","facts":[],"bullets":[],"metric":{"value":"","label":""},"chartData":[],"notes":"","layout":"cover|brief|evidence|process|comparison|quote|data|closing","visualTreatment":"typographic|grid|editorial|white-space|soft-tech|data|process|comparison","contentBrief":""}]}.
-slidePlans must be one-based, contiguous, complete, and in final order. Each contentBrief must contain exact copy direction, facts, visual form, and layout intent. Keep the JSON compact.`,
-      prompt: `Plan this deck from the supplied brief and source material.
-${styleRules(input)}
-Input JSON:
-${serializedInput}`,
-    };
-  }
-
-  if (input?.phase === 'slides') {
-    const assigned = (input.assignedSlides || [])
-      .map((slide) => slide.slideNumber)
-      .join(', ');
-    return {
-      systemPrompt: `${COMMON_SYSTEM_PROMPT}
-This is the render phase. Render only assigned slide numbers ${assigned}; do not research or change the plan.
-Return:
-{"slides":[{"slideNumber":1,"role":"cover|content|data|transition|closing","narrativeStage":"hook|progression|climax|landing","title":"","kicker":"","claim":"","proofObject":"","supportNote":"","sourceNote":"","facts":[],"bullets":[],"metric":{"value":"","label":""},"chartData":[],"notes":"","layout":"cover|brief|evidence|process|comparison|quote|data|closing","visualTreatment":"typographic|grid|editorial|white-space|soft-tech|data|process|comparison","html":"<!DOCTYPE html>..."}]}.
-Return exactly the assigned slides in ascending order. Preserve each planned title, claim, role, and slideNumber. Apply plan.design consistently and complete each slide object before starting the next.`,
-      prompt: `Render the assigned slides.
-${styleRules(input)}
-Input JSON:
-${serializedInput}`,
-    };
-  }
-
-  const editRules = hasCurrentDeck(input)
-    ? `The current deck is supplied. Prefer a minimal deckPatch:
-{"title":"","language":"zh-CN|en-US","outline":[],"researchReport":{"summary":"","verifiedFacts":[],"assumptions":[],"warnings":[]},"design":{"stylePhilosophy":"","theme":"light|dark","palette":{},"layoutPrinciples":[]},"deckPatch":{"rationale":"","changedSlideIndexes":[0],"changes":[{"op":"replace_slide|insert_slide|delete_slide","slideId":"","slideIndex":0,"slideNumber":1,"afterSlideId":"","slide":{"id":"","title":"","claim":"","notes":"","html":"<!DOCTYPE html>..."}}]}}.
-For replace_slide, reuse the existing id and return a complete replacement slide. For delete_slide, omit slide. Return a full slides array only for whole-deck rewrites.`
-    : 'This is a first-pass generation. Return a complete slides array using the render-phase slide shape.';
-
-  return {
-    systemPrompt: `${COMMON_SYSTEM_PROMPT}
-${editRules}`,
-    prompt: `Generate or revise the deck.
-${styleRules(input)}
-Input JSON:
-${serializedInput}`,
-  };
-}
-
-function createFallbackRun() {
-  const id = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-  const run = {
-    sessionId: `bitfun-ppt-${id}`,
-    turnId: `bitfun-turn-${id}`,
-    text: '',
-    thinking: '',
-    handle: null,
-    cancelled: false,
-    settled: false,
-  };
-  ACTIVE_RUNS.set(run.turnId, run);
-  return run;
-}
-
-function startFallbackRun(app, run, input) {
-  if (run.cancelled) return;
-  const aiPrompt = buildFallbackPrompt(input);
-  emitRunEvent(run, 'bitfun:model-round-started');
-  app.ai
-    .chat([{ role: 'user', content: aiPrompt.prompt }], {
-      systemPrompt: aiPrompt.systemPrompt,
-      model: 'primary',
-      maxTokens: 16000,
-      temperature: 0.35,
-      onChunk: (chunk = {}) => {
-        if (run.cancelled || run.settled) return;
-        const text = typeof chunk === 'string' ? chunk : chunk.text;
-        const reasoning = typeof chunk === 'object' ? chunk.reasoningContent : '';
-        if (text) {
-          run.text += String(text);
-          emitRunEvent(run, 'bitfun:text-chunk', {
-            text: String(text),
-            contentType: 'answer',
-          });
-        }
-        if (reasoning) {
-          run.thinking += String(reasoning);
-          emitRunEvent(run, 'bitfun:text-chunk', {
-            text: String(reasoning),
-            contentType: 'thinking',
-          });
-        }
-      },
-      onDone: (result = {}) => {
-        if (run.cancelled || run.settled) return;
-        const fullText = String(result.fullText || '').trim();
-        if (fullText) run.text = fullText;
-        run.settled = true;
-        emitRunEvent(run, 'bitfun:model-round-completed');
-        emitRunEvent(run, 'bitfun:dialog-turn-completed');
-      },
-      onError: (error = {}) => {
-        if (run.cancelled || run.settled) return;
-        run.settled = true;
-        emitRunEvent(run, 'bitfun:dialog-turn-failed', {
-          error: String(error.message || error || 'PPT Live AI request failed'),
-        });
-      },
-    })
-    .then((handle) => {
-      run.handle = handle;
-      if (run.cancelled) return handle?.cancel?.();
-      return undefined;
-    })
-    .catch((error) => {
-      if (run.cancelled || run.settled) return;
-      run.settled = true;
-      emitRunEvent(run, 'bitfun:dialog-turn-failed', {
-        error: String(error?.message || error || 'PPT Live AI request failed'),
-      });
-    });
-}
-
-async function cancelFallbackRun(app, run) {
-  if (!run || run.cancelled || run.settled) return;
-  run.cancelled = true;
-  try {
-    if (run.handle?.cancel) {
-      await run.handle.cancel();
-    } else if (run.handle?.streamId && app.ai?.cancel) {
-      await app.ai.cancel(run.handle.streamId);
-    }
-  } finally {
-    run.settled = true;
-    emitRunEvent(run, 'bitfun:dialog-turn-cancelled');
-  }
-}
-
-function installFallbackBackend(app) {
-  app.backend = {
-    call(action, input) {
-      if (action !== 'ppt.generate') {
-        return Promise.reject(new Error(`Unsupported PPT Live action: ${action}`));
-      }
-      const run = createFallbackRun();
-      setTimeout(() => startFallbackRun(app, run, input), 0);
-      return Promise.resolve({
-        sessionId: run.sessionId,
-        turnId: run.turnId,
-        actionRunId: run.turnId,
-      });
-    },
-    onEvent(listener) {
-      EVENT_LISTENERS.add(listener);
-    },
-    offEvent(listener) {
-      EVENT_LISTENERS.delete(listener);
-    },
-    async cancel(sessionId, turnId) {
-      const run = ACTIVE_RUNS.get(turnId);
-      if (run?.sessionId === sessionId) await cancelFallbackRun(app, run);
-    },
-    async turnText(sessionId, turnId) {
-      const run = ACTIVE_RUNS.get(turnId);
-      if (!run || run.sessionId !== sessionId) return { text: '' };
-      return { text: run.text || run.thinking || '' };
-    },
-    async cancelStaleRuns() {
-      await Promise.all(
-        [...ACTIVE_RUNS.values()]
-          .filter((run) => !run.settled)
-          .map((run) => cancelFallbackRun(app, run)),
-      );
-    },
-  };
-}
-
 // ─── Install ─────────────────────────────────────────────────────────────────
 
 export function installBitFunBackendAdapter(app = window.app) {
   if (!app || app.backend?.call) return;
   if (app.agent?.run) {
     installAgentBackend(app);
-    return;
-  }
-  if (app.ai?.chat) {
-    installFallbackBackend(app);
   }
 }

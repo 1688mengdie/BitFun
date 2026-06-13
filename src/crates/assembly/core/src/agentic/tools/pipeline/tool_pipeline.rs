@@ -24,9 +24,9 @@ use bitfun_agent_tools::{
     build_invalid_tool_call_error_message, build_tool_call_truncation_recovery_notice,
     build_tool_execution_error_presentation, build_user_steering_interrupted_presentation,
     render_tool_result_for_assistant, truncate_raw_tool_arguments_preview,
-    truncate_tool_arguments_preview, validate_tool_execution_admission, ToolCallLoopDecision,
-    ToolCallLoopHistory, ToolExecutionAdmissionRejection, ToolExecutionAdmissionRequest,
-    GET_TOOL_SPEC_TOOL_NAME, USER_STEERING_INTERRUPTED_MESSAGE,
+    truncate_tool_arguments_preview, validate_tool_execution_admission,
+    ToolExecutionAdmissionRejection, ToolExecutionAdmissionRequest, GET_TOOL_SPEC_TOOL_NAME,
+    USER_STEERING_INTERRUPTED_MESSAGE,
 };
 use dashmap::DashMap;
 use futures::future::join_all;
@@ -257,10 +257,6 @@ pub struct ToolPipeline {
     confirmation_channels: Arc<DashMap<String, oneshot::Sender<ConfirmationResponse>>>,
     /// Cancellation token management (tool_id -> CancellationToken)
     cancellation_tokens: Arc<DashMap<String, CancellationToken>>,
-    /// Per-session ring buffer of recent tool calls for loop detection.
-    /// Keyed by session_id; entries store (tool_name, arguments) so that
-    /// "same tool with deep-equal arguments" can be recognized across rounds.
-    recent_tool_calls: Arc<DashMap<String, ToolCallLoopHistory>>,
     computer_use_host: Option<ComputerUseHostRef>,
 }
 
@@ -275,29 +271,8 @@ impl ToolPipeline {
             state_manager,
             confirmation_channels: Arc::new(DashMap::new()),
             cancellation_tokens: Arc::new(DashMap::new()),
-            recent_tool_calls: Arc::new(DashMap::new()),
             computer_use_host,
         }
-    }
-
-    fn check_and_record_tool_call(
-        &self,
-        session_id: &str,
-        tool_name: &str,
-        arguments: &serde_json::Value,
-    ) -> ToolCallLoopDecision {
-        let mut entry = self
-            .recent_tool_calls
-            .entry(session_id.to_string())
-            .or_default();
-        entry.value_mut().check_and_record(tool_name, arguments)
-    }
-
-    /// Drop the loop-detection history for a session that is ending. Bounded
-    /// memory either way (max 10 entries per session) but this prevents
-    /// long-lived processes from accumulating stale sessions.
-    pub fn clear_session_tool_call_history(&self, session_id: &str) {
-        self.recent_tool_calls.remove(session_id);
     }
 
     pub fn computer_use_host(&self) -> Option<ComputerUseHostRef> {
@@ -584,36 +559,9 @@ impl ToolPipeline {
             return Err(BitFunError::Validation(error_msg));
         }
 
-        // Loop detection: refuse to execute the same tool call repeatedly with
-        // identical arguments. Triggered on the (THRESHOLD + 1)-th consecutive
-        // identical call within the per-session sliding window.
-        if let ToolCallLoopDecision::Blocked(block) =
-            self.check_and_record_tool_call(&task.context.session_id, &tool_name, &tool_args)
-        {
-            let error_msg = block.message;
-            warn!(
-                "Tool-call loop blocked: tool_name={}, tool_id={}, session_id={}, threshold={}",
-                tool_name, tool_id, task.context.session_id, block.threshold
-            );
-
-            self.state_manager
-                .update_state(
-                    &tool_id,
-                    ToolExecutionState::Failed {
-                        error: error_msg.clone(),
-                        is_retryable: false,
-                        duration_ms: None,
-                        queue_wait_ms: None,
-                        preflight_ms: None,
-                        confirmation_wait_ms: None,
-                        execution_ms: None,
-                    },
-                )
-                .await;
-
-            return Err(BitFunError::Validation(error_msg));
-        }
-
+        // Repetition alone is not execution failure: polling and status checks
+        // may legitimately reuse identical arguments. The execution engine
+        // evaluates repeated patterns only after observing actual tool results.
         if let Err(err) = validate_tool_execution_admission(ToolExecutionAdmissionRequest {
             tool_name: &tool_name,
             allowed_tools: &task.context.allowed_tools,

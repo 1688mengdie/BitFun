@@ -20,14 +20,6 @@
         </div>
       </div>
 
-      <div class="topbar-center">
-        <div id="topProgress" class="top-progress" aria-live="polite">
-          <span id="topProgressDot" class="progress-dot"></span>
-          <span id="topProgressText" data-i18n="ready">Ready.</span>
-          <span id="topProgressMeter" class="progress-meter"><i></i></span>
-        </div>
-      </div>
-
       <div class="topbar-actions">
         <div class="topbar-action-group">
           <button id="toggleHistory" class="btn btn-secondary" type="button" data-i18n="historyTitle">History</button>
@@ -79,18 +71,6 @@
             <div class="adaptation-toast__text">AI has auto-adapted <strong id="adaptationTemplateName">template</strong></div>
           </div>
 
-          <!-- Generation overlay -->
-          <div id="generationOverlay" class="generation-overlay" hidden>
-            <div class="generation-overlay-card">
-              <div class="generation-overlay-head">
-                <div class="generation-spinner" aria-hidden="true"></div>
-                <div>
-                  <strong id="generationOverlayTitle" data-i18n="generationAgentWorking">Building deck...</strong>
-                  <p id="generationOverlayProgress" class="generation-overlay-progress" data-i18n="generationProgressPulse">Still generating…</p>
-                </div>
-              </div>
-            </div>
-          </div>
         </section>
 
         <!-- Canvas zoom bar -->
@@ -213,6 +193,7 @@
 
     <footer class="statusbar">
       <div class="statusbar-left">
+        <span id="statusSpinner" class="statusbar-spinner" hidden aria-hidden="true"></span>
         <span id="statusLine" role="status" data-i18n="ready">Ready.</span>
         <span class="statusbar-divider" aria-hidden="true"></span>
         <span id="slidePosition">1 / 1</span>

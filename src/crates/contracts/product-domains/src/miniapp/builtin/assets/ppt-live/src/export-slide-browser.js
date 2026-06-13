@@ -198,6 +198,160 @@ async function loadHtmlInExportRoot(html) {
   return wrapExportDocument(root, body);
 }
 
+function hasVisibleBorder(computed) {
+  return ['Top', 'Right', 'Bottom', 'Left'].some(
+    (side) => parseFloat(computed[`border${side}Width`] || 0) > 0,
+  );
+}
+
+function isTransparentColor(value) {
+  return !value || value === 'transparent' || value === 'rgba(0, 0, 0, 0)';
+}
+
+function elementLabel(element) {
+  const id = element.id ? `#${element.id}` : '';
+  const className = typeof element.className === 'string'
+    ? element.className.trim().split(/\s+/).filter(Boolean).slice(0, 2).map((name) => `.${name}`).join('')
+    : '';
+  return `${element.tagName.toLowerCase()}${id}${className}`;
+}
+
+/**
+ * Validate the authored slide before export sanitization. Generation treats
+ * these findings as repair requirements rather than silently rasterizing or
+ * flattening unsupported HTML.
+ */
+export async function validateSlideForPptxGeneration(html) {
+  const source = String(html || '').trim();
+  const issues = [];
+  const seen = new Set();
+  const add = (code, message, element = null) => {
+    const suffix = element ? ` (${elementLabel(element)})` : '';
+    const key = `${code}:${message}${suffix}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    issues.push({ code, message: `${message}${suffix}` });
+  };
+
+  if (!source || !/<\/html>\s*$/i.test(source)) {
+    add('incomplete_html', 'The slide must be a complete HTML document ending with </html>.');
+  }
+  if (/<script\b/i.test(source)) {
+    add('script_forbidden', 'Scripts are not allowed in editable slide HTML.');
+  }
+  if (/(?:linear|radial|conic|repeating-linear|repeating-radial)-gradient\s*\(/i.test(source)) {
+    add('css_gradient', 'CSS gradients are unsupported; use solid fills and discrete shapes.');
+  }
+  if (/(?:src|href)\s*=\s*["']\s*(?:https?:)?\/\//i.test(source)) {
+    add('remote_asset', 'Remote assets are not allowed; use self-contained data or local project assets.');
+  }
+
+  let exportRoot = null;
+  try {
+    const doc = await loadHtmlInExportRoot(source);
+    exportRoot = doc._exportRoot;
+    const view = doc.defaultView || window;
+    const body = doc.body;
+    const bodyRect = body.getBoundingClientRect();
+    const bodyDimensions = measureBodyDimensions(doc);
+    bodyDimensions.errors.forEach((message) => add('canvas_overflow', message));
+
+    const expectedWidth = EXPORT_VIEWPORT.width;
+    const expectedHeight = EXPORT_VIEWPORT.height;
+    if (Math.abs(bodyRect.width - expectedWidth) > 2 || Math.abs(bodyRect.height - expectedHeight) > 2) {
+      add(
+        'canvas_size',
+        `Computed canvas must be 960pt x 540pt (${expectedWidth}px x ${expectedHeight}px); got ${bodyRect.width.toFixed(1)}px x ${bodyRect.height.toFixed(1)}px.`,
+      );
+    }
+
+    body.querySelectorAll('div').forEach((div) => {
+      [...div.childNodes].forEach((node) => {
+        if (node.nodeType === Node.TEXT_NODE && node.textContent.replace(/\s+/g, ' ').trim()) {
+          add('direct_div_text', 'Visible DIV text must be wrapped in p, h1-h6, or li.', div);
+        }
+      });
+      const computed = view.getComputedStyle(div);
+      if (computed.backgroundImage && computed.backgroundImage !== 'none') {
+        add('div_background_image', 'DIV background-image is unsupported; use an img element.', div);
+      }
+    });
+
+    const textSelector = 'p,h1,h2,h3,h4,h5,h6,li';
+    body.querySelectorAll(textSelector).forEach((element) => {
+      const computed = view.getComputedStyle(element);
+      if (!isTransparentColor(computed.backgroundColor)
+        || (computed.backgroundImage && computed.backgroundImage !== 'none')
+        || hasVisibleBorder(computed)
+        || (computed.boxShadow && computed.boxShadow !== 'none')) {
+        add(
+          'decorated_text_element',
+          'Background, border, image, and shadow styling must be on an enclosing DIV shape.',
+          element,
+        );
+      }
+
+      const rect = element.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return;
+      if (rect.left < bodyRect.left - 1
+        || rect.top < bodyRect.top - 1
+        || rect.right > bodyRect.right + 1
+        || rect.bottom > bodyRect.bottom + 1) {
+        add('text_out_of_bounds', 'A text element extends outside the slide canvas.', element);
+      }
+      if (parseFloat(computed.fontSize || 0) > 12 && rect.bottom > bodyRect.bottom - 48) {
+        add('bottom_safety_margin', 'Text larger than 12px must keep a 36pt bottom safety margin.', element);
+      }
+    });
+
+    body.querySelectorAll('span,em,strong,b,i,u,a,small,mark,sub,sup,code').forEach((element) => {
+      const computed = view.getComputedStyle(element);
+      const hasBoxSpacing = [
+        'marginTop', 'marginRight', 'marginBottom', 'marginLeft',
+        'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft',
+      ].some((prop) => parseFloat(computed[prop] || 0) > 0);
+      if (hasBoxSpacing
+        || !isTransparentColor(computed.backgroundColor)
+        || (computed.backgroundImage && computed.backgroundImage !== 'none')
+        || hasVisibleBorder(computed)
+        || (computed.boxShadow && computed.boxShadow !== 'none')) {
+        add('unsafe_inline_style', 'Inline text elements cannot carry box spacing, fills, borders, or shadows.', element);
+      }
+    });
+
+    body.querySelectorAll('*').forEach((element) => {
+      const computed = view.getComputedStyle(element);
+      if (String(computed.backgroundImage || '').includes('gradient')) {
+        add('computed_gradient', 'Computed CSS contains an unsupported gradient.', element);
+      }
+      for (const pseudo of ['::before', '::after']) {
+        try {
+          const content = view.getComputedStyle(element, pseudo)?.content;
+          if (content && content !== 'none' && content !== 'normal' && content !== '""') {
+            add('generated_content', `${pseudo} generated text/content is unsupported for editable PPTX.`, element);
+          }
+        } catch {
+          // Some WebViews do not expose pseudo-element computed styles.
+        }
+      }
+    });
+
+    try {
+      const slideData = extractSlideDataFromDocument(doc);
+      (slideData.errors || []).forEach((message) => add('pptx_conversion', message));
+    } catch (error) {
+      add('pptx_conversion', String(error?.message || error || 'PPTX conversion validation failed.'));
+    }
+  } finally {
+    if (exportRoot) removeExportRoot(exportRoot);
+  }
+
+  return {
+    valid: issues.length === 0,
+    issues: issues.slice(0, 32),
+  };
+}
+
 async function prepareSlideOnce(html, aggressive, options = {}) {
   let exportRoot = null;
   try {
