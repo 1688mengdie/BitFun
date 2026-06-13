@@ -10,7 +10,7 @@
     "ppt",
     "ai"
   ],
-  "version": 153,
+  "version": 167,
   "created_at": 0,
   "updated_at": 0,
   "permissions": {
@@ -26,24 +26,20 @@
       "allow": []
     },
     "net": {
-      "allow": [
-        "*"
-      ]
+      "allow": []
     },
     "node": {
       "enabled": false
     },
     "ai": {
-      "enabled": true,
-      "allowed_models": [
-        "primary"
-      ],
+      "enabled": false,
+      "allowed_models": [],
       "max_tokens_per_request": 16000,
-      "rate_limit_per_minute": 12
+      "rate_limit_per_minute": 0
     },
     "agent": {
       "enabled": true,
-      "rate_limit_per_minute": 12
+      "rate_limit_per_minute": 120
     }
   },
   "permission_rationale": "PPT Live stores only its own deck draft, fetches user-provided URLs only when generating source-grounded decks, runs hidden BitFun agent turns (ppt-design skill plus research tools such as WebSearch/WebFetch) only when the user asks it to generate or refine content, and exports PPTX/PDF/PNG/HTML entirely inside the desktop WebView.",

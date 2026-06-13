@@ -67,6 +67,15 @@ pub trait StreamEventSink: Send + Sync {
     async fn enqueue(&self, event: AgenticEvent, priority: Option<EventPriority>);
 }
 
+/// Whether a provider finish_reason means the response was cut by the model's
+/// output token limit rather than completed naturally.
+/// Covers OpenAI-compatible "length", Anthropic "max_tokens", and Gemini
+/// "MAX_TOKENS".
+fn is_token_limit_finish_reason(reason: &str) -> bool {
+    let normalized = reason.trim().to_ascii_lowercase();
+    normalized == "length" || normalized == "max_tokens"
+}
+
 fn elapsed_ms_u64(started_at: Instant) -> u64 {
     started_at
         .elapsed()
@@ -237,6 +246,9 @@ struct StreamContext {
     thinking_completed_sent: bool,
     has_effective_output: bool,
     partial_recovery_reason: Option<String>,
+    /// Provider finish_reason indicating the response was cut by the model's
+    /// output token limit (e.g. "length", "max_tokens", "MAX_TOKENS").
+    token_limit_finish_reason: Option<String>,
 }
 
 impl StreamContext {
@@ -267,6 +279,7 @@ impl StreamContext {
             thinking_completed_sent: false,
             has_effective_output: false,
             partial_recovery_reason: None,
+            token_limit_finish_reason: None,
         }
     }
 
@@ -966,8 +979,11 @@ impl StreamProcessor {
                         }
                     }
 
-                    if finish_reason.is_some() {
+                    if let Some(reason) = finish_reason {
                         let _ = ctx.finalize_all_pending_tool_calls(ToolCallBoundary::FinishReason);
+                        if is_token_limit_finish_reason(&reason) {
+                            ctx.token_limit_finish_reason = Some(reason);
+                        }
                     }
                 }
             }
@@ -977,6 +993,24 @@ impl StreamProcessor {
         self.send_thinking_end_if_needed(&mut ctx).await;
 
         let _ = ctx.finalize_all_pending_tool_calls(ToolCallBoundary::StreamEnd);
+
+        // A token-limit finish_reason means the provider ended the stream
+        // gracefully but the answer is silently truncated. Surface it as a
+        // partial recovery so downstream execution can continue the answer in
+        // a follow-up round instead of accepting cut-off output as final.
+        // Tool-call rounds are excluded: they already continue via the normal
+        // round loop, and truncated tool arguments have their own repair path.
+        if ctx.partial_recovery_reason.is_none()
+            && ctx.tool_calls.is_empty()
+            && !ctx.full_text.is_empty()
+        {
+            if let Some(reason) = ctx.token_limit_finish_reason.take() {
+                ctx.partial_recovery_reason = Some(format!(
+                    "response truncated by model output token limit (finish_reason={})",
+                    reason
+                ));
+            }
+        }
 
         // Invalid tool payloads that survive to finalization still need detailed SSE logs for diagnosis.
         if ctx.tool_calls.iter().any(|tc| !tc.is_valid()) {
@@ -1125,6 +1159,109 @@ mod tests {
         );
         assert!(!result.tool_calls[0].is_error);
         assert_eq!(result.usage.as_ref().map(|u| u.total_token_count), Some(7));
+    }
+
+    #[tokio::test]
+    async fn marks_token_limit_truncated_text_as_partial_recovery() {
+        let processor = build_processor();
+        let stream = iter(vec![
+            Ok(UnifiedResponse {
+                text: Some("{\"slides\": [{\"title\": \"cut off".to_string()),
+                ..Default::default()
+            }),
+            Ok(UnifiedResponse {
+                finish_reason: Some("length".to_string()),
+                ..Default::default()
+            }),
+        ])
+        .boxed();
+
+        let result = processor
+            .process_stream(
+                stream,
+                None,
+                None,
+                "session_1".to_string(),
+                "turn_1".to_string(),
+                "round_1".to_string(),
+                &CancellationToken::new(),
+            )
+            .await
+            .expect("stream result");
+
+        assert!(result
+            .partial_recovery_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("output token limit")));
+    }
+
+    #[tokio::test]
+    async fn natural_stop_finish_reason_is_not_partial_recovery() {
+        let processor = build_processor();
+        let stream = iter(vec![
+            Ok(UnifiedResponse {
+                text: Some("complete answer".to_string()),
+                ..Default::default()
+            }),
+            Ok(UnifiedResponse {
+                finish_reason: Some("stop".to_string()),
+                ..Default::default()
+            }),
+        ])
+        .boxed();
+
+        let result = processor
+            .process_stream(
+                stream,
+                None,
+                None,
+                "session_1".to_string(),
+                "turn_1".to_string(),
+                "round_1".to_string(),
+                &CancellationToken::new(),
+            )
+            .await
+            .expect("stream result");
+
+        assert!(result.partial_recovery_reason.is_none());
+    }
+
+    #[tokio::test]
+    async fn token_limit_with_tool_calls_is_not_partial_recovery() {
+        let processor = build_processor();
+        let stream = iter(vec![
+            Ok(UnifiedResponse {
+                tool_call: Some(UnifiedToolCall {
+                    tool_call_index: None,
+                    id: Some("call_1".to_string()),
+                    name: Some("tool_a".to_string()),
+                    arguments: Some("{\"a\":1}".to_string()),
+                    arguments_is_snapshot: false,
+                }),
+                ..Default::default()
+            }),
+            Ok(UnifiedResponse {
+                finish_reason: Some("MAX_TOKENS".to_string()),
+                ..Default::default()
+            }),
+        ])
+        .boxed();
+
+        let result = processor
+            .process_stream(
+                stream,
+                None,
+                None,
+                "session_1".to_string(),
+                "turn_1".to_string(),
+                "round_1".to_string(),
+                &CancellationToken::new(),
+            )
+            .await
+            .expect("stream result");
+
+        // Tool-call rounds continue through the normal round loop.
+        assert!(result.partial_recovery_reason.is_none());
     }
 
     #[tokio::test]

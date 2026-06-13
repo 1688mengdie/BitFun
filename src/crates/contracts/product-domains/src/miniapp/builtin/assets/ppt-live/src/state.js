@@ -3,7 +3,7 @@ import { normalizeStylePresetKey } from './style-presets.js';
 
 export const STORAGE_KEY = 'pptLiveStudioStateV6';
 export const HISTORY_KEY = 'pptLiveDeckHistoryV1';
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 export const ELEMENT_TYPES = ['text', 'list', 'shape', 'metric', 'chart', 'media'];
 
 export const THEME_PRESETS = {
@@ -176,6 +176,12 @@ export function createInitialState() {
     brief: defaultBrief(),
     promptDraft: '',
     lastSubmittedPrompt: '',
+    agentSession: {
+      id: '',
+      workspaceSubdir: '',
+      runId: '',
+      skillKey: '',
+    },
     style: defaultStyle(),
     outline: [],
     sources: { items: [], facts: [], warnings: [], summary: '', fetchedAt: 0 },
@@ -211,6 +217,12 @@ export function ensureState(value) {
   };
   state.promptDraft = typeof state.promptDraft === 'string' ? state.promptDraft : '';
   state.lastSubmittedPrompt = typeof state.lastSubmittedPrompt === 'string' ? state.lastSubmittedPrompt : '';
+  state.agentSession = {
+    id: String(state.agentSession?.id || ''),
+    workspaceSubdir: String(state.agentSession?.workspaceSubdir || ''),
+    runId: String(state.agentSession?.runId || ''),
+    skillKey: String(state.agentSession?.skillKey || ''),
+  };
   state.style = { ...defaultStyle(), ...(state.style || {}) };
   delete state.style.brandPrimary;
   delete state.style.brandAccent;

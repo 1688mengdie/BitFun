@@ -5,8 +5,8 @@
 //! and skills — instead of the raw single-call LLM access provided by the
 //! `ai` permission group.
 //!
-//! Each run creates a hidden subagent session (invisible in the session list)
-//! owned by `miniapp-agent:{app_id}:{run_id}` and submits exactly one dialog
+//! A run creates or reuses a hidden subagent session (invisible in the session
+//! list), owned by `miniapp-agent:{app_id}:{run_id}`, and submits one dialog
 //! turn through the standard `DialogScheduler`. Streaming output reaches the
 //! MiniApp iframe through the normal `agentic://*` Tauri events, which the
 //! web-ui MiniApp bridge filters by session id and forwards into the iframe.
@@ -61,6 +61,39 @@ fn now_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
+}
+
+/// A clean relative subdir contains only normal components: no `..`, no root,
+/// no prefix, so joining it onto a base directory can never escape the base.
+fn is_clean_relative_subdir(subdir: &str) -> bool {
+    let relative = std::path::Path::new(subdir);
+    !relative.as_os_str().is_empty()
+        && relative
+            .components()
+            .all(|component| matches!(component, std::path::Component::Normal(_)))
+}
+
+/// Resolve a MiniApp-requested agent workspace inside the app's own appdata
+/// directory. The subdir must be a clean relative path (no `..`, no absolute
+/// or rooted components) so a MiniApp can never point the agent outside its
+/// own storage. The directory is created if missing.
+fn resolve_app_data_workspace(
+    state: &AppState,
+    app_id: &str,
+    subdir: &str,
+) -> Result<String, String> {
+    if !is_clean_relative_subdir(subdir) {
+        return Err("appDataWorkspace must be a clean relative path".to_string());
+    }
+    let relative = std::path::Path::new(subdir);
+    let workspace = state
+        .miniapp_manager
+        .path_manager()
+        .miniapp_dir(app_id)
+        .join(relative);
+    std::fs::create_dir_all(&workspace)
+        .map_err(|e| format!("Failed to create MiniApp agent workspace: {}", e))?;
+    Ok(workspace.to_string_lossy().to_string())
 }
 
 fn check_agent_rate_limit(app_id: &str, rate_limit_per_minute: u32) -> Result<(), String> {
@@ -174,6 +207,23 @@ pub struct MiniAppAgentRunRequest {
     pub session_name: Option<String>,
     #[serde(default)]
     pub workspace_path: Option<String>,
+    /// Defaults to true for backward compatibility. MiniApps may disable tools
+    /// for deterministic render-only turns after a tool-enabled planning turn.
+    /// Only applies when a new session is created.
+    #[serde(default)]
+    pub enable_tools: Option<bool>,
+    /// Reuse an existing hidden session created by an earlier run of the same
+    /// MiniApp. Later turns then share the session context (loaded skills,
+    /// research results, prior outputs), so multi-step tasks load each
+    /// resource once and "continue" turns can resume interrupted work.
+    #[serde(default)]
+    pub session_id: Option<String>,
+    /// Relative subdirectory inside the MiniApp's own appdata directory to use
+    /// as the agent workspace (created if missing). File-protocol MiniApps use
+    /// this so the agent reads/writes project files in app-owned storage
+    /// instead of the user's workspace. Must be a clean relative path.
+    #[serde(default)]
+    pub app_data_workspace: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -238,13 +288,22 @@ pub async fn miniapp_agent_run(
         agent_perms.rate_limit_per_minute.unwrap_or(0),
     )?;
 
-    let workspace_path = request
-        .workspace_path
+    let workspace_path = if let Some(subdir) = request
+        .app_data_workspace
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or("workspacePath is required for MiniApp agent runs")?
-        .to_string();
+    {
+        resolve_app_data_workspace(&state, &request.app_id, subdir)?
+    } else {
+        request
+            .workspace_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or("workspacePath is required for MiniApp agent runs")?
+            .to_string()
+    };
 
     let run_id = request
         .run_id
@@ -268,31 +327,59 @@ pub async fn miniapp_agent_run(
         .unwrap_or("MiniApp Agent Run")
         .to_string();
 
-    // One hidden single-turn session per run so parallel runs never queue
-    // behind each other and never pollute the visible session list.
-    let config = SessionConfig {
-        enable_tools: true,
-        safe_mode: true,
-        auto_compact: false,
-        enable_context_compression: false,
-        max_turns: 1,
-        ..Default::default()
+    let requested_session_id = request
+        .session_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+
+    let session_id = if let Some(existing_session_id) = requested_session_id {
+        // Reuse a hidden session created by an earlier run of this MiniApp so
+        // the new turn shares its context (skills, research, prior outputs).
+        let session = coordinator
+            .get_session_manager()
+            .get_session(&existing_session_id)
+            .ok_or("Unknown MiniApp agent session")?;
+        let owner_prefix = format!("miniapp-agent:{}:", request.app_id);
+        if !session
+            .created_by
+            .as_deref()
+            .is_some_and(|created_by| created_by.starts_with(&owner_prefix))
+        {
+            return Err("Unknown MiniApp agent session".to_string());
+        }
+        if session.config.workspace_path.as_deref() != Some(workspace_path.as_str()) {
+            return Err("MiniApp agent session workspace does not match this run".to_string());
+        }
+        existing_session_id
+    } else {
+        // One hidden session per task keeps MiniApp work isolated and out of
+        // the visible session list. Follow-up turns may reuse it via sessionId.
+        let enable_tools = request.enable_tools.unwrap_or(true);
+        let config = SessionConfig {
+            enable_tools,
+            safe_mode: true,
+            auto_compact: true,
+            enable_context_compression: true,
+            compression_threshold: 0.65,
+            ..Default::default()
+        };
+        // Cowork supplies the office skill group and research/file tools when
+        // enabled.
+        let session = coordinator
+            .create_hidden_subagent_session_with_workspace(
+                None,
+                session_name,
+                "Cowork".to_string(),
+                config,
+                workspace_path.clone(),
+                Some(owner),
+            )
+            .await
+            .map_err(|e| format!("Failed to create MiniApp agent session: {}", e))?;
+        session.session_id
     };
-    // Cowork is the office/collaboration mode: it is the only mode where the
-    // office skill group (incl. ppt-design) is enabled by default, and its
-    // toolset covers the research + file tools PPT generation needs.
-    let session = coordinator
-        .create_hidden_subagent_session_with_workspace(
-            None,
-            session_name,
-            "Cowork".to_string(),
-            config,
-            workspace_path.clone(),
-            Some(owner),
-        )
-        .await
-        .map_err(|e| format!("Failed to create MiniApp agent session: {}", e))?;
-    let session_id = session.session_id.clone();
 
     let policy = DialogSubmissionPolicy::for_source(DialogTriggerSource::DesktopApi)
         .with_skip_tool_confirmation(true);
@@ -375,25 +462,41 @@ pub async fn miniapp_agent_turn_text(
         .get_context_messages(&request.session_id)
         .await
         .map_err(|e| e.to_string())?;
-    let text = messages
+    // Sessions may hold multiple MiniApp turns; only this turn's assistant
+    // text is a valid answer for this run. The answer itself may span several
+    // assistant messages when the engine continues a truncated stream across
+    // rounds ("continue from exactly where you stopped"), so concatenate, in
+    // order, every assistant text after this turn's last tool result. The
+    // internal reminder user messages between segments do not break the run.
+    let turn_messages: Vec<&_> = messages
         .iter()
-        .rev()
+        .filter(|message| message.metadata.turn_id.as_deref() == Some(request.turn_id.as_str()))
+        .collect();
+    let answer_start = turn_messages
+        .iter()
+        .rposition(|message| {
+            message.role == MessageRole::Tool
+                || matches!(message.content, MessageContent::ToolResult { .. })
+        })
+        .map_or(0, |index| index + 1);
+    let text = turn_messages[answer_start..]
+        .iter()
         .filter(|message| message.role == MessageRole::Assistant)
-        .find_map(|message| {
+        .filter_map(|message| {
             let text = match &message.content {
                 MessageContent::Text(text) => text.as_str(),
                 MessageContent::Multimodal { text, .. } => text.as_str(),
                 MessageContent::Mixed { text, .. } => text.as_str(),
                 MessageContent::ToolResult { .. } => "",
             };
-            let trimmed = text.trim();
-            if trimmed.is_empty() {
+            if text.trim().is_empty() {
                 None
             } else {
-                Some(text.to_string())
+                Some(text)
             }
         })
-        .unwrap_or_default();
+        .collect::<Vec<_>>()
+        .concat();
 
     Ok(MiniAppAgentTurnTextResponse { text })
 }
@@ -429,4 +532,69 @@ pub async fn miniapp_agent_cancel_stale_runs(
     Ok(MiniAppAgentCancelStaleRunsResponse {
         cancelled_runs: cancelled,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_clean_relative_subdir, MiniAppAgentRunRequest};
+    use serde_json::json;
+
+    #[test]
+    fn miniapp_agent_run_request_keeps_tool_enablement_backward_compatible() {
+        let legacy: MiniAppAgentRunRequest = serde_json::from_value(json!({
+            "appId": "builtin-ppt-live",
+            "prompt": "plan",
+            "workspacePath": "/tmp/workspace"
+        }))
+        .expect("legacy MiniApp agent request should deserialize");
+        assert!(legacy.enable_tools.unwrap_or(true));
+        assert!(legacy.session_id.is_none());
+
+        let render: MiniAppAgentRunRequest = serde_json::from_value(json!({
+            "appId": "builtin-ppt-live",
+            "prompt": "render",
+            "workspacePath": "/tmp/workspace",
+            "enableTools": false
+        }))
+        .expect("render-only MiniApp agent request should deserialize");
+        assert_eq!(render.enable_tools, Some(false));
+    }
+
+    #[test]
+    fn miniapp_agent_run_request_accepts_session_reuse() {
+        let follow_up: MiniAppAgentRunRequest = serde_json::from_value(json!({
+            "appId": "builtin-ppt-live",
+            "prompt": "render slide 2",
+            "workspacePath": "/tmp/workspace",
+            "sessionId": "session-1"
+        }))
+        .expect("session-reuse MiniApp agent request should deserialize");
+        assert_eq!(follow_up.session_id.as_deref(), Some("session-1"));
+    }
+
+    #[test]
+    fn miniapp_agent_run_request_accepts_app_data_workspace() {
+        let request: MiniAppAgentRunRequest = serde_json::from_value(json!({
+            "appId": "builtin-ppt-live",
+            "prompt": "plan a deck",
+            "appDataWorkspace": "decks/deck-123"
+        }))
+        .expect("appdata-workspace MiniApp agent request should deserialize");
+        assert_eq!(
+            request.app_data_workspace.as_deref(),
+            Some("decks/deck-123")
+        );
+        assert!(request.workspace_path.is_none());
+    }
+
+    #[test]
+    fn app_data_workspace_subdir_must_stay_inside_app_storage() {
+        assert!(is_clean_relative_subdir("decks/deck-123"));
+        assert!(is_clean_relative_subdir("decks"));
+        assert!(!is_clean_relative_subdir(""));
+        assert!(!is_clean_relative_subdir("/etc"));
+        assert!(!is_clean_relative_subdir("../outside"));
+        assert!(!is_clean_relative_subdir("decks/../../outside"));
+        assert!(!is_clean_relative_subdir("./decks"));
+    }
 }

@@ -536,19 +536,6 @@ function userFacingEventDetail(item) {
   return detail;
 }
 
-function currentGenerationStep(steps) {
-  return steps.find((step) => step.status === 'running')
-    || [...steps].reverse().find((step) => step.status === 'done')
-    || steps[0]
-    || null;
-}
-
-function formatGenerationProgress(state) {
-  const current = Number(state.generation?.draftedCount) || 0;
-  if (current <= 0) return '';
-  return t('generationPageProgress', { current });
-}
-
 function scrollGenerationListToLatest(list) {
   if (!list) return;
   const schedule = typeof requestAnimationFrame === 'function'
@@ -563,40 +550,11 @@ export function renderGeneration(state) {
   const list = byId('generationSteps');
   const steps = state.generation?.steps || [];
   const events = Array.isArray(state.generation?.events) ? state.generation.events : [];
-  const current = steps.find((step) => step.id === state.generation?.current)
-    || steps.find((step) => step.status === 'running')
-    || steps.find((step) => step.status === 'error')
-    || null;
-  const doneCount = steps.filter((step) => step.status === 'done').length;
   const isActive = Boolean(state.generation?.active || steps.some((step) => step.status === 'running'));
   const hasError = steps.some((step) => step.status === 'error');
-  const isComplete = !isActive && !hasError && steps.length > 0 && doneCount === steps.length;
-  const progress = steps.length ? Math.round((doneCount / steps.length) * 100) : 0;
-  const pageProgress = formatGenerationProgress(state);
-  const topProgress = byId('topProgress');
-  if (topProgress) {
-    topProgress.classList.toggle('is-step-progress', isActive && !pageProgress);
-  }
 
   document.querySelector('.ppt-live')?.classList.toggle('is-generating', isActive);
   document.querySelector('.ppt-live')?.classList.toggle('has-generation-error', hasError);
-
-  if (isComplete) {
-    text('topProgressText', t('deckReady'));
-    byId('topProgressMeter')?.style.setProperty('--progress', '100%');
-  } else if (isActive && pageProgress) {
-    text('topProgressText', pageProgress);
-    byId('topProgressMeter')?.style.setProperty('--progress', `${progress}%`);
-  } else if (isActive && current) {
-    text('topProgressText', `${current.label}: ${current.detail}`);
-    byId('topProgressMeter')?.style.setProperty('--progress', `${progress}%`);
-  } else if (current) {
-    text('topProgressText', `${current.label}: ${current.detail}`);
-    byId('topProgressMeter')?.style.setProperty('--progress', `${progress}%`);
-  } else {
-    text('topProgressText', t('ready'));
-    byId('topProgressMeter')?.style.setProperty('--progress', `${progress}%`);
-  }
 
   if (!list) return;
   list.innerHTML = '';
@@ -630,18 +588,12 @@ export function renderGeneration(state) {
 }
 
 export function renderGenerationOverlay(state) {
-  const overlay = byId('generationOverlay');
-  if (!overlay) return;
   const steps = state.generation?.steps || [];
   const isActive = Boolean(state.generation?.active || steps.some((step) => step.status === 'running'));
-  overlay.hidden = !isActive;
-  if (!isActive) return;
-  const current = steps.find((step) => step.id === state.generation?.current)
-    || steps.find((step) => step.status === 'running')
-    || null;
-  const pageProgress = formatGenerationProgress(state);
-  text('generationOverlayTitle', current?.label || t('generationAgentWorking'));
-  text('generationOverlayProgress', pageProgress || current?.detail || t('generationProgressPulse'));
+  const spinner = byId('statusSpinner');
+  if (!spinner) return;
+  spinner.hidden = !isActive;
+  spinner.setAttribute('aria-hidden', isActive ? 'false' : 'true');
 }
 
 export function syncFontFamilyToggle(fontFamily = 'sans') {

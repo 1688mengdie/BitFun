@@ -16,9 +16,8 @@ pub use bitfun_runtime_ports::{
     DynamicToolDescriptor, DynamicToolProvider, PortError, PortErrorKind, PortResult, ToolDecorator,
 };
 pub use execution_gate::{
-    build_tool_call_loop_block_message, validate_tool_execution_admission, ToolCallLoopBlock,
-    ToolCallLoopDecision, ToolCallLoopHistory, ToolExecutionAdmissionRejection,
-    ToolExecutionAdmissionRequest, TOOL_CALL_HISTORY_WINDOW, TOOL_CALL_LOOP_THRESHOLD,
+    validate_tool_execution_admission, ToolExecutionAdmissionRejection,
+    ToolExecutionAdmissionRequest,
 };
 pub use file_guidance::{
     file_tool_guidance_message, is_file_tool_guidance_message, FILE_TOOL_GUIDANCE_PREFIX,

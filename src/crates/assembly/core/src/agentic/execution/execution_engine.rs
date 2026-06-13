@@ -248,6 +248,11 @@ pub struct ExecutionEngine {
 }
 
 impl ExecutionEngine {
+    const FINALIZE_AFTER_TOOL_USE_REMINDER: &'static str = "Tool execution for this turn has already completed, but the turn is ending at this round boundary. Do not call any more tools. Provide the final response to the user based on the tool results already available.";
+    const FINALIZE_AFTER_REPEATED_TOOL_FAILURES_REMINDER: &'static str = "Repeated tool attempts have failed and tool use is now disabled for this turn. Provide a concise final response explaining what was completed, what failed, the evidence from the tool results, and the best actionable next step. Do not call any more tools.";
+    const FINALIZE_AFTER_MAX_ROUNDS_REMINDER: &'static str = "The execution round budget has been reached and tool use is now disabled for this turn. Provide the best final response possible from the work and evidence already collected. Clearly distinguish completed work from unresolved items. Do not call any more tools.";
+    const FORCE_TEXT_ONLY_REMINDER: &'static str = "STOP. Tool calls are disabled for this final turn. Respond ONLY with a plain-text answer summarizing what you have done and the result for the user. Do not output tool call syntax of any kind.";
+
     pub fn new(
         round_executor: Arc<RoundExecutor>,
         event_queue: Arc<EventQueue>,
@@ -314,6 +319,44 @@ impl ExecutionEngine {
             args_str.len(),
             args_hash
         )
+    }
+
+    fn tool_call_signature(tool_calls: &[crate::agentic::core::ToolCall]) -> Option<String> {
+        if tool_calls.is_empty() {
+            return None;
+        }
+
+        let mut signatures: Vec<String> = tool_calls
+            .iter()
+            .map(|tool_call| {
+                let arguments = tool_call.arguments.to_string();
+                let arguments_summary = Self::tool_signature_args_summary(&arguments);
+                format!("{}:{}", tool_call.tool_name, arguments_summary)
+            })
+            .collect();
+        signatures.sort();
+        Some(signatures.join("|"))
+    }
+
+    fn failed_tool_round_signature(
+        tool_calls: &[crate::agentic::core::ToolCall],
+        tool_result_messages: &[Message],
+    ) -> Option<String> {
+        if tool_result_messages.is_empty()
+            || !tool_result_messages.iter().all(|message| {
+                let MessageContent::ToolResult {
+                    result, is_error, ..
+                } = &message.content
+                else {
+                    return false;
+                };
+                ContextHealthSnapshot::tool_result_failed(result, *is_error)
+            })
+        {
+            return None;
+        }
+
+        Self::tool_call_signature(tool_calls)
     }
 
     /// Whether a partial stream recovery should trigger a continuation round
@@ -2102,11 +2145,12 @@ impl ExecutionEngine {
         let mut consecutive_compression_failures: u32 = 0;
         const MAX_CONSECUTIVE_COMPRESSION_FAILURES: u32 = 3;
 
-        // P0: Loop detection: track recent tool call signatures
+        // Track tool-call patterns for context health, but only use rounds with
+        // actual failed tool results for no-progress recovery decisions.
         let mut recent_tool_signatures: Vec<String> = Vec::new();
-        let mut loop_detected = false;
-        let mut loop_recovery_attempts: usize = 0;
-        const MAX_LOOP_RECOVERY_ATTEMPTS: usize = 3;
+        let mut recent_failed_tool_signatures: Vec<String> = Vec::new();
+        let mut failed_tool_recovery_attempts: usize = 0;
+        const MAX_FAILED_TOOL_RECOVERY_ATTEMPTS: usize = 3;
         const MAX_PARTIAL_CONTINUATION_ATTEMPTS: usize = 3;
         let mut full_compression_count = 0usize;
         let mut compression_failure_count = 0u32;
@@ -2454,22 +2498,23 @@ impl ExecutionEngine {
                 last_partial_recovery_reason = round_result.partial_recovery_reason.clone();
             }
 
-            // P0: Consecutive same-tool-call loop detection
-            if !round_result.tool_calls.is_empty() {
-                let mut sigs: Vec<String> = round_result
-                    .tool_calls
-                    .iter()
-                    .map(|tc| {
-                        let args_str = tc.arguments.to_string();
-                        let args_summary = Self::tool_signature_args_summary(&args_str);
-                        format!("{}:{}", tc.tool_name, args_summary)
-                    })
-                    .collect();
-                sigs.sort();
-                let round_sig = sigs.join("|");
-                recent_tool_signatures.push(round_sig);
+            if let Some(round_signature) = Self::tool_call_signature(&round_result.tool_calls) {
+                recent_tool_signatures.push(round_signature.clone());
+                if Self::failed_tool_round_signature(
+                    &round_result.tool_calls,
+                    &round_result.tool_result_messages,
+                )
+                .is_some()
+                {
+                    recent_failed_tool_signatures.push(round_signature);
+                } else {
+                    recent_failed_tool_signatures.clear();
+                    failed_tool_recovery_attempts = 0;
+                }
             } else {
                 recent_tool_signatures.clear();
+                recent_failed_tool_signatures.clear();
+                failed_tool_recovery_attempts = 0;
             }
 
             let after_round_tokens =
@@ -2496,18 +2541,19 @@ impl ExecutionEngine {
 
             let max_consec = context_profile_policy
                 .effective_loop_threshold(self.config.max_consecutive_same_tool);
-            if recent_tool_signatures.len() >= max_consec {
-                let tail = &recent_tool_signatures[recent_tool_signatures.len() - max_consec..];
+            if recent_failed_tool_signatures.len() >= max_consec {
+                let tail = &recent_failed_tool_signatures
+                    [recent_failed_tool_signatures.len() - max_consec..];
                 if tail.windows(2).all(|w| w[0] == w[1]) {
-                    if loop_recovery_attempts < MAX_LOOP_RECOVERY_ATTEMPTS {
-                        loop_recovery_attempts += 1;
+                    if failed_tool_recovery_attempts < MAX_FAILED_TOOL_RECOVERY_ATTEMPTS {
+                        failed_tool_recovery_attempts += 1;
                         warn!(
-                            "Loop detected: {} consecutive rounds with identical tool signatures, injecting recovery prompt #{}",
-                            max_consec, loop_recovery_attempts
+                            "Repeated tool failure detected: {} consecutive rounds with identical tool signatures, injecting recovery prompt #{}",
+                            max_consec, failed_tool_recovery_attempts
                         );
                         let reminder = format!(
-                            "<system_reminder>Loop detected: you have repeated the same tool call with identical arguments {} times in a row. \
-                            This means the approach is not making progress. You MUST now change your strategy: \
+                            "<system_reminder>Repeated tool failure detected: the same tool call with identical arguments has failed {} times in a row. \
+                            The current approach is not making progress. You MUST now change your strategy: \
                             (1) if the tool keeps failing, try a completely different approach or tool; \
                             (2) if you are stuck, step back and reason about the root cause before acting; \
                             (3) if the task is genuinely impossible with the available tools, provide a clear explanation to the user. \
@@ -2525,18 +2571,15 @@ impl ExecutionEngine {
                             .add_message(&context.session_id, user_msg)
                             .await
                         {
-                            warn!("Failed to persist loop recovery reminder: {}", e);
+                            warn!("Failed to persist failed-tool recovery reminder: {}", e);
                         }
-                        // Clear the recent signatures so the detector resets after recovery.
-                        recent_tool_signatures.clear();
-                        // Do NOT break — continue the loop so the model gets a chance to recover.
+                        recent_failed_tool_signatures.clear();
                     } else {
                         warn!(
-                            "Loop detected: {} consecutive rounds with identical tool signatures, max recovery attempts ({}) exhausted, stopping",
-                            max_consec, MAX_LOOP_RECOVERY_ATTEMPTS
+                            "Repeated tool failure detected: {} consecutive rounds with identical tool signatures, max recovery attempts ({}) exhausted, finalizing without tools",
+                            max_consec, MAX_FAILED_TOOL_RECOVERY_ATTEMPTS
                         );
-                        loop_detected = true;
-                        finalization_reason = Some("loop_detected");
+                        finalization_reason = Some("repeated_tool_failures");
                         break;
                     }
                 }
@@ -2556,17 +2599,17 @@ impl ExecutionEngine {
             // if at most `max_consec` distinct signatures appear AND every one
             // of those signatures appears at least twice, the window contains
             // no genuine new exploration and we treat it as a loop.
-            if Self::is_periodic_tool_signature_loop(&recent_tool_signatures, max_consec) {
+            if Self::is_periodic_tool_signature_loop(&recent_failed_tool_signatures, max_consec) {
                 let window_size = max_consec.max(1).saturating_mul(2);
-                if loop_recovery_attempts < MAX_LOOP_RECOVERY_ATTEMPTS {
-                    loop_recovery_attempts += 1;
+                if failed_tool_recovery_attempts < MAX_FAILED_TOOL_RECOVERY_ATTEMPTS {
+                    failed_tool_recovery_attempts += 1;
                     warn!(
-                        "Loop detected: last {} rounds form a periodic tool-call pattern (<= {} distinct signatures, each repeated), injecting recovery prompt #{}",
-                        window_size, max_consec, loop_recovery_attempts
+                        "Repeated tool failure detected: last {} failed rounds form a periodic tool-call pattern (<= {} distinct signatures, each repeated), injecting recovery prompt #{}",
+                        window_size, max_consec, failed_tool_recovery_attempts
                     );
                     let reminder = format!(
-                        "<system_reminder>Loop detected: your last {} tool calls form a repeating pattern with no new progress. \
-                        You are cycling between the same actions without advancing the task. You MUST now change your strategy: \
+                        "<system_reminder>Repeated tool failure detected: your last {} failed tool calls form a repeating pattern with no new progress. \
+                        You are cycling between failing actions without advancing the task. You MUST now change your strategy: \
                         (1) try a completely different approach or tool; \
                         (2) step back and reason about the root cause before acting; \
                         (3) if the task is genuinely impossible with the available tools, provide a clear explanation to the user. \
@@ -2586,16 +2629,13 @@ impl ExecutionEngine {
                     {
                         warn!("Failed to persist periodic loop recovery reminder: {}", e);
                     }
-                    // Clear the recent signatures so the detector resets after recovery.
-                    recent_tool_signatures.clear();
-                    // Do NOT break — continue the loop so the model gets a chance to recover.
+                    recent_failed_tool_signatures.clear();
                 } else {
                     warn!(
-                        "Loop detected: last {} rounds form a periodic tool-call pattern, max recovery attempts ({}) exhausted, stopping",
-                        window_size, MAX_LOOP_RECOVERY_ATTEMPTS
+                            "Repeated tool failure detected: last {} failed rounds form a periodic tool-call pattern, max recovery attempts ({}) exhausted, finalizing without tools",
+                            window_size, MAX_FAILED_TOOL_RECOVERY_ATTEMPTS
                     );
-                    loop_detected = true;
-                    finalization_reason = Some("loop_detected");
+                    finalization_reason = Some("repeated_tool_failures");
                     break;
                 }
             }
@@ -2807,10 +2847,121 @@ impl ExecutionEngine {
 
         // P1-6: Track the actual termination reason for downstream reporting.
         // Defaults to "complete" (model produced a final answer naturally).
-        let effective_finish_reason: &'static str = match finalization_reason {
+        let mut effective_finish_reason: &'static str = match finalization_reason {
             Some(r) => r,
             None => "complete",
         };
+        let mut finalize_fallback_text_used = false;
+
+        if let Some(reason) = finalization_reason {
+            let finalize_reminder = match reason {
+                "queued_user_message"
+                    if messages
+                        .iter()
+                        .rev()
+                        .find(|message| message.role == MessageRole::Assistant)
+                        .is_some_and(Self::assistant_has_tool_calls)
+                        && Self::has_tool_result_after_last_assistant(&messages) =>
+                {
+                    Some(Self::FINALIZE_AFTER_TOOL_USE_REMINDER)
+                }
+                "repeated_tool_failures" => {
+                    Some(Self::FINALIZE_AFTER_REPEATED_TOOL_FAILURES_REMINDER)
+                }
+                "max_rounds" => Some(Self::FINALIZE_AFTER_MAX_ROUNDS_REMINDER),
+                _ => None,
+            };
+
+            if let Some(finalize_reminder) = finalize_reminder {
+                info!(
+                    "Finalizing dialog turn: session_id={}, turn_id={}, reason={}",
+                    context.session_id, context.dialog_turn_id, reason
+                );
+
+                let final_round_result = self
+                    .run_finalize_round(
+                        ai_client.clone(),
+                        &context,
+                        agent_type.clone(),
+                        completed_rounds,
+                        &execution_context_vars,
+                        primary_supports_image_understanding,
+                        &prepended_reminders,
+                        &messages,
+                        finalize_reminder,
+                        context_window,
+                    )
+                    .await?;
+
+                let mut accepted = final_round_result.had_assistant_text
+                    && !Self::assistant_has_tool_calls(&final_round_result.assistant_message);
+                let mut chosen_assistant_message: Option<Message> = None;
+                let mut chosen_usage: Option<crate::util::types::ai::GeminiUsage> =
+                    final_round_result.usage.clone();
+
+                if accepted {
+                    chosen_assistant_message = Some(final_round_result.assistant_message.clone());
+                } else {
+                    // P1-10: First finalize round still returned tool calls
+                    // (rare; tools were not provided, but model hallucinated).
+                    // One last attempt with a stricter text-only reminder.
+                    warn!(
+                        "Finalize round still returned tool calls; retrying with text-only reminder: session_id={}, turn_id={}",
+                        context.session_id, context.dialog_turn_id
+                    );
+                    let retry_result = self
+                        .run_finalize_round(
+                            ai_client.clone(),
+                            &context,
+                            agent_type.clone(),
+                            completed_rounds,
+                            &execution_context_vars,
+                            primary_supports_image_understanding,
+                            &prepended_reminders,
+                            &messages,
+                            Self::FORCE_TEXT_ONLY_REMINDER,
+                            context_window,
+                        )
+                        .await?;
+                    finalize_fallback_text_used = true;
+                    if !retry_result.had_assistant_text
+                        || Self::assistant_has_tool_calls(&retry_result.assistant_message)
+                    {
+                        warn!(
+                            "Text-only retry did not return usable assistant text; keeping prior messages: session_id={}, turn_id={}",
+                            context.session_id, context.dialog_turn_id
+                        );
+                    } else {
+                        accepted = true;
+                        chosen_usage = retry_result.usage.clone();
+                        chosen_assistant_message = Some(retry_result.assistant_message);
+                    }
+                }
+
+                if let Some(msg) = chosen_assistant_message {
+                    completed_rounds += 1;
+                    if let Some(usage) = chosen_usage {
+                        last_usage = Some(usage);
+                    }
+                    messages.push(msg.clone());
+                    if let Err(e) = self
+                        .session_manager
+                        .add_message(&context.session_id, msg)
+                        .await
+                    {
+                        warn!("Failed to update final assistant message in memory: {}", e);
+                    }
+                }
+
+                if !accepted {
+                    effective_finish_reason = "finalize_failed";
+                } else if reason == "max_rounds" {
+                    effective_finish_reason = "max_rounds_finalized";
+                } else if finalize_fallback_text_used {
+                    effective_finish_reason = "finalize_text_only_forced";
+                }
+            }
+        }
 
         let duration_ms = elapsed_ms_u64(start_time);
 
@@ -2821,11 +2972,10 @@ impl ExecutionEngine {
 
         let finish_reason = FinishReason::Complete;
         // success reflects whether we ended with a usable final answer.
-        let success = !loop_detected
-            && !matches!(
-                effective_finish_reason,
-                "finalize_failed" | "empty_round" | "max_rounds"
-            );
+        let success = !matches!(
+            effective_finish_reason,
+            "finalize_failed" | "empty_round" | "max_rounds"
+        );
 
         // Post-processing hook: when a DeepResearch dialog turn finishes
         // successfully, renumber `cit_XXX` references in the final report
@@ -3064,6 +3214,58 @@ mod tests {
         assert_eq!(first.len(), second.len());
         assert_ne!(first, second);
         assert_ne!(first_summary, second_summary);
+    }
+
+    #[test]
+    fn failed_tool_round_signature_ignores_successful_repeated_calls() {
+        let tool_calls = vec![ToolCall {
+            tool_id: "tool-1".to_string(),
+            tool_name: "PollStatus".to_string(),
+            arguments: json!({ "job_id": "job-1" }),
+            raw_arguments: None,
+            is_error: false,
+            recovered_from_truncation: false,
+        }];
+        let results = vec![Message::tool_result(ToolResult {
+            tool_id: "tool-1".to_string(),
+            tool_name: "PollStatus".to_string(),
+            result: json!({ "status": "pending", "success": true }),
+            result_for_assistant: Some("The job is still pending.".to_string()),
+            is_error: false,
+            duration_ms: Some(1),
+            image_attachments: None,
+        })];
+
+        assert!(
+            ExecutionEngine::failed_tool_round_signature(&tool_calls, &results).is_none(),
+            "successful polling must not be treated as a failed loop"
+        );
+    }
+
+    #[test]
+    fn failed_tool_round_signature_requires_actual_failure_evidence() {
+        let tool_calls = vec![ToolCall {
+            tool_id: "tool-1".to_string(),
+            tool_name: "Read".to_string(),
+            arguments: json!({ "path": "missing.txt" }),
+            raw_arguments: None,
+            is_error: false,
+            recovered_from_truncation: false,
+        }];
+        let results = vec![Message::tool_result(ToolResult {
+            tool_id: "tool-1".to_string(),
+            tool_name: "Read".to_string(),
+            result: json!({ "success": false, "error": "not found" }),
+            result_for_assistant: Some("File not found.".to_string()),
+            is_error: true,
+            duration_ms: Some(1),
+            image_attachments: None,
+        })];
+
+        assert_eq!(
+            ExecutionEngine::failed_tool_round_signature(&tool_calls, &results).as_deref(),
+            Some(r#"Read:{"path":"missing.txt"}"#)
+        );
     }
 
     #[test]

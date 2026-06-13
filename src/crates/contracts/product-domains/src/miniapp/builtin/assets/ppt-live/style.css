@@ -353,8 +353,8 @@ button, input, select, textarea { font-size: inherit; line-height: inherit; }
 .app-topbar {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(360px, 1fr) minmax(180px, 300px) minmax(330px, 1fr);
-  grid-template-areas: "leading progress actions";
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: "leading actions";
   align-items: center;
   gap: 14px;
   box-sizing: border-box;
@@ -477,77 +477,6 @@ button, input, select, textarea { font-size: inherit; line-height: inherit; }
   color: var(--studio-muted);
   font-size: 11px;
   font-weight: 600;
-}
-
-.topbar-center {
-  grid-area: progress;
-  min-width: 0;
-  display: flex;
-  justify-content: center;
-}
-
-.top-progress {
-  display: inline-grid;
-  grid-template-columns: 6px minmax(0, 1fr);
-  align-items: center;
-  gap: 7px;
-  width: min(100%, 280px);
-  min-height: 25px;
-  padding: 0 10px;
-  border: 1px solid color-mix(in srgb, var(--studio-text) 8%, transparent);
-  border-radius: 999px;
-  color: var(--studio-soft);
-  background: color-mix(in srgb, var(--studio-text) 4%, transparent);
-  box-shadow: none;
-  font-size: 10px;
-  font-weight: 650;
-  pointer-events: none;
-}
-
-.top-progress.is-step-progress {
-  grid-template-columns: 6px minmax(0, 1fr) 42px;
-}
-
-.top-progress.is-step-progress .progress-meter {
-  display: block;
-}
-
-.top-progress span:nth-child(2) {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.progress-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--studio-success) 72%, var(--studio-muted));
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--studio-success) 10%, transparent);
-}
-
-.progress-meter {
-  display: none;
-  height: 3px;
-  overflow: hidden;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--studio-text) 9%, transparent);
-}
-
-.progress-meter i {
-  width: var(--progress, 0%);
-  height: 100%;
-  display: block;
-  border-radius: inherit;
-  background: linear-gradient(90deg, var(--studio-accent), var(--studio-primary-2));
-  transition: width 200ms ease;
-}
-
-.ppt-live.is-generating .progress-dot {
-  background: var(--studio-warning);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--studio-warning) 16%, transparent);
-  animation: pulse-dot 1s ease-in-out infinite;
 }
 
 .topbar-actions {
@@ -1009,61 +938,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   background: var(--studio-slide-chrome);
   font-size: 11px;
   cursor: pointer;
-}
-
-/* Generation overlay */
-.generation-overlay {
-  position: absolute;
-  inset: 0;
-  z-index: 20;
-  display: grid;
-  place-items: center;
-  padding: 20px;
-  background: color-mix(in srgb, var(--studio-bg) 78%, transparent);
-  backdrop-filter: blur(8px);
-}
-
-.generation-overlay[hidden] { display: none; }
-
-.generation-overlay-card {
-  width: min(440px, 92%);
-  display: grid;
-  gap: 14px;
-  padding: 20px;
-  border: 1px solid var(--studio-border);
-  border-radius: 14px;
-  background: color-mix(in srgb, var(--studio-panel) 95%, transparent);
-}
-
-.generation-overlay-head {
-  display: grid;
-  grid-template-columns: 32px minmax(0, 1fr);
-  gap: 12px;
-  align-items: center;
-}
-
-.generation-spinner {
-  width: 28px;
-  height: 28px;
-  border: 3px solid color-mix(in srgb, var(--studio-accent) 18%, transparent);
-  border-top-color: var(--studio-accent);
-  border-radius: 999px;
-  animation: spin 0.9s linear infinite;
-}
-
-.generation-overlay-head p {
-  margin: 4px 0 0;
-  color: var(--studio-muted);
-  font-size: 12px;
-}
-
-.generation-overlay-progress {
-  margin: 6px 0 0;
-  color: var(--studio-text);
-  font-size: 28px;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-  letter-spacing: 0.02em;
 }
 
 .generation-pipeline {
@@ -1869,7 +1743,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
     gap: 10px;
     padding: 0 10px;
   }
-  .eyebrow, .topbar-deck, .topbar-divider, .topbar-center, .top-progress { display: none; }
+  .eyebrow, .topbar-deck, .topbar-divider { display: none; }
   .brand-mark {
     width: 24px;
     height: 24px;
@@ -2821,6 +2695,20 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   gap: var(--space-3);
 }
 
+.statusbar-spinner {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  border: 2px solid color-mix(in srgb, var(--studio-accent) 18%, transparent);
+  border-top-color: var(--studio-accent);
+  border-radius: 999px;
+  animation: spin 0.9s linear infinite;
+}
+
+.statusbar-spinner[hidden] {
+  display: none;
+}
+
 .statusbar-divider {
   width: 1px;
   height: 14px;
@@ -2948,7 +2836,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
     gap: 10px;
     padding: 0 10px;
   }
-  .eyebrow, .topbar-deck, .topbar-divider, .topbar-center, .top-progress { display: none; }
+  .eyebrow, .topbar-deck, .topbar-divider { display: none; }
   .brand-mark {
     width: 24px;
     height: 24px;

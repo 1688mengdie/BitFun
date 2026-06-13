@@ -81,36 +81,6 @@ export async function planPresentationTaskWithAi(state, instruction) {
   return normalizeAgentPlan(data, state);
 }
 
-export async function enrichSources(state) {
-  const urls = extractUrls(`${state.brief.topic || ''}\n${state.brief.material || ''}`);
-  const manual = stripUrls(`${state.brief.topic || ''}\n${state.brief.material || ''}`).trim();
-  const sources = {
-    items: [],
-    facts: [],
-    warnings: [],
-    summary: '',
-    fetchedAt: Date.now(),
-  };
-  if (manual.length >= 20) {
-    sources.items.push({ kind: 'user-text', title: t('sourceManualTitle'), url: '', text: manual.slice(0, 5000) });
-  }
-  for (const url of urls.slice(0, 3)) {
-    try {
-      const fetched = await fetchReadableSources(url);
-      sources.items.push(...fetched);
-    } catch (error) {
-      window.app?.log?.warn?.('PPT Live source fetch failed', { url, error: String(error) });
-      sources.warnings.push(t('sourceFetchFailed', { url }));
-    }
-  }
-  const combined = sources.items.map((item) => `${item.title}\n${item.text}`).join('\n\n').slice(0, 14000);
-  sources.facts = extractFacts(combined);
-  sources.summary = summarizeSource(combined, sources);
-  if (!sources.items.length) sources.warnings.push(t('sourceMissingWarning'));
-  state.sources = sources;
-  return sources;
-}
-
 export async function generateOutlineWithAi(state) {
   const prompt = [
     'Return strict JSON only, no markdown fences.',
@@ -1179,12 +1149,12 @@ const DESIGN_THEMES = {
   },
   // === PPT Live Style Presets (kept in sync with style-presets.js) ===
   'clean-business': {
-    background: '#ffffff',
-    ink: '#1a1a1a',
-    muted: '#6b7280',
-    primary: '#2563eb',
-    accent: '#3b82f6',
-    panel: '#f8fafc',
+    background: '#FAFAF7',
+    ink: '#111111',
+    muted: '#787774',
+    primary: '#1e3a5f',
+    accent: '#0f766e',
+    panel: '#F3F2EF',
   },
   'insight-report': {
     background: '#ffffff',
@@ -1394,116 +1364,6 @@ function cleanUrlToken(value) {
     url = url.slice(0, -1);
   }
   return url;
-}
-
-async function fetchReadableSources(url) {
-  const host = window.app;
-  if (!host?.net?.fetch) throw new Error('net unavailable');
-  const targets = sourceTargets(url);
-  let lastError = null;
-  const found = [];
-  for (const target of targets) {
-    try {
-      const response = await host.net.fetch(target.url, {
-        headers: {
-          Accept: target.accept || 'text/html,text/plain,application/json',
-          'User-Agent': 'PPT-Live/1.0',
-        },
-      });
-      if (Number(response.status) < 200 || Number(response.status) >= 300) throw new Error(`HTTP ${response.status}`);
-      const text = readableText(response.body || '', target.url);
-      if (text.length < 80) throw new Error('source too small');
-      host.log?.info?.('PPT Live source fetched', { url: target.url, kind: target.kind, textLength: text.length });
-      found.push({
-        kind: target.kind,
-        title: target.title || target.url,
-        url: target.url,
-        text: text.slice(0, 9000),
-      });
-    } catch (error) {
-      host.log?.warn?.('PPT Live source target failed', { url: target.url, kind: target.kind, error: String(error) });
-      lastError = error;
-    }
-  }
-  if (found.length) return found;
-  throw lastError || new Error('fetch failed');
-}
-
-function sourceTargets(url) {
-  try {
-    const parsed = new URL(cleanUrlToken(url));
-    if (parsed.hostname === 'github.com') {
-      const [, owner, repo] = parsed.pathname.split('/');
-      if (owner && repo) {
-        const cleanRepo = repo.replace(/\.git$/i, '');
-        return [
-          {
-            kind: 'github-readme',
-            title: `${owner}/${cleanRepo} README`,
-            url: `https://raw.githubusercontent.com/${owner}/${cleanRepo}/HEAD/README.md`,
-            accept: 'text/plain',
-          },
-          {
-            kind: 'github-api',
-            title: `${owner}/${cleanRepo}`,
-            url: `https://api.github.com/repos/${owner}/${cleanRepo}`,
-            accept: 'application/vnd.github+json',
-          },
-          { kind: 'web-page', title: cleanUrlToken(url), url: cleanUrlToken(url) },
-        ];
-      }
-    }
-  } catch {
-    return [{ kind: 'web-page', title: cleanUrlToken(url), url: cleanUrlToken(url) }];
-  }
-  return [{ kind: 'web-page', title: cleanUrlToken(url), url: cleanUrlToken(url) }];
-}
-
-function readableText(body, url) {
-  const raw = String(body || '');
-  if (url.includes('api.github.com/repos/')) {
-    try {
-      const data = JSON.parse(raw);
-      return [
-        data.full_name,
-        data.description,
-        `Stars: ${data.stargazers_count ?? 'unknown'}`,
-        `Forks: ${data.forks_count ?? 'unknown'}`,
-        `Language: ${data.language || 'unknown'}`,
-        `Topics: ${(data.topics || []).join(', ')}`,
-        `Updated: ${data.updated_at || 'unknown'}`,
-        data.homepage ? `Homepage: ${data.homepage}` : '',
-      ].filter(Boolean).join('\n');
-    } catch {
-      return raw;
-    }
-  }
-  return raw
-    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function extractFacts(text) {
-  const clean = String(text || '').replace(/\s+/g, ' ').trim();
-  const sentences = clean
-    .split(/(?<=[。！？.!?])\s+|[\n\r]+/)
-    .map((item) => item.trim())
-    .filter((item) => item.length >= 16 && item.length <= 180);
-  const numeric = sentences.filter((item) => /\d/.test(item));
-  return [...numeric, ...sentences].slice(0, 12);
-}
-
-function summarizeSource(text, sources) {
-  const facts = extractFacts(text).slice(0, 6);
-  if (!facts.length) return '';
-  return [t('sourceDigestTitle'), ...facts.map((fact) => `- ${fact}`), ...(sources.warnings || []).map((warning) => `- ${warning}`)].join('\n');
 }
 
 async function askAi() {

@@ -22,13 +22,14 @@ import {
   indexToDensity,
   uid,
 } from './src/state.js';
-import { getAllStylePresets, getStylePreset, DEFAULT_STYLE_PRESET } from './src/style-presets.js';
+import { getAllStylePresets, getStylePreset, DEFAULT_STYLE_PRESET, resolveStylePalette } from './src/style-presets.js';
 import { enhanceFlatSelect, refreshFlatSelect } from './src/flat-select.js';
 import { applyI18n, readInputs, renderAll, renderInspector, renderSlideCanvas, renderGeneration, renderGenerationOverlay, renderThumbs, slideHtml, fitSlideCanvas, fitHtmlSlideFrame, buildExportPreviewStage, fitExportPreviewFrame, fitThumbPreviews, normalizeSlideDocument, observeThumbPreviews, ensureCanvasFitted, syncDensitySlider } from './src/render.js';
 import {
   prepareSlidesForPptxExport,
   slideExportHtml,
   EXPORT_VIEWPORT,
+  validateSlideForPptxGeneration,
 } from './src/export-slide-browser.js';
 import {
   exportPdfFromBase64Pages,
@@ -38,8 +39,11 @@ import {
 } from './src/export-deck-host.js';
 import { downloadBase64File, downloadHtmlDeck, fileSafe } from './src/export-html.js';
 import { exportFormatIcon, exportFormatTone } from './src/export-format-icons.js';
-import { enrichSources } from './src/deck-ai.js';
-import { installBitFunBackendAdapter } from './src/bitfun-backend-adapter.js';
+import {
+  installBitFunBackendAdapter,
+  PPT_DESIGN_REQUIRED_REFERENCES,
+  PPT_DESIGN_SKILL_KEY,
+} from './src/bitfun-backend-adapter.js';
 
 let state = createInitialState();
 let busy = false;
@@ -306,6 +310,7 @@ function resetGeneration() {
   state.generation.eventSeq = 0;
   state.generation.steps = state.generation.steps.map((step) => ({ ...step, status: 'pending' }));
   state.generation.events = [];
+  resetSlideValidationCache('');
   renderGeneration(state);
   renderGenerationOverlay(state);
 }
@@ -454,22 +459,47 @@ function failGenerationUi(statusMessage = t('backendGenerationFailed'), detail =
   renderGenerationOverlay(state);
 }
 
-function backendErrorDetail(error) {
-  const raw = String(error?.message || error || '').trim();
+function errorMessageChain(error, maxDepth = 5) {
+  const messages = [];
+  const seen = new Set();
+  let current = error;
+  for (let depth = 0; current && depth < maxDepth; depth += 1) {
+    const raw = String(current?.message || current || '').trim();
+    if (raw && !seen.has(raw)) {
+      seen.add(raw);
+      messages.push(raw);
+    }
+    current = current?.cause;
+  }
+  return messages;
+}
+
+function backendErrorDetail(error, maxLength = 220) {
+  const raw = errorMessageChain(error).join(' Root cause: ');
   if (!raw) return '';
   return compactText(raw
     .replace(/^Error:\s*/i, '')
     .replace(/^Tauri command .*? failed:\s*/i, '')
     .replace(/^live_app_backend_call:\s*/i, '')
     .replace(/^Failed to start PPT Live generation:\s*/i, '')
-    .trim(), 220);
+    .trim(), maxLength);
 }
 
 function failGenerationFromError(error) {
-  const detail = backendErrorDetail(error);
+  const detail = backendErrorDetail(error, error?.pptLiveRecoveryExhausted ? 520 : 220);
   let statusMessage;
   let hint = detail;
-  if (isTimeoutBackendError(error)) {
+  if (error?.pptLiveRecoveryExhausted) {
+    const recovery = error.pptLiveRecoveryExhausted;
+    statusMessage = t('generationRecoveryExhausted', {
+      stage: t(recovery.stageKey, recovery.stageVars || {}),
+      retries: recovery.stepAttempts,
+      continuations: recovery.continuationAttempts,
+    });
+    hint = t('generationRecoveryFailureDetail', {
+      reason: detail || t('agentOnlyRetryHint'),
+    });
+  } else if (isTimeoutBackendError(error)) {
     statusMessage = t('generationTimedOut');
   } else if (isRoundBudgetBackendError(error)) {
     statusMessage = t('generationRoundBudgetFailed');
@@ -482,12 +512,14 @@ function failGenerationFromError(error) {
   failGenerationUi(statusMessage, hint || t('agentOnlyRetryHint'));
 }
 
-function buildGenerationBrief() {
+function buildGenerationBrief({ includeEvidence = true } = {}) {
   const brief = {
     topic: String(state.brief?.topic || state.promptDraft || '').trim(),
     audience: String(state.brief?.audience || '').trim(),
-    material: String(state.brief?.material || '').trim().slice(0, 12000),
-    sources: state.sources
+  };
+  if (includeEvidence) {
+    brief.material = String(state.brief?.material || '').trim().slice(0, 12000);
+    brief.sources = state.sources
       ? {
           summary: String(state.sources.summary || '').slice(0, 4000),
           facts: (state.sources.facts || []).slice(0, 16),
@@ -499,21 +531,49 @@ function buildGenerationBrief() {
             text: String(item.text || '').slice(0, 6000),
           })),
         }
-      : null,
-  };
+      : null;
+  }
   const slideTarget = Number(state.brief?.slideTarget) || 0;
   if (slideTarget > 0) brief.slideTarget = slideTarget;
   return brief;
 }
 
-function buildGenerationStyle() {
+function buildGenerationStyle({ includePreset = true } = {}) {
   const preset = getStylePreset(state.style?.stylePreset);
-  return {
+  const colorMode = state.style?.colorMode === 'dark' ? 'dark' : 'light';
+  const style = {
     fontFamily: state.style?.fontFamily === 'serif' ? 'serif' : 'sans',
     density: normalizeDensity(state.style?.density),
-    colorMode: state.style?.colorMode === 'dark' ? 'dark' : 'light',
-    stylePreset: state.style?.stylePreset || DEFAULT_STYLE_PRESET,
-    palette: preset.palette || {},
+    colorMode,
+    theme: colorMode,
+    palette: resolveStylePalette(preset, colorMode),
+  };
+  if (includePreset) style.stylePreset = state.style?.stylePreset || DEFAULT_STYLE_PRESET;
+  return style;
+}
+
+function livePlanContextStyle(planContext = {}) {
+  const style = buildGenerationStyle();
+  return {
+    ...(planContext.style || {}),
+    ...style,
+  };
+}
+
+function livePlanContextDesign(planContext = {}) {
+  const style = buildGenerationStyle();
+  return {
+    ...(planContext.design || {}),
+    theme: style.colorMode === 'dark' ? 'dark' : 'light',
+    palette: { ...(planContext.design?.palette || {}), ...style.palette },
+  };
+}
+
+function liveGenerationContract(planContext = {}) {
+  const style = buildGenerationStyle();
+  return {
+    ...(planContext.generationContract || {}),
+    userStyle: style,
   };
 }
 
@@ -612,14 +672,433 @@ function setDensityIndex(index, { save = true } = {}) {
   if (save) void persist(true);
 }
 
-const PPT_BACKEND_MAX_ATTEMPTS = 3;
+// Interrupted turns are retried as "continue" turns inside the same agent
+// session. Each stage first gets a short retry budget for transient failures;
+// only after that budget is exhausted do we send explicit completion-aware
+// continuation prompts carrying host-verified missing artifacts.
+const PPT_BACKEND_MAX_ATTEMPTS = 4;
+const PPT_BACKEND_CONTINUATION_MAX_ATTEMPTS = 8;
+const PPT_BACKEND_TOTAL_STAGE_ATTEMPTS =
+  PPT_BACKEND_MAX_ATTEMPTS + PPT_BACKEND_CONTINUATION_MAX_ATTEMPTS;
+// Whole-deck Agent audit is slow; skip phase 3 until the audit path is fast enough.
+const PPT_LIVE_FINAL_AUDIT_ENABLED = false;
+const PPT_RETRY_DELAY_MS = 750;
+
+function stageAttemptInfo(attempt) {
+  const continuation = attempt > PPT_BACKEND_MAX_ATTEMPTS;
+  return {
+    continuation,
+    continuationAttempt: continuation ? attempt - PPT_BACKEND_MAX_ATTEMPTS : 0,
+  };
+}
+
+function completionRecoveryInput(stage, attempt, error, issues = []) {
+  const info = stageAttemptInfo(attempt);
+  if (!info.continuation) return null;
+  return {
+    stage,
+    attempt: info.continuationAttempt,
+    maxAttempts: PPT_BACKEND_CONTINUATION_MAX_ATTEMPTS,
+    previousFailure: backendErrorDetail(error),
+    issues: [...new Set((issues || []).map(String).filter(Boolean))],
+  };
+}
+
+function recoveryExhaustedError(stageKey, lastError, failures = [], stageVars = {}) {
+  const reasons = [...new Set(
+    failures
+      .map((failure) => backendErrorDetail(failure))
+      .filter(Boolean),
+  )];
+  const lastReason = backendErrorDetail(lastError);
+  const summary = lastReason || reasons.at(-1) || 'The Agent did not produce the required artifact.';
+  const error = new Error(
+    `PPT Live recovery exhausted after ${PPT_BACKEND_MAX_ATTEMPTS} stage attempts and `
+      + `${PPT_BACKEND_CONTINUATION_MAX_ATTEMPTS} continuation turns. Last verified reason: ${summary}`,
+    { cause: lastError || undefined },
+  );
+  error.pptLiveRecoveryExhausted = {
+    stageKey,
+    stageVars,
+    stepAttempts: PPT_BACKEND_MAX_ATTEMPTS,
+    continuationAttempts: PPT_BACKEND_CONTINUATION_MAX_ATTEMPTS,
+    reasons,
+  };
+  return error;
+}
+
+/** Per-run cache: validated slide html fingerprints keyed by runId:slideNumber. */
+const slideValidationCache = new Map();
+let slideValidationRunId = '';
+
+function slideHtmlFingerprint(html) {
+  const raw = String(html || '');
+  let hash = 0;
+  for (let i = 0; i < raw.length; i += 1) {
+    hash = ((hash << 5) - hash + raw.charCodeAt(i)) | 0;
+  }
+  return String(hash);
+}
+
+function resetSlideValidationCache(runId = '') {
+  slideValidationCache.clear();
+  slideValidationRunId = runId || '';
+}
+
+function slideValidationCacheKey(slideNumber) {
+  return `${slideValidationRunId}:${slideNumber}`;
+}
+
+function rememberValidatedSlide(slideNumber, html) {
+  slideValidationCache.set(slideValidationCacheKey(slideNumber), slideHtmlFingerprint(html));
+}
+
+function slideAlreadyValidated(slideNumber, html) {
+  return slideValidationCache.get(slideValidationCacheKey(slideNumber)) === slideHtmlFingerprint(html);
+}
+
+function slidePlanId(slidePlan, slideNumber) {
+  return String(slidePlan?.slideId || slidePlan?.id || `slide-${String(slideNumber).padStart(2, '0')}`);
+}
 
 function isRetryableBackendError(error) {
   const raw = String(error?.message || error || '');
   if (isStoppedBackendError(error)) return false;
   if (/Generation stopped/i.test(raw)) return false;
   if (/backend is unavailable|did not return sessionId/i.test(raw)) return false;
+  if (/permission|workspacePath is required|unsupported PPT Live action/i.test(raw)) return false;
   return true;
+}
+
+function retryDelayMs(error, attempt) {
+  const raw = String(error?.message || error || '');
+  const transient = /rate limit|network|timed? out|connection|temporar|overload|service unavailable|502|503|504/i
+    .test(raw);
+  if (!transient) return PPT_RETRY_DELAY_MS;
+  return Math.min(15000, 1000 * (2 ** Math.min(Math.max(0, attempt - 1), 4)));
+}
+
+// The hidden agent session lives in backend memory only; a backend restart or
+// a stale persisted sessionId surfaces as this error. The caller should drop
+// the sessionId and fall back to a self-contained turn.
+function isUnknownSessionBackendError(error) {
+  return /Unknown MiniApp agent session|session workspace does not match/i.test(
+    String(error?.message || error || ''),
+  );
+}
+
+// ─── Deck project files (ppt-design native protocol) ─────────────────────────
+//
+// Staged generation runs the agent inside a dedicated deck project directory
+// (`decks/<runId>` under this app's appdata storage). The agent follows the
+// ppt-design skill's own conventions — `project.json` for the plan and
+// `slides/slide-NN.html` per page — and ui.js reads the files back. Files on
+// disk are the source of truth, which makes interruption recovery natural:
+// whatever was written stays written.
+
+function backendUsesFileProtocol() {
+  const host = runtime();
+  return host.backend?.protocol === 'files'
+    && Boolean(host.appDataDir)
+    && Boolean(host.fs?.readFile);
+}
+
+function newDeckProject() {
+  const runId = `deck-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  return {
+    runId,
+    workspaceSubdir: `decks/${runId}`,
+    dir: `${runtime().appDataDir}/decks/${runId}`,
+  };
+}
+
+function currentDeckProject() {
+  const workspaceSubdir = String(state.agentSession?.workspaceSubdir || '');
+  if (!workspaceSubdir || !runtime().appDataDir) return null;
+  const runId = String(state.agentSession?.runId || workspaceSubdir.split('/').pop() || '');
+  return {
+    runId,
+    workspaceSubdir,
+    dir: `${runtime().appDataDir}/${workspaceSubdir}`,
+  };
+}
+
+function deckSlideFileName(slideNumber) {
+  return `slides/slide-${String(slideNumber).padStart(2, '0')}.html`;
+}
+
+const GENERATION_HARD_RULES = [
+  'All visible text must be inside p, h1-h6, or li; DIV cannot contain direct text and span is inline-only.',
+  'CSS gradients are forbidden; use solid fills and discrete shapes.',
+  'Backgrounds, borders, and shadows belong on DIV shapes, never on text or inline elements.',
+  'DIV background-image is forbidden; use img. Inline text elements cannot carry box spacing or decorative fills.',
+  'Use a complete self-contained 960pt x 540pt document with no remote assets and no canvas overflow.',
+  'Text larger than 12px must keep at least a 36pt bottom safety margin.',
+];
+
+function outlineItemTitle(item) {
+  return typeof item === 'string' ? item : String(item?.title || '');
+}
+
+function planOutlineTitles(plan) {
+  return Array.isArray(plan?.outline)
+    ? plan.outline.map(outlineItemTitle).filter(Boolean)
+    : [];
+}
+
+function expectedPlanReferences(style) {
+  const references = [...PPT_DESIGN_REQUIRED_REFERENCES];
+  if (style?.stylePreset) {
+    references.push(`references/style-presets/${style.stylePreset}.md`);
+  }
+  return references;
+}
+
+function finalizePlanContract(payload, instruction) {
+  const slidePlans = extractValidSlidePlans(payload).map((plan, index) => ({
+    ...plan,
+    slideNumber: slidePlanNumber(plan, index + 1),
+    slideId: String(plan?.slideId || `slide-${String(index + 1).padStart(2, '0')}`),
+  }));
+  const style = buildGenerationStyle();
+  const brief = buildGenerationBrief();
+  const outline = slidePlans.map((plan) => ({
+    id: plan.slideId,
+    title: String(plan.title || ''),
+    bullets: Array.isArray(plan.bullets) ? plan.bullets.map(String) : [],
+    slide_id: plan.slideId,
+  }));
+  const requestedShowcase = Array.isArray(payload?.showcaseSlideNumbers)
+    ? payload.showcaseSlideNumbers.map(Number)
+    : [];
+  const validShowcase = [...new Set(requestedShowcase)]
+    .filter((number) => Number.isInteger(number) && number >= 1 && number <= slidePlans.length)
+    .slice(0, 2);
+  if (slidePlans.length >= 5 && validShowcase.length < 2) {
+    for (const fallback of [1, Math.min(3, slidePlans.length), slidePlans.length]) {
+      if (!validShowcase.includes(fallback)) validShowcase.push(fallback);
+      if (validShowcase.length === 2) break;
+    }
+  }
+
+  return {
+    ...payload,
+    outline,
+    slide_order: outline.map((item) => item.slide_id),
+    style,
+    design: {
+      ...(payload?.design || {}),
+      theme: style.colorMode === 'dark' ? 'dark' : 'light',
+      palette: { ...(payload?.design?.palette || {}), ...style.palette },
+    },
+    assumptions: Array.isArray(payload?.assumptions)
+      ? payload.assumptions.map(String)
+      : (payload?.researchReport?.assumptions || []).map(String),
+    generationContract: {
+      ...(payload?.generationContract || {}),
+      version: 1,
+      skillKey: PPT_DESIGN_SKILL_KEY,
+      skillName: 'ppt-design',
+      requiredReferences: expectedPlanReferences(style),
+      deliveryTarget: 'editable-pptx',
+      userPrompt: String(instruction || ''),
+      userBrief: brief,
+      userStyle: style,
+      hardRules: GENERATION_HARD_RULES,
+      visualGrammar: {
+        ...(payload?.generationContract?.visualGrammar || {}),
+        ...(payload?.design?.renderGuide || {}),
+      },
+    },
+    showcaseSlideNumbers: slidePlans.length >= 5 ? validShowcase : [],
+    slidePlans,
+  };
+}
+
+async function writeDeckProjectJson(project, payload) {
+  const fs = runtime().fs;
+  if (!project || !fs?.writeFile) return;
+  await fs.writeFile(`${project.dir}/project.json`, `${JSON.stringify(payload, null, 2)}\n`);
+}
+
+async function readDeckProjectFile(project, relPath) {
+  const fs = runtime().fs;
+  if (!fs?.readFile) throw new Error('PPT Live fs API is unavailable');
+  return await fs.readFile(`${project.dir}/${relPath}`);
+}
+
+/** Parsed JSON project artifact, or null when missing or not yet valid JSON. */
+async function tryReadDeckJsonFile(project, relPath) {
+  try {
+    const raw = String(await readDeckProjectFile(project, relPath) || '');
+    if (!raw.trim()) return null;
+    return extractBackendJson(raw);
+  } catch {
+    return null;
+  }
+}
+
+async function inspectDeckJsonFile(project, relPath) {
+  try {
+    const raw = String(await readDeckProjectFile(project, relPath) || '');
+    if (!raw.trim()) {
+      return { status: 'empty', value: null, reason: `${relPath} exists but is empty.` };
+    }
+    try {
+      return { status: 'valid', value: extractBackendJson(raw), reason: '' };
+    } catch (error) {
+      return {
+        status: 'invalid',
+        value: null,
+        reason: `${relPath} is not valid JSON: ${backendErrorDetail(error) || 'parse failed'}.`,
+      };
+    }
+  } catch (error) {
+    return {
+      status: 'missing',
+      value: null,
+      reason: `${relPath} was not created or could not be read: ${
+        backendErrorDetail(error) || 'file unavailable'
+      }.`,
+    };
+  }
+}
+
+/** Parsed `project.json`, or null when missing or not yet valid JSON. */
+async function tryReadDeckPlanFile(project) {
+  return await tryReadDeckJsonFile(project, 'project.json');
+}
+
+/** Complete slide HTML from disk, or null when missing or incomplete. */
+async function tryReadDeckSlideFile(project, slideNumber) {
+  try {
+    const raw = String(await readDeckProjectFile(project, deckSlideFileName(slideNumber)) || '').trim();
+    if (!raw || !/<\/html>\s*$/i.test(raw)) return null;
+    return raw;
+  } catch {
+    return null;
+  }
+}
+
+function toolTraceParams(entry) {
+  return entry?.params && typeof entry.params === 'object' ? entry.params : {};
+}
+
+function isPptDesignSkillCommand(command) {
+  const normalized = String(command || '').trim();
+  return normalized === PPT_DESIGN_SKILL_KEY || normalized === 'ppt-design';
+}
+
+function pptDesignSkillLoadSucceeded(completedEntry) {
+  if (!completedEntry || String(completedEntry.toolName || '').toLowerCase() !== 'skill') return false;
+  const result = completedEntry.result || {};
+  const blob = JSON.stringify(result);
+  if (blob.includes(PPT_DESIGN_SKILL_KEY)) return true;
+  if (result?.success === true && String(result?.skill_name || '').toLowerCase() === 'ppt-design') return true;
+  return false;
+}
+
+function planningEvidenceIssues(toolTrace, style) {
+  const started = (toolTrace || []).filter((entry) => entry.eventType === 'Started');
+  const completed = (toolTrace || []).filter((entry) => entry.eventType === 'Completed');
+  const completedById = new Map(
+    completed
+      .filter((entry) => entry.toolId)
+      .map((entry) => [entry.toolId, entry]),
+  );
+  const issues = [];
+  const pptDesignSkillStarts = started.filter((entry) => (
+    String(entry.toolName || '').toLowerCase() === 'skill'
+    && isPptDesignSkillCommand(toolTraceParams(entry).command)
+  ));
+  const skillCompleted = pptDesignSkillStarts.some((entry) => (
+    pptDesignSkillLoadSucceeded(completedById.get(entry.toolId))
+  ));
+  if (!pptDesignSkillStarts.length || !skillCompleted) {
+    issues.push(`The exact built-in Skill key ${PPT_DESIGN_SKILL_KEY} was not successfully loaded.`);
+  }
+
+  const readPaths = started
+    .filter((entry) => (
+      String(entry.toolName || '').toLowerCase() === 'read'
+      && completedById.has(entry.toolId)
+    ))
+    .map((entry) => {
+      const params = toolTraceParams(entry);
+      return String(params.file_path || params.path || '');
+    });
+  expectedPlanReferences(style).forEach((reference) => {
+    if (!readPaths.some((path) => path.endsWith(reference))) {
+      issues.push(`Required reference was not read: ${reference}`);
+    }
+  });
+  return issues;
+}
+
+function auditWriteEvidenceIssues(toolTrace) {
+  const trace = Array.isArray(toolTrace) ? toolTrace : [];
+  const writeStarts = trace.filter((entry) => {
+    if (entry.eventType !== 'Started') return false;
+    const name = String(entry.toolName || '').toLowerCase();
+    const params = toolTraceParams(entry);
+    const path = String(params.file_path || params.path || '');
+    return (name === 'write' || name === 'filewrite') && path.endsWith('quality-report.json');
+  });
+  if (!writeStarts.length) {
+    return ['The Agent turn ended without calling Write for quality-report.json.'];
+  }
+  const terminalById = new Map(
+    trace
+      .filter((entry) => entry.toolId && ['Completed', 'Failed', 'Cancelled'].includes(entry.eventType))
+      .map((entry) => [entry.toolId, entry]),
+  );
+  const completed = writeStarts.some((entry) => terminalById.get(entry.toolId)?.eventType === 'Completed');
+  if (completed) return [];
+  const failed = writeStarts
+    .map((entry) => terminalById.get(entry.toolId))
+    .find((entry) => entry?.eventType === 'Failed' || entry?.eventType === 'Cancelled');
+  if (failed) {
+    return [
+      `The quality-report.json Write tool did not complete: ${
+        backendErrorDetail(failed.error) || failed.eventType
+      }.`,
+    ];
+  }
+  return ['The quality-report.json Write tool started but no completion event was observed.'];
+}
+
+function auditTurnCompletionIssue(completion) {
+  if (!completion) return '';
+  const finishReason = String(completion.finishReason || '').trim();
+  const partialReason = String(completion.partialRecoveryReason || '').trim();
+  if (completion.success === false) {
+    return `The Agent turn reported success=false${finishReason ? ` (${finishReason})` : ''}.`;
+  }
+  if (partialReason) {
+    return `The Agent turn ended after partial recovery: ${partialReason}.`;
+  }
+  if (finishReason && !['complete', 'completed', 'final_answer'].includes(finishReason.toLowerCase())) {
+    return `The Agent turn stopped with finish reason "${finishReason}".`;
+  }
+  return '';
+}
+
+/** Best-effort: drop old deck project dirs so appdata storage stays bounded. */
+async function pruneOldDeckProjects(currentRunId) {
+  const fs = runtime().fs;
+  if (!fs?.readdir || !fs?.rm) return;
+  try {
+    const decksDir = `${runtime().appDataDir}/decks`;
+    const entries = await fs.readdir(decksDir);
+    const names = (Array.isArray(entries) ? entries : [])
+      .map((entry) => (typeof entry === 'string' ? entry : entry?.name))
+      .filter((name) => typeof name === 'string' && name.startsWith('deck-') && name !== currentRunId);
+    for (const name of names) {
+      await fs.rm(`${decksDir}/${name}`, { recursive: true });
+    }
+  } catch {
+    // Old artifacts are harmless; never block generation on cleanup.
+  }
 }
 
 async function runPptLiveBackend(operation, instruction, options = {}) {
@@ -633,8 +1112,8 @@ async function runPptLiveBackend(operation, instruction, options = {}) {
     updateBriefFromInputs({ includeTopic: options.includeTopic !== false });
     const isInitialAutoDraft = operation === 'auto' && (isDefaultDraft() || isStarterDeck());
     if (isInitialAutoDraft) {
-      // Fresh deck generation runs the staged pipeline: plan once, render
-      // slides in parallel batches, retry only the failed stage/slides.
+      // Fresh deck generation plans once, then renders one slide per Agent
+      // turn in strict order so turns do not compete for model/tool capacity.
       await runStagedDeckGeneration(operation, instruction);
       return;
     }
@@ -646,16 +1125,29 @@ async function runPptLiveBackend(operation, instruction, options = {}) {
 
 async function runLegacyBackendWithRetries(operation, instruction) {
   let lastError = null;
+  // After an interrupted attempt, retry as a "continue" turn inside the same
+  // hidden session so the model resumes with its prior context intact.
+  const project = currentDeckProject() || (backendUsesFileProtocol() ? newDeckProject() : null);
+  if (project && !state.agentSession?.workspaceSubdir) {
+    await pruneOldDeckProjects(project.runId);
+  }
+  const retrySession = {
+    id: state.agentSession?.id || null,
+    project,
+  };
   for (let attempt = 1; attempt <= PPT_BACKEND_MAX_ATTEMPTS; attempt += 1) {
     try {
-      await runPptLiveBackendAttempt(operation, instruction, attempt);
+      await runPptLiveBackendAttempt(operation, instruction, attempt, retrySession);
       return;
     } catch (error) {
       lastError = error;
+      if (isUnknownSessionBackendError(error)) retrySession.id = null;
+      else if (error?.pptLiveSessionId) retrySession.id = error.pptLiveSessionId;
       if (!isRetryableBackendError(error) || attempt >= PPT_BACKEND_MAX_ATTEMPTS) throw error;
       runtime().log?.warn?.('PPT Live backend attempt failed, retrying', {
         attempt,
         maxAttempts: PPT_BACKEND_MAX_ATTEMPTS,
+        continueInSession: Boolean(retrySession.id),
         error: String(error),
       });
       addGenerationEvent({
@@ -664,21 +1156,29 @@ async function runLegacyBackendWithRetries(operation, instruction) {
         kind: 'error',
       });
       setStatus(t('generationRetrying', { attempt: attempt + 1, max: PPT_BACKEND_MAX_ATTEMPTS }));
-      await new Promise((resolve) => setTimeout(resolve, 1500 * attempt));
+      await new Promise((resolve) => setTimeout(resolve, retryDelayMs(error, attempt)));
     }
   }
   if (lastError) throw lastError;
 }
 
 /**
- * Run one `ppt.generate` backend turn and return the parsed JSON payload.
+ * Run one `ppt.generate` backend turn and return `{ payload, sessionId }`.
  * Handles event wiring, streaming buffers, idle/absolute timeouts,
  * cancel-on-abandon, and run tracking. UI step transitions are delegated to
  * `hooks` so staged phases and the legacy path can shape progress differently:
  * - `hooks.onTextProgress(buffer)`: called as answer text streams in.
  * - `hooks.onToolPhase(kind)`: called with 'detected' | 'completed' | 'research' | 'round'.
+ * `options.sessionId` submits the turn into an existing hidden agent session
+ * (the staged pipeline keeps plan + render + continue turns in one session).
+ * `options.appDataWorkspace` points the agent at the deck project directory.
+ * `options.resultKind === 'text'` returns the raw assistant text instead of
+ * demanding parseable JSON (file-protocol turns deliver through files and
+ * only reply with a short status line).
+ * On failure the session id is attached to the error as `pptLiveSessionId`
+ * so callers can retry with a "continue" turn in the same session.
  */
-async function executeBackendTurn(requestInput, hooks = {}) {
+async function executeBackendTurn(requestInput, hooks = {}, options = {}) {
   const host = runtime();
   const runEpoch = deckEpoch;
   let sessionId = null;
@@ -687,8 +1187,10 @@ async function executeBackendTurn(requestInput, hooks = {}) {
   let thinkingBuffer = '';
   let settled = false;
   let lastTextProgressAt = 0;
+  let completion = null;
   const cleanup = [];
   const loggedToolEvents = new Set();
+  const toolTrace = [];
   const progressTracker = createGenerationProgressTracker();
   const activity = { lastEventAt: Date.now() };
 
@@ -696,6 +1198,8 @@ async function executeBackendTurn(requestInput, hooks = {}) {
     const result = await host.backend.call('ppt.generate', requestInput, {
       entityId: 'deck',
       idempotencyKey: `ppt-live-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      sessionId: options.sessionId || undefined,
+      appDataWorkspace: options.appDataWorkspace || undefined,
     });
     sessionId = result?.sessionId || null;
     turnId = result?.turnId || result?.actionRunId || null;
@@ -713,12 +1217,34 @@ async function executeBackendTurn(requestInput, hooks = {}) {
           progressTracker.note(t('eventTurnStarted'), '', 'turn');
         } else if (sourceEvent.endsWith('model-round-started')) {
           hooks.onToolPhase?.('round');
-          progressTracker.note(t('processEventRound'), '', 'phase');
+          progressTracker.touch();
         } else if (sourceEvent.endsWith('model-round-completed')) {
-          progressTracker.note(t('eventRoundCompleted'), '', 'phase');
+          progressTracker.touch();
         } else if (sourceEvent.endsWith('tool-event')) {
           const toolEvent = normalizeToolEvent(event.toolEvent || {});
           const eventType = toolEvent.event_type || toolEvent.eventType || '';
+          if (eventType === 'Started') {
+            toolTrace.push({
+              eventType,
+              toolId: toolEvent.tool_id || toolEvent.toolId || '',
+              toolName: toolEvent.tool_name || toolEvent.toolName || '',
+              params: toolEvent.params || {},
+            });
+          } else if (eventType === 'Completed') {
+            toolTrace.push({
+              eventType,
+              toolId: toolEvent.tool_id || toolEvent.toolId || '',
+              toolName: toolEvent.tool_name || toolEvent.toolName || '',
+              result: toolEvent.result || {},
+            });
+          } else if (eventType === 'Failed' || eventType === 'Cancelled') {
+            toolTrace.push({
+              eventType,
+              toolId: toolEvent.tool_id || toolEvent.toolId || '',
+              toolName: toolEvent.tool_name || toolEvent.toolName || '',
+              error: toolEvent.error || toolEvent.message || eventType,
+            });
+          }
           if (shouldLogToolEvent(toolEvent, loggedToolEvents)) {
             addGenerationEvent(describeToolEvent(event));
             progressTracker.touch();
@@ -753,6 +1279,12 @@ async function executeBackendTurn(requestInput, hooks = {}) {
           // Keep token stats internal; do not surface them in the user-facing log.
         } else if (sourceEvent.endsWith('dialog-turn-completed')) {
           settled = true;
+          completion = {
+            success: event.success,
+            finishReason: event.finishReason || event.finish_reason || '',
+            partialRecoveryReason:
+              event.partialRecoveryReason || event.partial_recovery_reason || '',
+          };
           resolve({ answer: textBuffer, thinking: thinkingBuffer });
         } else if (sourceEvent.endsWith('dialog-turn-failed') || sourceEvent.endsWith('dialog-turn-cancelled')) {
           settled = true;
@@ -780,16 +1312,26 @@ async function executeBackendTurn(requestInput, hooks = {}) {
       cleanup.push(() => clearInterval(heartbeat));
     });
 
-    const streamed = await waitForBackendResultOrPersistedText(waitForResult, sessionId, turnId, activity);
+    const expectJson = options.resultKind !== 'text';
+    const streamed = await waitForBackendResultOrPersistedText(waitForResult, sessionId, turnId, activity, { expectJson });
     const streamedText = typeof streamed === 'string' ? streamed : streamed?.answer || '';
     const streamedThinking = typeof streamed === 'string' ? '' : streamed?.thinking || '';
     if (isDeckEpochStale(runEpoch)) throw new Error('Generation stopped');
+    if (!expectJson) {
+      // File-protocol turn: the deliverable is on disk; the reply is only a
+      // short status line. The caller reads and validates the files.
+      return { payload: null, text: streamedText, sessionId, toolTrace, completion };
+    }
     const finalText = await resolveBackendTurnText(sessionId, turnId, streamedText, streamedThinking);
     if (isDeckEpochStale(runEpoch)) throw new Error('Generation stopped');
     const payload = extractBackendJson(finalText);
     if (isDeckEpochStale(runEpoch)) throw new Error('Generation stopped');
-    return payload;
+    return { payload, sessionId, toolTrace, completion };
   } catch (error) {
+    if (error && typeof error === 'object' && sessionId) {
+      error.pptLiveSessionId = sessionId;
+      error.pptLiveToolTrace = toolTrace;
+    }
     // Do not leave an orphaned backend turn running when this attempt is abandoned.
     if (!settled && sessionId && turnId && host.backend?.cancel) {
       try {
@@ -819,7 +1361,16 @@ function buildBackendRequestBase(operation, instruction) {
   };
 }
 
-async function runPptLiveBackendAttempt(operation, instruction, attempt = 1) {
+function buildSlideRenderRequestBase(operation) {
+  return {
+    operation,
+    locale: getLocale(),
+    brief: buildGenerationBrief({ includeEvidence: false }),
+    style: buildGenerationStyle({ includePreset: false }),
+  };
+}
+
+async function runPptLiveBackendAttempt(operation, instruction, attempt = 1, retrySession = { id: null }) {
   const runEpoch = deckEpoch;
   setBusy(true, t('working'));
   resetGeneration();
@@ -838,12 +1389,13 @@ async function runPptLiveBackendAttempt(operation, instruction, attempt = 1) {
   const progressShim = { touch: () => {}, note: () => {}, lastProgressLogAt: 0 };
 
   try {
-    const payload = await executeBackendTurn({
+    const { payload, sessionId } = await executeBackendTurn({
       ...buildBackendRequestBase(operation, instruction),
       title: state.title,
       outline: clone(state.outline),
       currentSlideIndex: getActiveIndex(state),
       currentDeck: buildCurrentDeckSnapshot(instruction),
+      ...(retrySession?.id ? { continueAfterInterruption: true } : {}),
     }, {
       onToolPhase: (kind) => {
         if (kind === 'detected') {
@@ -858,7 +1410,17 @@ async function runPptLiveBackendAttempt(operation, instruction, attempt = 1) {
         }
       },
       onTextProgress: (buffer) => noteTextStreamProgress(buffer, progressShim, lastStreamPhase),
+    }, {
+      sessionId: retrySession?.id || undefined,
+      appDataWorkspace: retrySession?.project?.workspaceSubdir,
     });
+    retrySession.id = sessionId || retrySession.id;
+    state.agentSession = {
+      id: retrySession.id || '',
+      workspaceSubdir: retrySession?.project?.workspaceSubdir || '',
+      runId: retrySession?.project?.runId || '',
+      skillKey: PPT_DESIGN_SKILL_KEY,
+    };
     addGenerationEvent({ title: t('generationParsingDeck'), detail: '', kind: 'parsing' });
     setStatus(t('generationParsingDeck'));
     applyDeckPayload(payload);
@@ -883,112 +1445,70 @@ async function runPptLiveBackendAttempt(operation, instruction, attempt = 1) {
   }
 }
 
-// Keep each render request small: a single streamed response that runs longer
-// than ~10 minutes gets cut by upstream gateways, so one batch must stay well
-// under that (2 slides of dense HTML is roughly 3-5 minutes of streaming).
-const PPT_SLIDE_BATCH_SIZE = 2;
-const PPT_PARALLEL_SLIDE_WORKERS = 2;
-
-/**
- * Incrementally extract completed slide objects (with html) from a streaming
- * JSON answer. Used to checkpoint finished slides so a failed run resumes
- * from the first missing slide instead of starting over.
- */
-function extractCompletedSlidesFromBuffer(buffer) {
-  const text = String(buffer || '');
-  const key = text.indexOf('"slides"');
-  if (key < 0) return [];
-  const arrStart = text.indexOf('[', key);
-  if (arrStart < 0) return [];
-  const slides = [];
-  let i = arrStart + 1;
-  const n = text.length;
-  while (i < n) {
-    while (i < n && text[i] !== '{' && text[i] !== ']') i += 1;
-    if (i >= n || text[i] === ']') break;
-    let depth = 0;
-    let inString = false;
-    let escaped = false;
-    let end = -1;
-    for (let j = i; j < n; j += 1) {
-      const ch = text[j];
-      if (inString) {
-        if (escaped) escaped = false;
-        else if (ch === '\\') escaped = true;
-        else if (ch === '"') inString = false;
-      } else if (ch === '"') inString = true;
-      else if (ch === '{') depth += 1;
-      else if (ch === '}') {
-        depth -= 1;
-        if (depth === 0) {
-          end = j;
-          break;
-        }
-      }
-    }
-    if (end < 0) break;
-    try {
-      const slide = JSON.parse(text.slice(i, end + 1));
-      if (slide && typeof slide === 'object' && String(slide.html || '').trim()) slides.push(slide);
-    } catch {
-      break;
-    }
-    i = end + 1;
-  }
-  return slides;
-}
-
-function splitSlidePlansIntoBatches(slidePlans, batchSize) {
-  const size = Math.max(1, batchSize);
-  const batches = [];
-  for (let start = 0; start < slidePlans.length; start += size) {
-    batches.push(slidePlans.slice(start, start + size));
-  }
-  return batches;
-}
-
-/** Run tasks with a bounded worker pool; resolves to per-task settled results. */
-async function runWithConcurrencyLimit(tasks, limit) {
-  const results = new Array(tasks.length);
-  let next = 0;
-  const workers = Array.from({ length: Math.max(1, Math.min(limit, tasks.length)) }, async () => {
-    while (next < tasks.length) {
-      const index = next;
-      next += 1;
-      try {
-        results[index] = { status: 'fulfilled', value: await tasks[index]() };
-      } catch (reason) {
-        results[index] = { status: 'rejected', reason };
-      }
-    }
-  });
-  await Promise.all(workers);
-  return results;
-}
-
 function slidePlanNumber(plan, fallback) {
   const number = Number(plan?.slideNumber);
   return Number.isFinite(number) && number > 0 ? Math.round(number) : fallback;
 }
 
-async function runStagedPlanPhase(operation, instruction) {
+function extractValidSlidePlans(payload) {
+  return Array.isArray(payload?.slidePlans)
+    ? payload.slidePlans.filter((plan) => plan && typeof plan === 'object')
+    : [];
+}
+
+/**
+ * Plan phase. With the file protocol (`project` set) the agent saves the plan
+ * to `project.json` in the deck project directory and ui.js reads it back;
+ * the legacy AI fallback still returns the plan as JSON text. Interrupted
+ * attempts retry as "continue" turns in the same session, and a plan file
+ * that landed on disk before the failure is recovered without another turn.
+ */
+async function runStagedPlanPhase(operation, instruction, project = null) {
   let lastError = null;
-  for (let attempt = 1; attempt <= PPT_BACKEND_MAX_ATTEMPTS; attempt += 1) {
+  let planSessionId = null;
+  const planningTrace = [];
+  const failures = [];
+  let complianceIssues = [];
+  for (let attempt = 1; attempt <= PPT_BACKEND_TOTAL_STAGE_ATTEMPTS; attempt += 1) {
     try {
+      const attemptInfo = stageAttemptInfo(attempt);
       if (attempt > 1) {
         addGenerationEvent({
-          title: t('generationPlanRetry', { attempt, max: PPT_BACKEND_MAX_ATTEMPTS }),
-          detail: backendErrorDetail(lastError),
+          title: attemptInfo.continuation
+            ? t('generationRecoveryContinuing', {
+                stage: t('generationStagePlanning'),
+                attempt: attemptInfo.continuationAttempt,
+                max: PPT_BACKEND_CONTINUATION_MAX_ATTEMPTS,
+              })
+            : t('generationPlanRetry', { attempt, max: PPT_BACKEND_MAX_ATTEMPTS }),
+          detail: complianceIssues.join(' ') || backendErrorDetail(lastError),
           kind: 'error',
         });
-        setStatus(t('generationPlanRetry', { attempt, max: PPT_BACKEND_MAX_ATTEMPTS }));
-        await new Promise((resolve) => setTimeout(resolve, 1500 * attempt));
+        setStatus(attemptInfo.continuation
+          ? t('generationRecoveryContinuing', {
+              stage: t('generationStagePlanning'),
+              attempt: attemptInfo.continuationAttempt,
+              max: PPT_BACKEND_CONTINUATION_MAX_ATTEMPTS,
+            })
+          : t('generationPlanRetry', { attempt, max: PPT_BACKEND_MAX_ATTEMPTS }));
+        await new Promise((resolve) => setTimeout(resolve, retryDelayMs(lastError, attempt)));
       }
-      const payload = await executeBackendTurn({
+      const completionRecovery = completionRecoveryInput(
+        'plan',
+        attempt,
+        lastError,
+        complianceIssues,
+      );
+      const turn = await executeBackendTurn({
         ...buildBackendRequestBase(operation, instruction),
         phase: 'plan',
         title: state.title,
         outline: [],
+        ...(complianceIssues.length ? { complianceIssues } : {}),
+        ...(attempt > 1 && !completionRecovery && planSessionId
+          ? { continueAfterInterruption: true }
+          : {}),
+        ...(completionRecovery ? { completionRecovery } : {}),
       }, {
         onToolPhase: (kind) => {
           if (kind === 'detected') {
@@ -1002,8 +1522,9 @@ async function runStagedPlanPhase(operation, instruction) {
         },
         onTextProgress: (buffer) => {
           if (!buffer.includes('"slidePlans"')) return;
-          // The plan JSON streams for minutes on large decks; surface how many
-          // per-slide briefs have appeared so the UI never looks frozen.
+          // Legacy JSON delivery streams the plan for minutes on large decks;
+          // surface how many per-slide briefs appeared so the UI never looks
+          // frozen. File-protocol turns reply with a status line only.
           const plannedCount = (buffer.match(/"slideNumber"/g) || []).length;
           if (plannedCount > 0) {
             setGenerationStep('proof', 'running', t('generationPlanProgress', { count: plannedCount }));
@@ -1012,16 +1533,48 @@ async function runStagedPlanPhase(operation, instruction) {
             setGenerationStep('proof', 'running', t('generationPlanningSlides'));
           }
         },
+      }, {
+        sessionId: planSessionId || undefined,
+        appDataWorkspace: project?.workspaceSubdir,
+        resultKind: project ? 'text' : undefined,
       });
-      const slidePlans = Array.isArray(payload?.slidePlans) ? payload.slidePlans.filter((plan) => plan && typeof plan === 'object') : [];
+      planSessionId = turn.sessionId || planSessionId;
+      planningTrace.push(...(turn.toolTrace || []));
+      const payload = project ? await tryReadDeckPlanFile(project) : turn.payload;
+      if (project && !payload) {
+        throw new Error('PPT Live plan turn finished without a valid project.json');
+      }
+      complianceIssues = planningEvidenceIssues(planningTrace, buildGenerationStyle());
+      if (complianceIssues.length) {
+        const complianceError = new Error(`PPT Live planning compliance failed: ${complianceIssues.join(' ')}`);
+        complianceError.pptLivePlanCompliance = true;
+        complianceError.pptLiveSessionId = turn.sessionId || planSessionId || null;
+        throw complianceError;
+      }
+      const finalizedPayload = finalizePlanContract(payload, instruction);
+      const slidePlans = extractValidSlidePlans(finalizedPayload);
       if (!slidePlans.length) throw new Error('PPT Live plan phase returned no slidePlans');
-      return { payload, slidePlans };
+      await writeDeckProjectJson(project, finalizedPayload);
+      return {
+        payload: finalizedPayload,
+        slidePlans,
+        sessionId: turn.sessionId || planSessionId || null,
+        project,
+      };
     } catch (error) {
       lastError = error;
-      if (!isRetryableBackendError(error) || attempt >= PPT_BACKEND_MAX_ATTEMPTS) throw error;
+      failures.push(error);
+      if (Array.isArray(error?.pptLiveToolTrace)) planningTrace.push(...error.pptLiveToolTrace);
+      if (isUnknownSessionBackendError(error)) planSessionId = null;
+      else if (error?.pptLiveSessionId) planSessionId = error.pptLiveSessionId;
+      if (!isRetryableBackendError(error)) throw error;
+      if (attempt >= PPT_BACKEND_TOTAL_STAGE_ATTEMPTS) {
+        throw recoveryExhaustedError('generationStagePlanning', error, failures);
+      }
       runtime().log?.warn?.('PPT Live plan phase failed, retrying', {
         attempt,
-        maxAttempts: PPT_BACKEND_MAX_ATTEMPTS,
+        maxAttempts: PPT_BACKEND_TOTAL_STAGE_ATTEMPTS,
+        continueInSession: Boolean(planSessionId),
         error: String(error),
       });
     }
@@ -1029,68 +1582,397 @@ async function runStagedPlanPhase(operation, instruction) {
   throw lastError;
 }
 
-async function runStagedSlideBatch({ operation, instruction, planContext, batch, batchNumber, checkpoint, onSlideCheckpoint }) {
-  const assignedNumbers = batch.map((plan, index) => slidePlanNumber(plan, index + 1));
-  const isMissing = (number) => !checkpoint.has(number);
+async function validateAndRepairSlide({
+  operation,
+  planContext,
+  slidePlan,
+  slideNumber,
+  session,
+  project,
+  html,
+}) {
+  let currentHtml = html;
+  const maxRepairAttempts = 2;
+  if (slideAlreadyValidated(slideNumber, currentHtml)) {
+    return {
+      html: currentHtml,
+      quality: { score: 100, issues: [] },
+    };
+  }
+  for (let repairAttempt = 0; repairAttempt <= maxRepairAttempts; repairAttempt += 1) {
+    const validation = await validateSlideForPptxGeneration(currentHtml);
+    if (validation.valid) {
+      rememberValidatedSlide(slideNumber, currentHtml);
+      return {
+        html: currentHtml,
+        quality: { score: 100, issues: [] },
+      };
+    }
+    if (repairAttempt >= maxRepairAttempts) {
+      throw new Error(
+        `PPT Live slide ${slideNumber} failed editable-PPTX validation: ${
+          validation.issues.map((issue) => issue.message).join(' ')
+        }`,
+      );
+    }
+
+    addGenerationEvent({
+      title: t('generationSlideRepair', {
+        slide: slideNumber,
+        attempt: repairAttempt + 1,
+        max: maxRepairAttempts,
+      }),
+      detail: compactText(validation.issues.map((issue) => issue.message).join(' '), 260),
+      kind: 'error',
+    });
+    const repairTurn = await executeBackendTurn({
+      operation,
+      locale: getLocale(),
+      phase: 'repair',
+      assignedSlide: slidePlan,
+      validationIssues: validation.issues,
+      generationContract: liveGenerationContract(planContext),
+      design: livePlanContextDesign(planContext),
+      style: livePlanContextStyle(planContext),
+    }, {}, {
+      sessionId: session?.id || undefined,
+      appDataWorkspace: project?.workspaceSubdir,
+      resultKind: 'text',
+    });
+    if (session && repairTurn.sessionId) session.id = repairTurn.sessionId;
+    currentHtml = await tryReadDeckSlideFile(project, slideNumber);
+    if (!currentHtml) {
+      throw new Error(`PPT Live repair turn did not rewrite slide ${slideNumber}`);
+    }
+  }
+  throw new Error(`PPT Live slide ${slideNumber} validation did not finish`);
+}
+
+/**
+ * Render one slide. The normal path submits a lightweight turn INTO the
+ * planning session (`session.id`), where the ppt-design skill, style preset,
+ * research, and plan already live. The final audit reuses the pinned
+ * skill-derived project contract before accepting the deck.
+ * With the file protocol (`project` set) the agent writes
+ * `slides/slide-NN.html` in the deck project directory and ui.js reads it
+ * back; a file that landed on disk before a failure is recovered without
+ * another turn. If the session is lost (backend restart, stale id), the turn
+ * falls back to a self-contained prompt that reloads the skill and carries
+ * the plan. Interrupted attempts retry as "continue" turns in the session.
+ */
+async function runStagedSlide({ operation, planContext, slidePlan, slideNumber, session, project }) {
   let lastError = null;
-  for (let attempt = 1; attempt <= PPT_BACKEND_MAX_ATTEMPTS; attempt += 1) {
-    const remaining = batch.filter((plan, index) => isMissing(assignedNumbers[index]));
-    if (!remaining.length) return;
+  const failures = [];
+  const slideFromHtml = (html, quality = { score: 100, issues: [] }) => ({
+    ...slidePlan,
+    html,
+    quality,
+    id: `ppt-live-slide-${slideNumber}`,
+    slideNumber,
+  });
+  for (let attempt = 1; attempt <= PPT_BACKEND_TOTAL_STAGE_ATTEMPTS; attempt += 1) {
     try {
+      const attemptInfo = stageAttemptInfo(attempt);
       if (attempt > 1) {
-        const firstMissing = Math.min(...assignedNumbers.filter(isMissing));
+        if (project) {
+          // The failed turn may have written the slide file before dying.
+          const recovered = await tryReadDeckSlideFile(project, slideNumber);
+          if (recovered) {
+            const repaired = await validateAndRepairSlide({
+              operation,
+              planContext,
+              slidePlan,
+              slideNumber,
+              session,
+              project,
+              html: recovered,
+            });
+            return slideFromHtml(repaired.html, repaired.quality);
+          }
+        }
         addGenerationEvent({
-          title: t('generationBatchRetry', { batch: batchNumber, attempt, max: PPT_BACKEND_MAX_ATTEMPTS }),
-          detail: t('generationResumeFrom', { slide: firstMissing }),
+          title: attemptInfo.continuation
+            ? t('generationRecoveryContinuing', {
+                stage: t('generationStageSlide', { slide: slideNumber }),
+                attempt: attemptInfo.continuationAttempt,
+                max: PPT_BACKEND_CONTINUATION_MAX_ATTEMPTS,
+              })
+            : t('generationSlideRetry', {
+                slide: slideNumber,
+                attempt,
+                max: PPT_BACKEND_MAX_ATTEMPTS,
+              }),
+          detail: backendErrorDetail(lastError),
           kind: 'error',
         });
-        setStatus(t('generationResumeFrom', { slide: firstMissing }));
-        await new Promise((resolve) => setTimeout(resolve, 1500 * attempt));
+        setStatus(attemptInfo.continuation
+          ? t('generationRecoveryContinuing', {
+              stage: t('generationStageSlide', { slide: slideNumber }),
+              attempt: attemptInfo.continuationAttempt,
+              max: PPT_BACKEND_CONTINUATION_MAX_ATTEMPTS,
+            })
+          : t('generationSlideRetry', {
+              slide: slideNumber,
+              attempt,
+              max: PPT_BACKEND_MAX_ATTEMPTS,
+            }));
+        await new Promise((resolve) => setTimeout(resolve, retryDelayMs(lastError, attempt)));
       }
-      const completedSummary = [...checkpoint.values()]
-        .filter((slide) => assignedNumbers.includes(Number(slide.slideNumber)))
-        .map((slide) => ({ slideNumber: slide.slideNumber, title: slide.title || '' }));
-      const payload = await executeBackendTurn({
-        ...buildBackendRequestBase(operation, instruction),
-        phase: 'slides',
-        plan: planContext,
-        assignedSlides: remaining,
-        completedSlides: completedSummary,
-      }, {
-        onTextProgress: (buffer) => {
-          extractCompletedSlidesFromBuffer(buffer).forEach((slide) => {
-            const number = Number(slide.slideNumber);
-            if (Number.isFinite(number) && assignedNumbers.includes(number) && !checkpoint.has(number)) {
-              checkpoint.set(number, slide);
-              onSlideCheckpoint?.(number);
-            }
-          });
-        },
+      const completionRecovery = completionRecoveryInput(
+        'slides',
+        attempt,
+        lastError,
+        lastError ? [backendErrorDetail(lastError)] : [],
+      );
+      const inSession = Boolean(session?.id);
+      const requestInput = inSession
+        ? {
+            operation,
+            locale: getLocale(),
+            phase: 'slides',
+            inSession: true,
+            assignedSlides: [slidePlan],
+            generationContract: liveGenerationContract(planContext),
+            design: livePlanContextDesign(planContext),
+            style: livePlanContextStyle(planContext),
+            showcaseSlideNumbers: planContext.showcaseSlideNumbers,
+            ...(attempt > 1 && !completionRecovery ? { continueAfterInterruption: true } : {}),
+            ...(completionRecovery ? { completionRecovery } : {}),
+          }
+        : {
+            ...buildSlideRenderRequestBase(operation),
+            phase: 'slides',
+            plan: {
+              ...planContext,
+              style: livePlanContextStyle(planContext),
+              design: livePlanContextDesign(planContext),
+              generationContract: liveGenerationContract(planContext),
+            },
+            assignedSlides: [slidePlan],
+            ...(completionRecovery ? { completionRecovery } : {}),
+          };
+      const turn = await executeBackendTurn(requestInput, {}, {
+        sessionId: session?.id || undefined,
+        appDataWorkspace: project?.workspaceSubdir,
+        resultKind: project ? 'text' : undefined,
       });
-      const slides = Array.isArray(payload?.slides) ? payload.slides : [];
-      slides.forEach((slide, index) => {
-        if (!slide || typeof slide !== 'object' || !String(slide.html || '').trim()) return;
-        const number = slidePlanNumber(slide, remaining[index] ? slidePlanNumber(remaining[index], NaN) : NaN);
-        if (Number.isFinite(number) && assignedNumbers.includes(number) && !checkpoint.has(number)) {
-          checkpoint.set(number, slide);
-          onSlideCheckpoint?.(number);
+      if (session && turn.sessionId) session.id = turn.sessionId;
+      const { payload } = turn;
+      if (project) {
+        const html = await tryReadDeckSlideFile(project, slideNumber);
+        if (!html) {
+          throw new Error(`PPT Live slide ${slideNumber} file is missing or incomplete`);
         }
-      });
-      if (assignedNumbers.every((number) => checkpoint.has(number))) return;
-      throw new Error(`PPT Live batch ${batchNumber} is missing slides: ${assignedNumbers.filter(isMissing).join(', ')}`);
+        const repaired = await validateAndRepairSlide({
+          operation,
+          planContext,
+          slidePlan,
+          slideNumber,
+          session,
+          project,
+          html,
+        });
+        return slideFromHtml(repaired.html, repaired.quality);
+      }
+      const slides = Array.isArray(payload?.slides) ? payload.slides : [];
+      const slide = slides.find((candidate) => slidePlanNumber(candidate, NaN) === slideNumber) || slides[0];
+      if (!slide || typeof slide !== 'object' || !String(slide.html || '').trim()) {
+        throw new Error(`PPT Live slide ${slideNumber} is missing complete HTML`);
+      }
+      return {
+        ...slide,
+        id: slide.id || `ppt-live-slide-${slideNumber}`,
+        slideNumber,
+      };
     } catch (error) {
       lastError = error;
-      if (!isRetryableBackendError(error) || attempt >= PPT_BACKEND_MAX_ATTEMPTS) throw error;
-      runtime().log?.warn?.('PPT Live slide batch failed, retrying remaining slides', {
-        batch: batchNumber,
+      failures.push(error);
+      if (session && isUnknownSessionBackendError(error)) {
+        // Session is gone; render the rest of the deck with self-contained turns.
+        session.id = null;
+        runtime().log?.warn?.('PPT Live planning session lost, falling back to standalone render turns', {
+          slide: slideNumber,
+        });
+      }
+      if (!isRetryableBackendError(error)) throw error;
+      if (attempt >= PPT_BACKEND_TOTAL_STAGE_ATTEMPTS) {
+        throw recoveryExhaustedError(
+          'generationStageSlide',
+          error,
+          failures,
+          { slide: slideNumber },
+        );
+      }
+      runtime().log?.warn?.('PPT Live slide render failed, retrying page', {
+        slide: slideNumber,
         attempt,
-        maxAttempts: PPT_BACKEND_MAX_ATTEMPTS,
-        missing: assignedNumbers.filter(isMissing),
+        maxAttempts: PPT_BACKEND_TOTAL_STAGE_ATTEMPTS,
+        continueInSession: Boolean(session?.id),
         error: String(error),
       });
     }
   }
   throw lastError;
+}
+
+async function runFinalDeckAudit({
+  operation,
+  planContext,
+  slidePlans,
+  session,
+  project,
+}) {
+  let auditComplete = false;
+  let lastAuditError = null;
+  let auditReport = null;
+  let auditIssues = [];
+  const failures = [];
+  for (let attempt = 1; attempt <= PPT_BACKEND_TOTAL_STAGE_ATTEMPTS; attempt += 1) {
+    try {
+      const attemptInfo = stageAttemptInfo(attempt);
+      if (attempt > 1) {
+        const status = attemptInfo.continuation
+          ? t('generationRecoveryContinuing', {
+              stage: t('generationStageAudit'),
+              attempt: attemptInfo.continuationAttempt,
+              max: PPT_BACKEND_CONTINUATION_MAX_ATTEMPTS,
+            })
+          : t('generationAuditRetry', {
+              attempt,
+              max: PPT_BACKEND_MAX_ATTEMPTS,
+            });
+        addGenerationEvent({
+          title: status,
+          detail: auditIssues.join(' ') || backendErrorDetail(lastAuditError),
+          kind: 'error',
+        });
+        setStatus(status);
+        await new Promise((resolve) => setTimeout(resolve, retryDelayMs(lastAuditError, attempt)));
+      }
+      const completionRecovery = completionRecoveryInput(
+        'audit',
+        attempt,
+        lastAuditError,
+        auditIssues,
+      );
+      const auditTurn = await executeBackendTurn({
+        operation,
+        locale: getLocale(),
+        phase: 'audit',
+        inSession: Boolean(session?.id),
+        generationContract: liveGenerationContract(planContext),
+        design: livePlanContextDesign(planContext),
+        style: livePlanContextStyle(planContext),
+        slideOrder: planContext.slideOrder,
+        slidePlans,
+        ...(auditIssues.length ? { auditIssues } : {}),
+        ...(completionRecovery ? { completionRecovery } : {}),
+      }, {}, {
+        sessionId: session?.id || undefined,
+        appDataWorkspace: project?.workspaceSubdir,
+        resultKind: 'text',
+      });
+      if (session && auditTurn.sessionId) session.id = auditTurn.sessionId;
+
+      if (!session?.id) {
+        const evidenceIssues = planningEvidenceIssues(auditTurn.toolTrace, planContext.style);
+        if (evidenceIssues.length) {
+          throw new Error(`PPT Live final audit compliance failed: ${evidenceIssues.join(' ')}`);
+        }
+      }
+      const reportInspection = await inspectDeckJsonFile(project, 'quality-report.json');
+      auditReport = reportInspection.value;
+      const checkedSlides = new Set(
+        Array.isArray(auditReport?.checkedSlides) ? auditReport.checkedSlides.map(String) : [],
+      );
+      const missingSlides = (planContext.slideOrder || [])
+        .map(String)
+        .filter((slideId) => !checkedSlides.has(slideId));
+      const verificationIssues = [];
+      if (reportInspection.status !== 'valid') {
+        verificationIssues.push(reportInspection.reason);
+      } else if (auditReport?.status !== 'passed') {
+        verificationIssues.push(
+          `quality-report.json status is "${String(auditReport?.status || 'missing')}", not "passed".`,
+        );
+      }
+      if (missingSlides.length) {
+        verificationIssues.push(
+          `quality-report.json did not confirm these slide ids: ${missingSlides.join(', ')}.`,
+        );
+      }
+      if (verificationIssues.length) {
+        verificationIssues.push(...auditWriteEvidenceIssues(auditTurn.toolTrace));
+        const completionIssue = auditTurnCompletionIssue(auditTurn.completion);
+        if (completionIssue) verificationIssues.push(completionIssue);
+        const reply = compactText(auditTurn.text || '', 180);
+        if (reply) verificationIssues.push(`Agent reply: ${reply}`);
+        const verificationError = new Error(
+          `PPT Live final audit verification failed: ${verificationIssues.join(' ')}`,
+        );
+        verificationError.pptLiveAuditIssues = verificationIssues;
+        throw verificationError;
+      }
+      auditComplete = true;
+      break;
+    } catch (error) {
+      lastAuditError = error;
+      failures.push(error);
+      auditIssues = Array.isArray(error?.pptLiveAuditIssues)
+        ? error.pptLiveAuditIssues
+        : [backendErrorDetail(error)].filter(Boolean);
+      if (session && isUnknownSessionBackendError(error)) session.id = null;
+      if (!isRetryableBackendError(error)) throw error;
+      if (attempt >= PPT_BACKEND_TOTAL_STAGE_ATTEMPTS) {
+        throw recoveryExhaustedError('generationStageAudit', error, failures);
+      }
+      runtime().log?.warn?.('PPT Live final deck audit failed, retrying', {
+        attempt,
+        maxAttempts: PPT_BACKEND_TOTAL_STAGE_ATTEMPTS,
+        continueInSession: Boolean(session?.id),
+        error: String(error),
+      });
+    }
+  }
+  if (!auditComplete) throw lastAuditError || new Error('PPT Live final audit did not finish');
+
+  const fixedSlideIds = new Set(
+    Array.isArray(auditReport?.fixedSlides) ? auditReport.fixedSlides.map(String) : [],
+  );
+  const auditedSlides = [];
+  for (const slidePlan of slidePlans) {
+    const slideNumber = slidePlan.slideNumber;
+    const html = await tryReadDeckSlideFile(project, slideNumber);
+    if (!html) throw new Error(`PPT Live final audit lost slide ${slideNumber}`);
+    const slideId = slidePlanId(slidePlan, slideNumber);
+    if (!fixedSlideIds.has(slideId) && slideAlreadyValidated(slideNumber, html)) {
+      auditedSlides.push({
+        ...slidePlan,
+        id: `ppt-live-slide-${slideNumber}`,
+        slideNumber,
+        html,
+        quality: { score: 100, issues: [] },
+      });
+      continue;
+    }
+    const repaired = await validateAndRepairSlide({
+      operation,
+      planContext,
+      slidePlan,
+      slideNumber,
+      session,
+      project,
+      html,
+    });
+    auditedSlides.push({
+      ...slidePlan,
+      id: `ppt-live-slide-${slideNumber}`,
+      slideNumber,
+      html: repaired.html,
+      quality: repaired.quality,
+    });
+  }
+  return auditedSlides;
 }
 
 async function runStagedDeckGeneration(operation, instruction) {
@@ -1103,16 +1985,18 @@ async function runStagedDeckGeneration(operation, instruction) {
   prepareAgentGenerationSurface(operation, instruction);
   let completed = false;
 
+  // File protocol (agent backend): the whole run works inside a dedicated
+  // deck project directory in this app's appdata storage, following the
+  // ppt-design skill's native `project.json` + `slides/slide-NN.html` layout.
+  const project = backendUsesFileProtocol() ? newDeckProject() : null;
+  if (project) {
+    resetSlideValidationCache(project.runId);
+    await pruneOldDeckProjects(project.runId);
+  }
+
   try {
-    try {
-      await enrichSources(state);
-    } catch (error) {
-      runtime().log?.warn?.('PPT Live source preparation failed', {
-        error: String(error),
-      });
-    }
     // Phase 1: plan (research + outline + design + per-slide briefs).
-    const { payload: planPayload, slidePlans } = await runStagedPlanPhase(operation, instruction);
+    const { payload: planPayload, slidePlans, sessionId: planSessionId } = await runStagedPlanPhase(operation, instruction, project);
     if (isDeckEpochStale(runEpoch)) throw new Error('Generation stopped');
     setGenerationStep('brief', 'done');
     setGenerationStep('spine', 'done');
@@ -1122,7 +2006,7 @@ async function runStagedDeckGeneration(operation, instruction) {
     state.generation.draftedCount = 0;
     addGenerationEvent({
       title: t('generationPlanReady', { count: slidePlans.length }),
-      detail: compactText((planPayload.outline || []).join(' / '), 200),
+      detail: compactText(planOutlineTitles(planPayload).join(' / '), 200),
       kind: 'phase',
     });
     if (planPayload.title) {
@@ -1130,87 +2014,149 @@ async function runStagedDeckGeneration(operation, instruction) {
       rerender();
     }
 
-    // Phase 2: render slides in parallel batches with per-slide checkpoints.
+    // Phase 2: render exactly one slide per Agent turn, in deck order. Render
+    // turns run inside the planning session so the skill/preset/research load
+    // once for the whole deck; `planContext` is only sent on the standalone
+    // fallback path when that session is lost.
+    const session = { id: planSessionId || null };
+    state.agentSession = {
+      id: session.id || '',
+      workspaceSubdir: project?.workspaceSubdir || '',
+      runId: project?.runId || '',
+      skillKey: PPT_DESIGN_SKILL_KEY,
+    };
     const planContext = {
       title: planPayload.title || '',
       language: planPayload.language || '',
       outline: planPayload.outline || [],
-      researchReport: planPayload.researchReport || {},
+      researchReport: planPayload.researchReport || '',
       design: planPayload.design || {},
+      style: planPayload.style || buildGenerationStyle(),
+      generationContract: planPayload.generationContract || {},
+      showcaseSlideNumbers: planPayload.showcaseSlideNumbers || [],
+      slideOrder: planPayload.slide_order || [],
     };
     const normalizedPlans = slidePlans.map((plan, index) => ({
       ...plan,
       slideNumber: slidePlanNumber(plan, index + 1),
     }));
-    const batches = splitSlidePlansIntoBatches(normalizedPlans, PPT_SLIDE_BATCH_SIZE);
+    const showcaseNumbers = new Set(planContext.showcaseSlideNumbers);
+    const renderPlans = [
+      ...normalizedPlans.filter((plan) => showcaseNumbers.has(plan.slideNumber)),
+      ...normalizedPlans.filter((plan) => !showcaseNumbers.has(plan.slideNumber)),
+    ];
     addGenerationEvent({
       title: t('generationSlidesPhase', {
-        batches: batches.length,
         count: normalizedPlans.length,
-        workers: Math.min(PPT_PARALLEL_SLIDE_WORKERS, batches.length),
       }),
       detail: '',
       kind: 'phase',
     });
-    const checkpoint = new Map();
-    const onSlideCheckpoint = (number) => {
-      state.generation.draftedCount = checkpoint.size;
-      setGenerationStep('design', 'running', t('generationSlideReady', { slide: number, total: normalizedPlans.length }));
+    const readySlides = [];
+    for (const slidePlan of renderPlans) {
+      if (isDeckEpochStale(runEpoch)) throw new Error('Generation stopped');
+      const slideNumber = slidePlan.slideNumber;
+      setGenerationStep('design', 'running', t('generationRenderingSlide', {
+        slide: slideNumber,
+        total: normalizedPlans.length,
+      }));
+      setStatus(t('generationRenderingSlide', {
+        slide: slideNumber,
+        total: normalizedPlans.length,
+      }));
+      try {
+        const slide = await runStagedSlide({
+          operation,
+          planContext,
+          slidePlan,
+          slideNumber,
+          session,
+          project,
+        });
+        readySlides.push(slide);
+      } catch (error) {
+        if (!readySlides.length) throw error;
+        const orderedReadySlides = [...readySlides].sort((a, b) => a.slideNumber - b.slideNumber);
+        applyDeckPayload({
+          title: planPayload.title,
+          language: planPayload.language,
+          outline: [],
+          researchReport: planPayload.researchReport,
+          design: planPayload.design,
+          slides: orderedReadySlides,
+        });
+        state.activeSlideId = state.slides[state.slides.length - 1]?.id || state.activeSlideId;
+        state.selectedElementId = '';
+        rerender();
+        await persist(true);
+        const completedNumbers = new Set(readySlides.map((slide) => slide.slideNumber));
+        const missingNumbers = normalizedPlans
+          .filter((plan) => !completedNumbers.has(plan.slideNumber))
+          .map((plan) => plan.slideNumber);
+        const partialError = new Error(t('generationPartialDeck', { missing: missingNumbers.join(', ') }));
+        partialError.pptLivePartialDeck = true;
+        partialError.cause = error;
+        if (error?.pptLiveRecoveryExhausted) {
+          partialError.pptLiveRecoveryExhausted = error.pptLiveRecoveryExhausted;
+        }
+        throw partialError;
+      }
+
+      state.generation.draftedCount = readySlides.length;
+      setGenerationStep('design', 'running', t('generationSlideReady', {
+        slide: slideNumber,
+        total: normalizedPlans.length,
+      }));
       addGenerationEvent({
-        title: t('generationSlideReady', { slide: number, total: normalizedPlans.length }),
+        title: t('generationSlideReady', { slide: slideNumber, total: normalizedPlans.length }),
         detail: '',
         kind: 'slide',
       });
-    };
-    const results = await runWithConcurrencyLimit(
-      batches.map((batch, index) => () => runStagedSlideBatch({
-        operation,
-        instruction,
-        planContext,
-        batch,
-        batchNumber: index + 1,
-        checkpoint,
-        onSlideCheckpoint,
-      })),
-      PPT_PARALLEL_SLIDE_WORKERS,
-    );
-    if (isDeckEpochStale(runEpoch)) throw new Error('Generation stopped');
-
-    // Phase 3: assemble.
-    const failures = results.filter((result) => result.status === 'rejected');
-    const readySlides = [...checkpoint.entries()]
-      .sort((a, b) => a[0] - b[0])
-      .map(([, slide]) => slide);
-    if (failures.length && !readySlides.length) throw failures[0].reason;
-
-    const deckPayload = {
-      title: planPayload.title,
-      language: planPayload.language,
-      // On partial success keep the outline derived from the finished slides
-      // so the outline panel stays in sync with what is actually on canvas.
-      outline: failures.length ? [] : planPayload.outline,
-      researchReport: planPayload.researchReport,
-      design: planPayload.design,
-      slides: readySlides,
-    };
-    addGenerationEvent({ title: t('generationParsingDeck'), detail: '', kind: 'parsing' });
-    setStatus(t('generationParsingDeck'));
-    applyDeckPayload(deckPayload);
-    await saveHistorySnapshot(`agent:${operation}`);
-
-    if (failures.length) {
-      // Keep the finished slides on the canvas and report what is missing so
-      // the user can ask for the gap to be filled instead of starting over.
-      const missingNumbers = normalizedPlans
-        .map((plan) => plan.slideNumber)
-        .filter((number) => !checkpoint.has(number));
+      const orderedReadySlides = [...readySlides].sort((a, b) => a.slideNumber - b.slideNumber);
+      applyDeckPayload({
+        title: planPayload.title,
+        language: planPayload.language,
+        outline: orderedReadySlides.map((slide) => slide.title || ''),
+        researchReport: planPayload.researchReport,
+        design: planPayload.design,
+        slides: orderedReadySlides,
+      });
+      state.activeSlideId = `ppt-live-slide-${slideNumber}`;
+      state.selectedElementId = '';
       rerender();
-      await persist(true);
-      const error = new Error(t('generationPartialDeck', { missing: missingNumbers.join(', ') }));
-      error.pptLivePartialDeck = true;
-      throw error;
     }
 
+    const orderedReadySlides = [...readySlides].sort((a, b) => a.slideNumber - b.slideNumber);
+
+    // Phase 3 (optional): whole-deck skill/style audit, followed by deterministic
+    // editable-PPTX validation of every possibly rewritten page.
+    let finalSlides = orderedReadySlides;
+    if (PPT_LIVE_FINAL_AUDIT_ENABLED) {
+      addGenerationEvent({ title: t('generationAuditPhase'), detail: '', kind: 'phase' });
+      setGenerationStep('design', 'running', t('generationAuditPhase'));
+      setStatus(t('generationAuditPhase'));
+      finalSlides = await runFinalDeckAudit({
+        operation,
+        planContext,
+        slidePlans: normalizedPlans,
+        session,
+        project,
+      });
+    }
+    state.agentSession.id = session.id || state.agentSession.id;
+
+    // Phase 4: finalize the complete deck and persist once.
+    addGenerationEvent({ title: t('generationParsingDeck'), detail: '', kind: 'parsing' });
+    setStatus(t('generationParsingDeck'));
+    applyDeckPayload({
+      title: planPayload.title,
+      language: planPayload.language,
+      outline: planOutlineTitles(planPayload),
+      researchReport: planPayload.researchReport,
+      design: planPayload.design,
+      slides: finalSlides,
+    });
+    await saveHistorySnapshot(`agent:${operation}`);
     addGenerationEvent({ title: t('processEventDone'), detail: '', kind: 'done' });
     setGenerationStep('design', 'done');
     setGenerationStep('compile', 'done', t('generationCompiled'));
@@ -1349,11 +2295,18 @@ function shouldLogToolEvent(toolEvent, loggedToolEvents) {
   const normalized = normalizeToolEvent(toolEvent);
   const eventType = normalized.event_type || normalized.eventType || '';
   if (SILENT_TOOL_EVENT_TYPES.has(eventType)) return false;
-  const toolId = normalized.tool_id || normalized.toolId || normalized.tool_name || normalized.toolName || 'tool';
-  const key = `${toolId}:${eventType}`;
+  // One user-facing row per tool invocation; Started pairs are internal noise.
+  if (eventType === 'Started' || eventType === 'EarlyDetected') return false;
+  const toolName = String(normalized.tool_name || normalized.toolName || 'tool').toLowerCase();
+  const params = normalized.params && typeof normalized.params === 'object' ? normalized.params : {};
+  const path = String(params.file_path || params.path || params.command || '').trim();
+  const key = path ? `${toolName}:${path}:${eventType}` : `${toolName}:${eventType}`;
   if (loggedToolEvents.has(key)) return false;
   loggedToolEvents.add(key);
-  return true;
+  return eventType === 'Completed'
+    || eventType === 'Failed'
+    || eventType === 'Cancelled'
+    || eventType === 'ConfirmationNeeded';
 }
 
 function createGenerationProgressTracker() {
@@ -1655,7 +2608,7 @@ function applyDeckPayload(payload) {
     state.selectedElementId = state.slides[0]?.elements[0]?.id || '';
   }
   if (Array.isArray(payload.outline) && payload.outline.length) {
-    state.outline = payload.outline.map(String);
+    state.outline = payload.outline.map(outlineItemTitle).filter(Boolean);
   }
   if (payload.researchReport) applyResearchReport(payload.researchReport);
   if (payload.design?.palette && typeof payload.design.palette === 'object') {
@@ -1823,8 +2776,9 @@ function pickParseableBackendText(...candidates) {
   return String(candidates.find((raw) => String(raw || '').trim()) || '').trim();
 }
 
-async function waitForBackendResultOrPersistedText(waitForResult, sessionId, turnId, activity = null) {
+async function waitForBackendResultOrPersistedText(waitForResult, sessionId, turnId, activity = null, options = {}) {
   const host = runtime();
+  const expectJson = options.expectJson !== false;
   if (!sessionId || !turnId || !host.backend?.turnText) return waitForResult;
   let settled = false;
   const streamedResult = Promise.resolve(waitForResult).finally(() => {
@@ -1835,15 +2789,30 @@ async function waitForBackendResultOrPersistedText(waitForResult, sessionId, tur
     // Give up only when the backend turn looks dead (no events for a while),
     // never on a short wall-clock cap while the agent is still making progress.
     const idleTimeoutMs = 5 * 60 * 1000;
+    const fallbackPollIdleMs = 10 * 1000;
     const absoluteMaxWaitMs = 60 * 60 * 1000;
     const lastEventAt = () => Number(activity?.lastEventAt || startedAt);
     const poll = async () => {
       while (!settled && Date.now() - startedAt < absoluteMaxWaitMs) {
-        if (Date.now() - lastEventAt() > idleTimeoutMs) break;
+        const idleForMs = Date.now() - lastEventAt();
+        if (idleForMs > idleTimeoutMs) break;
+        if (idleForMs < fallbackPollIdleMs) {
+          await new Promise((resolveDelay) => setTimeout(
+            resolveDelay,
+            Math.min(1000, fallbackPollIdleMs - idleForMs),
+          ));
+          continue;
+        }
         try {
           const result = await host.backend.turnText(sessionId, turnId);
           const text = String(result?.text || '').trim();
           if (text) {
+            if (!expectJson) {
+              // File-protocol turns only reply with a status line; any
+              // persisted text means the turn produced its answer.
+              resolve({ answer: text, thinking: '' });
+              return;
+            }
             try {
               extractBackendJson(text);
               resolve({ answer: text, thinking: '' });
@@ -1855,7 +2824,7 @@ async function waitForBackendResultOrPersistedText(waitForResult, sessionId, tur
         } catch {
           // The turn may not be persisted yet.
         }
-        await new Promise((resolveDelay) => setTimeout(resolveDelay, 1000));
+        await new Promise((resolveDelay) => setTimeout(resolveDelay, 2000));
       }
       if (!settled) reject(new Error('PPT Live backend did not publish a final deck JSON'));
     };
@@ -2022,12 +2991,25 @@ function replaceActiveSlide(nextSlide) {
   state.selectedElementId = state.slides[index].elements[0]?.id || '';
 }
 
-function restyleDeck() {
+async function restyleDeck() {
   updateBriefFromInputs({ includeTopic: !hasUsableDeckForRevision() });
+  if ((state.slides || []).some((slide) => String(slide?.html || '').trim())) {
+    const instruction = `Restyle the existing deck without changing its facts or narrative. Apply these exact settings to every slide HTML: ${JSON.stringify(buildGenerationStyle())}. Preserve each page's informationIntent and visualStrategy while making the deck visually coherent.`;
+    try {
+      await runPptLiveBackend('revise_deck', instruction, { includeTopic: false });
+      return;
+    } catch (error) {
+      if (isStoppedBackendError(error)) return;
+      runtime().log?.warn?.('PPT Live Agent restyle failed', { error: String(error) });
+      failGenerationFromError(error);
+      await persist(true);
+      return;
+    }
+  }
   state.slides = state.slides.map((slide, index) => normalizeSlide({ ...slide, theme: undefined }, index, state));
   setStatus(t('deckRestyled'));
   rerender();
-  void persist(true);
+  await persist(true);
 }
 
 function syncSlidesFromOutline() {
@@ -2658,7 +3640,7 @@ function bindPropertyPanels() {
   if (densitySlider && densityTrack) {
     densityTrack.addEventListener('pointerdown', (event) => {
       event.preventDefault();
-      setDensityIndex(pickDensityIndexFromClientX(event.clientX, densityTrack));
+      setDensityIndex(pickDensityIndexFromClientX(event.clientX, densityTrack), { save: false });
       densityTrack.setPointerCapture(event.pointerId);
     });
     densityTrack.addEventListener('pointermove', (event) => {
@@ -2668,7 +3650,7 @@ function bindPropertyPanels() {
     densityTrack.addEventListener('pointerup', (event) => {
       if (!densityTrack.hasPointerCapture(event.pointerId)) return;
       densityTrack.releasePointerCapture(event.pointerId);
-      void persist(true);
+      void restyleDeck();
     });
     densityTrack.addEventListener('pointercancel', (event) => {
       if (!densityTrack.hasPointerCapture(event.pointerId)) return;
@@ -2679,6 +3661,7 @@ function bindPropertyPanels() {
       tick.addEventListener('click', (event) => {
         event.stopPropagation();
         setDensityIndex(tick.dataset.densityIndex);
+        void restyleDeck();
       });
     });
     densitySlider.addEventListener('keydown', (event) => {
@@ -2686,15 +3669,19 @@ function bindPropertyPanels() {
       if (event.key === 'ArrowLeft' || event.key === 'ArrowDown') {
         event.preventDefault();
         setDensityIndex(currentIndex - 1);
+        void restyleDeck();
       } else if (event.key === 'ArrowRight' || event.key === 'ArrowUp') {
         event.preventDefault();
         setDensityIndex(currentIndex + 1);
+        void restyleDeck();
       } else if (event.key === 'Home') {
         event.preventDefault();
         setDensityIndex(0);
+        void restyleDeck();
       } else if (event.key === 'End') {
         event.preventDefault();
         setDensityIndex(2);
+        void restyleDeck();
       }
     });
   }
@@ -2708,7 +3695,7 @@ function bindPropertyPanels() {
         node.classList.toggle('is-active', active);
         node.setAttribute('aria-pressed', active ? 'true' : 'false');
       });
-      restyleDeck();
+      void restyleDeck();
       void persist(true);
     });
   });
@@ -2722,7 +3709,7 @@ function bindPropertyPanels() {
         node.classList.toggle('is-active', active);
         node.setAttribute('aria-pressed', active ? 'true' : 'false');
       });
-      void persist(true);
+      void restyleDeck();
     });
   });
 
@@ -2755,7 +3742,7 @@ function bindPropertyPanels() {
           });
           syncDensitySlider(state.style.density);
         }
-        restyleDeck();
+        void restyleDeck();
         void persist(true);
       }
     });

@@ -87,6 +87,15 @@ export interface AiModelInfo {
 export interface AgentRunOptions {
   runId?: string;
   sessionName?: string;
+  /** Defaults to true host-side; only applies when a new session is created. */
+  enableTools?: boolean;
+  /** Reuse an existing hidden agent session from an earlier run of this app. */
+  sessionId?: string;
+  /**
+   * Relative subdirectory inside the app's own appdata directory to use as
+   * the agent workspace (file-protocol apps keep agent outputs there).
+   */
+  appDataWorkspace?: string;
 }
 
 export interface AgentRunStartedResult {
@@ -640,6 +649,9 @@ export class MiniAppAPI {
           runId: options?.runId,
           sessionName: options?.sessionName,
           workspacePath,
+          enableTools: options?.enableTools,
+          sessionId: options?.sessionId,
+          appDataWorkspace: options?.appDataWorkspace,
         }
       });
     } catch (error) {

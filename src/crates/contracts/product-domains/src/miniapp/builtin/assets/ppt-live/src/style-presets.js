@@ -1,7 +1,10 @@
 /**
  * PPT Live Style Presets
  *
- * 9 curated presets. Each preset maps to:
+ * Active UI presets: clean-business, insight-report (see STYLE_PRESET_UI_KEYS).
+ * Additional presets are preserved in the commented block below for re-enable.
+ *
+ * Each preset maps to:
  * - names/descriptions: localized UI labels keyed by locale ('en-US' | 'zh-CN')
  * - styleKey: internal identifier used by deck-ai.js and the ppt-design skill
  *   (references/style-presets/<styleKey>.md)
@@ -12,23 +15,26 @@
  * - keywords: regex patterns for AI style detection
  */
 
+/** Presets shown in the style dropdown; others are commented out below. */
+export const STYLE_PRESET_UI_KEYS = ['clean-business', 'insight-report'];
+
 export const STYLE_PRESETS = {
   // === 商务/极简 ===
   'clean-business': {
     styleKey: 'clean-business',
     names: { 'en-US': 'Clean Business', 'zh-CN': '简洁商务' },
     descriptions: {
-      'en-US': 'Pure white background, calm blue accent, minimal and professional',
-      'zh-CN': '纯白背景，蓝色强调，极简通透的商务风格',
+      'en-US': 'Calm editorial product-doc: warm canvas, charcoal type, one restrained accent, typography-led',
+      'zh-CN': '平静编辑感产品文档：暖白画布、炭黑字阶、单一克制强调色，排版即视觉',
     },
     colorMode: 'light',
     palette: {
-      background: '#ffffff',
-      ink: '#1a1a1a',
-      muted: '#6b7280',
-      primary: '#2563eb',
-      accent: '#3b82f6',
-      panel: '#f8fafc',
+      background: '#FAFAF7',
+      ink: '#111111',
+      muted: '#787774',
+      primary: '#1E293B',
+      accent: '#0f766e',
+      panel: '#F3F2EF',
     },
     fontFamily: 'sans',
     density: 'spacious',
@@ -39,8 +45,8 @@ export const STYLE_PRESETS = {
     styleKey: 'insight-report',
     names: { 'en-US': 'Insight Report', 'zh-CN': '洞察汇报' },
     descriptions: {
-      'en-US': 'Consulting-grade dense pages: action titles, full tables, flowcharts, detailed breakdowns',
-      'zh-CN': '咨询级高密度页面：行动式结论标题，满版表格图示，详尽逻辑拆解',
+      'en-US': 'Analytical memo on a slide: full sentences, explicit frameworks, evidence-dense tables',
+      'zh-CN': '分析备忘录上墙：完整论证、显性框架、满版证据，像尽调附录而非 bullet 演讲',
     },
     colorMode: 'light',
     palette: {
@@ -55,6 +61,9 @@ export const STYLE_PRESETS = {
     density: 'compact',
     keywords: /insight|consult|academic|research|whitepaper|due.*diligence|洞察|咨询|学术|调研|详尽|深度分析|尽调/,
   },
+
+  /*
+  // === Temporarily hidden from UI — uncomment entries to restore ===
 
   'minimal-gallery': {
     styleKey: 'minimal-gallery',
@@ -226,6 +235,7 @@ export const STYLE_PRESETS = {
     density: 'standard',
     keywords: /infographic|data|pixel|dev|vitamin|pop|信息图|数据|像素|开发者|波普/,
   },
+  */
 };
 
 export const DEFAULT_STYLE_PRESET = 'clean-business';
@@ -236,6 +246,37 @@ export function normalizeStylePresetKey(key) {
 
 export function getStylePreset(key) {
   return STYLE_PRESETS[normalizeStylePresetKey(key)];
+}
+
+const DEFAULT_DARK_PALETTE = {
+  background: '#111111',
+  ink: '#F5F5F4',
+  muted: '#A8A29E',
+  primary: '#93C5FD',
+  accent: '#2DD4BF',
+  panel: '#1C1C1C',
+};
+
+/**
+ * Resolve slide CSS palette for the user's colorMode. Light mode uses the preset
+ * palette; dark mode inverts semantic roles so prompt hex values match colorMode.
+ */
+export function resolveStylePalette(preset, colorMode = 'light') {
+  const base = preset?.palette || {};
+  if (colorMode !== 'dark') {
+    return { ...base };
+  }
+  if (preset?.paletteDark && typeof preset.paletteDark === 'object') {
+    return { ...preset.paletteDark };
+  }
+  return {
+    background: DEFAULT_DARK_PALETTE.background,
+    ink: DEFAULT_DARK_PALETTE.ink,
+    muted: DEFAULT_DARK_PALETTE.muted,
+    primary: base.primary || DEFAULT_DARK_PALETTE.primary,
+    accent: base.accent || DEFAULT_DARK_PALETTE.accent,
+    panel: DEFAULT_DARK_PALETTE.panel,
+  };
 }
 
 function resolveLocale(locale) {
@@ -260,10 +301,15 @@ export function resolveStylePresetFromKeywords(text) {
 
 export function getAllStylePresets(locale) {
   const lang = resolveLocale(locale);
-  return Object.entries(STYLE_PRESETS).map(([key, preset]) => ({
-    key,
-    displayName: preset.names[lang] || preset.names['en-US'],
-    description: preset.descriptions[lang] || preset.descriptions['en-US'],
-    colorMode: preset.colorMode,
-  }));
+  return STYLE_PRESET_UI_KEYS
+    .filter((key) => STYLE_PRESETS[key])
+    .map((key) => {
+      const preset = STYLE_PRESETS[key];
+      return {
+        key,
+        displayName: preset.names[lang] || preset.names['en-US'],
+        description: preset.descriptions[lang] || preset.descriptions['en-US'],
+        colorMode: preset.colorMode,
+      };
+    });
 }
