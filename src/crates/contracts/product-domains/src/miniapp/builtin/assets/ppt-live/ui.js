@@ -24,7 +24,7 @@ import {
 } from './src/state.js';
 import { getAllStylePresets, getStylePreset, DEFAULT_STYLE_PRESET, resolveStylePalette } from './src/style-presets.js';
 import { enhanceFlatSelect, refreshFlatSelect } from './src/flat-select.js';
-import { applyI18n, readInputs, renderAll, renderInspector, renderSlideCanvas, renderGeneration, renderGenerationOverlay, renderThumbs, slideHtml, fitSlideCanvas, fitHtmlSlideFrame, buildExportPreviewStage, fitExportPreviewFrame, fitThumbPreviews, normalizeSlideDocument, observeThumbPreviews, ensureCanvasFitted, syncDensitySlider } from './src/render.js';
+import { applyI18n, readInputs, readStyleInputs, renderAll, renderInspector, renderSlideCanvas, renderGeneration, renderGenerationOverlay, renderThumbs, slideHtml, fitSlideCanvas, fitHtmlSlideFrame, buildExportPreviewStage, fitExportPreviewFrame, fitThumbPreviews, normalizeSlideDocument, observeThumbPreviews, ensureCanvasFitted, syncDensitySlider, syncFontFamilyToggle, syncColorModeToggle, syncStylePanelFromState } from './src/render.js';
 import {
   prepareSlidesForPptxExport,
   slideExportHtml,
@@ -235,6 +235,7 @@ async function restoreHistory(id) {
   state.generation.active = false;
   resetGeneration();
   rerender();
+  syncStylePanelFromState(state);
   setStatus(t('historyRestored'));
   await storageSet(STORAGE_KEY, { ...state, updatedAt: Date.now() });
 }
@@ -418,7 +419,10 @@ async function handlePromptSubmit() {
   updateBriefFromInputs({ includeTopic: !reviseExistingDeck });
   if (!reviseExistingDeck) state.brief.topic = instruction;
   try {
-    await runPptLiveBackend('auto', instruction, { includeTopic: !reviseExistingDeck });
+    await runPptLiveBackend('auto', instruction, {
+      includeTopic: !reviseExistingDeck,
+      persistBeforeRun: true,
+    });
     return;
   } catch (error) {
     if (isStoppedBackendError(error)) return;
@@ -662,12 +666,13 @@ function pickDensityIndexFromClientX(clientX, track) {
   return Math.round(ratio * 2);
 }
 
-function setDensityIndex(index, { save = true } = {}) {
-  const nextIndex = clamp(Math.round(Number(index)), 0, 2);
-  state.style.density = indexToDensity(nextIndex);
-  syncDensitySlider(state.style.density);
-  rerender();
-  if (save) void persist(true);
+function setDensitySliderUi(index) {
+  syncDensitySlider(indexToDensity(clamp(Math.round(Number(index)), 0, 2)));
+}
+
+function readGenerationStyleFromPropertyPanel() {
+  readStyleInputs(state);
+  state = ensureState(state);
 }
 
 // Interrupted turns are retried as "continue" turns inside the same agent
@@ -998,6 +1003,10 @@ async function runPptLiveBackend(operation, instruction, options = {}) {
   backendRunInFlight = true;
   try {
     updateBriefFromInputs({ includeTopic: options.includeTopic !== false });
+    readGenerationStyleFromPropertyPanel();
+    if (options.persistBeforeRun) {
+      await persist(true);
+    }
     const isInitialAutoDraft = operation === 'auto' && (isDefaultDraft() || isStarterDeck());
     if (isInitialAutoDraft) {
       // Fresh deck generation plans once, then renders one slide per Agent
@@ -1134,7 +1143,8 @@ async function executeBackendTurn(requestInput, hooks = {}, options = {}) {
             });
           }
           if (shouldLogToolEvent(toolEvent, loggedToolEvents)) {
-            addGenerationEvent(describeToolEvent(event));
+            const described = describeToolEvent(event);
+            if (described) addGenerationEvent(described);
             progressTracker.touch();
           }
           if (eventType === 'EarlyDetected' || eventType === 'Started') {
@@ -1143,7 +1153,7 @@ async function executeBackendTurn(requestInput, hooks = {}, options = {}) {
             const toolName = String(toolEvent.tool_name || toolEvent.toolName || '').trim().toLowerCase();
             hooks.onToolPhase?.('completed');
             if (toolName === 'skill') {
-              progressTracker.note(t('eventToolSkillReady'), friendlyToolName(toolEvent.tool_name || toolEvent.toolName), 'phase');
+              progressTracker.note(t('eventToolSkillReady'), '', 'phase');
             } else if (toolName === 'websearch' || toolName === 'webfetch') {
               hooks.onToolPhase?.('research');
             }
@@ -1908,6 +1918,27 @@ const SILENT_TOOL_EVENT_TYPES = new Set([
   'StreamChunk',
   'Confirmed',
   'Rejected',
+  'EarlyDetected',
+  'Started',
+]);
+
+const SILENT_COMPLETED_TOOL_NAMES = new Set([
+  'read',
+  'write',
+  'grep',
+  'glob',
+  'list',
+  'todowrite',
+  'todo_write',
+  'task',
+  'skill',
+  'bash',
+  'shell',
+  'edit',
+  'delete',
+  'apply_patch',
+  'strreplace',
+  'search_replace',
 ]);
 
 function friendlyToolName(name) {
@@ -1919,13 +1950,20 @@ function friendlyToolName(name) {
   return raw;
 }
 
+function completedToolProgressTitle(rawToolName) {
+  const name = String(rawToolName || '').trim().toLowerCase();
+  if (!name || SILENT_COMPLETED_TOOL_NAMES.has(name)) return '';
+  if (name === 'websearch') return t('eventToolWebSearchDone');
+  if (name === 'webfetch') return t('eventToolWebFetchDone');
+  return '';
+}
+
 function shouldLogToolEvent(toolEvent, loggedToolEvents) {
   const normalized = normalizeToolEvent(toolEvent);
   const eventType = normalized.event_type || normalized.eventType || '';
   if (SILENT_TOOL_EVENT_TYPES.has(eventType)) return false;
-  // One user-facing row per tool invocation; Started pairs are internal noise.
-  if (eventType === 'Started' || eventType === 'EarlyDetected') return false;
   const toolName = String(normalized.tool_name || normalized.toolName || 'tool').toLowerCase();
+  if (eventType === 'Completed' && !completedToolProgressTitle(toolName)) return false;
   const params = normalized.params && typeof normalized.params === 'object' ? normalized.params : {};
   const path = String(params.file_path || params.path || params.command || '').trim();
   const key = path ? `${toolName}:${path}:${eventType}` : `${toolName}:${eventType}`;
@@ -2089,29 +2127,27 @@ function noteTextStreamProgress(buffer, progressTracker, lastPhaseRef) {
 function describeToolEvent(event) {
   const toolEvent = normalizeToolEvent(event.toolEvent || {});
   const eventType = toolEvent.event_type || toolEvent.eventType || 'ToolEvent';
-  const toolName = friendlyToolName(toolEvent.tool_name || toolEvent.toolName);
-  const labels = {
-    EarlyDetected: t('eventToolDetected'),
-    ParamsPartial: t('eventToolParams'),
-    Queued: t('eventToolQueued'),
-    Waiting: t('eventToolWaiting'),
-    Started: t('eventToolStarted'),
-    Progress: t('eventToolProgress'),
-    Streaming: t('eventToolStreaming'),
-    StreamChunk: t('eventToolStreamChunk'),
-    ConfirmationNeeded: t('eventToolConfirmation'),
-    Confirmed: t('eventToolConfirmed'),
-    Rejected: t('eventToolRejected'),
-    Completed: t('eventToolCompleted'),
-    Failed: t('eventToolFailed'),
-    Cancelled: t('eventToolCancelled'),
-  };
-  const namedTypes = new Set(['EarlyDetected', 'Started', 'Completed', 'Failed', 'Cancelled', 'ConfirmationNeeded']);
-  return {
-    title: labels[eventType] || t('processEventTool'),
-    detail: namedTypes.has(eventType) ? toolName : userFacingToolDetail(eventType, toolEvent),
-    kind: eventType === 'Failed' || eventType === 'Cancelled' || eventType === 'Rejected' ? 'error' : 'tool',
-  };
+  const rawToolName = String(toolEvent.tool_name || toolEvent.toolName || '').trim();
+  if (eventType === 'Completed') {
+    const title = completedToolProgressTitle(rawToolName);
+    if (!title) return null;
+    return { title, detail: '', kind: 'tool' };
+  }
+  if (eventType === 'Failed' || eventType === 'Cancelled') {
+    return {
+      title: t('eventToolFailedUser'),
+      detail: '',
+      kind: 'error',
+    };
+  }
+  if (eventType === 'ConfirmationNeeded') {
+    return {
+      title: t('processEventWaiting'),
+      detail: '',
+      kind: 'tool',
+    };
+  }
+  return null;
 }
 
 function userFacingToolDetail(eventType, toolEvent) {
@@ -2662,6 +2698,7 @@ async function newDeck() {
   state = createBlankDeckState();
   resetGeneration();
   rerender();
+  syncStylePanelFromState(state);
   setStatus(t('blankDeckReady'));
   await persist(true);
 }
@@ -3268,48 +3305,43 @@ function bindPropertyPanels() {
   if (densitySlider && densityTrack) {
     densityTrack.addEventListener('pointerdown', (event) => {
       event.preventDefault();
-      setDensityIndex(pickDensityIndexFromClientX(event.clientX, densityTrack), { save: false });
+      setDensitySliderUi(pickDensityIndexFromClientX(event.clientX, densityTrack));
       densityTrack.setPointerCapture(event.pointerId);
     });
     densityTrack.addEventListener('pointermove', (event) => {
       if (!densityTrack.hasPointerCapture(event.pointerId)) return;
-      setDensityIndex(pickDensityIndexFromClientX(event.clientX, densityTrack), { save: false });
+      setDensitySliderUi(pickDensityIndexFromClientX(event.clientX, densityTrack));
     });
     densityTrack.addEventListener('pointerup', (event) => {
       if (!densityTrack.hasPointerCapture(event.pointerId)) return;
       densityTrack.releasePointerCapture(event.pointerId);
-      void restyleDeck();
     });
     densityTrack.addEventListener('pointercancel', (event) => {
       if (!densityTrack.hasPointerCapture(event.pointerId)) return;
       densityTrack.releasePointerCapture(event.pointerId);
-      void persist(true);
+      syncDensitySlider(state.style?.density);
     });
     densitySlider.querySelectorAll('[data-density-index]').forEach((tick) => {
       tick.addEventListener('click', (event) => {
         event.stopPropagation();
-        setDensityIndex(tick.dataset.densityIndex);
-        void restyleDeck();
+        setDensitySliderUi(tick.dataset.densityIndex);
       });
     });
     densitySlider.addEventListener('keydown', (event) => {
-      const currentIndex = densityToIndex(state.style.density);
+      const densitySliderRoot = $('densitySlider');
+      const currentIndex = Number(densitySliderRoot?.dataset.index ?? 1);
       if (event.key === 'ArrowLeft' || event.key === 'ArrowDown') {
         event.preventDefault();
-        setDensityIndex(currentIndex - 1);
-        void restyleDeck();
+        setDensitySliderUi(currentIndex - 1);
       } else if (event.key === 'ArrowRight' || event.key === 'ArrowUp') {
         event.preventDefault();
-        setDensityIndex(currentIndex + 1);
-        void restyleDeck();
+        setDensitySliderUi(currentIndex + 1);
       } else if (event.key === 'Home') {
         event.preventDefault();
-        setDensityIndex(0);
-        void restyleDeck();
+        setDensitySliderUi(0);
       } else if (event.key === 'End') {
         event.preventDefault();
-        setDensityIndex(2);
-        void restyleDeck();
+        setDensitySliderUi(2);
       }
     });
   }
@@ -3317,27 +3349,14 @@ function bindPropertyPanels() {
   /* Font family */
   document.querySelectorAll('[data-font-family]').forEach((button) => {
     button.addEventListener('click', () => {
-      state.style.fontFamily = button.dataset.fontFamily === 'serif' ? 'serif' : 'sans';
-      document.querySelectorAll('[data-font-family]').forEach((node) => {
-        const active = node === button;
-        node.classList.toggle('is-active', active);
-        node.setAttribute('aria-pressed', active ? 'true' : 'false');
-      });
-      void restyleDeck();
-      void persist(true);
+      syncFontFamilyToggle(button.dataset.fontFamily === 'serif' ? 'serif' : 'sans');
     });
   });
 
   /* Slide color mode */
   document.querySelectorAll('[data-color-mode]').forEach((button) => {
     button.addEventListener('click', () => {
-      state.style.colorMode = button.dataset.colorMode === 'dark' ? 'dark' : 'light';
-      document.querySelectorAll('[data-color-mode]').forEach((node) => {
-        const active = node === button;
-        node.classList.toggle('is-active', active);
-        node.setAttribute('aria-pressed', active ? 'true' : 'false');
-      });
-      void restyleDeck();
+      syncColorModeToggle(button.dataset.colorMode === 'dark' ? 'dark' : 'light');
     });
   });
 
@@ -3346,33 +3365,17 @@ function bindPropertyPanels() {
   if (stylePresetSelect) {
     renderStylePresetOptions();
     enhanceFlatSelect(stylePresetSelect);
-    stylePresetSelect.value = state.style?.stylePreset || DEFAULT_STYLE_PRESET;
-    refreshFlatSelect(stylePresetSelect);
+    syncStylePanelFromState(state);
     stylePresetSelect.addEventListener('change', () => {
       const selected = stylePresetSelect.value;
-      if (selected) {
-        state.style.stylePreset = selected;
-        const preset = getStylePreset(selected);
-        if (preset) {
-          state.style.colorMode = preset.colorMode || 'light';
-          state.style.fontFamily = preset.fontFamily || 'sans';
-          state.style.density = preset.density || 'standard';
-          // Sync UI toggles
-          document.querySelectorAll('[data-color-mode]').forEach((node) => {
-            const active = node.dataset.colorMode === state.style.colorMode;
-            node.classList.toggle('is-active', active);
-            node.setAttribute('aria-pressed', active ? 'true' : 'false');
-          });
-          document.querySelectorAll('[data-font-family]').forEach((node) => {
-            const active = node.dataset.fontFamily === state.style.fontFamily;
-            node.classList.toggle('is-active', active);
-            node.setAttribute('aria-pressed', active ? 'true' : 'false');
-          });
-          syncDensitySlider(state.style.density);
-        }
-        void restyleDeck();
-        void persist(true);
+      if (!selected) return;
+      const preset = getStylePreset(selected);
+      if (preset) {
+        syncColorModeToggle(preset.colorMode || 'light');
+        syncFontFamilyToggle(preset.fontFamily || 'sans');
+        setDensitySliderUi(densityToIndex(preset.density || 'standard'));
       }
+      refreshFlatSelect(stylePresetSelect);
     });
   }
 }
@@ -3672,7 +3675,6 @@ function syncLocale() {
   state.generation = normalizeGeneration(state.generation);
   applyI18n();
   renderStylePresetOptions();
-  syncDensitySlider(state.style?.density);
   const pill = $('aiStatusPill');
   if (pill) pill.textContent = busy ? t('statusPillBusy') : t('statusPillReady');
   rerender();
@@ -3684,6 +3686,7 @@ async function init() {
     await loadState();
     await recoverFromRestart();
     syncLocale();
+    syncStylePanelFromState(state);
     await persist(true);
   } catch (error) {
     runtime().log?.error?.('PPT Live init failed', { error: String(error) });
