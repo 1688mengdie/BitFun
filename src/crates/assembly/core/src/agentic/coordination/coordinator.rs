@@ -40,7 +40,10 @@ use crate::agentic::skill_agent_snapshot::{
     diff_skill_agent_snapshot, resolve_skill_agent_snapshot, TurnSkillAgentSnapshot,
 };
 use crate::agentic::tools::pipeline::{SubagentParentInfo, ToolPipeline};
-use crate::agentic::tools::ToolRuntimeRestrictions;
+use crate::agentic::tools::{
+    is_miniapp_headless_agent_run, miniapp_headless_agent_tool_restrictions,
+    ToolRuntimeRestrictions,
+};
 use crate::agentic::workspace::WorkspaceServices;
 use crate::agentic::WorkspaceBinding;
 use crate::service::bootstrap::{
@@ -3191,6 +3194,15 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             .as_ref()
             .map(|workspace| workspace.session_storage_path().to_path_buf());
 
+        let runtime_tool_restrictions = if is_miniapp_headless_agent_run(
+            user_message_metadata.as_ref(),
+            session.created_by.as_deref(),
+        ) {
+            miniapp_headless_agent_tool_restrictions()
+        } else {
+            ToolRuntimeRestrictions::default()
+        };
+
         let execution_context = ExecutionContext {
             session_id: session_id.clone(),
             dialog_turn_id: turn_id.clone(),
@@ -3201,7 +3213,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             subagent_parent_info: None,
             delegation_policy: DelegationPolicy::top_level(),
             skip_tool_confirmation: submission_policy.skip_tool_confirmation,
-            runtime_tool_restrictions: ToolRuntimeRestrictions::default(),
+            runtime_tool_restrictions,
             workspace_services,
             round_injection: self.round_injection_source.get().cloned(),
             recover_partial_on_cancel: false,

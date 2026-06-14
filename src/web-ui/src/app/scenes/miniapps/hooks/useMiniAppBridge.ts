@@ -417,14 +417,32 @@ export function useMiniAppBridge(
       'dialog-turn-failed',
       'dialog-turn-cancelled',
       'token-usage-updated',
+      'subagent-session-linked',
     ];
 
+    const unlistenSubagentLink = api.listen<{
+      sessionId?: string;
+      parentSessionId?: string;
+    }>('agentic://subagent-session-linked', (payload) => {
+      if (!payload?.sessionId || !payload?.parentSessionId) return;
+      if (!agentSessionIdsRef.current.has(payload.parentSessionId)) return;
+      agentSessionIdsRef.current.add(payload.sessionId);
+    });
+
     const unlisteners = forwardedEvents.map((eventName) =>
-      api.listen<{ sessionId?: string; [key: string]: unknown }>(
+      api.listen<{ sessionId?: string; parentSessionId?: string; [key: string]: unknown }>(
         `agentic://${eventName}`,
         (payload) => {
           if (!iframeRef.current?.contentWindow) return;
-          if (!payload?.sessionId || !agentSessionIdsRef.current.has(payload.sessionId)) return;
+          const eventSessionId = payload?.sessionId;
+          if (!eventSessionId) return;
+          const parentSessionId = payload.parentSessionId;
+          const ownsSession =
+            agentSessionIdsRef.current.has(eventSessionId)
+            || (eventName === 'subagent-session-linked'
+              && typeof parentSessionId === 'string'
+              && agentSessionIdsRef.current.has(parentSessionId));
+          if (!ownsSession) return;
           iframeRef.current.contentWindow.postMessage(
             {
               type: 'bitfun:event',
@@ -438,6 +456,7 @@ export function useMiniAppBridge(
     );
 
     return () => {
+      unlistenSubagentLink();
       unlisteners.forEach((unlisten) => unlisten());
     };
   }, [app.id, app.permissions?.agent?.enabled, iframeRef]);

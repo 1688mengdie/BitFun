@@ -1088,6 +1088,7 @@ async function executeBackendTurn(requestInput, hooks = {}, options = {}) {
   const cleanup = [];
   const loggedToolEvents = new Set();
   const toolTrace = [];
+  const linkedSubagentSessionIds = new Set();
   const progressTracker = createGenerationProgressTracker();
   const activity = { lastEventAt: Date.now() };
 
@@ -1106,51 +1107,78 @@ async function executeBackendTurn(requestInput, hooks = {}, options = {}) {
 
     const waitForResult = new Promise((resolve, reject) => {
       const listener = (event) => {
-        if (event.sessionId !== sessionId) return;
-        if (event.turnId && event.turnId !== turnId) return;
-        activity.lastEventAt = Date.now();
+        const eventSessionId = event.sessionId;
+        const isParentTurn = eventSessionId === sessionId;
         const sourceEvent = String(event.sourceEvent || '');
+
+        if (sourceEvent.endsWith('subagent-session-linked')) {
+          if (event.parentSessionId === sessionId && eventSessionId) {
+            linkedSubagentSessionIds.add(eventSessionId);
+            addGenerationEvent({ title: t('eventSubagentStarted'), detail: '', kind: 'tool' });
+          }
+          return;
+        }
+
+        const isLinkedSubagent = linkedSubagentSessionIds.has(eventSessionId);
+        if (!isParentTurn && !isLinkedSubagent) return;
+        if (isParentTurn && event.turnId && event.turnId !== turnId) return;
+
+        activity.lastEventAt = Date.now();
+        if (!isParentTurn && eventSessionId) {
+          linkedSubagentSessionIds.add(eventSessionId);
+        }
         if (sourceEvent.endsWith('dialog-turn-started')) {
           progressTracker.note(t('eventTurnStarted'), '', 'turn');
         } else if (sourceEvent.endsWith('model-round-started')) {
-          hooks.onToolPhase?.('round');
+          if (isParentTurn) {
+            hooks.onToolPhase?.('round');
+          } else {
+            progressTracker.note(t('eventSubagentWorking'), '', 'pulse', 8000);
+          }
           progressTracker.touch();
         } else if (sourceEvent.endsWith('model-round-completed')) {
           progressTracker.touch();
         } else if (sourceEvent.endsWith('tool-event')) {
           const toolEvent = normalizeToolEvent(event.toolEvent || {});
           const eventType = toolEvent.event_type || toolEvent.eventType || '';
-          if (eventType === 'Started') {
-            toolTrace.push({
-              eventType,
-              toolId: toolEvent.tool_id || toolEvent.toolId || '',
-              toolName: toolEvent.tool_name || toolEvent.toolName || '',
-              params: toolEvent.params || {},
-            });
-          } else if (eventType === 'Completed') {
-            toolTrace.push({
-              eventType,
-              toolId: toolEvent.tool_id || toolEvent.toolId || '',
-              toolName: toolEvent.tool_name || toolEvent.toolName || '',
-              result: toolEvent.result || {},
-            });
-          } else if (eventType === 'Failed' || eventType === 'Cancelled') {
-            toolTrace.push({
-              eventType,
-              toolId: toolEvent.tool_id || toolEvent.toolId || '',
-              toolName: toolEvent.tool_name || toolEvent.toolName || '',
-              error: toolEvent.error || toolEvent.message || eventType,
-            });
+          const rawToolName = String(toolEvent.tool_name || toolEvent.toolName || '').trim().toLowerCase();
+          if (isParentTurn) {
+            if (eventType === 'Started') {
+              toolTrace.push({
+                eventType,
+                toolId: toolEvent.tool_id || toolEvent.toolId || '',
+                toolName: toolEvent.tool_name || toolEvent.toolName || '',
+                params: toolEvent.params || {},
+              });
+            } else if (eventType === 'Completed') {
+              toolTrace.push({
+                eventType,
+                toolId: toolEvent.tool_id || toolEvent.toolId || '',
+                toolName: toolEvent.tool_name || toolEvent.toolName || '',
+                result: toolEvent.result || {},
+              });
+            } else if (eventType === 'Failed' || eventType === 'Cancelled') {
+              toolTrace.push({
+                eventType,
+                toolId: toolEvent.tool_id || toolEvent.toolId || '',
+                toolName: toolEvent.tool_name || toolEvent.toolName || '',
+                error: toolEvent.error || toolEvent.message || eventType,
+              });
+            }
           }
-          if (shouldLogToolEvent(toolEvent, loggedToolEvents)) {
-            const described = describeToolEvent(event);
+          if (eventType === 'Started' && rawToolName === 'task') {
+            progressTracker.note(t('eventToolTaskStarted'), '', 'tool');
+            progressTracker.touch();
+          }
+          if (shouldLogToolEvent(toolEvent, loggedToolEvents, { isSubagent: !isParentTurn })) {
+            const described = describeToolEvent(event, { isSubagent: !isParentTurn });
             if (described) addGenerationEvent(described);
             progressTracker.touch();
           }
-          if (eventType === 'EarlyDetected' || eventType === 'Started') {
+          if (isParentTurn && (eventType === 'EarlyDetected' || eventType === 'Started')) {
             hooks.onToolPhase?.('detected');
-          } else if (eventType === 'Completed') {
-            const toolName = String(toolEvent.tool_name || toolEvent.toolName || '').trim().toLowerCase();
+          } else if (isParentTurn && eventType === 'Completed') {
+            const toolName = rawToolName;
             hooks.onToolPhase?.('completed');
             if (toolName === 'skill') {
               progressTracker.note(t('eventToolSkillReady'), '', 'phase');
@@ -1176,6 +1204,10 @@ async function executeBackendTurn(requestInput, hooks = {}, options = {}) {
         } else if (sourceEvent.endsWith('token-usage-updated')) {
           // Keep token stats internal; do not surface them in the user-facing log.
         } else if (sourceEvent.endsWith('dialog-turn-completed')) {
+          if (!isParentTurn) {
+            progressTracker.note(t('eventSubagentDone'), '', 'tool');
+            return;
+          }
           settled = true;
           completion = {
             success: event.success,
@@ -1185,6 +1217,10 @@ async function executeBackendTurn(requestInput, hooks = {}, options = {}) {
           };
           resolve({ answer: textBuffer, thinking: thinkingBuffer });
         } else if (sourceEvent.endsWith('dialog-turn-failed') || sourceEvent.endsWith('dialog-turn-cancelled')) {
+          if (!isParentTurn) {
+            progressTracker.note(t('eventSubagentFailed'), '', 'error');
+            return;
+          }
           settled = true;
           // Final flush so checkpoint extractors see every slide that finished
           // streaming before the failure; retries resume from those slides.
@@ -1930,7 +1966,6 @@ const SILENT_COMPLETED_TOOL_NAMES = new Set([
   'list',
   'todowrite',
   'todo_write',
-  'task',
   'skill',
   'bash',
   'shell',
@@ -1950,20 +1985,21 @@ function friendlyToolName(name) {
   return raw;
 }
 
-function completedToolProgressTitle(rawToolName) {
+function completedToolProgressTitle(rawToolName, options = {}) {
   const name = String(rawToolName || '').trim().toLowerCase();
   if (!name || SILENT_COMPLETED_TOOL_NAMES.has(name)) return '';
-  if (name === 'websearch') return t('eventToolWebSearchDone');
-  if (name === 'webfetch') return t('eventToolWebFetchDone');
+  if (name === 'websearch') return options.isSubagent ? t('eventSubagentWebSearchDone') : t('eventToolWebSearchDone');
+  if (name === 'webfetch') return options.isSubagent ? t('eventSubagentWebFetchDone') : t('eventToolWebFetchDone');
+  if (name === 'task') return t('eventToolTaskDone');
   return '';
 }
 
-function shouldLogToolEvent(toolEvent, loggedToolEvents) {
+function shouldLogToolEvent(toolEvent, loggedToolEvents, options = {}) {
   const normalized = normalizeToolEvent(toolEvent);
   const eventType = normalized.event_type || normalized.eventType || '';
   if (SILENT_TOOL_EVENT_TYPES.has(eventType)) return false;
   const toolName = String(normalized.tool_name || normalized.toolName || 'tool').toLowerCase();
-  if (eventType === 'Completed' && !completedToolProgressTitle(toolName)) return false;
+  if (eventType === 'Completed' && !completedToolProgressTitle(toolName, options)) return false;
   const params = normalized.params && typeof normalized.params === 'object' ? normalized.params : {};
   const path = String(params.file_path || params.path || params.command || '').trim();
   const key = path ? `${toolName}:${path}:${eventType}` : `${toolName}:${eventType}`;
@@ -2124,12 +2160,12 @@ function noteTextStreamProgress(buffer, progressTracker, lastPhaseRef) {
   void lastPhaseRef;
 }
 
-function describeToolEvent(event) {
+function describeToolEvent(event, options = {}) {
   const toolEvent = normalizeToolEvent(event.toolEvent || {});
   const eventType = toolEvent.event_type || toolEvent.eventType || 'ToolEvent';
   const rawToolName = String(toolEvent.tool_name || toolEvent.toolName || '').trim();
   if (eventType === 'Completed') {
-    const title = completedToolProgressTitle(rawToolName);
+    const title = completedToolProgressTitle(rawToolName, options);
     if (!title) return null;
     return { title, detail: '', kind: 'tool' };
   }
