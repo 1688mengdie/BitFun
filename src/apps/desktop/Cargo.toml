@@ -38,6 +38,8 @@ tauri-plugin-global-shortcut = { workspace = true }
 # where the root Cargo.lock is intentionally ignored.
 time = { workspace = true }
 brotli-decompressor = { workspace = true }
+alloc-no-stdlib = { workspace = true }
+alloc-stdlib = { workspace = true }
 
 # Inherited from workspace
 tokio = { workspace = true }
