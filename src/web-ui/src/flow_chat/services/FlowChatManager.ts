@@ -125,8 +125,7 @@ export class FlowChatManager {
       return existingRequest;
     }
 
-    let request: Promise<boolean>;
-    request = this.initializeWorkspace(
+    const request = this.initializeWorkspace(
       requestKey,
       workspacePath,
       preferredMode,
