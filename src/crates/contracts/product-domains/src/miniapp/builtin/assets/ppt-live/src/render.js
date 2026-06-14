@@ -25,7 +25,6 @@ export function renderAll(state, handlers) {
   renderSlideCanvas(state, handlers);
   renderInspector(state, handlers);
   ensureCanvasFitted();
-  document.querySelector('.ppt-live')?.setAttribute('data-density', state.style.density);
   document.querySelectorAll('.segment').forEach((button) => {
     button.classList.toggle('is-active', button.dataset.mode === state.mode);
   });
@@ -636,17 +635,40 @@ export function syncInputs(state) {
   const promptDraft = typeof state.promptDraft === 'string' ? state.promptDraft : '';
   const hasDeck = Array.isArray(state.slides) && state.slides.length > 0;
   value('topicInput', hasDeck ? promptDraft : (promptDraft || state.brief.topic));
+  text('deckTitle', state.title || t('defaultDeckTitle'));
+  text('deckMeta', t('slidesMeta', { count: state.slides.length }));
+  text('currentSlideIndex', String(getActiveIndex(state) + 1));
+}
+
+/** Push property-panel controls into state immediately before generation. */
+export function readStyleInputs(state) {
+  if (!state) return;
+  const stylePresetSelect = document.getElementById('stylePresetSelect');
+  const stylePreset = stylePresetSelect?.value || DEFAULT_STYLE_PRESET;
+  const activeFont = document.querySelector('[data-font-family].is-active');
+  const activeColor = document.querySelector('[data-color-mode].is-active');
+  const densitySlider = document.getElementById('densitySlider');
+  const densityIndex = Math.max(0, Math.min(2, Number(densitySlider?.dataset.index ?? 1)));
+  state.style = {
+    ...(state.style || {}),
+    stylePreset,
+    fontFamily: activeFont?.dataset.fontFamily === 'serif' ? 'serif' : 'sans',
+    colorMode: activeColor?.dataset.colorMode === 'dark' ? 'dark' : 'light',
+    density: indexToDensity(densityIndex),
+  };
+}
+
+/** Initialize or reset the property panel from persisted deck state. */
+export function syncStylePanelFromState(state) {
+  if (!state?.style) return;
   syncFontFamilyToggle(state.style.fontFamily);
   syncColorModeToggle(state.style.colorMode);
   syncDensitySlider(state.style.density);
   const stylePresetSelect = document.getElementById('stylePresetSelect');
   if (stylePresetSelect) {
-    stylePresetSelect.value = state.style?.stylePreset || DEFAULT_STYLE_PRESET;
+    stylePresetSelect.value = state.style.stylePreset || DEFAULT_STYLE_PRESET;
     refreshFlatSelect(stylePresetSelect);
   }
-  text('deckTitle', state.title || t('defaultDeckTitle'));
-  text('deckMeta', t('slidesMeta', { count: state.slides.length }));
-  text('currentSlideIndex', String(getActiveIndex(state) + 1));
 }
 
 export function readInputs(state, options = {}) {
