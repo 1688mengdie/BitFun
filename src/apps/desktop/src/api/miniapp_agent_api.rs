@@ -387,6 +387,9 @@ pub async fn miniapp_agent_run(
         "surface": "miniapp_agent",
         "appId": request.app_id,
         "runId": run_id,
+        // Hide AskUserQuestion from the tool manifest; MiniApp iframes have no
+        // question UI and would otherwise stall until the channel times out.
+        "acp_transport": true,
     });
 
     let outcome = scheduler

@@ -200,6 +200,16 @@ const CONTINUE_AFTER_INTERRUPTION_PREFIX = `Your previous response in this sessi
 
 `;
 
+const MINIAPP_HEADLESS_AGENT_RULES = `
+## MiniApp headless generation rules (mandatory)
+
+- The user only sees the PPT Live UI. They cannot answer AskUserQuestion prompts, approve tool confirmations, or interact with ControlHub/browser/desktop tools during this run.
+- Never call AskUserQuestion, ControlHub, GenerativeUI, ComputerUse*, ReviewPlatform, SessionControl, Playbook, Cron, or MiniappInit.
+- If the prompt is ambiguous, choose the best interpretation yourself and record assumptions in project files instead of asking the user.
+- Prefer WebSearch/WebFetch for straightforward research. Use Task with an Explore subagent only when multi-source deep research is truly required.
+- When you call Task, write a concrete subtask description so progress can be inferred.
+`;
+
 function buildCompletionRecoveryPrefix(recovery) {
   const issues = Array.isArray(recovery?.issues) ? recovery.issues.map(String).filter(Boolean) : [];
   const previousFailure = String(recovery?.previousFailure || '').trim();
@@ -492,7 +502,7 @@ function buildAgentPrompt(input) {
   } else if (input?.continueAfterInterruption) {
     prompt = CONTINUE_AFTER_INTERRUPTION_PREFIX + prompt;
   }
-  return prompt;
+  return MINIAPP_HEADLESS_AGENT_RULES + prompt;
 }
 
 // ─── Agent-backed backend (primary path) ─────────────────────────────────────
