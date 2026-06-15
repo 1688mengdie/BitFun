@@ -1395,6 +1395,95 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .generation-event p { margin: 0; color: var(--studio-text); }
 .generation-empty { color: var(--studio-muted); font-size: 10px; }
 
+/* ─── Live Agent stream (raw Cowork transcript) ─────────────────────────── */
+
+.agent-stream-head {
+  margin: 10px 0 4px;
+  padding: 0 2px;
+  color: var(--studio-muted);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.agent-stream-list {
+  margin: 0;
+  padding: 6px;
+  list-style: none;
+  display: grid;
+  align-content: start;
+  gap: 3px;
+  min-height: 80px;
+  max-height: 320px;
+  overflow: auto;
+  border: 1px solid var(--studio-line);
+  border-radius: 8px;
+  background: var(--studio-log-bg);
+  scrollbar-width: thin;
+}
+.agent-stream-list.is-empty { opacity: 0.6; }
+
+.agent-stream-entry {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  padding: 4px 4px;
+  border-radius: 4px;
+  font-size: 10px;
+  line-height: 1.35;
+  color: var(--studio-text);
+  word-break: break-word;
+}
+.agent-stream-entry.is-text {
+  background: color-mix(in srgb, var(--studio-accent) 6%, transparent);
+}
+.agent-stream-entry.is-tool-done { opacity: 0.8; }
+.agent-stream-entry.is-tool-error {
+  background: color-mix(in srgb, var(--studio-error, #c84b31) 8%, transparent);
+}
+.agent-stream-entry.is-empty {
+  color: var(--studio-muted);
+  font-style: italic;
+  display: block;
+}
+
+.agent-stream-label,
+.agent-stream-tool {
+  flex-shrink: 0;
+  max-width: 100%;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 9px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--studio-soft);
+  background: var(--studio-control-subtle);
+}
+.agent-stream-entry.is-text .agent-stream-label {
+  color: var(--studio-accent);
+  background: color-mix(in srgb, var(--studio-accent) 14%, transparent);
+}
+.agent-stream-entry.is-tool-error .agent-stream-tool {
+  color: var(--studio-error, #c84b31);
+  background: color-mix(in srgb, var(--studio-error, #c84b31) 14%, transparent);
+}
+.agent-stream-system {
+  width: 100%;
+  color: var(--studio-muted);
+  font-size: 9px;
+  font-style: italic;
+}
+.agent-stream-text {
+  width: 100%;
+  color: var(--studio-text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .outline-row {
   display: grid;
   grid-template-columns: 24px minmax(0, 1fr);
