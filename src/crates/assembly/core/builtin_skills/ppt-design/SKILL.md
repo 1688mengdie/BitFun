@@ -107,6 +107,14 @@ license: MIT
 | 流程与系统 | 流程图、泳道、架构图、关系图 |
 | 层级与论证 | 树状图、问题树、证据链、结构化文字 |
 
+**技术方案 / 工程分析 / 项目架构类内容的特别触发**：当 deck 主题涉及软件架构、系统设计、技术方案、工程复盘、数据处理流水线等内容时，**架构图和流程图几乎总是比文字更有效，必须在对应页面使用，而不是用编号列表或散文描述系统组成与处理步骤**。具体地：
+- 页面讲「系统由哪些模块组成」「模块间依赖关系」→ **分层架构图**（不是文字列表）
+- 页面讲「请求/数据/任务经过哪些步骤」→ **线性流程图带箭头**（不是编号段落）
+- 页面讲「多个角色/团队如何协作」→ **泳道图**
+- 页面讲「为什么出这个故障/问题」→ **因果链/问题树**
+
+实现方法见 `references/data-information-visualization.md` 第 6.1 节，提供了分层架构图、线性流程图、泳道图、因果链的纯 CSS 可编辑 snippet，直接套用。
+
 原则：
 
 - 同一份数据可以有多种正确表达；选择最符合该页叙事意图和视觉语言的一种，必要时创造混合形式。
@@ -141,7 +149,7 @@ DNA 与样例 → `references/design-styles.md`。
 | styleKey | 预设 | 一句话 DNA |
 |----------|------|------------|
 | `clean-business` | 简洁商务 | 纯白背景、平静蓝强调、产品文档式极简 |
-| `insight-report` | 洞察汇报 | 分析文档式高密度页：完整句子论证、固定分析框架、满版矩阵与过程叙事 |
+| `insight-report` | 洞察汇报 | 把 raw 数据转为有效信息：数据可视化优先、版式多样、完整句子论证与固定分析框架 |
 | `minimal-gallery` | 黑白极简 | 严格网格、黑白灰、画册式留白 |
 | `bold-editorial` | 黑白红大字 | 白底黑色大字、红色点缀、非对称编辑排版 |
 | `yellow-magazine` | 黄底黑字杂志 | 高识别度黄底黑字、手写点缀、杂志感 |
@@ -153,7 +161,7 @@ DNA 与样例 → `references/design-styles.md`。
 
 ## 工作流
 
-1. **假设 + 纲**：更新 `project.json` 的 `outline[]` / `slide_order`；顺带识别可能受益于图表、图示或更强视觉表达的页面，先不批量写 HTML。
+1. **假设 + 纲**：更新 `project.json` 的 `outline[]` / `slide_order`；顺带识别可能受益于图表、图示或更强视觉表达的页面，先不批量写 HTML。**若主题涉及技术方案/工程/系统/项目分析，必须在 outline 阶段就识别出哪些页是「系统组成」「处理流程」「多角色协作」「根因分析」，并标注用架构图/流程图/泳道图/因果链**（参考上方「技术方案类内容的特别触发」）。
 2. **≥5 页先打样**：做 2 页视觉差异最大的 showcase，定 grammar 再批量（见 slide-decks.md）。
 3. **逐页 HTML**：封面 `slide-01`（标题/副标题/作者或日期）→ 按 outline 生成其余页；根据内容与风格自由选择图表、图示、文字、图片或混合构图，每页完整内联 CSS。
 4. **整体视觉 + PPTX 自检**：检查是否遗漏明显的可视化机会，也检查是否为了变化而滥用图表；再逐页核对四条硬约束，违规即改 HTML。
@@ -212,8 +220,8 @@ DNA 与样例 → `references/design-styles.md`。
 | 风格 DNA | `references/design-styles.md` |
 | 风格预设（stylePreset）视觉规范 | `references/style-presets/<styleKey>.md` |
 | 文案与排版 | `references/content-guidelines.md` |
-| 场景版式 | `references/scene-templates.md` |
-| 数据可视化、信息可视化与图表实现 | `references/data-information-visualization.md` |
+| 场景版式（含技术方案/工程分析/架构汇报场景） | `references/scene-templates.md` |
+| 数据可视化、信息可视化、图表与架构图/流程图实现 | `references/data-information-visualization.md` |
 
 ## 不在范围
 
