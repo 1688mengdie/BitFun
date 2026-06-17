@@ -110,22 +110,18 @@ export function extractSlideDataFromDocument(doc = document) {
       return text;
     };
 
-    // Extract rotation angle from CSS transform and writing-mode
-    const getRotation = (transform, writingMode) => {
+    const getTextDirection = (writingMode) => {
+      if (writingMode === 'vertical-rl' || writingMode === 'vertical-lr') {
+        return 'eaVert';
+      }
+      return null;
+    };
+
+    // Extract rotation angle from CSS transform only. CSS writing-mode is exported
+    // as native PowerPoint vertical text so its box geometry stays anchored.
+    const getRotation = (transform) => {
       let angle = 0;
 
-      // Handle writing-mode first
-      // PowerPoint: 90° = text rotated 90° clockwise (reads top to bottom, letters upright)
-      // PowerPoint: 270° = text rotated 270° clockwise (reads bottom to top, letters upright)
-      if (writingMode === 'vertical-rl') {
-        // vertical-rl alone = text reads top to bottom = 90° in PowerPoint
-        angle = 90;
-      } else if (writingMode === 'vertical-lr') {
-        // vertical-lr alone = text reads bottom to top = 270° in PowerPoint
-        angle = 270;
-      }
-
-      // Then add any transform rotation
       if (transform && transform !== 'none') {
         // Try to match rotate() function
         const rotateMatch = transform.match(/rotate\((-?\d+(?:\.\d+)?)deg\)/);
@@ -956,7 +952,8 @@ export function extractSlideDataFromDocument(doc = document) {
       }
 
       const computed = view.getComputedStyle(el);
-      const rotation = getRotation(computed.transform, computed.writingMode);
+      const rotation = getRotation(computed.transform);
+      const textDirection = getTextDirection(computed.writingMode);
       const { x, y, w, h } = expandTextFrame(el, rect, rotation);
       const isBold = computed.fontWeight === 'bold' || parseInt(computed.fontWeight, 10) >= 600;
 
@@ -981,6 +978,7 @@ export function extractSlideDataFromDocument(doc = document) {
       if (transparency !== null) baseStyle.transparency = transparency;
 
       if (rotation !== null) baseStyle.rotate = rotation;
+      if (textDirection !== null) baseStyle.vert = textDirection;
 
       const hasFormatting = el.querySelector('b, i, u, strong, em, span, br');
 
