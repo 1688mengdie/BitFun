@@ -397,14 +397,12 @@ export async function prepareSlidesForPptxExport(slides, options = {}) {
       let rasterBase64 = null;
       const vectorTextCount = countVectorTextElements(item.slideData);
       const rasterOnly = vectorTextCount === 0;
-      if (typeof options.renderRaster === 'function') {
+      if (rasterOnly && typeof options.renderRaster === 'function') {
         try {
           if (typeof options.onRasterProgress === 'function') {
             options.onRasterProgress(index, slide);
           }
-          const rasterHtml = rasterOnly
-            ? slideExportHtml(slide)
-            : slideHtmlForRasterBackdrop(slide.html, item.slideData);
+          const rasterHtml = slideExportHtml(slide);
           rasterBase64 = await options.renderRaster(rasterHtml, index);
         } catch {
           rasterBase64 = null;
