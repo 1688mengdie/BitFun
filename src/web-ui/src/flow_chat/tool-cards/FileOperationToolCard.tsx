@@ -1236,6 +1236,7 @@ export const FileOperationToolCard: React.FC<FileOperationToolCardProps> = ({
         }
         isFailed={isFailed}
         requiresConfirmation={showConfirmationActions}
+        toggleTestId="chat-file-change-toggle"
         headerExpandAffordance={hasExpandableContent}
         headerAffordanceKind="expand"
       />
