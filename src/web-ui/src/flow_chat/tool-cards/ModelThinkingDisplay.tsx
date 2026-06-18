@@ -243,8 +243,17 @@ export const ModelThinkingDisplay: React.FC<ModelThinkingDisplayProps> = ({
   ].filter(Boolean).join(' ');
 
   return (
-    <div ref={wrapperRef} data-tool-card-id={thinkingItem.id} className={wrapperClassName}>
+    <div
+      ref={wrapperRef}
+      data-testid="chat-thinking-panel"
+      data-tool-card-id={thinkingItem.id}
+      data-status={status}
+      data-streaming={isActive ? 'true' : 'false'}
+      data-expanded={isExpanded ? 'true' : 'false'}
+      className={wrapperClassName}
+    >
       <div
+        data-testid="chat-thinking-toggle"
         className="thinking-collapsed-header"
         onClick={handleToggleClick}
       >
@@ -256,6 +265,9 @@ export const ModelThinkingDisplay: React.FC<ModelThinkingDisplayProps> = ({
         <div className={`thinking-content-wrapper ${scrollState.hasScroll ? 'has-scroll' : ''} ${scrollState.atTop ? 'at-top' : ''} ${scrollState.atBottom ? 'at-bottom' : ''}`}>
           <div
             ref={contentRef}
+            data-testid="chat-thinking-content"
+            data-status={status}
+            data-streaming={isActive ? 'true' : 'false'}
             className={`thinking-content expanded`}
             onScroll={checkScrollState}
             onWheelCapture={handleContentWheelCapture}
