@@ -29744,7 +29744,7 @@ function validateTextBoxPosition(slideData, bodyDimensions) {
   const slideHeightInches = bodyDimensions.height / PX_PER_IN;
   const minBottomMargin = 0.5;
   for (const el of slideData.elements) {
-    if (!["p", "h1", "h2", "h3", "h4", "h5", "h6", "list", "merged-text"].includes(el.type)) continue;
+    if (!["p", "h1", "h2", "h3", "h4", "h5", "h6", "text", "list", "merged-text"].includes(el.type)) continue;
     const fontSize = el.style?.fontSize || 0;
     const bottomEdge = el.position.y + el.position.h;
     const distanceFromBottom = slideHeightInches - bottomEdge;
@@ -29856,7 +29856,7 @@ function addElements(slideData, targetSlide, pres) {
         bold: el.style.bold,
         italic: el.style.italic,
         underline: el.style.underline,
-        valign: isVerticalText ? "mid" : "top",
+        valign: isVerticalText ? "mid" : el.style.valign || "top",
         lineSpacing: el.style.lineSpacing,
         paraSpaceBefore: el.style.paraSpaceBefore,
         paraSpaceAfter: el.style.paraSpaceAfter,
@@ -30202,7 +30202,7 @@ async function exportElementDeckToPptx(deck) {
 
 // src/crates/contracts/product-domains/src/miniapp/builtin/assets/ppt-live/src/export-deck-browser.js
 var MIME_PPTX = "application/vnd.openxmlformats-officedocument.presentationml.presentation";
-var RASTER_TEXT_TYPES = /* @__PURE__ */ new Set(["p", "h1", "h2", "h3", "h4", "h5", "h6", "list", "merged-text"]);
+var RASTER_TEXT_TYPES = /* @__PURE__ */ new Set(["p", "h1", "h2", "h3", "h4", "h5", "h6", "text", "list", "merged-text"]);
 function filterSlideDataForRasterBackdrop(slideData) {
   return {
     ...slideData,
