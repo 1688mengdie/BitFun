@@ -34,30 +34,17 @@ BitFun 基于一个面向长程任务、强调工程执行与 Token 经济性的
 
 BitFun 在 **SWE-Bench-Pro** 和 **SWE-Bench-Verified** 上均领先 Open Code 与 Claude Code。SWE-Bench-Pro 关注复杂软件工程，SWE-Bench-Verified 关注人工验证的 GitHub issue 修复。
 
-| 评测集 | BitFun | Open Code | Claude Code |
-| --- | ---: | ---: | ---: |
-| **SWE-Bench-Pro** | **52%** | 51% | 50% |
-| **SWE-Bench-Verified** | **74%** | 72% | 69% |
+![Agent benchmark scores](./png/agent_benchmark_scores.svg)
 
 当前数据为每个 case 跑 1 次得到的 BitFun 初始评测结果，后续会持续优化并放出完整评测详情。评测集说明：[SWE-Bench-Pro](https://labs.scale.com/leaderboard/swe_bench_pro_public) / [SWE-Bench-Verified](https://www.swebench.com/verified.html)
 
 Agent 执行是否经济，关键在于重复上下文能否被稳定复用。同一轮 SWE-Bench-Pro 评测中，BitFun 的 KV Cache 平均命中率为 **98.67%**；728 条有效 cache 记录里，**83.1%** 的 trials 命中率不低于 98%，**51.8%** 不低于 99%。Token 侧，Cached Input 占 **98.71%**，Uncached Input (scaled) 占 **1.29%**。
 
-| KV Cache 命中率 | 记录数 |
-| --- | ---: |
-| 80-90% | 7 |
-| 90-95% | 13 |
-| 95-98% | 103 |
-| 98-99% | 228 |
-| 99-99.5% | 239 |
-| >=99.5% | 138 |
+![KV Cache hit rate distribution](./png/kv_cache_hit_rate.svg)
 
 Agent 还需要反复寻找上下文。大仓库检索方面，BitFun 通过 **flashgrep** 在 Chromium 等超大仓库中最高降低约 **94.6%** 搜索耗时，平均加速约 **36.1x**。
 
-| 检索路径 | 搜索耗时 |
-| --- | ---: |
-| 传统检索 | 145.9s |
-| BitFun + flashgrep | 7.82s |
+![flashgrep search speed](./png/flashgrep_search_speed.svg)
 
 ---
 
