@@ -67,6 +67,14 @@ impl ViewImageTool {
         ))
     }
 
+    fn supports_multimodal_tool_output(ctx: &ToolUseContext) -> bool {
+        ctx.primary_model_supports_image_understanding()
+            && matches!(
+                Self::primary_api_format(ctx).as_str(),
+                "anthropic" | "openai" | "response" | "responses"
+            )
+    }
+
     fn mime_type_for_image(bytes: &[u8]) -> BitFunResult<&'static str> {
         let format = image::guess_format(bytes).map_err(|_| {
             BitFunError::tool(
@@ -115,7 +123,8 @@ impl ViewImageTool {
         context: Option<&ToolUseContext>,
     ) -> BitFunResult<ResolvedImagePath> {
         let local_path = Path::new(input_path);
-        if local_path.is_absolute()
+        if !context.is_some_and(|ctx| ctx.is_remote())
+            && local_path.is_absolute()
             && !crate::agentic::tools::workspace_paths::is_bitfun_runtime_uri(input_path)
         {
             return Ok(ResolvedImagePath::Local(local_path.to_path_buf()));
@@ -214,13 +223,13 @@ impl Tool for ViewImageTool {
 
     async fn description(&self) -> BitFunResult<String> {
         Ok(
-            "View a local image from the filesystem. Use only when given a local image path and the image is not already attached to the conversation."
+            "View an image from the filesystem. Use only when given an image path and the image is not already attached to the conversation."
                 .to_string(),
         )
     }
 
     fn short_description(&self) -> String {
-        "Attach a local image file for model vision.".to_string()
+        "Attach an image file for model vision.".to_string()
     }
 
     fn default_exposure(&self) -> ToolExposure {
@@ -233,7 +242,7 @@ impl Tool for ViewImageTool {
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "Local filesystem path to an image file. Use an absolute path, a workspace-relative path, or an absolute path inside the current workspace."
+                    "description": "Path to an image file. Use an absolute local path, a workspace-relative path, or an exact bitfun://runtime URI returned by another tool."
                 },
                 "detail": {
                     "type": "string",
@@ -248,7 +257,7 @@ impl Tool for ViewImageTool {
 
     async fn is_available_in_context(&self, context: Option<&ToolUseContext>) -> bool {
         context
-            .map(|ctx| ctx.primary_model_supports_image_understanding())
+            .map(Self::supports_multimodal_tool_output)
             .unwrap_or(true)
     }
 
@@ -362,9 +371,9 @@ impl Tool for ViewImageTool {
     fn render_tool_use_message(&self, input: &Value, _options: &ToolRenderOptions) -> String {
         let path = input.get("path").and_then(Value::as_str).unwrap_or("");
         if path.is_empty() {
-            "Viewing local image".to_string()
+            "Viewing image".to_string()
         } else {
-            format!("Viewing local image: {}", path)
+            format!("Viewing image: {}", path)
         }
     }
 
@@ -509,6 +518,19 @@ mod tests {
         }
     }
 
+    fn local_workspace_context(
+        provider: &str,
+        supports_images: bool,
+        root: PathBuf,
+    ) -> ToolUseContext {
+        let mut context = context(provider, supports_images);
+        context.workspace = Some(WorkspaceBinding::new(
+            Some("workspace-local".to_string()),
+            root,
+        ));
+        context
+    }
+
     fn remote_context(provider: &str, supports_images: bool) -> ToolUseContext {
         let mut context = context(provider, supports_images);
         let root = "/remote/workspace";
@@ -538,7 +560,10 @@ mod tests {
         fs::write(&path, ONE_BY_ONE_PNG).expect("write png");
 
         let results = ViewImageTool::new()
-            .call_impl(&json!({ "path": path }), &context("openai", true))
+            .call_impl(
+                &json!({ "path": path }),
+                &local_workspace_context("openai", true, dir.path().to_path_buf()),
+            )
             .await
             .expect("view image result");
 
@@ -558,13 +583,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn view_image_reads_local_absolute_path_without_workspace() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("pixel.png");
+        fs::write(&path, ONE_BY_ONE_PNG).expect("write png");
+
+        let results = ViewImageTool::new()
+            .call_impl(&json!({ "path": path }), &context("openai", true))
+            .await
+            .expect("view image result");
+
+        let ToolResult::Result {
+            data,
+            image_attachments,
+            ..
+        } = &results[0]
+        else {
+            panic!("expected result");
+        };
+        assert_eq!(data["mime_type"], "image/png");
+        assert_eq!(
+            image_attachments.as_ref().expect("image attachments").len(),
+            1
+        );
+    }
+
+    #[tokio::test]
     async fn view_image_rejects_text_only_model() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("pixel.png");
         fs::write(&path, ONE_BY_ONE_PNG).expect("write png");
 
         let error = ViewImageTool::new()
-            .call_impl(&json!({ "path": path }), &context("openai", false))
+            .call_impl(
+                &json!({ "path": path }),
+                &local_workspace_context("openai", false, dir.path().to_path_buf()),
+            )
             .await
             .expect_err("text-only model should be rejected");
 
@@ -578,7 +632,10 @@ mod tests {
         fs::write(&path, "not an image").expect("write text");
 
         let error = ViewImageTool::new()
-            .call_impl(&json!({ "path": path }), &context("openai", true))
+            .call_impl(
+                &json!({ "path": path }),
+                &local_workspace_context("openai", true, dir.path().to_path_buf()),
+            )
             .await
             .expect_err("non-image should be rejected");
 
@@ -586,10 +643,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn view_image_is_visible_in_remote_sessions_for_local_absolute_paths() {
+    async fn view_image_is_available_only_for_supported_multimodal_tool_output() {
         assert!(
             ViewImageTool::new()
                 .is_available_in_context(Some(&remote_context("openai", true)))
+                .await
+        );
+        assert!(
+            !ViewImageTool::new()
+                .is_available_in_context(Some(&remote_context("openai", false)))
+                .await
+        );
+        assert!(
+            !ViewImageTool::new()
+                .is_available_in_context(Some(&remote_context("gemini", true)))
                 .await
         );
     }
@@ -617,5 +684,43 @@ mod tests {
         let attachments = image_attachments.as_ref().expect("image attachments");
         assert_eq!(attachments.len(), 1);
         assert_eq!(attachments[0].mime_type, "image/png");
+    }
+
+    #[tokio::test]
+    async fn view_image_reads_remote_workspace_absolute_image() {
+        let results = ViewImageTool::new()
+            .call_impl(
+                &json!({ "path": "/remote/workspace/screenshots/pixel.png" }),
+                &remote_context("openai", true),
+            )
+            .await
+            .expect("remote image result");
+
+        let ToolResult::Result { data, .. } = &results[0] else {
+            panic!("expected result");
+        };
+        assert_eq!(data["path"], "/remote/workspace/screenshots/pixel.png");
+        assert_eq!(data["mime_type"], "image/png");
+    }
+
+    #[tokio::test]
+    async fn view_image_allows_local_absolute_path_outside_workspace() {
+        let workspace = tempfile::tempdir().expect("workspace tempdir");
+        let outside = tempfile::tempdir().expect("outside tempdir");
+        let path = outside.path().join("pixel.png");
+        fs::write(&path, ONE_BY_ONE_PNG).expect("write png");
+
+        let results = ViewImageTool::new()
+            .call_impl(
+                &json!({ "path": path }),
+                &local_workspace_context("openai", true, workspace.path().to_path_buf()),
+            )
+            .await
+            .expect("workspace-external absolute image path should be allowed");
+
+        let ToolResult::Result { data, .. } = &results[0] else {
+            panic!("expected result");
+        };
+        assert_eq!(data["mime_type"], "image/png");
     }
 }
