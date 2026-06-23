@@ -70,7 +70,7 @@ const WelcomeScene: React.FC = () => {
     } finally {
       setIsSelecting(false);
     }
-  }, [openWorkspace, openScene]);
+  }, [openWorkspace, openScene, t]);
 
   const handleNewProject = useCallback(() => {
     window.dispatchEvent(new Event('nav:new-project'));
