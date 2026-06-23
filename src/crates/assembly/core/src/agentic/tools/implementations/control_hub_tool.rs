@@ -108,7 +108,7 @@ Use this tool via `{ domain, action, params }` for browser automation, terminal 
 - Use the `Bash` tool to run new commands; this domain only signals existing terminal sessions.
 
 ### domain: "meta"
-- `capabilities` — returns `{ domains: { browser, terminal, meta }, host: { os, arch }, workspace_execution: { is_remote }, schema_version }`.
+- `capabilities` — returns `{ domains: { browser, terminal, meta }, local_client: { os, arch }, workspace_execution: { is_remote }, schema_version }`.
 - `route_hint` — maps a free-form intent to the appropriate ControlHub domain, or tells you to use `ComputerUse` for local computer/system/desktop work.
 
 ## Unified Response Envelope
@@ -268,7 +268,7 @@ Branch on `ok` and `error.code`, not on English messages.
                         "terminal": { "available": likely_terminal_available, "reason": if likely_terminal_available { Value::Null } else { json!("TerminalApi is only available in contexts that registered it") } },
                         "meta":     { "available": true },
                     },
-                    "host": {
+                    "local_client": {
                         "os": os,
                         "arch": arch,
                         "display_server": display_server,
@@ -2092,7 +2092,7 @@ mod control_hub_tests {
     }
 
     #[tokio::test]
-    async fn meta_capabilities_reports_host_and_domain_table() {
+    async fn meta_capabilities_reports_local_client_and_domain_table() {
         let tool = ControlHubTool::new();
         let ctx = empty_context();
         let results = tool
@@ -2111,7 +2111,7 @@ mod control_hub_tests {
         assert!(domains.get("system").is_none());
         assert_eq!(
             payload
-                .get("host")
+                .get("local_client")
                 .and_then(|h| h.get("os"))
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string()),

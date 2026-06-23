@@ -742,6 +742,7 @@ mod tests {
         assert!(runtime_context.contains("Local BitFun client OS:"));
         assert!(runtime_context.contains("Computer use and UI automation operate on the local BitFun desktop, even when workspace file and shell tools target a remote host."));
         assert!(runtime_context.contains("ExecCommand uses the remote user's default POSIX shell"));
+        assert!(runtime_context.contains("This session operates on the remote SSH host only"));
     }
 
     #[tokio::test]
