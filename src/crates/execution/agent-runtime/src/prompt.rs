@@ -153,6 +153,7 @@ pub fn render_runtime_context_reminder(facts: &RuntimeContextFacts) -> Option<St
                 remote.kernel_name.replace('"', "'")
             ));
             workspace_lines.push("- Path conventions for workspace operations: POSIX paths with forward slashes and Unix shell syntax. Do not use PowerShell, `cmd.exe`, or Windows-style paths for remote workspace operations.".to_string());
+            workspace_lines.push("- This session operates on the remote SSH host only. Local filesystem, local terminal, and local OS operations are not accessible. For tasks requiring local execution (e.g. editing the local Mac's ~/.ssh/config), provide the user with commands to run on their local machine.".to_string());
         } else {
             workspace_lines.push(
                 "- Workspace file and shell tools operate on the local filesystem.".to_string(),
