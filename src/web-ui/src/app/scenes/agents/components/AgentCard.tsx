@@ -51,6 +51,11 @@ const AgentCard: React.FC<AgentCardProps> = ({
       tabIndex={0}
       onKeyDown={(e) => e.key === 'Enter' && openDetails()}
       aria-label={agent.name}
+      data-testid="agent-list-item"
+      data-agent-id={agent.id}
+      data-agent-name={agent.name}
+      data-agent-kind={agent.agentKind}
+      data-subagent-source={agent.subagentSource ?? ''}
     >
       {/* Header: icon + name */}
       <div className="agent-card__header">
@@ -61,7 +66,7 @@ const AgentCard: React.FC<AgentCardProps> = ({
         </div>
         <div className="agent-card__header-info">
           <div className="agent-card__title-row">
-            <span className="agent-card__name">{agent.name}</span>
+            <span className="agent-card__name" data-testid="agent-list-item-title">{agent.name}</span>
             <div className="agent-card__badges">
               <Badge variant={badge.variant}>
                 {agent.agentKind === 'mode' ? <Cpu size={10} /> : <Bot size={10} />}
@@ -77,7 +82,7 @@ const AgentCard: React.FC<AgentCardProps> = ({
 
       {/* Body: description + meta */}
       <div className="agent-card__body">
-        <p className="agent-card__desc">
+        <p className="agent-card__desc" data-testid="agent-list-item-description">
           {getAgentDescription(t, agent)}
         </p>
       </div>

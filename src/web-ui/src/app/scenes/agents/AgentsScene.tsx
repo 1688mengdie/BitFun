@@ -556,7 +556,7 @@ const AgentsHomeView: React.FC = () => {
   );
 
   return (
-    <GalleryLayout className="bitfun-agents-scene">
+    <GalleryLayout className="bitfun-agents-scene" data-testid="agent-skill-panel">
       <GalleryPageHeader
         title={t('page.title')}
         subtitle={t('page.subtitle')}
@@ -566,6 +566,7 @@ const AgentsHomeView: React.FC = () => {
               type="button"
               className="gallery-anchor-btn"
               onClick={() => scrollToZone('core-agents-zone')}
+              data-testid="agents-anchor-core"
             >
               {t('nav.coreAgents')}
             </button>
@@ -573,6 +574,7 @@ const AgentsHomeView: React.FC = () => {
               type="button"
               className="gallery-anchor-btn"
               onClick={() => scrollToZone('teams-zone')}
+              data-testid="agents-anchor-teams"
             >
               {t('nav.teams')}
             </button>
@@ -580,6 +582,7 @@ const AgentsHomeView: React.FC = () => {
               type="button"
               className="gallery-anchor-btn"
               onClick={() => scrollToZone('agents-zone')}
+              data-testid="agents-anchor-custom"
             >
               {t('nav.agents')}
             </button>
@@ -599,6 +602,7 @@ const AgentsHomeView: React.FC = () => {
                   type="button"
                   className="gallery-search-btn"
                   aria-label={t('page.searchPlaceholder')}
+                  data-testid="agents-search-btn"
                 >
                   <SearchIcon size={14} />
                 </button>
@@ -608,9 +612,10 @@ const AgentsHomeView: React.FC = () => {
         )}
       />
 
-      <div className="gallery-zones">
+      <div className="gallery-zones" data-testid="agent-list">
         <GalleryZone
           id="core-agents-zone"
+          data-testid="agents-core-zone"
           title={t('coreAgentsZone.title')}
           subtitle={t('coreAgentsZone.subtitle')}
           tools={(
@@ -623,6 +628,7 @@ const AgentsHomeView: React.FC = () => {
             <GalleryEmpty
               icon={<Cpu size={32} strokeWidth={1.5} />}
               message={t('coreAgentsZone.empty')}
+              testId="agent-list-empty"
             />
           ) : (
             <div className="core-agents-grid">
@@ -648,6 +654,7 @@ const AgentsHomeView: React.FC = () => {
 
         <GalleryZone
           id="teams-zone"
+          data-testid="agents-teams-zone"
           title={t('teamsZone.title')}
           subtitle={t('teamsZone.subtitle')}
           tools={(
@@ -656,6 +663,7 @@ const AgentsHomeView: React.FC = () => {
                 type="button"
                 className="gallery-action-btn"
                 onClick={openReviewTeam}
+                data-testid="agents-review-team-configure-btn"
               >
                 <ShieldCheck size={15} />
                 <span>{t('reviewTeams.detail.open')}</span>
@@ -691,6 +699,7 @@ const AgentsHomeView: React.FC = () => {
 
         <GalleryZone
           id="agents-zone"
+          data-testid="agents-custom-zone"
           title={t('agentsZone.title')}
           subtitle={t('agentsZone.subtitle')}
           tools={(
@@ -709,6 +718,8 @@ const AgentsHomeView: React.FC = () => {
                         agentFilterLevel === key && 'gallery-cat-chip--active',
                       ].filter(Boolean).join(' ')}
                       onClick={() => setAgentFilterLevel(agentFilterLevel === key ? 'all' : key)}
+                      data-testid="agents-source-filter"
+                      data-agent-source={key}
                     >
                       <span>{label}</span>
                       <span className="gallery-filter-count">{count}</span>
@@ -728,6 +739,8 @@ const AgentsHomeView: React.FC = () => {
                         agentFilterType === key && 'gallery-cat-chip--active',
                       ].filter(Boolean).join(' ')}
                       onClick={() => setAgentFilterType(agentFilterType === key ? 'all' : key)}
+                      data-testid="agents-kind-filter"
+                      data-agent-kind={key}
                     >
                       <span>{label}</span>
                       <span className="gallery-filter-count">{count}</span>
@@ -739,6 +752,7 @@ const AgentsHomeView: React.FC = () => {
                 type="button"
                 className="gallery-action-btn gallery-action-btn--primary"
                 onClick={openCreateAgent}
+                data-testid="agents-create-agent-btn"
               >
                 <Plus size={15} />
                 <span>{t('page.newAgent')}</span>
@@ -753,6 +767,7 @@ const AgentsHomeView: React.FC = () => {
             <GalleryEmpty
               icon={<Bot size={32} strokeWidth={1.5} />}
               message={allAgents.length === 0 ? t('agentsZone.empty.noAgents') : t('agentsZone.empty.noMatch')}
+              testId="agent-list-empty"
             />
           ) : null}
 
@@ -813,6 +828,10 @@ const AgentsHomeView: React.FC = () => {
         description={selectedAgent
           ? getAgentDescription(t, selectedAgent)
           : undefined}
+        testId="agent-detail-panel"
+        titleTestId="agent-detail-title"
+        descriptionTestId="agent-detail-description"
+        closeButtonTestId="agent-detail-close"
         meta={selectedAgent ? (
           <>
             <span>{t('agentCard.meta.tools', { count: selectedAgentToolCount })}</span>
@@ -871,7 +890,7 @@ const AgentsHomeView: React.FC = () => {
             ) : null}
 
             {selectedAgentCapabilityTabs.length > 0 ? (
-              <div className="agent-card__section">
+              <div className="agent-card__section" data-testid="agent-detail-tools-section">
                 <div className="agent-card__section-head">
                   <div className="agent-card__tab-list" role="tablist" aria-label={t('agentsOverview.capabilities')}>
                     {selectedAgentCapabilityTabs.map((tab) => {
@@ -1108,7 +1127,13 @@ const AgentsHomeView: React.FC = () => {
                   ) : (
                     <div className="agent-card__chip-grid">
                       {selectedAgentTools.map((tool) => (
-                        <span key={tool} className="agent-card__chip" title={tool}>
+                        <span
+                          key={tool}
+                          className="agent-card__chip"
+                          title={tool}
+                          data-testid="agent-detail-tool-item"
+                          data-tool-name={tool}
+                        >
                           {tool.replace(/_/g, ' ')}
                         </span>
                       ))}

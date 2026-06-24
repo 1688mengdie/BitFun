@@ -28,6 +28,8 @@ export interface CompactToolCardProps {
   className?: string;
   /** Whether clickable */
   clickable?: boolean;
+  /** data-testid for the real click target that expands/collapses the card. */
+  toggleTestId?: string;
   /** Header content */
   header: ReactNode;
   /** Expanded content (optional) */
@@ -40,6 +42,7 @@ export const CompactToolCard: React.FC<CompactToolCardProps> = ({
   onClick,
   className = '',
   clickable = false,
+  toggleTestId,
   header,
   expandedContent,
 }) => {
@@ -67,6 +70,7 @@ export const CompactToolCard: React.FC<CompactToolCardProps> = ({
         className={`compact-tool-card-wrapper--expanded-card ${className}`.trim()}
         header={header}
         expandedContent={expandedContent}
+        toggleTestId={toggleTestId}
         headerExpandAffordance={clickable || Boolean(onClick)}
       />
     );
@@ -78,6 +82,7 @@ export const CompactToolCard: React.FC<CompactToolCardProps> = ({
     >
       <div
         className={`compact-tool-card status-${status} ${clickable ? 'clickable' : ''} ${isExpanded ? 'expanded' : ''}`}
+        data-testid={clickable || Boolean(onClick) ? toggleTestId : undefined}
         onClick={handleWrapperClick}
         style={{ cursor: clickable ? 'pointer' : 'default' }}
       >

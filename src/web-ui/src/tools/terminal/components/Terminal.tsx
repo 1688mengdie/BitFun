@@ -823,10 +823,13 @@ const Terminal = forwardRef<TerminalRef, TerminalProps>(({
       data-shortcut-scope="terminal"
       data-terminal-id={terminalId}
       data-session-id={sessionId}
+      data-testid="shell-command-item"
+      data-command-id={sessionId}
     >
       <div 
         ref={containerRef} 
         className="bitfun-terminal__container"
+        data-testid="shell-command-output"
       />
     </div>
   );
