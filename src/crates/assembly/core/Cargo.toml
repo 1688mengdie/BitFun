@@ -210,12 +210,15 @@ service-integrations = [
     "dep:tower-http",
     "bitfun-services-integrations/product-full",
 ]
-tool-packs = ["dep:bitfun-tool-packs", "bitfun-tool-packs/product-full"]
+tool-packs = ["dep:bitfun-tool-packs", "bitfun-tool-packs/product-full", "dep:image"]
 tauri-support = ["tauri"]  # Optional tauri support
 ssh-remote = [
     "bitfun-services-integrations/remote-ssh-concrete",
     "russh",
 ]
+
+[dev-dependencies]
+tempfile = { workspace = true }
 
 [build-dependencies]
 sha2 = { workspace = true }
