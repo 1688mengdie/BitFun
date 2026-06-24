@@ -1,6 +1,6 @@
 use super::flashgrep::{
-    ConsistencyMode, FlashgrepRepoSession, GlobRequest, ManagedClient, OpenRepoParams, PathScope,
-    QuerySpec, RefreshPolicyConfig, RepoConfig, RepoSession, SearchRequest, FLASHGREP_LOG_TARGET,
+    FlashgrepRepoSession, GlobRequest, ManagedClient, OpenRepoParams, PathScope, QuerySpec,
+    RefreshPolicyConfig, RepoConfig, RepoSession, SearchRequest, FLASHGREP_LOG_TARGET,
 };
 use async_trait::async_trait;
 use bitfun_services_core::filesystem::FileSearchOutcome;
@@ -17,7 +17,7 @@ use tokio::sync::{Mutex, RwLock};
 use super::result_mapping::convert_search_results;
 use super::types::{
     ContentSearchRequest, ContentSearchResult, GlobSearchRequest, GlobSearchResult,
-    IndexTaskHandle, WorkspaceIndexStatus, WorkspaceSearchFileCount, WorkspaceSearchHit,
+    IndexTaskHandle, WorkspaceIndexStatus, WorkspaceSearchFileCount,
 };
 
 pub type WorkspaceSearchResult<T> = Result<T, String>;
@@ -221,7 +221,6 @@ impl WorkspaceSearchService {
             session.as_ref(),
             SearchRequest::new(query)
                 .with_scope(scope)
-                .with_consistency(ConsistencyMode::WorkspaceEventual)
                 .with_scan_fallback(true),
         )
         .await
@@ -246,13 +245,7 @@ impl WorkspaceSearchService {
                 .into_iter()
                 .map(WorkspaceSearchFileCount::from)
                 .collect(),
-            hits: search
-                .results
-                .hits
-                .clone()
-                .into_iter()
-                .map(WorkspaceSearchHit::from)
-                .collect(),
+            hits: Vec::new(),
             backend: search.backend.into(),
             repo_status: search.status.into(),
             candidate_docs: search.results.candidate_docs,
@@ -856,14 +849,13 @@ mod tests {
     }
 
     #[test]
-    fn content_search_converts_legacy_line_matches() {
+    fn content_search_converts_line_matches_without_line_text() {
         let mut search_results = empty_search_results();
         search_results.line_matches = serde_json::from_value(serde_json::json!([{
             "path": "src/search.rs",
-            "line_number": 42,
-            "line_text": "pub enum SearchMode"
+            "line_number": 42
         }]))
-        .expect("legacy line_matches should decode");
+        .expect("line_matches should decode");
 
         let results = convert_search_results(&search_results, ContentSearchOutputMode::Content);
 
@@ -871,9 +863,7 @@ mod tests {
         assert_eq!(results[0].path, "src/search.rs");
         assert_eq!(results[0].name, "search.rs");
         assert_eq!(results[0].line_number, Some(42));
-        assert_eq!(
-            results[0].matched_content.as_deref(),
-            Some("pub enum SearchMode")
-        );
+        assert_eq!(results[0].matched_content.as_deref(), Some("line 42"));
+        assert_eq!(results[0].preview_inside, None);
     }
 }
