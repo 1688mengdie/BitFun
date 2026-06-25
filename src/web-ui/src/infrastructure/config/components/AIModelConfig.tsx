@@ -6,10 +6,10 @@ import {
   AIModelConfig as AIModelConfigType, 
   ProxyConfig, 
   ModelCategory,
-  ModelCapability,
   ReasoningMode
 } from '../types';
 import { configManager } from '../services/ConfigManager';
+import { getCapabilitiesByCategory, resolveModelCategory } from '../services/modelCategory';
 import { PROVIDER_TEMPLATES, getModelDisplayName, getProviderDisplayName, getProviderTemplateId } from '../services/modelConfigs';
 import { DEFAULT_REASONING_MODE, getEffectiveReasoningMode, supportsAnthropicAdaptive, supportsAnthropicReasoning, supportsAnthropicThinkingBudget, supportsDeepSeekReasoningEffort, supportsResponsesReasoning } from '../utils/reasoning';
 import { aiApi, systemAPI } from '@/infrastructure/api';
@@ -231,15 +231,6 @@ function dedupeSelectedModelDraftsByModelName(drafts: SelectedModelDraft[]): Sel
     out[i] = !prev.configId && draft.configId ? draft : prev;
   }
   return out;
-}
-
-function getCapabilitiesByCategory(category: ModelCategory): ModelCapability[] {
-  switch (category) {
-    case 'general_chat':
-    case 'multimodal':
-    default:
-      return ['text_chat', 'function_calling'];
-  }
 }
 
 /**
@@ -1047,8 +1038,18 @@ const AIModelConfig: React.FC = () => {
           enabled: editingConfig.enabled ?? true,
           context_window: draft.contextWindow,
           max_tokens: draft.maxTokens,
-          category: draft.category,
-          capabilities: getCapabilitiesByCategory(draft.category),
+          category: resolveModelCategory(
+            draft.modelName,
+            draft.category,
+            editingConfig.provider || 'openai'
+          ),
+          capabilities: getCapabilitiesByCategory(
+            resolveModelCategory(
+              draft.modelName,
+              draft.category,
+              editingConfig.provider || 'openai'
+            )
+          ),
           recommended_for: editingConfig.recommended_for || [],
           metadata: {
             ...(editingConfig.metadata || {}),

@@ -224,10 +224,31 @@ pub(crate) fn build_tool_description_context(
     agent_type: &str,
     workspace: Option<&WorkspaceBinding>,
     workspace_services: Option<&WorkspaceServices>,
+    primary_model_id: Option<&str>,
+    primary_model_name: Option<&str>,
+    primary_model_provider: Option<&str>,
     primary_supports_image_understanding: bool,
     context_vars: &HashMap<String, String>,
 ) -> ToolUseContext {
     let mut custom_data = HashMap::new();
+    if let Some(primary_model_id) = primary_model_id {
+        custom_data.insert(
+            "primary_model_id".to_string(),
+            Value::String(primary_model_id.to_string()),
+        );
+    }
+    if let Some(primary_model_name) = primary_model_name {
+        custom_data.insert(
+            "primary_model_name".to_string(),
+            Value::String(primary_model_name.to_string()),
+        );
+    }
+    if let Some(primary_model_provider) = primary_model_provider {
+        custom_data.insert(
+            "primary_model_provider".to_string(),
+            Value::String(primary_model_provider.to_string()),
+        );
+    }
     custom_data.insert(
         "primary_model_supports_image_understanding".to_string(),
         Value::Bool(primary_supports_image_understanding),
@@ -1197,7 +1218,16 @@ mod context_builder_tests {
             "false".to_string(),
         );
 
-        let context = build_tool_description_context("coding", None, None, true, &context_vars);
+        let context = build_tool_description_context(
+            "coding",
+            None,
+            None,
+            Some("model_1"),
+            Some("vision-model"),
+            Some("anthropic"),
+            true,
+            &context_vars,
+        );
 
         assert_eq!(context.agent_type.as_deref(), Some("coding"));
         assert!(context.tool_call_id.is_none());
@@ -1211,6 +1241,15 @@ mod context_builder_tests {
         assert_eq!(
             context.custom_data["primary_model_supports_image_understanding"],
             json!("false")
+        );
+        assert_eq!(context.custom_data["primary_model_id"], json!("model_1"));
+        assert_eq!(
+            context.custom_data["primary_model_name"],
+            json!("vision-model")
+        );
+        assert_eq!(
+            context.custom_data["primary_model_provider"],
+            json!("anthropic")
         );
     }
 }
