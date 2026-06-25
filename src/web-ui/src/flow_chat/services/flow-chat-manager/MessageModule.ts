@@ -69,13 +69,19 @@ async function syncSessionModelSelection(
   const currentModelId = (session.config.modelName || 'auto').trim() || 'auto';
 
   // When the session already has an explicit model selected, keep it —
-  // do not overwrite with the global per-mode default.  Only resolve
-  // from the global config when the session is still on 'auto'.
+  // do not overwrite with the global per-mode default.  Still sync to
+  // the backend in case a previous update_session_model call silently
+  // failed (e.g. the session had been evicted from memory on the Rust
+  // side and the restore path did not have a workspace index entry).
   if (currentModelId !== 'auto') {
     const desiredMaxContextTokens = await getModelMaxTokens(currentModelId, agentType);
     if (session.maxContextTokens !== desiredMaxContextTokens) {
       context.flowChatStore.updateSessionMaxContextTokens(sessionId, desiredMaxContextTokens);
     }
+    await agentAPI.updateSessionModel({
+      sessionId,
+      modelName: currentModelId,
+    });
     return;
   }
 
