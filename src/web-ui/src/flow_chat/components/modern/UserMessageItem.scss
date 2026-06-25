@@ -428,7 +428,7 @@
 .user-message-item__lightbox {
   position: fixed;
   inset: 0;
-  z-index: 9999;
+  z-index: tokens.$z-fullscreen;
   background: tokens.$modal-backdrop;
   display: flex;
   align-items: center;
