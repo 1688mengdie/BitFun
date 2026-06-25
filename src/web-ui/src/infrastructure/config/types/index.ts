@@ -95,7 +95,8 @@ export interface AIExperienceConfig {
 
 export type ModelCapability =
   | 'text_chat'
-  | 'function_calling';
+  | 'function_calling'
+  | 'image_understanding';
 
 export type ModelCategory =
   | 'general_chat'

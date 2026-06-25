@@ -655,6 +655,49 @@ impl ExecutionEngine {
             .unwrap_or_else(|| "auto".to_string())
     }
 
+    async fn resolve_primary_model_context(
+        model_id: &str,
+        ai_client_model: &str,
+        ai_client_provider: &str,
+        unavailable_log_message: &str,
+    ) -> (String, bool) {
+        let config_service = get_global_config_service().await.ok();
+        if let Some(service) = config_service {
+            let ai_config: crate::service::config::types::AIConfig =
+                service.get_config(Some("ai")).await.unwrap_or_default();
+
+            let resolved_id = Self::resolve_configured_model_id(&ai_config, model_id);
+            let model_cfg = ai_config
+                .models
+                .iter()
+                .find(|m| m.id == resolved_id)
+                .or_else(|| ai_config.models.iter().find(|m| m.name == resolved_id))
+                .or_else(|| {
+                    ai_config
+                        .models
+                        .iter()
+                        .find(|m| m.model_name == resolved_id)
+                })
+                .or_else(|| {
+                    ai_config.models.iter().find(|m| {
+                        m.model_name == ai_client_model && m.provider == ai_client_provider
+                    })
+                });
+
+            let supports = model_cfg.is_some_and(|m| {
+                m.capabilities
+                    .iter()
+                    .any(|cap| matches!(cap, ModelCapability::ImageUnderstanding))
+                    || matches!(m.category, ModelCategory::Multimodal)
+            });
+
+            (resolved_id, supports)
+        } else {
+            warn!("{}", unavailable_log_message);
+            (model_id.to_string(), false)
+        }
+    }
+
     async fn build_tool_listing_sections(
         manifest: &ResolvedToolManifest,
         tool_context: &crate::agentic::tools::framework::ToolUseContext,
@@ -1527,46 +1570,14 @@ impl ExecutionEngine {
                 ))
             })?;
 
-        let (resolved_primary_model_id, primary_supports_image_understanding) = {
-            let config_service = get_global_config_service().await.ok();
-            if let Some(service) = config_service {
-                let ai_config: crate::service::config::types::AIConfig =
-                    service.get_config(Some("ai")).await.unwrap_or_default();
-
-                let resolved_id = Self::resolve_configured_model_id(&ai_config, &model_id);
-                let model_cfg = ai_config
-                    .models
-                    .iter()
-                    .find(|m| m.id == resolved_id)
-                    .or_else(|| ai_config.models.iter().find(|m| m.name == resolved_id))
-                    .or_else(|| {
-                        ai_config
-                            .models
-                            .iter()
-                            .find(|m| m.model_name == resolved_id)
-                    })
-                    .or_else(|| {
-                        ai_config.models.iter().find(|m| {
-                            m.model_name == ai_client.config.model
-                                && m.provider == ai_client.config.format
-                        })
-                    });
-
-                let supports = model_cfg.is_some_and(|m| {
-                    m.capabilities
-                        .iter()
-                        .any(|cap| matches!(cap, ModelCapability::ImageUnderstanding))
-                        || matches!(m.category, ModelCategory::Multimodal)
-                });
-
-                (resolved_id, supports)
-            } else {
-                warn!(
-                    "Config service unavailable, assuming compression model is text-only for image input gating"
-                );
-                (model_id.clone(), false)
-            }
-        };
+        let (resolved_primary_model_id, primary_supports_image_understanding) =
+            Self::resolve_primary_model_context(
+                &model_id,
+                &ai_client.config.model,
+                &ai_client.config.format,
+                "Config service unavailable, assuming compression model is text-only for image input gating",
+            )
+            .await;
 
         let model_capability_profile = ModelCapabilityProfile::from_resolved_model(
             &resolved_primary_model_id,
@@ -1602,6 +1613,9 @@ impl ExecutionEngine {
             &context.agent_type,
             context.workspace.as_ref(),
             context.workspace_services.as_ref(),
+            Some(&resolved_primary_model_id),
+            Some(&ai_client.config.model),
+            Some(&ai_client.config.format),
             primary_supports_image_understanding,
             &tool_manifest_context_vars,
         );
@@ -2198,47 +2212,14 @@ impl ExecutionEngine {
             })?;
 
         // Primary model vision capability (tools + system prompt appendix; also used below for API message stripping).
-        let (resolved_primary_model_id, primary_supports_image_understanding) = {
-            let config_service = get_global_config_service().await.ok();
-            if let Some(service) = config_service {
-                let ai_config: crate::service::config::types::AIConfig =
-                    service.get_config(Some("ai")).await.unwrap_or_default();
-
-                let resolved_id = Self::resolve_configured_model_id(&ai_config, &model_id);
-
-                let model_cfg = ai_config
-                    .models
-                    .iter()
-                    .find(|m| m.id == resolved_id)
-                    .or_else(|| ai_config.models.iter().find(|m| m.name == resolved_id))
-                    .or_else(|| {
-                        ai_config
-                            .models
-                            .iter()
-                            .find(|m| m.model_name == resolved_id)
-                    })
-                    .or_else(|| {
-                        ai_config.models.iter().find(|m| {
-                            m.model_name == ai_client.config.model
-                                && m.provider == ai_client.config.format
-                        })
-                    });
-
-                let supports = model_cfg.is_some_and(|m| {
-                    m.capabilities
-                        .iter()
-                        .any(|cap| matches!(cap, ModelCapability::ImageUnderstanding))
-                        || matches!(m.category, ModelCategory::Multimodal)
-                });
-
-                (resolved_id, supports)
-            } else {
-                warn!(
-                    "Config service unavailable, assuming primary model is text-only for image input gating"
-                );
-                (model_id.clone(), false)
-            }
-        };
+        let (resolved_primary_model_id, primary_supports_image_understanding) =
+            Self::resolve_primary_model_context(
+                &model_id,
+                &ai_client.config.model,
+                &ai_client.config.format,
+                "Config service unavailable, assuming primary model is text-only for image input gating",
+            )
+            .await;
 
         let model_context_window = ai_client.config.context_window as usize;
         let session_max_tokens = session.config.max_context_tokens;
@@ -2296,6 +2277,9 @@ impl ExecutionEngine {
             &agent_type,
             context.workspace.as_ref(),
             context.workspace_services.as_ref(),
+            Some(&resolved_primary_model_id),
+            Some(&ai_client.config.model),
+            Some(&ai_client.config.format),
             primary_supports_image_understanding,
             &tool_manifest_context_vars,
         );
