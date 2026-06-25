@@ -636,6 +636,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const [tokenUsage, setTokenUsage] = React.useState<ContextUsageDisplay>(
     getSessionContextUsageDisplay()
   );
+  const [isModelSwitching, setIsModelSwitching] = useState(false);
   const isAssistantWorkspace = useMemo(
     () => resolveSessionAssistantWorkspace({
       currentWorkspace: workspace,
@@ -2442,6 +2443,10 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const handleCancelCurrentTask = useCallback(async () => {
     await FlowChatManager.getInstance().cancelCurrentTask();
   }, []);
+
+  const handleModelLoadingChange = useCallback((loading: boolean) => {
+    setIsModelSwitching(loading);
+  }, []);
   
   const handleSendOrCancel = useCallback(async () => {
     if (!derivedState) return;
@@ -2455,6 +2460,10 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       await handleCancelCurrentTask();
       return;
     }
+
+    // Block sending while model switch IPC is in-flight — the backend session may
+    // not yet reflect the newly selected model.
+    if (isModelSwitching) return;
     
     if (sendButtonMode === 'retry') {
       await transition(SessionExecutionEvent.RESET);
@@ -2583,6 +2592,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       }
     }
   }, [
+    isModelSwitching,
     inputState.value,
     derivedState,
     handleCancelCurrentTask,
@@ -3294,6 +3304,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         <IconButton
           className="bitfun-chat-input__send-button bitfun-chat-input__send-button--retry"
           onClick={handleSendOrCancel}
+          disabled={isModelSwitching}
           tooltip={t('input.retry')}
           size="small"
         >
@@ -3319,7 +3330,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
           <IconButton
             className="bitfun-chat-input__send-button"
             onClick={handleSendOrCancel}
-            disabled={!inputState.value.trim()}
+            disabled={!inputState.value.trim() || isModelSwitching}
             data-testid="chat-input-send-btn"
             tooltip={t('input.sendShortcut')}
             size="small"
@@ -3334,7 +3345,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       <IconButton
         className="bitfun-chat-input__send-button"
         onClick={handleSendOrCancel}
-        disabled={!inputState.value.trim()}
+        disabled={!inputState.value.trim() || isModelSwitching}
         data-testid="chat-input-send-btn"
         tooltip={t('input.sendShortcut')}
         size="small"
@@ -3955,6 +3966,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                     currentTokens={tokenUsage.current}
                     maxTokens={tokenUsage.max}
                     contextUsageSource={tokenUsage.source}
+                    onLoadingChange={handleModelLoadingChange}
                   />
                 </div>
 

@@ -47,6 +47,8 @@ interface ModelSelectorProps {
   maxTokens?: number;
   /** Semantic source for the context usage number. */
   contextUsageSource?: ContextUsageSource;
+  /** Called when model switching starts or completes, so the parent can gate sending. */
+  onLoadingChange?: (loading: boolean) => void;
 }
 
 interface ModelInfo {
@@ -163,6 +165,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   currentTokens = 0,
   maxTokens = 0,
   contextUsageSource,
+  onLoadingChange,
 }) => {
   const { t } = useTranslation('flow-chat');
   const [allModels, setAllModels] = useState<AIModelConfig[]>([]);
@@ -176,6 +179,11 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
 
   const dropdownRef = useRef<HTMLDivElement>(null);
   const portalDropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    onLoadingChange?.(loading);
+  }, [loading, onLoadingChange]);
+
   const [dropdownStyle, setDropdownStyle] = useState<React.CSSProperties>({
     position: 'fixed',
     visibility: 'hidden',
@@ -500,6 +508,8 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
 
       if (sessionId) {
         const store = FlowChatStore.getInstance();
+        // Update the frontend session model immediately so the UI reflects the
+        // switch without waiting for the backend IPC round-trip.
         store.updateSessionModelName(sessionId, modelId);
         const maxContextTokens = await getModelMaxTokens(modelId, currentMode);
         store.updateSessionMaxContextTokens(sessionId, maxContextTokens);
