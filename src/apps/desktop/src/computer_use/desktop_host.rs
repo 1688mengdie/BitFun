@@ -2583,13 +2583,46 @@ impl DesktopComputerUseHost {
                     }
                 }
             }
+            // Register the snapshot in the element-token registry so
+            // subsequent `app_click` calls can resolve `s{hex}:{idx}`
+            // tokens back to this snapshot's element indices.
+            let reg_pid = snap.app.pid.unwrap_or(0);
+            let _ = bitfun_agent_tools::element_token::global().register_snapshot(
+                reg_pid,
+                0,
+                snap.nodes.len(),
+            );
             Ok(snap)
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "windows")]
+        {
+            let snap = tokio::task::spawn_blocking(move || {
+                crate::computer_use::windows_ax_ui::get_app_state_snapshot(
+                    max_depth,
+                    focus_window_only,
+                )
+            })
+            .await
+            .map_err(|e| BitFunError::tool(e.to_string()))??;
+            // Auto-attach screenshot for parity with macOS path.
+            if capture_screenshot {
+                // TODO: wire windows_capture::screenshot_display_bytes
+                // once the Windows capture module is fully integrated.
+            }
+            // Register snapshot in element-token registry.
+            let reg_pid = snap.app.pid.unwrap_or(0);
+            let _ = bitfun_agent_tools::element_token::global().register_snapshot(
+                reg_pid,
+                0,
+                snap.nodes.len(),
+            );
+            Ok(snap)
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
             let _ = (app, max_depth, focus_window_only, capture_screenshot);
             Err(BitFunError::tool(
-                "get_app_state is only available on macOS in this build".to_string(),
+                "get_app_state is only available on macOS and Windows in this build".to_string(),
             ))
         }
     }
@@ -3481,6 +3514,36 @@ tell application "System Events" to get unix id of first process whose frontmost
         if text.is_empty() {
             return Ok(());
         }
+        // On macOS, route through background input when the frontmost app
+        // is a terminal emulator — enigo.text() uses Unicode string
+        // injection which terminal emulators (Ghostty, iTerm2, Terminal.app)
+        // silently drop. bg_type_text_auto detects this and switches to
+        // per-keystroke key-event synthesis.
+        #[cfg(target_os = "macos")]
+        {
+            if crate::computer_use::macos_bg_input::supports_background_input() {
+                let frontmost = crate::computer_use::macos_bg_input::frontmost_pid_macos();
+                if let Some(pid) = frontmost {
+                    if crate::computer_use::macos_bg_input::is_terminal_emulator(pid) {
+                        let txt = text.to_string();
+                        tokio::task::spawn_blocking(move || {
+                            macos::catch_objc(|| {
+                                crate::computer_use::macos_bg_input::bg_type_text_auto(pid, &txt)
+                            })
+                        })
+                        .await
+                        .map_err(|e| BitFunError::tool(e.to_string()))??;
+                        ComputerUseHost::computer_use_after_committed_ui_action(self);
+                        ComputerUseHost::computer_use_trust_pointer_after_text_input(self);
+                        ComputerUseHost::computer_use_record_mutation(
+                            self,
+                            ComputerUseLastMutationKind::TypeText,
+                        );
+                        return Ok(());
+                    }
+                }
+            }
+        }
         let owned = text.to_string();
         tokio::task::spawn_blocking(move || {
             Self::run_enigo_job(|e| {
@@ -3666,7 +3729,12 @@ tell application "System Events" to get unix id of first process whose frontmost
         {
             crate::computer_use::macos_bg_input::supports_background_input()
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "windows")]
+        {
+            // Windows uses PostMessageW / SendInput for background input.
+            true
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
             false
         }
@@ -3677,7 +3745,12 @@ tell application "System Events" to get unix id of first process whose frontmost
         {
             true
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "windows")]
+        {
+            // Windows uses UI Automation (UIA) for the AX tree.
+            true
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
             false
         }
@@ -3718,6 +3791,7 @@ tell application "System Events" to get unix id of first process whose frontmost
         {
             let pid = resolve_pid_macos(self, &params.app).await?;
             let self_pid = std::process::id() as i32;
+            let mut click_coords: Option<(f64, f64)> = None;
             log::info!(
                 target: "computer_use::app_click",
                 "app_click.enter pid={} self_pid={} same_process={} target={:?} button={} click_count={} modifier_keys={:?}",
@@ -3883,6 +3957,8 @@ tell application "System Events" to get unix id of first process whose frontmost
                         (m.center_x, m.center_y)
                     }
                 };
+                let click_coords_val = Some((x, y));
+                click_coords = click_coords_val;
                 let mods: Vec<crate::computer_use::macos_bg_input::BgModifier> = params
                     .modifier_keys
                     .iter()
@@ -3919,21 +3995,70 @@ tell application "System Events" to get unix id of first process whose frontmost
                     }
                 };
 
+                // Resolve window-id and bundle-id for focus-without-raise
+                // activation and Chromium click routing.
+                let bundle_id_opt = params
+                    .app
+                    .bundle_id
+                    .clone()
+                    .or_else(|| crate::computer_use::macos_bg_input::bundle_id_for_pid(pid));
+                let is_chromium = crate::computer_use::macos_bg_input::is_chromium_electron(
+                    bundle_id_opt.as_deref(),
+                );
+                let win_id_and_bounds = tokio::task::spawn_blocking(move || {
+                    macos::catch_objc(|| {
+                        let wid =
+                            crate::computer_use::macos_bg_input::frontmost_window_id_for_pid(pid);
+                        let bounds =
+                            crate::computer_use::macos_ax_ui::window_bounds_global_for_pid(pid)
+                                .ok();
+                        Ok::<_, BitFunError>((wid, bounds))
+                    })
+                })
+                .await
+                .unwrap_or(Ok((None, None)))
+                .unwrap_or((None, None));
+                let (win_id, win_bounds) = win_id_and_bounds;
+
                 // Best-effort foreground activation — required for WKWebView
                 // and many Cocoa hit-testers to actually deliver our
-                // synthetic events. No-op (returns false) when the pid is
-                // already frontmost.
+                // synthetic events. Uses focus-without-raise SPI when a
+                // window_id is available, falling back to public API.
                 let activate_pid = pid;
+                let activate_wid = win_id;
                 let _ = tokio::task::spawn_blocking(move || {
                     macos::catch_objc(|| {
-                        crate::computer_use::macos_bg_input::activate_pid_macos(activate_pid)
+                        crate::computer_use::macos_bg_input::activate_pid_macos_with_window(
+                            activate_pid,
+                            activate_wid,
+                        )
                     })
                 })
                 .await;
 
                 let mods_for_bg = mods.clone();
+                let win_bounds_for_click = win_bounds;
+                let wid_for_click = win_id;
                 tokio::task::spawn_blocking(move || {
                     macos::catch_objc(|| {
+                        // Use Chromium 5-event recipe for Chromium/Electron
+                        // targets when we have a window-id and window bounds.
+                        if is_chromium {
+                            if let (Some(wid), Some((wx, wy, _, _))) =
+                                (wid_for_click, win_bounds_for_click)
+                            {
+                                return crate::computer_use::macos_bg_input::bg_click_chromium(
+                                    pid,
+                                    x,
+                                    y,
+                                    x - wx as f64,
+                                    y - wy as f64,
+                                    wid,
+                                    cnt,
+                                    &mods_for_bg,
+                                );
+                            }
+                        }
                         crate::computer_use::macos_bg_input::bg_click(
                             pid,
                             (x, y),
@@ -3987,7 +4112,37 @@ tell application "System Events" to get unix id of first process whose frontmost
                 tokio::time::sleep(Duration::from_millis(settle_ms as u64)).await;
             }
             // Re-snapshot so the caller can see the new state + new digest.
-            self.get_app_state(params.app, 32, false).await
+            let result_snap = self.get_app_state(params.app, 32, false).await?;
+            // Debug-only: annotate the returned screenshot with the click
+            // target coordinates so logs show where the click landed.
+            if let Some((cx, cy)) = click_coords {
+                if log::log_enabled!(target: "computer_use::debug_overlay", log::Level::Debug) {
+                    if let Some(ref shot) = result_snap.screenshot {
+                        match crate::computer_use::debug_overlay::annotate_screenshot_with_click(
+                            &shot.bytes,
+                            "image/jpeg",
+                            cx as u32,
+                            cy as u32,
+                        ) {
+                            Ok(_annotated) => {
+                                debug!(
+                                    target: "computer_use::debug_overlay",
+                                    "click_annotated pid={} x={:.0} y={:.0} original_bytes={}",
+                                    pid, cx, cy, shot.bytes.len()
+                                );
+                            }
+                            Err(e) => {
+                                debug!(
+                                    target: "computer_use::debug_overlay",
+                                    "click_annotation_failed pid={} error={}",
+                                    pid, e
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(result_snap)
         }
         #[cfg(not(target_os = "macos"))]
         {
@@ -4007,6 +4162,10 @@ tell application "System Events" to get unix id of first process whose frontmost
         #[cfg(target_os = "macos")]
         {
             let pid = resolve_pid_macos(self, &app).await?;
+            let focus_target_idx = match &focus {
+                Some(ClickTarget::NodeIdx { idx }) => Some(*idx),
+                _ => None,
+            };
             // If a focus target is provided, click it first to give focus.
             if let Some(target) = focus {
                 let click = AppClickParams {
@@ -4026,16 +4185,42 @@ tell application "System Events" to get unix id of first process whose frontmost
                 pid,
                 text.chars().count()
             );
+            // Resolve window-id and activate with focus-without-raise SPI
+            // when available. Falls back to public NSRunningApplication.
+            // Also best-effort AX-focus the previously-clicked element so
+            // `bg_type_text` lands in the right text field even when the
+            // click activated the window but didn't move key focus.
             let activate_pid = pid;
             let _ = tokio::task::spawn_blocking(move || {
                 macos::catch_objc(|| {
-                    crate::computer_use::macos_bg_input::activate_pid_macos(activate_pid)
+                    let wid = crate::computer_use::macos_bg_input::frontmost_window_id_for_pid(
+                        activate_pid,
+                    );
+                    crate::computer_use::macos_bg_input::activate_pid_macos_with_window(
+                        activate_pid,
+                        wid,
+                    )?;
+                    // Best-effort: AX-focus the target node so the text
+                    // channel delivers to the right field. `Ok` even on
+                    // failure — the bg_type_text fallback still works.
+                    if let Some(idx) = focus_target_idx {
+                        if let Some(r) =
+                            crate::computer_use::macos_ax_dump::cached_ref_loose(activate_pid, idx)
+                        {
+                            let _ = crate::computer_use::macos_ax_write::try_ax_focus(r);
+                        }
+                    }
+                    Ok::<_, BitFunError>(())
                 })
             })
             .await;
             let txt = text.to_string();
+            // Use bg_type_text_auto which routes to terminal-safe key-event
+            // typing when the target is a terminal emulator.
             tokio::task::spawn_blocking(move || {
-                macos::catch_objc(|| crate::computer_use::macos_bg_input::bg_type_text(pid, &txt))
+                macos::catch_objc(|| {
+                    crate::computer_use::macos_bg_input::bg_type_text_auto(pid, &txt)
+                })
             })
             .await
             .map_err(|e| BitFunError::tool(e.to_string()))??;
@@ -4072,6 +4257,19 @@ tell application "System Events" to get unix id of first process whose frontmost
                 let _ = self.app_click(click).await?;
             }
             require_macos_background_input()?;
+            let activate_pid = pid;
+            let _ = tokio::task::spawn_blocking(move || {
+                macos::catch_objc(|| {
+                    let wid = crate::computer_use::macos_bg_input::frontmost_window_id_for_pid(
+                        activate_pid,
+                    );
+                    crate::computer_use::macos_bg_input::activate_pid_macos_with_window(
+                        activate_pid,
+                        wid,
+                    )
+                })
+            })
+            .await;
             tokio::task::spawn_blocking(move || {
                 macos::catch_objc(|| crate::computer_use::macos_bg_input::bg_scroll(pid, dx, dy))
             })
@@ -4109,6 +4307,19 @@ tell application "System Events" to get unix id of first process whose frontmost
                 let _ = self.app_click(click).await?;
             }
             require_macos_background_input()?;
+            let activate_pid = pid;
+            let _ = tokio::task::spawn_blocking(move || {
+                macos::catch_objc(|| {
+                    let wid = crate::computer_use::macos_bg_input::frontmost_window_id_for_pid(
+                        activate_pid,
+                    );
+                    crate::computer_use::macos_bg_input::activate_pid_macos_with_window(
+                        activate_pid,
+                        wid,
+                    )
+                })
+            })
+            .await;
             tokio::task::spawn_blocking(move || -> BitFunResult<()> {
                 macos::catch_objc(|| {
                     let (mods, kc) =
