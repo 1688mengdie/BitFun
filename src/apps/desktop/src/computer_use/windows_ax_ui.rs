@@ -665,6 +665,18 @@ fn render_lines(lines: &[(usize, String)]) -> String {
     out
 }
 
+/// Render tree text directly from a `UiaNode` vector (used by the MSAA
+/// fallback, which returns nodes without a pre-rendered line list). Indents by
+/// each node's `depth` and reuses [`format_node_line`] for parity with the UIA
+/// primary path.
+pub(crate) fn render_nodes_text(nodes: &[UiaNode]) -> String {
+    let lines: Vec<(usize, String)> = nodes
+        .iter()
+        .map(|n| (n.depth, format_node_line(n)))
+        .collect();
+    render_lines(&lines)
+}
+
 // ── Locate (cached approach) ────────────────────────────────────────────────
 
 /// Build a locate result from a walked node's retained rect + metadata.
@@ -714,7 +726,7 @@ pub fn locate_ui_element_center(
 ) -> BitFunResult<UiElementLocateResult> {
     ui_locate_common::validate_query(query)?;
 
-    let max_depth = query.max_depth.unwrap_or(48).clamp(1, 200);
+    let max_depth = query.max_depth.unwrap_or(48).clamp(1, 200) as usize;
     let max_elements = 12_000usize;
 
     let hwnd = unsafe { GetForegroundWindow() };
@@ -869,7 +881,34 @@ pub fn get_app_state_snapshot(
     max_depth: u32,
     _focus_window_only: bool,
 ) -> BitFunResult<AppStateSnapshot> {
-    let (tree_text, uia_nodes) = walk_uia_tree(500, max_depth as usize)?;
+    let hwnd = unsafe { GetForegroundWindow() };
+    if hwnd.is_invalid() {
+        return Err(BitFunError::tool(
+            "No foreground window (GetForegroundWindow returned null).".to_string(),
+        ));
+    }
+    let hwnd_raw = hwnd.0 as isize;
+
+    // Primary: UIA control-view walk. Fallback: MSAA for SAL/VCL windows
+    // (LibreOffice / OpenOffice) whose UIA provider hangs on
+    // `BuildUpdatedCache(Subtree)` or returns an empty tree, OR whenever the
+    // UIA walk errors / yields nothing on a SAL/VCL class.
+    let (tree_text, uia_nodes) = match unsafe { walk_tree_full(hwnd, 500, max_depth as usize) } {
+        Ok((text, nodes)) if !nodes.is_empty() => (text, nodes),
+        primary => {
+            if crate::computer_use::windows_msaa::is_sal_vcl_window(hwnd_raw) {
+                match crate::computer_use::windows_msaa::walk_msaa_tree(hwnd_raw) {
+                    Ok(msaa_nodes) if !msaa_nodes.is_empty() => {
+                        let text = render_nodes_text(&msaa_nodes);
+                        (text, msaa_nodes)
+                    }
+                    _ => primary?,
+                }
+            } else {
+                primary?
+            }
+        }
+    };
 
     // Dense re-index: assign idx to every node (including content-only),
     // remap parent_element_index to the dense space.
@@ -891,11 +930,18 @@ pub fn get_app_state_snapshot(
     // Compute digest — same algorithm as macOS `compute_digest`.
     let digest = compute_digest(&nodes);
 
-    // Best-effort app info from foreground window.
+    // Best-effort app info from the foreground window. The owning pid is
+    // resolved so the element-token registry keys, interactive/visual caches,
+    // and screenshot pointer maps all share a stable id (mirrors how macOS
+    // keys these by pid).
+    let window_title = foreground_app_name();
+    let pid = foreground_window_pid().map(|p| p as i32);
     let app = AppInfo {
-        name: foreground_app_name().unwrap_or_else(|| "unknown".to_string()),
+        name: window_title
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string()),
         bundle_id: None,
-        pid: None,
+        pid,
         running: true,
         last_used_ms: None,
         launch_count: 0,
@@ -903,7 +949,7 @@ pub fn get_app_state_snapshot(
 
     Ok(AppStateSnapshot {
         app,
-        window_title: None,
+        window_title,
         tree_text,
         nodes,
         digest,
@@ -912,8 +958,7 @@ pub fn get_app_state_snapshot(
             .unwrap_or_default()
             .as_millis() as u64,
         screenshot: None,
-        loop_detection: None,
-        warning: None,
+        loop_warning: None,
     })
 }
 
@@ -955,7 +1000,7 @@ fn compute_digest(nodes: &[AxNode]) -> String {
 
 fn foreground_app_name() -> Option<String> {
     use windows::Win32::Foundation::HWND;
-    use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowTextW};
+    use windows::Win32::UI::WindowsAndMessaging::GetWindowTextW;
     unsafe {
         let hwnd: HWND = GetForegroundWindow();
         if hwnd.is_invalid() {
@@ -967,5 +1012,31 @@ fn foreground_app_name() -> Option<String> {
             return None;
         }
         Some(String::from_utf16_lossy(&buf[..len as usize]))
+    }
+}
+
+/// Raw handle of the current foreground window as `isize` (0 when none). Used
+/// by the desktop host to capture a screenshot of the same window the AX
+/// snapshot was taken from.
+pub fn foreground_window_handle() -> isize {
+    let hwnd = unsafe { GetForegroundWindow() };
+    hwnd.0 as isize
+}
+
+/// Owning process id of the current foreground window, if any.
+pub fn foreground_window_pid() -> Option<u32> {
+    use windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
+    unsafe {
+        let hwnd = GetForegroundWindow();
+        if hwnd.is_invalid() {
+            return None;
+        }
+        let mut pid: u32 = 0;
+        GetWindowThreadProcessId(hwnd, Some(&mut pid));
+        if pid == 0 {
+            None
+        } else {
+            Some(pid)
+        }
     }
 }

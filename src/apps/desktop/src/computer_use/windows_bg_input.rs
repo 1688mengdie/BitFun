@@ -46,14 +46,16 @@ use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use bitfun_core::util::errors::{BitFunError, BitFunResult};
-use windows::Win32::Foundation::{BOOL, FALSE, HWND, LPARAM, POINT, TRUE, WPARAM};
+use windows::core::BOOL;
+use windows::Win32::Foundation::{FALSE, HWND, LPARAM, POINT, TRUE, WPARAM};
 use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_CLOAK};
 use windows::Win32::Graphics::Gdi::{ClientToScreen, ScreenToClient};
 use windows::Win32::UI::WindowsAndMessaging::{
     ChildWindowFromPointEx, GetClassNameW, GetForegroundWindow, GetWindowThreadProcessId, IsChild,
     PostMessageW, SetForegroundWindow, WindowFromPoint, CWP_SKIPDISABLED, CWP_SKIPINVISIBLE,
-    CWP_SKIPTRANSPARENT, WM_CHAR, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE, WM_RBUTTONDOWN, WM_RBUTTONUP,
+    CWP_SKIPTRANSPARENT, SB_LINEDOWN, SB_LINELEFT, SB_LINERIGHT, SB_LINEUP, WM_CHAR, WM_HSCROLL,
+    WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE,
+    WM_RBUTTONDOWN, WM_RBUTTONUP, WM_VSCROLL,
 };
 
 // ── raw Win32 FFI ───────────────────────────────────────────────────────────
@@ -191,6 +193,11 @@ extern "system" {
     fn SendInput(c_inputs: u32, p_inputs: *const INPUT, cb_size: i32) -> u32;
     fn AttachThreadInput(id_attach: u32, id_attach_to: u32, f_attach: i32) -> i32;
     fn MapVirtualKeyW(code: u32, map_type: u32) -> u32;
+    /// `VkKeyScanW` — translate a Unicode char to a virtual-key code + shift
+    /// state. Declared here (rather than via the `windows` crate) to avoid
+    /// enabling `Win32_UI_Input_KeyboardAndMouse`; the low byte of the return
+    /// is the VK code, the high byte the shift state. Returns `-1` on failure.
+    fn VkKeyScanW(ch: u16) -> i16;
     /// `GetWindowLongPtrW` — declared here (rather than via the `windows` crate)
     /// so we can pass `GWL_EXSTYLE` as a plain `i32` without depending on the
     /// `WINDOW_LONG_PTR_INDEX` newtype. `hwnd` is the raw pointer value of the
@@ -251,7 +258,27 @@ fn fg_serialize() -> Option<MutexGuard<'static, ()>> {
 /// Mouse-button key-state flags packed into WPARAM for WM_*BUTTON messages.
 const MK_LBUTTON: u32 = 0x0001;
 const MK_RBUTTON: u32 = 0x0002;
+const MK_SHIFT: u32 = 0x0004;
+const MK_CONTROL: u32 = 0x0008;
 const MK_MBUTTON: u32 = 0x0010;
+
+/// Translate modifier names into the `MK_*` key-state flags Win32 mouse
+/// messages carry in their `WPARAM`. Only Shift and Control have an `MK_*`
+/// representation — `WM_*BUTTON` messages have no bit for Alt or the Windows
+/// key (those are not part of the mouse-message contract). Unsupported
+/// modifier names are reported back to the caller so it can log them.
+fn mk_flags_for_modifiers(modifier_keys: &[String]) -> (u32, Vec<String>) {
+    let mut flags = 0u32;
+    let mut unsupported = Vec::new();
+    for m in modifier_keys {
+        match m.to_lowercase().as_str() {
+            "shift" => flags |= MK_SHIFT,
+            "ctrl" | "control" => flags |= MK_CONTROL,
+            other => unsupported.push(other.to_string()),
+        }
+    }
+    (flags, unsupported)
+}
 
 /// Down → up hold time inside a single click (ms). Matches cua-driver-rs.
 const CLICK_DELAY_MS: u64 = 35;
@@ -791,7 +818,7 @@ fn owning_exe_basename(hwnd: HWND) -> Option<String> {
 /// `BitFunError`. Logged at `error` on failure.
 fn post_msg(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> BitFunResult<()> {
     unsafe {
-        match PostMessageW(hwnd, msg, wparam, lparam) {
+        match PostMessageW(Some(hwnd), msg, wparam, lparam) {
             Ok(()) => Ok(()),
             Err(e) => {
                 let name = message_name(msg);
@@ -964,4 +991,286 @@ fn message_name(msg: u32) -> &'static str {
         WM_CHAR => "WM_CHAR",
         _ => "WM_UNKNOWN",
     }
+}
+
+// ── screen-coordinate click ─────────────────────────────────────────────────
+
+/// Post a mouse click at **screen** coordinates `(sx, sy)`, resolving the
+/// deepest child of `root` at that point and posting in the child's own client
+/// coordinates. Mirrors cua-driver-rs `post_click_screen`.
+///
+/// [`post_click`] takes *root-local client* coordinates; the desktop host's
+/// resolved targets (a node's `frame_global` center, an absolute `ScreenXy`,
+/// an image-pixel point mapped to global) are all **screen** coordinates, so
+/// this variant is the one the host wires up.
+pub fn post_click_screen(
+    root: HWND,
+    sx: i32,
+    sy: i32,
+    button: &str,
+    click_count: usize,
+    modifier_keys: &[String],
+) -> BitFunResult<()> {
+    if root.is_invalid() {
+        return Err(BitFunError::service("post_click_screen: invalid HWND"));
+    }
+    let target = deepest_child(root, sx, sy);
+    let (down_msg, up_msg, mk_flag) = match button {
+        "right" => (WM_RBUTTONDOWN, WM_RBUTTONUP, MK_RBUTTON),
+        "middle" => (WM_MBUTTONDOWN, WM_MBUTTONUP, MK_MBUTTON),
+        _ => (WM_LBUTTONDOWN, WM_LBUTTONUP, MK_LBUTTON),
+    };
+    if let Some(uipi) = post_message_blocked_by_uipi(target, down_msg) {
+        return Err(BitFunError::service(uipi));
+    }
+    let (mk_mods, unsupported) = mk_flags_for_modifiers(modifier_keys);
+    if !unsupported.is_empty() {
+        log::warn!(
+            "post_click_screen: modifiers {unsupported:?} have no MK_* mouse-message flag on \
+             Windows (only shift/control are carried in WM_*BUTTON WPARAM); they are ignored \
+             for this click."
+        );
+    }
+    // screen → target-local client coordinates for the LPARAM.
+    let mut client = POINT { x: sx, y: sy };
+    unsafe {
+        let _ = ScreenToClient(target, &mut client);
+    }
+    let lparam = make_lparam(client.x, client.y);
+    let wdown = WPARAM((mk_flag | mk_mods) as usize);
+    let wup = WPARAM(mk_mods as usize);
+    let count = click_count.max(1);
+    for i in 0..count {
+        post_msg(target, WM_MOUSEMOVE, WPARAM(mk_mods as usize), lparam)?;
+        post_msg(target, down_msg, wdown, lparam)?;
+        sleep(Duration::from_millis(CLICK_DELAY_MS));
+        post_msg(target, up_msg, wup, lparam)?;
+        if i + 1 < count {
+            sleep(Duration::from_millis(MULTI_CLICK_DELAY_MS));
+        }
+    }
+    Ok(())
+}
+
+// ── scroll ──────────────────────────────────────────────────────────────────
+
+/// Convert a pixel-ish wheel delta to a count of line-scroll messages.
+///
+/// The desktop tool layer hands `app_scroll` pixel-style deltas (macOS uses
+/// CGEvent pixel scrolls). Windows scrollbars step per **line**, so a raw
+/// pixel delta of e.g. 120 must not turn into 120 `SB_LINEDOWN` messages.
+/// Divide by an approximate line height (40 px) and clamp to a sane range.
+fn delta_to_line_count(delta: i32) -> usize {
+    let mag = delta.unsigned_abs();
+    if mag == 0 {
+        return 0;
+    }
+    ((mag as usize) / 40).clamp(1, 50)
+}
+
+/// Post line-granular scroll messages to the deepest child of `root` at the
+/// **screen** point `(sx, sy)` via `WM_VSCROLL` / `WM_HSCROLL`.
+///
+/// Sign convention matches the macOS `bg_scroll` / system trackpad: positive
+/// `dy` scrolls the content **down** (further into the document), positive
+/// `dx` scrolls **right**. Mirrors cua-driver-rs `ScrollTool`'s
+/// `WM_VSCROLL`/`WM_HSCROLL` transport.
+pub fn post_scroll_screen(root: HWND, sx: i32, sy: i32, dx: i32, dy: i32) -> BitFunResult<()> {
+    if root.is_invalid() {
+        return Err(BitFunError::service("post_scroll_screen: invalid HWND"));
+    }
+    let target = deepest_child(root, sx, sy);
+    if let Some(uipi) = post_message_blocked_by_uipi(target, WM_VSCROLL) {
+        return Err(BitFunError::service(uipi));
+    }
+
+    if dy != 0 {
+        let code = if dy > 0 { SB_LINEDOWN } else { SB_LINEUP };
+        for _ in 0..delta_to_line_count(dy) {
+            post_msg(target, WM_VSCROLL, WPARAM(code.0 as usize), LPARAM(0))?;
+        }
+    }
+    if dx != 0 {
+        let code = if dx > 0 { SB_LINERIGHT } else { SB_LINELEFT };
+        for _ in 0..delta_to_line_count(dx) {
+            post_msg(target, WM_HSCROLL, WPARAM(code.0 as usize), LPARAM(0))?;
+        }
+    }
+    Ok(())
+}
+
+// ── drag ──────────────────────────────────────────────────────────────────
+
+/// Down → up hold time at each drag endpoint (ms).
+const DRAG_ENDPOINT_DELAY_MS: u64 = 35;
+
+/// Press-drag-release gesture via `PostMessageW`, resolving the deepest child
+/// at the **screen** start point and posting the whole gesture in that child's
+/// client coordinates. Mirrors cua-driver-rs `post_drag_screen`.
+///
+/// Endpoints are given in **screen** coordinates; both are converted to the
+/// resolved target's client space so a drag stays within one control (a
+/// WinForms panel, a Win32 child canvas, …) rather than leaking to the frame.
+#[allow(clippy::too_many_arguments)]
+pub fn post_drag_screen(
+    root: HWND,
+    sx_from: i32,
+    sy_from: i32,
+    sx_to: i32,
+    sy_to: i32,
+    duration_ms: u64,
+    steps: usize,
+    button: &str,
+) -> BitFunResult<()> {
+    if root.is_invalid() {
+        return Err(BitFunError::service("post_drag_screen: invalid HWND"));
+    }
+    let target = deepest_child(root, sx_from, sy_from);
+    if let Some(uipi) = post_message_blocked_by_uipi(target, WM_LBUTTONDOWN) {
+        return Err(BitFunError::service(uipi));
+    }
+    let mut c_from = POINT {
+        x: sx_from,
+        y: sy_from,
+    };
+    let mut c_to = POINT { x: sx_to, y: sy_to };
+    unsafe {
+        let _ = ScreenToClient(target, &mut c_from);
+        let _ = ScreenToClient(target, &mut c_to);
+    }
+    let (down_msg, up_msg, mk_flag) = match button {
+        "right" => (WM_RBUTTONDOWN, WM_RBUTTONUP, MK_RBUTTON),
+        "middle" => (WM_MBUTTONDOWN, WM_MBUTTONUP, MK_MBUTTON),
+        _ => (WM_LBUTTONDOWN, WM_LBUTTONUP, MK_LBUTTON),
+    };
+    let wdown = WPARAM(mk_flag as usize);
+    let steps = steps.max(1);
+    let step_delay_ms = if steps > 1 {
+        duration_ms / steps as u64
+    } else {
+        duration_ms
+    };
+
+    // Pre-drag MOUSEMOVE (no buttons down yet), then DOWN at the start.
+    post_msg(
+        target,
+        WM_MOUSEMOVE,
+        WPARAM(0),
+        make_lparam(c_from.x, c_from.y),
+    )?;
+    post_msg(target, down_msg, wdown, make_lparam(c_from.x, c_from.y))?;
+    sleep(Duration::from_millis(DRAG_ENDPOINT_DELAY_MS));
+
+    for i in 1..=steps {
+        let t = i as f64 / steps as f64;
+        let ix = c_from.x + ((c_to.x - c_from.x) as f64 * t).round() as i32;
+        let iy = c_from.y + ((c_to.y - c_from.y) as f64 * t).round() as i32;
+        post_msg(target, WM_MOUSEMOVE, wdown, make_lparam(ix, iy))?;
+        if step_delay_ms > 0 {
+            sleep(Duration::from_millis(step_delay_ms));
+        }
+    }
+
+    post_msg(target, up_msg, WPARAM(0), make_lparam(c_to.x, c_to.y))?;
+    Ok(())
+}
+
+// ── key-name → virtual-key parsing ──────────────────────────────────────────
+
+/// Map a modifier name (`ctrl`/`control`, `shift`, `alt`/`option`/`menu`,
+/// `win`/`meta`/`cmd`/`command`/`super`) to its virtual-key code. Mirrors
+/// cua-driver-rs `modifier_vk`. Returns `None` for non-modifier names.
+pub fn vk_for_modifier(name: &str) -> Option<u16> {
+    match name.to_lowercase().as_str() {
+        "ctrl" | "control" => Some(0x11),        // VK_CONTROL
+        "shift" => Some(0x10),                   // VK_SHIFT
+        "alt" | "menu" | "option" => Some(0x12), // VK_MENU
+        "win" | "meta" | "windows" | "cmd" | "command" | "super" => Some(0x5B), // VK_LWIN
+        _ => None,
+    }
+}
+
+/// Map a key name (named keys like `enter`, `tab`, arrows, `f1..f12`, or a
+/// single printable character) to a virtual-key code. Mirrors cua-driver-rs
+/// `key_name_to_vk`; single characters go through `VkKeyScanW`.
+pub fn vk_for_key(key: &str) -> BitFunResult<u16> {
+    let vk: u16 = match key.to_lowercase().as_str() {
+        "enter" | "return" => 0x0D,
+        "tab" => 0x09,
+        "escape" | "esc" => 0x1B,
+        "space" | " " => 0x20,
+        "backspace" => 0x08,
+        "delete" | "del" => 0x2E,
+        "insert" | "ins" => 0x2D,
+        "home" => 0x24,
+        "end" => 0x23,
+        "pageup" | "pgup" => 0x21,
+        "pagedown" | "pgdn" => 0x22,
+        "up" => 0x26,
+        "down" => 0x28,
+        "left" => 0x25,
+        "right" => 0x27,
+        "f1" => 0x70,
+        "f2" => 0x71,
+        "f3" => 0x72,
+        "f4" => 0x73,
+        "f5" => 0x74,
+        "f6" => 0x75,
+        "f7" => 0x76,
+        "f8" => 0x77,
+        "f9" => 0x78,
+        "f10" => 0x79,
+        "f11" => 0x7A,
+        "f12" => 0x7B,
+        "ctrl" | "control" => 0x11,
+        "shift" => 0x10,
+        "alt" | "option" => 0x12,
+        "win" | "windows" | "meta" | "command" | "cmd" | "super" => 0x5B,
+        "capslock" => 0x14,
+        "numlock" => 0x90,
+        _ => {
+            // Single printable character → VK via VkKeyScanW (low byte).
+            let ch = key
+                .chars()
+                .next()
+                .ok_or_else(|| BitFunError::tool("empty key name".to_string()))?;
+            let scan = unsafe { VkKeyScanW(ch as u16) };
+            if scan == -1 {
+                return Err(BitFunError::tool(format!("unknown key: {key}")));
+            }
+            (scan & 0xFF) as u16
+        }
+    };
+    Ok(vk)
+}
+
+/// Parse a `key_chord` key list (modifiers + a final key, in any order) into a
+/// `(modifiers, keycode)` pair suitable for [`inject_key_cloaked`]. Modifier
+/// names are collected as modifiers; the first non-modifier (or, if every entry
+/// is a modifier, the last one) becomes the main key. Mirrors the macOS
+/// `parse_key_sequence` contract.
+pub fn parse_key_chord(keys: &[String]) -> BitFunResult<(Vec<u16>, u16)> {
+    if keys.is_empty() {
+        return Err(BitFunError::tool("empty key chord".to_string()));
+    }
+    let mut modifiers: Vec<u16> = Vec::new();
+    let mut main_key: Option<u16> = None;
+    for k in keys {
+        if let Some(m) = vk_for_modifier(k) {
+            if !modifiers.contains(&m) {
+                modifiers.push(m);
+            }
+        } else {
+            main_key = Some(vk_for_key(k)?);
+        }
+    }
+    let keycode = match main_key {
+        Some(k) => k,
+        None => {
+            // All entries were modifiers — treat the last as the key (e.g.
+            // pressing a lone modifier).
+            vk_for_key(keys.last().unwrap())?
+        }
+    };
+    Ok((modifiers, keycode))
 }

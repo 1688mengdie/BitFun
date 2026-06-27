@@ -293,26 +293,53 @@ unsafe fn screenshot_via_screen_region(hwnd: HWND) -> BitFunResult<(Vec<u8>, i32
     Ok((pixels, w, h))
 }
 
+/// A captured window bitmap plus the screen-space geometry it maps to.
+///
+/// `origin_x`/`origin_y` are the **physical** screen coordinates of the
+/// returned bitmap's top-left pixel, and `width`/`height` are its pixel
+/// dimensions. Together they let the desktop host build a `PointerMap` that
+/// converts an image pixel the vision model picked back into the screen
+/// coordinate a background click should target.
+pub struct WindowCapture {
+    pub png: Vec<u8>,
+    pub occluded: bool,
+    pub origin_x: i32,
+    pub origin_y: i32,
+    pub width: u32,
+    pub height: u32,
+}
+
 /// Capture a window by HWND, returning `(png_bytes, occluded_flag)`.
+///
+/// Thin wrapper over [`screenshot_window_capture`] that drops the geometry —
+/// kept for callers that only need the encoded bitmap.
+pub fn screenshot_window_bytes(hwnd: HWND) -> BitFunResult<(Vec<u8>, bool)> {
+    let cap = screenshot_window_capture(hwnd)?;
+    Ok((cap.png, cap.occluded))
+}
+
+/// Capture a window by HWND, returning the encoded PNG plus the screen-space
+/// rectangle the bitmap covers (see [`WindowCapture`]).
 ///
 /// Tiered fallback chain:
 /// - **Primary**: `PrintWindow(PW_RENDERFULLCONTENT)` — captures occluded /
 ///   off-screen GDI windows.
 /// - **Fallback**: screen-region `BitBlt` off the desktop DC when `PrintWindow`
 ///   returns an all-black bitmap (DirectComposition / UWP / WinUI3 targets have
-///   no GDI back buffer). The `occluded_flag` is `true` when this path is taken
+///   no GDI back buffer). The `occluded` flag is `true` when this path is taken
 ///   AND [`target_is_obscured`] reports another window covering the target — in
 ///   that case the bitmap shows the *covering* window's pixels.
 /// - **WGC**: [`screenshot_window_via_wgc`] (stub — returns `Err` for now; see
 ///   the `TODO: WGC` note).
 ///
 /// Minimized windows are rejected up front via [`is_iconic`]. The DWM
-/// extended-frame bounds are used to crop the invisible drop-shadow margin.
-pub fn screenshot_window_bytes(hwnd: HWND) -> BitFunResult<(Vec<u8>, bool)> {
+/// extended-frame bounds are used to crop the invisible drop-shadow margin; the
+/// returned `origin_*` account for that crop so coordinate mapping stays exact.
+pub fn screenshot_window_capture(hwnd: HWND) -> BitFunResult<WindowCapture> {
     unsafe { screenshot_window_bytes_unsafe(hwnd) }
 }
 
-unsafe fn screenshot_window_bytes_unsafe(hwnd: HWND) -> BitFunResult<(Vec<u8>, bool)> {
+unsafe fn screenshot_window_bytes_unsafe(hwnd: HWND) -> BitFunResult<WindowCapture> {
     if hwnd.is_invalid() {
         return Err(BitFunError::service(
             "screenshot_window_bytes: invalid HWND",
@@ -328,6 +355,11 @@ unsafe fn screenshot_window_bytes_unsafe(hwnd: HWND) -> BitFunResult<(Vec<u8>, b
              Restore the window first.",
         ));
     }
+    // Tracks the screen-space top-left of the returned bitmap; set from the
+    // window rect below and updated when the DWM crop trims the drop-shadow
+    // margin so coordinate mapping stays exact.
+    let mut origin_x: i32;
+    let mut origin_y: i32;
 
     // Size the buffer to the WHOLE window (GetWindowRect), not just the client
     // area — PrintWindow draws the entire window at 1:1 from (0, 0). A
@@ -346,6 +378,8 @@ unsafe fn screenshot_window_bytes_unsafe(hwnd: HWND) -> BitFunResult<(Vec<u8>, b
             "screenshot_window_bytes: window has zero/negative size: {w}x{h}"
         )));
     }
+    origin_x = win_rect.left;
+    origin_y = win_rect.top;
 
     let screen_dc = GetWindowDC(Some(hwnd));
     let mem_dc = CreateCompatibleDC(Some(screen_dc));
@@ -412,8 +446,13 @@ unsafe fn screenshot_window_bytes_unsafe(hwnd: HWND) -> BitFunResult<(Vec<u8>, b
     }
 
     // Crop to the DWM extended-frame bounds (with a 1-px inset) to remove the
-    // invisible-shadow margin and the Win11 rounded-corner hairline.
-    let (pixels, w, h) = crop_to_dwm_frame(pixels, w, h, win_rect, dwm_rect);
+    // invisible-shadow margin and the Win11 rounded-corner hairline. The crop
+    // offset shifts the bitmap origin in screen space, so fold it into
+    // origin_x/origin_y for coordinate mapping.
+    let (pixels, w, h, crop_off_x, crop_off_y) =
+        crop_to_dwm_frame(pixels, w, h, win_rect, dwm_rect);
+    origin_x += crop_off_x;
+    origin_y += crop_off_y;
 
     // Detect the all-black bitmap PrintWindow returns for DirectComposition-
     // backed surfaces. Recovery order:
@@ -423,15 +462,28 @@ unsafe fn screenshot_window_bytes_unsafe(hwnd: HWND) -> BitFunResult<(Vec<u8>, b
     if is_mostly_black_bgra(&pixels, w as u32, h as u32) {
         // TODO: WGC fallback for UWP/DirectComposition.
         if let Ok((alt_pixels, alt_w, alt_h)) = screenshot_window_via_wgc(hwnd) {
-            return Ok((encode_bgra_to_png(&alt_pixels, alt_w, alt_h)?, false));
+            return Ok(WindowCapture {
+                png: encode_bgra_to_png(&alt_pixels, alt_w, alt_h)?,
+                occluded: false,
+                origin_x: win_rect.left,
+                origin_y: win_rect.top,
+                width: alt_w,
+                height: alt_h,
+            });
         }
         let occluded = target_is_obscured(hwnd);
         match screenshot_via_screen_region(hwnd) {
             Ok((alt_pixels, alt_w, alt_h)) => {
-                return Ok((
-                    encode_bgra_to_png(&alt_pixels, alt_w as u32, alt_h as u32)?,
+                // Screen-region BitBlt captures the full GetWindowRect region
+                // (no DWM crop), so its origin is the raw window top-left.
+                return Ok(WindowCapture {
+                    png: encode_bgra_to_png(&alt_pixels, alt_w as u32, alt_h as u32)?,
                     occluded,
-                ));
+                    origin_x: win_rect.left,
+                    origin_y: win_rect.top,
+                    width: alt_w as u32,
+                    height: alt_h as u32,
+                });
             }
             Err(e) => {
                 warn!(
@@ -446,21 +498,33 @@ unsafe fn screenshot_window_bytes_unsafe(hwnd: HWND) -> BitFunResult<(Vec<u8>, b
 
     // PrintWindow reads from the target's own DC, so the bitmap is the target's
     // pixels even when occluded — no occluded warning on this path.
-    Ok((encode_bgra_to_png(&pixels, w as u32, h as u32)?, false))
+    Ok(WindowCapture {
+        png: encode_bgra_to_png(&pixels, w as u32, h as u32)?,
+        occluded: false,
+        origin_x,
+        origin_y,
+        width: w as u32,
+        height: h as u32,
+    })
 }
 
 /// Crop `pixels` (BGRA, top-down) to the DWM extended-frame bounds, removing the
 /// invisible drop-shadow margin PrintWindow doesn't paint. No-op when the DWM
 /// rect is unavailable or the computed crop is out of bounds.
+///
+/// Returns `(pixels, width, height, off_x, off_y)` where `off_x`/`off_y` are the
+/// offset (in window-local pixels) from the original window top-left to the
+/// cropped content's top-left — `0` when the crop is a no-op. Callers fold these
+/// into the screen-space origin so coordinate mapping stays exact.
 fn crop_to_dwm_frame(
     pixels: Vec<u8>,
     w: i32,
     h: i32,
     win_rect: RECT,
     dwm_rect: Option<RECT>,
-) -> (Vec<u8>, i32, i32) {
+) -> (Vec<u8>, i32, i32, i32, i32) {
     let Some(dwm) = dwm_rect else {
-        return (pixels, w, h);
+        return (pixels, w, h, 0, 0);
     };
     let off_x = (dwm.left - win_rect.left) + DWM_CROP_INSET_PX;
     let off_y = (dwm.top - win_rect.top) + DWM_CROP_INSET_PX;
@@ -473,7 +537,7 @@ fn crop_to_dwm_frame(
         || off_x + crop_w > w
         || off_y + crop_h > h
     {
-        return (pixels, w, h);
+        return (pixels, w, h, 0, 0);
     }
     let stride_full = (w * 4) as usize;
     let stride_crop = (crop_w * 4) as usize;
@@ -484,7 +548,7 @@ fn crop_to_dwm_frame(
         cropped[dst_row..dst_row + stride_crop]
             .copy_from_slice(&pixels[src_row..src_row + stride_crop]);
     }
-    (cropped, crop_w, crop_h)
+    (cropped, crop_w, crop_h, off_x, off_y)
 }
 
 /// Capture the primary display (full screen), returning raw PNG bytes.

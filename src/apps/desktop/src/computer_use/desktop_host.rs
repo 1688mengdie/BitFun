@@ -2507,6 +2507,191 @@ impl DesktopComputerUseHost {
         Ok(shot)
     }
 
+    /// Capture the foreground window on Windows, build a [`ComputerScreenshot`]
+    /// whose image pixels map 1:1 to the window's screen rectangle, and register
+    /// the resulting [`PointerMap`] under both `pid` and the screenshot id so
+    /// follow-up `ClickTarget::ImageXy` / `ImageGrid` calls resolve image pixels
+    /// back to the right screen coordinates.
+    ///
+    /// `hwnd_raw` is the foreground window handle the AX snapshot was taken from
+    /// (so the screenshot and the tree describe the same window). The capture is
+    /// the window's own pixels (`PrintWindow`), cropped to the DWM extended
+    /// frame, with `origin_*` adjusted for that crop.
+    #[cfg(target_os = "windows")]
+    async fn screenshot_for_foreground_window(
+        &self,
+        pid: i32,
+        hwnd_raw: isize,
+    ) -> BitFunResult<ComputerScreenshot> {
+        use windows::Win32::Foundation::HWND;
+
+        let cap = tokio::task::spawn_blocking(move || {
+            let hwnd = HWND(hwnd_raw as *mut std::ffi::c_void);
+            crate::computer_use::windows_capture::screenshot_window_capture(hwnd)
+        })
+        .await
+        .map_err(|e| BitFunError::tool(e.to_string()))??;
+
+        let img = image::load_from_memory(&cap.png)
+            .map_err(|e| BitFunError::tool(format!("decode window capture PNG: {}", e)))?;
+        let rgb = img.to_rgb8();
+        let native_w = rgb.width();
+        let native_h = rgb.height();
+
+        let shot =
+            Self::raw_shot_from_rgb_crop(rgb, cap.origin_x, cap.origin_y, native_w, native_h)?;
+
+        // Image pixels map 1:1 to the captured window rectangle (no downscale),
+        // so content == image == native and the screen origin is the window's
+        // (DWM-frame-adjusted) top-left.
+        let map = PointerMap {
+            image_w: shot.image_width,
+            image_h: shot.image_height,
+            content_origin_x: 0,
+            content_origin_y: 0,
+            content_w: shot.image_width,
+            content_h: shot.image_height,
+            native_w,
+            native_h,
+            origin_x: cap.origin_x,
+            origin_y: cap.origin_y,
+        };
+        {
+            let mut s = self
+                .state
+                .lock()
+                .map_err(|e| BitFunError::tool(format!("lock: {}", e)))?;
+            s.pointer_map = Some(map);
+            s.app_pointer_maps.insert(pid, map);
+            if let Some(id) = shot.screenshot_id.clone() {
+                s.screenshot_pointer_maps.insert(id, map);
+            }
+        }
+        Ok(shot)
+    }
+
+    /// Owning pid of the current foreground window (Windows), `0` when unknown.
+    /// Used to key pointer maps / element caches for the foreground-targeted
+    /// `app_*` actions.
+    #[cfg(target_os = "windows")]
+    fn windows_foreground_pid() -> i32 {
+        crate::computer_use::windows_ax_ui::foreground_window_pid()
+            .map(|p| p as i32)
+            .unwrap_or(0)
+    }
+
+    /// Screen-space center of the foreground window (physical pixels). Used as
+    /// the default scroll anchor when no explicit focus target is given.
+    #[cfg(target_os = "windows")]
+    fn windows_foreground_window_center(hwnd_raw: isize) -> Option<(i32, i32)> {
+        use windows::Win32::Foundation::{HWND, RECT};
+        use windows::Win32::UI::WindowsAndMessaging::GetWindowRect;
+        if hwnd_raw == 0 {
+            return None;
+        }
+        let hwnd = HWND(hwnd_raw as *mut std::ffi::c_void);
+        let mut rect = RECT::default();
+        if unsafe { GetWindowRect(hwnd, &mut rect) }.is_err() {
+            return None;
+        }
+        Some(((rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2))
+    }
+
+    /// Resolve a [`ClickTarget`] into a **global screen** `(x, y)` on Windows.
+    ///
+    /// Mirrors the macOS coordinate-resolution arm of `app_click`, but every
+    /// branch targets the foreground window (Windows snapshots are always of the
+    /// foreground window). Image-pixel targets are mapped through the stored
+    /// [`PointerMap`]; `NodeIdx` reads the node's `frame_global` center from a
+    /// fresh snapshot; `OcrText` runs OCR and takes the highest-confidence match.
+    #[cfg(target_os = "windows")]
+    async fn resolve_click_target_windows(&self, target: &ClickTarget) -> BitFunResult<(f64, f64)> {
+        let pid = Self::windows_foreground_pid();
+        match target {
+            ClickTarget::ScreenXy { x, y } => Ok((*x, *y)),
+            ClickTarget::ImageXy {
+                x,
+                y,
+                screenshot_id,
+            } => self.map_app_image_coords_to_pointer_f64(pid, *x, *y, screenshot_id.as_deref()),
+            ClickTarget::ImageGrid { screenshot_id, .. } => {
+                let (ix, iy) = Self::image_grid_target_to_xy(target)?
+                    .ok_or_else(|| BitFunError::tool("invalid image_grid target".to_string()))?;
+                self.map_app_image_coords_to_pointer_f64(pid, ix, iy, screenshot_id.as_deref())
+            }
+            ClickTarget::VisualGrid {
+                rows,
+                cols,
+                row,
+                col,
+                intersections,
+                wait_ms_after_detection,
+            } => {
+                let hwnd_raw = crate::computer_use::windows_ax_ui::foreground_window_handle();
+                let shot = self.screenshot_for_foreground_window(pid, hwnd_raw).await?;
+                let (x0, y0, width, height) =
+                    detect_regular_grid_rect_from_screenshot(&shot, *rows, *cols)?;
+                let detected = ClickTarget::ImageGrid {
+                    x0,
+                    y0,
+                    width,
+                    height,
+                    rows: *rows,
+                    cols: *cols,
+                    row: *row,
+                    col: *col,
+                    intersections: *intersections,
+                    screenshot_id: shot.screenshot_id.clone(),
+                };
+                let (ix, iy) = Self::image_grid_target_to_xy(&detected)?.ok_or_else(|| {
+                    BitFunError::tool("invalid detected visual_grid target".to_string())
+                })?;
+                if let Some(wait) = wait_ms_after_detection {
+                    if *wait > 0 {
+                        tokio::time::sleep(Duration::from_millis(*wait as u64)).await;
+                    }
+                }
+                self.map_app_image_coords_to_pointer_f64(pid, ix, iy, shot.screenshot_id.as_deref())
+            }
+            ClickTarget::NodeIdx { idx } => {
+                let snap = self
+                    .get_app_state_inner(AppSelector::default(), 32, false, false)
+                    .await?;
+                let node = snap.nodes.iter().find(|n| n.idx == *idx).ok_or_else(|| {
+                    BitFunError::tool(format!(
+                        "AX_NODE_STALE: idx={} no longer present in app state",
+                        idx
+                    ))
+                })?;
+                let (fx, fy, fw, fh) = node.frame_global.ok_or_else(|| {
+                    BitFunError::tool(format!(
+                        "AX_NODE_STALE: idx={} has no frame (off-screen or window minimised)",
+                        idx
+                    ))
+                })?;
+                if fw <= 0.0 || fh <= 0.0 {
+                    return Err(BitFunError::tool(format!(
+                        "AX_NODE_STALE: idx={} has zero-size frame ({}x{})",
+                        idx, fw, fh
+                    )));
+                }
+                Ok((fx + fw / 2.0, fy + fh / 2.0))
+            }
+            ClickTarget::OcrText { needle } => {
+                let matches = self.ocr_find_text_matches(needle, None).await?;
+                let best = matches.into_iter().max_by(|a, b| {
+                    a.confidence
+                        .partial_cmp(&b.confidence)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+                let m = best.ok_or_else(|| {
+                    BitFunError::tool(format!("NOT_FOUND: no OCR match for needle {:?}", needle))
+                })?;
+                Ok((m.center_x, m.center_y))
+            }
+        }
+    }
+
     /// Internal `get_app_state` that lets callers opt out of the focused-window
     /// screenshot. The public trait method always passes `capture_screenshot=true`
     /// (Codex parity). Internal re-snapshots from `app_click` / `app_type_text` /
@@ -2596,7 +2781,8 @@ impl DesktopComputerUseHost {
         }
         #[cfg(target_os = "windows")]
         {
-            let snap = tokio::task::spawn_blocking(move || {
+            let _ = &app; // Windows snapshots always target the foreground window.
+            let mut snap = tokio::task::spawn_blocking(move || {
                 crate::computer_use::windows_ax_ui::get_app_state_snapshot(
                     max_depth,
                     focus_window_only,
@@ -2604,13 +2790,40 @@ impl DesktopComputerUseHost {
             })
             .await
             .map_err(|e| BitFunError::tool(e.to_string()))??;
-            // Auto-attach screenshot for parity with macOS path.
-            if capture_screenshot {
-                // TODO: wire windows_capture::screenshot_display_bytes
-                // once the Windows capture module is fully integrated.
-            }
-            // Register snapshot in element-token registry.
+
             let reg_pid = snap.app.pid.unwrap_or(0);
+
+            // Auto-attach foreground-window screenshot (Codex parity). Failures
+            // are non-fatal — the model still has the AX tree.
+            if capture_screenshot {
+                let hwnd_raw = crate::computer_use::windows_ax_ui::foreground_window_handle();
+                if hwnd_raw != 0 {
+                    let started = std::time::Instant::now();
+                    match self
+                        .screenshot_for_foreground_window(reg_pid, hwnd_raw)
+                        .await
+                    {
+                        Ok(shot) => {
+                            debug!(
+                                "computer_use.app_state: attached window screenshot ({}x{}, {} bytes, {}ms)",
+                                shot.image_width,
+                                shot.image_height,
+                                shot.bytes.len(),
+                                started.elapsed().as_millis()
+                            );
+                            snap.screenshot = Some(shot);
+                        }
+                        Err(e) => {
+                            debug!(
+                                "computer_use.app_state: window screenshot failed (non-fatal): {}",
+                                e
+                            );
+                        }
+                    }
+                }
+            }
+
+            // Register snapshot in element-token registry.
             let _ = bitfun_agent_tools::element_token::global().register_snapshot(
                 reg_pid,
                 0,
@@ -3407,6 +3620,106 @@ tell application "System Events" to get unix id of first process whose frontmost
         Ok(())
     }
 
+    /// Press-drag-release gesture. The desktop host performs a **background**
+    /// (non-disruptive) drag where supported: macOS posts `bg_drag` to the
+    /// frontmost app's pid, Windows posts `post_drag_screen` to the foreground
+    /// window. When the background path is unavailable it falls back to the
+    /// foreground composite gesture (visible cursor movement).
+    async fn drag(
+        &self,
+        from: (f64, f64),
+        to: (f64, f64),
+        button: &str,
+        duration_ms: u64,
+    ) -> BitFunResult<()> {
+        debug!(
+            "computer_use: drag from=({:.1},{:.1}) to=({:.1},{:.1}) button={} dur={}ms",
+            from.0, from.1, to.0, to.1, button, duration_ms
+        );
+        // Number of intermediate move samples for a smooth drag path.
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        const DRAG_STEPS: usize = 24;
+
+        #[cfg(target_os = "macos")]
+        {
+            if crate::computer_use::macos_bg_input::supports_background_input() {
+                if let Some(pid) = crate::computer_use::macos_bg_input::frontmost_pid_macos() {
+                    let bg_button = match button {
+                        "right" => crate::computer_use::macos_bg_input::BgDragButton::Right,
+                        "middle" => crate::computer_use::macos_bg_input::BgDragButton::Middle,
+                        _ => crate::computer_use::macos_bg_input::BgDragButton::Left,
+                    };
+                    let (fx, fy) = from;
+                    let (tx, ty) = to;
+                    tokio::task::spawn_blocking(move || {
+                        macos::catch_objc(|| {
+                            let wid =
+                                crate::computer_use::macos_bg_input::frontmost_window_id_for_pid(
+                                    pid,
+                                );
+                            crate::computer_use::macos_bg_input::bg_drag(
+                                pid,
+                                fx,
+                                fy,
+                                tx,
+                                ty,
+                                None,
+                                None,
+                                wid,
+                                duration_ms,
+                                DRAG_STEPS,
+                                &[],
+                                bg_button,
+                            )
+                        })
+                    })
+                    .await
+                    .map_err(|e| BitFunError::tool(e.to_string()))??;
+                    return Ok(());
+                }
+            }
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            let hwnd_raw = crate::computer_use::windows_ax_ui::foreground_window_handle();
+            if hwnd_raw != 0 {
+                let bstr = button.to_string();
+                let (fx, fy) = (from.0.round() as i32, from.1.round() as i32);
+                let (tx, ty) = (to.0.round() as i32, to.1.round() as i32);
+                tokio::task::spawn_blocking(move || {
+                    let hwnd = windows::Win32::Foundation::HWND(hwnd_raw as *mut std::ffi::c_void);
+                    crate::computer_use::windows_bg_input::post_drag_screen(
+                        hwnd,
+                        fx,
+                        fy,
+                        tx,
+                        ty,
+                        duration_ms,
+                        DRAG_STEPS,
+                        &bstr,
+                    )
+                })
+                .await
+                .map_err(|e| BitFunError::tool(e.to_string()))??;
+                return Ok(());
+            }
+        }
+
+        // Foreground fallback: visible composite gesture (default behavior).
+        self.mouse_move_global_f64(from.0, from.1).await?;
+        self.mouse_down(button).await?;
+        let half = (duration_ms / 2).min(2_000);
+        if half > 0 {
+            self.wait_ms(half).await?;
+        }
+        self.mouse_move_global_f64(to.0, to.1).await?;
+        if half > 0 {
+            self.wait_ms(half).await?;
+        }
+        self.mouse_up(button).await
+    }
+
     async fn scroll(&self, delta_x: i32, delta_y: i32) -> BitFunResult<()> {
         if delta_x == 0 && delta_y == 0 {
             return Ok(());
@@ -3765,7 +4078,15 @@ tell application "System Events" to get unix id of first process whose frontmost
             .await
             .map_err(|e| BitFunError::tool(e.to_string()))?
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "windows")]
+        {
+            tokio::task::spawn_blocking(move || {
+                crate::computer_use::windows_list_apps::list_running_apps(include_hidden)
+            })
+            .await
+            .map_err(|e| BitFunError::tool(e.to_string()))?
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
             let _ = include_hidden;
             Ok(Vec::new())
@@ -4144,11 +4465,51 @@ tell application "System Events" to get unix id of first process whose frontmost
             }
             Ok(result_snap)
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "windows")]
+        {
+            // Resolve the target to a global screen point, then deliver an
+            // invisible PostMessage click to the foreground window (the same
+            // window the AX snapshot describes).
+            let (x, y) = self.resolve_click_target_windows(&params.target).await?;
+            let hwnd_raw = crate::computer_use::windows_ax_ui::foreground_window_handle();
+            if hwnd_raw == 0 {
+                return Err(BitFunError::tool(
+                    "app_click: no foreground window to target on Windows.".to_string(),
+                ));
+            }
+            let button = params.mouse_button.clone();
+            let count = params.click_count.max(1) as usize;
+            let modifiers = params.modifier_keys.clone();
+            log::info!(
+                target: "computer_use::app_click",
+                "app_click.windows post_click_screen x={:.1} y={:.1} button={} count={} mods={:?}",
+                x, y, button, count, modifiers
+            );
+            tokio::task::spawn_blocking(move || {
+                let hwnd = windows::Win32::Foundation::HWND(hwnd_raw as *mut std::ffi::c_void);
+                crate::computer_use::windows_bg_input::post_click_screen(
+                    hwnd,
+                    x.round() as i32,
+                    y.round() as i32,
+                    &button,
+                    count,
+                    &modifiers,
+                )
+            })
+            .await
+            .map_err(|e| BitFunError::tool(e.to_string()))??;
+
+            let settle_ms = params.wait_ms_after.unwrap_or(120).min(5_000);
+            if settle_ms > 0 {
+                tokio::time::sleep(Duration::from_millis(settle_ms as u64)).await;
+            }
+            self.get_app_state(params.app, 32, false).await
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
             let _ = params;
             Err(BitFunError::tool(
-                "app_click is only available on macOS in this build".to_string(),
+                "app_click is only available on macOS and Windows in this build".to_string(),
             ))
         }
     }
@@ -4226,11 +4587,50 @@ tell application "System Events" to get unix id of first process whose frontmost
             .map_err(|e| BitFunError::tool(e.to_string()))??;
             self.get_app_state(app, 32, false).await
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "windows")]
+        {
+            // Click the focus target first (if any) so keystrokes land in the
+            // right control, then deliver the text. Cloaked `SendInput` is the
+            // most reliable path (works for both classic Win32 edit controls and
+            // modern XAML/WinUI/WPF surfaces that ignore posted `WM_CHAR`); it
+            // falls back to `PostMessage(WM_CHAR)` internally when foreground
+            // cannot be claimed.
+            if let Some(target) = focus {
+                let click = AppClickParams {
+                    app: app.clone(),
+                    target,
+                    click_count: 1,
+                    mouse_button: "left".to_string(),
+                    modifier_keys: vec![],
+                    wait_ms_after: None,
+                };
+                let _ = self.app_click(click).await?;
+            }
+            let hwnd_raw = crate::computer_use::windows_ax_ui::foreground_window_handle();
+            if hwnd_raw == 0 {
+                return Err(BitFunError::tool(
+                    "app_type_text: no foreground window to target on Windows.".to_string(),
+                ));
+            }
+            let txt = text.to_string();
+            log::info!(
+                target: "computer_use::app_type_text",
+                "app_type_text.windows char_count={}",
+                txt.chars().count()
+            );
+            tokio::task::spawn_blocking(move || {
+                let hwnd = windows::Win32::Foundation::HWND(hwnd_raw as *mut std::ffi::c_void);
+                crate::computer_use::windows_bg_input::inject_text_cloaked(hwnd, &txt)
+            })
+            .await
+            .map_err(|e| BitFunError::tool(e.to_string()))??;
+            self.get_app_state(app, 32, false).await
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
             let _ = (app, text, focus);
             Err(BitFunError::tool(
-                "app_type_text is only available on macOS in this build".to_string(),
+                "app_type_text is only available on macOS and Windows in this build".to_string(),
             ))
         }
     }
@@ -4277,11 +4677,45 @@ tell application "System Events" to get unix id of first process whose frontmost
             .map_err(|e| BitFunError::tool(e.to_string()))??;
             self.get_app_state(app, 32, false).await
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "windows")]
+        {
+            let hwnd_raw = crate::computer_use::windows_ax_ui::foreground_window_handle();
+            if hwnd_raw == 0 {
+                return Err(BitFunError::tool(
+                    "app_scroll: no foreground window to target on Windows.".to_string(),
+                ));
+            }
+            // Anchor point: the focus target's center when given, else the
+            // foreground window center. `post_scroll_screen` resolves the
+            // deepest child at that point and posts WM_VSCROLL / WM_HSCROLL.
+            let (sx, sy) = if let Some(target) = &focus {
+                let (x, y) = self.resolve_click_target_windows(target).await?;
+                (x.round() as i32, y.round() as i32)
+            } else {
+                Self::windows_foreground_window_center(hwnd_raw).ok_or_else(|| {
+                    BitFunError::tool(
+                        "app_scroll: could not resolve foreground window center.".to_string(),
+                    )
+                })?
+            };
+            log::info!(
+                target: "computer_use::app_scroll",
+                "app_scroll.windows sx={} sy={} dx={} dy={}",
+                sx, sy, dx, dy
+            );
+            tokio::task::spawn_blocking(move || {
+                let hwnd = windows::Win32::Foundation::HWND(hwnd_raw as *mut std::ffi::c_void);
+                crate::computer_use::windows_bg_input::post_scroll_screen(hwnd, sx, sy, dx, dy)
+            })
+            .await
+            .map_err(|e| BitFunError::tool(e.to_string()))??;
+            self.get_app_state(app, 32, false).await
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
             let _ = (app, focus, dx, dy);
             Err(BitFunError::tool(
-                "app_scroll is only available on macOS in this build".to_string(),
+                "app_scroll is only available on macOS and Windows in this build".to_string(),
             ))
         }
     }
@@ -4332,11 +4766,48 @@ tell application "System Events" to get unix id of first process whose frontmost
             .map_err(|e| BitFunError::tool(e.to_string()))??;
             self.get_app_state(app, 32, false).await
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "windows")]
+        {
+            // Focus the target node first (if any) so the chord lands in the
+            // right control.
+            if let Some(idx) = focus_idx {
+                let click = AppClickParams {
+                    app: app.clone(),
+                    target: ClickTarget::NodeIdx { idx },
+                    click_count: 1,
+                    mouse_button: "left".to_string(),
+                    modifier_keys: vec![],
+                    wait_ms_after: None,
+                };
+                let _ = self.app_click(click).await?;
+            }
+            let hwnd_raw = crate::computer_use::windows_ax_ui::foreground_window_handle();
+            if hwnd_raw == 0 {
+                return Err(BitFunError::tool(
+                    "app_key_chord: no foreground window to target on Windows.".to_string(),
+                ));
+            }
+            let keys_for_parse = keys.clone();
+            log::info!(
+                target: "computer_use::app_key_chord",
+                "app_key_chord.windows keys={:?}",
+                keys
+            );
+            tokio::task::spawn_blocking(move || -> BitFunResult<()> {
+                let (mods, keycode) =
+                    crate::computer_use::windows_bg_input::parse_key_chord(&keys_for_parse)?;
+                let hwnd = windows::Win32::Foundation::HWND(hwnd_raw as *mut std::ffi::c_void);
+                crate::computer_use::windows_bg_input::inject_key_cloaked(hwnd, keycode, &mods)
+            })
+            .await
+            .map_err(|e| BitFunError::tool(e.to_string()))??;
+            self.get_app_state(app, 32, false).await
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
             let _ = (app, keys, focus_idx);
             Err(BitFunError::tool(
-                "app_key_chord is only available on macOS in this build".to_string(),
+                "app_key_chord is only available on macOS and Windows in this build".to_string(),
             ))
         }
     }
@@ -4401,21 +4872,73 @@ tell application "System Events" to get unix id of first process whose frontmost
                 tokio::time::sleep(poll).await;
             }
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "windows")]
+        {
+            let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
+            let poll = Duration::from_millis(poll_ms.max(50) as u64);
+            let baseline = self
+                .get_app_state_inner(app.clone(), 32, false, false)
+                .await?;
+            loop {
+                let snap = self
+                    .get_app_state_inner(app.clone(), 32, false, false)
+                    .await?;
+                let ok = match &pred {
+                    AppWaitPredicate::DigestChanged { prev_digest } => {
+                        snap.digest != *prev_digest && snap.digest != baseline.digest
+                    }
+                    AppWaitPredicate::TitleContains { needle } => snap
+                        .window_title
+                        .as_deref()
+                        .map(|t| t.contains(needle.as_str()))
+                        .unwrap_or(false),
+                    AppWaitPredicate::RoleEnabled { role } => snap
+                        .nodes
+                        .iter()
+                        .any(|n| n.role.as_str() == role && n.enabled),
+                    AppWaitPredicate::NodeEnabled { idx } => snap
+                        .nodes
+                        .iter()
+                        .find(|n| n.idx == *idx)
+                        .map(|n| n.enabled)
+                        .unwrap_or(false),
+                };
+                if ok || Instant::now() >= deadline {
+                    // Final returned snap — auto-attach a window screenshot for
+                    // parity with the rest of the `app_*` family.
+                    let mut snap = snap;
+                    if snap.screenshot.is_none() {
+                        let pid = Self::windows_foreground_pid();
+                        let hwnd_raw =
+                            crate::computer_use::windows_ax_ui::foreground_window_handle();
+                        if hwnd_raw != 0 {
+                            if let Ok(shot) =
+                                self.screenshot_for_foreground_window(pid, hwnd_raw).await
+                            {
+                                snap.screenshot = Some(shot);
+                            }
+                        }
+                    }
+                    return Ok(snap);
+                }
+                tokio::time::sleep(poll).await;
+            }
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
             let _ = (app, pred, timeout_ms, poll_ms);
             Err(BitFunError::tool(
-                "app_wait_for is only available on macOS in this build".to_string(),
+                "app_wait_for is only available on macOS and Windows in this build".to_string(),
             ))
         }
     }
 
     fn supports_interactive_view(&self) -> bool {
-        cfg!(target_os = "macos")
+        cfg!(any(target_os = "macos", target_os = "windows"))
     }
 
     fn supports_visual_mark_view(&self) -> bool {
-        cfg!(target_os = "macos")
+        cfg!(any(target_os = "macos", target_os = "windows"))
     }
 
     async fn build_interactive_view(
@@ -4423,9 +4946,9 @@ tell application "System Events" to get unix id of first process whose frontmost
         app: AppSelector,
         opts: InteractiveViewOpts,
     ) -> BitFunResult<InteractiveView> {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         {
-            let pid = resolve_pid_macos(self, &app).await?;
+            let pid = resolve_pid(self, &app).await?;
             let snap = self
                 .get_app_state_inner(app.clone(), 64, opts.focus_window_only, true)
                 .await?;
@@ -4510,11 +5033,12 @@ tell application "System Events" to get unix id of first process whose frontmost
             }
             Ok(view)
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
             let _ = (app, opts);
             Err(BitFunError::tool(
-                "build_interactive_view is only available on macOS in this build".to_string(),
+                "build_interactive_view is only available on macOS and Windows in this build"
+                    .to_string(),
             ))
         }
     }
@@ -4524,7 +5048,7 @@ tell application "System Events" to get unix id of first process whose frontmost
         app: AppSelector,
         params: InteractiveClickParams,
     ) -> BitFunResult<InteractiveActionResult> {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         {
             // Resolve `i → node_idx` against the cached interactive view.
             // On `STALE_INTERACTIVE_VIEW` we transparently rebuild the
@@ -4634,11 +5158,12 @@ tell application "System Events" to get unix id of first process whose frontmost
                 execution_note: Some(note),
             })
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
             let _ = (app, params);
             Err(BitFunError::tool(
-                "interactive_click is only available on macOS in this build".to_string(),
+                "interactive_click is only available on macOS and Windows in this build"
+                    .to_string(),
             ))
         }
     }
@@ -4648,15 +5173,28 @@ tell application "System Events" to get unix id of first process whose frontmost
         app: AppSelector,
         opts: VisualMarkViewOpts,
     ) -> BitFunResult<VisualMarkView> {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         {
-            let pid = resolve_pid_macos(self, &app).await?;
+            let pid = resolve_pid(self, &app).await?;
             let mut snap = self
                 .get_app_state_inner(app.clone(), 16, true, true)
                 .await?;
             if snap.screenshot.is_none() {
-                if let Ok(shot) = self.screenshot_for_app_pid(pid).await {
-                    snap.screenshot = Some(shot);
+                #[cfg(target_os = "macos")]
+                {
+                    if let Ok(shot) = self.screenshot_for_app_pid(pid).await {
+                        snap.screenshot = Some(shot);
+                    }
+                }
+                #[cfg(target_os = "windows")]
+                {
+                    let hwnd_raw = crate::computer_use::windows_ax_ui::foreground_window_handle();
+                    if hwnd_raw != 0 {
+                        if let Ok(shot) = self.screenshot_for_foreground_window(pid, hwnd_raw).await
+                        {
+                            snap.screenshot = Some(shot);
+                        }
+                    }
                 }
             }
             let shot = snap.screenshot.as_ref().ok_or_else(|| {
@@ -4720,11 +5258,12 @@ tell application "System Events" to get unix id of first process whose frontmost
             }
             Ok(view)
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
             let _ = (app, opts);
             Err(BitFunError::tool(
-                "build_visual_mark_view is only available on macOS in this build".to_string(),
+                "build_visual_mark_view is only available on macOS and Windows in this build"
+                    .to_string(),
             ))
         }
     }
@@ -4734,7 +5273,7 @@ tell application "System Events" to get unix id of first process whose frontmost
         app: AppSelector,
         params: VisualClickParams,
     ) -> BitFunResult<VisualActionResult> {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         {
             let mut auto_rebuilt = false;
             let mark = match self
@@ -4765,7 +5304,7 @@ tell application "System Events" to get unix id of first process whose frontmost
             };
 
             let screenshot_id = {
-                let pid = resolve_pid_macos(self, &app).await?;
+                let pid = resolve_pid(self, &app).await?;
                 let s = self
                     .state
                     .lock()
@@ -4808,11 +5347,11 @@ tell application "System Events" to get unix id of first process whose frontmost
                 execution_note: Some(note),
             })
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
             let _ = (app, params);
             Err(BitFunError::tool(
-                "visual_click is only available on macOS in this build".to_string(),
+                "visual_click is only available on macOS and Windows in this build".to_string(),
             ))
         }
     }
@@ -4822,7 +5361,7 @@ tell application "System Events" to get unix id of first process whose frontmost
         app: AppSelector,
         params: InteractiveTypeTextParams,
     ) -> BitFunResult<InteractiveActionResult> {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         {
             let focus = if let Some(i) = params.i {
                 let node_idx = self
@@ -4846,40 +5385,66 @@ tell application "System Events" to get unix id of first process whose frontmost
                         })
                         .await?;
                 }
-                let pid = resolve_pid_macos(self, &app).await?;
-                tokio::task::spawn_blocking(move || -> BitFunResult<()> {
-                    macos::catch_objc(|| {
-                        let (m1, k1) = crate::computer_use::macos_bg_input::parse_key_sequence(&[
-                            "cmd".to_string(),
-                            "a".to_string(),
-                        ])?;
-                        crate::computer_use::macos_bg_input::bg_key_chord(pid, &m1, k1)?;
-                        let (m2, k2) = crate::computer_use::macos_bg_input::parse_key_sequence(&[
-                            "delete".to_string(),
-                        ])?;
-                        crate::computer_use::macos_bg_input::bg_key_chord(pid, &m2, k2)?;
-                        Ok(())
+                // Select-all + delete to clear the field. The "select all"
+                // accelerator is Cmd+A on macOS and Ctrl+A on Windows.
+                #[cfg(target_os = "macos")]
+                {
+                    let pid = resolve_pid_macos(self, &app).await?;
+                    tokio::task::spawn_blocking(move || -> BitFunResult<()> {
+                        macos::catch_objc(|| {
+                            let (m1, k1) =
+                                crate::computer_use::macos_bg_input::parse_key_sequence(&[
+                                    "cmd".to_string(),
+                                    "a".to_string(),
+                                ])?;
+                            crate::computer_use::macos_bg_input::bg_key_chord(pid, &m1, k1)?;
+                            let (m2, k2) =
+                                crate::computer_use::macos_bg_input::parse_key_sequence(&[
+                                    "delete".to_string(),
+                                ])?;
+                            crate::computer_use::macos_bg_input::bg_key_chord(pid, &m2, k2)?;
+                            Ok(())
+                        })
                     })
-                })
-                .await
-                .map_err(|e| BitFunError::tool(e.to_string()))??;
+                    .await
+                    .map_err(|e| BitFunError::tool(e.to_string()))??;
+                }
+                #[cfg(target_os = "windows")]
+                {
+                    let _ = self
+                        .app_key_chord(app.clone(), vec!["ctrl".to_string(), "a".to_string()], None)
+                        .await?;
+                    let _ = self
+                        .app_key_chord(app.clone(), vec!["delete".to_string()], None)
+                        .await?;
+                }
             }
 
             let snapshot = self.app_type_text(app.clone(), &params.text, focus).await?;
 
             if params.press_enter_after {
-                let pid = resolve_pid_macos(self, &app).await?;
-                tokio::task::spawn_blocking(move || -> BitFunResult<()> {
-                    macos::catch_objc(|| {
-                        let (m, k) = crate::computer_use::macos_bg_input::parse_key_sequence(&[
-                            "return".to_string(),
-                        ])?;
-                        crate::computer_use::macos_bg_input::bg_key_chord(pid, &m, k)?;
-                        Ok(())
+                #[cfg(target_os = "macos")]
+                {
+                    let pid = resolve_pid_macos(self, &app).await?;
+                    tokio::task::spawn_blocking(move || -> BitFunResult<()> {
+                        macos::catch_objc(|| {
+                            let (m, k) =
+                                crate::computer_use::macos_bg_input::parse_key_sequence(&[
+                                    "return".to_string(),
+                                ])?;
+                            crate::computer_use::macos_bg_input::bg_key_chord(pid, &m, k)?;
+                            Ok(())
+                        })
                     })
-                })
-                .await
-                .map_err(|e| BitFunError::tool(e.to_string()))??;
+                    .await
+                    .map_err(|e| BitFunError::tool(e.to_string()))??;
+                }
+                #[cfg(target_os = "windows")]
+                {
+                    let _ = self
+                        .app_key_chord(app.clone(), vec!["return".to_string()], None)
+                        .await?;
+                }
             }
 
             if let Some(wait) = params.wait_ms_after {
@@ -4900,11 +5465,12 @@ tell application "System Events" to get unix id of first process whose frontmost
                 execution_note: Some("ax_focus_then_bg_type_text".to_string()),
             })
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
             let _ = (app, params);
             Err(BitFunError::tool(
-                "interactive_type_text is only available on macOS in this build".to_string(),
+                "interactive_type_text is only available on macOS and Windows in this build"
+                    .to_string(),
             ))
         }
     }
@@ -4914,7 +5480,7 @@ tell application "System Events" to get unix id of first process whose frontmost
         app: AppSelector,
         params: InteractiveScrollParams,
     ) -> BitFunResult<InteractiveActionResult> {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         {
             let focus = if let Some(i) = params.i {
                 let node_idx = self
@@ -4944,13 +5510,37 @@ tell application "System Events" to get unix id of first process whose frontmost
                 execution_note: Some("app_scroll".to_string()),
             })
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
             let _ = (app, params);
             Err(BitFunError::tool(
-                "interactive_scroll is only available on macOS in this build".to_string(),
+                "interactive_scroll is only available on macOS and Windows in this build"
+                    .to_string(),
             ))
         }
+    }
+}
+
+/// Resolve an `AppSelector` to a concrete `pid`, cross-platform.
+///
+/// macOS delegates to [`resolve_pid_macos`] (pid > bundle_id > name). Windows
+/// snapshots and `app_*` actions always target the **foreground window**, so an
+/// explicit `pid` is honored but any name/bundle selector collapses to the
+/// foreground window's owning pid (the per-pid caches / pointer maps are keyed
+/// by that id throughout the Windows path).
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+async fn resolve_pid(host: &DesktopComputerUseHost, app: &AppSelector) -> BitFunResult<i32> {
+    #[cfg(target_os = "macos")]
+    {
+        resolve_pid_macos(host, app).await
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let _ = host;
+        if let Some(pid) = app.pid {
+            return Ok(pid);
+        }
+        Ok(DesktopComputerUseHost::windows_foreground_pid())
     }
 }
 
@@ -5459,13 +6049,13 @@ impl DesktopComputerUseHost {
     /// element with the given `i`, when its `frame_image` is known. Used
     /// as a pointer-click fallback in `interactive_click` when AXPress
     /// fails (Electron / Canvas / custom-drawn surfaces).
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     async fn cached_interactive_image_center(
         &self,
         app: &AppSelector,
         i: u32,
     ) -> Option<(i32, i32)> {
-        let pid = resolve_pid_macos(self, app).await.ok()?;
+        let pid = resolve_pid(self, app).await.ok()?;
         let s = self.state.lock().ok()?;
         let cached = s.interactive_view_cache.get(&pid)?;
         let el = cached.elements.iter().find(|e| e.i == i)?;
@@ -5481,14 +6071,14 @@ impl DesktopComputerUseHost {
     /// a `STALE_INTERACTIVE_VIEW` tool error when the digest no longer matches
     /// (i.e. the UI changed between view + action) so the caller can re-build
     /// the interactive view before retrying.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     async fn resolve_interactive_index(
         &self,
         app: &AppSelector,
         i: u32,
         before_digest: Option<&str>,
     ) -> BitFunResult<u32> {
-        let pid = resolve_pid_macos(self, app).await?;
+        let pid = resolve_pid(self, app).await?;
         let s = self
             .state
             .lock()
@@ -5525,14 +6115,14 @@ impl DesktopComputerUseHost {
         Ok(el.node_idx)
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     async fn resolve_visual_mark(
         &self,
         app: &AppSelector,
         i: u32,
         before_digest: Option<&str>,
     ) -> BitFunResult<VisualMark> {
-        let pid = resolve_pid_macos(self, app).await?;
+        let pid = resolve_pid(self, app).await?;
         let s = self
             .state
             .lock()

@@ -28,6 +28,8 @@ mod windows_bg_input;
 #[cfg(target_os = "windows")]
 mod windows_capture;
 #[cfg(target_os = "windows")]
+mod windows_list_apps;
+#[cfg(target_os = "windows")]
 mod windows_msaa;
 
 pub use desktop_host::DesktopComputerUseHost;
