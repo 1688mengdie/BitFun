@@ -573,6 +573,7 @@ mod tests {
                 "LS",
                 "Read",
                 "view_image",
+                "analyze_image",
                 "Glob",
                 "Grep",
                 "GetTime",
