@@ -555,6 +555,7 @@
     "boostSectionAgent": "Agent",
     "boostSectionContext": "Context",
     "boostStartBtw": "Start side question",
+    "boostNewSession": "New session",
     "boostAddContext": "Reference file or folder",
     "boostSkills": "Skills",
     "modeSection": "Modes",

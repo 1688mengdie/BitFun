@@ -2845,7 +2845,23 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     },
     [currentSessionId, isBtwSession, selectSlashCommandAction, t]
   );
-  
+
+  const handleBoostNewSession = useCallback(
+    async (e: React.SyntheticEvent) => {
+      e.stopPropagation();
+      dispatchMode({ type: 'CLOSE_DROPDOWN' });
+      try {
+        const sessionMode = currentSessionId
+          ? FlowChatStore.getInstance().getState().sessions.get(currentSessionId)?.mode
+          : undefined;
+        await FlowChatManager.getInstance().createChatSession({}, sessionMode);
+      } catch (error) {
+        log.error('Failed to create new session from boost menu', { error });
+      }
+    },
+    [currentSessionId]
+  );
+
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     // Local /btw shortcut (Ctrl/Cmd+Alt+B) should work even when ChatInput is focused.
     if ((e.ctrlKey || e.metaKey) && e.altKey && !e.shiftKey && e.key.toLowerCase() === 'b') {
@@ -3956,6 +3972,21 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                             </div>
                           </>
                         )}
+
+                        {(!currentSessionId || isBtwSession) && (
+                          <div className="bitfun-chat-input__boost-section-divider" aria-hidden />
+                        )}
+                        <div
+                          role="button"
+                          tabIndex={0}
+                          className="bitfun-chat-input__boost-context-row"
+                          data-testid="chat-input-boost-new-session"
+                          onClick={handleBoostNewSession}
+                          onKeyDown={e => e.key === 'Enter' && handleBoostNewSession(e)}
+                        >
+                          <Plus size={14} className="bitfun-chat-input__boost-context-icon" aria-hidden />
+                          <span>{t('chatInput.boostNewSession')}</span>
+                        </div>
                       </div>
                     </div>
                   )}
