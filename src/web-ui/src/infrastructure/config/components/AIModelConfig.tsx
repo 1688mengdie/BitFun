@@ -1272,7 +1272,7 @@ const AIModelConfig: React.FC = () => {
       const nextDefaultModels = { ...currentDefaultModels };
       let defaultModelsChanged = false;
 
-      for (const key of ['primary', 'fast']) {
+      for (const key of ['primary', 'fast', 'image_understanding']) {
         if (nextDefaultModels[key] === id) {
           nextDefaultModels[key] = null;
           defaultModelsChanged = true;

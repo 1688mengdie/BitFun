@@ -1692,6 +1692,13 @@ impl Default for MinimapConfig {
 }
 
 impl AIModelConfig {
+    pub fn supports_image_understanding(&self) -> bool {
+        self.capabilities
+            .iter()
+            .any(|cap| matches!(cap, ModelCapability::ImageUnderstanding))
+            || matches!(self.category, ModelCategory::Multimodal)
+    }
+
     /// Legacy helper that infers the model category from the model name and provider.
     ///
     /// This is kept for one-off migrations/debugging, but runtime behavior should prefer
