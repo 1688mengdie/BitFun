@@ -18,6 +18,7 @@ impl StaticToolProviderFactory<dyn Tool> for ProductConcreteToolFactory {
             "LS" => Some(Arc::new(LSTool::new())),
             "Read" => Some(Arc::new(FileReadTool::new())),
             "view_image" => Some(Arc::new(ViewImageTool::new())),
+            "analyze_image" => Some(Arc::new(AnalyzeImageTool::new())),
             "Glob" => Some(Arc::new(GlobTool::new())),
             "Grep" => Some(Arc::new(GrepTool::new())),
             "Write" => Some(Arc::new(FileWriteTool::new())),

@@ -104,6 +104,7 @@ export function useMessageSender(props: UseMessageSenderProps): UseMessageSender
 
       const imageContexts = contexts.filter(ctx => ctx.type === 'image') as ImageContext[];
       const clipboardImages = imageContexts.filter(ctx => !ctx.isLocal && ctx.dataUrl);
+      const uploadedImagePaths = new Map<string, string>();
 
       if (clipboardImages.length > 0) {
         try {
@@ -124,10 +125,19 @@ export function useMessageSender(props: UseMessageSenderProps): UseMessageSender
             }
           };
 
-          await api.invoke('upload_image_contexts', uploadData);
+          const uploadResults = await api.invoke<Array<{ id: string; image_path?: string | null }>>(
+            'upload_image_contexts',
+            uploadData
+          );
+          for (const result of uploadResults) {
+            if (result.image_path) {
+              uploadedImagePaths.set(result.id, result.image_path);
+            }
+          }
           log.debug('Clipboard images uploaded', {
             imageCount: clipboardImages.length,
             ids: clipboardImages.map(img => img.id),
+            pathCount: uploadedImagePaths.size,
           });
         } catch (error) {
           log.error('Failed to upload clipboard images', {
@@ -154,7 +164,7 @@ export function useMessageSender(props: UseMessageSenderProps): UseMessageSender
         ? {
             imageContexts: imageContexts.map(ctx => ({
               id: ctx.id,
-              image_path: ctx.isLocal ? ctx.imagePath : undefined,
+              image_path: ctx.isLocal ? ctx.imagePath : uploadedImagePaths.get(ctx.id),
               data_url: undefined,
               mime_type: ctx.mimeType,
               metadata: {
@@ -169,7 +179,7 @@ export function useMessageSender(props: UseMessageSenderProps): UseMessageSender
               id: ctx.id,
               name: ctx.imageName || 'Image',
               dataUrl: ctx.dataUrl,
-              imagePath: ctx.isLocal ? ctx.imagePath : undefined,
+              imagePath: ctx.isLocal ? ctx.imagePath : uploadedImagePaths.get(ctx.id),
               mimeType: ctx.mimeType,
             })),
           }

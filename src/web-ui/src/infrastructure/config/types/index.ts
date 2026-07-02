@@ -180,6 +180,7 @@ export interface ProxyConfig {
 export interface DefaultModelsConfig {
   primary?: string | null;
   fast?: string | null;
+  image_understanding?: string | null;
 }
 
 export interface AIConfig {
@@ -593,6 +594,7 @@ export interface DiagnosticsBundleInfo {
 export interface DefaultModels {
   primary: string | null;
   fast: string | null;
+  image_understanding?: string | null;
 }
 
 export type OptionalCapabilityModels = Record<string, never>;

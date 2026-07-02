@@ -1365,17 +1365,29 @@ impl ExecutionEngine {
                 .and_then(|v| v.as_str())
                 .filter(|s| !s.is_empty())
                 .map(str::to_string)
-                .or_else(|| image.image_path.as_ref().filter(|s| !s.is_empty()).cloned())
                 .unwrap_or_else(|| image.id.clone());
 
-            content.push_str(&format!(
-                "- {} ({}, image_id={})\n",
-                name, image.mime_type, image.id
-            ));
+            let path = image
+                .image_path
+                .as_ref()
+                .map(String::as_str)
+                .filter(|s| !s.trim().is_empty());
+
+            if let Some(path) = path {
+                content.push_str(&format!(
+                    "- {} ({}, image_id={}, path={})\n",
+                    name, image.mime_type, image.id, path
+                ));
+            } else {
+                content.push_str(&format!(
+                    "- {} ({}, image_id={})\n",
+                    name, image.mime_type, image.id
+                ));
+            }
         }
         content.push_str("]\n");
 
-        content.push_str("Note: image inspection is not available for this session.\n");
+        content.push_str("Note: the primary model cannot inspect image pixels directly. If an image path is available, use analyze_image to inspect it, or use a user-provided image skill with that path.\n");
 
         content
     }
