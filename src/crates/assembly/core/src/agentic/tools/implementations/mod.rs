@@ -1,5 +1,6 @@
 //! Tool implementation module
 
+pub mod analyze_image_tool;
 pub mod ask_user_question_tool;
 pub mod bash_tool;
 pub mod code_review_tool;
@@ -47,6 +48,7 @@ pub mod web;
 
 #[deprecated(note = "GetToolSpecTool is owned by the product tool runtime boundary")]
 pub use crate::agentic::tools::product_runtime::GetToolSpecTool;
+pub use analyze_image_tool::AnalyzeImageTool;
 pub use ask_user_question_tool::AskUserQuestionTool;
 pub use bash_tool::BashTool;
 pub use code_review_tool::CodeReviewTool;
