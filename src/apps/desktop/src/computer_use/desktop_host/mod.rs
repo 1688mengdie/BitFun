@@ -21,6 +21,7 @@ use bitfun_core::agentic::tools::computer_use_host::{
 use bitfun_core::agentic::tools::computer_use_optimizer::ComputerUseOptimizer;
 use bitfun_core::util::errors::{BitFunError, BitFunResult};
 use log::debug;
+use screenshots::display_info::DisplayInfo;
 use screenshots::Screen;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -570,7 +571,7 @@ end tell"#])
     }
 
     /// Best-effort current mouse position in global screen coordinates.
-    fn current_mouse_position() -> (f64, f64) {
+    pub(super) fn current_mouse_position() -> (f64, f64) {
         #[cfg(target_os = "macos")]
         {
             macos::quartz_mouse_location().unwrap_or((0.0, 0.0))
@@ -590,6 +591,7 @@ end tell"#])
         }
         #[cfg(target_os = "linux")]
         {
+            use enigo::Mouse;
             match Self::run_enigo_job(|e| {
                 e.location()
                     .map_err(|err| BitFunError::tool(format!("pointer location: {}", err)))
@@ -715,8 +717,9 @@ impl DesktopComputerUseHost {
 
             let hwnd_raw = target_hwnd.0 as isize;
             let mut snap = tokio::task::spawn_blocking(move || {
+                let hwnd = windows::Win32::Foundation::HWND(hwnd_raw as *mut std::ffi::c_void);
                 crate::computer_use::windows_ax_ui::get_app_state_snapshot_for_window(
-                    target_hwnd,
+                    hwnd,
                     max_depth,
                     focus_window_only,
                 )

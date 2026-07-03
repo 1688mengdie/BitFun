@@ -1008,30 +1008,24 @@ impl DesktopComputerUseHost {
 
         #[cfg(not(target_os = "macos"))]
         let (pointer_image_x, pointer_image_y) = {
-            let pointer_loc = Self::run_enigo_job(|e| {
-                e.location()
-                    .map_err(|err| BitFunError::tool(format!("pointer location: {}", err)))
-            });
-            match pointer_loc {
-                Ok((gx, gy)) => match Self::pointer_in_scaled_image(
-                    map_origin_x,
-                    map_origin_y,
-                    map_native_w,
-                    map_native_h,
-                    content_w,
-                    content_h,
-                    gx,
-                    gy,
-                ) {
-                    Some((ix, iy)) => {
-                        let px = ix + margin_l as i32;
-                        let py = iy + margin_t as i32;
-                        Self::draw_pointer_marker(&mut frame, px, py);
-                        (Some(px), Some(py))
-                    }
-                    None => (None, None),
-                },
-                Err(_) => (None, None),
+            let (gx, gy) = Self::current_mouse_position();
+            match Self::pointer_in_scaled_image(
+                map_origin_x,
+                map_origin_y,
+                map_native_w,
+                map_native_h,
+                content_w,
+                content_h,
+                gx,
+                gy,
+            ) {
+                Some((ix, iy)) => {
+                    let px = ix + margin_l as i32;
+                    let py = iy + margin_t as i32;
+                    Self::draw_pointer_marker(&mut frame, px, py);
+                    (Some(px), Some(py))
+                }
+                None => (None, None),
             }
         };
 

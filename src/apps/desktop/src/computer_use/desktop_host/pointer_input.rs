@@ -65,7 +65,7 @@ impl DesktopComputerUseHost {
     /// converted into a Rust error instead of propagating across the FFI
     /// boundary as a "foreign exception" — which would otherwise cause Rust's
     /// `catch_unwind` to abort the whole process (`SIGABRT`).
-    fn run_enigo_job<F, T>(job: F) -> BitFunResult<T>
+    pub(super) fn run_enigo_job<F, T>(job: F) -> BitFunResult<T>
     where
         F: FnOnce(&mut Enigo) -> BitFunResult<T> + Send,
         T: Send,

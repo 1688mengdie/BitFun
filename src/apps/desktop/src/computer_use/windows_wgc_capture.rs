@@ -12,7 +12,7 @@ use windows::Graphics::Capture::{Direct3D11CaptureFramePool, GraphicsCaptureItem
 use windows::Graphics::DirectX::Direct3D11::IDirect3DDevice;
 use windows::Graphics::DirectX::DirectXPixelFormat;
 use windows::Win32::Foundation::HWND;
-use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE;
+use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP};
 use windows::Win32::Graphics::Direct3D11::{
     D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D, D3D11_CPU_ACCESS_READ,
     D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_MAP_READ, D3D11_TEXTURE2D_DESC, D3D11_USAGE_STAGING,
@@ -162,7 +162,7 @@ unsafe fn copy_frame_to_bgra(
         .cast()
         .map_err(|e| BitFunError::service(format!("IDirect3DDxgiInterfaceAccess cast: {e}")))?;
     let src_texture: ID3D11Texture2D = access
-        .GetInterface()
+        .GetInterface::<ID3D11Texture2D>()
         .map_err(|e| BitFunError::service(format!("GetInterface ID3D11Texture2D: {e}")))?;
 
     let mut desc = D3D11_TEXTURE2D_DESC::default();
@@ -187,9 +187,13 @@ unsafe fn copy_frame_to_bgra(
         CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
         MiscFlags: 0,
     };
-    let staging = d3d_device
-        .CreateTexture2D(&staging_desc, None)
+    let mut staging: Option<ID3D11Texture2D> = None;
+    d3d_device
+        .CreateTexture2D(&staging_desc, None, Some(&mut staging))
         .map_err(|e| BitFunError::service(format!("CreateTexture2D staging: {e}")))?;
+    let staging = staging.ok_or_else(|| {
+        BitFunError::service("CreateTexture2D returned null staging texture".to_string())
+    })?;
 
     d3d_context.CopyResource(&staging, &src_texture);
 

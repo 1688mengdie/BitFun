@@ -8,13 +8,15 @@
 //! AX-orchestration surface has a single, independently reviewable home
 //! instead of living inline inside the multi-thousand-line host file.
 
+#[cfg(target_os = "macos")]
 use super::macos;
-use super::{
-    require_macos_background_input, resolve_pid, resolve_pid_macos, CachedInteractiveView,
-    CachedVisualMarkView, DesktopComputerUseHost,
-};
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+use super::resolve_pid;
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 use super::LINUX_LEGACY_AX_UNAVAILABLE;
+#[cfg(target_os = "macos")]
+use super::{require_macos_background_input, resolve_pid_macos};
+use super::{CachedInteractiveView, CachedVisualMarkView, DesktopComputerUseHost};
 use bitfun_core::agentic::tools::computer_use_host::{
     AppClickParams, AppSelector, AppStateSnapshot, AppWaitPredicate, ClickTarget,
     ComputerScreenshot, ComputerUseHost, InteractiveActionResult, InteractiveClickParams,
