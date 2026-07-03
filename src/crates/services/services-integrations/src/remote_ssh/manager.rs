@@ -59,6 +59,22 @@ fn ssh_cfg_has(settings: &std::collections::HashMap<&str, &str>, canonical_key: 
         .any(|k| k.eq_ignore_ascii_case(canonical_key))
 }
 
+/// Extract the first value from an SSH config directive line, handling double-quoted strings.
+///
+/// SSH config values may be enclosed in double quotes when they contain whitespace
+/// (e.g. `IdentityFile "~/.ssh/my key"`). This function correctly extracts the full
+/// quoted value or the first whitespace-delimited token for unquoted values.
+fn parse_ssh_config_value(value: &str) -> Option<&str> {
+    let value = value.trim();
+    if value.starts_with('"') {
+        if let Some(end) = value[1..].find('"') {
+            let inner = &value[1..1 + end];
+            return if inner.is_empty() { None } else { Some(inner) };
+        }
+    }
+    value.split_whitespace().next()
+}
+
 /// Manually parse `~/.ssh/config` content into Host blocks with their direct settings.
 ///
 /// This is a fallback for when `SSHConfig::parse_str` fails — which happens when the
@@ -112,16 +128,14 @@ fn parse_ssh_config_manually(content: &str) -> Vec<SSHConfigEntry> {
         } else if current_host.is_some() {
             // Track details within the current Host block
             if keyword.eq_ignore_ascii_case("HostName") {
-                block_hostname = value.split_whitespace().next().map(|s| s.to_string());
+                block_hostname = parse_ssh_config_value(value).map(|s| s.to_string());
             } else if keyword.eq_ignore_ascii_case("Port") {
-                block_port = value.split_whitespace().next().and_then(|s| s.parse().ok());
+                block_port = parse_ssh_config_value(value).and_then(|s| s.parse().ok());
             } else if keyword.eq_ignore_ascii_case("User") {
-                block_user = value.split_whitespace().next().map(|s| s.to_string());
+                block_user = parse_ssh_config_value(value).map(|s| s.to_string());
             } else if keyword.eq_ignore_ascii_case("IdentityFile") {
-                block_identity_file = value
-                    .split_whitespace()
-                    .next()
-                    .map(|s| shellexpand::tilde(s).to_string());
+                block_identity_file =
+                    parse_ssh_config_value(value).map(|s| shellexpand::tilde(s).to_string());
             }
         }
     }

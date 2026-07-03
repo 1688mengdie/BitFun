@@ -13,7 +13,7 @@ import { Input } from '@/component-library';
 import { Select } from '@/component-library';
 import { Alert } from '@/component-library';
 import { IconButton } from '@/component-library';
-import { FolderOpen, Loader2, Server, User, Key, Lock, Trash2, Plus, Pencil, Play, ArrowDownToLine } from 'lucide-react';
+import { FolderOpen, Loader2, Server, User, Key, Lock, Trash2, Plus, Pencil, Play, ArrowDownToLine, Search } from 'lucide-react';
 import type {
   SSHConnectionConfig,
   SSHAuthMethod,
@@ -40,6 +40,8 @@ export const SSHConnectionDialog: React.FC<SSHConnectionDialogProps> = ({
   const [localError, setLocalError] = useState<string | null>(null);
   const [isConnecting, setIsConnecting] = useState(false);
   const [credentialsPrompt, setCredentialsPrompt] = useState<SavedConnection | null>(null);
+  const [savedSearch, setSavedSearch] = useState('');
+  const [configSearch, setConfigSearch] = useState('');
 
   const error = localError || connectionError;
 
@@ -80,6 +82,8 @@ export const SSHConnectionDialog: React.FC<SSHConnectionDialogProps> = ({
     if (open) {
       clearError();
       setLocalError(null);
+      setSavedSearch('');
+      setConfigSearch('');
       void loadSavedConnections();
       void loadSSHConfigHosts();
     }
@@ -336,6 +340,33 @@ export const SSHConnectionDialog: React.FC<SSHConnectionDialogProps> = ({
     { label: t('ssh.remote.privateKey') || 'Private Key', value: 'privateKey', icon: <Key size={14} /> },
   ];
 
+  const filteredSavedConnections = savedConnections.filter((conn) => {
+    if (!savedSearch.trim()) return true;
+    const q = savedSearch.toLowerCase();
+    return (
+      conn.name.toLowerCase().includes(q) ||
+      conn.host.toLowerCase().includes(q) ||
+      conn.username.toLowerCase().includes(q)
+    );
+  });
+
+  const filteredSSHConfigHosts = sshConfigHosts.filter((configHost) => {
+    // Hide SSH config hosts that already have a saved connection
+    const hostname = configHost.hostname || configHost.host;
+    const port = configHost.port || 22;
+    const user = configHost.user || '';
+    if (savedConnections.some((c) => c.host === hostname && c.port === port && c.username === user)) {
+      return false;
+    }
+    if (!configSearch.trim()) return true;
+    const q = configSearch.toLowerCase();
+    return (
+      configHost.host.toLowerCase().includes(q) ||
+      hostname.toLowerCase().includes(q) ||
+      (configHost.user || '').toLowerCase().includes(q)
+    );
+  });
+
   const dismissError = () => {
     setLocalError(null);
     clearError();
@@ -372,11 +403,21 @@ export const SSHConnectionDialog: React.FC<SSHConnectionDialogProps> = ({
           {/* Saved connections section */}
           {savedConnections.length > 0 && (
             <div className="ssh-connection-dialog__section">
-              <h3 className="ssh-connection-dialog__section-title">
-                {t('ssh.remote.savedConnections')}
-              </h3>
+              <div className="ssh-connection-dialog__section-header">
+                <h3 className="ssh-connection-dialog__section-title">
+                  {t('ssh.remote.savedConnections')}
+                </h3>
+                <Input
+                  className="ssh-connection-dialog__search"
+                  value={savedSearch}
+                  onChange={(e) => setSavedSearch(e.target.value)}
+                  placeholder={t('actions.search')}
+                  prefix={<Search size={14} />}
+                  size="small"
+                />
+              </div>
               <div className="ssh-connection-dialog__saved-list">
-                {savedConnections.map((conn) => (
+                {filteredSavedConnections.map((conn) => (
                   <div
                     key={conn.id}
                     className="ssh-connection-dialog__saved-item"
@@ -435,21 +476,21 @@ export const SSHConnectionDialog: React.FC<SSHConnectionDialogProps> = ({
           {/* SSH Config hosts section */}
           {sshConfigHosts.length > 0 && (
             <div className="ssh-connection-dialog__section">
-              <h3 className="ssh-connection-dialog__section-title">
-                {t('ssh.remote.sshConfigHosts') || 'SSH Config'}
-              </h3>
+              <div className="ssh-connection-dialog__section-header">
+                <h3 className="ssh-connection-dialog__section-title">
+                  {t('ssh.remote.sshConfigHosts') || 'SSH Config'}
+                </h3>
+                <Input
+                  className="ssh-connection-dialog__search"
+                  value={configSearch}
+                  onChange={(e) => setConfigSearch(e.target.value)}
+                  placeholder={t('actions.search')}
+                  prefix={<Search size={14} />}
+                  size="small"
+                />
+              </div>
               <div className="ssh-connection-dialog__saved-list">
-                {sshConfigHosts
-                  .filter((configHost) => {
-                    // Hide SSH config hosts that already have a saved connection
-                    const hostname = configHost.hostname || configHost.host;
-                    const port = configHost.port || 22;
-                    const user = configHost.user || '';
-                    return !savedConnections.some(
-                      (c) => c.host === hostname && c.port === port && c.username === user
-                    );
-                  })
-                  .map((configHost) => (
+                {filteredSSHConfigHosts.map((configHost) => (
                   <div
                     key={configHost.host}
                     className="ssh-connection-dialog__saved-item ssh-connection-dialog__saved-item--config"
