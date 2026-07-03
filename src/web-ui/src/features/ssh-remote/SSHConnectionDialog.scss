@@ -75,6 +75,10 @@
         background: var(--color-success-bg);
         color: var(--color-success);
       }
+
+      .ssh-connection-dialog__saved-actions {
+        opacity: 1;
+      }
     }
   }
 
