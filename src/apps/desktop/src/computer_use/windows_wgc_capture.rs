@@ -11,7 +11,7 @@ use windows::core::Interface;
 use windows::Graphics::Capture::{Direct3D11CaptureFramePool, GraphicsCaptureItem};
 use windows::Graphics::DirectX::Direct3D11::IDirect3DDevice;
 use windows::Graphics::DirectX::DirectXPixelFormat;
-use windows::Win32::Foundation::HWND;
+use windows::Win32::Foundation::{HMODULE, HWND};
 use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP};
 use windows::Win32::Graphics::Direct3D11::{
     D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D, D3D11_CPU_ACCESS_READ,
@@ -103,23 +103,23 @@ unsafe fn create_d3d11_device() -> BitFunResult<(ID3D11Device, ID3D11DeviceConte
     let mut context: Option<ID3D11DeviceContext> = None;
     let flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
 
-    let hr = D3D11CreateDevice(
+    if D3D11CreateDevice(
         None,
         D3D_DRIVER_TYPE_HARDWARE,
-        None,
+        HMODULE::default(),
         flags,
         None,
         D3D11_SDK_VERSION,
         Some(&mut device),
         None,
         Some(&mut context),
-    );
-
-    if hr.is_err() {
+    )
+    .is_err()
+    {
         D3D11CreateDevice(
             None,
             D3D_DRIVER_TYPE_WARP,
-            None,
+            HMODULE::default(),
             flags,
             None,
             D3D11_SDK_VERSION,

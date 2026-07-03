@@ -1016,8 +1016,8 @@ impl DesktopComputerUseHost {
                 map_native_h,
                 content_w,
                 content_h,
-                gx,
-                gy,
+                gx.round() as i32,
+                gy.round() as i32,
             ) {
                 Some((ix, iy)) => {
                     let px = ix + margin_l as i32;
