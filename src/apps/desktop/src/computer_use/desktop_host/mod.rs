@@ -696,26 +696,28 @@ impl DesktopComputerUseHost {
         {
             use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
 
-            let target_hwnd = if app_selector_is_unspecified(&app) {
-                unsafe { GetForegroundWindow() }
-            } else {
-                let pid = resolve_pid(self, &app).await? as u32;
-                crate::computer_use::windows_list_apps::find_top_window_for_pid(pid).ok_or_else(
-                    || {
-                        BitFunError::tool(format!(
-                            "APP_NOT_FOUND: no visible top-level window for pid={pid} (app={app:?})"
-                        ))
-                    },
-                )?
+            let hwnd_raw = {
+                let target_hwnd = if app_selector_is_unspecified(&app) {
+                    unsafe { GetForegroundWindow() }
+                } else {
+                    let pid = resolve_pid(self, &app).await? as u32;
+                    crate::computer_use::windows_list_apps::find_top_window_for_pid(pid)
+                        .ok_or_else(|| {
+                            BitFunError::tool(format!(
+                                "APP_NOT_FOUND: no visible top-level window for pid={pid} (app={app:?})"
+                            ))
+                        })?
+                };
+
+                if target_hwnd.is_invalid() {
+                    return Err(BitFunError::tool(
+                        "No target window for get_app_state (invalid HWND).".to_string(),
+                    ));
+                }
+
+                target_hwnd.0 as isize
             };
 
-            if target_hwnd.is_invalid() {
-                return Err(BitFunError::tool(
-                    "No target window for get_app_state (invalid HWND).".to_string(),
-                ));
-            }
-
-            let hwnd_raw = target_hwnd.0 as isize;
             let mut snap = tokio::task::spawn_blocking(move || {
                 let hwnd = windows::Win32::Foundation::HWND(hwnd_raw as *mut std::ffi::c_void);
                 crate::computer_use::windows_ax_ui::get_app_state_snapshot_for_window(
