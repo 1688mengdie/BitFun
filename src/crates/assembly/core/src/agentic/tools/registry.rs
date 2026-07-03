@@ -432,6 +432,7 @@ mod tests {
             vec![
                 "core.basic",
                 "core.agent",
+                "core.canvas",
                 "core.session",
                 "core.integration"
             ],
