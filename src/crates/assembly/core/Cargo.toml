@@ -49,6 +49,7 @@ tower-http = { workspace = true, optional = true }
 
 glob = { workspace = true, optional = true }
 notify = { workspace = true }
+oxc = { workspace = true, optional = true }
 dirs = { workspace = true }
 dunce = { workspace = true }
 filetime = { workspace = true, optional = true }
@@ -156,6 +157,7 @@ schannel = "0.1"
 default = ["product-full"]
 product-full = [
     "ai-adapter-runtime",
+    "canvas-compiler",
     "dep:chrono-tz",
     "dep:cron",
     "dep:dashmap",
@@ -208,6 +210,7 @@ service-integrations = [
 ]
 tool-packs = ["dep:bitfun-tool-packs", "bitfun-tool-packs/product-full", "dep:image"]
 tauri-support = ["tauri"]  # Optional tauri support
+canvas-compiler = ["dep:oxc", "product-domains"]
 ssh-remote = [
     "bitfun-services-integrations/remote-ssh-concrete",
     "russh",

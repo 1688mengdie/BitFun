@@ -52,6 +52,14 @@ impl CoworkMode {
                 "WebFetch".to_string(),
                 "ControlHub".to_string(),
                 "InitMiniApp".to_string(),
+                #[cfg(feature = "product-domains")]
+                "CreateCanvas".to_string(),
+                #[cfg(feature = "product-domains")]
+                "ReadCanvas".to_string(),
+                #[cfg(feature = "product-domains")]
+                "UpdateCanvas".to_string(),
+                #[cfg(feature = "product-domains")]
+                "PatchCanvas".to_string(),
             ],
         }
     }
@@ -106,8 +114,15 @@ mod tests {
 
     #[test]
     fn cowork_mode_includes_init_miniapp_in_default_tools() {
-        assert!(CoworkMode::new()
-            .default_tools()
-            .contains(&"InitMiniApp".to_string()));
+        let tools = CoworkMode::new().default_tools();
+        assert!(tools.contains(&"InitMiniApp".to_string()));
+        #[cfg(feature = "product-domains")]
+        assert!(tools.contains(&"CreateCanvas".to_string()));
+        #[cfg(feature = "product-domains")]
+        assert!(tools.contains(&"ReadCanvas".to_string()));
+        #[cfg(feature = "product-domains")]
+        assert!(tools.contains(&"UpdateCanvas".to_string()));
+        #[cfg(feature = "product-domains")]
+        assert!(tools.contains(&"PatchCanvas".to_string()));
     }
 }
