@@ -3,22 +3,16 @@
  */
 
 import React, { useMemo } from 'react';
-import { Check, FileText, X } from 'lucide-react';
+import { FileText } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { IconButton } from '../../component-library';
 import type { ToolCardProps } from '../types/flow-chat';
-import { AcpPermissionActions } from './AcpPermissionActions';
-import { hasAcpPermissionOptions } from './AcpPermissionActions.utils';
 import { CompactToolCard, CompactToolCardHeader } from './CompactToolCard';
-import { ToolCardHeaderActions } from './ToolCardHeaderActions';
 import { ToolCardStatusSlot } from './ToolCardStatusSlot';
 import { isSessionViewPreviewText } from '../utils/sessionViewPreview';
 
 export const ReadFileDisplay: React.FC<ToolCardProps> = React.memo(({
   toolItem,
-  onConfirm,
-  onReject,
-  onOpenInEditor
+  onOpenInEditor,
 }) => {
   const { t } = useTranslation('flow-chat');
   const { toolCall, toolResult, status, requiresConfirmation, userConfirmed } = toolItem;
@@ -72,11 +66,17 @@ export const ReadFileDisplay: React.FC<ToolCardProps> = React.memo(({
   }, [filePath, toolItem.acpPermission?.toolCall?.rawInput]);
 
   const lineRange = useMemo(() => {
-    const start_line = toolCall?.input?.start_line;
+    // Keep legacy `start_line` so older persisted tool calls still render.
+    const offset = toolCall?.input?.offset ?? toolCall?.input?.start_line;
+    const tail = toolCall?.input?.tail === true;
     const limit = toolCall?.input?.limit;
     
-    if (start_line !== undefined || limit !== undefined) {
-      const startLine = start_line || 1;
+    if (tail && limit !== undefined) {
+      return `tail ${limit} lines`;
+    }
+
+    if (offset !== undefined || limit !== undefined) {
+      const startLine = offset || 1;
       const endLine = limit ? startLine + limit - 1 : undefined;
       
       if (endLine) {
@@ -87,7 +87,7 @@ export const ReadFileDisplay: React.FC<ToolCardProps> = React.memo(({
     }
     
     return null;
-  }, [toolCall?.input?.start_line, toolCall?.input?.limit]);
+  }, [toolCall?.input?.offset, toolCall?.input?.start_line, toolCall?.input?.tail, toolCall?.input?.limit]);
 
   const fileSize = useMemo(() => {
     if (!toolResult?.result) return null;
@@ -109,6 +109,7 @@ export const ReadFileDisplay: React.FC<ToolCardProps> = React.memo(({
     !userConfirmed &&
     status !== 'completed' &&
     status !== 'cancelled' &&
+    status !== 'rejected' &&
     status !== 'error'
   );
 
@@ -154,53 +155,6 @@ export const ReadFileDisplay: React.FC<ToolCardProps> = React.memo(({
     return null;
   };
 
-  const renderActions = () => {
-    if (!showConfirmationActions) {
-      return undefined;
-    }
-
-    return (
-      <ToolCardHeaderActions>
-        {hasAcpPermissionOptions(toolItem) ? (
-          <AcpPermissionActions
-            toolItem={toolItem}
-            input={toolCall?.input}
-            presentation="text"
-            onConfirm={onConfirm}
-            onReject={onReject}
-          />
-        ) : (
-          <>
-            <IconButton
-              className="tool-card-header-action read-file-confirm-btn"
-              variant="success"
-              size="xs"
-              onClick={(event) => {
-                event.stopPropagation();
-                onConfirm?.(toolCall?.input);
-              }}
-              tooltip={t('toolCards.default.waitingConfirm')}
-            >
-              <Check size={12} />
-            </IconButton>
-            <IconButton
-              className="tool-card-header-action read-file-reject-btn"
-              variant="danger"
-              size="xs"
-              onClick={(event) => {
-                event.stopPropagation();
-                onReject?.();
-              }}
-              tooltip={t('toolCards.acpPermission.reject')}
-            >
-              <X size={12} />
-            </IconButton>
-          </>
-        )}
-      </ToolCardHeaderActions>
-    );
-  };
-
   return (
     <CompactToolCard
       status={status}
@@ -212,7 +166,6 @@ export const ReadFileDisplay: React.FC<ToolCardProps> = React.memo(({
         <CompactToolCardHeader
           icon={<ToolCardStatusSlot status={status} toolIcon={<FileText size={16} className="read-file-card-icon" />} />}
           content={renderContent()}
-          extra={renderActions()}
         />
       }
     />

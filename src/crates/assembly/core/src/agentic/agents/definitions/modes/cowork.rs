@@ -36,6 +36,7 @@ impl CoworkMode {
                 "LS".to_string(),
                 "Read".to_string(),
                 "view_image".to_string(),
+                "analyze_image".to_string(),
                 "Grep".to_string(),
                 "Glob".to_string(),
                 "Write".to_string(),
@@ -105,8 +106,7 @@ mod tests {
 
     #[test]
     fn cowork_mode_includes_init_miniapp_in_default_tools() {
-        assert!(CoworkMode::new()
-            .default_tools()
-            .contains(&"InitMiniApp".to_string()));
+        let tools = CoworkMode::new().default_tools();
+        assert!(tools.contains(&"InitMiniApp".to_string()));
     }
 }

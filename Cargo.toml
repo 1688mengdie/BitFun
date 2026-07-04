@@ -35,7 +35,7 @@ resolver = "2"
 
 # Shared package metadata — single source of truth for version
 [workspace.package]
-version = "0.2.11" # x-release-please-version
+version = "0.2.12" # x-release-please-version
 authors = ["BitFun Team"]
 edition = "2021"
 
@@ -138,6 +138,7 @@ sse-stream = "0.2.3"
 which = "8.0"
 similar = "2.5"
 urlencoding = "2.1"
+oxc = { version = "0.138.0", default-features = false, features = ["ast_visit", "codegen", "semantic", "transformer"] }
 
 # Tauri (desktop only)
 tauri = { version = "2.11", features = ["unstable", "macos-private-api", "tray-icon"] }
@@ -159,6 +160,7 @@ atspi = "0.29"
 leptess = "0.14"
 core-foundation = "0.9"
 core-graphics = { version = "0.23", features = ["elcapitan", "highsierra"] }
+foreign-types = "0.5"
 dispatch = "0.2"
 block2 = "0.6"
 objc2 = "0.6"

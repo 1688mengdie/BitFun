@@ -15,6 +15,7 @@ pub enum ToolPackFeatureGroup {
     ComputerUse,
     ImageAnalysis,
     MiniApp,
+    Canvas,
     AgentControl,
 }
 
@@ -28,6 +29,7 @@ impl ToolPackFeatureGroup {
             Self::ComputerUse => "computer-use",
             Self::ImageAnalysis => "image-analysis",
             Self::MiniApp => "miniapp",
+            Self::Canvas => "canvas",
             Self::AgentControl => "agent-control",
         }
     }
@@ -41,6 +43,7 @@ pub const ALL_FEATURE_GROUPS: &[ToolPackFeatureGroup] = &[
     ToolPackFeatureGroup::ComputerUse,
     ToolPackFeatureGroup::ImageAnalysis,
     ToolPackFeatureGroup::MiniApp,
+    ToolPackFeatureGroup::Canvas,
     ToolPackFeatureGroup::AgentControl,
 ];
 
@@ -66,6 +69,7 @@ pub fn enabled_feature_groups() -> Vec<ToolPackFeatureGroup> {
             ToolPackFeatureGroup::ImageAnalysis,
         ),
         (cfg!(feature = "miniapp"), ToolPackFeatureGroup::MiniApp),
+        (cfg!(feature = "canvas"), ToolPackFeatureGroup::Canvas),
         (
             cfg!(feature = "agent-control"),
             ToolPackFeatureGroup::AgentControl,
@@ -99,6 +103,7 @@ impl ToolProviderGroupPlan {
 
 const CORE_BASIC_FEATURE_GROUPS: &[ToolPackFeatureGroup] = &[ToolPackFeatureGroup::Basic];
 const CORE_AGENT_FEATURE_GROUPS: &[ToolPackFeatureGroup] = &[ToolPackFeatureGroup::AgentControl];
+const CORE_CANVAS_FEATURE_GROUPS: &[ToolPackFeatureGroup] = &[ToolPackFeatureGroup::Canvas];
 const CORE_SESSION_FEATURE_GROUPS: &[ToolPackFeatureGroup] = &[ToolPackFeatureGroup::AgentControl];
 const CORE_INTEGRATION_FEATURE_GROUPS: &[ToolPackFeatureGroup] = &[
     ToolPackFeatureGroup::BrowserWeb,
@@ -118,6 +123,7 @@ const PRODUCT_TOOL_PROVIDER_GROUP_PLAN: &[ToolProviderGroupPlan] = &[
             "LS",
             "Read",
             "view_image",
+            "analyze_image",
             "Glob",
             "Grep",
             "Write",
@@ -146,6 +152,11 @@ const PRODUCT_TOOL_PROVIDER_GROUP_PLAN: &[ToolProviderGroupPlan] = &[
             "GetFileDiff",
             "Log",
         ],
+    },
+    ToolProviderGroupPlan {
+        provider_id: "core.canvas",
+        feature_groups: CORE_CANVAS_FEATURE_GROUPS,
+        tool_names: &["CreateCanvas", "ReadCanvas", "UpdateCanvas", "PatchCanvas"],
     },
     ToolProviderGroupPlan {
         provider_id: "core.session",
@@ -244,6 +255,7 @@ mod tests {
                 "computer-use",
                 "image-analysis",
                 "miniapp",
+                "canvas",
                 "agent-control"
             ]
         );
@@ -282,6 +294,10 @@ mod tests {
             cfg!(feature = "miniapp")
         );
         assert_eq!(
+            groups.contains(&ToolPackFeatureGroup::Canvas),
+            cfg!(feature = "canvas")
+        );
+        assert_eq!(
             groups.contains(&ToolPackFeatureGroup::AgentControl),
             cfg!(feature = "agent-control")
         );
@@ -296,6 +312,7 @@ mod tests {
         assert_eq!(ToolPackFeatureGroup::ComputerUse.id(), "computer-use");
         assert_eq!(ToolPackFeatureGroup::ImageAnalysis.id(), "image-analysis");
         assert_eq!(ToolPackFeatureGroup::MiniApp.id(), "miniapp");
+        assert_eq!(ToolPackFeatureGroup::Canvas.id(), "canvas");
         assert_eq!(ToolPackFeatureGroup::AgentControl.id(), "agent-control");
     }
 
@@ -311,6 +328,7 @@ mod tests {
             vec![
                 "core.basic",
                 "core.agent",
+                "core.canvas",
                 "core.session",
                 "core.integration"
             ]
@@ -330,6 +348,7 @@ mod tests {
                 "LS",
                 "Read",
                 "view_image",
+                "analyze_image",
                 "Glob",
                 "Grep",
                 "Write",
@@ -351,6 +370,10 @@ mod tests {
                 "GetToolSpec",
                 "GetFileDiff",
                 "Log",
+                "CreateCanvas",
+                "ReadCanvas",
+                "UpdateCanvas",
+                "PatchCanvas",
                 "SessionControl",
                 "SessionMessage",
                 "SessionHistory",
@@ -393,6 +416,7 @@ mod tests {
             vec![
                 ("core.basic", vec!["basic"]),
                 ("core.agent", vec!["agent-control"]),
+                ("core.canvas", vec!["canvas"]),
                 ("core.session", vec!["agent-control"]),
                 (
                     "core.integration",

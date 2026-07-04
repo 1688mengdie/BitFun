@@ -54,8 +54,8 @@ export interface FlowChatHeaderProps {
   sessionId?: string;
   /** Ordered turn summaries used by header navigation. */
   turns?: FlowChatHeaderTurnSummary[];
-  /** Jump to a specific turn. */
-  onJumpToTurn?: (turnId: string) => void;
+  /** Jump to a specific turn. Return false when the selection is rejected or still pending. */
+  onJumpToTurn?: (turnId: string) => boolean | void;
   /** Jump to the currently displayed turn. */
   onJumpToCurrentTurn?: () => void;
   /** Jump to the previous turn. */
@@ -313,8 +313,10 @@ export const FlowChatHeader: React.FC<FlowChatHeaderProps> = ({
 
   const handleTurnSelect = (turnId: string) => {
     if (!onJumpToTurn) return;
-    onJumpToTurn(turnId);
-    setIsTurnListOpen(false);
+    const accepted = onJumpToTurn(turnId);
+    if (accepted !== false) {
+      setIsTurnListOpen(false);
+    }
   };
 
   const handleSubagentSelect = (sessionId: string) => {
@@ -908,4 +910,3 @@ export const FlowChatHeader: React.FC<FlowChatHeaderProps> = ({
 };
 
 FlowChatHeader.displayName = 'FlowChatHeader';
-

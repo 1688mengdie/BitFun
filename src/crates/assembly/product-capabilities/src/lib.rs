@@ -10,7 +10,10 @@ use bitfun_harness::{
     build_descriptor_harness_registry, HarnessCapability, HarnessProviderDescriptor,
     HarnessRegistry, HarnessRegistryBuildError, HarnessWorkflow,
 };
-use bitfun_runtime_ports::RuntimeServiceCapability;
+use bitfun_runtime_ports::{
+    PluginRuntimeAvailability, PluginRuntimeBinding, PluginRuntimeUnavailableReason,
+    RuntimeServiceCapability, UiExtensionAvailability,
+};
 use bitfun_runtime_services::RuntimeServices;
 pub use bitfun_tool_packs::ToolProviderGroupPlanSelectionError as ProductCapabilityBuildError;
 use bitfun_tool_packs::{
@@ -23,6 +26,7 @@ pub enum ProductCapabilityId {
     DeepReview,
     DeepResearch,
     MiniApp,
+    Canvas,
 }
 
 impl ProductCapabilityId {
@@ -32,6 +36,7 @@ impl ProductCapabilityId {
             Self::DeepReview => "deep-review",
             Self::DeepResearch => "deep-research",
             Self::MiniApp => "miniapp",
+            Self::Canvas => "canvas",
         }
     }
 }
@@ -52,6 +57,7 @@ pub enum ProductFeatureGroup {
     ComputerUse,
     ImageAnalysis,
     MiniApp,
+    Canvas,
     AgentControl,
 }
 
@@ -65,6 +71,7 @@ impl ProductFeatureGroup {
             Self::ComputerUse => "computer-use",
             Self::ImageAnalysis => "image-analysis",
             Self::MiniApp => "miniapp",
+            Self::Canvas => "canvas",
             Self::AgentControl => "agent-control",
         }
     }
@@ -86,6 +93,7 @@ impl From<ToolPackFeatureGroup> for ProductFeatureGroup {
             ToolPackFeatureGroup::ComputerUse => Self::ComputerUse,
             ToolPackFeatureGroup::ImageAnalysis => Self::ImageAnalysis,
             ToolPackFeatureGroup::MiniApp => Self::MiniApp,
+            ToolPackFeatureGroup::Canvas => Self::Canvas,
             ToolPackFeatureGroup::AgentControl => Self::AgentControl,
         }
     }
@@ -142,6 +150,7 @@ pub enum DeliveryProfile {
     Acp,
     Web,
     MobileWeb,
+    Sdk,
 }
 
 impl DeliveryProfile {
@@ -155,6 +164,7 @@ impl DeliveryProfile {
             Self::Acp => "acp",
             Self::Web => "web",
             Self::MobileWeb => "mobile-web",
+            Self::Sdk => "sdk",
         }
     }
 
@@ -168,6 +178,7 @@ impl DeliveryProfile {
             Self::Acp,
             Self::Web,
             Self::MobileWeb,
+            Self::Sdk,
         ]
     }
 }
@@ -242,6 +253,10 @@ const PRODUCT_DELIVERY_PROFILE_ENTRIES: &[ProductDeliveryProfileEntry] = &[
     ),
     ProductDeliveryProfileEntry::new(
         DeliveryProfile::MobileWeb,
+        ProductCoreDependencyMode::NoDirectCoreDependency,
+    ),
+    ProductDeliveryProfileEntry::new(
+        DeliveryProfile::Sdk,
         ProductCoreDependencyMode::NoDirectCoreDependency,
     ),
 ];
@@ -348,6 +363,7 @@ pub struct ProductAssemblyPlan {
     profile: DeliveryProfile,
     capability_set: ProductCapabilitySet,
     capability_assembly: ProductCapabilityAssembly,
+    extension_capabilities: ProductExtensionCapabilitySet,
 }
 
 impl ProductAssemblyPlan {
@@ -355,11 +371,13 @@ impl ProductAssemblyPlan {
         profile: DeliveryProfile,
         capability_set: ProductCapabilitySet,
         capability_assembly: ProductCapabilityAssembly,
+        extension_capabilities: ProductExtensionCapabilitySet,
     ) -> Self {
         Self {
             profile,
             capability_set,
             capability_assembly,
+            extension_capabilities,
         }
     }
 
@@ -373,6 +391,18 @@ impl ProductAssemblyPlan {
 
     pub fn capability_assembly(&self) -> &ProductCapabilityAssembly {
         &self.capability_assembly
+    }
+
+    pub fn extension_capabilities(&self) -> &ProductExtensionCapabilitySet {
+        &self.extension_capabilities
+    }
+
+    fn with_extension_capabilities(
+        mut self,
+        extension_capabilities: ProductExtensionCapabilitySet,
+    ) -> Self {
+        self.extension_capabilities = extension_capabilities;
+        self
     }
 
     pub fn feature_groups(&self) -> &[ProductFeatureGroup] {
@@ -452,15 +482,25 @@ impl ProductRuntimeAssembly {
 pub struct ProductAssemblyInput {
     profile: DeliveryProfile,
     services: RuntimeServices,
+    plugin_runtime: Option<PluginRuntimeBinding>,
 }
 
 impl ProductAssemblyInput {
     pub const fn new(profile: DeliveryProfile, services: RuntimeServices) -> Self {
-        Self { profile, services }
+        Self {
+            profile,
+            services,
+            plugin_runtime: None,
+        }
     }
 
     pub const fn profile(&self) -> DeliveryProfile {
         self.profile
+    }
+
+    pub fn with_plugin_runtime(mut self, binding: PluginRuntimeBinding) -> Self {
+        self.plugin_runtime = Some(binding);
+        self
     }
 }
 
@@ -469,6 +509,7 @@ pub struct ProductRuntimeParts {
     plan: ProductAssemblyPlan,
     services: RuntimeServices,
     harness_registry: HarnessRegistry,
+    plugin_runtime: PluginRuntimeBinding,
     service_availability: Vec<ProductServiceCapabilityAvailability>,
     missing_service_requirements: Vec<ProductServiceCapabilityRequirement>,
 }
@@ -486,12 +527,21 @@ impl ProductRuntimeParts {
         &self.harness_registry
     }
 
+    pub fn plugin_runtime(&self) -> &PluginRuntimeBinding {
+        &self.plugin_runtime
+    }
+
     pub fn service_availability(&self) -> &[ProductServiceCapabilityAvailability] {
         &self.service_availability
     }
 
     pub fn missing_service_requirements(&self) -> &[ProductServiceCapabilityRequirement] {
         &self.missing_service_requirements
+    }
+
+    /// Consume the assembled product output into runtime-builder inputs.
+    pub fn into_runtime_parts(self) -> (RuntimeServices, HarnessRegistry, PluginRuntimeBinding) {
+        (self.services, self.harness_registry, self.plugin_runtime)
     }
 }
 
@@ -504,6 +554,10 @@ pub enum ProductAssemblyError {
     HarnessRegistry {
         profile: DeliveryProfile,
         source: HarnessRegistryBuildError,
+    },
+    UnsupportedPluginRuntime {
+        profile: DeliveryProfile,
+        availability: PluginRuntimeAvailability,
     },
 }
 
@@ -521,6 +575,15 @@ impl fmt::Display for ProductAssemblyError {
                 write!(
                     f,
                     "delivery profile {profile} failed to build harness registry: {source}"
+                )
+            }
+            Self::UnsupportedPluginRuntime {
+                profile,
+                availability,
+            } => {
+                write!(
+                    f,
+                    "delivery profile {profile} does not support plugin runtime host binding before host gates: {availability:?}"
                 )
             }
         }
@@ -558,10 +621,31 @@ impl ProductAssembler {
             }
         })?;
 
+        let plugin_runtime = input.plugin_runtime.unwrap_or_else(|| {
+            PluginRuntimeBinding::disabled(PluginRuntimeUnavailableReason::NotBuilt)
+        });
+        let plugin_runtime_availability = plugin_runtime.availability();
+        if matches!(plugin_runtime, PluginRuntimeBinding::Client(_))
+            || plugin_runtime_availability.is_executable()
+        {
+            return Err(ProductAssemblyError::UnsupportedPluginRuntime {
+                profile: input.profile,
+                availability: plugin_runtime_availability,
+            });
+        }
+
+        let plan = assembly.plan().clone().with_extension_capabilities(
+            ProductExtensionCapabilitySet::new(
+                plugin_runtime_availability,
+                assembly.plan().extension_capabilities().ui_extensions(),
+            ),
+        );
+
         Ok(ProductRuntimeParts {
-            plan: assembly.plan().clone(),
+            plan,
             services: input.services,
             harness_registry,
+            plugin_runtime,
             service_availability,
             missing_service_requirements,
         })
@@ -771,8 +855,73 @@ impl ProductCapabilityRegistry {
     pub fn build_assembly_plan(self, profile: DeliveryProfile) -> ProductAssemblyPlan {
         let capability_set = self.capability_set();
         let capability_assembly = self.build_assembly();
-        ProductAssemblyPlan::new(profile, capability_set, capability_assembly)
+        ProductAssemblyPlan::new(
+            profile,
+            capability_set,
+            capability_assembly,
+            product_extension_capabilities_for_profile(profile),
+        )
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProductExtensionCapabilitySet {
+    plugin_runtime: PluginRuntimeAvailability,
+    ui_extensions: UiExtensionAvailability,
+}
+
+impl ProductExtensionCapabilitySet {
+    pub fn new(
+        plugin_runtime: PluginRuntimeAvailability,
+        ui_extensions: UiExtensionAvailability,
+    ) -> Self {
+        Self {
+            plugin_runtime,
+            ui_extensions,
+        }
+    }
+
+    pub const fn plugin_runtime(&self) -> PluginRuntimeAvailability {
+        self.plugin_runtime
+    }
+
+    pub const fn ui_extensions(&self) -> UiExtensionAvailability {
+        self.ui_extensions
+    }
+}
+
+pub fn product_extension_capabilities_for_profile(
+    profile: DeliveryProfile,
+) -> ProductExtensionCapabilitySet {
+    let plugin_runtime_reason = match profile {
+        DeliveryProfile::ProductFull
+        | DeliveryProfile::Desktop
+        | DeliveryProfile::Cli
+        | DeliveryProfile::Server
+        | DeliveryProfile::Remote
+        | DeliveryProfile::Acp
+        | DeliveryProfile::Sdk => PluginRuntimeUnavailableReason::NotBuilt,
+        DeliveryProfile::Web | DeliveryProfile::MobileWeb => {
+            PluginRuntimeUnavailableReason::UnsupportedProfile
+        }
+    };
+
+    let ui_extension_reason = match profile {
+        DeliveryProfile::ProductFull
+        | DeliveryProfile::Desktop
+        | DeliveryProfile::Web
+        | DeliveryProfile::MobileWeb => PluginRuntimeUnavailableReason::NotBuilt,
+        DeliveryProfile::Cli
+        | DeliveryProfile::Server
+        | DeliveryProfile::Remote
+        | DeliveryProfile::Acp
+        | DeliveryProfile::Sdk => PluginRuntimeUnavailableReason::UnsupportedProfile,
+    };
+
+    ProductExtensionCapabilitySet::new(
+        PluginRuntimeAvailability::disabled(plugin_runtime_reason),
+        UiExtensionAvailability::disabled(ui_extension_reason),
+    )
 }
 
 fn feature_groups_from_tool_provider_group_plan(
@@ -818,9 +967,16 @@ const MINIAPP_SERVICES: &[RuntimeServiceCapability] = &[
     RuntimeServiceCapability::Permission,
     RuntimeServiceCapability::Events,
 ];
+const CANVAS_SERVICES: &[RuntimeServiceCapability] = &[
+    RuntimeServiceCapability::FileSystem,
+    RuntimeServiceCapability::Workspace,
+    RuntimeServiceCapability::SessionStore,
+    RuntimeServiceCapability::Events,
+];
 
 const CODE_AGENT_TOOL_GROUPS: &[&str] = &["core.basic", "core.agent", "core.session"];
 const INTEGRATION_TOOL_GROUPS: &[&str] = &["core.integration"];
+const CANVAS_TOOL_GROUPS: &[&str] = &["core.canvas"];
 
 const DEEP_REVIEW_HARNESS_CAPABILITIES: &[HarnessCapability] = &[
     HarnessCapability::Plan,
@@ -889,6 +1045,12 @@ const DEFAULT_PRODUCT_CAPABILITY_PACKS: &[ProductCapabilityPack] = &[
         INTEGRATION_TOOL_GROUPS,
         MINIAPP_HARNESS_PROVIDERS,
     ),
+    ProductCapabilityPack::new(
+        ProductCapabilityId::Canvas,
+        CANVAS_SERVICES,
+        CANVAS_TOOL_GROUPS,
+        NO_HARNESS_PROVIDERS,
+    ),
 ];
 const EMPTY_PRODUCT_CAPABILITY_PACKS: &[ProductCapabilityPack] = &[];
 
@@ -927,8 +1089,7 @@ fn product_capability_registry_for_profile(profile: DeliveryProfile) -> ProductC
         DeliveryProfile::Server
         | DeliveryProfile::Remote
         | DeliveryProfile::Web
-        | DeliveryProfile::MobileWeb => {
-            ProductCapabilityRegistry::new(EMPTY_PRODUCT_CAPABILITY_PACKS)
-        }
+        | DeliveryProfile::MobileWeb
+        | DeliveryProfile::Sdk => ProductCapabilityRegistry::new(EMPTY_PRODUCT_CAPABILITY_PACKS),
     }
 }

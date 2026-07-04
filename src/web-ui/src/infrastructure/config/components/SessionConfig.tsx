@@ -71,7 +71,8 @@ type BrowserControlBrowserOption = {
 
 type SubagentBatchExecutionPolicy = 'safe_only' | 'force_parallel' | 'serial';
 
-const DEFAULT_SUBAGENT_BATCH_EXECUTION_POLICY: SubagentBatchExecutionPolicy = 'safe_only';
+const DEFAULT_SUBAGENT_BATCH_EXECUTION_POLICY: SubagentBatchExecutionPolicy = 'force_parallel';
+const DEFAULT_SUBAGENT_MAX_CONCURRENCY = 5;
 
 function normalizeSubagentBatchExecutionPolicy(value: unknown): SubagentBatchExecutionPolicy {
   return value === 'force_parallel' || value === 'serial' || value === 'safe_only'
@@ -105,6 +106,7 @@ const SessionSettingsPanels: React.FC<SessionSettingsPanelsProps> = ({ variant }
   const [models, setModels] = useState<AIModelConfig[]>([]);
   const [funcAgentModels, setFuncAgentModels] = useState<Record<string, string>>({});
   const [skipToolConfirmation, setSkipToolConfirmation] = useState(true);
+  const [subagentMaxConcurrency, setSubagentMaxConcurrency] = useState(DEFAULT_SUBAGENT_MAX_CONCURRENCY);
   const [executionTimeout, setExecutionTimeout] = useState('');
   const [confirmationTimeout, setConfirmationTimeout] = useState('');
   const [subagentBatchExecutionPolicy, setSubagentBatchExecutionPolicy] =
@@ -116,6 +118,7 @@ const SessionSettingsPanels: React.FC<SessionSettingsPanelsProps> = ({ variant }
   const [computerUseScreen, setComputerUseScreen] = useState(false);
   const [computerUseBusy, setComputerUseBusy] = useState(false);
   const [computerUseStatusLoading, setComputerUseStatusLoading] = useState(false);
+  const [computerUsePlatformNote, setComputerUsePlatformNote] = useState<string | null>(null);
 
   // ── Browser control state ───────────────────────────────────────────────
   const [browserCdpAvailable, setBrowserCdpAvailable] = useState(false);
@@ -145,6 +148,7 @@ const SessionSettingsPanels: React.FC<SessionSettingsPanelsProps> = ({ variant }
       setComputerUseEnabled(s.computerUseEnabled);
       setComputerUseAccess(s.accessibilityGranted);
       setComputerUseScreen(s.screenCaptureGranted);
+      setComputerUsePlatformNote(s.platformNote);
       return true;
     } catch (error) {
       log.error('computer_use_get_status failed', error);
@@ -206,6 +210,7 @@ const SessionSettingsPanels: React.FC<SessionSettingsPanelsProps> = ({ variant }
         allModels,
         funcAgentModelsData,
         skipConfirm,
+        loadedSubagentMaxConcurrency,
         execTimeout,
         confirmTimeout,
         loadedSubagentBatchExecutionPolicy,
@@ -218,6 +223,7 @@ const SessionSettingsPanels: React.FC<SessionSettingsPanelsProps> = ({ variant }
         configManager.getConfig<AIModelConfig[]>('ai.models') || [],
         configManager.getConfig<Record<string, string>>('ai.func_agent_models') || {},
         configManager.getConfig<boolean>('ai.skip_tool_confirmation'),
+        configManager.getConfig<number | null>('ai.subagent_max_concurrency'),
         configManager.getConfig<number | null>('ai.tool_execution_timeout_secs'),
         configManager.getConfig<number | null>('ai.tool_confirmation_timeout_secs'),
         configManager.getConfig<SubagentBatchExecutionPolicy>('ai.subagent_batch_execution_policy'),
@@ -232,6 +238,9 @@ const SessionSettingsPanels: React.FC<SessionSettingsPanelsProps> = ({ variant }
       setModels(allModels as AIModelConfig[]);
       setFuncAgentModels(funcAgentModelsData as Record<string, string>);
       setSkipToolConfirmation(skipConfirm ?? true);
+      setSubagentMaxConcurrency(loadedSubagentMaxConcurrency != null
+        ? loadedSubagentMaxConcurrency
+        : DEFAULT_SUBAGENT_MAX_CONCURRENCY);
       setExecutionTimeout(execTimeout != null ? String(execTimeout) : '');
       setConfirmationTimeout(confirmTimeout != null ? String(confirmTimeout) : '');
       setSubagentBatchExecutionPolicy(normalizeSubagentBatchExecutionPolicy(loadedSubagentBatchExecutionPolicy));
@@ -491,6 +500,17 @@ const SessionSettingsPanels: React.FC<SessionSettingsPanelsProps> = ({ variant }
     }
   };
 
+  const handleSubagentMaxConcurrencyChange = async (value: number) => {
+    if (Number.isNaN(value) || value < 1) return;
+    setSubagentMaxConcurrency(value);
+    try {
+      await configManager.setConfig('ai.subagent_max_concurrency', value);
+    } catch (error) {
+      log.error('Failed to save subagent_max_concurrency', error);
+      notificationService.error(tTools('messages.saveFailed'));
+    }
+  };
+
   const handleComputerUseEnabledChange = async (checked: boolean) => {
     setComputerUseBusy(true);
     setComputerUseEnabled(checked);
@@ -502,6 +522,17 @@ const SessionSettingsPanels: React.FC<SessionSettingsPanelsProps> = ({ variant }
         checked ? t('messages.saveSuccess') : t('messages.saveSuccess'),
         { duration: 2000 }
       );
+      if (checked) {
+        // Proactively surface the OS permission prompt (macOS Accessibility /
+        // Screen Recording) the moment the user opts in, instead of waiting
+        // for the first agent tool call to fail with a permission error.
+        try {
+          const { invoke } = await import('@tauri-apps/api/core');
+          await invoke('computer_use_request_permissions');
+        } catch (permError) {
+          log.warn('computer_use_request_permissions failed', permError);
+        }
+      }
       await refreshComputerUseStatus();
     } catch (error) {
       log.error('Failed to save computer_use_enabled', error);
@@ -1059,18 +1090,25 @@ const SessionSettingsPanels: React.FC<SessionSettingsPanelsProps> = ({ variant }
               />
             </div>
           </ConfigPageRow>
-          <ConfigPageRow label={subagentBatchPolicyLabel} description={tTools('config.subagentBatchPolicy.desc')} align="center">
-            <div className="bitfun-func-agent-config__row-control">
-              <Select
-                value={subagentBatchExecutionPolicy}
-                options={subagentBatchExecutionPolicyOptions}
-                size="small"
-                disabled={toolExecConfigLoading}
-                onChange={handleSubagentBatchExecutionPolicyChange}
-              />
-            </div>
-          </ConfigPageRow>
-          <ConfigPageRow label={tTools('config.confirmTimeout')} description={tTools('config.confirmTimeoutDesc')} align="center">
+          <ConfigPageRow
+            label={(
+              <span className="bitfun-func-agent-config__inline-label">
+                <span>{tTools('config.confirmTimeout')}</span>
+                <Tooltip content={tTools('config.confirmTimeoutHint')} placement="top">
+                  <span
+                    className="bitfun-func-agent-config__inline-info"
+                    role="button"
+                    tabIndex={0}
+                    aria-label={tTools('config.confirmTimeoutHint')}
+                  >
+                    <Info size={14} />
+                  </span>
+                </Tooltip>
+              </span>
+            )}
+            description={tTools('config.confirmTimeoutDesc')}
+            align="center"
+          >
             <div className="bitfun-func-agent-config__row-control">
               <NumberInput
                 value={confirmationTimeout === '' ? 0 : parseInt(confirmationTimeout, 10)}
@@ -1084,7 +1122,25 @@ const SessionSettingsPanels: React.FC<SessionSettingsPanelsProps> = ({ variant }
               />
             </div>
           </ConfigPageRow>
-          <ConfigPageRow label={tTools('config.executionTimeout')} description={tTools('config.executionTimeoutDesc')} align="center">
+          <ConfigPageRow
+            label={(
+              <span className="bitfun-func-agent-config__inline-label">
+                <span>{tTools('config.executionTimeout')}</span>
+                <Tooltip content={tTools('config.executionTimeoutHint')} placement="top">
+                  <span
+                    className="bitfun-func-agent-config__inline-info"
+                    role="button"
+                    tabIndex={0}
+                    aria-label={tTools('config.executionTimeoutHint')}
+                  >
+                    <Info size={14} />
+                  </span>
+                </Tooltip>
+              </span>
+            )}
+            description={tTools('config.executionTimeoutDesc')}
+            align="center"
+          >
             <div className="bitfun-func-agent-config__row-control">
               <NumberInput
                 value={executionTimeout === '' ? 0 : parseInt(executionTimeout, 10)}
@@ -1093,6 +1149,38 @@ const SessionSettingsPanels: React.FC<SessionSettingsPanelsProps> = ({ variant }
                 max={3600}
                 step={5}
                 unit={tTools('config.seconds')}
+                size="small"
+                variant="compact"
+              />
+            </div>
+          </ConfigPageRow>
+          <ConfigPageRow label={subagentBatchPolicyLabel} description={tTools('config.subagentBatchPolicy.desc')} align="center">
+            <div className="bitfun-func-agent-config__row-control">
+              <Select
+                value={subagentBatchExecutionPolicy}
+                options={subagentBatchExecutionPolicyOptions}
+                size="small"
+                disabled={toolExecConfigLoading}
+                onChange={handleSubagentBatchExecutionPolicyChange}
+              />
+            </div>
+          </ConfigPageRow>
+          <ConfigPageRow
+            label={(
+              <span className="bitfun-func-agent-config__inline-label">
+                <span>{tTools('config.subagentMaxConcurrency')}</span>
+              </span>
+            )}
+            description={tTools('config.subagentMaxConcurrencyDesc')}
+            align="center"
+          >
+            <div className="bitfun-func-agent-config__row-control">
+              <NumberInput
+                value={subagentMaxConcurrency}
+                onChange={(val) => void handleSubagentMaxConcurrencyChange(val)}
+                min={1}
+                max={100}
+                step={1}
                 size="small"
                 variant="compact"
               />
@@ -1152,15 +1240,17 @@ const SessionSettingsPanels: React.FC<SessionSettingsPanelsProps> = ({ variant }
                       <RefreshCw size={14} />
                     </IconButton>
                   </span>
-                  <Button
-                    className="bitfun-func-agent-config__row-action-btn"
-                    size="small"
-                    variant="secondary"
-                    disabled={computerUseBusy || computerUseStatusLoading}
-                    onClick={() => void handleComputerUseOpenSettings('accessibility')}
-                  >
-                    {t('computerUse.openSettings')}
-                  </Button>
+                  {platform === 'macos' && (
+                    <Button
+                      className="bitfun-func-agent-config__row-action-btn"
+                      size="small"
+                      variant="secondary"
+                      disabled={computerUseBusy || computerUseStatusLoading}
+                      onClick={() => void handleComputerUseOpenSettings('accessibility')}
+                    >
+                      {t('computerUse.openSettings')}
+                    </Button>
+                  )}
                 </div>
               </ConfigPageRow>
               <ConfigPageRow
@@ -1196,17 +1286,36 @@ const SessionSettingsPanels: React.FC<SessionSettingsPanelsProps> = ({ variant }
                       <RefreshCw size={14} />
                     </IconButton>
                   </span>
-                  <Button
-                    className="bitfun-func-agent-config__row-action-btn"
-                    size="small"
-                    variant="secondary"
-                    disabled={computerUseBusy || computerUseStatusLoading}
-                    onClick={() => void handleComputerUseOpenSettings('screen_capture')}
-                  >
-                    {t('computerUse.openSettings')}
-                  </Button>
+                  {platform === 'macos' && (
+                    <Button
+                      className="bitfun-func-agent-config__row-action-btn"
+                      size="small"
+                      variant="secondary"
+                      disabled={computerUseBusy || computerUseStatusLoading}
+                      onClick={() => void handleComputerUseOpenSettings('screen_capture')}
+                    >
+                      {t('computerUse.openSettings')}
+                    </Button>
+                  )}
                 </div>
               </ConfigPageRow>
+              {computerUsePlatformNote && (
+                <div
+                  className="bitfun-func-agent-config__platform-note"
+                  style={{
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    gap: 6,
+                    padding: '8px 0 4px',
+                  }}
+                >
+                  <Info size={14} style={{ flexShrink: 0, marginTop: 2, opacity: 0.7 }} />
+                  <p className="bitfun-config-page-row__description" style={{ margin: 0 }}>
+                    <strong>{t('computerUse.platformNote')}: </strong>
+                    {computerUsePlatformNote}
+                  </p>
+                </div>
+              )}
             </>
           ) : null}
         </ConfigPageSection>

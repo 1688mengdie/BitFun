@@ -19,6 +19,7 @@ impl ClawMode {
                 "Task".to_string(),
                 "Read".to_string(),
                 "view_image".to_string(),
+                "analyze_image".to_string(),
                 "Write".to_string(),
                 "Edit".to_string(),
                 "Delete".to_string(),
@@ -28,6 +29,7 @@ impl ClawMode {
                 "Grep".to_string(),
                 "Glob".to_string(),
                 "WebSearch".to_string(),
+                "WebFetch".to_string(),
                 "Skill".to_string(),
                 "Git".to_string(),
                 "SessionControl".to_string(),
@@ -89,8 +91,7 @@ mod tests {
 
     #[test]
     fn claw_mode_includes_init_miniapp_in_default_tools() {
-        assert!(ClawMode::new()
-            .default_tools()
-            .contains(&"InitMiniApp".to_string()));
+        let tools = ClawMode::new().default_tools();
+        assert!(tools.contains(&"InitMiniApp".to_string()));
     }
 }
