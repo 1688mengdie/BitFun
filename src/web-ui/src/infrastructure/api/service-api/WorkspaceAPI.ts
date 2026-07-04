@@ -262,10 +262,10 @@ export class WorkspaceAPI {
   }
 
    
-  async createFile(path: string): Promise<void> {
+  async createFile(path: string, remoteConnectionId?: string): Promise<void> {
     try {
-      await api.invoke('create_file', { 
-        request: { path } 
+      await api.invoke('create_file', {
+        request: { path, remoteConnectionId }
       });
     } catch (error) {
       throw createTauriCommandError('create_file', error, { path });
@@ -273,10 +273,10 @@ export class WorkspaceAPI {
   }
 
    
-  async deleteFile(path: string): Promise<void> {
+  async deleteFile(path: string, remoteConnectionId?: string): Promise<void> {
     try {
-      await api.invoke('delete_file', { 
-        request: { path } 
+      await api.invoke('delete_file', {
+        request: { path, remoteConnectionId }
       });
     } catch (error) {
       throw createTauriCommandError('delete_file', error, { path });
@@ -284,10 +284,10 @@ export class WorkspaceAPI {
   }
 
    
-  async createDirectory(path: string): Promise<void> {
+  async createDirectory(path: string, remoteConnectionId?: string): Promise<void> {
     try {
-      await api.invoke('create_directory', { 
-        request: { path } 
+      await api.invoke('create_directory', {
+        request: { path, remoteConnectionId }
       });
     } catch (error) {
       throw createTauriCommandError('create_directory', error, { path });
@@ -295,10 +295,10 @@ export class WorkspaceAPI {
   }
 
    
-  async deleteDirectory(path: string, recursive: boolean = true): Promise<void> {
+  async deleteDirectory(path: string, recursive: boolean = true, remoteConnectionId?: string): Promise<void> {
     try {
-      await api.invoke('delete_directory', { 
-        request: { path, recursive } 
+      await api.invoke('delete_directory', {
+        request: { path, recursive, remoteConnectionId }
       });
     } catch (error) {
       throw createTauriCommandError('delete_directory', error, { path, recursive });
@@ -898,10 +898,10 @@ export class WorkspaceAPI {
   }
 
    
-  async renameFile(oldPath: string, newPath: string): Promise<void> {
+  async renameFile(oldPath: string, newPath: string, remoteConnectionId?: string): Promise<void> {
     try {
-      await api.invoke('rename_file', { 
-        request: { oldPath, newPath } 
+      await api.invoke('rename_file', {
+        request: { oldPath, newPath, remoteConnectionId }
       });
     } catch (error) {
       throw createTauriCommandError('rename_file', error, { oldPath, newPath });
