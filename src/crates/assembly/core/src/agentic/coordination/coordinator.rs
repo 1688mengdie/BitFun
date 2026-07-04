@@ -1440,6 +1440,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                 session_id,
                 turn_id,
                 final_response.clone(),
+                &execution_result.new_messages,
                 TurnStats {
                     total_rounds: execution_result.total_rounds,
                     total_tools: 0, // TODO: get from execution_result
@@ -5717,11 +5718,9 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                     Ok(runtime) => runtime,
                     Err(error) => {
                         warn!(
-                        "Agent runtime lifecycle delivery is not available; background subagent result dropped: background_task_id={}, parent_session_id={}, error={}",
-                        background_task_id_for_delivery,
-                        subagent_parent_info.session_id,
-                        error
-                    );
+                            "Agent runtime lifecycle delivery is not available; background subagent result dropped: background_task_id={}, parent_session_id={}, error={}",
+                            background_task_id_for_delivery, subagent_parent_info.session_id, error
+                        );
                         return;
                     }
                 };

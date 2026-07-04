@@ -4,8 +4,8 @@
 
 use crate::agentic::core::{
     new_turn_id, CompressionContract, CompressionState, InternalReminderKind, Message,
-    MessageSemanticKind, ProcessingPhase, Session, SessionConfig, SessionKind, SessionState,
-    SessionSummary, TurnStats,
+    MessageContent, MessageRole, MessageSemanticKind, ProcessingPhase, Session, SessionConfig,
+    SessionKind, SessionState, SessionSummary, TurnStats,
 };
 use crate::agentic::image_analysis::ImageContextData;
 use crate::agentic::persistence::PersistenceManager;
@@ -30,7 +30,8 @@ use crate::service::config::{
 use crate::service::remote_ssh::workspace_state::LOCAL_WORKSPACE_SSH_HOST;
 use crate::service::session::{
     DialogTurnData, DialogTurnKind, ModelRoundData, SessionMetadata, SessionRelationship,
-    TextItemData, TurnStatus, UserMessageData,
+    TextItemData, ThinkingItemData, ToolCallData, ToolItemData, ToolResultData, TurnStatus,
+    UserMessageData,
 };
 use crate::service::snapshot::ensure_snapshot_manager_for_workspace;
 use crate::service::workspace::{get_global_workspace_service, WorkspaceInfo, WorkspaceKind};
@@ -2204,9 +2205,7 @@ impl SessionManager {
         if session.session_name != expected_current_title {
             debug!(
                 "Skipping auto-generated title because current title changed: session_id={}, expected_title={}, current_title={}",
-                session_id,
-                expected_current_title,
-                session.session_name
+                session_id, expected_current_title, session.session_name
             );
             return Ok(false);
         }
@@ -2910,8 +2909,7 @@ impl SessionManager {
         let resolve_storage_path_duration_ms = 0;
         debug!(
             "Session view restore phase completed: session_id={}, phase=use_storage_path, duration_ms={}",
-            session_id,
-            resolve_storage_path_duration_ms
+            session_id, resolve_storage_path_duration_ms
         );
 
         let metadata_started_at = Instant::now();
@@ -2929,8 +2927,7 @@ impl SessionManager {
         let visibility_metadata_duration_ms = elapsed_ms_u64(metadata_started_at);
         debug!(
             "Session view restore phase completed: session_id={}, phase=load_metadata, duration_ms={}",
-            session_id,
-            visibility_metadata_duration_ms
+            session_id, visibility_metadata_duration_ms
         );
 
         let session_started_at = Instant::now();
@@ -4020,12 +4017,217 @@ impl SessionManager {
         Ok(turn)
     }
 
+    /// Build model rounds from execution messages.
+    ///
+    /// Used by `complete_dialog_turn` to populate `model_rounds` when the
+    /// host surface (e.g. CLI) does not persist rounds itself. This ensures
+    /// turn files contain rich conversation data (text, tools, thinking) that
+    /// other surfaces (e.g. Desktop) can render.
+    fn build_model_rounds_from_messages(
+        messages: &[Message],
+        turn_id: &str,
+        timestamp: u64,
+    ) -> Vec<ModelRoundData> {
+        let mut rounds: Vec<ModelRoundData> = Vec::new();
+
+        for msg in messages {
+            match msg.role {
+                MessageRole::Assistant => {
+                    let round_index = rounds.len();
+                    let round_id = format!("{}-round-{}", turn_id, round_index);
+
+                    let mut text_items = Vec::new();
+                    let mut thinking_items = Vec::new();
+                    let mut tool_items = Vec::new();
+                    let mut order_index = 0usize;
+
+                    match &msg.content {
+                        MessageContent::Text(text) => {
+                            if !text.trim().is_empty() {
+                                text_items.push(Self::make_text_item(
+                                    &format!("{}-text-{}", round_id, order_index),
+                                    text,
+                                    timestamp,
+                                    order_index,
+                                ));
+                            }
+                        }
+                        MessageContent::Mixed {
+                            reasoning_content,
+                            text,
+                            tool_calls,
+                        } => {
+                            // Thinking / reasoning content
+                            if let Some(reasoning) = reasoning_content {
+                                if !reasoning.trim().is_empty() {
+                                    thinking_items.push(ThinkingItemData {
+                                        id: format!("{}-think-{}", round_id, order_index),
+                                        content: reasoning.clone(),
+                                        is_streaming: false,
+                                        is_collapsed: true,
+                                        timestamp,
+                                        order_index: Some(order_index),
+                                        status: Some("completed".to_string()),
+                                        is_subagent_item: None,
+                                        parent_task_tool_id: None,
+                                        subagent_session_id: None,
+                                        attempt_id: None,
+                                        attempt_index: None,
+                                    });
+                                    order_index += 1;
+                                }
+                            }
+                            // Text content
+                            if !text.trim().is_empty() {
+                                text_items.push(Self::make_text_item(
+                                    &format!("{}-text-{}", round_id, order_index),
+                                    text,
+                                    timestamp,
+                                    order_index,
+                                ));
+                                order_index += 1;
+                            }
+                            // Tool calls
+                            for tc in tool_calls {
+                                tool_items.push(ToolItemData {
+                                    id: tc.tool_id.clone(),
+                                    tool_name: tc.tool_name.clone(),
+                                    tool_call: ToolCallData {
+                                        input: tc.arguments.clone(),
+                                        id: tc.tool_id.clone(),
+                                    },
+                                    tool_result: None,
+                                    ai_intent: None,
+                                    start_time: timestamp,
+                                    end_time: None,
+                                    duration_ms: None,
+                                    queue_wait_ms: None,
+                                    preflight_ms: None,
+                                    confirmation_wait_ms: None,
+                                    execution_ms: None,
+                                    order_index: Some(order_index),
+                                    is_subagent_item: None,
+                                    parent_task_tool_id: None,
+                                    subagent_session_id: None,
+                                    attempt_id: None,
+                                    attempt_index: None,
+                                    subagent_model_id: None,
+                                    subagent_model_alias: None,
+                                    status: Some("completed".to_string()),
+                                    interruption_reason: None,
+                                });
+                                order_index += 1;
+                            }
+                        }
+                        MessageContent::Multimodal { text, .. } => {
+                            if !text.trim().is_empty() {
+                                text_items.push(Self::make_text_item(
+                                    &format!("{}-text-{}", round_id, order_index),
+                                    text,
+                                    timestamp,
+                                    order_index,
+                                ));
+                            }
+                        }
+                        _ => {}
+                    }
+
+                    // Only add the round if it has any content
+                    if !text_items.is_empty()
+                        || !tool_items.is_empty()
+                        || !thinking_items.is_empty()
+                    {
+                        rounds.push(ModelRoundData {
+                            id: round_id,
+                            turn_id: turn_id.to_string(),
+                            round_index,
+                            round_group_id: None,
+                            timestamp,
+                            text_items,
+                            tool_items,
+                            thinking_items,
+                            start_time: timestamp,
+                            end_time: Some(timestamp),
+                            duration_ms: Some(0),
+                            provider_id: None,
+                            model_id: None,
+                            model_alias: None,
+                            first_chunk_ms: None,
+                            first_visible_output_ms: None,
+                            stream_duration_ms: None,
+                            attempt_count: None,
+                            failure_category: None,
+                            token_details: None,
+                            status: "completed".to_string(),
+                        });
+                    }
+                }
+                MessageRole::Tool => {
+                    // Attach tool result to the matching tool item in the last round
+                    if let MessageContent::ToolResult {
+                        tool_id,
+                        result,
+                        result_for_assistant,
+                        is_error,
+                        ..
+                    } = &msg.content
+                    {
+                        if let Some(last_round) = rounds.last_mut() {
+                            for tool_item in &mut last_round.tool_items {
+                                if tool_item.id == *tool_id {
+                                    let assistant_text = result_for_assistant
+                                        .clone()
+                                        .or_else(|| serde_json::to_string(result).ok());
+                                    tool_item.tool_result = Some(ToolResultData {
+                                        result: result.clone(),
+                                        success: !is_error,
+                                        result_for_assistant: assistant_text,
+                                        error: if *is_error {
+                                            serde_json::to_string(result).ok()
+                                        } else {
+                                            None
+                                        },
+                                        duration_ms: None,
+                                    });
+                                    tool_item.end_time = Some(timestamp);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        rounds
+    }
+
+    /// Helper to create a `TextItemData` with common defaults.
+    fn make_text_item(id: &str, content: &str, timestamp: u64, order_index: usize) -> TextItemData {
+        TextItemData {
+            id: id.to_string(),
+            content: content.to_string(),
+            is_streaming: false,
+            timestamp,
+            is_markdown: true,
+            order_index: Some(order_index),
+            is_subagent_item: None,
+            parent_task_tool_id: None,
+            subagent_session_id: None,
+            status: Some("completed".to_string()),
+            attempt_id: None,
+            attempt_index: None,
+        }
+    }
+
     /// Complete dialog turn
     pub async fn complete_dialog_turn(
         &self,
         session_id: &str,
         turn_id: &str,
         final_response: String,
+        new_messages: &[Message],
         stats: TurnStats,
     ) -> BitFunResult<()> {
         if !self.should_persist_session_id(session_id) {
@@ -4070,44 +4272,58 @@ impl SessionManager {
                 .iter()
                 .any(|item| !item.content.trim().is_empty())
         });
-        if !has_assistant_text && !final_response.trim().is_empty() {
-            let round_index = turn.model_rounds.len();
-            turn.model_rounds.push(ModelRoundData {
-                id: format!("{}-final-round", turn.turn_id),
-                turn_id: turn.turn_id.clone(),
-                round_index,
-                round_group_id: None,
-                timestamp: completion_timestamp,
-                text_items: vec![TextItemData {
-                    id: format!("{}-final-text", turn.turn_id),
-                    content: final_response.clone(),
-                    is_streaming: false,
+        if !has_assistant_text {
+            // Hosts that do not persist model rounds themselves (e.g. CLI)
+            // still need rich turn data on disk so other surfaces (e.g.
+            // Desktop) can render the conversation history. Build model
+            // rounds from the execution's new_messages.
+            let built_rounds = Self::build_model_rounds_from_messages(
+                new_messages,
+                &turn.turn_id,
+                completion_timestamp,
+            );
+            if !built_rounds.is_empty() {
+                turn.model_rounds = built_rounds;
+            } else if !final_response.trim().is_empty() {
+                // Fallback: append a single text-only round
+                let round_index = turn.model_rounds.len();
+                turn.model_rounds.push(ModelRoundData {
+                    id: format!("{}-final-round", turn.turn_id),
+                    turn_id: turn.turn_id.clone(),
+                    round_index,
+                    round_group_id: None,
                     timestamp: completion_timestamp,
-                    is_markdown: true,
-                    order_index: Some(0),
-                    is_subagent_item: None,
-                    parent_task_tool_id: None,
-                    subagent_session_id: None,
-                    status: Some("completed".to_string()),
-                    attempt_id: None,
-                    attempt_index: None,
-                }],
-                tool_items: Vec::new(),
-                thinking_items: Vec::new(),
-                start_time: completion_timestamp,
-                end_time: Some(completion_timestamp),
-                duration_ms: Some(0),
-                provider_id: None,
-                model_id: None,
-                model_alias: None,
-                first_chunk_ms: None,
-                first_visible_output_ms: None,
-                stream_duration_ms: None,
-                attempt_count: None,
-                failure_category: None,
-                token_details: None,
-                status: "completed".to_string(),
-            });
+                    text_items: vec![TextItemData {
+                        id: format!("{}-final-text", turn.turn_id),
+                        content: final_response.clone(),
+                        is_streaming: false,
+                        timestamp: completion_timestamp,
+                        is_markdown: true,
+                        order_index: Some(0),
+                        is_subagent_item: None,
+                        parent_task_tool_id: None,
+                        subagent_session_id: None,
+                        status: Some("completed".to_string()),
+                        attempt_id: None,
+                        attempt_index: None,
+                    }],
+                    tool_items: Vec::new(),
+                    thinking_items: Vec::new(),
+                    start_time: completion_timestamp,
+                    end_time: Some(completion_timestamp),
+                    duration_ms: Some(0),
+                    provider_id: None,
+                    model_id: None,
+                    model_alias: None,
+                    first_chunk_ms: None,
+                    first_visible_output_ms: None,
+                    stream_duration_ms: None,
+                    attempt_count: None,
+                    failure_category: None,
+                    token_details: None,
+                    status: "completed".to_string(),
+                });
+            }
         }
         turn.status = TurnStatus::Completed;
         turn.duration_ms = Some(stats.duration_ms);
@@ -4528,8 +4744,7 @@ impl SessionManager {
         // Construct system prompt
         let system_prompt = format!(
             "You are a professional session title generation assistant. Based on the user's message content, generate a concise and accurate session title.\n\nRequirements:\n- Title should not exceed {} characters\n- {}\n- Concise and accurate, reflecting the conversation topic\n- Do not add quotes or other decorative symbols\n- Return only the title text, no other content",
-            max_length,
-            language_instruction
+            max_length, language_instruction
         );
 
         // Truncate message to save tokens (max 200 characters)
