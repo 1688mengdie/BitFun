@@ -12,6 +12,8 @@ import { addFileMentionToChat } from '@/shared/utils/chatContext';
 import { dirnameAbsolutePath } from '@/shared/utils/pathUtils';
 import { isHtmlFilePath } from '@/shared/utils/htmlFilePreview';
 
+const PASTE_SHORTCUT = /Mac|iPhone|iPad|iPod/.test(navigator.userAgent) ? 'Cmd+V' : 'Ctrl+V';
+
 export class FileExplorerMenuProvider implements IMenuProvider {
   readonly id = 'file-explorer';
   readonly name = i18nService.t('common:contextMenu.fileExplorerMenu.name');
@@ -75,7 +77,7 @@ export class FileExplorerMenuProvider implements IMenuProvider {
           id: 'file-paste',
           label: i18nService.t('common:actions.paste'),
           icon: 'Clipboard',
-          shortcut: 'Ctrl+V',
+          shortcut: PASTE_SHORTCUT,
           onClick: async () => {
             globalEventBus.emit('file:paste', { targetDirectory: parentPath });
           }
@@ -201,7 +203,7 @@ export class FileExplorerMenuProvider implements IMenuProvider {
         id: 'file-paste',
         label: i18nService.t('common:actions.paste'),
         icon: 'Clipboard',
-        shortcut: 'Ctrl+V',
+        shortcut: PASTE_SHORTCUT,
         onClick: async () => {
           globalEventBus.emit('file:paste', { targetDirectory });
         }

@@ -810,6 +810,8 @@ async fn search_remote_file_names_with_progress(
 pub struct RenameFileRequest {
     pub old_path: String,
     pub new_path: String,
+    #[serde(default)]
+    pub remote_connection_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -822,22 +824,30 @@ pub struct ExportLocalFileRequest {
 #[derive(Debug, Deserialize)]
 pub struct DeleteFileRequest {
     pub path: String,
+    #[serde(default, rename = "remoteConnectionId")]
+    pub remote_connection_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct DeleteDirectoryRequest {
     pub path: String,
     pub recursive: Option<bool>,
+    #[serde(default, rename = "remoteConnectionId")]
+    pub remote_connection_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct CreateFileRequest {
     pub path: String,
+    #[serde(default, rename = "remoteConnectionId")]
+    pub remote_connection_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct CreateDirectoryRequest {
     pub path: String,
+    #[serde(default, rename = "remoteConnectionId")]
+    pub remote_connection_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2952,7 +2962,13 @@ pub async fn rename_file(
     state: State<'_, AppState>,
     request: RenameFileRequest,
 ) -> Result<(), String> {
-    rename_path(&state, &request.old_path, &request.new_path).await
+    rename_path(
+        &state,
+        &request.old_path,
+        &request.new_path,
+        request.remote_connection_id.as_deref(),
+    )
+    .await
 }
 
 /// Copy a local file to another local path (binary-safe). Used for export and drag-upload into local workspaces.
@@ -2979,7 +2995,12 @@ pub async fn delete_file(
     state: State<'_, AppState>,
     request: DeleteFileRequest,
 ) -> Result<(), String> {
-    delete_desktop_file(&state, &request.path).await
+    delete_desktop_file(
+        &state,
+        &request.path,
+        request.remote_connection_id.as_deref(),
+    )
+    .await
 }
 
 #[tauri::command]
@@ -2988,7 +3009,13 @@ pub async fn delete_directory(
     request: DeleteDirectoryRequest,
 ) -> Result<(), String> {
     let recursive = request.recursive.unwrap_or(false);
-    delete_desktop_directory(&state, &request.path, recursive).await
+    delete_desktop_directory(
+        &state,
+        &request.path,
+        recursive,
+        request.remote_connection_id.as_deref(),
+    )
+    .await
 }
 
 #[tauri::command]
@@ -2996,7 +3023,12 @@ pub async fn create_file(
     state: State<'_, AppState>,
     request: CreateFileRequest,
 ) -> Result<(), String> {
-    create_empty_file(&state, &request.path).await
+    create_empty_file(
+        &state,
+        &request.path,
+        request.remote_connection_id.as_deref(),
+    )
+    .await
 }
 
 #[tauri::command]
@@ -3004,7 +3036,12 @@ pub async fn create_directory(
     state: State<'_, AppState>,
     request: CreateDirectoryRequest,
 ) -> Result<(), String> {
-    create_desktop_directory(&state, &request.path).await
+    create_desktop_directory(
+        &state,
+        &request.path,
+        request.remote_connection_id.as_deref(),
+    )
+    .await
 }
 
 #[derive(Debug, Deserialize)]
@@ -3123,7 +3160,7 @@ pub async fn reveal_in_explorer(
         } else {
             let normalized_path = path_str.replace("/", "\\");
             bitfun_core::util::process_manager::create_command("explorer")
-                .args(["/select,", &normalized_path])
+                .arg(format!("/select,{}", normalized_path))
                 .spawn()
                 .map_err(|e| format!("Failed to open explorer: {}", e))?;
         }
@@ -3146,17 +3183,52 @@ pub async fn reveal_in_explorer(
 
     #[cfg(target_os = "linux")]
     {
-        let target = if is_directory {
-            path.to_path_buf()
+        if is_directory {
+            bitfun_core::util::process_manager::create_command("xdg-open")
+                .arg(&path_str)
+                .spawn()
+                .map_err(|e| format!("Failed to open file manager: {}", e))?;
         } else {
-            path.parent()
-                .ok_or_else(|| "Failed to get parent directory".to_string())?
-                .to_path_buf()
-        };
-        bitfun_core::util::process_manager::create_command("xdg-open")
-            .arg(target)
-            .spawn()
-            .map_err(|e| format!("Failed to open file manager: {}", e))?;
+            // On Linux there is no cross-desktop standard to select a specific
+            // file in the file manager. Try the freedesktop FileManager1 D-Bus
+            // interface (supported by Nautilus, Dolphin, Nemo) to highlight the
+            // file; fall back to opening the parent directory with xdg-open.
+            // Encode each path segment so spaces and other special characters
+            // do not break the dbus-send array:string: syntax (which splits on
+            // spaces) and produce a valid file:// URI.
+            let encoded_path: String = path
+                .to_string_lossy()
+                .split('/')
+                .map(|s| urlencoding::encode(s).to_string())
+                .collect::<Vec<_>>()
+                .join('/');
+            let file_uri = format!("file://{}", encoded_path);
+            let dbus_ok = match bitfun_core::util::process_manager::create_command("dbus-send")
+                .args([
+                    "--session",
+                    "--print-reply",
+                    "--dest=org.freedesktop.FileManager1",
+                    "/org/freedesktop/FileManager1",
+                    "org.freedesktop.FileManager1.ShowItems",
+                    &format!("array:string:{}", file_uri),
+                    "string:",
+                ])
+                .spawn()
+            {
+                Ok(mut child) => child.wait().map(|s| s.success()).unwrap_or(false),
+                Err(_) => false,
+            };
+
+            if !dbus_ok {
+                let parent = path
+                    .parent()
+                    .ok_or_else(|| "Failed to get parent directory".to_string())?;
+                bitfun_core::util::process_manager::create_command("xdg-open")
+                    .arg(parent)
+                    .spawn()
+                    .map_err(|e| format!("Failed to open file manager: {}", e))?;
+            }
+        }
     }
 
     Ok(())

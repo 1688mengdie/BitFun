@@ -26,6 +26,7 @@ import { createLogger } from '@/shared/utils/logger';
 import {
   basenamePath,
   normalizeLocalPathForRename,
+  normalizeRemoteWorkspacePath,
   pathsEquivalentFs,
   replaceBasename,
 } from '@/shared/utils/pathUtils';
@@ -228,6 +229,14 @@ const FilesPanel: React.FC<FilesPanelProps> = ({
     prevWorkspacePathRef.current = workspacePath;
   }, [workspacePath, clearSearch, onViewModeChange]);
 
+  const normalizePathForCurrentWorkspace = useCallback(
+    (path: string) =>
+      isRemoteCurrentWorkspace
+        ? normalizeRemoteWorkspacePath(path)
+        : normalizeLocalPathForRename(path),
+    [isRemoteCurrentWorkspace]
+  );
+
   // ===== File Operation Handlers =====
   
   const handleOpenFile = useCallback((data: { path: string; line?: number; column?: number }) => {
@@ -265,7 +274,7 @@ const FilesPanel: React.FC<FilesPanelProps> = ({
     );
     
     try {
-      await workspaceAPI.createFile(filePath);
+      await workspaceAPI.createFile(filePath, currentWorkspace?.connectionId);
       log.info('File created', { path: filePath });
       handleInputDialogClose();
       loadFileTree(workspacePath || '', true);
@@ -291,7 +300,7 @@ const FilesPanel: React.FC<FilesPanelProps> = ({
     );
     
     try {
-      await workspaceAPI.createDirectory(folderPath);
+      await workspaceAPI.createDirectory(folderPath, currentWorkspace?.connectionId);
       log.info('Directory created', { path: folderPath });
       handleInputDialogClose();
       loadFileTree(workspacePath || '', true);
@@ -310,11 +319,11 @@ const FilesPanel: React.FC<FilesPanelProps> = ({
   }, [inputDialog.type, handleConfirmNewFile, handleConfirmNewFolder]);
 
   const handleStartRename = useCallback((data: { path: string; name: string }) => {
-    setRenamingPath(normalizeLocalPathForRename(data.path));
-  }, []);
+    setRenamingPath(normalizePathForCurrentWorkspace(data.path));
+  }, [normalizePathForCurrentWorkspace]);
 
   const handleExecuteRename = useCallback(async (oldPath: string, newName: string) => {
-    const normalizedOld = normalizeLocalPathForRename(oldPath);
+    const normalizedOld = normalizePathForCurrentWorkspace(oldPath);
     const oldName = basenamePath(normalizedOld);
 
     if (newName.trim() === oldName) {
@@ -325,7 +334,7 @@ const FilesPanel: React.FC<FilesPanelProps> = ({
     const newPath = replaceBasename(normalizedOld, newName.trim());
 
     try {
-      await workspaceAPI.renameFile(normalizedOld, newPath);
+      await workspaceAPI.renameFile(normalizedOld, newPath, currentWorkspace?.connectionId);
       log.info('File renamed', { oldPath: normalizedOld, newPath });
       setRenamingPath(null);
       removePath(normalizedOld);
@@ -335,20 +344,20 @@ const FilesPanel: React.FC<FilesPanelProps> = ({
       notification.error(t('notifications.renameFailed', { error: String(error) }));
       setRenamingPath(null);
     }
-  }, [workspacePath, loadFileTree, removePath, notification, t]);
+  }, [workspacePath, loadFileTree, removePath, notification, t, normalizePathForCurrentWorkspace, currentWorkspace]);
 
   const handleCancelRename = useCallback(() => {
     setRenamingPath(null);
   }, []);
 
   const handleDelete = useCallback(async (data: { path: string; isDirectory: boolean }) => {
-    const normalizedPath = normalizeLocalPathForRename(data.path);
+    const normalizedPath = normalizePathForCurrentWorkspace(data.path);
 
     try {
       if (data.isDirectory) {
-        await workspaceAPI.deleteDirectory(normalizedPath);
+        await workspaceAPI.deleteDirectory(normalizedPath, true, currentWorkspace?.connectionId);
       } else {
-        await workspaceAPI.deleteFile(normalizedPath);
+        await workspaceAPI.deleteFile(normalizedPath, currentWorkspace?.connectionId);
       }
       log.info('File deleted', { path: normalizedPath, isDirectory: data.isDirectory });
       removePath(normalizedPath);
@@ -357,7 +366,7 @@ const FilesPanel: React.FC<FilesPanelProps> = ({
       log.error('Failed to delete file', error);
       notification.error(t('notifications.deleteFailed', { error: String(error) }));
     }
-  }, [workspacePath, loadFileTree, removePath, notification, t]);
+  }, [workspacePath, loadFileTree, removePath, notification, t, normalizePathForCurrentWorkspace, currentWorkspace]);
 
   const handleReveal = useCallback(async (data: { path: string }) => {
     if (isRemoteWorkspace(workspaceManager.getState().currentWorkspace)) {
@@ -1072,8 +1081,12 @@ const FilesPanel: React.FC<FilesPanelProps> = ({
         confirmText={inputDialog.type === 'newFile' ? t('dialog.newFile.confirm') : t('dialog.newFolder.confirm')}
         cancelText={inputDialog.type === 'newFile' ? t('dialog.newFile.cancel') : t('dialog.newFolder.cancel')}
         validator={(value) => {
-          // eslint-disable-next-line no-control-regex -- Windows filename rules explicitly forbid ASCII control characters.
-          if (!/^[^<>:"/\\|?*\x00-\x1F]+$/.test(value)) {
+          const validPattern = isRemoteCurrentWorkspace
+            // eslint-disable-next-line no-control-regex -- filename rules explicitly forbid ASCII control characters.
+            ? /^[^/\x00-\x1F]+$/
+            // eslint-disable-next-line no-control-regex -- filename rules explicitly forbid ASCII control characters.
+            : /^[^<>:"/\\|?*\x00-\x1F]+$/;
+          if (!validPattern.test(value)) {
             return t('validation.invalidFilename');
           }
           return null;

@@ -327,6 +327,12 @@ impl RemoteFileService {
         manager.sftp_rmdir(connection_id, path).await
     }
 
+    /// Remove an empty directory via SFTP (non-recursive; fails if not empty)
+    pub async fn remove_dir(&self, connection_id: &str, path: &str) -> anyhow::Result<()> {
+        let manager = self.get_manager(connection_id).await?;
+        manager.sftp_rmdir(connection_id, path).await
+    }
+
     /// Rename/move a remote file or directory via SFTP
     pub async fn rename(
         &self,

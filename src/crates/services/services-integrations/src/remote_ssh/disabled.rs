@@ -599,6 +599,10 @@ impl RemoteFileService {
         Err(unsupported())
     }
 
+    pub async fn remove_dir(&self, _connection_id: &str, _path: &str) -> anyhow::Result<()> {
+        Err(unsupported())
+    }
+
     pub async fn rename(
         &self,
         _connection_id: &str,

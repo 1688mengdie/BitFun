@@ -247,6 +247,17 @@ describe('ModernFlowChatContainer historical empty state', () => {
       return rafCallbacks.length;
     }));
     vi.stubGlobal('cancelAnimationFrame', vi.fn());
+    // jsdom in vitest 4.x may expose window.localStorage without a callable
+    // getItem; provide a minimal storage so shouldShowMockBackgroundActivities
+    // does not crash during render.
+    vi.stubGlobal('localStorage', {
+      getItem: vi.fn(() => null),
+      setItem: vi.fn(),
+      removeItem: vi.fn(),
+      clear: vi.fn(),
+      key: vi.fn(() => null),
+      length: 0,
+    });
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
