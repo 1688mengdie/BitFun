@@ -3201,7 +3201,7 @@ pub async fn reveal_in_explorer(
                 .split('/')
                 .map(|s| urlencoding::encode(s).to_string())
                 .collect::<Vec<_>>()
-                .join('/');
+                .join("/");
             let file_uri = format!("file://{}", encoded_path);
             let dbus_ok = match bitfun_core::util::process_manager::create_command("dbus-send")
                 .args([
