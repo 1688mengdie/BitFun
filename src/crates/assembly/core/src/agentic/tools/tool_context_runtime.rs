@@ -51,9 +51,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use tool_runtime::context::{
-    build_tool_runtime_custom_data, delegation_policy_from_custom_data,
-    primary_model_supports_image_understanding as runtime_primary_model_supports_image_understanding,
-    project_tool_context_facts, ToolRuntimeContextFactsInput, ToolRuntimeCustomDataInput,
+    build_tool_runtime_custom_data, delegation_policy_from_custom_data, project_tool_context_facts,
+    PrimaryModelFacts, ToolRuntimeContextFactsInput, ToolRuntimeCustomDataInput,
 };
 
 /// Core-owned tool use context.
@@ -65,6 +64,7 @@ pub struct ToolUseContext {
     pub dialog_turn_id: Option<String>,
     pub workspace: Option<WorkspaceBinding>,
     pub unlocked_collapsed_tools: Vec<String>,
+    pub primary_model_facts: PrimaryModelFacts,
     /// Extended context data passed from execution layer to tools.
     pub custom_data: HashMap<String, Value>,
     /// Desktop automation (Computer use); only set in BitFun desktop.
@@ -118,7 +118,11 @@ impl ToolUseContext {
     /// Whether the session primary model accepts image inputs (from tool-definition / pipeline context).
     /// Defaults to **true** when unset (e.g. API listings without model metadata).
     pub fn primary_model_supports_image_understanding(&self) -> bool {
-        runtime_primary_model_supports_image_understanding(&self.custom_data)
+        self.primary_model_facts.supports_image_inputs
+    }
+
+    pub fn primary_model_facts(&self) -> &PrimaryModelFacts {
+        &self.primary_model_facts
     }
 
     pub fn cancellation_token(&self) -> Option<&CancellationToken> {
@@ -161,6 +165,7 @@ impl ToolUseContext {
             dialog_turn_id: None,
             workspace,
             unlocked_collapsed_tools: Vec::new(),
+            primary_model_facts: PrimaryModelFacts::default(),
             custom_data: HashMap::new(),
             computer_use_host: None,
             runtime_tool_restrictions: ToolRuntimeRestrictions::default(),
@@ -241,6 +246,7 @@ pub(crate) fn build_tool_use_context_for_execution_context(
         dialog_turn_id: Some(context.dialog_turn_id.clone()),
         workspace: context.workspace.clone(),
         unlocked_collapsed_tools: context.unlocked_collapsed_tools.clone(),
+        primary_model_facts: context.primary_model_facts.clone(),
         custom_data: build_tool_context_custom_data(context),
         computer_use_host,
         runtime_handles: core_tool_runtime_handles(
@@ -257,35 +263,11 @@ pub(crate) fn build_tool_description_context(
     agent_type: &str,
     workspace: Option<&WorkspaceBinding>,
     workspace_services: Option<&WorkspaceServices>,
-    primary_model_id: Option<&str>,
-    primary_model_name: Option<&str>,
-    primary_model_provider: Option<&str>,
-    primary_supports_image_understanding: bool,
+    primary_model_facts: Option<&PrimaryModelFacts>,
     context_vars: &HashMap<String, String>,
 ) -> ToolUseContext {
     let mut custom_data = HashMap::new();
-    if let Some(primary_model_id) = primary_model_id {
-        custom_data.insert(
-            "primary_model_id".to_string(),
-            Value::String(primary_model_id.to_string()),
-        );
-    }
-    if let Some(primary_model_name) = primary_model_name {
-        custom_data.insert(
-            "primary_model_name".to_string(),
-            Value::String(primary_model_name.to_string()),
-        );
-    }
-    if let Some(primary_model_provider) = primary_model_provider {
-        custom_data.insert(
-            "primary_model_provider".to_string(),
-            Value::String(primary_model_provider.to_string()),
-        );
-    }
-    custom_data.insert(
-        "primary_model_supports_image_understanding".to_string(),
-        Value::Bool(primary_supports_image_understanding),
-    );
+    let primary_model_facts = primary_model_facts.cloned().unwrap_or_default();
     for (key, value) in context_vars {
         custom_data.insert(key.clone(), Value::String(value.clone()));
     }
@@ -297,6 +279,7 @@ pub(crate) fn build_tool_description_context(
         dialog_turn_id: None,
         workspace: workspace.cloned(),
         unlocked_collapsed_tools: Vec::new(),
+        primary_model_facts,
         custom_data,
         computer_use_host: None,
         runtime_tool_restrictions: ToolRuntimeRestrictions::default(),
@@ -729,6 +712,7 @@ mod context_facts_tests {
     use crate::service::remote_ssh::workspace_state::workspace_session_identity;
     use std::collections::{BTreeSet, HashMap};
     use std::path::PathBuf;
+    use tool_runtime::context::PrimaryModelFacts;
 
     fn local_context(root: &str) -> ToolUseContext {
         ToolUseContext {
@@ -738,6 +722,7 @@ mod context_facts_tests {
             dialog_turn_id: None,
             workspace: Some(WorkspaceBinding::new(None, PathBuf::from(root))),
             unlocked_collapsed_tools: Vec::new(),
+            primary_model_facts: PrimaryModelFacts::default(),
             custom_data: HashMap::new(),
             computer_use_host: None,
             runtime_tool_restrictions: ToolRuntimeRestrictions::default(),
@@ -754,6 +739,7 @@ mod context_facts_tests {
             dialog_turn_id: Some("turn-1".to_string()),
             workspace: Some(WorkspaceBinding::new(None, PathBuf::from("/repo/project"))),
             unlocked_collapsed_tools: vec!["WebFetch".to_string()],
+            primary_model_facts: PrimaryModelFacts::default(),
             custom_data: HashMap::new(),
             computer_use_host: None,
             runtime_tool_restrictions: ToolRuntimeRestrictions {
@@ -798,6 +784,7 @@ mod context_facts_tests {
             dialog_turn_id: Some("turn-runtime".to_string()),
             workspace: Some(WorkspaceBinding::new(None, PathBuf::from("/repo/runtime"))),
             unlocked_collapsed_tools: vec!["WebFetch".to_string(), "Git".to_string()],
+            primary_model_facts: PrimaryModelFacts::default(),
             custom_data,
             computer_use_host: None,
             runtime_tool_restrictions: ToolRuntimeRestrictions {
@@ -859,6 +846,7 @@ mod context_facts_tests {
                 session_identity,
             )),
             unlocked_collapsed_tools: Vec::new(),
+            primary_model_facts: PrimaryModelFacts::default(),
             custom_data: HashMap::new(),
             computer_use_host: None,
             runtime_tool_restrictions: ToolRuntimeRestrictions::default(),
@@ -901,6 +889,7 @@ mod path_resolution_tests {
     use crate::service::remote_ssh::workspace_state::workspace_session_identity;
     use std::collections::HashMap;
     use std::path::PathBuf;
+    use tool_runtime::context::PrimaryModelFacts;
 
     fn local_context(root: &str) -> ToolUseContext {
         ToolUseContext {
@@ -910,6 +899,7 @@ mod path_resolution_tests {
             dialog_turn_id: None,
             workspace: Some(WorkspaceBinding::new(None, PathBuf::from(root))),
             unlocked_collapsed_tools: Vec::new(),
+            primary_model_facts: PrimaryModelFacts::default(),
             custom_data: HashMap::new(),
             computer_use_host: None,
             runtime_tool_restrictions: ToolRuntimeRestrictions::default(),
@@ -933,6 +923,7 @@ mod path_resolution_tests {
                 session_identity,
             )),
             unlocked_collapsed_tools: Vec::new(),
+            primary_model_facts: PrimaryModelFacts::default(),
             custom_data: HashMap::new(),
             computer_use_host: None,
             runtime_tool_restrictions: ToolRuntimeRestrictions::default(),
@@ -958,6 +949,7 @@ mod path_resolution_tests {
             dialog_turn_id: None,
             workspace: None,
             unlocked_collapsed_tools: Vec::new(),
+            primary_model_facts: PrimaryModelFacts::default(),
             custom_data: HashMap::new(),
             computer_use_host: None,
             runtime_tool_restrictions: ToolRuntimeRestrictions::default(),
@@ -1117,6 +1109,7 @@ mod call_runtime_tests {
     use std::collections::HashMap;
     use tokio::time::{sleep, Duration};
     use tokio_util::sync::CancellationToken;
+    use tool_runtime::context::PrimaryModelFacts;
 
     struct MeasurementReadTool;
 
@@ -1163,6 +1156,7 @@ mod call_runtime_tests {
             dialog_turn_id: None,
             workspace: None,
             unlocked_collapsed_tools: Vec::new(),
+            primary_model_facts: PrimaryModelFacts::default(),
             custom_data: HashMap::new(),
             computer_use_host: None,
             runtime_tool_restrictions: ToolRuntimeRestrictions::default(),
@@ -1199,6 +1193,7 @@ mod call_runtime_tests {
             dialog_turn_id: None,
             workspace: None,
             unlocked_collapsed_tools: Vec::new(),
+            primary_model_facts: PrimaryModelFacts::default(),
             custom_data: HashMap::new(),
             computer_use_host: None,
             runtime_tool_restrictions: ToolRuntimeRestrictions::default(),
@@ -1239,6 +1234,7 @@ mod call_runtime_tests {
             dialog_turn_id: Some("subagent-turn".to_string()),
             workspace: None,
             unlocked_collapsed_tools: Vec::new(),
+            primary_model_facts: PrimaryModelFacts::default(),
             custom_data,
             computer_use_host: None,
             runtime_tool_restrictions: ToolRuntimeRestrictions::default(),
@@ -1269,25 +1265,23 @@ mod call_runtime_tests {
 #[cfg(test)]
 mod context_builder_tests {
     use super::build_tool_description_context;
-    use serde_json::json;
     use std::collections::HashMap;
+    use tool_runtime::context::PrimaryModelFacts;
 
     #[test]
     fn tool_description_context_preserves_manifest_custom_data_shape() {
-        let mut context_vars = HashMap::new();
-        context_vars.insert(
-            "primary_model_supports_image_understanding".to_string(),
-            "false".to_string(),
-        );
+        let context_vars = HashMap::new();
 
         let context = build_tool_description_context(
             "coding",
             None,
             None,
-            Some("model_1"),
-            Some("vision-model"),
-            Some("anthropic"),
-            true,
+            Some(&PrimaryModelFacts::new(
+                "model_1",
+                "vision-model",
+                "anthropic",
+                true,
+            )),
             &context_vars,
         );
 
@@ -1300,19 +1294,16 @@ mod context_builder_tests {
         assert!(context.cancellation_token().is_none());
         assert!(context.workspace_services().is_none());
         assert!(context.runtime_tool_restrictions.is_tool_allowed("Write"));
-        assert_eq!(
-            context.custom_data["primary_model_supports_image_understanding"],
-            json!("false")
-        );
-        assert_eq!(context.custom_data["primary_model_id"], json!("model_1"));
-        assert_eq!(
-            context.custom_data["primary_model_name"],
-            json!("vision-model")
-        );
-        assert_eq!(
-            context.custom_data["primary_model_provider"],
-            json!("anthropic")
-        );
+        assert!(context.primary_model_supports_image_understanding());
+        assert_eq!(context.primary_model_facts().model_id, "model_1");
+        assert_eq!(context.primary_model_facts().model_name, "vision-model");
+        assert_eq!(context.primary_model_facts().api_format, "anthropic");
+        assert!(!context.custom_data.contains_key("primary_model_id"));
+        assert!(!context.custom_data.contains_key("primary_model_name"));
+        assert!(!context.custom_data.contains_key("primary_model_provider"));
+        assert!(!context
+            .custom_data
+            .contains_key("primary_model_supports_image_understanding"));
     }
 }
 
@@ -1328,15 +1319,11 @@ mod task_context_tests {
     use serde_json::json;
     use std::collections::{BTreeSet, HashMap};
     use tokio_util::sync::CancellationToken;
+    use tool_runtime::context::PrimaryModelFacts;
 
     fn task_with_context_vars() -> ToolTask {
         let mut context_vars = HashMap::new();
         context_vars.insert("turn_index".to_string(), "7".to_string());
-        context_vars.insert("primary_model_provider".to_string(), "openai".to_string());
-        context_vars.insert(
-            "primary_model_supports_image_understanding".to_string(),
-            "true".to_string(),
-        );
         context_vars.insert("acp_transport".to_string(), "true".to_string());
         context_vars.insert(
             "deep_review_run_manifest".to_string(),
@@ -1368,6 +1355,12 @@ mod task_context_tests {
                 attempt_index: None,
                 agent_type: "agent".to_string(),
                 workspace: None,
+                primary_model_facts: PrimaryModelFacts::new(
+                    "primary-model",
+                    "vision-model",
+                    "openai",
+                    true,
+                ),
                 context_vars,
                 subagent_parent_info: Some(SubagentParentInfo {
                     tool_call_id: "parent_tool".to_string(),
@@ -1410,14 +1403,13 @@ mod task_context_tests {
             .is_tool_allowed("WebFetch"));
         assert!(!context.runtime_tool_restrictions.is_tool_allowed("Bash"));
         assert_eq!(context.custom_data["turn_index"], json!(7));
-        assert_eq!(
-            context.custom_data["primary_model_provider"],
-            json!("openai")
-        );
-        assert_eq!(
-            context.custom_data["primary_model_supports_image_understanding"],
-            json!(true)
-        );
+        assert_eq!(context.primary_model_facts().model_id, "primary-model");
+        assert_eq!(context.primary_model_facts().api_format, "openai");
+        assert!(context.primary_model_facts().supports_image_inputs);
+        assert!(!context.custom_data.contains_key("primary_model_provider"));
+        assert!(!context
+            .custom_data
+            .contains_key("primary_model_supports_image_understanding"));
         assert_eq!(context.custom_data["acp_transport"], json!(true));
         assert_eq!(
             context.custom_data["deep_review_run_manifest"],
