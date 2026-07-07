@@ -607,6 +607,8 @@ export interface UnexpectedExitInfo {
   startedAt?: string;
   sessionLogDir?: string;
   crashReportPath?: string;
+  category?: 'crash' | 'unclean_shutdown';
+  notifyOnStartup?: boolean;
   reason: string;
 }
 
