@@ -1,3 +1,11 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// PPT Live — UI entry point
+//
+// This is the entry point for build-bitfun.mjs. All src/*.js modules and npm
+// dependencies are bundled into dist/ui.bundle.js at build time.
+//
+// After editing this file or any src/*.js file, run:  node build-bitfun.mjs
+// ─────────────────────────────────────────────────────────────────────────────
 import { translate as t, getLocale } from './src/i18n.js';
 import {
   ELEMENT_TYPES,
