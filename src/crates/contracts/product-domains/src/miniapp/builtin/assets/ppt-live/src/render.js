@@ -174,6 +174,31 @@ const HTML_SLIDE_PREVIEW_HOST_CLASS = 'html-slide-preview-host';
 const HTML_SLIDE_PREVIEW_SCALER_CLASS = 'html-slide-preview-scaler';
 const DEFAULT_SLIDE_DESIGN = { width: 1280, height: 720 };
 
+function writeSandboxIframeDocument(frame, html) {
+  const doc = frame.contentDocument;
+  if (!doc) return false;
+  doc.open();
+  doc.write(normalizeSlideDocument(html));
+  doc.close();
+  return true;
+}
+
+function mountSandboxIframeHtml(frame, html, onMounted) {
+  frame.setAttribute('sandbox', 'allow-same-origin');
+  frame.src = 'about:blank';
+
+  const mount = () => {
+    if (!writeSandboxIframeDocument(frame, html)) return false;
+    onMounted?.();
+    return true;
+  };
+
+  if (mount()) return;
+  frame.addEventListener('load', () => {
+    mount();
+  }, { once: true });
+}
+
 /** Parse author slide canvas from inline CSS (960pt×540pt → 1280×720px). */
 export function parseSlideDesignSizeFromHtml(html) {
   const text = String(html || '');
@@ -458,16 +483,12 @@ function createHtmlSlidePreviewSurface({ hostClass = '', frameClass, html, onRea
 
   const frame = document.createElement('iframe');
   frame.className = frameClass;
-  frame.setAttribute('sandbox', 'allow-same-origin');
   frame.setAttribute('loading', 'lazy');
   stampFrameDesignSize(frame, html);
-  frame.srcdoc = normalizeSlideDocument(html);
-
-  const runFit = () => {
+  mountSandboxIframeHtml(frame, html, () => {
     fitHtmlSlidePreviewSurface(host);
     onReady?.(frame, host);
-  };
-  frame.addEventListener('load', runFit, { once: true });
+  });
 
   scaler.appendChild(frame);
   host.appendChild(scaler);
@@ -888,6 +909,7 @@ export function renderThumbs(state, handlers) {
       const slideNode = document.createElement('div');
       slideNode.className = 'thumb-preview-slide';
       slideNode.innerHTML = slideHtml(slide);
+      hydrateHtmlSlideIframes(slideNode);
       preview.appendChild(slideNode);
     }
     button.appendChild(preview);
@@ -1103,6 +1125,7 @@ export function renderSlideCanvas(state, handlers) {
   }
   canvas.classList.remove('is-html-slide');
   canvas.innerHTML = slide ? slideHtml(slide, { selectedElementId: state.selectedElementId, editable: true }) : '';
+  hydrateHtmlSlideIframes(canvas);
   canvas.querySelectorAll('.slide-element').forEach((node) => {
     const elementId = node.dataset.elementId;
     node.addEventListener('click', (event) => {
@@ -1227,9 +1250,29 @@ function bindSlideFields(panel, handlers) {
   });
 }
 
+const pendingSlideHtmlMounts = new Map();
+let pendingSlideHtmlMountSeq = 0;
+
+export function hydrateHtmlSlideIframes(root = document) {
+  const scope = root?.querySelectorAll ? root : document;
+  scope.querySelectorAll('iframe.html-slide-frame[data-ppt-live-mount]').forEach((frame) => {
+    const mountId = frame.getAttribute('data-ppt-live-mount');
+    if (!mountId) return;
+    const html = pendingSlideHtmlMounts.get(mountId);
+    if (!html) return;
+    pendingSlideHtmlMounts.delete(mountId);
+    frame.removeAttribute('data-ppt-live-mount');
+    mountSandboxIframeHtml(frame, html, () => {
+      fitHtmlSlideFrame(frame);
+    });
+  });
+}
+
 export function slideHtml(slide, options = {}) {
   if (slide?.html) {
-    return `<iframe class="html-slide-frame" sandbox="allow-same-origin" srcdoc="${escapeHtml(normalizeSlideDocument(slide.html))}"></iframe>`;
+    const mountId = `slide-${++pendingSlideHtmlMountSeq}`;
+    pendingSlideHtmlMounts.set(mountId, normalizeSlideDocument(slide.html));
+    return `<iframe class="html-slide-frame" sandbox="allow-same-origin" src="about:blank" data-ppt-live-mount="${mountId}"></iframe>`;
   }
   const editable = Boolean(options.editable);
   const selectedId = options.selectedElementId || '';

@@ -20,11 +20,10 @@ import MiniAppCustomizeEntry from './customization/MiniAppCustomizeEntry';
 import MiniAppCustomizePanel from './customization/MiniAppCustomizePanel';
 import MiniAppDraftPreview from './customization/MiniAppDraftPreview';
 import { useMiniAppCustomizeHotspot } from './customization/useMiniAppCustomizeHotspot';
+import MiniAppRunner from './components/MiniAppRunner';
 import './MiniAppScene.scss';
 
 const log = createLogger('MiniAppScene');
-
-const MiniAppRunner = React.lazy(() => import('./components/MiniAppRunner'));
 const MINIAPP_REFRESH_EVENTS = [
   'miniapp-updated',
   'miniapp-recompiled',
@@ -84,6 +83,12 @@ const MiniAppScene: React.FC<MiniAppSceneProps> = ({ appId }) => {
     try {
       const theme = themeType ?? 'dark';
       const loaded = await miniAppAPI.getMiniApp(id, theme, workspacePath || undefined);
+      if (!loaded.compiled_html?.trim()) {
+        log.error('MiniApp loaded without compiled_html', { appId: id });
+        setError('MiniApp compiled_html is empty');
+        setApp(null);
+        return;
+      }
       setApp(loaded);
     } catch (err) {
       log.error('Failed to load app', err);
@@ -185,7 +190,7 @@ const MiniAppScene: React.FC<MiniAppSceneProps> = ({ appId }) => {
             <span>{t('scene.loading')}</span>
           </div>
         )}
-        {error && (
+        {error && !app && (
           <div className="miniapp-scene__error">
             <AlertTriangle size={32} strokeWidth={1.5} />
             <p>{t('scene.loadFailed', { error })}</p>
@@ -194,11 +199,14 @@ const MiniAppScene: React.FC<MiniAppSceneProps> = ({ appId }) => {
             </Button>
           </div>
         )}
-        {app && !loading && (
+        {app && (
           <div className="miniapp-scene__runner-shell">
-            <React.Suspense fallback={null}>
-              <MiniAppRunner key={`${app.id}-${key}`} app={app} />
-            </React.Suspense>
+            {loading && (
+              <div className="miniapp-scene__refresh-overlay" role="status" aria-live="polite">
+                <Loader2 size={20} className="miniapp-scene__spinning" strokeWidth={1.5} />
+              </div>
+            )}
+            <MiniAppRunner key={`${app.id}-${key}`} app={app} />
             {customizePreview && (
               <div className="miniapp-scene__preview-stage" role="region" aria-label={t('customize.previewTitle')}>
                 <div className="miniapp-scene__preview-stage-header">

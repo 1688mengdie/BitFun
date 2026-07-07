@@ -24,7 +24,7 @@ import {
 } from './src/state.js';
 import { getAllStylePresets, getStylePreset, DEFAULT_STYLE_PRESET, resolveStylePalette } from './src/style-presets.js';
 import { enhanceFlatSelect, refreshFlatSelect } from './src/flat-select.js';
-import { applyI18n, readInputs, readStyleInputs, renderAll, renderInspector, renderSlideCanvas, renderGeneration, renderGenerationOverlay, renderThumbs, slideHtml, fitSlideCanvas, fitHtmlSlideFrame, buildExportPreviewStage, fitExportPreviewFrame, fitThumbPreviews, normalizeSlideDocument, observeThumbPreviews, ensureCanvasFitted, syncDensitySlider, syncFontFamilyToggle, syncColorModeToggle, syncStylePanelFromState } from './src/render.js';
+import { applyI18n, readInputs, readStyleInputs, renderAll, renderInspector, renderSlideCanvas, renderGeneration, renderGenerationOverlay, renderThumbs, slideHtml, hydrateHtmlSlideIframes, fitSlideCanvas, fitHtmlSlideFrame, buildExportPreviewStage, fitExportPreviewFrame, fitThumbPreviews, normalizeSlideDocument, observeThumbPreviews, ensureCanvasFitted, syncDensitySlider, syncFontFamilyToggle, syncColorModeToggle, syncStylePanelFromState } from './src/render.js';
 import {
   prepareSlidesForPptxExport,
   slideExportHtml,
@@ -2509,7 +2509,10 @@ function openPreview() {
 
 function renderPresent() {
   const slide = state.slides[state.presentIndex] || state.slides[0];
-  if ($('presentSlide')) $('presentSlide').innerHTML = slide ? slideHtml(slide) : '';
+  if ($('presentSlide')) {
+    $('presentSlide').innerHTML = slide ? slideHtml(slide) : '';
+    hydrateHtmlSlideIframes($('presentSlide'));
+  }
   if ($('presentCounter')) $('presentCounter').textContent = `${Math.max(1, state.presentIndex + 1)} / ${Math.max(1, state.slides.length)}`;
   ensureCanvasFitted();
 }
@@ -3260,6 +3263,7 @@ function mountExportPreviewSlide(frame, slide) {
     const stage = document.createElement('div');
     stage.className = 'export-preview__element-stage';
     stage.innerHTML = slideHtml(slide);
+    hydrateHtmlSlideIframes(stage);
     scaleWrap.append(stage);
   }
   viewport.append(scaleWrap);
