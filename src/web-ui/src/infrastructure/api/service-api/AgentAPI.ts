@@ -302,6 +302,12 @@ export interface AgenticEvent {
 
 export type DialogTurnStartedEvent = AgenticEvent;
 
+export interface OpenBuiltInBrowserEvent {
+  url: string;
+  title?: string;
+  replaceExisting?: boolean;
+}
+
 export interface TextChunkEvent extends AgenticEvent {
   roundId: string;
   attemptId?: string;
@@ -966,6 +972,10 @@ export class AgentAPI {
     callback: (event: { sessionId: string; goal?: Record<string, unknown> | null }) => void
   ): () => void {
     return api.listen('agentic://thread-goal-updated', callback);
+  }
+
+  onOpenBuiltInBrowser(callback: (event: OpenBuiltInBrowserEvent) => void): () => void {
+    return api.listen<OpenBuiltInBrowserEvent>('agentic://open-built-in-browser', callback);
   }
 
   onImageAnalysisStarted(callback: (event: ImageAnalysisEvent) => void): () => void {
