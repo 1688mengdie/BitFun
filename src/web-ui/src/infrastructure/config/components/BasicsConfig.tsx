@@ -378,11 +378,20 @@ function BasicsLoggingSection() {
         >
           {runtimeInfo?.previousUnexpectedExit?.detected && (
             <Alert
-              type="warning"
-              message={t('logging.previousCrash.title')}
-              description={t('logging.previousCrash.description', {
-                path: runtimeInfo.previousUnexpectedExit.sessionLogDir || '-',
-              })}
+              type={runtimeInfo.previousUnexpectedExit.category === 'crash' ? 'warning' : 'info'}
+              message={t(
+                runtimeInfo.previousUnexpectedExit.category === 'crash'
+                  ? 'logging.previousCrash.title'
+                  : 'logging.previousUncleanShutdown.title'
+              )}
+              description={t(
+                runtimeInfo.previousUnexpectedExit.category === 'crash'
+                  ? 'logging.previousCrash.description'
+                  : 'logging.previousUncleanShutdown.description',
+                {
+                  path: runtimeInfo.previousUnexpectedExit.sessionLogDir || '-',
+                }
+              )}
             />
           )}
           <ConfigPageRow
