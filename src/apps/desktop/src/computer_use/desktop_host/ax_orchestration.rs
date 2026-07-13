@@ -22,14 +22,15 @@ use super::{CachedInteractiveView, CachedVisualMarkView};
 #[cfg(any(test, target_os = "macos", target_os = "windows"))]
 use bitfun_core::agentic::tools::computer_use_host::ComputerScreenshot;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
+use bitfun_core::agentic::tools::computer_use_host::ComputerUseHost;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use bitfun_core::agentic::tools::computer_use_host::VisualMark;
 use bitfun_core::agentic::tools::computer_use_host::{
-    AppClickParams, AppSelector, AppStateSnapshot, AppWaitPredicate, InteractiveActionResult,
-    InteractiveClickParams, InteractiveScrollParams, InteractiveTypeTextParams, InteractiveView,
-    InteractiveViewOpts, VisualActionResult, VisualClickParams, VisualMarkView, VisualMarkViewOpts,
+    AppClickParams, AppSelector, AppStateSnapshot, AppWaitPredicate, ClickTarget,
+    InteractiveActionResult, InteractiveClickParams, InteractiveScrollParams,
+    InteractiveTypeTextParams, InteractiveView, InteractiveViewOpts, VisualActionResult,
+    VisualClickParams, VisualMarkView, VisualMarkViewOpts,
 };
-#[cfg(any(target_os = "macos", target_os = "windows"))]
-use bitfun_core::agentic::tools::computer_use_host::{ClickTarget, ComputerUseHost};
 use bitfun_core::util::errors::{BitFunError, BitFunResult};
 #[cfg(target_os = "macos")]
 use log::debug;
