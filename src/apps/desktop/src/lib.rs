@@ -1027,6 +1027,7 @@ pub async fn run() {
             git_resolve_revision,
             git_get_repository,
             review_platform_get_workspace_snapshot,
+            review_platform_get_workspace_context,
             review_platform_get_pull_request_detail,
             review_platform_get_pull_request_review_target,
             review_platform_get_issue,
