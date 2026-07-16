@@ -281,11 +281,6 @@ impl FileWriteTool {
                 "payload": {
                     "type": "string",
                     "description": "A path-first Write payload in the format `+++ {absolute_file_path_or_bitfun_uri}\n{file_content}`. Content lines do not need a leading `+`."
-                },
-                "force": {
-                    "type": "boolean",
-                    "default": false,
-                    "description": "Only set true after a prior call was rejected for touching a file the task said not to modify, and you have stated a legitimate reason for overriding that constraint."
                 }
             },
             "required": ["payload"],
@@ -426,20 +421,20 @@ impl Tool for FileWriteTool {
 
         if let Some(ctx) = context {
             if let ParsedWritePayload::Target { file_path, .. } = &parsed {
-                let force = input
+                let force_requested = input
                     .get("force")
                     .and_then(Value::as_bool)
                     .unwrap_or(false);
-                if let Ok(resolved) = ctx.resolve_tool_path(file_path) {
-                    if Self::file_exists(ctx, &resolved).await {
-                        if let Some(rejection) =
-                            crate::agentic::execution::edit_constraint_guard::check(
-                                context, file_path, force,
-                            )
-                        {
-                            return rejection;
-                        }
-                    }
+                if let Some(rejection) =
+                    crate::agentic::execution::edit_constraint_guard::check(
+                        context,
+                        "Write",
+                        "write",
+                        file_path,
+                        force_requested,
+                    )
+                {
+                    return rejection;
                 }
             }
             let preflight_error = match &parsed {
