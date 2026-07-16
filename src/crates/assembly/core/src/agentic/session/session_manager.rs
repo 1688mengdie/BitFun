@@ -9704,6 +9704,7 @@ mod tests {
                     deterministic_constraint_count: 0,
                     model_attempts: 1,
                     active_constraint_ids: Vec::new(),
+                    revocation_authorized: true,
                     model_status: ModelExtractionStatus::Parsed,
                     model_constraints: constraints.clone(),
                     model_revocations: Vec::new(),
@@ -9779,6 +9780,7 @@ mod tests {
                     deterministic_constraint_count: 1,
                     model_attempts: 0,
                     active_constraint_ids: Vec::new(),
+                    revocation_authorized: true,
                     model_status: ModelExtractionStatus::NotRun,
                     model_constraints: Vec::new(),
                     model_revocations: Vec::new(),
@@ -9805,6 +9807,7 @@ mod tests {
                     deterministic_constraint_count: 0,
                     model_attempts: 1,
                     active_constraint_ids: vec![constraint.id.clone()],
+                    revocation_authorized: true,
                     model_status: ModelExtractionStatus::Parsed,
                     model_constraints: Vec::new(),
                     model_revocations: vec![ConstraintRevocation {
