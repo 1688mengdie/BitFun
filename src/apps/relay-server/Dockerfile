@@ -6,8 +6,9 @@ FROM rust:1-slim AS builder
 WORKDIR /build/src/apps/relay-server
 
 # Optional: limit rustc parallelism on small or low-memory VPS hosts.
+#   docker compose build --build-arg CARGO_BUILD_JOBS=1
+# Note: empty value must NOT be set as ENV — cargo chokes on empty string.
 ARG CARGO_BUILD_JOBS=
-ENV CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update \
@@ -39,7 +40,8 @@ RUN rm -rf src ../../crates/services/relay-service/src \
 COPY src/apps/relay-server/src/ ./src/
 COPY src/crates/services/relay-service/src/ ../../crates/services/relay-service/src/
 
-RUN cargo build --release \
+RUN if [ -n "${CARGO_BUILD_JOBS}" ]; then export CARGO_BUILD_JOBS; fi \
+    && cargo build --release \
     && (strip target/release/bitfun-relay-server target/release/relay-admin || true)
 
 FROM debian:bookworm-slim
