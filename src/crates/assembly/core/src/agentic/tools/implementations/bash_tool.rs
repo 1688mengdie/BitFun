@@ -1,7 +1,6 @@
 use crate::agentic::tools::framework::{
     PermissionIntent, Tool, ToolRenderOptions, ToolResult, ToolUseContext, ValidationResult,
 };
-use crate::agentic::tools::implementations::shell_command_safety;
 use crate::agentic::workspace::WorkspaceCommandOptions;
 use crate::infrastructure::events::event_system::get_global_event_system;
 use crate::infrastructure::events::event_system::BackendEvent::{

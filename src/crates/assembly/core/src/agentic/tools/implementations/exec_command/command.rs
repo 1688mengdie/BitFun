@@ -633,7 +633,7 @@ Output:
     async fn validate_input(
         &self,
         input: &Value,
-        _context: Option<&ToolUseContext>,
+        context: Option<&ToolUseContext>,
     ) -> ValidationResult {
         if let Some(message) = exec_command_run_input_validation_message(input) {
             return ValidationResult {
@@ -642,6 +642,17 @@ Output:
                 error_code: Some(400),
                 meta: None,
             };
+        }
+        if let (Some(context), Some(parsed)) =
+            (context, exec_command_run_input_from_input(input))
+        {
+            if let Some(rejection) =
+                crate::agentic::execution::edit_constraint_guard::check_bash_command(
+                    context, parsed.cmd,
+                )
+            {
+                return rejection;
+            }
         }
         ValidationResult {
             result: true,
