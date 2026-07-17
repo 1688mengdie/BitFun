@@ -426,13 +426,14 @@ impl Tool for FileWriteTool {
                     .and_then(Value::as_bool)
                     .unwrap_or(false);
                 if let Some(rejection) =
-                    crate::agentic::execution::edit_constraint_guard::check(
+                    crate::agentic::execution::edit_constraint_guard::check_write(
                         context,
                         "Write",
                         "write",
                         file_path,
                         force_requested,
                     )
+                    .await
                 {
                     return rejection;
                 }
@@ -558,6 +559,19 @@ impl Tool for FileWriteTool {
                 .map_err(|e| BitFunError::tool(format!("Failed to write file: {}", e)))?;
             let timestamp_ms = file_mutation_timestamp_ms(context, &resolved).await;
             update_file_read_state_after_mutation(context, &resolved, &content, timestamp_ms);
+            crate::agentic::execution::edit_constraint_guard::record_mutation_applied(
+                context,
+                "Write",
+                "write",
+                &resolved.logical_path,
+            );
+            if !file_already_exists {
+                crate::agentic::execution::edit_constraint_guard::remember_agent_created_file(
+                    context,
+                    &resolved.logical_path,
+                )
+                .await;
+            }
 
             let result = Self::write_success_result(
                 &resolved.logical_path,
@@ -580,6 +594,19 @@ impl Tool for FileWriteTool {
 
         let timestamp_ms = file_mutation_timestamp_ms(context, &resolved).await;
         update_file_read_state_after_mutation(context, &resolved, &content, timestamp_ms);
+        crate::agentic::execution::edit_constraint_guard::record_mutation_applied(
+            context,
+            "Write",
+            "write",
+            &resolved.logical_path,
+        );
+        if !file_already_exists {
+            crate::agentic::execution::edit_constraint_guard::remember_agent_created_file(
+                context,
+                &resolved.logical_path,
+            )
+            .await;
+        }
 
         let result = Self::write_success_result(
             &resolved.logical_path,
