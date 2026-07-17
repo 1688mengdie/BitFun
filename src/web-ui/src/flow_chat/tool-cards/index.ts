@@ -52,6 +52,7 @@ import { ReviewSessionSummaryCard } from './ReviewSessionSummaryCard';
 import { SessionControlToolCard } from './SessionControlToolCard';
 import { SessionMessageToolCard } from './SessionMessageToolCard';
 import { ComputerUseToolCard } from './ComputerUseToolCard';
+import { ViewImageToolCard } from './ViewImageToolCard';
 
 // Tool card component map - uses backend tool names
 export const TOOL_CARD_COMPONENTS = {
@@ -121,6 +122,9 @@ export const TOOL_CARD_COMPONENTS = {
 
   // Computer use (desktop automation)
   'ComputerUse': ComputerUseToolCard,
+
+  // Model vision image preview
+  'view_image': ViewImageToolCard,
 
   // BitFun Canvas tools
   'CreateCanvas': CanvasToolCard,

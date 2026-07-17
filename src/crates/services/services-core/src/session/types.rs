@@ -1,6 +1,6 @@
 //! Types for session persistence
 
-use bitfun_core_types::SessionKind;
+use bitfun_core_types::{SessionKind, ToolImageAttachment};
 use serde::{Deserialize, Serialize};
 
 pub const SESSION_STORAGE_SCHEMA_VERSION: u32 = 2;
@@ -759,6 +759,12 @@ pub struct ToolResultData {
         alias = "result_for_assistant"
     )]
     pub result_for_assistant: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "image_attachments"
+    )]
+    pub image_attachments: Option<Vec<ToolImageAttachment>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", alias = "duration_ms")]

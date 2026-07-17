@@ -270,6 +270,10 @@ export interface ToolResultData {
   result: any;
   success: boolean;
   resultForAssistant?: string;
+  imageAttachments?: Array<{
+    mime_type: string;
+    data_base64: string;
+  }>;
   error?: string;
   durationMs?: number;
 }

@@ -2321,6 +2321,7 @@ mod tests {
             }),
             success: false,
             result_for_assistant: None,
+            image_attachments: None,
             error: Some("operation timed out".to_string()),
             duration_ms: Some(95_000),
         });
@@ -2783,6 +2784,7 @@ mod tests {
                 result: serde_json::json!({}),
                 success,
                 result_for_assistant: None,
+                image_attachments: None,
                 error: (!success).then(|| "tool failed".to_string()),
                 duration_ms: Some(duration_ms),
             }),
