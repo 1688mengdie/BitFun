@@ -1,7 +1,8 @@
 //! Product-owned activation and contextual routing for external standalone tools.
 
 use crate::agentic::tools::framework::{
-    DynamicToolInfo, Tool, ToolExposure, ToolResult, ToolUseContext, ValidationResult,
+    DynamicToolInfo, PermissionIntent, Tool, ToolExposure, ToolResult, ToolUseContext,
+    ValidationResult,
 };
 use crate::agentic::tools::registry::get_global_tool_registry;
 use crate::util::errors::{BitFunError, BitFunResult};
@@ -484,6 +485,16 @@ impl Tool for ExternalToolMux {
 
     fn needs_permissions(&self, _input: Option<&Value>) -> bool {
         true
+    }
+
+    fn permission_intents(
+        &self,
+        input: &Value,
+        context: &ToolUseContext,
+    ) -> BitFunResult<Vec<PermissionIntent>> {
+        self.selected(Some(context))
+            .ok_or_else(|| BitFunError::tool(format!("tool '{}' is unavailable", self.name)))?
+            .permission_intents(input, context)
     }
 
     async fn validate_input(

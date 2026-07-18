@@ -8,6 +8,7 @@ use super::types::*;
 use crate::agentic::core::{ToolCall, ToolExecutionState, ToolResult as ModelToolResult};
 use crate::agentic::events::types::ToolEventData;
 use crate::agentic::tools::computer_use_host::ComputerUseHostRef;
+use crate::agentic::tools::file_permissions::uses_v2_file_permission;
 use crate::agentic::tools::framework::ToolResult as FrameworkToolResult;
 use crate::agentic::tools::registry::ToolRegistry;
 use crate::agentic::tools::tool_context_runtime;
@@ -15,6 +16,7 @@ use crate::agentic::tools::tool_context_runtime::ToolUseContext;
 use crate::agentic::tools::tool_result_storage;
 use crate::util::elapsed_ms_u64;
 use crate::util::errors::{BitFunError, BitFunResult};
+use bitfun_agent_runtime::permission_v2::{PermissionRequestManager, PermissionWaitOutcome};
 use bitfun_agent_runtime::tool_confirmation::{
     resolve_confirmation_failure, resolve_confirmation_wait_result, resolve_tool_confirmation_plan,
     ConfirmationFailureKind, ToolConfirmationChannelStore, ToolConfirmationPlan,
@@ -27,10 +29,15 @@ use bitfun_agent_tools::{
     build_user_rejected_tool_presentation_with_instruction,
     build_user_steering_interrupted_presentation, render_tool_result_for_assistant,
     truncate_raw_tool_arguments_preview, truncate_tool_arguments_preview,
-    validate_tool_execution_admission, ResolvedToolInvocation, ToolExecutionAdmissionRejection,
-    ToolExecutionAdmissionRequest, GET_TOOL_SPEC_TOOL_NAME, USER_STEERING_INTERRUPTED_MESSAGE,
+    validate_tool_execution_admission, PermissionIntent, ResolvedToolInvocation,
+    ToolExecutionAdmissionRejection, ToolExecutionAdmissionRequest, GET_TOOL_SPEC_TOOL_NAME,
+    USER_STEERING_INTERRUPTED_MESSAGE,
 };
-use bitfun_runtime_ports::RoundInjectionToolPreemption;
+use bitfun_runtime_ports::{
+    wildcard_matches, PermissionEffect, PermissionGrant, PermissionReply, PermissionRequestSource,
+    PermissionRequestSourceKind, PermissionResourceCaseSensitivity, PermissionRule,
+    PermissionV2Request, RoundInjectionToolPreemption,
+};
 use futures::future::join_all;
 use log::{debug, error, info, warn};
 use std::sync::Arc;
@@ -397,6 +404,92 @@ fn recovered_write_has_potentially_truncated_marked_path(
             .is_some_and(|value| value.starts_with("+++ ") && !value.contains('\n'))
 }
 
+enum V2PermissionAuthorization {
+    Allowed,
+    Rejected { reason: String },
+}
+
+fn permission_project_id(context: &ToolUseContext) -> BitFunResult<String> {
+    let workspace = context.workspace.as_ref().ok_or_else(|| {
+        BitFunError::validation("A workspace is required for file permissions".to_string())
+    })?;
+    let identity = &workspace.session_identity;
+
+    if !workspace.is_remote() {
+        return Ok(
+            bitfun_services_integrations::remote_ssh::paths::local_workspace_stable_storage_id(
+                identity.logical_workspace_path(),
+            ),
+        );
+    }
+
+    if identity.hostname == "_unresolved" {
+        let connection_id = identity.remote_connection_id.as_deref().ok_or_else(|| {
+            BitFunError::validation(
+                "Unresolved remote workspace permission identity has no connection id".to_string(),
+            )
+        })?;
+        let key =
+            bitfun_services_integrations::remote_ssh::paths::unresolved_remote_session_storage_key(
+                connection_id,
+                identity.logical_workspace_path(),
+            );
+        return Ok(format!("remote_unresolved_{key}"));
+    }
+
+    Ok(
+        bitfun_services_integrations::remote_ssh::paths::remote_workspace_stable_id(
+            &identity.hostname,
+            identity.logical_workspace_path(),
+        ),
+    )
+}
+
+fn permission_resource_case_sensitivity(
+    context: &ToolUseContext,
+) -> PermissionResourceCaseSensitivity {
+    if context.is_remote() || !cfg!(windows) {
+        PermissionResourceCaseSensitivity::Sensitive
+    } else {
+        PermissionResourceCaseSensitivity::Insensitive
+    }
+}
+
+fn permission_intent_effect(
+    intent: &PermissionIntent,
+    rules: &[PermissionRule],
+    grants: &[PermissionGrant],
+    case_sensitivity: PermissionResourceCaseSensitivity,
+) -> PermissionEffect {
+    let evaluator = bitfun_runtime_ports::PermissionEvaluator::new(case_sensitivity);
+    let mut aggregate = PermissionEffect::Allow;
+
+    for resource in &intent.resources {
+        match evaluator.evaluate_resource(&intent.action, resource, rules) {
+            PermissionEffect::Deny => return PermissionEffect::Deny,
+            PermissionEffect::Allow => {}
+            PermissionEffect::Ask => {
+                let remembered = grants.iter().any(|grant| {
+                    wildcard_matches(
+                        &intent.action,
+                        &grant.action,
+                        PermissionResourceCaseSensitivity::Sensitive,
+                    ) && wildcard_matches(resource, &grant.resource, case_sensitivity)
+                });
+                if !remembered {
+                    aggregate = PermissionEffect::Ask;
+                }
+            }
+        }
+    }
+
+    if intent.resources.is_empty() {
+        PermissionEffect::Ask
+    } else {
+        aggregate
+    }
+}
+
 const SUBAGENT_LAUNCH_TOOL_NAME: &str = "Task";
 
 /// Tool pipeline
@@ -407,6 +500,7 @@ pub struct ToolPipeline {
     confirmation_channels: ToolConfirmationChannelStore,
     cancellation_tokens: ToolCancellationTokenStore,
     computer_use_host: Option<ComputerUseHostRef>,
+    permission_request_manager: Option<Arc<PermissionRequestManager>>,
 }
 
 impl ToolPipeline {
@@ -421,11 +515,129 @@ impl ToolPipeline {
             confirmation_channels: ToolConfirmationChannelStore::new(),
             cancellation_tokens: ToolCancellationTokenStore::new(),
             computer_use_host,
+            permission_request_manager: None,
         }
+    }
+
+    pub fn with_permission_request_manager(
+        mut self,
+        permission_request_manager: Arc<PermissionRequestManager>,
+    ) -> Self {
+        self.permission_request_manager = Some(permission_request_manager);
+        self
     }
 
     pub fn computer_use_host(&self) -> Option<ComputerUseHostRef> {
         self.computer_use_host.clone()
+    }
+
+    async fn authorize_permission_intents(
+        &self,
+        task: &ToolTask,
+        tool_name: &str,
+        intents: Vec<PermissionIntent>,
+        context: &ToolUseContext,
+        cancellation_token: &CancellationToken,
+    ) -> BitFunResult<V2PermissionAuthorization> {
+        if intents.is_empty() {
+            return Ok(V2PermissionAuthorization::Allowed);
+        }
+
+        let project_id = permission_project_id(context)?;
+        let manager = self.permission_request_manager.as_ref();
+        let grants = match manager {
+            Some(manager) => manager
+                .list_project_grants(&project_id)
+                .await
+                .map_err(|error| BitFunError::service(error.to_string()))?,
+            None => Vec::new(),
+        };
+        let case_sensitivity = permission_resource_case_sensitivity(context);
+        let mut asks = Vec::new();
+
+        for intent in intents {
+            match permission_intent_effect(
+                &intent,
+                &task.options.permission_rules,
+                &grants,
+                case_sensitivity,
+            ) {
+                PermissionEffect::Allow => {}
+                PermissionEffect::Ask => asks.push(intent),
+                PermissionEffect::Deny => {
+                    return Ok(V2PermissionAuthorization::Rejected {
+                        reason: format!(
+                            "Permission policy denied '{}' for {}",
+                            intent.action,
+                            intent.resources.join(", ")
+                        ),
+                    });
+                }
+            }
+        }
+
+        if asks.is_empty() {
+            return Ok(V2PermissionAuthorization::Allowed);
+        }
+
+        let manager = manager.ok_or_else(|| {
+            BitFunError::service(
+                "V2 permission request manager is unavailable for a file tool request".to_string(),
+            )
+        })?;
+
+        for intent in asks {
+            let request_id = uuid::Uuid::new_v4().to_string();
+            let pending = manager
+                .register(PermissionV2Request {
+                    request_id: request_id.clone(),
+                    project_id: project_id.clone(),
+                    session_id: task.context.session_id.clone(),
+                    agent_id: task.context.agent_type.clone(),
+                    action: intent.action,
+                    resources: intent.resources,
+                    save_resources: intent.save_resources,
+                    source: PermissionRequestSource {
+                        kind: PermissionRequestSourceKind::ToolCall,
+                        identity: tool_name.to_string(),
+                    },
+                    display_metadata: intent.display_metadata,
+                })
+                .await
+                .map_err(|error| BitFunError::service(error.to_string()))?;
+
+            let outcome = tokio::select! {
+                outcome = pending.wait() => outcome,
+                _ = cancellation_token.cancelled() => {
+                    if let Err(error) = manager
+                        .cancel_request(&request_id, "Tool execution was cancelled")
+                        .await
+                    {
+                        warn!("Failed to cancel pending permission request: request_id={}, error={}", request_id, error);
+                    }
+                    return Err(BitFunError::Cancelled(
+                        "Tool execution was cancelled while awaiting permission".to_string(),
+                    ));
+                }
+            };
+
+            match outcome {
+                PermissionWaitOutcome::Replied(PermissionReply::Once | PermissionReply::Always) => {
+                }
+                PermissionWaitOutcome::Replied(PermissionReply::Reject { feedback }) => {
+                    return Ok(V2PermissionAuthorization::Rejected {
+                        reason: feedback.unwrap_or_else(|| {
+                            format!("User rejected permission for tool '{tool_name}'")
+                        }),
+                    });
+                }
+                PermissionWaitOutcome::Cancelled { reason } => {
+                    return Err(BitFunError::Cancelled(reason));
+                }
+            }
+        }
+
+        Ok(V2PermissionAuthorization::Allowed)
     }
 
     fn pending_round_injection_tool_preemption(
@@ -918,9 +1130,50 @@ impl ToolPipeline {
             );
         }
 
+        let permission_intents = tool.permission_intents(&tool_args, &tool_context)?;
+
         // Register cancellation only after deterministic validation and registry lookup succeed.
         self.cancellation_tokens
             .insert(tool_id.clone(), cancellation_token.clone());
+
+        match self
+            .authorize_permission_intents(
+                &task,
+                &tool_name,
+                permission_intents,
+                &tool_context,
+                &cancellation_token,
+            )
+            .await
+        {
+            Ok(V2PermissionAuthorization::Allowed) => {}
+            Ok(V2PermissionAuthorization::Rejected { reason }) => {
+                let preflight_ms = elapsed_ms_u64(start_time);
+                self.state_manager
+                    .update_state(
+                        &tool_id,
+                        ToolExecutionState::Rejected {
+                            reason: reason.clone(),
+                            duration_ms: Some(preflight_ms),
+                            queue_wait_ms: Some(queue_wait_ms),
+                            preflight_ms: Some(preflight_ms),
+                            confirmation_wait_ms: Some(0),
+                            execution_ms: None,
+                        },
+                    )
+                    .await;
+                self.cancellation_tokens.remove(&tool_id);
+                return Ok(build_user_rejected_tool_result(
+                    &tool_id,
+                    self.state_manager.get_task(&tool_id),
+                    Some(&reason),
+                ));
+            }
+            Err(error) => {
+                self.cancellation_tokens.remove(&tool_id);
+                return Err(error);
+            }
+        }
 
         debug!("Executing tool: tool_name={}", tool_name);
 
@@ -929,7 +1182,8 @@ impl ToolPipeline {
 
         let confirmation_plan = resolve_tool_confirmation_plan(ToolConfirmationRequestFacts {
             confirm_before_run: task.options.confirm_before_run,
-            tool_needs_permission: tool.needs_permissions(Some(&tool_args)),
+            tool_needs_permission: !uses_v2_file_permission(&tool_name)
+                && tool.needs_permissions(Some(&tool_args)),
             confirmation_timeout_secs: task.options.confirmation_timeout_secs,
             now: SystemTime::now(),
         });
@@ -1653,12 +1907,16 @@ mod tests {
     use async_trait::async_trait;
     use bitfun_agent_tools::{LoadedDeferredToolSpec, CALL_DEFERRED_TOOL_NAME};
     use bitfun_runtime_ports::{
-        RoundInjection, RoundInjectionExecutionPolicy, RoundInjectionKind, RoundInjectionTarget,
-        RoundInjectionToolPreemption,
+        ClockPort, PermissionAuditEvent, PermissionAuditRecord, PermissionAuditStorePort,
+        PermissionGrant, PermissionGrantKey, PermissionGrantStorePort, PermissionReplyStorePort,
+        PortResult, RoundInjection, RoundInjectionExecutionPolicy, RoundInjectionKind,
+        RoundInjectionTarget, RoundInjectionToolPreemption, RuntimeServiceCapability,
+        RuntimeServicePort,
     };
     use serde_json::json;
     use std::collections::HashMap;
     use std::path::PathBuf;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
     use std::time::SystemTime;
     use tokio::time::{sleep, Duration};
@@ -1717,6 +1975,154 @@ mod tests {
     struct CapturingTestTool {
         name: String,
         received_arguments: Arc<Mutex<Option<serde_json::Value>>>,
+    }
+
+    struct V2FileTestTool {
+        intents: Vec<PermissionIntent>,
+        call_count: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl Tool for V2FileTestTool {
+        fn name(&self) -> &str {
+            "Write"
+        }
+
+        async fn description(&self) -> BitFunResult<String> {
+            Ok("V2 file permission test tool".to_string())
+        }
+
+        fn short_description(&self) -> String {
+            "V2 file permission test tool".to_string()
+        }
+
+        fn input_schema(&self) -> serde_json::Value {
+            json!({ "type": "object" })
+        }
+
+        fn needs_permissions(&self, _input: Option<&serde_json::Value>) -> bool {
+            true
+        }
+
+        fn permission_intents(
+            &self,
+            _input: &serde_json::Value,
+            _context: &ToolUseContext,
+        ) -> BitFunResult<Vec<PermissionIntent>> {
+            Ok(self.intents.clone())
+        }
+
+        async fn call_impl(
+            &self,
+            _input: &serde_json::Value,
+            _context: &ToolUseContext,
+        ) -> BitFunResult<Vec<ToolResult>> {
+            self.call_count.fetch_add(1, Ordering::SeqCst);
+            Ok(vec![ToolResult::Result {
+                data: json!({ "written": true }),
+                result_for_assistant: None,
+                image_attachments: None,
+            }])
+        }
+    }
+
+    #[derive(Default)]
+    struct MemoryPermissionStore {
+        grants: Mutex<Vec<PermissionGrant>>,
+        audit: Mutex<Vec<PermissionAuditRecord>>,
+    }
+
+    impl RuntimeServicePort for MemoryPermissionStore {
+        fn capability(&self) -> RuntimeServiceCapability {
+            RuntimeServiceCapability::Permission
+        }
+    }
+
+    #[async_trait]
+    impl PermissionGrantStorePort for MemoryPermissionStore {
+        async fn list_project_grants(&self, project_id: &str) -> PortResult<Vec<PermissionGrant>> {
+            Ok(self
+                .grants
+                .lock()
+                .expect("permission grant lock")
+                .iter()
+                .filter(|grant| grant.project_id == project_id)
+                .cloned()
+                .collect())
+        }
+
+        async fn add_project_grants(&self, grants: Vec<PermissionGrant>) -> PortResult<()> {
+            self.grants
+                .lock()
+                .expect("permission grant lock")
+                .extend(grants);
+            Ok(())
+        }
+
+        async fn remove_project_grant(&self, key: PermissionGrantKey) -> PortResult<bool> {
+            let mut grants = self.grants.lock().expect("permission grant lock");
+            let original_len = grants.len();
+            grants.retain(|grant| grant.key() != key);
+            Ok(grants.len() != original_len)
+        }
+    }
+
+    #[async_trait]
+    impl PermissionAuditStorePort for MemoryPermissionStore {
+        async fn append_permission_audit(&self, record: PermissionAuditRecord) -> PortResult<()> {
+            self.audit
+                .lock()
+                .expect("permission audit lock")
+                .push(record);
+            Ok(())
+        }
+
+        async fn list_project_permission_audit(
+            &self,
+            project_id: &str,
+        ) -> PortResult<Vec<PermissionAuditRecord>> {
+            Ok(self
+                .audit
+                .lock()
+                .expect("permission audit lock")
+                .iter()
+                .filter(|record| record.request.project_id == project_id)
+                .cloned()
+                .collect())
+        }
+    }
+
+    #[async_trait]
+    impl PermissionReplyStorePort for MemoryPermissionStore {
+        async fn commit_permission_reply(
+            &self,
+            grants: Vec<PermissionGrant>,
+            audit: Vec<PermissionAuditRecord>,
+        ) -> PortResult<()> {
+            self.grants
+                .lock()
+                .expect("permission grant lock")
+                .extend(grants);
+            self.audit
+                .lock()
+                .expect("permission audit lock")
+                .extend(audit);
+            Ok(())
+        }
+    }
+
+    struct FixedPermissionClock;
+
+    impl RuntimeServicePort for FixedPermissionClock {
+        fn capability(&self) -> RuntimeServiceCapability {
+            RuntimeServiceCapability::Clock
+        }
+    }
+
+    impl ClockPort for FixedPermissionClock {
+        fn now_unix_millis(&self) -> i64 {
+            42
+        }
     }
 
     #[async_trait]
@@ -1989,6 +2395,286 @@ mod tests {
             .read()
             .await
             .current_snapshot_generation()
+    }
+
+    async fn register_v2_file_test_tool(
+        pipeline: &ToolPipeline,
+        intents: Vec<PermissionIntent>,
+        call_count: Arc<AtomicUsize>,
+    ) {
+        pipeline
+            .tool_registry
+            .write()
+            .await
+            .register_tool(Arc::new(V2FileTestTool {
+                intents,
+                call_count,
+            }));
+    }
+
+    fn permission_test_context() -> ToolExecutionContext {
+        let mut context = test_tool_execution_context();
+        context.workspace = Some(WorkspaceBinding::new(
+            None,
+            std::env::temp_dir().join("bitfun-permission-v2-test"),
+        ));
+        context
+    }
+
+    fn permission_test_manager(store: Arc<MemoryPermissionStore>) -> Arc<PermissionRequestManager> {
+        Arc::new(
+            PermissionRequestManager::new(
+                store.clone(),
+                store.clone(),
+                Arc::new(FixedPermissionClock),
+            )
+            .with_grant_store(store),
+        )
+    }
+
+    async fn wait_for_permission_request(
+        manager: &PermissionRequestManager,
+    ) -> bitfun_runtime_ports::PermissionV2Request {
+        for _ in 0..100 {
+            if let Some(request) = manager.pending_requests().into_iter().next() {
+                return request;
+            }
+            sleep(Duration::from_millis(5)).await;
+        }
+        panic!("permission request was not registered");
+    }
+
+    #[tokio::test]
+    async fn v2_allow_and_deny_are_enforced_before_tool_side_effects() {
+        let pipeline = test_tool_pipeline();
+        let calls = Arc::new(AtomicUsize::new(0));
+        register_v2_file_test_tool(
+            &pipeline,
+            vec![PermissionIntent::new(
+                "edit",
+                vec!["src/main.rs".to_string(), "src/private/key.rs".to_string()],
+            )],
+            Arc::clone(&calls),
+        )
+        .await;
+
+        let mut allow_options = ToolExecutionOptions::default();
+        allow_options.permission_rules = vec![PermissionRule::new(
+            "edit",
+            "src/*",
+            PermissionEffect::Allow,
+        )];
+        let results = pipeline
+            .execute_tools(
+                vec![test_tool_call("allow", "Write")],
+                permission_test_context(),
+                allow_options,
+            )
+            .await
+            .expect("allowed tool should execute");
+        assert!(!results[0].result.is_error);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+        let mut deny_options = ToolExecutionOptions::default();
+        deny_options.permission_rules = vec![
+            PermissionRule::new("edit", "src/*", PermissionEffect::Allow),
+            PermissionRule::new("edit", "src/private/*", PermissionEffect::Deny),
+        ];
+        let results = pipeline
+            .execute_tools(
+                vec![test_tool_call("deny", "Write")],
+                permission_test_context(),
+                deny_options,
+            )
+            .await
+            .expect("denied tool should return a structured rejection");
+        assert!(!results[0].result.is_error);
+        assert!(matches!(
+            pipeline
+                .state_manager
+                .get_task("deny")
+                .map(|task| task.state),
+            Some(ToolExecutionState::Rejected { .. })
+        ));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn v2_once_and_always_replies_control_execution_and_remembered_grants() {
+        let store = Arc::new(MemoryPermissionStore::default());
+        let manager = permission_test_manager(Arc::clone(&store));
+        let pipeline = test_tool_pipeline().with_permission_request_manager(Arc::clone(&manager));
+        let calls = Arc::new(AtomicUsize::new(0));
+        register_v2_file_test_tool(
+            &pipeline,
+            vec![PermissionIntent::new(
+                "edit",
+                vec!["src/main.rs".to_string(), "src/private/key.rs".to_string()],
+            )],
+            Arc::clone(&calls),
+        )
+        .await;
+
+        let once_pipeline = pipeline.clone();
+        let once = tokio::spawn(async move {
+            once_pipeline
+                .execute_tools(
+                    vec![test_tool_call("once", "Write")],
+                    permission_test_context(),
+                    ToolExecutionOptions::default(),
+                )
+                .await
+        });
+        let request = wait_for_permission_request(&manager).await;
+        manager
+            .reply(
+                &request.request_id,
+                PermissionReply::Once,
+                bitfun_runtime_ports::PermissionReplySource::User,
+            )
+            .await
+            .expect("once reply");
+        once.await.expect("once task join").expect("once execution");
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+        let always_pipeline = pipeline.clone();
+        let always = tokio::spawn(async move {
+            always_pipeline
+                .execute_tools(
+                    vec![test_tool_call("always", "Write")],
+                    permission_test_context(),
+                    ToolExecutionOptions::default(),
+                )
+                .await
+        });
+        let request = wait_for_permission_request(&manager).await;
+        manager
+            .reply(
+                &request.request_id,
+                PermissionReply::Always,
+                bitfun_runtime_ports::PermissionReplySource::User,
+            )
+            .await
+            .expect("always reply");
+        always
+            .await
+            .expect("always task join")
+            .expect("always execution");
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+
+        pipeline
+            .execute_tools(
+                vec![test_tool_call("remembered", "Write")],
+                permission_test_context(),
+                ToolExecutionOptions::default(),
+            )
+            .await
+            .expect("remembered grant should allow the same project");
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+
+        assert_eq!(
+            store.audit.lock().expect("permission audit lock").len(),
+            4,
+            "once and always should each persist requested and replied audit facts"
+        );
+
+        let mut other_project_context = permission_test_context();
+        other_project_context.workspace = Some(WorkspaceBinding::new(
+            None,
+            std::env::temp_dir().join("bitfun-permission-v2-other-project"),
+        ));
+        let other_pipeline = pipeline.clone();
+        let other_project = tokio::spawn(async move {
+            other_pipeline
+                .execute_tools(
+                    vec![test_tool_call("other-project", "Write")],
+                    other_project_context,
+                    ToolExecutionOptions::default(),
+                )
+                .await
+        });
+        let other_request = wait_for_permission_request(&manager).await;
+        let remembered_project_id = store
+            .grants
+            .lock()
+            .expect("permission grant lock")
+            .first()
+            .expect("remembered grant")
+            .project_id
+            .clone();
+        assert_ne!(other_request.project_id, remembered_project_id);
+        manager
+            .reply(
+                &other_request.request_id,
+                PermissionReply::Reject { feedback: None },
+                bitfun_runtime_ports::PermissionReplySource::User,
+            )
+            .await
+            .expect("reject other project request");
+        other_project
+            .await
+            .expect("other project task join")
+            .expect("other project rejection");
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+
+        let mut deny_options = ToolExecutionOptions::default();
+        deny_options.permission_rules = vec![
+            PermissionRule::new("edit", "src/*", PermissionEffect::Allow),
+            PermissionRule::new("edit", "src/private/*", PermissionEffect::Deny),
+        ];
+        pipeline
+            .execute_tools(
+                vec![test_tool_call("deny-after-grant", "Write")],
+                permission_test_context(),
+                deny_options,
+            )
+            .await
+            .expect("policy denial should be structured");
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn v2_cancellation_clears_pending_request_without_side_effect() {
+        let store = Arc::new(MemoryPermissionStore::default());
+        let manager = permission_test_manager(Arc::clone(&store));
+        let pipeline = test_tool_pipeline().with_permission_request_manager(Arc::clone(&manager));
+        let calls = Arc::new(AtomicUsize::new(0));
+        register_v2_file_test_tool(
+            &pipeline,
+            vec![PermissionIntent::new(
+                "edit",
+                vec!["src/main.rs".to_string()],
+            )],
+            Arc::clone(&calls),
+        )
+        .await;
+
+        let running_pipeline = pipeline.clone();
+        let task = tokio::spawn(async move {
+            running_pipeline
+                .execute_tools(
+                    vec![test_tool_call("cancel", "Write")],
+                    permission_test_context(),
+                    ToolExecutionOptions::default(),
+                )
+                .await
+        });
+        let _request = wait_for_permission_request(&manager).await;
+        pipeline
+            .cancel_tool("cancel", "test cancellation".to_string())
+            .await
+            .expect("cancel tool");
+        task.await
+            .expect("cancel task join")
+            .expect("cancel result");
+        assert!(manager.pending_requests().is_empty());
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert!(store
+            .audit
+            .lock()
+            .expect("permission audit lock")
+            .iter()
+            .any(|record| matches!(record.event, PermissionAuditEvent::Cancelled { .. })));
     }
 
     #[tokio::test]

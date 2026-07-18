@@ -13,6 +13,7 @@ pub mod file_read_freshness;
 pub mod framework;
 pub mod input_validator;
 pub mod mcp_tool_bridge;
+pub mod permission_intent;
 pub mod tool_execution_presentation;
 pub mod tool_result_storage;
 pub mod tool_snapshot;
@@ -99,6 +100,7 @@ pub use mcp_tool_bridge::{
     McpToolBridgeDefinition, McpToolBridgeDefinitionInput, McpToolBridgeToolInfo,
     MCP_TOOL_DELIMITER, MCP_TOOL_PREFIX,
 };
+pub use permission_intent::PermissionIntent;
 pub use tool_execution_presentation::{
     build_invalid_tool_call_error_message, build_tool_call_truncation_recovery_notice,
     build_tool_confirmation_timeout_presentation, build_tool_execution_error_presentation,

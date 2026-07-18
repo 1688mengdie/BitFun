@@ -75,12 +75,12 @@ pub fn core_permission_request_manager() -> Result<Arc<PermissionRequestManager>
         path_manager.user_data_dir().join("permissions"),
     ));
     let audit_store: Arc<dyn bitfun_runtime_ports::PermissionAuditStorePort> = store.clone();
-    let reply_store: Arc<dyn bitfun_runtime_ports::PermissionReplyStorePort> = store;
-    let manager = Arc::new(PermissionRequestManager::new(
-        audit_store,
-        reply_store,
-        Arc::new(SystemPermissionClock),
-    ));
+    let reply_store: Arc<dyn bitfun_runtime_ports::PermissionReplyStorePort> = store.clone();
+    let grant_store: Arc<dyn bitfun_runtime_ports::PermissionGrantStorePort> = store;
+    let manager = Arc::new(
+        PermissionRequestManager::new(audit_store, reply_store, Arc::new(SystemPermissionClock))
+            .with_grant_store(grant_store),
+    );
     let _ = PERMISSION_REQUEST_MANAGER.set(manager);
     PERMISSION_REQUEST_MANAGER
         .get()

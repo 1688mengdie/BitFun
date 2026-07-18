@@ -7,7 +7,7 @@ use crate::agentic::tools::ToolRuntimeRestrictions;
 use crate::agentic::workspace::WorkspaceServices;
 use crate::agentic::WorkspaceBinding;
 use bitfun_agent_tools::ResolvedToolInvocation;
-use bitfun_runtime_ports::{DelegationPolicy, RemoteExecPort, TerminalPort};
+use bitfun_runtime_ports::{DelegationPolicy, PermissionRule, RemoteExecPort, TerminalPort};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -25,6 +25,8 @@ pub struct ToolExecutionOptions {
     pub confirm_before_run: bool,
     /// Tool confirmation timeout (seconds), None means infinite waiting
     pub confirmation_timeout_secs: Option<u64>,
+    /// Ordered V2 permission rules. An unmatched resource defaults to `ask`.
+    pub permission_rules: Vec<PermissionRule>,
 }
 
 impl Default for ToolExecutionOptions {
@@ -36,6 +38,7 @@ impl Default for ToolExecutionOptions {
             timeout_secs: None, // Default no timeout (infinite waiting)
             confirm_before_run: true,
             confirmation_timeout_secs: None, // Default no timeout (infinite waiting)
+            permission_rules: Vec::new(),
         }
     }
 }

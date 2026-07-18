@@ -487,6 +487,14 @@ impl Tool for WrappedTool {
         self.original_tool.needs_permissions(input)
     }
 
+    fn permission_intents(
+        &self,
+        input: &Value,
+        context: &ToolUseContext,
+    ) -> crate::util::errors::BitFunResult<Vec<bitfun_agent_tools::PermissionIntent>> {
+        self.original_tool.permission_intents(input, context)
+    }
+
     async fn validate_input(
         &self,
         input: &Value,

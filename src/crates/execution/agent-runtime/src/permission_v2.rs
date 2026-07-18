@@ -6,8 +6,8 @@
 
 use bitfun_runtime_ports::{
     ClockPort, PermissionAuditEvent, PermissionAuditRecord, PermissionAuditStorePort,
-    PermissionGrant, PermissionReply, PermissionReplySource, PermissionReplyStorePort,
-    PermissionRequestEvent, PermissionV2Request, PortError,
+    PermissionGrant, PermissionGrantStorePort, PermissionReply, PermissionReplySource,
+    PermissionReplyStorePort, PermissionRequestEvent, PermissionV2Request, PortError,
 };
 use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
@@ -61,6 +61,8 @@ pub enum PermissionRequestManagerError {
     RequestNotFound(String),
     #[error("Failed to persist permission reply: {0}")]
     ReplyStore(#[source] PortError),
+    #[error("Failed to load remembered permission grants: {0}")]
+    GrantStore(#[source] PortError),
     #[error("Failed to persist permission audit: {0}")]
     AuditStore(#[source] PortError),
 }
@@ -77,6 +79,7 @@ pub struct PermissionRequestManager {
     operations: Arc<Mutex<()>>,
     audit_store: Arc<dyn PermissionAuditStorePort>,
     reply_store: Arc<dyn PermissionReplyStorePort>,
+    grant_store: Option<Arc<dyn PermissionGrantStorePort>>,
     clock: Arc<dyn ClockPort>,
     events: broadcast::Sender<PermissionRequestEvent>,
 }
@@ -101,9 +104,28 @@ impl PermissionRequestManager {
             operations: Arc::new(Mutex::new(())),
             audit_store,
             reply_store,
+            grant_store: None,
             clock,
             events,
         }
+    }
+
+    pub fn with_grant_store(mut self, grant_store: Arc<dyn PermissionGrantStorePort>) -> Self {
+        self.grant_store = Some(grant_store);
+        self
+    }
+
+    pub async fn list_project_grants(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<PermissionGrant>, PermissionRequestManagerError> {
+        let Some(grant_store) = &self.grant_store else {
+            return Ok(Vec::new());
+        };
+        grant_store
+            .list_project_grants(project_id)
+            .await
+            .map_err(PermissionRequestManagerError::GrantStore)
     }
 
     pub fn subscribe(&self) -> PermissionRequestEventReceiver {

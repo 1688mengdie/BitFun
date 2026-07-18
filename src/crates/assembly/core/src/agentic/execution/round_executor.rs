@@ -55,6 +55,12 @@ fn tool_call_needs_permission(
         ResolvedToolInvocation::direct(tool_call.tool_name.clone(), tool_call.arguments.clone())
     });
 
+    if crate::agentic::tools::file_permissions::uses_v2_file_permission(
+        &invocation.effective_tool_name,
+    ) {
+        return false;
+    }
+
     registry
         .get_tool(&invocation.effective_tool_name)
         .and_then(|tool| {
@@ -1405,7 +1411,7 @@ mod tests {
     }
 
     #[test]
-    fn deferred_permission_gate_uses_effective_target() {
+    fn deferred_file_tool_uses_v2_permission_gate_instead_of_legacy_gate() {
         let registry = create_tool_registry();
         let call = ToolCall {
             tool_id: "tool-1".to_string(),
@@ -1419,7 +1425,7 @@ mod tests {
             recovered_from_truncation: false,
         };
 
-        assert!(tool_call_needs_permission(&registry, &call, None, false));
+        assert!(!tool_call_needs_permission(&registry, &call, None, false));
     }
 
     fn test_round_context() -> RoundContext {
