@@ -859,34 +859,6 @@ export class AgentAPI {
     }
   }
 
-  async confirmToolExecution(sessionId: string, toolId: string): Promise<void> {
-    try {
-      await api.invoke<void>('confirm_tool_execution', {
-        request: {
-          sessionId,
-          toolId
-        }
-      });
-    } catch (error) {
-      throw createTauriCommandError('confirm_tool_execution', error, { sessionId, toolId });
-    }
-  }
-
-   
-  async rejectToolExecution(sessionId: string, toolId: string, reason?: string): Promise<void> {
-    try {
-      await api.invoke<void>('reject_tool_execution', {
-        request: {
-          sessionId,
-          toolId,
-          reason
-        }
-      });
-    } catch (error) {
-      throw createTauriCommandError('reject_tool_execution', error, { sessionId, toolId, reason });
-    }
-  }
-
   async listPendingPermissionRequests(): Promise<PermissionV2Request[]> {
     try {
       return await api.invoke<PermissionV2Request[]>('list_pending_permission_requests');

@@ -3,8 +3,8 @@
 //! Wraps MCP tools as implementations of BitFun's `Tool` trait.
 
 use crate::agentic::tools::framework::{
-    DynamicToolInfo, Tool, ToolExposure, ToolRenderOptions, ToolResult, ToolUseContext,
-    ValidationResult,
+    DynamicToolInfo, PermissionIntent, Tool, ToolExposure, ToolRenderOptions, ToolResult,
+    ToolUseContext, ValidationResult,
 };
 use crate::service::mcp::protocol::{MCPTool, MCPToolResult};
 use crate::service::mcp::server::MCPConnection;
@@ -24,6 +24,10 @@ use serde_json::Value;
 use std::sync::Arc;
 
 const MCP_TOOL_DEFAULT_EXPOSURE: ToolExposure = ToolExposure::Deferred;
+
+fn dynamic_mcp_permission_intent(full_name: &str) -> PermissionIntent {
+    PermissionIntent::new("mcp", vec![full_name.to_string()])
+}
 
 /// MCP tool wrapper that adapts an MCP tool to BitFun's `Tool`.
 struct MCPToolWrapper {
@@ -123,8 +127,14 @@ impl Tool for MCPToolWrapper {
         self.is_readonly()
     }
 
-    fn needs_permissions(&self, _input: Option<&Value>) -> bool {
-        !self.is_readonly()
+    fn permission_intents(
+        &self,
+        _input: &Value,
+        _context: &ToolUseContext,
+    ) -> BitFunResult<Vec<PermissionIntent>> {
+        Ok(vec![dynamic_mcp_permission_intent(
+            &self.descriptor.full_name,
+        )])
     }
 
     async fn validate_input(
@@ -284,10 +294,21 @@ impl Default for MCPToolAdapter {
 
 #[cfg(test)]
 mod tests {
-    use super::{ToolExposure, MCP_TOOL_DEFAULT_EXPOSURE};
+    use super::{dynamic_mcp_permission_intent, ToolExposure, MCP_TOOL_DEFAULT_EXPOSURE};
 
     #[test]
     fn mcp_tool_wrapper_defaults_to_deferred_exposure() {
         assert_eq!(MCP_TOOL_DEFAULT_EXPOSURE, ToolExposure::Deferred);
+    }
+
+    #[test]
+    fn dynamic_mcp_tools_use_the_full_server_tool_identity() {
+        let intent = dynamic_mcp_permission_intent("mcp__github__search_repositories");
+
+        assert_eq!(intent.action, "mcp");
+        assert_eq!(
+            intent.resources,
+            ["mcp__github__search_repositories".to_string()]
+        );
     }
 }

@@ -208,15 +208,6 @@ fn metadata_bool(metadata: Option<&serde_json::Value>, key: &str) -> Option<bool
         .and_then(serde_json::Value::as_bool)
 }
 
-fn should_require_tool_confirmation(
-    policy: DialogSubmissionPolicy,
-    user_message_metadata: Option<&serde_json::Value>,
-) -> bool {
-    (policy.requires_tool_confirmation()
-        || metadata_bool(user_message_metadata, "require_tool_confirmation") == Some(true))
-        && metadata_bool(user_message_metadata, "acp_transport") != Some(true)
-}
-
 /// Subagent execution result
 ///
 /// Contains the text response after subagent execution
@@ -376,11 +367,10 @@ fn background_subagent_delivery_metadata(
     parent: &SubagentParentInfo,
     subagent_session_id: &str,
     subagent_dialog_turn_id: &str,
-    require_tool_confirmation: bool,
     agent_type: &str,
     task_description: &str,
 ) -> serde_json::Map<String, serde_json::Value> {
-    let mut metadata = serde_json::Map::from_iter([
+    let metadata = serde_json::Map::from_iter([
         ("kind".to_string(), serde_json::json!("background_result")),
         ("sourceKind".to_string(), serde_json::json!("subagent")),
         (
@@ -409,12 +399,6 @@ fn background_subagent_delivery_metadata(
             serde_json::json!(task_description),
         ),
     ]);
-    if require_tool_confirmation {
-        metadata.insert(
-            "require_tool_confirmation".to_string(),
-            serde_json::Value::Bool(true),
-        );
-    }
     metadata
 }
 
@@ -2274,8 +2258,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             Some(workspace_root.to_string_lossy().to_string()),
             None,
             None,
-            DialogSubmissionPolicy::for_source(DialogTriggerSource::DesktopApi)
-                .with_skip_tool_confirmation(true),
+            DialogSubmissionPolicy::for_source(DialogTriggerSource::DesktopApi),
             Some(metadata),
             vec![Message::internal_reminder(
                 InternalReminderKind::Generic,
@@ -3075,7 +3058,6 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             context: HashMap::new(),
             subagent_parent_info: None,
             delegation_policy: DelegationPolicy::top_level(),
-            skip_tool_confirmation: true,
             runtime_tool_restrictions: ToolRuntimeRestrictions::default(),
             workspace_services: manual_workspace_services,
             terminal_port: self.terminal_port(),
@@ -3252,7 +3234,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         Self::track_session_workspace_activity_best_effort(&session.config, "dialog_started").await;
 
         debug!(
-            "Resolved dialog turn agent type: session_id={}, turn_id={}, requested_agent_type={}, session_agent_type={}, effective_agent_type={}, trigger_source={:?}, queue_priority={:?}, skip_tool_confirmation={}",
+            "Resolved dialog turn agent type: session_id={}, turn_id={}, requested_agent_type={}, session_agent_type={}, effective_agent_type={}, trigger_source={:?}, queue_priority={:?}",
             session_id,
             turn_id.as_deref().unwrap_or(""),
             if requested_agent_type.is_empty() {
@@ -3267,8 +3249,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             },
             effective_agent_type,
             submission_policy.trigger_source,
-            submission_policy.queue_priority,
-            submission_policy.skip_tool_confirmation
+            submission_policy.queue_priority
         );
 
         if session.agent_type != effective_agent_type {
@@ -3730,9 +3711,6 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                 "true".to_string(),
             );
         }
-        if should_require_tool_confirmation(submission_policy, user_message_metadata.as_ref()) {
-            context_vars.insert("require_tool_confirmation".to_string(), "true".to_string());
-        }
         let session_workspace_path = session_workspace
             .as_ref()
             .map(|workspace| workspace.root_path_string());
@@ -3761,7 +3739,6 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             context: context_vars,
             subagent_parent_info: None,
             delegation_policy: DelegationPolicy::top_level(),
-            skip_tool_confirmation: submission_policy.skip_tool_confirmation,
             runtime_tool_restrictions,
             workspace_services,
             terminal_port: self.terminal_port(),
@@ -4674,16 +4651,6 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         self.event_router.unsubscribe_internal(subscriber_id);
     }
 
-    /// Confirm tool execution
-    pub async fn confirm_tool(&self, tool_id: &str) -> BitFunResult<()> {
-        self.tool_pipeline.confirm_tool(tool_id).await
-    }
-
-    /// Reject tool execution
-    pub async fn reject_tool(&self, tool_id: &str, reason: String) -> BitFunResult<()> {
-        self.tool_pipeline.reject_tool(tool_id, reason).await
-    }
-
     /// Cancel tool execution
     pub async fn cancel_tool(&self, tool_id: &str, reason: String) -> BitFunResult<()> {
         self.tool_pipeline.cancel_tool(tool_id, reason).await
@@ -5353,10 +5320,6 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             context,
             subagent_parent_info: subagent_parent_info.clone(),
             delegation_policy,
-            // Subagents run autonomously without user interaction; always skip
-            // tool confirmation to prevent them from blocking indefinitely on a
-            // confirmation channel that nobody will ever respond to.
-            skip_tool_confirmation: true,
             runtime_tool_restrictions,
             workspace_services: subagent_services,
             terminal_port: self.terminal_port(),
@@ -6090,8 +6053,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             child_session.config.workspace_path.clone(),
             child_session.config.remote_connection_id.clone(),
             child_session.config.remote_ssh_host.clone(),
-            DialogSubmissionPolicy::for_source(DialogTriggerSource::DesktopApi)
-                .with_skip_tool_confirmation(true),
+            DialogSubmissionPolicy::for_source(DialogTriggerSource::DesktopApi),
             Some(user_message_metadata),
             prepended_messages,
             true,
@@ -7087,12 +7049,6 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         let parent_workspace_path = parent_session.config.workspace_path.clone();
         let parent_remote_connection_id = parent_session.config.remote_connection_id.clone();
         let parent_remote_ssh_host = parent_session.config.remote_ssh_host.clone();
-        let parent_requires_tool_confirmation = get_global_scheduler().is_some_and(|scheduler| {
-            scheduler.active_turn_requires_tool_confirmation(
-                &subagent_parent_info.session_id,
-                &subagent_parent_info.dialog_turn_id,
-            )
-        });
         let background_task_id = format!("bg-subagent-{}", uuid::Uuid::new_v4());
         let background_task_id_for_delivery = background_task_id.clone();
         let task_description = request.user_input_text.clone();
@@ -7190,7 +7146,6 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                     &subagent_parent_info,
                     &subagent_session_id_for_delivery,
                     &subagent_dialog_turn_id_for_delivery,
-                    parent_requires_tool_confirmation,
                     &agent_type,
                     &task_description,
                 );
@@ -7324,7 +7279,6 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                 &subagent_parent_info,
                 &subagent_session_id_for_delivery,
                 &subagent_dialog_turn_id_for_delivery,
-                parent_requires_tool_confirmation,
                 &agent_type,
                 &task_description,
             );
@@ -8015,24 +7969,6 @@ impl bitfun_agent_runtime::sdk::AgentSessionRestorePort for ConversationCoordina
 
 #[async_trait::async_trait]
 impl bitfun_agent_runtime::sdk::AgentInteractionResponsePort for ConversationCoordinator {
-    async fn confirm_tool(
-        &self,
-        request: bitfun_agent_runtime::sdk::AgentToolConfirmationRequest,
-    ) -> bitfun_runtime_ports::PortResult<()> {
-        self.confirm_tool(&request.tool_id)
-            .await
-            .map_err(runtime_port_error_preserving_message)
-    }
-
-    async fn reject_tool(
-        &self,
-        request: bitfun_agent_runtime::sdk::AgentToolRejectionRequest,
-    ) -> bitfun_runtime_ports::PortResult<()> {
-        self.reject_tool(&request.tool_id, request.reason)
-            .await
-            .map_err(runtime_port_error_preserving_message)
-    }
-
     async fn submit_user_answers(
         &self,
         request: bitfun_agent_runtime::sdk::AgentUserAnswersRequest,
@@ -8341,9 +8277,9 @@ mod tests {
         background_subagent_delivery_metadata, merge_prepended_messages_for_turn,
         normalize_subagent_max_concurrency, resolve_agent_session_create_created_by,
         resolve_agent_submission_turn_id, resolve_subagent_model_selection,
-        runtime_port_error_preserving_message, should_require_tool_confirmation,
-        turn_review_manifest_for_agent, validate_background_subagent_delivery,
-        ConversationCoordinator, SubagentExecutionRequest, TEST_AGENT_MODEL_DEFAULTS,
+        runtime_port_error_preserving_message, turn_review_manifest_for_agent,
+        validate_background_subagent_delivery, ConversationCoordinator, SubagentExecutionRequest,
+        TEST_AGENT_MODEL_DEFAULTS,
     };
     use crate::agentic::agents::{CustomSubagent, CustomSubagentKind, UserContextPolicy};
     use crate::agentic::core::{
@@ -8371,8 +8307,7 @@ mod tests {
     use crate::service::session::SessionMetadata;
     use bitfun_runtime_ports::{
         AgentSessionCreateRequest, AgentSubmissionPort, AgentSubmissionRequest,
-        AgentSubmissionSource, DelegationPolicy, DialogQueuePriority, DialogSubmissionPolicy,
-        SubagentContextMode,
+        AgentSubmissionSource, DelegationPolicy, SubagentContextMode,
     };
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -8392,11 +8327,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn interaction_response_port_uses_core_owners_and_typed_stale_errors() {
-        use bitfun_agent_runtime::sdk::{
-            AgentInteractionResponsePort, AgentToolConfirmationRequest, AgentToolRejectionRequest,
-            AgentUserAnswersRequest,
-        };
+    async fn interaction_response_port_uses_user_question_owner_and_typed_stale_errors() {
+        use bitfun_agent_runtime::sdk::{AgentInteractionResponsePort, AgentUserAnswersRequest};
 
         let (coordinator, _) = test_coordinator();
         let answer_tool_id = format!("answer-{}", uuid::Uuid::new_v4());
@@ -8436,42 +8368,6 @@ mod tests {
         assert_eq!(
             stale_answer.message,
             format!("Tool error: Waiting channel not found: {answer_tool_id}")
-        );
-
-        let missing_tool_id = format!("tool-{}", uuid::Uuid::new_v4());
-        let confirmation = AgentInteractionResponsePort::confirm_tool(
-            &coordinator,
-            AgentToolConfirmationRequest {
-                tool_id: missing_tool_id.clone(),
-            },
-        )
-        .await
-        .expect_err("missing confirmation task");
-        assert_eq!(
-            confirmation.kind,
-            bitfun_runtime_ports::PortErrorKind::NotFound
-        );
-        assert_eq!(
-            confirmation.message,
-            format!("Not found: Tool task not found: {missing_tool_id}")
-        );
-
-        let rejection = AgentInteractionResponsePort::reject_tool(
-            &coordinator,
-            AgentToolRejectionRequest {
-                tool_id: missing_tool_id.clone(),
-                reason: "Use a read-only path".to_string(),
-            },
-        )
-        .await
-        .expect_err("missing rejection task");
-        assert_eq!(
-            rejection.kind,
-            bitfun_runtime_ports::PortErrorKind::NotFound
-        );
-        assert_eq!(
-            rejection.message,
-            format!("Not found: Tool task not found: {missing_tool_id}")
         );
     }
 
@@ -8613,43 +8509,6 @@ mod tests {
     }
 
     #[test]
-    fn local_cli_confirmation_override_excludes_acp_transport() {
-        let policy = DialogSubmissionPolicy::new(
-            AgentSubmissionSource::Cli,
-            DialogQueuePriority::Normal,
-            false,
-        );
-
-        assert!(should_require_tool_confirmation(policy, None));
-        assert!(!should_require_tool_confirmation(
-            policy,
-            Some(&serde_json::json!({ "acp_transport": true })),
-        ));
-    }
-
-    #[test]
-    fn peer_metadata_can_only_strengthen_tool_confirmation() {
-        let desktop_policy = DialogSubmissionPolicy::new(
-            AgentSubmissionSource::DesktopUi,
-            DialogQueuePriority::Normal,
-            false,
-        );
-        let peer_metadata = serde_json::json!({ "require_tool_confirmation": true });
-
-        assert!(should_require_tool_confirmation(
-            desktop_policy,
-            Some(&peer_metadata)
-        ));
-        assert!(!should_require_tool_confirmation(
-            desktop_policy,
-            Some(&serde_json::json!({
-                "require_tool_confirmation": true,
-                "acp_transport": true,
-            }))
-        ));
-    }
-
-    #[test]
     fn background_subagent_delivery_identifies_its_exact_parent_turn() {
         let parent = SubagentParentInfo {
             session_id: "parent-session".to_string(),
@@ -8662,7 +8521,6 @@ mod tests {
             &parent,
             "subagent-session",
             "subagent-turn",
-            true,
             "agentic",
             "Investigate",
         );
@@ -8685,25 +8543,6 @@ mod tests {
             metadata["subagentDialogTurnId"],
             serde_json::json!("subagent-turn")
         );
-        assert_eq!(
-            metadata["require_tool_confirmation"],
-            serde_json::json!(true)
-        );
-        assert!(should_require_tool_confirmation(
-            DialogSubmissionPolicy::for_source(AgentSubmissionSource::AgentSession),
-            Some(&serde_json::Value::Object(metadata))
-        ));
-
-        let non_peer_metadata = background_subagent_delivery_metadata(
-            "background-task",
-            &parent,
-            "subagent-session",
-            "subagent-turn",
-            false,
-            "agentic",
-            "Investigate",
-        );
-        assert!(!non_peer_metadata.contains_key("require_tool_confirmation"));
     }
 
     #[tokio::test]

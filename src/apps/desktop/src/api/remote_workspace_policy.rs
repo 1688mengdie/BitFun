@@ -248,10 +248,6 @@ pub const REMOTE_WORKSPACE_COMMAND_POLICIES: &[(&str, RemoteWorkspacePolicy)] = 
         RemoteWorkspacePolicy::LocalOnly,
     ),
     (
-        "confirm_tool_execution",
-        RemoteWorkspacePolicy::LegacyUnaudited,
-    ),
-    (
         "control_background_command",
         RemoteWorkspacePolicy::LegacyUnaudited,
     ),
@@ -1087,10 +1083,6 @@ pub const REMOTE_WORKSPACE_COMMAND_POLICIES: &[(&str, RemoteWorkspacePolicy)] = 
         "respond_permission",
         RemoteWorkspacePolicy::WorkspaceAgnostic,
     ),
-    (
-        "reject_tool_execution",
-        RemoteWorkspacePolicy::LegacyUnaudited,
-    ),
     ("reload_config", RemoteWorkspacePolicy::LegacyUnaudited),
     (
         "reload_custom_agents",
@@ -1709,7 +1701,6 @@ mod tests {
         "compact_session",
         "compress_path",
         "compute_diff",
-        "confirm_tool_execution",
         "control_background_command",
         "control_deep_review_queue",
         "create_acp_flow_session",
@@ -1947,7 +1938,6 @@ mod tests {
         "refresh_model_client",
         "reject_file",
         "reject_operation",
-        "reject_tool_execution",
         "reload_config",
         "reload_custom_agents",
         "reload_global_config",

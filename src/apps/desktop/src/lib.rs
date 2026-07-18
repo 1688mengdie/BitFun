@@ -921,8 +921,6 @@ pub async fn run() {
             api::agentic_api::list_pending_permission_requests,
             api::agentic_api::subscribe_permission_requests,
             api::agentic_api::respond_permission,
-            api::agentic_api::confirm_tool_execution,
-            api::agentic_api::reject_tool_execution,
             api::agentic_api::cancel_tool,
             api::agentic_api::generate_session_title,
             api::agentic_api::get_available_modes,

@@ -14,8 +14,8 @@ use bitfun_agent_tools::{
     build_tool_runtime_artifact_reference, build_tool_session_runtime_artifact_reference,
     call_deferred_tool_description, call_deferred_tool_input_schema,
     collect_loaded_deferred_tool_specs, effective_tool_invocation, get_tool_spec_input_schema,
-    get_tool_spec_is_concurrency_safe, get_tool_spec_is_readonly, get_tool_spec_needs_permissions,
-    get_tool_spec_short_description, is_bitfun_runtime_uri, is_remote_posix_path_within_root,
+    get_tool_spec_is_concurrency_safe, get_tool_spec_is_readonly, get_tool_spec_short_description,
+    is_bitfun_runtime_uri, is_remote_posix_path_within_root,
     is_tool_path_allowed_by_resolved_roots, normalize_host_path, normalize_runtime_relative_path,
     parse_bitfun_current_session_uri, parse_bitfun_runtime_uri, posix_resolve_path_with_workspace,
     posix_style_path_is_absolute, render_get_tool_spec_tool_use_message,
@@ -39,13 +39,12 @@ use bitfun_agent_tools::{
 };
 use bitfun_agent_tools::{
     build_invalid_tool_call_error_message, build_tool_call_truncation_recovery_notice,
-    build_tool_confirmation_timeout_presentation, build_tool_execution_error_presentation,
-    build_user_rejected_tool_presentation, build_user_rejected_tool_presentation_with_instruction,
+    build_tool_execution_error_presentation, build_user_rejected_tool_presentation,
+    build_user_rejected_tool_presentation_with_instruction,
     build_user_steering_interrupted_presentation, is_write_like_tool_name,
     render_tool_result_for_assistant, truncate_raw_tool_arguments_preview_to,
-    truncate_tool_arguments_preview, TOOL_CONFIRMATION_TIMEOUT_MESSAGE,
-    TOOL_ERROR_ARGUMENTS_PREVIEW_BYTES, USER_REJECTED_TOOL_MESSAGE,
-    USER_STEERING_INTERRUPTED_MESSAGE,
+    truncate_tool_arguments_preview, TOOL_ERROR_ARGUMENTS_PREVIEW_BYTES,
+    USER_REJECTED_TOOL_MESSAGE, USER_STEERING_INTERRUPTED_MESSAGE,
 };
 use bitfun_agent_tools::{
     build_mcp_tool_bridge_definition, build_mcp_tool_bridge_name, build_mcp_tool_bridge_result,
@@ -502,28 +501,6 @@ fn steering_interrupted_presentation_preserves_current_contract() {
         presentation.result_for_assistant,
         USER_STEERING_INTERRUPTED_MESSAGE
     );
-}
-
-#[test]
-fn tool_confirmation_timeout_presentation_is_not_an_execution_failure() {
-    let presentation = build_tool_confirmation_timeout_presentation("ExecCommand");
-
-    assert_eq!(presentation.result_json["status"], "cancelled");
-    assert_eq!(presentation.result_json["category"], "confirmation_timeout");
-    assert_eq!(presentation.result_json["tool_name"], "ExecCommand");
-    assert_eq!(
-        presentation.result_json["message"],
-        TOOL_CONFIRMATION_TIMEOUT_MESSAGE
-    );
-    assert!(presentation.result_json["provided_arguments"].is_null());
-    assert_eq!(
-        presentation.result_for_assistant,
-        TOOL_CONFIRMATION_TIMEOUT_MESSAGE
-    );
-    assert!(!presentation.result_for_assistant.contains("failed"));
-    assert!(!presentation
-        .result_for_assistant
-        .contains("Provided arguments"));
 }
 
 #[test]
@@ -1881,9 +1858,6 @@ fn get_tool_spec_contract_preserves_static_metadata_and_use_message() {
     assert!(get_tool_spec_is_concurrency_safe(Some(&json!({
         "tool_name": "WebFetch"
     }))));
-    assert!(!get_tool_spec_needs_permissions(Some(&json!({
-        "tool_name": "WebFetch"
-    }))));
     assert_eq!(
         render_get_tool_spec_tool_use_message(&json!({ "tool_name": "Git" })),
         "Reading tool spec for 'Git'."
@@ -2129,15 +2103,6 @@ impl ToolRegistryItem for InputSensitiveEffectTool {
 
     fn is_readonly(&self) -> bool {
         false
-    }
-
-    fn needs_permissions(&self, input: Option<&serde_json::Value>) -> bool {
-        !matches!(
-            input
-                .and_then(|value| value.get("action"))
-                .and_then(serde_json::Value::as_str),
-            Some("status")
-        )
     }
 
     fn is_concurrency_safe(&self, input: Option<&serde_json::Value>) -> bool {
@@ -3249,7 +3214,6 @@ fn get_tool_spec_runtime_facade_owns_static_tool_surface() {
     assert_eq!(runtime.input_schema(), get_tool_spec_input_schema());
     assert!(runtime.is_readonly());
     assert!(runtime.is_concurrency_safe(None));
-    assert!(!runtime.needs_permissions(None));
     assert_eq!(
         runtime.render_tool_use_message(&json!({ "tool_name": "WebFetch" })),
         "Reading tool spec for 'WebFetch'."
@@ -3457,10 +3421,9 @@ async fn generic_tool_registry_snapshot_preserves_static_provider_identity_after
 }
 
 #[tokio::test]
-async fn generic_tool_registry_snapshot_labels_effects_as_no_input_defaults() {
+async fn generic_tool_registry_snapshot_labels_execution_effects_as_no_input_defaults() {
     let mut registry: ToolRegistry<dyn ToolRegistryItem> = ToolRegistry::new();
     let tool = Arc::new(InputSensitiveEffectTool);
-    assert!(!tool.needs_permissions(Some(&json!({ "action": "status" }))));
     assert!(tool.is_concurrency_safe(Some(&json!({ "action": "status" }))));
 
     registry.register_tool(tool);
@@ -3475,7 +3438,6 @@ async fn generic_tool_registry_snapshot_labels_effects_as_no_input_defaults() {
 
     assert_eq!(tool.effects.source, ToolEffectFactsSource::NoInputDefault);
     assert!(!tool.effects.readonly_by_default);
-    assert!(tool.effects.needs_permissions_by_default);
     assert!(!tool.effects.concurrency_safe_by_default);
 }
 

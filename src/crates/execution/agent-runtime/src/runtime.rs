@@ -107,21 +107,6 @@ pub trait AgentSessionRestorePort: Send + Sync {
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-/// Confirms a pending tool call.
-pub struct AgentToolConfirmationRequest {
-    pub tool_id: String,
-}
-
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-/// Rejects a pending tool call with the user's reason.
-pub struct AgentToolRejectionRequest {
-    pub tool_id: String,
-    pub reason: String,
-}
-
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
 /// Delivers answers to a pending user-question tool call.
 pub struct AgentUserAnswersRequest {
     pub tool_id: String,
@@ -129,12 +114,10 @@ pub struct AgentUserAnswersRequest {
 }
 
 #[async_trait::async_trait]
-/// Routes product responses to the existing tool and user-input owners.
+/// Routes product responses to the existing user-input owner.
 ///
 /// Implementations do not own approval policy or interaction lifecycle state.
 pub trait AgentInteractionResponsePort: Send + Sync {
-    async fn confirm_tool(&self, request: AgentToolConfirmationRequest) -> PortResult<()>;
-    async fn reject_tool(&self, request: AgentToolRejectionRequest) -> PortResult<()>;
     async fn submit_user_answers(&self, request: AgentUserAnswersRequest) -> PortResult<()>;
 }
 
@@ -670,30 +653,6 @@ impl AgentRuntime {
             .unwrap_or_default()
     }
 
-    pub async fn confirm_tool(
-        &self,
-        request: AgentToolConfirmationRequest,
-    ) -> Result<(), RuntimeError> {
-        self.interaction_response
-            .as_ref()
-            .ok_or(RuntimeError::MissingInteractionResponsePort)?
-            .confirm_tool(request)
-            .await?;
-        Ok(())
-    }
-
-    pub async fn reject_tool(
-        &self,
-        request: AgentToolRejectionRequest,
-    ) -> Result<(), RuntimeError> {
-        self.interaction_response
-            .as_ref()
-            .ok_or(RuntimeError::MissingInteractionResponsePort)?
-            .reject_tool(request)
-            .await?;
-        Ok(())
-    }
-
     pub async fn submit_user_answers(
         &self,
         request: AgentUserAnswersRequest,
@@ -1041,12 +1000,12 @@ mod tests {
         AgentSessionManagementPort, AgentSessionSummary, AgentSessionWorkspaceRequest,
         AgentSubmissionResult, AgentThreadGoalDeliveryKind, AgentThreadGoalDeliveryRequest,
         AgentThreadGoalManagementPort, AgentTurnCancellationResult, ClockPort, DialogQueuePriority,
-        DialogSubmissionPolicy, DialogSubmitOutcome, FileSystemPort, PermissionPort,
-        PluginDispatchEnvelope, PluginResponseEnvelope, PluginRuntimeAvailability,
-        PluginRuntimeClient, PluginRuntimeUnavailableReason, PortErrorKind, PortResult,
-        RuntimeEventSink, RuntimeEventType, RuntimeServiceCapability, SessionStorePort,
-        SessionTranscript, SessionTranscriptReader, SessionTranscriptRequest, ThreadGoal,
-        ThreadGoalStatus, TranscriptContent, TranscriptMessage, WorkspacePort,
+        DialogSubmissionPolicy, DialogSubmitOutcome, FileSystemPort, PluginDispatchEnvelope,
+        PluginResponseEnvelope, PluginRuntimeAvailability, PluginRuntimeClient,
+        PluginRuntimeUnavailableReason, PortErrorKind, PortResult, RuntimeEventSink,
+        RuntimeEventType, RuntimeServiceCapability, SessionStorePort, SessionTranscript,
+        SessionTranscriptReader, SessionTranscriptRequest, ThreadGoal, ThreadGoalStatus,
+        TranscriptContent, TranscriptMessage, WorkspacePort,
     };
     use bitfun_runtime_services::{test_support::FakeRuntimePort, RuntimeServicesBuilder};
 
@@ -1350,8 +1309,6 @@ mod tests {
             Arc::new(FakeRuntimePort::new(RuntimeServiceCapability::Workspace));
         let session_store: Arc<dyn SessionStorePort> =
             Arc::new(FakeRuntimePort::new(RuntimeServiceCapability::SessionStore));
-        let permission: Arc<dyn PermissionPort> =
-            Arc::new(FakeRuntimePort::new(RuntimeServiceCapability::Permission));
         let clock: Arc<dyn ClockPort> =
             Arc::new(FakeRuntimePort::new(RuntimeServiceCapability::Clock));
 
@@ -1359,7 +1316,6 @@ mod tests {
             .with_filesystem(filesystem)
             .with_workspace(workspace)
             .with_session_store(session_store)
-            .with_permission(permission)
             .with_events(events)
             .with_clock(clock)
             .build()
@@ -1910,7 +1866,6 @@ mod tests {
                 policy: DialogSubmissionPolicy::new(
                     AgentSubmissionSource::RemoteRelay,
                     DialogQueuePriority::Normal,
-                    true,
                 ),
                 reply_route: None,
                 prepended_reminders: Vec::new(),
@@ -1965,7 +1920,6 @@ mod tests {
                 policy: DialogSubmissionPolicy::new(
                     AgentSubmissionSource::RemoteRelay,
                     DialogQueuePriority::High,
-                    true,
                 ),
                 reply_route: None,
                 prepended_reminders: Vec::new(),

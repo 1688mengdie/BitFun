@@ -95,12 +95,7 @@ export function useFlowChatToolActions() {
         return;
       }
 
-      const { agentService } = await import('../../../shared/services/agent-service');
-      await agentService.confirmToolExecution(
-        sessionId,
-        toolId,
-        'confirm',
-      );
+      log.warn('Ignoring legacy BitFun tool confirmation without a V2 request id', { toolId });
     } catch (error) {
       log.error('Tool confirmation failed', error);
       notificationService.error(`Tool confirmation failed: ${error}`);
@@ -140,13 +135,7 @@ export function useFlowChatToolActions() {
         return;
       }
 
-      const { agentService } = await import('../../../shared/services/agent-service');
-      await agentService.confirmToolExecution(
-        sessionId,
-        toolId,
-        'reject',
-        options?.instruction,
-      );
+      log.warn('Ignoring legacy BitFun tool rejection without a V2 request id', { toolId });
     } catch (error) {
       log.error('Tool rejection failed', error);
       notificationService.error(`Tool rejection failed: ${error}`);

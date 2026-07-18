@@ -47,12 +47,6 @@ pub(crate) enum ExecApprovalMode {
     Auto,
 }
 
-impl ExecApprovalMode {
-    pub(crate) const fn rejects_confirmation(self) -> bool {
-        matches!(self, Self::Reject)
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub(crate) struct ExecTokenUsage {
     input_tokens: usize,
@@ -712,6 +706,11 @@ impl ExecMode {
                     if let Err(error) = self.agent.cancel_current_turn().await {
                         tracing::error!("Failed to cancel after permission action: {error}");
                     }
+                    emit_exit_diagnostic(
+                        ExitKind::PermissionRejected,
+                        &message,
+                        &self.exit_context(Some(&session_id), Some(&turn_id)),
+                    );
                     terminal_status = Some(ExecTerminalStatus::Error);
                     terminal_message = Some(message.clone());
                     terminal_outcome = Some(Err(anyhow::anyhow!(message)));
@@ -897,87 +896,7 @@ impl ExecMode {
                     } if event_turn_id == &turn_id => {
                         use bitfun_events::ToolEventData;
                         match tool_event {
-                            ToolEventData::ConfirmationNeeded { identity, .. } => {
-                                let tool_id = &identity.tool_id;
-                                let tool_name = identity.effective_name();
-                                if self.approval_mode.rejects_confirmation() {
-                                    let mut message = format!(
-                                        "Permission rejected for {tool_name}; rerun with --auto to approve tool requests"
-                                    );
-                                    if let Err(error) =
-                                        self.agent.reject_tool(tool_id, message.clone()).await
-                                    {
-                                        message.push_str(&format!(
-                                            "; failed to deliver tool rejection: {error}"
-                                        ));
-                                    }
-                                    if let Err(error) = self.agent.cancel_current_turn().await {
-                                        message.push_str(&format!(
-                                            "; failed to cancel active turn: {error}"
-                                        ));
-                                    }
-                                    if self.output_format == ExecOutputFormat::StreamJson {
-                                        if let Err(error) = self
-                                            .drain_interrupted_turn_events(
-                                                &mut event_rx,
-                                                &session_id,
-                                                &turn_id,
-                                            )
-                                            .await
-                                        {
-                                            message.push_str(&format!(
-                                                "; failed to drain terminal event: {error}"
-                                            ));
-                                        }
-                                    }
-                                    self.print_text(|| eprintln!("{message}"));
-                                    emit_exit_diagnostic(
-                                        ExitKind::PermissionRejected,
-                                        &message,
-                                        &self.exit_context(Some(&session_id), Some(&turn_id)),
-                                    );
-                                    terminal_status = Some(ExecTerminalStatus::Error);
-                                    terminal_message = Some(message.clone());
-                                    terminal_outcome = Some(Err(anyhow::anyhow!(message)));
-                                    break;
-                                } else {
-                                    if let Err(error) = self.agent.confirm_tool(tool_id).await {
-                                        let mut message = format!(
-                                            "Failed to approve tool request for {tool_name}: {error}"
-                                        );
-                                        if let Err(cancel_error) =
-                                            self.agent.cancel_current_turn().await
-                                        {
-                                            message.push_str(&format!(
-                                                "; failed to cancel active turn: {cancel_error}"
-                                            ));
-                                        }
-                                        if self.output_format == ExecOutputFormat::StreamJson {
-                                            if let Err(drain_error) = self
-                                                .drain_interrupted_turn_events(
-                                                    &mut event_rx,
-                                                    &session_id,
-                                                    &turn_id,
-                                                )
-                                                .await
-                                            {
-                                                message.push_str(&format!(
-                                                    "; failed to drain terminal event: {drain_error}"
-                                                ));
-                                            }
-                                        }
-                                        emit_exit_diagnostic(
-                                            ExitKind::PermissionRejected,
-                                            &message,
-                                            &self.exit_context(Some(&session_id), Some(&turn_id)),
-                                        );
-                                        terminal_status = Some(ExecTerminalStatus::Error);
-                                        terminal_message = Some(message.clone());
-                                        terminal_outcome = Some(Err(anyhow::anyhow!(message)));
-                                        break;
-                                    }
-                                }
-                            }
+                            ToolEventData::ConfirmationNeeded { .. } => {}
                             ToolEventData::Started {
                                 identity, params, ..
                             } => {
@@ -1727,12 +1646,6 @@ mod patch_tests {
         assert_eq!(value["event"]["type"], "SessionStateChanged");
         assert!(value.get("schema_version").is_none());
         assert!(value.get("sequence").is_none());
-    }
-
-    #[test]
-    fn default_exec_policy_rejects_confirmation_events() {
-        assert!(ExecApprovalMode::Reject.rejects_confirmation());
-        assert!(!ExecApprovalMode::Auto.rejects_confirmation());
     }
 
     #[test]

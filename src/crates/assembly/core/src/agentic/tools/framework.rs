@@ -111,18 +111,20 @@ pub trait Tool: Send + Sync {
         self.is_readonly()
     }
 
-    /// Whether to need permissions
-    fn needs_permissions(&self, _input: Option<&Value>) -> bool {
-        !self.is_readonly()
-    }
-
     /// Describe V2 permission actions and resources without performing side effects.
     fn permission_intents(
         &self,
         _input: &Value,
         _context: &ToolUseContext,
     ) -> BitFunResult<Vec<PermissionIntent>> {
-        Ok(Vec::new())
+        if self.is_readonly() {
+            Ok(Vec::new())
+        } else {
+            Ok(vec![PermissionIntent::new(
+                "custom_tool",
+                vec![self.name().to_string()],
+            )])
+        }
     }
 
     /// Whether this tool manages its own execution timeout (for example via the

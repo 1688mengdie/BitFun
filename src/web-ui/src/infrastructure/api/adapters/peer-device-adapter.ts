@@ -92,8 +92,6 @@ const HIGH_PRIORITY_COMMANDS = new Set([
   'reload_config',
   'start_dialog_turn',
   'cancel_dialog_turn',
-  'confirm_tool_execution',
-  'reject_tool_execution',
   // Interactive directory picking / browsing on the peer
   'get_directory_children',
   'get_directory_children_paginated',

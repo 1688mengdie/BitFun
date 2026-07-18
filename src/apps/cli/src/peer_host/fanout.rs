@@ -309,19 +309,6 @@ async fn handle_agentic_event(state: &PeerHostState, event: AgenticEvent) -> Res
         }
     }
 
-    if let AgenticEvent::ToolEvent {
-        session_id,
-        turn_id,
-        tool_event: ToolEventData::ConfirmationNeeded { identity, .. },
-        ..
-    } = &event
-    {
-        state.turns.record_confirmation(
-            &PeerTurnKey::new(session_id, turn_id),
-            identity.tool_id.clone(),
-        )?;
-    }
-
     let Some(projected) = project_agentic_frontend_event(event) else {
         if let Some(turn) = terminal_turn {
             state.turns.finish_turn(&turn);

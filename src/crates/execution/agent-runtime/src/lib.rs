@@ -38,6 +38,5 @@ pub mod skill_agent_snapshot;
 pub mod skills;
 pub mod thread_goal;
 pub mod thread_goal_tools;
-pub mod tool_confirmation;
 pub mod turn_cancellation;
 pub mod user_questions;

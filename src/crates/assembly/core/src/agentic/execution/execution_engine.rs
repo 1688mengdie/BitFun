@@ -3086,10 +3086,7 @@ impl ExecutionEngine {
             );
 
             // Create round context
-            let mut round_context_vars = execution_context_vars.clone();
-            if context.skip_tool_confirmation {
-                round_context_vars.insert("skip_tool_confirmation".to_string(), "true".to_string());
-            }
+            let round_context_vars = execution_context_vars.clone();
             let loaded_deferred_tool_specs =
                 collect_product_loaded_deferred_tool_specs(&messages, &deferred_tools);
 
@@ -4250,7 +4247,6 @@ mod tests {
             context: HashMap::new(),
             subagent_parent_info: None,
             delegation_policy: bitfun_runtime_ports::DelegationPolicy::top_level(),
-            skip_tool_confirmation: false,
             runtime_tool_restrictions: ToolRuntimeRestrictions::default(),
             workspace_services: None,
             terminal_port: None,

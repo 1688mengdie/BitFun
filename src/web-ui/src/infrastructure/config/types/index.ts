@@ -237,9 +237,7 @@ export interface AIConfig {
   stream_idle_timeout_secs?: number | null;
   stream_ttft_timeout_secs?: number | null;
   tool_execution_timeout_secs?: number | null;
-  tool_confirmation_timeout_secs?: number | null;
   subagent_batch_execution_policy?: 'safe_only' | 'force_parallel' | 'serial';
-  skip_tool_confirmation?: boolean;
   computer_use_enabled?: boolean;
   browser_control_preferred_browser?: string;
 }

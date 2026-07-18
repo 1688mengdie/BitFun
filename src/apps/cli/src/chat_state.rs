@@ -11,7 +11,7 @@ use bitfun_agent_runtime::sdk::{SessionTranscript, TranscriptContent, Transcript
 use bitfun_agent_tools::effective_tool_invocation;
 use bitfun_events::ToolEventData;
 
-use crate::ui::permission::{PermissionPrompt, PermissionV2Prompt};
+use crate::ui::permission::PermissionV2Prompt;
 use crate::ui::question::QuestionPrompt;
 
 // ============ Display Status Types ============
@@ -326,7 +326,6 @@ pub(crate) struct ChatState {
 
     // -- Permission state --
     /// Current pending permission prompt (if a tool needs user confirmation)
-    pub permission_prompt: Option<PermissionPrompt>,
     pub permission_v2_prompt: Option<PermissionV2Prompt>,
 
     // -- Question state --
@@ -354,7 +353,6 @@ impl ChatState {
             current_flow_items: Vec::new(),
             tool_index: HashMap::new(),
             is_processing: false,
-            permission_prompt: None,
             permission_v2_prompt: None,
             question_prompt: None,
         }
@@ -654,12 +652,6 @@ impl ChatState {
                     tool.parameters = effective_params.clone();
                     tool.progress_message = Some("Waiting for user confirmation".to_string());
                 });
-                // Auto-create permission prompt for user interaction
-                self.permission_prompt = Some(PermissionPrompt::new(
-                    identity.tool_id.clone(),
-                    tool_name.to_string(),
-                    effective_params.clone(),
-                ));
                 self.rebuild_streaming_message();
             }
 
@@ -667,10 +659,6 @@ impl ChatState {
                 self.update_tool(&identity.tool_id, |tool| {
                     tool.status = ToolDisplayStatus::Confirmed;
                 });
-                // Clear permission prompt if it matches this tool
-                if self.permission_prompt.as_ref().map(|p| &p.tool_id) == Some(&identity.tool_id) {
-                    self.permission_prompt = None;
-                }
                 self.rebuild_streaming_message();
             }
 
@@ -679,10 +667,6 @@ impl ChatState {
                     tool.status = ToolDisplayStatus::Rejected;
                     tool.result = Some("User rejected execution".to_string());
                 });
-                // Clear permission prompt if it matches this tool
-                if self.permission_prompt.as_ref().map(|p| &p.tool_id) == Some(&identity.tool_id) {
-                    self.permission_prompt = None;
-                }
                 self.rebuild_streaming_message();
             }
 
@@ -856,7 +840,6 @@ impl ChatState {
         self.current_flow_items.clear();
         self.tool_index.clear();
         self.is_processing = false;
-        self.permission_prompt = None;
         self.question_prompt = None;
     }
 
@@ -878,7 +861,6 @@ impl ChatState {
         self.current_flow_items.clear();
         self.tool_index.clear();
         self.is_processing = false;
-        self.permission_prompt = None;
         self.question_prompt = None;
     }
 
@@ -899,7 +881,6 @@ impl ChatState {
         self.current_flow_items.clear();
         self.tool_index.clear();
         self.is_processing = false;
-        self.permission_prompt = None;
         self.question_prompt = None;
     }
 

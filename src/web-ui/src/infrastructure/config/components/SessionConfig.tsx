@@ -105,11 +105,9 @@ const SessionSettingsPanels: React.FC<SessionSettingsPanelsProps> = ({ variant }
   const [companionPetListExpanded, setCompanionPetListExpanded] = useState(false);
   const [models, setModels] = useState<AIModelConfig[]>([]);
   const [funcAgentModels, setFuncAgentModels] = useState<Record<string, string>>({});
-  const [skipToolConfirmation, setSkipToolConfirmation] = useState(true);
   const [enableDeferredToolLoading, setEnableDeferredToolLoading] = useState(true);
   const [subagentMaxConcurrency, setSubagentMaxConcurrency] = useState(DEFAULT_SUBAGENT_MAX_CONCURRENCY);
   const [executionTimeout, setExecutionTimeout] = useState('');
-  const [confirmationTimeout, setConfirmationTimeout] = useState('');
   const [subagentBatchExecutionPolicy, setSubagentBatchExecutionPolicy] =
     useState<SubagentBatchExecutionPolicy>(DEFAULT_SUBAGENT_BATCH_EXECUTION_POLICY);
   const [toolExecConfigLoading, setToolExecConfigLoading] = useState(false);
@@ -211,11 +209,9 @@ const SessionSettingsPanels: React.FC<SessionSettingsPanelsProps> = ({ variant }
         loadedSettings,
         allModels,
         funcAgentModelsData,
-        skipConfirm,
         deferredToolLoadingEnabled,
         loadedSubagentMaxConcurrency,
         execTimeout,
-        confirmTimeout,
         loadedSubagentBatchExecutionPolicy,
         debugConfigData,
         computerUseCfg,
@@ -225,11 +221,9 @@ const SessionSettingsPanels: React.FC<SessionSettingsPanelsProps> = ({ variant }
         aiExperienceConfigService.getSettingsAsync(),
         configManager.getConfig<AIModelConfig[]>('ai.models') || [],
         configManager.getConfig<Record<string, string>>('ai.func_agent_models') || {},
-        configManager.getConfig<boolean>('ai.skip_tool_confirmation'),
         configManager.getConfig<boolean>('ai.enable_deferred_tool_loading'),
         configManager.getConfig<number | null>('ai.subagent_max_concurrency'),
         configManager.getConfig<number | null>('ai.tool_execution_timeout_secs'),
-        configManager.getConfig<number | null>('ai.tool_confirmation_timeout_secs'),
         configManager.getConfig<SubagentBatchExecutionPolicy>('ai.subagent_batch_execution_policy'),
         configManager.getConfig<DebugModeConfig>('ai.debug_mode_config'),
         configManager.getConfig<boolean>('ai.computer_use_enabled'),
@@ -241,13 +235,11 @@ const SessionSettingsPanels: React.FC<SessionSettingsPanelsProps> = ({ variant }
       setCompanionPets(loadedCompanionPets);
       setModels(allModels as AIModelConfig[]);
       setFuncAgentModels(funcAgentModelsData as Record<string, string>);
-      setSkipToolConfirmation(skipConfirm ?? true);
       setEnableDeferredToolLoading(deferredToolLoadingEnabled ?? true);
       setSubagentMaxConcurrency(loadedSubagentMaxConcurrency != null
         ? loadedSubagentMaxConcurrency
         : DEFAULT_SUBAGENT_MAX_CONCURRENCY);
       setExecutionTimeout(execTimeout != null ? String(execTimeout) : '');
-      setConfirmationTimeout(confirmTimeout != null ? String(confirmTimeout) : '');
       setSubagentBatchExecutionPolicy(normalizeSubagentBatchExecutionPolicy(loadedSubagentBatchExecutionPolicy));
       if (debugConfigData) setDebugConfig(debugConfigData);
       setPreferredBrowser(browserControlPreferredBrowser || DEFAULT_BROWSER_CONTROL_BROWSER);
@@ -462,28 +454,6 @@ const SessionSettingsPanels: React.FC<SessionSettingsPanelsProps> = ({ variant }
     }
   };
 
-  const handleSkipToolConfirmationChange = async (checked: boolean) => {
-    setSkipToolConfirmation(checked);
-    setToolExecConfigLoading(true);
-    try {
-      await configManager.setConfig('ai.skip_tool_confirmation', checked);
-      notificationService.success(
-        checked ? tTools('messages.autoExecuteEnabled') : tTools('messages.autoExecuteDisabled'),
-        { duration: 2000 }
-      );
-      const { globalEventBus } = await import('@/infrastructure/event-bus');
-      globalEventBus.emit('mode:config:updated');
-    } catch (error) {
-      log.error('Failed to save skip_tool_confirmation', error);
-      notificationService.error(
-        `${tTools('messages.saveFailed')}: ` + (error instanceof Error ? error.message : String(error))
-      );
-      setSkipToolConfirmation(!checked);
-    } finally {
-      setToolExecConfigLoading(false);
-    }
-  };
-
   const handleDeferredToolLoadingChange = async (checked: boolean) => {
     const previous = enableDeferredToolLoading;
     setEnableDeferredToolLoading(checked);
@@ -665,21 +635,19 @@ const SessionSettingsPanels: React.FC<SessionSettingsPanelsProps> = ({ variant }
     }
   };
 
-  const handleToolTimeoutChange = async (type: 'execution' | 'confirmation', value: string) => {
-    const configKey =
-      type === 'execution' ? 'ai.tool_execution_timeout_secs' : 'ai.tool_confirmation_timeout_secs';
+  const handleToolTimeoutChange = async (value: string) => {
+    const configKey = 'ai.tool_execution_timeout_secs';
     const trimmedValue = value.trim();
     if (trimmedValue !== '') {
       const numValue = parseInt(trimmedValue, 10);
       if (Number.isNaN(numValue) || numValue < 0) return;
     }
-    if (type === 'execution') setExecutionTimeout(trimmedValue);
-    else setConfirmationTimeout(trimmedValue);
+    setExecutionTimeout(trimmedValue);
     const numValue = trimmedValue === '' ? null : parseInt(trimmedValue, 10);
     try {
       await configManager.setConfig(configKey, numValue);
     } catch (error) {
-      log.error('Failed to save tool timeout config', { type, error });
+      log.error('Failed to save tool timeout config', { error });
       notificationService.error(tTools('messages.saveFailed'));
     }
   };
@@ -1103,48 +1071,6 @@ const SessionSettingsPanels: React.FC<SessionSettingsPanelsProps> = ({ variant }
           title={t('toolExecution.sectionTitle')}
           description={t('toolExecution.sectionDescription')}
         >
-          <ConfigPageRow label={tTools('config.autoExecute')} description={tTools('config.autoExecuteDesc')} align="center">
-            <div className="bitfun-func-agent-config__row-control">
-              <Switch
-                checked={skipToolConfirmation}
-                onChange={(e) => handleSkipToolConfirmationChange(e.target.checked)}
-                disabled={toolExecConfigLoading}
-                size="small"
-              />
-            </div>
-          </ConfigPageRow>
-          <ConfigPageRow
-            label={(
-              <span className="bitfun-func-agent-config__inline-label">
-                <span>{tTools('config.confirmTimeout')}</span>
-                <Tooltip content={tTools('config.confirmTimeoutHint')} placement="top">
-                  <span
-                    className="bitfun-func-agent-config__inline-info"
-                    role="button"
-                    tabIndex={0}
-                    aria-label={tTools('config.confirmTimeoutHint')}
-                  >
-                    <Info size={14} />
-                  </span>
-                </Tooltip>
-              </span>
-            )}
-            description={tTools('config.confirmTimeoutDesc')}
-            align="center"
-          >
-            <div className="bitfun-func-agent-config__row-control">
-              <NumberInput
-                value={confirmationTimeout === '' ? 0 : parseInt(confirmationTimeout, 10)}
-                onChange={(val) => handleToolTimeoutChange('confirmation', val === 0 ? '' : String(val))}
-                min={0}
-                max={3600}
-                step={5}
-                unit={tTools('config.seconds')}
-                size="small"
-                variant="compact"
-              />
-            </div>
-          </ConfigPageRow>
           <ConfigPageRow
             label={(
               <span className="bitfun-func-agent-config__inline-label">
@@ -1167,7 +1093,7 @@ const SessionSettingsPanels: React.FC<SessionSettingsPanelsProps> = ({ variant }
             <div className="bitfun-func-agent-config__row-control">
               <NumberInput
                 value={executionTimeout === '' ? 0 : parseInt(executionTimeout, 10)}
-                onChange={(val) => handleToolTimeoutChange('execution', val === 0 ? '' : String(val))}
+                onChange={(val) => handleToolTimeoutChange(val === 0 ? '' : String(val))}
                 min={0}
                 max={3600}
                 step={5}

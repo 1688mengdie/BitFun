@@ -116,10 +116,6 @@ Important notes:
         false
     }
 
-    fn needs_permissions(&self, _input: Option<&Value>) -> bool {
-        true
-    }
-
     fn permission_intents(
         &self,
         input: &Value,

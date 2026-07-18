@@ -180,10 +180,6 @@ impl Tool for TaskTool {
         }
     }
 
-    fn needs_permissions(&self, _input: Option<&Value>) -> bool {
-        false
-    }
-
     fn permission_intents(
         &self,
         input: &Value,

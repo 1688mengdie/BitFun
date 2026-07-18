@@ -1,7 +1,7 @@
 //! Tool pipeline
 //!
 //! Manages the complete lifecycle of tools:
-//! confirmation, execution, caching, retries, etc.
+//! permission authorization, execution, caching, retries, etc.
 
 use super::state_manager::{tool_task_state_kind, ToolStateManager};
 use super::types::*;
@@ -16,15 +16,9 @@ use crate::agentic::tools::tool_result_storage;
 use crate::util::elapsed_ms_u64;
 use crate::util::errors::{BitFunError, BitFunResult};
 use bitfun_agent_runtime::permission_v2::{PermissionRequestManager, PermissionWaitOutcome};
-use bitfun_agent_runtime::tool_confirmation::{
-    resolve_confirmation_failure, resolve_confirmation_wait_result, resolve_tool_confirmation_plan,
-    ConfirmationFailureKind, ToolConfirmationChannelStore, ToolConfirmationPlan,
-    ToolConfirmationRequestFacts, ToolConfirmationResponse, ToolConfirmationWaitResult,
-};
 use bitfun_agent_tools::{
     build_invalid_tool_call_error_message, build_tool_call_truncation_recovery_notice,
-    build_tool_confirmation_timeout_presentation, build_tool_execution_error_presentation,
-    build_tool_execution_timeout_presentation,
+    build_tool_execution_error_presentation, build_tool_execution_timeout_presentation,
     build_user_rejected_tool_presentation_with_instruction,
     build_user_steering_interrupted_presentation, render_tool_result_for_assistant,
     truncate_raw_tool_arguments_preview, truncate_tool_arguments_preview,
@@ -522,7 +516,6 @@ const SUBAGENT_LAUNCH_TOOL_NAME: &str = "Task";
 pub struct ToolPipeline {
     tool_registry: Arc<TokioRwLock<ToolRegistry>>,
     state_manager: Arc<ToolStateManager>,
-    confirmation_channels: ToolConfirmationChannelStore,
     cancellation_tokens: ToolCancellationTokenStore,
     computer_use_host: Option<ComputerUseHostRef>,
     permission_request_manager: Option<Arc<PermissionRequestManager>>,
@@ -537,7 +530,6 @@ impl ToolPipeline {
         Self {
             tool_registry,
             state_manager,
-            confirmation_channels: ToolConfirmationChannelStore::new(),
             cancellation_tokens: ToolCancellationTokenStore::new(),
             computer_use_host,
             permission_request_manager: None,
@@ -1008,7 +1000,7 @@ impl ToolPipeline {
         let tool_is_error = task.tool_call.is_error;
         let recovered_from_truncation = task.tool_call.recovered_from_truncation;
         let queue_wait_ms = elapsed_ms_since(task.created_at);
-        let mut confirmation_wait_ms = 0;
+        let confirmation_wait_ms = 0;
 
         debug!(
             "Tool task details: tool_name={}, wire_tool_name={}, tool_id={}, queue_wait_ms={}",
@@ -1156,7 +1148,6 @@ impl ToolPipeline {
         }
 
         let permission_intents = tool.permission_intents(&tool_args, &tool_context)?;
-        let uses_v2_permission = !permission_intents.is_empty();
 
         // Register cancellation only after deterministic validation and registry lookup succeed.
         self.cancellation_tokens
@@ -1205,146 +1196,6 @@ impl ToolPipeline {
 
         let is_streaming = tool.supports_streaming();
         let preflight_ms = elapsed_ms_u64(start_time);
-
-        let confirmation_plan = resolve_tool_confirmation_plan(ToolConfirmationRequestFacts {
-            confirm_before_run: task.options.confirm_before_run,
-            tool_needs_permission: !uses_v2_permission && tool.needs_permissions(Some(&tool_args)),
-            confirmation_timeout_secs: task.options.confirmation_timeout_secs,
-            now: SystemTime::now(),
-        });
-
-        if let ToolConfirmationPlan::Await {
-            timeout_at,
-            timeout_secs,
-        } = confirmation_plan
-        {
-            info!("Tool requires confirmation: tool_name={}", tool_name);
-
-            let rx = self.confirmation_channels.register(tool_id.clone());
-
-            self.state_manager
-                .update_state(
-                    &tool_id,
-                    ToolExecutionState::AwaitingConfirmation {
-                        params: tool_args.clone(),
-                        timeout_at,
-                    },
-                )
-                .await;
-
-            debug!("Waiting for confirmation: tool_name={}", tool_name);
-            let confirmation_started_at = Instant::now();
-
-            let confirmation_result = match timeout_secs {
-                Some(timeout_secs) => {
-                    debug!(
-                        "Waiting for user confirmation with timeout: timeout_secs={}, tool_name={}",
-                        timeout_secs, tool_name
-                    );
-                    // There is a timeout limit
-                    timeout(Duration::from_secs(timeout_secs), rx).await.ok()
-                }
-                None => {
-                    debug!(
-                        "Waiting for user confirmation without timeout: tool_name={}",
-                        tool_name
-                    );
-                    Some(rx.await)
-                }
-            };
-            confirmation_wait_ms = elapsed_ms_u64(confirmation_started_at);
-
-            let confirmation_wait_result = match confirmation_result {
-                Some(Ok(ToolConfirmationResponse::Confirmed)) => {
-                    debug!("Tool confirmed: tool_name={}", tool_name);
-                    ToolConfirmationWaitResult::Confirmed
-                }
-                Some(Ok(ToolConfirmationResponse::Rejected(reason))) => {
-                    ToolConfirmationWaitResult::Rejected(reason)
-                }
-                Some(Err(_)) => ToolConfirmationWaitResult::ChannelClosed,
-                None => ToolConfirmationWaitResult::TimedOut,
-            };
-            let confirmation_outcome =
-                resolve_confirmation_wait_result(confirmation_wait_result, &tool_name);
-
-            if let Some(failure) = resolve_confirmation_failure(confirmation_outcome) {
-                if matches!(
-                    failure.kind,
-                    ConfirmationFailureKind::ChannelClosed | ConfirmationFailureKind::Timeout
-                ) {
-                    self.confirmation_channels.cancel(&tool_id);
-                }
-
-                if matches!(failure.kind, ConfirmationFailureKind::Timeout) {
-                    warn!("{}", failure.error_message);
-                }
-
-                self.state_manager
-                    .update_state(
-                        &tool_id,
-                        match failure.kind {
-                            ConfirmationFailureKind::Rejected => ToolExecutionState::Rejected {
-                                reason: failure.state_reason,
-                                duration_ms: Some(elapsed_ms_u64(start_time)),
-                                queue_wait_ms: Some(queue_wait_ms),
-                                preflight_ms: Some(preflight_ms),
-                                confirmation_wait_ms: Some(elapsed_ms_u64(confirmation_started_at)),
-                                execution_ms: None,
-                            },
-                            ConfirmationFailureKind::ChannelClosed
-                            | ConfirmationFailureKind::Timeout => ToolExecutionState::Cancelled {
-                                reason: failure.state_reason,
-                                duration_ms: Some(elapsed_ms_u64(start_time)),
-                                queue_wait_ms: Some(queue_wait_ms),
-                                preflight_ms: Some(preflight_ms),
-                                confirmation_wait_ms: Some(elapsed_ms_u64(confirmation_started_at)),
-                                execution_ms: None,
-                            },
-                        },
-                    )
-                    .await;
-
-                match failure.kind {
-                    ConfirmationFailureKind::Rejected => {
-                        return Ok(build_user_rejected_tool_result(
-                            &tool_id,
-                            self.state_manager.get_task(&tool_id),
-                            failure.rejection_instruction.as_deref(),
-                        ));
-                    }
-                    ConfirmationFailureKind::ChannelClosed => {
-                        return Err(BitFunError::service(failure.error_message));
-                    }
-                    ConfirmationFailureKind::Timeout => {
-                        let presentation = build_tool_confirmation_timeout_presentation(&tool_name);
-                        return Ok(ToolExecutionResult {
-                            tool_id: tool_id.clone(),
-                            tool_name: wire_tool_name.clone(),
-                            effective_tool_name: tool_name.clone(),
-                            result: ModelToolResult {
-                                tool_id,
-                                effective_tool_name: persisted_effective_tool_name(
-                                    &wire_tool_name,
-                                    &tool_name,
-                                ),
-                                tool_name: wire_tool_name,
-                                result: presentation.result_json,
-                                result_for_assistant: Some(presentation.result_for_assistant),
-                                is_error: false,
-                                duration_ms: Some(elapsed_ms_u64(start_time)),
-                                image_attachments: None,
-                            },
-                            execution_time_ms: elapsed_ms_u64(start_time),
-                        });
-                    }
-                }
-            }
-
-            self.confirmation_channels.cancel(&tool_id);
-        }
-
-        let preflight_ms = elapsed_ms_u64(start_time).saturating_sub(confirmation_wait_ms);
 
         if cancellation_token.is_cancelled() {
             self.state_manager
@@ -1781,13 +1632,7 @@ impl ToolPipeline {
             );
         }
 
-        // 2. Clean up confirmation channel (if waiting for confirmation)
-        if self.confirmation_channels.cancel(tool_id) {
-            // Channel will be automatically closed, causing await rx to return Err
-            debug!("Cleared confirmation channel: tool_id={}", tool_id);
-        }
-
-        // 3. Update state to cancelled
+        // 2. Update state to cancelled
         self.state_manager
             .update_state(
                 tool_id,
@@ -1844,75 +1689,6 @@ impl ToolPipeline {
             summary.cancelled, summary.skipped
         );
         Ok(())
-    }
-
-    /// Confirm tool execution
-    pub async fn confirm_tool(&self, tool_id: &str) -> BitFunResult<()> {
-        let task = self
-            .state_manager
-            .get_task(tool_id)
-            .ok_or_else(|| BitFunError::NotFound(format!("Tool task not found: {}", tool_id)))?;
-
-        // Check if the state is waiting for confirmation
-        if !matches!(task.state, ToolExecutionState::AwaitingConfirmation { .. }) {
-            return Err(BitFunError::Validation(format!(
-                "Tool is not in awaiting confirmation state: {:?}",
-                task.state
-            )));
-        }
-
-        // Get sender from map and send confirmation response
-        if self.confirmation_channels.confirm(tool_id) {
-            info!("User confirmed tool execution: tool_id={}", tool_id);
-            Ok(())
-        } else {
-            Err(BitFunError::NotFound(format!(
-                "Confirmation channel not found: {}",
-                tool_id
-            )))
-        }
-    }
-
-    /// Reject tool execution
-    pub async fn reject_tool(&self, tool_id: &str, reason: String) -> BitFunResult<()> {
-        let task = self
-            .state_manager
-            .get_task(tool_id)
-            .ok_or_else(|| BitFunError::NotFound(format!("Tool task not found: {}", tool_id)))?;
-
-        // Check if the state is waiting for confirmation
-        if !matches!(task.state, ToolExecutionState::AwaitingConfirmation { .. }) {
-            return Err(BitFunError::Validation(format!(
-                "Tool is not in awaiting confirmation state: {:?}",
-                task.state
-            )));
-        }
-
-        // Get sender from map and send rejection response
-        if self.confirmation_channels.reject(tool_id, reason.clone()) {
-            info!(
-                "User rejected tool execution: tool_id={}, reason={}",
-                tool_id, reason
-            );
-            Ok(())
-        } else {
-            // If the channel does not exist, mark it as rejected directly.
-            self.state_manager
-                .update_state(
-                    tool_id,
-                    ToolExecutionState::Rejected {
-                        reason: format!("User rejected: {}", reason),
-                        duration_ms: None,
-                        queue_wait_ms: None,
-                        preflight_ms: None,
-                        confirmation_wait_ms: None,
-                        execution_ms: None,
-                    },
-                )
-                .await;
-
-            Ok(())
-        }
     }
 }
 
@@ -2039,7 +1815,7 @@ mod tests {
         name: String,
         response: serde_json::Value,
         delay_ms: u64,
-        needs_permissions: bool,
+        readonly: bool,
     }
 
     struct CapturingTestTool {
@@ -2068,10 +1844,6 @@ mod tests {
 
         fn input_schema(&self) -> serde_json::Value {
             json!({ "type": "object" })
-        }
-
-        fn needs_permissions(&self, _input: Option<&serde_json::Value>) -> bool {
-            true
         }
 
         fn permission_intents(
@@ -2274,11 +2046,7 @@ mod tests {
         }
 
         fn is_readonly(&self) -> bool {
-            !self.needs_permissions
-        }
-
-        fn needs_permissions(&self, _input: Option<&serde_json::Value>) -> bool {
-            self.needs_permissions
+            self.readonly
         }
 
         fn input_schema(&self) -> serde_json::Value {
@@ -2422,25 +2190,7 @@ mod tests {
                 name: name.to_string(),
                 response,
                 delay_ms,
-                needs_permissions: false,
-            }));
-    }
-
-    async fn register_permissioned_static_test_tool(
-        pipeline: &ToolPipeline,
-        name: &str,
-        response: serde_json::Value,
-        delay_ms: u64,
-    ) {
-        pipeline
-            .tool_registry
-            .write()
-            .await
-            .register_tool(Arc::new(StaticTestTool {
-                name: name.to_string(),
-                response,
-                delay_ms,
-                needs_permissions: true,
+                readonly: true,
             }));
     }
 
@@ -2489,6 +2239,45 @@ mod tests {
             std::env::temp_dir().join("bitfun-permission-v2-test"),
         ));
         context
+    }
+
+    #[tokio::test]
+    async fn non_readonly_tools_use_v2_custom_tool_fallback() {
+        let pipeline = test_tool_pipeline();
+        pipeline
+            .tool_registry
+            .write()
+            .await
+            .register_tool(Arc::new(StaticTestTool {
+                name: "UnclassifiedMutation".to_string(),
+                response: json!({ "unexpected": true }),
+                delay_ms: 0,
+                readonly: false,
+            }));
+        let mut options = ToolExecutionOptions::default();
+        options.permission_rules = vec![PermissionRule::new(
+            "custom_tool",
+            "UnclassifiedMutation",
+            PermissionEffect::Deny,
+        )];
+
+        let results = pipeline
+            .execute_tools(
+                vec![test_tool_call("fallback-deny", "UnclassifiedMutation")],
+                permission_test_context(),
+                options,
+            )
+            .await
+            .expect("fallback policy denial");
+
+        assert!(matches!(
+            pipeline
+                .state_manager
+                .get_task("fallback-deny")
+                .map(|task| task.state),
+            Some(ToolExecutionState::Rejected { .. })
+        ));
+        assert_eq!(results[0].result.result["category"], "user_rejected");
     }
 
     fn permission_test_manager(store: Arc<MemoryPermissionStore>) -> Arc<PermissionRequestManager> {
@@ -2687,6 +2476,54 @@ mod tests {
             .expect("other project rejection");
         assert_eq!(calls.load(Ordering::SeqCst), 3);
 
+        let mut remote_context = permission_test_context();
+        let local_root = remote_context
+            .workspace
+            .as_ref()
+            .expect("local permission workspace")
+            .root_path()
+            .to_path_buf();
+        let remote_identity =
+            crate::service::remote_ssh::workspace_state::workspace_session_identity(
+                local_root.to_string_lossy().as_ref(),
+                Some("permission-remote-connection"),
+                Some("remote.example"),
+            )
+            .expect("remote permission identity");
+        remote_context.workspace = Some(WorkspaceBinding::new_remote(
+            None,
+            local_root,
+            "permission-remote-connection".to_string(),
+            "Remote permission test".to_string(),
+            remote_identity,
+        ));
+        let remote_pipeline = pipeline.clone();
+        let remote_execution = tokio::spawn(async move {
+            remote_pipeline
+                .execute_tools(
+                    vec![test_tool_call("remote-project", "Write")],
+                    remote_context,
+                    ToolExecutionOptions::default(),
+                )
+                .await
+        });
+        let remote_request = wait_for_permission_request(&manager).await;
+        assert_ne!(remote_request.project_id, remembered_project_id);
+        assert!(remote_request.project_id.starts_with("remote_"));
+        manager
+            .reply(
+                &remote_request.request_id,
+                PermissionReply::Reject { feedback: None },
+                bitfun_runtime_ports::PermissionReplySource::User,
+            )
+            .await
+            .expect("reject remote project request");
+        remote_execution
+            .await
+            .expect("remote project task join")
+            .expect("remote project rejection");
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+
         let mut deny_options = ToolExecutionOptions::default();
         deny_options.permission_rules = vec![
             PermissionRule::new("edit", "src/*", PermissionEffect::Allow),
@@ -2772,14 +2609,7 @@ mod tests {
         });
 
         let results = pipeline
-            .execute_tools(
-                vec![call],
-                context,
-                ToolExecutionOptions {
-                    confirm_before_run: false,
-                    ..ToolExecutionOptions::default()
-                },
-            )
+            .execute_tools(vec![call], context, ToolExecutionOptions::default())
             .await
             .expect("deferred tool execution");
 
@@ -2944,54 +2774,6 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn deferred_gateway_uses_effective_target_permission_policy() {
-        let pipeline = test_tool_pipeline();
-        register_permissioned_static_test_tool(
-            &pipeline,
-            "write_weather",
-            json!({ "ok": true }),
-            0,
-        )
-        .await;
-
-        let mut context = test_tool_execution_context();
-        context.allowed_tools = vec![
-            CALL_DEFERRED_TOOL_NAME.to_string(),
-            "write_weather".to_string(),
-        ];
-        context.deferred_tools = vec!["write_weather".to_string()];
-        context.loaded_deferred_tool_specs = vec![loaded_spec(
-            "write_weather",
-            current_registry_generation(&pipeline).await,
-        )];
-
-        let mut call = test_tool_call("deferred_permission", CALL_DEFERRED_TOOL_NAME);
-        call.arguments = json!({
-            "tool_name": "write_weather",
-            "args": { "city": "Shanghai" }
-        });
-
-        let results = pipeline
-            .execute_tools(
-                vec![call],
-                context,
-                ToolExecutionOptions {
-                    confirmation_timeout_secs: Some(0),
-                    ..ToolExecutionOptions::default()
-                },
-            )
-            .await
-            .expect("permission timeout should be returned as a tool result");
-
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].tool_name, CALL_DEFERRED_TOOL_NAME);
-        assert_eq!(results[0].effective_tool_name, "write_weather");
-        assert_eq!(results[0].result.tool_name, CALL_DEFERRED_TOOL_NAME);
-        assert_eq!(results[0].result.result["category"], "confirmation_timeout");
-        assert_eq!(results[0].result.result["tool_name"], "write_weather");
-    }
-
     fn test_round_injection(
         kind: RoundInjectionKind,
         tool_preemption: RoundInjectionToolPreemption,
@@ -3067,131 +2849,6 @@ mod tests {
             .as_deref()
             .unwrap_or_default()
             .contains("Raw arguments:"));
-    }
-
-    #[tokio::test]
-    async fn confirmation_timeout_returns_timeout_result_without_argument_error() {
-        let pipeline = test_tool_pipeline();
-        register_permissioned_static_test_tool(
-            &pipeline,
-            "ExecCommand",
-            json!({ "unexpected": true }),
-            0,
-        )
-        .await;
-
-        let task_id = "tool_1".to_string();
-        pipeline
-            .state_manager
-            .create_task(ToolTask::new(
-                test_tool_call(&task_id, "ExecCommand"),
-                test_tool_execution_context(),
-                ToolExecutionOptions {
-                    confirm_before_run: true,
-                    confirmation_timeout_secs: Some(1),
-                    ..Default::default()
-                },
-            ))
-            .await;
-
-        // The public execute_tools path is easier to keep stable via timeout
-        // by not delivering confirmation. We use a second task with the same
-        // setup to exercise the actual pipeline path.
-        let results = pipeline
-            .execute_tools(
-                vec![test_tool_call("tool_1", "ExecCommand")],
-                test_tool_execution_context(),
-                ToolExecutionOptions {
-                    confirmation_timeout_secs: Some(0),
-                    ..Default::default()
-                },
-            )
-            .await
-            .expect("timeout should be returned as a tool result");
-
-        assert_eq!(results.len(), 1);
-        let result = &results[0].result;
-        assert!(!result.is_error);
-        assert_eq!(result.result["category"], json!("confirmation_timeout"));
-        assert_eq!(result.result["tool_name"], json!("ExecCommand"));
-        assert!(result.result["provided_arguments"].is_null());
-        let assistant_text = result.result_for_assistant.as_deref().unwrap_or_default();
-        assert!(assistant_text.contains("confirmation window expired"));
-        assert!(!assistant_text.contains("failed"));
-        assert!(!assistant_text.contains("Provided arguments"));
-    }
-
-    #[tokio::test]
-    async fn confirmation_rejection_returns_user_rejected_result_without_argument_error() {
-        let pipeline = test_tool_pipeline();
-        register_permissioned_static_test_tool(
-            &pipeline,
-            "ExecCommand",
-            json!({ "unexpected": true }),
-            0,
-        )
-        .await;
-
-        let reject_pipeline = pipeline.clone();
-        let reject_handle = tokio::spawn(async move {
-            for _ in 0..50 {
-                if reject_pipeline
-                    .state_manager
-                    .get_task("tool_1")
-                    .is_some_and(|task| {
-                        matches!(task.state, ToolExecutionState::AwaitingConfirmation { .. })
-                    })
-                {
-                    reject_pipeline
-                        .reject_tool(
-                            "tool_1",
-                            "Use the built-in status view instead.".to_string(),
-                        )
-                        .await
-                        .expect("reject tool confirmation");
-                    return;
-                }
-                sleep(Duration::from_millis(10)).await;
-            }
-            panic!("tool should enter awaiting confirmation");
-        });
-
-        let results = pipeline
-            .execute_tools(
-                vec![test_tool_call("tool_1", "ExecCommand")],
-                test_tool_execution_context(),
-                ToolExecutionOptions::default(),
-            )
-            .await
-            .expect("user rejection should be returned as a tool result");
-        reject_handle.await.expect("rejection task should finish");
-
-        assert_eq!(results.len(), 1);
-        let result = &results[0].result;
-        assert!(!result.is_error);
-        assert_eq!(result.result["status"], json!("rejected"));
-        assert_eq!(result.result["category"], json!("user_rejected"));
-        assert_eq!(result.result["tool_name"], json!("ExecCommand"));
-        assert_eq!(
-            result.result["instruction"],
-            json!("Use the built-in status view instead.")
-        );
-        assert!(result.result["provided_arguments"].is_null());
-
-        let assistant_text = result.result_for_assistant.as_deref().unwrap_or_default();
-        assert!(assistant_text.contains(
-            "The user rejected this tool call with the following instruction: \"Use the built-in status view instead.\""
-        ));
-        assert!(assistant_text.contains("Do not retry it unless the user explicitly asks you to."));
-        assert!(!assistant_text.contains("invalid_arguments"));
-        assert!(!assistant_text.contains("Provided arguments"));
-        assert!(!assistant_text.contains("failed"));
-
-        let task = pipeline
-            .state_manager
-            .get_task("tool_1")
-            .expect("tool task should be retained");
-        assert!(matches!(task.state, ToolExecutionState::Rejected { .. }));
     }
 
     #[tokio::test]

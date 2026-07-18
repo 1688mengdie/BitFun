@@ -13,8 +13,7 @@ use crate::runtime::DesktopRuntimeContext;
 use crate::startup_trace::DesktopStartupTrace;
 use bitfun_agent_runtime::sdk::{
     AgentDialogTurnRequest, AgentInputAttachment, AgentSessionModelUpdateRequest,
-    AgentSubmissionSource, AgentToolConfirmationRequest, AgentToolRejectionRequest,
-    AgentTurnCancellationRequest, PermissionReply, PermissionV2Request,
+    AgentSubmissionSource, AgentTurnCancellationRequest, PermissionReply, PermissionV2Request,
 };
 use bitfun_core::agentic::agents::AgentSource;
 use bitfun_core::agentic::coordination::{
@@ -706,21 +705,6 @@ pub struct ListSessionsRequest {
     pub remote_connection_id: Option<String>,
     #[serde(default)]
     pub remote_ssh_host: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ConfirmToolRequest {
-    pub session_id: String,
-    pub tool_id: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RejectToolRequest {
-    pub session_id: String,
-    pub tool_id: String,
-    pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -2363,39 +2347,6 @@ pub async fn list_sessions(
 }
 
 #[tauri::command]
-pub async fn confirm_tool_execution(
-    runtime: State<'_, DesktopRuntimeContext>,
-    request: ConfirmToolRequest,
-) -> Result<(), String> {
-    runtime
-        .agent_runtime()
-        .confirm_tool(AgentToolConfirmationRequest {
-            tool_id: request.tool_id,
-        })
-        .await
-        .map_err(|error| format!("Confirm tool failed: {}", error.into_message()))
-}
-
-#[tauri::command]
-pub async fn reject_tool_execution(
-    runtime: State<'_, DesktopRuntimeContext>,
-    request: RejectToolRequest,
-) -> Result<(), String> {
-    let reason = request
-        .reason
-        .unwrap_or_else(|| "User rejected".to_string());
-
-    runtime
-        .agent_runtime()
-        .reject_tool(AgentToolRejectionRequest {
-            tool_id: request.tool_id,
-            reason,
-        })
-        .await
-        .map_err(|error| format!("Reject tool failed: {}", error.into_message()))
-}
-
-#[tauri::command]
 pub async fn generate_session_title(
     coordinator: State<'_, Arc<ConversationCoordinator>>,
     request: GenerateSessionTitleRequest,
@@ -2680,22 +2631,8 @@ mod tests {
             "dialogTurnId": "turn-1"
         }))
         .expect("cancel request");
-        let confirm: ConfirmToolRequest = serde_json::from_value(json!({
-            "sessionId": "session-1",
-            "toolId": "tool-1"
-        }))
-        .expect("confirm request");
-        let reject: RejectToolRequest = serde_json::from_value(json!({
-            "sessionId": "session-1",
-            "toolId": "tool-1",
-            "reason": "Use a read-only path"
-        }))
-        .expect("reject request");
-
         assert_eq!(cancel.session_id, "session-1");
         assert_eq!(cancel.dialog_turn_id, "turn-1");
-        assert_eq!(confirm.tool_id, "tool-1");
-        assert_eq!(reject.reason.as_deref(), Some("Use a read-only path"));
         assert_eq!(
             serde_json::to_value(StartDialogTurnResponse {
                 success: true,

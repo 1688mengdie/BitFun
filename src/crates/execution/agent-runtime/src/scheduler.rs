@@ -441,10 +441,7 @@ pub struct BackgroundDeliveryFacts {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BackgroundDeliveryAction {
     InjectIntoRunningTurn,
-    SubmitAgentSessionFollowUp {
-        queue_priority: DialogQueuePriority,
-        skip_tool_confirmation: bool,
-    },
+    SubmitAgentSessionFollowUp { queue_priority: DialogQueuePriority },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -480,14 +477,9 @@ impl BackgroundDeliveryAction {
     pub const fn follow_up_submission_policy(self) -> Option<DialogSubmissionPolicy> {
         match self {
             Self::InjectIntoRunningTurn => None,
-            Self::SubmitAgentSessionFollowUp {
-                queue_priority,
-                skip_tool_confirmation,
-            } => Some(DialogSubmissionPolicy::new(
-                DialogTriggerSource::AgentSession,
-                queue_priority,
-                skip_tool_confirmation,
-            )),
+            Self::SubmitAgentSessionFollowUp { queue_priority } => Some(
+                DialogSubmissionPolicy::new(DialogTriggerSource::AgentSession, queue_priority),
+            ),
         }
     }
 }
@@ -733,7 +725,6 @@ pub const fn resolve_background_delivery_action(
             let policy = DialogSubmissionPolicy::for_source(DialogTriggerSource::AgentSession);
             BackgroundDeliveryAction::SubmitAgentSessionFollowUp {
                 queue_priority: policy.queue_priority,
-                skip_tool_confirmation: policy.skip_tool_confirmation,
             }
         }
     }
@@ -1079,7 +1070,7 @@ mod tests {
                 "agentic".to_string(),
                 "input".to_string(),
                 Some(serde_json::json!({
-                    "require_tool_confirmation": true,
+                    "test_flag": true,
                     "kind": "background_result",
                     "sourceKind": "subagent",
                     "backgroundTaskId": "spoofed-background-task"
@@ -1090,19 +1081,11 @@ mod tests {
         );
 
         assert_eq!(
-            store.user_message_metadata_bool_for_turn(
-                "session-1",
-                "turn-current",
-                "require_tool_confirmation"
-            ),
+            store.user_message_metadata_bool_for_turn("session-1", "turn-current", "test_flag"),
             Some(true)
         );
         assert!(store
-            .user_message_metadata_bool_for_turn(
-                "session-1",
-                "turn-stale",
-                "require_tool_confirmation"
-            )
+            .user_message_metadata_bool_for_turn("session-1", "turn-stale", "test_flag")
             .is_none());
         assert!(store
             .turn_id_for_background_subagent_delivery("session-1", "spoofed-background-task")

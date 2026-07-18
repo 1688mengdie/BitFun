@@ -7,8 +7,8 @@ use agent_client_protocol::schema::{
 use agent_client_protocol::{Client, ConnectionTo, Error, Result};
 use bitfun_agent_runtime::sdk::{
     AgentDialogTurnRequest, AgentSessionEventReceiver, AgentSubmissionSource,
-    AgentToolConfirmationRequest, AgentToolRejectionRequest, AgentTurnCancellationRequest,
-    DialogSubmissionPolicy, DialogSubmitOutcome,
+    AgentTurnCancellationRequest, DialogSubmissionPolicy, DialogSubmitOutcome, PermissionReply,
+    PermissionRequestEvent, PermissionRequestEventReceiver, PermissionV2Request,
 };
 use bitfun_events::AgenticEvent as CoreEvent;
 use log::warn;
@@ -47,6 +47,10 @@ impl BitfunAcpRuntime {
             .agent_runtime
             .subscribe_session_events(&acp_session.bitfun_session_id)
             .map_err(Self::runtime_error)?;
+        let mut permission_rx = self
+            .agent_runtime
+            .subscribe_permission_requests()
+            .map_err(Self::runtime_error)?;
         let outcome = self
             .agent_runtime
             .submit_dialog_turn(dialog_turn_request(&acp_session, parsed_prompt))
@@ -71,6 +75,7 @@ impl BitfunAcpRuntime {
         let stop_reason = wait_for_prompt_completion(
             self,
             &mut event_rx,
+            &mut permission_rx,
             &connection,
             &acp_session.acp_session_id,
             &acp_session.bitfun_session_id,
@@ -154,6 +159,7 @@ fn acp_user_message_metadata() -> serde_json::Map<String, serde_json::Value> {
 async fn wait_for_prompt_completion(
     runtime: &BitfunAcpRuntime,
     event_rx: &mut AgentSessionEventReceiver,
+    permission_rx: &mut PermissionRequestEventReceiver,
     connection: &ConnectionTo<Client>,
     acp_session_id: &str,
     bitfun_session_id: &str,
@@ -163,7 +169,49 @@ async fn wait_for_prompt_completion(
     let mut inline_think = InlineThinkRouter::new();
 
     loop {
-        let event = match event_rx.recv().await {
+        let event_result = tokio::select! {
+            event = event_rx.recv() => event,
+            permission = permission_rx.recv() => {
+                match permission {
+                    Ok(PermissionRequestEvent::Asked { request })
+                        if request.session_id == bitfun_session_id =>
+                    {
+                        handle_v2_permission_request(
+                            runtime,
+                            connection,
+                            acp_session_id,
+                            request,
+                        )
+                        .await?;
+                    }
+                    Ok(_) => {}
+                    Err(broadcast::error::RecvError::Lagged(count)) => {
+                        cancel_turn_after_event_stream_failure(
+                            runtime,
+                            bitfun_session_id,
+                            turn_id,
+                            "acp_permission_stream_lagged",
+                        )
+                        .await;
+                        return Err(Error::internal_error().data(format!(
+                            "permission event stream lagged after skipping {count} events"
+                        )));
+                    }
+                    Err(broadcast::error::RecvError::Closed) => {
+                        cancel_turn_after_event_stream_failure(
+                            runtime,
+                            bitfun_session_id,
+                            turn_id,
+                            "acp_permission_stream_closed",
+                        )
+                        .await;
+                        return Err(Error::internal_error().data("permission event stream closed"));
+                    }
+                }
+                continue;
+            }
+        };
+        let event = match event_result {
             Ok(envelope) => envelope.event,
             Err(broadcast::error::RecvError::Lagged(count)) => {
                 let message = format!(
@@ -215,23 +263,6 @@ async fn wait_for_prompt_completion(
             CoreEvent::ToolEvent { tool_event, .. } => {
                 for update in tool_event_updates(&tool_event, &mut seen_tool_calls) {
                     send_update(connection, acp_session_id, update)?;
-                }
-
-                if let bitfun_events::ToolEventData::ConfirmationNeeded {
-                    identity, params, ..
-                } = tool_event
-                {
-                    let (effective_tool_name, effective_params) =
-                        bitfun_agent_tools::effective_tool_invocation(&identity.tool_name, &params);
-                    handle_permission_request(
-                        runtime,
-                        connection,
-                        acp_session_id,
-                        &identity.tool_id,
-                        effective_tool_name,
-                        effective_params,
-                    )
-                    .await?;
                 }
             }
             CoreEvent::DialogTurnCompleted { .. } => {
@@ -312,89 +343,70 @@ fn send_inline_think_segments(
     Ok(())
 }
 
-async fn handle_permission_request(
+async fn handle_v2_permission_request(
     runtime: &BitfunAcpRuntime,
     connection: &ConnectionTo<Client>,
     acp_session_id: &str,
-    tool_id: &str,
-    tool_name: &str,
-    params: &serde_json::Value,
+    permission: PermissionV2Request,
 ) -> Result<()> {
-    let request = permission_request(acp_session_id, tool_id, tool_name, params);
+    let request_id = permission.request_id.clone();
+    let tool_name = permission.source.identity.clone();
+    let params = json!({
+        "action": permission.action,
+        "resources": permission.resources,
+        "saveResources": permission.save_resources,
+        "source": permission.source,
+        "displayMetadata": permission.display_metadata,
+    });
+    let request = permission_request(acp_session_id, &request_id, &tool_name, &params);
     let response = match connection.send_request(request).block_task().await {
         Ok(response) => response,
         Err(error) => {
-            let reason = format!("ACP permission request failed: {}", error);
             let _ = runtime
                 .agent_runtime
-                .reject_tool(AgentToolRejectionRequest {
-                    tool_id: tool_id.to_string(),
-                    reason: reason.clone(),
-                })
+                .respond_permission(
+                    &request_id,
+                    PermissionReply::Reject {
+                        feedback: Some(format!("ACP permission request failed: {error}")),
+                    },
+                )
                 .await;
             return Err(error);
         }
     };
 
-    match response.outcome {
+    let reply = match response.outcome {
         RequestPermissionOutcome::Selected(selected)
             if selected.option_id.to_string() == PERMISSION_ALLOW_ONCE =>
         {
-            runtime
-                .agent_runtime
-                .confirm_tool(AgentToolConfirmationRequest {
-                    tool_id: tool_id.to_string(),
-                })
-                .await
-                .map_err(BitfunAcpRuntime::runtime_error)?;
+            PermissionReply::Once
         }
         RequestPermissionOutcome::Selected(selected)
             if selected.option_id.to_string() == PERMISSION_REJECT_ONCE =>
         {
-            runtime
-                .agent_runtime
-                .reject_tool(AgentToolRejectionRequest {
-                    tool_id: tool_id.to_string(),
-                    reason: "Rejected by ACP client".to_string(),
-                })
-                .await
-                .map_err(BitfunAcpRuntime::runtime_error)?;
+            PermissionReply::Reject {
+                feedback: Some("Rejected by ACP client".to_string()),
+            }
         }
-        RequestPermissionOutcome::Cancelled => {
-            runtime
-                .agent_runtime
-                .reject_tool(AgentToolRejectionRequest {
-                    tool_id: tool_id.to_string(),
-                    reason: "ACP permission request cancelled".to_string(),
-                })
-                .await
-                .map_err(BitfunAcpRuntime::runtime_error)?;
-        }
-        RequestPermissionOutcome::Selected(selected) => {
-            let reason = format!(
+        RequestPermissionOutcome::Cancelled => PermissionReply::Reject {
+            feedback: Some("ACP permission request cancelled".to_string()),
+        },
+        RequestPermissionOutcome::Selected(selected) => PermissionReply::Reject {
+            feedback: Some(format!(
                 "Unknown ACP permission option selected: {}",
                 selected.option_id
-            );
-            runtime
-                .agent_runtime
-                .reject_tool(AgentToolRejectionRequest {
-                    tool_id: tool_id.to_string(),
-                    reason,
-                })
-                .await
-                .map_err(BitfunAcpRuntime::runtime_error)?;
-        }
-        _ => {
-            runtime
-                .agent_runtime
-                .reject_tool(AgentToolRejectionRequest {
-                    tool_id: tool_id.to_string(),
-                    reason: "Unsupported ACP permission outcome".to_string(),
-                })
-                .await
-                .map_err(BitfunAcpRuntime::runtime_error)?;
-        }
-    }
+            )),
+        },
+        _ => PermissionReply::Reject {
+            feedback: Some("Unsupported ACP permission outcome".to_string()),
+        },
+    };
+
+    runtime
+        .agent_runtime
+        .respond_permission(&request_id, reply)
+        .await
+        .map_err(BitfunAcpRuntime::runtime_error)?;
 
     Ok(())
 }
@@ -440,7 +452,6 @@ mod tests {
         assert_eq!(request.session_id, "bitfun-session");
         assert_eq!(request.workspace_path.as_deref(), Some("/workspace"));
         assert_eq!(request.policy.trigger_source, AgentSubmissionSource::Cli);
-        assert!(request.policy.requires_tool_confirmation());
         assert_eq!(request.metadata["acp_transport"], true);
         assert_eq!(request.attachments.len(), 1);
     }

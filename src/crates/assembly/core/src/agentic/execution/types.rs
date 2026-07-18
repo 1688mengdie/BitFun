@@ -27,7 +27,6 @@ pub struct ExecutionContext {
     pub context: HashMap<String, String>,
     pub subagent_parent_info: Option<SubagentParentInfo>,
     pub(crate) delegation_policy: DelegationPolicy,
-    pub skip_tool_confirmation: bool,
     pub runtime_tool_restrictions: ToolRuntimeRestrictions,
     /// Workspace I/O services (filesystem + shell) injected into tools
     pub workspace_services: Option<WorkspaceServices>,

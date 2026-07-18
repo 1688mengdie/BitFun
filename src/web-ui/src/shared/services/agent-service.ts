@@ -626,21 +626,6 @@ export class AgentService {
   }
 
    
-  async confirmToolExecution(
-    sessionId: string,
-    toolUseId: string, 
-    action: 'confirm' | 'reject', 
-    rejectReason?: string
-  ): Promise<any> {
-    const requestPayload = {
-      sessionId,
-      toolId: toolUseId,
-      action,
-      rejectReason
-    };
-    
-    return toolAPI.confirmToolExecution(requestPayload);
-  }
 }
 
 

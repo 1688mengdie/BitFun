@@ -40,78 +40,6 @@ impl ChatMode {
             return Ok(None);
         }
 
-        // ── Legacy permission prompt intercepts all keys when active ──
-        if let Some(ref mut prompt) = chat_state.permission_prompt {
-            let action = prompt.handle_key_event(key);
-            match action {
-                PermissionAction::AllowOnce => {
-                    let tool_id = prompt.tool_id.clone();
-                    let agent = self.agent.clone();
-                    tracing::info!("User allowed tool once: {}", tool_id);
-                    match tokio::task::block_in_place(|| {
-                        rt_handle.block_on(agent.confirm_tool(&tool_id))
-                    }) {
-                        Ok(()) => {
-                            chat_state.permission_prompt = None;
-                            chat_view.set_status(Some("Tool confirmed".to_string()));
-                        }
-                        Err(error) => {
-                            tracing::error!("Failed to confirm tool: {}", error);
-                            chat_view.set_status(Some(format!("Error: {error}")));
-                        }
-                    }
-                }
-                PermissionAction::AllowAlways => {
-                    let tool_id = prompt.tool_id.clone();
-                    let tool_name = prompt.tool_name().to_string();
-                    let agent = self.agent.clone();
-                    tracing::info!(
-                        "User allowed tool {}: tool_id={}, tool_name={}",
-                        ALLOW_ALWAYS_RUNTIME_SCOPE,
-                        tool_id,
-                        tool_name
-                    );
-                    match tokio::task::block_in_place(|| {
-                        rt_handle.block_on(agent.confirm_tool(&tool_id))
-                    }) {
-                        Ok(()) => {
-                            self.runtime.approval_controller().allow_always(&tool_name);
-                            chat_state.permission_prompt = None;
-                            chat_view.set_status(Some(format!(
-                                "Tool approved {ALLOW_ALWAYS_RUNTIME_SCOPE}"
-                            )));
-                        }
-                        Err(error) => {
-                            tracing::error!("Failed to confirm tool: {}", error);
-                            chat_view.set_status(Some(format!("Error: {error}")));
-                        }
-                    }
-                }
-                PermissionAction::Reject(reason) => {
-                    let tool_id = prompt.tool_id.clone();
-                    let agent = self.agent.clone();
-                    tracing::info!("User rejected tool: {}, reason: {}", tool_id, reason);
-                    let reason_clone = reason.clone();
-                    match tokio::task::block_in_place(|| {
-                        rt_handle.block_on(agent.reject_tool(&tool_id, reason_clone))
-                    }) {
-                        Ok(()) => {
-                            chat_state.permission_prompt = None;
-                            chat_view.set_status(Some(format!("Tool rejected: {}", reason)));
-                        }
-                        Err(error) => {
-                            tracing::error!("Failed to reject tool: {}", error);
-                            chat_view.set_status(Some(format!("Error: {error}")));
-                        }
-                    }
-                }
-                PermissionAction::None => {
-                    // Permission prompt consumed the key, no further action
-                }
-            }
-            return Ok(None);
-        }
-
         // ── Question prompt intercepts all keys when active ──
         if let Some(ref mut prompt) = chat_state.question_prompt {
             let action = prompt.handle_key_event(key);
@@ -621,8 +549,7 @@ impl ChatMode {
                     context.chat_view.mcp_add_dialog_handle_paste(&text);
                 } else if context.chat_view.login_form_visible() {
                     context.chat_view.login_form_insert_paste(&text);
-                } else if context.chat_state.permission_prompt.is_none()
-                    && context.chat_state.permission_v2_prompt.is_none()
+                } else if context.chat_state.permission_v2_prompt.is_none()
                     && context.chat_state.question_prompt.is_none()
                     && !context.this.any_popup_visible(context.chat_view)
                 {

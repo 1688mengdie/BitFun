@@ -16,7 +16,6 @@ use crate::agentic::tools::pipeline::{
     SubagentBatchExecutionPolicy as PipelineSubagentBatchExecutionPolicy, ToolExecutionContext,
     ToolExecutionOptions, ToolPipeline,
 };
-use crate::agentic::tools::registry::{get_global_tool_registry, ToolRegistry};
 use crate::agentic::tools::tool_context_runtime;
 use crate::agentic::tools::tool_result_storage;
 use crate::agentic::MessageContent;
@@ -27,12 +26,7 @@ use crate::util::elapsed_ms_u64;
 use crate::util::errors::{BitFunError, BitFunResult};
 use crate::util::types::Message as AIMessage;
 use crate::util::types::ToolDefinition;
-use bitfun_agent_runtime::tool_confirmation::{
-    resolve_tool_confirmation_policy_gate, ToolConfirmationContextPolicy,
-    ToolConfirmationPolicyGateFacts,
-};
 use bitfun_agent_runtime::turn_cancellation::DialogTurnCancellationTokenStore;
-use bitfun_agent_tools::ResolvedToolInvocation;
 use bitfun_ai_adapters::{
     ModelExchangeRequestTraceHandle, ModelExchangeResponseTrace, ModelExchangeTraceConfig,
 };
@@ -40,38 +34,6 @@ use log::{debug, error, warn};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
-
-fn tool_call_needs_permission(
-    registry: &ToolRegistry,
-    tool_call: &ToolCall,
-    workspace_root: Option<&std::path::Path>,
-    is_remote: bool,
-) -> bool {
-    let invocation = ResolvedToolInvocation::from_wire_call(
-        tool_call.tool_name.clone(),
-        tool_call.arguments.clone(),
-    )
-    .unwrap_or_else(|_| {
-        ResolvedToolInvocation::direct(tool_call.tool_name.clone(), tool_call.arguments.clone())
-    });
-
-    if crate::agentic::tools::permission_migration::uses_v2_permission(
-        &invocation.effective_tool_name,
-    ) {
-        return false;
-    }
-
-    registry
-        .get_tool(&invocation.effective_tool_name)
-        .and_then(|tool| {
-            crate::external_tools::resolve_external_tool_for_workspace(
-                tool,
-                crate::external_tools::external_tool_route_root(workspace_root, is_remote),
-            )
-        })
-        .map(|tool| tool.needs_permissions(Some(&invocation.effective_arguments)))
-        .unwrap_or(false)
-}
 
 /// Round executor
 pub struct RoundExecutor {
@@ -771,101 +733,26 @@ impl RoundExecutor {
             };
 
             // Read tool execution related configuration from global config
-            let (
-                needs_confirmation,
-                tool_execution_timeout,
-                tool_confirmation_timeout,
-                subagent_batch_execution_policy,
-            ) = {
+            let (tool_execution_timeout, subagent_batch_execution_policy) = {
                 let config_service = GlobalConfigManager::get_service().await.ok();
 
-                // Timeout and skip confirmation settings
-                let (exec_timeout, confirm_timeout, skip_confirmation, task_policy) =
-                    if let Some(ref service) = config_service {
-                        let ai_config: crate::service::config::types::AIConfig =
-                            service.get_config(Some("ai")).await.unwrap_or_default();
-
-                        if ai_config.skip_tool_confirmation {
-                            debug!("Global config skips tool confirmation");
-                        }
-
-                        (
-                            ai_config.tool_execution_timeout_secs,
-                            ai_config.tool_confirmation_timeout_secs,
-                            ai_config.skip_tool_confirmation,
-                            Self::map_subagent_batch_execution_policy(
-                                ai_config.subagent_batch_execution_policy,
-                            ),
-                        )
-                    } else {
-                        (
-                            None,
-                            None,
-                            false,
-                            PipelineSubagentBatchExecutionPolicy::default(),
-                        ) // Default: no timeout, requires confirmation
-                    };
-
-                let skip_from_context = context
-                    .context_vars
-                    .get("skip_tool_confirmation")
-                    .map(|v| v == "true")
-                    .unwrap_or(false);
-                let require_from_context = context
-                    .context_vars
-                    .get("require_tool_confirmation")
-                    .map(|v| v == "true")
-                    .unwrap_or(false);
-                let context_policy = if require_from_context {
-                    ToolConfirmationContextPolicy::Require
-                } else if skip_from_context {
-                    ToolConfirmationContextPolicy::Skip
+                if let Some(ref service) = config_service {
+                    let ai_config: crate::service::config::types::AIConfig =
+                        service.get_config(Some("ai")).await.unwrap_or_default();
+                    (
+                        ai_config.tool_execution_timeout_secs,
+                        Self::map_subagent_batch_execution_policy(
+                            ai_config.subagent_batch_execution_policy,
+                        ),
+                    )
                 } else {
-                    ToolConfirmationContextPolicy::Inherit
-                };
-
-                let skips_confirmation = match context_policy {
-                    ToolConfirmationContextPolicy::Require => false,
-                    ToolConfirmationContextPolicy::Skip => true,
-                    ToolConfirmationContextPolicy::Inherit => skip_confirmation,
-                };
-                let any_tool_needs_permission = if skips_confirmation {
-                    false
-                } else {
-                    let registry = get_global_tool_registry();
-                    let tool_registry = registry.read().await;
-
-                    stream_result.tool_calls.iter().any(|tool_call| {
-                        tool_call_needs_permission(
-                            &tool_registry,
-                            tool_call,
-                            context
-                                .workspace
-                                .as_ref()
-                                .map(|workspace| workspace.root_path()),
-                            context
-                                .workspace
-                                .as_ref()
-                                .is_some_and(|workspace| workspace.is_remote()),
-                        )
-                    })
-                };
-                let needs_confirm =
-                    resolve_tool_confirmation_policy_gate(ToolConfirmationPolicyGateFacts {
-                        global_skip_tool_confirmation: skip_confirmation,
-                        context_policy,
-                        any_tool_needs_permission,
-                    })
-                    .confirm_before_run();
-
-                (needs_confirm, exec_timeout, confirm_timeout, task_policy)
+                    (None, PipelineSubagentBatchExecutionPolicy::default())
+                }
             };
 
             // Create tool execution options (use configured timeout values)
             let tool_options = ToolExecutionOptions {
-                confirm_before_run: needs_confirmation,
                 timeout_secs: tool_execution_timeout,
-                confirmation_timeout_secs: tool_confirmation_timeout,
                 subagent_batch_execution_policy,
                 ..ToolExecutionOptions::default()
             };
@@ -1383,12 +1270,11 @@ fn token_details_from_usage(
 
 #[cfg(test)]
 mod tests {
-    use super::{tool_call_needs_permission, RoundExecutor, StreamProcessor};
+    use super::{RoundExecutor, StreamProcessor};
     use crate::agentic::core::ToolCall;
     use crate::agentic::events::{EventQueue, EventQueueConfig};
     use crate::agentic::execution::stream_processor::StreamResult;
     use crate::agentic::execution::types::RoundContext;
-    use crate::agentic::tools::registry::create_tool_registry;
     use crate::agentic::tools::ToolRuntimeRestrictions;
     use crate::util::errors::BitFunError;
     use crate::util::types::ai::GeminiUsage;
@@ -1408,24 +1294,6 @@ mod tests {
             event_queue,
             cancellation_tokens: DialogTurnCancellationTokenStore::new(),
         }
-    }
-
-    #[test]
-    fn deferred_file_tool_uses_v2_permission_gate_instead_of_legacy_gate() {
-        let registry = create_tool_registry();
-        let call = ToolCall {
-            tool_id: "tool-1".to_string(),
-            tool_name: bitfun_agent_tools::CALL_DEFERRED_TOOL_NAME.to_string(),
-            arguments: json!({
-                "tool_name": "Write",
-                "args": { "payload": "+++ file.txt\ncontent" }
-            }),
-            raw_arguments: None,
-            is_error: false,
-            recovered_from_truncation: false,
-        };
-
-        assert!(!tool_call_needs_permission(&registry, &call, None, false));
     }
 
     fn test_round_context() -> RoundContext {

@@ -12,7 +12,6 @@ pub mod framework;
 pub mod image_context;
 pub mod implementations;
 pub mod manifest_resolver;
-pub(crate) mod permission_migration;
 pub mod pipeline;
 pub(crate) mod post_call_hooks;
 #[doc(hidden)]

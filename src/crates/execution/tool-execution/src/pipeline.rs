@@ -38,7 +38,6 @@ pub enum ToolTaskStateKind {
     Waiting,
     Running,
     Streaming,
-    AwaitingConfirmation,
     Completed,
     Failed,
     Rejected,
@@ -54,10 +53,7 @@ impl ToolTaskStateKind {
     }
 
     pub fn is_cancellable(self) -> bool {
-        matches!(
-            self,
-            Self::Queued | Self::Waiting | Self::Running | Self::AwaitingConfirmation
-        )
+        matches!(self, Self::Queued | Self::Waiting | Self::Running)
     }
 
     pub fn starts_execution_timer(self) -> bool {
@@ -76,7 +72,6 @@ pub struct ToolStateCounts {
     pub waiting: usize,
     pub running: usize,
     pub streaming: usize,
-    pub awaiting_confirmation: usize,
     pub completed: usize,
     pub failed: usize,
     pub rejected: usize,
@@ -103,10 +98,6 @@ pub enum ToolStateEventKind {
     },
     Streaming {
         chunks_received: usize,
-    },
-    AwaitingConfirmation {
-        params: serde_json::Value,
-        timeout_at: Option<u64>,
     },
     Completed {
         result: serde_json::Value,
@@ -257,7 +248,6 @@ pub fn count_tool_states(states: impl IntoIterator<Item = ToolTaskStateKind>) ->
             ToolTaskStateKind::Waiting => counts.waiting += 1,
             ToolTaskStateKind::Running => counts.running += 1,
             ToolTaskStateKind::Streaming => counts.streaming += 1,
-            ToolTaskStateKind::AwaitingConfirmation => counts.awaiting_confirmation += 1,
             ToolTaskStateKind::Completed => counts.completed += 1,
             ToolTaskStateKind::Failed => counts.failed += 1,
             ToolTaskStateKind::Rejected => counts.rejected += 1,
@@ -295,13 +285,6 @@ pub fn tool_state_event_data(facts: ToolStateEventFacts) -> ToolEventData {
             identity,
             chunks_received,
         },
-        ToolStateEventKind::AwaitingConfirmation { params, timeout_at } => {
-            ToolEventData::ConfirmationNeeded {
-                identity,
-                params,
-                timeout_at,
-            }
-        }
         ToolStateEventKind::Completed {
             result,
             result_for_assistant,

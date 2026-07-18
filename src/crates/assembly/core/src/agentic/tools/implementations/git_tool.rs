@@ -1040,44 +1040,6 @@ When creating commits, use this format for the commit message:
         false
     }
 
-    fn needs_permissions(&self, input: Option<&Value>) -> bool {
-        // Read-only operations don't need permissions
-        if let Some(input) = input {
-            if let Some(operation) = input.get("operation").and_then(|v| v.as_str()) {
-                let readonly_ops = [
-                    "status",
-                    "diff",
-                    "log",
-                    "show",
-                    "branch",
-                    "remote",
-                    "tag",
-                    "blame",
-                    "describe",
-                    "shortlog",
-                    "rev-parse",
-                ];
-                // For branch command, if just listing branches (no args or using -l), it's read-only
-                if operation == "branch" {
-                    if let Some(args) = input.get("args").and_then(|v| v.as_str()) {
-                        // If there are args but not viewing commands, permissions are needed
-                        if !args.is_empty()
-                            && !args.contains("-l")
-                            && !args.contains("--list")
-                            && !args.contains("-a")
-                            && !args.contains("-r")
-                        {
-                            return true;
-                        }
-                    }
-                    return false;
-                }
-                return !readonly_ops.contains(&operation);
-            }
-        }
-        true
-    }
-
     fn permission_intents(
         &self,
         input: &Value,

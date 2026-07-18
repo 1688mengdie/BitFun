@@ -499,25 +499,6 @@ impl ChatMode {
                             );
                             continue;
                         }
-                        if let ToolEventData::ConfirmationNeeded { identity, .. } = tool_event {
-                            if self
-                                .runtime
-                                .approval_controller()
-                                .is_allowed(identity.effective_name())
-                            {
-                                let agent = self.agent.clone();
-                                let tool_id = identity.tool_id.clone();
-                                match tokio::task::block_in_place(|| {
-                                    rt_handle.block_on(agent.confirm_tool(&tool_id))
-                                }) {
-                                    Ok(()) => continue,
-                                    Err(error) => tracing::error!(
-                                        "Failed to confirm runtime-approved tool; showing the permission prompt again: {}",
-                                        error
-                                    ),
-                                }
-                            }
-                        }
                         chat_state.handle_tool_event(tool_event);
                         chat_view.invalidate_lines_cache();
                         needs_redraw = true;

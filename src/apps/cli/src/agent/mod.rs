@@ -28,12 +28,6 @@ pub(crate) trait Agent: Send + Sync {
     /// Restore an existing session from persistence
     async fn restore_session(&self, session_id: &str) -> Result<()>;
 
-    /// Confirm tool execution (allow once)
-    async fn confirm_tool(&self, tool_id: &str) -> Result<()>;
-
-    /// Reject tool execution
-    async fn reject_tool(&self, tool_id: &str, reason: String) -> Result<()>;
-
     /// Submit answers for AskUserQuestion tool
     async fn submit_user_answers(&self, tool_id: &str, answers: serde_json::Value) -> Result<()>;
 }

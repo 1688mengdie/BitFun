@@ -47,9 +47,8 @@ pub use crate::post_call_hooks::{
 pub use crate::runtime::{
     AgentEventStream, AgentInteractionResponsePort, AgentRunHandle, AgentRunRequest,
     AgentSessionRestorePort, AgentSessionRestoreRequest, AgentSessionRestoreResult,
-    AgentToolConfirmationRequest, AgentToolRejectionRequest, AgentUserAnswersRequest,
-    RuntimeAgentRegistry, RuntimeAgentRegistryQuery, RuntimeBuildError, RuntimeError,
-    RuntimeToolRegistry, SessionSelector,
+    AgentUserAnswersRequest, RuntimeAgentRegistry, RuntimeAgentRegistryQuery, RuntimeBuildError,
+    RuntimeError, RuntimeToolRegistry, SessionSelector,
 };
 pub use crate::session_state::{session_state_label_for_state, ProcessingPhase, SessionState};
 pub use bitfun_agent_tools::{ToolRegistry, ToolRegistryItem};
@@ -67,12 +66,12 @@ pub use bitfun_runtime_ports::{
     AgentThreadGoalCreateRequest, AgentThreadGoalDeliveryRequest, AgentThreadGoalGetRequest,
     AgentThreadGoalManagementPort, AgentThreadGoalUpdateStatusRequest, AgentTurnCancellationPort,
     AgentTurnCancellationRequest, AgentTurnCancellationResult, ClockPort, DialogSubmissionPolicy,
-    DialogSubmitOutcome, FileSystemPort, GitPort, McpCatalogPort, NetworkPort, PermissionDecision,
-    PermissionPort, PermissionReply, PermissionReplySource, PermissionRequest,
-    PermissionRequestEvent, PermissionRequestSource, PermissionRequestSourceKind,
-    PermissionV2Request, PortError, PortResult, RemoteAssistantWorkspaceFacts,
-    RemoteCapabilityPort, RemoteConnectionPort, RemoteProjectionPort, RemoteRecentWorkspaceFacts,
-    RemoteWorkspaceFacts, RemoteWorkspaceFileRuntimeHost, RemoteWorkspaceKind, RemoteWorkspacePort,
+    DialogSubmitOutcome, FileSystemPort, GitPort, McpCatalogPort, NetworkPort, PermissionReply,
+    PermissionReplySource, PermissionRequestEvent, PermissionRequestSource,
+    PermissionRequestSourceKind, PermissionV2Request, PortError, PortResult,
+    RemoteAssistantWorkspaceFacts, RemoteCapabilityPort, RemoteConnectionPort,
+    RemoteProjectionPort, RemoteRecentWorkspaceFacts, RemoteWorkspaceFacts,
+    RemoteWorkspaceFileRuntimeHost, RemoteWorkspaceKind, RemoteWorkspacePort,
     RemoteWorkspaceRuntimeHost, RemoteWorkspaceUpdate, RuntimeEventEnvelope, RuntimeEventSink,
     RuntimeEventType, RuntimeServiceCapability, RuntimeServicePort, SessionStorageKind,
     SessionStoragePathRequest, SessionStoragePathResolution, SessionStorePort, SessionTranscript,
@@ -401,20 +400,6 @@ impl AgentRuntime {
         request: AgentTurnCancellationRequest,
     ) -> Result<AgentTurnCancellationResult, RuntimeError> {
         self.inner.cancel_turn(request).await
-    }
-
-    pub async fn confirm_tool(
-        &self,
-        request: AgentToolConfirmationRequest,
-    ) -> Result<(), RuntimeError> {
-        self.inner.confirm_tool(request).await
-    }
-
-    pub async fn reject_tool(
-        &self,
-        request: AgentToolRejectionRequest,
-    ) -> Result<(), RuntimeError> {
-        self.inner.reject_tool(request).await
     }
 
     pub async fn submit_user_answers(

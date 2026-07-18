@@ -22,9 +22,6 @@ pub struct ToolExecutionOptions {
     pub max_retries: usize,
     /// Tool execution timeout (seconds), None means infinite waiting
     pub timeout_secs: Option<u64>,
-    pub confirm_before_run: bool,
-    /// Tool confirmation timeout (seconds), None means infinite waiting
-    pub confirmation_timeout_secs: Option<u64>,
     /// Ordered V2 permission rules. An unmatched resource defaults to `ask`.
     pub permission_rules: Vec<PermissionRule>,
 }
@@ -36,8 +33,6 @@ impl Default for ToolExecutionOptions {
             subagent_batch_execution_policy: SubagentBatchExecutionPolicy::default(),
             max_retries: 0,
             timeout_secs: None, // Default no timeout (infinite waiting)
-            confirm_before_run: true,
-            confirmation_timeout_secs: None, // Default no timeout (infinite waiting)
             permission_rules: Vec::new(),
         }
     }

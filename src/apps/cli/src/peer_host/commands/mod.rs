@@ -77,8 +77,6 @@ pub(crate) async fn dispatch(
         // Dialog / tools
         "start_dialog_turn" => dialog::start_dialog_turn(state, args).await,
         "cancel_dialog_turn" => dialog::cancel_dialog_turn(state, args).await,
-        "confirm_tool_execution" => dialog::confirm_tool_execution(state, args).await,
-        "reject_tool_execution" => dialog::reject_tool_execution(state, args).await,
 
         // Git (local workspace only)
         "git_is_repository" => git::git_is_repository(args).await,

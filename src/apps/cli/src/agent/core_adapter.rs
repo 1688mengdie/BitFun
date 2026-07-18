@@ -12,8 +12,8 @@ use super::Agent;
 use bitfun_agent_runtime::sdk::{
     AgentDialogTurnRequest, AgentRuntime, AgentSessionCreateRequest, AgentSessionDeleteRequest,
     AgentSessionListRequest, AgentSessionModelUpdateRequest, AgentSessionRestoreRequest,
-    AgentToolConfirmationRequest, AgentToolRejectionRequest, AgentTurnCancellationRequest,
-    AgentUserAnswersRequest, SessionTranscript, SessionTranscriptRequest,
+    AgentTurnCancellationRequest, AgentUserAnswersRequest, SessionTranscript,
+    SessionTranscriptRequest,
 };
 use bitfun_agent_runtime::user_questions::USER_INPUT_AVAILABLE_CONTEXT_KEY;
 use bitfun_core::agentic::persistence::session_branch::SessionBranchResult;
@@ -409,8 +409,7 @@ impl Agent for CoreAgentAdapter {
             workspace_path: Some(self.workspace_path_string()),
             remote_connection_id: None,
             remote_ssh_host: None,
-            policy: DialogSubmissionPolicy::for_source(AgentSubmissionSource::Cli)
-                .with_skip_tool_confirmation(self.approval_policy == CliApprovalPolicy::Auto),
+            policy: DialogSubmissionPolicy::for_source(AgentSubmissionSource::Cli),
             reply_route: None,
             prepended_reminders: Vec::new(),
             attachments: Vec::new(),
@@ -495,27 +494,6 @@ impl Agent for CoreAgentAdapter {
         self.restore_session_in_current_workspace(session_id)
             .await?;
         Ok(())
-    }
-
-    async fn confirm_tool(&self, tool_id: &str) -> Result<()> {
-        tracing::info!("Confirming tool execution: {}", tool_id);
-        self.runtime
-            .confirm_tool(AgentToolConfirmationRequest {
-                tool_id: tool_id.to_string(),
-            })
-            .await
-            .map_err(|e| anyhow::anyhow!("Confirm tool failed: {}", e.into_message()))
-    }
-
-    async fn reject_tool(&self, tool_id: &str, reason: String) -> Result<()> {
-        tracing::info!("Rejecting tool execution: {}, reason: {}", tool_id, reason);
-        self.runtime
-            .reject_tool(AgentToolRejectionRequest {
-                tool_id: tool_id.to_string(),
-                reason,
-            })
-            .await
-            .map_err(|e| anyhow::anyhow!("Reject tool failed: {}", e.into_message()))
     }
 
     async fn submit_user_answers(&self, tool_id: &str, answers: serde_json::Value) -> Result<()> {

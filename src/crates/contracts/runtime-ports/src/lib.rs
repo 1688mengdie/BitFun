@@ -680,30 +680,6 @@ impl std::fmt::Debug for ToolRuntimeHandles {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PermissionRequest {
-    pub scope: String,
-    pub action: String,
-    #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
-    pub metadata: serde_json::Map<String, serde_json::Value>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PermissionDecision {
-    Allow,
-    Deny { reason: String },
-}
-
-#[async_trait::async_trait]
-pub trait PermissionPort: RuntimeServicePort {
-    async fn request_permission(
-        &self,
-        request: PermissionRequest,
-    ) -> PortResult<PermissionDecision>;
-}
-
 pub trait ClockPort: RuntimeServicePort {
     fn now_unix_millis(&self) -> i64;
 }
@@ -1172,48 +1148,36 @@ pub enum DialogQueuePriority {
 pub struct DialogSubmissionPolicy {
     pub trigger_source: DialogTriggerSource,
     pub queue_priority: DialogQueuePriority,
-    pub skip_tool_confirmation: bool,
 }
 
 impl DialogSubmissionPolicy {
     pub const fn new(
         trigger_source: DialogTriggerSource,
         queue_priority: DialogQueuePriority,
-        skip_tool_confirmation: bool,
     ) -> Self {
         Self {
             trigger_source,
             queue_priority,
-            skip_tool_confirmation,
         }
     }
 
     pub const fn for_source(trigger_source: DialogTriggerSource) -> Self {
-        let (queue_priority, skip_tool_confirmation) = match trigger_source {
-            DialogTriggerSource::AgentSession => (DialogQueuePriority::Low, true),
-            DialogTriggerSource::ScheduledJob => (DialogQueuePriority::Low, true),
+        let queue_priority = match trigger_source {
+            DialogTriggerSource::AgentSession => DialogQueuePriority::Low,
+            DialogTriggerSource::ScheduledJob => DialogQueuePriority::Low,
             DialogTriggerSource::DesktopUi
             | DialogTriggerSource::DesktopApi
-            | DialogTriggerSource::Cli => (DialogQueuePriority::Normal, false),
+            | DialogTriggerSource::Cli => DialogQueuePriority::Normal,
             DialogTriggerSource::RemoteRelay | DialogTriggerSource::Bot => {
-                (DialogQueuePriority::Normal, true)
+                DialogQueuePriority::Normal
             }
         };
-        Self::new(trigger_source, queue_priority, skip_tool_confirmation)
+        Self::new(trigger_source, queue_priority)
     }
 
     pub const fn with_queue_priority(mut self, queue_priority: DialogQueuePriority) -> Self {
         self.queue_priority = queue_priority;
         self
-    }
-
-    pub const fn with_skip_tool_confirmation(mut self, skip_tool_confirmation: bool) -> Self {
-        self.skip_tool_confirmation = skip_tool_confirmation;
-        self
-    }
-
-    pub const fn requires_tool_confirmation(self) -> bool {
-        matches!(self.trigger_source, DialogTriggerSource::Cli) && !self.skip_tool_confirmation
     }
 }
 
@@ -2086,38 +2050,15 @@ mod tests {
     fn dialog_submission_policy_preserves_current_surface_queue_defaults() {
         let remote = DialogSubmissionPolicy::for_source(DialogTriggerSource::RemoteRelay);
         assert_eq!(remote.queue_priority, DialogQueuePriority::Normal);
-        assert!(remote.skip_tool_confirmation);
 
         let bot = DialogSubmissionPolicy::for_source(DialogTriggerSource::Bot);
         assert_eq!(bot.queue_priority, DialogQueuePriority::Normal);
-        assert!(bot.skip_tool_confirmation);
 
         let agent_session = DialogSubmissionPolicy::for_source(DialogTriggerSource::AgentSession);
         assert_eq!(agent_session.queue_priority, DialogQueuePriority::Low);
-        assert!(agent_session.skip_tool_confirmation);
 
         let cli = DialogSubmissionPolicy::for_source(DialogTriggerSource::Cli);
         assert_eq!(cli.queue_priority, DialogQueuePriority::Normal);
-        assert!(!cli.skip_tool_confirmation);
-        assert!(cli.requires_tool_confirmation());
-        let cli_json = serde_json::to_value(cli).expect("serialize cli policy");
-        assert!(cli_json.get("requireToolConfirmation").is_none());
-
-        let auto = cli.with_skip_tool_confirmation(true);
-        assert!(auto.skip_tool_confirmation);
-        assert!(!auto.requires_tool_confirmation());
-    }
-
-    #[test]
-    fn legacy_cli_policy_without_require_field_still_requires_confirmation() {
-        let policy: DialogSubmissionPolicy = serde_json::from_value(serde_json::json!({
-            "triggerSource": "cli",
-            "queuePriority": "normal",
-            "skipToolConfirmation": false
-        }))
-        .expect("legacy policy");
-
-        assert!(policy.requires_tool_confirmation());
     }
 
     #[test]
@@ -2537,7 +2478,6 @@ mod tests {
             policy: DialogSubmissionPolicy::new(
                 AgentSubmissionSource::RemoteRelay,
                 DialogQueuePriority::High,
-                true,
             ),
             reply_route: Some(AgentSessionReplyRoute {
                 source_session_id: "source_session".to_string(),

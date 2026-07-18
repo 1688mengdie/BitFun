@@ -624,14 +624,6 @@ pub struct AIConfig {
     #[serde(default = "default_tool_execution_timeout")]
     pub tool_execution_timeout_secs: Option<u64>,
 
-    /// Tool confirmation timeout in seconds; `None` means wait indefinitely.
-    #[serde(default = "default_tool_confirmation_timeout")]
-    pub tool_confirmation_timeout_secs: Option<u64>,
-
-    /// Skip tool execution confirmation (global, applies to all modes).
-    #[serde(default = "default_skip_tool_confirmation")]
-    pub skip_tool_confirmation: bool,
-
     /// Whether tools with deferred exposure load their schemas on demand.
     #[serde(default = "default_enable_deferred_tool_loading")]
     pub enable_deferred_tool_loading: bool,
@@ -843,15 +835,6 @@ fn default_stream_ttft_timeout() -> Option<u64> {
 /// Default is no timeout (wait forever).
 fn default_tool_execution_timeout() -> Option<u64> {
     None
-}
-
-/// Default is no timeout (wait forever).
-fn default_tool_confirmation_timeout() -> Option<u64> {
-    None
-}
-
-fn default_skip_tool_confirmation() -> bool {
-    true
 }
 
 fn default_enable_deferred_tool_loading() -> bool {
@@ -1607,8 +1590,6 @@ impl Default for AIConfig {
             stream_idle_timeout_secs: default_stream_idle_timeout(),
             stream_ttft_timeout_secs: default_stream_ttft_timeout(),
             tool_execution_timeout_secs: default_tool_execution_timeout(),
-            tool_confirmation_timeout_secs: default_tool_confirmation_timeout(),
-            skip_tool_confirmation: true,
             enable_deferred_tool_loading: default_enable_deferred_tool_loading(),
             debug_mode_config: DebugModeConfig::default(),
             computer_use_enabled: false,

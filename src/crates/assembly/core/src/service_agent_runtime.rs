@@ -340,11 +340,7 @@ fn core_dialog_submission_policy(policy: RemoteDialogSubmissionPolicy) -> Dialog
         RemoteDialogQueuePriority::High => DialogQueuePriority::High,
     };
 
-    DialogSubmissionPolicy::new(
-        trigger_source,
-        queue_priority,
-        policy.skip_tool_confirmation,
-    )
+    DialogSubmissionPolicy::new(trigger_source, queue_priority)
 }
 
 fn remote_dialog_scheduler_outcome_fact(
@@ -1551,22 +1547,6 @@ impl RemotePollRuntimeHost for CoreRemotePollRuntimeHost<'_> {
 
 #[async_trait::async_trait]
 impl RemoteInteractionRuntimeHost for CoreRemoteInteractionRuntimeHost {
-    async fn confirm_tool(&self, tool_id: &str) -> Result<(), String> {
-        self.coordinator()?
-            .confirm_tool(tool_id)
-            .await
-            .map(|_| ())
-            .map_err(|error| error.to_string())
-    }
-
-    async fn reject_tool(&self, tool_id: &str, reason: String) -> Result<(), String> {
-        self.coordinator()?
-            .reject_tool(tool_id, reason)
-            .await
-            .map(|_| ())
-            .map_err(|error| error.to_string())
-    }
-
     async fn cancel_tool(&self, tool_id: &str, reason: String) -> Result<(), String> {
         self.coordinator()?
             .cancel_tool(tool_id, reason)
@@ -1720,20 +1700,16 @@ mod tests {
         let relay = core_dialog_submission_policy(RemoteDialogSubmissionPolicy {
             source: RemoteConnectSubmissionSource::Relay,
             queue_priority: RemoteDialogQueuePriority::High,
-            skip_tool_confirmation: true,
         });
         assert_eq!(relay.trigger_source, DialogTriggerSource::RemoteRelay);
         assert_eq!(relay.queue_priority, DialogQueuePriority::High);
-        assert!(relay.skip_tool_confirmation);
 
         let bot = core_dialog_submission_policy(RemoteDialogSubmissionPolicy {
             source: RemoteConnectSubmissionSource::Bot,
             queue_priority: RemoteDialogQueuePriority::Low,
-            skip_tool_confirmation: false,
         });
         assert_eq!(bot.trigger_source, DialogTriggerSource::Bot);
         assert_eq!(bot.queue_priority, DialogQueuePriority::Low);
-        assert!(!bot.skip_tool_confirmation);
     }
 
     #[test]
