@@ -436,18 +436,15 @@ impl ChatMode {
                     };
                 }
 
+                crate::account_sync::notify_local_settings_changed();
+
                 ModelSelectionApplyOutcome::Applied {
                     default_persist_error: None,
                 }
             })
         });
 
-        apply_model_selection_feedback(
-            chat_state,
-            &selected_display_name,
-            &selected_id,
-            outcome,
-        );
+        apply_model_selection_feedback(chat_state, &selected_display_name, &selected_id, outcome);
     }
 
     /// Show agent selector popup with all available agent modes
@@ -499,7 +496,6 @@ impl ChatMode {
     }
 
     // ============ MCP management ============
-
 }
 
 #[cfg(test)]
