@@ -158,7 +158,7 @@ describe('ToolApprovalBar', () => {
       rejectButton.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
     });
 
-    expect(onConfirm).toHaveBeenCalledWith(input);
+    expect(onConfirm).toHaveBeenCalledWith();
     expect(onReject).toHaveBeenCalledWith();
   });
 

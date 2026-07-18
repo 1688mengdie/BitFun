@@ -984,7 +984,6 @@ async fn remote_connect_command_owner_preserves_cancel_and_group_routing() {
         &host,
         &RemoteCommand::ConfirmTool {
             tool_id: "tool-1".to_string(),
-            updated_input: None,
         },
         RemoteConnectSubmissionSource::Relay,
     )

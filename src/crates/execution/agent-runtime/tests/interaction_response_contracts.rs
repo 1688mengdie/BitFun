@@ -83,7 +83,6 @@ async fn sdk_forwards_typed_interaction_responses_without_losing_payloads() {
 
     let confirmation = AgentToolConfirmationRequest {
         tool_id: "tool-1".to_string(),
-        updated_input: Some(json!({ "path": "updated.txt" })),
     };
     let rejection = AgentToolRejectionRequest {
         tool_id: "tool-2".to_string(),
@@ -127,7 +126,6 @@ async fn sdk_reports_a_missing_interaction_response_port() {
     let error = runtime
         .confirm_tool(AgentToolConfirmationRequest {
             tool_id: "tool-1".to_string(),
-            updated_input: None,
         })
         .await
         .expect_err("missing port must be explicit");
@@ -140,12 +138,10 @@ fn interaction_response_requests_keep_camel_case_wire_fields() {
     assert_eq!(
         serde_json::to_value(AgentToolConfirmationRequest {
             tool_id: "tool-1".to_string(),
-            updated_input: Some(json!({ "command": "safe" })),
         })
         .expect("serialize confirmation request"),
         json!({
             "toolId": "tool-1",
-            "updatedInput": { "command": "safe" },
         })
     );
     assert_eq!(

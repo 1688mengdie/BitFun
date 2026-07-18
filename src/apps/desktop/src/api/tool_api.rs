@@ -105,8 +105,6 @@ pub struct ToolConfirmationRequest {
     pub action: String,
     #[serde(alias = "task_id")]
     pub task_id: Option<String>,
-    #[serde(alias = "updated_input")]
-    pub updated_input: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

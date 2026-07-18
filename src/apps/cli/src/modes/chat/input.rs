@@ -25,7 +25,7 @@ impl ChatMode {
                     let agent = self.agent.clone();
                     tracing::info!("User allowed tool once: {}", tool_id);
                     match tokio::task::block_in_place(|| {
-                        rt_handle.block_on(agent.confirm_tool(&tool_id, None))
+                        rt_handle.block_on(agent.confirm_tool(&tool_id))
                     }) {
                         Ok(()) => {
                             chat_state.permission_prompt = None;
@@ -48,7 +48,7 @@ impl ChatMode {
                         tool_name
                     );
                     match tokio::task::block_in_place(|| {
-                        rt_handle.block_on(agent.confirm_tool(&tool_id, None))
+                        rt_handle.block_on(agent.confirm_tool(&tool_id))
                     }) {
                         Ok(()) => {
                             self.runtime.approval_controller().allow_always(&tool_name);
@@ -612,5 +612,4 @@ impl ChatMode {
         }
         Ok(outcome)
     }
-
 }

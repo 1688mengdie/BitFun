@@ -1550,13 +1550,9 @@ impl RemotePollRuntimeHost for CoreRemotePollRuntimeHost<'_> {
 
 #[async_trait::async_trait]
 impl RemoteInteractionRuntimeHost for CoreRemoteInteractionRuntimeHost {
-    async fn confirm_tool(
-        &self,
-        tool_id: &str,
-        updated_input: Option<serde_json::Value>,
-    ) -> Result<(), String> {
+    async fn confirm_tool(&self, tool_id: &str) -> Result<(), String> {
         self.coordinator()?
-            .confirm_tool(tool_id, updated_input)
+            .confirm_tool(tool_id)
             .await
             .map(|_| ())
             .map_err(|error| error.to_string())

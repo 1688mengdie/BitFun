@@ -497,16 +497,11 @@ impl Agent for CoreAgentAdapter {
         Ok(())
     }
 
-    async fn confirm_tool(
-        &self,
-        tool_id: &str,
-        updated_input: Option<serde_json::Value>,
-    ) -> Result<()> {
+    async fn confirm_tool(&self, tool_id: &str) -> Result<()> {
         tracing::info!("Confirming tool execution: {}", tool_id);
         self.runtime
             .confirm_tool(AgentToolConfirmationRequest {
                 tool_id: tool_id.to_string(),
-                updated_input,
             })
             .await
             .map_err(|e| anyhow::anyhow!("Confirm tool failed: {}", e.into_message()))

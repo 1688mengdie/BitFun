@@ -14,7 +14,7 @@ const log = createLogger('ToolApprovalBar');
 
 interface ToolApprovalBarProps {
   toolItem: FlowToolItem;
-  onConfirm?: (updatedInput?: any, permissionOptionId?: string, approve?: boolean) => void;
+  onConfirm?: (permissionOptionId?: string, approve?: boolean) => void;
   onReject?: (options?: ToolRejectOptions) => void;
 }
 
@@ -97,7 +97,7 @@ export const ToolApprovalBar: React.FC<ToolApprovalBarProps> = ({
       return;
     }
 
-    onConfirm?.(input);
+    onConfirm?.();
   };
 
   const handleReject = (event: React.MouseEvent<HTMLButtonElement>) => {
@@ -172,7 +172,6 @@ export const ToolApprovalBar: React.FC<ToolApprovalBarProps> = ({
           {hasPermissionOptions ? (
             <AcpPermissionActions
               toolItem={toolItem}
-              input={input}
               disabled={!canConfirm}
               presentation="text"
               className="tool-approval-bar__permission-actions"

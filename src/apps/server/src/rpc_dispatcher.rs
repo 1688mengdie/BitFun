@@ -512,10 +512,9 @@ pub async fn dispatch(
         "confirm_tool_execution" => {
             let request = extract_request(&params)?;
             let tool_id = get_string(&request, "toolId")?;
-            let updated_input = request.get("updatedInput").cloned();
             state
                 .coordinator
-                .confirm_tool(&tool_id, updated_input)
+                .confirm_tool(&tool_id)
                 .await
                 .map_err(|e| anyhow!("{}", e))?;
             Ok(serde_json::json!({ "success": true }))

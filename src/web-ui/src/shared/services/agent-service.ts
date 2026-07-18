@@ -630,14 +630,12 @@ export class AgentService {
     sessionId: string,
     toolUseId: string, 
     action: 'confirm' | 'reject', 
-    updatedInput?: any,
     rejectReason?: string
   ): Promise<any> {
     const requestPayload = {
       sessionId,
       toolId: toolUseId,
       action,
-      updatedInput: updatedInput || null,
       rejectReason
     };
     

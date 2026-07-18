@@ -3,10 +3,6 @@
  */
 
 import { useCallback } from 'react';
-import {
-  effectiveToolInvocation,
-  replaceEffectiveToolInput,
-} from '../../utils/toolInvocationIdentity';
 import { notificationService } from '@/shared/notification-system';
 import { createLogger } from '@/shared/utils/logger';
 import {
@@ -62,7 +58,6 @@ function resolveToolContext(toolId: string): ResolvedToolContext {
 export function useFlowChatToolActions() {
   const handleToolConfirm = useCallback(async (
     toolId: string,
-    updatedInput?: any,
     permissionOptionId?: string,
     approve = true,
   ) => {
@@ -74,21 +69,9 @@ export function useFlowChatToolActions() {
         return;
       }
 
-      const effective = effectiveToolInvocation(toolItem.toolName, toolItem.toolCall?.input);
-      const finalInput = updatedInput || effective.input;
-      const finalWireInput = replaceEffectiveToolInput(
-        toolItem.toolName,
-        toolItem.toolCall?.input,
-        finalInput,
-      );
-
       flowChatStore.updateModelRoundItem(sessionId, turnId, toolId, {
         userConfirmed: approve,
         status: approve ? 'confirmed' : 'rejected',
-        toolCall: {
-          ...toolItem.toolCall,
-          input: finalWireInput,
-        },
         ...(approve ? {} : {
           requiresConfirmation: false,
           acpPermission: undefined,
@@ -117,7 +100,6 @@ export function useFlowChatToolActions() {
         sessionId,
         toolId,
         'confirm',
-        finalInput,
       );
     } catch (error) {
       log.error('Tool confirmation failed', error);
@@ -163,7 +145,6 @@ export function useFlowChatToolActions() {
         sessionId,
         toolId,
         'reject',
-        undefined,
         options?.instruction,
       );
     } catch (error) {

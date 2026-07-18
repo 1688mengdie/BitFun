@@ -344,7 +344,6 @@ async fn handle_permission_request(
                 .agent_runtime
                 .confirm_tool(AgentToolConfirmationRequest {
                     tool_id: tool_id.to_string(),
-                    updated_input: None,
                 })
                 .await
                 .map_err(BitfunAcpRuntime::runtime_error)?;

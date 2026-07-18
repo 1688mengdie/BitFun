@@ -586,7 +586,7 @@ export interface FlowChatActions {
   sendMessage: (message: string, sessionId?: string) => Promise<void>;
   createSession: (config?: Partial<SessionConfig>) => Promise<string>;
   switchSession: (sessionId: string) => void;
-  confirmTool: (toolId: string, updatedInput?: any) => void;
+  confirmTool: (toolId: string) => void;
   rejectTool: (toolId: string) => void;
   clearSession: (sessionId?: string) => void;
   deleteSession: (sessionId: string) => Promise<void>; // Now async.
