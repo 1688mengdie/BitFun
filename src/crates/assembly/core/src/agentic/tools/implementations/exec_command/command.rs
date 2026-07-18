@@ -7,7 +7,9 @@ use super::env_snapshot::{remote_env_snapshot_for, RemoteEnvSnapshot};
 use super::local_shell::{resolve_local_exec_shell, ResolvedLocalExecShell};
 use super::progress::ExecOutputProgressBridge;
 use super::shell_kind::{exec_command_shell_kind, terminal_shell_type};
-use crate::agentic::tools::framework::{Tool, ToolResult, ToolUseContext, ValidationResult};
+use crate::agentic::tools::framework::{
+    PermissionIntent, Tool, ToolResult, ToolUseContext, ValidationResult,
+};
 use crate::infrastructure::events::event_system::{
     get_global_event_system, BackendEvent::BackgroundCommandLifecycle,
 };
@@ -598,6 +600,18 @@ Output:
 
     fn needs_permissions(&self, _input: Option<&Value>) -> bool {
         true
+    }
+
+    fn permission_intents(
+        &self,
+        input: &Value,
+        _context: &ToolUseContext,
+    ) -> BitFunResult<Vec<PermissionIntent>> {
+        let command = exec_command_run_input_from_input(input)
+            .map(|parsed| parsed.cmd.trim().to_string())
+            .filter(|command| !command.is_empty())
+            .ok_or_else(|| BitFunError::validation("cmd is required".to_string()))?;
+        Ok(vec![PermissionIntent::new("bash", vec![command])])
     }
 
     fn manages_own_execution_timeout(&self) -> bool {

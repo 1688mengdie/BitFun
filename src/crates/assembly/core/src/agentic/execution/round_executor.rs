@@ -55,7 +55,7 @@ fn tool_call_needs_permission(
         ResolvedToolInvocation::direct(tool_call.tool_name.clone(), tool_call.arguments.clone())
     });
 
-    if crate::agentic::tools::file_permissions::uses_v2_file_permission(
+    if crate::agentic::tools::permission_migration::uses_v2_permission(
         &invocation.effective_tool_name,
     ) {
         return false;

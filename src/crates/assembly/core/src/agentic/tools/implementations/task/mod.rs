@@ -20,7 +20,7 @@ use crate::agentic::deep_review_policy::{
 };
 use crate::agentic::events::DeepReviewQueueStatus;
 use crate::agentic::tools::framework::{
-    Tool, ToolRenderOptions, ToolResult, ToolUseContext, ValidationResult,
+    PermissionIntent, Tool, ToolRenderOptions, ToolResult, ToolUseContext, ValidationResult,
 };
 use crate::agentic::tools::pipeline::SubagentParentInfo;
 use crate::service::config::global::GlobalConfigManager;
@@ -182,6 +182,38 @@ impl Tool for TaskTool {
 
     fn needs_permissions(&self, _input: Option<&Value>) -> bool {
         false
+    }
+
+    fn permission_intents(
+        &self,
+        input: &Value,
+        _context: &ToolUseContext,
+    ) -> BitFunResult<Vec<PermissionIntent>> {
+        let action = TaskAction::parse(input)?;
+        let resource = match action {
+            TaskAction::Spawn => input
+                .get("subagent_type")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|subagent_type| !subagent_type.is_empty())
+                .unwrap_or("fork_context")
+                .to_string(),
+            TaskAction::SendInput => input
+                .get("session_id")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|session_id| !session_id.is_empty())
+                .map(|session_id| format!("send_input:{session_id}"))
+                .ok_or_else(|| BitFunError::validation("session_id is required".to_string()))?,
+            TaskAction::Cancel => input
+                .get("session_id")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|session_id| !session_id.is_empty())
+                .map(|session_id| format!("cancel:{session_id}"))
+                .ok_or_else(|| BitFunError::validation("session_id is required".to_string()))?,
+        };
+        Ok(vec![PermissionIntent::new("task", vec![resource])])
     }
 
     async fn validate_input(

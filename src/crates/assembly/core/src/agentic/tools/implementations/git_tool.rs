@@ -3,7 +3,8 @@
 //! Provides safe and convenient Git command execution functionality, reuses underlying GitService
 
 use crate::agentic::tools::framework::{
-    Tool, ToolExposure, ToolRenderOptions, ToolResult, ToolUseContext, ValidationResult,
+    PermissionIntent, Tool, ToolExposure, ToolRenderOptions, ToolResult, ToolUseContext,
+    ValidationResult,
 };
 use crate::service::git::{
     execute_git_command, execute_git_command_raw, GitAddParams, GitCommitParams, GitDiffParams,
@@ -1075,6 +1076,28 @@ When creating commits, use this format for the commit message:
             }
         }
         true
+    }
+
+    fn permission_intents(
+        &self,
+        input: &Value,
+        _context: &ToolUseContext,
+    ) -> BitFunResult<Vec<PermissionIntent>> {
+        let normalized = Self::normalize_git_input(input.clone());
+        let operation = normalized
+            .get("operation")
+            .and_then(Value::as_str)
+            .ok_or_else(|| BitFunError::validation("operation is required".to_string()))?;
+        let args = normalized
+            .get("args")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|args| !args.is_empty());
+        let resource = match args {
+            Some(args) => format!("git {operation} {args}"),
+            None => format!("git {operation}"),
+        };
+        Ok(vec![PermissionIntent::new("git", vec![resource])])
     }
 
     async fn validate_input(

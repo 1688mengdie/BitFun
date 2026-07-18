@@ -8,7 +8,6 @@ use super::types::*;
 use crate::agentic::core::{ToolCall, ToolExecutionState, ToolResult as ModelToolResult};
 use crate::agentic::events::types::ToolEventData;
 use crate::agentic::tools::computer_use_host::ComputerUseHostRef;
-use crate::agentic::tools::file_permissions::uses_v2_file_permission;
 use crate::agentic::tools::framework::ToolResult as FrameworkToolResult;
 use crate::agentic::tools::registry::ToolRegistry;
 use crate::agentic::tools::tool_context_runtime;
@@ -465,16 +464,42 @@ fn permission_intent_effect(
     let mut aggregate = PermissionEffect::Allow;
 
     for resource in &intent.resources {
-        match evaluator.evaluate_resource(&intent.action, resource, rules) {
+        let configured_effect = if intent.action == "bash" {
+            rules
+                .iter()
+                .rev()
+                .find(|rule| {
+                    wildcard_matches(
+                        &intent.action,
+                        &rule.action,
+                        PermissionResourceCaseSensitivity::Sensitive,
+                    ) && match rule.effect {
+                        PermissionEffect::Allow => rule.resource == *resource,
+                        PermissionEffect::Ask | PermissionEffect::Deny => {
+                            wildcard_matches(resource, &rule.resource, case_sensitivity)
+                        }
+                    }
+                })
+                .map(|rule| rule.effect)
+                .unwrap_or(PermissionEffect::Ask)
+        } else {
+            evaluator.evaluate_resource(&intent.action, resource, rules)
+        };
+
+        match configured_effect {
             PermissionEffect::Deny => return PermissionEffect::Deny,
             PermissionEffect::Allow => {}
             PermissionEffect::Ask => {
                 let remembered = grants.iter().any(|grant| {
-                    wildcard_matches(
-                        &intent.action,
-                        &grant.action,
-                        PermissionResourceCaseSensitivity::Sensitive,
-                    ) && wildcard_matches(resource, &grant.resource, case_sensitivity)
+                    if intent.action == "bash" {
+                        grant.action == intent.action && grant.resource == *resource
+                    } else {
+                        wildcard_matches(
+                            &intent.action,
+                            &grant.action,
+                            PermissionResourceCaseSensitivity::Sensitive,
+                        ) && wildcard_matches(resource, &grant.resource, case_sensitivity)
+                    }
                 });
                 if !remembered {
                     aggregate = PermissionEffect::Ask;
@@ -1131,6 +1156,7 @@ impl ToolPipeline {
         }
 
         let permission_intents = tool.permission_intents(&tool_args, &tool_context)?;
+        let uses_v2_permission = !permission_intents.is_empty();
 
         // Register cancellation only after deterministic validation and registry lookup succeed.
         self.cancellation_tokens
@@ -1182,8 +1208,7 @@ impl ToolPipeline {
 
         let confirmation_plan = resolve_tool_confirmation_plan(ToolConfirmationRequestFacts {
             confirm_before_run: task.options.confirm_before_run,
-            tool_needs_permission: !uses_v2_file_permission(&tool_name)
-                && tool.needs_permissions(Some(&tool_args)),
+            tool_needs_permission: !uses_v2_permission && tool.needs_permissions(Some(&tool_args)),
             confirmation_timeout_secs: task.options.confirmation_timeout_secs,
             now: SystemTime::now(),
         });
@@ -1963,6 +1988,51 @@ mod tests {
             &json!({ "payload": "+++ C:/workspace/main.rs\npartial content" }),
             true,
         ));
+    }
+
+    #[test]
+    fn bash_permission_allows_only_exact_command_grants() {
+        let intent = PermissionIntent::new("bash", vec!["git status && rm -rf build".to_string()]);
+        let wildcard_allow = vec![PermissionRule::new(
+            "bash",
+            "git *",
+            PermissionEffect::Allow,
+        )];
+        assert_eq!(
+            permission_intent_effect(
+                &intent,
+                &wildcard_allow,
+                &[],
+                PermissionResourceCaseSensitivity::Sensitive,
+            ),
+            PermissionEffect::Ask
+        );
+
+        let exact_allow = vec![PermissionRule::new(
+            "bash",
+            "git status && rm -rf build",
+            PermissionEffect::Allow,
+        )];
+        assert_eq!(
+            permission_intent_effect(
+                &intent,
+                &exact_allow,
+                &[],
+                PermissionResourceCaseSensitivity::Sensitive,
+            ),
+            PermissionEffect::Allow
+        );
+
+        let wildcard_deny = vec![PermissionRule::new("bash", "*", PermissionEffect::Deny)];
+        assert_eq!(
+            permission_intent_effect(
+                &intent,
+                &wildcard_deny,
+                &[],
+                PermissionResourceCaseSensitivity::Sensitive,
+            ),
+            PermissionEffect::Deny
+        );
     }
 
     struct StaticTestTool {

@@ -6,12 +6,6 @@ use crate::util::errors::{BitFunError, BitFunResult};
 use std::collections::HashSet;
 use std::path::Path;
 
-pub(crate) const V2_FILE_TOOL_NAMES: &[&str] = &["Read", "Write", "Edit", "Delete"];
-
-pub(crate) fn uses_v2_file_permission(tool_name: &str) -> bool {
-    V2_FILE_TOOL_NAMES.contains(&tool_name)
-}
-
 pub(crate) fn file_permission_intents<'a>(
     action: &str,
     paths: impl IntoIterator<Item = &'a str>,
