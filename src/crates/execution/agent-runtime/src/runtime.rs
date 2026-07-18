@@ -99,11 +99,9 @@ pub trait AgentSessionRestorePort: Send + Sync {
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-/// Confirms a pending tool call, optionally replacing its input before execution.
+/// Confirms a pending tool call.
 pub struct AgentToolConfirmationRequest {
     pub tool_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub updated_input: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]

@@ -1568,11 +1568,7 @@ impl ToolPipeline {
     }
 
     /// Confirm tool execution
-    pub async fn confirm_tool(
-        &self,
-        tool_id: &str,
-        updated_input: Option<serde_json::Value>,
-    ) -> BitFunResult<()> {
+    pub async fn confirm_tool(&self, tool_id: &str) -> BitFunResult<()> {
         let task = self
             .state_manager
             .get_task(tool_id)
@@ -1584,12 +1580,6 @@ impl ToolPipeline {
                 "Tool is not in awaiting confirmation state: {:?}",
                 task.state
             )));
-        }
-
-        // If the user modified the parameters, update the task parameters first
-        if let Some(new_args) = updated_input {
-            debug!("User updated tool arguments: tool_id={}", tool_id);
-            self.state_manager.update_task_arguments(tool_id, new_args);
         }
 
         // Get sender from map and send confirmation response

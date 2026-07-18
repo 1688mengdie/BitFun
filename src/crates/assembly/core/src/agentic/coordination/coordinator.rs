@@ -4675,14 +4675,8 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
     }
 
     /// Confirm tool execution
-    pub async fn confirm_tool(
-        &self,
-        tool_id: &str,
-        updated_input: Option<serde_json::Value>,
-    ) -> BitFunResult<()> {
-        self.tool_pipeline
-            .confirm_tool(tool_id, updated_input)
-            .await
+    pub async fn confirm_tool(&self, tool_id: &str) -> BitFunResult<()> {
+        self.tool_pipeline.confirm_tool(tool_id).await
     }
 
     /// Reject tool execution
@@ -8025,7 +8019,7 @@ impl bitfun_agent_runtime::sdk::AgentInteractionResponsePort for ConversationCoo
         &self,
         request: bitfun_agent_runtime::sdk::AgentToolConfirmationRequest,
     ) -> bitfun_runtime_ports::PortResult<()> {
-        self.confirm_tool(&request.tool_id, request.updated_input)
+        self.confirm_tool(&request.tool_id)
             .await
             .map_err(runtime_port_error_preserving_message)
     }
@@ -8449,7 +8443,6 @@ mod tests {
             &coordinator,
             AgentToolConfirmationRequest {
                 tool_id: missing_tool_id.clone(),
-                updated_input: Some(serde_json::json!({ "path": "updated.txt" })),
             },
         )
         .await

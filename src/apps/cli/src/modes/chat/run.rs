@@ -455,7 +455,7 @@ impl ChatMode {
                                 let agent = self.agent.clone();
                                 let tool_id = identity.tool_id.clone();
                                 match tokio::task::block_in_place(|| {
-                                    rt_handle.block_on(agent.confirm_tool(&tool_id, None))
+                                    rt_handle.block_on(agent.confirm_tool(&tool_id))
                                 }) {
                                     Ok(()) => continue,
                                     Err(error) => tracing::error!(

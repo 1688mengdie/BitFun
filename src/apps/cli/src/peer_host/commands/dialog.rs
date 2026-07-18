@@ -175,12 +175,10 @@ pub(crate) async fn confirm_tool_execution(
         state.turns.restore_confirmation(tool_id, ownership);
         return Err("Tool confirmation session or turn does not match its Peer owner".to_string());
     }
-    let updated_input = request.get("updatedInput").cloned();
     if let Err(error) = state
         .agent_runtime
         .confirm_tool(AgentToolConfirmationRequest {
             tool_id: tool_id.clone(),
-            updated_input,
         })
         .await
     {

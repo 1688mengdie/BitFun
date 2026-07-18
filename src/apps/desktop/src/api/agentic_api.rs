@@ -713,7 +713,6 @@ pub struct ListSessionsRequest {
 pub struct ConfirmToolRequest {
     pub session_id: String,
     pub tool_id: String,
-    pub updated_input: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2312,7 +2311,6 @@ pub async fn confirm_tool_execution(
         .agent_runtime()
         .confirm_tool(AgentToolConfirmationRequest {
             tool_id: request.tool_id,
-            updated_input: request.updated_input,
         })
         .await
         .map_err(|error| format!("Confirm tool failed: {}", error.into_message()))
@@ -2604,8 +2602,7 @@ mod tests {
         .expect("cancel request");
         let confirm: ConfirmToolRequest = serde_json::from_value(json!({
             "sessionId": "session-1",
-            "toolId": "tool-1",
-            "updatedInput": { "path": "updated.txt" }
+            "toolId": "tool-1"
         }))
         .expect("confirm request");
         let reject: RejectToolRequest = serde_json::from_value(json!({
@@ -2618,10 +2615,6 @@ mod tests {
         assert_eq!(cancel.session_id, "session-1");
         assert_eq!(cancel.dialog_turn_id, "turn-1");
         assert_eq!(confirm.tool_id, "tool-1");
-        assert_eq!(
-            confirm.updated_input,
-            Some(json!({ "path": "updated.txt" }))
-        );
         assert_eq!(reject.reason.as_deref(), Some("Use a read-only path"));
         assert_eq!(
             serde_json::to_value(StartDialogTurnResponse {

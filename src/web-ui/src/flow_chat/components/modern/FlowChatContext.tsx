@@ -17,7 +17,7 @@ export interface FlowChatContextValue {
   onSwitchToChatPanel?: () => void;
 
   // Tool actions
-  onToolConfirm?: (toolId: string, updatedInput?: any, permissionOptionId?: string, approve?: boolean) => Promise<void>;
+  onToolConfirm?: (toolId: string, permissionOptionId?: string, approve?: boolean) => Promise<void>;
   onToolReject?: (toolId: string, options?: ToolRejectOptions) => Promise<void>;
 
   // Session info

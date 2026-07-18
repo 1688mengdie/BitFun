@@ -857,8 +857,7 @@ impl ExecMode {
                                     terminal_outcome = Some(Err(anyhow::anyhow!(message)));
                                     break;
                                 } else {
-                                    if let Err(error) = self.agent.confirm_tool(tool_id, None).await
-                                    {
+                                    if let Err(error) = self.agent.confirm_tool(tool_id).await {
                                         let mut message = format!(
                                             "Failed to approve tool request for {tool_name}: {error}"
                                         );

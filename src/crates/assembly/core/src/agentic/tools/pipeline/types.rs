@@ -140,12 +140,6 @@ impl ToolTask {
     pub fn effective_arguments(&self) -> &serde_json::Value {
         &self.invocation.effective_arguments
     }
-
-    pub fn update_effective_arguments(&mut self, arguments: serde_json::Value) {
-        self.invocation
-            .replace_effective_arguments(arguments.clone());
-        self.tool_call.arguments = self.invocation.wire_arguments.clone();
-    }
 }
 
 /// Tool execution result wrapper

@@ -1465,11 +1465,7 @@ where
 
 #[async_trait::async_trait]
 pub trait RemoteInteractionRuntimeHost: Send + Sync {
-    async fn confirm_tool(
-        &self,
-        tool_id: &str,
-        updated_input: Option<serde_json::Value>,
-    ) -> Result<(), String>;
+    async fn confirm_tool(&self, tool_id: &str) -> Result<(), String>;
     async fn reject_tool(&self, tool_id: &str, reason: String) -> Result<(), String>;
     async fn cancel_tool(&self, tool_id: &str, reason: String) -> Result<(), String>;
     fn answer_question(&self, tool_id: &str, answers: serde_json::Value) -> Result<(), String>;
@@ -1483,13 +1479,10 @@ where
     H: RemoteInteractionRuntimeHost + ?Sized,
 {
     match command {
-        RemoteCommand::ConfirmTool {
-            tool_id,
-            updated_input,
-        } => remote_interaction_accepted_response(
+        RemoteCommand::ConfirmTool { tool_id } => remote_interaction_accepted_response(
             "confirm_tool",
             tool_id.clone(),
-            host.confirm_tool(tool_id, updated_input.clone()).await,
+            host.confirm_tool(tool_id).await,
         ),
         RemoteCommand::RejectTool { tool_id, reason } => {
             let reject_reason = reason
@@ -2105,7 +2098,6 @@ pub enum RemoteCommand {
     },
     ConfirmTool {
         tool_id: String,
-        updated_input: Option<serde_json::Value>,
     },
     RejectTool {
         tool_id: String,
@@ -3719,11 +3711,7 @@ mod tests {
 
     #[async_trait::async_trait]
     impl RemoteInteractionRuntimeHost for FakeInteractionHost {
-        async fn confirm_tool(
-            &self,
-            _tool_id: &str,
-            _updated_input: Option<serde_json::Value>,
-        ) -> Result<(), String> {
+        async fn confirm_tool(&self, _tool_id: &str) -> Result<(), String> {
             Ok(())
         }
 

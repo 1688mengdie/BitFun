@@ -18,7 +18,7 @@ const log = createLogger('FlowToolCard');
 
 interface FlowToolCardProps {
   toolItem: FlowToolItem;
-  onConfirm?: (toolId: string, updatedInput?: any, permissionOptionId?: string, approve?: boolean) => void;
+  onConfirm?: (toolId: string, permissionOptionId?: string, approve?: boolean) => void;
   onReject?: (toolId: string, options?: ToolRejectOptions) => void;
   onOpenInEditor?: (filePath: string) => void;
   onOpenInPanel?: (panelType: string, data: any) => void;
@@ -53,16 +53,14 @@ export const FlowToolCard: React.FC<FlowToolCardProps> = React.memo(({
         ? 'chat-browser-tool-card'
         : undefined;
 
-  const handleConfirm = React.useCallback((updatedInput?: any, permissionOptionId?: string, approve?: boolean) => {
+  const handleConfirm = React.useCallback((permissionOptionId?: string, approve?: boolean) => {
     log.debug('handleConfirm called', {
       toolId: toolItem.id,
       toolName: effectiveToolItem.toolName,
-      hasUpdatedInput: updatedInput !== undefined,
-      updatedInputKeys: updatedInput ? Object.keys(updatedInput) : [],
       hasPermissionOption: Boolean(permissionOptionId),
       approve
     });
-    onConfirm?.(toolItem.id, updatedInput, permissionOptionId, approve);
+    onConfirm?.(toolItem.id, permissionOptionId, approve);
   }, [effectiveToolItem.toolName, toolItem.id, onConfirm]);
 
   const handleReject = React.useCallback((options?: ToolRejectOptions) => {

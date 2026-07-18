@@ -893,9 +893,9 @@ const FlowItemRenderer: React.FC<FlowItemRendererProps> = ({
         <div className={toolClassName} data-flow-item-id={item.id} data-flow-item-type="tool">
           <FlowToolCard
             toolItem={toolItem}
-            onConfirm={async (toolId: string, updatedInput?: any, permissionOptionId?: string, approve?: boolean) => {
+            onConfirm={async (toolId: string, permissionOptionId?: string, approve?: boolean) => {
               if (onToolConfirm) {
-                await onToolConfirm(toolId, updatedInput, permissionOptionId, approve);
+                await onToolConfirm(toolId, permissionOptionId, approve);
               }
             }}
             onReject={async (_toolId: string, options?: ToolRejectOptions) => {

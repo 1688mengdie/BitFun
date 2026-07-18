@@ -92,19 +92,6 @@ impl ToolStateManager {
         self.tasks.get(tool_id).map(|t| t.clone())
     }
 
-    /// Update task arguments
-    pub fn update_task_arguments(&self, tool_id: &str, new_arguments: serde_json::Value) {
-        if let Some(mut task) = self.tasks.get_mut(tool_id) {
-            debug!(
-                "Updated tool arguments: tool_id={}, old_args={:?}, new_args={:?}",
-                tool_id,
-                task.effective_arguments(),
-                new_arguments
-            );
-            task.update_effective_arguments(new_arguments);
-        }
-    }
-
     /// Get all tasks of a session
     pub fn get_session_tasks(&self, session_id: &str) -> Vec<ToolTask> {
         self.tasks
