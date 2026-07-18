@@ -82,6 +82,30 @@ export interface StartDialogTurnResponse {
   message: string;
 }
 
+export type PermissionReplyKind = 'once' | 'always' | 'reject';
+
+export interface PermissionRequestSource {
+  kind: 'tool_call' | 'provider' | 'extension';
+  identity: string;
+}
+
+export interface PermissionV2Request {
+  requestId: string;
+  projectId: string;
+  sessionId: string;
+  agentId: string;
+  action: string;
+  resources: string[];
+  saveResources?: string[];
+  source: PermissionRequestSource;
+  displayMetadata?: Record<string, unknown>;
+}
+
+export type PermissionRequestEvent =
+  | { event: 'asked'; request: PermissionV2Request }
+  | { event: 'replied'; requestId: string; reply: { reply: PermissionReplyKind }; source: string }
+  | { event: 'cancelled'; requestId: string; reason: string };
+
 export interface CompactSessionRequest {
   sessionId: string;
   workspacePath?: string;
@@ -861,6 +885,43 @@ export class AgentAPI {
     } catch (error) {
       throw createTauriCommandError('reject_tool_execution', error, { sessionId, toolId, reason });
     }
+  }
+
+  async listPendingPermissionRequests(): Promise<PermissionV2Request[]> {
+    try {
+      return await api.invoke<PermissionV2Request[]>('list_pending_permission_requests');
+    } catch (error) {
+      throw createTauriCommandError('list_pending_permission_requests', error);
+    }
+  }
+
+  async subscribePermissionRequests(): Promise<void> {
+    try {
+      await api.invoke<void>('subscribe_permission_requests');
+    } catch (error) {
+      throw createTauriCommandError('subscribe_permission_requests', error);
+    }
+  }
+
+  async respondPermission(
+    requestId: string,
+    reply: PermissionReplyKind,
+    feedback?: string,
+  ): Promise<void> {
+    const request = {
+      requestId,
+      reply,
+      ...(feedback?.trim() ? { feedback: feedback.trim() } : {}),
+    };
+    try {
+      await api.invoke<void>('respond_permission', { request });
+    } catch (error) {
+      throw createTauriCommandError('respond_permission', error, request);
+    }
+  }
+
+  onPermissionRequestEvent(callback: (event: PermissionRequestEvent) => void): () => void {
+    return api.listen<PermissionRequestEvent>('permission://event', callback);
   }
   
 

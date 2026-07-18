@@ -99,6 +99,7 @@ bitfun-services-core = { path = "../../services/services-core", default-features
     "lsp",
     "markdown",
     "workspace-runtime",
+    "permission-v2",
 ] }
 
 # Integration service owner crate
@@ -138,7 +139,7 @@ bitfun-relay-service = { path = "../../services/relay-service", optional = true 
 # Event layer dependency (lowest layer)
 bitfun-core-types = { path = "../../contracts/core-types" }
 bitfun-events = { path = "../../contracts/events" }
-bitfun-runtime-ports = { path = "../../contracts/runtime-ports" }
+bitfun-runtime-ports = { path = "../../contracts/runtime-ports", features = ["permission-v2"] }
 bitfun-runtime-services = { path = "../../execution/runtime-services" }
 
 # Reviewed product-full plugin composition root.

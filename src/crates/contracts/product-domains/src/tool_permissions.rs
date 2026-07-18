@@ -97,6 +97,24 @@ pub enum PermissionReplySource {
     System,
 }
 
+/// Process-local lifecycle event projected to interactive permission surfaces.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "event", rename_all = "snake_case")]
+pub enum PermissionRequestEvent {
+    Asked {
+        request: PermissionRequest,
+    },
+    Replied {
+        request_id: String,
+        reply: PermissionReply,
+        source: PermissionReplySource,
+    },
+    Cancelled {
+        request_id: String,
+        reason: String,
+    },
+}
+
 /// A remembered allow scoped by project, action, and resource.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

@@ -1,8 +1,10 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use bitfun_agent_runtime::sdk::{
     AgentDialogTurnPort, AgentInteractionResponsePort, AgentRuntime, AgentRuntimeBuilder,
-    AgentSessionModelPort, AgentSubmissionPort, AgentTurnCancellationPort, RuntimeBuildError,
+    AgentSessionModelPort, AgentSubmissionPort, AgentTurnCancellationPort, PermissionRequestEvent,
+    RuntimeBuildError,
 };
 use bitfun_core::agentic::coordination::{ConversationCoordinator, DialogScheduler};
 
@@ -14,6 +16,7 @@ use bitfun_core::agentic::coordination::{ConversationCoordinator, DialogSchedule
 /// Desktop delivery profile or its product services have been assembled.
 pub struct DesktopRuntimeContext {
     agent_runtime: AgentRuntime,
+    permission_events_started: AtomicBool,
 }
 
 impl DesktopRuntimeContext {
@@ -32,13 +35,62 @@ impl DesktopRuntimeContext {
             .with_dialog_turn_port(dialog_turn)
             .with_cancellation_port(cancellation)
             .with_interaction_response_port(interaction_response)
+            .with_permission_request_manager(
+                bitfun_core::product_runtime::core_permission_request_manager()
+                    .map_err(RuntimeBuildError::PermissionRequestManagerUnavailable)?,
+            )
             .build()?;
 
-        Ok(Self { agent_runtime })
+        Ok(Self {
+            agent_runtime,
+            permission_events_started: AtomicBool::new(false),
+        })
     }
 
     pub(crate) fn agent_runtime(&self) -> &AgentRuntime {
         &self.agent_runtime
+    }
+
+    pub(crate) fn start_permission_event_forwarding(
+        &self,
+        app: tauri::AppHandle,
+    ) -> Result<(), bitfun_agent_runtime::sdk::RuntimeError> {
+        if self.permission_events_started.swap(true, Ordering::AcqRel) {
+            return Ok(());
+        }
+
+        let mut receiver = match self.agent_runtime.subscribe_permission_requests() {
+            Ok(receiver) => receiver,
+            Err(error) => {
+                self.permission_events_started
+                    .store(false, Ordering::Release);
+                return Err(error);
+            }
+        };
+        let runtime = self.agent_runtime.clone();
+        tauri::async_runtime::spawn(async move {
+            use tauri::Emitter;
+
+            loop {
+                match receiver.recv().await {
+                    Ok(event) => {
+                        let _ = app.emit("permission://event", event);
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        if let Ok(requests) = runtime.pending_permission_requests() {
+                            for request in requests {
+                                let _ = app.emit(
+                                    "permission://event",
+                                    PermissionRequestEvent::Asked { request },
+                                );
+                            }
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
+        Ok(())
     }
 }
 

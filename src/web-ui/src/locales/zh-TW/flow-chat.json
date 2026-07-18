@@ -1,4 +1,15 @@
 {
+  "permissionV2": {
+    "title": "需要授權",
+    "scope": "始終允許會為項目 {{project}} 儲存存取權限。",
+    "scopeOnce": "僅允許本次操作，不會儲存項目授權。",
+    "feedbackLabel": "拒絕回饋",
+    "feedbackPlaceholder": "拒絕時可選填後續建議",
+    "responseFailed": "權限回覆未能送達，請重試。",
+    "allowOnce": "允許一次",
+    "allowAlways": "始終允許",
+    "reject": "拒絕"
+  },
   "emptyState": {
     "welcomeBack": "歡迎回來！",
     "workingIn": "您正在 <workspace>{{workspace}}</workspace> 中",

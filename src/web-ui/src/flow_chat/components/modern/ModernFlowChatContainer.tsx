@@ -74,6 +74,8 @@ import {
   type BackgroundSubagentActivityItem,
 } from '../../utils/backgroundSubagentActivity';
 import './ModernFlowChatContainer.scss';
+import { PermissionRequestPanel } from './PermissionRequestPanel';
+import { usePermissionRequests } from './usePermissionRequests';
 
 interface ModernFlowChatContainerProps {
   className?: string;
@@ -224,6 +226,9 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
   const { t } = useTranslation('flow-chat');
   const virtualItems = useVirtualItems();
   const activeSession = useActiveSession();
+  const { requests: permissionRequests, respond: respondPermission } = usePermissionRequests(
+    activeSession?.sessionId,
+  );
   const visibleTurnInfo = useVisibleTurnInfo();
   const [pendingHeaderTurnId, setPendingHeaderTurnId] = useState<string | null>(null);
   const [queuedHeaderTurnPinId, setQueuedHeaderTurnPinId] = useState<string | null>(null);
@@ -1475,6 +1480,15 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
           onClose={handleCloseBackgroundCommandInput}
           onSend={handleSendBackgroundCommandInput}
         />
+
+        {permissionRequests[0] && (
+          <PermissionRequestPanel
+            request={permissionRequests[0]}
+            onRespond={(reply, feedback) =>
+              respondPermission(permissionRequests[0].requestId, reply, feedback)
+            }
+          />
+        )}
 
         <div
           className="modern-flowchat-container__messages"

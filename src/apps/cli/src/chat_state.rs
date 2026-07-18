@@ -11,7 +11,7 @@ use bitfun_agent_runtime::sdk::{SessionTranscript, TranscriptContent, Transcript
 use bitfun_agent_tools::effective_tool_invocation;
 use bitfun_events::ToolEventData;
 
-use crate::ui::permission::PermissionPrompt;
+use crate::ui::permission::{PermissionPrompt, PermissionV2Prompt};
 use crate::ui::question::QuestionPrompt;
 
 // ============ Display Status Types ============
@@ -327,6 +327,7 @@ pub(crate) struct ChatState {
     // -- Permission state --
     /// Current pending permission prompt (if a tool needs user confirmation)
     pub permission_prompt: Option<PermissionPrompt>,
+    pub permission_v2_prompt: Option<PermissionV2Prompt>,
 
     // -- Question state --
     /// Current pending question prompt (if AskUserQuestion tool is waiting for answers)
@@ -354,6 +355,7 @@ impl ChatState {
             tool_index: HashMap::new(),
             is_processing: false,
             permission_prompt: None,
+            permission_v2_prompt: None,
             question_prompt: None,
         }
     }

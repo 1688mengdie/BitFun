@@ -25,7 +25,9 @@ use bitfun_runtime_ports::{
 use bitfun_runtime_services::RuntimeServices;
 
 use crate::event_source::{AgentEventReceiver, AgentEventSource, AgentSessionEventReceiver};
+use crate::permission_v2::{PermissionRequestEventReceiver, PermissionRequestManager};
 use crate::post_call_hooks::RuntimeHookRegistry;
+use bitfun_runtime_ports::{PermissionReply, PermissionReplySource, PermissionV2Request};
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum RuntimeBuildError {
@@ -33,6 +35,8 @@ pub enum RuntimeBuildError {
     MissingSubmissionPort,
     #[error("plugin runtime client binding must report executable host availability")]
     UnsupportedPluginRuntimeHostBinding,
+    #[error("permission request manager is unavailable: {0}")]
+    PermissionRequestManagerUnavailable(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -57,6 +61,10 @@ pub enum RuntimeError {
     MissingEventSink,
     #[error("agent event source is not registered")]
     MissingEventSource,
+    #[error("permission request manager is not registered")]
+    MissingPermissionRequestManager,
+    #[error("permission request failed: {0}")]
+    PermissionRequest(String),
     #[error(transparent)]
     Port(#[from] PortError),
 }
@@ -190,6 +198,7 @@ pub struct AgentRuntime {
     lifecycle_delivery: Option<Arc<dyn AgentLifecycleDeliveryPort>>,
     cancellation: Option<Arc<dyn AgentTurnCancellationPort>>,
     interaction_response: Option<Arc<dyn AgentInteractionResponsePort>>,
+    permission_requests: Option<Arc<PermissionRequestManager>>,
     services: Option<RuntimeServices>,
     event_stream: Option<AgentEventStream>,
     event_source: Option<AgentEventSource>,
@@ -325,6 +334,7 @@ pub struct AgentRuntimeBuilder {
     lifecycle_delivery: Option<Arc<dyn AgentLifecycleDeliveryPort>>,
     cancellation: Option<Arc<dyn AgentTurnCancellationPort>>,
     interaction_response: Option<Arc<dyn AgentInteractionResponsePort>>,
+    permission_requests: Option<Arc<PermissionRequestManager>>,
     services: Option<RuntimeServices>,
     event_stream: Option<AgentEventStream>,
     event_source: Option<AgentEventSource>,
@@ -405,6 +415,14 @@ impl AgentRuntimeBuilder {
         self
     }
 
+    pub fn with_permission_request_manager(
+        mut self,
+        manager: Arc<PermissionRequestManager>,
+    ) -> Self {
+        self.permission_requests = Some(manager);
+        self
+    }
+
     pub fn with_services(mut self, services: RuntimeServices) -> Self {
         self.services = Some(services);
         self
@@ -457,6 +475,7 @@ impl AgentRuntimeBuilder {
             lifecycle_delivery,
             cancellation,
             interaction_response,
+            permission_requests,
             services,
             event_stream,
             event_source,
@@ -482,6 +501,7 @@ impl AgentRuntimeBuilder {
             lifecycle_delivery,
             cancellation,
             interaction_response,
+            permission_requests,
             services,
             event_stream,
             event_source,
@@ -606,6 +626,37 @@ impl AgentRuntime {
             .as_ref()
             .map(|source| source.subscribe_session(session_id))
             .ok_or(RuntimeError::MissingEventSource)
+    }
+
+    pub fn pending_permission_requests(&self) -> Result<Vec<PermissionV2Request>, RuntimeError> {
+        self.permission_requests
+            .as_ref()
+            .map(|manager| manager.pending_requests())
+            .ok_or(RuntimeError::MissingPermissionRequestManager)
+    }
+
+    pub fn subscribe_permission_requests(
+        &self,
+    ) -> Result<PermissionRequestEventReceiver, RuntimeError> {
+        self.permission_requests
+            .as_ref()
+            .map(|manager| manager.subscribe())
+            .ok_or(RuntimeError::MissingPermissionRequestManager)
+    }
+
+    pub async fn respond_permission(
+        &self,
+        request_id: &str,
+        reply: PermissionReply,
+        source: PermissionReplySource,
+    ) -> Result<(), RuntimeError> {
+        self.permission_requests
+            .as_ref()
+            .ok_or(RuntimeError::MissingPermissionRequestManager)?
+            .reply(request_id, reply, source)
+            .await
+            .map(|_| ())
+            .map_err(|error| RuntimeError::PermissionRequest(error.to_string()))
     }
 
     pub fn services(&self) -> Option<&RuntimeServices> {

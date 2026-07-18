@@ -14,7 +14,7 @@ use crate::startup_trace::DesktopStartupTrace;
 use bitfun_agent_runtime::sdk::{
     AgentDialogTurnRequest, AgentInputAttachment, AgentSessionModelUpdateRequest,
     AgentSubmissionSource, AgentToolConfirmationRequest, AgentToolRejectionRequest,
-    AgentTurnCancellationRequest,
+    AgentTurnCancellationRequest, PermissionReply, PermissionV2Request,
 };
 use bitfun_core::agentic::agents::AgentSource;
 use bitfun_core::agentic::coordination::{
@@ -721,6 +721,66 @@ pub struct RejectToolRequest {
     pub session_id: String,
     pub tool_id: String,
     pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionResponseRequest {
+    pub request_id: String,
+    pub reply: PermissionReplyKind,
+    pub feedback: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PermissionReplyKind {
+    Once,
+    Always,
+    Reject,
+}
+
+fn permission_reply(request: PermissionResponseRequest) -> PermissionReply {
+    match request.reply {
+        PermissionReplyKind::Once => PermissionReply::Once,
+        PermissionReplyKind::Always => PermissionReply::Always,
+        PermissionReplyKind::Reject => PermissionReply::Reject {
+            feedback: request.feedback,
+        },
+    }
+}
+
+#[tauri::command]
+pub fn list_pending_permission_requests(
+    runtime: State<'_, DesktopRuntimeContext>,
+) -> Result<Vec<PermissionV2Request>, String> {
+    runtime
+        .agent_runtime()
+        .pending_permission_requests()
+        .map_err(|error| error.into_message())
+}
+
+#[tauri::command]
+pub fn subscribe_permission_requests(
+    app: AppHandle,
+    runtime: State<'_, DesktopRuntimeContext>,
+) -> Result<(), String> {
+    runtime
+        .start_permission_event_forwarding(app)
+        .map_err(|error| error.into_message())
+}
+
+#[tauri::command]
+pub async fn respond_permission(
+    runtime: State<'_, DesktopRuntimeContext>,
+    request: PermissionResponseRequest,
+) -> Result<(), String> {
+    let request_id = request.request_id.clone();
+    let reply = permission_reply(request);
+    runtime
+        .agent_runtime()
+        .respond_permission(&request_id, reply)
+        .await
+        .map_err(|error| error.into_message())
 }
 
 #[derive(Debug, Deserialize)]
@@ -2590,6 +2650,26 @@ mod tests {
         assert_eq!(
             runtime_request.metadata.get("requestId"),
             Some(&json!("request-1"))
+        );
+    }
+
+    #[test]
+    fn permission_response_dto_uses_stable_camel_case_wire_shape() {
+        let request: PermissionResponseRequest = serde_json::from_value(json!({
+            "requestId": "permission-1",
+            "reply": "reject",
+            "feedback": "Use a read-only path"
+        }))
+        .expect("permission response request");
+
+        assert_eq!(request.request_id, "permission-1");
+        assert!(matches!(request.reply, PermissionReplyKind::Reject));
+        assert_eq!(request.feedback.as_deref(), Some("Use a read-only path"));
+        assert_eq!(
+            permission_reply(request),
+            PermissionReply::Reject {
+                feedback: Some("Use a read-only path".to_string()),
+            }
         );
     }
 

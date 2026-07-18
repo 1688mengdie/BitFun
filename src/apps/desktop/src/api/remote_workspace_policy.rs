@@ -718,6 +718,10 @@ pub const REMOTE_WORKSPACE_COMMAND_POLICIES: &[(&str, RemoteWorkspacePolicy)] = 
         "list_background_command_activities",
         RemoteWorkspacePolicy::LegacyUnaudited,
     ),
+    (
+        "list_pending_permission_requests",
+        RemoteWorkspacePolicy::WorkspaceAgnostic,
+    ),
     ("list_cron_jobs", RemoteWorkspacePolicy::LegacyUnaudited),
     (
         "list_directory_files",
@@ -1080,6 +1084,10 @@ pub const REMOTE_WORKSPACE_COMMAND_POLICIES: &[(&str, RemoteWorkspacePolicy)] = 
     ("reject_file", RemoteWorkspacePolicy::LegacyUnaudited),
     ("reject_operation", RemoteWorkspacePolicy::LegacyUnaudited),
     (
+        "respond_permission",
+        RemoteWorkspacePolicy::WorkspaceAgnostic,
+    ),
+    (
         "reject_tool_execution",
         RemoteWorkspacePolicy::LegacyUnaudited,
     ),
@@ -1434,6 +1442,10 @@ pub const REMOTE_WORKSPACE_COMMAND_POLICIES: &[(&str, RemoteWorkspacePolicy)] = 
         RemoteWorkspacePolicy::LegacyUnaudited,
     ),
     ("start_dialog_turn", RemoteWorkspacePolicy::LegacyUnaudited),
+    (
+        "subscribe_permission_requests",
+        RemoteWorkspacePolicy::WorkspaceAgnostic,
+    ),
     ("start_file_watch", RemoteWorkspacePolicy::LegacyUnaudited),
     (
         "start_mcp_remote_oauth",

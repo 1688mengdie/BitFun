@@ -38,7 +38,9 @@ use crate::ui::mcp_add_dialog::McpAddAction;
 use crate::ui::mcp_selector::McpItem;
 use crate::ui::model_config_form::{ModelFormAction, ModelFormResult};
 use crate::ui::model_selector::ModelItem;
-use crate::ui::permission::{PermissionAction, ALLOW_ALWAYS_RUNTIME_SCOPE};
+use crate::ui::permission::{
+    PermissionAction, PermissionV2Action, PermissionV2Prompt, ALLOW_ALWAYS_RUNTIME_SCOPE,
+};
 use crate::ui::provider_selector::ProviderSelection;
 use crate::ui::question::QuestionAction;
 use crate::ui::session_selector::{SessionAction, SessionItem};

@@ -8,11 +8,16 @@ mod runtime_services;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::OnceLock;
+use std::time::{SystemTime, UNIX_EPOCH};
 
+use bitfun_agent_runtime::permission_v2::PermissionRequestManager;
 use bitfun_agent_runtime::sdk::{AgentEventSource, AgentRuntime};
 use bitfun_harness::HarnessRegistry;
+use bitfun_runtime_ports::{ClockPort, RuntimeServiceCapability, RuntimeServicePort};
 use bitfun_runtime_ports::{SessionStoragePathRequest, SessionStorePort, SessionViewRestoreTiming};
 use bitfun_runtime_services::RuntimeServices;
+use bitfun_services_core::permission_store::ProjectPermissionFileStore;
 
 use crate::agentic::coordination::{
     ConversationCoordinator, DialogScheduler, SessionMaintenancePermit,
@@ -35,6 +40,53 @@ use crate::util::errors::{BitFunError, BitFunResult};
 
 pub use bitfun_product_capabilities::ProductRuntimeAssembly as CoreProductRuntimeAssembly;
 pub use runtime_services::CoreRuntimeServicesProvider;
+
+#[derive(Debug, Clone, Copy, Default)]
+struct SystemPermissionClock;
+
+impl RuntimeServicePort for SystemPermissionClock {
+    fn capability(&self) -> RuntimeServiceCapability {
+        RuntimeServiceCapability::Clock
+    }
+}
+
+impl ClockPort for SystemPermissionClock {
+    fn now_unix_millis(&self) -> i64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| i64::try_from(duration.as_millis()).unwrap_or(i64::MAX))
+            .unwrap_or_default()
+    }
+}
+
+static PERMISSION_REQUEST_MANAGER: OnceLock<Arc<PermissionRequestManager>> = OnceLock::new();
+
+/// Returns the process-shared V2 permission request owner used by product
+/// surfaces. Pending requests remain process-local; only remembered grants and
+/// audit facts are written to the user data directory.
+pub fn core_permission_request_manager() -> Result<Arc<PermissionRequestManager>, String> {
+    if let Some(manager) = PERMISSION_REQUEST_MANAGER.get() {
+        return Ok(manager.clone());
+    }
+
+    let path_manager = crate::infrastructure::PathManager::new()
+        .map_err(|error| format!("Failed to initialize permission path manager: {error}"))?;
+    let store = Arc::new(ProjectPermissionFileStore::new(
+        path_manager.user_data_dir().join("permissions"),
+    ));
+    let audit_store: Arc<dyn bitfun_runtime_ports::PermissionAuditStorePort> = store.clone();
+    let reply_store: Arc<dyn bitfun_runtime_ports::PermissionReplyStorePort> = store;
+    let manager = Arc::new(PermissionRequestManager::new(
+        audit_store,
+        reply_store,
+        Arc::new(SystemPermissionClock),
+    ));
+    let _ = PERMISSION_REQUEST_MANAGER.set(manager);
+    PERMISSION_REQUEST_MANAGER
+        .get()
+        .cloned()
+        .ok_or_else(|| "Failed to initialize shared permission request manager".to_string())
+}
 
 /// Serializes one compatibility mutation with Core's session lifecycle.
 pub struct CoreSessionMutationPermit {

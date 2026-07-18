@@ -1,4 +1,15 @@
 {
+  "permissionV2": {
+    "title": "Permission required",
+    "scope": "Always allow saves access for project {{project}}.",
+    "scopeOnce": "Allow once only; no project grant will be saved.",
+    "feedbackLabel": "Rejection feedback",
+    "feedbackPlaceholder": "Optional guidance when rejecting",
+    "responseFailed": "The permission response could not be delivered. Try again.",
+    "allowOnce": "Allow once",
+    "allowAlways": "Always allow",
+    "reject": "Reject"
+  },
   "emptyState": {
     "welcomeBack": "Welcome back!",
     "workingIn": "You are working in <workspace>{{workspace}}</workspace>",

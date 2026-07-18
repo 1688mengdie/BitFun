@@ -19,7 +19,7 @@ mod script_tool;
 pub use bitfun_product_domains::tool_permissions::{
     PermissionAuditEvent, PermissionAuditRecord, PermissionGrant, PermissionGrantKey,
     PermissionReply, PermissionReplySource, PermissionRequest as PermissionV2Request,
-    PermissionRequestSource, PermissionRequestSourceKind,
+    PermissionRequestEvent, PermissionRequestSource, PermissionRequestSourceKind,
 };
 #[cfg(feature = "permission-v2")]
 pub use permission_v2::{

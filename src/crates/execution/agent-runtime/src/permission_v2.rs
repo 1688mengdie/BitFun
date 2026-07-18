@@ -7,13 +7,17 @@
 use bitfun_runtime_ports::{
     ClockPort, PermissionAuditEvent, PermissionAuditRecord, PermissionAuditStorePort,
     PermissionGrant, PermissionReply, PermissionReplySource, PermissionReplyStorePort,
-    PermissionV2Request, PortError,
+    PermissionRequestEvent, PermissionV2Request, PortError,
 };
 use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
-use tokio::sync::{oneshot, Mutex};
+use tokio::sync::{broadcast, oneshot, Mutex};
+
+const PERMISSION_EVENT_CAPACITY: usize = 128;
+
+pub type PermissionRequestEventReceiver = broadcast::Receiver<PermissionRequestEvent>;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum PermissionWaitOutcome {
@@ -74,6 +78,7 @@ pub struct PermissionRequestManager {
     audit_store: Arc<dyn PermissionAuditStorePort>,
     reply_store: Arc<dyn PermissionReplyStorePort>,
     clock: Arc<dyn ClockPort>,
+    events: broadcast::Sender<PermissionRequestEvent>,
 }
 
 impl std::fmt::Debug for PermissionRequestManager {
@@ -90,13 +95,19 @@ impl PermissionRequestManager {
         reply_store: Arc<dyn PermissionReplyStorePort>,
         clock: Arc<dyn ClockPort>,
     ) -> Self {
+        let (events, _) = broadcast::channel(PERMISSION_EVENT_CAPACITY);
         Self {
             pending: Arc::new(DashMap::new()),
             operations: Arc::new(Mutex::new(())),
             audit_store,
             reply_store,
             clock,
+            events,
         }
+    }
+
+    pub fn subscribe(&self) -> PermissionRequestEventReceiver {
+        self.events.subscribe()
     }
 
     pub async fn register(
@@ -121,7 +132,7 @@ impl PermissionRequestManager {
 
         let audit = PermissionAuditRecord {
             audit_id: audit_id(&request_id, "requested"),
-            request,
+            request: request.clone(),
             event: PermissionAuditEvent::Requested,
             timestamp_ms: self.clock.now_unix_millis(),
         };
@@ -129,6 +140,10 @@ impl PermissionRequestManager {
             self.pending.remove(&request_id);
             return Err(PermissionRequestManagerError::AuditStore(error));
         }
+
+        let _ = self.events.send(PermissionRequestEvent::Asked {
+            request: request.clone(),
+        });
 
         Ok(PendingPermissionReceiver {
             request_id,
@@ -211,7 +226,12 @@ impl PermissionRequestManager {
             if let Some((_, pending)) = self.pending.remove(&pending_request.request_id) {
                 let _ = pending
                     .sender
-                    .send(PermissionWaitOutcome::Replied(pending_reply));
+                    .send(PermissionWaitOutcome::Replied(pending_reply.clone()));
+                let _ = self.events.send(PermissionRequestEvent::Replied {
+                    request_id: pending_request.request_id,
+                    reply: pending_reply,
+                    source,
+                });
             }
         }
 
@@ -286,6 +306,10 @@ impl PermissionRequestManager {
                 let _ = pending.sender.send(PermissionWaitOutcome::Cancelled {
                     reason: reason.clone(),
                 });
+                let _ = self.events.send(PermissionRequestEvent::Cancelled {
+                    request_id: request.request_id,
+                    reason: reason.clone(),
+                });
             }
         }
         Ok(())
@@ -317,4 +341,152 @@ fn grants_for_reply(
 
 fn audit_id(request_id: &str, event: &str) -> String {
     format!("{request_id}:{event}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bitfun_runtime_ports::{
+        PermissionAuditStorePort, PermissionReplyStorePort, PortResult, RuntimeServiceCapability,
+        RuntimeServicePort,
+    };
+    use serde_json::Map;
+    use std::sync::Mutex as StdMutex;
+
+    #[derive(Debug, Default)]
+    struct MemoryPermissionStore {
+        audit: StdMutex<Vec<PermissionAuditRecord>>,
+    }
+
+    impl RuntimeServicePort for MemoryPermissionStore {
+        fn capability(&self) -> RuntimeServiceCapability {
+            RuntimeServiceCapability::Permission
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl PermissionAuditStorePort for MemoryPermissionStore {
+        async fn append_permission_audit(&self, record: PermissionAuditRecord) -> PortResult<()> {
+            self.audit.lock().unwrap().push(record);
+            Ok(())
+        }
+
+        async fn list_project_permission_audit(
+            &self,
+            project_id: &str,
+        ) -> PortResult<Vec<PermissionAuditRecord>> {
+            Ok(self
+                .audit
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|record| record.request.project_id == project_id)
+                .cloned()
+                .collect())
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl PermissionReplyStorePort for MemoryPermissionStore {
+        async fn commit_permission_reply(
+            &self,
+            _grants: Vec<PermissionGrant>,
+            audit: Vec<PermissionAuditRecord>,
+        ) -> PortResult<()> {
+            self.audit.lock().unwrap().extend(audit);
+            Ok(())
+        }
+    }
+
+    #[derive(Debug)]
+    struct FixedClock;
+
+    impl RuntimeServicePort for FixedClock {
+        fn capability(&self) -> RuntimeServiceCapability {
+            RuntimeServiceCapability::Clock
+        }
+    }
+
+    impl ClockPort for FixedClock {
+        fn now_unix_millis(&self) -> i64 {
+            42
+        }
+    }
+
+    fn request() -> PermissionV2Request {
+        PermissionV2Request {
+            request_id: "request-1".to_string(),
+            project_id: "project-1".to_string(),
+            session_id: "session-1".to_string(),
+            agent_id: "agentic".to_string(),
+            action: "edit".to_string(),
+            resources: vec!["src/main.rs".to_string()],
+            save_resources: vec!["src/main.rs".to_string()],
+            source: bitfun_runtime_ports::PermissionRequestSource {
+                kind: bitfun_runtime_ports::PermissionRequestSourceKind::ToolCall,
+                identity: "write_file".to_string(),
+            },
+            display_metadata: Map::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn request_events_project_asked_and_replied_lifecycle() {
+        let store = Arc::new(MemoryPermissionStore::default());
+        let manager = PermissionRequestManager::new(store.clone(), store, Arc::new(FixedClock));
+        let mut events = manager.subscribe();
+
+        let pending = manager.register(request()).await.expect("register request");
+        assert_eq!(
+            events.recv().await.expect("asked event"),
+            PermissionRequestEvent::Asked { request: request() }
+        );
+        assert_eq!(manager.pending_requests(), vec![request()]);
+
+        manager
+            .reply(
+                "request-1",
+                PermissionReply::Once,
+                PermissionReplySource::User,
+            )
+            .await
+            .expect("reply request");
+        assert_eq!(
+            events.recv().await.expect("replied event"),
+            PermissionRequestEvent::Replied {
+                request_id: "request-1".to_string(),
+                reply: PermissionReply::Once,
+                source: PermissionReplySource::User,
+            }
+        );
+        assert_eq!(
+            pending.wait().await,
+            PermissionWaitOutcome::Replied(PermissionReply::Once)
+        );
+        assert!(manager.pending_requests().is_empty());
+
+        let cancelled = manager
+            .register(PermissionV2Request {
+                request_id: "request-2".to_string(),
+                ..request()
+            })
+            .await
+            .expect("register second request");
+        let _ = events.recv().await.expect("second asked event");
+        manager
+            .cancel_request("request-2", "session closed")
+            .await
+            .expect("cancel request");
+        assert!(matches!(
+            events.recv().await.expect("cancelled event"),
+            PermissionRequestEvent::Cancelled { request_id, reason }
+                if request_id == "request-2" && reason == "session closed"
+        ));
+        assert_eq!(
+            cancelled.wait().await,
+            PermissionWaitOutcome::Cancelled {
+                reason: "session closed".to_string()
+            }
+        );
+    }
 }

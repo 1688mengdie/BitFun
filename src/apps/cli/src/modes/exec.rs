@@ -5,12 +5,13 @@
 use anyhow::Result;
 use clap::ValueEnum;
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use bitfun_agent_runtime::sdk::{PermissionReply, PermissionReplySource, PermissionRequestEvent};
 use bitfun_agent_tools::effective_tool_invocation;
 use bitfun_events::{AgenticEvent, ToolEventIdentity};
 use tokio::time::{sleep, Instant};
@@ -309,7 +310,7 @@ pub(crate) struct ExecMode {
     message: String,
     agent_type: String,
     agent: Arc<CoreAgentAdapter>,
-    _runtime: Arc<CliRuntimeContext>,
+    runtime: Arc<CliRuntimeContext>,
     workspace_path: Option<PathBuf>,
     /// None: no patch output, Some("-"): output to stdout, Some(path): save to file
     output_patch: Option<String>,
@@ -344,7 +345,7 @@ impl ExecMode {
             message,
             agent_type,
             agent,
-            _runtime: runtime,
+            runtime,
             workspace_path,
             output_patch,
             output_format,
@@ -557,7 +558,6 @@ impl ExecMode {
         };
         tracing::info!(session_id = %session_id, "Session ready");
         let mut event_rx = self.agent.event_source().subscribe();
-
         self.print_text(|| {
             eprintln!("Executing: {}", self.message);
             eprintln!();
@@ -585,6 +585,78 @@ impl ExecMode {
             }
         };
         tracing::info!(session_id = %session_id, turn_id = %turn_id, "Message sent");
+
+        let mut permission_rx = self
+            .runtime
+            .agent_runtime()
+            .subscribe_permission_requests()
+            .map_err(|error| anyhow::anyhow!(error.into_message()))?;
+        let permission_runtime = self.runtime.agent_runtime().clone();
+        let permission_session_id = session_id.clone();
+        let permission_mode = self.approval_mode;
+        let (permission_action_tx, mut permission_action_rx) = tokio::sync::mpsc::channel(1);
+        let permission_task = tokio::spawn(async move {
+            let mut initial_requests = permission_runtime
+                .pending_permission_requests()
+                .unwrap_or_default()
+                .into_iter()
+                .collect::<VecDeque<_>>();
+            let mut handled_request_ids = HashSet::new();
+            loop {
+                let request = if let Some(request) = initial_requests.pop_front() {
+                    request
+                } else {
+                    let Ok(event) = permission_rx.recv().await else {
+                        break;
+                    };
+                    let PermissionRequestEvent::Asked { request } = event else {
+                        continue;
+                    };
+                    request
+                };
+                if request.session_id != permission_session_id {
+                    continue;
+                }
+                if !handled_request_ids.insert(request.request_id.clone()) {
+                    continue;
+                }
+                let (reply, action_required, source) = match permission_mode {
+                    ExecApprovalMode::Auto => (
+                        PermissionReply::Once,
+                        false,
+                        PermissionReplySource::AutoApprove,
+                    ),
+                    ExecApprovalMode::Reject => (
+                        PermissionReply::Reject {
+                            feedback: Some(
+                                "Non-interactive execution requires an explicit permission policy"
+                                    .to_string(),
+                            ),
+                        },
+                        true,
+                        PermissionReplySource::System,
+                    ),
+                };
+                if let Err(error) = permission_runtime
+                    .respond_permission_with_source(&request.request_id, reply, source)
+                    .await
+                {
+                    let _ = permission_action_tx
+                        .send(format!("Failed to respond to permission request: {error}"))
+                        .await;
+                    break;
+                }
+                if action_required {
+                    let _ = permission_action_tx
+                        .send(format!(
+                            "action-required: permission needed for {} ({})",
+                            request.action, request.request_id
+                        ))
+                        .await;
+                    break;
+                }
+            }
+        });
 
         // Observe the shared Agentic event stream without consuming other clients' events.
         let mut total_tool_calls = 0usize;
@@ -633,6 +705,18 @@ impl ExecMode {
                     break 'event_loop;
                 }
                 },
+                permission = permission_action_rx.recv() => {
+                    let message = permission.unwrap_or_else(|| {
+                        "Permission response channel closed before execution settled".to_string()
+                    });
+                    if let Err(error) = self.agent.cancel_current_turn().await {
+                        tracing::error!("Failed to cancel after permission action: {error}");
+                    }
+                    terminal_status = Some(ExecTerminalStatus::Error);
+                    terminal_message = Some(message.clone());
+                    terminal_outcome = Some(Err(anyhow::anyhow!(message)));
+                    break 'event_loop;
+                }
                 signal = tokio::signal::ctrl_c() => {
                     let interrupted = signal.is_ok();
                     let mut message = match signal {
@@ -1027,6 +1111,8 @@ impl ExecMode {
                 break;
             }
         }
+
+        permission_task.abort();
 
         if let Err(error) = self.wait_for_turn_settlement(&session_id, &turn_id).await {
             let message = match terminal_message.take() {

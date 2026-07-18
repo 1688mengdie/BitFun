@@ -36,6 +36,10 @@ impl AgentRuntimeSdkCompatibility {
 
 pub use crate::context_profile::{ContextProfile, ContextProfilePolicy, ModelCapabilityProfile};
 pub use crate::event_source::{AgentEventReceiver, AgentEventSource, AgentSessionEventReceiver};
+pub use crate::permission_v2::{
+    PermissionReplyResolution, PermissionRequestEventReceiver, PermissionRequestManager,
+    PermissionRequestManagerError,
+};
 pub use crate::post_call_hooks::{
     RuntimeHookErrorPolicy, RuntimeHookKind, RuntimeHookPlan, RuntimeHookRegistry,
     RuntimeHookRegistryBuildError,
@@ -64,7 +68,9 @@ pub use bitfun_runtime_ports::{
     AgentThreadGoalManagementPort, AgentThreadGoalUpdateStatusRequest, AgentTurnCancellationPort,
     AgentTurnCancellationRequest, AgentTurnCancellationResult, ClockPort, DialogSubmissionPolicy,
     DialogSubmitOutcome, FileSystemPort, GitPort, McpCatalogPort, NetworkPort, PermissionDecision,
-    PermissionPort, PermissionRequest, PortError, PortResult, RemoteAssistantWorkspaceFacts,
+    PermissionPort, PermissionReply, PermissionReplySource, PermissionRequest,
+    PermissionRequestEvent, PermissionRequestSource, PermissionRequestSourceKind,
+    PermissionV2Request, PortError, PortResult, RemoteAssistantWorkspaceFacts,
     RemoteCapabilityPort, RemoteConnectionPort, RemoteProjectionPort, RemoteRecentWorkspaceFacts,
     RemoteWorkspaceFacts, RemoteWorkspaceFileRuntimeHost, RemoteWorkspaceKind, RemoteWorkspacePort,
     RemoteWorkspaceRuntimeHost, RemoteWorkspaceUpdate, RuntimeEventEnvelope, RuntimeEventSink,
@@ -166,6 +172,14 @@ impl AgentRuntimeBuilder {
         self
     }
 
+    pub fn with_permission_request_manager(
+        mut self,
+        manager: Arc<PermissionRequestManager>,
+    ) -> Self {
+        self.inner = self.inner.with_permission_request_manager(manager);
+        self
+    }
+
     pub fn with_services(mut self, services: RuntimeServices) -> Self {
         self.inner = self.inner.with_services(services);
         self
@@ -216,6 +230,37 @@ impl AgentRuntime {
         session_id: &str,
     ) -> Result<AgentSessionEventReceiver, RuntimeError> {
         self.inner.subscribe_session_events(session_id)
+    }
+
+    pub fn pending_permission_requests(&self) -> Result<Vec<PermissionV2Request>, RuntimeError> {
+        self.inner.pending_permission_requests()
+    }
+
+    pub fn subscribe_permission_requests(
+        &self,
+    ) -> Result<PermissionRequestEventReceiver, RuntimeError> {
+        self.inner.subscribe_permission_requests()
+    }
+
+    pub async fn respond_permission(
+        &self,
+        request_id: &str,
+        reply: PermissionReply,
+    ) -> Result<(), RuntimeError> {
+        self.inner
+            .respond_permission(request_id, reply, PermissionReplySource::User)
+            .await
+    }
+
+    pub async fn respond_permission_with_source(
+        &self,
+        request_id: &str,
+        reply: PermissionReply,
+        source: PermissionReplySource,
+    ) -> Result<(), RuntimeError> {
+        self.inner
+            .respond_permission(request_id, reply, source)
+            .await
     }
 
     pub fn services(&self) -> Option<&RuntimeServices> {

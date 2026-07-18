@@ -151,6 +151,19 @@ impl ChatMode {
         }
 
         let mut event_rx = self.agent.event_source().subscribe();
+        let mut permission_rx = self
+            .runtime
+            .agent_runtime()
+            .subscribe_permission_requests()
+            .ok();
+        if let Ok(pending) = self.runtime.agent_runtime().pending_permission_requests() {
+            if let Some(request) = pending
+                .into_iter()
+                .find(|request| request.session_id == session_id)
+            {
+                chat_state.permission_v2_prompt = Some(PermissionV2Prompt::new(request));
+            }
+        }
 
         // Send initial prompt if provided (from startup page input)
         if let Some(prompt) = self.initial_prompt.take() {
@@ -214,6 +227,46 @@ impl ChatMode {
             }
             if self.poll_external_tool_mutation(&mut chat_view) {
                 needs_redraw = true;
+            }
+
+            if let Some(receiver) = permission_rx.as_mut() {
+                for _ in 0..4 {
+                    match receiver.try_recv() {
+                        Ok(bitfun_agent_runtime::sdk::PermissionRequestEvent::Asked {
+                            request,
+                        }) if request.session_id == session_id => {
+                            if chat_state.permission_v2_prompt.is_none() {
+                                chat_state.permission_v2_prompt =
+                                    Some(PermissionV2Prompt::new(request));
+                                needs_redraw = true;
+                            }
+                        }
+                        Ok(bitfun_agent_runtime::sdk::PermissionRequestEvent::Replied {
+                            request_id,
+                            ..
+                        })
+                        | Ok(bitfun_agent_runtime::sdk::PermissionRequestEvent::Cancelled {
+                            request_id,
+                            ..
+                        }) => {
+                            if chat_state
+                                .permission_v2_prompt
+                                .as_ref()
+                                .is_some_and(|prompt| prompt.request.request_id == request_id)
+                            {
+                                chat_state.permission_v2_prompt = None;
+                                needs_redraw = true;
+                            }
+                        }
+                        Err(TryRecvError::Empty) => break,
+                        Err(TryRecvError::Lagged(_)) => continue,
+                        Err(TryRecvError::Closed) => {
+                            permission_rx = None;
+                            break;
+                        }
+                        Ok(_) => {}
+                    }
+                }
             }
 
             let mut external_source_closed = false;

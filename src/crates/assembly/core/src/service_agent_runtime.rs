@@ -403,10 +403,10 @@ fn core_agent_runtime_builder(
     thread_goal_management: Arc<dyn AgentThreadGoalManagementPort>,
     cancellation: Arc<dyn AgentTurnCancellationPort>,
     interaction_response: Arc<dyn AgentInteractionResponsePort>,
-) -> AgentRuntimeBuilder {
+) -> Result<AgentRuntimeBuilder, String> {
     let agent_registry: Arc<dyn bitfun_agent_runtime::sdk::RuntimeAgentRegistry> =
         crate::agentic::agents::get_agent_registry();
-    AgentRuntimeBuilder::new()
+    Ok(AgentRuntimeBuilder::new()
         .with_submission_port(submission)
         .with_session_management_port(session_management)
         .with_session_model_port(session_model)
@@ -415,7 +415,8 @@ fn core_agent_runtime_builder(
         .with_thread_goal_management_port(thread_goal_management)
         .with_cancellation_port(cancellation)
         .with_interaction_response_port(interaction_response)
-        .with_agent_registry(agent_registry)
+        .with_permission_request_manager(crate::product_runtime::core_permission_request_manager()?)
+        .with_agent_registry(agent_registry))
 }
 
 #[derive(Clone)]
@@ -806,7 +807,7 @@ impl CoreServiceAgentRuntime {
             thread_goal_management,
             cancellation,
             interaction_response,
-        )
+        )?
         .build()
         .map_err(|error| error.to_string())
     }
@@ -836,7 +837,7 @@ impl CoreServiceAgentRuntime {
             thread_goal_management,
             cancellation,
             interaction_response,
-        )
+        )?
         .with_dialog_turn_port(dialog_turn)
         .with_lifecycle_delivery_port(lifecycle_delivery)
         .build()
@@ -867,7 +868,7 @@ impl CoreServiceAgentRuntime {
             thread_goal_management,
             cancellation,
             interaction_response,
-        )
+        )?
         .with_lifecycle_delivery_port(lifecycle_delivery)
         .build()
         .map_err(|error| error.to_string())
@@ -898,7 +899,7 @@ impl CoreServiceAgentRuntime {
             thread_goal_management,
             cancellation,
             interaction_response,
-        )
+        )?
         .with_dialog_turn_port(dialog_turn)
         .with_lifecycle_delivery_port(lifecycle_delivery)
         .build()
@@ -970,7 +971,7 @@ impl CoreServiceAgentRuntime {
             thread_goal_management,
             cancellation,
             interaction_response,
-        )
+        )?
         .with_dialog_turn_port(dialog_turn)
         .with_lifecycle_delivery_port(lifecycle_delivery);
         let builder = match event_source {

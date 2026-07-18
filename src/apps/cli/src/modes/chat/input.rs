@@ -16,7 +16,31 @@ impl ChatMode {
             return self.dispatch_action(action, modal_state, chat_view, chat_state, rt_handle);
         }
 
-        // ── Permission prompt intercepts all keys when active ──
+        if let Some(ref mut prompt) = chat_state.permission_v2_prompt {
+            match prompt.handle_key_event(key) {
+                PermissionV2Action::Reply(reply) => {
+                    let request_id = prompt.request.request_id.clone();
+                    let runtime = self.runtime.agent_runtime().clone();
+                    let result = tokio::task::block_in_place(|| {
+                        rt_handle.block_on(runtime.respond_permission(&request_id, reply))
+                    });
+                    match result {
+                        Ok(()) => {
+                            chat_state.permission_v2_prompt = None;
+                            chat_view.set_status(Some("Permission response sent".to_string()));
+                        }
+                        Err(error) => {
+                            tracing::error!("Failed to respond to permission request: {error}");
+                            chat_view.set_status(Some(format!("Error: {error}")));
+                        }
+                    }
+                }
+                PermissionV2Action::None => {}
+            }
+            return Ok(None);
+        }
+
+        // ── Legacy permission prompt intercepts all keys when active ──
         if let Some(ref mut prompt) = chat_state.permission_prompt {
             let action = prompt.handle_key_event(key);
             match action {
@@ -598,6 +622,7 @@ impl ChatMode {
                 } else if context.chat_view.login_form_visible() {
                     context.chat_view.login_form_insert_paste(&text);
                 } else if context.chat_state.permission_prompt.is_none()
+                    && context.chat_state.permission_v2_prompt.is_none()
                     && context.chat_state.question_prompt.is_none()
                     && !context.this.any_popup_visible(context.chat_view)
                 {
