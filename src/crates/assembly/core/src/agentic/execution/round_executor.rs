@@ -1444,6 +1444,11 @@ mod tests {
         let mut global = GlobalConfig::default();
         global.tool_permissions.interaction.auto_approve_ask = true;
         let mut context_vars = std::collections::HashMap::new();
+
+        assert!(RoundExecutor::resolve_auto_approve_ask(
+            &global,
+            &context_vars
+        ));
         context_vars.insert(
             AUTO_APPROVE_ASK_CONTEXT_KEY.to_string(),
             "false".to_string(),
@@ -1454,6 +1459,15 @@ mod tests {
             &context_vars
         ));
         context_vars.insert(AUTO_APPROVE_ASK_CONTEXT_KEY.to_string(), "true".to_string());
+        assert!(RoundExecutor::resolve_auto_approve_ask(
+            &global,
+            &context_vars
+        ));
+
+        context_vars.insert(
+            AUTO_APPROVE_ASK_CONTEXT_KEY.to_string(),
+            "invalid".to_string(),
+        );
         assert!(RoundExecutor::resolve_auto_approve_ask(
             &global,
             &context_vars

@@ -156,6 +156,14 @@ fn acp_user_message_metadata() -> serde_json::Map<String, serde_json::Value> {
         .expect("ACP metadata must be an object")
 }
 
+fn permission_request_targets_session(request: &PermissionV2Request, session_id: &str) -> bool {
+    request.session_id == session_id
+        || request
+            .delegation
+            .as_ref()
+            .is_some_and(|delegation| delegation.parent_session_id == session_id)
+}
+
 async fn wait_for_prompt_completion(
     runtime: &BitfunAcpRuntime,
     event_rx: &mut AgentSessionEventReceiver,
@@ -174,7 +182,7 @@ async fn wait_for_prompt_completion(
             permission = permission_rx.recv() => {
                 match permission {
                     Ok(PermissionRequestEvent::Asked { request })
-                        if request.session_id == bitfun_session_id =>
+                        if permission_request_targets_session(&request, bitfun_session_id) =>
                     {
                         handle_v2_permission_request(
                             runtime,
@@ -415,12 +423,14 @@ async fn handle_v2_permission_request(
 mod tests {
     use bitfun_agent_runtime::sdk::{
         AgentInputAttachment, AgentSubmissionSource, DialogSubmitOutcome,
+        PermissionDelegationContext, PermissionRequestSource, PermissionRequestSourceKind,
+        PermissionV2Request,
     };
     use bitfun_events::AgenticEvent;
 
     use super::{
-        dialog_turn_request, prompt_event_matches_turn, resolve_started_prompt_turn,
-        turn_cancellation_request, AcpSessionState, ParsedPrompt,
+        dialog_turn_request, permission_request_targets_session, prompt_event_matches_turn,
+        resolve_started_prompt_turn, turn_cancellation_request, AcpSessionState, ParsedPrompt,
     };
 
     fn session() -> AcpSessionState {
@@ -431,6 +441,33 @@ mod tests {
             mode_id: "agentic".to_string(),
             model_id: "auto".to_string(),
             mcp_server_ids: Vec::new(),
+        }
+    }
+
+    fn permission_request(
+        session_id: &str,
+        parent_session_id: Option<&str>,
+    ) -> PermissionV2Request {
+        PermissionV2Request {
+            request_id: "request-1".to_string(),
+            tool_call_id: Some("tool-call".to_string()),
+            project_id: "project".to_string(),
+            session_id: session_id.to_string(),
+            agent_id: "Explore".to_string(),
+            action: "read".to_string(),
+            resources: vec!["README.md".to_string()],
+            save_resources: Vec::new(),
+            source: PermissionRequestSource {
+                kind: PermissionRequestSourceKind::ToolCall,
+                identity: "Read".to_string(),
+            },
+            delegation: parent_session_id.map(|parent_session_id| PermissionDelegationContext {
+                parent_session_id: parent_session_id.to_string(),
+                parent_dialog_turn_id: "parent-turn".to_string(),
+                parent_tool_call_id: "parent-task".to_string(),
+                subagent_type: "Explore".to_string(),
+            }),
+            display_metadata: serde_json::Map::new(),
         }
     }
 
@@ -505,5 +542,21 @@ mod tests {
 
         assert!(prompt_event_matches_turn(&current, "turn-current"));
         assert!(!prompt_event_matches_turn(&other, "turn-current"));
+    }
+
+    #[test]
+    fn permission_requests_target_direct_and_delegated_acp_sessions() {
+        assert!(permission_request_targets_session(
+            &permission_request("bitfun-session", None),
+            "bitfun-session",
+        ));
+        assert!(permission_request_targets_session(
+            &permission_request("child-session", Some("bitfun-session")),
+            "bitfun-session",
+        ));
+        assert!(!permission_request_targets_session(
+            &permission_request("child-session", Some("other-session")),
+            "bitfun-session",
+        ));
     }
 }

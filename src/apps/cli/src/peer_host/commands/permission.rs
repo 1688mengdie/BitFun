@@ -66,7 +66,7 @@ pub(crate) fn list_pending_permission_requests(state: &PeerHostState) -> Result<
         .pending_permission_requests()
         .map_err(|error| error.into_message())?
         .into_iter()
-        .filter(|request| state.turns.owns(&request.session_id, None))
+        .filter(|request| state.turns.owns_permission_request(request))
         .collect::<Vec<_>>();
     serde_json::to_value(requests)
         .map_err(|error| format!("Failed to serialize permission requests: {error}"))
@@ -91,7 +91,7 @@ pub(crate) async fn respond_permission(
         .into_iter()
         .find(|pending| pending.request_id == request_id)
         .ok_or_else(|| format!("Permission request not found: {request_id}"))?;
-    if !state.turns.owns(&pending.session_id, None) {
+    if !state.turns.owns_permission_request(&pending) {
         return Err("The permission request is not owned by the Peer controller".to_string());
     }
     if !crate::peer_host::control::is_controller_lease_current(lease) {

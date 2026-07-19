@@ -8324,6 +8324,7 @@ mod tests {
     use crate::service::config::{AgentModelDefaultsConfig, SubagentModelSelection};
     use crate::service::remote_ssh::workspace_state::init_remote_workspace_manager;
     use crate::service::session::SessionMetadata;
+    use bitfun_agent_runtime::permission_v2::AUTO_APPROVE_ASK_CONTEXT_KEY;
     use bitfun_runtime_ports::{
         AgentSessionCreateRequest, AgentSubmissionPort, AgentSubmissionRequest,
         AgentSubmissionSource, DelegationPolicy, PermissionEffect, PermissionRule,
@@ -8677,7 +8678,10 @@ mod tests {
                 dialog_turn_id: "parent-turn".to_string(),
                 tool_call_id: "task-tool".to_string(),
             },
-            context: HashMap::new(),
+            context: HashMap::from([(
+                AUTO_APPROVE_ASK_CONTEXT_KEY.to_string(),
+                "true".to_string(),
+            )]),
             permission_runtime_ceiling: PermissionRuntimeCeiling::default(),
             delegation_policy: DelegationPolicy::top_level().spawn_child(),
         };
@@ -8689,6 +8693,13 @@ mod tests {
 
         assert_eq!(resolved.agent_type, "CodeReview");
         assert!(resolved.target_session_id.is_none());
+        assert_eq!(
+            resolved
+                .context
+                .get(AUTO_APPROVE_ASK_CONTEXT_KEY)
+                .map(String::as_str),
+            Some("true")
+        );
         let _ = std::fs::remove_dir_all(workspace_path);
     }
 
@@ -9548,7 +9559,10 @@ mod tests {
                 dialog_turn_id: "parent-turn".to_string(),
                 tool_call_id: "task-tool".to_string(),
             },
-            context: HashMap::new(),
+            context: HashMap::from([(
+                AUTO_APPROVE_ASK_CONTEXT_KEY.to_string(),
+                "false".to_string(),
+            )]),
             permission_runtime_ceiling: PermissionRuntimeCeiling::try_new(vec![
                 PermissionRule::new("bash", "rm *", PermissionEffect::Deny),
                 PermissionRule::new("external_directory", "*", PermissionEffect::Ask),
@@ -9563,6 +9577,14 @@ mod tests {
             .expect("send_input request should prepare with a requested model");
 
         assert_eq!(prepared.session_config.model_id.as_deref(), Some("fast"));
+        assert_eq!(
+            prepared
+                .context
+                .get(AUTO_APPROVE_ASK_CONTEXT_KEY)
+                .map(String::as_str),
+            Some("false"),
+            "reused subagent runs must use the current invocation override"
+        );
         assert_eq!(
             prepared
                 .permission_runtime_ceiling
@@ -9641,6 +9663,7 @@ mod tests {
             .expect("fork request should prepare with a requested model");
 
         assert_eq!(prepared.session_config.model_id.as_deref(), Some("fast"));
+        assert!(!prepared.context.contains_key(AUTO_APPROVE_ASK_CONTEXT_KEY));
         assert_eq!(
             prepared.prompt_cache_source_session_id.as_deref(),
             Some(parent_session.session_id.as_str())

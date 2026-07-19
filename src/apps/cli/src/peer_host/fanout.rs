@@ -126,7 +126,7 @@ fn start_peer_permission_event_fanout(state: PeerHostState) {
             match receiver.recv().await {
                 Ok(event) => match &event {
                     PermissionRequestEvent::Asked { request } => {
-                        if !state.turns.owns(&request.session_id, None) {
+                        if !state.turns.owns_permission_request(request) {
                             continue;
                         }
                         owned_request_ids.insert(request.request_id.clone());
@@ -146,7 +146,7 @@ fn start_peer_permission_event_fanout(state: PeerHostState) {
                         .pending_permission_requests()
                         .unwrap_or_default()
                         .into_iter()
-                        .filter(|request| state.turns.owns(&request.session_id, None))
+                        .filter(|request| state.turns.owns_permission_request(request))
                         .collect::<Vec<_>>();
                     let pending_ids = pending
                         .iter()
