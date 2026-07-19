@@ -4,6 +4,7 @@
 
 use crate::util::errors::*;
 use async_trait::async_trait;
+use bitfun_runtime_ports::{PermissionRule, ToolPermissionConfig};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -54,6 +55,9 @@ pub struct GlobalConfig {
     pub terminal: TerminalConfig,
     pub workspace: WorkspaceConfig,
     pub ai: AIConfig,
+    /// User-level static tool permission policy and interaction preferences.
+    #[serde(default)]
+    pub tool_permissions: ToolPermissionConfig,
     #[serde(default)]
     pub memories: MemoriesConfig,
     /// Project-scoped overlays stored in the shared config document.
@@ -803,6 +807,10 @@ pub struct AgentProfileConfig {
     /// User-level subagent availability overrides for this shared profile.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub subagent_overrides: ParentSubagentOverrideConfig,
+
+    /// Agent-level permission rules applied after project rules.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_permission_rules: Vec<PermissionRule>,
 }
 
 /// API view of a mode configuration.
@@ -1404,6 +1412,7 @@ impl Default for GlobalConfig {
             ai: AIConfig::default(),
             memories: MemoriesConfig::default(),
             project: ProjectConfig::default(),
+            tool_permissions: ToolPermissionConfig::default(),
             mcp_servers: None,
             acp_clients: None,
             themes: Some(ThemesConfig::default()),
@@ -1836,6 +1845,7 @@ mod tests {
         ModelExchangeTracingMode, ReasoningMode, SubagentBatchExecutionPolicy,
         SubagentModelSelection,
     };
+    use bitfun_runtime_ports::ToolPermissionConfig;
 
     #[test]
     fn agent_profile_defaults_keep_all_collections_empty() {
@@ -1846,6 +1856,7 @@ mod tests {
         assert!(config.disabled_user_skills.is_empty());
         assert!(config.enabled_user_skills.is_empty());
         assert!(config.subagent_overrides.is_empty());
+        assert!(config.tool_permission_rules.is_empty());
 
         let view = AgentProfileView::default();
         assert!(view.profile_id.is_empty());
@@ -1853,6 +1864,27 @@ mod tests {
         assert!(view.default_tools.is_empty());
         assert!(view.disabled_user_skills.is_empty());
         assert!(view.enabled_user_skills.is_empty());
+    }
+
+    #[test]
+    fn legacy_agent_profile_defaults_permission_rules_and_omits_empty_field() {
+        let config: AgentProfileConfig = serde_json::from_value(serde_json::json!({
+            "profile_id": "coding_shared",
+            "added_tools": ["read"]
+        }))
+        .expect("legacy agent profile should deserialize");
+
+        assert!(config.tool_permission_rules.is_empty());
+        let serialized = serde_json::to_value(config).expect("agent profile should serialize");
+        assert!(serialized.get("tool_permission_rules").is_none());
+    }
+
+    #[test]
+    fn legacy_global_config_defaults_permission_settings() {
+        let config: GlobalConfig = serde_json::from_value(serde_json::json!({}))
+            .expect("legacy config should deserialize with permission defaults");
+
+        assert_eq!(config.tool_permissions, ToolPermissionConfig::default());
     }
 
     #[test]

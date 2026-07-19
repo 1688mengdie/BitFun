@@ -20,6 +20,10 @@ use crate::agentic::tools::tool_context_runtime;
 use crate::agentic::tools::tool_result_storage;
 use crate::agentic::MessageContent;
 use crate::infrastructure::ai::AIClient;
+use crate::service::config::project_permission_store::{
+    load_project_permission_config_local, load_project_permission_config_remote,
+};
+use crate::service::config::types::AgentProfileConfig;
 use crate::service::config::types::SubagentBatchExecutionPolicy as ConfigSubagentBatchExecutionPolicy;
 use crate::service::config::GlobalConfigManager;
 use crate::util::elapsed_ms_u64;
@@ -30,6 +34,7 @@ use bitfun_agent_runtime::turn_cancellation::DialogTurnCancellationTokenStore;
 use bitfun_ai_adapters::{
     ModelExchangeRequestTraceHandle, ModelExchangeResponseTrace, ModelExchangeTraceConfig,
 };
+use bitfun_runtime_ports::{resolve_permission_policy, PermissionPolicyLayers, PermissionRule};
 use log::{debug, error, warn};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -80,6 +85,24 @@ impl RoundExecutor {
                 PipelineSubagentBatchExecutionPolicy::Serial
             }
         }
+    }
+
+    fn resolve_permission_rules(
+        global: &crate::service::config::types::GlobalConfig,
+        project_rules: &[PermissionRule],
+        agent_profile: Option<&AgentProfileConfig>,
+    ) -> Vec<PermissionRule> {
+        let agent_rules = agent_profile
+            .map(|profile| profile.tool_permission_rules.as_slice())
+            .unwrap_or(&[]);
+
+        resolve_permission_policy(PermissionPolicyLayers {
+            product_defaults: &[],
+            global: &global.tool_permissions.policy,
+            project: project_rules,
+            agent: agent_rules,
+            enforced: &[],
+        })
     }
 
     async fn sleep_with_cancellation(
@@ -732,28 +755,53 @@ impl RoundExecutor {
                 remote_exec_port: context.remote_exec_port.clone(),
             };
 
-            // Read tool execution related configuration from global config
-            let (tool_execution_timeout, subagent_batch_execution_policy) = {
-                let config_service = GlobalConfigManager::get_service().await.ok();
+            // Read tool execution related configuration from global config.
+            let global_config: crate::service::config::types::GlobalConfig =
+                match GlobalConfigManager::get_service().await {
+                    Ok(service) => service.get_config(None).await.unwrap_or_default(),
+                    Err(_) => Default::default(),
+                };
+            let tool_execution_timeout = global_config.ai.tool_execution_timeout_secs;
+            let subagent_batch_execution_policy = Self::map_subagent_batch_execution_policy(
+                global_config.ai.subagent_batch_execution_policy,
+            );
 
-                if let Some(ref service) = config_service {
-                    let ai_config: crate::service::config::types::AIConfig =
-                        service.get_config(Some("ai")).await.unwrap_or_default();
-                    (
-                        ai_config.tool_execution_timeout_secs,
-                        Self::map_subagent_batch_execution_policy(
-                            ai_config.subagent_batch_execution_policy,
-                        ),
-                    )
-                } else {
-                    (None, PipelineSubagentBatchExecutionPolicy::default())
+            let project_rules = match context.workspace.as_ref() {
+                Some(workspace) if workspace.is_remote() => {
+                    match context.workspace_services.as_ref() {
+                        Some(services) => {
+                            load_project_permission_config_remote(
+                                services.fs.as_ref(),
+                                &workspace.root_path_string(),
+                            )
+                            .await?
+                            .rules
+                        }
+                        None => Vec::new(),
+                    }
                 }
+                Some(workspace) => {
+                    load_project_permission_config_local(workspace.root_path())
+                        .await?
+                        .rules
+                }
+                None => Vec::new(),
             };
+
+            let agent_profile_id =
+                crate::agentic::agents::resolve_mode_config_profile_id(&context.agent_type);
+            let agent_profile = global_config
+                .ai
+                .agent_profiles
+                .get(agent_profile_id.as_ref());
+            let permission_rules =
+                Self::resolve_permission_rules(&global_config, &project_rules, agent_profile);
 
             // Create tool execution options (use configured timeout values)
             let tool_options = ToolExecutionOptions {
                 timeout_secs: tool_execution_timeout,
                 subagent_batch_execution_policy,
+                permission_rules,
                 ..ToolExecutionOptions::default()
             };
 
@@ -1276,10 +1324,14 @@ mod tests {
     use crate::agentic::execution::stream_processor::StreamResult;
     use crate::agentic::execution::types::RoundContext;
     use crate::agentic::tools::ToolRuntimeRestrictions;
+    use crate::service::config::types::{AgentProfileConfig, GlobalConfig};
     use crate::util::errors::BitFunError;
     use crate::util::types::ai::GeminiUsage;
     use bitfun_agent_runtime::turn_cancellation::DialogTurnCancellationTokenStore;
-    use bitfun_runtime_ports::DelegationPolicy;
+    use bitfun_runtime_ports::{
+        DelegationPolicy, PermissionEffect, PermissionEvaluator, PermissionPolicyPreset,
+        PermissionRule,
+    };
     use serde_json::json;
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -1325,6 +1377,48 @@ mod tests {
             remote_exec_port: None,
             recover_partial_on_cancel: false,
         }
+    }
+
+    #[test]
+    fn resolves_global_project_and_agent_permission_rules_before_execution() {
+        let mut global = GlobalConfig::default();
+        global.tool_permissions.policy.preset = PermissionPolicyPreset::FullAccess;
+        global.tool_permissions.policy.rules =
+            vec![PermissionRule::new("bash", "rm *", PermissionEffect::Ask)];
+        let project_rules = vec![PermissionRule::new(
+            "edit",
+            "generated/*",
+            PermissionEffect::Deny,
+        )];
+        let agent = AgentProfileConfig {
+            tool_permission_rules: vec![PermissionRule::new(
+                "edit",
+                "generated/review.md",
+                PermissionEffect::Allow,
+            )],
+            ..AgentProfileConfig::default()
+        };
+
+        let resolved =
+            RoundExecutor::resolve_permission_rules(&global, &project_rules, Some(&agent));
+        let evaluator = PermissionEvaluator::case_sensitive();
+
+        assert_eq!(
+            evaluator.evaluate_resource("bash", "rm -rf target", &resolved),
+            PermissionEffect::Ask
+        );
+        assert_eq!(
+            evaluator.evaluate_resource("edit", "generated/review.md", &resolved),
+            PermissionEffect::Allow
+        );
+        assert_eq!(
+            evaluator.evaluate_resource("edit", "generated/api.rs", &resolved),
+            PermissionEffect::Deny
+        );
+        assert_eq!(
+            evaluator.evaluate_resource("read", "src/main.rs", &resolved),
+            PermissionEffect::Allow
+        );
     }
 
     #[tokio::test]
