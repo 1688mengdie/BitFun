@@ -17,6 +17,12 @@ use tokio::sync::{broadcast, oneshot, Mutex};
 
 const PERMISSION_EVENT_CAPACITY: usize = 128;
 
+/// Per-submission override for the interactive ask handling policy.
+///
+/// Product surfaces may set this in dialog metadata to keep invocation-scoped
+/// policies (such as CLI `--auto`) separate from persisted user preferences.
+pub const AUTO_APPROVE_ASK_CONTEXT_KEY: &str = "auto_approve_ask";
+
 pub type PermissionRequestEventReceiver = broadcast::Receiver<PermissionRequestEvent>;
 
 #[derive(Debug, Clone, PartialEq)]

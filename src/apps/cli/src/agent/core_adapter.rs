@@ -13,7 +13,7 @@ use bitfun_agent_runtime::sdk::{
     AgentDialogTurnRequest, AgentRuntime, AgentSessionCreateRequest, AgentSessionDeleteRequest,
     AgentSessionListRequest, AgentSessionModelUpdateRequest, AgentSessionRestoreRequest,
     AgentTurnCancellationRequest, AgentUserAnswersRequest, SessionTranscript,
-    SessionTranscriptRequest,
+    SessionTranscriptRequest, AUTO_APPROVE_ASK_CONTEXT_KEY,
 };
 use bitfun_agent_runtime::user_questions::USER_INPUT_AVAILABLE_CONTEXT_KEY;
 use bitfun_core::agentic::persistence::session_branch::SessionBranchResult;
@@ -41,6 +41,23 @@ fn validated_session_summary(
                 workspace_path.display()
             )
         })
+}
+
+fn cli_approval_metadata(
+    approval_policy: CliApprovalPolicy,
+) -> serde_json::Map<String, serde_json::Value> {
+    let mut metadata = serde_json::Map::new();
+    if approval_policy != CliApprovalPolicy::Ask {
+        metadata.insert(
+            USER_INPUT_AVAILABLE_CONTEXT_KEY.to_string(),
+            serde_json::Value::Bool(false),
+        );
+    }
+    metadata.insert(
+        AUTO_APPROVE_ASK_CONTEXT_KEY.to_string(),
+        serde_json::Value::Bool(approval_policy == CliApprovalPolicy::Auto),
+    );
+    metadata
 }
 
 /// Core-based Agent implementation.
@@ -393,13 +410,7 @@ impl Agent for CoreAgentAdapter {
         }
 
         // Start the dialog turn; events arrive through the shared broadcast source.
-        let mut metadata = serde_json::Map::new();
-        if self.approval_policy != CliApprovalPolicy::Ask {
-            metadata.insert(
-                USER_INPUT_AVAILABLE_CONTEXT_KEY.to_string(),
-                serde_json::Value::Bool(false),
-            );
-        }
+        let metadata = cli_approval_metadata(self.approval_policy);
         let request = AgentDialogTurnRequest {
             session_id: session_id.clone(),
             message: message.clone(),
@@ -514,7 +525,26 @@ mod tests {
 
     use bitfun_runtime_ports::AgentSessionSummary;
 
-    use super::validated_session_summary;
+    use bitfun_agent_runtime::sdk::AUTO_APPROVE_ASK_CONTEXT_KEY;
+    use bitfun_agent_runtime::user_questions::USER_INPUT_AVAILABLE_CONTEXT_KEY;
+
+    use crate::runtime::approval::CliApprovalPolicy;
+
+    use super::{cli_approval_metadata, validated_session_summary};
+
+    #[test]
+    fn cli_approval_metadata_keeps_auto_invocation_scoped() {
+        let auto = cli_approval_metadata(CliApprovalPolicy::Auto);
+        assert_eq!(auto[AUTO_APPROVE_ASK_CONTEXT_KEY], true);
+        assert_eq!(auto[USER_INPUT_AVAILABLE_CONTEXT_KEY], false);
+
+        let reject = cli_approval_metadata(CliApprovalPolicy::Reject);
+        assert_eq!(reject[AUTO_APPROVE_ASK_CONTEXT_KEY], false);
+
+        let ask = cli_approval_metadata(CliApprovalPolicy::Ask);
+        assert_eq!(ask[AUTO_APPROVE_ASK_CONTEXT_KEY], false);
+        assert!(!ask.contains_key(USER_INPUT_AVAILABLE_CONTEXT_KEY));
+    }
 
     #[test]
     fn model_updates_use_the_runtime_sdk_without_the_core_compatibility_facade() {

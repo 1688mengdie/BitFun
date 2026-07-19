@@ -624,6 +624,27 @@ impl ToolPipeline {
                 .await
                 .map_err(|error| BitFunError::service(error.to_string()))?;
 
+            if task.options.auto_approve_ask {
+                if cancellation_token.is_cancelled() {
+                    manager
+                        .cancel_request(&request_id, "Tool execution was cancelled")
+                        .await
+                        .map_err(|error| BitFunError::service(error.to_string()))?;
+                    return Err(BitFunError::Cancelled(
+                        "Tool execution was cancelled before automatic permission reply"
+                            .to_string(),
+                    ));
+                }
+                manager
+                    .reply(
+                        &request_id,
+                        PermissionReply::Once,
+                        bitfun_runtime_ports::PermissionReplySource::AutoApprove,
+                    )
+                    .await
+                    .map_err(|error| BitFunError::service(error.to_string()))?;
+            }
+
             let outcome = tokio::select! {
                 outcome = pending.wait() => outcome,
                 _ = cancellation_token.cancelled() => {
@@ -652,6 +673,12 @@ impl ToolPipeline {
                 PermissionWaitOutcome::Cancelled { reason } => {
                     return Err(BitFunError::Cancelled(reason));
                 }
+            }
+
+            if cancellation_token.is_cancelled() {
+                return Err(BitFunError::Cancelled(
+                    "Tool execution was cancelled after permission reply".to_string(),
+                ));
             }
         }
 
@@ -2336,6 +2363,7 @@ mod tests {
         assert_eq!(calls.load(Ordering::SeqCst), 1);
 
         let mut deny_options = ToolExecutionOptions::default();
+        deny_options.auto_approve_ask = true;
         deny_options.permission_rules = vec![
             PermissionRule::new("edit", "src/*", PermissionEffect::Allow),
             PermissionRule::new("edit", "src/private/*", PermissionEffect::Deny),
@@ -2540,6 +2568,65 @@ mod tests {
             .await
             .expect("policy denial should be structured");
         assert_eq!(calls.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn v2_auto_approve_ask_uses_once_reply_and_writes_no_grant() {
+        let store = Arc::new(MemoryPermissionStore::default());
+        let manager = permission_test_manager(Arc::clone(&store));
+        let mut events = manager.subscribe();
+        let pipeline = test_tool_pipeline().with_permission_request_manager(Arc::clone(&manager));
+        let calls = Arc::new(AtomicUsize::new(0));
+        register_v2_file_test_tool(
+            &pipeline,
+            vec![PermissionIntent::new(
+                "edit",
+                vec!["src/main.rs".to_string()],
+            )],
+            Arc::clone(&calls),
+        )
+        .await;
+
+        let mut options = ToolExecutionOptions::default();
+        options.auto_approve_ask = true;
+        pipeline
+            .execute_tools(
+                vec![test_tool_call("auto", "Write")],
+                permission_test_context(),
+                options,
+            )
+            .await
+            .expect("auto-approved tool should execute");
+
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert!(store
+            .grants
+            .lock()
+            .expect("permission grant lock")
+            .is_empty());
+        let audit = store.audit.lock().expect("permission audit lock");
+        assert_eq!(audit.len(), 2);
+        assert!(matches!(audit[0].event, PermissionAuditEvent::Requested));
+        assert!(matches!(
+            audit[1].event,
+            PermissionAuditEvent::Replied {
+                reply: PermissionReply::Once,
+                source: bitfun_runtime_ports::PermissionReplySource::AutoApprove,
+            }
+        ));
+        assert!(matches!(
+            events.try_recv().expect("asked event"),
+            bitfun_runtime_ports::PermissionRequestEvent::Asked { .. }
+        ));
+        assert!(matches!(
+            events.try_recv().expect("replied event"),
+            bitfun_runtime_ports::PermissionRequestEvent::Replied {
+                reply: PermissionReply::Once,
+                source: bitfun_runtime_ports::PermissionReplySource::AutoApprove,
+                ..
+            }
+        ));
+        assert!(manager.pending_requests().is_empty());
     }
 
     #[tokio::test]

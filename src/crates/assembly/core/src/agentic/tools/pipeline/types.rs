@@ -24,6 +24,8 @@ pub struct ToolExecutionOptions {
     pub timeout_secs: Option<u64>,
     /// Ordered V2 permission rules. An unmatched resource defaults to `ask`.
     pub permission_rules: Vec<PermissionRule>,
+    /// Automatically reply `once` to `ask` requests through the V2 manager.
+    pub auto_approve_ask: bool,
 }
 
 impl Default for ToolExecutionOptions {
@@ -34,6 +36,7 @@ impl Default for ToolExecutionOptions {
             max_retries: 0,
             timeout_secs: None, // Default no timeout (infinite waiting)
             permission_rules: Vec::new(),
+            auto_approve_ask: false,
         }
     }
 }

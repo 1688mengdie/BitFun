@@ -30,6 +30,7 @@ use crate::util::elapsed_ms_u64;
 use crate::util::errors::{BitFunError, BitFunResult};
 use crate::util::types::Message as AIMessage;
 use crate::util::types::ToolDefinition;
+use bitfun_agent_runtime::permission_v2::AUTO_APPROVE_ASK_CONTEXT_KEY;
 use bitfun_agent_runtime::turn_cancellation::DialogTurnCancellationTokenStore;
 use bitfun_ai_adapters::{
     ModelExchangeRequestTraceHandle, ModelExchangeResponseTrace, ModelExchangeTraceConfig,
@@ -103,6 +104,16 @@ impl RoundExecutor {
             agent: agent_rules,
             enforced: &[],
         })
+    }
+
+    fn resolve_auto_approve_ask(
+        global: &crate::service::config::types::GlobalConfig,
+        context_vars: &std::collections::HashMap<String, String>,
+    ) -> bool {
+        context_vars
+            .get(AUTO_APPROVE_ASK_CONTEXT_KEY)
+            .and_then(|value| value.parse::<bool>().ok())
+            .unwrap_or(global.tool_permissions.interaction.auto_approve_ask)
     }
 
     async fn sleep_with_cancellation(
@@ -765,6 +776,8 @@ impl RoundExecutor {
             let subagent_batch_execution_policy = Self::map_subagent_batch_execution_policy(
                 global_config.ai.subagent_batch_execution_policy,
             );
+            let auto_approve_ask =
+                Self::resolve_auto_approve_ask(&global_config, &context.context_vars);
 
             let project_rules = match context.workspace.as_ref() {
                 Some(workspace) if workspace.is_remote() => {
@@ -802,6 +815,7 @@ impl RoundExecutor {
                 timeout_secs: tool_execution_timeout,
                 subagent_batch_execution_policy,
                 permission_rules,
+                auto_approve_ask,
                 ..ToolExecutionOptions::default()
             };
 
@@ -1327,6 +1341,7 @@ mod tests {
     use crate::service::config::types::{AgentProfileConfig, GlobalConfig};
     use crate::util::errors::BitFunError;
     use crate::util::types::ai::GeminiUsage;
+    use bitfun_agent_runtime::permission_v2::AUTO_APPROVE_ASK_CONTEXT_KEY;
     use bitfun_agent_runtime::turn_cancellation::DialogTurnCancellationTokenStore;
     use bitfun_runtime_ports::{
         DelegationPolicy, PermissionEffect, PermissionEvaluator, PermissionPolicyPreset,
@@ -1419,6 +1434,27 @@ mod tests {
             evaluator.evaluate_resource("read", "src/main.rs", &resolved),
             PermissionEffect::Allow
         );
+    }
+
+    #[test]
+    fn auto_approve_context_overrides_persisted_interaction_preference() {
+        let mut global = GlobalConfig::default();
+        global.tool_permissions.interaction.auto_approve_ask = true;
+        let mut context_vars = std::collections::HashMap::new();
+        context_vars.insert(
+            AUTO_APPROVE_ASK_CONTEXT_KEY.to_string(),
+            "false".to_string(),
+        );
+
+        assert!(!RoundExecutor::resolve_auto_approve_ask(
+            &global,
+            &context_vars
+        ));
+        context_vars.insert(AUTO_APPROVE_ASK_CONTEXT_KEY.to_string(), "true".to_string());
+        assert!(RoundExecutor::resolve_auto_approve_ask(
+            &global,
+            &context_vars
+        ));
     }
 
     #[tokio::test]

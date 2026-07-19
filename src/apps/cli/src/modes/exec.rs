@@ -614,25 +614,21 @@ impl ExecMode {
                 if !handled_request_ids.insert(request.request_id.clone()) {
                     continue;
                 }
-                let (reply, action_required, source) = match permission_mode {
-                    ExecApprovalMode::Auto => (
-                        PermissionReply::Once,
-                        false,
-                        PermissionReplySource::AutoApprove,
-                    ),
-                    ExecApprovalMode::Reject => (
-                        PermissionReply::Reject {
-                            feedback: Some(
-                                "Non-interactive execution requires an explicit permission policy"
-                                    .to_string(),
-                            ),
-                        },
-                        true,
-                        PermissionReplySource::System,
+                if permission_mode == ExecApprovalMode::Auto {
+                    continue;
+                }
+                let reply = PermissionReply::Reject {
+                    feedback: Some(
+                        "Non-interactive execution requires an explicit permission policy"
+                            .to_string(),
                     ),
                 };
                 if let Err(error) = permission_runtime
-                    .respond_permission_with_source(&request.request_id, reply, source)
+                    .respond_permission_with_source(
+                        &request.request_id,
+                        reply,
+                        PermissionReplySource::System,
+                    )
                     .await
                 {
                     let _ = permission_action_tx
@@ -640,15 +636,13 @@ impl ExecMode {
                         .await;
                     break;
                 }
-                if action_required {
-                    let _ = permission_action_tx
-                        .send(format!(
-                            "action-required: permission needed for {} ({})",
-                            request.action, request.request_id
-                        ))
-                        .await;
-                    break;
-                }
+                let _ = permission_action_tx
+                    .send(format!(
+                        "action-required: permission needed for {} ({})",
+                        request.action, request.request_id
+                    ))
+                    .await;
+                break;
             }
         });
 
@@ -1308,8 +1302,8 @@ mod patch_tests {
 
     use super::{
         completed_turn_failure, effective_event_invocation, event_belongs_to_exec_turn,
-        event_turn_id, serialize_stream_envelope, write_patch_to_path, ExecApprovalMode,
-        ExecJsonResult, ExecMode, ExecTokenUsage, TOOL_START_INPUT_PREVIEW_CHARS,
+        event_turn_id, serialize_stream_envelope, write_patch_to_path, ExecJsonResult, ExecMode,
+        ExecTokenUsage, TOOL_START_INPUT_PREVIEW_CHARS,
     };
     use bitfun_events::{
         AgenticEvent, AgenticEventEnvelope, AgenticEventPriority, ToolEventIdentity,
