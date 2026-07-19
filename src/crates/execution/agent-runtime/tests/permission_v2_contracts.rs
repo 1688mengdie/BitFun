@@ -61,6 +61,13 @@ impl PermissionGrantStorePort for RecordingPermissionStore {
         stored.retain(|grant| grant.key() != key);
         Ok(stored.len() != previous_len)
     }
+
+    async fn clear_project_grants(&self, project_id: &str) -> PortResult<usize> {
+        let mut stored = self.grants.lock().unwrap();
+        let previous_len = stored.len();
+        stored.retain(|grant| grant.project_id != project_id);
+        Ok(previous_len - stored.len())
+    }
 }
 
 #[async_trait]
@@ -160,7 +167,8 @@ fn request(request_id: &str, session_id: &str) -> PermissionV2Request {
 fn manager() -> (PermissionRequestManager, Arc<RecordingPermissionStore>) {
     let store = Arc::new(RecordingPermissionStore::default());
     (
-        PermissionRequestManager::new(store.clone(), store.clone(), Arc::new(FixedClock(123))),
+        PermissionRequestManager::new(store.clone(), store.clone(), Arc::new(FixedClock(123)))
+            .with_grant_store(store.clone()),
         store,
     )
 }
@@ -347,4 +355,71 @@ async fn pending_requests_are_process_local_and_not_restored_by_a_new_manager() 
 
     let restarted = PermissionRequestManager::new(store.clone(), store, Arc::new(FixedClock(456)));
     assert!(restarted.pending_requests().is_empty());
+}
+
+#[tokio::test]
+async fn grant_management_is_project_scoped_and_audit_remains_append_only() {
+    let (manager, store) = manager();
+    store
+        .add_project_grants(vec![
+            PermissionGrant {
+                project_id: "project-a".to_string(),
+                action: "edit".to_string(),
+                resource: "src/main.rs".to_string(),
+                created_at_ms: 1,
+            },
+            PermissionGrant {
+                project_id: "project-b".to_string(),
+                action: "read".to_string(),
+                resource: "README.md".to_string(),
+                created_at_ms: 2,
+            },
+        ])
+        .await
+        .expect("seed grants");
+    let pending = manager
+        .register(request("request-audit", "session-a"))
+        .await
+        .expect("register audited request");
+
+    assert_eq!(
+        manager
+            .list_project_grants("project-a")
+            .await
+            .expect("list project grants")
+            .len(),
+        1
+    );
+    assert!(manager
+        .remove_project_grant(PermissionGrantKey {
+            project_id: "project-a".to_string(),
+            action: "edit".to_string(),
+            resource: "src/main.rs".to_string(),
+        })
+        .await
+        .expect("remove project grant"));
+    assert_eq!(
+        manager
+            .clear_project_grants("project-b")
+            .await
+            .expect("clear project grants"),
+        1
+    );
+    assert_eq!(
+        manager
+            .list_project_permission_audit("project-a")
+            .await
+            .expect("list project audit")
+            .len(),
+        1
+    );
+
+    manager
+        .cancel_request("request-audit", "test cleanup")
+        .await
+        .expect("cancel request");
+    assert!(matches!(
+        pending.wait().await,
+        PermissionWaitOutcome::Cancelled { .. }
+    ));
 }

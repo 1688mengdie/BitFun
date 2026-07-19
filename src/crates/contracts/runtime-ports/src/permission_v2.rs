@@ -12,6 +12,8 @@ pub trait PermissionGrantStorePort: RuntimeServicePort {
     async fn add_project_grants(&self, grants: Vec<PermissionGrant>) -> PortResult<()>;
 
     async fn remove_project_grant(&self, key: PermissionGrantKey) -> PortResult<bool>;
+
+    async fn clear_project_grants(&self, project_id: &str) -> PortResult<usize>;
 }
 
 /// Append-only permission audit persistence over presentation-safe DTOs.

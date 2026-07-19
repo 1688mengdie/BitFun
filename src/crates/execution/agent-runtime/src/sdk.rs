@@ -66,7 +66,8 @@ pub use bitfun_runtime_ports::{
     AgentThreadGoalCreateRequest, AgentThreadGoalDeliveryRequest, AgentThreadGoalGetRequest,
     AgentThreadGoalManagementPort, AgentThreadGoalUpdateStatusRequest, AgentTurnCancellationPort,
     AgentTurnCancellationRequest, AgentTurnCancellationResult, ClockPort, DialogSubmissionPolicy,
-    DialogSubmitOutcome, FileSystemPort, GitPort, McpCatalogPort, NetworkPort, PermissionReply,
+    DialogSubmitOutcome, FileSystemPort, GitPort, McpCatalogPort, NetworkPort,
+    PermissionAuditRecord, PermissionGrant, PermissionGrantKey, PermissionReply,
     PermissionReplySource, PermissionRequestEvent, PermissionRequestSource,
     PermissionRequestSourceKind, PermissionV2Request, PortError, PortResult,
     RemoteAssistantWorkspaceFacts, RemoteCapabilityPort, RemoteConnectionPort,
@@ -260,6 +261,34 @@ impl AgentRuntime {
         self.inner
             .respond_permission(request_id, reply, source)
             .await
+    }
+
+    pub async fn list_project_permission_grants(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<PermissionGrant>, RuntimeError> {
+        self.inner.list_project_permission_grants(project_id).await
+    }
+
+    pub async fn remove_project_permission_grant(
+        &self,
+        key: PermissionGrantKey,
+    ) -> Result<bool, RuntimeError> {
+        self.inner.remove_project_permission_grant(key).await
+    }
+
+    pub async fn clear_project_permission_grants(
+        &self,
+        project_id: &str,
+    ) -> Result<usize, RuntimeError> {
+        self.inner.clear_project_permission_grants(project_id).await
+    }
+
+    pub async fn list_project_permission_audit(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<PermissionAuditRecord>, RuntimeError> {
+        self.inner.list_project_permission_audit(project_id).await
     }
 
     pub fn services(&self) -> Option<&RuntimeServices> {

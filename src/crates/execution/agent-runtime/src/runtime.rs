@@ -19,8 +19,9 @@ use bitfun_runtime_ports::{
     AgentThreadGoalCreateRequest, AgentThreadGoalDeliveryRequest, AgentThreadGoalGetRequest,
     AgentThreadGoalManagementPort, AgentThreadGoalUpdateStatusRequest, AgentTurnCancellationPort,
     AgentTurnCancellationRequest, AgentTurnCancellationResult, DialogSubmitOutcome,
-    PluginRuntimeBinding, PortError, PortErrorKind, PortResult, RuntimeEventEnvelope,
-    SessionTranscript, SessionTranscriptReader, SessionTranscriptRequest, ThreadGoal,
+    PermissionAuditRecord, PermissionGrant, PermissionGrantKey, PluginRuntimeBinding, PortError,
+    PortErrorKind, PortResult, RuntimeEventEnvelope, SessionTranscript, SessionTranscriptReader,
+    SessionTranscriptRequest, ThreadGoal,
 };
 use bitfun_runtime_services::RuntimeServices;
 
@@ -639,6 +640,54 @@ impl AgentRuntime {
             .reply(request_id, reply, source)
             .await
             .map(|_| ())
+            .map_err(|error| RuntimeError::PermissionRequest(error.to_string()))
+    }
+
+    pub async fn list_project_permission_grants(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<PermissionGrant>, RuntimeError> {
+        self.permission_requests
+            .as_ref()
+            .ok_or(RuntimeError::MissingPermissionRequestManager)?
+            .list_project_grants(project_id)
+            .await
+            .map_err(|error| RuntimeError::PermissionRequest(error.to_string()))
+    }
+
+    pub async fn remove_project_permission_grant(
+        &self,
+        key: PermissionGrantKey,
+    ) -> Result<bool, RuntimeError> {
+        self.permission_requests
+            .as_ref()
+            .ok_or(RuntimeError::MissingPermissionRequestManager)?
+            .remove_project_grant(key)
+            .await
+            .map_err(|error| RuntimeError::PermissionRequest(error.to_string()))
+    }
+
+    pub async fn clear_project_permission_grants(
+        &self,
+        project_id: &str,
+    ) -> Result<usize, RuntimeError> {
+        self.permission_requests
+            .as_ref()
+            .ok_or(RuntimeError::MissingPermissionRequestManager)?
+            .clear_project_grants(project_id)
+            .await
+            .map_err(|error| RuntimeError::PermissionRequest(error.to_string()))
+    }
+
+    pub async fn list_project_permission_audit(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<PermissionAuditRecord>, RuntimeError> {
+        self.permission_requests
+            .as_ref()
+            .ok_or(RuntimeError::MissingPermissionRequestManager)?
+            .list_project_permission_audit(project_id)
+            .await
             .map_err(|error| RuntimeError::PermissionRequest(error.to_string()))
     }
 

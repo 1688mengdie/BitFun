@@ -65,6 +65,43 @@
     "autoApprove": "Auto approve permission prompts",
     "autoApproveDescription": "Automatically approve only actions that evaluate to Ask. Denied actions remain blocked, and no remembered grant is created."
   },
+  "permissionGrants": {
+    "sectionTitle": "Remembered project grants",
+    "sectionDescription": "Saved Always allow decisions for {{workspace}}. These grants are separate from static permission rules.",
+    "projectIdentity": "Project identity",
+    "noWorkspace": "Open a workspace to manage its remembered grants.",
+    "empty": "No remembered grants for this workspace.",
+    "remove": "Remove grant",
+    "removeTitle": "Remove remembered grant?",
+    "removeMessage": "Remove the remembered {{action}} grant for {{resource}}? The next matching request will ask again.",
+    "removeConfirm": "Remove grant",
+    "removeSuccess": "Remembered grant removed",
+    "removeFailed": "Failed to remove remembered grant",
+    "clear": "Clear all",
+    "clearTitle": "Clear remembered grants?",
+    "clearMessage": "Remove every remembered permission grant for {{workspace}}? The next matching requests will ask again.",
+    "clearConfirm": "Clear all grants",
+    "clearSuccess": "Remembered grants cleared",
+    "clearFailed": "Failed to clear remembered grants",
+    "loadFailed": "Failed to load project permission data",
+    "auditTitle": "Recent permission activity",
+    "auditEmpty": "No permission activity recorded.",
+    "auditRequested": "Requested",
+    "auditReplied": "Replied: {{reply}} ({{source}})",
+    "auditCancelled": "Permission request cancelled",
+    "replies": {
+      "once": "once",
+      "always": "always",
+      "reject": "rejected"
+    },
+    "sources": {
+      "user": "user",
+      "auto_approve": "Auto",
+      "system": "system"
+    },
+    "previous": "Previous",
+    "next": "Next"
+  },
   "deferredToolLoading": {
     "sectionTitle": "Deferred tool loading",
     "sectionDescription": "Load detailed schemas for some tools only when needed, including a subset of built-in tools and all MCP tools.",

@@ -402,13 +402,11 @@ enum V2PermissionAuthorization {
     Rejected { reason: String },
 }
 
-fn permission_project_id(context: &ToolUseContext) -> BitFunResult<String> {
-    let workspace = context.workspace.as_ref().ok_or_else(|| {
-        BitFunError::validation("A workspace is required for file permissions".to_string())
-    })?;
-    let identity = &workspace.session_identity;
-
-    if !workspace.is_remote() {
+pub fn permission_project_id_for_workspace_identity(
+    identity: &crate::service::remote_ssh::workspace_state::WorkspaceSessionIdentity,
+    is_remote: bool,
+) -> BitFunResult<String> {
+    if !is_remote {
         return Ok(
             bitfun_services_integrations::remote_ssh::paths::local_workspace_stable_storage_id(
                 identity.logical_workspace_path(),
@@ -436,6 +434,13 @@ fn permission_project_id(context: &ToolUseContext) -> BitFunResult<String> {
             identity.logical_workspace_path(),
         ),
     )
+}
+
+fn permission_project_id(context: &ToolUseContext) -> BitFunResult<String> {
+    let workspace = context.workspace.as_ref().ok_or_else(|| {
+        BitFunError::validation("A workspace is required for file permissions".to_string())
+    })?;
+    permission_project_id_for_workspace_identity(&workspace.session_identity, workspace.is_remote())
 }
 
 fn permission_resource_case_sensitivity(
@@ -1934,6 +1939,13 @@ mod tests {
             let original_len = grants.len();
             grants.retain(|grant| grant.key() != key);
             Ok(grants.len() != original_len)
+        }
+
+        async fn clear_project_grants(&self, project_id: &str) -> PortResult<usize> {
+            let mut grants = self.grants.lock().expect("permission grant lock");
+            let original_len = grants.len();
+            grants.retain(|grant| grant.project_id != project_id);
+            Ok(original_len - grants.len())
         }
     }
 

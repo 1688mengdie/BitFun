@@ -125,6 +125,21 @@ impl PermissionGrantStorePort for ProjectPermissionFileStore {
         })
         .await
     }
+
+    async fn clear_project_grants(&self, project_id: &str) -> PortResult<usize> {
+        if project_id.trim().is_empty() {
+            return Err(PortError::new(
+                PortErrorKind::InvalidRequest,
+                "Permission grant project ID must be non-empty",
+            ));
+        }
+        self.update_state(|state| {
+            let previous_len = state.grants.len();
+            state.grants.retain(|grant| grant.project_id != project_id);
+            Ok(previous_len - state.grants.len())
+        })
+        .await
+    }
 }
 
 #[async_trait::async_trait]

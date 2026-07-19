@@ -134,6 +134,43 @@ impl PermissionRequestManager {
             .map_err(PermissionRequestManagerError::GrantStore)
     }
 
+    pub async fn remove_project_grant(
+        &self,
+        key: bitfun_runtime_ports::PermissionGrantKey,
+    ) -> Result<bool, PermissionRequestManagerError> {
+        let Some(grant_store) = &self.grant_store else {
+            return Ok(false);
+        };
+        grant_store
+            .remove_project_grant(key)
+            .await
+            .map_err(PermissionRequestManagerError::GrantStore)
+    }
+
+    pub async fn clear_project_grants(
+        &self,
+        project_id: &str,
+    ) -> Result<usize, PermissionRequestManagerError> {
+        let Some(grant_store) = &self.grant_store else {
+            return Ok(0);
+        };
+        grant_store
+            .clear_project_grants(project_id)
+            .await
+            .map_err(PermissionRequestManagerError::GrantStore)
+    }
+
+    pub async fn list_project_permission_audit(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<bitfun_runtime_ports::PermissionAuditRecord>, PermissionRequestManagerError>
+    {
+        self.audit_store
+            .list_project_permission_audit(project_id)
+            .await
+            .map_err(PermissionRequestManagerError::AuditStore)
+    }
+
     pub fn subscribe(&self) -> PermissionRequestEventReceiver {
         self.events.subscribe()
     }

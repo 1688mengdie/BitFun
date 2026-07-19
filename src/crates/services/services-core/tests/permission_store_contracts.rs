@@ -82,6 +82,50 @@ async fn project_grants_are_idempotent_isolated_and_survive_store_recreation() {
 }
 
 #[tokio::test]
+async fn clearing_grants_only_removes_the_selected_project() {
+    let root = tempfile::tempdir().expect("temp permission store");
+    let store = ProjectPermissionFileStore::new(root.path());
+    store
+        .add_project_grants(vec![
+            PermissionGrant {
+                project_id: "project-a".to_string(),
+                action: "read".to_string(),
+                resource: "README.md".to_string(),
+                created_at_ms: 10,
+            },
+            PermissionGrant {
+                project_id: "project-b".to_string(),
+                action: "edit".to_string(),
+                resource: "src/*".to_string(),
+                created_at_ms: 20,
+            },
+        ])
+        .await
+        .expect("persist grants");
+
+    assert_eq!(
+        store
+            .clear_project_grants("project-a")
+            .await
+            .expect("clear project grants"),
+        1
+    );
+    assert!(store
+        .list_project_grants("project-a")
+        .await
+        .expect("list cleared project grants")
+        .is_empty());
+    assert_eq!(
+        store
+            .list_project_grants("project-b")
+            .await
+            .expect("list retained project grants")
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
 async fn audit_records_are_idempotent_project_scoped_and_persistent() {
     let root = tempfile::tempdir().expect("temp permission store");
     let store = ProjectPermissionFileStore::new(root.path());

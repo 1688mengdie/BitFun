@@ -13,7 +13,8 @@ use crate::runtime::DesktopRuntimeContext;
 use crate::startup_trace::DesktopStartupTrace;
 use bitfun_agent_runtime::sdk::{
     AgentDialogTurnRequest, AgentInputAttachment, AgentSessionModelUpdateRequest,
-    AgentSubmissionSource, AgentTurnCancellationRequest, PermissionReply, PermissionV2Request,
+    AgentSubmissionSource, AgentTurnCancellationRequest, PermissionAuditRecord, PermissionGrant,
+    PermissionGrantKey, PermissionReply, PermissionV2Request,
 };
 use bitfun_core::agentic::agents::AgentSource;
 use bitfun_core::agentic::coordination::{
@@ -39,10 +40,12 @@ use bitfun_core::agentic::tools::implementations::exec_command::{
     ReadBackgroundCommandOutputRequest as CoreReadBackgroundCommandOutputRequest,
     ReadBackgroundCommandOutputResponse,
 };
+use bitfun_core::service::remote_ssh::workspace_state::resolve_workspace_session_identity;
 use bitfun_core::service::session::{
     DialogTurnData, SessionMemoryMode, SessionMetadata, SessionRelationship,
     SessionRelationshipKind,
 };
+use bitfun_core::service::workspace::WorkspaceKind;
 
 const SESSION_VIEW_TOOL_RESULT_TOTAL_CHAR_BUDGET: usize = 512 * 1024;
 const SESSION_VIEW_TOOL_RESULT_STRING_CHAR_LIMIT: usize = 16 * 1024;
@@ -713,6 +716,152 @@ pub struct PermissionResponseRequest {
     pub request_id: String,
     pub reply: PermissionReplyKind,
     pub feedback: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionProjectRequest {
+    pub workspace_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemovePermissionGrantRequest {
+    pub workspace_id: String,
+    pub action: String,
+    pub resource: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionAuditRequest {
+    pub workspace_id: String,
+    #[serde(default)]
+    pub page: usize,
+    #[serde(default = "default_permission_audit_page_size")]
+    pub page_size: usize,
+}
+
+const fn default_permission_audit_page_size() -> usize {
+    50
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionAuditPage {
+    pub project_id: String,
+    pub records: Vec<PermissionAuditRecord>,
+    pub page: usize,
+    pub page_size: usize,
+    pub total: usize,
+}
+
+async fn permission_project_id_for_workspace(
+    state: &AppState,
+    workspace_id: &str,
+) -> Result<String, String> {
+    let workspace = state
+        .workspace_service
+        .get_workspace(workspace_id)
+        .await
+        .ok_or_else(|| format!("Workspace not found: {workspace_id}"))?;
+    let remote = workspace.workspace_kind == WorkspaceKind::Remote;
+    let connection_id = workspace
+        .metadata
+        .get("connectionId")
+        .and_then(|value| value.as_str());
+    let ssh_host = workspace
+        .metadata
+        .get("sshHost")
+        .and_then(|value| value.as_str());
+    let identity = resolve_workspace_session_identity(
+        &workspace.root_path.to_string_lossy(),
+        connection_id,
+        ssh_host,
+    )
+    .await
+    .ok_or_else(|| format!("Workspace identity is unavailable: {workspace_id}"))?;
+    bitfun_core::agentic::tools::pipeline::permission_project_id_for_workspace_identity(
+        &identity, remote,
+    )
+    .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn list_project_permission_grants(
+    state: State<'_, AppState>,
+    runtime: State<'_, DesktopRuntimeContext>,
+    request: PermissionProjectRequest,
+) -> Result<Vec<PermissionGrant>, String> {
+    let project_id = permission_project_id_for_workspace(&state, &request.workspace_id).await?;
+    runtime
+        .agent_runtime()
+        .list_project_permission_grants(&project_id)
+        .await
+        .map_err(|error| error.into_message())
+}
+
+#[tauri::command]
+pub async fn remove_project_permission_grant(
+    state: State<'_, AppState>,
+    runtime: State<'_, DesktopRuntimeContext>,
+    request: RemovePermissionGrantRequest,
+) -> Result<bool, String> {
+    let project_id = permission_project_id_for_workspace(&state, &request.workspace_id).await?;
+    runtime
+        .agent_runtime()
+        .remove_project_permission_grant(PermissionGrantKey {
+            project_id,
+            action: request.action,
+            resource: request.resource,
+        })
+        .await
+        .map_err(|error| error.into_message())
+}
+
+#[tauri::command]
+pub async fn clear_project_permission_grants(
+    state: State<'_, AppState>,
+    runtime: State<'_, DesktopRuntimeContext>,
+    request: PermissionProjectRequest,
+) -> Result<usize, String> {
+    let project_id = permission_project_id_for_workspace(&state, &request.workspace_id).await?;
+    runtime
+        .agent_runtime()
+        .clear_project_permission_grants(&project_id)
+        .await
+        .map_err(|error| error.into_message())
+}
+
+#[tauri::command]
+pub async fn list_project_permission_audit(
+    state: State<'_, AppState>,
+    runtime: State<'_, DesktopRuntimeContext>,
+    request: PermissionAuditRequest,
+) -> Result<PermissionAuditPage, String> {
+    let project_id = permission_project_id_for_workspace(&state, &request.workspace_id).await?;
+    let mut records = runtime
+        .agent_runtime()
+        .list_project_permission_audit(&project_id)
+        .await
+        .map_err(|error| error.into_message())?;
+    records.sort_by(|left, right| {
+        right
+            .timestamp_ms
+            .cmp(&left.timestamp_ms)
+            .then_with(|| right.audit_id.cmp(&left.audit_id))
+    });
+    let total = records.len();
+    let page_size = request.page_size.clamp(1, 100);
+    let offset = request.page.saturating_mul(page_size).min(total);
+    let records = records.into_iter().skip(offset).take(page_size).collect();
+    Ok(PermissionAuditPage {
+        project_id,
+        records,
+        page: request.page,
+        page_size,
+        total,
+    })
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]

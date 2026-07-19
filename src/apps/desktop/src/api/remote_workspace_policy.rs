@@ -718,6 +718,14 @@ pub const REMOTE_WORKSPACE_COMMAND_POLICIES: &[(&str, RemoteWorkspacePolicy)] = 
         "list_pending_permission_requests",
         RemoteWorkspacePolicy::WorkspaceAgnostic,
     ),
+    (
+        "list_project_permission_grants",
+        RemoteWorkspacePolicy::WorkspaceAgnostic,
+    ),
+    (
+        "list_project_permission_audit",
+        RemoteWorkspacePolicy::WorkspaceAgnostic,
+    ),
     ("list_cron_jobs", RemoteWorkspacePolicy::LegacyUnaudited),
     (
         "list_directory_files",
@@ -1081,6 +1089,14 @@ pub const REMOTE_WORKSPACE_COMMAND_POLICIES: &[(&str, RemoteWorkspacePolicy)] = 
     ("reject_operation", RemoteWorkspacePolicy::LegacyUnaudited),
     (
         "respond_permission",
+        RemoteWorkspacePolicy::WorkspaceAgnostic,
+    ),
+    (
+        "remove_project_permission_grant",
+        RemoteWorkspacePolicy::WorkspaceAgnostic,
+    ),
+    (
+        "clear_project_permission_grants",
         RemoteWorkspacePolicy::WorkspaceAgnostic,
     ),
     ("reload_config", RemoteWorkspacePolicy::LegacyUnaudited),

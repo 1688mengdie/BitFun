@@ -34,6 +34,14 @@ import {
   permissionConfigService,
 } from '../services/PermissionConfigService';
 import { systemAPI } from '@/infrastructure/api/service-api/SystemAPI';
+import {
+  permissionAPI,
+  type PermissionAuditPage,
+  type PermissionAuditRecord,
+  type PermissionGrant,
+} from '@/infrastructure/api/service-api/PermissionAPI';
+import { useCurrentWorkspace } from '@/infrastructure/contexts/WorkspaceContext';
+import { useI18n } from '@/infrastructure/i18n';
 import { useNotification, notificationService } from '@/shared/notification-system';
 import type { AIModelConfig, DebugModeConfig, LanguageDebugTemplate, ToolPermissionConfig } from '../types';
 import {
@@ -99,6 +107,8 @@ const SessionSettingsPanels: React.FC<SessionSettingsPanelsProps> = ({ variant }
   const { t } = useTranslation('settings/session-config');
   const { t: tTools } = useTranslation('settings/agentic-tools');
   const { t: tDebug } = useTranslation('settings/debug');
+  const { formatDate } = useI18n('settings/session-config');
+  const { workspace } = useCurrentWorkspace();
   const notification = useNotification();
 
   // ── Session config state ─────────────────────────────────────────────────
@@ -120,6 +130,10 @@ const SessionSettingsPanels: React.FC<SessionSettingsPanelsProps> = ({ variant }
   const [deferredToolLoadingConfigSaving, setDeferredToolLoadingConfigSaving] = useState(false);
   const [toolPermissionConfig, setToolPermissionConfig] = useState<ToolPermissionConfig>(DEFAULT_TOOL_PERMISSION_CONFIG);
   const [permissionConfigSaving, setPermissionConfigSaving] = useState(false);
+  const [permissionGrants, setPermissionGrants] = useState<PermissionGrant[]>([]);
+  const [permissionAuditPage, setPermissionAuditPage] = useState<PermissionAuditPage | null>(null);
+  const [permissionManagementLoading, setPermissionManagementLoading] = useState(false);
+  const [permissionGrantMutationKey, setPermissionGrantMutationKey] = useState<string | null>(null);
 
   const [computerUseEnabled, setComputerUseEnabled] = useState(false);
   const [computerUseAccess, setComputerUseAccess] = useState(false);
@@ -308,9 +322,94 @@ const SessionSettingsPanels: React.FC<SessionSettingsPanelsProps> = ({ variant }
     );
   };
 
+  const loadPermissionManagement = useCallback(async (page = 0) => {
+    if (!workspace?.id) {
+      setPermissionGrants([]);
+      setPermissionAuditPage(null);
+      return;
+    }
+    setPermissionManagementLoading(true);
+    try {
+      const [grants, audit] = await Promise.all([
+        permissionAPI.listProjectGrants(workspace.id),
+        permissionAPI.listProjectAudit(workspace.id, page),
+      ]);
+      setPermissionGrants(grants);
+      setPermissionAuditPage(audit);
+    } catch (error) {
+      log.error('Failed to load project permission management data', error);
+      notificationService.error(t('permissionGrants.loadFailed'));
+    } finally {
+      setPermissionManagementLoading(false);
+    }
+  }, [t, workspace?.id]);
+
+  const handleRemovePermissionGrant = async (grant: PermissionGrant) => {
+    if (!workspace?.id) return;
+    const confirmed = await confirmDanger(
+      t('permissionGrants.removeTitle'),
+      t('permissionGrants.removeMessage', { action: grant.action, resource: grant.resource }),
+      { confirmText: t('permissionGrants.removeConfirm') },
+    );
+    if (!confirmed) return;
+    const mutationKey = `${grant.action}\n${grant.resource}`;
+    setPermissionGrantMutationKey(mutationKey);
+    try {
+      await permissionAPI.removeProjectGrant(workspace.id, grant);
+      await loadPermissionManagement(permissionAuditPage?.page ?? 0);
+      notificationService.success(t('permissionGrants.removeSuccess'));
+    } catch (error) {
+      log.error('Failed to remove project permission grant', error);
+      notificationService.error(t('permissionGrants.removeFailed'));
+    } finally {
+      setPermissionGrantMutationKey(null);
+    }
+  };
+
+  const handleClearPermissionGrants = async () => {
+    if (!workspace?.id || permissionGrants.length === 0) return;
+    const confirmed = await confirmDanger(
+      t('permissionGrants.clearTitle'),
+      t('permissionGrants.clearMessage', { workspace: workspace.name }),
+      { confirmText: t('permissionGrants.clearConfirm') },
+    );
+    if (!confirmed) return;
+    setPermissionGrantMutationKey('*');
+    try {
+      await permissionAPI.clearProjectGrants(workspace.id);
+      await loadPermissionManagement(0);
+      notificationService.success(t('permissionGrants.clearSuccess'));
+    } catch (error) {
+      log.error('Failed to clear project permission grants', error);
+      notificationService.error(t('permissionGrants.clearFailed'));
+    } finally {
+      setPermissionGrantMutationKey(null);
+    }
+  };
+
+  const permissionAuditLabel = (record: PermissionAuditRecord): string => {
+    switch (record.event.event) {
+      case 'requested':
+        return t('permissionGrants.auditRequested');
+      case 'replied':
+        return t('permissionGrants.auditReplied', {
+          reply: t(`permissionGrants.replies.${record.event.reply.reply}`),
+          source: t(`permissionGrants.sources.${record.event.source}`),
+        });
+      case 'cancelled':
+        return t('permissionGrants.auditCancelled');
+    }
+  };
+
   useEffect(() => {
     loadAllData();
   }, [loadAllData]);
+
+  useEffect(() => {
+    if (variant === 'permissions') {
+      void loadPermissionManagement(0);
+    }
+  }, [loadPermissionManagement, variant]);
 
   // ── Session config handlers ──────────────────────────────────────────────
 
@@ -1159,6 +1258,103 @@ const SessionSettingsPanels: React.FC<SessionSettingsPanelsProps> = ({ variant }
               />
             </div>
           </ConfigPageRow>
+        </ConfigPageSection>
+
+        <ConfigPageSection
+          title={t('permissionGrants.sectionTitle')}
+          description={workspace
+            ? t('permissionGrants.sectionDescription', { workspace: workspace.name })
+            : t('permissionGrants.noWorkspace')}
+          extra={workspace && permissionGrants.length > 0 ? (
+            <Button
+              size="small"
+              variant="secondary"
+              onClick={() => void handleClearPermissionGrants()}
+              disabled={permissionManagementLoading || permissionGrantMutationKey !== null}
+            >
+              <Trash2 size={14} />
+              {t('permissionGrants.clear')}
+            </Button>
+          ) : undefined}
+        >
+          {workspace ? (
+            <>
+              {permissionAuditPage ? (
+                <div className="bitfun-func-agent-config__permission-project-identity">
+                  <span>{t('permissionGrants.projectIdentity')}</span>
+                  <code>{permissionAuditPage.projectId}</code>
+                </div>
+              ) : null}
+              <div className="bitfun-func-agent-config__permission-grants">
+                {permissionManagementLoading && permissionGrants.length === 0 ? (
+                  <div className="bitfun-func-agent-config__permission-empty">{t('loading.text')}</div>
+                ) : permissionGrants.length === 0 ? (
+                  <div className="bitfun-func-agent-config__permission-empty">{t('permissionGrants.empty')}</div>
+                ) : permissionGrants.map((grant) => {
+                  const key = `${grant.action}\n${grant.resource}`;
+                  return (
+                    <div key={key} className="bitfun-func-agent-config__permission-grant-row">
+                      <div className="bitfun-func-agent-config__permission-grant-copy">
+                        <code>{grant.action}</code>
+                        <code>{grant.resource}</code>
+                        <span>{formatDate(grant.createdAtMs, { dateStyle: 'medium', timeStyle: 'short' })}</span>
+                      </div>
+                      <IconButton
+                        type="button"
+                        size="small"
+                        variant="ghost"
+                        aria-label={t('permissionGrants.remove')}
+                        tooltip={t('permissionGrants.remove')}
+                        disabled={permissionGrantMutationKey !== null}
+                        onClick={() => void handleRemovePermissionGrant(grant)}
+                      >
+                        <Trash2 size={14} />
+                      </IconButton>
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="bitfun-func-agent-config__permission-audit">
+                <div className="bitfun-func-agent-config__permission-audit-header">
+                  <span>{t('permissionGrants.auditTitle')}</span>
+                  {permissionAuditPage && permissionAuditPage.total > permissionAuditPage.pageSize ? (
+                    <div className="bitfun-func-agent-config__permission-audit-pagination">
+                      <Button
+                        size="small"
+                        variant="ghost"
+                        disabled={permissionAuditPage.page === 0 || permissionManagementLoading}
+                        onClick={() => void loadPermissionManagement(permissionAuditPage.page - 1)}
+                      >
+                        {t('permissionGrants.previous')}
+                      </Button>
+                      <span>{permissionAuditPage.page + 1}</span>
+                      <Button
+                        size="small"
+                        variant="ghost"
+                        disabled={(permissionAuditPage.page + 1) * permissionAuditPage.pageSize >= permissionAuditPage.total || permissionManagementLoading}
+                        onClick={() => void loadPermissionManagement(permissionAuditPage.page + 1)}
+                      >
+                        {t('permissionGrants.next')}
+                      </Button>
+                    </div>
+                  ) : null}
+                </div>
+                {permissionAuditPage?.records.length ? permissionAuditPage.records.map((record) => (
+                  <div key={record.auditId} className="bitfun-func-agent-config__permission-audit-row">
+                    <span>{permissionAuditLabel(record)}</span>
+                    <code title={record.request.resources.join(', ')}>
+                      {record.request.action}: {record.request.resources.join(', ')}
+                    </code>
+                    <span>{formatDate(record.timestampMs, { dateStyle: 'medium', timeStyle: 'short' })}</span>
+                  </div>
+                )) : (
+                  <div className="bitfun-func-agent-config__permission-empty">{t('permissionGrants.auditEmpty')}</div>
+                )}
+              </div>
+            </>
+          ) : (
+            <div className="bitfun-func-agent-config__permission-empty">{t('permissionGrants.noWorkspace')}</div>
+          )}
         </ConfigPageSection>
 
         {/* ── Tool execution behavior ────────────────────────────── */}
