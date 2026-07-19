@@ -89,6 +89,13 @@ export interface PermissionRequestSource {
   identity: string;
 }
 
+export interface PermissionDelegationContext {
+  parentSessionId: string;
+  parentDialogTurnId: string;
+  parentToolCallId: string;
+  subagentType: string;
+}
+
 export interface PermissionV2Request {
   requestId: string;
   /** Provider/tool-stream call ID for correlating one concrete tool card. */
@@ -100,6 +107,7 @@ export interface PermissionV2Request {
   resources: string[];
   saveResources?: string[];
   source: PermissionRequestSource;
+  delegation?: PermissionDelegationContext;
   displayMetadata?: Record<string, unknown>;
 }
 

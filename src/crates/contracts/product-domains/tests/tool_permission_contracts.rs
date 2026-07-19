@@ -1,9 +1,10 @@
 use bitfun_product_domains::tool_permissions::{
-    merge_permission_rule_layers, resolve_permission_policy, wildcard_matches, PermissionEffect,
-    PermissionEvaluator, PermissionPolicyConfig, PermissionPolicyLayers, PermissionPolicyPreset,
-    PermissionReply, PermissionReplySource, PermissionRequest, PermissionRequestEvent,
-    PermissionRequestSource, PermissionRequestSourceKind, PermissionResourceCaseSensitivity,
-    PermissionRule, ToolPermissionConfig,
+    merge_permission_rule_layers, resolve_permission_policy, wildcard_matches,
+    PermissionDelegationContext, PermissionEffect, PermissionEvaluator, PermissionPolicyConfig,
+    PermissionPolicyLayers, PermissionPolicyPreset, PermissionReply, PermissionReplySource,
+    PermissionRequest, PermissionRequestEvent, PermissionRequestSource,
+    PermissionRequestSourceKind, PermissionResourceCaseSensitivity, PermissionRule,
+    ToolPermissionConfig,
 };
 use serde_json::json;
 use serde_json::Map;
@@ -251,7 +252,7 @@ fn permission_reply_uses_stable_tagged_wire_values() {
 }
 
 #[test]
-fn permission_request_call_id_is_optional_and_camel_cased() {
+fn permission_request_optional_correlation_fields_use_stable_wire_shape() {
     let request = PermissionRequest {
         request_id: "request-1".to_string(),
         tool_call_id: Some("call-1".to_string()),
@@ -265,10 +266,33 @@ fn permission_request_call_id_is_optional_and_camel_cased() {
             kind: PermissionRequestSourceKind::ToolCall,
             identity: "Read".to_string(),
         },
+        delegation: Some(PermissionDelegationContext {
+            parent_session_id: "parent-session-1".to_string(),
+            parent_dialog_turn_id: "parent-turn-1".to_string(),
+            parent_tool_call_id: "parent-task-call-1".to_string(),
+            subagent_type: "Explore".to_string(),
+        }),
         display_metadata: Map::new(),
     };
     let value = serde_json::to_value(&request).expect("serialize permission request");
     assert_eq!(value["toolCallId"], "call-1");
+    assert_eq!(
+        value["delegation"],
+        json!({
+            "parentSessionId": "parent-session-1",
+            "parentDialogTurnId": "parent-turn-1",
+            "parentToolCallId": "parent-task-call-1",
+            "subagentType": "Explore",
+        })
+    );
+
+    let top_level = PermissionRequest {
+        delegation: None,
+        ..request
+    };
+    let top_level_value =
+        serde_json::to_value(top_level).expect("serialize top-level permission request");
+    assert!(top_level_value.get("delegation").is_none());
 
     let legacy = json!({
         "requestId": "request-legacy",
@@ -281,6 +305,7 @@ fn permission_request_call_id_is_optional_and_camel_cased() {
     });
     let decoded: PermissionRequest = serde_json::from_value(legacy).expect("decode legacy request");
     assert_eq!(decoded.tool_call_id, None);
+    assert_eq!(decoded.delegation, None);
 }
 
 #[test]

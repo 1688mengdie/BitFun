@@ -528,6 +528,7 @@ mod tests {
                 kind: bitfun_runtime_ports::PermissionRequestSourceKind::ToolCall,
                 identity: "write_file".to_string(),
             },
+            delegation: None,
             display_metadata: Map::new(),
         }
     }

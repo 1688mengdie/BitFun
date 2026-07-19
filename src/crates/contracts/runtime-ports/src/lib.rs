@@ -18,9 +18,9 @@ mod script_tool;
 #[cfg(feature = "permission-v2")]
 pub use bitfun_product_domains::tool_permissions::{
     resolve_permission_policy, wildcard_matches, PermissionAuditEvent, PermissionAuditRecord,
-    PermissionEffect, PermissionEvaluator, PermissionGrant, PermissionGrantKey,
-    PermissionInteractionConfig, PermissionPolicyConfig, PermissionPolicyLayers,
-    PermissionPolicyPreset, PermissionReply, PermissionReplySource,
+    PermissionDelegationContext, PermissionEffect, PermissionEvaluator, PermissionGrant,
+    PermissionGrantKey, PermissionInteractionConfig, PermissionPolicyConfig,
+    PermissionPolicyLayers, PermissionPolicyPreset, PermissionReply, PermissionReplySource,
     PermissionRequest as PermissionV2Request, PermissionRequestEvent, PermissionRequestSource,
     PermissionRequestSourceKind, PermissionResourceCaseSensitivity, PermissionRule,
     PermissionRuleset, ToolPermissionConfig,

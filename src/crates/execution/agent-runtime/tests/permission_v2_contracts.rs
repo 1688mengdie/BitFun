@@ -160,6 +160,7 @@ fn request(request_id: &str, session_id: &str) -> PermissionV2Request {
             kind: PermissionRequestSourceKind::ToolCall,
             identity: format!("tool-{request_id}"),
         },
+        delegation: None,
         display_metadata: Map::new(),
     }
 }

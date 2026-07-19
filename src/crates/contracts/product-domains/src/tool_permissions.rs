@@ -149,6 +149,21 @@ pub struct PermissionRequestSource {
     pub identity: String,
 }
 
+/// Identifies the parent Task invocation that owns interaction for a
+/// permission request raised by a subagent.
+///
+/// The request's own session and tool-call IDs continue to identify the
+/// concrete child execution. These fields only project the existing
+/// delegation relationship to interactive surfaces and audit consumers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionDelegationContext {
+    pub parent_session_id: String,
+    pub parent_dialog_turn_id: String,
+    pub parent_tool_call_id: String,
+    pub subagent_type: String,
+}
+
 /// A process-local permission request projected to an interactive surface.
 ///
 /// Resource and display values stored here must already be safe for user
@@ -174,6 +189,8 @@ pub struct PermissionRequest {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub save_resources: Vec<String>,
     pub source: PermissionRequestSource,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delegation: Option<PermissionDelegationContext>,
     #[serde(default, skip_serializing_if = "Map::is_empty")]
     pub display_metadata: Map<String, Value>,
 }

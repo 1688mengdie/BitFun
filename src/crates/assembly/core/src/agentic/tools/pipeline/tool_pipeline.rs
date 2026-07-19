@@ -623,6 +623,7 @@ impl ToolPipeline {
                     kind: PermissionRequestSourceKind::ToolCall,
                     identity: tool_name.to_string(),
                 },
+                delegation: None,
                 display_metadata: intent.display_metadata,
             };
             let pending = if task.options.auto_approve_ask {

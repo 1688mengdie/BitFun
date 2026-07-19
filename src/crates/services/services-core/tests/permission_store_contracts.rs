@@ -23,6 +23,7 @@ fn request(request_id: &str, project_id: &str) -> PermissionV2Request {
             kind: PermissionRequestSourceKind::ToolCall,
             identity: "tool-1".to_string(),
         },
+        delegation: None,
         display_metadata: Map::new(),
     }
 }
