@@ -7,7 +7,9 @@ use crate::agentic::tools::ToolRuntimeRestrictions;
 use crate::agentic::workspace::WorkspaceServices;
 use crate::agentic::WorkspaceBinding;
 use bitfun_agent_tools::ResolvedToolInvocation;
-use bitfun_runtime_ports::{DelegationPolicy, PermissionRule, RemoteExecPort, TerminalPort};
+use bitfun_runtime_ports::{
+    DelegationPolicy, PermissionDelegationContext, PermissionRule, RemoteExecPort, TerminalPort,
+};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -46,6 +48,20 @@ pub struct SubagentParentInfo {
     pub tool_call_id: String,
     pub session_id: String,
     pub dialog_turn_id: String,
+}
+
+impl SubagentParentInfo {
+    pub(crate) fn permission_delegation_context(
+        &self,
+        subagent_type: &str,
+    ) -> PermissionDelegationContext {
+        PermissionDelegationContext {
+            parent_session_id: self.session_id.clone(),
+            parent_dialog_turn_id: self.dialog_turn_id.clone(),
+            parent_tool_call_id: self.tool_call_id.clone(),
+            subagent_type: subagent_type.to_string(),
+        }
+    }
 }
 
 impl From<SubagentParentInfo> for EventSubagentParentInfo {

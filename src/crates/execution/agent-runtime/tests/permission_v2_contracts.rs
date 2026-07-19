@@ -297,6 +297,54 @@ async fn reject_clears_every_pending_request_in_the_same_session_only() {
 }
 
 #[tokio::test]
+async fn pending_snapshots_and_session_cancellation_preserve_registration_order() {
+    let (manager, _) = manager();
+    let first = manager
+        .register(request("request-z", "session-a"))
+        .await
+        .expect("register first request");
+    let second = manager
+        .register_non_interactive(request("request-a", "session-a"))
+        .await
+        .expect("register second request");
+    let third = manager
+        .register(request("request-m", "session-a"))
+        .await
+        .expect("register third request");
+
+    let request_ids = |requests: Vec<PermissionV2Request>| {
+        requests
+            .into_iter()
+            .map(|request| request.request_id)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        request_ids(manager.pending_requests()),
+        vec!["request-z", "request-a", "request-m"]
+    );
+    assert_eq!(
+        request_ids(manager.interactive_pending_requests()),
+        vec!["request-z", "request-m"]
+    );
+
+    assert_eq!(
+        manager
+            .cancel_session("session-a", "session closed")
+            .await
+            .expect("cancel session"),
+        vec!["request-z", "request-a", "request-m"]
+    );
+    for receiver in [first, second, third] {
+        assert_eq!(
+            receiver.wait().await,
+            PermissionWaitOutcome::Cancelled {
+                reason: "session closed".to_string()
+            }
+        );
+    }
+}
+
+#[tokio::test]
 async fn grant_persistence_failure_keeps_the_request_pending_and_waiting() {
     let (manager, store) = manager();
     let _receiver = manager

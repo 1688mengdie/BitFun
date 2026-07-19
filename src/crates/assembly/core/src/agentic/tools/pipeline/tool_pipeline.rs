@@ -610,22 +610,25 @@ impl ToolPipeline {
 
         for intent in asks {
             let request_id = uuid::Uuid::new_v4().to_string();
-            let request = PermissionV2Request {
-                request_id: request_id.clone(),
-                tool_call_id: Some(task.tool_call.tool_id.clone()),
-                project_id: project_id.clone(),
-                session_id: task.context.session_id.clone(),
-                agent_id: task.context.agent_type.clone(),
-                action: intent.action,
-                resources: intent.resources,
-                save_resources: intent.save_resources,
-                source: PermissionRequestSource {
-                    kind: PermissionRequestSourceKind::ToolCall,
-                    identity: tool_name.to_string(),
-                },
-                delegation: None,
-                display_metadata: intent.display_metadata,
-            };
+            let request =
+                PermissionV2Request {
+                    request_id: request_id.clone(),
+                    tool_call_id: Some(task.tool_call.tool_id.clone()),
+                    project_id: project_id.clone(),
+                    session_id: task.context.session_id.clone(),
+                    agent_id: task.context.agent_type.clone(),
+                    action: intent.action,
+                    resources: intent.resources,
+                    save_resources: intent.save_resources,
+                    source: PermissionRequestSource {
+                        kind: PermissionRequestSourceKind::ToolCall,
+                        identity: tool_name.to_string(),
+                    },
+                    delegation: task.context.subagent_parent_info.as_ref().map(|parent| {
+                        parent.permission_delegation_context(&task.context.agent_type)
+                    }),
+                    display_metadata: intent.display_metadata,
+                };
             let pending = if task.options.auto_approve_ask {
                 manager.register_non_interactive(request).await
             } else {
@@ -2285,6 +2288,19 @@ mod tests {
         context
     }
 
+    fn subagent_permission_test_context(parent_tool_call_id: &str) -> ToolExecutionContext {
+        let mut context = permission_test_context();
+        context.session_id = "subagent-session".to_string();
+        context.dialog_turn_id = "subagent-turn".to_string();
+        context.agent_type = "Explore".to_string();
+        context.subagent_parent_info = Some(SubagentParentInfo {
+            session_id: "parent-session".to_string(),
+            dialog_turn_id: "parent-turn".to_string(),
+            tool_call_id: parent_tool_call_id.to_string(),
+        });
+        context
+    }
+
     #[tokio::test]
     async fn non_readonly_tools_use_v2_custom_tool_fallback() {
         let pipeline = test_tool_pipeline();
@@ -2404,6 +2420,60 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn v2_subagent_request_projects_exact_parent_task_context() {
+        let store = Arc::new(MemoryPermissionStore::default());
+        let manager = permission_test_manager(Arc::clone(&store));
+        let pipeline = test_tool_pipeline().with_permission_request_manager(Arc::clone(&manager));
+        let calls = Arc::new(AtomicUsize::new(0));
+        register_v2_file_test_tool(
+            &pipeline,
+            vec![PermissionIntent::new(
+                "edit",
+                vec!["src/main.rs".to_string()],
+            )],
+            Arc::clone(&calls),
+        )
+        .await;
+
+        let running_pipeline = pipeline.clone();
+        let execution = tokio::spawn(async move {
+            running_pipeline
+                .execute_tools(
+                    vec![test_tool_call("child-write", "Write")],
+                    subagent_permission_test_context("parent-task-call"),
+                    ToolExecutionOptions::default(),
+                )
+                .await
+        });
+
+        let request = wait_for_permission_request(&manager).await;
+        assert_eq!(request.session_id, "subagent-session");
+        assert_eq!(request.tool_call_id.as_deref(), Some("child-write"));
+        let delegation = request
+            .delegation
+            .as_ref()
+            .expect("subagent request should project delegation context");
+        assert_eq!(delegation.parent_session_id, "parent-session");
+        assert_eq!(delegation.parent_dialog_turn_id, "parent-turn");
+        assert_eq!(delegation.parent_tool_call_id, "parent-task-call");
+        assert_eq!(delegation.subagent_type, "Explore");
+
+        manager
+            .reply(
+                &request.request_id,
+                PermissionReply::Once,
+                bitfun_runtime_ports::PermissionReplySource::User,
+            )
+            .await
+            .expect("allow child request");
+        execution
+            .await
+            .expect("child task join")
+            .expect("child execution");
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
     async fn v2_once_and_always_replies_control_execution_and_remembered_grants() {
         let store = Arc::new(MemoryPermissionStore::default());
         let manager = permission_test_manager(Arc::clone(&store));
@@ -2431,6 +2501,7 @@ mod tests {
         });
         let request = wait_for_permission_request(&manager).await;
         assert_eq!(request.tool_call_id.as_deref(), Some("once"));
+        assert!(request.delegation.is_none());
         manager
             .reply(
                 &request.request_id,
@@ -2587,7 +2658,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn v2_auto_approve_ask_uses_once_reply_and_writes_no_grant() {
+    async fn v2_auto_approve_subagent_ask_preserves_lineage_without_interactive_event() {
         let store = Arc::new(MemoryPermissionStore::default());
         let manager = permission_test_manager(Arc::clone(&store));
         let mut events = manager.subscribe();
@@ -2608,7 +2679,7 @@ mod tests {
         pipeline
             .execute_tools(
                 vec![test_tool_call("auto", "Write")],
-                permission_test_context(),
+                subagent_permission_test_context("background-task-call"),
                 options,
             )
             .await
@@ -2622,6 +2693,16 @@ mod tests {
             .is_empty());
         let audit = store.audit.lock().expect("permission audit lock");
         assert_eq!(audit.len(), 2);
+        assert!(audit.iter().all(|record| {
+            record
+                .request
+                .delegation
+                .as_ref()
+                .is_some_and(|delegation| {
+                    delegation.parent_tool_call_id == "background-task-call"
+                        && delegation.subagent_type == "Explore"
+                })
+        }));
         assert!(matches!(audit[0].event, PermissionAuditEvent::Requested));
         assert!(matches!(
             audit[1].event,
@@ -2658,12 +2739,19 @@ mod tests {
             running_pipeline
                 .execute_tools(
                     vec![test_tool_call("cancel", "Write")],
-                    permission_test_context(),
+                    subagent_permission_test_context("cancelled-parent-task"),
                     ToolExecutionOptions::default(),
                 )
                 .await
         });
-        let _request = wait_for_permission_request(&manager).await;
+        let request = wait_for_permission_request(&manager).await;
+        assert_eq!(
+            request
+                .delegation
+                .as_ref()
+                .map(|delegation| delegation.parent_tool_call_id.as_str()),
+            Some("cancelled-parent-task")
+        );
         pipeline
             .cancel_tool("cancel", "test cancellation".to_string())
             .await

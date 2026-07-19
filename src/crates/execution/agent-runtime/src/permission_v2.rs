@@ -12,6 +12,7 @@ use bitfun_runtime_ports::{
 use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::{broadcast, oneshot, Mutex};
 
@@ -78,11 +79,13 @@ struct PendingPermission {
     request: PermissionV2Request,
     sender: oneshot::Sender<PermissionWaitOutcome>,
     interactive: bool,
+    registration_sequence: u64,
 }
 
 #[derive(Clone)]
 pub struct PermissionRequestManager {
     pending: Arc<DashMap<String, PendingPermission>>,
+    next_registration_sequence: Arc<AtomicU64>,
     operations: Arc<Mutex<()>>,
     audit_store: Arc<dyn PermissionAuditStorePort>,
     reply_store: Arc<dyn PermissionReplyStorePort>,
@@ -108,6 +111,7 @@ impl PermissionRequestManager {
         let (events, _) = broadcast::channel(PERMISSION_EVENT_CAPACITY);
         Self {
             pending: Arc::new(DashMap::new()),
+            next_registration_sequence: Arc::new(AtomicU64::new(0)),
             operations: Arc::new(Mutex::new(())),
             audit_store,
             reply_store,
@@ -206,10 +210,14 @@ impl PermissionRequestManager {
                 return Err(PermissionRequestManagerError::DuplicateRequest(request_id));
             }
             Entry::Vacant(entry) => {
+                let registration_sequence = self
+                    .next_registration_sequence
+                    .fetch_add(1, Ordering::Relaxed);
                 entry.insert(PendingPermission {
                     request: request.clone(),
                     sender,
                     interactive,
+                    registration_sequence,
                 });
             }
         }
@@ -238,24 +246,35 @@ impl PermissionRequestManager {
     }
 
     pub fn pending_requests(&self) -> Vec<PermissionV2Request> {
-        let mut requests = self
-            .pending
-            .iter()
-            .map(|entry| entry.request.clone())
-            .collect::<Vec<_>>();
-        requests.sort_by(|left, right| left.request_id.cmp(&right.request_id));
-        requests
+        self.ordered_pending_requests(|_| true)
     }
 
     pub fn interactive_pending_requests(&self) -> Vec<PermissionV2Request> {
+        self.ordered_pending_requests(|pending| pending.interactive)
+    }
+
+    fn ordered_pending_requests(
+        &self,
+        include: impl Fn(&PendingPermission) -> bool,
+    ) -> Vec<PermissionV2Request> {
         let mut requests = self
             .pending
             .iter()
-            .filter(|entry| entry.interactive)
-            .map(|entry| entry.request.clone())
+            .filter_map(|entry| {
+                include(entry.value()).then(|| {
+                    (
+                        entry.registration_sequence,
+                        entry.request.request_id.clone(),
+                        entry.request.clone(),
+                    )
+                })
+            })
             .collect::<Vec<_>>();
-        requests.sort_by(|left, right| left.request_id.cmp(&right.request_id));
+        requests.sort_by(|left, right| (left.0, &left.1).cmp(&(right.0, &right.1)));
         requests
+            .into_iter()
+            .map(|(_, _, request)| request)
+            .collect()
     }
 
     pub async fn reply(
@@ -276,24 +295,19 @@ impl PermissionRequestManager {
         let grants = grants_for_reply(&request, &reply, timestamp_ms);
 
         let resolutions = if matches!(reply, PermissionReply::Reject { .. }) {
-            let mut requests = self
-                .pending
-                .iter()
-                .filter(|entry| entry.request.session_id == request.session_id)
-                .map(|entry| entry.request.clone())
-                .collect::<Vec<_>>();
-            requests.sort_by(|left, right| left.request_id.cmp(&right.request_id));
-            requests
-                .into_iter()
-                .map(|pending_request| {
-                    let pending_reply = if pending_request.request_id == request_id {
-                        reply.clone()
-                    } else {
-                        PermissionReply::Reject { feedback: None }
-                    };
-                    (pending_request, pending_reply)
-                })
-                .collect::<Vec<_>>()
+            self.ordered_pending_requests(|pending| {
+                pending.request.session_id == request.session_id
+            })
+            .into_iter()
+            .map(|pending_request| {
+                let pending_reply = if pending_request.request_id == request_id {
+                    reply.clone()
+                } else {
+                    PermissionReply::Reject { feedback: None }
+                };
+                (pending_request, pending_reply)
+            })
+            .collect::<Vec<_>>()
         } else {
             vec![(request.clone(), reply.clone())]
         };
@@ -365,13 +379,8 @@ impl PermissionRequestManager {
         reason: impl Into<String>,
     ) -> Result<Vec<String>, PermissionRequestManagerError> {
         let _operation = self.operations.lock().await;
-        let mut requests = self
-            .pending
-            .iter()
-            .filter(|entry| entry.request.session_id == session_id)
-            .map(|entry| entry.request.clone())
-            .collect::<Vec<_>>();
-        requests.sort_by(|left, right| left.request_id.cmp(&right.request_id));
+        let requests =
+            self.ordered_pending_requests(|pending| pending.request.session_id == session_id);
         let request_ids = requests
             .iter()
             .map(|request| request.request_id.clone())
