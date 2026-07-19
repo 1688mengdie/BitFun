@@ -54,6 +54,7 @@ struct BackgroundTaskStartRequest<'a> {
     subagent_type: Option<String>,
     effective_workspace_path: Option<String>,
     model_id: Option<String>,
+    permission_runtime_ceiling: PermissionRuntimeCeiling,
     subagent_context: Option<HashMap<String, String>>,
     prepared_prompt: String,
     timeout_seconds: Option<u64>,
@@ -64,6 +65,21 @@ struct BackgroundTaskStartRequest<'a> {
 }
 
 impl TaskTool {
+    async fn derive_parent_permission_runtime_ceiling(
+        context: &ToolUseContext,
+    ) -> PermissionRuntimeCeiling {
+        let global: GlobalConfig = match GlobalConfigManager::get_service().await {
+            Ok(service) => service.get_config(None).await.unwrap_or_default(),
+            Err(_) => GlobalConfig::default(),
+        };
+        let agent_profile = context.agent_type.as_deref().and_then(|agent_type| {
+            let profile_id = crate::agentic::agents::resolve_mode_config_profile_id(agent_type);
+            global.ai.agent_profiles.get(profile_id.as_ref())
+        });
+
+        crate::agentic::permission_policy::derive_parent_permission_runtime_ceiling(agent_profile)
+    }
+
     pub(super) async fn load_configured_tool_execution_timeout() -> Option<u64> {
         let service = GlobalConfigManager::get_service().await.ok()?;
         let ai_config: AIConfig = service.get_config(Some("ai")).await.ok()?;
@@ -538,6 +554,8 @@ impl TaskTool {
             .unwrap_or_default();
         forward_user_input_availability(context, &mut subagent_context);
         let subagent_context = (!subagent_context.is_empty()).then_some(subagent_context);
+        let permission_runtime_ceiling =
+            Self::derive_parent_permission_runtime_ceiling(context).await;
         let prepared_prompt = prompt;
         if run_in_background {
             return Self::start_background_task(BackgroundTaskStartRequest {
@@ -548,6 +566,7 @@ impl TaskTool {
                 subagent_type,
                 effective_workspace_path,
                 model_id,
+                permission_runtime_ceiling,
                 subagent_context,
                 prepared_prompt,
                 timeout_seconds,
@@ -567,6 +586,7 @@ impl TaskTool {
             subagent_type,
             effective_workspace_path,
             model_id,
+            permission_runtime_ceiling,
             subagent_context,
             prepared_prompt,
             timeout_seconds,
@@ -598,6 +618,7 @@ impl TaskTool {
             subagent_type,
             effective_workspace_path,
             model_id,
+            permission_runtime_ceiling,
             subagent_context,
             prepared_prompt,
             timeout_seconds,
@@ -622,6 +643,7 @@ impl TaskTool {
                     model_id,
                     subagent_parent_info: parent_info,
                     context: subagent_context.unwrap_or_default(),
+                    permission_runtime_ceiling,
                     delegation_policy: context.delegation_policy().spawn_child(),
                 },
                 timeout_seconds,
@@ -653,6 +675,7 @@ impl TaskTool {
         subagent_type: Option<String>,
         effective_workspace_path: Option<String>,
         model_id: Option<String>,
+        permission_runtime_ceiling: PermissionRuntimeCeiling,
         subagent_context: Option<HashMap<String, String>>,
         prepared_prompt: String,
         timeout_seconds: Option<u64>,
@@ -703,6 +726,7 @@ impl TaskTool {
                         model_id: model_id.clone(),
                         subagent_parent_info: parent_info,
                         context: subagent_context.clone().unwrap_or_default(),
+                        permission_runtime_ceiling: permission_runtime_ceiling.clone(),
                         delegation_policy: context.delegation_policy().spawn_child(),
                     },
                     context.cancellation_token(),

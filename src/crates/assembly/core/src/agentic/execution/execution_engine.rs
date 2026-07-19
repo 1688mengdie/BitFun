@@ -1369,6 +1369,7 @@ impl ExecutionEngine {
             primary_model_facts: input.primary_model_facts.clone(),
             agent_type: input.agent_type,
             context_vars: input.execution_context_vars.clone(),
+            permission_runtime_ceiling: input.context.permission_runtime_ceiling.clone(),
             delegation_policy: input.context.delegation_policy,
             runtime_tool_restrictions: finalize_runtime_tool_restrictions,
             steering_interrupt: None,
@@ -3111,6 +3112,7 @@ impl ExecutionEngine {
                 primary_model_facts: primary_model_facts.clone(),
                 agent_type: agent_type.clone(),
                 context_vars: round_context_vars,
+                permission_runtime_ceiling: context.permission_runtime_ceiling.clone(),
                 delegation_policy: context.delegation_policy,
                 runtime_tool_restrictions: context.runtime_tool_restrictions.clone(),
                 steering_interrupt: context.round_injection.as_ref().map(|source| {
@@ -4246,6 +4248,7 @@ mod tests {
             workspace: None,
             context: HashMap::new(),
             subagent_parent_info: None,
+            permission_runtime_ceiling: None,
             delegation_policy: bitfun_runtime_ports::DelegationPolicy::top_level(),
             runtime_tool_restrictions: ToolRuntimeRestrictions::default(),
             workspace_services: None,

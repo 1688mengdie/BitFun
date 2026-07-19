@@ -17,13 +17,15 @@ mod plugin;
 mod script_tool;
 #[cfg(feature = "permission-v2")]
 pub use bitfun_product_domains::tool_permissions::{
-    resolve_permission_policy, wildcard_matches, PermissionAuditEvent, PermissionAuditRecord,
+    resolve_child_permission_policy, resolve_permission_policy, wildcard_matches,
+    ChildPermissionPolicyLayers, PermissionAuditEvent, PermissionAuditRecord,
     PermissionDelegationContext, PermissionEffect, PermissionEvaluator, PermissionGrant,
     PermissionGrantKey, PermissionInteractionConfig, PermissionPolicyConfig,
     PermissionPolicyLayers, PermissionPolicyPreset, PermissionReply, PermissionReplySource,
     PermissionRequest as PermissionV2Request, PermissionRequestEvent, PermissionRequestSource,
     PermissionRequestSourceKind, PermissionResourceCaseSensitivity, PermissionRule,
-    PermissionRuleset, ToolPermissionConfig,
+    PermissionRuleset, PermissionRuntimeCeiling, PermissionRuntimeCeilingValidationError,
+    ToolPermissionConfig,
 };
 #[cfg(feature = "permission-v2")]
 pub use permission_v2::{

@@ -11,6 +11,7 @@ use crate::agentic::memories::{
     parse_bitfun_memory_citation, parse_bitfun_memory_citation_payloads,
     strip_bitfun_memory_citations,
 };
+use crate::agentic::permission_policy::resolve_effective_permission_rules;
 use crate::agentic::tools::computer_use_host::ComputerUseHostRef;
 use crate::agentic::tools::pipeline::{
     SubagentBatchExecutionPolicy as PipelineSubagentBatchExecutionPolicy, ToolExecutionContext,
@@ -35,7 +36,7 @@ use bitfun_agent_runtime::turn_cancellation::DialogTurnCancellationTokenStore;
 use bitfun_ai_adapters::{
     ModelExchangeRequestTraceHandle, ModelExchangeResponseTrace, ModelExchangeTraceConfig,
 };
-use bitfun_runtime_ports::{resolve_permission_policy, PermissionPolicyLayers, PermissionRule};
+use bitfun_runtime_ports::PermissionRule;
 use log::{debug, error, warn};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -92,18 +93,15 @@ impl RoundExecutor {
         global: &crate::service::config::types::GlobalConfig,
         project_rules: &[PermissionRule],
         agent_profile: Option<&AgentProfileConfig>,
+        parent_runtime_ceiling: Option<&bitfun_runtime_ports::PermissionRuntimeCeiling>,
     ) -> Vec<PermissionRule> {
-        let agent_rules = agent_profile
-            .map(|profile| profile.tool_permission_rules.as_slice())
-            .unwrap_or(&[]);
-
-        resolve_permission_policy(PermissionPolicyLayers {
-            product_defaults: &[],
-            global: &global.tool_permissions.policy,
-            project: project_rules,
-            agent: agent_rules,
-            enforced: &[],
-        })
+        resolve_effective_permission_rules(
+            global,
+            project_rules,
+            agent_profile,
+            parent_runtime_ceiling,
+            &[],
+        )
     }
 
     fn resolve_auto_approve_ask(
@@ -807,8 +805,12 @@ impl RoundExecutor {
                 .ai
                 .agent_profiles
                 .get(agent_profile_id.as_ref());
-            let permission_rules =
-                Self::resolve_permission_rules(&global_config, &project_rules, agent_profile);
+            let permission_rules = Self::resolve_permission_rules(
+                &global_config,
+                &project_rules,
+                agent_profile,
+                context.permission_runtime_ceiling.as_ref(),
+            );
 
             // Create tool execution options (use configured timeout values)
             let tool_options = ToolExecutionOptions {
@@ -1383,6 +1385,7 @@ mod tests {
             ),
             agent_type: "agentic".to_string(),
             context_vars: HashMap::new(),
+            permission_runtime_ceiling: None,
             delegation_policy: DelegationPolicy::top_level(),
             runtime_tool_restrictions: ToolRuntimeRestrictions::default(),
             steering_interrupt: None,
@@ -1415,7 +1418,7 @@ mod tests {
         };
 
         let resolved =
-            RoundExecutor::resolve_permission_rules(&global, &project_rules, Some(&agent));
+            RoundExecutor::resolve_permission_rules(&global, &project_rules, Some(&agent), None);
         let evaluator = PermissionEvaluator::case_sensitive();
 
         assert_eq!(

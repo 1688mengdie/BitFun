@@ -1,10 +1,10 @@
 use bitfun_product_domains::tool_permissions::{
-    merge_permission_rule_layers, resolve_permission_policy, wildcard_matches,
-    PermissionDelegationContext, PermissionEffect, PermissionEvaluator, PermissionPolicyConfig,
-    PermissionPolicyLayers, PermissionPolicyPreset, PermissionReply, PermissionReplySource,
-    PermissionRequest, PermissionRequestEvent, PermissionRequestSource,
-    PermissionRequestSourceKind, PermissionResourceCaseSensitivity, PermissionRule,
-    ToolPermissionConfig,
+    merge_permission_rule_layers, resolve_child_permission_policy, resolve_permission_policy,
+    wildcard_matches, ChildPermissionPolicyLayers, PermissionDelegationContext, PermissionEffect,
+    PermissionEvaluator, PermissionPolicyConfig, PermissionPolicyLayers, PermissionPolicyPreset,
+    PermissionReply, PermissionReplySource, PermissionRequest, PermissionRequestEvent,
+    PermissionRequestSource, PermissionRequestSourceKind, PermissionResourceCaseSensitivity,
+    PermissionRule, PermissionRuntimeCeiling, ToolPermissionConfig,
 };
 use serde_json::json;
 use serde_json::Map;
@@ -197,6 +197,134 @@ fn resolved_policy_preserves_layer_order_and_enforced_limits() {
     assert_eq!(
         evaluator.evaluate_resource("webfetch", "https://example.com", &resolved),
         PermissionEffect::Allow
+    );
+}
+
+#[test]
+fn runtime_ceiling_accepts_empty_ask_and_deny_rules() {
+    assert!(PermissionRuntimeCeiling::try_new(Vec::new())
+        .expect("empty ceiling should be valid")
+        .is_empty());
+
+    let rules = vec![
+        rule("read", "secrets/*", PermissionEffect::Ask),
+        rule("bash", "rm *", PermissionEffect::Deny),
+    ];
+    let ceiling = PermissionRuntimeCeiling::try_new(rules.clone())
+        .expect("ask and deny rules should be valid ceiling restrictions");
+    assert_eq!(ceiling.rules(), rules);
+}
+
+#[test]
+fn runtime_ceiling_rejects_allow_rules_with_typed_context() {
+    let error = PermissionRuntimeCeiling::try_new(vec![
+        rule("read", "secrets/*", PermissionEffect::Ask),
+        rule("bash", "cargo test", PermissionEffect::Allow),
+    ])
+    .expect_err("allow must not enter a runtime ceiling");
+
+    assert_eq!(error.rule_index, 1);
+    assert_eq!(error.action, "bash");
+    assert_eq!(error.resource, "cargo test");
+}
+
+#[test]
+fn child_policy_preserves_exact_layer_order_and_security_precedence() {
+    let product_defaults = vec![rule("read", "*", PermissionEffect::Allow)];
+    let global = policy(
+        PermissionPolicyPreset::Ask,
+        vec![rule("edit", "generated/*", PermissionEffect::Ask)],
+    );
+    let project = vec![rule("edit", "generated/*", PermissionEffect::Deny)];
+    let child_agent = vec![rule("edit", "generated/review.md", PermissionEffect::Allow)];
+    let ceiling_rules = vec![rule("edit", "generated/review.md", PermissionEffect::Ask)];
+    let ceiling = PermissionRuntimeCeiling::try_new(ceiling_rules.clone())
+        .expect("ask ceiling should be valid");
+    let enforced = vec![rule("edit", "generated/review.md", PermissionEffect::Deny)];
+
+    let resolved = resolve_child_permission_policy(ChildPermissionPolicyLayers {
+        product_defaults: &product_defaults,
+        global: &global,
+        project: &project,
+        child_agent: &child_agent,
+        parent_runtime_ceiling: &ceiling,
+        enforced: &enforced,
+    });
+
+    assert_eq!(
+        resolved,
+        [
+            product_defaults,
+            PermissionPolicyPreset::Ask.baseline_rules(),
+            global.rules,
+            project,
+            child_agent,
+            ceiling_rules,
+            enforced,
+        ]
+        .concat()
+    );
+
+    let evaluator = PermissionEvaluator::case_sensitive();
+    assert_eq!(
+        evaluator.evaluate_resource("edit", "generated/review.md", &resolved),
+        PermissionEffect::Deny,
+        "enforced rules must remain later than the parent ceiling"
+    );
+}
+
+#[test]
+fn parent_ceiling_overrides_child_agent_allow() {
+    let global = policy(PermissionPolicyPreset::FullAccess, Vec::new());
+    let child_agent = vec![rule("read", "secrets/*", PermissionEffect::Allow)];
+    let ceiling =
+        PermissionRuntimeCeiling::try_new(vec![rule("read", "secrets/*", PermissionEffect::Deny)])
+            .expect("deny ceiling should be valid");
+
+    let resolved = resolve_child_permission_policy(ChildPermissionPolicyLayers {
+        product_defaults: &[],
+        global: &global,
+        project: &[],
+        child_agent: &child_agent,
+        parent_runtime_ceiling: &ceiling,
+        enforced: &[],
+    });
+
+    assert_eq!(
+        PermissionEvaluator::case_sensitive().evaluate_resource(
+            "read",
+            "secrets/token.txt",
+            &resolved,
+        ),
+        PermissionEffect::Deny
+    );
+}
+
+#[test]
+fn task_and_skill_default_allow_do_not_authorize_child_tools() {
+    let global = policy(PermissionPolicyPreset::Ask, Vec::new());
+    let ceiling = PermissionRuntimeCeiling::default();
+    let resolved = resolve_child_permission_policy(ChildPermissionPolicyLayers {
+        product_defaults: &[],
+        global: &global,
+        project: &[],
+        child_agent: &[],
+        parent_runtime_ceiling: &ceiling,
+        enforced: &[],
+    });
+    let evaluator = PermissionEvaluator::case_sensitive();
+
+    assert_eq!(
+        evaluator.evaluate_resource("task", "Explore", &resolved),
+        PermissionEffect::Allow
+    );
+    assert_eq!(
+        evaluator.evaluate_resource("skill", "pdf", &resolved),
+        PermissionEffect::Allow
+    );
+    assert_eq!(
+        evaluator.evaluate_resource("edit", "src/main.rs", &resolved),
+        PermissionEffect::Ask
     );
 }
 

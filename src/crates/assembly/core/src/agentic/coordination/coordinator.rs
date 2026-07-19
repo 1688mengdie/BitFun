@@ -70,9 +70,9 @@ use bitfun_agent_runtime::remote_file_delivery::{
 use bitfun_agent_runtime::user_questions::USER_INPUT_AVAILABLE_CONTEXT_KEY;
 use bitfun_runtime_ports::{
     AgentBackgroundResultRequest, AgentSessionWorkspaceBinding, AgentThreadGoalDeliveryKind,
-    AgentThreadGoalDeliveryRequest, DelegationPolicy, RemoteExecPort, SessionStoragePathRequest,
-    SessionStorePort, SubagentContextMode, TerminalPort, ThreadGoal, ThreadGoalContinuationPlan,
-    ThreadGoalStatus,
+    AgentThreadGoalDeliveryRequest, DelegationPolicy, PermissionRuntimeCeiling, RemoteExecPort,
+    SessionStoragePathRequest, SessionStorePort, SubagentContextMode, TerminalPort, ThreadGoal,
+    ThreadGoalContinuationPlan, ThreadGoalStatus,
 };
 use dashmap::DashMap;
 use log::{debug, error, info, warn};
@@ -238,6 +238,7 @@ pub(crate) struct SubagentExecutionRequest {
     pub(crate) model_id: Option<String>,
     pub(crate) subagent_parent_info: SubagentParentInfo,
     pub(crate) context: HashMap<String, String>,
+    pub(crate) permission_runtime_ceiling: PermissionRuntimeCeiling,
     /// Execution policy for the child subagent session being launched.
     pub(crate) delegation_policy: DelegationPolicy,
 }
@@ -449,6 +450,7 @@ pub(crate) struct HiddenSubagentExecutionRequest {
     created_by: Option<String>,
     subagent_parent_info: Option<SubagentParentInfo>,
     context: HashMap<String, String>,
+    permission_runtime_ceiling: Option<PermissionRuntimeCeiling>,
     delegation_policy: DelegationPolicy,
     runtime_tool_restrictions: ToolRuntimeRestrictions,
     prompt_cache_source_session_id: Option<String>,
@@ -3058,6 +3060,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             workspace: manual_workspace,
             context: HashMap::new(),
             subagent_parent_info: None,
+            permission_runtime_ceiling: None,
             delegation_policy: DelegationPolicy::top_level(),
             runtime_tool_restrictions: ToolRuntimeRestrictions::default(),
             workspace_services: manual_workspace_services,
@@ -3747,6 +3750,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             workspace: session_workspace,
             context: context_vars,
             subagent_parent_info: None,
+            permission_runtime_ceiling: None,
             delegation_policy: DelegationPolicy::top_level(),
             runtime_tool_restrictions,
             workspace_services,
@@ -4920,6 +4924,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             created_by,
             subagent_parent_info,
             context,
+            permission_runtime_ceiling,
             delegation_policy,
             runtime_tool_restrictions,
             prompt_cache_source_session_id,
@@ -5328,6 +5333,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             workspace: subagent_workspace,
             context,
             subagent_parent_info: subagent_parent_info.clone(),
+            permission_runtime_ceiling,
             delegation_policy,
             runtime_tool_restrictions,
             workspace_services: subagent_services,
@@ -6441,6 +6447,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                         created_by: session.created_by.clone(),
                         subagent_parent_info: Some(request.subagent_parent_info),
                         context: request.context,
+                        permission_runtime_ceiling: Some(request.permission_runtime_ceiling),
                         delegation_policy: request.delegation_policy,
                         runtime_tool_restrictions: runtime_tool_restrictions_for_delegation_policy(
                             request.delegation_policy,
@@ -6495,6 +6502,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                     created_by,
                     subagent_parent_info: Some(request.subagent_parent_info),
                     context: request.context,
+                    permission_runtime_ceiling: Some(request.permission_runtime_ceiling),
                     delegation_policy: request.delegation_policy,
                     runtime_tool_restrictions: runtime_tool_restrictions_for_delegation_policy(
                         request.delegation_policy,
@@ -6575,6 +6583,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                     created_by,
                     subagent_parent_info: Some(request.subagent_parent_info),
                     context: request.context,
+                    permission_runtime_ceiling: Some(request.permission_runtime_ceiling),
                     delegation_policy: request.delegation_policy,
                     runtime_tool_restrictions: runtime_tool_restrictions_for_delegation_policy(
                         request.delegation_policy,
@@ -6987,6 +6996,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             created_by: request.created_by,
             subagent_parent_info: None,
             context: request.context,
+            permission_runtime_ceiling: None,
             delegation_policy: request.delegation_policy,
             runtime_tool_restrictions: request.runtime_tool_restrictions,
             prompt_cache_source_session_id: None,
@@ -8316,7 +8326,8 @@ mod tests {
     use crate::service::session::SessionMetadata;
     use bitfun_runtime_ports::{
         AgentSessionCreateRequest, AgentSubmissionPort, AgentSubmissionRequest,
-        AgentSubmissionSource, DelegationPolicy, SubagentContextMode,
+        AgentSubmissionSource, DelegationPolicy, PermissionEffect, PermissionRule,
+        PermissionRuntimeCeiling, SubagentContextMode,
     };
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -8667,6 +8678,7 @@ mod tests {
                 tool_call_id: "task-tool".to_string(),
             },
             context: HashMap::new(),
+            permission_runtime_ceiling: PermissionRuntimeCeiling::default(),
             delegation_policy: DelegationPolicy::top_level().spawn_child(),
         };
 
@@ -8715,6 +8727,7 @@ mod tests {
                 tool_call_id: "task-tool".to_string(),
             },
             context: HashMap::new(),
+            permission_runtime_ceiling: PermissionRuntimeCeiling::default(),
             delegation_policy: DelegationPolicy::top_level().spawn_child(),
         };
 
@@ -8775,6 +8788,7 @@ mod tests {
                 tool_call_id: "task-tool".to_string(),
             },
             context: HashMap::new(),
+            permission_runtime_ceiling: PermissionRuntimeCeiling::default(),
             delegation_policy: DelegationPolicy::top_level().spawn_child(),
         };
 
@@ -8859,6 +8873,7 @@ mod tests {
                 tool_call_id: "task-tool".to_string(),
             },
             context: HashMap::new(),
+            permission_runtime_ceiling: PermissionRuntimeCeiling::default(),
             delegation_policy: DelegationPolicy::top_level().spawn_child(),
         };
 
@@ -8929,6 +8944,7 @@ mod tests {
                 tool_call_id: "task-tool".to_string(),
             },
             context: HashMap::new(),
+            permission_runtime_ceiling: PermissionRuntimeCeiling::default(),
             delegation_policy: DelegationPolicy::top_level().spawn_child(),
         };
 
@@ -9038,6 +9054,7 @@ mod tests {
                 tool_call_id: "task-tool".to_string(),
             },
             context: HashMap::new(),
+            permission_runtime_ceiling: PermissionRuntimeCeiling::default(),
             delegation_policy: DelegationPolicy::top_level().spawn_child(),
         };
 
@@ -9532,6 +9549,11 @@ mod tests {
                 tool_call_id: "task-tool".to_string(),
             },
             context: HashMap::new(),
+            permission_runtime_ceiling: PermissionRuntimeCeiling::try_new(vec![
+                PermissionRule::new("bash", "rm *", PermissionEffect::Deny),
+                PermissionRule::new("external_directory", "*", PermissionEffect::Ask),
+            ])
+            .expect("test ceiling should be valid"),
             delegation_policy: DelegationPolicy::top_level().spawn_child(),
         };
 
@@ -9541,6 +9563,17 @@ mod tests {
             .expect("send_input request should prepare with a requested model");
 
         assert_eq!(prepared.session_config.model_id.as_deref(), Some("fast"));
+        assert_eq!(
+            prepared
+                .permission_runtime_ceiling
+                .as_ref()
+                .expect("child request should retain the parent ceiling")
+                .rules(),
+            [
+                PermissionRule::new("bash", "rm *", PermissionEffect::Deny),
+                PermissionRule::new("external_directory", "*", PermissionEffect::Ask,),
+            ]
+        );
         assert_eq!(
             session_manager
                 .get_session(&subagent_session.session_id)
@@ -9598,6 +9631,7 @@ mod tests {
                 tool_call_id: "task-tool".to_string(),
             },
             context: HashMap::new(),
+            permission_runtime_ceiling: PermissionRuntimeCeiling::default(),
             delegation_policy: DelegationPolicy::top_level().spawn_child(),
         };
 

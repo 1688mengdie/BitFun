@@ -6,6 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use std::fmt;
 
 /// The effect produced by a matching permission rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -40,6 +41,69 @@ impl PermissionRule {
 
 /// A rule list whose order is significant: later matching rules win.
 pub type PermissionRuleset = Vec<PermissionRule>;
+
+/// A validated runtime restriction inherited by a delegated child agent.
+///
+/// A ceiling is intentionally unable to carry `allow` rules: delegation may
+/// preserve or tighten the parent's runtime restrictions, but it must never
+/// widen the child's independently resolved policy.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PermissionRuntimeCeiling {
+    rules: PermissionRuleset,
+}
+
+impl PermissionRuntimeCeiling {
+    pub fn try_new(
+        rules: PermissionRuleset,
+    ) -> Result<Self, PermissionRuntimeCeilingValidationError> {
+        if let Some((rule_index, rule)) = rules
+            .iter()
+            .enumerate()
+            .find(|(_, rule)| rule.effect == PermissionEffect::Allow)
+        {
+            return Err(PermissionRuntimeCeilingValidationError {
+                rule_index,
+                action: rule.action.clone(),
+                resource: rule.resource.clone(),
+            });
+        }
+
+        Ok(Self { rules })
+    }
+
+    pub fn rules(&self) -> &[PermissionRule] {
+        &self.rules
+    }
+
+    pub fn into_rules(self) -> PermissionRuleset {
+        self.rules
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.rules.is_empty()
+    }
+}
+
+/// Validation failure returned when a runtime ceiling attempts to widen
+/// delegated permissions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PermissionRuntimeCeilingValidationError {
+    pub rule_index: usize,
+    pub action: String,
+    pub resource: String,
+}
+
+impl fmt::Display for PermissionRuntimeCeilingValidationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "permission runtime ceiling rule {} cannot allow action '{}' on resource '{}'",
+            self.rule_index, self.action, self.resource
+        )
+    }
+}
+
+impl std::error::Error for PermissionRuntimeCeilingValidationError {}
 
 /// Product-facing baseline for static tool permission rules.
 ///
@@ -119,6 +183,21 @@ pub struct PermissionPolicyLayers<'a> {
     pub enforced: &'a [PermissionRule],
 }
 
+/// Ordered inputs used to derive a delegated child agent's permission policy.
+///
+/// The child keeps the ordinary global, project, and child-profile layers.
+/// The parent's validated runtime ceiling follows the child profile, while
+/// product or organization enforced rules remain authoritative at the end.
+#[derive(Debug, Clone, Copy)]
+pub struct ChildPermissionPolicyLayers<'a> {
+    pub product_defaults: &'a [PermissionRule],
+    pub global: &'a PermissionPolicyConfig,
+    pub project: &'a [PermissionRule],
+    pub child_agent: &'a [PermissionRule],
+    pub parent_runtime_ceiling: &'a PermissionRuntimeCeiling,
+    pub enforced: &'a [PermissionRule],
+}
+
 /// Expands the configured preset and merges every static rule layer in its
 /// security-significant evaluation order.
 pub fn resolve_permission_policy(layers: PermissionPolicyLayers<'_>) -> PermissionRuleset {
@@ -129,6 +208,23 @@ pub fn resolve_permission_policy(layers: PermissionPolicyLayers<'_>) -> Permissi
         &layers.global.rules,
         layers.project,
         layers.agent,
+        layers.enforced,
+    ])
+}
+
+/// Resolves a delegated child policy without allowing parent policy to widen
+/// the child's own capabilities.
+pub fn resolve_child_permission_policy(
+    layers: ChildPermissionPolicyLayers<'_>,
+) -> PermissionRuleset {
+    let baseline = layers.global.preset.baseline_rules();
+    merge_permission_rule_layers(&[
+        layers.product_defaults,
+        &baseline,
+        &layers.global.rules,
+        layers.project,
+        layers.child_agent,
+        layers.parent_runtime_ceiling.rules(),
         layers.enforced,
     ])
 }
