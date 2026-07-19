@@ -1,6 +1,7 @@
 {
   "permissionV2": {
     "title": "Permission required",
+    "subagentRequest": "{{subagent}} subagent · {{action}} · {{tool}}",
     "scope": "Always allow saves access for project {{project}}.",
     "scopeOnce": "Allow once only; no project grant will be saved.",
     "feedbackLabel": "Rejection feedback",

@@ -1,6 +1,7 @@
 {
   "permissionV2": {
     "title": "需要授權",
+    "subagentRequest": "{{subagent}} 子 Agent · {{action}} · {{tool}}",
     "scope": "始終允許會為項目 {{project}} 儲存存取權限。",
     "scopeOnce": "僅允許本次操作，不會儲存項目授權。",
     "feedbackLabel": "拒絕回饋",

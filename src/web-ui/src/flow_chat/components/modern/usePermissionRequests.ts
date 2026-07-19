@@ -5,6 +5,11 @@ import {
   type PermissionRequestEvent,
   type PermissionV2Request,
 } from '@/infrastructure/api/service-api/AgentAPI';
+import {
+  applyPermissionRequestEvent,
+  reconcilePermissionRequestSnapshot,
+  selectPermissionRequestsForSession,
+} from './permissionRequestRouting';
 
 export function usePermissionRequests(sessionId?: string) {
   const [requests, setRequests] = useState<PermissionV2Request[]>([]);
@@ -17,14 +22,10 @@ export function usePermissionRequests(sessionId?: string) {
       setRequests((current) => {
         if (event.event === 'asked') {
           resolvedIds.current.delete(event.request.requestId);
-          return current.some((request) => request.requestId === event.request.requestId)
-            ? current.map((request) =>
-                request.requestId === event.request.requestId ? event.request : request,
-              )
-            : [...current, event.request];
+        } else {
+          resolvedIds.current.add(event.requestId);
         }
-        resolvedIds.current.add(event.requestId);
-        return current.filter((request) => request.requestId !== event.requestId);
+        return applyPermissionRequestEvent(current, event);
       });
     });
 
@@ -33,7 +34,9 @@ export function usePermissionRequests(sessionId?: string) {
         await agentAPI.subscribePermissionRequests();
         const pending = await agentAPI.listPendingPermissionRequests();
         if (!disposed) {
-          setRequests(pending.filter((request) => !resolvedIds.current.has(request.requestId)));
+          setRequests((current) =>
+            reconcilePermissionRequestSnapshot(current, pending, resolvedIds.current),
+          );
         }
       } catch {
         if (!disposed) setRequests([]);
@@ -56,7 +59,7 @@ export function usePermissionRequests(sessionId?: string) {
   );
 
   const sessionRequests = useMemo(
-    () => requests.filter((request) => !sessionId || request.sessionId === sessionId),
+    () => selectPermissionRequestsForSession(requests, sessionId),
     [requests, sessionId],
   );
 

@@ -62,7 +62,13 @@ export function PermissionRequestPanel({
         <div>
           <h2>{t('permissionV2.title')}</h2>
           <p>
-            {request.action} · {request.source.identity}
+            {request.delegation
+              ? t('permissionV2.subagentRequest', {
+                  subagent: request.delegation.subagentType,
+                  action: request.action,
+                  tool: request.source.identity,
+                })
+              : `${request.action} · ${request.source.identity}`}
           </p>
         </div>
       </div>

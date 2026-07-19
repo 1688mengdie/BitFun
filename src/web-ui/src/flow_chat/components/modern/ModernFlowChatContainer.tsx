@@ -75,6 +75,7 @@ import {
 } from '../../utils/backgroundSubagentActivity';
 import './ModernFlowChatContainer.scss';
 import { PermissionRequestPanel } from './PermissionRequestPanel';
+import { pendingPermissionToolCallIdsForSession } from './permissionRequestRouting';
 import { usePermissionRequests } from './usePermissionRequests';
 
 interface ModernFlowChatContainerProps {
@@ -396,10 +397,9 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     onSwitchToChatPanel,
     onToolConfirm: handleToolConfirm,
     onToolReject: handleToolReject,
-    pendingPermissionToolCallIds: new Set(
-      permissionRequests
-        .map((request) => request.toolCallId)
-        .filter((toolCallId): toolCallId is string => Boolean(toolCallId)),
+    pendingPermissionToolCallIds: pendingPermissionToolCallIdsForSession(
+      permissionRequests,
+      activeSession?.sessionId,
     ),
     sessionId: activeSession?.sessionId,
     activeSessionOverride: activeSession,

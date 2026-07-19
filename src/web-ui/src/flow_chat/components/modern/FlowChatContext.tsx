@@ -19,7 +19,7 @@ export interface FlowChatContextValue {
   // Tool actions
   onToolConfirm?: (toolId: string, permissionOptionId?: string, approve?: boolean) => Promise<void>;
   onToolReject?: (toolId: string, options?: ToolRejectOptions) => Promise<void>;
-  /** Tool-call IDs with an active V2 permission request in this session. */
+  /** Tool-call IDs highlighted for active V2 requests, including delegated parent Task calls. */
   pendingPermissionToolCallIds?: ReadonlySet<string>;
 
   // Session info

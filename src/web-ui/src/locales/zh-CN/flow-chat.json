@@ -1,6 +1,7 @@
 {
   "permissionV2": {
     "title": "需要授权",
+    "subagentRequest": "{{subagent}} 子 Agent · {{action}} · {{tool}}",
     "scope": "始终允许会为项目 {{project}} 保存访问权限。",
     "scopeOnce": "仅允许本次操作，不会保存项目授权。",
     "feedbackLabel": "拒绝反馈",
