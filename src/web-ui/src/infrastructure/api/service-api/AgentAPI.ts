@@ -98,6 +98,10 @@ export interface PermissionDelegationContext {
 
 export interface PermissionV2Request {
   requestId: string;
+  /** Model round that owns this permission request. */
+  roundId: string;
+  /** Stable permission order within the model round. */
+  order: number;
   /** Provider/tool-stream call ID for correlating one concrete tool card. */
   toolCallId?: string;
   projectId: string;

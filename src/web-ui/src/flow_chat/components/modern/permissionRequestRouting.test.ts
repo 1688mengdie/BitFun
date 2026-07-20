@@ -5,6 +5,7 @@ import {
   pendingPermissionToolCallIdsForSession,
   reconcilePermissionRequestSnapshot,
   selectPermissionRequestsForSession,
+  sortPermissionRequests,
 } from './permissionRequestRouting';
 
 function request(
@@ -16,6 +17,8 @@ function request(
 ): PermissionV2Request {
   return {
     requestId,
+    roundId: parentSessionId ? 'round-child' : 'round-parent',
+    order: requestId === 'parent-request' ? 0 : 1,
     sessionId,
     toolCallId,
     projectId: 'project-1',
@@ -71,6 +74,18 @@ describe('permission request routing', () => {
     expect([
       ...pendingPermissionToolCallIdsForSession(requests, 'other-session'),
     ]).toEqual(['other-tool']);
+  });
+
+  it('sorts requests by order within a round while preserving batch arrival order', () => {
+    const laterRound = { ...parentRequest, requestId: 'later-round', roundId: 'round-later', order: 0 };
+    const firstRoundLater = { ...parentRequest, requestId: 'first-round-later', roundId: 'round-first', order: 2 };
+    const firstRoundEarlier = { ...parentRequest, requestId: 'first-round-earlier', roundId: 'round-first', order: 1 };
+
+    expect(sortPermissionRequests([laterRound, firstRoundLater, firstRoundEarlier]).map((item) => item.requestId)).toEqual([
+      'later-round',
+      'first-round-earlier',
+      'first-round-later',
+    ]);
   });
 
   it('does not guess a tool card when the relevant call ID is missing', () => {

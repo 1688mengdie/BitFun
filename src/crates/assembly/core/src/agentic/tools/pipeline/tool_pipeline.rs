@@ -613,6 +613,8 @@ impl ToolPipeline {
             let request =
                 PermissionV2Request {
                     request_id: request_id.clone(),
+                    round_id: task.context.round_id.clone(),
+                    order: task.tool_call_order,
                     tool_call_id: Some(task.tool_call.tool_id.clone()),
                     project_id: project_id.clone(),
                     session_id: task.context.session_id.clone(),
@@ -873,14 +875,17 @@ impl ToolPipeline {
 
         // Create tasks for all tool calls
         let mut task_ids = Vec::with_capacity(resolved_tool_calls.len());
-        for (tool_call, invocation, resolution_error) in resolved_tool_calls {
-            let task = ToolTask::new_resolved(
+        for (tool_call_order, (tool_call, invocation, resolution_error)) in
+            resolved_tool_calls.into_iter().enumerate()
+        {
+            let mut task = ToolTask::new_resolved(
                 tool_call,
                 invocation,
                 resolution_error,
                 context.clone(),
                 options.clone(),
             );
+            task.tool_call_order = tool_call_order as u32;
             let tool_id = self.state_manager.create_task(task).await;
             task_ids.push(tool_id);
         }
@@ -2471,6 +2476,10 @@ mod tests {
 
         let requests = wait_for_permission_request_count(&manager, 2).await;
         assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0].tool_call_id.as_deref(), Some("reject-me"));
+        assert_eq!(requests[0].order, 0);
+        assert_eq!(requests[1].tool_call_id.as_deref(), Some("keep-going"));
+        assert_eq!(requests[1].order, 1);
         let rejected_request = requests
             .iter()
             .find(|request| request.tool_call_id.as_deref() == Some("reject-me"))

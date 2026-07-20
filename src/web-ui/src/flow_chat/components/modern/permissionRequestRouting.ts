@@ -15,7 +15,31 @@ export function selectPermissionRequestsForSession(
   requests: readonly PermissionV2Request[],
   sessionId?: string,
 ): PermissionV2Request[] {
-  return requests.filter((request) => permissionRequestBelongsToSession(request, sessionId));
+  return sortPermissionRequests(
+    requests.filter((request) => permissionRequestBelongsToSession(request, sessionId)),
+  );
+}
+
+/**
+ * Keep permission requests in arrival order across rounds, while preserving
+ * the model-provided order inside each round. The first-seen batch position is
+ * used because round IDs are opaque (usually UUIDs) and are not chronological.
+ */
+export function sortPermissionRequests(
+  requests: readonly PermissionV2Request[],
+): PermissionV2Request[] {
+  const firstBatchIndex = new Map<string, number>();
+  requests.forEach((request, index) => {
+    if (!firstBatchIndex.has(request.roundId)) firstBatchIndex.set(request.roundId, index);
+  });
+
+  return [...requests].sort((left, right) => {
+    const batchOrder =
+      (firstBatchIndex.get(left.roundId) ?? 0) - (firstBatchIndex.get(right.roundId) ?? 0);
+    if (batchOrder !== 0) return batchOrder;
+
+    return left.order - right.order || left.requestId.localeCompare(right.requestId);
+  });
 }
 
 export function pendingPermissionToolCallIdsForSession(

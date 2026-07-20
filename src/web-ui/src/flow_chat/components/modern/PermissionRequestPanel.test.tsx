@@ -26,6 +26,8 @@ vi.mock('../../store/chatInputStateStore', () => ({
 function request(delegated: boolean): PermissionV2Request {
   return {
     requestId: delegated ? 'child-request' : 'direct-request',
+    roundId: delegated ? 'round-child' : 'round-parent',
+    order: 0,
     sessionId: delegated ? 'child-session' : 'parent-session',
     toolCallId: delegated ? 'child-tool' : 'direct-tool',
     projectId: 'project-1',

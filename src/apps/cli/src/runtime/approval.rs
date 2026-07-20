@@ -33,6 +33,8 @@ mod tests {
     fn request() -> PermissionV2Request {
         PermissionV2Request {
             request_id: "request-1".to_string(),
+            round_id: "synthetic:request-1".to_string(),
+            order: 0,
             tool_call_id: Some("child-tool".to_string()),
             project_id: "project-1".to_string(),
             session_id: "child-session".to_string(),

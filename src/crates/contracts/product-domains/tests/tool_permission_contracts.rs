@@ -380,9 +380,11 @@ fn permission_reply_uses_stable_tagged_wire_values() {
 }
 
 #[test]
-fn permission_request_optional_correlation_fields_use_stable_wire_shape() {
+fn permission_request_correlation_fields_use_stable_wire_shape() {
     let request = PermissionRequest {
         request_id: "request-1".to_string(),
+        round_id: "round-1".to_string(),
+        order: 2,
         tool_call_id: Some("call-1".to_string()),
         project_id: "project-1".to_string(),
         session_id: "session-1".to_string(),
@@ -403,6 +405,8 @@ fn permission_request_optional_correlation_fields_use_stable_wire_shape() {
         display_metadata: Map::new(),
     };
     let value = serde_json::to_value(&request).expect("serialize permission request");
+    assert_eq!(value["roundId"], "round-1");
+    assert_eq!(value["order"], 2);
     assert_eq!(value["toolCallId"], "call-1");
     assert_eq!(
         value["delegation"],
@@ -421,19 +425,6 @@ fn permission_request_optional_correlation_fields_use_stable_wire_shape() {
     let top_level_value =
         serde_json::to_value(top_level).expect("serialize top-level permission request");
     assert!(top_level_value.get("delegation").is_none());
-
-    let legacy = json!({
-        "requestId": "request-legacy",
-        "projectId": "project-1",
-        "sessionId": "session-1",
-        "agentId": "agentic",
-        "action": "read",
-        "resources": ["README.md"],
-        "source": { "kind": "tool_call", "identity": "Read" },
-    });
-    let decoded: PermissionRequest = serde_json::from_value(legacy).expect("decode legacy request");
-    assert_eq!(decoded.tool_call_id, None);
-    assert_eq!(decoded.delegation, None);
 }
 
 #[test]
