@@ -9,7 +9,6 @@ use bitfun_runtime_ports::{
     PermissionGrant, PermissionGrantStorePort, PermissionReply, PermissionReplySource,
     PermissionReplyStorePort, PermissionRequestEvent, PermissionV2Request, PortError,
 };
-use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -184,7 +183,10 @@ impl PermissionRequestManager {
         &self,
         request: PermissionV2Request,
     ) -> Result<PendingPermissionReceiver, PermissionRequestManagerError> {
-        self.register_with_visibility(request, true).await
+        let mut pending = self.register_batch(vec![request]).await?;
+        Ok(pending
+            .pop()
+            .expect("a single-request batch must return one receiver"))
     }
 
     /// Registers a request for internal coordination and audit without exposing
@@ -193,56 +195,97 @@ impl PermissionRequestManager {
         &self,
         request: PermissionV2Request,
     ) -> Result<PendingPermissionReceiver, PermissionRequestManagerError> {
-        self.register_with_visibility(request, false).await
+        let mut pending = self.register_batch_non_interactive(vec![request]).await?;
+        Ok(pending
+            .pop()
+            .expect("a single-request batch must return one receiver"))
     }
 
-    async fn register_with_visibility(
+    pub async fn register_batch(
         &self,
-        request: PermissionV2Request,
-        interactive: bool,
-    ) -> Result<PendingPermissionReceiver, PermissionRequestManagerError> {
-        let _operation = self.operations.lock().await;
-        let request_id = request.request_id.clone();
-        let (sender, receiver) = oneshot::channel();
+        requests: Vec<PermissionV2Request>,
+    ) -> Result<Vec<PendingPermissionReceiver>, PermissionRequestManagerError> {
+        self.register_batch_with_visibility(requests, true).await
+    }
 
-        match self.pending.entry(request_id.clone()) {
-            Entry::Occupied(_) => {
-                return Err(PermissionRequestManagerError::DuplicateRequest(request_id));
+    pub async fn register_batch_non_interactive(
+        &self,
+        requests: Vec<PermissionV2Request>,
+    ) -> Result<Vec<PendingPermissionReceiver>, PermissionRequestManagerError> {
+        self.register_batch_with_visibility(requests, false).await
+    }
+
+    async fn register_batch_with_visibility(
+        &self,
+        requests: Vec<PermissionV2Request>,
+        interactive: bool,
+    ) -> Result<Vec<PendingPermissionReceiver>, PermissionRequestManagerError> {
+        if requests.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let _operation = self.operations.lock().await;
+        let mut request_ids = HashSet::with_capacity(requests.len());
+        for request in &requests {
+            if !request_ids.insert(request.request_id.clone()) {
+                return Err(PermissionRequestManagerError::DuplicateRequest(
+                    request.request_id.clone(),
+                ));
             }
-            Entry::Vacant(entry) => {
-                let registration_sequence = self
-                    .next_registration_sequence
-                    .fetch_add(1, Ordering::Relaxed);
-                entry.insert(PendingPermission {
+            if self.pending.contains_key(&request.request_id) {
+                return Err(PermissionRequestManagerError::DuplicateRequest(
+                    request.request_id.clone(),
+                ));
+            }
+        }
+
+        let timestamp_ms = self.clock.now_unix_millis();
+        let mut receivers = Vec::with_capacity(requests.len());
+        for request in &requests {
+            let (sender, receiver) = oneshot::channel();
+            let registration_sequence = self
+                .next_registration_sequence
+                .fetch_add(1, Ordering::Relaxed);
+            self.pending.insert(
+                request.request_id.clone(),
+                PendingPermission {
                     request: request.clone(),
                     sender,
                     interactive,
                     registration_sequence,
-                });
-            }
-        }
-
-        let audit = PermissionAuditRecord {
-            audit_id: audit_id(&request_id, "requested"),
-            request: request.clone(),
-            event: PermissionAuditEvent::Requested,
-            timestamp_ms: self.clock.now_unix_millis(),
-        };
-        if let Err(error) = self.audit_store.append_permission_audit(audit).await {
-            self.pending.remove(&request_id);
-            return Err(PermissionRequestManagerError::AuditStore(error));
-        }
-
-        if interactive {
-            let _ = self.events.send(PermissionRequestEvent::Asked {
-                request: request.clone(),
+                },
+            );
+            receivers.push(PendingPermissionReceiver {
+                request_id: request.request_id.clone(),
+                receiver,
             });
         }
 
-        Ok(PendingPermissionReceiver {
-            request_id,
-            receiver,
-        })
+        for request in &requests {
+            if let Err(error) = self
+                .audit_store
+                .append_permission_audit(PermissionAuditRecord {
+                    audit_id: audit_id(&request.request_id, "requested"),
+                    request: request.clone(),
+                    event: PermissionAuditEvent::Requested,
+                    timestamp_ms,
+                })
+                .await
+            {
+                for request in &requests {
+                    self.pending.remove(&request.request_id);
+                }
+                return Err(PermissionRequestManagerError::AuditStore(error));
+            }
+        }
+
+        if interactive {
+            for request in requests {
+                let _ = self.events.send(PermissionRequestEvent::Asked { request });
+            }
+        }
+
+        Ok(receivers)
     }
 
     pub fn pending_requests(&self) -> Vec<PermissionV2Request> {

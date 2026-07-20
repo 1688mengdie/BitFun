@@ -5,9 +5,9 @@ use bitfun_agent_runtime::permission_v2::{
 use bitfun_runtime_ports::{
     ClockPort, PermissionAuditRecord, PermissionAuditStorePort, PermissionGrant,
     PermissionGrantKey, PermissionGrantStorePort, PermissionReply, PermissionReplySource,
-    PermissionReplyStorePort, PermissionRequestSource, PermissionRequestSourceKind,
-    PermissionV2Request, PortError, PortErrorKind, PortResult, RuntimeServiceCapability,
-    RuntimeServicePort,
+    PermissionReplyStorePort, PermissionRequestEvent, PermissionRequestSource,
+    PermissionRequestSourceKind, PermissionV2Request, PortError, PortErrorKind, PortResult,
+    RuntimeServiceCapability, RuntimeServicePort,
 };
 use serde_json::Map;
 use std::sync::{Arc, Mutex};
@@ -408,6 +408,66 @@ async fn pending_snapshots_order_requests_within_each_round() {
             PermissionWaitOutcome::Cancelled { .. }
         ));
     }
+}
+
+#[tokio::test]
+async fn register_batch_publishes_asked_events_in_batch_order() {
+    let (manager, _) = manager();
+    let mut events = manager.subscribe();
+    let requests = vec![
+        PermissionV2Request {
+            round_id: "round-1".to_string(),
+            order: 0,
+            ..request("request-first", "session-a")
+        },
+        PermissionV2Request {
+            round_id: "round-1".to_string(),
+            order: 1,
+            ..request("request-second", "session-a")
+        },
+    ];
+    let receivers = manager
+        .register_batch(requests.clone())
+        .await
+        .expect("register permission batch");
+
+    for request in requests {
+        assert_eq!(
+            events.recv().await.expect("asked event"),
+            PermissionRequestEvent::Asked { request }
+        );
+    }
+    assert_eq!(receivers.len(), 2);
+
+    manager
+        .cancel_session("session-a", "test cleanup")
+        .await
+        .expect("cancel permission batch");
+    for receiver in receivers {
+        assert!(matches!(
+            receiver.wait().await,
+            PermissionWaitOutcome::Cancelled { .. }
+        ));
+    }
+}
+
+#[tokio::test]
+async fn register_batch_rolls_back_pending_requests_when_audit_fails() {
+    let (manager, store) = manager();
+    *store.fail_audit.lock().unwrap() = true;
+    let error = manager
+        .register_batch(vec![
+            request("request-first", "session-a"),
+            request("request-second", "session-a"),
+        ])
+        .await
+        .expect_err("audit failure should reject the whole batch");
+
+    assert!(matches!(
+        error,
+        PermissionRequestManagerError::AuditStore(_)
+    ));
+    assert!(manager.pending_requests().is_empty());
 }
 
 #[tokio::test]

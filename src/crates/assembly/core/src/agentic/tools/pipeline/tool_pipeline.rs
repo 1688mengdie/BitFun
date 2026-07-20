@@ -15,7 +15,9 @@ use crate::agentic::tools::tool_context_runtime::ToolUseContext;
 use crate::agentic::tools::tool_result_storage;
 use crate::util::elapsed_ms_u64;
 use crate::util::errors::{BitFunError, BitFunResult};
-use bitfun_agent_runtime::permission_v2::{PermissionRequestManager, PermissionWaitOutcome};
+use bitfun_agent_runtime::permission_v2::{
+    PendingPermissionReceiver, PermissionRequestManager, PermissionWaitOutcome,
+};
 use bitfun_agent_tools::{
     build_invalid_tool_call_error_message, build_tool_call_truncation_recovery_notice,
     build_tool_execution_error_presentation, build_tool_execution_timeout_presentation,
@@ -33,9 +35,10 @@ use bitfun_runtime_ports::{
 };
 use futures::future::join_all;
 use log::{debug, error, info, warn};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime};
-use tokio::sync::RwLock as TokioRwLock;
+use tokio::sync::{Mutex as TokioMutex, RwLock as TokioRwLock};
 use tokio::time::{timeout, Duration};
 use tokio_util::sync::CancellationToken;
 use tool_runtime::pipeline::{
@@ -402,6 +405,20 @@ enum V2PermissionAuthorization {
     Rejected { reason: String },
 }
 
+#[derive(Debug)]
+enum PermissionExecutionPlan {
+    Allowed,
+    Rejected { reason: String },
+    Awaiting(Vec<PendingPermissionReceiver>),
+}
+
+#[derive(Debug, Clone)]
+enum PermissionPlanDraft {
+    Allowed,
+    Rejected { reason: String },
+    Requests(Vec<PermissionV2Request>),
+}
+
 pub fn permission_project_id_for_workspace_identity(
     identity: &crate::service::remote_ssh::workspace_state::WorkspaceSessionIdentity,
     is_remote: bool,
@@ -524,6 +541,7 @@ pub struct ToolPipeline {
     cancellation_tokens: ToolCancellationTokenStore,
     computer_use_host: Option<ComputerUseHostRef>,
     permission_request_manager: Option<Arc<PermissionRequestManager>>,
+    permission_plans: Arc<TokioMutex<HashMap<String, PermissionExecutionPlan>>>,
 }
 
 impl ToolPipeline {
@@ -538,6 +556,7 @@ impl ToolPipeline {
             cancellation_tokens: ToolCancellationTokenStore::new(),
             computer_use_host,
             permission_request_manager: None,
+            permission_plans: Arc::new(TokioMutex::new(HashMap::new())),
         }
     }
 
@@ -553,41 +572,41 @@ impl ToolPipeline {
         self.computer_use_host.clone()
     }
 
-    async fn authorize_permission_intents(
+    async fn draft_permission_plan(
         &self,
-        task: &ToolTask,
-        tool_name: &str,
+        task: ToolTask,
+        tool_name: String,
         intents: Vec<PermissionIntent>,
-        context: &ToolUseContext,
-        cancellation_token: &CancellationToken,
-    ) -> BitFunResult<V2PermissionAuthorization> {
+        context: ToolUseContext,
+    ) -> BitFunResult<PermissionPlanDraft> {
         if intents.is_empty() {
-            return Ok(V2PermissionAuthorization::Allowed);
+            return Ok(PermissionPlanDraft::Allowed);
         }
 
-        let project_id = permission_project_id(context)?;
-        let manager = self.permission_request_manager.as_ref();
+        let project_id = permission_project_id(&context)?;
+        let permission_rules = task.options.permission_rules.clone();
+        let case_sensitivity = permission_resource_case_sensitivity(&context);
+        let round_id = task.context.round_id.clone();
+        let tool_call_id = task.tool_call.tool_id.clone();
+        let session_id = task.context.session_id.clone();
+        let agent_type = task.context.agent_type.clone();
+        let parent_info = task.context.subagent_parent_info.clone();
+        let manager = self.permission_request_manager.clone();
         let grants = match manager {
-            Some(manager) => manager
+            Some(ref manager) => manager
                 .list_project_grants(&project_id)
                 .await
                 .map_err(|error| BitFunError::service(error.to_string()))?,
             None => Vec::new(),
         };
-        let case_sensitivity = permission_resource_case_sensitivity(context);
         let mut asks = Vec::new();
 
         for intent in intents {
-            match permission_intent_effect(
-                &intent,
-                &task.options.permission_rules,
-                &grants,
-                case_sensitivity,
-            ) {
+            match permission_intent_effect(&intent, &permission_rules, &grants, case_sensitivity) {
                 PermissionEffect::Allow => {}
                 PermissionEffect::Ask => asks.push(intent),
                 PermissionEffect::Deny => {
-                    return Ok(V2PermissionAuthorization::Rejected {
+                    return Ok(PermissionPlanDraft::Rejected {
                         reason: format!(
                             "Permission policy denied '{}' for {}",
                             intent.action,
@@ -599,75 +618,250 @@ impl ToolPipeline {
         }
 
         if asks.is_empty() {
-            return Ok(V2PermissionAuthorization::Allowed);
+            return Ok(PermissionPlanDraft::Allowed);
         }
 
-        let manager = manager.ok_or_else(|| {
+        if manager.is_none() {
+            return Err(BitFunError::service(
+                "V2 permission request manager is unavailable for a file tool request".to_string(),
+            ));
+        }
+
+        let requests = asks
+            .into_iter()
+            .map(|intent| PermissionV2Request {
+                request_id: uuid::Uuid::new_v4().to_string(),
+                round_id: round_id.clone(),
+                order: task.tool_call_order,
+                tool_call_id: Some(tool_call_id.clone()),
+                project_id: project_id.clone(),
+                session_id: session_id.clone(),
+                agent_id: agent_type.clone(),
+                action: intent.action,
+                resources: intent.resources,
+                save_resources: intent.save_resources,
+                source: PermissionRequestSource {
+                    kind: PermissionRequestSourceKind::ToolCall,
+                    identity: tool_name.clone(),
+                },
+                delegation: parent_info
+                    .as_ref()
+                    .map(|parent| parent.permission_delegation_context(&agent_type)),
+                display_metadata: intent.display_metadata,
+            })
+            .collect();
+
+        Ok(PermissionPlanDraft::Requests(requests))
+    }
+
+    async fn register_permission_requests(
+        &self,
+        requests: Vec<PermissionV2Request>,
+        auto_approve: bool,
+    ) -> BitFunResult<Vec<PendingPermissionReceiver>> {
+        let manager = self.permission_request_manager.as_ref().ok_or_else(|| {
             BitFunError::service(
                 "V2 permission request manager is unavailable for a file tool request".to_string(),
             )
         })?;
+        let receivers = if auto_approve {
+            manager
+                .register_batch_non_interactive(requests.clone())
+                .await
+        } else {
+            manager.register_batch(requests.clone()).await
+        }
+        .map_err(|error| BitFunError::service(error.to_string()))?;
 
-        for intent in asks {
-            let request_id = uuid::Uuid::new_v4().to_string();
-            let request =
-                PermissionV2Request {
-                    request_id: request_id.clone(),
-                    round_id: task.context.round_id.clone(),
-                    order: task.tool_call_order,
-                    tool_call_id: Some(task.tool_call.tool_id.clone()),
-                    project_id: project_id.clone(),
-                    session_id: task.context.session_id.clone(),
-                    agent_id: task.context.agent_type.clone(),
-                    action: intent.action,
-                    resources: intent.resources,
-                    save_resources: intent.save_resources,
-                    source: PermissionRequestSource {
-                        kind: PermissionRequestSourceKind::ToolCall,
-                        identity: tool_name.to_string(),
-                    },
-                    delegation: task.context.subagent_parent_info.as_ref().map(|parent| {
-                        parent.permission_delegation_context(&task.context.agent_type)
-                    }),
-                    display_metadata: intent.display_metadata,
-                };
-            let pending = if task.options.auto_approve_ask {
-                manager.register_non_interactive(request).await
-            } else {
-                manager.register(request).await
-            }
-            .map_err(|error| BitFunError::service(error.to_string()))?;
-
-            if task.options.auto_approve_ask {
-                if cancellation_token.is_cancelled() {
-                    manager
-                        .cancel_request(&request_id, "Tool execution was cancelled")
-                        .await
-                        .map_err(|error| BitFunError::service(error.to_string()))?;
-                    return Err(BitFunError::Cancelled(
-                        "Tool execution was cancelled before automatic permission reply"
-                            .to_string(),
-                    ));
-                }
-                manager
+        if auto_approve {
+            for request in &requests {
+                if let Err(error) = manager
                     .reply(
-                        &request_id,
+                        &request.request_id,
                         PermissionReply::Once,
                         bitfun_runtime_ports::PermissionReplySource::AutoApprove,
                     )
                     .await
-                    .map_err(|error| BitFunError::service(error.to_string()))?;
+                {
+                    self.cancel_permission_request_ids(
+                        requests
+                            .iter()
+                            .map(|request| request.request_id.clone())
+                            .collect(),
+                        "Automatic permission approval failed".to_string(),
+                    )
+                    .await;
+                    return Err(BitFunError::service(error.to_string()));
+                }
             }
+        }
 
+        Ok(receivers)
+    }
+
+    async fn prepare_permission_plans(&self, task_ids: &[String]) -> BitFunResult<()> {
+        let mut drafts = Vec::with_capacity(task_ids.len());
+        let mut ordered_requests = Vec::new();
+
+        for task_id in task_ids {
+            let Some(task) = self.state_manager.get_task(task_id) else {
+                continue;
+            };
+            let tool_name = task.invocation.effective_tool_name.clone();
+            if task.invocation_resolution_error.is_some()
+                || task.tool_call.tool_name.is_empty()
+                || task.tool_call.is_error
+                || recovered_write_has_potentially_truncated_marked_path(
+                    &tool_name,
+                    &task.invocation.effective_arguments,
+                    task.tool_call.recovered_from_truncation,
+                )
+            {
+                continue;
+            }
+            let tool = {
+                let registry = self.tool_registry.read().await;
+                if validate_tool_execution_admission(ToolExecutionAdmissionRequest {
+                    tool_name: &tool_name,
+                    allowed_tools: &task.context.allowed_tools,
+                    runtime_tool_restrictions: &task.context.runtime_tool_restrictions,
+                    invocation_is_deferred: task.invocation.is_deferred(),
+                    deferred_tools: &task.context.deferred_tools,
+                    loaded_deferred_tool_specs: &task.context.loaded_deferred_tool_specs,
+                    current_catalog_generation: registry.current_snapshot_generation(),
+                    get_tool_spec_tool_name: GET_TOOL_SPEC_TOOL_NAME,
+                })
+                .is_err()
+                {
+                    continue;
+                }
+                registry.get_tool(&tool_name)
+            };
+            let Some(tool) = tool else {
+                continue;
+            };
+            let tool_context = self.build_tool_use_context(&task, CancellationToken::new());
+            let validation = tool
+                .validate_input(&task.invocation.effective_arguments, Some(&tool_context))
+                .await;
+            if !validation.result {
+                continue;
+            }
+            let intents =
+                tool.permission_intents(&task.invocation.effective_arguments, &tool_context)?;
+            let draft = self
+                .draft_permission_plan(
+                    task.clone(),
+                    tool_name.clone(),
+                    intents,
+                    tool_context.clone(),
+                )
+                .await?;
+            if let PermissionPlanDraft::Requests(requests) = &draft {
+                ordered_requests.extend(
+                    requests
+                        .iter()
+                        .cloned()
+                        .map(|request| (task_id.clone(), request)),
+                );
+            }
+            drafts.push((task_id.clone(), draft));
+        }
+
+        if !ordered_requests.is_empty() {
+            let batch_requests = ordered_requests
+                .iter()
+                .map(|(_, request)| request.clone())
+                .collect::<Vec<_>>();
+            let auto_approve = task_ids
+                .first()
+                .and_then(|task_id| self.state_manager.get_task(task_id))
+                .is_some_and(|task| task.options.auto_approve_ask);
+            let receivers = self
+                .register_permission_requests(batch_requests, auto_approve)
+                .await?;
+
+            let mut receivers_by_task = HashMap::<String, Vec<PendingPermissionReceiver>>::new();
+            for ((task_id, _), receiver) in ordered_requests.into_iter().zip(receivers) {
+                receivers_by_task.entry(task_id).or_default().push(receiver);
+            }
+            for (task_id, draft) in &drafts {
+                if let PermissionPlanDraft::Requests(_) = draft {
+                    let receivers = receivers_by_task.remove(task_id).ok_or_else(|| {
+                        BitFunError::service(format!(
+                            "Permission plan lost its pending receivers for tool task '{task_id}'"
+                        ))
+                    })?;
+                    self.permission_plans.lock().await.insert(
+                        task_id.clone(),
+                        PermissionExecutionPlan::Awaiting(receivers),
+                    );
+                }
+            }
+        }
+
+        for (task_id, draft) in drafts {
+            match draft {
+                PermissionPlanDraft::Allowed => {
+                    self.permission_plans
+                        .lock()
+                        .await
+                        .insert(task_id, PermissionExecutionPlan::Allowed);
+                }
+                PermissionPlanDraft::Rejected { reason } => {
+                    self.permission_plans
+                        .lock()
+                        .await
+                        .insert(task_id, PermissionExecutionPlan::Rejected { reason });
+                }
+                PermissionPlanDraft::Requests(_) => {}
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn await_prepared_permission_plan(
+        &self,
+        task_id: &str,
+        tool_name: String,
+        cancellation_token: &CancellationToken,
+    ) -> BitFunResult<V2PermissionAuthorization> {
+        let Some(plan) = self.permission_plans.lock().await.remove(task_id) else {
+            return Ok(V2PermissionAuthorization::Allowed);
+        };
+
+        self.await_permission_execution_plan(plan, tool_name, cancellation_token)
+            .await
+    }
+
+    async fn await_permission_execution_plan(
+        &self,
+        plan: PermissionExecutionPlan,
+        tool_name: String,
+        cancellation_token: &CancellationToken,
+    ) -> BitFunResult<V2PermissionAuthorization> {
+        let receivers = match plan {
+            PermissionExecutionPlan::Allowed => return Ok(V2PermissionAuthorization::Allowed),
+            PermissionExecutionPlan::Rejected { reason } => {
+                return Ok(V2PermissionAuthorization::Rejected { reason });
+            }
+            PermissionExecutionPlan::Awaiting(receivers) => receivers,
+        };
+
+        let mut receivers = receivers.into_iter();
+        while let Some(pending) = receivers.next() {
+            let request_id = pending.request_id().to_string();
             let outcome = tokio::select! {
                 outcome = pending.wait() => outcome,
                 _ = cancellation_token.cancelled() => {
-                    if let Err(error) = manager
-                        .cancel_request(&request_id, "Tool execution was cancelled")
-                        .await
-                    {
-                        warn!("Failed to cancel pending permission request: request_id={}, error={}", request_id, error);
-                    }
+                    let remaining = std::iter::once(request_id.clone())
+                        .chain(receivers.map(|pending| pending.request_id().to_string()));
+                    self.cancel_permission_request_ids(
+                        remaining.collect(),
+                        "Tool execution was cancelled".to_string(),
+                    )
+                    .await;
                     return Err(BitFunError::Cancelled(
                         "Tool execution was cancelled while awaiting permission".to_string(),
                     ));
@@ -678,6 +872,13 @@ impl ToolPipeline {
                 PermissionWaitOutcome::Replied(PermissionReply::Once | PermissionReply::Always) => {
                 }
                 PermissionWaitOutcome::Replied(PermissionReply::Reject { feedback }) => {
+                    self.cancel_permission_request_ids(
+                        receivers
+                            .map(|pending| pending.request_id().to_string())
+                            .collect(),
+                        "Another permission request for this tool was rejected".to_string(),
+                    )
+                    .await;
                     return Ok(V2PermissionAuthorization::Rejected {
                         reason: feedback.unwrap_or_else(|| {
                             format!("User rejected permission for tool '{tool_name}'")
@@ -685,11 +886,25 @@ impl ToolPipeline {
                     });
                 }
                 PermissionWaitOutcome::Cancelled { reason } => {
+                    self.cancel_permission_request_ids(
+                        receivers
+                            .map(|pending| pending.request_id().to_string())
+                            .collect(),
+                        "Another permission request for this tool was cancelled".to_string(),
+                    )
+                    .await;
                     return Err(BitFunError::Cancelled(reason));
                 }
             }
 
             if cancellation_token.is_cancelled() {
+                self.cancel_permission_request_ids(
+                    receivers
+                        .map(|pending| pending.request_id().to_string())
+                        .collect(),
+                    "Tool execution was cancelled".to_string(),
+                )
+                .await;
                 return Err(BitFunError::Cancelled(
                     "Tool execution was cancelled after permission reply".to_string(),
                 ));
@@ -697,6 +912,69 @@ impl ToolPipeline {
         }
 
         Ok(V2PermissionAuthorization::Allowed)
+    }
+
+    async fn cancel_permission_request_ids(&self, request_ids: Vec<String>, reason: String) {
+        let Some(manager) = self.permission_request_manager.as_ref() else {
+            return;
+        };
+        for request_id in request_ids {
+            if let Err(error) = manager.cancel_request(&request_id, reason.clone()).await {
+                warn!(
+                    "Failed to cancel prepared permission request: request_id={}, error={}",
+                    request_id, error
+                );
+            }
+        }
+    }
+
+    async fn cleanup_permission_plans(&self, task_ids: &[String], reason: String) {
+        for task_id in task_ids {
+            let Some(plan) = self.permission_plans.lock().await.remove(task_id) else {
+                continue;
+            };
+            if let PermissionExecutionPlan::Awaiting(receivers) = plan {
+                self.cancel_permission_request_ids(
+                    receivers
+                        .into_iter()
+                        .map(|pending| pending.request_id().to_string())
+                        .collect(),
+                    reason.clone(),
+                )
+                .await;
+            }
+        }
+    }
+
+    async fn authorize_permission_intents(
+        &self,
+        task: &ToolTask,
+        tool_name: &str,
+        intents: Vec<PermissionIntent>,
+        context: &ToolUseContext,
+        cancellation_token: &CancellationToken,
+    ) -> BitFunResult<V2PermissionAuthorization> {
+        let draft = self
+            .draft_permission_plan(
+                task.clone(),
+                tool_name.to_string(),
+                intents,
+                context.clone(),
+            )
+            .await?;
+        let plan = match draft {
+            PermissionPlanDraft::Allowed => PermissionExecutionPlan::Allowed,
+            PermissionPlanDraft::Rejected { reason } => {
+                PermissionExecutionPlan::Rejected { reason }
+            }
+            PermissionPlanDraft::Requests(requests) => PermissionExecutionPlan::Awaiting(
+                self.register_permission_requests(requests, task.options.auto_approve_ask)
+                    .await?,
+            ),
+        };
+
+        self.await_permission_execution_plan(plan, tool_name.to_string(), cancellation_token)
+            .await
     }
 
     fn pending_round_injection_tool_preemption(
@@ -890,6 +1168,12 @@ impl ToolPipeline {
             task_ids.push(tool_id);
         }
 
+        if let Err(error) = self.prepare_permission_plans(&task_ids).await {
+            self.cleanup_permission_plans(&task_ids, "Permission planning failed".to_string())
+                .await;
+            return Err(error);
+        }
+
         if !options.allow_parallel {
             debug!(
                 "Tool execution plan: total_tools={}, batches=1, concurrency_safe={}, non_concurrency_safe={}, allow_parallel=false, tools={}",
@@ -898,7 +1182,10 @@ impl ToolPipeline {
                 task_ids.len().saturating_sub(concurrency_safe_count),
                 tool_names.join(", ")
             );
-            return self.execute_sequential(task_ids).await;
+            let result = self.execute_sequential(task_ids.clone()).await;
+            self.cleanup_permission_plans(&task_ids, "Tool execution finished".to_string())
+                .await;
+            return result;
         }
 
         // Partition into batches of consecutive same-safety tool calls
@@ -955,6 +1242,8 @@ impl ToolPipeline {
             all_results.extend(batch_results);
         }
 
+        self.cleanup_permission_plans(&task_ids, "Tool execution finished".to_string())
+            .await;
         Ok(all_results)
     }
 
@@ -1192,14 +1481,17 @@ impl ToolPipeline {
             );
         }
 
-        let permission_intents = tool.permission_intents(&tool_args, &tool_context)?;
-
         // Register cancellation only after deterministic validation and registry lookup succeed.
         self.cancellation_tokens
             .insert(tool_id.clone(), cancellation_token.clone());
 
-        match self
-            .authorize_permission_intents(
+        let has_prepared_plan = self.permission_plans.lock().await.contains_key(&tool_id);
+        let permission_authorization = if has_prepared_plan {
+            self.await_prepared_permission_plan(&tool_id, tool_name.clone(), &cancellation_token)
+                .await
+        } else {
+            let permission_intents = tool.permission_intents(&tool_args, &tool_context)?;
+            self.authorize_permission_intents(
                 &task,
                 &tool_name,
                 permission_intents,
@@ -1207,7 +1499,9 @@ impl ToolPipeline {
                 &cancellation_token,
             )
             .await
-        {
+        };
+
+        match permission_authorization {
             Ok(V2PermissionAuthorization::Allowed) => {}
             Ok(V2PermissionAuthorization::Rejected { reason }) => {
                 let preflight_ms = elapsed_ms_u64(start_time);
@@ -2460,6 +2754,7 @@ mod tests {
         )
         .await;
 
+        let mut permission_events = manager.subscribe();
         let running_pipeline = pipeline.clone();
         let execution = tokio::spawn(async move {
             running_pipeline
@@ -2480,6 +2775,20 @@ mod tests {
         assert_eq!(requests[0].order, 0);
         assert_eq!(requests[1].tool_call_id.as_deref(), Some("keep-going"));
         assert_eq!(requests[1].order, 1);
+        for (event, expected_request) in [
+            permission_events.recv().await.expect("first asked event"),
+            permission_events.recv().await.expect("second asked event"),
+        ]
+        .into_iter()
+        .zip(requests.iter())
+        {
+            match event {
+                bitfun_runtime_ports::PermissionRequestEvent::Asked { request } => {
+                    assert_eq!(request.request_id, expected_request.request_id);
+                }
+                other => panic!("expected asked event, got {other:?}"),
+            }
+        }
         let rejected_request = requests
             .iter()
             .find(|request| request.tool_call_id.as_deref() == Some("reject-me"))
