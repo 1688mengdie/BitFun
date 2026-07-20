@@ -2,7 +2,8 @@
 
 use log::{debug, warn};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use sha1::{Digest, Sha1};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 use tauri::{AppHandle, State};
@@ -40,12 +41,17 @@ use bitfun_core::agentic::tools::implementations::exec_command::{
     ReadBackgroundCommandOutputRequest as CoreReadBackgroundCommandOutputRequest,
     ReadBackgroundCommandOutputResponse,
 };
+use bitfun_core::service::config::project_permission_store::{
+    deserialize_project_permission_config, project_permission_file_path,
+    project_permission_file_path_for_remote, ProjectPermissionConfig,
+};
 use bitfun_core::service::remote_ssh::workspace_state::resolve_workspace_session_identity;
 use bitfun_core::service::session::{
     DialogTurnData, SessionMemoryMode, SessionMetadata, SessionRelationship,
     SessionRelationshipKind,
 };
 use bitfun_core::service::workspace::WorkspaceKind;
+use bitfun_product_domains::tool_permissions::PermissionRule;
 
 const SESSION_VIEW_TOOL_RESULT_TOTAL_CHAR_BUDGET: usize = 512 * 1024;
 const SESSION_VIEW_TOOL_RESULT_STRING_CHAR_LIMIT: usize = 16 * 1024;
@@ -756,6 +762,27 @@ pub struct PermissionAuditPage {
     pub total: usize,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectPermissionRulesResponse {
+    pub rules: Vec<PermissionRule>,
+    pub revision: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveProjectPermissionRulesRequest {
+    pub workspace_id: String,
+    pub rules: Vec<PermissionRule>,
+    pub revision: String,
+}
+
+#[derive(Debug, Clone)]
+struct ProjectPermissionConfigTarget {
+    path: String,
+    remote_connection_id: Option<String>,
+}
+
 async fn permission_project_id_for_workspace(
     state: &AppState,
     workspace_id: &str,
@@ -785,6 +812,207 @@ async fn permission_project_id_for_workspace(
         &identity, remote,
     )
     .map_err(|error| error.to_string())
+}
+
+async fn project_permission_config_target_for_workspace(
+    state: &AppState,
+    workspace_id: &str,
+) -> Result<ProjectPermissionConfigTarget, String> {
+    let workspace = state
+        .workspace_service
+        .get_workspace(workspace_id)
+        .await
+        .ok_or_else(|| format!("Workspace not found: {workspace_id}"))?;
+
+    if workspace.workspace_kind == WorkspaceKind::Remote {
+        let remote_connection_id = workspace
+            .metadata
+            .get("connectionId")
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                format!(
+                    "Remote workspace is missing a connection ID: {}",
+                    workspace.id
+                )
+            })?
+            .to_string();
+        return Ok(ProjectPermissionConfigTarget {
+            path: project_permission_file_path_for_remote(&workspace.root_path.to_string_lossy()),
+            remote_connection_id: Some(remote_connection_id),
+        });
+    }
+
+    Ok(ProjectPermissionConfigTarget {
+        path: project_permission_file_path(&workspace.root_path)
+            .to_string_lossy()
+            .to_string(),
+        remote_connection_id: None,
+    })
+}
+
+async fn read_project_permission_config_content(
+    state: &AppState,
+    target: &ProjectPermissionConfigTarget,
+) -> Result<Option<String>, String> {
+    let Some(connection_id) = target.remote_connection_id.as_deref() else {
+        return match tokio::fs::read_to_string(&target.path).await {
+            Ok(content) => Ok(Some(content)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(format!(
+                "Failed to read project permission rules '{}': {error}",
+                target.path
+            )),
+        };
+    };
+
+    let remote_fs = state
+        .get_remote_file_service_async()
+        .await
+        .map_err(|error| format!("Remote file service is not available: {error}"))?;
+    let exists = remote_fs
+        .exists(connection_id, &target.path)
+        .await
+        .map_err(|error| format!("Failed to check remote project permission rules: {error}"))?;
+    if !exists {
+        return Ok(None);
+    }
+    let bytes = remote_fs
+        .read_file(connection_id, &target.path)
+        .await
+        .map_err(|error| format!("Failed to read remote project permission rules: {error}"))?;
+    String::from_utf8(bytes)
+        .map(Some)
+        .map_err(|error| format!("Project permission rules are not valid UTF-8: {error}"))
+}
+
+async fn write_project_permission_config_content(
+    state: &AppState,
+    target: &ProjectPermissionConfigTarget,
+    content: &str,
+) -> Result<(), String> {
+    let Some(connection_id) = target.remote_connection_id.as_deref() else {
+        let parent = Path::new(&target.path).parent().ok_or_else(|| {
+            format!(
+                "Project permission rules path has no parent directory: {}",
+                target.path
+            )
+        })?;
+        tokio::fs::create_dir_all(parent).await.map_err(|error| {
+            format!(
+                "Failed to create project permission rules directory '{}': {error}",
+                parent.display()
+            )
+        })?;
+        return tokio::fs::write(&target.path, content)
+            .await
+            .map_err(|error| {
+                format!(
+                    "Failed to write project permission rules '{}': {error}",
+                    target.path
+                )
+            });
+    };
+
+    let remote_fs = state
+        .get_remote_file_service_async()
+        .await
+        .map_err(|error| format!("Remote file service is not available: {error}"))?;
+    let parent = target
+        .path
+        .rsplit_once('/')
+        .map(|(parent, _)| parent)
+        .ok_or_else(|| {
+            format!(
+                "Remote project permission rules path has no parent directory: {}",
+                target.path
+            )
+        })?;
+    remote_fs
+        .create_dir_all(connection_id, parent)
+        .await
+        .map_err(|error| {
+            format!("Failed to create remote project permission rules directory: {error}")
+        })?;
+    remote_fs
+        .write_file(connection_id, &target.path, content.as_bytes())
+        .await
+        .map_err(|error| format!("Failed to write remote project permission rules: {error}"))
+}
+
+fn project_permission_rules_revision(content: Option<&str>) -> String {
+    let mut hasher = Sha1::new();
+    match content {
+        Some(content) => {
+            hasher.update(b"present\0");
+            hasher.update(content.as_bytes());
+        }
+        None => hasher.update(b"missing\0"),
+    }
+    format!("{:x}", hasher.finalize())
+}
+
+fn validate_project_permission_rules(rules: &[PermissionRule]) -> Result<(), String> {
+    if rules
+        .iter()
+        .any(|rule| rule.action.trim().is_empty() || rule.resource.trim().is_empty())
+    {
+        return Err("Project permission rule action and resource must be non-empty".to_string());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_project_permission_rules(
+    state: State<'_, AppState>,
+    request: PermissionProjectRequest,
+) -> Result<ProjectPermissionRulesResponse, String> {
+    let target =
+        project_permission_config_target_for_workspace(&state, &request.workspace_id).await?;
+    let content = read_project_permission_config_content(&state, &target).await?;
+    let rules = content
+        .as_deref()
+        .map(deserialize_project_permission_config)
+        .transpose()
+        .map_err(|error| error.to_string())?
+        .unwrap_or_default()
+        .rules;
+    Ok(ProjectPermissionRulesResponse {
+        rules,
+        revision: project_permission_rules_revision(content.as_deref()),
+    })
+}
+
+#[tauri::command]
+pub async fn save_project_permission_rules(
+    state: State<'_, AppState>,
+    request: SaveProjectPermissionRulesRequest,
+) -> Result<ProjectPermissionRulesResponse, String> {
+    validate_project_permission_rules(&request.rules)?;
+
+    let target =
+        project_permission_config_target_for_workspace(&state, &request.workspace_id).await?;
+    let current_content = read_project_permission_config_content(&state, &target).await?;
+    let current_revision = project_permission_rules_revision(current_content.as_deref());
+    if request.revision != current_revision {
+        return Err(
+            "Project permission rules changed outside BitFun. Reload before saving.".to_string(),
+        );
+    }
+
+    let content = format!(
+        "{}\n",
+        serde_json::to_string_pretty(&ProjectPermissionConfig {
+            rules: request.rules.clone(),
+        })
+        .map_err(|error| format!("Failed to serialize project permission rules: {error}"))?
+    );
+    write_project_permission_config_content(&state, &target, &content).await?;
+    Ok(ProjectPermissionRulesResponse {
+        rules: request.rules,
+        revision: project_permission_rules_revision(Some(&content)),
+    })
 }
 
 #[tauri::command]
@@ -2674,7 +2902,36 @@ mod tests {
     use bitfun_core::service::session::{
         ModelRoundData, ToolCallData, ToolItemData, ToolResultData, TurnStatus, UserMessageData,
     };
+    use bitfun_product_domains::tool_permissions::{PermissionEffect, PermissionRule};
     use serde_json::json;
+
+    #[test]
+    fn project_permission_rule_revisions_distinguish_missing_and_present_files() {
+        assert_eq!(
+            project_permission_rules_revision(Some("{\"rules\":[]}")),
+            project_permission_rules_revision(Some("{\"rules\":[]}"))
+        );
+        assert_ne!(
+            project_permission_rules_revision(None),
+            project_permission_rules_revision(Some(""))
+        );
+    }
+
+    #[test]
+    fn project_permission_rule_validation_requires_action_and_resource() {
+        assert!(validate_project_permission_rules(&[PermissionRule::new(
+            "edit",
+            "src/*",
+            PermissionEffect::Ask,
+        )])
+        .is_ok());
+        assert!(validate_project_permission_rules(&[PermissionRule::new(
+            " ",
+            "src/*",
+            PermissionEffect::Ask,
+        )])
+        .is_err());
+    }
 
     #[test]
     fn desktop_dialog_turn_request_preserves_runtime_contract() {

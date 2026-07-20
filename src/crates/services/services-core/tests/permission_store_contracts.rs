@@ -6,7 +6,7 @@ use bitfun_runtime_ports::{
     PermissionReplyStorePort, PermissionRequestSource, PermissionRequestSourceKind,
     PermissionV2Request,
 };
-use bitfun_services_core::permission_store::ProjectPermissionFileStore;
+use bitfun_services_core::permission_store::ProjectPermissionSqliteStore;
 use serde_json::Map;
 
 fn request(request_id: &str, project_id: &str) -> PermissionV2Request {
@@ -31,10 +31,28 @@ fn request(request_id: &str, project_id: &str) -> PermissionV2Request {
     }
 }
 
+fn audit_record(
+    audit_id: &str,
+    request_id: &str,
+    project_id: &str,
+    timestamp_ms: i64,
+) -> PermissionAuditRecord {
+    PermissionAuditRecord {
+        audit_id: audit_id.to_string(),
+        request: request(request_id, project_id),
+        event: PermissionAuditEvent::Requested,
+        timestamp_ms,
+    }
+}
+
 #[tokio::test]
 async fn project_grants_are_idempotent_isolated_and_survive_store_recreation() {
     let root = tempfile::tempdir().expect("temp permission store");
-    let store = ProjectPermissionFileStore::new(root.path());
+    let store = ProjectPermissionSqliteStore::new(root.path());
+    assert_eq!(
+        store.path(),
+        root.path().join("tool-permissions.sqlite").as_path()
+    );
     let project_a = PermissionGrant {
         project_id: "project-a".to_string(),
         action: "read".to_string(),
@@ -52,8 +70,14 @@ async fn project_grants_are_idempotent_isolated_and_survive_store_recreation() {
         .add_project_grants(vec![project_a.clone(), project_a.clone(), project_b])
         .await
         .expect("persist grants");
+    assert!(store.path().is_file());
+    let connection = rusqlite::Connection::open(store.path()).expect("open permission database");
+    let schema_version = connection
+        .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+        .expect("read permission database schema version");
+    assert_eq!(schema_version, 1);
 
-    let reopened = ProjectPermissionFileStore::new(root.path());
+    let reopened = ProjectPermissionSqliteStore::new(root.path());
     assert_eq!(
         reopened
             .list_project_grants("project-a")
@@ -88,7 +112,7 @@ async fn project_grants_are_idempotent_isolated_and_survive_store_recreation() {
 #[tokio::test]
 async fn clearing_grants_only_removes_the_selected_project() {
     let root = tempfile::tempdir().expect("temp permission store");
-    let store = ProjectPermissionFileStore::new(root.path());
+    let store = ProjectPermissionSqliteStore::new(root.path());
     store
         .add_project_grants(vec![
             PermissionGrant {
@@ -132,7 +156,7 @@ async fn clearing_grants_only_removes_the_selected_project() {
 #[tokio::test]
 async fn audit_records_are_idempotent_project_scoped_and_persistent() {
     let root = tempfile::tempdir().expect("temp permission store");
-    let store = ProjectPermissionFileStore::new(root.path());
+    let store = ProjectPermissionSqliteStore::new(root.path());
     let record = PermissionAuditRecord {
         audit_id: "request-1:replied".to_string(),
         request: request("request-1", "project-a"),
@@ -168,7 +192,7 @@ async fn audit_records_are_idempotent_project_scoped_and_persistent() {
         .await
         .expect("append other project audit");
 
-    let reopened = ProjectPermissionFileStore::new(root.path());
+    let reopened = ProjectPermissionSqliteStore::new(root.path());
     assert_eq!(
         reopened
             .list_project_permission_audit("project-a")
@@ -189,7 +213,7 @@ async fn audit_records_are_idempotent_project_scoped_and_persistent() {
 #[tokio::test]
 async fn reply_transaction_persists_grants_and_audit_in_one_state_update() {
     let root = tempfile::tempdir().expect("temp permission store");
-    let store = ProjectPermissionFileStore::new(root.path());
+    let store = ProjectPermissionSqliteStore::new(root.path());
     let grant = PermissionGrant {
         project_id: "project-a".to_string(),
         action: "read".to_string(),
@@ -211,7 +235,7 @@ async fn reply_transaction_persists_grants_and_audit_in_one_state_update() {
         .await
         .expect("commit reply transaction");
 
-    let reopened = ProjectPermissionFileStore::new(root.path());
+    let reopened = ProjectPermissionSqliteStore::new(root.path());
     assert_eq!(
         reopened
             .list_project_grants("project-a")
@@ -225,5 +249,52 @@ async fn reply_transaction_persists_grants_and_audit_in_one_state_update() {
             .await
             .expect("list committed audit"),
         vec![audit]
+    );
+}
+
+#[tokio::test]
+async fn audit_retention_keeps_the_newest_records_for_each_project() {
+    let root = tempfile::tempdir().expect("temp permission store");
+    let store = ProjectPermissionSqliteStore::new(root.path()).with_audit_limit(2);
+
+    store
+        .append_permission_audit(audit_record("project-a:1", "request-1", "project-a", 10))
+        .await
+        .expect("append first project audit");
+    store
+        .append_permission_audit(audit_record("project-a:2", "request-2", "project-a", 20))
+        .await
+        .expect("append second project audit");
+    store
+        .append_permission_audit(audit_record("project-b:1", "request-3", "project-b", 30))
+        .await
+        .expect("append other project audit");
+    store
+        .commit_permission_reply(
+            Vec::new(),
+            vec![audit_record("project-a:3", "request-4", "project-a", 40)],
+        )
+        .await
+        .expect("commit bounded project audit");
+
+    assert_eq!(
+        store
+            .list_project_permission_audit("project-a")
+            .await
+            .expect("list retained project audit")
+            .into_iter()
+            .map(|record| record.audit_id)
+            .collect::<Vec<_>>(),
+        vec!["project-a:2", "project-a:3"]
+    );
+    assert_eq!(
+        store
+            .list_project_permission_audit("project-b")
+            .await
+            .expect("list isolated project audit")
+            .into_iter()
+            .map(|record| record.audit_id)
+            .collect::<Vec<_>>(),
+        vec!["project-b:1"]
     );
 }

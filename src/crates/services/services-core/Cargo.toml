@@ -30,6 +30,7 @@ sha2 = { workspace = true }
 which = { workspace = true }
 similar = { workspace = true }
 regex = { workspace = true }
+rusqlite = { version = "0.32", features = ["bundled"], optional = true }
 
 [target.'cfg(windows)'.dependencies]
 win32job = { workspace = true }
@@ -40,7 +41,7 @@ default = ["lsp"]
 lsp = ["dep:anyhow", "dep:notify", "dep:zip"]
 markdown = ["dep:serde_yaml"]
 workspace-runtime = ["dep:anyhow", "dep:async-trait", "dep:bitfun-runtime-ports"]
-permission-v2 = ["dep:async-trait", "dep:bitfun-runtime-ports", "bitfun-runtime-ports/permission-v2"]
+permission-v2 = ["dep:async-trait", "dep:bitfun-runtime-ports", "dep:rusqlite", "bitfun-runtime-ports/permission-v2"]
 
 [dev-dependencies]
 filetime = { workspace = true }

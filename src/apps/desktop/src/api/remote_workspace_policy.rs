@@ -726,6 +726,14 @@ pub const REMOTE_WORKSPACE_COMMAND_POLICIES: &[(&str, RemoteWorkspacePolicy)] = 
         "list_project_permission_audit",
         RemoteWorkspacePolicy::WorkspaceAgnostic,
     ),
+    (
+        "get_project_permission_rules",
+        RemoteWorkspacePolicy::RemoteRouted,
+    ),
+    (
+        "save_project_permission_rules",
+        RemoteWorkspacePolicy::RemoteRouted,
+    ),
     ("list_cron_jobs", RemoteWorkspacePolicy::LegacyUnaudited),
     (
         "list_directory_files",

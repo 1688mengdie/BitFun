@@ -17,7 +17,7 @@ use bitfun_harness::HarnessRegistry;
 use bitfun_runtime_ports::{ClockPort, RuntimeServiceCapability, RuntimeServicePort};
 use bitfun_runtime_ports::{SessionStoragePathRequest, SessionStorePort, SessionViewRestoreTiming};
 use bitfun_runtime_services::RuntimeServices;
-use bitfun_services_core::permission_store::ProjectPermissionFileStore;
+use bitfun_services_core::permission_store::ProjectPermissionSqliteStore;
 
 use crate::agentic::coordination::{
     ConversationCoordinator, DialogScheduler, SessionMaintenancePermit,
@@ -71,7 +71,7 @@ pub fn core_permission_request_manager() -> Result<Arc<PermissionRequestManager>
 
     let path_manager = crate::infrastructure::PathManager::new()
         .map_err(|error| format!("Failed to initialize permission path manager: {error}"))?;
-    let store = Arc::new(ProjectPermissionFileStore::new(
+    let store = Arc::new(ProjectPermissionSqliteStore::new(
         path_manager.user_data_dir().join("permissions"),
     ));
     let audit_store: Arc<dyn bitfun_runtime_ports::PermissionAuditStorePort> = store.clone();

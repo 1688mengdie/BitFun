@@ -1,32 +1,24 @@
 import { api } from './ApiClient';
 import { createTauriCommandError } from '../errors/TauriCommandError';
-import type { PermissionReplyKind, PermissionV2Request } from './AgentAPI';
+
+export type ProjectPermissionEffect = 'allow' | 'ask' | 'deny';
+
+export interface ProjectPermissionRule {
+  action: string;
+  resource: string;
+  effect: ProjectPermissionEffect;
+}
+
+export interface ProjectPermissionRulesResponse {
+  rules: ProjectPermissionRule[];
+  revision: string;
+}
 
 export interface PermissionGrant {
   projectId: string;
   action: string;
   resource: string;
   createdAtMs: number;
-}
-
-export type PermissionAuditEvent =
-  | { event: 'requested' }
-  | { event: 'replied'; reply: { reply: PermissionReplyKind; feedback?: string }; source: 'user' | 'auto_approve' | 'system' }
-  | { event: 'cancelled'; reason: string };
-
-export interface PermissionAuditRecord {
-  auditId: string;
-  request: PermissionV2Request;
-  timestampMs: number;
-  event: PermissionAuditEvent;
-}
-
-export interface PermissionAuditPage {
-  projectId: string;
-  records: PermissionAuditRecord[];
-  page: number;
-  pageSize: number;
-  total: number;
 }
 
 class PermissionAPI {
@@ -59,12 +51,25 @@ class PermissionAPI {
     }
   }
 
-  async listProjectAudit(workspaceId: string, page = 0, pageSize = 50): Promise<PermissionAuditPage> {
-    const request = { workspaceId, page, pageSize };
+  async getProjectRules(workspaceId: string): Promise<ProjectPermissionRulesResponse> {
+    const request = { workspaceId };
     try {
-      return await api.invoke<PermissionAuditPage>('list_project_permission_audit', { request });
+      return await api.invoke<ProjectPermissionRulesResponse>('get_project_permission_rules', { request });
     } catch (error) {
-      throw createTauriCommandError('list_project_permission_audit', error, request);
+      throw createTauriCommandError('get_project_permission_rules', error, request);
+    }
+  }
+
+  async saveProjectRules(
+    workspaceId: string,
+    rules: ProjectPermissionRule[],
+    revision: string,
+  ): Promise<ProjectPermissionRulesResponse> {
+    const request = { workspaceId, rules, revision };
+    try {
+      return await api.invoke<ProjectPermissionRulesResponse>('save_project_permission_rules', { request });
+    } catch (error) {
+      throw createTauriCommandError('save_project_permission_rules', error, request);
     }
   }
 }

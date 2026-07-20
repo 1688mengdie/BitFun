@@ -32,6 +32,8 @@ describe('peerInvokePriorityFor', () => {
       'remove_project_permission_grant',
       'clear_project_permission_grants',
       'list_project_permission_audit',
+      'get_project_permission_rules',
+      'save_project_permission_rules',
     ]) {
       expect(peerInvokePriorityFor(command)).toBe('high');
     }

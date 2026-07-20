@@ -926,6 +926,8 @@ pub async fn run() {
             api::agentic_api::remove_project_permission_grant,
             api::agentic_api::clear_project_permission_grants,
             api::agentic_api::list_project_permission_audit,
+            api::agentic_api::get_project_permission_rules,
+            api::agentic_api::save_project_permission_rules,
             api::agentic_api::cancel_tool,
             api::agentic_api::generate_session_title,
             api::agentic_api::get_available_modes,

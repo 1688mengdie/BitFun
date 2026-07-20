@@ -100,6 +100,8 @@ const HIGH_PRIORITY_COMMANDS = new Set([
   'remove_project_permission_grant',
   'clear_project_permission_grants',
   'list_project_permission_audit',
+  'get_project_permission_rules',
+  'save_project_permission_rules',
   // Interactive directory picking / browsing on the peer
   'get_directory_children',
   'get_directory_children_paginated',

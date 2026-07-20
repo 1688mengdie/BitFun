@@ -49,14 +49,31 @@ describe('PermissionAPI', () => {
     });
   });
 
-  it('passes explicit audit pagination', async () => {
-    invokeMock.mockResolvedValueOnce({ records: [], page: 2, pageSize: 25, total: 0 });
+  it('loads static rules using only the backend workspace id', async () => {
+    invokeMock.mockResolvedValueOnce({ rules: [], revision: 'revision-1' });
     const { permissionAPI } = await import('./PermissionAPI');
 
-    await permissionAPI.listProjectAudit('workspace-1', 2, 25);
+    await permissionAPI.getProjectRules('workspace-1');
 
-    expect(invokeMock).toHaveBeenCalledWith('list_project_permission_audit', {
-      request: { workspaceId: 'workspace-1', page: 2, pageSize: 25 },
+    expect(invokeMock).toHaveBeenCalledWith('get_project_permission_rules', {
+      request: { workspaceId: 'workspace-1' },
+    });
+  });
+
+  it('saves static rules with the revision returned by the backend', async () => {
+    invokeMock.mockResolvedValueOnce({ rules: [], revision: 'revision-2' });
+    const { permissionAPI } = await import('./PermissionAPI');
+
+    await permissionAPI.saveProjectRules('workspace-1', [
+      { action: 'edit', resource: 'src/*', effect: 'ask' },
+    ], 'revision-1');
+
+    expect(invokeMock).toHaveBeenCalledWith('save_project_permission_rules', {
+      request: {
+        workspaceId: 'workspace-1',
+        rules: [{ action: 'edit', resource: 'src/*', effect: 'ask' }],
+        revision: 'revision-1',
+      },
     });
   });
 });
