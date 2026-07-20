@@ -1463,6 +1463,7 @@ mod task_context_tests {
                     session_id: "parent_session".to_string(),
                     dialog_turn_id: "parent_turn".to_string(),
                 }),
+                permission_delegation: None,
                 delegation_policy: DelegationPolicy::top_level().spawn_child(),
                 deferred_tools: vec!["WebFetch".to_string()],
                 loaded_deferred_tool_specs: vec![loaded_spec("WebFetch")],

@@ -255,7 +255,11 @@ pub struct PermissionRequestSource {
 #[serde(rename_all = "camelCase")]
 pub struct PermissionDelegationContext {
     pub parent_session_id: String,
-    pub parent_dialog_turn_id: String,
+    /// The parent dialog turn when it is available from the persisted
+    /// subagent lineage. Older child sessions may retain only the parent
+    /// session and Task call identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_dialog_turn_id: Option<String>,
     pub parent_tool_call_id: String,
     pub subagent_type: String,
 }

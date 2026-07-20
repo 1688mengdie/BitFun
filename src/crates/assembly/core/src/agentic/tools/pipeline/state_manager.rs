@@ -306,6 +306,7 @@ mod tests {
                 primary_model_facts: tool_runtime::context::PrimaryModelFacts::default(),
                 context_vars: HashMap::new(),
                 subagent_parent_info: None,
+                permission_delegation: None,
                 delegation_policy: bitfun_runtime_ports::DelegationPolicy::top_level(),
                 deferred_tools: Vec::new(),
                 loaded_deferred_tool_specs: Vec::new(),

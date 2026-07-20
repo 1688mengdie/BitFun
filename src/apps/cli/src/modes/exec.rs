@@ -1362,7 +1362,7 @@ mod patch_tests {
             },
             delegation: Some(PermissionDelegationContext {
                 parent_session_id: "parent-session".to_string(),
-                parent_dialog_turn_id: "parent-turn".to_string(),
+                parent_dialog_turn_id: Some("parent-turn".to_string()),
                 parent_tool_call_id: "parent-task".to_string(),
                 subagent_type: "Explore".to_string(),
             }),
