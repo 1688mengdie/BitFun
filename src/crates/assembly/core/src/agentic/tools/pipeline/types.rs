@@ -57,7 +57,7 @@ impl SubagentParentInfo {
     ) -> PermissionDelegationContext {
         PermissionDelegationContext {
             parent_session_id: self.session_id.clone(),
-            parent_dialog_turn_id: self.dialog_turn_id.clone(),
+            parent_dialog_turn_id: Some(self.dialog_turn_id.clone()),
             parent_tool_call_id: self.tool_call_id.clone(),
             subagent_type: subagent_type.to_string(),
         }
@@ -87,6 +87,7 @@ pub struct ToolExecutionContext {
     pub primary_model_facts: PrimaryModelFacts,
     pub context_vars: HashMap<String, String>,
     pub subagent_parent_info: Option<SubagentParentInfo>,
+    pub permission_delegation: Option<PermissionDelegationContext>,
     pub(crate) delegation_policy: DelegationPolicy,
     pub deferred_tools: Vec<String>,
     pub loaded_deferred_tool_specs: Vec<bitfun_agent_tools::LoadedDeferredToolSpec>,

@@ -399,7 +399,7 @@ fn permission_request_correlation_fields_use_stable_wire_shape() {
         },
         delegation: Some(PermissionDelegationContext {
             parent_session_id: "parent-session-1".to_string(),
-            parent_dialog_turn_id: "parent-turn-1".to_string(),
+            parent_dialog_turn_id: Some("parent-turn-1".to_string()),
             parent_tool_call_id: "parent-task-call-1".to_string(),
             subagent_type: "Explore".to_string(),
         }),
@@ -422,11 +422,28 @@ fn permission_request_correlation_fields_use_stable_wire_shape() {
 
     let top_level = PermissionRequest {
         delegation: None,
-        ..request
+        ..request.clone()
     };
     let top_level_value =
         serde_json::to_value(top_level).expect("serialize top-level permission request");
     assert!(top_level_value.get("delegation").is_none());
+
+    let partial_delegation = PermissionRequest {
+        delegation: Some(PermissionDelegationContext {
+            parent_dialog_turn_id: None,
+            ..request.delegation.expect("delegation should exist")
+        }),
+        ..request
+    };
+    let partial_value =
+        serde_json::to_value(partial_delegation).expect("serialize partial permission delegation");
+    assert_eq!(
+        partial_value["delegation"]["parentSessionId"],
+        "parent-session-1"
+    );
+    assert!(partial_value["delegation"]
+        .get("parentDialogTurnId")
+        .is_none());
 }
 
 #[test]

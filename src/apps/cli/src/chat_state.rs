@@ -1233,7 +1233,7 @@ mod tests {
             },
             delegation: Some(PermissionDelegationContext {
                 parent_session_id: "parent-session".to_string(),
-                parent_dialog_turn_id: "parent-turn".to_string(),
+                parent_dialog_turn_id: Some("parent-turn".to_string()),
                 parent_tool_call_id: format!("{request_id}-parent-task"),
                 subagent_type: "Explore".to_string(),
             }),

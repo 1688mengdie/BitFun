@@ -91,7 +91,7 @@ export interface PermissionRequestSource {
 
 export interface PermissionDelegationContext {
   parentSessionId: string;
-  parentDialogTurnId: string;
+  parentDialogTurnId?: string;
   parentToolCallId: string;
   subagentType: string;
 }

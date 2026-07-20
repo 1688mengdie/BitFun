@@ -742,6 +742,11 @@ impl RoundExecutor {
         let tool_results = if let Some(tool_pipeline) = &self.tool_pipeline {
             // Create tool execution context
             let allowed_tools = context.available_tools.clone();
+            let permission_delegation = context.permission_delegation.clone().or_else(|| {
+                subagent_parent_info
+                    .as_ref()
+                    .map(|parent| parent.permission_delegation_context(&context.agent_type))
+            });
             let tool_context = ToolExecutionContext {
                 session_id: context.session_id.clone(),
                 dialog_turn_id: context.dialog_turn_id.clone(),
@@ -753,6 +758,7 @@ impl RoundExecutor {
                 primary_model_facts: context.primary_model_facts.clone(),
                 context_vars: context.context_vars.clone(),
                 subagent_parent_info,
+                permission_delegation,
                 delegation_policy: context.delegation_policy,
                 deferred_tools: context.deferred_tools.clone(),
                 loaded_deferred_tool_specs: context.loaded_deferred_tool_specs.clone(),
@@ -1369,6 +1375,7 @@ mod tests {
         RoundContext {
             session_id: "session-1".to_string(),
             subagent_parent_info: None,
+            permission_delegation: None,
             dialog_turn_id: "turn-1".to_string(),
             turn_index: 0,
             round_number: 0,

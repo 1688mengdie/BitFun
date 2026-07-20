@@ -1355,6 +1355,7 @@ impl ExecutionEngine {
         let round_context = RoundContext {
             session_id: input.context.session_id.clone(),
             subagent_parent_info: input.context.subagent_parent_info.clone(),
+            permission_delegation: input.context.permission_delegation.clone(),
             dialog_turn_id: input.context.dialog_turn_id.clone(),
             turn_index: input.context.turn_index,
             round_number: input.round_number,
@@ -3098,6 +3099,7 @@ impl ExecutionEngine {
             let round_context = RoundContext {
                 session_id: context.session_id.clone(),
                 subagent_parent_info: context.subagent_parent_info.clone(),
+                permission_delegation: context.permission_delegation.clone(),
                 dialog_turn_id: context.dialog_turn_id.clone(),
                 turn_index: context.turn_index,
                 round_number: round_index,
@@ -4248,6 +4250,7 @@ mod tests {
             workspace: None,
             context: HashMap::new(),
             subagent_parent_info: None,
+            permission_delegation: None,
             permission_runtime_ceiling: None,
             delegation_policy: bitfun_runtime_ports::DelegationPolicy::top_level(),
             runtime_tool_restrictions: ToolRuntimeRestrictions::default(),

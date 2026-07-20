@@ -601,7 +601,12 @@ impl ToolPipeline {
         let tool_call_id = task.tool_call.tool_id.clone();
         let session_id = task.context.session_id.clone();
         let agent_type = task.context.agent_type.clone();
-        let parent_info = task.context.subagent_parent_info.clone();
+        let permission_delegation = task.context.permission_delegation.clone().or_else(|| {
+            task.context
+                .subagent_parent_info
+                .as_ref()
+                .map(|parent| parent.permission_delegation_context(&agent_type))
+        });
         let manager = self.permission_request_manager.clone();
         let grants = match manager {
             Some(ref manager) => manager
@@ -656,9 +661,7 @@ impl ToolPipeline {
                     kind: PermissionRequestSourceKind::ToolCall,
                     identity: tool_name.clone(),
                 },
-                delegation: parent_info
-                    .as_ref()
-                    .map(|parent| parent.permission_delegation_context(&agent_type)),
+                delegation: permission_delegation.clone(),
                 display_metadata: intent.display_metadata,
             })
             .collect();
@@ -676,6 +679,7 @@ impl ToolPipeline {
                 "V2 permission request manager is unavailable for a file tool request".to_string(),
             )
         })?;
+
         let receivers = if auto_approve {
             manager
                 .register_batch_non_interactive(requests.clone())
@@ -2479,6 +2483,7 @@ mod tests {
             primary_model_facts: tool_runtime::context::PrimaryModelFacts::default(),
             context_vars: HashMap::new(),
             subagent_parent_info: None,
+            permission_delegation: None,
             delegation_policy: bitfun_runtime_ports::DelegationPolicy::top_level(),
             deferred_tools: Vec::new(),
             loaded_deferred_tool_specs: Vec::new(),
@@ -2889,9 +2894,73 @@ mod tests {
             .as_ref()
             .expect("subagent request should project delegation context");
         assert_eq!(delegation.parent_session_id, "parent-session");
-        assert_eq!(delegation.parent_dialog_turn_id, "parent-turn");
+        assert_eq!(
+            delegation.parent_dialog_turn_id.as_deref(),
+            Some("parent-turn")
+        );
         assert_eq!(delegation.parent_tool_call_id, "parent-task-call");
         assert_eq!(delegation.subagent_type, "Explore");
+
+        manager
+            .reply(
+                &request.request_id,
+                PermissionReply::Once,
+                bitfun_runtime_ports::PermissionReplySource::User,
+            )
+            .await
+            .expect("allow child request");
+        execution
+            .await
+            .expect("child task join")
+            .expect("child execution");
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn v2_request_routes_partial_persisted_subagent_delegation() {
+        let store = Arc::new(MemoryPermissionStore::default());
+        let manager = permission_test_manager(Arc::clone(&store));
+        let pipeline = test_tool_pipeline().with_permission_request_manager(Arc::clone(&manager));
+        let calls = Arc::new(AtomicUsize::new(0));
+        register_v2_file_test_tool(
+            &pipeline,
+            vec![PermissionIntent::new(
+                "edit",
+                vec!["src/main.rs".to_string()],
+            )],
+            Arc::clone(&calls),
+        )
+        .await;
+
+        let mut context = permission_test_context();
+        context.session_id = "subagent-session".to_string();
+        context.agent_type = "Explore".to_string();
+        context.permission_delegation = Some(bitfun_runtime_ports::PermissionDelegationContext {
+            parent_session_id: "parent-session".to_string(),
+            parent_dialog_turn_id: None,
+            parent_tool_call_id: "parent-task-call".to_string(),
+            subagent_type: "Explore".to_string(),
+        });
+
+        let running_pipeline = pipeline.clone();
+        let execution = tokio::spawn(async move {
+            running_pipeline
+                .execute_tools(
+                    vec![test_tool_call("child-write", "Write")],
+                    context,
+                    ToolExecutionOptions::default(),
+                )
+                .await
+        });
+
+        let request = wait_for_permission_request(&manager).await;
+        let delegation = request
+            .delegation
+            .as_ref()
+            .expect("partial subagent lineage should route permission requests");
+        assert_eq!(delegation.parent_session_id, "parent-session");
+        assert_eq!(delegation.parent_dialog_turn_id, None);
+        assert_eq!(delegation.parent_tool_call_id, "parent-task-call");
 
         manager
             .reply(
