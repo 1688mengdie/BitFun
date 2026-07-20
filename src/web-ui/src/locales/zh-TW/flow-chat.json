@@ -1,5 +1,5 @@
 {
-  "permissionV2": {
+  "permission": {
     "title": "需要授權",
     "subagentOwner": "{{subagent}} 子 Agent",
     "feedbackLabel": "拒絕回饋",

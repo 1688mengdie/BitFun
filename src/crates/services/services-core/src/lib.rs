@@ -12,7 +12,7 @@ pub mod lsp;
 pub mod managed_runtime;
 #[cfg(feature = "markdown")]
 pub mod markdown;
-#[cfg(feature = "permission-v2")]
+#[cfg(feature = "permission")]
 pub mod permission_store;
 pub mod persistence;
 pub mod process_manager;

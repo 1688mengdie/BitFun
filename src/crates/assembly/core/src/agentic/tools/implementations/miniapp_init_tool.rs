@@ -243,7 +243,7 @@ mod tests {
     }
 
     #[test]
-    fn init_miniapp_emits_stable_v2_permission_identity() {
+    fn init_miniapp_emits_stable_permission_identity() {
         let tool = InitMiniAppTool::new();
         let context = ToolUseContext::for_tool_listing(None, None);
         let intents = tool

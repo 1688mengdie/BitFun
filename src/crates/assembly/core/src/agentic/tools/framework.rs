@@ -111,7 +111,7 @@ pub trait Tool: Send + Sync {
         self.is_readonly()
     }
 
-    /// Describe V2 permission actions and resources without performing side effects.
+    /// Describe permission actions and resources without performing side effects.
     fn permission_intents(
         &self,
         _input: &Value,

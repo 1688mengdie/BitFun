@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use bitfun_agent_runtime::permission_v2::PermissionRequestManager;
+use bitfun_agent_runtime::permission::PermissionRequestManager;
 use bitfun_agent_runtime::sdk::{AgentEventSource, AgentRuntime};
 use bitfun_harness::HarnessRegistry;
 use bitfun_runtime_ports::{ClockPort, RuntimeServiceCapability, RuntimeServicePort};
@@ -61,7 +61,7 @@ impl ClockPort for SystemPermissionClock {
 
 static PERMISSION_REQUEST_MANAGER: OnceLock<Arc<PermissionRequestManager>> = OnceLock::new();
 
-/// Returns the process-shared V2 permission request owner used by product
+/// Returns the process-shared permission request owner used by product
 /// surfaces. Pending requests remain process-local; only remembered grants and
 /// audit facts are written to the user data directory.
 pub fn core_permission_request_manager() -> Result<Arc<PermissionRequestManager>, String> {

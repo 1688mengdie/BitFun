@@ -1,4 +1,4 @@
-/// V2 permission request modal panel.
+/// Permission request modal panel.
 ///
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::{
@@ -11,24 +11,24 @@ use ratatui::{
 
 use super::string_utils::truncate_str;
 use super::theme::{StyleKind, Theme};
-use bitfun_agent_runtime::sdk::{PermissionReply, PermissionV2Request};
+use bitfun_agent_runtime::sdk::{PermissionReply, PermissionRequest};
 
 #[derive(Debug, Clone)]
-pub(crate) struct PermissionV2Prompt {
-    pub(crate) request: PermissionV2Request,
+pub(crate) struct PermissionPrompt {
+    pub(crate) request: PermissionRequest,
     pub(crate) selected_option: usize,
     reject_feedback: String,
     editing_reject_feedback: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) enum PermissionV2Action {
+pub(crate) enum PermissionAction {
     None,
     Reply(PermissionReply),
 }
 
-impl PermissionV2Prompt {
-    pub(crate) fn new(request: PermissionV2Request) -> Self {
+impl PermissionPrompt {
+    pub(crate) fn new(request: PermissionRequest) -> Self {
         Self {
             request,
             selected_option: 0,
@@ -37,13 +37,13 @@ impl PermissionV2Prompt {
         }
     }
 
-    pub(crate) fn handle_key_event(&mut self, key: KeyEvent) -> PermissionV2Action {
+    pub(crate) fn handle_key_event(&mut self, key: KeyEvent) -> PermissionAction {
         if key.kind != KeyEventKind::Press && key.kind != KeyEventKind::Repeat {
-            return PermissionV2Action::None;
+            return PermissionAction::None;
         }
         if self.editing_reject_feedback {
             return match (key.code, key.modifiers) {
-                (KeyCode::Enter, _) => PermissionV2Action::Reply(PermissionReply::Reject {
+                (KeyCode::Enter, _) => PermissionAction::Reply(PermissionReply::Reject {
                     feedback: match self.reject_feedback.trim() {
                         "" => None,
                         feedback => Some(feedback.to_string()),
@@ -51,47 +51,47 @@ impl PermissionV2Prompt {
                 }),
                 (KeyCode::Esc, _) => {
                     self.editing_reject_feedback = false;
-                    PermissionV2Action::None
+                    PermissionAction::None
                 }
                 (KeyCode::Backspace, _) => {
                     self.reject_feedback.pop();
-                    PermissionV2Action::None
+                    PermissionAction::None
                 }
                 (KeyCode::Char(character), KeyModifiers::NONE | KeyModifiers::SHIFT)
                     if !character.is_control() =>
                 {
                     self.reject_feedback.push(character);
-                    PermissionV2Action::None
+                    PermissionAction::None
                 }
-                _ => PermissionV2Action::None,
+                _ => PermissionAction::None,
             };
         }
         match key.code {
             KeyCode::Left | KeyCode::Char('h') => {
                 self.selected_option = self.selected_option.saturating_sub(1);
-                PermissionV2Action::None
+                PermissionAction::None
             }
             KeyCode::Right | KeyCode::Char('l') => {
                 self.selected_option = (self.selected_option + 1).min(2);
-                PermissionV2Action::None
+                PermissionAction::None
             }
-            KeyCode::Esc => PermissionV2Action::Reply(PermissionReply::Reject { feedback: None }),
+            KeyCode::Esc => PermissionAction::Reply(PermissionReply::Reject { feedback: None }),
             KeyCode::Enter => match self.selected_option {
-                0 => PermissionV2Action::Reply(PermissionReply::Once),
-                1 => PermissionV2Action::Reply(PermissionReply::Always),
+                0 => PermissionAction::Reply(PermissionReply::Once),
+                1 => PermissionAction::Reply(PermissionReply::Always),
                 _ => {
                     self.editing_reject_feedback = true;
-                    PermissionV2Action::None
+                    PermissionAction::None
                 }
             },
-            _ => PermissionV2Action::None,
+            _ => PermissionAction::None,
         }
     }
 }
 
 // ============ Rendering ============
 
-fn permission_delegation_lines(request: &PermissionV2Request) -> Option<[String; 2]> {
+fn permission_delegation_lines(request: &PermissionRequest) -> Option<[String; 2]> {
     let delegation = request.delegation.as_ref()?;
     Some([
         format!(
@@ -105,9 +105,9 @@ fn permission_delegation_lines(request: &PermissionV2Request) -> Option<[String;
     ])
 }
 
-pub(super) fn render_permission_v2_overlay(
+pub(super) fn render_permission_overlay(
     frame: &mut Frame,
-    prompt: &PermissionV2Prompt,
+    prompt: &PermissionPrompt,
     theme: &Theme,
     area: Rect,
 ) {
@@ -260,16 +260,16 @@ fn render_button_bar(
 
 #[cfg(test)]
 mod tests {
-    use super::{permission_delegation_lines, PermissionV2Action, PermissionV2Prompt};
+    use super::{permission_delegation_lines, PermissionAction, PermissionPrompt};
     use bitfun_agent_runtime::sdk::{
-        PermissionDelegationContext, PermissionReply, PermissionRequestSource,
-        PermissionRequestSourceKind, PermissionV2Request,
+        PermissionDelegationContext, PermissionReply, PermissionRequest, PermissionRequestSource,
+        PermissionRequestSourceKind,
     };
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use serde_json::Map;
 
-    fn request() -> PermissionV2Request {
-        PermissionV2Request {
+    fn request() -> PermissionRequest {
+        PermissionRequest {
             request_id: "request-1".to_string(),
             round_id: "synthetic:request-1".to_string(),
             order: 0,
@@ -292,23 +292,23 @@ mod tests {
 
     #[test]
     fn v2_prompt_returns_project_always_reply_without_using_legacy_runtime_scope() {
-        let mut prompt = PermissionV2Prompt::new(request());
+        let mut prompt = PermissionPrompt::new(request());
         prompt.handle_key_event(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
 
         assert_eq!(
             prompt.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
-            PermissionV2Action::Reply(PermissionReply::Always)
+            PermissionAction::Reply(PermissionReply::Always)
         );
     }
 
     #[test]
     fn v2_prompt_collects_optional_rejection_feedback() {
-        let mut prompt = PermissionV2Prompt::new(request());
+        let mut prompt = PermissionPrompt::new(request());
         prompt.handle_key_event(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
         prompt.handle_key_event(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
         assert_eq!(
             prompt.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
-            PermissionV2Action::None
+            PermissionAction::None
         );
         for character in "read only".chars() {
             prompt.handle_key_event(KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE));
@@ -316,7 +316,7 @@ mod tests {
 
         assert_eq!(
             prompt.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
-            PermissionV2Action::Reply(PermissionReply::Reject {
+            PermissionAction::Reply(PermissionReply::Reject {
                 feedback: Some("read only".to_string()),
             })
         );

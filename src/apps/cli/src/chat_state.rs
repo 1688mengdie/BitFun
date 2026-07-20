@@ -8,12 +8,12 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use bitfun_agent_runtime::prompt_markup::strip_prompt_markup;
 use bitfun_agent_runtime::sdk::{
-    PermissionV2Request, SessionTranscript, TranscriptContent, TranscriptMessage,
+    PermissionRequest, SessionTranscript, TranscriptContent, TranscriptMessage,
 };
 use bitfun_agent_tools::effective_tool_invocation;
 use bitfun_events::ToolEventData;
 
-use crate::ui::permission::PermissionV2Prompt;
+use crate::ui::permission::PermissionPrompt;
 use crate::ui::question::QuestionPrompt;
 
 // ============ Display Status Types ============
@@ -330,9 +330,9 @@ pub(crate) struct ChatState {
 
     // -- Permission state --
     /// Current pending permission prompt (if a tool needs user confirmation)
-    pub permission_v2_prompt: Option<PermissionV2Prompt>,
+    pub permission_prompt: Option<PermissionPrompt>,
     /// Additional permission requests waiting behind the visible prompt.
-    permission_v2_queue: VecDeque<PermissionV2Request>,
+    permission_queue: VecDeque<PermissionRequest>,
 
     // -- Question state --
     /// Current pending question prompt (if AskUserQuestion tool is waiting for answers)
@@ -360,36 +360,36 @@ impl ChatState {
             current_flow_items: Vec::new(),
             tool_index: HashMap::new(),
             is_processing: false,
-            permission_v2_prompt: None,
-            permission_v2_queue: VecDeque::new(),
+            permission_prompt: None,
+            permission_queue: VecDeque::new(),
             question_prompt: None,
         }
     }
 
-    pub(crate) fn enqueue_permission_request(&mut self, request: PermissionV2Request) -> bool {
+    pub(crate) fn enqueue_permission_request(&mut self, request: PermissionRequest) -> bool {
         let request_id = request.request_id.as_str();
         if self
-            .permission_v2_prompt
+            .permission_prompt
             .as_ref()
             .is_some_and(|prompt| prompt.request.request_id == request_id)
             || self
-                .permission_v2_queue
+                .permission_queue
                 .iter()
                 .any(|queued| queued.request_id == request_id)
         {
             return false;
         }
 
-        if self.permission_v2_prompt.is_none() {
-            self.permission_v2_prompt = Some(PermissionV2Prompt::new(request));
-        } else if self.permission_v2_prompt.as_ref().is_some_and(|prompt| {
+        if self.permission_prompt.is_none() {
+            self.permission_prompt = Some(PermissionPrompt::new(request));
+        } else if self.permission_prompt.as_ref().is_some_and(|prompt| {
             prompt.request.round_id == request.round_id && request.order < prompt.request.order
         }) {
             let current = self
-                .permission_v2_prompt
+                .permission_prompt
                 .take()
                 .expect("permission prompt should exist when reordering");
-            self.permission_v2_prompt = Some(PermissionV2Prompt::new(request));
+            self.permission_prompt = Some(PermissionPrompt::new(request));
             self.insert_permission_request_sorted(current.request);
         } else {
             self.insert_permission_request_sorted(request);
@@ -397,9 +397,9 @@ impl ChatState {
         true
     }
 
-    fn insert_permission_request_sorted(&mut self, request: PermissionV2Request) {
+    fn insert_permission_request_sorted(&mut self, request: PermissionRequest) {
         let same_round_positions = self
-            .permission_v2_queue
+            .permission_queue
             .iter()
             .enumerate()
             .filter_map(|(index, queued)| (queued.round_id == request.round_id).then_some(index))
@@ -408,45 +408,42 @@ impl ChatState {
         let insert_position = if let Some(position) = same_round_positions
             .iter()
             .copied()
-            .find(|&index| request.order < self.permission_v2_queue[index].order)
+            .find(|&index| request.order < self.permission_queue[index].order)
         {
             position
         } else if let Some(position) = same_round_positions.last().copied() {
             position + 1
         } else if self
-            .permission_v2_prompt
+            .permission_prompt
             .as_ref()
             .is_some_and(|prompt| prompt.request.round_id == request.round_id)
         {
             0
         } else {
-            self.permission_v2_queue.len()
+            self.permission_queue.len()
         };
 
-        self.permission_v2_queue.insert(insert_position, request);
+        self.permission_queue.insert(insert_position, request);
     }
 
     pub(crate) fn resolve_permission_request(&mut self, request_id: &str) -> bool {
         if self
-            .permission_v2_prompt
+            .permission_prompt
             .as_ref()
             .is_some_and(|prompt| prompt.request.request_id == request_id)
         {
-            self.permission_v2_prompt = self
-                .permission_v2_queue
-                .pop_front()
-                .map(PermissionV2Prompt::new);
+            self.permission_prompt = self.permission_queue.pop_front().map(PermissionPrompt::new);
             return true;
         }
 
         let Some(position) = self
-            .permission_v2_queue
+            .permission_queue
             .iter()
             .position(|request| request.request_id == request_id)
         else {
             return false;
         };
-        self.permission_v2_queue.remove(position);
+        self.permission_queue.remove(position);
         true
     }
 
@@ -1207,15 +1204,15 @@ fn truncate_string(s: &str, max_len: usize) -> String {
 mod tests {
     use super::{ChatState, FlowItem, ToolDisplayStatus};
     use bitfun_agent_runtime::sdk::{
-        PermissionDelegationContext, PermissionRequestSource, PermissionRequestSourceKind,
-        PermissionV2Request, SessionTranscript, TranscriptContent, TranscriptMessage,
+        PermissionDelegationContext, PermissionRequest, PermissionRequestSource,
+        PermissionRequestSourceKind, SessionTranscript, TranscriptContent, TranscriptMessage,
         TranscriptToolCall,
     };
     use bitfun_events::{ToolEventData, ToolEventIdentity};
     use serde_json::json;
 
-    fn permission_request(request_id: &str, child_session_id: &str) -> PermissionV2Request {
-        PermissionV2Request {
+    fn permission_request(request_id: &str, child_session_id: &str) -> PermissionRequest {
+        PermissionRequest {
             request_id: request_id.to_string(),
             round_id: format!("synthetic:{request_id}"),
             order: 0,
@@ -1283,7 +1280,7 @@ mod tests {
         assert!(!state.enqueue_permission_request(second));
         assert_eq!(
             state
-                .permission_v2_prompt
+                .permission_prompt
                 .as_ref()
                 .map(|prompt| prompt.request.request_id.as_str()),
             Some("request-z")
@@ -1293,14 +1290,14 @@ mod tests {
         assert!(state.resolve_permission_request("request-z"));
         assert_eq!(
             state
-                .permission_v2_prompt
+                .permission_prompt
                 .as_ref()
                 .map(|prompt| prompt.request.request_id.as_str()),
             Some("request-m")
         );
         assert!(!state.resolve_permission_request("unrelated"));
         assert!(state.resolve_permission_request("request-m"));
-        assert!(state.permission_v2_prompt.is_none());
+        assert!(state.permission_prompt.is_none());
     }
 
     #[test]
@@ -1311,17 +1308,17 @@ mod tests {
             "agentic".to_string(),
             None,
         );
-        let first = PermissionV2Request {
+        let first = PermissionRequest {
             round_id: "round-1".to_string(),
             order: 2,
             ..permission_request("request-2", "session-1")
         };
-        let second = PermissionV2Request {
+        let second = PermissionRequest {
             round_id: "round-1".to_string(),
             order: 0,
             ..permission_request("request-0", "session-1")
         };
-        let third = PermissionV2Request {
+        let third = PermissionRequest {
             round_id: "round-1".to_string(),
             order: 1,
             ..permission_request("request-1", "session-1")
@@ -1332,7 +1329,7 @@ mod tests {
         assert!(state.enqueue_permission_request(third));
         assert_eq!(
             state
-                .permission_v2_prompt
+                .permission_prompt
                 .as_ref()
                 .map(|prompt| prompt.request.request_id.as_str()),
             Some("request-0")
@@ -1341,7 +1338,7 @@ mod tests {
         assert!(state.resolve_permission_request("request-0"));
         assert_eq!(
             state
-                .permission_v2_prompt
+                .permission_prompt
                 .as_ref()
                 .map(|prompt| prompt.request.request_id.as_str()),
             Some("request-1")
@@ -1349,7 +1346,7 @@ mod tests {
         assert!(state.resolve_permission_request("request-1"));
         assert_eq!(
             state
-                .permission_v2_prompt
+                .permission_prompt
                 .as_ref()
                 .map(|prompt| prompt.request.request_id.as_str()),
             Some("request-2")

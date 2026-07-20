@@ -16,9 +16,9 @@ impl ChatMode {
             return self.dispatch_action(action, modal_state, chat_view, chat_state, rt_handle);
         }
 
-        if let Some(ref mut prompt) = chat_state.permission_v2_prompt {
+        if let Some(ref mut prompt) = chat_state.permission_prompt {
             match prompt.handle_key_event(key) {
-                PermissionV2Action::Reply(reply) => {
+                PermissionAction::Reply(reply) => {
                     let request_id = prompt.request.request_id.clone();
                     let runtime = self.runtime.agent_runtime().clone();
                     let result = tokio::task::block_in_place(|| {
@@ -35,7 +35,7 @@ impl ChatMode {
                         }
                     }
                 }
-                PermissionV2Action::None => {}
+                PermissionAction::None => {}
             }
             return Ok(None);
         }
@@ -549,7 +549,7 @@ impl ChatMode {
                     context.chat_view.mcp_add_dialog_handle_paste(&text);
                 } else if context.chat_view.login_form_visible() {
                     context.chat_view.login_form_insert_paste(&text);
-                } else if context.chat_state.permission_v2_prompt.is_none()
+                } else if context.chat_state.permission_prompt.is_none()
                     && context.chat_state.question_prompt.is_none()
                     && !context.this.any_popup_visible(context.chat_view)
                 {

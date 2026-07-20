@@ -96,7 +96,7 @@ export interface PermissionDelegationContext {
   subagentType: string;
 }
 
-export interface PermissionV2Request {
+export interface PermissionRequest {
   requestId: string;
   /** Model round that owns this permission request. */
   roundId: string;
@@ -118,7 +118,7 @@ export interface PermissionV2Request {
 }
 
 export type PermissionRequestEvent =
-  | { event: 'asked'; request: PermissionV2Request }
+  | { event: 'asked'; request: PermissionRequest }
   | { event: 'replied'; requestId: string; reply: { reply: PermissionReplyKind }; source: string }
   | { event: 'cancelled'; requestId: string; reason: string };
 
@@ -875,9 +875,9 @@ export class AgentAPI {
     }
   }
 
-  async listPendingPermissionRequests(): Promise<PermissionV2Request[]> {
+  async listPendingPermissionRequests(): Promise<PermissionRequest[]> {
     try {
-      return await api.invoke<PermissionV2Request[]>('list_pending_permission_requests');
+      return await api.invoke<PermissionRequest[]>('list_pending_permission_requests');
     } catch (error) {
       throw createTauriCommandError('list_pending_permission_requests', error);
     }

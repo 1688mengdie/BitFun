@@ -1,4 +1,4 @@
-use bitfun_agent_runtime::sdk::PermissionV2Request;
+use bitfun_agent_runtime::sdk::PermissionRequest;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CliApprovalPolicy {
@@ -11,7 +11,7 @@ pub(crate) enum CliApprovalPolicy {
 }
 
 pub(crate) fn permission_request_targets_session(
-    request: &PermissionV2Request,
+    request: &PermissionRequest,
     session_id: &str,
 ) -> bool {
     request.session_id == session_id
@@ -25,13 +25,13 @@ pub(crate) fn permission_request_targets_session(
 mod tests {
     use super::permission_request_targets_session;
     use bitfun_agent_runtime::sdk::{
-        PermissionDelegationContext, PermissionRequestSource, PermissionRequestSourceKind,
-        PermissionV2Request,
+        PermissionDelegationContext, PermissionRequest, PermissionRequestSource,
+        PermissionRequestSourceKind,
     };
     use serde_json::Map;
 
-    fn request() -> PermissionV2Request {
-        PermissionV2Request {
+    fn request() -> PermissionRequest {
+        PermissionRequest {
             request_id: "request-1".to_string(),
             round_id: "synthetic:request-1".to_string(),
             order: 0,

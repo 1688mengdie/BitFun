@@ -99,7 +99,7 @@ describe('FlowToolCard deferred identity', () => {
     expect(container.querySelector('[data-tool-name="CreatePlan"]')).not.toBeNull();
   });
 
-  it('marks V2 permission-pending cards for the shared warning highlight', () => {
+  it('marks permission-pending cards for the shared warning highlight', () => {
     act(() => root.render(
       <FlowToolCard
         toolItem={{
@@ -116,7 +116,7 @@ describe('FlowToolCard deferred identity', () => {
     expect(container.querySelector('.flow-tool-card-wrapper--permission-pending')).not.toBeNull();
   });
 
-  it('does not highlight a same-name card without a matching V2 call ID', () => {
+  it('does not highlight a same-name card without a matching permission call ID', () => {
     act(() => root.render(
       <FlowToolCard
         toolItem={{
@@ -133,7 +133,7 @@ describe('FlowToolCard deferred identity', () => {
     expect(container.querySelector('.flow-tool-card-wrapper--permission-pending')).toBeNull();
   });
 
-  it('highlights only the tool card matching a V2 permission call ID', () => {
+  it('highlights only the tool card matching a permission call ID', () => {
     permissionContextMock.pendingPermissionToolCallIds.add('pending-call');
 
     const tool = (id: string): FlowToolItem => ({

@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { Tooltip } from '@/component-library';
 import type {
   PermissionReplyKind,
-  PermissionV2Request,
+  PermissionRequest,
 } from '@/infrastructure/api/service-api/AgentAPI';
 import { useChatInputState } from '../../store/chatInputStateStore';
 import { CHAT_INPUT_DROP_ZONE_BOTTOM_PX } from '../../utils/flowChatScrollLayout';
@@ -13,7 +13,7 @@ import './PermissionRequestPanel.scss';
 const PERMISSION_PANEL_INPUT_GAP_PX = 16;
 
 interface PermissionRequestPanelProps {
-  requests: PermissionV2Request[];
+  requests: PermissionRequest[];
   onRespond: (requestId: string, reply: PermissionReplyKind, feedback?: string) => Promise<void>;
   onRespondBatch: (requestId: string, reply: PermissionReplyKind, feedback?: string) => Promise<void>;
   aboveChatInput?: boolean;
@@ -25,32 +25,32 @@ function permissionActionLabel(
 ): string {
   switch (action) {
     case 'read':
-      return t('permissionV2.actions.read');
+      return t('permission.actions.read');
     case 'edit':
-      return t('permissionV2.actions.edit');
+      return t('permission.actions.edit');
     case 'bash':
-      return t('permissionV2.actions.bash');
+      return t('permission.actions.bash');
     case 'git':
-      return t('permissionV2.actions.git');
+      return t('permission.actions.git');
     case 'computer_use':
-      return t('permissionV2.actions.computerUse');
+      return t('permission.actions.computerUse');
     case 'websearch':
-      return t('permissionV2.actions.webSearch');
+      return t('permission.actions.webSearch');
     case 'webfetch':
-      return t('permissionV2.actions.webFetch');
+      return t('permission.actions.webFetch');
     case 'mcp':
-      return t('permissionV2.actions.mcp');
+      return t('permission.actions.mcp');
     case 'task':
-      return t('permissionV2.actions.task');
+      return t('permission.actions.task');
     case 'skill':
-      return t('permissionV2.actions.skill');
+      return t('permission.actions.skill');
     case 'custom_tool':
-      return t('permissionV2.actions.customTool');
+      return t('permission.actions.customTool');
     case 'external':
     case 'network':
-      return t('permissionV2.actions.external');
+      return t('permission.actions.external');
     default:
-      return t('permissionV2.actions.other');
+      return t('permission.actions.other');
   }
 }
 
@@ -72,9 +72,9 @@ export function PermissionRequestPanel({
 
   const alwaysAllowTooltip = request?.saveResources?.length
     ? request.projectPath?.trim()
-      ? t('permissionV2.allowAlwaysTooltip', { projectPath: request.projectPath.trim() })
-      : t('permissionV2.allowAlwaysTooltipCurrentProject')
-    : t('permissionV2.allowAlwaysTooltipNoGrant');
+      ? t('permission.allowAlwaysTooltip', { projectPath: request.projectPath.trim() })
+      : t('permission.allowAlwaysTooltipCurrentProject')
+    : t('permission.allowAlwaysTooltipNoGrant');
 
   const panelStyle = aboveChatInput && inputHeight > 0
     ? {
@@ -114,15 +114,15 @@ export function PermissionRequestPanel({
     <section
       className={`permission-request-panel${aboveChatInput ? ' permission-request-panel--above-chat-input' : ''}`}
       style={panelStyle}
-      aria-label={t('permissionV2.title')}
+      aria-label={t('permission.title')}
     >
       <div className="permission-request-panel__heading">
         <div className="permission-request-panel__heading-title">
           <ShieldAlert size={18} aria-hidden="true" />
-          <h2>{t('permissionV2.title')}</h2>
+          <h2>{t('permission.title')}</h2>
         </div>
         <span className="permission-request-panel__count">
-          {t('permissionV2.batchCount', { count: requests.length })}
+          {t('permission.batchCount', { count: requests.length })}
         </span>
       </div>
       <div className="permission-request-panel__requests" role="list">
@@ -137,11 +137,11 @@ export function PermissionRequestPanel({
                 <strong>{item.source.identity}</strong>
                 {item.delegation && (
                   <span className="permission-request-panel__subagent">
-                    {t('permissionV2.subagentOwner', { subagent: item.delegation.subagentType })}
+                    {t('permission.subagentOwner', { subagent: item.delegation.subagentType })}
                   </span>
                 )}
               </div>
-              <span>{index === 0 ? t('permissionV2.current') : t('permissionV2.pending')}</span>
+              <span>{index === 0 ? t('permission.current') : t('permission.pending')}</span>
             </div>
             <div className="permission-request-panel__request-details">
               <span className="permission-request-panel__action">
@@ -158,23 +158,23 @@ export function PermissionRequestPanel({
         ))}
       </div>
       {risk && <p className="permission-request-panel__risk">{risk}</p>}
-      {error && <p role="alert">{t('permissionV2.responseFailed')}</p>}
+      {error && <p role="alert">{t('permission.responseFailed')}</p>}
       <textarea
         value={feedback}
         onChange={(event) => setFeedback(event.target.value)}
-        placeholder={t('permissionV2.feedbackPlaceholder')}
-        aria-label={t('permissionV2.feedbackLabel')}
+        placeholder={t('permission.feedbackPlaceholder')}
+        aria-label={t('permission.feedbackLabel')}
         disabled={responding}
         rows={2}
       />
       <div className="permission-request-panel__actions">
         <div className="permission-request-panel__single-actions">
           <button type="button" onClick={() => void respond('once')} disabled={responding}>
-            <Check size={15} aria-hidden="true" /> {t('permissionV2.allowOnce')}
+            <Check size={15} aria-hidden="true" /> {t('permission.allowOnce')}
           </button>
           <Tooltip content={alwaysAllowTooltip} placement="top">
             <button type="button" onClick={() => void respond('always')} disabled={responding}>
-              <Check size={15} aria-hidden="true" /> {t('permissionV2.allowAlways')}
+              <Check size={15} aria-hidden="true" /> {t('permission.allowAlways')}
             </button>
           </Tooltip>
           <button
@@ -183,13 +183,13 @@ export function PermissionRequestPanel({
             onClick={() => void respond('reject')}
             disabled={responding}
           >
-            <X size={15} aria-hidden="true" /> {t('permissionV2.reject')}
+            <X size={15} aria-hidden="true" /> {t('permission.reject')}
           </button>
         </div>
         {requests.length > 1 && (
           <div className="permission-request-panel__batch-actions">
           <button type="button" onClick={() => void respondBatch('once')} disabled={responding}>
-            <Check size={15} aria-hidden="true" /> {t('permissionV2.allowCurrentAndFollowing')}
+            <Check size={15} aria-hidden="true" /> {t('permission.allowCurrentAndFollowing')}
           </button>
           <button
             type="button"
@@ -197,7 +197,7 @@ export function PermissionRequestPanel({
             onClick={() => void respondBatch('reject')}
             disabled={responding}
           >
-            <X size={15} aria-hidden="true" /> {t('permissionV2.rejectCurrentAndFollowing')}
+            <X size={15} aria-hidden="true" /> {t('permission.rejectCurrentAndFollowing')}
           </button>
           </div>
         )}

@@ -11,24 +11,24 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-#[cfg(feature = "permission-v2")]
-mod permission_v2;
+#[cfg(feature = "permission")]
+mod permission;
 mod plugin;
 mod script_tool;
-#[cfg(feature = "permission-v2")]
+#[cfg(feature = "permission")]
 pub use bitfun_product_domains::tool_permissions::{
     resolve_child_permission_policy, resolve_permission_policy, wildcard_matches,
     ChildPermissionPolicyLayers, PermissionAuditEvent, PermissionAuditRecord,
     PermissionDelegationContext, PermissionEffect, PermissionEvaluator, PermissionGrant,
     PermissionGrantKey, PermissionInteractionConfig, PermissionPolicyConfig,
     PermissionPolicyLayers, PermissionPolicyPreset, PermissionReply, PermissionReplySource,
-    PermissionRequest as PermissionV2Request, PermissionRequestEvent, PermissionRequestSource,
+    PermissionRequest, PermissionRequestEvent, PermissionRequestSource,
     PermissionRequestSourceKind, PermissionResourceCaseSensitivity, PermissionRule,
     PermissionRuleset, PermissionRuntimeCeiling, PermissionRuntimeCeilingValidationError,
     ToolPermissionConfig,
 };
-#[cfg(feature = "permission-v2")]
-pub use permission_v2::{
+#[cfg(feature = "permission")]
+pub use permission::{
     PermissionAuditStorePort, PermissionGrantStorePort, PermissionReplyStorePort,
 };
 pub use plugin::{
@@ -2513,7 +2513,7 @@ mod tests {
         assert_eq!(json["remoteSshHost"], "host-1");
         assert_eq!(json["policy"]["triggerSource"], "remote_relay");
         assert_eq!(json["policy"]["queuePriority"], "high");
-        assert_eq!(json["policy"]["skipToolConfirmation"], true);
+        assert!(json["policy"].get("skipToolConfirmation").is_none());
         assert_eq!(json["replyRoute"]["sourceSessionId"], "source_session");
         assert_eq!(json["replyRoute"]["sourceRemoteConnectionId"], "conn-1");
         assert_eq!(json["replyRoute"]["sourceRemoteSshHost"], "host-1");

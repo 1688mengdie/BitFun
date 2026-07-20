@@ -26,9 +26,9 @@ use bitfun_runtime_ports::{
 use bitfun_runtime_services::RuntimeServices;
 
 use crate::event_source::{AgentEventReceiver, AgentEventSource, AgentSessionEventReceiver};
-use crate::permission_v2::{PermissionRequestEventReceiver, PermissionRequestManager};
+use crate::permission::{PermissionRequestEventReceiver, PermissionRequestManager};
 use crate::post_call_hooks::RuntimeHookRegistry;
-use bitfun_runtime_ports::{PermissionReply, PermissionReplySource, PermissionV2Request};
+use bitfun_runtime_ports::{PermissionReply, PermissionReplySource, PermissionRequest};
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum RuntimeBuildError {
@@ -612,7 +612,7 @@ impl AgentRuntime {
             .ok_or(RuntimeError::MissingEventSource)
     }
 
-    pub fn pending_permission_requests(&self) -> Result<Vec<PermissionV2Request>, RuntimeError> {
+    pub fn pending_permission_requests(&self) -> Result<Vec<PermissionRequest>, RuntimeError> {
         self.permission_requests
             .as_ref()
             .map(|manager| manager.interactive_pending_requests())

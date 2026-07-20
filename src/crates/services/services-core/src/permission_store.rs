@@ -2,7 +2,7 @@
 
 use bitfun_runtime_ports::{
     PermissionAuditEvent, PermissionAuditRecord, PermissionAuditStorePort, PermissionGrant,
-    PermissionGrantKey, PermissionGrantStorePort, PermissionReplyStorePort, PermissionV2Request,
+    PermissionGrantKey, PermissionGrantStorePort, PermissionReplyStorePort, PermissionRequest,
     PortError, PortErrorKind, PortResult, RuntimeServiceCapability, RuntimeServicePort,
 };
 use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
@@ -371,7 +371,7 @@ fn ensure_audit_record_compatible(
         .map_err(store_error)?;
 
     if let Some((request_json, event_json)) = existing {
-        let existing_request: PermissionV2Request =
+        let existing_request: PermissionRequest =
             deserialize_audit_value(&request_json, "request")?;
         let existing_event: PermissionAuditEvent = deserialize_audit_value(&event_json, "event")?;
         if existing_request != record.record.request || existing_event != record.record.event {
