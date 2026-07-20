@@ -149,6 +149,8 @@ impl ClockPort for FixedClock {
 fn request(request_id: &str, session_id: &str) -> PermissionV2Request {
     PermissionV2Request {
         request_id: request_id.to_string(),
+        round_id: format!("synthetic:{request_id}"),
+        order: 0,
         tool_call_id: None,
         project_id: "project-a".to_string(),
         session_id: session_id.to_string(),
@@ -352,6 +354,59 @@ async fn pending_snapshots_and_session_cancellation_preserve_registration_order(
                 reason: "session closed".to_string()
             }
         );
+    }
+}
+
+#[tokio::test]
+async fn pending_snapshots_order_requests_within_each_round() {
+    let (manager, _) = manager();
+    let first_round_late = manager
+        .register(PermissionV2Request {
+            round_id: "round-1".to_string(),
+            order: 2,
+            ..request("request-round-1-late", "session-a")
+        })
+        .await
+        .expect("register first round late request");
+    let second_round = manager
+        .register(PermissionV2Request {
+            round_id: "round-2".to_string(),
+            order: 0,
+            ..request("request-round-2", "session-a")
+        })
+        .await
+        .expect("register second round request");
+    let first_round_early = manager
+        .register(PermissionV2Request {
+            round_id: "round-1".to_string(),
+            order: 0,
+            ..request("request-round-1-early", "session-a")
+        })
+        .await
+        .expect("register first round early request");
+
+    assert_eq!(
+        manager
+            .pending_requests()
+            .iter()
+            .map(|request| request.request_id.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "request-round-1-early",
+            "request-round-1-late",
+            "request-round-2",
+        ]
+    );
+
+    manager
+        .cancel_session("session-a", "test cleanup")
+        .await
+        .expect("cancel ordered requests");
+    for receiver in [first_round_late, second_round, first_round_early] {
+        assert!(matches!(
+            receiver.wait().await,
+            PermissionWaitOutcome::Cancelled { .. }
+        ));
     }
 }
 

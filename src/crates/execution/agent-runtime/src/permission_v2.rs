@@ -11,7 +11,7 @@ use bitfun_runtime_ports::{
 };
 use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::{broadcast, oneshot, Mutex};
@@ -257,12 +257,26 @@ impl PermissionRequestManager {
         &self,
         include: impl Fn(&PendingPermission) -> bool,
     ) -> Vec<PermissionV2Request> {
+        let mut first_registration_by_round = HashMap::<String, u64>::new();
+        for entry in self.pending.iter().filter(|entry| include(entry.value())) {
+            let round_id = entry.request.round_id.clone();
+            first_registration_by_round
+                .entry(round_id)
+                .and_modify(|first| *first = (*first).min(entry.registration_sequence))
+                .or_insert(entry.registration_sequence);
+        }
+
         let mut requests = self
             .pending
             .iter()
             .filter_map(|entry| {
                 include(entry.value()).then(|| {
                     (
+                        first_registration_by_round
+                            .get(&entry.request.round_id)
+                            .copied()
+                            .unwrap_or(entry.registration_sequence),
+                        entry.request.order,
                         entry.registration_sequence,
                         entry.request.request_id.clone(),
                         entry.request.clone(),
@@ -270,10 +284,12 @@ impl PermissionRequestManager {
                 })
             })
             .collect::<Vec<_>>();
-        requests.sort_by(|left, right| (left.0, &left.1).cmp(&(right.0, &right.1)));
+        requests.sort_by(|left, right| {
+            (left.0, left.1, left.2, &left.3).cmp(&(right.0, right.1, right.2, &right.3))
+        });
         requests
             .into_iter()
-            .map(|(_, _, request)| request)
+            .map(|(_, _, _, _, request)| request)
             .collect()
     }
 
@@ -513,6 +529,8 @@ mod tests {
     fn request() -> PermissionV2Request {
         PermissionV2Request {
             request_id: "request-1".to_string(),
+            round_id: "round-1".to_string(),
+            order: 0,
             tool_call_id: None,
             project_id: "project-1".to_string(),
             session_id: "session-1".to_string(),

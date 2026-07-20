@@ -40,6 +40,8 @@ function request(
 ): PermissionV2Request {
   return {
     requestId,
+    roundId: parentSessionId ? 'round-child' : 'round-parent',
+    order: requestId.endsWith('b') ? 1 : 0,
     sessionId,
     toolCallId: `${requestId}-tool`,
     projectId: 'project-1',

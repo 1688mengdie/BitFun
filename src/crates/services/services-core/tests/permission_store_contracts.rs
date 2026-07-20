@@ -12,6 +12,8 @@ use serde_json::Map;
 fn request(request_id: &str, project_id: &str) -> PermissionV2Request {
     PermissionV2Request {
         request_id: request_id.to_string(),
+        round_id: format!("synthetic:{request_id}"),
+        order: 0,
         tool_call_id: None,
         project_id: project_id.to_string(),
         session_id: "session-1".to_string(),

@@ -107,6 +107,9 @@ pub struct ToolExecutionContext {
 #[derive(Debug, Clone)]
 pub struct ToolTask {
     pub tool_call: ToolCall,
+    /// Position of this call in the model's tool-call array for the current
+    /// round. Permission requests inherit this value as their order key.
+    pub tool_call_order: u32,
     pub invocation: ResolvedToolInvocation,
     pub invocation_resolution_error: Option<String>,
     pub context: ToolExecutionContext,
@@ -139,6 +142,7 @@ impl ToolTask {
     ) -> Self {
         Self {
             tool_call,
+            tool_call_order: 0,
             invocation,
             invocation_resolution_error,
             context,

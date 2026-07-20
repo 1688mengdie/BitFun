@@ -382,10 +382,48 @@ impl ChatState {
 
         if self.permission_v2_prompt.is_none() {
             self.permission_v2_prompt = Some(PermissionV2Prompt::new(request));
+        } else if self.permission_v2_prompt.as_ref().is_some_and(|prompt| {
+            prompt.request.round_id == request.round_id && request.order < prompt.request.order
+        }) {
+            let current = self
+                .permission_v2_prompt
+                .take()
+                .expect("permission prompt should exist when reordering");
+            self.permission_v2_prompt = Some(PermissionV2Prompt::new(request));
+            self.insert_permission_request_sorted(current.request);
         } else {
-            self.permission_v2_queue.push_back(request);
+            self.insert_permission_request_sorted(request);
         }
         true
+    }
+
+    fn insert_permission_request_sorted(&mut self, request: PermissionV2Request) {
+        let same_round_positions = self
+            .permission_v2_queue
+            .iter()
+            .enumerate()
+            .filter_map(|(index, queued)| (queued.round_id == request.round_id).then_some(index))
+            .collect::<Vec<_>>();
+
+        let insert_position = if let Some(position) = same_round_positions
+            .iter()
+            .copied()
+            .find(|&index| request.order < self.permission_v2_queue[index].order)
+        {
+            position
+        } else if let Some(position) = same_round_positions.last().copied() {
+            position + 1
+        } else if self
+            .permission_v2_prompt
+            .as_ref()
+            .is_some_and(|prompt| prompt.request.round_id == request.round_id)
+        {
+            0
+        } else {
+            self.permission_v2_queue.len()
+        };
+
+        self.permission_v2_queue.insert(insert_position, request);
     }
 
     pub(crate) fn resolve_permission_request(&mut self, request_id: &str) -> bool {
@@ -1179,6 +1217,8 @@ mod tests {
     fn permission_request(request_id: &str, child_session_id: &str) -> PermissionV2Request {
         PermissionV2Request {
             request_id: request_id.to_string(),
+            round_id: format!("synthetic:{request_id}"),
+            order: 0,
             tool_call_id: Some(format!("{request_id}-tool")),
             project_id: "project-1".to_string(),
             session_id: child_session_id.to_string(),
@@ -1260,6 +1300,59 @@ mod tests {
         assert!(!state.resolve_permission_request("unrelated"));
         assert!(state.resolve_permission_request("request-m"));
         assert!(state.permission_v2_prompt.is_none());
+    }
+
+    #[test]
+    fn permission_queue_orders_requests_within_their_round() {
+        let mut state = ChatState::new(
+            "session-1".to_string(),
+            "Session".to_string(),
+            "agentic".to_string(),
+            None,
+        );
+        let first = PermissionV2Request {
+            round_id: "round-1".to_string(),
+            order: 2,
+            ..permission_request("request-2", "session-1")
+        };
+        let second = PermissionV2Request {
+            round_id: "round-1".to_string(),
+            order: 0,
+            ..permission_request("request-0", "session-1")
+        };
+        let third = PermissionV2Request {
+            round_id: "round-1".to_string(),
+            order: 1,
+            ..permission_request("request-1", "session-1")
+        };
+
+        assert!(state.enqueue_permission_request(first));
+        assert!(state.enqueue_permission_request(second));
+        assert!(state.enqueue_permission_request(third));
+        assert_eq!(
+            state
+                .permission_v2_prompt
+                .as_ref()
+                .map(|prompt| prompt.request.request_id.as_str()),
+            Some("request-0")
+        );
+
+        assert!(state.resolve_permission_request("request-0"));
+        assert_eq!(
+            state
+                .permission_v2_prompt
+                .as_ref()
+                .map(|prompt| prompt.request.request_id.as_str()),
+            Some("request-1")
+        );
+        assert!(state.resolve_permission_request("request-1"));
+        assert_eq!(
+            state
+                .permission_v2_prompt
+                .as_ref()
+                .map(|prompt| prompt.request.request_id.as_str()),
+            Some("request-2")
+        );
     }
 
     #[test]

@@ -269,6 +269,18 @@ pub struct PermissionDelegationContext {
 #[serde(rename_all = "camelCase")]
 pub struct PermissionRequest {
     pub request_id: String,
+    /// Model round that owns this permission request.
+    ///
+    /// BitFun-created tool requests always provide this value so interactive
+    /// surfaces can keep requests from one model round together.
+    pub round_id: String,
+    /// Stable permission order within `round_id`.
+    ///
+    /// This is derived from the model tool-call order before tools are
+    /// scheduled. Requests produced by one tool share the same order when
+    /// they cannot be counted before execution; registration order remains a
+    /// deterministic tie-breaker in that case.
+    pub order: u32,
     /// Provider/tool-stream call ID used to correlate this request with one
     /// concrete tool invocation in interactive surfaces.
     ///

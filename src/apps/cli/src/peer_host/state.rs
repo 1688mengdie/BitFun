@@ -1102,6 +1102,8 @@ mod tests {
     ) -> PermissionV2Request {
         PermissionV2Request {
             request_id: format!("request-{session_id}"),
+            round_id: format!("synthetic:request-{session_id}"),
+            order: 0,
             tool_call_id: Some("tool-call".to_string()),
             project_id: "project".to_string(),
             session_id: session_id.to_string(),
