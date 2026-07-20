@@ -36,7 +36,7 @@ impl AgentRuntimeSdkCompatibility {
 
 pub use crate::context_profile::{ContextProfile, ContextProfilePolicy, ModelCapabilityProfile};
 pub use crate::event_source::{AgentEventReceiver, AgentEventSource, AgentSessionEventReceiver};
-pub use crate::permission_v2::{
+pub use crate::permission::{
     PermissionReplyResolution, PermissionRequestEventReceiver, PermissionRequestManager,
     PermissionRequestManagerError, AUTO_APPROVE_ASK_CONTEXT_KEY,
 };
@@ -68,8 +68,8 @@ pub use bitfun_runtime_ports::{
     AgentTurnCancellationRequest, AgentTurnCancellationResult, ClockPort, DialogSubmissionPolicy,
     DialogSubmitOutcome, FileSystemPort, GitPort, McpCatalogPort, NetworkPort,
     PermissionAuditRecord, PermissionDelegationContext, PermissionGrant, PermissionGrantKey,
-    PermissionReply, PermissionReplySource, PermissionRequestEvent, PermissionRequestSource,
-    PermissionRequestSourceKind, PermissionV2Request, PortError, PortResult,
+    PermissionReply, PermissionReplySource, PermissionRequest, PermissionRequestEvent,
+    PermissionRequestSource, PermissionRequestSourceKind, PortError, PortResult,
     RemoteAssistantWorkspaceFacts, RemoteCapabilityPort, RemoteConnectionPort,
     RemoteProjectionPort, RemoteRecentWorkspaceFacts, RemoteWorkspaceFacts,
     RemoteWorkspaceFileRuntimeHost, RemoteWorkspaceKind, RemoteWorkspacePort,
@@ -232,7 +232,7 @@ impl AgentRuntime {
         self.inner.subscribe_session_events(session_id)
     }
 
-    pub fn pending_permission_requests(&self) -> Result<Vec<PermissionV2Request>, RuntimeError> {
+    pub fn pending_permission_requests(&self) -> Result<Vec<PermissionRequest>, RuntimeError> {
         self.inner.pending_permission_requests()
     }
 

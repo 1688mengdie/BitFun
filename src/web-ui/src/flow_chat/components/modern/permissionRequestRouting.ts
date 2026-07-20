@@ -1,10 +1,10 @@
 import type {
   PermissionRequestEvent,
-  PermissionV2Request,
+  PermissionRequest,
 } from '@/infrastructure/api/service-api/AgentAPI';
 
 export function permissionRequestBelongsToSession(
-  request: PermissionV2Request,
+  request: PermissionRequest,
   sessionId?: string,
 ): boolean {
   if (!sessionId) return false;
@@ -12,9 +12,9 @@ export function permissionRequestBelongsToSession(
 }
 
 export function selectPermissionRequestsForSession(
-  requests: readonly PermissionV2Request[],
+  requests: readonly PermissionRequest[],
   sessionId?: string,
-): PermissionV2Request[] {
+): PermissionRequest[] {
   return sortPermissionRequests(
     requests.filter((request) => permissionRequestBelongsToSession(request, sessionId)),
   );
@@ -23,11 +23,11 @@ export function selectPermissionRequestsForSession(
 export interface PermissionRequestBatch {
   sessionId: string;
   roundId: string;
-  requests: PermissionV2Request[];
+  requests: PermissionRequest[];
 }
 
 export function selectActivePermissionBatch(
-  requests: readonly PermissionV2Request[],
+  requests: readonly PermissionRequest[],
   sessionId?: string,
 ): PermissionRequestBatch | undefined {
   const routed = selectPermissionRequestsForSession(requests, sessionId);
@@ -50,8 +50,8 @@ export function selectActivePermissionBatch(
  * used because round IDs are opaque (usually UUIDs) and are not chronological.
  */
 export function sortPermissionRequests(
-  requests: readonly PermissionV2Request[],
-): PermissionV2Request[] {
+  requests: readonly PermissionRequest[],
+): PermissionRequest[] {
   const firstBatchIndex = new Map<string, number>();
   requests.forEach((request, index) => {
     const batchId = `${request.sessionId}\u0000${request.roundId}`;
@@ -70,7 +70,7 @@ export function sortPermissionRequests(
 }
 
 export function pendingPermissionToolCallIdsForSession(
-  requests: readonly PermissionV2Request[],
+  requests: readonly PermissionRequest[],
   sessionId?: string,
 ): ReadonlySet<string> {
   const toolCallIds = new Set<string>();
@@ -89,9 +89,9 @@ export function pendingPermissionToolCallIdsForSession(
 }
 
 export function applyPermissionRequestEvent(
-  requests: readonly PermissionV2Request[],
+  requests: readonly PermissionRequest[],
   event: PermissionRequestEvent,
-): PermissionV2Request[] {
+): PermissionRequest[] {
   if (event.event !== 'asked') {
     return requests.filter((request) => request.requestId !== event.requestId);
   }
@@ -107,13 +107,13 @@ export function applyPermissionRequestEvent(
 }
 
 export function reconcilePermissionRequestSnapshot(
-  current: readonly PermissionV2Request[],
-  pending: readonly PermissionV2Request[],
+  current: readonly PermissionRequest[],
+  pending: readonly PermissionRequest[],
   resolvedIds: ReadonlySet<string>,
-): PermissionV2Request[] {
+): PermissionRequest[] {
   const currentById = new Map(current.map((request) => [request.requestId, request]));
   const pendingIds = new Set<string>();
-  const reconciled: PermissionV2Request[] = [];
+  const reconciled: PermissionRequest[] = [];
 
   for (const request of pending) {
     if (resolvedIds.has(request.requestId)) continue;

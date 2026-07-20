@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use bitfun_agent_runtime::sdk::AgentRuntime;
-use bitfun_agent_runtime::sdk::PermissionV2Request;
+use bitfun_agent_runtime::sdk::PermissionRequest;
 use bitfun_core::product_runtime::CoreAgentRuntimeCompatibility;
 use bitfun_core::service::filesystem::FileSystemService;
 use bitfun_core::service::workspace::WorkspaceService;
@@ -406,7 +406,7 @@ impl PeerTurnTracker {
             .unwrap_or(false)
     }
 
-    pub(crate) fn owns_permission_request(&self, request: &PermissionV2Request) -> bool {
+    pub(crate) fn owns_permission_request(&self, request: &PermissionRequest) -> bool {
         self.owns(&request.session_id, None)
             || request
                 .delegation
@@ -1076,8 +1076,8 @@ mod tests {
     use std::collections::HashSet;
 
     use bitfun_agent_runtime::sdk::{
-        PermissionDelegationContext, PermissionRequestSource, PermissionRequestSourceKind,
-        PermissionV2Request,
+        PermissionDelegationContext, PermissionRequest, PermissionRequestSource,
+        PermissionRequestSourceKind,
     };
 
     use super::{aggregate_cancellation_results, PeerTurnKey, PeerTurnTracker};
@@ -1096,11 +1096,8 @@ mod tests {
             .expect("register background child"));
     }
 
-    fn permission_request(
-        session_id: &str,
-        parent_session_id: Option<&str>,
-    ) -> PermissionV2Request {
-        PermissionV2Request {
+    fn permission_request(session_id: &str, parent_session_id: Option<&str>) -> PermissionRequest {
+        PermissionRequest {
             request_id: format!("request-{session_id}"),
             round_id: format!("synthetic:request-{session_id}"),
             order: 0,

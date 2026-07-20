@@ -2,12 +2,12 @@
 //!
 //! This owner is intentionally not connected to the legacy tool confirmation
 //! pipeline yet. It persists remembered grants and audit facts only when an
-//! explicit V2 reply is delivered through this standalone contract.
+//! explicit permission reply is delivered through this standalone contract.
 
 use bitfun_runtime_ports::{
     ClockPort, PermissionAuditEvent, PermissionAuditRecord, PermissionAuditStorePort,
     PermissionGrant, PermissionGrantStorePort, PermissionReply, PermissionReplySource,
-    PermissionReplyStorePort, PermissionRequestEvent, PermissionV2Request, PortError,
+    PermissionReplyStorePort, PermissionRequest, PermissionRequestEvent, PortError,
 };
 use dashmap::DashMap;
 use std::collections::{HashMap, HashSet};
@@ -53,7 +53,7 @@ impl PendingPermissionReceiver {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PermissionReplyResolution {
-    pub request: PermissionV2Request,
+    pub request: PermissionRequest,
     pub reply: PermissionReply,
     pub saved_grants: Vec<PermissionGrant>,
     pub resolved_request_ids: Vec<String>,
@@ -75,7 +75,7 @@ pub enum PermissionRequestManagerError {
 
 #[derive(Debug)]
 struct PendingPermission {
-    request: PermissionV2Request,
+    request: PermissionRequest,
     sender: oneshot::Sender<PermissionWaitOutcome>,
     interactive: bool,
     registration_sequence: u64,
@@ -181,7 +181,7 @@ impl PermissionRequestManager {
 
     pub async fn register(
         &self,
-        request: PermissionV2Request,
+        request: PermissionRequest,
     ) -> Result<PendingPermissionReceiver, PermissionRequestManagerError> {
         let mut pending = self.register_batch(vec![request]).await?;
         Ok(pending
@@ -193,7 +193,7 @@ impl PermissionRequestManager {
     /// it to interactive subscribers or pending-request snapshots.
     pub async fn register_non_interactive(
         &self,
-        request: PermissionV2Request,
+        request: PermissionRequest,
     ) -> Result<PendingPermissionReceiver, PermissionRequestManagerError> {
         let mut pending = self.register_batch_non_interactive(vec![request]).await?;
         Ok(pending
@@ -203,21 +203,21 @@ impl PermissionRequestManager {
 
     pub async fn register_batch(
         &self,
-        requests: Vec<PermissionV2Request>,
+        requests: Vec<PermissionRequest>,
     ) -> Result<Vec<PendingPermissionReceiver>, PermissionRequestManagerError> {
         self.register_batch_with_visibility(requests, true).await
     }
 
     pub async fn register_batch_non_interactive(
         &self,
-        requests: Vec<PermissionV2Request>,
+        requests: Vec<PermissionRequest>,
     ) -> Result<Vec<PendingPermissionReceiver>, PermissionRequestManagerError> {
         self.register_batch_with_visibility(requests, false).await
     }
 
     async fn register_batch_with_visibility(
         &self,
-        requests: Vec<PermissionV2Request>,
+        requests: Vec<PermissionRequest>,
         interactive: bool,
     ) -> Result<Vec<PendingPermissionReceiver>, PermissionRequestManagerError> {
         if requests.is_empty() {
@@ -288,18 +288,18 @@ impl PermissionRequestManager {
         Ok(receivers)
     }
 
-    pub fn pending_requests(&self) -> Vec<PermissionV2Request> {
+    pub fn pending_requests(&self) -> Vec<PermissionRequest> {
         self.ordered_pending_requests(|_| true)
     }
 
-    pub fn interactive_pending_requests(&self) -> Vec<PermissionV2Request> {
+    pub fn interactive_pending_requests(&self) -> Vec<PermissionRequest> {
         self.ordered_pending_requests(|pending| pending.interactive)
     }
 
     fn ordered_pending_requests(
         &self,
         include: impl Fn(&PendingPermission) -> bool,
-    ) -> Vec<PermissionV2Request> {
+    ) -> Vec<PermissionRequest> {
         let mut first_registration_by_round = HashMap::<(String, String), u64>::new();
         for entry in self.pending.iter().filter(|entry| include(entry.value())) {
             let batch_id = (
@@ -464,7 +464,7 @@ impl PermissionRequestManager {
 
     async fn cancel_requests(
         &self,
-        requests: Vec<PermissionV2Request>,
+        requests: Vec<PermissionRequest>,
         reason: String,
     ) -> Result<(), PermissionRequestManagerError> {
         let timestamp_ms = self.clock.now_unix_millis();
@@ -500,7 +500,7 @@ impl PermissionRequestManager {
 }
 
 fn grants_for_reply(
-    request: &PermissionV2Request,
+    request: &PermissionRequest,
     reply: &PermissionReply,
     created_at_ms: i64,
 ) -> Vec<PermissionGrant> {
@@ -596,8 +596,8 @@ mod tests {
         }
     }
 
-    fn request() -> PermissionV2Request {
-        PermissionV2Request {
+    fn request() -> PermissionRequest {
+        PermissionRequest {
             request_id: "request-1".to_string(),
             round_id: "round-1".to_string(),
             order: 0,
@@ -654,7 +654,7 @@ mod tests {
         assert!(manager.pending_requests().is_empty());
 
         let cancelled = manager
-            .register(PermissionV2Request {
+            .register(PermissionRequest {
                 request_id: "request-2".to_string(),
                 ..request()
             })

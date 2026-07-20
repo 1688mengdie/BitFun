@@ -3,7 +3,7 @@ import {
   agentAPI,
   type PermissionReplyKind,
   type PermissionRequestEvent,
-  type PermissionV2Request,
+  type PermissionRequest,
 } from '@/infrastructure/api/service-api/AgentAPI';
 import {
   applyPermissionRequestEvent,
@@ -13,7 +13,7 @@ import {
 } from './permissionRequestRouting';
 
 export function usePermissionRequests(sessionId?: string) {
-  const [requests, setRequests] = useState<PermissionV2Request[]>([]);
+  const [requests, setRequests] = useState<PermissionRequest[]>([]);
   const resolvedIds = useRef(new Set<string>());
 
   useEffect(() => {

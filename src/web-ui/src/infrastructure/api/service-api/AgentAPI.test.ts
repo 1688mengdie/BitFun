@@ -38,7 +38,7 @@ describe('AgentAPI', () => {
     });
   });
 
-  it('responds to V2 permission requests by request id', async () => {
+  it('responds to permission requests by request id', async () => {
     await agentAPI.respondPermission('permission-1', 'reject', 'Use a read-only path');
 
     expect(invokeMock).toHaveBeenCalledWith('respond_permission', {
@@ -50,7 +50,7 @@ describe('AgentAPI', () => {
     });
   });
 
-  it('responds to the current and following V2 permission requests atomically', async () => {
+  it('responds to the current and following permission requests atomically', async () => {
     invokeMock.mockResolvedValue(['permission-1', 'permission-2']);
 
     await expect(

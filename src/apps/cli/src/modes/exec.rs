@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bitfun_agent_runtime::sdk::{
-    PermissionReply, PermissionReplySource, PermissionRequestEvent, PermissionV2Request,
+    PermissionReply, PermissionReplySource, PermissionRequest, PermissionRequestEvent,
 };
 use bitfun_agent_tools::effective_tool_invocation;
 use bitfun_events::{AgenticEvent, ToolEventIdentity};
@@ -192,7 +192,7 @@ fn completed_turn_failure(
     })
 }
 
-fn permission_action_required_message(request: &PermissionV2Request) -> String {
+fn permission_action_required_message(request: &PermissionRequest) -> String {
     match request.delegation.as_ref() {
         Some(delegation) => format!(
             "action-required: permission needed for {} by {} subagent (child session {}, parent session {}, parent task {}, request {})",
@@ -211,7 +211,7 @@ fn permission_action_required_message(request: &PermissionV2Request) -> String {
 }
 
 fn should_reject_permission_request(
-    request: &PermissionV2Request,
+    request: &PermissionRequest,
     session_id: &str,
     approval_mode: ExecApprovalMode,
 ) -> bool {
@@ -1335,16 +1335,16 @@ mod patch_tests {
         ExecMode, ExecTokenUsage, TOOL_START_INPUT_PREVIEW_CHARS,
     };
     use bitfun_agent_runtime::sdk::{
-        PermissionDelegationContext, PermissionRequestSource, PermissionRequestSourceKind,
-        PermissionV2Request,
+        PermissionDelegationContext, PermissionRequest, PermissionRequestSource,
+        PermissionRequestSourceKind,
     };
     use bitfun_events::{
         AgenticEvent, AgenticEventEnvelope, AgenticEventPriority, ToolEventIdentity,
     };
     use serde_json::json;
 
-    fn delegated_permission_request() -> PermissionV2Request {
-        PermissionV2Request {
+    fn delegated_permission_request() -> PermissionRequest {
+        PermissionRequest {
             request_id: "request-1".to_string(),
             round_id: "synthetic:request-1".to_string(),
             order: 0,

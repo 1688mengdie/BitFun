@@ -33,7 +33,7 @@ fn forward_subagent_invocation_context(
     context: &ToolUseContext,
     subagent_context: &mut HashMap<String, String>,
 ) {
-    use bitfun_agent_runtime::permission_v2::AUTO_APPROVE_ASK_CONTEXT_KEY;
+    use bitfun_agent_runtime::permission::AUTO_APPROVE_ASK_CONTEXT_KEY;
     use bitfun_agent_runtime::user_questions::USER_INPUT_AVAILABLE_CONTEXT_KEY;
 
     for key in [
@@ -1026,7 +1026,7 @@ impl TaskTool {
 mod target_context_tests {
     use super::*;
     use bitfun_agent_runtime::deep_review::{append_tool_use_context_data, ReviewTargetEvidence};
-    use bitfun_agent_runtime::permission_v2::AUTO_APPROVE_ASK_CONTEXT_KEY;
+    use bitfun_agent_runtime::permission::AUTO_APPROVE_ASK_CONTEXT_KEY;
     use bitfun_agent_runtime::user_questions::USER_INPUT_AVAILABLE_CONTEXT_KEY;
 
     fn parent_tool_context() -> ToolUseContext {

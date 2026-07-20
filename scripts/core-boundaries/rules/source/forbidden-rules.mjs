@@ -1770,12 +1770,12 @@ export const forbiddenContentRules = [
       {
         regex: /\bpub enum ConfirmationResponse\b/,
         message:
-          'core tool pipeline must not reintroduce legacy confirmation channel responses; use permission V2',
+          'core tool pipeline must not reintroduce legacy confirmation channel responses; use permission requests',
       },
       {
         regex: /\boneshot::Sender<\s*ConfirmationResponse\s*>/,
         message:
-          'core tool pipeline must not reintroduce legacy confirmation wait-channel storage; use permission V2',
+          'core tool pipeline must not reintroduce legacy confirmation wait-channel storage; use permission requests',
       },
       {
         regex: /\bArc<DashMap<String,\s*CancellationToken>>\b/,
@@ -2508,7 +2508,7 @@ export const forbiddenContentRules = [
       {
         regex: /ToolConfirmationOutcome::(?:Rejected|ChannelClosed|Timeout)/,
         message:
-          'core tool pipeline must not reintroduce legacy confirmation wait-result mapping; use permission V2',
+          'core tool pipeline must not reintroduce legacy confirmation wait-result mapping; use permission requests',
       },
     ],
   },

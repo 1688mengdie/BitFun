@@ -1,5 +1,5 @@
 {
-  "permissionV2": {
+  "permission": {
     "title": "Permission required",
     "subagentOwner": "{{subagent}} subagent",
     "feedbackLabel": "Rejection feedback",

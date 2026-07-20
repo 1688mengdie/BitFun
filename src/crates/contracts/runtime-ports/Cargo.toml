@@ -20,7 +20,7 @@ tokio-util = { workspace = true }
 
 [features]
 default = []
-permission-v2 = ["dep:bitfun-product-domains"]
+permission = ["dep:bitfun-product-domains"]
 
 [dev-dependencies]
 tokio = { workspace = true }

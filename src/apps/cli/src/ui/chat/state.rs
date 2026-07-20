@@ -17,7 +17,7 @@ use super::mcp_add_dialog::{McpAddAction, McpAddDialogState};
 use super::mcp_selector::{McpAction, McpItem, McpSelectorState};
 use super::model_config_form::{ModelConfigFormState, ModelFormAction};
 use super::model_selector::{ModelItem, ModelSelectorState};
-use super::permission::render_permission_v2_overlay;
+use super::permission::render_permission_overlay;
 use super::provider_selector::{ProviderSelection, ProviderSelectorState};
 use super::question::render_question_overlay;
 use super::session_selector::{SessionAction, SessionItem, SessionSelectorState};

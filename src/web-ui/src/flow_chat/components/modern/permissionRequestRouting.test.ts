@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { PermissionV2Request } from '@/infrastructure/api/service-api/AgentAPI';
+import type { PermissionRequest } from '@/infrastructure/api/service-api/AgentAPI';
 import {
   applyPermissionRequestEvent,
   pendingPermissionToolCallIdsForSession,
@@ -15,7 +15,7 @@ function request(
   toolCallId: string | undefined,
   parentSessionId?: string,
   parentToolCallId?: string,
-): PermissionV2Request {
+): PermissionRequest {
   return {
     requestId,
     roundId: parentSessionId ? 'round-child' : 'round-parent',

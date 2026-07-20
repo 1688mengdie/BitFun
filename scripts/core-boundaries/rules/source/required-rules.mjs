@@ -2704,8 +2704,8 @@ export const requiredContentRules = [
         message: 'missing remote workspace permission identity isolation regression',
       },
       {
-        regex: /\bv2_once_and_always_replies_control_execution_and_remembered_grants\b/,
-        message: 'missing permission V2 project and remote grant isolation regression',
+        regex: /\bonce_and_always_replies_control_execution_and_remembered_grants\b/,
+        message: 'missing permission project and remote grant isolation regression',
       },
       {
         regex: /\bToolCancellationTokenStore\b/,

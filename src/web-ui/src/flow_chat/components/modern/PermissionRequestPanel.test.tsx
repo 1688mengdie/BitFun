@@ -3,7 +3,7 @@
 import React, { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { PermissionV2Request } from '@/infrastructure/api/service-api/AgentAPI';
+import type { PermissionRequest } from '@/infrastructure/api/service-api/AgentAPI';
 import { PermissionRequestPanel } from './PermissionRequestPanel';
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
@@ -11,16 +11,16 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     t: (key: string, values?: Record<string, string>) => {
-      if (key === 'permissionV2.subagentOwner') {
+      if (key === 'permission.subagentOwner') {
         return `${values?.subagent} subagent`;
       }
-      if (key === 'permissionV2.allowAlwaysTooltip') {
+      if (key === 'permission.allowAlwaysTooltip') {
         return `Always allow saves matching access for ${values?.projectPath}`;
       }
-      if (key === 'permissionV2.actions.edit') {
+      if (key === 'permission.actions.edit') {
         return 'Edit files';
       }
-      if (key === 'permissionV2.actions.bash') {
+      if (key === 'permission.actions.bash') {
         return 'Run command';
       }
       return key;
@@ -38,7 +38,7 @@ vi.mock('../../store/chatInputStateStore', () => ({
   useChatInputState: () => 0,
 }));
 
-function request(delegated: boolean): PermissionV2Request {
+function request(delegated: boolean): PermissionRequest {
   return {
     requestId: delegated ? 'child-request' : 'direct-request',
     roundId: delegated ? 'round-child' : 'round-parent',
@@ -91,7 +91,7 @@ describe('PermissionRequestPanel', () => {
 
     expect(container.textContent).toContain('Explore subagent');
     expect(container.querySelector('.permission-request-panel__heading h2')?.textContent)
-      .toBe('permissionV2.title');
+      .toBe('permission.title');
   });
 
   it('keeps direct request details in the request row and scopes always allow to the project path', () => {
@@ -154,7 +154,7 @@ describe('PermissionRequestPanel', () => {
     });
 
     const batchButton = [...container.querySelectorAll('button')].find(
-      (button) => button.textContent?.includes('permissionV2.allowCurrentAndFollowing'),
+      (button) => button.textContent?.includes('permission.allowCurrentAndFollowing'),
     );
     expect(batchButton).toBeDefined();
     await act(async () => {

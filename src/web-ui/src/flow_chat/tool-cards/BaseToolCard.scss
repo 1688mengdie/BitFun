@@ -81,7 +81,7 @@
   
 }
 
-/* V2 permission requests can be rendered by dedicated cards that do not
+/* Permission requests can be rendered by dedicated cards that do not
  * receive the legacy requiresConfirmation prop. Highlight their shared
  * FlowToolCard root so every waiting tool category gets the same affordance. */
 .flow-tool-card-wrapper--permission-pending > :first-child {

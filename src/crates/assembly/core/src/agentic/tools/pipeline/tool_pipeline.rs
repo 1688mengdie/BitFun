@@ -15,7 +15,7 @@ use crate::agentic::tools::tool_context_runtime::ToolUseContext;
 use crate::agentic::tools::tool_result_storage;
 use crate::util::elapsed_ms_u64;
 use crate::util::errors::{BitFunError, BitFunResult};
-use bitfun_agent_runtime::permission_v2::{
+use bitfun_agent_runtime::permission::{
     PendingPermissionReceiver, PermissionRequestManager, PermissionWaitOutcome,
 };
 use bitfun_agent_tools::{
@@ -29,9 +29,9 @@ use bitfun_agent_tools::{
     USER_STEERING_INTERRUPTED_MESSAGE,
 };
 use bitfun_runtime_ports::{
-    wildcard_matches, PermissionEffect, PermissionGrant, PermissionReply, PermissionRequestSource,
-    PermissionRequestSourceKind, PermissionResourceCaseSensitivity, PermissionRule,
-    PermissionV2Request, RoundInjectionToolPreemption,
+    wildcard_matches, PermissionEffect, PermissionGrant, PermissionReply, PermissionRequest,
+    PermissionRequestSource, PermissionRequestSourceKind, PermissionResourceCaseSensitivity,
+    PermissionRule, RoundInjectionToolPreemption,
 };
 use futures::future::join_all;
 use log::{debug, error, info, warn};
@@ -400,7 +400,7 @@ fn recovered_write_has_potentially_truncated_marked_path(
             .is_some_and(|value| value.starts_with("+++ ") && !value.contains('\n'))
 }
 
-enum V2PermissionAuthorization {
+enum PermissionAuthorization {
     Allowed,
     Rejected { reason: String },
 }
@@ -416,7 +416,7 @@ enum PermissionExecutionPlan {
 enum PermissionPlanDraft {
     Allowed,
     Rejected { reason: String },
-    Requests(Vec<PermissionV2Request>),
+    Requests(Vec<PermissionRequest>),
 }
 
 pub fn permission_project_id_for_workspace_identity(
@@ -639,13 +639,13 @@ impl ToolPipeline {
 
         if manager.is_none() {
             return Err(BitFunError::service(
-                "V2 permission request manager is unavailable for a file tool request".to_string(),
+                "Permission request manager is unavailable for a file tool request".to_string(),
             ));
         }
 
         let requests = asks
             .into_iter()
-            .map(|intent| PermissionV2Request {
+            .map(|intent| PermissionRequest {
                 request_id: uuid::Uuid::new_v4().to_string(),
                 round_id: round_id.clone(),
                 order: task.tool_call_order,
@@ -671,12 +671,12 @@ impl ToolPipeline {
 
     async fn register_permission_requests(
         &self,
-        requests: Vec<PermissionV2Request>,
+        requests: Vec<PermissionRequest>,
         auto_approve: bool,
     ) -> BitFunResult<Vec<PendingPermissionReceiver>> {
         let manager = self.permission_request_manager.as_ref().ok_or_else(|| {
             BitFunError::service(
-                "V2 permission request manager is unavailable for a file tool request".to_string(),
+                "Permission request manager is unavailable for a file tool request".to_string(),
             )
         })?;
 
@@ -842,9 +842,9 @@ impl ToolPipeline {
         task_id: &str,
         tool_name: String,
         cancellation_token: &CancellationToken,
-    ) -> BitFunResult<V2PermissionAuthorization> {
+    ) -> BitFunResult<PermissionAuthorization> {
         let Some(plan) = self.permission_plans.lock().await.remove(task_id) else {
-            return Ok(V2PermissionAuthorization::Allowed);
+            return Ok(PermissionAuthorization::Allowed);
         };
 
         self.await_permission_execution_plan(plan, tool_name, cancellation_token)
@@ -856,11 +856,11 @@ impl ToolPipeline {
         plan: PermissionExecutionPlan,
         tool_name: String,
         cancellation_token: &CancellationToken,
-    ) -> BitFunResult<V2PermissionAuthorization> {
+    ) -> BitFunResult<PermissionAuthorization> {
         let receivers = match plan {
-            PermissionExecutionPlan::Allowed => return Ok(V2PermissionAuthorization::Allowed),
+            PermissionExecutionPlan::Allowed => return Ok(PermissionAuthorization::Allowed),
             PermissionExecutionPlan::Rejected { reason } => {
-                return Ok(V2PermissionAuthorization::Rejected { reason });
+                return Ok(PermissionAuthorization::Rejected { reason });
             }
             PermissionExecutionPlan::Awaiting(receivers) => receivers,
         };
@@ -895,7 +895,7 @@ impl ToolPipeline {
                         "Another permission request for this tool was rejected".to_string(),
                     )
                     .await;
-                    return Ok(V2PermissionAuthorization::Rejected {
+                    return Ok(PermissionAuthorization::Rejected {
                         reason: feedback.unwrap_or_else(|| {
                             format!("User rejected permission for tool '{tool_name}'")
                         }),
@@ -927,7 +927,7 @@ impl ToolPipeline {
             }
         }
 
-        Ok(V2PermissionAuthorization::Allowed)
+        Ok(PermissionAuthorization::Allowed)
     }
 
     async fn cancel_permission_request_ids(&self, request_ids: Vec<String>, reason: String) {
@@ -969,7 +969,7 @@ impl ToolPipeline {
         intents: Vec<PermissionIntent>,
         context: &ToolUseContext,
         cancellation_token: &CancellationToken,
-    ) -> BitFunResult<V2PermissionAuthorization> {
+    ) -> BitFunResult<PermissionAuthorization> {
         let draft = self
             .draft_permission_plan(
                 task.clone(),
@@ -1518,8 +1518,8 @@ impl ToolPipeline {
         };
 
         match permission_authorization {
-            Ok(V2PermissionAuthorization::Allowed) => {}
-            Ok(V2PermissionAuthorization::Rejected { reason }) => {
+            Ok(PermissionAuthorization::Allowed) => {}
+            Ok(PermissionAuthorization::Rejected { reason }) => {
                 let preflight_ms = elapsed_ms_u64(start_time);
                 self.state_manager
                     .update_state(
@@ -2191,16 +2191,16 @@ mod tests {
 
         fn is_readonly(&self) -> bool {
             // Keep the test tool eligible for the parallel batch scheduler
-            // while its explicit permission intent still exercises V2 asks.
+            // while its explicit permission intent still exercises permission prompts.
             true
         }
 
         async fn description(&self) -> BitFunResult<String> {
-            Ok("V2 file permission test tool".to_string())
+            Ok("File permission test tool".to_string())
         }
 
         fn short_description(&self) -> String {
-            "V2 file permission test tool".to_string()
+            "File permission test tool".to_string()
         }
 
         fn input_schema(&self) -> serde_json::Value {
@@ -2605,7 +2605,7 @@ mod tests {
         let mut context = test_tool_execution_context();
         context.workspace = Some(WorkspaceBinding::new(
             None,
-            std::env::temp_dir().join("bitfun-permission-v2-test"),
+            std::env::temp_dir().join("bitfun-permission-test"),
         ));
         context
     }
@@ -2675,7 +2675,7 @@ mod tests {
 
     async fn wait_for_permission_request(
         manager: &PermissionRequestManager,
-    ) -> bitfun_runtime_ports::PermissionV2Request {
+    ) -> bitfun_runtime_ports::PermissionRequest {
         for _ in 0..100 {
             if let Some(request) = manager.pending_requests().into_iter().next() {
                 return request;
@@ -2688,7 +2688,7 @@ mod tests {
     async fn wait_for_permission_request_count(
         manager: &PermissionRequestManager,
         expected: usize,
-    ) -> Vec<bitfun_runtime_ports::PermissionV2Request> {
+    ) -> Vec<bitfun_runtime_ports::PermissionRequest> {
         for _ in 0..100 {
             let requests = manager.pending_requests();
             if requests.len() >= expected {
@@ -2789,7 +2789,7 @@ mod tests {
         let requests = wait_for_permission_request_count(&manager, 2).await;
         assert_eq!(requests.len(), 2);
         let expected_project_path = std::env::temp_dir()
-            .join("bitfun-permission-v2-test")
+            .join("bitfun-permission-test")
             .to_string_lossy()
             .to_string();
         assert_eq!(
@@ -2978,7 +2978,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn v2_once_and_always_replies_control_execution_and_remembered_grants() {
+    async fn once_and_always_replies_control_execution_and_remembered_grants() {
         let store = Arc::new(MemoryPermissionStore::default());
         let manager = permission_test_manager(Arc::clone(&store));
         let pipeline = test_tool_pipeline().with_permission_request_manager(Arc::clone(&manager));
@@ -3061,7 +3061,7 @@ mod tests {
         let mut other_project_context = permission_test_context();
         other_project_context.workspace = Some(WorkspaceBinding::new(
             None,
-            std::env::temp_dir().join("bitfun-permission-v2-other-project"),
+            std::env::temp_dir().join("bitfun-permission-other-project"),
         ));
         let other_pipeline = pipeline.clone();
         let other_project = tokio::spawn(async move {

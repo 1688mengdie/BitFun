@@ -1,13 +1,13 @@
 use async_trait::async_trait;
-use bitfun_agent_runtime::permission_v2::{
+use bitfun_agent_runtime::permission::{
     PermissionRequestManager, PermissionRequestManagerError, PermissionWaitOutcome,
 };
 use bitfun_runtime_ports::{
     ClockPort, PermissionAuditRecord, PermissionAuditStorePort, PermissionGrant,
     PermissionGrantKey, PermissionGrantStorePort, PermissionReply, PermissionReplySource,
-    PermissionReplyStorePort, PermissionRequestEvent, PermissionRequestSource,
-    PermissionRequestSourceKind, PermissionV2Request, PortError, PortErrorKind, PortResult,
-    RuntimeServiceCapability, RuntimeServicePort,
+    PermissionReplyStorePort, PermissionRequest, PermissionRequestEvent, PermissionRequestSource,
+    PermissionRequestSourceKind, PortError, PortErrorKind, PortResult, RuntimeServiceCapability,
+    RuntimeServicePort,
 };
 use serde_json::Map;
 use std::sync::{Arc, Mutex};
@@ -146,8 +146,8 @@ impl ClockPort for FixedClock {
     }
 }
 
-fn request(request_id: &str, session_id: &str) -> PermissionV2Request {
-    PermissionV2Request {
+fn request(request_id: &str, session_id: &str) -> PermissionRequest {
+    PermissionRequest {
         request_id: request_id.to_string(),
         round_id: format!("synthetic:{request_id}"),
         order: 0,
@@ -314,27 +314,27 @@ async fn reject_releases_only_the_selected_request() {
 async fn batch_reply_resolves_only_the_anchor_and_following_requests_in_one_round() {
     let (manager, _) = manager();
     let requests = vec![
-        PermissionV2Request {
+        PermissionRequest {
             round_id: "round-a".to_string(),
             order: 0,
             ..request("earlier", "session-a")
         },
-        PermissionV2Request {
+        PermissionRequest {
             round_id: "round-a".to_string(),
             order: 1,
             ..request("anchor", "session-a")
         },
-        PermissionV2Request {
+        PermissionRequest {
             round_id: "round-a".to_string(),
             order: 2,
             ..request("following", "session-a")
         },
-        PermissionV2Request {
+        PermissionRequest {
             round_id: "round-b".to_string(),
             order: 2,
             ..request("other-round", "session-a")
         },
-        PermissionV2Request {
+        PermissionRequest {
             round_id: "round-a".to_string(),
             order: 2,
             ..request("other-session", "session-b")
@@ -397,13 +397,13 @@ async fn batch_always_persists_each_request_grant_atomically() {
     let (manager, store) = manager();
     let receivers = manager
         .register_batch(vec![
-            PermissionV2Request {
+            PermissionRequest {
                 round_id: "round-a".to_string(),
                 order: 0,
                 save_resources: vec!["src/a.rs".to_string()],
                 ..request("request-a", "session-a")
             },
-            PermissionV2Request {
+            PermissionRequest {
                 round_id: "round-a".to_string(),
                 order: 1,
                 save_resources: vec!["src/b.rs".to_string()],
@@ -453,7 +453,7 @@ async fn pending_snapshots_and_session_cancellation_preserve_registration_order(
         .await
         .expect("register third request");
 
-    let request_ids = |requests: Vec<PermissionV2Request>| {
+    let request_ids = |requests: Vec<PermissionRequest>| {
         requests
             .into_iter()
             .map(|request| request.request_id)
@@ -489,7 +489,7 @@ async fn pending_snapshots_and_session_cancellation_preserve_registration_order(
 async fn pending_snapshots_order_requests_within_each_round() {
     let (manager, _) = manager();
     let first_round_late = manager
-        .register(PermissionV2Request {
+        .register(PermissionRequest {
             round_id: "round-1".to_string(),
             order: 2,
             ..request("request-round-1-late", "session-a")
@@ -497,7 +497,7 @@ async fn pending_snapshots_order_requests_within_each_round() {
         .await
         .expect("register first round late request");
     let second_round = manager
-        .register(PermissionV2Request {
+        .register(PermissionRequest {
             round_id: "round-2".to_string(),
             order: 0,
             ..request("request-round-2", "session-a")
@@ -505,7 +505,7 @@ async fn pending_snapshots_order_requests_within_each_round() {
         .await
         .expect("register second round request");
     let first_round_early = manager
-        .register(PermissionV2Request {
+        .register(PermissionRequest {
             round_id: "round-1".to_string(),
             order: 0,
             ..request("request-round-1-early", "session-a")
@@ -543,12 +543,12 @@ async fn register_batch_publishes_asked_events_in_batch_order() {
     let (manager, _) = manager();
     let mut events = manager.subscribe();
     let requests = vec![
-        PermissionV2Request {
+        PermissionRequest {
             round_id: "round-1".to_string(),
             order: 0,
             ..request("request-first", "session-a")
         },
-        PermissionV2Request {
+        PermissionRequest {
             round_id: "round-1".to_string(),
             order: 1,
             ..request("request-second", "session-a")
@@ -653,12 +653,12 @@ async fn batch_reply_persistence_failure_keeps_every_request_pending() {
     let (manager, store) = manager();
     let _receivers = manager
         .register_batch(vec![
-            PermissionV2Request {
+            PermissionRequest {
                 round_id: "round-a".to_string(),
                 order: 0,
                 ..request("request-a", "session-a")
             },
-            PermissionV2Request {
+            PermissionRequest {
                 round_id: "round-a".to_string(),
                 order: 1,
                 ..request("request-b", "session-a")

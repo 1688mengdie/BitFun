@@ -24,9 +24,9 @@ pub struct ToolExecutionOptions {
     pub max_retries: usize,
     /// Tool execution timeout (seconds), None means infinite waiting
     pub timeout_secs: Option<u64>,
-    /// Ordered V2 permission rules. An unmatched resource defaults to `ask`.
+    /// Ordered permission rules. An unmatched resource defaults to `ask`.
     pub permission_rules: Vec<PermissionRule>,
-    /// Automatically reply `once` to `ask` requests through the V2 manager.
+    /// Automatically reply `once` to `ask` requests through the permission manager.
     pub auto_approve_ask: bool,
 }
 

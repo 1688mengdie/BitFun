@@ -2476,7 +2476,7 @@ export function runManifestParserSelfTest({
       path: 'src/crates/assembly/core/src/agentic/tools/pipeline/tool_pipeline.rs',
       contracts: [
         'remote_workspace_route_root_isolated_from_same_local_path',
-        'v2_once_and_always_replies_control_execution_and_remembered_grants',
+        'once_and_always_replies_control_execution_and_remembered_grants',
         'should_retry_tool_attempt',
         'retry_delay_ms',
         'build_tool_call_truncation_recovery_notice',

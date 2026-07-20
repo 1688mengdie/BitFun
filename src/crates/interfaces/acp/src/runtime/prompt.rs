@@ -8,7 +8,7 @@ use agent_client_protocol::{Client, ConnectionTo, Error, Result};
 use bitfun_agent_runtime::sdk::{
     AgentDialogTurnRequest, AgentSessionEventReceiver, AgentSubmissionSource,
     AgentTurnCancellationRequest, DialogSubmissionPolicy, DialogSubmitOutcome, PermissionReply,
-    PermissionRequestEvent, PermissionRequestEventReceiver, PermissionV2Request,
+    PermissionRequest, PermissionRequestEvent, PermissionRequestEventReceiver,
 };
 use bitfun_events::AgenticEvent as CoreEvent;
 use log::warn;
@@ -156,7 +156,7 @@ fn acp_user_message_metadata() -> serde_json::Map<String, serde_json::Value> {
         .expect("ACP metadata must be an object")
 }
 
-fn permission_request_targets_session(request: &PermissionV2Request, session_id: &str) -> bool {
+fn permission_request_targets_session(request: &PermissionRequest, session_id: &str) -> bool {
     request.session_id == session_id
         || request
             .delegation
@@ -184,7 +184,7 @@ async fn wait_for_prompt_completion(
                     Ok(PermissionRequestEvent::Asked { request })
                         if permission_request_targets_session(&request, bitfun_session_id) =>
                     {
-                        handle_v2_permission_request(
+                        handle_permission_request(
                             runtime,
                             connection,
                             acp_session_id,
@@ -351,11 +351,11 @@ fn send_inline_think_segments(
     Ok(())
 }
 
-async fn handle_v2_permission_request(
+async fn handle_permission_request(
     runtime: &BitfunAcpRuntime,
     connection: &ConnectionTo<Client>,
     acp_session_id: &str,
-    permission: PermissionV2Request,
+    permission: PermissionRequest,
 ) -> Result<()> {
     let request_id = permission.request_id.clone();
     let tool_name = permission.source.identity.clone();
@@ -423,8 +423,8 @@ async fn handle_v2_permission_request(
 mod tests {
     use bitfun_agent_runtime::sdk::{
         AgentInputAttachment, AgentSubmissionSource, DialogSubmitOutcome,
-        PermissionDelegationContext, PermissionRequestSource, PermissionRequestSourceKind,
-        PermissionV2Request,
+        PermissionDelegationContext, PermissionRequest, PermissionRequestSource,
+        PermissionRequestSourceKind,
     };
     use bitfun_events::AgenticEvent;
 
@@ -444,11 +444,8 @@ mod tests {
         }
     }
 
-    fn permission_request(
-        session_id: &str,
-        parent_session_id: Option<&str>,
-    ) -> PermissionV2Request {
-        PermissionV2Request {
+    fn permission_request(session_id: &str, parent_session_id: Option<&str>) -> PermissionRequest {
+        PermissionRequest {
             request_id: "request-1".to_string(),
             round_id: "synthetic:request-1".to_string(),
             order: 0,

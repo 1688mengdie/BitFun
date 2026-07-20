@@ -19,7 +19,7 @@ pub mod events;
 pub mod evidence_ledger;
 pub mod file_read_state;
 pub mod output_surface;
-pub mod permission_v2;
+pub mod permission;
 pub mod post_call_hooks;
 pub mod prompt;
 pub mod prompt_cache;

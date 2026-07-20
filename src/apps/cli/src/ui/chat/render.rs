@@ -107,8 +107,8 @@ impl ChatView {
         self.render_shortcuts(frame, chunks[4], chat_state);
 
         // Render permission overlay on top of messages area if active (highest priority)
-        if let Some(ref prompt) = chat_state.permission_v2_prompt {
-            render_permission_v2_overlay(frame, prompt, &self.theme, chunks[1]);
+        if let Some(ref prompt) = chat_state.permission_prompt {
+            render_permission_overlay(frame, prompt, &self.theme, chunks[1]);
         } else if let Some(ref prompt) = chat_state.question_prompt {
             render_question_overlay(frame, prompt, &self.theme, chunks[1]);
         }

@@ -5,7 +5,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
   PermissionRequestEvent,
-  PermissionV2Request,
+  PermissionRequest,
 } from '@/infrastructure/api/service-api/AgentAPI';
 import { usePermissionRequests } from './usePermissionRequests';
 
@@ -15,7 +15,7 @@ const agentApiMock = vi.hoisted(() => ({
   listener: null as ((event: PermissionRequestEvent) => void) | null,
   unlisten: vi.fn(),
   subscribePermissionRequests: vi.fn(() => Promise.resolve()),
-  listPendingPermissionRequests: vi.fn(() => Promise.resolve([] as PermissionV2Request[])),
+  listPendingPermissionRequests: vi.fn(() => Promise.resolve([] as PermissionRequest[])),
   respondPermission: vi.fn(() => Promise.resolve()),
   respondPermissionBatch: vi.fn(() => Promise.resolve([] as string[])),
 }));
@@ -39,7 +39,7 @@ function request(
   requestId: string,
   sessionId: string,
   parentSessionId?: string,
-): PermissionV2Request {
+): PermissionRequest {
   return {
     requestId,
     roundId: parentSessionId ? 'round-child' : 'round-parent',
@@ -172,7 +172,7 @@ describe('usePermissionRequests', () => {
   });
 
   it('does not restore a resolved request from a stale pending snapshot', async () => {
-    let resolvePending: (requests: PermissionV2Request[]) => void = () => undefined;
+    let resolvePending: (requests: PermissionRequest[]) => void = () => undefined;
     agentApiMock.listPendingPermissionRequests.mockImplementation(
       () => new Promise((resolve) => {
         resolvePending = resolve;

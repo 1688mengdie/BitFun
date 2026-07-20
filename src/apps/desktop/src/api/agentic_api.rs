@@ -15,7 +15,7 @@ use crate::startup_trace::DesktopStartupTrace;
 use bitfun_agent_runtime::sdk::{
     AgentDialogTurnRequest, AgentInputAttachment, AgentSessionModelUpdateRequest,
     AgentSubmissionSource, AgentTurnCancellationRequest, PermissionAuditRecord, PermissionGrant,
-    PermissionGrantKey, PermissionReply, PermissionV2Request,
+    PermissionGrantKey, PermissionReply, PermissionRequest,
 };
 use bitfun_core::agentic::agents::AgentSource;
 use bitfun_core::agentic::coordination::{
@@ -1113,7 +1113,7 @@ fn permission_reply(request: PermissionResponseRequest) -> PermissionReply {
 #[tauri::command]
 pub fn list_pending_permission_requests(
     runtime: State<'_, DesktopRuntimeContext>,
-) -> Result<Vec<PermissionV2Request>, String> {
+) -> Result<Vec<PermissionRequest>, String> {
     runtime
         .agent_runtime()
         .pending_permission_requests()
