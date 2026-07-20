@@ -104,6 +104,8 @@ export interface PermissionV2Request {
   order: number;
   /** Provider/tool-stream call ID for correlating one concrete tool card. */
   toolCallId?: string;
+  /** User-presentable workspace root; distinct from the stable project ID. */
+  projectPath?: string;
   projectId: string;
   sessionId: string;
   agentId: string;

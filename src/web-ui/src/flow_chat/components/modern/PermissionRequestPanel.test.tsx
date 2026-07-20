@@ -11,12 +11,27 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     t: (key: string, values?: Record<string, string>) => {
-      if (key === 'permissionV2.subagentRequest') {
-        return `${values?.subagent} subagent · ${values?.action} · ${values?.tool}`;
+      if (key === 'permissionV2.subagentOwner') {
+        return `${values?.subagent} subagent`;
+      }
+      if (key === 'permissionV2.allowAlwaysTooltip') {
+        return `Always allow saves matching access for ${values?.projectPath}`;
+      }
+      if (key === 'permissionV2.actions.edit') {
+        return 'Edit files';
+      }
+      if (key === 'permissionV2.actions.bash') {
+        return 'Run command';
       }
       return key;
     },
   }),
+}));
+
+vi.mock('@/component-library', () => ({
+  Tooltip: ({ content, children }: { content: string; children: React.ReactElement }) => (
+    <span data-tooltip={content}>{children}</span>
+  ),
 }));
 
 vi.mock('../../store/chatInputStateStore', () => ({
@@ -30,10 +45,12 @@ function request(delegated: boolean): PermissionV2Request {
     order: 0,
     sessionId: delegated ? 'child-session' : 'parent-session',
     toolCallId: delegated ? 'child-tool' : 'direct-tool',
+    projectPath: '/workspace/BitFun',
     projectId: 'project-1',
     agentId: delegated ? 'Explore' : 'agentic',
     action: 'edit',
     resources: ['src/main.rs'],
+    saveResources: ['src/main.rs'],
     source: { kind: 'tool_call', identity: 'Write' },
     delegation: delegated
       ? {
@@ -72,10 +89,12 @@ describe('PermissionRequestPanel', () => {
       );
     });
 
-    expect(container.textContent).toContain('Explore subagent · edit · Write');
+    expect(container.textContent).toContain('Explore subagent');
+    expect(container.querySelector('.permission-request-panel__heading h2')?.textContent)
+      .toBe('permissionV2.title');
   });
 
-  it('preserves the direct request description', () => {
+  it('keeps direct request details in the request row and scopes always allow to the project path', () => {
     act(() => {
       root.render(
         <PermissionRequestPanel
@@ -86,8 +105,38 @@ describe('PermissionRequestPanel', () => {
       );
     });
 
-    expect(container.textContent).toContain('edit · Write');
+    expect(container.textContent).toContain('Edit files');
+    expect(container.textContent).toContain('Write');
+    expect(container.textContent).not.toContain('edit');
     expect(container.textContent).not.toContain('subagent');
+    const tooltips = [...container.querySelectorAll('[data-tooltip]')]
+      .map((node) => node.getAttribute('data-tooltip'));
+    expect(tooltips).toContain('Always allow saves matching access for /workspace/BitFun');
+    expect(tooltips).not.toContain('project-1');
+  });
+
+  it('keeps resources to one ellipsized summary with the complete value in a tooltip', () => {
+    const longResource = 'src/a-very-long-directory-name/another-long-directory/file-with-a-long-name.ts';
+    const bashRequest = {
+      ...request(false),
+      action: 'bash',
+      resources: [longResource, 'pnpm run type-check:web'],
+    };
+    act(() => {
+      root.render(
+        <PermissionRequestPanel
+          requests={[bashRequest]}
+          onRespond={vi.fn()}
+          onRespondBatch={vi.fn()}
+        />,
+      );
+    });
+
+    const resourceSummary = container.querySelector('.permission-request-panel__resource-summary');
+    expect(resourceSummary?.textContent).toBe(`${longResource}, pnpm run type-check:web`);
+    expect(resourceSummary?.parentElement?.getAttribute('data-tooltip'))
+      .toBe(`${longResource}, pnpm run type-check:web`);
+    expect(container.textContent).toContain('Run command');
   });
 
   it('shows one ordered batch and responds to the current and following requests once', async () => {

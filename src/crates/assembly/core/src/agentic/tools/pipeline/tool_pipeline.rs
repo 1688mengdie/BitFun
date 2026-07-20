@@ -460,6 +460,16 @@ fn permission_project_id(context: &ToolUseContext) -> BitFunResult<String> {
     permission_project_id_for_workspace_identity(&workspace.session_identity, workspace.is_remote())
 }
 
+fn permission_project_path(context: &ToolUseContext) -> BitFunResult<String> {
+    let workspace = context.workspace.as_ref().ok_or_else(|| {
+        BitFunError::validation("A workspace is required for file permissions".to_string())
+    })?;
+    Ok(workspace
+        .session_identity
+        .logical_workspace_path()
+        .to_string())
+}
+
 fn permission_resource_case_sensitivity(
     context: &ToolUseContext,
 ) -> PermissionResourceCaseSensitivity {
@@ -584,6 +594,7 @@ impl ToolPipeline {
         }
 
         let project_id = permission_project_id(&context)?;
+        let project_path = permission_project_path(&context)?;
         let permission_rules = task.options.permission_rules.clone();
         let case_sensitivity = permission_resource_case_sensitivity(&context);
         let round_id = task.context.round_id.clone();
@@ -634,6 +645,7 @@ impl ToolPipeline {
                 round_id: round_id.clone(),
                 order: task.tool_call_order,
                 tool_call_id: Some(tool_call_id.clone()),
+                project_path: Some(project_path.clone()),
                 project_id: project_id.clone(),
                 session_id: session_id.clone(),
                 agent_id: agent_type.clone(),
@@ -2771,6 +2783,14 @@ mod tests {
 
         let requests = wait_for_permission_request_count(&manager, 2).await;
         assert_eq!(requests.len(), 2);
+        let expected_project_path = std::env::temp_dir()
+            .join("bitfun-permission-v2-test")
+            .to_string_lossy()
+            .to_string();
+        assert_eq!(
+            requests[0].project_path.as_deref(),
+            Some(expected_project_path.as_str())
+        );
         assert_eq!(requests[0].tool_call_id.as_deref(), Some("reject-me"));
         assert_eq!(requests[0].order, 0);
         assert_eq!(requests[1].tool_call_id.as_deref(), Some("keep-going"));

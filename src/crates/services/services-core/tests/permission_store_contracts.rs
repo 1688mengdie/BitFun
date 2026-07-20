@@ -15,6 +15,7 @@ fn request(request_id: &str, project_id: &str) -> PermissionV2Request {
         round_id: format!("synthetic:{request_id}"),
         order: 0,
         tool_call_id: None,
+        project_path: None,
         project_id: project_id.to_string(),
         session_id: "session-1".to_string(),
         agent_id: "agentic".to_string(),

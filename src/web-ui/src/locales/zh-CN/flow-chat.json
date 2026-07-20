@@ -1,20 +1,36 @@
 {
   "permissionV2": {
     "title": "需要授权",
-    "subagentRequest": "{{subagent}} 子 Agent · {{action}} · {{tool}}",
-    "scope": "始终允许会为项目 {{project}} 保存访问权限。",
-    "scopeOnce": "仅允许本次操作，不会保存项目授权。",
+    "subagentOwner": "{{subagent}} 子 Agent",
     "feedbackLabel": "拒绝反馈",
     "feedbackPlaceholder": "拒绝时可选填后续建议",
     "responseFailed": "权限回复未能送达，请重试。",
     "allowOnce": "允许一次",
     "allowAlways": "始终允许",
+    "allowAlwaysTooltip": "始终允许会为 {{projectPath}} 保存匹配的访问权限。",
+    "allowAlwaysTooltipCurrentProject": "始终允许会为当前项目保存匹配的访问权限。",
+    "allowAlwaysTooltipNoGrant": "此请求没有可保存的访问范围；始终允许仅应用于本次请求。",
     "reject": "拒绝",
     "batchCount": "{{count}} 个权限请求",
     "current": "当前",
     "pending": "等待中",
-    "allowCurrentAndFollowing": "允许当前及之后",
-    "rejectCurrentAndFollowing": "拒绝当前及之后"
+    "actions": {
+      "read": "读取文件",
+      "edit": "编辑文件",
+      "bash": "执行命令",
+      "git": "Git 操作",
+      "computerUse": "控制设备",
+      "webSearch": "搜索网络",
+      "webFetch": "访问网页",
+      "mcp": "MCP 调用",
+      "task": "运行任务",
+      "skill": "运行技能",
+      "customTool": "外部工具",
+      "external": "外部访问",
+      "other": "其他操作"
+    },
+    "allowCurrentAndFollowing": "允许全部",
+    "rejectCurrentAndFollowing": "拒绝全部"
   },
   "emptyState": {
     "welcomeBack": "欢迎回来！",

@@ -36,6 +36,7 @@ mod tests {
             round_id: "synthetic:request-1".to_string(),
             order: 0,
             tool_call_id: Some("child-tool".to_string()),
+            project_path: None,
             project_id: "project-1".to_string(),
             session_id: "child-session".to_string(),
             agent_id: "Explore".to_string(),

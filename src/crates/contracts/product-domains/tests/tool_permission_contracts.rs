@@ -386,6 +386,7 @@ fn permission_request_correlation_fields_use_stable_wire_shape() {
         round_id: "round-1".to_string(),
         order: 2,
         tool_call_id: Some("call-1".to_string()),
+        project_path: Some("/workspace/project".to_string()),
         project_id: "project-1".to_string(),
         session_id: "session-1".to_string(),
         agent_id: "agentic".to_string(),
@@ -408,6 +409,7 @@ fn permission_request_correlation_fields_use_stable_wire_shape() {
     assert_eq!(value["roundId"], "round-1");
     assert_eq!(value["order"], 2);
     assert_eq!(value["toolCallId"], "call-1");
+    assert_eq!(value["projectPath"], "/workspace/project");
     assert_eq!(
         value["delegation"],
         json!({
