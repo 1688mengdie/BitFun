@@ -453,6 +453,7 @@ mod tests {
             round_id: "synthetic:request-1".to_string(),
             order: 0,
             tool_call_id: Some("tool-call".to_string()),
+            project_path: Some("/workspace".to_string()),
             project_id: "project".to_string(),
             session_id: session_id.to_string(),
             agent_id: "Explore".to_string(),

@@ -289,6 +289,12 @@ pub struct PermissionRequest {
     /// extensions may not expose a call ID at all.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
+    /// User-presentable logical workspace root for this permission request.
+    ///
+    /// This is display-only and must not be used as a persistence or grant
+    /// identity. `project_id` remains the stable authorization scope key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_path: Option<String>,
     pub project_id: String,
     pub session_id: String,
     pub agent_id: String,

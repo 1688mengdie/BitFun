@@ -1,20 +1,36 @@
 {
   "permissionV2": {
     "title": "Permission required",
-    "subagentRequest": "{{subagent}} subagent · {{action}} · {{tool}}",
-    "scope": "Always allow saves access for project {{project}}.",
-    "scopeOnce": "Allow once only; no project grant will be saved.",
+    "subagentOwner": "{{subagent}} subagent",
     "feedbackLabel": "Rejection feedback",
     "feedbackPlaceholder": "Optional guidance when rejecting",
     "responseFailed": "The permission response could not be delivered. Try again.",
     "allowOnce": "Allow once",
     "allowAlways": "Always allow",
+    "allowAlwaysTooltip": "Always allow saves matching access for {{projectPath}}.",
+    "allowAlwaysTooltipCurrentProject": "Always allow saves matching access for the current project.",
+    "allowAlwaysTooltipNoGrant": "This request has no savable access scope; always allow applies only to this request.",
     "reject": "Reject",
     "batchCount": "{{count}} permission requests",
     "current": "Current",
     "pending": "Pending",
-    "allowCurrentAndFollowing": "Allow current and later",
-    "rejectCurrentAndFollowing": "Reject current and later"
+    "actions": {
+      "read": "Read files",
+      "edit": "Edit files",
+      "bash": "Run command",
+      "git": "Git action",
+      "computerUse": "Control device",
+      "webSearch": "Search web",
+      "webFetch": "Access web",
+      "mcp": "MCP tool",
+      "task": "Run task",
+      "skill": "Run skill",
+      "customTool": "External tool",
+      "external": "External access",
+      "other": "Other action"
+    },
+    "allowCurrentAndFollowing": "Allow all",
+    "rejectCurrentAndFollowing": "Reject all"
   },
   "emptyState": {
     "welcomeBack": "Welcome back!",
