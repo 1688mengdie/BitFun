@@ -916,6 +916,20 @@ pub async fn respond_permission(
         .map_err(|error| error.into_message())
 }
 
+#[tauri::command]
+pub async fn respond_permission_batch(
+    runtime: State<'_, DesktopRuntimeContext>,
+    request: PermissionResponseRequest,
+) -> Result<Vec<String>, String> {
+    let request_id = request.request_id.clone();
+    let reply = permission_reply(request);
+    runtime
+        .agent_runtime()
+        .respond_permission_batch(&request_id, reply)
+        .await
+        .map_err(|error| error.into_message())
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GenerateSessionTitleRequest {

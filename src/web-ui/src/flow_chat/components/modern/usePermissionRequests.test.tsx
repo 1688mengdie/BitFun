@@ -17,6 +17,7 @@ const agentApiMock = vi.hoisted(() => ({
   subscribePermissionRequests: vi.fn(() => Promise.resolve()),
   listPendingPermissionRequests: vi.fn(() => Promise.resolve([] as PermissionV2Request[])),
   respondPermission: vi.fn(() => Promise.resolve()),
+  respondPermissionBatch: vi.fn(() => Promise.resolve([] as string[])),
 }));
 
 vi.mock('@/infrastructure/api/service-api/AgentAPI', () => ({
@@ -28,6 +29,7 @@ vi.mock('@/infrastructure/api/service-api/AgentAPI', () => ({
     subscribePermissionRequests: agentApiMock.subscribePermissionRequests,
     listPendingPermissionRequests: agentApiMock.listPendingPermissionRequests,
     respondPermission: agentApiMock.respondPermission,
+    respondPermissionBatch: agentApiMock.respondPermissionBatch,
   },
 }));
 
@@ -105,6 +107,8 @@ describe('usePermissionRequests', () => {
     agentApiMock.listPendingPermissionRequests.mockResolvedValue([]);
     agentApiMock.respondPermission.mockReset();
     agentApiMock.respondPermission.mockResolvedValue(undefined);
+    agentApiMock.respondPermissionBatch.mockReset();
+    agentApiMock.respondPermissionBatch.mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -192,5 +196,40 @@ describe('usePermissionRequests', () => {
     });
 
     expect(controller?.requests).toEqual([]);
+  });
+
+  it('removes all backend-resolved requests after one batch response', async () => {
+    await renderHarness(root, 'session-1', (next) => {
+      controller = next;
+    });
+    const first = request('first', 'session-1');
+    const second = { ...request('second', 'session-1'), order: 1 };
+    const later = { ...request('later', 'session-1'), roundId: 'later-round' };
+    emit({ event: 'asked', request: first });
+    emit({ event: 'asked', request: second });
+    emit({ event: 'asked', request: later });
+    agentApiMock.respondPermissionBatch.mockResolvedValue(['first', 'second']);
+
+    await act(async () => {
+      await controller?.respondBatch('first', 'once');
+    });
+
+    expect(agentApiMock.respondPermissionBatch).toHaveBeenCalledWith('first', 'once', undefined);
+    expect(controller?.requests.map((item) => item.requestId)).toEqual(['later']);
+  });
+
+  it('keeps pending requests when a batch response fails', async () => {
+    await renderHarness(root, 'session-1', (next) => {
+      controller = next;
+    });
+    const first = request('first', 'session-1');
+    emit({ event: 'asked', request: first });
+    agentApiMock.respondPermissionBatch.mockRejectedValue(new Error('offline'));
+
+    await act(async () => {
+      await expect(controller?.respondBatch('first', 'reject')).rejects.toThrow('offline');
+    });
+
+    expect(controller?.requests.map((item) => item.requestId)).toEqual(['first']);
   });
 });

@@ -9,7 +9,12 @@
     "responseFailed": "The permission response could not be delivered. Try again.",
     "allowOnce": "Allow once",
     "allowAlways": "Always allow",
-    "reject": "Reject"
+    "reject": "Reject",
+    "batchCount": "{{count}} permission requests",
+    "current": "Current",
+    "pending": "Pending",
+    "allowCurrentAndFollowing": "Allow current and later",
+    "rejectCurrentAndFollowing": "Reject current and later"
   },
   "emptyState": {
     "welcomeBack": "Welcome back!",

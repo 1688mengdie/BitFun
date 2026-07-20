@@ -300,11 +300,14 @@ impl PermissionRequestManager {
         &self,
         include: impl Fn(&PendingPermission) -> bool,
     ) -> Vec<PermissionV2Request> {
-        let mut first_registration_by_round = HashMap::<String, u64>::new();
+        let mut first_registration_by_round = HashMap::<(String, String), u64>::new();
         for entry in self.pending.iter().filter(|entry| include(entry.value())) {
-            let round_id = entry.request.round_id.clone();
+            let batch_id = (
+                entry.request.session_id.clone(),
+                entry.request.round_id.clone(),
+            );
             first_registration_by_round
-                .entry(round_id)
+                .entry(batch_id)
                 .and_modify(|first| *first = (*first).min(entry.registration_sequence))
                 .or_insert(entry.registration_sequence);
         }
@@ -316,7 +319,10 @@ impl PermissionRequestManager {
                 include(entry.value()).then(|| {
                     (
                         first_registration_by_round
-                            .get(&entry.request.round_id)
+                            .get(&(
+                                entry.request.session_id.clone(),
+                                entry.request.round_id.clone(),
+                            ))
                             .copied()
                             .unwrap_or(entry.registration_sequence),
                         entry.request.order,
@@ -342,6 +348,16 @@ impl PermissionRequestManager {
         reply: PermissionReply,
         source: PermissionReplySource,
     ) -> Result<PermissionReplyResolution, PermissionRequestManagerError> {
+        self.reply_from(request_id, false, reply, source).await
+    }
+
+    pub async fn reply_from(
+        &self,
+        request_id: &str,
+        include_following: bool,
+        reply: PermissionReply,
+        source: PermissionReplySource,
+    ) -> Result<PermissionReplyResolution, PermissionRequestManagerError> {
         let _operation = self.operations.lock().await;
         let request = self
             .pending
@@ -351,12 +367,23 @@ impl PermissionRequestManager {
                 PermissionRequestManagerError::RequestNotFound(request_id.to_string())
             })?;
         let timestamp_ms = self.clock.now_unix_millis();
-        let grants = grants_for_reply(&request, &reply, timestamp_ms);
-
-        // A rejection is scoped to the request the user explicitly answered.
-        // Other pending requests may belong to independent tool calls in the
-        // same round and must remain available for their own decisions.
-        let resolutions = vec![(request.clone(), reply.clone())];
+        let resolution_requests = if include_following {
+            self.ordered_pending_requests(|pending| {
+                pending.request.session_id == request.session_id
+                    && pending.request.round_id == request.round_id
+                    && pending.request.order >= request.order
+            })
+        } else {
+            vec![request.clone()]
+        };
+        let resolutions = resolution_requests
+            .into_iter()
+            .map(|request| (request, reply.clone()))
+            .collect::<Vec<_>>();
+        let grants = resolutions
+            .iter()
+            .flat_map(|(request, reply)| grants_for_reply(request, reply, timestamp_ms))
+            .collect::<Vec<_>>();
 
         let audit = resolutions
             .iter()

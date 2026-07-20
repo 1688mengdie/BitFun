@@ -27,6 +27,7 @@ describe('peerInvokePriorityFor', () => {
       'list_pending_permission_requests',
       'subscribe_permission_requests',
       'respond_permission',
+      'respond_permission_batch',
       'list_project_permission_grants',
       'remove_project_permission_grant',
       'clear_project_permission_grants',

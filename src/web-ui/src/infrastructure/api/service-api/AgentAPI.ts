@@ -906,6 +906,23 @@ export class AgentAPI {
     }
   }
 
+  async respondPermissionBatch(
+    requestId: string,
+    reply: PermissionReplyKind,
+    feedback?: string,
+  ): Promise<string[]> {
+    const request = {
+      requestId,
+      reply,
+      ...(feedback?.trim() ? { feedback: feedback.trim() } : {}),
+    };
+    try {
+      return await api.invoke<string[]>('respond_permission_batch', { request });
+    } catch (error) {
+      throw createTauriCommandError('respond_permission_batch', error, request);
+    }
+  }
+
   onPermissionRequestEvent(callback: (event: PermissionRequestEvent) => void): () => void {
     return api.listen<PermissionRequestEvent>('permission://event', callback);
   }

@@ -9,7 +9,12 @@
     "responseFailed": "权限回复未能送达，请重试。",
     "allowOnce": "允许一次",
     "allowAlways": "始终允许",
-    "reject": "拒绝"
+    "reject": "拒绝",
+    "batchCount": "{{count}} 个权限请求",
+    "current": "当前",
+    "pending": "等待中",
+    "allowCurrentAndFollowing": "允许当前及之后",
+    "rejectCurrentAndFollowing": "拒绝当前及之后"
   },
   "emptyState": {
     "welcomeBack": "欢迎回来！",

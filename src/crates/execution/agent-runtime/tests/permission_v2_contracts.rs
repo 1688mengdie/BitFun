@@ -310,6 +310,133 @@ async fn reject_releases_only_the_selected_request() {
 }
 
 #[tokio::test]
+async fn batch_reply_resolves_only_the_anchor_and_following_requests_in_one_round() {
+    let (manager, _) = manager();
+    let requests = vec![
+        PermissionV2Request {
+            round_id: "round-a".to_string(),
+            order: 0,
+            ..request("earlier", "session-a")
+        },
+        PermissionV2Request {
+            round_id: "round-a".to_string(),
+            order: 1,
+            ..request("anchor", "session-a")
+        },
+        PermissionV2Request {
+            round_id: "round-a".to_string(),
+            order: 2,
+            ..request("following", "session-a")
+        },
+        PermissionV2Request {
+            round_id: "round-b".to_string(),
+            order: 2,
+            ..request("other-round", "session-a")
+        },
+        PermissionV2Request {
+            round_id: "round-a".to_string(),
+            order: 2,
+            ..request("other-session", "session-b")
+        },
+    ];
+    let mut receivers = manager
+        .register_batch(requests)
+        .await
+        .expect("register batch reply fixtures");
+    let earlier = receivers.remove(0);
+    let anchor = receivers.remove(0);
+    let following = receivers.remove(0);
+    let other_round = receivers.remove(0);
+    let other_session = receivers.remove(0);
+
+    let resolution = manager
+        .reply_from(
+            "anchor",
+            true,
+            PermissionReply::Once,
+            PermissionReplySource::User,
+        )
+        .await
+        .expect("reply to current and following requests");
+
+    assert_eq!(resolution.resolved_request_ids, vec!["anchor", "following"]);
+    for receiver in [anchor, following] {
+        assert_eq!(
+            receiver.wait().await,
+            PermissionWaitOutcome::Replied(PermissionReply::Once)
+        );
+    }
+    assert_eq!(
+        manager
+            .pending_requests()
+            .into_iter()
+            .map(|request| request.request_id)
+            .collect::<Vec<_>>(),
+        vec!["earlier", "other-round", "other-session"]
+    );
+
+    manager
+        .cancel_session("session-a", "test cleanup")
+        .await
+        .expect("cancel remaining session-a requests");
+    manager
+        .cancel_session("session-b", "test cleanup")
+        .await
+        .expect("cancel remaining session-b request");
+    for receiver in [earlier, other_round, other_session] {
+        assert!(matches!(
+            receiver.wait().await,
+            PermissionWaitOutcome::Cancelled { .. }
+        ));
+    }
+}
+
+#[tokio::test]
+async fn batch_always_persists_each_request_grant_atomically() {
+    let (manager, store) = manager();
+    let receivers = manager
+        .register_batch(vec![
+            PermissionV2Request {
+                round_id: "round-a".to_string(),
+                order: 0,
+                save_resources: vec!["src/a.rs".to_string()],
+                ..request("request-a", "session-a")
+            },
+            PermissionV2Request {
+                round_id: "round-a".to_string(),
+                order: 1,
+                save_resources: vec!["src/b.rs".to_string()],
+                ..request("request-b", "session-a")
+            },
+        ])
+        .await
+        .expect("register always batch");
+
+    let resolution = manager
+        .reply_from(
+            "request-a",
+            true,
+            PermissionReply::Always,
+            PermissionReplySource::User,
+        )
+        .await
+        .expect("always allow batch");
+
+    assert_eq!(
+        resolution.resolved_request_ids,
+        vec!["request-a", "request-b"]
+    );
+    assert_eq!(resolution.saved_grants.len(), 2);
+    assert_eq!(store.grants.lock().unwrap().len(), 2);
+    for receiver in receivers {
+        assert_eq!(
+            receiver.wait().await,
+            PermissionWaitOutcome::Replied(PermissionReply::Always)
+        );
+    }
+}
+
+#[tokio::test]
 async fn pending_snapshots_and_session_cancellation_preserve_registration_order() {
     let (manager, _) = manager();
     let first = manager
@@ -518,6 +645,50 @@ async fn audit_persistence_failure_keeps_the_request_pending_and_waiting() {
         PermissionRequestManagerError::ReplyStore(_)
     ));
     assert_eq!(manager.pending_requests().len(), 1);
+}
+
+#[tokio::test]
+async fn batch_reply_persistence_failure_keeps_every_request_pending() {
+    let (manager, store) = manager();
+    let _receivers = manager
+        .register_batch(vec![
+            PermissionV2Request {
+                round_id: "round-a".to_string(),
+                order: 0,
+                ..request("request-a", "session-a")
+            },
+            PermissionV2Request {
+                round_id: "round-a".to_string(),
+                order: 1,
+                ..request("request-b", "session-a")
+            },
+        ])
+        .await
+        .expect("register failing batch");
+    *store.fail_audit.lock().unwrap() = true;
+
+    let error = manager
+        .reply_from(
+            "request-a",
+            true,
+            PermissionReply::Once,
+            PermissionReplySource::User,
+        )
+        .await
+        .expect_err("batch persistence failure must fail closed");
+
+    assert!(matches!(
+        error,
+        PermissionRequestManagerError::ReplyStore(_)
+    ));
+    assert_eq!(
+        manager
+            .pending_requests()
+            .into_iter()
+            .map(|request| request.request_id)
+            .collect::<Vec<_>>(),
+        vec!["request-a", "request-b"]
+    );
 }
 
 #[tokio::test]

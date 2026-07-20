@@ -50,4 +50,19 @@ describe('AgentAPI', () => {
     });
   });
 
+  it('responds to the current and following V2 permission requests atomically', async () => {
+    invokeMock.mockResolvedValue(['permission-1', 'permission-2']);
+
+    await expect(
+      agentAPI.respondPermissionBatch('permission-1', 'always'),
+    ).resolves.toEqual(['permission-1', 'permission-2']);
+
+    expect(invokeMock).toHaveBeenCalledWith('respond_permission_batch', {
+      request: {
+        requestId: 'permission-1',
+        reply: 'always',
+      },
+    });
+  });
+
 });

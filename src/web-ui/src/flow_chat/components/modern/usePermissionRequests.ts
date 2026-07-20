@@ -8,6 +8,7 @@ import {
 import {
   applyPermissionRequestEvent,
   reconcilePermissionRequestSnapshot,
+  selectActivePermissionBatch,
   selectPermissionRequestsForSession,
 } from './permissionRequestRouting';
 
@@ -58,10 +59,25 @@ export function usePermissionRequests(sessionId?: string) {
     [],
   );
 
+  const respondBatch = useCallback(
+    async (requestId: string, reply: PermissionReplyKind, feedback?: string) => {
+      const resolvedRequestIds = await agentAPI.respondPermissionBatch(requestId, reply, feedback);
+      const resolved = new Set(resolvedRequestIds);
+      resolvedRequestIds.forEach((id) => resolvedIds.current.add(id));
+      setRequests((current) => current.filter((request) => !resolved.has(request.requestId)));
+    },
+    [],
+  );
+
   const sessionRequests = useMemo(
     () => selectPermissionRequestsForSession(requests, sessionId),
     [requests, sessionId],
   );
 
-  return { requests: sessionRequests, respond };
+  const activeBatch = useMemo(
+    () => selectActivePermissionBatch(requests, sessionId),
+    [requests, sessionId],
+  );
+
+  return { requests: sessionRequests, activeBatch, respond, respondBatch };
 }

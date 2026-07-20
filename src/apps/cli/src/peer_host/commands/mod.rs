@@ -81,6 +81,7 @@ pub(crate) async fn dispatch(
         "list_pending_permission_requests" => permission::list_pending_permission_requests(state),
         "subscribe_permission_requests" => permission::subscribe_permission_requests(),
         "respond_permission" => permission::respond_permission(state, args).await,
+        "respond_permission_batch" => permission::respond_permission_batch(state, args).await,
         "list_project_permission_grants" => {
             permission::list_project_permission_grants(state, args).await
         }

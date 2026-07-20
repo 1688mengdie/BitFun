@@ -1092,6 +1092,10 @@ pub const REMOTE_WORKSPACE_COMMAND_POLICIES: &[(&str, RemoteWorkspacePolicy)] = 
         RemoteWorkspacePolicy::WorkspaceAgnostic,
     ),
     (
+        "respond_permission_batch",
+        RemoteWorkspacePolicy::WorkspaceAgnostic,
+    ),
+    (
         "remove_project_permission_grant",
         RemoteWorkspacePolicy::WorkspaceAgnostic,
     ),

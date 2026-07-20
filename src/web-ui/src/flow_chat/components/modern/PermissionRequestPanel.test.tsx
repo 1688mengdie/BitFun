@@ -63,7 +63,13 @@ describe('PermissionRequestPanel', () => {
 
   it('names the subagent that owns a delegated permission request', () => {
     act(() => {
-      root.render(<PermissionRequestPanel request={request(true)} onRespond={vi.fn()} />);
+      root.render(
+        <PermissionRequestPanel
+          requests={[request(true)]}
+          onRespond={vi.fn()}
+          onRespondBatch={vi.fn()}
+        />,
+      );
     });
 
     expect(container.textContent).toContain('Explore subagent · edit · Write');
@@ -71,10 +77,43 @@ describe('PermissionRequestPanel', () => {
 
   it('preserves the direct request description', () => {
     act(() => {
-      root.render(<PermissionRequestPanel request={request(false)} onRespond={vi.fn()} />);
+      root.render(
+        <PermissionRequestPanel
+          requests={[request(false)]}
+          onRespond={vi.fn()}
+          onRespondBatch={vi.fn()}
+        />,
+      );
     });
 
     expect(container.textContent).toContain('edit · Write');
     expect(container.textContent).not.toContain('subagent');
+  });
+
+  it('shows one ordered batch and responds to the current and following requests once', async () => {
+    const first = request(false);
+    const second = { ...request(false), requestId: 'second-request', order: 1 };
+    const onRespondBatch = vi.fn(() => Promise.resolve());
+    await act(async () => {
+      root.render(
+        <PermissionRequestPanel
+          requests={[first, second]}
+          onRespond={vi.fn()}
+          onRespondBatch={onRespondBatch}
+        />,
+      );
+    });
+
+    const batchButton = [...container.querySelectorAll('button')].find(
+      (button) => button.textContent?.includes('permissionV2.allowCurrentAndFollowing'),
+    );
+    expect(batchButton).toBeDefined();
+    await act(async () => {
+      batchButton?.click();
+      await Promise.resolve();
+    });
+
+    expect(onRespondBatch).toHaveBeenCalledWith(first.requestId, 'once', undefined);
+    expect(container.querySelectorAll('[role="listitem"]')).toHaveLength(2);
   });
 });

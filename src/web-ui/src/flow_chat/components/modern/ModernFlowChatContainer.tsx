@@ -229,7 +229,12 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
   const { t } = useTranslation('flow-chat');
   const virtualItems = useVirtualItems();
   const activeSession = useActiveSession();
-  const { requests: permissionRequests, respond: respondPermission } = usePermissionRequests(
+  const {
+    requests: permissionRequests,
+    activeBatch: activePermissionBatch,
+    respond: respondPermission,
+    respondBatch: respondPermissionBatch,
+  } = usePermissionRequests(
     activeSession?.sessionId,
   );
   const visibleTurnInfo = useVisibleTurnInfo();
@@ -1489,13 +1494,12 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
           onSend={handleSendBackgroundCommandInput}
         />
 
-        {permissionRequests[0] && (
+        {activePermissionBatch && (
           <PermissionRequestPanel
-            request={permissionRequests[0]}
+            requests={activePermissionBatch.requests}
             aboveChatInput={permissionPanelAboveChatInput}
-            onRespond={(reply, feedback) =>
-              respondPermission(permissionRequests[0].requestId, reply, feedback)
-            }
+            onRespond={respondPermission}
+            onRespondBatch={respondPermissionBatch}
           />
         )}
 

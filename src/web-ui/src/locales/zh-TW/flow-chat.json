@@ -9,7 +9,12 @@
     "responseFailed": "權限回覆未能送達，請重試。",
     "allowOnce": "允許一次",
     "allowAlways": "始終允許",
-    "reject": "拒絕"
+    "reject": "拒絕",
+    "batchCount": "{{count}} 個授權請求",
+    "current": "目前",
+    "pending": "等待中",
+    "allowCurrentAndFollowing": "允許目前及之後",
+    "rejectCurrentAndFollowing": "拒絕目前及之後"
   },
   "emptyState": {
     "welcomeBack": "歡迎回來！",

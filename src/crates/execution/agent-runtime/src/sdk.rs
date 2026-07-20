@@ -263,6 +263,16 @@ impl AgentRuntime {
             .await
     }
 
+    pub async fn respond_permission_batch(
+        &self,
+        request_id: &str,
+        reply: PermissionReply,
+    ) -> Result<Vec<String>, RuntimeError> {
+        self.inner
+            .respond_permission_batch(request_id, reply, PermissionReplySource::User)
+            .await
+    }
+
     pub async fn list_project_permission_grants(
         &self,
         project_id: &str,

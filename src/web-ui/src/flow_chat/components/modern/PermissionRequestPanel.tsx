@@ -12,14 +12,16 @@ import './PermissionRequestPanel.scss';
 const PERMISSION_PANEL_INPUT_GAP_PX = 16;
 
 interface PermissionRequestPanelProps {
-  request: PermissionV2Request;
-  onRespond: (reply: PermissionReplyKind, feedback?: string) => Promise<void>;
+  requests: PermissionV2Request[];
+  onRespond: (requestId: string, reply: PermissionReplyKind, feedback?: string) => Promise<void>;
+  onRespondBatch: (requestId: string, reply: PermissionReplyKind, feedback?: string) => Promise<void>;
   aboveChatInput?: boolean;
 }
 
 export function PermissionRequestPanel({
-  request,
+  requests,
   onRespond,
+  onRespondBatch,
   aboveChatInput = false,
 }: PermissionRequestPanelProps) {
   const { t } = useTranslation('flow-chat');
@@ -27,7 +29,8 @@ export function PermissionRequestPanel({
   const [responding, setResponding] = useState(false);
   const [error, setError] = useState(false);
   const inputHeight = useChatInputState((state) => state.inputHeight);
-  const risk = [request.displayMetadata?.riskDescription, request.displayMetadata?.risk].find(
+  const request = requests[0];
+  const risk = [request?.displayMetadata?.riskDescription, request?.displayMetadata?.risk].find(
     (value): value is string => typeof value === 'string' && value.trim().length > 0,
   );
 
@@ -43,13 +46,27 @@ export function PermissionRequestPanel({
     setResponding(true);
     setError(false);
     try {
-      await onRespond(reply, reply === 'reject' ? feedback : undefined);
+      await onRespond(request.requestId, reply, reply === 'reject' ? feedback : undefined);
     } catch {
       setError(true);
     } finally {
       setResponding(false);
     }
   };
+
+  const respondBatch = async (reply: PermissionReplyKind) => {
+    setResponding(true);
+    setError(false);
+    try {
+      await onRespondBatch(request.requestId, reply, reply === 'reject' ? feedback : undefined);
+    } catch {
+      setError(true);
+    } finally {
+      setResponding(false);
+    }
+  };
+
+  if (!request) return null;
 
   return (
     <section
@@ -72,9 +89,27 @@ export function PermissionRequestPanel({
           </p>
         </div>
       </div>
-      <div className="permission-request-panel__resources">
-        {request.resources.map((resource, index) => (
-          <code key={`${request.requestId}:${index}`}>{resource}</code>
+      <p className="permission-request-panel__count">
+        {t('permissionV2.batchCount', { count: requests.length })}
+      </p>
+      <div className="permission-request-panel__requests" role="list">
+        {requests.map((item, index) => (
+          <div
+            className={`permission-request-panel__request${index === 0 ? ' permission-request-panel__request--active' : ''}`}
+            key={item.requestId}
+            role="listitem"
+          >
+            <div className="permission-request-panel__request-heading">
+              <strong>{item.source.identity}</strong>
+              <span>{index === 0 ? t('permissionV2.current') : t('permissionV2.pending')}</span>
+            </div>
+            <span>{item.action}</span>
+            <div className="permission-request-panel__request-resources">
+              {item.resources.map((resource, resourceIndex) => (
+                <code key={`${item.requestId}:${resourceIndex}`}>{resource}</code>
+              ))}
+            </div>
+          </div>
         ))}
       </div>
       {risk && <p className="permission-request-panel__risk">{risk}</p>}
@@ -108,6 +143,21 @@ export function PermissionRequestPanel({
           <X size={15} aria-hidden="true" /> {t('permissionV2.reject')}
         </button>
       </div>
+      {requests.length > 1 && (
+        <div className="permission-request-panel__batch-actions">
+          <button type="button" onClick={() => void respondBatch('once')} disabled={responding}>
+            <Check size={15} aria-hidden="true" /> {t('permissionV2.allowCurrentAndFollowing')}
+          </button>
+          <button
+            type="button"
+            className="permission-request-panel__reject"
+            onClick={() => void respondBatch('reject')}
+            disabled={responding}
+          >
+            <X size={15} aria-hidden="true" /> {t('permissionV2.rejectCurrentAndFollowing')}
+          </button>
+        </div>
+      )}
     </section>
   );
 }

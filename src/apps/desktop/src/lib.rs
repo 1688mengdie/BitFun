@@ -921,6 +921,7 @@ pub async fn run() {
             api::agentic_api::list_pending_permission_requests,
             api::agentic_api::subscribe_permission_requests,
             api::agentic_api::respond_permission,
+            api::agentic_api::respond_permission_batch,
             api::agentic_api::list_project_permission_grants,
             api::agentic_api::remove_project_permission_grant,
             api::agentic_api::clear_project_permission_grants,

@@ -5,6 +5,7 @@ import {
   pendingPermissionToolCallIdsForSession,
   reconcilePermissionRequestSnapshot,
   selectPermissionRequestsForSession,
+  selectActivePermissionBatch,
   sortPermissionRequests,
 } from './permissionRequestRouting';
 
@@ -142,5 +143,38 @@ describe('permission request routing', () => {
         new Set([unrelatedRequest.requestId]),
       ),
     ).toEqual([parentRequest, childRequest]);
+  });
+
+  it('selects only the first concrete session and round as the active batch', () => {
+    const first = { ...parentRequest, requestId: 'first', order: 0 };
+    const sameRound = { ...parentRequest, requestId: 'same-round', order: 1 };
+    const laterRound = { ...parentRequest, requestId: 'later-round', roundId: 'round-later', order: 0 };
+
+    expect(selectActivePermissionBatch([laterRound, sameRound, first], 'parent-session')).toEqual({
+      sessionId: 'parent-session',
+      roundId: 'round-later',
+      requests: [laterRound],
+    });
+    expect(selectActivePermissionBatch([first, sameRound, laterRound], 'parent-session')).toEqual({
+      sessionId: 'parent-session',
+      roundId: 'round-parent',
+      requests: [first, sameRound],
+    });
+  });
+
+  it('routes delegated requests to the parent without merging separate child batches', () => {
+    const childA = { ...childRequest, requestId: 'child-a', sessionId: 'child-a-session' };
+    const childB = {
+      ...childRequest,
+      requestId: 'child-b',
+      sessionId: 'child-b-session',
+      roundId: childA.roundId,
+    };
+
+    expect(selectActivePermissionBatch([childA, childB], 'parent-session')).toEqual({
+      sessionId: 'child-a-session',
+      roundId: 'round-child',
+      requests: [childA],
+    });
   });
 });

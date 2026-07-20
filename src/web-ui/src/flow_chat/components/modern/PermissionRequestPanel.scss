@@ -1,7 +1,9 @@
 .permission-request-panel {
+  --permission-request-panel-bottom: 20px;
+
   position: absolute;
   right: 20px;
-  bottom: var(--permission-request-panel-bottom, 20px);
+  bottom: var(--permission-request-panel-bottom);
   z-index: 25;
   width: min(460px, calc(100% - 40px));
   display: grid;
@@ -40,30 +42,63 @@
 }
 
 .permission-request-panel__heading p,
+.permission-request-panel__count,
 .permission-request-panel__scope,
 .permission-request-panel__risk {
   color: var(--color-text-secondary);
   font-size: var(--flowchat-font-size-sm);
 }
 
-.permission-request-panel__risk {
+.permission-request-panel__count {
   margin: 0;
-  color: var(--color-warning);
 }
 
-.permission-request-panel__resources {
+.permission-request-panel__requests {
   display: grid;
-  gap: 5px;
-  max-height: 120px;
+  gap: 6px;
+  max-height: 180px;
   overflow: auto;
 }
 
-.permission-request-panel__resources code {
-  padding: 5px 7px;
-  overflow-wrap: anywhere;
-  border-radius: 4px;
-  background: var(--color-bg-tertiary);
+.permission-request-panel__request {
+  display: grid;
+  gap: 3px;
+  padding: 7px 9px;
+  border: 1px solid var(--border-base);
+  border-radius: 5px;
+  color: var(--color-text-secondary);
   font-size: var(--flowchat-font-size-sm);
+}
+
+.permission-request-panel__request--active {
+  border-color: var(--color-warning);
+  color: var(--color-text-primary);
+}
+
+.permission-request-panel__request-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.permission-request-panel__request-heading span {
+  color: var(--color-text-secondary);
+  font-size: var(--flowchat-font-size-xs);
+}
+
+.permission-request-panel__request-resources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.permission-request-panel__request-resources code {
+  overflow-wrap: anywhere;
+}
+
+.permission-request-panel__risk {
+  margin: 0;
+  color: var(--color-warning);
 }
 
 .permission-request-panel textarea {
@@ -80,6 +115,27 @@
   display: flex;
   flex-wrap: wrap;
   gap: 7px;
+}
+
+.permission-request-panel__batch-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  padding-top: 2px;
+  border-top: 1px solid var(--border-base);
+}
+
+.permission-request-panel__batch-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 30px;
+  padding: 5px 9px;
+  border: 1px solid var(--color-warning);
+  border-radius: 5px;
+  color: var(--color-text-primary);
+  background: var(--color-bg-primary);
+  cursor: pointer;
 }
 
 .permission-request-panel__actions button {
@@ -100,6 +156,11 @@
   opacity: 0.6;
 }
 
-.permission-request-panel__actions .permission-request-panel__reject {
+.permission-request-panel__batch-actions button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.permission-request-panel .permission-request-panel__reject {
   color: var(--color-error);
 }

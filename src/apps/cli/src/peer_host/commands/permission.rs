@@ -106,6 +106,35 @@ pub(crate) async fn respond_permission(
     Ok(Value::Null)
 }
 
+pub(crate) async fn respond_permission_batch(
+    state: &PeerHostState,
+    args: &Value,
+) -> Result<Value, String> {
+    let lease = attached_controller_lease()?;
+    let request = request_value(args);
+    let request_id = get_string(request, "requestId")?;
+    let pending = state
+        .agent_runtime
+        .pending_permission_requests()
+        .map_err(|error| error.into_message())?
+        .into_iter()
+        .find(|pending| pending.request_id == request_id)
+        .ok_or_else(|| format!("Permission request not found: {request_id}"))?;
+    if !state.turns.owns_permission_request(&pending) {
+        return Err("The permission request is not owned by the Peer controller".to_string());
+    }
+    if !crate::peer_host::control::is_controller_lease_current(lease) {
+        return Err("Peer controller continuity was lost before permission response".to_string());
+    }
+    let reply = permission_reply(request)?;
+    let resolved_request_ids = state
+        .agent_runtime
+        .respond_permission_batch(&request_id, reply)
+        .await
+        .map_err(|error| error.into_message())?;
+    serde_json::to_value(resolved_request_ids).map_err(|error| error.to_string())
+}
+
 pub(crate) async fn list_project_permission_grants(
     state: &PeerHostState,
     args: &Value,

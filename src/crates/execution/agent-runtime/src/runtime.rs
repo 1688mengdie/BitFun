@@ -643,6 +643,21 @@ impl AgentRuntime {
             .map_err(|error| RuntimeError::PermissionRequest(error.to_string()))
     }
 
+    pub async fn respond_permission_batch(
+        &self,
+        request_id: &str,
+        reply: PermissionReply,
+        source: PermissionReplySource,
+    ) -> Result<Vec<String>, RuntimeError> {
+        self.permission_requests
+            .as_ref()
+            .ok_or(RuntimeError::MissingPermissionRequestManager)?
+            .reply_from(request_id, true, reply, source)
+            .await
+            .map(|resolution| resolution.resolved_request_ids)
+            .map_err(|error| RuntimeError::PermissionRequest(error.to_string()))
+    }
+
     pub async fn list_project_permission_grants(
         &self,
         project_id: &str,
