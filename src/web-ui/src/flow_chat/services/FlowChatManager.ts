@@ -445,6 +445,7 @@ export class FlowChatManager {
       detail: { phase: 'start', clientId, action: 'create' },
     }));
 
+    let succeeded = false;
     try {
       const response = await ACPClientAPI.createFlowSession({
         clientId,
@@ -470,10 +471,11 @@ export class FlowChatManager {
         config.remoteSshHost,
       );
 
+      succeeded = true;
       return response.sessionId;
     } finally {
       window.dispatchEvent(new CustomEvent('bitfun:acp-session-creation', {
-        detail: { phase: 'finish', clientId, action: 'create' },
+        detail: { phase: 'finish', clientId, action: 'create', succeeded },
       }));
     }
   }

@@ -27,6 +27,7 @@ const EXEC_STREAM_SIZE: PtySize = PtySize {
 };
 const STARTUP_INPUT: &[u8] = b"exercise active turn resize Q7Z9";
 const STARTUP_INPUT_SENTINEL: &str = "Q7Z9";
+const MULTILINE_INPUT_SENTINEL: &str = "M7Q4";
 const RECOVERY_INPUT: &[u8] = b"READY_AFTER_CANCEL K4W8";
 const RECOVERY_INPUT_SENTINEL: &str = "K4W8";
 
@@ -48,18 +49,20 @@ fn interactive_startup_survives_resize_multiline_input_and_emits_cleanup() {
 
     process.resize(RESIZED_SIZE);
 
+    // Ratatui emits only changed cells, so the sentinel must not share characters
+    // with the startup placeholder at the same screen positions.
     #[cfg(unix)]
-    process.write(b"\x1b[200~alpha\r\nbeta\x1b[201~");
+    process.write(b"\x1b[200~M7Q4\r\nbeta\x1b[201~");
     #[cfg(windows)]
     {
-        let mut rapid_input = b"alpha".to_vec();
+        let mut rapid_input = MULTILINE_INPUT_SENTINEL.as_bytes().to_vec();
         rapid_input.extend(std::iter::repeat_n(b'a', 251));
         rapid_input.extend_from_slice(b"\rbeta");
         process.write(&rapid_input);
     }
 
     process.expect_output(
-        "alpha",
+        MULTILINE_INPUT_SENTINEL,
         Duration::from_secs(15),
         "interactive startup did not render multiline input",
     );
@@ -80,7 +83,7 @@ fn interactive_startup_survives_resize_multiline_input_and_emits_cleanup() {
         "unexpected process status {status}:\n{output}"
     );
     assert!(
-        output.contains("alpha"),
+        output.contains(MULTILINE_INPUT_SENTINEL),
         "paste text was not rendered:\n{output}"
     );
     assert!(

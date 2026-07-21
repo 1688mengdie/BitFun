@@ -261,6 +261,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
       }));
     }
 
+    let succeeded = false;
     try {
       const options = await withTimeout(
         ACPClientAPI.getSessionOptions({
@@ -275,13 +276,20 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
       );
       setAcpOptions(options);
       syncAcpContextUsageToStore(sessionId, options);
+      succeeded = true;
     } catch (error) {
       log.warn('Failed to load ACP session model options', { sessionId, acpClientId, error });
       setAcpOptions(null);
     } finally {
       if (shouldShowRestoreToast) {
         window.dispatchEvent(new CustomEvent('bitfun:acp-session-creation', {
-          detail: { phase: 'finish', clientId: acpClientId, action: 'restore', requestId: restoreRequestId },
+          detail: {
+            phase: 'finish',
+            clientId: acpClientId,
+            action: 'restore',
+            requestId: restoreRequestId,
+            succeeded,
+          },
         }));
       }
     }
