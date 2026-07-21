@@ -70,7 +70,7 @@
     "globalRulesEffect": "效果",
     "globalRulesAction": "操作",
     "globalRulesResource": "资源",
-    "globalRulesResourcePlaceholder": "例如，C:/workspace/*",
+    "globalRulesResourcePlaceholder": "例如，workspace/*",
     "moveGlobalRuleUp": "上移规则",
     "moveGlobalRuleDown": "下移规则",
     "removeGlobalRule": "删除规则",

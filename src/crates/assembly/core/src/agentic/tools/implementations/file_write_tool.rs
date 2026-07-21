@@ -849,11 +849,10 @@ mod tests {
         std::fs::create_dir_all(&root).expect("create temp workspace");
         let original_payload = "def main():\n    print(\"Hello world\")";
 
+        let mut context = local_context(root.clone());
+        context.tool_call_id = Some("fallback123".to_string());
         let results = FileWriteTool::new()
-            .call(
-                &json!({ "payload": original_payload }),
-                &local_context(root.clone()),
-            )
+            .call(&json!({ "payload": original_payload }), &context)
             .await
             .expect("malformed payload should be preserved");
 
@@ -863,12 +862,7 @@ mod tests {
             .expect("collect workspace entries");
         assert_eq!(entries.len(), 1);
         let file_name = entries[0].file_name().to_string_lossy().into_owned();
-        assert!(file_name.starts_with("write_"));
-        assert!(file_name.ends_with(".tmp"));
-        assert_eq!(file_name.len(), "write_000000.tmp".len());
-        assert!(file_name[6..12]
-            .chars()
-            .all(|character| character.is_ascii_hexdigit()));
+        assert_eq!(file_name, "write_fallback123.tmp");
         assert_eq!(
             std::fs::read_to_string(entries[0].path()).expect("read fallback file"),
             original_payload
