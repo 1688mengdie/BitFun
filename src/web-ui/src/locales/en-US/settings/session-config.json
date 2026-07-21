@@ -70,7 +70,7 @@
     "globalRulesEffect": "Effect",
     "globalRulesAction": "Action",
     "globalRulesResource": "Resource",
-    "globalRulesResourcePlaceholder": "For example, C:/workspace/*",
+    "globalRulesResourcePlaceholder": "For example, workspace/*",
     "moveGlobalRuleUp": "Move rule up",
     "moveGlobalRuleDown": "Move rule down",
     "removeGlobalRule": "Remove rule",
