@@ -15,6 +15,7 @@ const chooseSubagentConflictMock = vi.hoisted(() => vi.fn());
 const setMcpServerDecisionMock = vi.hoisted(() => vi.fn());
 const chooseMcpConflictMock = vi.hoisted(() => vi.fn());
 const updateIntegrationPolicyMock = vi.hoisted(() => vi.fn());
+const revealSourceLocationMock = vi.hoisted(() => vi.fn());
 const workspaceState = vi.hoisted(() => ({ path: 'D:/workspace/project', kind: 'normal' }));
 const peerState = vi.hoisted(() => ({ deviceId: '' }));
 
@@ -44,6 +45,20 @@ vi.mock('@/infrastructure/peer-device/PeerDeviceContext', () => ({
 }));
 
 vi.mock('@/infrastructure/runtime', () => ({ isTauriRuntime: () => true }));
+vi.mock('@/shared/utils/logger', () => {
+  const fn = () => vi.fn();
+  const contextLogger = { trace: fn(), debug: fn(), info: fn(), warn: fn(), error: fn() };
+  return {
+    createLogger: () => contextLogger,
+    logger: contextLogger,
+    log: contextLogger,
+  };
+});
+vi.mock('@/infrastructure/api/service-api/WorkspaceAPI', () => ({
+  workspaceAPI: {
+    revealInExplorer: vi.fn().mockResolvedValue(undefined),
+  },
+}));
 vi.mock('@/shared/types', () => ({
   isRemoteWorkspace: () => false,
   WorkspaceKind: { Normal: 'normal', Assistant: 'assistant', Remote: 'remote' },
@@ -60,6 +75,7 @@ vi.mock('@/infrastructure/api/service-api/ExternalSourcesAPI', () => ({
     setMcpServerDecision: setMcpServerDecisionMock,
     chooseMcpConflict: chooseMcpConflictMock,
     updateIntegrationPolicy: updateIntegrationPolicyMock,
+    revealSourceLocation: revealSourceLocationMock,
   },
 }));
 
@@ -78,7 +94,7 @@ const snapshot = {
     presentationGroupId: 'source-key',
     record: {
       key: { providerId: 'opencode.commands', sourceId: 'project' },
-      ecosystemId: 'opencode',
+      ecosystemId: 'other',
       displayName: 'OpenCode project commands',
       sourceKind: 'prompt_commands',
       scope: 'project',
@@ -236,6 +252,7 @@ describe('ExternalSourcesConfig', () => {
     setMcpServerDecisionMock.mockResolvedValue(snapshot);
     chooseMcpConflictMock.mockResolvedValue(snapshot);
     updateIntegrationPolicyMock.mockResolvedValue(snapshot);
+    revealSourceLocationMock.mockResolvedValue(undefined);
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
@@ -382,11 +399,12 @@ describe('ExternalSourcesConfig', () => {
   it('combines duplicate physical sources and exposes honest capability-level controls', async () => {
     const sharedRecord = {
       ...snapshot.sources[0].record,
-      sourceKind: 'opencode_user_configuration',
+      ecosystemId: 'other',
+      sourceKind: 'other_user_configuration',
       scope: 'user_global',
-      location: '~\\.config\\opencode\\opencode.json',
+      location: '~\\.config\\other\\other.json',
       executionDomainId: 'local',
-      displayName: 'OpenCode user configuration',
+      displayName: 'Other user configuration',
     };
     const groupedSnapshot = {
       ...snapshot,
@@ -394,26 +412,26 @@ describe('ExternalSourcesConfig', () => {
       diagnostics: [],
       commandConflicts: [],
       sources: [{
-        stableKey: 'opencode-command-source',
-        presentationGroupId: 'opencode-user-config',
+        stableKey: 'other-command-source',
+        presentationGroupId: 'other-user-config',
         record: {
           ...sharedRecord,
-          key: { providerId: 'opencode.commands', sourceId: 'user-configuration' },
+          key: { providerId: 'other.commands', sourceId: 'user-configuration' },
         },
         lifecycle: 'available',
       }, {
-        stableKey: 'opencode-agent-source',
-        presentationGroupId: 'opencode-user-config',
+        stableKey: 'other-agent-source',
+        presentationGroupId: 'other-user-config',
         record: {
           ...sharedRecord,
-          key: { providerId: 'opencode.subagents', sourceId: 'user-configuration' },
+          key: { providerId: 'other.subagents', sourceId: 'user-configuration' },
         },
         lifecycle: 'suppressed',
       }],
       commands: [{
         definition: {
           id: {
-            source: { providerId: 'opencode.commands', sourceId: 'user-configuration' },
+            source: { providerId: 'other.commands', sourceId: 'user-configuration' },
             localId: 'smoke-command',
           },
           name: 'smoke-command',
@@ -427,10 +445,10 @@ describe('ExternalSourcesConfig', () => {
         logicalId: 'smoke-agent',
         displayName: 'Smoke agent',
         description: 'Smoke agent',
-        providerLabel: 'OpenCode',
+        providerLabel: 'Other',
         scope: 'user_global',
-        sourceKeys: [{ providerId: 'opencode.subagents', sourceId: 'user-configuration' }],
-        sourceLocationLabels: ['~/.config/opencode/opencode.json'],
+        sourceKeys: [{ providerId: 'other.subagents', sourceId: 'user-configuration' }],
+        sourceLocationLabels: ['~/.config/other/other.json'],
         sourceCount: 1,
         effectiveToolLabels: [],
         supportsFollowUp: false,
@@ -454,7 +472,7 @@ describe('ExternalSourcesConfig', () => {
     expect(container.querySelectorAll(
       '.bitfun-external-sources-config__source-group',
     )).toHaveLength(1);
-    expect(container.textContent?.match(/OpenCode user configuration/g)).toHaveLength(1);
+    expect(container.textContent?.match(/Other user configuration/g)).toHaveLength(1);
     expect(container.textContent).toContain('sources.commandCount:{"count":1}');
     expect(container.textContent).toContain('sources.agentCount:{"count":1}');
     expect(container.textContent).not.toContain('sources.toolCount:{"count":0}');
@@ -477,7 +495,7 @@ describe('ExternalSourcesConfig', () => {
     expect(setSourceEnabledMock).toHaveBeenCalledOnce();
     expect(setSourceEnabledMock).toHaveBeenCalledWith(
       'D:/workspace/project',
-      'opencode-command-source',
+      'other-command-source',
       false,
       7,
     );
@@ -1189,7 +1207,6 @@ describe('ExternalSourcesConfig', () => {
     expect(container.textContent).toContain('agentDiagnostics.invalidDefinition.reason');
     expect(container.textContent).toContain('agentConflicts.selectionApproves');
     expect(container.textContent).toContain('.opencode/agents/explore.md');
-    expect(container.textContent).toContain('sources.agentCount:{"count":2}');
     expect(container.textContent).not.toContain('D:/workspace/project/.opencode/agents');
     expect(container.innerHTML).not.toContain('D:');
     expect(container.innerHTML).not.toContain('D:/shared');
@@ -1627,6 +1644,54 @@ describe('ExternalSourcesConfig', () => {
     expect(container.textContent?.match(/opencode\.configuration\.invalid/g)).toHaveLength(1);
   });
 
+  it('keeps grouped OpenCode diagnostics and lifecycle states visible', async () => {
+    const diagnostic = {
+      severity: 'warning',
+      code: 'opencode.configuration.invalid',
+      message: 'The configuration could not be parsed.',
+    };
+    getSnapshotMock.mockResolvedValue({
+      ...snapshot,
+      integrationPolicy,
+      diagnostics: [diagnostic],
+      commandConflicts: [],
+      sources: [{
+        ...snapshot.sources[0],
+        stableKey: 'opencode-project',
+        presentationGroupId: 'opencode-project',
+        lifecycle: 'degraded',
+        record: {
+          ...snapshot.sources[0].record,
+          ecosystemId: 'opencode',
+          diagnostics: [diagnostic],
+        },
+      }],
+    });
+
+    await act(async () => {
+      root.render(<ExternalSourcesConfig />);
+      await Promise.resolve();
+    });
+
+    expect(container.textContent).toContain('lifecycle.degraded');
+    expect(container.textContent).toContain('opencode.configuration.invalid');
+    expect(container.querySelector(
+      '.bitfun-external-sources-config__opencode-card [data-external-attention="true"]',
+    )).not.toBeNull();
+    expect(container.textContent?.match(/opencode\.configuration\.invalid/g)).toHaveLength(1);
+    const sourceToggle = container.querySelector(
+      '.bitfun-external-sources-config__opencode-card input[aria-label^="sources.toggleLabel"]',
+    ) as HTMLInputElement;
+    expect(sourceToggle).not.toBeNull();
+    await act(async () => sourceToggle.click());
+    expect(setSourceEnabledMock).toHaveBeenCalledWith(
+      'D:/workspace/project',
+      'opencode-project',
+      false,
+      0,
+    );
+  });
+
   it('ignores an older workspace response after switching workspaces', async () => {
     let resolveProject: ((value: typeof snapshot) => void) | undefined;
     const projectRequest = new Promise<typeof snapshot>((resolve) => {
@@ -2008,5 +2073,256 @@ describe('ExternalSourcesConfig', () => {
     expect(container.textContent).toContain('operationErrors.internal');
     expect(container.textContent).toContain('external-source-ref-7');
     expect(container.textContent).not.toContain('database connection string');
+  });
+
+  it('shows MCP empty state when no MCP servers found', async () => {
+    const emptyMcpSnapshot = {
+      ...snapshot,
+      mcpServers: [],
+      mcpApprovalRequests: [],
+      mcpConflicts: [],
+    };
+    getSnapshotMock.mockResolvedValue(emptyMcpSnapshot);
+
+    await act(async () => {
+      root.render(<ExternalSourcesConfig />);
+      await Promise.resolve();
+    });
+
+    expect(container.textContent).toContain('mcp.empty');
+    expect(container.textContent).toContain('mcp.emptyGuidance');
+  });
+
+  it('does not show the MCP empty state when the initial snapshot failed', async () => {
+    getSnapshotMock.mockRejectedValueOnce(new Error('initial load failed'));
+
+    await act(async () => {
+      root.render(<ExternalSourcesConfig />);
+      await Promise.resolve();
+    });
+
+    expect(container.textContent).toContain('errors.loadFailed');
+    expect(container.textContent).not.toContain('mcp.empty');
+  });
+
+  it('renders subagent source locations as path links', async () => {
+    const agentSnapshot = {
+      ...snapshot,
+      commandConflicts: [],
+      sources: [{
+        ...snapshot.sources[0],
+        stableKey: 'opencode-agent-user',
+        record: {
+          ...snapshot.sources[0].record,
+          key: { providerId: 'opencode.agents', sourceId: 'user' },
+          location: '<workspace>/.opencode/agents/review.md',
+        },
+      }, {
+        ...snapshot.sources[0],
+        stableKey: 'opencode-agent-admin',
+        record: {
+          ...snapshot.sources[0].record,
+          key: { providerId: 'opencode.agents', sourceId: 'admin' },
+          location: '<workspace>/.opencode/agents/review.md',
+        },
+      }],
+      subagents: [{
+        candidateId: 'agent-path-test',
+        logicalId: 'test',
+        displayName: 'Test Agent',
+        description: 'A test agent',
+        providerLabel: 'OpenCode',
+        scope: 'project',
+        sourceKeys: [
+          { providerId: 'opencode.agents', sourceId: 'user' },
+          { providerId: 'opencode.agents', sourceId: 'admin' },
+        ],
+        sourceLocationLabels: ['<workspace>/.opencode/agents/review.md'],
+        sourceCount: 2,
+        effectiveModelLabel: 'gpt-4',
+        effectiveToolLabels: ['read'],
+        supportsFollowUp: false,
+        compatibilityState: 'ready',
+        diagnostics: [],
+        activationState: { state: 'approval_required' },
+        decisionKey: 'agent-path-key',
+      }],
+    };
+    getSnapshotMock.mockResolvedValue(agentSnapshot);
+
+    await act(async () => {
+      root.render(<ExternalSourcesConfig />);
+      await Promise.resolve();
+    });
+
+    const detailsButton = Array.from(container.querySelectorAll('button')).find(
+      (button) => button.textContent === 'common.details',
+    );
+    await act(async () => detailsButton?.click());
+
+    const pathLinks = container.querySelectorAll(
+      '.bitfun-external-sources-config__source-detail-toggle .bitfun-external-sources-config__path-link',
+    );
+    expect(pathLinks).toHaveLength(2);
+    await act(async () => {
+      (pathLinks[0] as HTMLAnchorElement).click();
+      (pathLinks[1] as HTMLAnchorElement).click();
+      await Promise.resolve();
+    });
+    expect(revealSourceLocationMock).toHaveBeenNthCalledWith(
+      1,
+      'D:/workspace/project',
+      'opencode-agent-user',
+    );
+    expect(revealSourceLocationMock).toHaveBeenNthCalledWith(
+      2,
+      'D:/workspace/project',
+      'opencode-agent-admin',
+    );
+  });
+
+  it('renders the OpenCode aggregation card with summary counts and config locations', async () => {
+    const opencodeSnapshot = {
+      ...snapshot,
+      integrationPolicy,
+      commandConflicts: [],
+      sources: [{
+        stableKey: 'opencode-source',
+        presentationGroupId: 'opencode-source',
+        record: {
+          key: { providerId: 'opencode.commands', sourceId: 'project' },
+          ecosystemId: 'opencode',
+          displayName: 'OpenCode project commands',
+          sourceKind: 'prompt_commands',
+          scope: 'project',
+          location: '<workspace>/.opencode/commands',
+          health: 'available',
+          contentVersion: 'v1',
+        },
+        lifecycle: 'suppressed',
+      }, {
+        stableKey: 'opencode-source-secondary',
+        presentationGroupId: 'opencode-source-secondary',
+        record: {
+          key: { providerId: 'opencode.commands', sourceId: 'user' },
+          ecosystemId: 'opencode',
+          displayName: 'OpenCode user commands',
+          sourceKind: 'prompt_commands',
+          scope: 'user_global',
+          location: '<workspace>/.opencode/commands',
+          health: 'available',
+          contentVersion: 'v2',
+        },
+        lifecycle: 'suppressed',
+      }],
+    };
+    getSnapshotMock.mockResolvedValue(opencodeSnapshot);
+
+    await act(async () => {
+      root.render(<ExternalSourcesConfig />);
+      await Promise.resolve();
+    });
+
+    expect(container.textContent).toContain('opencode.title');
+    expect(container.querySelector(
+      '.bitfun-external-sources-config__opencode-card',
+    )).not.toBeNull();
+    expect(container.textContent).not.toContain('sources.title');
+
+    const expandButton = container.querySelector(
+      'button[aria-controls="external-capabilities-opencode"]',
+    );
+    expect(expandButton).not.toBeNull();
+    await act(async () => {
+      (expandButton as HTMLButtonElement).click();
+      await Promise.resolve();
+    });
+    expect(expandButton?.getAttribute('aria-expanded')).toBe('true');
+    const locationBlocks = container.querySelectorAll(
+      '.bitfun-external-sources-config__opencode-locations',
+    );
+    expect(locationBlocks).toHaveLength(2);
+    const expandedLinks = locationBlocks[1].querySelectorAll(
+      '.bitfun-external-sources-config__path-link',
+    );
+    expect(expandedLinks).toHaveLength(2);
+    await act(async () => {
+      (expandedLinks[1] as HTMLAnchorElement).click();
+      await Promise.resolve();
+    });
+    expect(revealSourceLocationMock).toHaveBeenLastCalledWith(
+      'D:/workspace/project',
+      'opencode-source-secondary',
+    );
+  });
+
+  it('labels all OpenCode scopes with supported translations and includes tools in the summary', async () => {
+    const opencodeSnapshot = {
+      ...snapshot,
+      integrationPolicy,
+      commandConflicts: [],
+      commands: [{
+        ...discoveredCommand,
+        definition: {
+          ...discoveredCommand.definition,
+          id: {
+            ...discoveredCommand.definition.id,
+            source: { providerId: 'opencode.commands', sourceId: 'user' },
+          },
+        },
+      }],
+      tools: [{
+        definition: {
+          id: {
+            target: {
+              source: { providerId: 'opencode.tools', sourceId: 'config-dir' },
+              localId: 'weather',
+            },
+            exportId: 'weather',
+          },
+          displayName: 'Weather',
+          description: 'Weather tool',
+          modulePath: '<workspace>/.opencode/tools/weather.js',
+          workingDirectory: '<workspace>',
+          runtimeKind: 'javascript',
+          capabilities: [],
+          contentVersion: 'v1',
+        },
+        activation: { state: 'disabled' },
+      }],
+      sources: [{
+        ...snapshot.sources[0],
+        stableKey: 'opencode-workspace',
+        presentationGroupId: 'opencode-workspace',
+        record: {
+          ...snapshot.sources[0].record,
+          key: { providerId: 'opencode.tools', sourceId: 'config-dir' },
+          ecosystemId: 'opencode',
+          scope: 'workspace_local',
+        },
+      }, {
+        ...snapshot.sources[0],
+        stableKey: 'opencode-user',
+        presentationGroupId: 'opencode-user',
+        record: {
+          ...snapshot.sources[0].record,
+          key: { providerId: 'opencode.commands', sourceId: 'user' },
+          ecosystemId: 'opencode',
+          scope: 'user_global',
+          location: '~/.config/opencode/opencode.json',
+        },
+      }],
+    };
+    getSnapshotMock.mockResolvedValue(opencodeSnapshot);
+
+    await act(async () => {
+      root.render(<ExternalSourcesConfig />);
+      await Promise.resolve();
+    });
+
+    expect(container.textContent).toContain('shared:features.workspace');
+    expect(container.textContent).toContain('scope.user_global');
+    expect(container.textContent).not.toContain('scope.workspace_local');
+    expect(container.textContent).toContain('"tools":1');
   });
 });
