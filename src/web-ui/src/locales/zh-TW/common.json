@@ -361,6 +361,8 @@
       "worktreeCreateOrOpenFailed": "worktree 已建立，但作為工作區開啟失敗：{{error}}",
       "worktreeDeleted": "已刪除 worktree",
       "deleteWorktreeFailed": "刪除 worktree 失敗",
+      "renameFailed": "重新命名專案失敗",
+      "renamed": "專案已重新命名",
       "expandSessions": "展開會話列表",
       "collapseSessions": "收起會話列表",
       "groups": {
@@ -376,11 +378,22 @@
         "initAgents": "初始化 AGENTS.md",
         "manageRelatedPaths": "關聯目錄",
         "manageProjectPermissions": "專案權限",
+        "rename": "重新命名專案",
         "newWorktree": "新增 worktree",
         "deleteWorktree": "刪除 worktree",
         "copyPath": "複製路徑",
         "reveal": "在資源管理器中開啟",
         "close": "關閉工作區"
+      },
+      "renameDialog": {
+        "title": "重新命名專案",
+        "description": "僅修改 BitFun 中顯示的專案名稱，專案目錄和檔案不會改變。",
+        "placeholder": "輸入專案名稱",
+        "validation": {
+          "required": "請輸入專案名稱",
+          "tooLong": "專案名稱不能超過 {{max}} 個字元",
+          "invalidCharacters": "專案名稱不能包含控制字元"
+        }
       },
       "relatedPaths": {
         "badge": "{{count}} 關聯",

@@ -361,6 +361,8 @@
       "worktreeCreateOrOpenFailed": "Worktree was created, but opening it as a workspace failed: {{error}}",
       "worktreeDeleted": "Worktree deleted",
       "deleteWorktreeFailed": "Failed to delete worktree",
+      "renameFailed": "Failed to rename project",
+      "renamed": "Project renamed",
       "expandSessions": "Expand sessions",
       "collapseSessions": "Collapse sessions",
       "groups": {
@@ -376,11 +378,22 @@
         "initAgents": "Initialize AGENTS.md",
         "manageRelatedPaths": "Related directories",
         "manageProjectPermissions": "Project permissions",
+        "rename": "Rename project",
         "newWorktree": "New worktree",
         "deleteWorktree": "Delete worktree",
         "copyPath": "Copy path",
         "reveal": "Reveal in explorer",
         "close": "Close workspace"
+      },
+      "renameDialog": {
+        "title": "Rename project",
+        "description": "Changes the name shown in BitFun. The project directory and files stay unchanged.",
+        "placeholder": "Enter a project name",
+        "validation": {
+          "required": "Please enter a project name",
+          "tooLong": "Project name cannot exceed {{max}} characters",
+          "invalidCharacters": "Project name cannot contain control characters"
+        }
       },
       "relatedPaths": {
         "badge": "{{count}} linked",
