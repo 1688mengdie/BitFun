@@ -390,10 +390,7 @@ pub struct BackgroundDeliveryFacts {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BackgroundDeliveryAction {
     InjectIntoRunningTurn,
-    SubmitAgentSessionFollowUp {
-        queue_priority: DialogQueuePriority,
-        skip_tool_confirmation: bool,
-    },
+    SubmitAgentSessionFollowUp { queue_priority: DialogQueuePriority },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -429,14 +426,9 @@ impl BackgroundDeliveryAction {
     pub const fn follow_up_submission_policy(self) -> Option<DialogSubmissionPolicy> {
         match self {
             Self::InjectIntoRunningTurn => None,
-            Self::SubmitAgentSessionFollowUp {
-                queue_priority,
-                skip_tool_confirmation,
-            } => Some(DialogSubmissionPolicy::new(
-                DialogTriggerSource::AgentSession,
-                queue_priority,
-                skip_tool_confirmation,
-            )),
+            Self::SubmitAgentSessionFollowUp { queue_priority } => Some(
+                DialogSubmissionPolicy::new(DialogTriggerSource::AgentSession, queue_priority),
+            ),
         }
     }
 }
@@ -682,7 +674,6 @@ pub const fn resolve_background_delivery_action(
             let policy = DialogSubmissionPolicy::for_source(DialogTriggerSource::AgentSession);
             BackgroundDeliveryAction::SubmitAgentSessionFollowUp {
                 queue_priority: policy.queue_priority,
-                skip_tool_confirmation: policy.skip_tool_confirmation,
             }
         }
     }

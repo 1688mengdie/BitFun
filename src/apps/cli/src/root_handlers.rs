@@ -776,13 +776,11 @@ pub(crate) fn handle_health_command() -> Result<()> {
 
     use bitfun_core::runtime_ports::PluginRuntimeAvailability;
 
-    use crate::runtime::approval::{CliApprovalPolicy, CliPermissionService};
     use crate::runtime::services::{CliClock, CliRuntimeEventSink, CliRuntimeServicesProvider};
 
     let workspace = std::env::current_dir().context("Failed to resolve current directory")?;
     let services = CliRuntimeServicesProvider::new(
         &workspace,
-        Arc::new(CliPermissionService::new(CliApprovalPolicy::Reject)),
         Arc::new(CliRuntimeEventSink::new(16)),
         Arc::new(CliClock),
     )?

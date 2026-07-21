@@ -1915,10 +1915,6 @@ impl Tool for ControlHubTool {
         })
     }
 
-    fn needs_permissions(&self, _input: Option<&Value>) -> bool {
-        true
-    }
-
     fn is_concurrency_safe(&self, _input: Option<&Value>) -> bool {
         false
     }

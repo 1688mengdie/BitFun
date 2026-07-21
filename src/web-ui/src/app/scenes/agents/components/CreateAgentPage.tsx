@@ -133,7 +133,7 @@ const CreateAgentPage: React.FC = () => {
               name: toolName,
               description: typeof tool?.description === 'string' ? tool.description : '',
               isReadonly: Boolean(tool?.is_readonly),
-              needsPermissions: Boolean(tool?.needs_permissions),
+              needsPermissions: !tool?.is_readonly,
               dynamicInfo: tool?.dynamic_info,
             };
           })

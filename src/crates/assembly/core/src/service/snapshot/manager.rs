@@ -491,8 +491,12 @@ impl Tool for WrappedTool {
         self.original_tool.is_concurrency_safe(input)
     }
 
-    fn needs_permissions(&self, input: Option<&Value>) -> bool {
-        self.original_tool.needs_permissions(input)
+    fn permission_intents(
+        &self,
+        input: &Value,
+        context: &ToolUseContext,
+    ) -> crate::util::errors::BitFunResult<Vec<bitfun_agent_tools::PermissionIntent>> {
+        self.original_tool.permission_intents(input, context)
     }
 
     async fn validate_input(

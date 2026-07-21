@@ -14,6 +14,7 @@ import {
   Modal,
   Select,
   Tooltip,
+  confirmDanger,
   type SelectOption,
 } from '@/component-library';
 import { ConfigPageHeader, ConfigPageLayout, ConfigPageContent, ConfigPageSection, ConfigPageRow } from './common';
@@ -27,15 +28,26 @@ import {
   type AgentCompanionPetPackage,
 } from '../services/AgentCompanionPetService';
 import { configManager } from '../services/ConfigManager';
+import {
+  DEFAULT_TOOL_PERMISSION_CONFIG,
+  normalizeToolPermissionConfig,
+  permissionConfigService,
+} from '../services/PermissionConfigService';
 import { systemAPI } from '@/infrastructure/api/service-api/SystemAPI';
 import { useNotification, notificationService } from '@/shared/notification-system';
-import type { DebugModeConfig, LanguageDebugTemplate } from '../types';
+import type {
+  DebugModeConfig,
+  LanguageDebugTemplate,
+  PermissionRule,
+  ToolPermissionConfig,
+} from '../types';
 import {
   LANGUAGE_TEMPLATE_LABELS,
   DEFAULT_DEBUG_MODE_CONFIG,
   ALL_LANGUAGES,
   DEFAULT_LANGUAGE_TEMPLATES,
 } from '../types';
+import { GlobalPermissionRulesDialog } from './GlobalPermissionRulesDialog';
 import { ChatInputPixelPet } from '@/flow_chat/components/ChatInputPixelPet';
 import { ask, open } from '@tauri-apps/plugin-dialog';
 import { createLogger } from '@/shared/utils/logger';
@@ -100,15 +112,16 @@ const SessionSettingsPanels: React.FC<SessionSettingsPanelsProps> = ({ variant }
   const [companionPetImporting, setCompanionPetImporting] = useState(false);
   const [companionPetDeletingPath, setCompanionPetDeletingPath] = useState<string | null>(null);
   const [companionPetListExpanded, setCompanionPetListExpanded] = useState(false);
-  const [skipToolConfirmation, setSkipToolConfirmation] = useState(true);
   const [enableDeferredToolLoading, setEnableDeferredToolLoading] = useState(true);
   const [subagentMaxConcurrency, setSubagentMaxConcurrency] = useState(DEFAULT_SUBAGENT_MAX_CONCURRENCY);
   const [executionTimeout, setExecutionTimeout] = useState('');
-  const [confirmationTimeout, setConfirmationTimeout] = useState('');
   const [subagentBatchExecutionPolicy, setSubagentBatchExecutionPolicy] =
     useState<SubagentBatchExecutionPolicy>(DEFAULT_SUBAGENT_BATCH_EXECUTION_POLICY);
   const [toolExecConfigLoading, setToolExecConfigLoading] = useState(false);
   const [deferredToolLoadingConfigSaving, setDeferredToolLoadingConfigSaving] = useState(false);
+  const [toolPermissionConfig, setToolPermissionConfig] = useState<ToolPermissionConfig>(DEFAULT_TOOL_PERMISSION_CONFIG);
+  const [permissionConfigSaving, setPermissionConfigSaving] = useState(false);
+  const [isGlobalPermissionRulesDialogOpen, setIsGlobalPermissionRulesDialogOpen] = useState(false);
 
   const [computerUseEnabled, setComputerUseEnabled] = useState(false);
   const [computerUseAccess, setComputerUseAccess] = useState(false);
@@ -204,42 +217,39 @@ const SessionSettingsPanels: React.FC<SessionSettingsPanelsProps> = ({ variant }
     try {
       const [
         loadedSettings,
-        skipConfirm,
         deferredToolLoadingEnabled,
         loadedSubagentMaxConcurrency,
         execTimeout,
-        confirmTimeout,
         loadedSubagentBatchExecutionPolicy,
         debugConfigData,
         computerUseCfg,
         browserControlPreferredBrowser,
+        loadedToolPermissionConfig,
         loadedCompanionPets,
       ] = await Promise.all([
         aiExperienceConfigService.getSettingsAsync(),
-        configManager.getConfig<boolean>('ai.skip_tool_confirmation'),
         configManager.getConfig<boolean>('ai.enable_deferred_tool_loading'),
         configManager.getConfig<number | null>('ai.subagent_max_concurrency'),
         configManager.getConfig<number | null>('ai.tool_execution_timeout_secs'),
-        configManager.getConfig<number | null>('ai.tool_confirmation_timeout_secs'),
         configManager.getConfig<SubagentBatchExecutionPolicy>('ai.subagent_batch_execution_policy'),
         configManager.getConfig<DebugModeConfig>('ai.debug_mode_config'),
         configManager.getConfig<boolean>('ai.computer_use_enabled'),
         configManager.getConfig<string>('ai.browser_control_preferred_browser'),
+        permissionConfigService.getConfig(),
         listAgentCompanionPets(),
       ]);
 
       setSettings(loadedSettings);
       setCompanionPets(loadedCompanionPets);
-      setSkipToolConfirmation(skipConfirm ?? true);
       setEnableDeferredToolLoading(deferredToolLoadingEnabled ?? true);
       setSubagentMaxConcurrency(loadedSubagentMaxConcurrency != null
         ? loadedSubagentMaxConcurrency
         : DEFAULT_SUBAGENT_MAX_CONCURRENCY);
       setExecutionTimeout(execTimeout != null ? String(execTimeout) : '');
-      setConfirmationTimeout(confirmTimeout != null ? String(confirmTimeout) : '');
       setSubagentBatchExecutionPolicy(normalizeSubagentBatchExecutionPolicy(loadedSubagentBatchExecutionPolicy));
       if (debugConfigData) setDebugConfig(debugConfigData);
       setPreferredBrowser(browserControlPreferredBrowser || DEFAULT_BROWSER_CONTROL_BROWSER);
+      setToolPermissionConfig(normalizeToolPermissionConfig(loadedToolPermissionConfig));
 
       refreshDesktopStatus(computerUseCfg);
     } catch (error) {
@@ -249,6 +259,63 @@ const SessionSettingsPanels: React.FC<SessionSettingsPanelsProps> = ({ variant }
       setIsLoading(false);
     }
   }, [refreshDesktopStatus]);
+
+  const saveToolPermissionConfig = async (
+    nextConfig: ToolPermissionConfig,
+    previousConfig: ToolPermissionConfig,
+  ): Promise<boolean> => {
+    setToolPermissionConfig(nextConfig);
+    setPermissionConfigSaving(true);
+    try {
+      await permissionConfigService.saveConfig(nextConfig);
+      notificationService.success(t('messages.saveSuccess'), { duration: 2000 });
+      return true;
+    } catch (error) {
+      log.error('Failed to save tool permission config', error);
+      setToolPermissionConfig(previousConfig);
+      notificationService.error(t('messages.saveFailed'));
+      return false;
+    } finally {
+      setPermissionConfigSaving(false);
+    }
+  };
+
+  const handlePermissionPresetChange = async (value: string | number | (string | number)[]) => {
+    const nextPreset = String(Array.isArray(value) ? value[0] : value) === 'full_access' ? 'full_access' : 'ask';
+    if (nextPreset === toolPermissionConfig.policy.preset) return;
+    const previousConfig = toolPermissionConfig;
+    if (nextPreset === 'full_access') {
+      const confirmed = await confirmDanger(
+        t('permissionPolicy.fullAccessWarningTitle'),
+        t('permissionPolicy.fullAccessWarningMessage'),
+        {
+          confirmText: t('permissionPolicy.fullAccessConfirm'),
+          cancelText: t('permissionPolicy.cancel'),
+        },
+      );
+      if (!confirmed) return;
+    }
+    await saveToolPermissionConfig(
+      { ...previousConfig, policy: { ...previousConfig.policy, preset: nextPreset } },
+      previousConfig,
+    );
+  };
+
+  const handleAutoApproveAskChange = async (enabled: boolean) => {
+    const previousConfig = toolPermissionConfig;
+    await saveToolPermissionConfig(
+      { ...previousConfig, interaction: { ...previousConfig.interaction, auto_approve_ask: enabled } },
+      previousConfig,
+    );
+  };
+
+  const handleSaveGlobalPermissionRules = async (rules: PermissionRule[]): Promise<boolean> => {
+    const previousConfig = toolPermissionConfig;
+    return saveToolPermissionConfig(
+      { ...previousConfig, policy: { ...previousConfig.policy, rules } },
+      previousConfig,
+    );
+  };
 
   useEffect(() => {
     loadAllData();
@@ -418,28 +485,6 @@ const SessionSettingsPanels: React.FC<SessionSettingsPanelsProps> = ({ variant }
       spritesheetMimeType: pet.spritesheetMimeType,
     });
     setCompanionPetListExpanded(false);
-  };
-
-  const handleSkipToolConfirmationChange = async (checked: boolean) => {
-    setSkipToolConfirmation(checked);
-    setToolExecConfigLoading(true);
-    try {
-      await configManager.setConfig('ai.skip_tool_confirmation', checked);
-      notificationService.success(
-        checked ? tTools('messages.autoExecuteEnabled') : tTools('messages.autoExecuteDisabled'),
-        { duration: 2000 }
-      );
-      const { globalEventBus } = await import('@/infrastructure/event-bus');
-      globalEventBus.emit('mode:config:updated');
-    } catch (error) {
-      log.error('Failed to save skip_tool_confirmation', error);
-      notificationService.error(
-        `${tTools('messages.saveFailed')}: ` + (error instanceof Error ? error.message : String(error))
-      );
-      setSkipToolConfirmation(!checked);
-    } finally {
-      setToolExecConfigLoading(false);
-    }
   };
 
   const handleDeferredToolLoadingChange = async (checked: boolean) => {
@@ -623,21 +668,19 @@ const SessionSettingsPanels: React.FC<SessionSettingsPanelsProps> = ({ variant }
     }
   };
 
-  const handleToolTimeoutChange = async (type: 'execution' | 'confirmation', value: string) => {
-    const configKey =
-      type === 'execution' ? 'ai.tool_execution_timeout_secs' : 'ai.tool_confirmation_timeout_secs';
+  const handleToolTimeoutChange = async (value: string) => {
+    const configKey = 'ai.tool_execution_timeout_secs';
     const trimmedValue = value.trim();
     if (trimmedValue !== '') {
       const numValue = parseInt(trimmedValue, 10);
       if (Number.isNaN(numValue) || numValue < 0) return;
     }
-    if (type === 'execution') setExecutionTimeout(trimmedValue);
-    else setConfirmationTimeout(trimmedValue);
+    setExecutionTimeout(trimmedValue);
     const numValue = trimmedValue === '' ? null : parseInt(trimmedValue, 10);
     try {
       await configManager.setConfig(configKey, numValue);
     } catch (error) {
-      log.error('Failed to save tool timeout config', { type, error });
+      log.error('Failed to save tool timeout config', { error });
       notificationService.error(tTools('messages.saveFailed'));
     }
   };
@@ -1022,53 +1065,76 @@ const SessionSettingsPanels: React.FC<SessionSettingsPanelsProps> = ({ variant }
           </ConfigPageRow>
         </ConfigPageSection>
 
-        {/* ── Tool execution behavior ────────────────────────────── */}
         <ConfigPageSection
-          title={t('toolExecution.sectionTitle')}
-          description={t('toolExecution.sectionDescription')}
+          title={t('permissionPolicy.sectionTitle')}
+          description={t('permissionPolicy.sectionDescription')}
         >
-          <ConfigPageRow label={tTools('config.autoExecute')} description={tTools('config.autoExecuteDesc')} align="center">
+          <ConfigPageRow
+            label={t('permissionPolicy.mode')}
+            description={toolPermissionConfig.policy.preset === 'full_access'
+              ? t('permissionPolicy.fullAccessDescription')
+              : t('permissionPolicy.askDescription')}
+            align="center"
+          >
+            <div className="bitfun-func-agent-config__row-control">
+              <Select
+                size="small"
+                value={toolPermissionConfig.policy.preset}
+                options={[
+                  { value: 'ask', label: t('permissionPolicy.ask') },
+                  { value: 'full_access', label: t('permissionPolicy.fullAccess') },
+                ]}
+                disabled={permissionConfigSaving}
+                onChange={handlePermissionPresetChange}
+              />
+            </div>
+          </ConfigPageRow>
+          <ConfigPageRow
+            label={t('permissionPolicy.autoApprove')}
+            description={t('permissionPolicy.autoApproveDescription')}
+            align="center"
+          >
             <div className="bitfun-func-agent-config__row-control">
               <Switch
-                checked={skipToolConfirmation}
-                onChange={(e) => handleSkipToolConfirmationChange(e.target.checked)}
-                disabled={toolExecConfigLoading}
+                checked={toolPermissionConfig.interaction.auto_approve_ask}
+                onChange={(event) => void handleAutoApproveAskChange(event.target.checked)}
+                disabled={permissionConfigSaving}
                 size="small"
               />
             </div>
           </ConfigPageRow>
           <ConfigPageRow
-            label={(
-              <span className="bitfun-func-agent-config__inline-label">
-                <span>{tTools('config.confirmTimeout')}</span>
-                <Tooltip content={tTools('config.confirmTimeoutHint')} placement="top">
-                  <span
-                    className="bitfun-func-agent-config__inline-info"
-                    role="button"
-                    tabIndex={0}
-                    aria-label={tTools('config.confirmTimeoutHint')}
-                  >
-                    <Info size={14} />
-                  </span>
-                </Tooltip>
-              </span>
-            )}
-            description={tTools('config.confirmTimeoutDesc')}
+            label={t('permissionPolicy.globalRules')}
+            description={t('permissionPolicy.globalRulesDescription')}
             align="center"
           >
             <div className="bitfun-func-agent-config__row-control">
-              <NumberInput
-                value={confirmationTimeout === '' ? 0 : parseInt(confirmationTimeout, 10)}
-                onChange={(val) => handleToolTimeoutChange('confirmation', val === 0 ? '' : String(val))}
-                min={0}
-                max={3600}
-                step={5}
-                unit={tTools('config.seconds')}
+              <Button
+                type="button"
                 size="small"
-                variant="compact"
-              />
+                variant="secondary"
+                disabled={permissionConfigSaving}
+                onClick={() => setIsGlobalPermissionRulesDialogOpen(true)}
+              >
+                {t('permissionPolicy.manageGlobalRules')}
+              </Button>
             </div>
           </ConfigPageRow>
+        </ConfigPageSection>
+
+        <GlobalPermissionRulesDialog
+          isOpen={isGlobalPermissionRulesDialogOpen}
+          rules={toolPermissionConfig.policy.rules}
+          isSaving={permissionConfigSaving}
+          onSave={handleSaveGlobalPermissionRules}
+          onClose={() => setIsGlobalPermissionRulesDialogOpen(false)}
+        />
+
+        {/* ── Tool execution behavior ────────────────────────────── */}
+        <ConfigPageSection
+          title={t('toolExecution.sectionTitle')}
+          description={t('toolExecution.sectionDescription')}
+        >
           <ConfigPageRow
             label={(
               <span className="bitfun-func-agent-config__inline-label">
@@ -1091,7 +1157,7 @@ const SessionSettingsPanels: React.FC<SessionSettingsPanelsProps> = ({ variant }
             <div className="bitfun-func-agent-config__row-control">
               <NumberInput
                 value={executionTimeout === '' ? 0 : parseInt(executionTimeout, 10)}
-                onChange={(val) => handleToolTimeoutChange('execution', val === 0 ? '' : String(val))}
+                onChange={(val) => handleToolTimeoutChange(val === 0 ? '' : String(val))}
                 min={0}
                 max={3600}
                 step={5}

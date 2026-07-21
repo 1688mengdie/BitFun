@@ -1,5 +1,5 @@
 use crate::agentic::tools::framework::{
-    Tool, ToolRenderOptions, ToolResult, ToolUseContext, ValidationResult,
+    PermissionIntent, Tool, ToolRenderOptions, ToolResult, ToolUseContext, ValidationResult,
 };
 use crate::agentic::workspace::WorkspaceCommandOptions;
 use crate::infrastructure::events::event_system::get_global_event_system;
@@ -368,8 +368,21 @@ Usage notes:
         false
     }
 
-    fn needs_permissions(&self, _input: Option<&Value>) -> bool {
-        true
+    fn permission_intents(
+        &self,
+        input: &Value,
+        _context: &ToolUseContext,
+    ) -> BitFunResult<Vec<PermissionIntent>> {
+        let command = input
+            .get("command")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|command| !command.is_empty())
+            .ok_or_else(|| BitFunError::validation("command is required".to_string()))?;
+        Ok(vec![PermissionIntent::new(
+            "bash",
+            vec![command.to_string()],
+        )])
     }
 
     async fn validate_input(

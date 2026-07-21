@@ -375,6 +375,7 @@
         "resetWorkspace": "重置工作区",
         "initAgents": "初始化 AGENTS.md",
         "manageRelatedPaths": "关联目录",
+        "manageProjectPermissions": "项目权限",
         "newWorktree": "新建 worktree",
         "deleteWorktree": "删除 worktree",
         "copyPath": "复制路径",

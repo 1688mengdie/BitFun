@@ -1,4 +1,37 @@
 {
+  "permission": {
+    "title": "Permission required",
+    "subagentOwner": "{{subagent}} subagent",
+    "feedbackLabel": "Rejection feedback",
+    "feedbackPlaceholder": "Optional guidance when rejecting",
+    "responseFailed": "The permission response could not be delivered. Try again.",
+    "allowOnce": "Allow once",
+    "allowAlways": "Always allow",
+    "allowAlwaysTooltip": "Always allow saves matching access for {{projectPath}}.",
+    "allowAlwaysTooltipCurrentProject": "Always allow saves matching access for the current project.",
+    "allowAlwaysTooltipNoGrant": "This request has no savable access scope; always allow applies only to this request.",
+    "reject": "Reject",
+    "batchCount": "{{count}} permission requests",
+    "current": "Current",
+    "pending": "Pending",
+    "actions": {
+      "read": "Read files",
+      "edit": "Edit files",
+      "bash": "Run command",
+      "git": "Git action",
+      "computerUse": "Control device",
+      "webSearch": "Search web",
+      "webFetch": "Access web",
+      "mcp": "MCP tool",
+      "task": "Run task",
+      "skill": "Run skill",
+      "customTool": "External tool",
+      "externalDirectory": "Access external directory",
+      "other": "Other action"
+    },
+    "allowCurrentAndFollowing": "Allow all",
+    "rejectCurrentAndFollowing": "Reject all"
+  },
   "emptyState": {
     "welcomeBack": "Welcome back!",
     "workingIn": "You are working in <workspace>{{workspace}}</workspace>",
@@ -551,6 +584,32 @@
   },
   "chatInput": {
     "addBoostTooltip": "Agent modes, image, or skills",
+    "permissionMode": {
+      "menuLabel": "Permission mode",
+      "globalScope": "Global",
+      "current": "Permissions: {{mode}}",
+      "changeFailed": "Failed to change the permission mode.",
+      "ask": {
+        "label": "Ask",
+        "description": "Low-risk reads, browsing, Task, and Skill are allowed automatically; file changes and commands require approval."
+      },
+      "auto": {
+        "label": "Auto approve",
+        "description": "Automatically approves Ask requests; explicit denies still apply."
+      },
+      "fullAccess": {
+        "label": "Full access",
+        "description": "Allows tools by default; product restrictions and OS permissions still apply."
+      },
+      "acp": {
+        "label": "ACP controlled",
+        "tooltip": "Permissions for this session are controlled by the ACP client."
+      },
+      "fullAccessWarningTitle": "Enable full access?",
+      "fullAccessWarningMessage": "Full access allows tools to read and write files, run commands, and call integrations without asking each time. Explicit deny rules, product restrictions, and operating system permissions still apply.",
+      "fullAccessConfirm": "Enable full access",
+      "cancel": "Cancel"
+    },
     "addModeTooltip": "Add Plan or Debug",
     "boostSectionAgent": "Agent",
     "boostSectionContext": "Context",

@@ -384,6 +384,12 @@ impl PathManager {
             .join("agent_profiles.json")
     }
 
+    /// Get project tool permission rules file: {project}/.bitfun/config/tool_permissions.json
+    pub fn project_permission_file(&self, workspace_path: &Path) -> PathBuf {
+        self.project_internal_config_dir(workspace_path)
+            .join("tool_permissions.json")
+    }
+
     /// Get project mode skills file: {project}/.bitfun/config/mode_skills.json
     pub fn project_mode_skills_file(&self, workspace_path: &Path) -> PathBuf {
         self.project_internal_config_dir(workspace_path)

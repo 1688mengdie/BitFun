@@ -21,7 +21,7 @@ use tokio::sync::broadcast::error::TryRecvError;
 use bitfun_agent_runtime::sdk::{
     AgentLocalCommandTurnRecordRequest, AgentSessionUsageRequest, SessionUsageReport,
 };
-use bitfun_events::{AgenticEvent, ToolEventData};
+use bitfun_events::AgenticEvent;
 use resize::ResizeRedrawState;
 
 use crate::actions::{
@@ -42,7 +42,7 @@ use crate::ui::mcp_add_dialog::McpAddAction;
 use crate::ui::mcp_selector::{McpItem, McpItemAction};
 use crate::ui::model_config_form::{ModelFormAction, ModelFormResult};
 use crate::ui::model_selector::ModelItem;
-use crate::ui::permission::{PermissionAction, ALLOW_ALWAYS_RUNTIME_SCOPE};
+use crate::ui::permission::PermissionAction;
 use crate::ui::provider_selector::ProviderSelection;
 use crate::ui::question::QuestionAction;
 use crate::ui::session_selector::{SessionAction, SessionItem};
@@ -186,6 +186,10 @@ pub(crate) struct ChatMode {
     workspace: Option<String>,
     agent: Arc<CliAgentRuntimeClient>,
     runtime: Arc<CliRuntimeContext>,
+    /// User-level default resolved from shared config for this TUI run.
+    auto_approve_ask_default: bool,
+    /// Temporary override for the current session only.
+    auto_approve_ask_override: Option<bool>,
     /// If set, restore this existing session instead of creating a new one
     restore_session_id: Option<String>,
     /// If set, send this prompt automatically when the session starts
@@ -238,6 +242,8 @@ impl ChatMode {
             workspace,
             agent,
             runtime,
+            auto_approve_ask_default: false,
+            auto_approve_ask_override: None,
             restore_session_id: None,
             initial_prompt: None,
             pending_mcp_op: None,

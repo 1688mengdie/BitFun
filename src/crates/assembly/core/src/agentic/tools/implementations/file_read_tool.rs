@@ -1,8 +1,9 @@
+use crate::agentic::tools::file_permissions::file_permission_intents;
 use crate::agentic::tools::file_read_state_runtime::{
     local_file_modification_time_ms, record_file_read_state,
 };
 use crate::agentic::tools::framework::{
-    Tool, ToolRenderOptions, ToolResult, ToolUseContext, ValidationResult,
+    PermissionIntent, Tool, ToolRenderOptions, ToolResult, ToolUseContext, ValidationResult,
 };
 use crate::agentic::tools::workspace_paths::is_bitfun_tool_uri;
 use crate::util::errors::{BitFunError, BitFunResult};
@@ -307,8 +308,16 @@ Usage:
         true
     }
 
-    fn needs_permissions(&self, _input: Option<&Value>) -> bool {
-        false
+    fn permission_intents(
+        &self,
+        input: &Value,
+        context: &ToolUseContext,
+    ) -> BitFunResult<Vec<PermissionIntent>> {
+        let file_path = input
+            .get("file_path")
+            .and_then(Value::as_str)
+            .ok_or_else(|| BitFunError::validation("file_path is required".to_string()))?;
+        file_permission_intents("read", [file_path], context)
     }
 
     async fn validate_input(

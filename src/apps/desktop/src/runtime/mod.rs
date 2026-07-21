@@ -1,6 +1,7 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use bitfun_agent_runtime::sdk::AgentRuntime;
+use bitfun_agent_runtime::sdk::{AgentRuntime, PermissionRequestEvent};
 use bitfun_core::agentic::coordination::{ConversationCoordinator, DialogScheduler};
 use bitfun_core::product_runtime::CoreLocalWorkspaceSnapshot;
 use bitfun_core::service::remote_ssh::SSHConnectionManager;
@@ -28,6 +29,7 @@ pub(crate) use session_application::{
 pub struct DesktopRuntimeContext {
     session_application: DesktopSessionApplication,
     local_workspace_snapshot: Arc<dyn LocalWorkspaceSnapshotPort>,
+    permission_events_started: AtomicBool,
 }
 
 impl DesktopRuntimeContext {
@@ -53,6 +55,7 @@ impl DesktopRuntimeContext {
         Ok(Self {
             session_application,
             local_workspace_snapshot,
+            permission_events_started: AtomicBool::new(false),
         })
     }
 
@@ -66,6 +69,80 @@ impl DesktopRuntimeContext {
 
     pub(crate) fn local_workspace_snapshot(&self) -> &dyn LocalWorkspaceSnapshotPort {
         self.local_workspace_snapshot.as_ref()
+    }
+
+    pub(crate) fn start_permission_event_forwarding(
+        &self,
+        app: tauri::AppHandle,
+    ) -> Result<(), bitfun_agent_runtime::sdk::RuntimeError> {
+        if self.permission_events_started.swap(true, Ordering::AcqRel) {
+            return Ok(());
+        }
+
+        let mut receiver = match self.agent_runtime().subscribe_permission_requests() {
+            Ok(receiver) => receiver,
+            Err(error) => {
+                self.permission_events_started
+                    .store(false, Ordering::Release);
+                return Err(error);
+            }
+        };
+        let runtime = self.agent_runtime().clone();
+        tauri::async_runtime::spawn(async move {
+            use tauri::Emitter;
+
+            loop {
+                match receiver.recv().await {
+                    Ok(event) => {
+                        let fanout = crate::api::peer_host_invoke::track_permission_event(&event);
+                        if fanout {
+                            if let Ok(payload) = serde_json::to_value(&event) {
+                                crate::api::remote_connect_api::maybe_fanout_peer_ui_event(
+                                    "permission://event",
+                                    payload,
+                                );
+                            }
+                        }
+                        let _ = app.emit("permission://event", event);
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        if let Ok(requests) = runtime.pending_permission_requests() {
+                            for request in requests {
+                                let event = PermissionRequestEvent::Asked { request };
+                                let fanout =
+                                    crate::api::peer_host_invoke::track_permission_event(&event);
+                                if fanout {
+                                    if let Ok(payload) = serde_json::to_value(&event) {
+                                        crate::api::remote_connect_api::maybe_fanout_peer_ui_event(
+                                            "permission://event",
+                                            payload,
+                                        );
+                                    }
+                                }
+                                let _ = app.emit("permission://event", event);
+                            }
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        let request_ids =
+                            crate::api::peer_host_invoke::take_tracked_permission_requests();
+                        if let Err(error) =
+                            crate::api::peer_host_invoke::fail_closed_permission_requests(
+                                request_ids,
+                                "Peer permission event stream closed",
+                            )
+                            .await
+                        {
+                            log::warn!(
+                                "Peer permission requests were not fully cancelled: {error}"
+                            );
+                        }
+                        break;
+                    }
+                }
+            }
+        });
+        Ok(())
     }
 }
 

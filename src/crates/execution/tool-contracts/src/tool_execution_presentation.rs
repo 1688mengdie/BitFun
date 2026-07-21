@@ -4,8 +4,6 @@ pub const TOOL_ERROR_ARGUMENTS_PREVIEW_BYTES: usize = 1024;
 pub const USER_STEERING_INTERRUPTED_MESSAGE: &str = "Tool execution skipped because the user sent a new steering message for the running turn. Stop the remaining old tool plan and handle the new user message next.";
 pub const USER_REJECTED_TOOL_MESSAGE: &str =
     "The user rejected this tool call. Do not retry it unless the user explicitly asks you to. If you cannot complete the task without running this tool call, stop and ask the user how to proceed.";
-pub const TOOL_CONFIRMATION_TIMEOUT_MESSAGE: &str =
-    "The tool confirmation window expired before the user responded. Do not retry the same tool call unless the user explicitly asks you to. If you still need this tool to complete the task, stop and ask the user how to proceed.";
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ToolExecutionErrorPresentation {
@@ -102,20 +100,6 @@ pub fn build_user_steering_interrupted_presentation(
     }
 }
 
-pub fn build_tool_confirmation_timeout_presentation(
-    tool_name: &str,
-) -> ToolExecutionErrorPresentation {
-    ToolExecutionErrorPresentation {
-        result_json: serde_json::json!({
-            "status": "cancelled",
-            "category": "confirmation_timeout",
-            "tool_name": tool_name,
-            "message": TOOL_CONFIRMATION_TIMEOUT_MESSAGE,
-        }),
-        result_for_assistant: TOOL_CONFIRMATION_TIMEOUT_MESSAGE.to_string(),
-    }
-}
-
 pub fn build_tool_execution_timeout_presentation(
     tool_name: &str,
     timeout_secs: Option<u64>,
@@ -172,6 +156,27 @@ pub fn build_user_rejected_tool_presentation_with_instruction(
 
     ToolExecutionErrorPresentation {
         result_json,
+        result_for_assistant: message,
+    }
+}
+
+pub fn build_permission_denied_tool_presentation(
+    tool_name: &str,
+    reason: &str,
+) -> ToolExecutionErrorPresentation {
+    let reason = reason.trim();
+    let message = format!(
+        "This tool call was blocked by the current permission policy: \"{reason}\". Do not retry it. If you cannot complete the task without running this tool call, stop and ask the user how to proceed."
+    );
+
+    ToolExecutionErrorPresentation {
+        result_json: serde_json::json!({
+            "status": "rejected",
+            "category": "permission_denied",
+            "tool_name": tool_name,
+            "reason": reason,
+            "message": message,
+        }),
         result_for_assistant: message,
     }
 }

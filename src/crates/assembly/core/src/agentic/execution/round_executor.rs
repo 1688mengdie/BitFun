@@ -11,61 +11,36 @@ use crate::agentic::memories::{
     parse_bitfun_memory_citation, parse_bitfun_memory_citation_payloads,
     strip_bitfun_memory_citations,
 };
+use crate::agentic::permission_policy::resolve_effective_permission_rules;
 use crate::agentic::tools::computer_use_host::ComputerUseHostRef;
 use crate::agentic::tools::pipeline::{
     SubagentBatchExecutionPolicy as PipelineSubagentBatchExecutionPolicy, ToolExecutionContext,
     ToolExecutionOptions, ToolPipeline,
 };
-use crate::agentic::tools::registry::{get_global_tool_registry, ToolRegistry};
 use crate::agentic::tools::tool_context_runtime;
 use crate::agentic::tools::tool_result_storage;
 use crate::agentic::MessageContent;
 use crate::infrastructure::ai::AIClient;
+use crate::service::config::project_permission_store::{
+    load_project_permission_config_local, load_project_permission_config_remote,
+};
+use crate::service::config::types::AgentProfileConfig;
 use crate::service::config::types::SubagentBatchExecutionPolicy as ConfigSubagentBatchExecutionPolicy;
 use crate::service::config::GlobalConfigManager;
 use crate::util::elapsed_ms_u64;
 use crate::util::errors::{BitFunError, BitFunResult};
 use crate::util::types::Message as AIMessage;
 use crate::util::types::ToolDefinition;
-use bitfun_agent_runtime::tool_confirmation::{
-    resolve_tool_confirmation_policy_gate, ToolConfirmationContextPolicy,
-    ToolConfirmationPolicyGateFacts,
-};
+use bitfun_agent_runtime::permission::AUTO_APPROVE_ASK_CONTEXT_KEY;
 use bitfun_agent_runtime::turn_cancellation::DialogTurnCancellationTokenStore;
-use bitfun_agent_tools::ResolvedToolInvocation;
 use bitfun_ai_adapters::{
     ModelExchangeRequestTraceHandle, ModelExchangeResponseTrace, ModelExchangeTraceConfig,
 };
+use bitfun_runtime_ports::PermissionRule;
 use log::{debug, error, warn};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
-
-fn tool_call_needs_permission(
-    registry: &ToolRegistry,
-    tool_call: &ToolCall,
-    workspace_root: Option<&std::path::Path>,
-    is_remote: bool,
-) -> bool {
-    let invocation = ResolvedToolInvocation::from_wire_call(
-        tool_call.tool_name.clone(),
-        tool_call.arguments.clone(),
-    )
-    .unwrap_or_else(|_| {
-        ResolvedToolInvocation::direct(tool_call.tool_name.clone(), tool_call.arguments.clone())
-    });
-
-    registry
-        .get_tool(&invocation.effective_tool_name)
-        .and_then(|tool| {
-            crate::external_tools::resolve_external_tool_for_workspace(
-                tool,
-                crate::external_tools::external_tool_route_root(workspace_root, is_remote),
-            )
-        })
-        .map(|tool| tool.needs_permissions(Some(&invocation.effective_arguments)))
-        .unwrap_or(false)
-}
 
 /// Round executor
 pub struct RoundExecutor {
@@ -116,6 +91,31 @@ impl RoundExecutor {
                 PipelineSubagentBatchExecutionPolicy::Serial
             }
         }
+    }
+
+    fn resolve_permission_rules(
+        global: &crate::service::config::types::GlobalConfig,
+        project_rules: &[PermissionRule],
+        agent_profile: Option<&AgentProfileConfig>,
+        parent_runtime_ceiling: Option<&bitfun_runtime_ports::PermissionRuntimeCeiling>,
+    ) -> Vec<PermissionRule> {
+        resolve_effective_permission_rules(
+            global,
+            project_rules,
+            agent_profile,
+            parent_runtime_ceiling,
+            &[],
+        )
+    }
+
+    fn resolve_auto_approve_ask(
+        global: &crate::service::config::types::GlobalConfig,
+        context_vars: &std::collections::HashMap<String, String>,
+    ) -> bool {
+        context_vars
+            .get(AUTO_APPROVE_ASK_CONTEXT_KEY)
+            .and_then(|value| value.parse::<bool>().ok())
+            .unwrap_or(global.tool_permissions.interaction.auto_approve_ask)
     }
 
     async fn sleep_with_cancellation(
@@ -747,6 +747,11 @@ impl RoundExecutor {
         let tool_results = if let Some(tool_pipeline) = &self.tool_pipeline {
             // Create tool execution context
             let allowed_tools = context.available_tools.clone();
+            let permission_delegation = context.permission_delegation.clone().or_else(|| {
+                subagent_parent_info
+                    .as_ref()
+                    .map(|parent| parent.permission_delegation_context(&context.agent_type))
+            });
             let tool_context = ToolExecutionContext {
                 session_id: context.session_id.clone(),
                 dialog_turn_id: context.dialog_turn_id.clone(),
@@ -758,6 +763,7 @@ impl RoundExecutor {
                 primary_model_facts: context.primary_model_facts.clone(),
                 context_vars: context.context_vars.clone(),
                 subagent_parent_info,
+                permission_delegation,
                 delegation_policy: context.delegation_policy,
                 deferred_tools: context.deferred_tools.clone(),
                 loaded_deferred_tool_specs: context.loaded_deferred_tool_specs.clone(),
@@ -769,103 +775,60 @@ impl RoundExecutor {
                 remote_exec_port: context.remote_exec_port.clone(),
             };
 
-            // Read tool execution related configuration from global config
-            let (
-                needs_confirmation,
-                tool_execution_timeout,
-                tool_confirmation_timeout,
-                subagent_batch_execution_policy,
-            ) = {
-                let config_service = GlobalConfigManager::get_service().await.ok();
+            // Read tool execution related configuration from global config.
+            let global_config: crate::service::config::types::GlobalConfig =
+                match GlobalConfigManager::get_service().await {
+                    Ok(service) => service.get_config(None).await.unwrap_or_default(),
+                    Err(_) => Default::default(),
+                };
+            let tool_execution_timeout = global_config.ai.tool_execution_timeout_secs;
+            let subagent_batch_execution_policy = Self::map_subagent_batch_execution_policy(
+                global_config.ai.subagent_batch_execution_policy,
+            );
+            let auto_approve_ask =
+                Self::resolve_auto_approve_ask(&global_config, &context.context_vars);
 
-                // Timeout and skip confirmation settings
-                let (exec_timeout, confirm_timeout, skip_confirmation, task_policy) =
-                    if let Some(ref service) = config_service {
-                        let ai_config: crate::service::config::types::AIConfig =
-                            service.get_config(Some("ai")).await.unwrap_or_default();
-
-                        if ai_config.skip_tool_confirmation {
-                            debug!("Global config skips tool confirmation");
+            let project_rules = match context.workspace.as_ref() {
+                Some(workspace) if workspace.is_remote() => {
+                    match context.workspace_services.as_ref() {
+                        Some(services) => {
+                            load_project_permission_config_remote(
+                                services.fs.as_ref(),
+                                &workspace.root_path_string(),
+                            )
+                            .await?
+                            .rules
                         }
-
-                        (
-                            ai_config.tool_execution_timeout_secs,
-                            ai_config.tool_confirmation_timeout_secs,
-                            ai_config.skip_tool_confirmation,
-                            Self::map_subagent_batch_execution_policy(
-                                ai_config.subagent_batch_execution_policy,
-                            ),
-                        )
-                    } else {
-                        (
-                            None,
-                            None,
-                            false,
-                            PipelineSubagentBatchExecutionPolicy::default(),
-                        ) // Default: no timeout, requires confirmation
-                    };
-
-                let skip_from_context = context
-                    .context_vars
-                    .get("skip_tool_confirmation")
-                    .map(|v| v == "true")
-                    .unwrap_or(false);
-                let require_from_context = context
-                    .context_vars
-                    .get("require_tool_confirmation")
-                    .map(|v| v == "true")
-                    .unwrap_or(false);
-                let context_policy = if require_from_context {
-                    ToolConfirmationContextPolicy::Require
-                } else if skip_from_context {
-                    ToolConfirmationContextPolicy::Skip
-                } else {
-                    ToolConfirmationContextPolicy::Inherit
-                };
-
-                let skips_confirmation = match context_policy {
-                    ToolConfirmationContextPolicy::Require => false,
-                    ToolConfirmationContextPolicy::Skip => true,
-                    ToolConfirmationContextPolicy::Inherit => skip_confirmation,
-                };
-                let any_tool_needs_permission = if skips_confirmation {
-                    false
-                } else {
-                    let registry = get_global_tool_registry();
-                    let tool_registry = registry.read().await;
-
-                    stream_result.tool_calls.iter().any(|tool_call| {
-                        tool_call_needs_permission(
-                            &tool_registry,
-                            tool_call,
-                            context
-                                .workspace
-                                .as_ref()
-                                .map(|workspace| workspace.root_path()),
-                            context
-                                .workspace
-                                .as_ref()
-                                .is_some_and(|workspace| workspace.is_remote()),
-                        )
-                    })
-                };
-                let needs_confirm =
-                    resolve_tool_confirmation_policy_gate(ToolConfirmationPolicyGateFacts {
-                        global_skip_tool_confirmation: skip_confirmation,
-                        context_policy,
-                        any_tool_needs_permission,
-                    })
-                    .confirm_before_run();
-
-                (needs_confirm, exec_timeout, confirm_timeout, task_policy)
+                        None => Vec::new(),
+                    }
+                }
+                Some(workspace) => {
+                    load_project_permission_config_local(workspace.root_path())
+                        .await?
+                        .rules
+                }
+                None => Vec::new(),
             };
+
+            let agent_profile_id =
+                crate::agentic::agents::resolve_mode_config_profile_id(&context.agent_type);
+            let agent_profile = global_config
+                .ai
+                .agent_profiles
+                .get(agent_profile_id.as_ref());
+            let permission_rules = Self::resolve_permission_rules(
+                &global_config,
+                &project_rules,
+                agent_profile,
+                context.permission_runtime_ceiling.as_ref(),
+            );
 
             // Create tool execution options (use configured timeout values)
             let tool_options = ToolExecutionOptions {
-                confirm_before_run: needs_confirmation,
                 timeout_secs: tool_execution_timeout,
-                confirmation_timeout_secs: tool_confirmation_timeout,
                 subagent_batch_execution_policy,
+                permission_rules,
+                auto_approve_ask,
                 ..ToolExecutionOptions::default()
             };
 
@@ -1401,17 +1364,21 @@ fn token_details_from_usage(
 
 #[cfg(test)]
 mod tests {
-    use super::{tool_call_needs_permission, RoundExecutor, StreamProcessor};
+    use super::{RoundExecutor, StreamProcessor};
     use crate::agentic::core::ToolCall;
     use crate::agentic::events::{EventQueue, EventQueueConfig};
     use crate::agentic::execution::stream_processor::StreamResult;
     use crate::agentic::execution::types::RoundContext;
-    use crate::agentic::tools::registry::create_tool_registry;
     use crate::agentic::tools::ToolRuntimeRestrictions;
+    use crate::service::config::types::{AgentProfileConfig, GlobalConfig};
     use crate::util::errors::BitFunError;
     use crate::util::types::ai::GeminiUsage;
+    use bitfun_agent_runtime::permission::AUTO_APPROVE_ASK_CONTEXT_KEY;
     use bitfun_agent_runtime::turn_cancellation::DialogTurnCancellationTokenStore;
-    use bitfun_runtime_ports::DelegationPolicy;
+    use bitfun_runtime_ports::{
+        DelegationPolicy, PermissionEffect, PermissionEvaluator, PermissionPolicyPreset,
+        PermissionRule,
+    };
     use serde_json::json;
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -1428,28 +1395,11 @@ mod tests {
         }
     }
 
-    #[test]
-    fn deferred_permission_gate_uses_effective_target() {
-        let registry = create_tool_registry();
-        let call = ToolCall {
-            tool_id: "tool-1".to_string(),
-            tool_name: bitfun_agent_tools::CALL_DEFERRED_TOOL_NAME.to_string(),
-            arguments: json!({
-                "tool_name": "Write",
-                "args": { "payload": "+++ file.txt\ncontent" }
-            }),
-            raw_arguments: None,
-            is_error: false,
-            recovered_from_truncation: false,
-        };
-
-        assert!(tool_call_needs_permission(&registry, &call, None, false));
-    }
-
     fn test_round_context() -> RoundContext {
         RoundContext {
             session_id: "session-1".to_string(),
             subagent_parent_info: None,
+            permission_delegation: None,
             dialog_turn_id: "turn-1".to_string(),
             turn_index: 0,
             round_number: 0,
@@ -1466,6 +1416,7 @@ mod tests {
             ),
             agent_type: "agentic".to_string(),
             context_vars: HashMap::new(),
+            permission_runtime_ceiling: None,
             delegation_policy: DelegationPolicy::top_level(),
             runtime_tool_restrictions: ToolRuntimeRestrictions::default(),
             steering_interrupt: None,
@@ -1475,6 +1426,83 @@ mod tests {
             remote_exec_port: None,
             recover_partial_on_cancel: false,
         }
+    }
+
+    #[test]
+    fn resolves_global_project_and_agent_permission_rules_before_execution() {
+        let mut global = GlobalConfig::default();
+        global.tool_permissions.policy.preset = PermissionPolicyPreset::FullAccess;
+        global.tool_permissions.policy.rules =
+            vec![PermissionRule::new("bash", "rm *", PermissionEffect::Ask)];
+        let project_rules = vec![PermissionRule::new(
+            "edit",
+            "generated/*",
+            PermissionEffect::Deny,
+        )];
+        let agent = AgentProfileConfig {
+            tool_permission_rules: vec![PermissionRule::new(
+                "edit",
+                "generated/review.md",
+                PermissionEffect::Allow,
+            )],
+            ..AgentProfileConfig::default()
+        };
+
+        let resolved =
+            RoundExecutor::resolve_permission_rules(&global, &project_rules, Some(&agent), None);
+        let evaluator = PermissionEvaluator::case_sensitive();
+
+        assert_eq!(
+            evaluator.evaluate_resource("bash", "rm -rf target", &resolved),
+            PermissionEffect::Ask
+        );
+        assert_eq!(
+            evaluator.evaluate_resource("edit", "generated/review.md", &resolved),
+            PermissionEffect::Allow
+        );
+        assert_eq!(
+            evaluator.evaluate_resource("edit", "generated/api.rs", &resolved),
+            PermissionEffect::Deny
+        );
+        assert_eq!(
+            evaluator.evaluate_resource("read", "src/main.rs", &resolved),
+            PermissionEffect::Allow
+        );
+    }
+
+    #[test]
+    fn auto_approve_context_overrides_persisted_interaction_preference() {
+        let mut global = GlobalConfig::default();
+        global.tool_permissions.interaction.auto_approve_ask = true;
+        let mut context_vars = std::collections::HashMap::new();
+
+        assert!(RoundExecutor::resolve_auto_approve_ask(
+            &global,
+            &context_vars
+        ));
+        context_vars.insert(
+            AUTO_APPROVE_ASK_CONTEXT_KEY.to_string(),
+            "false".to_string(),
+        );
+
+        assert!(!RoundExecutor::resolve_auto_approve_ask(
+            &global,
+            &context_vars
+        ));
+        context_vars.insert(AUTO_APPROVE_ASK_CONTEXT_KEY.to_string(), "true".to_string());
+        assert!(RoundExecutor::resolve_auto_approve_ask(
+            &global,
+            &context_vars
+        ));
+
+        context_vars.insert(
+            AUTO_APPROVE_ASK_CONTEXT_KEY.to_string(),
+            "invalid".to_string(),
+        );
+        assert!(RoundExecutor::resolve_auto_approve_ask(
+            &global,
+            &context_vars
+        ));
     }
 
     #[tokio::test]

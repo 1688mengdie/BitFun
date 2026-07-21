@@ -30,21 +30,27 @@ fn build_deep_review_subagent_context(
     values
 }
 
-fn forward_user_input_availability(
+fn forward_subagent_invocation_context(
     context: &ToolUseContext,
     subagent_context: &mut HashMap<String, String>,
 ) {
+    use bitfun_agent_runtime::permission::AUTO_APPROVE_ASK_CONTEXT_KEY;
     use bitfun_agent_runtime::user_questions::USER_INPUT_AVAILABLE_CONTEXT_KEY;
 
-    let Some(value) = context.custom_data.get(USER_INPUT_AVAILABLE_CONTEXT_KEY) else {
-        return;
-    };
-    let value = match value {
-        Value::Bool(value) => value.to_string(),
-        Value::String(value) if matches!(value.as_str(), "true" | "false") => value.clone(),
-        _ => return,
-    };
-    subagent_context.insert(USER_INPUT_AVAILABLE_CONTEXT_KEY.to_string(), value);
+    for key in [
+        USER_INPUT_AVAILABLE_CONTEXT_KEY,
+        AUTO_APPROVE_ASK_CONTEXT_KEY,
+    ] {
+        let Some(value) = context.custom_data.get(key) else {
+            continue;
+        };
+        let value = match value {
+            Value::Bool(value) => value.to_string(),
+            Value::String(value) if matches!(value.as_str(), "true" | "false") => value.clone(),
+            _ => continue,
+        };
+        subagent_context.insert(key.to_string(), value);
+    }
 }
 
 struct BackgroundTaskStartRequest<'a> {
@@ -58,6 +64,7 @@ struct BackgroundTaskStartRequest<'a> {
     model_binding_policy: SessionModelBindingPolicy,
     effective_workspace_path: Option<String>,
     model_id: Option<String>,
+    permission_runtime_ceiling: PermissionRuntimeCeiling,
     inherit_parent_model: bool,
     subagent_context: Option<HashMap<String, String>>,
     prepared_prompt: String,
@@ -69,6 +76,21 @@ struct BackgroundTaskStartRequest<'a> {
 }
 
 impl TaskTool {
+    async fn derive_parent_permission_runtime_ceiling(
+        context: &ToolUseContext,
+    ) -> PermissionRuntimeCeiling {
+        let global: GlobalConfig = match GlobalConfigManager::get_service().await {
+            Ok(service) => service.get_config(None).await.unwrap_or_default(),
+            Err(_) => GlobalConfig::default(),
+        };
+        let agent_profile = context.agent_type.as_deref().and_then(|agent_type| {
+            let profile_id = crate::agentic::agents::resolve_mode_config_profile_id(agent_type);
+            global.ai.agent_profiles.get(profile_id.as_ref())
+        });
+
+        crate::agentic::permission_policy::derive_parent_permission_runtime_ceiling(agent_profile)
+    }
+
     pub(super) async fn load_configured_tool_execution_timeout() -> Option<u64> {
         let service = GlobalConfigManager::get_service().await.ok()?;
         let ai_config: AIConfig = service.get_config(Some("ai")).await.ok()?;
@@ -577,8 +599,10 @@ impl TaskTool {
                 )
             })
             .unwrap_or_default();
-        forward_user_input_availability(context, &mut subagent_context);
+        forward_subagent_invocation_context(context, &mut subagent_context);
         let subagent_context = (!subagent_context.is_empty()).then_some(subagent_context);
+        let permission_runtime_ceiling =
+            Self::derive_parent_permission_runtime_ceiling(context).await;
         let prepared_prompt = prompt;
         if run_in_background {
             return Self::start_background_task(BackgroundTaskStartRequest {
@@ -592,6 +616,7 @@ impl TaskTool {
                 model_binding_policy,
                 effective_workspace_path,
                 model_id,
+                permission_runtime_ceiling,
                 inherit_parent_model,
                 subagent_context,
                 prepared_prompt,
@@ -615,6 +640,7 @@ impl TaskTool {
             model_binding_policy,
             effective_workspace_path,
             model_id,
+            permission_runtime_ceiling,
             inherit_parent_model,
             subagent_context,
             prepared_prompt,
@@ -652,6 +678,7 @@ impl TaskTool {
             model_binding_policy,
             effective_workspace_path,
             model_id,
+            permission_runtime_ceiling,
             inherit_parent_model,
             subagent_context,
             prepared_prompt,
@@ -681,6 +708,7 @@ impl TaskTool {
                     inherit_parent_model,
                     subagent_parent_info: parent_info,
                     context: subagent_context.unwrap_or_default(),
+                    permission_runtime_ceiling,
                     delegation_policy: context.delegation_policy().spawn_child(),
                     external_generation_lease,
                 },
@@ -716,6 +744,7 @@ impl TaskTool {
         model_binding_policy: SessionModelBindingPolicy,
         effective_workspace_path: Option<String>,
         model_id: Option<String>,
+        permission_runtime_ceiling: PermissionRuntimeCeiling,
         inherit_parent_model: bool,
         subagent_context: Option<HashMap<String, String>>,
         prepared_prompt: String,
@@ -774,6 +803,7 @@ impl TaskTool {
                         inherit_parent_model,
                         subagent_parent_info: parent_info,
                         context: subagent_context.clone().unwrap_or_default(),
+                        permission_runtime_ceiling: permission_runtime_ceiling.clone(),
                         delegation_policy: context.delegation_policy().spawn_child(),
                         external_generation_lease: external_generation_lease.clone(),
                     },
@@ -1073,6 +1103,24 @@ impl TaskTool {
 mod target_context_tests {
     use super::*;
     use bitfun_agent_runtime::deep_review::{append_tool_use_context_data, ReviewTargetEvidence};
+    use bitfun_agent_runtime::permission::AUTO_APPROVE_ASK_CONTEXT_KEY;
+    use bitfun_agent_runtime::user_questions::USER_INPUT_AVAILABLE_CONTEXT_KEY;
+
+    fn parent_tool_context() -> ToolUseContext {
+        ToolUseContext {
+            tool_call_id: None,
+            agent_type: None,
+            session_id: None,
+            dialog_turn_id: None,
+            workspace: None,
+            loaded_deferred_tool_specs: Vec::new(),
+            primary_model_facts: tool_runtime::context::PrimaryModelFacts::default(),
+            custom_data: HashMap::new(),
+            computer_use_host: None,
+            runtime_tool_restrictions: Default::default(),
+            runtime_handles: bitfun_runtime_ports::ToolRuntimeHandles::default(),
+        }
+    }
 
     #[test]
     fn deep_review_child_context_preserves_target_evidence_for_tools() {
@@ -1113,27 +1161,71 @@ mod target_context_tests {
 
     #[test]
     fn child_context_preserves_non_interactive_user_input_boundary() {
-        let mut parent = ToolUseContext {
-            tool_call_id: None,
-            agent_type: None,
-            session_id: None,
-            dialog_turn_id: None,
-            workspace: None,
-            loaded_deferred_tool_specs: Vec::new(),
-            primary_model_facts: tool_runtime::context::PrimaryModelFacts::default(),
-            custom_data: HashMap::new(),
-            computer_use_host: None,
-            runtime_tool_restrictions: Default::default(),
-            runtime_handles: bitfun_runtime_ports::ToolRuntimeHandles::default(),
-        };
+        let mut parent = parent_tool_context();
         parent.custom_data.insert(
-            bitfun_agent_runtime::user_questions::USER_INPUT_AVAILABLE_CONTEXT_KEY.to_string(),
+            USER_INPUT_AVAILABLE_CONTEXT_KEY.to_string(),
             Value::Bool(false),
         );
         let mut child = HashMap::new();
 
-        forward_user_input_availability(&parent, &mut child);
+        forward_subagent_invocation_context(&parent, &mut child);
 
         assert_eq!(child["user_input_available"], "false");
+    }
+
+    #[test]
+    fn child_context_preserves_explicit_auto_approve_true_and_false() {
+        for value in [true, false] {
+            let mut parent = parent_tool_context();
+            parent
+                .custom_data
+                .insert(AUTO_APPROVE_ASK_CONTEXT_KEY.to_string(), Value::Bool(value));
+            let mut child = HashMap::new();
+
+            forward_subagent_invocation_context(&parent, &mut child);
+
+            assert_eq!(
+                child.get(AUTO_APPROVE_ASK_CONTEXT_KEY).map(String::as_str),
+                Some(if value { "true" } else { "false" })
+            );
+        }
+    }
+
+    #[test]
+    fn child_context_leaves_unset_auto_approve_for_global_fallback() {
+        let parent = parent_tool_context();
+        let mut child = HashMap::new();
+
+        forward_subagent_invocation_context(&parent, &mut child);
+
+        assert!(!child.contains_key(AUTO_APPROVE_ASK_CONTEXT_KEY));
+    }
+
+    #[test]
+    fn child_context_forwards_only_allowlisted_boolean_invocation_facts() {
+        let mut parent = parent_tool_context();
+        parent.custom_data.insert(
+            AUTO_APPROVE_ASK_CONTEXT_KEY.to_string(),
+            Value::String("true".to_string()),
+        );
+        parent.custom_data.insert(
+            USER_INPUT_AVAILABLE_CONTEXT_KEY.to_string(),
+            Value::String("invalid".to_string()),
+        );
+        parent.custom_data.insert(
+            "parent_tool_runtime_state".to_string(),
+            Value::String("must-not-propagate".to_string()),
+        );
+        let mut child = HashMap::from([(
+            "deep_review_subagent_role".to_string(),
+            "reviewer".to_string(),
+        )]);
+
+        forward_subagent_invocation_context(&parent, &mut child);
+
+        assert_eq!(child[AUTO_APPROVE_ASK_CONTEXT_KEY], "true");
+        assert!(!child.contains_key(USER_INPUT_AVAILABLE_CONTEXT_KEY));
+        assert!(!child.contains_key("parent_tool_runtime_state"));
+        assert_eq!(child["deep_review_subagent_role"], "reviewer");
     }
 }

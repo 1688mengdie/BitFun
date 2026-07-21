@@ -13,9 +13,9 @@ use bitfun_agent_runtime::sdk::{
     AgentDialogTurnRequest, AgentRuntime, AgentSessionCreateRequest, AgentSessionDeleteRequest,
     AgentSessionForkRequest, AgentSessionForkResult, AgentSessionListRequest,
     AgentSessionModeUpdateRequest, AgentSessionModelUpdateRequest, AgentSessionRestoreRequest,
-    AgentSessionUsageRequest, AgentToolConfirmationRequest, AgentToolRejectionRequest,
-    AgentTurnCancellationRequest, AgentTurnSettlementRequest, AgentUserAnswersRequest,
-    PortErrorKind, RuntimeError, SessionTranscript, SessionTranscriptRequest, SessionUsageReport,
+    AgentSessionUsageRequest, AgentTurnCancellationRequest, AgentTurnSettlementRequest,
+    AgentUserAnswersRequest, PortErrorKind, RuntimeError, SessionTranscript,
+    SessionTranscriptRequest, SessionUsageReport, AUTO_APPROVE_ASK_CONTEXT_KEY,
 };
 use bitfun_agent_runtime::user_questions::USER_INPUT_AVAILABLE_CONTEXT_KEY;
 use bitfun_runtime_ports::{AgentSessionSummary, AgentSubmissionSource, DialogSubmissionPolicy};
@@ -39,6 +39,33 @@ fn validated_session_summary(
                 workspace_path.display()
             )
         })
+}
+
+fn cli_approval_metadata(
+    approval_policy: CliApprovalPolicy,
+) -> serde_json::Map<String, serde_json::Value> {
+    let mut metadata = serde_json::Map::new();
+    if matches!(
+        approval_policy,
+        CliApprovalPolicy::Reject | CliApprovalPolicy::Auto
+    ) {
+        metadata.insert(
+            USER_INPUT_AVAILABLE_CONTEXT_KEY.to_string(),
+            serde_json::Value::Bool(false),
+        );
+    }
+    let auto_approve_ask = match approval_policy {
+        CliApprovalPolicy::Ask => None,
+        CliApprovalPolicy::DisableAuto | CliApprovalPolicy::Reject => Some(false),
+        CliApprovalPolicy::Auto => Some(true),
+    };
+    if let Some(auto_approve_ask) = auto_approve_ask {
+        metadata.insert(
+            AUTO_APPROVE_ASK_CONTEXT_KEY.to_string(),
+            serde_json::Value::Bool(auto_approve_ask),
+        );
+    }
+    metadata
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -71,7 +98,7 @@ fn session_mode_migration_notice(
 pub(crate) struct CliAgentRuntimeClient {
     runtime: AgentRuntime,
     event_source: CliAgentEventSource,
-    approval_policy: CliApprovalPolicy,
+    approval_policy: Arc<RwLock<CliApprovalPolicy>>,
     workspace_path: Arc<RwLock<Option<PathBuf>>>,
     /// Session ID — uses Mutex for interior mutability
     session_id: Arc<Mutex<Option<String>>>,
@@ -84,7 +111,7 @@ impl CliAgentRuntimeClient {
         Self {
             runtime: runtime.agent_runtime().clone(),
             event_source: runtime.agent_events().clone(),
-            approval_policy: runtime.approval_policy(),
+            approval_policy: Arc::new(RwLock::new(runtime.approval_policy())),
             workspace_path: Arc::new(RwLock::new(workspace_path)),
             session_id: Arc::new(Mutex::new(None)),
             current_turn_id: Arc::new(Mutex::new(None)),
@@ -93,6 +120,20 @@ impl CliAgentRuntimeClient {
 
     pub(crate) fn event_source(&self) -> &CliAgentEventSource {
         &self.event_source
+    }
+
+    pub(crate) fn set_approval_policy(&self, policy: CliApprovalPolicy) {
+        *self
+            .approval_policy
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = policy;
+    }
+
+    pub(crate) fn approval_policy(&self) -> CliApprovalPolicy {
+        *self
+            .approval_policy
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     pub(crate) fn workspace_path_buf(&self) -> PathBuf {
@@ -426,13 +467,7 @@ impl CliAgentRuntimeClient {
         }
 
         // Start the dialog turn; events arrive through the shared broadcast source.
-        let mut metadata = serde_json::Map::new();
-        if self.approval_policy != CliApprovalPolicy::Ask {
-            metadata.insert(
-                USER_INPUT_AVAILABLE_CONTEXT_KEY.to_string(),
-                serde_json::Value::Bool(false),
-            );
-        }
+        let metadata = cli_approval_metadata(self.approval_policy());
         let request = AgentDialogTurnRequest {
             session_id: session_id.clone(),
             message: message.clone(),
@@ -442,8 +477,7 @@ impl CliAgentRuntimeClient {
             workspace_path: Some(self.workspace_path_string()),
             remote_connection_id: None,
             remote_ssh_host: None,
-            policy: DialogSubmissionPolicy::for_source(AgentSubmissionSource::Cli)
-                .with_skip_tool_confirmation(self.approval_policy == CliApprovalPolicy::Auto),
+            policy: DialogSubmissionPolicy::for_source(AgentSubmissionSource::Cli),
             reply_route: None,
             prepended_reminders: Vec::new(),
             attachments: Vec::new(),
@@ -533,32 +567,6 @@ impl CliAgentRuntimeClient {
         Ok(())
     }
 
-    pub(crate) async fn confirm_tool(
-        &self,
-        tool_id: &str,
-        updated_input: Option<serde_json::Value>,
-    ) -> Result<()> {
-        tracing::info!("Confirming tool execution: {}", tool_id);
-        self.runtime
-            .confirm_tool(AgentToolConfirmationRequest {
-                tool_id: tool_id.to_string(),
-                updated_input,
-            })
-            .await
-            .map_err(|e| anyhow::anyhow!("Confirm tool failed: {}", e.into_message()))
-    }
-
-    pub(crate) async fn reject_tool(&self, tool_id: &str, reason: String) -> Result<()> {
-        tracing::info!("Rejecting tool execution: {}, reason: {}", tool_id, reason);
-        self.runtime
-            .reject_tool(AgentToolRejectionRequest {
-                tool_id: tool_id.to_string(),
-                reason,
-            })
-            .await
-            .map_err(|e| anyhow::anyhow!("Reject tool failed: {}", e.into_message()))
-    }
-
     pub(crate) async fn submit_user_answers(
         &self,
         tool_id: &str,
@@ -603,7 +611,30 @@ mod tests {
 
     use bitfun_runtime_ports::AgentSessionSummary;
 
-    use super::{session_mode_migration_notice, validated_session_summary};
+    use bitfun_agent_runtime::sdk::AUTO_APPROVE_ASK_CONTEXT_KEY;
+    use bitfun_agent_runtime::user_questions::USER_INPUT_AVAILABLE_CONTEXT_KEY;
+
+    use crate::runtime::approval::CliApprovalPolicy;
+
+    use super::{cli_approval_metadata, session_mode_migration_notice, validated_session_summary};
+
+    #[test]
+    fn cli_approval_metadata_keeps_auto_invocation_scoped() {
+        let auto = cli_approval_metadata(CliApprovalPolicy::Auto);
+        assert_eq!(auto[AUTO_APPROVE_ASK_CONTEXT_KEY], true);
+        assert_eq!(auto[USER_INPUT_AVAILABLE_CONTEXT_KEY], false);
+
+        let reject = cli_approval_metadata(CliApprovalPolicy::Reject);
+        assert_eq!(reject[AUTO_APPROVE_ASK_CONTEXT_KEY], false);
+
+        let ask = cli_approval_metadata(CliApprovalPolicy::Ask);
+        assert!(!ask.contains_key(AUTO_APPROVE_ASK_CONTEXT_KEY));
+        assert!(!ask.contains_key(USER_INPUT_AVAILABLE_CONTEXT_KEY));
+
+        let disabled = cli_approval_metadata(CliApprovalPolicy::DisableAuto);
+        assert_eq!(disabled[AUTO_APPROVE_ASK_CONTEXT_KEY], false);
+        assert!(!disabled.contains_key(USER_INPUT_AVAILABLE_CONTEXT_KEY));
+    }
 
     #[test]
     fn model_updates_use_the_runtime_sdk_without_the_core_compatibility_facade() {

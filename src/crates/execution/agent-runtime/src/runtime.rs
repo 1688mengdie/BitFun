@@ -24,14 +24,17 @@ use bitfun_runtime_ports::{
     AgentThreadGoalCreateRequest, AgentThreadGoalDeliveryRequest, AgentThreadGoalGetRequest,
     AgentThreadGoalManagementPort, AgentThreadGoalUpdateStatusRequest, AgentTurnCancellationPort,
     AgentTurnCancellationRequest, AgentTurnCancellationResult, AgentTurnSettlementPort,
-    AgentTurnSettlementRequest, DialogSubmitOutcome, PluginRuntimeBinding, PortError,
-    PortErrorKind, PortResult, RuntimeEventEnvelope, SessionTranscript, SessionTranscriptReader,
-    SessionTranscriptRequest, ThreadGoal,
+    AgentTurnSettlementRequest, DialogSubmitOutcome, PermissionAuditRecord, PermissionGrant,
+    PermissionGrantKey, PluginRuntimeBinding, PortError, PortErrorKind, PortResult,
+    RuntimeEventEnvelope, SessionTranscript, SessionTranscriptReader, SessionTranscriptRequest,
+    ThreadGoal,
 };
 use bitfun_runtime_services::RuntimeServices;
 
 use crate::event_source::{AgentEventReceiver, AgentEventSource, AgentSessionEventReceiver};
+use crate::permission::{PermissionRequestEventReceiver, PermissionRequestManager};
 use crate::post_call_hooks::RuntimeHookRegistry;
+use bitfun_runtime_ports::{PermissionReply, PermissionReplySource, PermissionRequest};
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum RuntimeBuildError {
@@ -39,6 +42,8 @@ pub enum RuntimeBuildError {
     MissingSubmissionPort,
     #[error("plugin runtime client binding must report executable host availability")]
     UnsupportedPluginRuntimeHostBinding,
+    #[error("permission request manager is unavailable: {0}")]
+    PermissionRequestManagerUnavailable(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -65,6 +70,10 @@ pub enum RuntimeError {
     MissingEventSink,
     #[error("agent event source is not registered")]
     MissingEventSource,
+    #[error("permission request manager is not registered")]
+    MissingPermissionRequestManager,
+    #[error("permission request failed: {0}")]
+    PermissionRequest(String),
     #[error(transparent)]
     Port(#[from] PortError),
 }
@@ -109,23 +118,6 @@ pub trait AgentSessionRestorePort: Send + Sync {
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-/// Confirms a pending tool call, optionally replacing its input before execution.
-pub struct AgentToolConfirmationRequest {
-    pub tool_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub updated_input: Option<serde_json::Value>,
-}
-
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-/// Rejects a pending tool call with the user's reason.
-pub struct AgentToolRejectionRequest {
-    pub tool_id: String,
-    pub reason: String,
-}
-
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
 /// Delivers answers to a pending user-question tool call.
 pub struct AgentUserAnswersRequest {
     pub tool_id: String,
@@ -133,12 +125,10 @@ pub struct AgentUserAnswersRequest {
 }
 
 #[async_trait::async_trait]
-/// Routes product responses to the existing tool and user-input owners.
+/// Routes product responses to the existing user-input owner.
 ///
 /// Implementations do not own approval policy or interaction lifecycle state.
 pub trait AgentInteractionResponsePort: Send + Sync {
-    async fn confirm_tool(&self, request: AgentToolConfirmationRequest) -> PortResult<()>;
-    async fn reject_tool(&self, request: AgentToolRejectionRequest) -> PortResult<()>;
     async fn submit_user_answers(&self, request: AgentUserAnswersRequest) -> PortResult<()>;
 }
 
@@ -207,6 +197,7 @@ pub struct AgentRuntime {
     lifecycle_delivery: Option<Arc<dyn AgentLifecycleDeliveryPort>>,
     cancellation: Option<Arc<dyn AgentTurnCancellationPort>>,
     interaction_response: Option<Arc<dyn AgentInteractionResponsePort>>,
+    permission_requests: Option<Arc<PermissionRequestManager>>,
     services: Option<RuntimeServices>,
     event_stream: Option<AgentEventStream>,
     event_source: Option<AgentEventSource>,
@@ -382,6 +373,7 @@ pub struct AgentRuntimeBuilder {
     lifecycle_delivery: Option<Arc<dyn AgentLifecycleDeliveryPort>>,
     cancellation: Option<Arc<dyn AgentTurnCancellationPort>>,
     interaction_response: Option<Arc<dyn AgentInteractionResponsePort>>,
+    permission_requests: Option<Arc<PermissionRequestManager>>,
     services: Option<RuntimeServices>,
     event_stream: Option<AgentEventStream>,
     event_source: Option<AgentEventSource>,
@@ -490,6 +482,14 @@ impl AgentRuntimeBuilder {
         self
     }
 
+    pub fn with_permission_request_manager(
+        mut self,
+        manager: Arc<PermissionRequestManager>,
+    ) -> Self {
+        self.permission_requests = Some(manager);
+        self
+    }
+
     pub fn with_services(mut self, services: RuntimeServices) -> Self {
         self.services = Some(services);
         self
@@ -547,6 +547,7 @@ impl AgentRuntimeBuilder {
             lifecycle_delivery,
             cancellation,
             interaction_response,
+            permission_requests,
             services,
             event_stream,
             event_source,
@@ -577,6 +578,7 @@ impl AgentRuntimeBuilder {
             lifecycle_delivery,
             cancellation,
             interaction_response,
+            permission_requests,
             services,
             event_stream,
             event_source,
@@ -703,6 +705,100 @@ impl AgentRuntime {
             .ok_or(RuntimeError::MissingEventSource)
     }
 
+    pub fn pending_permission_requests(&self) -> Result<Vec<PermissionRequest>, RuntimeError> {
+        self.permission_requests
+            .as_ref()
+            .map(|manager| manager.interactive_pending_requests())
+            .ok_or(RuntimeError::MissingPermissionRequestManager)
+    }
+
+    pub fn subscribe_permission_requests(
+        &self,
+    ) -> Result<PermissionRequestEventReceiver, RuntimeError> {
+        self.permission_requests
+            .as_ref()
+            .map(|manager| manager.subscribe())
+            .ok_or(RuntimeError::MissingPermissionRequestManager)
+    }
+
+    pub async fn respond_permission(
+        &self,
+        request_id: &str,
+        reply: PermissionReply,
+        source: PermissionReplySource,
+    ) -> Result<(), RuntimeError> {
+        self.permission_requests
+            .as_ref()
+            .ok_or(RuntimeError::MissingPermissionRequestManager)?
+            .reply(request_id, reply, source)
+            .await
+            .map(|_| ())
+            .map_err(|error| RuntimeError::PermissionRequest(error.to_string()))
+    }
+
+    pub async fn respond_permission_batch(
+        &self,
+        request_id: &str,
+        reply: PermissionReply,
+        source: PermissionReplySource,
+    ) -> Result<Vec<String>, RuntimeError> {
+        self.permission_requests
+            .as_ref()
+            .ok_or(RuntimeError::MissingPermissionRequestManager)?
+            .reply_from(request_id, true, reply, source)
+            .await
+            .map(|resolution| resolution.resolved_request_ids)
+            .map_err(|error| RuntimeError::PermissionRequest(error.to_string()))
+    }
+
+    pub async fn list_project_permission_grants(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<PermissionGrant>, RuntimeError> {
+        self.permission_requests
+            .as_ref()
+            .ok_or(RuntimeError::MissingPermissionRequestManager)?
+            .list_project_grants(project_id)
+            .await
+            .map_err(|error| RuntimeError::PermissionRequest(error.to_string()))
+    }
+
+    pub async fn remove_project_permission_grant(
+        &self,
+        key: PermissionGrantKey,
+    ) -> Result<bool, RuntimeError> {
+        self.permission_requests
+            .as_ref()
+            .ok_or(RuntimeError::MissingPermissionRequestManager)?
+            .remove_project_grant(key)
+            .await
+            .map_err(|error| RuntimeError::PermissionRequest(error.to_string()))
+    }
+
+    pub async fn clear_project_permission_grants(
+        &self,
+        project_id: &str,
+    ) -> Result<usize, RuntimeError> {
+        self.permission_requests
+            .as_ref()
+            .ok_or(RuntimeError::MissingPermissionRequestManager)?
+            .clear_project_grants(project_id)
+            .await
+            .map_err(|error| RuntimeError::PermissionRequest(error.to_string()))
+    }
+
+    pub async fn list_project_permission_audit(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<PermissionAuditRecord>, RuntimeError> {
+        self.permission_requests
+            .as_ref()
+            .ok_or(RuntimeError::MissingPermissionRequestManager)?
+            .list_project_permission_audit(project_id)
+            .await
+            .map_err(|error| RuntimeError::PermissionRequest(error.to_string()))
+    }
+
     pub fn services(&self) -> Option<&RuntimeServices> {
         self.services.as_ref()
     }
@@ -712,30 +808,6 @@ impl AgentRuntime {
             .as_ref()
             .map(|registry| registry.tool_names())
             .unwrap_or_default()
-    }
-
-    pub async fn confirm_tool(
-        &self,
-        request: AgentToolConfirmationRequest,
-    ) -> Result<(), RuntimeError> {
-        self.interaction_response
-            .as_ref()
-            .ok_or(RuntimeError::MissingInteractionResponsePort)?
-            .confirm_tool(request)
-            .await?;
-        Ok(())
-    }
-
-    pub async fn reject_tool(
-        &self,
-        request: AgentToolRejectionRequest,
-    ) -> Result<(), RuntimeError> {
-        self.interaction_response
-            .as_ref()
-            .ok_or(RuntimeError::MissingInteractionResponsePort)?
-            .reject_tool(request)
-            .await?;
-        Ok(())
     }
 
     pub async fn submit_user_answers(
@@ -1217,12 +1289,11 @@ mod tests {
         AgentSessionSummary, AgentSessionWorkspaceRequest, AgentSubmissionResult,
         AgentThreadGoalDeliveryKind, AgentThreadGoalDeliveryRequest, AgentThreadGoalManagementPort,
         AgentTurnCancellationResult, ClockPort, DialogQueuePriority, DialogSubmissionPolicy,
-        DialogSubmitOutcome, FileSystemPort, PermissionPort, PluginDispatchEnvelope,
-        PluginResponseEnvelope, PluginRuntimeAvailability, PluginRuntimeClient,
-        PluginRuntimeUnavailableReason, PortErrorKind, PortResult, RuntimeEventSink,
-        RuntimeEventType, RuntimeServiceCapability, SessionStorePort, SessionTranscript,
-        SessionTranscriptReader, SessionTranscriptRequest, ThreadGoal, ThreadGoalStatus,
-        TranscriptContent, TranscriptMessage, WorkspacePort,
+        DialogSubmitOutcome, FileSystemPort, PluginDispatchEnvelope, PluginResponseEnvelope,
+        PluginRuntimeAvailability, PluginRuntimeClient, PluginRuntimeUnavailableReason,
+        PortErrorKind, PortResult, RuntimeEventSink, RuntimeEventType, RuntimeServiceCapability,
+        SessionStorePort, SessionTranscript, SessionTranscriptReader, SessionTranscriptRequest,
+        ThreadGoal, ThreadGoalStatus, TranscriptContent, TranscriptMessage, WorkspacePort,
     };
     use bitfun_runtime_services::{test_support::FakeRuntimePort, RuntimeServicesBuilder};
 
@@ -1577,8 +1648,6 @@ mod tests {
             Arc::new(FakeRuntimePort::new(RuntimeServiceCapability::Workspace));
         let session_store: Arc<dyn SessionStorePort> =
             Arc::new(FakeRuntimePort::new(RuntimeServiceCapability::SessionStore));
-        let permission: Arc<dyn PermissionPort> =
-            Arc::new(FakeRuntimePort::new(RuntimeServiceCapability::Permission));
         let clock: Arc<dyn ClockPort> =
             Arc::new(FakeRuntimePort::new(RuntimeServiceCapability::Clock));
 
@@ -1586,7 +1655,6 @@ mod tests {
             .with_filesystem(filesystem)
             .with_workspace(workspace)
             .with_session_store(session_store)
-            .with_permission(permission)
             .with_events(events)
             .with_clock(clock)
             .build()
@@ -2287,7 +2355,6 @@ mod tests {
                 policy: DialogSubmissionPolicy::new(
                     AgentSubmissionSource::RemoteRelay,
                     DialogQueuePriority::Normal,
-                    true,
                 ),
                 reply_route: None,
                 prepended_reminders: Vec::new(),
@@ -2342,7 +2409,6 @@ mod tests {
                 policy: DialogSubmissionPolicy::new(
                     AgentSubmissionSource::RemoteRelay,
                     DialogQueuePriority::High,
-                    true,
                 ),
                 reply_route: None,
                 prepended_reminders: Vec::new(),

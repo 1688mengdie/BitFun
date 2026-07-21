@@ -268,10 +268,6 @@ pub const REMOTE_WORKSPACE_COMMAND_POLICIES: &[(&str, RemoteWorkspacePolicy)] = 
         RemoteWorkspacePolicy::LocalOnly,
     ),
     (
-        "confirm_tool_execution",
-        RemoteWorkspacePolicy::LegacyUnaudited,
-    ),
-    (
         "control_background_command",
         RemoteWorkspacePolicy::LegacyUnaudited,
     ),
@@ -743,6 +739,26 @@ pub const REMOTE_WORKSPACE_COMMAND_POLICIES: &[(&str, RemoteWorkspacePolicy)] = 
         "list_background_command_activities",
         RemoteWorkspacePolicy::LegacyUnaudited,
     ),
+    (
+        "list_pending_permission_requests",
+        RemoteWorkspacePolicy::WorkspaceAgnostic,
+    ),
+    (
+        "list_project_permission_grants",
+        RemoteWorkspacePolicy::WorkspaceAgnostic,
+    ),
+    (
+        "list_project_permission_audit",
+        RemoteWorkspacePolicy::WorkspaceAgnostic,
+    ),
+    (
+        "get_project_permission_rules",
+        RemoteWorkspacePolicy::RemoteRouted,
+    ),
+    (
+        "save_project_permission_rules",
+        RemoteWorkspacePolicy::RemoteRouted,
+    ),
     ("list_cron_jobs", RemoteWorkspacePolicy::LegacyUnaudited),
     (
         "list_directory_files",
@@ -1127,8 +1143,20 @@ pub const REMOTE_WORKSPACE_COMMAND_POLICIES: &[(&str, RemoteWorkspacePolicy)] = 
     ("reject_file", RemoteWorkspacePolicy::LegacyUnaudited),
     ("reject_operation", RemoteWorkspacePolicy::LegacyUnaudited),
     (
-        "reject_tool_execution",
-        RemoteWorkspacePolicy::LegacyUnaudited,
+        "respond_permission",
+        RemoteWorkspacePolicy::WorkspaceAgnostic,
+    ),
+    (
+        "respond_permission_batch",
+        RemoteWorkspacePolicy::WorkspaceAgnostic,
+    ),
+    (
+        "remove_project_permission_grant",
+        RemoteWorkspacePolicy::WorkspaceAgnostic,
+    ),
+    (
+        "clear_project_permission_grants",
+        RemoteWorkspacePolicy::WorkspaceAgnostic,
     ),
     ("reload_config", RemoteWorkspacePolicy::LegacyUnaudited),
     (
@@ -1520,6 +1548,10 @@ pub const REMOTE_WORKSPACE_COMMAND_POLICIES: &[(&str, RemoteWorkspacePolicy)] = 
         RemoteWorkspacePolicy::LegacyUnaudited,
     ),
     ("start_dialog_turn", RemoteWorkspacePolicy::LegacyUnaudited),
+    (
+        "subscribe_permission_requests",
+        RemoteWorkspacePolicy::WorkspaceAgnostic,
+    ),
     ("start_file_watch", RemoteWorkspacePolicy::LegacyUnaudited),
     (
         "start_mcp_remote_oauth",
@@ -1805,7 +1837,6 @@ mod tests {
         "compact_session",
         "compress_path",
         "compute_diff",
-        "confirm_tool_execution",
         "control_background_command",
         "control_deep_review_queue",
         "create_acp_flow_session",
@@ -2041,7 +2072,6 @@ mod tests {
         "refresh_model_client",
         "reject_file",
         "reject_operation",
-        "reject_tool_execution",
         "reload_config",
         "reload_custom_agents",
         "reload_global_config",

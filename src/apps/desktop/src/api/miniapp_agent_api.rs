@@ -266,8 +266,7 @@ pub async fn miniapp_agent_run(
         session.session_id
     };
 
-    let policy = DialogSubmissionPolicy::for_source(DialogTriggerSource::DesktopApi)
-        .with_skip_tool_confirmation(true);
+    let policy = DialogSubmissionPolicy::for_source(DialogTriggerSource::DesktopApi);
 
     let outcome = scheduler
         .submit(

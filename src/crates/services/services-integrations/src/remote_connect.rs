@@ -331,7 +331,6 @@ pub enum RemoteDialogQueuePriority {
 pub struct RemoteDialogSubmissionPolicy {
     pub source: RemoteConnectSubmissionSource,
     pub queue_priority: RemoteDialogQueuePriority,
-    pub skip_tool_confirmation: bool,
 }
 
 impl RemoteDialogSubmissionPolicy {
@@ -339,7 +338,6 @@ impl RemoteDialogSubmissionPolicy {
         Self {
             source,
             queue_priority: RemoteDialogQueuePriority::Normal,
-            skip_tool_confirmation: true,
         }
     }
 }
@@ -1475,12 +1473,6 @@ where
 
 #[async_trait::async_trait]
 pub trait RemoteInteractionRuntimeHost: Send + Sync {
-    async fn confirm_tool(
-        &self,
-        tool_id: &str,
-        updated_input: Option<serde_json::Value>,
-    ) -> Result<(), String>;
-    async fn reject_tool(&self, tool_id: &str, reason: String) -> Result<(), String>;
     async fn cancel_tool(&self, tool_id: &str, reason: String) -> Result<(), String>;
     fn answer_question(&self, tool_id: &str, answers: serde_json::Value) -> Result<(), String>;
 }
@@ -1493,24 +1485,6 @@ where
     H: RemoteInteractionRuntimeHost + ?Sized,
 {
     match command {
-        RemoteCommand::ConfirmTool {
-            tool_id,
-            updated_input,
-        } => remote_interaction_accepted_response(
-            "confirm_tool",
-            tool_id.clone(),
-            host.confirm_tool(tool_id, updated_input.clone()).await,
-        ),
-        RemoteCommand::RejectTool { tool_id, reason } => {
-            let reject_reason = reason
-                .clone()
-                .unwrap_or_else(|| "User rejected".to_string());
-            remote_interaction_accepted_response(
-                "reject_tool",
-                tool_id.clone(),
-                host.reject_tool(tool_id, reject_reason).await,
-            )
-        }
         RemoteCommand::CancelTool { tool_id, reason } => {
             let cancel_reason = reason
                 .clone()
@@ -2113,14 +2087,6 @@ pub enum RemoteCommand {
     DeleteSession {
         session_id: String,
     },
-    ConfirmTool {
-        tool_id: String,
-        updated_input: Option<serde_json::Value>,
-    },
-    RejectTool {
-        tool_id: String,
-        reason: Option<String>,
-    },
     CancelTool {
         tool_id: String,
         reason: Option<String>,
@@ -2446,10 +2412,9 @@ where
         | RemoteCommand::ReadFileChunk { .. }
         | RemoteCommand::GetFileInfo { .. } => host.handle_workspace_file_command(command).await,
 
-        RemoteCommand::ConfirmTool { .. }
-        | RemoteCommand::RejectTool { .. }
-        | RemoteCommand::CancelTool { .. }
-        | RemoteCommand::AnswerQuestion { .. } => host.handle_interaction_command(command).await,
+        RemoteCommand::CancelTool { .. } | RemoteCommand::AnswerQuestion { .. } => {
+            host.handle_interaction_command(command).await
+        }
 
         RemoteCommand::SendMessage {
             session_id,
@@ -3723,28 +3688,10 @@ mod tests {
     }
 
     #[derive(Default)]
-    struct FakeInteractionHost {
-        rejected: Mutex<Vec<(String, String)>>,
-    }
+    struct FakeInteractionHost;
 
     #[async_trait::async_trait]
     impl RemoteInteractionRuntimeHost for FakeInteractionHost {
-        async fn confirm_tool(
-            &self,
-            _tool_id: &str,
-            _updated_input: Option<serde_json::Value>,
-        ) -> Result<(), String> {
-            Ok(())
-        }
-
-        async fn reject_tool(&self, tool_id: &str, reason: String) -> Result<(), String> {
-            self.rejected
-                .lock()
-                .unwrap()
-                .push((tool_id.to_string(), reason));
-            Ok(())
-        }
-
         async fn cancel_tool(&self, _tool_id: &str, _reason: String) -> Result<(), String> {
             Ok(())
         }
@@ -3756,31 +3703,5 @@ mod tests {
         ) -> Result<(), String> {
             Ok(())
         }
-    }
-
-    #[tokio::test]
-    async fn remote_interaction_handler_preserves_default_reject_reason() {
-        let host = FakeInteractionHost::default();
-
-        let response = handle_remote_interaction_command(
-            &host,
-            &RemoteCommand::RejectTool {
-                tool_id: "tool-1".to_string(),
-                reason: None,
-            },
-        )
-        .await;
-
-        assert_eq!(
-            response,
-            RemoteResponse::InteractionAccepted {
-                action: "reject_tool".to_string(),
-                target_id: "tool-1".to_string(),
-            }
-        );
-        assert_eq!(
-            host.rejected.lock().unwrap().as_slice(),
-            [("tool-1".to_string(), "User rejected".to_string())]
-        );
     }
 }

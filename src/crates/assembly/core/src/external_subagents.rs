@@ -227,10 +227,10 @@ async fn gather_product_facts(
                     name.as_str(),
                     metadata.as_str(),
                     if readonly { "readonly" } else { "writable" },
-                    if selected.needs_permissions(None) {
-                        "permissioned"
-                    } else {
+                    if readonly {
                         "unpermissioned"
+                    } else {
+                        "permissioned"
                     },
                 ]),
                 readonly,

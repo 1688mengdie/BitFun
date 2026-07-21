@@ -1,7 +1,8 @@
 //! Product-owned activation and contextual routing for external standalone tools.
 
 use crate::agentic::tools::framework::{
-    DynamicToolInfo, Tool, ToolExposure, ToolResult, ToolUseContext, ValidationResult,
+    DynamicToolInfo, PermissionIntent, Tool, ToolExposure, ToolResult, ToolUseContext,
+    ValidationResult,
 };
 use crate::agentic::tools::registry::get_global_tool_registry;
 use crate::util::errors::{BitFunError, BitFunResult};
@@ -151,6 +152,10 @@ pub(super) fn project_external_tools_read_only(
 pub(super) const UNRESOLVED_TOOL_CONFLICT_CHOICE: &str = "__bitfun_unresolved__";
 pub(super) const TOOL_CONFLICT_RESELECTION_REQUIRED: &str = "__bitfun_reselection_required__";
 
+fn external_tool_permission_intent(provider_id: &str, tool_name: &str) -> PermissionIntent {
+    PermissionIntent::new("custom_tool", vec![format!("{provider_id}:{tool_name}")])
+}
+
 #[derive(Clone)]
 struct LoadedExternalTool {
     descriptor: ScriptToolDescriptor,
@@ -209,8 +214,15 @@ impl Tool for LoadedExternalTool {
         false
     }
 
-    fn needs_permissions(&self, _input: Option<&Value>) -> bool {
-        true
+    fn permission_intents(
+        &self,
+        _input: &Value,
+        _context: &ToolUseContext,
+    ) -> BitFunResult<Vec<PermissionIntent>> {
+        Ok(vec![external_tool_permission_intent(
+            &self.provider_id,
+            &self.descriptor.name,
+        )])
     }
 
     async fn call_impl(
@@ -591,8 +603,14 @@ impl Tool for ExternalToolMux {
         false
     }
 
-    fn needs_permissions(&self, _input: Option<&Value>) -> bool {
-        true
+    fn permission_intents(
+        &self,
+        input: &Value,
+        context: &ToolUseContext,
+    ) -> BitFunResult<Vec<PermissionIntent>> {
+        self.selected(Some(context))
+            .ok_or_else(|| BitFunError::tool(format!("tool '{}' is unavailable", self.name)))?
+            .permission_intents(input, context)
     }
 
     async fn validate_input(
@@ -2057,6 +2075,14 @@ fn tool_diagnostic(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn external_tools_use_provider_qualified_v2_identity() {
+        let intent = external_tool_permission_intent("opencode", "release_notes");
+
+        assert_eq!(intent.action, "custom_tool");
+        assert_eq!(intent.resources, ["opencode:release_notes".to_string()]);
+    }
 
     struct TestTool {
         name: String,

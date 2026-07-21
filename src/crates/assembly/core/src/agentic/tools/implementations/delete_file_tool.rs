@@ -1,5 +1,6 @@
+use crate::agentic::tools::file_permissions::file_permission_intents;
 use crate::agentic::tools::framework::{
-    Tool, ToolRenderOptions, ToolResult, ToolUseContext, ValidationResult,
+    PermissionIntent, Tool, ToolRenderOptions, ToolResult, ToolUseContext, ValidationResult,
 };
 use crate::agentic::tools::workspace_paths::is_bitfun_tool_uri;
 use crate::agentic::tools::ToolPathOperation;
@@ -115,8 +116,16 @@ Important notes:
         false
     }
 
-    fn needs_permissions(&self, _input: Option<&Value>) -> bool {
-        true
+    fn permission_intents(
+        &self,
+        input: &Value,
+        context: &ToolUseContext,
+    ) -> BitFunResult<Vec<PermissionIntent>> {
+        let path = input
+            .get("path")
+            .and_then(Value::as_str)
+            .ok_or_else(|| BitFunError::validation("path parameter is required".to_string()))?;
+        file_permission_intents("edit", [path], context)
     }
 
     async fn validate_input(

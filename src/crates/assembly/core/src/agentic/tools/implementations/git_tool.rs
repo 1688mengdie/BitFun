@@ -3,7 +3,8 @@
 //! Provides safe and convenient Git command execution functionality, reuses underlying GitService
 
 use crate::agentic::tools::framework::{
-    Tool, ToolExposure, ToolRenderOptions, ToolResult, ToolUseContext, ValidationResult,
+    PermissionIntent, Tool, ToolExposure, ToolRenderOptions, ToolResult, ToolUseContext,
+    ValidationResult,
 };
 use crate::service::git::{
     execute_git_command, execute_git_command_raw, GitAddParams, GitCommitParams, GitDiffParams,
@@ -1039,42 +1040,26 @@ When creating commits, use this format for the commit message:
         false
     }
 
-    fn needs_permissions(&self, input: Option<&Value>) -> bool {
-        // Read-only operations don't need permissions
-        if let Some(input) = input {
-            if let Some(operation) = input.get("operation").and_then(|v| v.as_str()) {
-                let readonly_ops = [
-                    "status",
-                    "diff",
-                    "log",
-                    "show",
-                    "branch",
-                    "remote",
-                    "tag",
-                    "blame",
-                    "describe",
-                    "shortlog",
-                    "rev-parse",
-                ];
-                // For branch command, if just listing branches (no args or using -l), it's read-only
-                if operation == "branch" {
-                    if let Some(args) = input.get("args").and_then(|v| v.as_str()) {
-                        // If there are args but not viewing commands, permissions are needed
-                        if !args.is_empty()
-                            && !args.contains("-l")
-                            && !args.contains("--list")
-                            && !args.contains("-a")
-                            && !args.contains("-r")
-                        {
-                            return true;
-                        }
-                    }
-                    return false;
-                }
-                return !readonly_ops.contains(&operation);
-            }
-        }
-        true
+    fn permission_intents(
+        &self,
+        input: &Value,
+        _context: &ToolUseContext,
+    ) -> BitFunResult<Vec<PermissionIntent>> {
+        let normalized = Self::normalize_git_input(input.clone());
+        let operation = normalized
+            .get("operation")
+            .and_then(Value::as_str)
+            .ok_or_else(|| BitFunError::validation("operation is required".to_string()))?;
+        let args = normalized
+            .get("args")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|args| !args.is_empty());
+        let resource = match args {
+            Some(args) => format!("git {operation} {args}"),
+            None => format!("git {operation}"),
+        };
+        Ok(vec![PermissionIntent::new("git", vec![resource])])
     }
 
     async fn validate_input(

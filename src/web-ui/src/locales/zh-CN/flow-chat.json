@@ -1,4 +1,37 @@
 {
+  "permission": {
+    "title": "需要授权",
+    "subagentOwner": "{{subagent}} 子 Agent",
+    "feedbackLabel": "拒绝反馈",
+    "feedbackPlaceholder": "拒绝时可选填后续建议",
+    "responseFailed": "权限回复未能送达，请重试。",
+    "allowOnce": "允许一次",
+    "allowAlways": "始终允许",
+    "allowAlwaysTooltip": "始终允许会为 {{projectPath}} 保存匹配的访问权限。",
+    "allowAlwaysTooltipCurrentProject": "始终允许会为当前项目保存匹配的访问权限。",
+    "allowAlwaysTooltipNoGrant": "此请求没有可保存的访问范围；始终允许仅应用于本次请求。",
+    "reject": "拒绝",
+    "batchCount": "{{count}} 个权限请求",
+    "current": "当前",
+    "pending": "等待中",
+    "actions": {
+      "read": "读取文件",
+      "edit": "编辑文件",
+      "bash": "执行命令",
+      "git": "Git 操作",
+      "computerUse": "控制设备",
+      "webSearch": "搜索网络",
+      "webFetch": "访问网页",
+      "mcp": "MCP 调用",
+      "task": "运行任务",
+      "skill": "运行技能",
+      "customTool": "外部工具",
+      "externalDirectory": "访问外部目录",
+      "other": "其他操作"
+    },
+    "allowCurrentAndFollowing": "允许全部",
+    "rejectCurrentAndFollowing": "拒绝全部"
+  },
   "emptyState": {
     "welcomeBack": "欢迎回来！",
     "workingIn": "您正在 <workspace>{{workspace}}</workspace> 中",
@@ -551,6 +584,32 @@
   },
   "chatInput": {
     "addBoostTooltip": "智能体模式、图片或 Skill",
+    "permissionMode": {
+      "menuLabel": "权限模式",
+      "globalScope": "全局",
+      "current": "权限：{{mode}}",
+      "changeFailed": "切换权限模式失败。",
+      "ask": {
+        "label": "需要确认",
+        "description": "低风险读取、浏览、Task 和 Skill 自动允许；修改文件和执行命令需要确认。"
+      },
+      "auto": {
+        "label": "自动批准",
+        "description": "自动批准需要确认的请求；明确拒绝仍然生效。"
+      },
+      "fullAccess": {
+        "label": "完全访问",
+        "description": "默认允许工具执行；产品限制和系统权限仍然生效。"
+      },
+      "acp": {
+        "label": "ACP 控制",
+        "tooltip": "此会话的权限由 ACP 客户端控制。"
+      },
+      "fullAccessWarningTitle": "启用完全访问？",
+      "fullAccessWarningMessage": "完全访问会允许工具读取和写入文件、执行命令及调用集成，不再逐次询问。明确拒绝规则、产品限制和操作系统权限仍然生效。",
+      "fullAccessConfirm": "启用完全访问",
+      "cancel": "取消"
+    },
     "addModeTooltip": "附加 Plan 或 Debug",
     "boostSectionAgent": "智能体",
     "boostSectionContext": "上下文",

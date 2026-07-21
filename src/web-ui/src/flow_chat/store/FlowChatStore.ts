@@ -3192,7 +3192,6 @@ export class FlowChatStore {
               preflightMs: (item as any).preflightMs,
               confirmationWaitMs: (item as any).confirmationWaitMs,
               executionMs: (item as any).executionMs,
-              confirmationTimeoutAt: (item as any).confirmationTimeoutAt,
               attemptId: item.attemptId,
               attemptIndex: item.attemptIndex,
             }));
@@ -4488,7 +4487,6 @@ export class FlowChatStore {
               userConfirmed: tool.userConfirmed,
               acpPermission: tool.acpPermission,
               startTime: tool.startTime,
-              confirmationTimeoutAt: tool.confirmationTimeoutAt,
               endTime: tool.endTime,
               durationMs: tool.durationMs,
               queueWaitMs: tool.queueWaitMs,

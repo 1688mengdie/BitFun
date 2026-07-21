@@ -36,6 +36,10 @@ impl AgentRuntimeSdkCompatibility {
 
 pub use crate::context_profile::{ContextProfile, ContextProfilePolicy, ModelCapabilityProfile};
 pub use crate::event_source::{AgentEventReceiver, AgentEventSource, AgentSessionEventReceiver};
+pub use crate::permission::{
+    PermissionReplyResolution, PermissionRequestEventReceiver, PermissionRequestManager,
+    PermissionRequestManagerError, AUTO_APPROVE_ASK_CONTEXT_KEY,
+};
 pub use crate::post_call_hooks::{
     RuntimeHookErrorPolicy, RuntimeHookKind, RuntimeHookPlan, RuntimeHookRegistry,
     RuntimeHookRegistryBuildError,
@@ -43,9 +47,8 @@ pub use crate::post_call_hooks::{
 pub use crate::runtime::{
     AgentEventStream, AgentInteractionResponsePort, AgentRunHandle, AgentRunRequest,
     AgentSessionRestorePort, AgentSessionRestoreRequest, AgentSessionRestoreResult,
-    AgentToolConfirmationRequest, AgentToolRejectionRequest, AgentUserAnswersRequest,
-    RuntimeAgentRegistry, RuntimeAgentRegistryQuery, RuntimeBuildError, RuntimeError,
-    RuntimeToolRegistry, SessionSelector,
+    AgentUserAnswersRequest, RuntimeAgentRegistry, RuntimeAgentRegistryQuery, RuntimeBuildError,
+    RuntimeError, RuntimeToolRegistry, SessionSelector,
 };
 pub use crate::session_state::{session_state_label_for_state, ProcessingPhase, SessionState};
 pub use bitfun_agent_tools::{ToolRegistry, ToolRegistryItem};
@@ -70,10 +73,13 @@ pub use bitfun_runtime_ports::{
     AgentThreadGoalManagementPort, AgentThreadGoalUpdateStatusRequest, AgentTurnCancellationPort,
     AgentTurnCancellationRequest, AgentTurnCancellationResult, AgentTurnSettlementPort,
     AgentTurnSettlementRequest, ClockPort, DialogSubmissionPolicy, DialogSubmitOutcome,
-    FileSystemPort, GitPort, McpCatalogPort, NetworkPort, PermissionDecision, PermissionPort,
-    PermissionRequest, PortError, PortErrorKind, PortResult, RemoteAssistantWorkspaceFacts,
-    RemoteCapabilityPort, RemoteConnectionPort, RemoteProjectionPort, RemoteRecentWorkspaceFacts,
-    RemoteWorkspaceFacts, RemoteWorkspaceFileRuntimeHost, RemoteWorkspaceKind, RemoteWorkspacePort,
+    FileSystemPort, GitPort, McpCatalogPort, NetworkPort, PermissionAuditRecord,
+    PermissionDelegationContext, PermissionGrant, PermissionGrantKey, PermissionReply,
+    PermissionReplySource, PermissionRequest, PermissionRequestEvent, PermissionRequestSource,
+    PermissionRequestSourceKind, PortError, PortErrorKind, PortResult,
+    RemoteAssistantWorkspaceFacts, RemoteCapabilityPort, RemoteConnectionPort,
+    RemoteProjectionPort, RemoteRecentWorkspaceFacts, RemoteWorkspaceFacts,
+    RemoteWorkspaceFileRuntimeHost, RemoteWorkspaceKind, RemoteWorkspacePort,
     RemoteWorkspaceRuntimeHost, RemoteWorkspaceUpdate, RuntimeEventEnvelope, RuntimeEventSink,
     RuntimeEventType, RuntimeServiceCapability, RuntimeServicePort, SessionStorageKind,
     SessionStoragePathRequest, SessionStoragePathResolution, SessionStorePort, SessionTranscript,
@@ -201,6 +207,14 @@ impl AgentRuntimeBuilder {
         self
     }
 
+    pub fn with_permission_request_manager(
+        mut self,
+        manager: Arc<PermissionRequestManager>,
+    ) -> Self {
+        self.inner = self.inner.with_permission_request_manager(manager);
+        self
+    }
+
     pub fn with_services(mut self, services: RuntimeServices) -> Self {
         self.inner = self.inner.with_services(services);
         self
@@ -251,6 +265,75 @@ impl AgentRuntime {
         session_id: &str,
     ) -> Result<AgentSessionEventReceiver, RuntimeError> {
         self.inner.subscribe_session_events(session_id)
+    }
+
+    pub fn pending_permission_requests(&self) -> Result<Vec<PermissionRequest>, RuntimeError> {
+        self.inner.pending_permission_requests()
+    }
+
+    pub fn subscribe_permission_requests(
+        &self,
+    ) -> Result<PermissionRequestEventReceiver, RuntimeError> {
+        self.inner.subscribe_permission_requests()
+    }
+
+    pub async fn respond_permission(
+        &self,
+        request_id: &str,
+        reply: PermissionReply,
+    ) -> Result<(), RuntimeError> {
+        self.inner
+            .respond_permission(request_id, reply, PermissionReplySource::User)
+            .await
+    }
+
+    pub async fn respond_permission_with_source(
+        &self,
+        request_id: &str,
+        reply: PermissionReply,
+        source: PermissionReplySource,
+    ) -> Result<(), RuntimeError> {
+        self.inner
+            .respond_permission(request_id, reply, source)
+            .await
+    }
+
+    pub async fn respond_permission_batch(
+        &self,
+        request_id: &str,
+        reply: PermissionReply,
+    ) -> Result<Vec<String>, RuntimeError> {
+        self.inner
+            .respond_permission_batch(request_id, reply, PermissionReplySource::User)
+            .await
+    }
+
+    pub async fn list_project_permission_grants(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<PermissionGrant>, RuntimeError> {
+        self.inner.list_project_permission_grants(project_id).await
+    }
+
+    pub async fn remove_project_permission_grant(
+        &self,
+        key: PermissionGrantKey,
+    ) -> Result<bool, RuntimeError> {
+        self.inner.remove_project_permission_grant(key).await
+    }
+
+    pub async fn clear_project_permission_grants(
+        &self,
+        project_id: &str,
+    ) -> Result<usize, RuntimeError> {
+        self.inner.clear_project_permission_grants(project_id).await
+    }
+
+    pub async fn list_project_permission_audit(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<PermissionAuditRecord>, RuntimeError> {
+        self.inner.list_project_permission_audit(project_id).await
     }
 
     pub fn services(&self) -> Option<&RuntimeServices> {
@@ -456,20 +539,6 @@ impl AgentRuntime {
         request: AgentTurnCancellationRequest,
     ) -> Result<AgentTurnCancellationResult, RuntimeError> {
         self.inner.cancel_turn(request).await
-    }
-
-    pub async fn confirm_tool(
-        &self,
-        request: AgentToolConfirmationRequest,
-    ) -> Result<(), RuntimeError> {
-        self.inner.confirm_tool(request).await
-    }
-
-    pub async fn reject_tool(
-        &self,
-        request: AgentToolRejectionRequest,
-    ) -> Result<(), RuntimeError> {
-        self.inner.reject_tool(request).await
     }
 
     pub async fn submit_user_answers(

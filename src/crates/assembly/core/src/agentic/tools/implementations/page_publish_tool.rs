@@ -108,10 +108,6 @@ Use PageDeploy only to switch an already-saved version_id (rollback / promote a 
         false
     }
 
-    fn needs_permissions(&self, _input: Option<&Value>) -> bool {
-        true
-    }
-
     async fn is_available_in_context(&self, _context: Option<&ToolUseContext>) -> bool {
         account_login_available()
     }
