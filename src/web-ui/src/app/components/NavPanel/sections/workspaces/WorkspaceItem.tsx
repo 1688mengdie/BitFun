@@ -634,13 +634,10 @@ const WorkspaceItem: React.FC<WorkspaceItemProps> = ({
         workspaceId: workspace.id,
         activateWorkspace: setActiveWorkspace,
       });
-    } catch (error) {
-      notificationService.error(
-        error instanceof Error ? error.message : t('nav.workspaces.createSessionFailed'),
-        { duration: 4000 }
-      );
+    } catch {
+      // createAcpChatSession records the failure through the ACP notification lifecycle.
     }
-  }, [setActiveWorkspace, t, workspace]);
+  }, [setActiveWorkspace, workspace]);
 
   const handleCreateInitSession = useCallback(async () => {
     setMenuOpen(false);
