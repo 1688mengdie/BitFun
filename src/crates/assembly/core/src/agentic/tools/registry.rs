@@ -498,6 +498,8 @@ mod tests {
             "Git",
             "ReviewPlatform",
             "InitMiniApp",
+            "PageDeploy",
+            "PagePublish",
             "ControlHub",
             "ComputerUse",
             "Playbook",

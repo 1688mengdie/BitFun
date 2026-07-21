@@ -1327,6 +1327,28 @@
       "labelPath": "path",
       "nameLabel": "应用：{{name}}"
     },
+    "pageDeploy": {
+      "title": "部署页面",
+      "deployingShort": "…",
+      "untitled": "（未命名）",
+      "deployFailed": "无法部署 BitFun Page 版本",
+      "labelSlug": "slug",
+      "labelVersion": "version",
+      "labelPath": "url_path",
+      "openProduction": "打开生产链接"
+    },
+    "pagePublish": {
+      "title": "发布页面",
+      "publishingShort": "…",
+      "untitled": "（未命名）",
+      "publishFailed": "无法发布 BitFun Page",
+      "labelSlug": "slug",
+      "labelVersion": "version",
+      "labelPath": "url_path",
+      "labelPreview": "preview_url_path",
+      "openProduction": "打开生产链接",
+      "openPreview": "打开预览链接"
+    },
     "terminal": {
       "executeCommand": "执行命令:",
       "commandEmpty": "[命令为空 - 请编辑]",

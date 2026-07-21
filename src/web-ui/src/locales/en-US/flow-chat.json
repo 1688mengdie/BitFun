@@ -1327,6 +1327,28 @@
       "labelPath": "path",
       "nameLabel": "App: {{name}}"
     },
+    "pageDeploy": {
+      "title": "Deploy Page",
+      "deployingShort": "…",
+      "untitled": "(unnamed)",
+      "deployFailed": "Could not deploy BitFun Page version",
+      "labelSlug": "slug",
+      "labelVersion": "version",
+      "labelPath": "url_path",
+      "openProduction": "Open production URL"
+    },
+    "pagePublish": {
+      "title": "Publish Page",
+      "publishingShort": "…",
+      "untitled": "(unnamed)",
+      "publishFailed": "Could not publish BitFun Page",
+      "labelSlug": "slug",
+      "labelVersion": "version",
+      "labelPath": "url_path",
+      "labelPreview": "preview_url_path",
+      "openProduction": "Open production URL",
+      "openPreview": "Open preview URL"
+    },
     "terminal": {
       "executeCommand": "Execute command:",
       "commandEmpty": "[Command empty - please edit]",

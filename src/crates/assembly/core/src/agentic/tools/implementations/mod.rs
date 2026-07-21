@@ -31,6 +31,8 @@ pub mod list_models_tool;
 pub mod ls_tool;
 pub mod mcp_tools;
 pub mod miniapp_init_tool;
+pub mod page_deploy_tool;
+pub mod page_publish_tool;
 pub mod playbook_tool;
 pub mod review_platform_tool;
 pub mod session_control_tool;
@@ -76,6 +78,8 @@ pub use mcp_tools::{
     GetMCPPromptTool, ListMCPPromptsTool, ListMCPResourcesTool, ReadMCPResourceTool,
 };
 pub use miniapp_init_tool::InitMiniAppTool;
+pub use page_deploy_tool::PageDeployTool;
+pub use page_publish_tool::PagePublishTool;
 pub use playbook_tool::PlaybookTool;
 pub use review_platform_tool::ReviewPlatformTool;
 pub use session_control_tool::SessionControlTool;

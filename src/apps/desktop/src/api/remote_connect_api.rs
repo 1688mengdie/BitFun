@@ -3,6 +3,9 @@
 use crate::api::session_storage_path::desktop_effective_session_storage_path;
 use crate::embedded_relay_host::DesktopEmbeddedRelayHost;
 use bitfun_core::agentic::persistence::PersistenceManager;
+use bitfun_core::agentic::tools::account_login_capability::set_account_login_available;
+use bitfun_core::agentic::tools::page_deploy_host::set_page_deploy_handler;
+use bitfun_core::agentic::tools::page_publish_host::set_page_publish_handler;
 use bitfun_core::service::remote_connect::session_store::{
     clear_credential_hint, load_credential_hint, save_credential_hint, AccountHint,
 };
@@ -13,6 +16,9 @@ use bitfun_core::service::remote_connect::{
 };
 use bitfun_core::service::session::{DialogTurnData, SessionMetadata};
 use bitfun_services_integrations::remote_connect::account::error_indicates_expired_token;
+use bitfun_services_integrations::remote_connect::{
+    deploy_page_version_on_relay, join_relay_url, publish_page_content_on_relay,
+};
 use futures::stream::{self, StreamExt};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -317,7 +323,69 @@ async fn invalidate_local_account_session(reason: &str) {
     *get_account_session().write().await = None;
     *get_account_relay_url().write().await = None;
     session_store::clear_session();
+    sync_account_login_capability(false);
     log::warn!("Invalidated local account session after relay auth failure: {reason}");
+}
+
+fn sync_account_login_capability(logged_in: bool) {
+    set_account_login_available(logged_in);
+}
+
+fn register_page_deploy_host() {
+    set_page_deploy_handler(Arc::new(|slug, version_id| {
+        Box::pin(async move {
+            let (session, relay_url) = read_account_context().await?;
+            let info = deploy_page_version_on_relay(&relay_url, &session.token, &slug, &version_id)
+                .await
+                .map_err(|e| e.to_string())?;
+            let mut value = serde_json::to_value(info).map_err(|e| e.to_string())?;
+            if let Some(obj) = value.as_object_mut() {
+                let path = obj
+                    .get("url_path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let preview_path = obj
+                    .get("preview_url_path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                obj.insert(
+                    "url".into(),
+                    serde_json::Value::String(join_relay_url(&relay_url, &path)),
+                );
+                if !preview_path.is_empty() {
+                    obj.insert(
+                        "preview_url".into(),
+                        serde_json::Value::String(join_relay_url(&relay_url, &preview_path)),
+                    );
+                }
+            }
+            Ok(value)
+        })
+    }));
+}
+
+fn register_page_publish_host() {
+    set_page_publish_handler(Arc::new(|request| {
+        Box::pin(async move {
+            let (session, relay_url) = read_account_context().await?;
+            let result = publish_page_content_on_relay(
+                &relay_url,
+                &session.token,
+                &request.slug,
+                &request.visibility,
+                request.title.as_deref(),
+                request.note.as_deref(),
+                request.deploy,
+                request.directory.as_deref(),
+                request.files.as_ref(),
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+            serde_json::to_value(result).map_err(|e| e.to_string())
+        })
+    }));
 }
 
 fn get_account_session() -> &'static Arc<RwLock<Option<AccountSession>>> {
@@ -330,7 +398,7 @@ fn get_account_relay_url() -> &'static Arc<RwLock<Option<String>>> {
 
 /// Read both the session and relay URL, returning owned clones to avoid
 /// holding locks across awaits.
-async fn read_account_context() -> Result<(AccountSession, String), String> {
+pub(crate) async fn read_account_context() -> Result<(AccountSession, String), String> {
     let session = get_account_session().read().await.clone();
     let relay_url = get_account_relay_url().read().await.clone();
     match (session, relay_url) {
@@ -471,6 +539,8 @@ async fn register_account_pairing_context(service: &RemoteConnectService) {
 }
 
 pub fn init_on_startup() {
+    register_page_deploy_host();
+    register_page_publish_host();
     tokio::spawn(async {
         // Restore persisted account session (if any) before anything else
         // so that auto-sync, device routing, and bot delegation work on restart.
@@ -490,6 +560,7 @@ pub fn init_on_startup() {
                 };
                 *get_account_session().write().await = Some(session);
                 *get_account_relay_url().write().await = Some(relay_url.clone());
+                sync_account_login_capability(true);
                 // Keep the mirrored "Self-Hosted" server field in sync for
                 // sessions restored from an older version without the mirror.
                 set_self_hosted_form_url(Some(&relay_url));
@@ -517,12 +588,14 @@ pub fn init_on_startup() {
                 });
             }
             Ok(None) => {
+                sync_account_login_capability(false);
                 // No persisted session — normal for first-time users.
                 if let Err(e) = ensure_service().await {
                     log::warn!("Remote connect startup init failed: {e}");
                 }
             }
             Err(e) => {
+                sync_account_login_capability(false);
                 log::warn!("Failed to load persisted session: {e}");
                 if let Err(e) = ensure_service().await {
                     log::warn!("Remote connect startup init failed: {e}");
@@ -1297,6 +1370,7 @@ pub async fn account_finalize_login() -> Result<(), String> {
     persist_account_session(Some(device.device_id.as_str())).await?;
     PENDING_SYNC_CHOICE.store(false, std::sync::atomic::Ordering::Relaxed);
     TOKEN_EXPIRED.store(false, std::sync::atomic::Ordering::Relaxed);
+    sync_account_login_capability(true);
 
     register_delegated_identity_providers().await;
 
@@ -1353,6 +1427,7 @@ pub async fn account_login(request: AccountAuthRequest) -> Result<AccountLoginRe
         // Hold the session in memory only until the user picks cloud vs local.
         // Persisting here would restore "logged in" after a kill with no choice.
         PENDING_SYNC_CHOICE.store(true, std::sync::atomic::Ordering::Relaxed);
+        sync_account_login_capability(false);
         log::info!(
             "Account authenticated pending sync choice: {} (has_cloud_settings=true)",
             result.user_id
@@ -1366,6 +1441,7 @@ pub async fn account_login(request: AccountAuthRequest) -> Result<AccountLoginRe
     }
 
     register_delegated_identity_providers().await;
+    sync_account_login_capability(true);
 
     emit_account_event(
         "account://login-state",
@@ -1419,6 +1495,7 @@ pub async fn account_logout() -> Result<(), String> {
     // Clear the mirrored "Self-Hosted" server field on logout.
     set_self_hosted_form_url(None);
     TOKEN_EXPIRED.store(false, std::sync::atomic::Ordering::Relaxed);
+    sync_account_login_capability(false);
     emit_account_event(
         "account://login-state",
         serde_json::json!({ "logged_in": false }),
