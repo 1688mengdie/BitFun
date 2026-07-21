@@ -512,10 +512,7 @@ impl DialogScheduler {
                 );
                 Ok(())
             }
-            BackgroundDeliveryAction::SubmitAgentSessionFollowUp {
-                queue_priority,
-                skip_tool_confirmation,
-            } => {
+            BackgroundDeliveryAction::SubmitAgentSessionFollowUp { queue_priority } => {
                 let prepended = thread_goal_delivery_messages(plan.prepended_reminders);
                 self.submit_with_prepended_messages(
                     session_id,
@@ -526,11 +523,7 @@ impl DialogScheduler {
                     workspace_path,
                     remote_connection_id,
                     remote_ssh_host,
-                    DialogSubmissionPolicy::new(
-                        DialogTriggerSource::AgentSession,
-                        queue_priority,
-                        skip_tool_confirmation,
-                    ),
+                    DialogSubmissionPolicy::new(DialogTriggerSource::AgentSession, queue_priority),
                     None,
                     Some(plan.user_message_metadata),
                     prepended,
@@ -574,10 +567,7 @@ impl DialogScheduler {
                 );
                 Ok(())
             }
-            BackgroundDeliveryAction::SubmitAgentSessionFollowUp {
-                queue_priority,
-                skip_tool_confirmation,
-            } => {
+            BackgroundDeliveryAction::SubmitAgentSessionFollowUp { queue_priority } => {
                 let prepended = thread_goal_delivery_messages(plan.prepended_reminders);
                 self.submit_with_prepended_messages(
                     session_id,
@@ -588,11 +578,7 @@ impl DialogScheduler {
                     workspace_path,
                     remote_connection_id,
                     remote_ssh_host,
-                    DialogSubmissionPolicy::new(
-                        DialogTriggerSource::AgentSession,
-                        queue_priority,
-                        skip_tool_confirmation,
-                    ),
+                    DialogSubmissionPolicy::new(DialogTriggerSource::AgentSession, queue_priority),
                     None,
                     Some(plan.user_message_metadata),
                     prepended,
@@ -667,16 +653,9 @@ impl DialogScheduler {
                 self.round_injection_buffer.push(&session_id, injection);
                 Ok(())
             }
-            BackgroundDeliveryAction::SubmitAgentSessionFollowUp {
-                queue_priority,
-                skip_tool_confirmation,
-            } => {
-                self.submit_background_result_follow_up_locked(
-                    delivery,
-                    queue_priority,
-                    skip_tool_confirmation,
-                )
-                .await
+            BackgroundDeliveryAction::SubmitAgentSessionFollowUp { queue_priority } => {
+                self.submit_background_result_follow_up_locked(delivery, queue_priority)
+                    .await
             }
         }
     }
@@ -685,7 +664,6 @@ impl DialogScheduler {
         &self,
         delivery: BackgroundResultDelivery,
         queue_priority: DialogQueuePriority,
-        skip_tool_confirmation: bool,
     ) -> Result<(), String> {
         let resolved_turn_id = Uuid::new_v4().to_string();
         let queued_turn = QueuedTurn {
@@ -697,11 +675,7 @@ impl DialogScheduler {
             workspace_path: delivery.workspace_path,
             remote_connection_id: delivery.remote_connection_id,
             remote_ssh_host: delivery.remote_ssh_host,
-            policy: DialogSubmissionPolicy::new(
-                DialogTriggerSource::AgentSession,
-                queue_priority,
-                skip_tool_confirmation,
-            ),
+            policy: DialogSubmissionPolicy::new(DialogTriggerSource::AgentSession, queue_priority),
             reply_route: None,
             user_message_metadata: delivery.user_message_metadata,
             image_contexts: None,
@@ -891,8 +865,7 @@ impl DialogScheduler {
             workspace_path: session.config.workspace_path.clone(),
             remote_connection_id: session.config.remote_connection_id.clone(),
             remote_ssh_host: session.config.remote_ssh_host.clone(),
-            policy: DialogSubmissionPolicy::for_source(DialogTriggerSource::AgentSession)
-                .with_skip_tool_confirmation(true),
+            policy: DialogSubmissionPolicy::for_source(DialogTriggerSource::AgentSession),
             reply_route: None,
             user_message_metadata: None,
             image_contexts: None,
@@ -3211,18 +3184,15 @@ mod tests {
     }
 
     #[test]
-    fn remote_queue_policy_preserves_confirmation_boundary() {
+    fn remote_queue_policy_preserves_priority_boundary() {
         let remote = DialogSubmissionPolicy::for_source(DialogTriggerSource::RemoteRelay);
         assert_eq!(remote.queue_priority, DialogQueuePriority::Normal);
-        assert!(remote.skip_tool_confirmation);
 
         let bot = DialogSubmissionPolicy::for_source(DialogTriggerSource::Bot);
         assert_eq!(bot.queue_priority, DialogQueuePriority::Normal);
-        assert!(bot.skip_tool_confirmation);
 
         let agent_session = DialogSubmissionPolicy::for_source(DialogTriggerSource::AgentSession);
         assert_eq!(agent_session.queue_priority, DialogQueuePriority::Low);
-        assert!(agent_session.skip_tool_confirmation);
     }
 
     #[test]

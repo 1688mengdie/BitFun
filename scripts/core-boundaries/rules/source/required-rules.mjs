@@ -1823,69 +1823,6 @@ export const requiredContentRules = [
     ],
   },
   {
-    path: 'src/crates/execution/agent-runtime/src/tool_confirmation.rs',
-    reason:
-      'agent-runtime must own portable tool confirmation planning, failure mapping, and wait-channel lifecycle state',
-    patterns: [
-      {
-        regex: /\bpub struct ToolConfirmationRequestFacts\b/,
-        message: 'missing tool confirmation request facts',
-      },
-      {
-        regex: /\bpub struct ToolConfirmationGateFacts\b/,
-        message: 'missing tool confirmation gate facts',
-      },
-      {
-        regex: /\bpub enum ToolConfirmationGatePlan\b/,
-        message: 'missing tool confirmation gate plan',
-      },
-      {
-        regex: /\bpub enum ToolConfirmationPlan\b/,
-        message: 'missing tool confirmation plan contract',
-      },
-      {
-        regex: /\bpub enum ToolConfirmationOutcome\b/,
-        message: 'missing tool confirmation outcome contract',
-      },
-      {
-        regex: /\bpub enum ToolConfirmationWaitResult\b/,
-        message: 'missing tool confirmation wait-result contract',
-      },
-      {
-        regex: /\bpub enum ToolConfirmationResponse\b/,
-        message: 'missing tool confirmation channel response',
-      },
-      {
-        regex: /\bpub enum ConfirmationFailureKind\b/,
-        message: 'missing tool confirmation failure kind',
-      },
-      {
-        regex: /\bpub struct ToolConfirmationChannelStore\b/,
-        message: 'missing tool confirmation channel store',
-      },
-      {
-        regex: /\bpub fn resolve_tool_confirmation_plan\b/,
-        message: 'missing tool confirmation plan resolver',
-      },
-      {
-        regex: /\bpub fn resolve_tool_confirmation_gate\b/,
-        message: 'missing tool confirmation gate resolver',
-      },
-      {
-        regex: /\bpub fn resolve_confirmation_failure\b/,
-        message: 'missing tool confirmation failure resolver',
-      },
-      {
-        regex: /\bpub fn resolve_confirmation_wait_result\b/,
-        message: 'missing tool confirmation wait-result resolver',
-      },
-      {
-        regex: /\bconfirmation_channel_store_delivers_confirmation_once\b/,
-        message: 'missing confirmation channel delivery regression',
-      },
-    ],
-  },
-  {
     path: 'src/crates/execution/agent-runtime/src/checkpoint.rs',
     reason:
       'agent-runtime must own provider-neutral light-checkpoint summary policy while core keeps concrete Git/session IO',
@@ -1905,37 +1842,6 @@ export const requiredContentRules = [
       {
         regex: /\bpub fn build_light_checkpoint\b/,
         message: 'missing light checkpoint builder',
-      },
-    ],
-  },
-  {
-    path: 'src/crates/execution/agent-runtime/tests/tool_confirmation_contracts.rs',
-    reason:
-      'agent-runtime tool confirmation owner must keep behavior-equivalence contracts for legacy permission planning and failures',
-    patterns: [
-      {
-        regex: /\bconfirmation_plan_requires_permission_only_when_both_flags_are_true\b/,
-        message: 'missing tool confirmation gate regression',
-      },
-      {
-        regex: /\bconfirmation_gate_preserves_skip_policy_precedence\b/,
-        message: 'missing tool confirmation skip-policy regression',
-      },
-      {
-        regex: /\bconfirmation_gate_requires_confirmation_only_for_permissioned_tools\b/,
-        message: 'missing tool confirmation permissioned-tool regression',
-      },
-      {
-        regex: /\bconfirmation_plan_preserves_legacy_no_timeout_one_year_deadline\b/,
-        message: 'missing tool confirmation no-timeout regression',
-      },
-      {
-        regex: /\bconfirmation_failure_mapping_preserves_legacy_reasons_and_errors\b/,
-        message: 'missing tool confirmation failure mapping regression',
-      },
-      {
-        regex: /\bconfirmation_wait_result_mapping_preserves_legacy_timeout_and_rejection\b/,
-        message: 'missing tool confirmation wait-result mapping regression',
       },
     ],
   },
@@ -2791,27 +2697,15 @@ export const requiredContentRules = [
   {
     path: 'src/crates/assembly/core/src/agentic/tools/pipeline/tool_pipeline.rs',
     reason:
-      'core tool pipeline must delegate portable confirmation planning, failure mapping, and channel ownership to agent-runtime while retaining state/event/tool execution wiring',
+      'core tool pipeline must delegate portable cancellation and retry policy while retaining state/event/tool execution wiring',
     patterns: [
       {
-        regex: /\bresolve_tool_confirmation_plan\b/,
-        message: 'missing tool confirmation plan delegation',
+        regex: /\bremote_workspace_route_root_isolated_from_same_local_path\b/,
+        message: 'missing remote workspace permission identity isolation regression',
       },
       {
-        regex: /\bresolve_confirmation_failure\b/,
-        message: 'missing tool confirmation failure mapping delegation',
-      },
-      {
-        regex: /\bresolve_confirmation_wait_result\b/,
-        message: 'missing tool confirmation wait-result mapping delegation',
-      },
-      {
-        regex: /\bToolConfirmationPlan::Await\b/,
-        message: 'missing tool confirmation await-plan handling',
-      },
-      {
-        regex: /\bToolConfirmationChannelStore\b/,
-        message: 'missing tool confirmation channel owner delegation',
+        regex: /\bonce_and_always_replies_control_execution_and_remembered_grants\b/,
+        message: 'missing permission project and remote grant isolation regression',
       },
       {
         regex: /\bToolCancellationTokenStore\b/,
@@ -5355,10 +5249,6 @@ export const requiredContentRules = [
         message: 'missing pure GetToolSpec concurrency metadata contract',
       },
       {
-        regex: /\bpub fn get_tool_spec_needs_permissions\b/,
-        message: 'missing pure GetToolSpec permission metadata contract',
-      },
-      {
         regex: /\bpub fn validate_get_tool_spec_input\b/,
         message: 'missing pure GetToolSpec input validation contract',
       },
@@ -6627,10 +6517,6 @@ export const requiredContentRules = [
         regex: /\bremote_poll_handler_preserves_missing_workspace_error\b/,
         message: 'missing remote poll missing-workspace regression',
       },
-      {
-        regex: /\bremote_interaction_handler_preserves_default_reject_reason\b/,
-        message: 'missing remote interaction default reject regression',
-      },
     ],
   },
   {
@@ -6950,12 +6836,8 @@ export const requiredContentRules = [
   {
     path: 'src/crates/assembly/core/src/agentic/coordination/scheduler.rs',
     reason:
-      'core scheduler keeps remote queue policy semantics until agent-runtime migration is reviewed',
+      'core scheduler must keep dialog lifecycle and requester-aware cancellation adapters',
     patterns: [
-      {
-        regex: /\bremote_queue_policy_preserves_confirmation_boundary\b/,
-        message: 'missing remote queue policy regression',
-      },
       {
         regex: /\bimpl AgentDialogTurnPort for DialogScheduler\b/,
         message: 'missing dialog lifecycle port implementation',

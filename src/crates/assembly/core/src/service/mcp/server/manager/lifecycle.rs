@@ -713,8 +713,7 @@ impl MCPServerManager {
     pub async fn retire_external_ephemeral_server(&self, server_id: &str) -> BitFunResult<()> {
         const RETIREMENT_GRACE: std::time::Duration = std::time::Duration::from_secs(30);
         const RETIREMENT_RECLAIM_ATTEMPTS: usize = 3;
-        const RETIREMENT_RETRY_DELAY: std::time::Duration =
-            std::time::Duration::from_millis(250);
+        const RETIREMENT_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(250);
         let _lifecycle_guard = self.ephemeral_lifecycle.lock().await;
         self.ephemeral_start_tokens.write().await.remove(server_id);
         if !self.runtime.contains(server_id).await {

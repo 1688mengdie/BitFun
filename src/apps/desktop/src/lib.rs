@@ -925,8 +925,16 @@ pub async fn run() {
             webdriver_bridge_result,
             get_startup_native_trace,
             api::agentic_api::list_sessions,
-            api::agentic_api::confirm_tool_execution,
-            api::agentic_api::reject_tool_execution,
+            api::agentic_api::list_pending_permission_requests,
+            api::agentic_api::subscribe_permission_requests,
+            api::agentic_api::respond_permission,
+            api::agentic_api::respond_permission_batch,
+            api::agentic_api::list_project_permission_grants,
+            api::agentic_api::remove_project_permission_grant,
+            api::agentic_api::clear_project_permission_grants,
+            api::agentic_api::list_project_permission_audit,
+            api::agentic_api::get_project_permission_rules,
+            api::agentic_api::save_project_permission_rules,
             api::agentic_api::cancel_tool,
             api::agentic_api::generate_session_title,
             api::agentic_api::get_available_modes,
@@ -1530,16 +1538,22 @@ async fn init_agentic_system() -> anyhow::Result<(
 
     let tool_registry = tools::registry::get_global_tool_registry();
     let tool_state_manager = Arc::new(tools::pipeline::ToolStateManager::new(event_queue.clone()));
+    let permission_request_manager =
+        bitfun_core::product_runtime::core_permission_request_manager()
+            .map_err(anyhow::Error::msg)?;
 
     let computer_use_host: ComputerUseHostRef =
         Arc::new(computer_use::DesktopComputerUseHost::new());
     set_computer_use_desktop_available(true);
 
-    let tool_pipeline = Arc::new(tools::pipeline::ToolPipeline::new(
-        tool_registry,
-        tool_state_manager,
-        Some(computer_use_host),
-    ));
+    let tool_pipeline = Arc::new(
+        tools::pipeline::ToolPipeline::new(
+            tool_registry,
+            tool_state_manager,
+            Some(computer_use_host),
+        )
+        .with_permission_request_manager(permission_request_manager),
+    );
 
     let stream_processor = Arc::new(execution::StreamProcessor::new(event_queue.clone()));
     let round_executor = Arc::new(execution::RoundExecutor::new(

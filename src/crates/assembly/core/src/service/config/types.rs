@@ -4,6 +4,7 @@
 
 use crate::util::errors::*;
 use async_trait::async_trait;
+use bitfun_runtime_ports::{PermissionRule, ToolPermissionConfig};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -55,6 +56,9 @@ pub struct GlobalConfig {
     pub terminal: TerminalConfig,
     pub workspace: WorkspaceConfig,
     pub ai: AIConfig,
+    /// User-level static tool permission policy and interaction preferences.
+    #[serde(default)]
+    pub tool_permissions: ToolPermissionConfig,
     #[serde(default)]
     pub memories: MemoriesConfig,
     /// Project-scoped overlays stored in the shared config document.
@@ -695,14 +699,6 @@ pub struct AIConfig {
     #[serde(default = "default_tool_execution_timeout")]
     pub tool_execution_timeout_secs: Option<u64>,
 
-    /// Tool confirmation timeout in seconds; `None` means wait indefinitely.
-    #[serde(default = "default_tool_confirmation_timeout")]
-    pub tool_confirmation_timeout_secs: Option<u64>,
-
-    /// Skip tool execution confirmation (global, applies to all modes).
-    #[serde(default = "default_skip_tool_confirmation")]
-    pub skip_tool_confirmation: bool,
-
     /// Whether tools with deferred exposure load their schemas on demand.
     #[serde(default = "default_enable_deferred_tool_loading")]
     pub enable_deferred_tool_loading: bool,
@@ -882,6 +878,10 @@ pub struct AgentProfileConfig {
     /// User-level subagent availability overrides for this shared profile.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub subagent_overrides: ParentSubagentOverrideConfig,
+
+    /// Agent-level permission rules applied after project rules.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_permission_rules: Vec<PermissionRule>,
 }
 
 /// API view of a mode configuration.
@@ -914,15 +914,6 @@ fn default_stream_ttft_timeout() -> Option<u64> {
 /// Default is no timeout (wait forever).
 fn default_tool_execution_timeout() -> Option<u64> {
     None
-}
-
-/// Default is no timeout (wait forever).
-fn default_tool_confirmation_timeout() -> Option<u64> {
-    None
-}
-
-fn default_skip_tool_confirmation() -> bool {
-    true
 }
 
 fn default_enable_deferred_tool_loading() -> bool {
@@ -1569,6 +1560,7 @@ impl Default for GlobalConfig {
             ai: AIConfig::default(),
             memories: MemoriesConfig::default(),
             project: ProjectConfig::default(),
+            tool_permissions: ToolPermissionConfig::default(),
             mcp_servers: None,
             acp_clients: None,
             themes: Some(ThemesConfig::default()),
@@ -1757,8 +1749,6 @@ impl Default for AIConfig {
             stream_idle_timeout_secs: default_stream_idle_timeout(),
             stream_ttft_timeout_secs: default_stream_ttft_timeout(),
             tool_execution_timeout_secs: default_tool_execution_timeout(),
-            tool_confirmation_timeout_secs: default_tool_confirmation_timeout(),
-            skip_tool_confirmation: true,
             enable_deferred_tool_loading: default_enable_deferred_tool_loading(),
             debug_mode_config: DebugModeConfig::default(),
             computer_use_enabled: false,
@@ -2005,6 +1995,7 @@ mod tests {
         ModelExchangeTracingMode, ReasoningMode, SubagentBatchExecutionPolicy,
         SubagentModelSelection, UserSkillGroupsConfig, UserToolGroupsConfig,
     };
+    use bitfun_runtime_ports::ToolPermissionConfig;
 
     #[test]
     fn agent_profile_defaults_keep_all_collections_empty() {
@@ -2015,6 +2006,7 @@ mod tests {
         assert!(config.disabled_user_skills.is_empty());
         assert!(config.enabled_user_skills.is_empty());
         assert!(config.subagent_overrides.is_empty());
+        assert!(config.tool_permission_rules.is_empty());
 
         let view = AgentProfileView::default();
         assert!(view.profile_id.is_empty());
@@ -2022,6 +2014,27 @@ mod tests {
         assert!(view.default_tools.is_empty());
         assert!(view.disabled_user_skills.is_empty());
         assert!(view.enabled_user_skills.is_empty());
+    }
+
+    #[test]
+    fn legacy_agent_profile_defaults_permission_rules_and_omits_empty_field() {
+        let config: AgentProfileConfig = serde_json::from_value(serde_json::json!({
+            "profile_id": "coding_shared",
+            "added_tools": ["read"]
+        }))
+        .expect("legacy agent profile should deserialize");
+
+        assert!(config.tool_permission_rules.is_empty());
+        let serialized = serde_json::to_value(config).expect("agent profile should serialize");
+        assert!(serialized.get("tool_permission_rules").is_none());
+    }
+
+    #[test]
+    fn legacy_global_config_defaults_permission_settings() {
+        let config: GlobalConfig = serde_json::from_value(serde_json::json!({}))
+            .expect("legacy config should deserialize with permission defaults");
+
+        assert_eq!(config.tool_permissions, ToolPermissionConfig::default());
     }
 
     #[test]

@@ -375,6 +375,7 @@
         "resetWorkspace": "Reset workspace",
         "initAgents": "Initialize AGENTS.md",
         "manageRelatedPaths": "Related directories",
+        "manageProjectPermissions": "Project permissions",
         "newWorktree": "New worktree",
         "deleteWorktree": "Delete worktree",
         "copyPath": "Copy path",

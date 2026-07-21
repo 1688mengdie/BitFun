@@ -54,11 +54,12 @@ pub async fn init_agentic_system() -> Result<AgenticSystem> {
 
     let tool_registry = tools::registry::get_global_tool_registry();
     let tool_state_manager = Arc::new(tools::pipeline::ToolStateManager::new(event_queue.clone()));
-    let tool_pipeline = Arc::new(tools::pipeline::ToolPipeline::new(
-        tool_registry,
-        tool_state_manager,
-        None,
-    ));
+    let permission_request_manager =
+        crate::product_runtime::core_permission_request_manager().map_err(anyhow::Error::msg)?;
+    let tool_pipeline = Arc::new(
+        tools::pipeline::ToolPipeline::new(tool_registry, tool_state_manager, None)
+            .with_permission_request_manager(permission_request_manager),
+    );
 
     let stream_processor = Arc::new(execution::StreamProcessor::new(event_queue.clone()));
     let round_executor = Arc::new(execution::RoundExecutor::new(

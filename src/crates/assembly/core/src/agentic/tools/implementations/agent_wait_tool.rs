@@ -3,7 +3,7 @@ use crate::agentic::coordination::{
     BackgroundSubagentWaitResult,
 };
 use crate::agentic::tools::framework::{
-    Tool, ToolRenderOptions, ToolResult, ToolUseContext, ValidationResult,
+    PermissionIntent, Tool, ToolRenderOptions, ToolResult, ToolUseContext, ValidationResult,
 };
 use crate::util::errors::{BitFunError, BitFunResult};
 use async_trait::async_trait;
@@ -201,8 +201,12 @@ The selected task set is fixed when the call starts. wait_mode defaults to `all`
         false
     }
 
-    fn needs_permissions(&self, _input: Option<&Value>) -> bool {
-        false
+    fn permission_intents(
+        &self,
+        _input: &Value,
+        _context: &ToolUseContext,
+    ) -> BitFunResult<Vec<PermissionIntent>> {
+        Ok(Vec::new())
     }
 
     fn render_tool_use_message(&self, _input: &Value, options: &ToolRenderOptions) -> String {

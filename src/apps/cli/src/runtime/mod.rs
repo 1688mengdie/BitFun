@@ -19,7 +19,7 @@ pub(crate) mod approval;
 pub(crate) mod events;
 pub(crate) mod services;
 
-use approval::{CliApprovalController, CliApprovalPolicy, CliPermissionService};
+use approval::CliApprovalPolicy;
 use events::CliAgentEventSource;
 use services::{CliClock, CliRuntimeEventSink, CliRuntimeServicesProvider};
 
@@ -61,7 +61,6 @@ pub(crate) struct CliRuntimeContext {
     services: RuntimeServices,
     product: CliProductRuntimeState,
     approval_policy: CliApprovalPolicy,
-    approval_controller: Arc<CliApprovalController>,
 }
 
 impl CliRuntimeContext {
@@ -74,7 +73,6 @@ impl CliRuntimeContext {
         let runtime_events = Arc::new(CliRuntimeEventSink::new(RUNTIME_EVENT_BUFFER));
         let provider = CliRuntimeServicesProvider::new(
             workspace_root,
-            Arc::new(CliPermissionService::new(approval_policy)),
             runtime_events.clone(),
             Arc::new(CliClock),
         )?;
@@ -126,7 +124,6 @@ impl CliRuntimeContext {
             services,
             product,
             approval_policy,
-            approval_controller: Arc::new(CliApprovalController::new()),
         })
     }
 
@@ -161,10 +158,6 @@ impl CliRuntimeContext {
     pub(crate) const fn approval_policy(&self) -> CliApprovalPolicy {
         self.approval_policy
     }
-
-    pub(crate) fn approval_controller(&self) -> &Arc<CliApprovalController> {
-        &self.approval_controller
-    }
 }
 
 #[derive(Clone)]
@@ -181,12 +174,8 @@ impl AcpRuntimeContext {
     ) -> Result<Self> {
         let scheduler = ensure_dialog_scheduler(&agentic_system);
         let runtime_events = Arc::new(CliRuntimeEventSink::new(RUNTIME_EVENT_BUFFER));
-        let provider = CliRuntimeServicesProvider::new(
-            workspace_root,
-            Arc::new(CliPermissionService::new(CliApprovalPolicy::Ask)),
-            runtime_events,
-            Arc::new(CliClock),
-        )?;
+        let provider =
+            CliRuntimeServicesProvider::new(workspace_root, runtime_events, Arc::new(CliClock))?;
         let parts = assemble_acp_runtime_parts(provider.build()?)
             .context("Failed to assemble ACP product runtime")?;
         let (services, harness_registry, _disabled_plugin_runtime) = parts.into_runtime_parts();

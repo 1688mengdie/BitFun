@@ -28,10 +28,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::{assemble_acp_runtime_parts, assemble_cli_runtime_parts};
-    use crate::runtime::{
-        approval::{CliApprovalPolicy, CliPermissionService},
-        services::{CliClock, CliRuntimeEventSink, CliRuntimeServicesProvider},
-    };
+    use crate::runtime::services::{CliClock, CliRuntimeEventSink, CliRuntimeServicesProvider};
     use bitfun_core::product_assembly::ProductServiceCapabilityStatus;
     use bitfun_core::product_assembly::{product_assembly_plan_for_profile, DeliveryProfile};
     use bitfun_runtime_ports::{
@@ -48,7 +45,6 @@ mod tests {
             RuntimeServiceCapability::FileSystem,
             RuntimeServiceCapability::Workspace,
             RuntimeServiceCapability::SessionStore,
-            RuntimeServiceCapability::Permission,
             RuntimeServiceCapability::Events,
             RuntimeServiceCapability::Clock,
             RuntimeServiceCapability::Terminal,
@@ -76,7 +72,6 @@ mod tests {
         let workspace = tempfile::tempdir().expect("workspace");
         let services = CliRuntimeServicesProvider::new(
             workspace.path(),
-            Arc::new(CliPermissionService::new(CliApprovalPolicy::Reject)),
             Arc::new(CliRuntimeEventSink::new(8)),
             Arc::new(CliClock),
         )
@@ -106,7 +101,6 @@ mod tests {
         let workspace = tempfile::tempdir().expect("workspace");
         let services = CliRuntimeServicesProvider::new(
             workspace.path(),
-            Arc::new(CliPermissionService::new(CliApprovalPolicy::Ask)),
             Arc::new(CliRuntimeEventSink::new(8)),
             Arc::new(CliClock),
         )

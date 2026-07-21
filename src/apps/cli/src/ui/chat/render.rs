@@ -109,9 +109,7 @@ impl ChatView {
         // Render permission overlay on top of messages area if active (highest priority)
         if let Some(ref prompt) = chat_state.permission_prompt {
             render_permission_overlay(frame, prompt, &self.theme, chunks[1]);
-        }
-        // Render question overlay (second priority, only if no permission prompt)
-        else if let Some(ref prompt) = chat_state.question_prompt {
+        } else if let Some(ref prompt) = chat_state.question_prompt {
             render_question_overlay(frame, prompt, &self.theme, chunks[1]);
         }
 
@@ -142,7 +140,12 @@ impl ChatView {
     /// Render header
     fn render_header(&self, frame: &mut Frame, area: Rect, chat_state: &ChatState) {
         let title = format!(" BitFun CLI v{} ", env!("CARGO_PKG_VERSION"));
-        let agent_info = format!(" Agent: {} ", chat_state.agent_type);
+        let auto_mode = if chat_state.auto_approve_ask {
+            "Auto: on"
+        } else {
+            "Auto: off"
+        };
+        let agent_info = format!(" Agent: {} | {} ", chat_state.agent_type, auto_mode);
 
         let workspace = chat_state
             .workspace

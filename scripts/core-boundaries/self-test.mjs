@@ -2000,25 +2000,6 @@ export function runManifestParserSelfTest({
       contracts: ['successful_tool_post_call_executor_runs_deep_review_measurement_route'],
     },
     {
-      path: 'src/crates/execution/agent-runtime/src/tool_confirmation.rs',
-      contracts: [
-        'ToolConfirmationRequestFacts',
-        'ToolConfirmationGateFacts',
-        'ToolConfirmationGatePlan',
-        'ToolConfirmationPlan',
-        'ToolConfirmationOutcome',
-        'ToolConfirmationWaitResult',
-        'ToolConfirmationResponse',
-        'ToolConfirmationChannelStore',
-        'ConfirmationFailureKind',
-        'resolve_tool_confirmation_gate',
-        'resolve_tool_confirmation_plan',
-        'resolve_confirmation_failure',
-        'resolve_confirmation_wait_result',
-        'confirmation_channel_store_delivers_confirmation_once',
-      ],
-    },
-    {
       path: 'src/crates/execution/agent-runtime/src/user_questions.rs',
       contracts: [
         'AskUserQuestionInput',
@@ -2152,17 +2133,6 @@ export function runManifestParserSelfTest({
         'terminal_shell_type',
         'ExecCommandShellKind::Custom(name.clone())',
         'ShellType::Custom(name)',
-      ],
-    },
-    {
-      path: 'src/crates/execution/agent-runtime/tests/tool_confirmation_contracts.rs',
-      contracts: [
-        'confirmation_gate_preserves_skip_policy_precedence',
-        'confirmation_gate_requires_confirmation_only_for_permissioned_tools',
-        'confirmation_plan_requires_permission_only_when_both_flags_are_true',
-        'confirmation_plan_preserves_legacy_no_timeout_one_year_deadline',
-        'confirmation_failure_mapping_preserves_legacy_reasons_and_errors',
-        'confirmation_wait_result_mapping_preserves_legacy_timeout_and_rejection',
       ],
     },
     {
@@ -2630,10 +2600,8 @@ export function runManifestParserSelfTest({
     {
       path: 'src/crates/assembly/core/src/agentic/tools/pipeline/tool_pipeline.rs',
       contracts: [
-        'resolve_tool_confirmation_plan',
-        'resolve_confirmation_failure',
-        'resolve_confirmation_wait_result',
-        'ToolConfirmationPlan::Await',
+        'remote_workspace_route_root_isolated_from_same_local_path',
+        'once_and_always_replies_control_execution_and_remembered_grants',
         'should_retry_tool_attempt',
         'retry_delay_ms',
         'build_tool_call_truncation_recovery_notice',
@@ -2734,7 +2702,6 @@ export function runManifestParserSelfTest({
         'render_get_tool_spec_tool_use_message',
         'get_tool_spec_is_readonly',
         'get_tool_spec_is_concurrency_safe',
-        'get_tool_spec_needs_permissions',
         'validate_get_tool_spec_input',
         'build_get_tool_spec_assistant_detail',
         'build_get_tool_spec_duplicate_load_result',
@@ -3032,7 +2999,6 @@ export function runManifestParserSelfTest({
         'remote_poll_handler_preserves_missing_workspace_error',
         'RemoteInteractionRuntimeHost',
         'handle_remote_interaction_command',
-        'remote_interaction_handler_preserves_default_reject_reason',
         'RemoteDefaultModelsConfig',
         'RemoteModelConfig',
         'RemoteModelCatalog',
@@ -3104,7 +3070,6 @@ export function runManifestParserSelfTest({
     {
       path: 'src/crates/assembly/core/src/agentic/coordination/scheduler.rs',
       contracts: [
-        'remote_queue_policy_preserves_confirmation_boundary',
         'AgentDialogTurnPort',
         'AgentLifecycleDeliveryPort',
         'AgentTurnCancellationPort',

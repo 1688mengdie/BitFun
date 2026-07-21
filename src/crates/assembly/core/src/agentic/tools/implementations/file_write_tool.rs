@@ -1,3 +1,4 @@
+use crate::agentic::tools::file_permissions::file_permission_intents;
 use crate::agentic::tools::file_read_state_runtime::{
     assert_file_not_unexpectedly_modified, file_mutation_timestamp_ms, get_stored_file_read_state,
     local_file_modification_time_ms, read_current_file_content, read_state_tracking_enabled,
@@ -8,7 +9,8 @@ use crate::agentic::tools::file_tool_guidance::{
     file_tool_guidance_message, is_file_tool_guidance_message,
 };
 use crate::agentic::tools::framework::{
-    Tool, ToolPathResolution, ToolRenderOptions, ToolResult, ToolUseContext, ValidationResult,
+    PermissionIntent, Tool, ToolPathResolution, ToolRenderOptions, ToolResult, ToolUseContext,
+    ValidationResult,
 };
 use crate::agentic::tools::ToolPathOperation;
 use crate::util::errors::{BitFunError, BitFunResult};
@@ -43,7 +45,6 @@ impl<'a> ParsedWritePayload<'a> {
 }
 
 const WRITE_PAYLOAD_PATH_PREFIX: &str = "+++ ";
-const WRITE_FALLBACK_FILE_ATTEMPTS: usize = 16;
 const LARGE_WRITE_SOFT_LINE_LIMIT: usize = 200;
 const LARGE_WRITE_SOFT_BYTE_LIMIT: usize = 20 * 1024;
 
@@ -198,20 +199,21 @@ impl FileWriteTool {
         Ok(ParsedWritePayload::Target { file_path, content })
     }
 
-    async fn unused_fallback_file_path(context: &ToolUseContext) -> BitFunResult<String> {
-        for _ in 0..WRITE_FALLBACK_FILE_ATTEMPTS {
-            let random_id = uuid::Uuid::new_v4().simple().to_string();
-            let file_path = format!("write_{}.tmp", &random_id[..6]);
-            let resolved = context.resolve_tool_path(&file_path)?;
-            context.enforce_path_operation(ToolPathOperation::Write, &resolved)?;
-            if !Self::file_exists(context, &resolved).await {
-                return Ok(file_path);
-            }
-        }
-
-        Err(BitFunError::tool(
-            "Failed to allocate a unique fallback file for Write".to_string(),
-        ))
+    fn fallback_file_path(context: &ToolUseContext) -> String {
+        let stable_id = context
+            .tool_call_id
+            .as_deref()
+            .unwrap_or("unknown")
+            .chars()
+            .filter(|character| character.is_ascii_alphanumeric())
+            .take(12)
+            .collect::<String>();
+        let stable_id = if stable_id.is_empty() {
+            "unknown"
+        } else {
+            stable_id.as_str()
+        };
+        format!("write_{stable_id}.tmp")
     }
 
     fn ignored_top_level_parameter_names(input: &Value) -> Vec<String> {
@@ -371,8 +373,17 @@ impl Tool for FileWriteTool {
         false
     }
 
-    fn needs_permissions(&self, _input: Option<&Value>) -> bool {
-        true
+    fn permission_intents(
+        &self,
+        input: &Value,
+        context: &ToolUseContext,
+    ) -> BitFunResult<Vec<PermissionIntent>> {
+        let parsed = Self::parse_payload(input).map_err(BitFunError::validation)?;
+        let file_path = match parsed {
+            ParsedWritePayload::Target { file_path, .. } => file_path.to_string(),
+            ParsedWritePayload::MissingPath { .. } => Self::fallback_file_path(context),
+        };
+        file_permission_intents("edit", [file_path.as_str()], context)
     }
 
     async fn validate_input(
@@ -409,8 +420,8 @@ impl Tool for FileWriteTool {
                     Self::preflight_write_error(ctx, file_path).await
                 }
                 ParsedWritePayload::MissingPath { .. } => {
-                    let fallback_path = "write_000000.tmp";
-                    match ctx.resolve_tool_path(fallback_path) {
+                    let fallback_path = Self::fallback_file_path(ctx);
+                    match ctx.resolve_tool_path(&fallback_path) {
                         Ok(resolved) => ctx
                             .enforce_path_operation(ToolPathOperation::Write, &resolved)
                             .err()
@@ -485,11 +496,9 @@ impl Tool for FileWriteTool {
             ParsedWritePayload::Target { file_path, content } => {
                 (file_path.to_string(), content.to_string(), false)
             }
-            ParsedWritePayload::MissingPath { content } => (
-                Self::unused_fallback_file_path(context).await?,
-                content.to_string(),
-                true,
-            ),
+            ParsedWritePayload::MissingPath { content } => {
+                (Self::fallback_file_path(context), content.to_string(), true)
+            }
         };
 
         let resolved = context.resolve_tool_path(&file_path)?;
@@ -840,11 +849,10 @@ mod tests {
         std::fs::create_dir_all(&root).expect("create temp workspace");
         let original_payload = "def main():\n    print(\"Hello world\")";
 
+        let mut context = local_context(root.clone());
+        context.tool_call_id = Some("fallback123".to_string());
         let results = FileWriteTool::new()
-            .call(
-                &json!({ "payload": original_payload }),
-                &local_context(root.clone()),
-            )
+            .call(&json!({ "payload": original_payload }), &context)
             .await
             .expect("malformed payload should be preserved");
 
@@ -854,12 +862,7 @@ mod tests {
             .expect("collect workspace entries");
         assert_eq!(entries.len(), 1);
         let file_name = entries[0].file_name().to_string_lossy().into_owned();
-        assert!(file_name.starts_with("write_"));
-        assert!(file_name.ends_with(".tmp"));
-        assert_eq!(file_name.len(), "write_000000.tmp".len());
-        assert!(file_name[6..12]
-            .chars()
-            .all(|character| character.is_ascii_hexdigit()));
+        assert_eq!(file_name, "write_fallback123.tmp");
         assert_eq!(
             std::fs::read_to_string(entries[0].path()).expect("read fallback file"),
             original_payload

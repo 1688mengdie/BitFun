@@ -5,7 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use bitfun_core::product_runtime::CoreRuntimeServicesProvider;
 use bitfun_runtime_ports::{
-    ClockPort, FileSystemPort, PermissionPort, PortResult, RuntimeEventEnvelope, RuntimeEventSink,
+    ClockPort, FileSystemPort, PortResult, RuntimeEventEnvelope, RuntimeEventSink,
     RuntimeServiceCapability, RuntimeServicePort, WorkspacePort,
 };
 use bitfun_runtime_services::{
@@ -100,7 +100,6 @@ pub(crate) struct CliRuntimeServicesProvider {
     workspace_root: PathBuf,
     filesystem: Arc<CliFileSystemService>,
     workspace: Arc<CliWorkspaceService>,
-    permission: Arc<dyn PermissionPort>,
     events: Arc<dyn RuntimeEventSink>,
     clock: Arc<dyn ClockPort>,
 }
@@ -117,7 +116,6 @@ impl fmt::Debug for CliRuntimeServicesProvider {
 impl CliRuntimeServicesProvider {
     pub(crate) fn new(
         workspace_root: impl AsRef<Path>,
-        permission: Arc<dyn PermissionPort>,
         events: Arc<dyn RuntimeEventSink>,
         clock: Arc<dyn ClockPort>,
     ) -> anyhow::Result<Self> {
@@ -143,7 +141,6 @@ impl CliRuntimeServicesProvider {
             workspace: Arc::new(CliWorkspaceService {
                 workspace_root: canonical_root,
             }),
-            permission,
             events,
             clock,
         })
@@ -170,7 +167,6 @@ impl RuntimeServicesProvider for CliRuntimeServicesProvider {
         builder
             .with_filesystem(filesystem)
             .with_workspace(workspace)
-            .with_permission(self.permission.clone())
             .with_events(self.events.clone())
             .with_clock(self.clock.clone())
     }
@@ -185,19 +181,14 @@ mod tests {
     };
 
     use super::{CliClock, CliRuntimeEventSink, CliRuntimeServicesProvider};
-    use crate::runtime::approval::{CliApprovalPolicy, CliPermissionService};
 
     #[tokio::test]
     async fn provider_registers_required_capability_contracts() {
         let workspace = tempfile::tempdir().expect("workspace");
         let events = Arc::new(CliRuntimeEventSink::new(8));
-        let provider = CliRuntimeServicesProvider::new(
-            workspace.path(),
-            Arc::new(CliPermissionService::new(CliApprovalPolicy::Reject)),
-            events.clone(),
-            Arc::new(CliClock),
-        )
-        .expect("provider");
+        let provider =
+            CliRuntimeServicesProvider::new(workspace.path(), events.clone(), Arc::new(CliClock))
+                .expect("provider");
 
         let services = provider.build().expect("runtime services");
 
@@ -209,7 +200,6 @@ mod tests {
             RuntimeServiceCapability::FileSystem,
             RuntimeServiceCapability::Workspace,
             RuntimeServiceCapability::SessionStore,
-            RuntimeServiceCapability::Permission,
             RuntimeServiceCapability::Events,
             RuntimeServiceCapability::Clock,
             RuntimeServiceCapability::Terminal,
@@ -246,7 +236,6 @@ mod tests {
 
         let error = CliRuntimeServicesProvider::new(
             &missing,
-            Arc::new(CliPermissionService::new(CliApprovalPolicy::Reject)),
             Arc::new(CliRuntimeEventSink::new(8)),
             Arc::new(CliClock),
         )

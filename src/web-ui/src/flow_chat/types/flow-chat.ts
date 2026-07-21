@@ -88,7 +88,6 @@ export interface FlowToolItem extends FlowItem {
   };
   aiIntent?: string; // AI rationale for calling the tool.
   startTime?: number;  // Tool start time.
-  confirmationTimeoutAt?: number;
   endTime?: number;    // Tool end time.
   durationMs?: number;
   queueWaitMs?: number;
@@ -586,7 +585,7 @@ export interface FlowChatActions {
   sendMessage: (message: string, sessionId?: string) => Promise<void>;
   createSession: (config?: Partial<SessionConfig>) => Promise<string>;
   switchSession: (sessionId: string) => void;
-  confirmTool: (toolId: string, updatedInput?: any) => void;
+  confirmTool: (toolId: string) => void;
   rejectTool: (toolId: string) => void;
   clearSession: (sessionId?: string) => void;
   deleteSession: (sessionId: string) => Promise<void>; // Now async.

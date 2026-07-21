@@ -7,9 +7,32 @@ export interface GlobalConfig {
   terminal: TerminalConfig;
   workspace: WorkspaceConfig;
   ai: AIConfig;
+  tool_permissions: ToolPermissionConfig;
   memories: MemoriesConfig;
   version: string;
   last_modified: number;
+}
+
+export type PermissionEffect = 'allow' | 'ask' | 'deny';
+
+export interface PermissionRule {
+  action: string;
+  resource: string;
+  effect: PermissionEffect;
+}
+
+export interface PermissionPolicyConfig {
+  preset: 'ask' | 'full_access';
+  rules: PermissionRule[];
+}
+
+export interface PermissionInteractionConfig {
+  auto_approve_ask: boolean;
+}
+
+export interface ToolPermissionConfig {
+  policy: PermissionPolicyConfig;
+  interaction: PermissionInteractionConfig;
 }
 
 export type MemoryExternalContextPolicy = 'clear_tool_results' | 'allow' | 'skip_session';
@@ -263,9 +286,7 @@ export interface AIConfig {
   stream_idle_timeout_secs?: number | null;
   stream_ttft_timeout_secs?: number | null;
   tool_execution_timeout_secs?: number | null;
-  tool_confirmation_timeout_secs?: number | null;
   subagent_batch_execution_policy?: 'safe_only' | 'force_parallel' | 'serial';
-  skip_tool_confirmation?: boolean;
   computer_use_enabled?: boolean;
   browser_control_preferred_browser?: string;
 }
@@ -277,6 +298,7 @@ export interface StoredAgentProfileConfigItem {
   disabled_user_skills?: string[];
   enabled_user_skills?: string[];
   subagent_overrides?: ParentSubagentOverrideConfig;
+  tool_permission_rules?: PermissionRule[];
 }
 
 export interface AgentProfileConfigItem {

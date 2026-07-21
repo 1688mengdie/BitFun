@@ -342,11 +342,7 @@ fn core_dialog_submission_policy(policy: RemoteDialogSubmissionPolicy) -> Dialog
         RemoteDialogQueuePriority::High => DialogQueuePriority::High,
     };
 
-    DialogSubmissionPolicy::new(
-        trigger_source,
-        queue_priority,
-        policy.skip_tool_confirmation,
-    )
+    DialogSubmissionPolicy::new(trigger_source, queue_priority)
 }
 
 fn remote_dialog_scheduler_outcome_fact(
@@ -407,10 +403,10 @@ fn core_agent_runtime_builder(
     thread_goal_management: Arc<dyn AgentThreadGoalManagementPort>,
     cancellation: Arc<dyn AgentTurnCancellationPort>,
     interaction_response: Arc<dyn AgentInteractionResponsePort>,
-) -> AgentRuntimeBuilder {
+) -> Result<AgentRuntimeBuilder, String> {
     let agent_registry: Arc<dyn bitfun_agent_runtime::sdk::RuntimeAgentRegistry> =
         crate::agentic::agents::get_agent_registry();
-    AgentRuntimeBuilder::new()
+    Ok(AgentRuntimeBuilder::new()
         .with_submission_port(submission)
         .with_session_management_port(session_management)
         .with_session_mode_port(session_mode)
@@ -421,7 +417,8 @@ fn core_agent_runtime_builder(
         .with_thread_goal_management_port(thread_goal_management)
         .with_cancellation_port(cancellation)
         .with_interaction_response_port(interaction_response)
-        .with_agent_registry(agent_registry)
+        .with_permission_request_manager(crate::product_runtime::core_permission_request_manager()?)
+        .with_agent_registry(agent_registry))
 }
 
 #[derive(Clone)]
@@ -837,7 +834,7 @@ impl CoreServiceAgentRuntime {
             thread_goal_management,
             cancellation,
             interaction_response,
-        )
+        )?
         .build()
         .map_err(|error| error.to_string())
     }
@@ -871,7 +868,7 @@ impl CoreServiceAgentRuntime {
             thread_goal_management,
             cancellation,
             interaction_response,
-        )
+        )?
         .with_dialog_turn_port(dialog_turn)
         .with_lifecycle_delivery_port(lifecycle_delivery)
         .build()
@@ -906,7 +903,7 @@ impl CoreServiceAgentRuntime {
             thread_goal_management,
             cancellation,
             interaction_response,
-        )
+        )?
         .with_lifecycle_delivery_port(lifecycle_delivery)
         .build()
         .map_err(|error| error.to_string())
@@ -937,6 +934,9 @@ impl CoreServiceAgentRuntime {
             .with_interaction_response_port(interaction_response)
             .with_session_fork_port(session_fork)
             .with_session_usage_port(session_usage)
+            .with_permission_request_manager(
+                crate::product_runtime::core_permission_request_manager()?,
+            )
             .build()
             .map_err(|error| error.to_string())
     }
@@ -970,7 +970,7 @@ impl CoreServiceAgentRuntime {
             thread_goal_management,
             cancellation,
             interaction_response,
-        )
+        )?
         .with_dialog_turn_port(dialog_turn)
         .with_lifecycle_delivery_port(lifecycle_delivery)
         .build()
@@ -1058,7 +1058,7 @@ impl CoreServiceAgentRuntime {
             thread_goal_management,
             cancellation,
             interaction_response,
-        )
+        )?
         .with_dialog_turn_port(dialog_turn)
         .with_lifecycle_delivery_port(lifecycle_delivery);
         let builder = match event_source {
@@ -1654,26 +1654,6 @@ impl RemotePollRuntimeHost for CoreRemotePollRuntimeHost<'_> {
 
 #[async_trait::async_trait]
 impl RemoteInteractionRuntimeHost for CoreRemoteInteractionRuntimeHost {
-    async fn confirm_tool(
-        &self,
-        tool_id: &str,
-        updated_input: Option<serde_json::Value>,
-    ) -> Result<(), String> {
-        self.coordinator()?
-            .confirm_tool(tool_id, updated_input)
-            .await
-            .map(|_| ())
-            .map_err(|error| error.to_string())
-    }
-
-    async fn reject_tool(&self, tool_id: &str, reason: String) -> Result<(), String> {
-        self.coordinator()?
-            .reject_tool(tool_id, reason)
-            .await
-            .map(|_| ())
-            .map_err(|error| error.to_string())
-    }
-
     async fn cancel_tool(&self, tool_id: &str, reason: String) -> Result<(), String> {
         self.coordinator()?
             .cancel_tool(tool_id, reason)
@@ -1842,20 +1822,16 @@ mod tests {
         let relay = core_dialog_submission_policy(RemoteDialogSubmissionPolicy {
             source: RemoteConnectSubmissionSource::Relay,
             queue_priority: RemoteDialogQueuePriority::High,
-            skip_tool_confirmation: true,
         });
         assert_eq!(relay.trigger_source, DialogTriggerSource::RemoteRelay);
         assert_eq!(relay.queue_priority, DialogQueuePriority::High);
-        assert!(relay.skip_tool_confirmation);
 
         let bot = core_dialog_submission_policy(RemoteDialogSubmissionPolicy {
             source: RemoteConnectSubmissionSource::Bot,
             queue_priority: RemoteDialogQueuePriority::Low,
-            skip_tool_confirmation: false,
         });
         assert_eq!(bot.trigger_source, DialogTriggerSource::Bot);
         assert_eq!(bot.queue_priority, DialogQueuePriority::Low);
-        assert!(!bot.skip_tool_confirmation);
     }
 
     #[test]

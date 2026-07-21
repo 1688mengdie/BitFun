@@ -33,6 +33,23 @@ describe('peerInvokePriorityFor', () => {
     expect(peerInvokePriorityFor('get_system_info')).toBe('high');
   });
 
+  it('ranks permission control commands high', () => {
+    for (const command of [
+      'list_pending_permission_requests',
+      'subscribe_permission_requests',
+      'respond_permission',
+      'respond_permission_batch',
+      'list_project_permission_grants',
+      'remove_project_permission_grant',
+      'clear_project_permission_grants',
+      'list_project_permission_audit',
+      'get_project_permission_rules',
+      'save_project_permission_rules',
+    ]) {
+      expect(peerInvokePriorityFor(command)).toBe('high');
+    }
+  });
+
   it('ranks all terminal commands high', () => {
     expect(peerInvokePriorityFor('terminal_create')).toBe('high');
     expect(peerInvokePriorityFor('terminal_write')).toBe('high');

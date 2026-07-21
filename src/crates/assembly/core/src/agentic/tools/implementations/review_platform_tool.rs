@@ -394,13 +394,6 @@ When returning pull request results to the user, include the provider web URL so
             .is_some_and(|action| !WRITE_ACTIONS.contains(&action))
     }
 
-    fn needs_permissions(&self, input: Option<&Value>) -> bool {
-        input
-            .and_then(Self::action)
-            .map(|action| WRITE_ACTIONS.contains(&action))
-            .unwrap_or(true)
-    }
-
     async fn validate_input(
         &self,
         input: &Value,

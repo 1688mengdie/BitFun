@@ -339,8 +339,23 @@ impl Tool for LaunchReviewAgentTool {
         }
     }
 
-    fn needs_permissions(&self, _input: Option<&Value>) -> bool {
-        false
+    fn permission_intents(
+        &self,
+        input: &Value,
+        _context: &ToolUseContext,
+    ) -> BitFunResult<Vec<crate::agentic::tools::framework::PermissionIntent>> {
+        let subagent_type = input
+            .get("subagent_type")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|subagent_type| !subagent_type.is_empty())
+            .ok_or_else(|| BitFunError::validation("subagent_type is required".to_string()))?;
+        Ok(vec![
+            crate::agentic::tools::framework::PermissionIntent::new(
+                "task",
+                vec![subagent_type.to_string()],
+            ),
+        ])
     }
 
     async fn validate_input(

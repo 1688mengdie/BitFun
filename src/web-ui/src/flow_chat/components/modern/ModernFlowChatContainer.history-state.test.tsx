@@ -60,6 +60,9 @@ const virtualListPropsMock = vi.hoisted(() => ({
 }));
 const agentApiMock = vi.hoisted(() => ({
   listBackgroundCommandActivities: vi.fn(() => Promise.resolve({ activities: [] })),
+  onPermissionRequestEvent: vi.fn(() => vi.fn()),
+  subscribePermissionRequests: vi.fn(() => Promise.resolve()),
+  listPendingPermissionRequests: vi.fn(() => Promise.resolve([])),
 }));
 
 vi.mock('react-i18next', () => ({

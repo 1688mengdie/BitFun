@@ -3,14 +3,74 @@ use std::process::Command;
 use super::lifecycle::{
     completed_turn_failure, drain_interrupted_turn_events, effective_event_invocation,
     event_belongs_to_exec_turn, event_turn_id, is_exec_terminal,
-    resolve_cancelled_turn_observation, serialize_stream_envelope, settlement_failure,
+    permission_action_required_message, resolve_cancelled_turn_observation,
+    serialize_stream_envelope, settlement_failure, should_reject_permission_request,
     ExecApprovalMode, ExecJsonResult, ExecMode, ExecTokenUsage, TOOL_START_INPUT_PREVIEW_CHARS,
 };
 use super::patch::write_patch_to_path;
 use crate::diagnostics::ExitKind;
-use bitfun_agent_runtime::sdk::{PortError, PortErrorKind, RuntimeError};
+use bitfun_agent_runtime::sdk::{
+    PermissionDelegationContext, PermissionRequest, PermissionRequestSource,
+    PermissionRequestSourceKind, PortError, PortErrorKind, RuntimeError,
+};
 use bitfun_events::{AgenticEvent, AgenticEventEnvelope, AgenticEventPriority, ToolEventIdentity};
 use serde_json::json;
+
+fn delegated_permission_request() -> PermissionRequest {
+    PermissionRequest {
+        request_id: "request-1".to_string(),
+        round_id: "synthetic:request-1".to_string(),
+        order: 0,
+        tool_call_id: Some("child-tool".to_string()),
+        project_path: None,
+        project_id: "project-1".to_string(),
+        session_id: "child-session".to_string(),
+        agent_id: "Explore".to_string(),
+        action: "edit".to_string(),
+        resources: vec!["src/main.rs".to_string()],
+        save_resources: Vec::new(),
+        source: PermissionRequestSource {
+            kind: PermissionRequestSourceKind::ToolCall,
+            identity: "Write".to_string(),
+        },
+        delegation: Some(PermissionDelegationContext {
+            parent_session_id: "parent-session".to_string(),
+            parent_dialog_turn_id: Some("parent-turn".to_string()),
+            parent_tool_call_id: "parent-task".to_string(),
+            subagent_type: "Explore".to_string(),
+        }),
+        display_metadata: serde_json::Map::new(),
+    }
+}
+
+#[test]
+fn permission_action_required_message_includes_subagent_lineage() {
+    assert_eq!(
+        permission_action_required_message(&delegated_permission_request()),
+        "action-required: permission needed for edit by Explore subagent (child session child-session, parent session parent-session, parent task parent-task, request request-1)"
+    );
+}
+
+#[test]
+fn exec_rejects_owned_child_requests_without_event_driven_auto_approval() {
+    let request = delegated_permission_request();
+
+    assert!(should_reject_permission_request(
+        &request,
+        "parent-session",
+        ExecApprovalMode::Reject
+    ));
+    assert!(!should_reject_permission_request(
+        &request,
+        "parent-session",
+        ExecApprovalMode::Auto
+    ));
+    assert!(!should_reject_permission_request(
+        &request,
+        "unrelated-session",
+        ExecApprovalMode::Reject
+    ));
+}
 
 #[test]
 fn write_patch_to_path_creates_nested_parent_directories() {
@@ -341,12 +401,6 @@ fn stream_json_reuses_the_existing_agentic_envelope() {
     assert_eq!(value["event"]["type"], "SessionStateChanged");
     assert!(value.get("schema_version").is_none());
     assert!(value.get("sequence").is_none());
-}
-
-#[test]
-fn default_exec_policy_rejects_confirmation_events() {
-    assert!(ExecApprovalMode::Reject.rejects_confirmation());
-    assert!(!ExecApprovalMode::Auto.rejects_confirmation());
 }
 
 #[test]

@@ -944,7 +944,6 @@ const CODE_AGENT_SERVICES: &[RuntimeServiceCapability] = &[
     RuntimeServiceCapability::FileSystem,
     RuntimeServiceCapability::Workspace,
     RuntimeServiceCapability::SessionStore,
-    RuntimeServiceCapability::Permission,
     RuntimeServiceCapability::Events,
     RuntimeServiceCapability::Clock,
     RuntimeServiceCapability::Terminal,
@@ -952,19 +951,16 @@ const CODE_AGENT_SERVICES: &[RuntimeServiceCapability] = &[
 const DEEP_REVIEW_SERVICES: &[RuntimeServiceCapability] = &[
     RuntimeServiceCapability::Workspace,
     RuntimeServiceCapability::Git,
-    RuntimeServiceCapability::Permission,
     RuntimeServiceCapability::Events,
 ];
 const DEEP_RESEARCH_SERVICES: &[RuntimeServiceCapability] = &[
     RuntimeServiceCapability::Workspace,
     RuntimeServiceCapability::Network,
-    RuntimeServiceCapability::Permission,
     RuntimeServiceCapability::Events,
 ];
 const MINIAPP_SERVICES: &[RuntimeServiceCapability] = &[
     RuntimeServiceCapability::FileSystem,
     RuntimeServiceCapability::Workspace,
-    RuntimeServiceCapability::Permission,
     RuntimeServiceCapability::Events,
 ];
 const CANVAS_SERVICES: &[RuntimeServiceCapability] = &[

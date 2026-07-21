@@ -4,6 +4,7 @@
 //! the full BitFun core runtime assembly.
 
 pub mod canvas;
+pub mod tool_permissions;
 
 #[cfg(feature = "external-sources")]
 pub mod external_integration_policy;

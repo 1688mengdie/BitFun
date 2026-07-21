@@ -68,6 +68,7 @@ use crate::util::errors::{BitFunError, BitFunResult};
 use bitfun_agent_runtime::output_surface::{
     supports_inline_markdown_images_for_source, TOOL_CONTEXT_INLINE_MARKDOWN_IMAGE_DISPLAY_KEY,
 };
+use bitfun_agent_runtime::permission::AUTO_APPROVE_ASK_CONTEXT_KEY;
 use bitfun_agent_runtime::remote_file_delivery::{
     needs_computer_links_for_source, remote_file_delivery_reminder,
     TOOL_CONTEXT_REMOTE_FILE_DELIVERY_KEY,
@@ -75,8 +76,9 @@ use bitfun_agent_runtime::remote_file_delivery::{
 use bitfun_agent_runtime::user_questions::USER_INPUT_AVAILABLE_CONTEXT_KEY;
 use bitfun_runtime_ports::{
     AgentSessionWorkspaceBinding, AgentThreadGoalDeliveryKind, AgentThreadGoalDeliveryRequest,
-    DelegationPolicy, RemoteExecPort, SessionStoragePathRequest, SessionStorePort,
-    SubagentContextMode, TerminalPort, ThreadGoal, ThreadGoalContinuationPlan, ThreadGoalStatus,
+    DelegationPolicy, PermissionDelegationContext, PermissionRuntimeCeiling, RemoteExecPort,
+    SessionStoragePathRequest, SessionStorePort, SubagentContextMode, TerminalPort, ThreadGoal,
+    ThreadGoalContinuationPlan, ThreadGoalStatus,
 };
 use dashmap::DashMap;
 use log::{debug, error, info, warn};
@@ -194,15 +196,6 @@ fn metadata_bool(metadata: Option<&serde_json::Value>, key: &str) -> Option<bool
         .and_then(serde_json::Value::as_bool)
 }
 
-fn should_require_tool_confirmation(
-    policy: DialogSubmissionPolicy,
-    user_message_metadata: Option<&serde_json::Value>,
-) -> bool {
-    (policy.requires_tool_confirmation()
-        || metadata_bool(user_message_metadata, "require_tool_confirmation") == Some(true))
-        && metadata_bool(user_message_metadata, "acp_transport") != Some(true)
-}
-
 /// Subagent execution result
 ///
 /// Contains the text response after subagent execution
@@ -241,6 +234,7 @@ pub(crate) struct SubagentExecutionRequest {
     pub(crate) inherit_parent_model: bool,
     pub(crate) subagent_parent_info: SubagentParentInfo,
     pub(crate) context: HashMap<String, String>,
+    pub(crate) permission_runtime_ceiling: PermissionRuntimeCeiling,
     /// Execution policy for the child subagent session being launched.
     pub(crate) delegation_policy: DelegationPolicy,
     /// Pins an immutable external generation from Task validation until the
@@ -371,6 +365,74 @@ fn session_lineage_matches_parent(
     })
 }
 
+fn subagent_parent_info_from_relationship(
+    relationship: Option<&SessionRelationship>,
+) -> Option<SubagentParentInfo> {
+    let relationship = relationship?;
+    if relationship.kind != Some(SessionRelationshipKind::Subagent) {
+        return None;
+    }
+
+    let parent_session_id = relationship.parent_session_id.as_deref()?.trim();
+    let parent_dialog_turn_id = relationship.parent_dialog_turn_id.as_deref()?.trim();
+    let parent_tool_call_id = relationship.parent_tool_call_id.as_deref()?.trim();
+    if parent_session_id.is_empty()
+        || parent_dialog_turn_id.is_empty()
+        || parent_tool_call_id.is_empty()
+    {
+        return None;
+    }
+
+    Some(SubagentParentInfo {
+        session_id: parent_session_id.to_string(),
+        dialog_turn_id: parent_dialog_turn_id.to_string(),
+        tool_call_id: parent_tool_call_id.to_string(),
+    })
+}
+
+fn permission_delegation_from_relationship(
+    relationship: Option<&SessionRelationship>,
+    fallback_subagent_type: &str,
+) -> Option<PermissionDelegationContext> {
+    let relationship = relationship?;
+    if relationship.kind != Some(SessionRelationshipKind::Subagent) {
+        return None;
+    }
+
+    let parent_session_id = relationship.parent_session_id.as_deref()?.trim();
+    let parent_tool_call_id = relationship.parent_tool_call_id.as_deref()?.trim();
+    if parent_session_id.is_empty() || parent_tool_call_id.is_empty() {
+        return None;
+    }
+
+    let parent_dialog_turn_id = relationship
+        .parent_dialog_turn_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let subagent_type = relationship
+        .subagent_type
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(fallback_subagent_type)
+        .to_string();
+
+    Some(PermissionDelegationContext {
+        parent_session_id: parent_session_id.to_string(),
+        parent_dialog_turn_id,
+        parent_tool_call_id: parent_tool_call_id.to_string(),
+        subagent_type,
+    })
+}
+
+#[derive(Default)]
+struct PersistedSubagentContinuationContext {
+    subagent_parent_info: Option<SubagentParentInfo>,
+    permission_delegation: Option<PermissionDelegationContext>,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct HiddenSubagentExecutionRequest {
     target_session_id: Option<String>,
@@ -384,6 +446,7 @@ pub(crate) struct HiddenSubagentExecutionRequest {
     created_by: Option<String>,
     subagent_parent_info: Option<SubagentParentInfo>,
     context: HashMap<String, String>,
+    permission_runtime_ceiling: Option<PermissionRuntimeCeiling>,
     delegation_policy: DelegationPolicy,
     runtime_tool_restrictions: ToolRuntimeRestrictions,
     prompt_cache_source_session_id: Option<String>,
@@ -2233,8 +2296,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             Some(workspace_root.to_string_lossy().to_string()),
             None,
             None,
-            DialogSubmissionPolicy::for_source(DialogTriggerSource::DesktopApi)
-                .with_skip_tool_confirmation(true),
+            DialogSubmissionPolicy::for_source(DialogTriggerSource::DesktopApi),
             Some(metadata),
             vec![Message::internal_reminder(
                 InternalReminderKind::Generic,
@@ -3033,8 +3095,9 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             workspace: manual_workspace,
             context: HashMap::new(),
             subagent_parent_info: None,
+            permission_delegation: None,
+            permission_runtime_ceiling: None,
             delegation_policy: DelegationPolicy::top_level(),
-            skip_tool_confirmation: true,
             runtime_tool_restrictions: ToolRuntimeRestrictions::default(),
             workspace_services: manual_workspace_services,
             terminal_port: self.terminal_port(),
@@ -3211,7 +3274,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         Self::track_session_workspace_activity_best_effort(&session.config, "dialog_started").await;
 
         debug!(
-            "Resolved dialog turn agent type: session_id={}, turn_id={}, requested_agent_type={}, session_agent_type={}, effective_agent_type={}, trigger_source={:?}, queue_priority={:?}, skip_tool_confirmation={}",
+            "Resolved dialog turn agent type: session_id={}, turn_id={}, requested_agent_type={}, session_agent_type={}, effective_agent_type={}, trigger_source={:?}, queue_priority={:?}",
             session_id,
             turn_id.as_deref().unwrap_or(""),
             if requested_agent_type.is_empty() {
@@ -3226,8 +3289,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             },
             effective_agent_type,
             submission_policy.trigger_source,
-            submission_policy.queue_priority,
-            submission_policy.skip_tool_confirmation
+            submission_policy.queue_priority
         );
 
         if session.agent_type != effective_agent_type {
@@ -3680,6 +3742,14 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                 user_input_available.to_string(),
             );
         }
+        if let Some(auto_approve_ask) =
+            metadata_bool(user_message_metadata.as_ref(), AUTO_APPROVE_ASK_CONTEXT_KEY)
+        {
+            context_vars.insert(
+                AUTO_APPROVE_ASK_CONTEXT_KEY.to_string(),
+                auto_approve_ask.to_string(),
+            );
+        }
         if needs_computer_links_for_source(submission_policy.trigger_source) {
             context_vars.insert(
                 TOOL_CONTEXT_REMOTE_FILE_DELIVERY_KEY.to_string(),
@@ -3691,9 +3761,6 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                 TOOL_CONTEXT_INLINE_MARKDOWN_IMAGE_DISPLAY_KEY.to_string(),
                 "true".to_string(),
             );
-        }
-        if should_require_tool_confirmation(submission_policy, user_message_metadata.as_ref()) {
-            context_vars.insert("require_tool_confirmation".to_string(), "true".to_string());
         }
         let session_workspace_path = session_workspace
             .as_ref()
@@ -3713,6 +3780,9 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         } else {
             ToolRuntimeRestrictions::default()
         };
+        let persisted_subagent_context = self
+            .load_persisted_subagent_continuation_context(&session)
+            .await;
 
         let execution_context = ExecutionContext {
             session_id: session_id.clone(),
@@ -3721,9 +3791,10 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             agent_type: effective_agent_type.clone(),
             workspace: session_workspace,
             context: context_vars,
-            subagent_parent_info: None,
+            subagent_parent_info: persisted_subagent_context.subagent_parent_info,
+            permission_delegation: persisted_subagent_context.permission_delegation,
+            permission_runtime_ceiling: None,
             delegation_policy: DelegationPolicy::top_level(),
-            skip_tool_confirmation: submission_policy.skip_tool_confirmation,
             runtime_tool_restrictions,
             workspace_services,
             terminal_port: self.terminal_port(),
@@ -4725,22 +4796,6 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         self.event_router.unsubscribe_internal(subscriber_id);
     }
 
-    /// Confirm tool execution
-    pub async fn confirm_tool(
-        &self,
-        tool_id: &str,
-        updated_input: Option<serde_json::Value>,
-    ) -> BitFunResult<()> {
-        self.tool_pipeline
-            .confirm_tool(tool_id, updated_input)
-            .await
-    }
-
-    /// Reject tool execution
-    pub async fn reject_tool(&self, tool_id: &str, reason: String) -> BitFunResult<()> {
-        self.tool_pipeline.reject_tool(tool_id, reason).await
-    }
-
     /// Cancel tool execution
     pub async fn cancel_tool(&self, tool_id: &str, reason: String) -> BitFunResult<()> {
         self.tool_pipeline.cancel_tool(tool_id, reason).await
@@ -5002,6 +5057,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             created_by,
             subagent_parent_info,
             context,
+            permission_runtime_ceiling,
             delegation_policy,
             runtime_tool_restrictions,
             prompt_cache_source_session_id,
@@ -5416,11 +5472,11 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             workspace: subagent_workspace,
             context,
             subagent_parent_info: subagent_parent_info.clone(),
+            permission_delegation: subagent_parent_info
+                .as_ref()
+                .map(|parent| parent.permission_delegation_context(&agent_type)),
+            permission_runtime_ceiling,
             delegation_policy,
-            // Subagents run autonomously without user interaction; always skip
-            // tool confirmation to prevent them from blocking indefinitely on a
-            // confirmation channel that nobody will ever respond to.
-            skip_tool_confirmation: true,
             runtime_tool_restrictions,
             workspace_services: subagent_services,
             terminal_port: self.terminal_port(),
@@ -6154,8 +6210,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             child_session.config.workspace_path.clone(),
             child_session.config.remote_connection_id.clone(),
             child_session.config.remote_ssh_host.clone(),
-            DialogSubmissionPolicy::for_source(DialogTriggerSource::DesktopApi)
-                .with_skip_tool_confirmation(true),
+            DialogSubmissionPolicy::for_source(DialogTriggerSource::DesktopApi),
             Some(user_message_metadata),
             prepended_messages,
             true,
@@ -6283,6 +6338,52 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         }
 
         session_created_by_parent(session, parent_session_id)
+    }
+
+    async fn load_persisted_subagent_continuation_context(
+        &self,
+        session: &Session,
+    ) -> PersistedSubagentContinuationContext {
+        if session.kind != SessionKind::Subagent {
+            return PersistedSubagentContinuationContext::default();
+        }
+
+        let storage_path = match self
+            .restore_path_for_existing_session(&session.session_id)
+            .await
+        {
+            Ok(storage_path) => storage_path,
+            Err(error) => {
+                debug!(
+                    "Failed to resolve subagent session storage for permission delegation: session_id={}, error={}",
+                    session.session_id, error
+                );
+                return PersistedSubagentContinuationContext::default();
+            }
+        };
+        match self
+            .session_manager
+            .load_session_metadata(&storage_path, &session.session_id)
+            .await
+        {
+            Ok(Some(metadata)) => PersistedSubagentContinuationContext {
+                subagent_parent_info: subagent_parent_info_from_relationship(
+                    metadata.relationship.as_ref(),
+                ),
+                permission_delegation: permission_delegation_from_relationship(
+                    metadata.relationship.as_ref(),
+                    &session.agent_type,
+                ),
+            },
+            Ok(None) => PersistedSubagentContinuationContext::default(),
+            Err(error) => {
+                debug!(
+                    "Failed to load subagent session lineage for permission delegation: session_id={}, error={}",
+                    session.session_id, error
+                );
+                PersistedSubagentContinuationContext::default()
+            }
+        }
     }
 
     async fn load_reusable_subagent_context_messages(
@@ -6488,6 +6589,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                         created_by: session.created_by.clone(),
                         subagent_parent_info: Some(request.subagent_parent_info),
                         context: request.context,
+                        permission_runtime_ceiling: Some(request.permission_runtime_ceiling),
                         delegation_policy: request.delegation_policy,
                         runtime_tool_restrictions: runtime_tool_restrictions_for_delegation_policy(
                             request.delegation_policy,
@@ -6566,6 +6668,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                     created_by,
                     subagent_parent_info: Some(request.subagent_parent_info),
                     context: request.context,
+                    permission_runtime_ceiling: Some(request.permission_runtime_ceiling),
                     delegation_policy: request.delegation_policy,
                     runtime_tool_restrictions: runtime_tool_restrictions_for_delegation_policy(
                         request.delegation_policy,
@@ -6649,6 +6752,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                     created_by,
                     subagent_parent_info: Some(request.subagent_parent_info),
                     context: request.context,
+                    permission_runtime_ceiling: Some(request.permission_runtime_ceiling),
                     delegation_policy: request.delegation_policy,
                     runtime_tool_restrictions: runtime_tool_restrictions_for_delegation_policy(
                         request.delegation_policy,
@@ -7048,6 +7152,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             created_by: request.created_by,
             subagent_parent_info: None,
             context: request.context,
+            permission_runtime_ceiling: None,
             delegation_policy: request.delegation_policy,
             runtime_tool_restrictions: request.runtime_tool_restrictions,
             prompt_cache_source_session_id: None,
@@ -8064,24 +8169,6 @@ impl bitfun_runtime_ports::AgentLocalCommandTurnPort for ConversationCoordinator
 
 #[async_trait::async_trait]
 impl bitfun_agent_runtime::sdk::AgentInteractionResponsePort for ConversationCoordinator {
-    async fn confirm_tool(
-        &self,
-        request: bitfun_agent_runtime::sdk::AgentToolConfirmationRequest,
-    ) -> bitfun_runtime_ports::PortResult<()> {
-        self.confirm_tool(&request.tool_id, request.updated_input)
-            .await
-            .map_err(runtime_port_error_preserving_message)
-    }
-
-    async fn reject_tool(
-        &self,
-        request: bitfun_agent_runtime::sdk::AgentToolRejectionRequest,
-    ) -> bitfun_runtime_ports::PortResult<()> {
-        self.reject_tool(&request.tool_id, request.reason)
-            .await
-            .map_err(runtime_port_error_preserving_message)
-    }
-
     async fn submit_user_answers(
         &self,
         request: bitfun_agent_runtime::sdk::AgentUserAnswersRequest,
@@ -8424,9 +8511,8 @@ mod tests {
         merge_prepended_messages_for_turn, normalize_subagent_max_concurrency,
         resolve_agent_session_create_created_by, resolve_agent_submission_turn_id,
         resolve_subagent_model_selection, runtime_port_error_preserving_message,
-        should_require_tool_confirmation, turn_review_manifest_for_agent,
-        BackgroundSubagentWaitMode, ConversationCoordinator, SubagentExecutionRequest,
-        TEST_AGENT_MODEL_DEFAULTS,
+        turn_review_manifest_for_agent, BackgroundSubagentWaitMode, ConversationCoordinator,
+        SubagentExecutionRequest, TEST_AGENT_MODEL_DEFAULTS,
     };
     use crate::agentic::coordination::coordination_store::{
         BackgroundTaskRegistration, RegisteredBackgroundTask,
@@ -8455,12 +8541,13 @@ mod tests {
     use crate::service::config::{AgentModelDefaultsConfig, SubagentModelSelection};
     use crate::service::remote_ssh::workspace_state::init_remote_workspace_manager;
     use crate::service::session::{SessionMetadata, SessionStatus};
+    use bitfun_agent_runtime::permission::AUTO_APPROVE_ASK_CONTEXT_KEY;
     use bitfun_runtime_ports::{
         AgentSessionArchiveRequest, AgentSessionCreateRequest, AgentSessionManagementPort,
         AgentSessionRenameRequest, AgentSubmissionPort, AgentSubmissionRequest,
         AgentSubmissionSource, AgentThreadGoalGetRequest, AgentThreadGoalManagementPort,
-        DelegationPolicy, DialogQueuePriority, DialogSubmissionPolicy, SubagentContextMode,
-        ThreadGoal, ThreadGoalStatus,
+        DelegationPolicy, PermissionEffect, PermissionRule, PermissionRuntimeCeiling,
+        SubagentContextMode, ThreadGoal, ThreadGoalStatus,
     };
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -8480,11 +8567,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn interaction_response_port_uses_core_owners_and_typed_stale_errors() {
-        use bitfun_agent_runtime::sdk::{
-            AgentInteractionResponsePort, AgentToolConfirmationRequest, AgentToolRejectionRequest,
-            AgentUserAnswersRequest,
-        };
+    async fn interaction_response_port_uses_user_question_owner_and_typed_stale_errors() {
+        use bitfun_agent_runtime::sdk::{AgentInteractionResponsePort, AgentUserAnswersRequest};
 
         let (coordinator, _) = test_coordinator();
         let answer_tool_id = format!("answer-{}", uuid::Uuid::new_v4());
@@ -8524,43 +8608,6 @@ mod tests {
         assert_eq!(
             stale_answer.message,
             format!("Tool error: Waiting channel not found: {answer_tool_id}")
-        );
-
-        let missing_tool_id = format!("tool-{}", uuid::Uuid::new_v4());
-        let confirmation = AgentInteractionResponsePort::confirm_tool(
-            &coordinator,
-            AgentToolConfirmationRequest {
-                tool_id: missing_tool_id.clone(),
-                updated_input: Some(serde_json::json!({ "path": "updated.txt" })),
-            },
-        )
-        .await
-        .expect_err("missing confirmation task");
-        assert_eq!(
-            confirmation.kind,
-            bitfun_runtime_ports::PortErrorKind::NotFound
-        );
-        assert_eq!(
-            confirmation.message,
-            format!("Not found: Tool task not found: {missing_tool_id}")
-        );
-
-        let rejection = AgentInteractionResponsePort::reject_tool(
-            &coordinator,
-            AgentToolRejectionRequest {
-                tool_id: missing_tool_id.clone(),
-                reason: "Use a read-only path".to_string(),
-            },
-        )
-        .await
-        .expect_err("missing rejection task");
-        assert_eq!(
-            rejection.kind,
-            bitfun_runtime_ports::PortErrorKind::NotFound
-        );
-        assert_eq!(
-            rejection.message,
-            format!("Not found: Tool task not found: {missing_tool_id}")
         );
     }
 
@@ -8884,43 +8931,6 @@ mod tests {
 
         assert_cancellation_port::<ConversationCoordinator>();
         assert_state_port::<ConversationCoordinator>();
-    }
-
-    #[test]
-    fn local_cli_confirmation_override_excludes_acp_transport() {
-        let policy = DialogSubmissionPolicy::new(
-            AgentSubmissionSource::Cli,
-            DialogQueuePriority::Normal,
-            false,
-        );
-
-        assert!(should_require_tool_confirmation(policy, None));
-        assert!(!should_require_tool_confirmation(
-            policy,
-            Some(&serde_json::json!({ "acp_transport": true })),
-        ));
-    }
-
-    #[test]
-    fn peer_metadata_can_only_strengthen_tool_confirmation() {
-        let desktop_policy = DialogSubmissionPolicy::new(
-            AgentSubmissionSource::DesktopUi,
-            DialogQueuePriority::Normal,
-            false,
-        );
-        let peer_metadata = serde_json::json!({ "require_tool_confirmation": true });
-
-        assert!(should_require_tool_confirmation(
-            desktop_policy,
-            Some(&peer_metadata)
-        ));
-        assert!(!should_require_tool_confirmation(
-            desktop_policy,
-            Some(&serde_json::json!({
-                "require_tool_confirmation": true,
-                "acp_transport": true,
-            }))
-        ));
     }
 
     #[test]
@@ -9361,6 +9371,68 @@ mod tests {
             None,
             "parent-session"
         ));
+    }
+
+    #[test]
+    fn persisted_subagent_lineage_restores_permission_delegation_context() {
+        use crate::service::session::{SessionRelationship, SessionRelationshipKind};
+
+        let relationship = SessionRelationship {
+            kind: Some(SessionRelationshipKind::Subagent),
+            parent_session_id: Some("parent-session".to_string()),
+            parent_request_id: None,
+            parent_dialog_turn_id: Some("parent-turn".to_string()),
+            parent_turn_index: None,
+            parent_tool_call_id: Some("task-tool-call".to_string()),
+            subagent_type: Some("Explore".to_string()),
+            continuation_policy: None,
+        };
+
+        assert_eq!(
+            super::subagent_parent_info_from_relationship(Some(&relationship)).map(|info| (
+                info.session_id,
+                info.dialog_turn_id,
+                info.tool_call_id
+            )),
+            Some((
+                "parent-session".to_string(),
+                "parent-turn".to_string(),
+                "task-tool-call".to_string(),
+            ))
+        );
+    }
+
+    #[test]
+    fn persisted_subagent_lineage_without_parent_turn_preserves_permission_routing() {
+        use crate::service::session::{SessionRelationship, SessionRelationshipKind};
+
+        let relationship = SessionRelationship {
+            kind: Some(SessionRelationshipKind::Subagent),
+            parent_session_id: Some("parent-session".to_string()),
+            parent_request_id: None,
+            parent_dialog_turn_id: None,
+            parent_turn_index: None,
+            parent_tool_call_id: Some("task-tool-call".to_string()),
+            subagent_type: Some("Explore".to_string()),
+            continuation_policy: None,
+        };
+
+        assert!(super::subagent_parent_info_from_relationship(Some(&relationship)).is_none());
+        assert_eq!(
+            super::permission_delegation_from_relationship(Some(&relationship), "GeneralPurpose")
+                .map(|delegation| (
+                    delegation.parent_session_id,
+                    delegation.parent_dialog_turn_id,
+                    delegation.parent_tool_call_id,
+                    delegation.subagent_type,
+                )),
+            Some((
+                "parent-session".to_string(),
+                None,
+                "task-tool-call".to_string(),
+                "Explore".to_string(),
+            ))
+        );
     }
 
     #[test]
@@ -10136,7 +10208,15 @@ mod tests {
                 dialog_turn_id: "parent-turn".to_string(),
                 tool_call_id: "task-tool".to_string(),
             },
-            context: HashMap::new(),
+            context: HashMap::from([(
+                AUTO_APPROVE_ASK_CONTEXT_KEY.to_string(),
+                "false".to_string(),
+            )]),
+            permission_runtime_ceiling: PermissionRuntimeCeiling::try_new(vec![
+                PermissionRule::new("bash", "rm *", PermissionEffect::Deny),
+                PermissionRule::new("external_directory", "*", PermissionEffect::Ask),
+            ])
+            .expect("test ceiling should be valid"),
             delegation_policy: DelegationPolicy::top_level().spawn_child(),
             external_generation_lease: None,
         };
@@ -10147,6 +10227,25 @@ mod tests {
             .expect("send_input request should prepare with a requested model");
 
         assert_eq!(prepared.session_config.model_id.as_deref(), Some("fast"));
+        assert_eq!(
+            prepared
+                .context
+                .get(AUTO_APPROVE_ASK_CONTEXT_KEY)
+                .map(String::as_str),
+            Some("false"),
+            "reused subagent runs must use the current invocation override"
+        );
+        assert_eq!(
+            prepared
+                .permission_runtime_ceiling
+                .as_ref()
+                .expect("child request should retain the parent ceiling")
+                .rules(),
+            [
+                PermissionRule::new("bash", "rm *", PermissionEffect::Deny),
+                PermissionRule::new("external_directory", "*", PermissionEffect::Ask,),
+            ]
+        );
         assert_eq!(
             session_manager
                 .get_session(&subagent_session.session_id)
@@ -10174,6 +10273,7 @@ mod tests {
                 tool_call_id: "task-tool".to_string(),
             },
             context: HashMap::new(),
+            permission_runtime_ceiling: PermissionRuntimeCeiling::default(),
             delegation_policy: DelegationPolicy::top_level().spawn_child(),
             external_generation_lease: None,
         };
@@ -10245,6 +10345,7 @@ mod tests {
                 tool_call_id: "task-tool".to_string(),
             },
             context: HashMap::new(),
+            permission_runtime_ceiling: PermissionRuntimeCeiling::default(),
             delegation_policy: DelegationPolicy::top_level().spawn_child(),
             external_generation_lease: None,
         };
@@ -10255,6 +10356,7 @@ mod tests {
             .expect("fork request should prepare with a requested model");
 
         assert_eq!(prepared.session_config.model_id.as_deref(), Some("fast"));
+        assert!(!prepared.context.contains_key(AUTO_APPROVE_ASK_CONTEXT_KEY));
         assert_eq!(
             prepared.prompt_cache_source_session_id.as_deref(),
             Some(parent_session.session_id.as_str())
@@ -10286,6 +10388,7 @@ mod tests {
                 tool_call_id: "task-tool".to_string(),
             },
             context: HashMap::new(),
+            permission_runtime_ceiling: PermissionRuntimeCeiling::default(),
             delegation_policy: DelegationPolicy::top_level().spawn_child(),
             external_generation_lease: None,
         };

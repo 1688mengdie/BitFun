@@ -7,12 +7,12 @@ use bitfun_agent_runtime::sdk::{
     AgentRuntimeSdkCompatibility, AgentRuntimeSdkStability, AgentSessionCreateRequest,
     AgentSessionCreateResult, AgentSubmissionPort, AgentSubmissionRequest, AgentSubmissionResult,
     AgentSubmissionSource, ClockPort, FileSystemPort, HarnessCapability, HarnessProviderDescriptor,
-    HarnessWorkflow, PermissionDecision, PermissionPort, PermissionRequest, PortResult,
-    RuntimeAgentRegistry, RuntimeAgentRegistryQuery, RuntimeEventEnvelope, RuntimeEventSink,
-    RuntimeEventType, RuntimeHookErrorPolicy, RuntimeHookKind, RuntimeHookPlan,
-    RuntimeHookRegistry, RuntimeServiceCapability, RuntimeServicePort, RuntimeServices,
-    RuntimeServicesBuilder, SessionSelector, SessionStorageKind, SessionStoragePathRequest,
-    SessionStoragePathResolution, SessionStorePort, ToolRegistry, ToolRegistryItem, WorkspacePort,
+    HarnessWorkflow, PortResult, RuntimeAgentRegistry, RuntimeAgentRegistryQuery,
+    RuntimeEventEnvelope, RuntimeEventSink, RuntimeEventType, RuntimeHookErrorPolicy,
+    RuntimeHookKind, RuntimeHookPlan, RuntimeHookRegistry, RuntimeServiceCapability,
+    RuntimeServicePort, RuntimeServices, RuntimeServicesBuilder, SessionSelector,
+    SessionStorageKind, SessionStoragePathRequest, SessionStoragePathResolution, SessionStorePort,
+    ToolRegistry, ToolRegistryItem, WorkspacePort,
 };
 use serde_json::{json, Value};
 
@@ -88,16 +88,6 @@ impl SessionStorePort for FakeSdkRuntimePort {
     }
 }
 
-#[async_trait]
-impl PermissionPort for FakeSdkRuntimePort {
-    async fn request_permission(
-        &self,
-        _request: PermissionRequest,
-    ) -> PortResult<PermissionDecision> {
-        Ok(PermissionDecision::Allow)
-    }
-}
-
 impl ClockPort for FakeSdkRuntimePort {
     fn now_unix_millis(&self) -> i64 {
         0
@@ -121,9 +111,6 @@ fn fake_sdk_services() -> RuntimeServices {
         )))
         .with_session_store(Arc::new(FakeSdkRuntimePort::new(
             RuntimeServiceCapability::SessionStore,
-        )))
-        .with_permission(Arc::new(FakeSdkRuntimePort::new(
-            RuntimeServiceCapability::Permission,
         )))
         .with_events(Arc::new(FakeSdkRuntimeEventSink))
         .with_clock(Arc::new(FakeSdkRuntimePort::new(

@@ -180,7 +180,6 @@ fn capability_packs_describe_service_tool_and_harness_requirements() {
     let service_capabilities = registry.required_service_capabilities();
     assert!(service_capabilities.contains(&RuntimeServiceCapability::FileSystem));
     assert!(service_capabilities.contains(&RuntimeServiceCapability::Workspace));
-    assert!(service_capabilities.contains(&RuntimeServiceCapability::Permission));
     assert!(service_capabilities.contains(&RuntimeServiceCapability::Events));
 
     let harness_capabilities = registry
@@ -770,7 +769,6 @@ fn default_capability_assembly_keeps_service_tool_and_harness_facts_together() {
             RuntimeServiceCapability::FileSystem,
             RuntimeServiceCapability::Workspace,
             RuntimeServiceCapability::SessionStore,
-            RuntimeServiceCapability::Permission,
             RuntimeServiceCapability::Events,
             RuntimeServiceCapability::Clock,
             RuntimeServiceCapability::Terminal,

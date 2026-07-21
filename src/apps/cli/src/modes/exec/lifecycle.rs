@@ -5,13 +5,16 @@
 use anyhow::Result;
 use clap::ValueEnum;
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use bitfun_agent_runtime::sdk::{PortErrorKind, RuntimeError};
+use bitfun_agent_runtime::sdk::{
+    PermissionReply, PermissionReplySource, PermissionRequest, PermissionRequestEvent,
+    PortErrorKind, RuntimeError,
+};
 use bitfun_agent_tools::effective_tool_invocation;
 use bitfun_events::{AgenticEvent, ToolEventIdentity};
 use tokio::time::Instant;
@@ -45,12 +48,6 @@ pub(crate) enum ExecApprovalMode {
     #[default]
     Reject,
     Auto,
-}
-
-impl ExecApprovalMode {
-    pub(super) const fn rejects_confirmation(self) -> bool {
-        matches!(self, Self::Reject)
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -204,6 +201,33 @@ pub(super) fn completed_turn_failure(
         Some(false) => format!("Execution completed without a successful final response: {reason}"),
         _ => format!("Execution completed unsuccessfully: {reason}"),
     })
+}
+
+pub(super) fn permission_action_required_message(request: &PermissionRequest) -> String {
+    match request.delegation.as_ref() {
+        Some(delegation) => format!(
+            "action-required: permission needed for {} by {} subagent (child session {}, parent session {}, parent task {}, request {})",
+            request.action,
+            delegation.subagent_type,
+            request.session_id,
+            delegation.parent_session_id,
+            delegation.parent_tool_call_id,
+            request.request_id
+        ),
+        None => format!(
+            "action-required: permission needed for {} ({})",
+            request.action, request.request_id
+        ),
+    }
+}
+
+pub(super) fn should_reject_permission_request(
+    request: &PermissionRequest,
+    session_id: &str,
+    approval_mode: ExecApprovalMode,
+) -> bool {
+    approval_mode == ExecApprovalMode::Reject
+        && crate::runtime::approval::permission_request_targets_session(request, session_id)
 }
 
 fn exec_terminal_decision(event: &AgenticEvent, turn_id: &str) -> Option<ExecTerminalDecision> {
@@ -416,7 +440,7 @@ pub(crate) struct ExecMode {
     message: String,
     agent_type: String,
     agent: Arc<CliAgentRuntimeClient>,
-    _runtime: Arc<CliRuntimeContext>,
+    runtime: Arc<CliRuntimeContext>,
     pub(super) workspace_path: Option<PathBuf>,
     /// None: no patch output, Some("-"): output to stdout, Some(path): save to file
     pub(super) output_patch: Option<String>,
@@ -439,6 +463,7 @@ impl ExecMode {
         let approval_mode = match runtime.approval_policy() {
             crate::runtime::approval::CliApprovalPolicy::Auto => ExecApprovalMode::Auto,
             crate::runtime::approval::CliApprovalPolicy::Ask
+            | crate::runtime::approval::CliApprovalPolicy::DisableAuto
             | crate::runtime::approval::CliApprovalPolicy::Reject => ExecApprovalMode::Reject,
         };
         let agent = Arc::new(CliAgentRuntimeClient::new(
@@ -451,7 +476,7 @@ impl ExecMode {
             message,
             agent_type,
             agent,
-            _runtime: runtime,
+            runtime,
             workspace_path,
             output_patch,
             output_format,
@@ -584,6 +609,70 @@ impl ExecMode {
         };
         tracing::info!(session_id = %session_id, turn_id = %turn_id, "Message sent");
 
+        let mut permission_rx = self
+            .runtime
+            .agent_runtime()
+            .subscribe_permission_requests()
+            .map_err(|error| anyhow::anyhow!(error.into_message()))?;
+        let permission_runtime = self.runtime.agent_runtime().clone();
+        let permission_session_id = session_id.clone();
+        let permission_mode = self.approval_mode;
+        let (permission_action_tx, mut permission_action_rx) = tokio::sync::mpsc::channel(1);
+        let permission_task = tokio::spawn(async move {
+            let mut initial_requests = permission_runtime
+                .pending_permission_requests()
+                .unwrap_or_default()
+                .into_iter()
+                .collect::<VecDeque<_>>();
+            let mut handled_request_ids = HashSet::new();
+            loop {
+                let request = if let Some(request) = initial_requests.pop_front() {
+                    request
+                } else {
+                    let Ok(event) = permission_rx.recv().await else {
+                        break;
+                    };
+                    let PermissionRequestEvent::Asked { request } = event else {
+                        continue;
+                    };
+                    request
+                };
+                if !should_reject_permission_request(
+                    &request,
+                    &permission_session_id,
+                    permission_mode,
+                ) {
+                    continue;
+                }
+                if !handled_request_ids.insert(request.request_id.clone()) {
+                    continue;
+                }
+                let reply = PermissionReply::Reject {
+                    feedback: Some(
+                        "Non-interactive execution requires an explicit permission policy"
+                            .to_string(),
+                    ),
+                };
+                if let Err(error) = permission_runtime
+                    .respond_permission_with_source(
+                        &request.request_id,
+                        reply,
+                        PermissionReplySource::System,
+                    )
+                    .await
+                {
+                    let _ = permission_action_tx
+                        .send(format!("Failed to respond to permission request: {error}"))
+                        .await;
+                    break;
+                }
+                let _ = permission_action_tx
+                    .send(permission_action_required_message(&request))
+                    .await;
+                break;
+            }
+        });
+
         // Observe the shared Agentic event stream without consuming other clients' events.
         let mut total_tool_calls = 0usize;
         let mut subagent_parent_turns: HashMap<String, (String, String)> = HashMap::new();
@@ -636,6 +725,23 @@ impl ExecMode {
                     break 'event_loop;
                 }
                 },
+                permission = permission_action_rx.recv() => {
+                    let message = permission.unwrap_or_else(|| {
+                        "Permission response channel closed before execution settled".to_string()
+                    });
+                    if let Err(error) = self.agent.cancel_current_turn().await {
+                        tracing::error!("Failed to cancel after permission action: {error}");
+                    }
+                    emit_exit_diagnostic(
+                        ExitKind::PermissionRejected,
+                        &message,
+                        &self.exit_context(Some(&session_id), Some(&turn_id)),
+                    );
+                    terminal_status = Some(ExecTerminalStatus::Error);
+                    terminal_message = Some(message.clone());
+                    terminal_outcome = Some(Err(anyhow::anyhow!(message)));
+                    break 'event_loop;
+                }
                 signal = tokio::signal::ctrl_c() => {
                     let interrupted = signal.is_ok();
                     let mut message = match signal {
@@ -788,77 +894,23 @@ impl ExecMode {
                     break;
                 }
 
-                let confirmation = self
-                    .project_exec_nonterminal_event(
-                        &envelope,
-                        &session_id,
-                        &turn_id,
-                        &mut assistant_text,
-                        &mut usage,
-                        &mut total_tool_calls,
-                    )
-                    .await?;
-                if let Some((tool_id, tool_name)) = confirmation {
-                    if self.approval_mode.rejects_confirmation() {
-                        let mut message = format!(
-                            "Permission rejected for {tool_name}; rerun with --auto to approve tool requests"
-                        );
-                        if let Err(error) = self.agent.reject_tool(&tool_id, message.clone()).await
-                        {
-                            message
-                                .push_str(&format!("; failed to deliver tool rejection: {error}"));
-                        }
-                        if let Err(error) = self.agent.cancel_current_turn().await {
-                            message.push_str(&format!("; failed to cancel active turn: {error}"));
-                        }
-                        let (drain_result, settlement_result) = self
-                            .observe_cancelled_turn_settlement(&mut event_rx, &session_id, &turn_id)
-                            .await;
-                        cancellation_observation = Some(drain_result);
-                        cancellation_settlement = Some(settlement_result);
-                        cancelled_terminal_override = Some((
-                            ExecTerminalStatus::Error,
-                            ExitKind::PermissionRejected,
-                            message.clone(),
-                        ));
-                        self.print_text(|| eprintln!("{message}"));
-                        terminal_exit_kind = Some(ExitKind::PermissionRejected);
-                        terminal_status = Some(ExecTerminalStatus::Error);
-                        terminal_message = Some(message.clone());
-                        terminal_outcome = Some(Err(anyhow::anyhow!(message)));
-                        break;
-                    }
-                    if let Err(error) = self.agent.confirm_tool(&tool_id, None).await {
-                        let mut message =
-                            format!("Failed to approve tool request for {tool_name}: {error}");
-                        if let Err(cancel_error) = self.agent.cancel_current_turn().await {
-                            message.push_str(&format!(
-                                "; failed to cancel active turn: {cancel_error}"
-                            ));
-                        }
-                        let (drain_result, settlement_result) = self
-                            .observe_cancelled_turn_settlement(&mut event_rx, &session_id, &turn_id)
-                            .await;
-                        cancellation_observation = Some(drain_result);
-                        cancellation_settlement = Some(settlement_result);
-                        cancelled_terminal_override = Some((
-                            ExecTerminalStatus::Error,
-                            ExitKind::PermissionRejected,
-                            message.clone(),
-                        ));
-                        terminal_exit_kind = Some(ExitKind::PermissionRejected);
-                        terminal_status = Some(ExecTerminalStatus::Error);
-                        terminal_message = Some(message.clone());
-                        terminal_outcome = Some(Err(anyhow::anyhow!(message)));
-                        break;
-                    }
-                }
+                self.project_exec_nonterminal_event(
+                    &envelope,
+                    &session_id,
+                    &turn_id,
+                    &mut assistant_text,
+                    &mut usage,
+                    &mut total_tool_calls,
+                )
+                .await?;
             }
 
             if terminal_outcome.is_some() {
                 break;
             }
         }
+
+        permission_task.abort();
 
         let turn_settled = if let Some(settlement_result) = cancellation_settlement.take() {
             let settled = settlement_result.is_ok();
@@ -1051,7 +1103,7 @@ impl ExecMode {
         assistant_text: &mut String,
         usage: &mut Option<ExecTokenUsage>,
         total_tool_calls: &mut usize,
-    ) -> Result<Option<(String, String)>> {
+    ) -> Result<()> {
         self.emit_stream_envelope(envelope)?;
         let event = &envelope.event;
         if let Some(model_config_id) = ExecTokenUsage::accumulate_event(usage, event, turn_id) {
@@ -1101,12 +1153,7 @@ impl ExecMode {
             } if event_turn_id == turn_id => {
                 use bitfun_events::ToolEventData;
                 match tool_event {
-                    ToolEventData::ConfirmationNeeded { identity, .. } => {
-                        return Ok(Some((
-                            identity.tool_id.clone(),
-                            identity.effective_name().to_string(),
-                        )));
-                    }
+                    ToolEventData::ConfirmationNeeded { .. } => {}
                     ToolEventData::Started {
                         identity, params, ..
                     } => {
@@ -1143,7 +1190,7 @@ impl ExecMode {
             }
             _ => {}
         }
-        Ok(None)
+        Ok(())
     }
 
     async fn record_resolved_model_config_id(&self, session_id: &str, model_config_id: &str) {

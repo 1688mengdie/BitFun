@@ -76,12 +76,16 @@ import {
   type BackgroundSubagentActivityItem,
 } from '../../utils/backgroundSubagentActivity';
 import './ModernFlowChatContainer.scss';
+import { PermissionRequestPanel } from './PermissionRequestPanel';
+import { pendingPermissionToolCallIdsForSession } from './permissionRequestRouting';
+import { usePermissionRequests } from './usePermissionRequests';
 
 const log = createLogger('ModernFlowChatContainer');
 
 interface ModernFlowChatContainerProps {
   className?: string;
   config?: Partial<FlowChatConfig>;
+  permissionPanelAboveChatInput?: boolean;
 
   // Callbacks compatible with the legacy version.
   onFileViewRequest?: (filePath: string, fileName: string, lineRange?: LineRange) => void;
@@ -220,6 +224,7 @@ function backgroundCommandSummaryFromActivity(activity: BackgroundCommandActivit
 export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = ({
   className = '',
   config,
+  permissionPanelAboveChatInput = false,
   onFileViewRequest,
   onTabOpen,
   onOpenVisualization,
@@ -228,6 +233,14 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
   const { t } = useTranslation('flow-chat');
   const virtualItems = useVirtualItems();
   const activeSession = useActiveSession();
+  const {
+    requests: permissionRequests,
+    activeBatch: activePermissionBatch,
+    respond: respondPermission,
+    respondBatch: respondPermissionBatch,
+  } = usePermissionRequests(
+    activeSession?.sessionId,
+  );
   const visibleTurnInfo = useVisibleTurnInfo();
   const [pendingHeaderTurnId, setPendingHeaderTurnId] = useState<string | null>(null);
   const [queuedHeaderTurnPinId, setQueuedHeaderTurnPinId] = useState<string | null>(null);
@@ -393,6 +406,10 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     onSwitchToChatPanel,
     onToolConfirm: handleToolConfirm,
     onToolReject: handleToolReject,
+    pendingPermissionToolCallIds: pendingPermissionToolCallIdsForSession(
+      permissionRequests,
+      activeSession?.sessionId,
+    ),
     sessionId: activeSession?.sessionId,
     activeSessionOverride: activeSession,
     allowUserMessageRollback,
@@ -421,6 +438,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     onSwitchToChatPanel,
     handleToolConfirm,
     handleToolReject,
+    permissionRequests,
     activeSession,
     allowUserMessageRollback,
     config,
@@ -1482,6 +1500,15 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
           onClose={handleCloseBackgroundCommandInput}
           onSend={handleSendBackgroundCommandInput}
         />
+
+        {activePermissionBatch && (
+          <PermissionRequestPanel
+            requests={activePermissionBatch.requests}
+            aboveChatInput={permissionPanelAboveChatInput}
+            onRespond={respondPermission}
+            onRespondBatch={respondPermissionBatch}
+          />
+        )}
 
         <div
           className="modern-flowchat-container__messages"

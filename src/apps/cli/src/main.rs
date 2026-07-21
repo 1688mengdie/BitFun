@@ -941,13 +941,11 @@ async fn run_cli() -> Result<()> {
         Some(Commands::Doctor) => {
             use std::sync::Arc;
 
-            use runtime::approval::{CliApprovalPolicy, CliPermissionService};
             use runtime::services::{CliClock, CliRuntimeEventSink, CliRuntimeServicesProvider};
 
             let workspace = std::env::current_dir()?;
             let services = CliRuntimeServicesProvider::new(
                 &workspace,
-                Arc::new(CliPermissionService::new(CliApprovalPolicy::Reject)),
                 Arc::new(CliRuntimeEventSink::new(16)),
                 Arc::new(CliClock),
             )?

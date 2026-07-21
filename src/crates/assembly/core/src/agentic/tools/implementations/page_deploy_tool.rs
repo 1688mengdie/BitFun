@@ -1,7 +1,7 @@
 //! PageDeploy tool — deploy a saved BitFun Page version to production.
 
 use crate::agentic::tools::account_login_capability::account_login_available;
-use crate::agentic::tools::framework::{Tool, ToolResult, ToolUseContext};
+use crate::agentic::tools::framework::{PermissionIntent, Tool, ToolResult, ToolUseContext};
 use crate::agentic::tools::page_deploy_host::invoke_page_deploy;
 use crate::util::errors::{BitFunError, BitFunResult};
 use async_trait::async_trait;
@@ -68,8 +68,12 @@ Preview a version at /p/{username}/{slug}/@v/{version_id}."#
         false
     }
 
-    fn needs_permissions(&self, _input: Option<&Value>) -> bool {
-        false
+    fn permission_intents(
+        &self,
+        _input: &Value,
+        _context: &ToolUseContext,
+    ) -> BitFunResult<Vec<PermissionIntent>> {
+        Ok(Vec::new())
     }
 
     async fn is_available_in_context(&self, _context: Option<&ToolUseContext>) -> bool {

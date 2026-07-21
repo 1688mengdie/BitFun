@@ -676,7 +676,6 @@ function handleConfirmationNeeded(
     },
     requiresConfirmation: true,
     status: 'pending_confirmation',
-    confirmationTimeoutAt: typeof toolEvent.timeout_at === 'number' ? toolEvent.timeout_at : undefined,
   } as any);
 
   const state = store.getState();

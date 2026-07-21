@@ -29,6 +29,19 @@ impl ChatMode {
 
         // Create or restore core session
         let rt_handle = tokio::runtime::Handle::current();
+        self.auto_approve_ask_default = tokio::task::block_in_place(|| {
+            rt_handle.block_on(async {
+                let Ok(service) = bitfun_core::service::config::get_global_config_service().await
+                else {
+                    return false;
+                };
+                service
+                    .get_config::<bitfun_core::service::config::types::GlobalConfig>(None)
+                    .await
+                    .map(|config| config.tool_permissions.interaction.auto_approve_ask)
+                    .unwrap_or(false)
+            })
+        });
 
         let (mut session_id, mut chat_state, mode_migration_notice) =
             if let Some(ref restore_id) = self.restore_session_id {
@@ -85,6 +98,10 @@ impl ChatMode {
                 );
                 (session_id, state, None)
             };
+        self.auto_approve_ask_override = None;
+        self.agent
+            .set_approval_policy(crate::runtime::approval::CliApprovalPolicy::Ask);
+        chat_state.auto_approve_ask = self.auto_approve_ask_default;
 
         // Keep ChatMode workspace in sync with the session's effective workspace
         self.agent_type = chat_state.agent_type.clone();
@@ -158,6 +175,18 @@ impl ChatMode {
         }
 
         let mut event_rx = self.agent.event_source().subscribe();
+        let mut permission_rx = self
+            .runtime
+            .agent_runtime()
+            .subscribe_permission_requests()
+            .ok();
+        if let Ok(pending) = self.runtime.agent_runtime().pending_permission_requests() {
+            for request in pending.into_iter().filter(|request| {
+                crate::runtime::approval::permission_request_targets_session(request, &session_id)
+            }) {
+                chat_state.enqueue_permission_request(request);
+            }
+        }
 
         if let Some(notice) = &mode_migration_notice {
             chat_state.add_system_message(notice.user_message());
@@ -246,6 +275,43 @@ impl ChatMode {
             }
             if self.poll_external_control_mutation(&mut chat_view) {
                 needs_redraw = true;
+            }
+
+            if let Some(receiver) = permission_rx.as_mut() {
+                for _ in 0..4 {
+                    match receiver.try_recv() {
+                        Ok(bitfun_agent_runtime::sdk::PermissionRequestEvent::Asked {
+                            request,
+                        }) if crate::runtime::approval::permission_request_targets_session(
+                            &request,
+                            &session_id,
+                        ) =>
+                        {
+                            if chat_state.enqueue_permission_request(request) {
+                                needs_redraw = true;
+                            }
+                        }
+                        Ok(bitfun_agent_runtime::sdk::PermissionRequestEvent::Replied {
+                            request_id,
+                            ..
+                        })
+                        | Ok(bitfun_agent_runtime::sdk::PermissionRequestEvent::Cancelled {
+                            request_id,
+                            ..
+                        }) => {
+                            if chat_state.resolve_permission_request(&request_id) {
+                                needs_redraw = true;
+                            }
+                        }
+                        Err(TryRecvError::Empty) => break,
+                        Err(TryRecvError::Lagged(_)) => continue,
+                        Err(TryRecvError::Closed) => {
+                            permission_rx = None;
+                            break;
+                        }
+                        Ok(_) => {}
+                    }
+                }
             }
 
             let mut external_source_closed = false;
@@ -496,25 +562,6 @@ impl ChatMode {
                                 turn_id
                             );
                             continue;
-                        }
-                        if let ToolEventData::ConfirmationNeeded { identity, .. } = tool_event {
-                            if self
-                                .runtime
-                                .approval_controller()
-                                .is_allowed(identity.effective_name())
-                            {
-                                let agent = self.agent.clone();
-                                let tool_id = identity.tool_id.clone();
-                                match tokio::task::block_in_place(|| {
-                                    rt_handle.block_on(agent.confirm_tool(&tool_id, None))
-                                }) {
-                                    Ok(()) => continue,
-                                    Err(error) => tracing::error!(
-                                        "Failed to confirm runtime-approved tool; showing the permission prompt again: {}",
-                                        error
-                                    ),
-                                }
-                            }
                         }
                         chat_state.handle_tool_event(tool_event);
                         chat_view.invalidate_lines_cache();

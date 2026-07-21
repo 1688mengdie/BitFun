@@ -1,6 +1,6 @@
 import React, { lazy, Suspense, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
-import { Folder, FolderOpen, MoreHorizontal, FolderSearch, Plus, ChevronDown, Trash2, RotateCcw, Copy, FileText, GitBranch, Bot, Link2, ListChecks, Loader2, Clock3 } from 'lucide-react';
+import { Folder, FolderOpen, MoreHorizontal, FolderSearch, Plus, ChevronDown, Trash2, RotateCcw, Copy, FileText, GitBranch, Bot, Link2, ListChecks, Loader2, Clock3, ShieldCheck } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { DotMatrixArrowRightIcon } from './DotMatrixArrowRightIcon';
 import { Button, ConfirmDialog, Modal, Tooltip } from '@/component-library';
@@ -47,6 +47,7 @@ import {
 } from './workspaceGitRefreshOptions';
 
 const WorkspaceRelatedPathsDialog = lazy(() => import('./WorkspaceRelatedPathsDialog'));
+const WorkspaceProjectPermissionsDialog = lazy(() => import('./WorkspaceProjectPermissionsDialog'));
 const WorkspaceSessionBatchModal = lazy(() => import('./WorkspaceSessionBatchModal'));
 const ScheduledJobsModal = lazy(() => import('@/app/components/scheduled-jobs/ScheduledJobsModal'));
 
@@ -111,6 +112,7 @@ const WorkspaceItem: React.FC<WorkspaceItemProps> = ({
   const [deleteWorktreeDialogOpen, setDeleteWorktreeDialogOpen] = useState(false);
   const [resetDialogOpen, setResetDialogOpen] = useState(false);
   const [relatedPathsDialogOpen, setRelatedPathsDialogOpen] = useState(false);
+  const [projectPermissionsDialogOpen, setProjectPermissionsDialogOpen] = useState(false);
   const [isDeletingAssistant, setIsDeletingAssistant] = useState(false);
   const [isDeletingWorktree, setIsDeletingWorktree] = useState(false);
   const [isResettingWorkspace, setIsResettingWorkspace] = useState(false);
@@ -483,6 +485,11 @@ const WorkspaceItem: React.FC<WorkspaceItemProps> = ({
   const handleOpenScheduledJobs = useCallback(() => {
     setMenuOpen(false);
     setScheduledJobsModalOpen(true);
+  }, []);
+
+  const handleOpenProjectPermissions = useCallback(() => {
+    setMenuOpen(false);
+    setProjectPermissionsDialogOpen(true);
   }, []);
 
   const handleRequestDeleteAssistant = useCallback(() => {
@@ -871,6 +878,17 @@ const WorkspaceItem: React.FC<WorkspaceItemProps> = ({
                     <Clock3 size={13} />
                     <span className="bitfun-nav-panel__workspace-item-menu-label">{t('nav.scheduledJobs.open')}</span>
                   </button>
+                  <button
+                    type="button"
+                    className="bitfun-nav-panel__workspace-item-menu-item"
+                    onClick={handleOpenProjectPermissions}
+                    data-testid="nav-workspace-menu-project-permissions"
+                  >
+                    <ShieldCheck size={13} />
+                    <span className="bitfun-nav-panel__workspace-item-menu-label">
+                      {t('nav.workspaces.actions.manageProjectPermissions')}
+                    </span>
+                  </button>
                   <div className="bitfun-nav-panel__workspace-item-menu-divider" />
                   <button
                     type="button"
@@ -978,6 +996,15 @@ const WorkspaceItem: React.FC<WorkspaceItemProps> = ({
               title={t('nav.scheduledJobs.title')}
               targetLabel={workspaceDisplayName}
               targetDescription={workspace.rootPath}
+            />
+          </Suspense>
+        )}
+        {projectPermissionsDialogOpen && (
+          <Suspense fallback={null}>
+            <WorkspaceProjectPermissionsDialog
+              workspace={workspace}
+              isOpen={projectPermissionsDialogOpen}
+              onClose={() => setProjectPermissionsDialogOpen(false)}
             />
           </Suspense>
         )}
@@ -1289,6 +1316,17 @@ const WorkspaceItem: React.FC<WorkspaceItemProps> = ({
                 <button
                   type="button"
                   className="bitfun-nav-panel__workspace-item-menu-item"
+                  onClick={handleOpenProjectPermissions}
+                  data-testid="nav-workspace-menu-project-permissions"
+                >
+                  <ShieldCheck size={13} />
+                  <span className="bitfun-nav-panel__workspace-item-menu-label">
+                    {t('nav.workspaces.actions.manageProjectPermissions')}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  className="bitfun-nav-panel__workspace-item-menu-item"
                   onClick={handleOpenScheduledJobs}
                 >
                   <Clock3 size={13} />
@@ -1407,6 +1445,15 @@ const WorkspaceItem: React.FC<WorkspaceItemProps> = ({
             workspace={workspace}
             isOpen={relatedPathsDialogOpen}
             onClose={() => setRelatedPathsDialogOpen(false)}
+          />
+        </Suspense>
+      )}
+      {projectPermissionsDialogOpen && (
+        <Suspense fallback={null}>
+          <WorkspaceProjectPermissionsDialog
+            workspace={workspace}
+            isOpen={projectPermissionsDialogOpen}
+            onClose={() => setProjectPermissionsDialogOpen(false)}
           />
         </Suspense>
       )}

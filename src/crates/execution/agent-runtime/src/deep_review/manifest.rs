@@ -349,10 +349,6 @@ impl DeepReviewEvidencePack {
     pub(crate) fn content_boundary(&self) -> &str {
         &self.content_boundary
     }
-
-    pub(crate) fn requires_tool_confirmation(&self) -> bool {
-        true
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1282,7 +1278,6 @@ mod tests {
         );
         assert_eq!(pack.hunk_hint_count(), 1);
         assert_eq!(pack.contract_hint_count(), 1);
-        assert!(pack.requires_tool_confirmation());
     }
 
     #[test]

@@ -885,7 +885,7 @@ impl RemoteCommandRuntimeHost for RecordingCommandHost {
     async fn handle_interaction_command(&self, _command: &RemoteCommand) -> RemoteResponse {
         self.events.lock().unwrap().push("interaction".to_string());
         RemoteResponse::InteractionAccepted {
-            action: "confirm_tool".to_string(),
+            action: "cancel_tool".to_string(),
             target_id: "tool-1".to_string(),
         }
     }
@@ -1018,9 +1018,9 @@ async fn remote_connect_command_owner_preserves_cancel_and_group_routing() {
 
     let interaction = handle_remote_command(
         &host,
-        &RemoteCommand::ConfirmTool {
+        &RemoteCommand::CancelTool {
             tool_id: "tool-1".to_string(),
-            updated_input: None,
+            reason: None,
         },
         RemoteConnectSubmissionSource::Relay,
     )
@@ -1117,7 +1117,6 @@ async fn remote_connect_dialog_runtime_owns_restore_prewarm_and_submit_order() {
         submitted.policy.queue_priority,
         RemoteDialogQueuePriority::Normal
     );
-    assert!(submitted.policy.skip_tool_confirmation);
 }
 
 #[tokio::test]
@@ -1620,9 +1619,9 @@ fn remote_connect_execution_response_helpers_preserve_wire_shape() {
         }
     );
     assert_eq!(
-        remote_interaction_accepted_response("confirm_tool", "tool-1", Ok(())),
+        remote_interaction_accepted_response("cancel_tool", "tool-1", Ok(())),
         RemoteResponse::InteractionAccepted {
-            action: "confirm_tool".to_string(),
+            action: "cancel_tool".to_string(),
             target_id: "tool-1".to_string(),
         }
     );
