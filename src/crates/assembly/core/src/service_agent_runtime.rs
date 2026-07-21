@@ -934,6 +934,9 @@ impl CoreServiceAgentRuntime {
             .with_interaction_response_port(interaction_response)
             .with_session_fork_port(session_fork)
             .with_session_usage_port(session_usage)
+            .with_permission_request_manager(
+                crate::product_runtime::core_permission_request_manager()?,
+            )
             .build()
             .map_err(|error| error.to_string())
     }
