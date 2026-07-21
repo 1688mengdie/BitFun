@@ -1,9 +1,9 @@
 import React, { lazy, Suspense, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
-import { Folder, FolderOpen, MoreHorizontal, FolderSearch, Plus, ChevronDown, Trash2, RotateCcw, Copy, FileText, GitBranch, Bot, Link2, ListChecks, Loader2, Clock3, ShieldCheck } from 'lucide-react';
+import { Folder, FolderOpen, MoreHorizontal, FolderSearch, Plus, ChevronDown, Trash2, RotateCcw, Copy, FileText, GitBranch, Bot, Link2, ListChecks, Loader2, Clock3, ShieldCheck, Pencil } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { DotMatrixArrowRightIcon } from './DotMatrixArrowRightIcon';
-import { Button, ConfirmDialog, Modal, Tooltip } from '@/component-library';
+import { Button, ConfirmDialog, InputDialog, Modal, Tooltip } from '@/component-library';
 import { useI18n } from '@/infrastructure/i18n';
 import { aiExperienceConfigService } from '@/infrastructure/config/services/AIExperienceConfigService';
 import { useWorkspaceContext } from '@/infrastructure/contexts/WorkspaceContext';
@@ -51,6 +51,9 @@ const WorkspaceProjectPermissionsDialog = lazy(() => import('./WorkspaceProjectP
 const WorkspaceSessionBatchModal = lazy(() => import('./WorkspaceSessionBatchModal'));
 const ScheduledJobsModal = lazy(() => import('@/app/components/scheduled-jobs/ScheduledJobsModal'));
 
+const MAX_WORKSPACE_NAME_CHARS = 80;
+const WORKSPACE_NAME_CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/;
+
 interface WorkspaceItemProps {
   workspace: WorkspaceInfo;
   isActive: boolean;
@@ -85,6 +88,7 @@ const WorkspaceItem: React.FC<WorkspaceItemProps> = ({
     closeWorkspaceById,
     deleteAssistantWorkspace,
     resetAssistantWorkspace,
+    renameWorkspace,
   } = useWorkspaceContext();
   const { switchLeftPanelTab } = useApp();
   const openNavScene = useNavSceneStore(s => s.openNavScene);
@@ -120,6 +124,7 @@ const WorkspaceItem: React.FC<WorkspaceItemProps> = ({
   const [searchIndexModalOpen, setSearchIndexModalOpen] = useState(false);
   const [scheduledJobsModalOpen, setScheduledJobsModalOpen] = useState(false);
   const [sessionBatchModalOpen, setSessionBatchModalOpen] = useState(false);
+  const [renameDialogOpen, setRenameDialogOpen] = useState(false);
   const [workspaceSearchEnabled, setWorkspaceSearchEnabled] = useState(
     () => aiExperienceConfigService.getSettings().enable_workspace_search,
   );
@@ -491,6 +496,44 @@ const WorkspaceItem: React.FC<WorkspaceItemProps> = ({
     setMenuOpen(false);
     setProjectPermissionsDialogOpen(true);
   }, []);
+
+  const handleRequestRename = useCallback(() => {
+    setMenuOpen(false);
+    setRenameDialogOpen(true);
+  }, []);
+
+  const validateWorkspaceName = useCallback((value: string): string | null => {
+    const normalizedName = value.trim();
+    if (!normalizedName) {
+      return t('nav.workspaces.renameDialog.validation.required');
+    }
+    if (WORKSPACE_NAME_CONTROL_CHARACTERS.test(normalizedName)) {
+      return t('nav.workspaces.renameDialog.validation.invalidCharacters');
+    }
+    if (Array.from(normalizedName).length > MAX_WORKSPACE_NAME_CHARS) {
+      return t('nav.workspaces.renameDialog.validation.tooLong', {
+        max: MAX_WORKSPACE_NAME_CHARS,
+      });
+    }
+    return null;
+  }, [t]);
+
+  const handleRenameWorkspace = useCallback(async (name: string) => {
+    const normalizedName = name.trim();
+    if (normalizedName === workspace.name) {
+      return;
+    }
+
+    try {
+      await renameWorkspace(workspace.id, normalizedName);
+      notificationService.success(t('nav.workspaces.renamed'), { duration: 2500 });
+    } catch (error) {
+      notificationService.error(
+        error instanceof Error ? error.message : t('nav.workspaces.renameFailed'),
+        { duration: 4000 }
+      );
+    }
+  }, [renameWorkspace, t, workspace.id, workspace.name]);
 
   const handleRequestDeleteAssistant = useCallback(() => {
     setMenuOpen(false);
@@ -1333,6 +1376,17 @@ const WorkspaceItem: React.FC<WorkspaceItemProps> = ({
                   <span className="bitfun-nav-panel__workspace-item-menu-label">{t('nav.scheduledJobs.open')}</span>
                 </button>
                 <div className="bitfun-nav-panel__workspace-item-menu-divider" />
+                <button
+                  type="button"
+                  className="bitfun-nav-panel__workspace-item-menu-item"
+                  onClick={handleRequestRename}
+                  data-testid="nav-workspace-menu-rename"
+                >
+                  <Pencil size={13} />
+                  <span className="bitfun-nav-panel__workspace-item-menu-label">
+                    {t('nav.workspaces.actions.rename')}
+                  </span>
+                </button>
                 {isLinkedWorktree ? (
                   <button
                     type="button"
@@ -1419,6 +1473,19 @@ const WorkspaceItem: React.FC<WorkspaceItemProps> = ({
         />
       </div>
 
+      <InputDialog
+        isOpen={renameDialogOpen}
+        onClose={() => setRenameDialogOpen(false)}
+        onConfirm={(name) => { void handleRenameWorkspace(name); }}
+        title={t('nav.workspaces.renameDialog.title')}
+        description={t('nav.workspaces.renameDialog.description')}
+        placeholder={t('nav.workspaces.renameDialog.placeholder')}
+        defaultValue={workspace.name}
+        confirmText={t('actions.save')}
+        cancelText={t('actions.cancel')}
+        validator={validateWorkspaceName}
+        required={false}
+      />
       <BranchSelectModal
         isOpen={worktreeModalOpen}
         onClose={() => setWorktreeModalOpen(false)}
