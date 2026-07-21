@@ -3,13 +3,14 @@
 //! Top-level component that integrates all subsystems and provides a unified interface
 
 use super::{
+    coordination_store::{BackgroundTaskRegistration, CoordinationStore},
     scheduler::{
         abort_thread_goal_continuation_for_session, clear_thread_goal_continuation_abort,
         get_global_scheduler, DialogSubmissionPolicy, HiddenSubagentQueueCancelHandle,
     },
     turn_outcome::TurnOutcome,
     turn_settlement::TurnSettlementTracker,
-    BackgroundSubagentOutcome, BackgroundSubagentOutcomeStore, BackgroundSubagentWaitResult,
+    BackgroundSubagentOutcomeStore, BackgroundSubagentWaitMode, BackgroundSubagentWaitResult,
 };
 use crate::agentic::agents::get_agent_registry;
 use crate::agentic::context_profile::ContextProfilePolicy;
@@ -173,25 +174,6 @@ fn is_review_agent_type(agent_type: &str) -> bool {
     )
 }
 
-pub(crate) async fn validate_background_subagent_delivery(
-    agent_type: &str,
-    workspace_root: Option<&Path>,
-    allow_review_follow_up: bool,
-) -> BitFunResult<()> {
-    let is_review = get_agent_registry()
-        .get_subagent_is_review_for_workspace(agent_type, workspace_root)
-        .await
-        .unwrap_or(false);
-    if !is_review || allow_review_follow_up {
-        return Ok(());
-    }
-
-    Err(BitFunError::Validation(
-        "Reviews wait for results by default so one final review can be returned. Retry without run_in_background. Only when the user explicitly asked not to wait, retry with run_in_background=true and allow_review_follow_up=true."
-            .to_string(),
-    ))
-}
-
 fn turn_review_manifest_for_agent(
     metadata: Option<&serde_json::Value>,
     agent_type: &str,
@@ -336,8 +318,8 @@ impl SubagentResult {
 
 #[derive(Debug, Clone)]
 pub struct BackgroundSubagentStartResult {
-    pub background_task_id: String,
-    pub session_id: String,
+    pub bg_task_id: String,
+    pub agent_id: String,
 }
 
 fn build_subagent_session_relationship(
@@ -786,13 +768,10 @@ pub struct ConversationCoordinator {
     subagent_timeout_registry: Arc<RwLock<HashMap<String, Arc<SubagentTimeoutHandle>>>>,
     /// Active subagent executions keyed by subagent session id.
     active_subagent_executions: Arc<DashMap<String, ActiveSubagentExecution>>,
-    /// Background Task runs keyed by background_task_id.
-    background_subagent_tasks: Arc<DashMap<String, BackgroundSubagentTaskControl>>,
+    /// Background Task runs keyed by the coordination database task primary key.
+    background_subagent_tasks: Arc<DashMap<i64, BackgroundSubagentTaskControl>>,
     /// Parent-owned terminal outcomes consumed only through AgentWait.
     background_subagent_outcomes: Arc<BackgroundSubagentOutcomeStore>,
-    /// Cancelled deliveries consumed by the scheduler after it acquires the
-    /// parent session's operation lock.
-    background_subagent_delivery_suppressions: Arc<DashMap<String, ()>>,
     /// Notifies DialogScheduler of turn outcomes; injected after construction
     scheduler_notify_tx: OnceLock<mpsc::Sender<(String, TurnOutcome)>>,
     /// Round-boundary user steering source (mid-turn user message injection); injected after construction
@@ -1337,8 +1316,31 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         event_queue: Arc<EventQueue>,
         event_router: Arc<EventRouter>,
     ) -> Self {
+        let coordination_database_file = session_manager
+            .path_manager()
+            .agent_coordination_database_file();
+        Self::new_with_coordination_database_file(
+            session_manager,
+            execution_engine,
+            tool_pipeline,
+            event_queue,
+            event_router,
+            coordination_database_file,
+        )
+    }
+
+    fn new_with_coordination_database_file(
+        session_manager: Arc<SessionManager>,
+        execution_engine: Arc<ExecutionEngine>,
+        tool_pipeline: Arc<ToolPipeline>,
+        event_queue: Arc<EventQueue>,
+        event_router: Arc<EventRouter>,
+        coordination_database_file: PathBuf,
+    ) -> Self {
+        let coordination_store = Arc::new(CoordinationStore::new(coordination_database_file));
         let background_subagent_outcomes = Arc::new(BackgroundSubagentOutcomeStore::new(
             Arc::clone(&session_manager),
+            coordination_store,
         ));
         Self {
             session_manager,
@@ -1352,7 +1354,6 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             active_subagent_executions: Arc::new(DashMap::new()),
             background_subagent_tasks: Arc::new(DashMap::new()),
             background_subagent_outcomes,
-            background_subagent_delivery_suppressions: Arc::new(DashMap::new()),
             scheduler_notify_tx: OnceLock::new(),
             round_injection_source: OnceLock::new(),
             active_turns_per_session: Arc::new(DashMap::new()),
@@ -4350,6 +4351,9 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         self.session_manager
             .delete_session(workspace_path, session_id)
             .await?;
+        self.background_subagent_outcomes
+            .delete_session_references(session_id)
+            .await?;
         self.emit_event(AgenticEvent::SessionDeleted {
             session_id: session_id.to_string(),
         })
@@ -4371,6 +4375,11 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             )
             .await?;
 
+        let rolled_back_turn_ids = parent_dialog_turn_ids.iter().cloned().collect::<Vec<_>>();
+        self.background_subagent_outcomes
+            .rollback_parent_turns(parent_session_id, &rolled_back_turn_ids)
+            .await?;
+
         let mut deleted_session_ids = Vec::new();
 
         for session_id in session_ids {
@@ -4380,6 +4389,16 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         }
 
         Ok(deleted_session_ids)
+    }
+
+    pub(crate) async fn initialize_fork_coordination(
+        &self,
+        source_session_id: &str,
+        target_session_id: &str,
+    ) -> BitFunResult<()> {
+        self.background_subagent_outcomes
+            .initialize_fork(source_session_id, target_session_id)
+            .await
     }
 
     pub(crate) async fn collect_hidden_subagent_sessions_for_parent_turns(
@@ -6205,7 +6224,6 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         &self,
         target_session_id: &str,
         parent_session_id: &str,
-        background_allow_review_follow_up: Option<bool>,
     ) -> BitFunResult<Session> {
         let session = match self.session_manager.get_session(target_session_id) {
             Some(session) => session,
@@ -6235,79 +6253,6 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                         "subagent_follow_up_unsupported: this subagent session is fresh-only; start a new Task invocation"
                             .to_string(),
                     ));
-                }
-                if let Some(allow_review_follow_up) = background_allow_review_follow_up {
-                    let metadata = persisted_metadata.ok_or_else(|| {
-                        BitFunError::NotFound(format!(
-                            "Session metadata not found: {}",
-                            target_session_id
-                        ))
-                    })?;
-                    if !metadata.is_subagent() {
-                        return Err(BitFunError::Validation(format!(
-                            "Subagent execution target must be a subagent session: {}",
-                            target_session_id
-                        )));
-                    }
-                    let created_by_marker = format!("session-{parent_session_id}");
-                    let owned_subagent = session_lineage_matches_parent(
-                        metadata.relationship.as_ref(),
-                        parent_session_id,
-                    ) || metadata.created_by.as_deref()
-                        == Some(created_by_marker.as_str());
-                    if !owned_subagent {
-                        return Err(BitFunError::Validation(format!(
-                            "Subagent session '{}' was not created by parent session '{}'",
-                            target_session_id, parent_session_id
-                        )));
-                    }
-                    validate_background_subagent_delivery(
-                        &metadata.agent_type,
-                        metadata
-                            .workspace_path
-                            .as_deref()
-                            .map(Path::new)
-                            .or(Some(binding.root_path())),
-                        allow_review_follow_up,
-                    )
-                    .await?;
-
-                    let (session_view, _, _, _) = self
-                        .session_manager
-                        .restore_internal_session_view_from_storage_path_tail_timed(
-                            &binding.session_storage_dir(),
-                            target_session_id,
-                            0,
-                        )
-                        .await?;
-                    if session_view.kind != SessionKind::Subagent {
-                        return Err(BitFunError::Validation(format!(
-                            "Subagent execution target must be a subagent session: {}",
-                            target_session_id
-                        )));
-                    }
-                    if !session_created_by_parent(&session_view, parent_session_id)
-                        && !session_lineage_matches_parent(
-                            metadata.relationship.as_ref(),
-                            parent_session_id,
-                        )
-                    {
-                        return Err(BitFunError::Validation(format!(
-                            "Subagent session '{}' was not created by parent session '{}'",
-                            target_session_id, parent_session_id
-                        )));
-                    }
-                    validate_background_subagent_delivery(
-                        &session_view.agent_type,
-                        session_view
-                            .config
-                            .workspace_path
-                            .as_deref()
-                            .map(Path::new)
-                            .or(Some(binding.root_path())),
-                        allow_review_follow_up,
-                    )
-                    .await?;
                 }
                 self.session_manager
                     .restore_internal_session_from_storage_path(
@@ -6347,15 +6292,6 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                 "Subagent session is in error state and cannot be reused: {}",
                 target_session_id
             )));
-        }
-
-        if let Some(allow_review_follow_up) = background_allow_review_follow_up {
-            validate_background_subagent_delivery(
-                &session.agent_type,
-                session.config.workspace_path.as_deref().map(Path::new),
-                allow_review_follow_up,
-            )
-            .await?;
         }
 
         Ok(session)
@@ -6555,7 +6491,6 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
     async fn resolve_hidden_subagent_execution_request(
         &self,
         request: SubagentExecutionRequest,
-        background_allow_review_follow_up: Option<bool>,
     ) -> BitFunResult<HiddenSubagentExecutionRequest> {
         let task_description = request.task_description.trim().to_string();
         if task_description.is_empty() {
@@ -6607,7 +6542,6 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                         .ensure_subagent_session_loaded_for_reuse(
                             target_session_id,
                             &parent_session_id,
-                            background_allow_review_follow_up,
                         )
                         .await?;
                     let requested_model_id = if inherit_parent_model {
@@ -6679,14 +6613,6 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                             .to_string(),
                     )
                 })?;
-                if let Some(allow_review_follow_up) = background_allow_review_follow_up {
-                    validate_background_subagent_delivery(
-                        &agent_type,
-                        Some(Path::new(&workspace_path)),
-                        allow_review_follow_up,
-                    )
-                    .await?;
-                }
                 let resolved_model_id = if matches!(
                     request.model_binding_policy,
                     SessionModelBindingPolicy::ApprovedImmutable
@@ -6773,14 +6699,6 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                 let snapshot = self
                     .capture_fork_agent_context_snapshot(&request.subagent_parent_info.session_id)
                     .await?;
-                if let Some(allow_review_follow_up) = background_allow_review_follow_up {
-                    validate_background_subagent_delivery(
-                        &snapshot.parent_agent_type,
-                        Some(Path::new(&snapshot.workspace_path)),
-                        allow_review_follow_up,
-                    )
-                    .await?;
-                }
                 let defaults = Self::agent_model_defaults().await;
                 let parent_model_id = if inherit_parent_model
                     || (model_id.is_none()
@@ -6943,7 +6861,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         request: SubagentExecutionRequest,
     ) -> BitFunResult<HiddenSubagentExecutionRequest> {
         let request = self
-            .resolve_hidden_subagent_execution_request(request, None)
+            .resolve_hidden_subagent_execution_request(request)
             .await?;
         self.prepare_hidden_subagent_execution_request(request)
             .await
@@ -6985,14 +6903,14 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
 
     fn register_background_subagent_task(
         &self,
-        background_task_id: String,
+        task_pk: i64,
         parent_session_id: String,
         subagent_session_id: String,
         cancel_target: BackgroundSubagentCancelTarget,
     ) -> Arc<AtomicBool> {
         let suppress_delivery = Arc::new(AtomicBool::new(false));
         self.background_subagent_tasks.insert(
-            background_task_id,
+            task_pk,
             BackgroundSubagentTaskControl {
                 parent_session_id,
                 subagent_session_id,
@@ -7006,36 +6924,16 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
     #[cfg(test)]
     pub(crate) fn register_background_subagent_task_for_test(
         &self,
-        background_task_id: &str,
+        task_pk: i64,
         parent_session_id: &str,
         subagent_session_id: &str,
     ) {
         self.register_background_subagent_task(
-            background_task_id.to_string(),
+            task_pk,
             parent_session_id.to_string(),
             subagent_session_id.to_string(),
             BackgroundSubagentCancelTarget::Direct(CancellationToken::new()),
         );
-    }
-
-    #[cfg(test)]
-    pub(crate) fn has_background_subagent_task_for_test(&self, background_task_id: &str) -> bool {
-        self.background_subagent_tasks
-            .contains_key(background_task_id)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn suppress_background_subagent_task_for_test(
-        &self,
-        background_task_id: &str,
-    ) -> bool {
-        self.background_subagent_tasks
-            .remove_if(background_task_id, |task_id, control| {
-                control.suppress_delivery.store(true, Ordering::SeqCst);
-                self.mark_background_subagent_delivery_suppression(task_id.clone());
-                true
-            })
-            .is_some()
     }
 
     pub(crate) async fn cancel_background_subagents_for_parent(
@@ -7043,21 +6941,19 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         parent_session_id: &str,
         subagent_session_id: &str,
     ) -> BitFunResult<usize> {
-        self.ensure_subagent_session_loaded_for_reuse(subagent_session_id, parent_session_id, None)
+        self.ensure_subagent_session_loaded_for_reuse(subagent_session_id, parent_session_id)
             .await?;
 
         let controls = self.claim_background_subagent_controls(|control| {
             control.parent_session_id == parent_session_id
                 && control.subagent_session_id == subagent_session_id
         });
-        let background_task_ids = controls
+        let task_pks = controls
             .iter()
-            .map(|(background_task_id, _)| background_task_id.clone())
+            .map(|(task_pk, _)| *task_pk)
             .collect::<Vec<_>>();
         let cancelled = self.cancel_background_subagent_controls(controls).await?;
-        self.background_subagent_outcomes
-            .cancel(&background_task_ids)
-            .await;
+        self.background_subagent_outcomes.cancel(&task_pks).await;
         Ok(cancelled)
     }
 
@@ -7072,96 +6968,75 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             .iter()
             .map(|(_, control)| control.subagent_session_id.clone())
             .collect::<Vec<_>>();
-        let background_task_ids = controls
+        let task_pks = controls
             .iter()
-            .map(|(background_task_id, _)| background_task_id.clone())
+            .map(|(task_pk, _)| *task_pk)
             .collect::<Vec<_>>();
         self.cancel_background_subagent_controls(controls).await?;
-        self.background_subagent_outcomes
-            .cancel(&background_task_ids)
-            .await;
+        self.background_subagent_outcomes.cancel(&task_pks).await;
         Ok(subagent_session_ids)
     }
 
     pub(crate) async fn wait_for_background_subagent_outcomes(
         &self,
         parent_session_id: &str,
-        parent_dialog_turn_id: &str,
-        background_task_ids: &[String],
+        bg_task_ids: &[String],
+        wait_mode: BackgroundSubagentWaitMode,
         timeout: Duration,
+        delivered_parent_dialog_turn_id: &str,
         cancellation_token: Option<&CancellationToken>,
     ) -> BitFunResult<BackgroundSubagentWaitResult> {
         self.background_subagent_outcomes
             .wait_for(
                 parent_session_id,
-                parent_dialog_turn_id,
-                background_task_ids,
+                bg_task_ids,
+                wait_mode,
                 timeout,
+                delivered_parent_dialog_turn_id,
                 cancellation_token,
             )
             .await
     }
 
-    pub(crate) fn take_background_subagent_delivery_suppression(
+    pub(crate) async fn agent_id_for_subagent_session(
         &self,
-        background_task_id: &str,
-    ) -> bool {
-        self.background_subagent_delivery_suppressions
-            .remove(background_task_id)
-            .is_some()
+        parent_session_id: &str,
+        subagent_session_id: &str,
+    ) -> BitFunResult<String> {
+        self.background_subagent_outcomes
+            .agent_id_for_session(parent_session_id, subagent_session_id)
+            .await
     }
 
-    pub(crate) fn mark_background_subagent_delivery_suppression(&self, background_task_id: String) {
-        self.background_subagent_delivery_suppressions
-            .insert(background_task_id, ());
-    }
-
-    pub(crate) fn finish_background_subagent_delivery(&self, background_task_id: &str) {
-        self.background_subagent_tasks.remove(background_task_id);
-        self.background_subagent_delivery_suppressions
-            .remove(background_task_id);
-    }
-
-    pub(crate) fn background_subagent_control_available_for_injection(
+    pub(crate) async fn resolve_agent_id(
         &self,
-        background_task_id: &str,
-    ) -> bool {
-        self.background_subagent_tasks
-            .get(background_task_id)
-            .is_some_and(|control| !control.suppress_delivery.load(Ordering::SeqCst))
-    }
-
-    pub(crate) fn claim_background_subagent_control_for_injection(
-        &self,
-        background_task_id: &str,
-    ) -> bool {
-        self.background_subagent_tasks
-            .remove_if(background_task_id, |_, control| {
-                !control.suppress_delivery.load(Ordering::SeqCst)
-            })
-            .is_some()
+        parent_session_id: &str,
+        agent_id: &str,
+    ) -> BitFunResult<String> {
+        self.background_subagent_outcomes
+            .resolve_agent_id(parent_session_id, agent_id)
+            .await
     }
 
     fn claim_background_subagent_controls(
         &self,
         matches: impl Fn(&BackgroundSubagentTaskControl) -> bool,
-    ) -> Vec<(String, BackgroundSubagentTaskControl)> {
+    ) -> Vec<(i64, BackgroundSubagentTaskControl)> {
         let candidate_ids = self
             .background_subagent_tasks
             .iter()
             .filter(|entry| matches(entry.value()))
-            .map(|entry| entry.key().clone())
+            .map(|entry| *entry.key())
             .collect::<Vec<_>>();
         candidate_ids
             .into_iter()
-            .filter_map(|background_task_id| {
+            .filter_map(|task_pk| {
                 self.background_subagent_tasks
-                    .remove_if(&background_task_id, |task_id, control| {
+                    .remove_if(&task_pk, |_task_pk, control| {
                         if !matches(control) {
                             return false;
                         }
                         control.suppress_delivery.store(true, Ordering::SeqCst);
-                        self.mark_background_subagent_delivery_suppression(task_id.clone());
                         true
                     })
             })
@@ -7170,12 +7045,12 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
 
     async fn cancel_background_subagent_controls(
         &self,
-        controls: Vec<(String, BackgroundSubagentTaskControl)>,
+        controls: Vec<(i64, BackgroundSubagentTaskControl)>,
     ) -> BitFunResult<usize> {
-        for (background_task_id, control) in &controls {
+        for (task_pk, control) in &controls {
             debug!(
-                "Cancelling background subagent task: background_task_id={}, parent_session_id={}, subagent_session_id={}",
-                background_task_id, control.parent_session_id, control.subagent_session_id
+                "Cancelling background subagent task: task_pk={}, parent_session_id={}, subagent_session_id={}",
+                task_pk, control.parent_session_id, control.subagent_session_id
             );
             match &control.cancel_target {
                 BackgroundSubagentCancelTarget::Scheduler(handle) => {
@@ -7183,8 +7058,8 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                         scheduler.request_hidden_subagent_cancellation(handle).await;
                     } else {
                         warn!(
-                            "Cannot cancel scheduler-backed background subagent because scheduler is unavailable: background_task_id={}, subagent_session_id={}",
-                            background_task_id, control.subagent_session_id
+                            "Cannot cancel scheduler-backed background subagent because scheduler is unavailable: task_pk={}, subagent_session_id={}",
+                            task_pk, control.subagent_session_id
                         );
                     }
                 }
@@ -7297,7 +7172,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         timeout_seconds: Option<u64>,
     ) -> BitFunResult<BackgroundSubagentStartResult> {
         let request = self
-            .resolve_hidden_subagent_execution_request(request, None)
+            .resolve_hidden_subagent_execution_request(request)
             .await?;
         let mut request = self
             .prepare_hidden_subagent_execution_request(request)
@@ -7311,7 +7186,6 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                 )
             })?
             .to_string();
-        let logical_agent_type = request.logical_agent_type.clone();
         let subagent_parent_info = match request.subagent_parent_info.clone() {
             Some(info) => info,
             None => {
@@ -7337,9 +7211,6 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                 )));
             }
         };
-        let background_task_id = format!("bg-subagent-{}", uuid::Uuid::new_v4());
-        let background_task_id_for_delivery = background_task_id.clone();
-        let task_description = request.user_input_text.clone();
         let coordinator = match get_global_coordinator() {
             Some(coordinator) => coordinator,
             None => {
@@ -7350,23 +7221,28 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                 ));
             }
         };
-        if let Err(error) = self
+        let registered_task = match self
             .background_subagent_outcomes
-            .register(BackgroundSubagentOutcome::running(
-                background_task_id.clone(),
-                subagent_parent_info.session_id.clone(),
-                subagent_parent_info.dialog_turn_id.clone(),
-                subagent_session_id.clone(),
-                subagent_dialog_turn_id.clone(),
-                logical_agent_type.clone(),
-                task_description.clone(),
-            ))
+            .register(BackgroundTaskRegistration {
+                parent_session_id: subagent_parent_info.session_id.clone(),
+                requested_agent_id: None,
+                child_session_id: subagent_session_id.clone(),
+                parent_dialog_turn_id: subagent_parent_info.dialog_turn_id.clone(),
+                parent_tool_call_id: subagent_parent_info.tool_call_id.clone(),
+                child_dialog_turn_id: subagent_dialog_turn_id.clone(),
+            })
             .await
         {
-            self.cleanup_prepared_hidden_subagent_session_if_unsubmitted(&request)
-                .await;
-            return Err(error);
-        }
+            Ok(registered_task) => registered_task,
+            Err(error) => {
+                self.cleanup_prepared_hidden_subagent_session_if_unsubmitted(&request)
+                    .await;
+                return Err(error);
+            }
+        };
+        let task_pk = registered_task.task_pk;
+        let bg_task_id = registered_task.bg_task_id;
+        let agent_id = registered_task.agent_id;
         let parent_cancel_token = self
             .execution_engine
             .cancel_token_for_dialog_turn(&subagent_parent_info.dialog_turn_id)
@@ -7379,9 +7255,14 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             {
                 Ok(submit_result) => submit_result,
                 Err(error) => {
-                    self.background_subagent_outcomes
-                        .cancel(std::slice::from_ref(&background_task_id))
-                        .await;
+                    if let Err(discard_error) =
+                        self.background_subagent_outcomes.discard(task_pk).await
+                    {
+                        warn!(
+                            "Failed to discard unsubmitted background task: task_pk={}, error={}",
+                            task_pk, discard_error
+                        );
+                    }
                     self.cleanup_prepared_hidden_subagent_session_if_unsubmitted(&request)
                         .await;
                     return Err(BitFunError::tool(error));
@@ -7391,14 +7272,12 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             let cancel_handle = submit_result.cancel_handle.clone();
             let scheduler_for_cancel = scheduler.clone();
             let suppress_delivery = self.register_background_subagent_task(
-                background_task_id.clone(),
+                task_pk,
                 subagent_parent_info.session_id.clone(),
                 subagent_session_id.clone(),
                 BackgroundSubagentCancelTarget::Scheduler(cancel_handle.clone()),
             );
             let background_subagent_tasks = self.background_subagent_tasks.clone();
-            let background_delivery_suppressions =
-                self.background_subagent_delivery_suppressions.clone();
             let background_subagent_outcomes = self.background_subagent_outcomes.clone();
 
             tokio::spawn(async move {
@@ -7422,35 +7301,23 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                     None => Self::await_hidden_subagent_receiver(receiver).await,
                 };
                 if suppress_delivery.load(Ordering::SeqCst) {
-                    background_subagent_tasks.remove(&background_task_id_for_delivery);
-                    background_delivery_suppressions.remove(&background_task_id_for_delivery);
+                    background_subagent_tasks.remove(&task_pk);
                     debug!(
-                        "Suppressing cancelled background subagent result delivery: background_task_id={}, parent_session_id={}",
-                        background_task_id_for_delivery, subagent_parent_info.session_id
-                    );
-                    return;
-                }
-
-                if suppress_delivery.load(Ordering::SeqCst) {
-                    background_subagent_tasks.remove(&background_task_id_for_delivery);
-                    background_delivery_suppressions.remove(&background_task_id_for_delivery);
-                    debug!(
-                        "Suppressing cancelled background subagent result delivery: background_task_id={}, parent_session_id={}",
-                        background_task_id_for_delivery, subagent_parent_info.session_id
+                        "Suppressing cancelled background subagent result delivery: task_pk={}, parent_session_id={}",
+                        task_pk, subagent_parent_info.session_id
                     );
                     return;
                 }
 
                 background_subagent_outcomes
-                    .complete(&background_task_id_for_delivery, result.as_ref())
+                    .complete(task_pk, result.as_ref())
                     .await;
-                background_subagent_tasks.remove(&background_task_id_for_delivery);
-                background_delivery_suppressions.remove(&background_task_id_for_delivery);
+                background_subagent_tasks.remove(&task_pk);
             });
 
             return Ok(BackgroundSubagentStartResult {
-                background_task_id,
-                session_id: subagent_session_id,
+                bg_task_id,
+                agent_id,
             });
         }
 
@@ -7475,14 +7342,12 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             }),
         };
         let suppress_delivery = self.register_background_subagent_task(
-            background_task_id.clone(),
+            task_pk,
             subagent_parent_info.session_id.clone(),
             subagent_session_id.clone(),
             BackgroundSubagentCancelTarget::Direct(background_cancel_token),
         );
         let background_subagent_tasks = self.background_subagent_tasks.clone();
-        let background_delivery_suppressions =
-            self.background_subagent_delivery_suppressions.clone();
         let background_subagent_outcomes = self.background_subagent_outcomes.clone();
 
         tokio::spawn(async move {
@@ -7495,35 +7360,23 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                 .await;
             cancel_bridge_handle.abort();
             if suppress_delivery.load(Ordering::SeqCst) {
-                background_subagent_tasks.remove(&background_task_id_for_delivery);
-                background_delivery_suppressions.remove(&background_task_id_for_delivery);
+                background_subagent_tasks.remove(&task_pk);
                 debug!(
-                    "Suppressing cancelled background subagent result delivery: background_task_id={}, parent_session_id={}",
-                    background_task_id_for_delivery, subagent_parent_info.session_id
-                );
-                return;
-            }
-
-            if suppress_delivery.load(Ordering::SeqCst) {
-                background_subagent_tasks.remove(&background_task_id_for_delivery);
-                background_delivery_suppressions.remove(&background_task_id_for_delivery);
-                debug!(
-                    "Suppressing cancelled background subagent result delivery: background_task_id={}, parent_session_id={}",
-                    background_task_id_for_delivery, subagent_parent_info.session_id
+                    "Suppressing cancelled background subagent result delivery: task_pk={}, parent_session_id={}",
+                    task_pk, subagent_parent_info.session_id
                 );
                 return;
             }
 
             background_subagent_outcomes
-                .complete(&background_task_id_for_delivery, result.as_ref())
+                .complete(task_pk, result.as_ref())
                 .await;
-            background_subagent_tasks.remove(&background_task_id_for_delivery);
-            background_delivery_suppressions.remove(&background_task_id_for_delivery);
+            background_subagent_tasks.remove(&task_pk);
         });
 
         Ok(BackgroundSubagentStartResult {
-            background_task_id,
-            session_id: subagent_session_id,
+            bg_task_id,
+            agent_id,
         })
     }
 
@@ -8658,13 +8511,14 @@ mod tests {
         merge_prepended_messages_for_turn, normalize_subagent_max_concurrency,
         resolve_agent_session_create_created_by, resolve_agent_submission_turn_id,
         resolve_subagent_model_selection, runtime_port_error_preserving_message,
-        should_require_tool_confirmation, turn_review_manifest_for_agent,
-        validate_background_subagent_delivery, BackgroundSubagentOutcome, ConversationCoordinator,
+        turn_review_manifest_for_agent, BackgroundSubagentWaitMode, ConversationCoordinator,
         SubagentExecutionRequest, TEST_AGENT_MODEL_DEFAULTS,
     };
-    use crate::agentic::agents::{CustomSubagent, CustomSubagentKind, UserContextPolicy};
+    use crate::agentic::coordination::coordination_store::{
+        BackgroundTaskRegistration, RegisteredBackgroundTask,
+    };
     use crate::agentic::core::{
-        InternalReminderKind, Message, MessageContent, MessageRole, MessageSemanticKind, Session,
+        InternalReminderKind, Message, MessageContent, MessageRole, MessageSemanticKind,
         SessionConfig, SessionContinuationPolicy, SessionKind, SessionModelBindingPolicy,
     };
     use crate::agentic::events::{EventQueue, EventQueueConfig, EventRouter};
@@ -8692,9 +8546,8 @@ mod tests {
         AgentSessionArchiveRequest, AgentSessionCreateRequest, AgentSessionManagementPort,
         AgentSessionRenameRequest, AgentSubmissionPort, AgentSubmissionRequest,
         AgentSubmissionSource, AgentThreadGoalGetRequest, AgentThreadGoalManagementPort,
-        DelegationPolicy, DialogQueuePriority, DialogSubmissionPolicy, PermissionEffect,
-        PermissionRule, PermissionRuntimeCeiling, SubagentContextMode, ThreadGoal,
-        ThreadGoalStatus,
+        DelegationPolicy, PermissionEffect, PermissionRule, PermissionRuntimeCeiling,
+        SubagentContextMode, ThreadGoal, ThreadGoalStatus,
     };
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -8996,6 +8849,9 @@ mod tests {
         max_active_sessions: usize,
     ) -> (ConversationCoordinator, Arc<SessionManager>) {
         let event_queue = Arc::new(EventQueue::new(EventQueueConfig::default()));
+        let coordination_database_file = std::env::temp_dir()
+            .join(format!("bitfun-coordinator-test-{}", uuid::Uuid::new_v4()))
+            .join("coordination.sqlite");
         let session_manager = Arc::new(SessionManager::new(
             Arc::new(SessionContextStore::new()),
             Arc::new(
@@ -9026,12 +8882,13 @@ mod tests {
             Arc::new(ContextCompressor::new(CompressionConfig::default())),
             ExecutionEngineConfig::default(),
         ));
-        let coordinator = ConversationCoordinator::new(
+        let coordinator = ConversationCoordinator::new_with_coordination_database_file(
             session_manager.clone(),
             execution_engine,
             tool_pipeline,
             event_queue,
             Arc::new(EventRouter::new()),
+            coordination_database_file,
         );
         coordinator.set_terminal_port(
             bitfun_runtime_services::test_support::FakeRuntimeServicesProvider::terminal_port(),
@@ -9047,6 +8904,26 @@ mod tests {
         test_coordinator_with_max_active_sessions(100)
     }
 
+    async fn register_test_background_task(
+        coordinator: &ConversationCoordinator,
+        parent_session_id: &str,
+        parent_dialog_turn_id: &str,
+        child_session_id: &str,
+    ) -> RegisteredBackgroundTask {
+        coordinator
+            .background_subagent_outcomes
+            .register(BackgroundTaskRegistration {
+                parent_session_id: parent_session_id.to_string(),
+                requested_agent_id: None,
+                child_session_id: child_session_id.to_string(),
+                parent_dialog_turn_id: parent_dialog_turn_id.to_string(),
+                parent_tool_call_id: format!("tool-{child_session_id}"),
+                child_dialog_turn_id: format!("turn-{child_session_id}"),
+            })
+            .await
+            .expect("register background task")
+    }
+
     #[test]
     fn conversation_coordinator_exposes_remote_runtime_ports() {
         fn assert_cancellation_port<T: bitfun_runtime_ports::AgentTurnCancellationPort>() {}
@@ -9054,43 +8931,6 @@ mod tests {
 
         assert_cancellation_port::<ConversationCoordinator>();
         assert_state_port::<ConversationCoordinator>();
-    }
-
-    #[test]
-    fn local_cli_confirmation_override_excludes_acp_transport() {
-        let policy = DialogSubmissionPolicy::new(
-            AgentSubmissionSource::Cli,
-            DialogQueuePriority::Normal,
-            false,
-        );
-
-        assert!(should_require_tool_confirmation(policy, None));
-        assert!(!should_require_tool_confirmation(
-            policy,
-            Some(&serde_json::json!({ "acp_transport": true })),
-        ));
-    }
-
-    #[test]
-    fn peer_metadata_can_only_strengthen_tool_confirmation() {
-        let desktop_policy = DialogSubmissionPolicy::new(
-            AgentSubmissionSource::DesktopUi,
-            DialogQueuePriority::Normal,
-            false,
-        );
-        let peer_metadata = serde_json::json!({ "require_tool_confirmation": true });
-
-        assert!(should_require_tool_confirmation(
-            desktop_policy,
-            Some(&peer_metadata)
-        ));
-        assert!(!should_require_tool_confirmation(
-            desktop_policy,
-            Some(&serde_json::json!({
-                "require_tool_confirmation": true,
-                "acp_transport": true,
-            }))
-        ));
     }
 
     #[test]
@@ -9113,32 +8953,28 @@ mod tests {
     #[tokio::test]
     async fn background_subagent_outcome_is_consumed_only_by_agent_wait() {
         let (coordinator, _) = test_coordinator();
-        let background_task_id = "background-task".to_string();
-        coordinator
-            .background_subagent_outcomes
-            .register(BackgroundSubagentOutcome::running(
-                background_task_id.clone(),
-                "parent-session".to_string(),
-                "parent-turn".to_string(),
-                "subagent-session".to_string(),
-                "subagent-turn".to_string(),
-                "GeneralPurpose".to_string(),
-                "Inspect implementation".to_string(),
-            ))
-            .await
-            .expect("register outcome");
+        let registered = register_test_background_task(
+            &coordinator,
+            "parent-session",
+            "parent-turn",
+            "subagent-session",
+        )
+        .await;
+        assert_eq!(registered.agent_id, "a1");
+        assert_eq!(registered.bg_task_id, "a1_bg1");
         let completed = super::SubagentResult::completed("done".to_string());
         coordinator
             .background_subagent_outcomes
-            .complete(&background_task_id, Ok(&completed))
+            .complete(registered.task_pk, Ok(&completed))
             .await;
 
         let result = coordinator
             .wait_for_background_subagent_outcomes(
                 "parent-session",
-                "parent-turn",
-                std::slice::from_ref(&background_task_id),
+                std::slice::from_ref(&registered.bg_task_id),
+                BackgroundSubagentWaitMode::All,
                 Duration::from_millis(10),
+                "wait-turn-1",
                 None,
             )
             .await
@@ -9147,14 +8983,17 @@ mod tests {
         assert_eq!(result.status.as_str(), "completed");
         assert_eq!(result.outcomes.len(), 1);
         assert_eq!(result.outcomes[0].content.as_deref(), Some("done"));
-        assert!(result.pending_background_task_ids.is_empty());
+        assert_eq!(result.outcomes[0].model_bg_task_id(), "a1_bg1");
+        assert_eq!(result.outcomes[0].model_agent_id(), "a1");
+        assert!(result.pending_bg_task_ids.is_empty());
 
         let second = coordinator
             .wait_for_background_subagent_outcomes(
                 "parent-session",
-                "parent-turn",
-                std::slice::from_ref(&background_task_id),
+                std::slice::from_ref(&registered.bg_task_id),
+                BackgroundSubagentWaitMode::All,
                 Duration::from_millis(10),
+                "wait-turn-2",
                 None,
             )
             .await
@@ -9164,29 +9003,283 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn agent_wait_timeout_keeps_background_outcome_pending_without_follow_up() {
+    async fn model_facing_subagent_ids_are_stable_and_parent_scoped() {
         let (coordinator, _) = test_coordinator();
-        let background_task_id = "background-task-timeout".to_string();
+
+        let first_agent = coordinator
+            .agent_id_for_subagent_session("parent-1", "subagent-session-1")
+            .await
+            .expect("allocate first agent id");
+        let repeated_agent = coordinator
+            .agent_id_for_subagent_session("parent-1", "subagent-session-1")
+            .await
+            .expect("reuse first agent id");
+        let second_agent = coordinator
+            .agent_id_for_subagent_session("parent-1", "subagent-session-2")
+            .await
+            .expect("allocate second agent id");
+        let other_parent_agent = coordinator
+            .agent_id_for_subagent_session("parent-2", "subagent-session-3")
+            .await
+            .expect("allocate agent id for another parent");
+
+        assert_eq!(first_agent, "a1");
+        assert_eq!(repeated_agent, "a1");
+        assert_eq!(second_agent, "a2");
+        assert_eq!(other_parent_agent, "a1");
+        assert_eq!(
+            coordinator
+                .resolve_agent_id("parent-1", "a2")
+                .await
+                .expect("resolve agent id"),
+            "subagent-session-2"
+        );
+
+        let first_bg_task = register_test_background_task(
+            &coordinator,
+            "parent-1",
+            "parent-turn-1",
+            "subagent-session-1",
+        )
+        .await;
+        let second_bg_task = register_test_background_task(
+            &coordinator,
+            "parent-1",
+            "parent-turn-2",
+            "subagent-session-1",
+        )
+        .await;
+        assert_eq!(first_bg_task.bg_task_id, "a1_bg1");
+        assert_eq!(second_bg_task.bg_task_id, "a1_bg2");
+
+        let custom = coordinator
+            .background_subagent_outcomes
+            .register(BackgroundTaskRegistration {
+                parent_session_id: "parent-1".to_string(),
+                requested_agent_id: Some("reviewer".to_string()),
+                child_session_id: "reviewer-session".to_string(),
+                parent_dialog_turn_id: "parent-turn-3".to_string(),
+                parent_tool_call_id: "tool-reviewer".to_string(),
+                child_dialog_turn_id: "turn-reviewer".to_string(),
+            })
+            .await
+            .expect("register caller-named agent");
+        assert_eq!(custom.agent_id, "reviewer");
+        assert_eq!(custom.bg_task_id, "reviewer_bg1");
+        assert_eq!(
+            coordinator
+                .resolve_agent_id("parent-1", "reviewer")
+                .await
+                .expect("resolve caller-named agent"),
+            "reviewer-session"
+        );
+    }
+
+    #[tokio::test]
+    async fn agent_wait_without_task_ids_collects_unconsumed_session_outcomes() {
+        let (coordinator, _) = test_coordinator();
+        let registered = register_test_background_task(
+            &coordinator,
+            "parent-session",
+            "earlier-parent-turn",
+            "subagent-session",
+        )
+        .await;
+        let completed = super::SubagentResult::completed("done".to_string());
         coordinator
             .background_subagent_outcomes
-            .register(BackgroundSubagentOutcome::running(
-                background_task_id.clone(),
-                "parent-session".to_string(),
-                "parent-turn".to_string(),
-                "subagent-session".to_string(),
-                "subagent-turn".to_string(),
-                "GeneralPurpose".to_string(),
-                "Inspect implementation".to_string(),
-            ))
-            .await
-            .expect("register outcome");
+            .complete(registered.task_pk, Ok(&completed))
+            .await;
 
         let result = coordinator
             .wait_for_background_subagent_outcomes(
                 "parent-session",
-                "parent-turn",
-                std::slice::from_ref(&background_task_id),
+                &[],
+                BackgroundSubagentWaitMode::Any,
+                Duration::from_millis(10),
+                "wait-turn",
+                None,
+            )
+            .await
+            .expect("AgentWait should collect a prior-turn outcome in the same session");
+
+        assert_eq!(result.status.as_str(), "completed");
+        assert_eq!(result.outcomes.len(), 1);
+        assert_eq!(result.outcomes[0].bg_task_id, registered.bg_task_id);
+        assert!(result.pending_bg_task_ids.is_empty());
+    }
+
+    #[tokio::test]
+    async fn agent_wait_all_times_out_with_returned_partial_results() {
+        let (coordinator, _) = test_coordinator();
+        let completed_task = register_test_background_task(
+            &coordinator,
+            "parent-session",
+            "parent-turn",
+            "subagent-session-completed",
+        )
+        .await;
+        let pending_task = register_test_background_task(
+            &coordinator,
+            "parent-session",
+            "parent-turn",
+            "subagent-session-pending",
+        )
+        .await;
+        let completed = super::SubagentResult::completed("done".to_string());
+        coordinator
+            .background_subagent_outcomes
+            .complete(completed_task.task_pk, Ok(&completed))
+            .await;
+
+        let result = coordinator
+            .wait_for_background_subagent_outcomes(
+                "parent-session",
+                &[],
+                BackgroundSubagentWaitMode::All,
                 Duration::from_millis(1),
+                "wait-turn-1",
+                None,
+            )
+            .await
+            .expect("all selector timeout should return partial results");
+
+        assert_eq!(result.status.as_str(), "timed_out");
+        assert_eq!(result.outcomes.len(), 1);
+        assert_eq!(result.outcomes[0].bg_task_id, completed_task.bg_task_id);
+        assert_eq!(result.pending_bg_task_ids, vec![pending_task.bg_task_id]);
+
+        let retry = coordinator
+            .wait_for_background_subagent_outcomes(
+                "parent-session",
+                std::slice::from_ref(&completed_task.bg_task_id),
+                BackgroundSubagentWaitMode::All,
+                Duration::from_millis(10),
+                "wait-turn-2",
+                None,
+            )
+            .await
+            .expect("returned results should be consumed");
+        assert_eq!(retry.status.as_str(), "no_matching_tasks");
+    }
+
+    #[tokio::test]
+    async fn agent_wait_any_returns_partial_results_after_debounce() {
+        let (coordinator, _) = test_coordinator();
+        let completed_task = register_test_background_task(
+            &coordinator,
+            "parent-session",
+            "parent-turn",
+            "subagent-session-completed",
+        )
+        .await;
+        let pending_task = register_test_background_task(
+            &coordinator,
+            "parent-session",
+            "parent-turn",
+            "subagent-session-pending",
+        )
+        .await;
+        let completed = super::SubagentResult::completed("done".to_string());
+        coordinator
+            .background_subagent_outcomes
+            .complete(completed_task.task_pk, Ok(&completed))
+            .await;
+
+        let result = coordinator
+            .wait_for_background_subagent_outcomes(
+                "parent-session",
+                &[],
+                BackgroundSubagentWaitMode::Any,
+                Duration::from_secs(6),
+                "wait-turn",
+                None,
+            )
+            .await
+            .expect("any selector should return after the result debounce");
+
+        assert_eq!(result.status.as_str(), "completed");
+        assert_eq!(result.outcomes.len(), 1);
+        assert_eq!(result.outcomes[0].bg_task_id, completed_task.bg_task_id);
+        assert_eq!(result.pending_bg_task_ids, vec![pending_task.bg_task_id]);
+    }
+
+    #[tokio::test]
+    async fn cancelled_agent_wait_keeps_collected_outcomes_available() {
+        let (coordinator, _) = test_coordinator();
+        let completed_task = register_test_background_task(
+            &coordinator,
+            "parent-session",
+            "parent-turn",
+            "subagent-session-completed",
+        )
+        .await;
+        let pending_task = register_test_background_task(
+            &coordinator,
+            "parent-session",
+            "parent-turn",
+            "subagent-session-pending",
+        )
+        .await;
+        let completed = super::SubagentResult::completed("done".to_string());
+        coordinator
+            .background_subagent_outcomes
+            .complete(completed_task.task_pk, Ok(&completed))
+            .await;
+
+        let cancellation = tokio_util::sync::CancellationToken::new();
+        cancellation.cancel();
+        let requested_task_ids = vec![
+            completed_task.bg_task_id.clone(),
+            pending_task.bg_task_id.clone(),
+        ];
+        let error = coordinator
+            .wait_for_background_subagent_outcomes(
+                "parent-session",
+                &requested_task_ids,
+                BackgroundSubagentWaitMode::All,
+                Duration::from_secs(10),
+                "cancelled-wait-turn",
+                Some(&cancellation),
+            )
+            .await
+            .expect_err("cancelled AgentWait should not return a partial result");
+        assert!(error.to_string().contains("AgentWait was cancelled"));
+
+        let retry = coordinator
+            .wait_for_background_subagent_outcomes(
+                "parent-session",
+                std::slice::from_ref(&completed_task.bg_task_id),
+                BackgroundSubagentWaitMode::All,
+                Duration::from_millis(10),
+                "retry-wait-turn",
+                None,
+            )
+            .await
+            .expect("a cancelled wait must not consume the completed outcome");
+
+        assert_eq!(retry.outcomes.len(), 1);
+        assert_eq!(retry.outcomes[0].bg_task_id, completed_task.bg_task_id);
+    }
+
+    #[tokio::test]
+    async fn agent_wait_timeout_keeps_background_outcome_pending_without_follow_up() {
+        let (coordinator, _) = test_coordinator();
+        let registered = register_test_background_task(
+            &coordinator,
+            "parent-session",
+            "parent-turn",
+            "subagent-session",
+        )
+        .await;
+
+        let result = coordinator
+            .wait_for_background_subagent_outcomes(
+                "parent-session",
+                std::slice::from_ref(&registered.bg_task_id),
+                BackgroundSubagentWaitMode::All,
+                Duration::from_millis(1),
+                "wait-turn",
                 None,
             )
             .await
@@ -9194,7 +9287,7 @@ mod tests {
 
         assert_eq!(result.status.as_str(), "timed_out");
         assert!(result.outcomes.is_empty());
-        assert_eq!(result.pending_background_task_ids, vec![background_task_id]);
+        assert_eq!(result.pending_bg_task_ids, vec![registered.bg_task_id]);
     }
 
     #[test]
@@ -9216,68 +9309,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn completed_background_control_cannot_be_claimed_for_late_cancellation() {
-        let (coordinator, _) = test_coordinator();
-        coordinator.register_background_subagent_task(
-            "background-task".to_string(),
-            "parent-session".to_string(),
-            "subagent-session".to_string(),
-            super::BackgroundSubagentCancelTarget::Direct(
-                tokio_util::sync::CancellationToken::new(),
-            ),
-        );
-        coordinator.finish_background_subagent_delivery("background-task");
-
-        let claimed = coordinator.claim_background_subagent_controls(|control| {
-            control.parent_session_id == "parent-session"
-                && control.subagent_session_id == "subagent-session"
-        });
-
-        assert!(claimed.is_empty());
-        assert!(!coordinator.take_background_subagent_delivery_suppression("background-task"));
-    }
-
-    #[tokio::test]
-    async fn injection_and_cancellation_claim_the_same_background_control_once() {
-        let (coordinator, _) = test_coordinator();
-        coordinator.register_background_subagent_task(
-            "delivery-wins".to_string(),
-            "parent-session".to_string(),
-            "subagent-session".to_string(),
-            super::BackgroundSubagentCancelTarget::Direct(
-                tokio_util::sync::CancellationToken::new(),
-            ),
-        );
-        assert!(coordinator.claim_background_subagent_control_for_injection("delivery-wins"));
-        assert!(coordinator
-            .claim_background_subagent_controls(|control| {
-                control.parent_session_id == "parent-session"
-                    && control.subagent_session_id == "subagent-session"
-            })
-            .is_empty());
-
-        coordinator.register_background_subagent_task(
-            "cancellation-wins".to_string(),
-            "parent-session".to_string(),
-            "subagent-session".to_string(),
-            super::BackgroundSubagentCancelTarget::Direct(
-                tokio_util::sync::CancellationToken::new(),
-            ),
-        );
-        assert_eq!(
-            coordinator
-                .claim_background_subagent_controls(|control| {
-                    control.parent_session_id == "parent-session"
-                        && control.subagent_session_id == "subagent-session"
-                })
-                .len(),
-            1
-        );
-        assert!(!coordinator.claim_background_subagent_control_for_injection("cancellation-wins"));
-        assert!(coordinator.take_background_subagent_delivery_suppression("cancellation-wins"));
-    }
-
-    #[tokio::test]
     async fn coordinator_test_fixture_injects_terminal_port() {
         let (coordinator, _) = test_coordinator();
 
@@ -9290,468 +9321,6 @@ mod tests {
         assert_eq!(normalize_subagent_max_concurrency(0), 1);
         assert_eq!(normalize_subagent_max_concurrency(5), 5);
         assert_eq!(normalize_subagent_max_concurrency(usize::MAX), 64);
-    }
-
-    #[tokio::test]
-    async fn review_background_delivery_requires_explicit_follow_up_permission() {
-        let error = validate_background_subagent_delivery("CodeReview", None, false)
-            .await
-            .expect_err("review background delivery should require explicit follow-up permission");
-
-        assert!(error.to_string().contains("one final review"));
-        assert!(error.to_string().contains("allow_review_follow_up=true"));
-        assert!(
-            validate_background_subagent_delivery("CodeReview", None, true)
-                .await
-                .is_ok()
-        );
-    }
-
-    #[tokio::test]
-    async fn explicit_review_follow_up_allows_fresh_background_resolution() {
-        let (coordinator, _) = test_coordinator();
-        let workspace_path = std::env::temp_dir().join(format!(
-            "bitfun-review-follow-up-fresh-test-{}",
-            uuid::Uuid::new_v4()
-        ));
-        std::fs::create_dir_all(&workspace_path).expect("workspace dir should exist");
-        let request = SubagentExecutionRequest {
-            task_description: "Review the current diff later".to_string(),
-            context_mode: SubagentContextMode::Fresh,
-            target_session_id: None,
-            subagent_type: Some("CodeReview".to_string()),
-            logical_subagent_type: None,
-            continuation_policy: SessionContinuationPolicy::Reusable,
-            model_binding_policy: SessionModelBindingPolicy::Mutable,
-            workspace_path: Some(workspace_path.to_string_lossy().into_owned()),
-            model_id: None,
-            inherit_parent_model: false,
-            subagent_parent_info: SubagentParentInfo {
-                session_id: "parent-session".to_string(),
-                dialog_turn_id: "parent-turn".to_string(),
-                tool_call_id: "task-tool".to_string(),
-            },
-            context: HashMap::from([(
-                AUTO_APPROVE_ASK_CONTEXT_KEY.to_string(),
-                "true".to_string(),
-            )]),
-            permission_runtime_ceiling: PermissionRuntimeCeiling::default(),
-            delegation_policy: DelegationPolicy::top_level().spawn_child(),
-            external_generation_lease: None,
-        };
-
-        let resolved = coordinator
-            .resolve_hidden_subagent_execution_request(request, Some(true))
-            .await
-            .expect("explicit review follow-up should resolve a fresh background request");
-
-        assert_eq!(resolved.agent_type, "CodeReview");
-        assert!(resolved.target_session_id.is_none());
-        assert_eq!(
-            resolved
-                .context
-                .get(AUTO_APPROVE_ASK_CONTEXT_KEY)
-                .map(String::as_str),
-            Some("true")
-        );
-        let _ = std::fs::remove_dir_all(workspace_path);
-    }
-
-    #[tokio::test]
-    async fn explicit_review_follow_up_allows_reused_background_resolution() {
-        let (coordinator, _) = test_coordinator();
-        let workspace_path = std::env::temp_dir().join(format!(
-            "bitfun-review-follow-up-reuse-test-{}",
-            uuid::Uuid::new_v4()
-        ));
-        std::fs::create_dir_all(&workspace_path).expect("workspace dir should exist");
-        let review_session = coordinator
-            .create_hidden_agent_session(
-                None,
-                "Reusable review".to_string(),
-                "CodeReview".to_string(),
-                SessionConfig {
-                    workspace_path: Some(workspace_path.to_string_lossy().into_owned()),
-                    ..Default::default()
-                },
-                Some("session-parent-session".to_string()),
-                SessionKind::Subagent,
-            )
-            .await
-            .expect("review session should be created");
-        let request = SubagentExecutionRequest {
-            task_description: "Continue the review later".to_string(),
-            context_mode: SubagentContextMode::Fresh,
-            target_session_id: Some(review_session.session_id.clone()),
-            subagent_type: None,
-            logical_subagent_type: None,
-            continuation_policy: SessionContinuationPolicy::Reusable,
-            model_binding_policy: SessionModelBindingPolicy::Mutable,
-            workspace_path: None,
-            model_id: None,
-            inherit_parent_model: false,
-            subagent_parent_info: SubagentParentInfo {
-                session_id: "parent-session".to_string(),
-                dialog_turn_id: "parent-turn".to_string(),
-                tool_call_id: "task-tool".to_string(),
-            },
-            context: HashMap::new(),
-            permission_runtime_ceiling: PermissionRuntimeCeiling::default(),
-            delegation_policy: DelegationPolicy::top_level().spawn_child(),
-            external_generation_lease: None,
-        };
-
-        let resolved = coordinator
-            .resolve_hidden_subagent_execution_request(request, Some(true))
-            .await
-            .expect("explicit review follow-up should resolve a reused background request");
-
-        assert_eq!(
-            resolved.target_session_id.as_deref(),
-            Some(review_session.session_id.as_str())
-        );
-        let _ = std::fs::remove_dir_all(workspace_path);
-    }
-
-    #[tokio::test]
-    async fn non_review_background_delivery_preserves_existing_behavior() {
-        assert!(
-            validate_background_subagent_delivery("GeneralPurpose", None, false)
-                .await
-                .is_ok()
-        );
-        assert!(
-            validate_background_subagent_delivery("ReviewFixer", None, false)
-                .await
-                .is_ok()
-        );
-    }
-
-    #[tokio::test]
-    async fn continued_review_session_cannot_run_in_background_implicitly() {
-        let (coordinator, session_manager) = test_coordinator();
-        let review_session = coordinator
-            .create_hidden_agent_session(
-                None,
-                "Reusable review".to_string(),
-                "CodeReview".to_string(),
-                SessionConfig {
-                    model_id: Some("primary".to_string()),
-                    workspace_path: Some(std::env::temp_dir().to_string_lossy().into_owned()),
-                    ..Default::default()
-                },
-                Some("session-parent-session".to_string()),
-                SessionKind::Subagent,
-            )
-            .await
-            .expect("review session should be created");
-        let request = SubagentExecutionRequest {
-            task_description: "Continue reviewing the current diff".to_string(),
-            context_mode: SubagentContextMode::Fresh,
-            target_session_id: Some(review_session.session_id.clone()),
-            subagent_type: None,
-            workspace_path: None,
-            model_id: Some("fast".to_string()),
-            subagent_parent_info: SubagentParentInfo {
-                session_id: "parent-session".to_string(),
-                dialog_turn_id: "parent-turn".to_string(),
-                tool_call_id: "task-tool".to_string(),
-            },
-            context: HashMap::new(),
-            permission_runtime_ceiling: PermissionRuntimeCeiling::default(),
-            delegation_policy: DelegationPolicy::top_level().spawn_child(),
-        };
-
-        let error = coordinator
-            .start_background_subagent(request, None, false)
-            .await
-            .expect_err(
-                "continued review should not run in the background without explicit intent",
-            );
-
-        assert!(error.to_string().contains("one final review"));
-        assert!(error.to_string().contains("allow_review_follow_up=true"));
-        assert_eq!(
-            session_manager
-                .get_session(&review_session.session_id)
-                .expect("review session should remain available")
-                .config
-                .model_id
-                .as_deref(),
-            Some("primary"),
-            "rejected delivery must not mutate the review session model"
-        );
-    }
-
-    #[tokio::test]
-    async fn cold_review_session_is_rejected_before_full_restore() {
-        let (coordinator, session_manager) = test_coordinator();
-        let workspace_path = std::env::temp_dir().join(format!(
-            "bitfun-cold-review-background-test-{}",
-            uuid::Uuid::new_v4()
-        ));
-        std::fs::create_dir_all(&workspace_path).expect("workspace dir should exist");
-        let parent_session = session_manager
-            .create_session(
-                "Parent".to_string(),
-                "agentic".to_string(),
-                SessionConfig {
-                    workspace_path: Some(workspace_path.to_string_lossy().into_owned()),
-                    ..Default::default()
-                },
-            )
-            .await
-            .expect("parent session should be created");
-        let storage_binding = session_manager
-            .resolve_session_workspace_binding(&parent_session.session_id)
-            .await
-            .expect("parent workspace binding should resolve");
-        let review_session_id = format!("session-cold-review-{}", uuid::Uuid::new_v4());
-        let mut metadata = SessionMetadata::new(
-            review_session_id.clone(),
-            "Cold review".to_string(),
-            "CodeReview".to_string(),
-            "primary".to_string(),
-        );
-        metadata.session_kind = SessionKind::Subagent;
-        metadata.created_by = Some(format!("session-{}", parent_session.session_id));
-        metadata.workspace_path = Some(workspace_path.to_string_lossy().into_owned());
-        metadata.relationship = Some(super::build_subagent_session_relationship(
-            Some(&SubagentParentInfo {
-                session_id: parent_session.session_id.clone(),
-                dialog_turn_id: "parent-turn".to_string(),
-                tool_call_id: "task-tool".to_string(),
-            }),
-            "CodeReview",
-            SessionContinuationPolicy::Reusable,
-        ));
-        session_manager
-            .save_session_metadata(&storage_binding.session_storage_dir(), &metadata)
-            .await
-            .expect("cold review metadata should be persisted");
-        assert!(session_manager.get_session(&review_session_id).is_none());
-
-        let request = SubagentExecutionRequest {
-            task_description: "Continue the cold review".to_string(),
-            context_mode: SubagentContextMode::Fresh,
-            target_session_id: Some(review_session_id.clone()),
-            subagent_type: None,
-            logical_subagent_type: None,
-            continuation_policy: SessionContinuationPolicy::Reusable,
-            model_binding_policy: SessionModelBindingPolicy::Mutable,
-            workspace_path: None,
-            model_id: Some("fast".to_string()),
-            inherit_parent_model: false,
-            subagent_parent_info: SubagentParentInfo {
-                session_id: parent_session.session_id.clone(),
-                dialog_turn_id: "parent-turn".to_string(),
-                tool_call_id: "task-tool".to_string(),
-            },
-            context: HashMap::new(),
-            permission_runtime_ceiling: PermissionRuntimeCeiling::default(),
-            delegation_policy: DelegationPolicy::top_level().spawn_child(),
-            external_generation_lease: None,
-        };
-
-        let error = coordinator
-            .resolve_hidden_subagent_execution_request(request, Some(false))
-            .await
-            .expect_err("cold review should reject background delivery before restore");
-
-        assert!(error.to_string().contains("one final review"));
-        assert!(session_manager.get_session(&review_session_id).is_none());
-        let persisted = session_manager
-            .load_session_metadata(&storage_binding.session_storage_dir(), &review_session_id)
-            .await
-            .expect("cold review metadata should remain readable")
-            .expect("cold review metadata should remain present");
-        assert_eq!(persisted.model_name, "primary");
-        let _ = std::fs::remove_dir_all(workspace_path);
-    }
-
-    #[tokio::test]
-    async fn cold_subagent_owned_by_another_parent_is_rejected_before_restore() {
-        let (coordinator, session_manager) = test_coordinator();
-        let workspace_path = std::env::temp_dir().join(format!(
-            "bitfun-cold-foreign-subagent-test-{}",
-            uuid::Uuid::new_v4()
-        ));
-        std::fs::create_dir_all(&workspace_path).expect("workspace dir should exist");
-        let parent_session = session_manager
-            .create_session(
-                "Parent".to_string(),
-                "agentic".to_string(),
-                SessionConfig {
-                    workspace_path: Some(workspace_path.to_string_lossy().into_owned()),
-                    ..Default::default()
-                },
-            )
-            .await
-            .expect("parent session should be created");
-        let storage_binding = session_manager
-            .resolve_session_workspace_binding(&parent_session.session_id)
-            .await
-            .expect("parent workspace binding should resolve");
-        let review_session_id = format!("session-foreign-review-{}", uuid::Uuid::new_v4());
-        let mut metadata = SessionMetadata::new(
-            review_session_id.clone(),
-            "Foreign review".to_string(),
-            "CodeReview".to_string(),
-            "primary".to_string(),
-        );
-        metadata.session_kind = SessionKind::Subagent;
-        metadata.created_by = Some("session-another-parent".to_string());
-        metadata.workspace_path = Some(workspace_path.to_string_lossy().into_owned());
-        session_manager
-            .save_session_metadata(&storage_binding.session_storage_dir(), &metadata)
-            .await
-            .expect("foreign review metadata should be persisted");
-
-        let request = SubagentExecutionRequest {
-            task_description: "Continue a foreign review".to_string(),
-            context_mode: SubagentContextMode::Fresh,
-            target_session_id: Some(review_session_id.clone()),
-            subagent_type: None,
-            logical_subagent_type: None,
-            continuation_policy: SessionContinuationPolicy::Reusable,
-            model_binding_policy: SessionModelBindingPolicy::Mutable,
-            workspace_path: None,
-            model_id: None,
-            inherit_parent_model: false,
-            subagent_parent_info: SubagentParentInfo {
-                session_id: parent_session.session_id.clone(),
-                dialog_turn_id: "parent-turn".to_string(),
-                tool_call_id: "task-tool".to_string(),
-            },
-            context: HashMap::new(),
-            permission_runtime_ceiling: PermissionRuntimeCeiling::default(),
-            delegation_policy: DelegationPolicy::top_level().spawn_child(),
-            external_generation_lease: None,
-        };
-
-        let error = coordinator
-            .resolve_hidden_subagent_execution_request(request, Some(false))
-            .await
-            .expect_err("foreign subagent should fail ownership preflight");
-
-        assert!(error
-            .to_string()
-            .contains("was not created by parent session"));
-        assert!(session_manager.get_session(&review_session_id).is_none());
-        let _ = std::fs::remove_dir_all(workspace_path);
-    }
-
-    #[tokio::test]
-    async fn cold_review_uses_read_only_session_workspace_before_restore() {
-        let (coordinator, session_manager) = test_coordinator();
-        let workspace_path = std::env::temp_dir().join(format!(
-            "bitfun-cold-review-workspace-preflight-test-{}",
-            uuid::Uuid::new_v4()
-        ));
-        let review_workspace = workspace_path.join("review-workspace");
-        let reviewer_path = review_workspace
-            .join(".bitfun")
-            .join("agents")
-            .join("cold-reviewer.md");
-        std::fs::create_dir_all(
-            reviewer_path
-                .parent()
-                .expect("reviewer path should have a parent"),
-        )
-        .expect("review agent directory should exist");
-        let mut reviewer = CustomSubagent::new_with_id(
-            "ColdWorkspaceReviewer".to_string(),
-            "ColdWorkspaceReviewer".to_string(),
-            "Project review subagent".to_string(),
-            vec!["Read".to_string()],
-            "Review the relevant files.".to_string(),
-            true,
-            reviewer_path.to_string_lossy().into_owned(),
-            CustomSubagentKind::Project,
-            "fast".to_string(),
-            UserContextPolicy::empty().with_workspace_instructions(),
-        );
-        reviewer.data.review = true;
-        reviewer
-            .save_to_file(None)
-            .expect("project review subagent should save");
-
-        let parent_session = session_manager
-            .create_session(
-                "Parent".to_string(),
-                "agentic".to_string(),
-                SessionConfig {
-                    workspace_path: Some(workspace_path.to_string_lossy().into_owned()),
-                    ..Default::default()
-                },
-            )
-            .await
-            .expect("parent session should be created");
-        let storage_binding = session_manager
-            .resolve_session_workspace_binding(&parent_session.session_id)
-            .await
-            .expect("parent workspace binding should resolve");
-        let review_session_id = format!("session-workspace-review-{}", uuid::Uuid::new_v4());
-        let mut persisted_session = Session::new_with_id(
-            review_session_id.clone(),
-            "Workspace review".to_string(),
-            "ColdWorkspaceReviewer".to_string(),
-            SessionConfig {
-                workspace_path: Some(review_workspace.to_string_lossy().into_owned()),
-                ..Default::default()
-            },
-        );
-        persisted_session.kind = SessionKind::Subagent;
-        persisted_session.created_by = Some(format!("session-{}", parent_session.session_id));
-        let persistence_manager = PersistenceManager::new(Arc::new(
-            PathManager::new().expect("path manager should initialize"),
-        ))
-        .expect("persistence manager should initialize");
-        persistence_manager
-            .save_session(&storage_binding.session_storage_dir(), &persisted_session)
-            .await
-            .expect("cold review session should be persisted");
-        let mut metadata = session_manager
-            .load_session_metadata(&storage_binding.session_storage_dir(), &review_session_id)
-            .await
-            .expect("cold review metadata should load")
-            .expect("cold review metadata should exist");
-        metadata.workspace_path = Some(workspace_path.to_string_lossy().into_owned());
-        session_manager
-            .save_session_metadata(&storage_binding.session_storage_dir(), &metadata)
-            .await
-            .expect("metadata workspace should be overridden for the mismatch fixture");
-
-        let request = SubagentExecutionRequest {
-            task_description: "Continue the workspace review".to_string(),
-            context_mode: SubagentContextMode::Fresh,
-            target_session_id: Some(review_session_id.clone()),
-            subagent_type: None,
-            logical_subagent_type: None,
-            continuation_policy: SessionContinuationPolicy::Reusable,
-            model_binding_policy: SessionModelBindingPolicy::Mutable,
-            workspace_path: None,
-            model_id: None,
-            inherit_parent_model: false,
-            subagent_parent_info: SubagentParentInfo {
-                session_id: parent_session.session_id.clone(),
-                dialog_turn_id: "parent-turn".to_string(),
-                tool_call_id: "task-tool".to_string(),
-            },
-            context: HashMap::new(),
-            permission_runtime_ceiling: PermissionRuntimeCeiling::default(),
-            delegation_policy: DelegationPolicy::top_level().spawn_child(),
-            external_generation_lease: None,
-        };
-
-        let error = coordinator
-            .resolve_hidden_subagent_execution_request(request, Some(false))
-            .await
-            .expect_err("stored review workspace should be checked before full restore");
-
-        assert!(error.to_string().contains("one final review"));
-        assert!(session_manager.get_session(&review_session_id).is_none());
-        let _ = std::fs::remove_dir_all(workspace_path);
     }
 
     #[test]
@@ -9816,6 +9385,7 @@ mod tests {
             parent_turn_index: None,
             parent_tool_call_id: Some("task-tool-call".to_string()),
             subagent_type: Some("Explore".to_string()),
+            continuation_policy: None,
         };
 
         assert_eq!(
@@ -9844,6 +9414,7 @@ mod tests {
             parent_turn_index: None,
             parent_tool_call_id: Some("task-tool-call".to_string()),
             subagent_type: Some("Explore".to_string()),
+            continuation_policy: None,
         };
 
         assert!(super::subagent_parent_info_from_relationship(Some(&relationship)).is_none());
@@ -10702,6 +10273,7 @@ mod tests {
                 tool_call_id: "task-tool".to_string(),
             },
             context: HashMap::new(),
+            permission_runtime_ceiling: PermissionRuntimeCeiling::default(),
             delegation_policy: DelegationPolicy::top_level().spawn_child(),
             external_generation_lease: None,
         };
@@ -10816,6 +10388,7 @@ mod tests {
                 tool_call_id: "task-tool".to_string(),
             },
             context: HashMap::new(),
+            permission_runtime_ceiling: PermissionRuntimeCeiling::default(),
             delegation_policy: DelegationPolicy::top_level().spawn_child(),
             external_generation_lease: None,
         };

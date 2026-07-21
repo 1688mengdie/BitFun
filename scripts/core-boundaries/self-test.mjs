@@ -3323,7 +3323,7 @@ export function runManifestParserSelfTest({
       contracts: [
         'delegation_policy\\(\\)\\.spawn_child\\(\\)',
         'start_background_subagent',
-        'background_task_id',
+        'bg_task_id',
       ],
     },
     {
@@ -3524,7 +3524,7 @@ export function runManifestParserSelfTest({
       contracts: [
         'feature = "ai-adapter-runtime"',
         'pub mod ai',
-        'pub mod cli_credentials',
+        'pub mod subscription_auth',
         'feature = "product-full"',
         'pub mod debug_log',
       ],
