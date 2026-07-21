@@ -10,19 +10,35 @@ use crate::infrastructure::ai::{build_stream_options_for_model, AIClient};
 use crate::infrastructure::cli_credentials::{
     self, codex::CodexResolver, gemini::GeminiResolver, CredentialResolver,
 };
-use crate::service::config::types::AuthConfig;
+use crate::service::config::types::{model_runtime_binding_fingerprint, AuthConfig};
 use crate::service::config::{get_global_config_service, ConfigService};
 use crate::util::errors::{BitFunError, BitFunResult};
 use crate::util::types::AIConfig;
 use anyhow::{anyhow, Result};
-use bitfun_ai_adapters::{resolve_cache_model_selector, resolve_required_model_selector};
+use bitfun_ai_adapters::resolve_required_model_selector;
 use log::{debug, info, warn};
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock, RwLock};
 
 pub struct AIClientFactory {
     config_service: Arc<ConfigService>,
-    client_cache: RwLock<HashMap<String, Arc<AIClient>>>,
+    client_cache: RwLock<HashMap<String, CachedAIClient>>,
+}
+
+struct CachedAIClient {
+    configuration_fingerprint: String,
+    client: Arc<AIClient>,
+}
+
+fn functional_agent_model_selector<'a>(
+    ai_config: &'a crate::service::config::types::AIConfig,
+    func_agent_name: &str,
+) -> &'a str {
+    ai_config
+        .func_agent_models
+        .get(func_agent_name)
+        .map(String::as_str)
+        .unwrap_or("fast")
 }
 
 impl AIClientFactory {
@@ -33,37 +49,29 @@ impl AIClientFactory {
         }
     }
 
-    /// Get the main agent's AI client
-    /// Falls back to primary when no dedicated model is configured
-    pub async fn get_client_by_agent(&self, agent_name: &str) -> Result<Arc<AIClient>> {
-        let global_config: crate::service::config::GlobalConfig =
-            self.config_service.get_config(None).await?;
-
-        match global_config.ai.agent_models.get(agent_name) {
-            Some(model_id) => self.get_client_resolved(model_id).await,
-            None => self.get_client_resolved("primary").await,
-        }
-    }
-
-    /// Get a functional agent's AI client
-    /// Prefer func_agent_models, fall back to agent_models (legacy), then fast
+    /// Get a functional agent's AI client using its dedicated mapping or fast.
     pub async fn get_client_by_func_agent(&self, func_agent_name: &str) -> Result<Arc<AIClient>> {
         let global_config: crate::service::config::GlobalConfig =
             self.config_service.get_config(None).await?;
 
-        let model_id = global_config
-            .ai
-            .func_agent_models
-            .get(func_agent_name)
-            .or_else(|| global_config.ai.agent_models.get(func_agent_name))
-            .map(String::as_str)
-            .unwrap_or("fast");
+        let model_id = functional_agent_model_selector(&global_config.ai, func_agent_name);
 
         self.get_client_resolved(model_id).await
     }
 
     pub async fn get_client_by_id(&self, model_id: &str) -> Result<Arc<AIClient>> {
-        self.get_or_create_client(model_id).await
+        self.get_or_create_client(model_id, None).await
+    }
+
+    /// Resolves an immutable concrete model id only when its current runtime
+    /// identity still matches the user-approved binding.
+    pub async fn get_client_by_approved_binding(
+        &self,
+        model_id: &str,
+        configuration_fingerprint: &str,
+    ) -> Result<Arc<AIClient>> {
+        self.get_or_create_client(model_id, Some(configuration_fingerprint))
+            .await
     }
 
     /// Get a client (supports resolving primary/fast)
@@ -77,7 +85,7 @@ impl AIClientFactory {
         )
         .map_err(|error| anyhow!(error.to_string()))?;
 
-        self.get_or_create_client(&resolved_model_id).await
+        self.get_or_create_client(&resolved_model_id, None).await
     }
 
     pub fn invalidate_cache(&self) {
@@ -117,14 +125,64 @@ impl AIClientFactory {
         }
     }
 
-    async fn get_or_create_client(&self, model_id: &str) -> Result<Arc<AIClient>> {
+    async fn get_or_create_client(
+        &self,
+        model_id: &str,
+        expected_configuration_fingerprint: Option<&str>,
+    ) -> Result<Arc<AIClient>> {
         let global_config: crate::service::config::GlobalConfig =
             self.config_service.get_config(None).await?;
-        let normalized_model_id = resolve_cache_model_selector(
-            model_id,
-            |selector| global_config.ai.resolve_model_selection(selector),
-            |model_ref| global_config.ai.resolve_model_reference(model_ref),
-        );
+        let normalized_model_id = model_id.trim().to_string();
+        if normalized_model_id.is_empty() {
+            return Err(anyhow!("Model configuration id is empty"));
+        }
+        if global_config
+            .ai
+            .models
+            .iter()
+            .filter(|model| model.id == normalized_model_id)
+            .nth(1)
+            .is_some()
+        {
+            return Err(anyhow!(
+                "Multiple model configurations use the same ID: {}",
+                normalized_model_id
+            ));
+        }
+
+        debug!("Creating new AI client: model_id={}", normalized_model_id);
+        let mut matching_models = global_config
+            .ai
+            .models
+            .iter()
+            .filter(|m| m.id == normalized_model_id);
+        let model_config = matching_models
+            .next()
+            .ok_or_else(|| anyhow!("Model configuration not found: {}", normalized_model_id))?;
+        if matching_models.next().is_some() {
+            return Err(anyhow!(
+                "Multiple model configurations use the same ID: {}",
+                normalized_model_id
+            ));
+        }
+
+        if !model_config.enabled {
+            return Err(anyhow!(
+                "Model '{}' (id={}) is currently disabled; enable it in settings or pick another model",
+                model_config.name,
+                model_config.id
+            ));
+        }
+
+        let configuration_fingerprint = model_runtime_binding_fingerprint(model_config);
+        if expected_configuration_fingerprint
+            .is_some_and(|expected| expected != configuration_fingerprint)
+        {
+            return Err(anyhow!(
+                "Approved model binding changed for configuration id: {}",
+                normalized_model_id
+            ));
+        }
 
         {
             let cache = match self.client_cache.read() {
@@ -136,29 +194,11 @@ impl AIClientFactory {
                     poisoned.into_inner()
                 }
             };
-            if let Some(client) = cache.get(&normalized_model_id) {
-                return Ok(client.clone());
+            if let Some(cached) = cache.get(&normalized_model_id) {
+                if cached.configuration_fingerprint == configuration_fingerprint {
+                    return Ok(cached.client.clone());
+                }
             }
-        }
-
-        debug!("Creating new AI client: model_id={}", normalized_model_id);
-        let model_config = global_config
-            .ai
-            .models
-            .iter()
-            .find(|m| {
-                m.id == normalized_model_id
-                    || m.name == normalized_model_id
-                    || m.model_name == normalized_model_id
-            })
-            .ok_or_else(|| anyhow!("Model configuration not found: {}", normalized_model_id))?;
-
-        if !model_config.enabled {
-            return Err(anyhow!(
-                "Model '{}' (id={}) is currently disabled; enable it in settings or pick another model",
-                model_config.name,
-                model_config.id
-            ));
         }
 
         let mut ai_config = AIConfig::try_from(model_config.clone())
@@ -188,7 +228,13 @@ impl AIClientFactory {
                     poisoned.into_inner()
                 }
             };
-            cache.insert(model_config.id.clone(), client.clone());
+            cache.insert(
+                model_config.id.clone(),
+                CachedAIClient {
+                    configuration_fingerprint,
+                    client: client.clone(),
+                },
+            );
         }
 
         debug!(
@@ -317,7 +363,9 @@ pub async fn discover_cli_credentials() -> Vec<cli_credentials::DiscoveredCreden
 
 #[cfg(test)]
 mod tests {
-    use crate::service::config::types::{AIModelConfig, GlobalConfig};
+    use crate::service::config::types::{
+        model_runtime_binding_fingerprint, AIModelConfig, GlobalConfig,
+    };
     use bitfun_ai_adapters::{
         classify_model_selector, resolve_required_model_selector, ModelSelectorKind,
     };
@@ -334,7 +382,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_model_reference_supports_id_name_and_model_name() {
+    fn resolve_model_reference_requires_a_config_id() {
         let mut config = GlobalConfig::default();
         config.ai.models = vec![build_model(
             "model-123",
@@ -346,14 +394,46 @@ mod tests {
             config.ai.resolve_model_reference("model-123"),
             Some("model-123".to_string())
         );
-        assert_eq!(
-            config.ai.resolve_model_reference("Primary Chat"),
-            Some("model-123".to_string())
-        );
-        assert_eq!(
-            config.ai.resolve_model_reference("claude-sonnet-4.5"),
-            Some("model-123".to_string())
-        );
+        assert_eq!(config.ai.resolve_model_reference("Primary Chat"), None);
+        assert_eq!(config.ai.resolve_model_reference("claude-sonnet-4.5"), None);
+
+        config.ai.models.push(build_model(
+            "model-123",
+            "Duplicate Config",
+            "claude-sonnet-4.5-duplicate",
+        ));
+        assert_eq!(config.ai.resolve_model_reference("model-123"), None);
+    }
+
+    #[test]
+    fn concrete_reserved_model_ids_remain_exact_config_references() {
+        let mut config = GlobalConfig::default();
+        config.ai.models = ["inherit", "primary", "fast", "auto", "default"]
+            .into_iter()
+            .map(|id| build_model(id, id, &format!("runtime-{id}")))
+            .collect();
+
+        for id in ["inherit", "primary", "fast", "auto", "default"] {
+            assert_eq!(
+                config.ai.resolve_model_reference(id),
+                Some(id.to_string()),
+                "approved concrete ids must bypass selector classification"
+            );
+        }
+    }
+
+    #[test]
+    fn runtime_binding_fingerprint_tracks_identity_but_not_secret_rotation() {
+        let mut model = build_model("model-123", "Provider", "runtime-model");
+        model.base_url = "https://models.example/v1".to_string();
+        model.api_key = "secret-one".to_string();
+        let first = model_runtime_binding_fingerprint(&model);
+
+        model.api_key = "secret-two".to_string();
+        assert_eq!(model_runtime_binding_fingerprint(&model), first);
+
+        model.base_url = "https://models.example/v2".to_string();
+        assert_ne!(model_runtime_binding_fingerprint(&model), first);
     }
 
     #[test]

@@ -15,23 +15,10 @@ use crate::service::token_usage::{
 };
 use crate::util::errors::{BitFunError, BitFunResult};
 use chrono::Utc;
-use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::Path;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct SessionUsageReportRequest {
-    pub session_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub workspace_path: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub remote_connection_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub remote_ssh_host: Option<String>,
-    #[serde(default)]
-    pub include_hidden_subagents: bool,
-}
+pub use bitfun_runtime_ports::AgentSessionUsageRequest as SessionUsageReportRequest;
 
 pub async fn generate_session_usage_report(
     persistence_manager: &PersistenceManager,
@@ -702,9 +689,9 @@ fn build_model_breakdown(
     let token_model_ids_by_turn = build_token_model_ids_by_turn(token_records);
     for record in token_records {
         let row = by_model
-            .entry(record.model_id.clone())
+            .entry(record.effective_model_name.clone())
             .or_insert_with(|| UsageModelBreakdown {
-                model_id: record.model_id.clone(),
+                model_id: record.effective_model_name.clone(),
                 call_count: 0,
                 input_tokens: Some(0),
                 output_tokens: Some(0),
@@ -776,7 +763,7 @@ fn build_model_breakdown(
     let mut records_by_model: HashMap<&str, Vec<&TokenUsageRecord>> = HashMap::new();
     for record in token_records {
         records_by_model
-            .entry(record.model_id.as_str())
+            .entry(record.effective_model_name.as_str())
             .or_default()
             .push(record);
     }
@@ -799,7 +786,7 @@ fn build_token_model_ids_by_turn(
         by_turn
             .entry(record.turn_id.clone())
             .or_default()
-            .insert(record.model_id.clone());
+            .insert(record.effective_model_name.clone());
     }
     by_turn
 }
@@ -1289,9 +1276,8 @@ fn model_round_duration_ms(round: &ModelRoundData) -> Option<u64> {
 
 fn model_round_label(round: &ModelRoundData) -> String {
     round
-        .model_id
+        .effective_model_name
         .as_deref()
-        .or(round.model_alias.as_deref())
         .map(|value| redact_usage_label(value, 80).value)
         .unwrap_or_else(|| "unknown_model".to_string())
 }
@@ -1728,6 +1714,7 @@ mod tests {
             parent_turn_index: Some(0),
             parent_tool_call_id: Some("tool-1".to_string()),
             subagent_type: Some("Explore".to_string()),
+            continuation_policy: None,
         });
         let mut grandchild = SessionMetadata::new(
             "grandchild-session".to_string(),
@@ -1743,6 +1730,7 @@ mod tests {
             parent_turn_index: Some(0),
             parent_tool_call_id: Some("child-tool".to_string()),
             subagent_type: Some("Explore".to_string()),
+            continuation_policy: None,
         });
 
         let (session_ids, complete) =
@@ -1961,8 +1949,8 @@ mod tests {
     fn report_merges_legacy_model_timing_into_token_model_row_for_same_turn() {
         let request = test_request(None);
         let mut turn = test_turn("turn-1", 0, DialogTurnKind::UserDialog);
-        turn.model_rounds[0].model_id = None;
-        turn.model_rounds[0].model_alias = None;
+        turn.model_rounds[0].model_config_id = None;
+        turn.model_rounds[0].effective_model_name = None;
         turn.model_rounds[0].duration_ms = Some(180);
         let token_record = test_token_record("gpt-5.4", 120, 30, 0);
 
@@ -1997,8 +1985,8 @@ mod tests {
     fn report_uses_clear_label_when_model_identity_is_missing() {
         let request = test_request(None);
         let mut turn = test_turn("turn-1", 0, DialogTurnKind::UserDialog);
-        turn.model_rounds[0].model_id = None;
-        turn.model_rounds[0].model_alias = None;
+        turn.model_rounds[0].model_config_id = None;
+        turn.model_rounds[0].effective_model_name = None;
         turn.model_rounds[0].duration_ms = Some(180);
 
         let report =
@@ -2088,8 +2076,8 @@ mod tests {
                 "D:/workspace/bitfun/src/main.rs",
             )],
         );
-        failed_turn.model_rounds[0].model_id = Some("model-a".to_string());
-        failed_turn.model_rounds[0].model_alias = Some("model-a".to_string());
+        failed_turn.model_rounds[0].model_config_id = Some("config-model-a".to_string());
+        failed_turn.model_rounds[0].effective_model_name = Some("model-a".to_string());
         failed_turn.model_rounds[0].duration_ms = Some(220);
         let mut model_error_turn =
             test_turn_with_tools("turn-4", 4, DialogTurnKind::UserDialog, vec![]);
@@ -2696,8 +2684,8 @@ mod tests {
                 end_time: Some(1_200 + turn_index as u64),
                 duration_ms: Some(200),
                 provider_id: None,
-                model_id: Some("model-a".to_string()),
-                model_alias: Some("model-a".to_string()),
+                model_config_id: Some("model-config-a".to_string()),
+                effective_model_name: Some("model-a".to_string()),
                 first_chunk_ms: None,
                 first_visible_output_ms: None,
                 stream_duration_ms: None,
@@ -2736,8 +2724,8 @@ mod tests {
             end_time: Some(1_000 + round_index as u64 + duration_ms),
             duration_ms: Some(duration_ms),
             provider_id: Some("test-provider".to_string()),
-            model_id: Some(model_id.to_string()),
-            model_alias: Some(model_id.to_string()),
+            model_config_id: Some(format!("config-{}", model_id)),
+            effective_model_name: Some(model_id.to_string()),
             first_chunk_ms: Some(5),
             first_visible_output_ms: Some(8),
             stream_duration_ms: Some(duration_ms.saturating_sub(10)),
@@ -2824,7 +2812,8 @@ mod tests {
         cached_tokens: u32,
     ) -> TokenUsageRecord {
         TokenUsageRecord {
-            model_id: model_id.to_string(),
+            model_config_id: format!("config-{}", model_id),
+            effective_model_name: model_id.to_string(),
             session_id: "session-1".to_string(),
             turn_id: "turn-1".to_string(),
             timestamp: Utc.timestamp_millis_opt(1_778_347_200_000).unwrap(),

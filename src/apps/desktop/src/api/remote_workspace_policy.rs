@@ -117,6 +117,10 @@ pub const REMOTE_WORKSPACE_COMMAND_POLICIES: &[(&str, RemoteWorkspacePolicy)] = 
         RemoteWorkspacePolicy::WorkspaceAgnostic,
     ),
     ("account_login", RemoteWorkspacePolicy::WorkspaceAgnostic),
+    (
+        "account_finalize_login",
+        RemoteWorkspacePolicy::WorkspaceAgnostic,
+    ),
     ("account_logout", RemoteWorkspacePolicy::WorkspaceAgnostic),
     (
         "account_online_devices",
@@ -217,6 +221,14 @@ pub const REMOTE_WORKSPACE_COMMAND_POLICIES: &[(&str, RemoteWorkspacePolicy)] = 
         RemoteWorkspacePolicy::LegacyUnaudited,
     ),
     ("check_path_exists", RemoteWorkspacePolicy::LegacyUnaudited),
+    (
+        "choose_external_mcp_conflict_command",
+        RemoteWorkspacePolicy::RemoteUnsupported,
+    ),
+    (
+        "choose_external_subagent_conflict_command",
+        RemoteWorkspacePolicy::RemoteUnsupported,
+    ),
     (
         "cleanup_invalid_workspaces",
         RemoteWorkspacePolicy::LegacyUnaudited,
@@ -385,7 +397,6 @@ pub const REMOTE_WORKSPACE_COMMAND_POLICIES: &[(&str, RemoteWorkspacePolicy)] = 
         "get_acp_session_options",
         RemoteWorkspacePolicy::LegacyUnaudited,
     ),
-    ("get_agent_models", RemoteWorkspacePolicy::LegacyUnaudited),
     (
         "get_agent_profile_config",
         RemoteWorkspacePolicy::LegacyUnaudited,
@@ -726,7 +737,7 @@ pub const REMOTE_WORKSPACE_COMMAND_POLICIES: &[(&str, RemoteWorkspacePolicy)] = 
     ),
     (
         "list_manageable_subagents",
-        RemoteWorkspacePolicy::LegacyUnaudited,
+        RemoteWorkspacePolicy::RemoteRouted,
     ),
     ("list_mcp_prompts", RemoteWorkspacePolicy::LegacyUnaudited),
     ("list_mcp_resources", RemoteWorkspacePolicy::LegacyUnaudited),
@@ -741,10 +752,10 @@ pub const REMOTE_WORKSPACE_COMMAND_POLICIES: &[(&str, RemoteWorkspacePolicy)] = 
     ),
     ("list_sessions", RemoteWorkspacePolicy::LegacyUnaudited),
     ("list_skill_market", RemoteWorkspacePolicy::LegacyUnaudited),
-    ("list_subagents", RemoteWorkspacePolicy::LegacyUnaudited),
+    ("list_subagents", RemoteWorkspacePolicy::RemoteRouted),
     (
         "list_visible_subagents",
-        RemoteWorkspacePolicy::LegacyUnaudited,
+        RemoteWorkspacePolicy::RemoteRouted,
     ),
     (
         "load_acp_json_config",
@@ -1094,6 +1105,37 @@ pub const REMOTE_WORKSPACE_COMMAND_POLICIES: &[(&str, RemoteWorkspacePolicy)] = 
         RemoteWorkspacePolicy::LegacyUnaudited,
     ),
     ("reload_subagents", RemoteWorkspacePolicy::LegacyUnaudited),
+    // One-click self-hosted relay (SSH to user host). WorkspaceAgnostic: uses
+    // an SSH connection id, not the open project workspace. See
+    // src/web-ui/src/features/relay-deploy/README.md.
+    (
+        "relay_deploy_cancel",
+        RemoteWorkspacePolicy::WorkspaceAgnostic,
+    ),
+    (
+        "relay_deploy_install_docker",
+        RemoteWorkspacePolicy::WorkspaceAgnostic,
+    ),
+    (
+        "relay_deploy_poll",
+        RemoteWorkspacePolicy::WorkspaceAgnostic,
+    ),
+    (
+        "relay_deploy_preflight",
+        RemoteWorkspacePolicy::WorkspaceAgnostic,
+    ),
+    (
+        "relay_deploy_register",
+        RemoteWorkspacePolicy::WorkspaceAgnostic,
+    ),
+    (
+        "relay_deploy_start",
+        RemoteWorkspacePolicy::WorkspaceAgnostic,
+    ),
+    (
+        "relay_deploy_verify",
+        RemoteWorkspacePolicy::WorkspaceAgnostic,
+    ),
     (
         "remote_close_workspace",
         RemoteWorkspacePolicy::RemoteRouted,
@@ -1347,12 +1389,15 @@ pub const REMOTE_WORKSPACE_COMMAND_POLICIES: &[(&str, RemoteWorkspacePolicy)] = 
         "set_active_workspace",
         RemoteWorkspacePolicy::LegacyUnaudited,
     ),
-    ("set_agent_model", RemoteWorkspacePolicy::LegacyUnaudited),
     (
         "set_agent_profile_config",
         RemoteWorkspacePolicy::LegacyUnaudited,
     ),
     ("set_config", RemoteWorkspacePolicy::LegacyUnaudited),
+    (
+        "set_external_mcp_server_decision_command",
+        RemoteWorkspacePolicy::RemoteUnsupported,
+    ),
     (
         "set_external_source_conflict_choice_command",
         RemoteWorkspacePolicy::RemoteUnsupported,
@@ -1367,6 +1412,10 @@ pub const REMOTE_WORKSPACE_COMMAND_POLICIES: &[(&str, RemoteWorkspacePolicy)] = 
     ),
     (
         "set_external_tool_target_decision_command",
+        RemoteWorkspacePolicy::RemoteUnsupported,
+    ),
+    (
+        "set_external_subagent_activation_command",
         RemoteWorkspacePolicy::RemoteUnsupported,
     ),
     ("set_macos_edit_menu_mode", RemoteWorkspacePolicy::LocalOnly),
@@ -1524,6 +1573,10 @@ pub const REMOTE_WORKSPACE_COMMAND_POLICIES: &[(&str, RemoteWorkspacePolicy)] = 
     (
         "update_custom_agent",
         RemoteWorkspacePolicy::LegacyUnaudited,
+    ),
+    (
+        "update_external_integration_policy_command",
+        RemoteWorkspacePolicy::RemoteUnsupported,
     ),
     (
         "update_mcp_remote_auth",
@@ -1748,7 +1801,6 @@ mod tests {
         "get_acp_clients",
         "get_acp_session_commands",
         "get_acp_session_options",
-        "get_agent_models",
         "get_agent_profile_config",
         "get_agent_profile_configs",
         "get_all_modified_files",
@@ -1980,7 +2032,6 @@ mod tests {
         "send_mcp_app_message",
         "set_acp_session_model",
         "set_active_workspace",
-        "set_agent_model",
         "set_agent_profile_config",
         "set_config",
         "set_miniapp_draft_storage",

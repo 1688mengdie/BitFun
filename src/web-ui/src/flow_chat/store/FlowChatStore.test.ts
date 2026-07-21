@@ -13,7 +13,10 @@ const apiMocks = vi.hoisted(() => ({
   restoreSession: vi.fn(),
   restoreSessionView: vi.fn(),
   restoreSessionWithTurns: vi.fn(),
+  accountFetchSessionTurns: vi.fn(),
 }));
+
+const peerModeFlagMock = vi.hoisted(() => ({ active: false }));
 
 const configManagerMock = vi.hoisted(() => {
   const getConfig = vi.fn(async (path: string) => {
@@ -66,6 +69,16 @@ vi.mock('@/infrastructure/api/service-api/AgentAPI', () => ({
     },
     restoreSessionWithTurns: apiMocks.restoreSessionWithTurns,
   },
+}));
+
+vi.mock('@/infrastructure/api/service-api/RemoteConnectAPI', () => ({
+  remoteConnectAPI: {
+    accountFetchSessionTurns: apiMocks.accountFetchSessionTurns,
+  },
+}));
+
+vi.mock('@/infrastructure/peer-device/peerModeFlag', () => ({
+  isPeerDeviceModeActive: () => peerModeFlagMock.active,
 }));
 
 vi.mock('@/infrastructure/config/services/ConfigManager', () => ({
@@ -673,8 +686,28 @@ describe('FlowChatStore ACP context usage', () => {
   });
 });
 
+describe('FlowChatStore session model selection', () => {
+  afterEach(() => {
+    resetStore();
+  });
+
+  it('stores an explicit auto selector on a legacy session without a model', () => {
+    const session = createSession({ config: { agentType: 'agentic' } });
+    flowChatStore.setState(() => ({
+      sessions: new Map([[session.sessionId, session]]),
+      activeSessionId: session.sessionId,
+    }));
+
+    flowChatStore.updateSessionModelName(session.sessionId, 'auto');
+
+    expect(flowChatStore.getState().sessions.get(session.sessionId)?.config.modelName).toBe('auto');
+  });
+});
+
 describe('FlowChatStore historical session hydration state', () => {
   beforeEach(() => {
+    peerModeFlagMock.active = false;
+    apiMocks.accountFetchSessionTurns.mockResolvedValue(false);
     vi.stubGlobal('CustomEvent', class {
       type: string;
       detail: unknown;
@@ -690,6 +723,7 @@ describe('FlowChatStore historical session hydration state', () => {
   });
 
   afterEach(() => {
+    peerModeFlagMock.active = false;
     resetStore();
     if (typeof apiMocks.restoreSessionView !== 'function') {
       (apiMocks as any).restoreSessionView = vi.fn();
@@ -719,6 +753,96 @@ describe('FlowChatStore historical session hydration state', () => {
       historyState: 'metadata-only',
       dialogTurns: [],
     });
+  });
+
+  it('checks relay history completeness before restoring Core context', async () => {
+    const order: string[] = [];
+    apiMocks.accountFetchSessionTurns.mockImplementationOnce(async () => {
+      order.push('relay');
+      return true;
+    });
+    apiMocks.restoreSessionView.mockImplementationOnce(async () => {
+      order.push('restore');
+      return {
+        session: {
+          sessionId: 'history-1',
+          sessionName: 'History 1',
+          agentType: 'agentic',
+          state: 'Idle',
+          turnCount: 0,
+          createdAt: 1,
+        },
+        turns: [],
+        contextRestoreState: 'ready',
+      };
+    });
+    flowChatStore.setState(() => ({
+      sessions: new Map([
+        ['history-1', createSession({
+          sessionId: 'history-1',
+          isHistorical: true,
+          historyState: 'metadata-only',
+        })],
+      ]),
+      activeSessionId: 'history-1',
+    }));
+
+    await flowChatStore.loadSessionHistory('history-1', 'D:/workspace/BitFun');
+
+    expect(order).toEqual(['relay', 'restore']);
+  });
+
+  it('fails closed before Core restore when relay history is incomplete', async () => {
+    apiMocks.accountFetchSessionTurns.mockRejectedValueOnce(new Error('relay unavailable'));
+    flowChatStore.setState(() => ({
+      sessions: new Map([
+        ['history-1', createSession({
+          sessionId: 'history-1',
+          isHistorical: true,
+          historyState: 'metadata-only',
+        })],
+      ]),
+      activeSessionId: 'history-1',
+    }));
+
+    await expect(
+      flowChatStore.loadSessionHistory('history-1', 'D:/workspace/BitFun')
+    ).rejects.toThrow('relay unavailable');
+
+    expect(apiMocks.restoreSessionView).not.toHaveBeenCalled();
+    expect(flowChatStore.getState().sessions.get('history-1')?.historyState).toBe('failed');
+  });
+
+  it('skips cloud turn fetch in Peer Device Mode and restores from the peer host', async () => {
+    peerModeFlagMock.active = true;
+    apiMocks.restoreSessionView.mockResolvedValueOnce({
+      session: {
+        sessionId: 'history-1',
+        sessionName: 'History 1',
+        agentType: 'agentic',
+        state: 'Idle',
+        turnCount: 0,
+        createdAt: 1,
+      },
+      turns: [],
+      contextRestoreState: 'ready',
+    });
+    flowChatStore.setState(() => ({
+      sessions: new Map([
+        ['history-1', createSession({
+          sessionId: 'history-1',
+          isHistorical: true,
+          historyState: 'metadata-only',
+        })],
+      ]),
+      activeSessionId: 'history-1',
+    }));
+
+    await flowChatStore.loadSessionHistory('history-1', '/Users/host/project');
+
+    expect(apiMocks.accountFetchSessionTurns).not.toHaveBeenCalled();
+    expect(apiMocks.restoreSessionView).toHaveBeenCalled();
+    expect(flowChatStore.getState().sessions.get('history-1')?.historyState).not.toBe('failed');
   });
 
   it('loads model config once while processing multiple persisted sessions', async () => {

@@ -133,6 +133,7 @@ const PRODUCT_TOOL_PROVIDER_GROUP_PLAN: &[ToolProviderGroupPlan] = &[
             "WriteStdin",
             "ExecControl",
             "GetTime",
+            "ListModels",
         ],
     },
     ToolProviderGroupPlan {
@@ -140,6 +141,7 @@ const PRODUCT_TOOL_PROVIDER_GROUP_PLAN: &[ToolProviderGroupPlan] = &[
         feature_groups: CORE_AGENT_FEATURE_GROUPS,
         tool_names: &[
             "Task",
+            "AgentWait",
             "LaunchReviewAgent",
             "Skill",
             "AskUserQuestion",
@@ -359,7 +361,9 @@ mod tests {
                 "WriteStdin",
                 "ExecControl",
                 "GetTime",
+                "ListModels",
                 "Task",
+                "AgentWait",
                 "LaunchReviewAgent",
                 "Skill",
                 "AskUserQuestion",

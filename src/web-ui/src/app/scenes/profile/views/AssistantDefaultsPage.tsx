@@ -15,12 +15,16 @@ import '@/app/components/GalleryLayout/GalleryLayout.scss';
 import { Switch } from '@/component-library';
 import { configAPI } from '@/infrastructure/api/service-api/ConfigAPI';
 import type { AgentProfileConfigItem, ModeSkillInfo } from '@/infrastructure/config/types';
+import {
+  buildSkillCoverageSourceMap,
+  formatSkillOrigin,
+  getModeSkillRuntimeStatus,
+} from '@/infrastructure/config/skillSourcePresentation';
 import { MCPAPI, type MCPServerInfo } from '@/infrastructure/api/service-api/MCPAPI';
 import { notificationService } from '@/shared/notification-system';
 import type { DynamicToolInfo } from '@/shared/types/agent-api';
 import { createLogger } from '@/shared/utils/logger';
 import { isUserSelectableToolName } from '@/shared/utils/toolVisibility';
-import { ModelSelector } from '@/flow_chat/components/ModelSelector';
 import { useNurseryStore } from '../nurseryStore';
 
 const log = createLogger('AssistantDefaultsPage');
@@ -62,15 +66,15 @@ function buildDuplicateSkillNameSet(skills: ModeSkillInfo[]): Set<string> {
   );
 }
 
-function formatSkillOrigin(skill: ModeSkillInfo): string {
-  return `${skill.level}/${skill.sourceSlot}`;
-}
-
-function formatSkillDisplayName(skill: ModeSkillInfo, duplicateNames: Set<string>): string {
+function formatSkillDisplayName(
+  skill: ModeSkillInfo,
+  duplicateNames: Set<string>,
+  origin: string,
+): string {
   if (!duplicateNames.has(skill.name)) {
     return skill.name;
   }
-  return `${skill.name} [${formatSkillOrigin(skill)}]`;
+  return `${skill.name} [${origin}]`;
 }
 
 const AssistantDefaultsPage: React.FC = () => {
@@ -100,6 +104,39 @@ const AssistantDefaultsPage: React.FC = () => {
     () => buildDuplicateSkillNameSet(modeSkills),
     [modeSkills],
   );
+  const coverageSourceBySkillKey = useMemo(
+    () => buildSkillCoverageSourceMap(
+      modeSkills,
+      t('nursery.template.unknownSkillSource'),
+    ),
+    [modeSkills, t],
+  );
+
+  const getLocalizedSkillOrigin = useCallback((skill: ModeSkillInfo) => (
+    formatSkillOrigin(skill, {
+      fallbackSourceLabel: t('nursery.template.unknownSkillSource'),
+      userLabel: t('nursery.template.skillScopeUser'),
+      projectLabel: t('nursery.template.skillScopeProject'),
+    })
+  ), [t]);
+
+  const getSkillRuntimeStatusLabel = useCallback((skill: ModeSkillInfo): string | null => {
+    const status = getModeSkillRuntimeStatus(
+      skill,
+      coverageSourceBySkillKey,
+      t('nursery.template.unknownSkillSource'),
+    );
+    switch (status.kind) {
+      case 'selected':
+        return t('nursery.template.skillRuntimeSelected');
+      case 'covered':
+        return t('nursery.template.skillRuntimeCovered', { source: status.sourceLabel });
+      case 'enabled':
+        return t('nursery.template.skillRuntimeEnabled');
+      case 'disabled':
+        return null;
+    }
+  }, [coverageSourceBySkillKey, t]);
 
   const userSelectableTools = useMemo(
     () => availableTools.filter((tool) => isUserSelectableToolName(tool.name)),
@@ -350,11 +387,18 @@ const AssistantDefaultsPage: React.FC = () => {
       {list.map((skill) => {
         const on = skill.effectiveEnabled;
         const selected = detail?.type === 'skill' && detail.skill.key === skill.key;
-        const displayName = formatSkillDisplayName(skill, duplicateSkillNames);
+        const origin = getLocalizedSkillOrigin(skill);
+        const displayName = formatSkillDisplayName(skill, duplicateSkillNames, origin);
+        const runtimeStatus = getModeSkillRuntimeStatus(
+          skill,
+          coverageSourceBySkillKey,
+          t('nursery.template.unknownSkillSource'),
+        );
+        const runtimeStatusLabel = getSkillRuntimeStatusLabel(skill);
         return (
           <div
             key={skill.key}
-            className={`tc-skill-row${!on ? ' tc-skill-row--off' : ''}${selected ? ' tc-skill-row--selected' : ''}`}
+            className={`tc-skill-row${!on ? ' tc-skill-row--off' : ''}${runtimeStatus.kind === 'covered' ? ' tc-skill-row--covered' : ''}${selected ? ' tc-skill-row--selected' : ''}`}
           >
             <button
               type="button"
@@ -362,13 +406,17 @@ const AssistantDefaultsPage: React.FC = () => {
               onClick={() => openSkillDetail(skill)}
             >
               <span className="tc-skill-row__name">{displayName}</span>
-              <span className="tc-skill-row__level">{formatSkillOrigin(skill)}</span>
+              <span className="tc-skill-row__level">{origin}</span>
+              {runtimeStatusLabel ? (
+                <span className="tc-skill-row__state" title={runtimeStatusLabel}>{runtimeStatusLabel}</span>
+              ) : null}
             </button>
             <Switch
               checked={on}
               onChange={() => handleSkillToggle(skill)}
               disabled={skillsLoading[skill.key]}
               size="small"
+              aria-label={displayName}
             />
           </div>
         );
@@ -379,7 +427,7 @@ const AssistantDefaultsPage: React.FC = () => {
   const renderSkillEnabledDisabledSplit = () => (
     <div className="tc-enabled-disabled-split">
       <div className="tc-enabled-disabled-split__col">
-        <p className="tc-enabled-disabled-split__title">{t('nursery.template.colEnabled')}</p>
+        <p className="tc-enabled-disabled-split__title">{t('nursery.template.skillEnabledCandidates')}</p>
         {skillsEnabled.length > 0 ? (
           renderSkillList(skillsEnabled)
         ) : (
@@ -562,6 +610,8 @@ const AssistantDefaultsPage: React.FC = () => {
 
     const { skill } = detail;
     const on = skill.effectiveEnabled;
+    const origin = getLocalizedSkillOrigin(skill);
+    const runtimeStatusLabel = getSkillRuntimeStatusLabel(skill);
     return (
       <aside className="tc-template-detail" aria-label={t('nursery.template.detailPanel')}>
         <div className="tc-template-detail__head tc-template-detail__head--center-line">
@@ -569,7 +619,7 @@ const AssistantDefaultsPage: React.FC = () => {
           <div className="tc-template-detail__head-text">
             <div className="tc-template-detail__head-line">
               <span className="tc-template-detail__kind">{t('cards.skills')}</span>
-              <h3 className="tc-template-detail__title">{formatSkillDisplayName(skill, duplicateSkillNames)}</h3>
+              <h3 className="tc-template-detail__title">{formatSkillDisplayName(skill, duplicateSkillNames, origin)}</h3>
             </div>
           </div>
           <button
@@ -582,7 +632,10 @@ const AssistantDefaultsPage: React.FC = () => {
           </button>
         </div>
         <div className="tc-template-detail__body">
-          <p className="tc-template-detail__meta">{t('nursery.template.skillLevel', { level: formatSkillOrigin(skill) })}</p>
+          <p className="tc-template-detail__meta">{t('nursery.template.skillOrigin', { origin })}</p>
+          {runtimeStatusLabel ? (
+            <p className="tc-template-detail__meta">{runtimeStatusLabel}</p>
+          ) : null}
           <p className="tc-template-detail__desc">
             {skill.description?.trim() ? skill.description : '—'}
           </p>
@@ -592,6 +645,7 @@ const AssistantDefaultsPage: React.FC = () => {
               onChange={() => handleSkillToggle(skill)}
               disabled={skillsLoading[skill.key]}
               size="small"
+              aria-label={skill.name}
             />
           </div>
         </div>
@@ -629,25 +683,6 @@ const AssistantDefaultsPage: React.FC = () => {
             </div>
 
             <div className="gallery-zones tc-template-shell__zones">
-            <GalleryZone
-              className="tc-template-model-zone"
-              title={t('cards.model')}
-              subtitle={t('nursery.template.sectionModelsSubtitle')}
-              tools={(
-                <div className="tc-model-slot tc-model-slot--header">
-                  <div className="tc-model-slot__select tc-model-slot__select--model-selector">
-                    <ModelSelector
-                      currentMode={ASSISTANT_MODE_ID}
-                      className="tc-model-slot__selector"
-                      dropdownPlacement="bottom"
-                    />
-                  </div>
-                </div>
-              )}
-            >
-              {null}
-            </GalleryZone>
-
             <GalleryZone
               title={t('cards.skills')}
             >

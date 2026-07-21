@@ -78,6 +78,10 @@ pub struct RoundExecutor {
 impl RoundExecutor {
     const MAX_STREAM_ATTEMPTS: usize = 10;
     const RETRY_BASE_DELAY_MS: u64 = 500;
+    const RATE_LIMIT_RETRY_BASE_DELAY_MS: u64 = 2_000;
+    const MAX_EXPONENTIAL_DELAY_MS: u64 = 30_000;
+    const MAX_RATE_LIMIT_DELAY_MS: u64 = 60_000;
+    const MAX_RETRY_EXPONENT_SHIFT: u32 = 6;
 
     fn has_user_visible_assistant_text(text: &str) -> bool {
         !text.trim().is_empty()
@@ -171,7 +175,8 @@ impl RoundExecutor {
                 round_id: round_id.clone(),
                 round_group_id: context.round_group_id.clone(),
                 round_index: context.round_number,
-                model_id: Some(context.model_name.clone()),
+                model_config_id: context.model_config_id.clone(),
+                effective_model_name: context.effective_model_name.clone(),
             },
             EventPriority::High,
         )
@@ -197,7 +202,7 @@ impl RoundExecutor {
             let request_started_at = Instant::now();
             debug!(
                 "Sending request: model={}, messages={}, tools={}, attempt={}/{}",
-                context.model_name,
+                context.effective_model_name,
                 ai_messages.len(),
                 tool_definitions.as_ref().map(|t| t.len()).unwrap_or(0),
                 attempt_index + 1,
@@ -234,7 +239,7 @@ impl RoundExecutor {
                     if Self::is_transient_network_error(&err_msg)
                         && attempt_index < max_attempts - 1
                     {
-                        let delay_ms = Self::retry_delay_ms(attempt_index);
+                        let delay_ms = Self::retry_delay_ms_for_error(attempt_index, &err_msg);
                         warn!(
                             "Retrying AI request after connection failure: session_id={}, round_id={}, attempt={}/{}, delay_ms={}, error={}",
                             context.session_id,
@@ -338,7 +343,7 @@ impl RoundExecutor {
                                 Self::trace_response_from_stream_result("partial", &result),
                             )
                             .await;
-                            let delay_ms = Self::retry_delay_ms(attempt_index);
+                            let delay_ms = Self::retry_delay_ms_for_error(attempt_index, &err_msg);
                             warn!(
                                 "Retrying stream because tool arguments were interrupted before valid JSON completed: session_id={}, round_id={}, attempt={}/{}, delay_ms={}, invalid_tool_calls={}, error={}",
                                 context.session_id,
@@ -429,7 +434,8 @@ impl RoundExecutor {
                             Self::trace_response_from_stream_result("partial", &result),
                         )
                         .await;
-                        let delay_ms = Self::retry_delay_ms(attempt_index);
+                        let delay_ms =
+                            Self::retry_delay_ms_for_error(attempt_index, partial_recovery_reason);
                         warn!(
                             "Retrying stream because tool calls arrived on an interrupted network stream without assistant text: session_id={}, round_id={}, attempt={}/{}, delay_ms={}, tool_calls={}, reason={}",
                             context.session_id,
@@ -553,7 +559,7 @@ impl RoundExecutor {
                     )
                     .await;
                     if can_retry {
-                        let delay_ms = Self::retry_delay_ms(attempt_index);
+                        let delay_ms = Self::retry_delay_ms_for_error(attempt_index, &err_msg);
                         warn!(
                             "Retrying stream after transient error with no effective output: session_id={}, round_id={}, attempt={}/{}, delay_ms={}, error={}",
                             context.session_id,
@@ -648,8 +654,8 @@ impl RoundExecutor {
                 has_tool_calls: !stream_result.tool_calls.is_empty(),
                 duration_ms: Some(elapsed_ms_u64(round_started_at)),
                 provider_id: None,
-                model_id: Some(context.model_name.clone()),
-                model_alias: Some(context.model_name.clone()),
+                model_config_id: context.model_config_id.clone(),
+                effective_model_name: context.effective_model_name.clone(),
                 first_chunk_ms: stream_result.first_chunk_ms,
                 first_visible_output_ms: stream_result.first_visible_output_ms,
                 stream_duration_ms: Some(stream_processing_ms),
@@ -1077,7 +1083,8 @@ impl RoundExecutor {
             AgenticEvent::TokenUsageUpdated {
                 session_id: context.session_id.clone(),
                 turn_id: context.dialog_turn_id.clone(),
-                model_id: context.model_name.clone(),
+                model_config_id: context.model_config_id.clone(),
+                effective_model_name: context.effective_model_name.clone(),
                 input_tokens: usage.prompt_token_count as usize,
                 output_tokens: Some(usage.candidates_token_count as usize),
                 total_tokens: usage.total_token_count as usize,
@@ -1236,7 +1243,26 @@ impl RoundExecutor {
     }
 
     fn retry_delay_ms(attempt_index: usize) -> u64 {
-        Self::RETRY_BASE_DELAY_MS * (1u64 << attempt_index.min(3))
+        Self::retry_delay_ms_for_error(attempt_index, "")
+    }
+
+    fn retry_delay_ms_for_error(attempt_index: usize, error_message: &str) -> u64 {
+        let shift = u32::try_from(attempt_index)
+            .unwrap_or(u32::MAX)
+            .min(Self::MAX_RETRY_EXPONENT_SHIFT);
+        let msg = error_message.to_lowercase();
+        let is_rate_limit =
+            msg.contains("429") || msg.contains("rate limit") || msg.contains("too many requests");
+
+        if is_rate_limit {
+            Self::RATE_LIMIT_RETRY_BASE_DELAY_MS
+                .saturating_mul(1u64 << shift)
+                .min(Self::MAX_RATE_LIMIT_DELAY_MS)
+        } else {
+            Self::RETRY_BASE_DELAY_MS
+                .saturating_mul(1u64 << shift)
+                .min(Self::MAX_EXPONENTIAL_DELAY_MS)
+        }
     }
 
     /// Check whether an error message represents a transient (retryable) condition.
@@ -1433,7 +1459,8 @@ mod tests {
             available_tools: Vec::new(),
             deferred_tools: Vec::new(),
             loaded_deferred_tool_specs: Vec::new(),
-            model_name: "model-1".to_string(),
+            model_config_id: "model-1".to_string(),
+            effective_model_name: "model-1".to_string(),
             primary_model_facts: tool_runtime::context::PrimaryModelFacts::new(
                 "model-1", "model-1", "openai", true,
             ),
@@ -1503,7 +1530,8 @@ mod tests {
             crate::agentic::events::AgenticEvent::TokenUsageUpdated {
                 session_id,
                 turn_id,
-                model_id,
+                model_config_id,
+                effective_model_name,
                 input_tokens: 100,
                 output_tokens: Some(20),
                 total_tokens: 120,
@@ -1511,7 +1539,10 @@ mod tests {
                 is_subagent: false,
                 cached_tokens: Some(30),
                 ..
-            } if session_id == "session-1" && turn_id == "turn-1" && model_id == "model-1"
+            } if session_id == "session-1"
+                && turn_id == "turn-1"
+                && model_config_id == "model-1"
+                && effective_model_name == "model-1"
         )));
     }
 
@@ -1697,6 +1728,32 @@ mod tests {
         assert!(RoundExecutor::is_transient_network_error(
             "rate limit exceeded"
         ));
+    }
+
+    #[test]
+    fn retry_delay_grows_beyond_previous_four_second_cap() {
+        assert_eq!(RoundExecutor::retry_delay_ms(0), 500);
+        assert_eq!(RoundExecutor::retry_delay_ms(3), 4_000);
+        assert_eq!(RoundExecutor::retry_delay_ms(5), 16_000);
+        assert_eq!(RoundExecutor::retry_delay_ms(6), 30_000);
+        assert_eq!(RoundExecutor::retry_delay_ms(9), 30_000);
+    }
+
+    #[test]
+    fn rate_limit_retry_delay_uses_longer_ladder() {
+        assert_eq!(
+            RoundExecutor::retry_delay_ms_for_error(0, "error 429 Too Many Requests"),
+            2_000
+        );
+        assert_eq!(
+            RoundExecutor::retry_delay_ms_for_error(3, "rate limit exceeded"),
+            16_000
+        );
+        assert_eq!(
+            RoundExecutor::retry_delay_ms_for_error(5, "too many requests"),
+            60_000
+        );
+        assert_eq!(RoundExecutor::retry_delay_ms_for_error(9, "429"), 60_000);
     }
 
     #[test]

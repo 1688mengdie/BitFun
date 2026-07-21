@@ -465,7 +465,9 @@ mod tests {
             "WriteStdin",
             "ExecControl",
             "GetTime",
+            "ListModels",
             "Task",
+            "AgentWait",
             "LaunchReviewAgent",
             "Skill",
             "AskUserQuestion",
@@ -643,6 +645,7 @@ mod tests {
 
         assert!(registry.is_tool_deferred("WebFetch"));
         assert!(registry.is_tool_deferred("GetFileDiff"));
+        assert!(registry.is_tool_deferred("ListModels"));
         assert!(!registry.is_tool_deferred("GetToolSpec"));
         assert!(registry.is_tool_deferred("Git"));
         assert!(registry.is_tool_deferred("ReviewPlatform"));
@@ -656,6 +659,7 @@ mod tests {
         assert_eq!(
             registry.get_deferred_tool_names(),
             vec![
+                "ListModels",
                 "CreatePlan",
                 "GetFileDiff",
                 "SessionControl",
@@ -698,6 +702,7 @@ mod tests {
                 "Glob",
                 "Grep",
                 "GetTime",
+                "ListModels",
                 "Skill",
                 "AskUserQuestion",
                 "TodoWrite",

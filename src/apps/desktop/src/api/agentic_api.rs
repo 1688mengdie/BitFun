@@ -9,7 +9,15 @@ use tauri::{AppHandle, State};
 
 use crate::api::app_state::AppState;
 use crate::api::session_storage_path::desktop_effective_session_storage_path;
+use crate::runtime::{
+    DesktopRuntimeContext, DesktopSessionApplicationError, DesktopSessionScopeRequest,
+};
 use crate::startup_trace::DesktopStartupTrace;
+use bitfun_agent_runtime::sdk::{
+    AgentDialogTurnRequest, AgentInputAttachment, AgentSessionModelUpdateRequest,
+    AgentSubmissionSource, AgentToolConfirmationRequest, AgentToolRejectionRequest,
+    AgentTurnCancellationRequest,
+};
 use bitfun_core::agentic::agents::AgentSource;
 use bitfun_core::agentic::coordination::{
     AssistantBootstrapBlockReason, AssistantBootstrapEnsureOutcome, AssistantBootstrapSkipReason,
@@ -43,6 +51,18 @@ const SESSION_VIEW_TOOL_RESULT_TOTAL_CHAR_BUDGET: usize = 512 * 1024;
 const SESSION_VIEW_TOOL_RESULT_STRING_CHAR_LIMIT: usize = 16 * 1024;
 const SESSION_VIEW_TRUNCATED_MARKER: &str = "\n... Output truncated for session preview";
 const SESSION_VIEW_OMITTED_MARKER: &str = "Output omitted from session preview";
+
+fn desktop_session_scope(
+    workspace_path: String,
+    remote_connection_id: Option<String>,
+    remote_ssh_host: Option<String>,
+) -> DesktopSessionScopeRequest {
+    DesktopSessionScopeRequest {
+        workspace_path,
+        remote_connection_id,
+        remote_ssh_host,
+    }
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -785,9 +805,22 @@ pub async fn create_session(
                 repaired = true;
             }
             if repaired {
+                let relationship = request.relationship.clone();
+                let deep_review_run_manifest = request.deep_review_run_manifest.clone();
+                let review_target_evidence = request.review_target_evidence.clone();
                 coordinator
                     .get_session_manager()
-                    .save_session_metadata(&effective_path, &metadata)
+                    .update_session_metadata(&effective_path, session_id, |current| {
+                        if current.relationship.is_none() {
+                            current.relationship = relationship;
+                        }
+                        if current.deep_review_run_manifest.is_none() {
+                            current.deep_review_run_manifest = deep_review_run_manifest;
+                        }
+                        if current.review_target_evidence.is_none() {
+                            current.review_target_evidence = review_target_evidence;
+                        }
+                    })
                     .await
                     .map_err(|error| {
                         format!("Failed to repair Review session metadata: {error}")
@@ -811,6 +844,7 @@ pub async fn create_session(
             remote_connection_id: remote_conn.clone(),
             remote_ssh_host: remote_ssh_host.clone(),
             model_id: c.model_name,
+            ..Default::default()
         })
         .unwrap_or(SessionConfig {
             workspace_path: Some(request.workspace_path.clone()),
@@ -882,19 +916,22 @@ pub async fn create_session(
 
 #[tauri::command]
 pub async fn update_session_model(
-    coordinator: State<'_, Arc<ConversationCoordinator>>,
+    runtime: State<'_, DesktopRuntimeContext>,
     request: UpdateSessionModelRequest,
 ) -> Result<(), String> {
-    coordinator
-        .update_session_model(&request.session_id, &request.model_name)
+    runtime
+        .agent_runtime()
+        .update_session_model(AgentSessionModelUpdateRequest {
+            session_id: request.session_id,
+            model_id: request.model_name,
+        })
         .await
-        .map_err(|e| format!("Failed to update session model: {}", e))
+        .map_err(|error| format!("Failed to update session model: {}", error.into_message()))
 }
 
 #[tauri::command]
 pub async fn update_session_title(
-    coordinator: State<'_, Arc<ConversationCoordinator>>,
-    app_state: State<'_, AppState>,
+    runtime: State<'_, DesktopRuntimeContext>,
     request: UpdateSessionTitleRequest,
 ) -> Result<String, String> {
     let session_id = request.session_id.trim();
@@ -902,97 +939,78 @@ pub async fn update_session_title(
         return Err("session_id is required".to_string());
     }
 
-    if coordinator
-        .get_session_manager()
-        .get_session(session_id)
-        .is_none()
-    {
-        let workspace_path = request
-            .workspace_path
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| {
-                "workspace_path is required when the session is not loaded".to_string()
-            })?;
-
-        let effective = desktop_effective_session_storage_path(
-            &app_state,
-            workspace_path,
-            request.remote_connection_id.as_deref(),
-            request.remote_ssh_host.as_deref(),
-        )
-        .await;
-
-        coordinator
-            .restore_session_from_storage_path(&effective, session_id)
-            .await
-            .map_err(|e| format!("Failed to restore session before renaming: {}", e))?;
-    }
-
-    let result = coordinator
-        .update_session_title(session_id, &request.title)
+    let scope = request
+        .workspace_path
+        .filter(|workspace_path| !workspace_path.trim().is_empty())
+        .map(|workspace_path| {
+            desktop_session_scope(
+                workspace_path,
+                request.remote_connection_id,
+                request.remote_ssh_host,
+            )
+        });
+    runtime
+        .session_application()
+        .rename_session(scope, session_id.to_string(), request.title)
         .await
-        .map_err(|e| format!("Failed to update session title: {}", e));
-
-    // Notify auto-sync: metadata changed (title)
-    let wp = request.workspace_path.as_deref().unwrap_or("");
-    crate::api::remote_connect_api::notify_session_changed(session_id, wp);
-
-    result
+        .map_err(|error| match error {
+            DesktopSessionApplicationError::Validation(message) => message,
+            DesktopSessionApplicationError::RestoreBeforeRename(message) => {
+                format!("Failed to restore session before renaming: {message}")
+            }
+            error => format!("Failed to update session title: {error}"),
+        })
 }
 
 /// Load the session into the coordinator process when it exists on disk but is not in memory.
 /// Uses the same remote→local session path mapping as `restore_session`.
 #[tauri::command]
 pub async fn ensure_coordinator_session(
-    coordinator: State<'_, Arc<ConversationCoordinator>>,
-    app_state: State<'_, AppState>,
+    runtime: State<'_, DesktopRuntimeContext>,
     request: EnsureCoordinatorSessionRequest,
 ) -> Result<(), String> {
     let session_id = request.session_id.trim();
     if session_id.is_empty() {
         return Err("session_id is required".to_string());
     }
-    if coordinator
-        .get_session_manager()
-        .get_session(session_id)
-        .is_some()
-    {
-        return Ok(());
-    }
-
-    let wp = request.workspace_path.trim();
-    if wp.is_empty() {
-        return Err("workspace_path is required when the session is not loaded".to_string());
-    }
-
-    let effective = desktop_effective_session_storage_path(
-        &app_state,
-        wp,
-        request.remote_connection_id.as_deref(),
-        request.remote_ssh_host.as_deref(),
-    )
-    .await;
-    let restore_result = if request.include_internal {
-        coordinator
-            .restore_internal_session_from_storage_path(&effective, session_id)
-            .await
-    } else {
-        coordinator
-            .restore_session_from_storage_path(&effective, session_id)
-            .await
-    };
-    restore_result.map(|_| ()).map_err(|e| e.to_string())
+    runtime
+        .session_application()
+        .ensure_session_loaded(
+            desktop_session_scope(
+                request.workspace_path.clone(),
+                request.remote_connection_id.clone(),
+                request.remote_ssh_host.clone(),
+            ),
+            session_id,
+            request.include_internal,
+        )
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
 pub async fn start_dialog_turn(
     _app: AppHandle,
-    _coordinator: State<'_, Arc<ConversationCoordinator>>,
-    scheduler: State<'_, Arc<DialogScheduler>>,
+    runtime: State<'_, DesktopRuntimeContext>,
     request: StartDialogTurnRequest,
 ) -> Result<StartDialogTurnResponse, String> {
+    let runtime_request = desktop_dialog_turn_request(request)?;
+
+    runtime
+        .agent_runtime()
+        .submit_dialog_turn(runtime_request)
+        .await
+        .map_err(|error| format!("Failed to start dialog turn: {}", error.into_message()))?;
+
+    Ok(StartDialogTurnResponse {
+        success: true,
+        message: "Dialog turn started".to_string(),
+    })
+}
+
+fn desktop_dialog_turn_request(
+    request: StartDialogTurnRequest,
+) -> Result<AgentDialogTurnRequest, String> {
     let StartDialogTurnRequest {
         session_id,
         user_input,
@@ -1007,38 +1025,66 @@ pub async fn start_dialog_turn(
     } = request;
 
     let policy = DialogSubmissionPolicy::for_source(DialogTriggerSource::DesktopUi);
-    let resolved_images = if let Some(image_contexts) = image_contexts
-        .as_ref()
-        .filter(|images| !images.is_empty())
-        .cloned()
-    {
-        Some(resolve_missing_image_payloads(image_contexts)?)
-    } else {
-        None
+    let attachments = match image_contexts.filter(|images| !images.is_empty()) {
+        Some(images) => resolve_missing_image_payloads(images)?
+            .into_iter()
+            .map(desktop_image_attachment)
+            .collect(),
+        None => Vec::new(),
     };
+    let metadata = desktop_user_message_metadata(user_message_metadata);
 
-    scheduler
-        .submit(
-            session_id,
-            user_input,
-            original_user_input,
-            turn_id,
-            agent_type,
-            workspace_path,
-            remote_connection_id,
-            remote_ssh_host,
-            policy,
-            None,
-            user_message_metadata,
-            resolved_images,
-        )
-        .await
-        .map_err(|e| format!("Failed to start dialog turn: {}", e))?;
-
-    Ok(StartDialogTurnResponse {
-        success: true,
-        message: "Dialog turn started".to_string(),
+    Ok(AgentDialogTurnRequest {
+        session_id,
+        message: user_input,
+        original_message: original_user_input,
+        turn_id,
+        agent_type,
+        workspace_path,
+        remote_connection_id,
+        remote_ssh_host,
+        policy,
+        reply_route: None,
+        prepended_reminders: Vec::new(),
+        attachments,
+        metadata,
     })
+}
+
+fn desktop_user_message_metadata(
+    metadata: Option<serde_json::Value>,
+) -> serde_json::Map<String, serde_json::Value> {
+    match metadata {
+        Some(serde_json::Value::Object(metadata)) => metadata,
+        Some(metadata) => serde_json::Map::from_iter([("raw_metadata".to_string(), metadata)]),
+        None => serde_json::Map::new(),
+    }
+}
+
+fn desktop_image_attachment(image: ImageContextData) -> AgentInputAttachment {
+    let mut metadata = serde_json::Map::new();
+    if let Some(image_path) = image.image_path {
+        metadata.insert(
+            "imagePath".to_string(),
+            serde_json::Value::String(image_path),
+        );
+    }
+    if let Some(data_url) = image.data_url {
+        metadata.insert("dataUrl".to_string(), serde_json::Value::String(data_url));
+    }
+    metadata.insert(
+        "mimeType".to_string(),
+        serde_json::Value::String(image.mime_type),
+    );
+    if let Some(image_metadata) = image.metadata {
+        metadata.insert("metadata".to_string(), image_metadata);
+    }
+
+    AgentInputAttachment {
+        kind: "remote_image".to_string(),
+        id: image.id,
+        metadata,
+    }
 }
 
 #[tauri::command]
@@ -1573,7 +1619,7 @@ fn resolve_missing_image_payloads(
 
 #[tauri::command]
 pub async fn cancel_dialog_turn(
-    coordinator: State<'_, Arc<ConversationCoordinator>>,
+    runtime: State<'_, DesktopRuntimeContext>,
     app_state: State<'_, AppState>,
     request: CancelDialogTurnRequest,
 ) -> Result<(), String> {
@@ -1596,8 +1642,16 @@ pub async fn cancel_dialog_turn(
         }
     }
 
-    coordinator
-        .cancel_dialog_turn(&request.session_id, &request.dialog_turn_id)
+    runtime
+        .agent_runtime()
+        .cancel_turn(AgentTurnCancellationRequest {
+            session_id: request.session_id.clone(),
+            turn_id: Some(request.dialog_turn_id.clone()),
+            source: Some(AgentSubmissionSource::DesktopUi),
+            requester_session_id: None,
+            reason: None,
+            wait_timeout_ms: None,
+        })
         .await
         .map_err(|e| {
             log::error!(
@@ -1606,8 +1660,9 @@ pub async fn cancel_dialog_turn(
                 request.dialog_turn_id,
                 e
             );
-            format!("Failed to cancel dialog turn: {}", e)
+            format!("Failed to cancel dialog turn: {}", e.into_message())
         })
+        .map(|_| ())
 }
 
 #[tauri::command]
@@ -1945,63 +2000,48 @@ pub async fn cancel_tool(
 
 #[tauri::command]
 pub async fn delete_session(
-    coordinator: State<'_, Arc<ConversationCoordinator>>,
-    app_state: State<'_, AppState>,
+    runtime: State<'_, DesktopRuntimeContext>,
     request: DeleteSessionRequest,
 ) -> Result<(), String> {
-    let effective_path = desktop_effective_session_storage_path(
-        &app_state,
-        &request.workspace_path,
-        request.remote_connection_id.as_deref(),
-        request.remote_ssh_host.as_deref(),
-    )
-    .await;
-    if let Some(acp_client_service) = app_state.acp_client_service.as_ref() {
-        acp_client_service
-            .release_bitfun_session(&request.session_id)
-            .await;
-    }
-    coordinator
-        .delete_session(&effective_path, &request.session_id)
+    runtime
+        .session_application()
+        .delete_session(
+            desktop_session_scope(
+                request.workspace_path,
+                request.remote_connection_id,
+                request.remote_ssh_host,
+            ),
+            request.session_id,
+        )
         .await
-        .map_err(|e| format!("Failed to delete session: {}", e))?;
-
-    // Notify auto-sync: tombstone this session on the relay
-    crate::api::remote_connect_api::notify_session_deleted(&request.session_id);
-    Ok(())
+        .map_err(|error| format!("Failed to delete session: {error}"))
 }
 
 #[tauri::command]
 pub async fn restore_session(
-    coordinator: State<'_, Arc<ConversationCoordinator>>,
-    app_state: State<'_, AppState>,
+    runtime: State<'_, DesktopRuntimeContext>,
     request: RestoreSessionRequest,
 ) -> Result<SessionResponse, String> {
-    let effective_path = desktop_effective_session_storage_path(
-        &app_state,
-        &request.workspace_path,
-        request.remote_connection_id.as_deref(),
-        request.remote_ssh_host.as_deref(),
-    )
-    .await;
-    let session = if request.include_internal {
-        coordinator
-            .restore_internal_session_from_storage_path(&effective_path, &request.session_id)
-            .await
-    } else {
-        coordinator
-            .restore_session_from_storage_path(&effective_path, &request.session_id)
-            .await
-    }
-    .map_err(|e| format!("Failed to restore session: {}", e))?;
+    let session = runtime
+        .session_application()
+        .restore_session(
+            desktop_session_scope(
+                request.workspace_path.clone(),
+                request.remote_connection_id.clone(),
+                request.remote_ssh_host.clone(),
+            ),
+            &request.session_id,
+            request.include_internal,
+        )
+        .await
+        .map_err(|error| format!("Failed to restore session: {error}"))?;
 
     Ok(session_to_response(session))
 }
 
 #[tauri::command]
 pub async fn restore_session_view(
-    coordinator: State<'_, Arc<ConversationCoordinator>>,
-    app_state: State<'_, AppState>,
+    runtime: State<'_, DesktopRuntimeContext>,
     startup_trace: State<'_, DesktopStartupTrace>,
     request: RestoreSessionRequest,
 ) -> Result<RestoreSessionViewResponse, String> {
@@ -2012,72 +2052,36 @@ pub async fn restore_session_view(
             "restore_session_view request received: trace_id={}, session_id={}",
             trace_id, request.session_id
         );
-        let path_started_at = Instant::now();
-        let effective_path = desktop_effective_session_storage_path(
-            &app_state,
-            &request.workspace_path,
-            request.remote_connection_id.as_deref(),
-            request.remote_ssh_host.as_deref(),
-        )
-        .await;
-        let resolve_storage_path_duration_ms =
-            path_started_at.elapsed().as_millis().min(u64::MAX as u128) as u64;
-        debug!(
-            "restore_session_view storage path resolved: trace_id={}, session_id={}, duration_ms={}",
-            trace_id,
-            request.session_id,
-            resolve_storage_path_duration_ms
-        );
-
-        let session_storage_path = effective_path;
         let tail_turn_count = request
             .tail_turn_count
             .filter(|count| *count > 0)
             .map(|count| count.min(16));
-        let (session, mut turns, total_turn_count, mut timings) =
-            if let Some(tail_turn_count) = tail_turn_count {
-                if request.include_internal {
-                    coordinator
-                        .restore_internal_session_view_from_storage_path_tail_timed(
-                            &session_storage_path,
-                            &request.session_id,
-                            tail_turn_count,
-                        )
-                        .await
-                } else {
-                    coordinator
-                        .restore_session_view_from_storage_path_tail_timed(
-                            &session_storage_path,
-                            &request.session_id,
-                            tail_turn_count,
-                        )
-                        .await
-                }
-            } else if request.include_internal {
-                coordinator
-                    .restore_internal_session_view_from_storage_path_timed(
-                        &session_storage_path,
-                        &request.session_id,
-                    )
-                    .await
-                    .map(|(session, turns, timings)| {
-                        let total_turn_count = turns.len();
-                        (session, turns, total_turn_count, timings)
-                    })
-            } else {
-                coordinator
-                    .restore_session_view_from_storage_path_timed(
-                        &session_storage_path,
-                        &request.session_id,
-                    )
-                    .await
-                    .map(|(session, turns, timings)| {
-                        let total_turn_count = turns.len();
-                        (session, turns, total_turn_count, timings)
-                    })
-            }
-            .map_err(|e| format!("Failed to restore session view: {}", e))?;
-        timings.resolve_storage_path_duration_ms = resolve_storage_path_duration_ms;
+        let restored = runtime
+            .session_application()
+            .restore_session_view(
+                desktop_session_scope(
+                    request.workspace_path.clone(),
+                    request.remote_connection_id.clone(),
+                    request.remote_ssh_host.clone(),
+                ),
+                &request.session_id,
+                request.include_internal,
+                tail_turn_count,
+                |resolve_storage_path_duration_ms| {
+                    debug!(
+                        "restore_session_view storage path resolved: trace_id={}, session_id={}, duration_ms={}",
+                        trace_id,
+                        request.session_id,
+                        resolve_storage_path_duration_ms
+                    );
+                },
+            )
+            .await
+            .map_err(|error| format!("Failed to restore session view: {error}"))?;
+        let session = restored.session;
+        let mut turns = restored.turns;
+        let total_turn_count = restored.total_turn_count;
+        let timings = restored.timings;
         let loaded_turn_count = turns.len();
         let is_partial = loaded_turn_count < total_turn_count;
 
@@ -2132,8 +2136,7 @@ pub async fn restore_session_view(
 
 #[tauri::command]
 pub async fn restore_session_with_turns(
-    coordinator: State<'_, Arc<ConversationCoordinator>>,
-    app_state: State<'_, AppState>,
+    runtime: State<'_, DesktopRuntimeContext>,
     request: RestoreSessionRequest,
 ) -> Result<RestoreSessionWithTurnsResponse, String> {
     let started_at = std::time::Instant::now();
@@ -2142,33 +2145,29 @@ pub async fn restore_session_with_turns(
         "restore_session_with_turns request received: trace_id={}, session_id={}",
         trace_id, request.session_id
     );
-    let path_started_at = std::time::Instant::now();
-    let effective_path = desktop_effective_session_storage_path(
-        &app_state,
-        &request.workspace_path,
-        request.remote_connection_id.as_deref(),
-        request.remote_ssh_host.as_deref(),
-    )
-    .await;
-    debug!(
-        "restore_session_with_turns storage path resolved: trace_id={}, session_id={}, duration_ms={}",
-        trace_id,
-        request.session_id,
-        path_started_at.elapsed().as_millis()
-    );
-    let (session, turns) = if request.include_internal {
-        coordinator
-            .restore_internal_session_with_turns_from_storage_path(
-                &effective_path,
-                &request.session_id,
-            )
-            .await
-    } else {
-        coordinator
-            .restore_session_with_turns_from_storage_path(&effective_path, &request.session_id)
-            .await
-    }
-    .map_err(|e| format!("Failed to restore session: {}", e))?;
+    let restored = runtime
+        .session_application()
+        .restore_session_with_turns(
+            desktop_session_scope(
+                request.workspace_path.clone(),
+                request.remote_connection_id.clone(),
+                request.remote_ssh_host.clone(),
+            ),
+            &request.session_id,
+            request.include_internal,
+            |resolve_storage_path_duration_ms| {
+                debug!(
+                    "restore_session_with_turns storage path resolved: trace_id={}, session_id={}, duration_ms={}",
+                    trace_id,
+                    request.session_id,
+                    resolve_storage_path_duration_ms
+                );
+            },
+        )
+        .await
+        .map_err(|error| format!("Failed to restore session: {error}"))?;
+    let session = restored.session;
+    let turns = restored.turns;
 
     if log::log_enabled!(log::Level::Debug) {
         let payload_stats = restore_turn_payload_stats(&turns);
@@ -2242,28 +2241,36 @@ pub async fn list_sessions(
 
 #[tauri::command]
 pub async fn confirm_tool_execution(
-    coordinator: State<'_, Arc<ConversationCoordinator>>,
+    runtime: State<'_, DesktopRuntimeContext>,
     request: ConfirmToolRequest,
 ) -> Result<(), String> {
-    coordinator
-        .confirm_tool(&request.tool_id, request.updated_input)
+    runtime
+        .agent_runtime()
+        .confirm_tool(AgentToolConfirmationRequest {
+            tool_id: request.tool_id,
+            updated_input: request.updated_input,
+        })
         .await
-        .map_err(|e| format!("Confirm tool failed: {}", e))
+        .map_err(|error| format!("Confirm tool failed: {}", error.into_message()))
 }
 
 #[tauri::command]
 pub async fn reject_tool_execution(
-    coordinator: State<'_, Arc<ConversationCoordinator>>,
+    runtime: State<'_, DesktopRuntimeContext>,
     request: RejectToolRequest,
 ) -> Result<(), String> {
     let reason = request
         .reason
         .unwrap_or_else(|| "User rejected".to_string());
 
-    coordinator
-        .reject_tool(&request.tool_id, reason)
+    runtime
+        .agent_runtime()
+        .reject_tool(AgentToolRejectionRequest {
+            tool_id: request.tool_id,
+            reason,
+        })
         .await
-        .map_err(|e| format!("Reject tool failed: {}", e))
+        .map_err(|error| format!("Reject tool failed: {}", error.into_message()))
 }
 
 #[tauri::command]
@@ -2433,6 +2440,156 @@ mod tests {
     };
     use serde_json::json;
 
+    #[test]
+    fn desktop_dialog_turn_request_preserves_runtime_contract() {
+        let request: StartDialogTurnRequest = serde_json::from_value(json!({
+            "sessionId": "session-1",
+            "userInput": "resolved input",
+            "originalUserInput": "original input",
+            "agentType": "agentic",
+            "workspacePath": "/workspace/project",
+            "remoteConnectionId": "connection-1",
+            "remoteSshHost": "host-1",
+            "turnId": "turn-1",
+            "imageContexts": [{
+                "id": "image-1",
+                "image_path": "/workspace/clip.png",
+                "data_url": "data:image/png;base64,abc",
+                "mime_type": "image/png",
+                "metadata": {
+                    "name": "clip.png",
+                    "source": "upload"
+                }
+            }],
+            "userMessageMetadata": {
+                "surface": "flow_chat",
+                "requestId": "request-1"
+            }
+        }))
+        .expect("current Tauri request shape");
+
+        let runtime_request =
+            desktop_dialog_turn_request(request).expect("Desktop runtime request");
+
+        assert_eq!(runtime_request.session_id, "session-1");
+        assert_eq!(runtime_request.message, "resolved input");
+        assert_eq!(
+            runtime_request.original_message.as_deref(),
+            Some("original input")
+        );
+        assert_eq!(runtime_request.turn_id.as_deref(), Some("turn-1"));
+        assert_eq!(runtime_request.agent_type, "agentic");
+        assert_eq!(
+            runtime_request.workspace_path.as_deref(),
+            Some("/workspace/project")
+        );
+        assert_eq!(
+            runtime_request.remote_connection_id.as_deref(),
+            Some("connection-1")
+        );
+        assert_eq!(runtime_request.remote_ssh_host.as_deref(), Some("host-1"));
+        assert_eq!(
+            runtime_request.policy.trigger_source,
+            AgentSubmissionSource::DesktopUi
+        );
+        assert_eq!(
+            runtime_request.policy,
+            DialogSubmissionPolicy::for_source(DialogTriggerSource::DesktopUi)
+        );
+        assert!(runtime_request.reply_route.is_none());
+        assert!(runtime_request.prepended_reminders.is_empty());
+        assert_eq!(runtime_request.attachments.len(), 1);
+        let attachment = &runtime_request.attachments[0];
+        assert_eq!(attachment.kind, "remote_image");
+        assert_eq!(attachment.id, "image-1");
+        assert_eq!(
+            attachment.metadata.get("imagePath"),
+            Some(&json!("/workspace/clip.png"))
+        );
+        assert_eq!(
+            attachment.metadata.get("dataUrl"),
+            Some(&json!("data:image/png;base64,abc"))
+        );
+        assert_eq!(
+            attachment.metadata.get("mimeType"),
+            Some(&json!("image/png"))
+        );
+        assert_eq!(
+            attachment
+                .metadata
+                .get("metadata")
+                .and_then(|value| value.get("source")),
+            Some(&json!("upload"))
+        );
+        assert_eq!(
+            runtime_request.metadata.get("surface"),
+            Some(&json!("flow_chat"))
+        );
+        assert_eq!(
+            runtime_request.metadata.get("requestId"),
+            Some(&json!("request-1"))
+        );
+    }
+
+    #[test]
+    fn desktop_interaction_dtos_keep_existing_camel_case_shape() {
+        let cancel: CancelDialogTurnRequest = serde_json::from_value(json!({
+            "sessionId": "session-1",
+            "dialogTurnId": "turn-1"
+        }))
+        .expect("cancel request");
+        let confirm: ConfirmToolRequest = serde_json::from_value(json!({
+            "sessionId": "session-1",
+            "toolId": "tool-1",
+            "updatedInput": { "path": "updated.txt" }
+        }))
+        .expect("confirm request");
+        let reject: RejectToolRequest = serde_json::from_value(json!({
+            "sessionId": "session-1",
+            "toolId": "tool-1",
+            "reason": "Use a read-only path"
+        }))
+        .expect("reject request");
+
+        assert_eq!(cancel.session_id, "session-1");
+        assert_eq!(cancel.dialog_turn_id, "turn-1");
+        assert_eq!(confirm.tool_id, "tool-1");
+        assert_eq!(
+            confirm.updated_input,
+            Some(json!({ "path": "updated.txt" }))
+        );
+        assert_eq!(reject.reason.as_deref(), Some("Use a read-only path"));
+        assert_eq!(
+            serde_json::to_value(StartDialogTurnResponse {
+                success: true,
+                message: "Dialog turn started".to_string(),
+            })
+            .expect("response"),
+            json!({
+                "success": true,
+                "message": "Dialog turn started"
+            })
+        );
+    }
+
+    #[test]
+    fn desktop_dialog_turn_accepts_and_normalizes_legacy_non_object_metadata() {
+        let request = serde_json::from_value::<StartDialogTurnRequest>(json!({
+            "sessionId": "session-1",
+            "userInput": "hello",
+            "agentType": "agentic",
+            "userMessageMetadata": "not-an-object"
+        }))
+        .expect("legacy metadata request");
+        let runtime_request =
+            desktop_dialog_turn_request(request).expect("Desktop runtime request");
+
+        assert_eq!(
+            runtime_request.metadata.get("raw_metadata"),
+            Some(&json!("not-an-object"))
+        );
+    }
+
     fn idempotent_create_request() -> CreateSessionRequest {
         CreateSessionRequest {
             session_id: Some("review_child_request-1".to_string()),
@@ -2566,6 +2723,7 @@ mod tests {
                 result,
                 success: true,
                 result_for_assistant: assistant.map(str::to_string),
+                image_attachments: None,
                 error: None,
                 duration_ms: Some(1),
             }),
@@ -2622,8 +2780,8 @@ mod tests {
                 end_time: Some(2),
                 duration_ms: Some(1),
                 provider_id: None,
-                model_id: None,
-                model_alias: None,
+                model_config_id: None,
+                effective_model_name: None,
                 first_chunk_ms: None,
                 first_visible_output_ms: None,
                 stream_duration_ms: None,
@@ -2703,8 +2861,8 @@ mod tests {
                 end_time: Some(2),
                 duration_ms: Some(1),
                 provider_id: None,
-                model_id: None,
-                model_alias: None,
+                model_config_id: None,
+                effective_model_name: None,
                 first_chunk_ms: None,
                 first_visible_output_ms: None,
                 stream_duration_ms: None,
@@ -2765,8 +2923,8 @@ mod tests {
                 end_time: Some(2),
                 duration_ms: Some(1),
                 provider_id: None,
-                model_id: None,
-                model_alias: None,
+                model_config_id: None,
+                effective_model_name: None,
                 first_chunk_ms: None,
                 first_visible_output_ms: None,
                 stream_duration_ms: None,

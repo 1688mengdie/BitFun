@@ -25,6 +25,7 @@ jobs:
   cli-test:
     name: CLI Tests (ubuntu-latest)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
 
@@ -135,6 +136,10 @@ jobs:
 
       - name: Check compilation
         run: cargo check --locked --workspace
+
+      - name: Run Windows ConPTY CLI smoke test
+        if: runner.os == 'Windows'
+        run: cargo test --locked -p bitfun-cli --test terminal_process_contracts
 
       - name: Run core and desktop Rust tests
         run: cargo test --locked -p bitfun-core -p bitfun-desktop

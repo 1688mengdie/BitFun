@@ -49,24 +49,31 @@ pub use crate::runtime::{
 };
 pub use crate::session_state::{session_state_label_for_state, ProcessingPhase, SessionState};
 pub use bitfun_agent_tools::{ToolRegistry, ToolRegistryItem};
+pub use bitfun_core_types::SessionUsageReport;
 pub use bitfun_harness::{
     build_descriptor_harness_registry, HarnessCapability, HarnessProviderDescriptor,
     HarnessRegistry, HarnessWorkflow,
 };
 pub use bitfun_runtime_ports::{
     AgentBackgroundResultRequest, AgentDialogTurnPort, AgentDialogTurnRequest,
-    AgentInputAttachment, AgentLifecycleDeliveryPort, AgentSessionCreateRequest,
-    AgentSessionCreateResult, AgentSessionDeleteRequest, AgentSessionListRequest,
-    AgentSessionManagementPort, AgentSessionSummary, AgentSessionWorkspaceBinding,
-    AgentSessionWorkspaceRequest, AgentSubmissionPort, AgentSubmissionRequest,
-    AgentSubmissionResult, AgentSubmissionSource, AgentThreadGoalCreateRequest,
-    AgentThreadGoalDeliveryRequest, AgentThreadGoalGetRequest, AgentThreadGoalManagementPort,
-    AgentThreadGoalUpdateStatusRequest, AgentTurnCancellationPort, AgentTurnCancellationRequest,
-    AgentTurnCancellationResult, ClockPort, DialogSubmissionPolicy, DialogSubmitOutcome,
+    AgentInputAttachment, AgentLifecycleDeliveryPort, AgentLocalCommandTurnPort,
+    AgentLocalCommandTurnRecordRequest, AgentSessionArchiveRequest,
+    AgentSessionArchiveStateRequest, AgentSessionCreateRequest, AgentSessionCreateResult,
+    AgentSessionDeleteRequest, AgentSessionForkAtTurnRequest, AgentSessionForkPort,
+    AgentSessionForkRequest, AgentSessionForkResult, AgentSessionListRequest,
+    AgentSessionManagementPort, AgentSessionModePort, AgentSessionModeUpdateRequest,
+    AgentSessionModelPort, AgentSessionModelUpdateRequest, AgentSessionRenameRequest,
+    AgentSessionSummary, AgentSessionUsagePort, AgentSessionUsageRequest,
+    AgentSessionWorkspaceBinding, AgentSessionWorkspaceRequest, AgentSubmissionPort,
+    AgentSubmissionRequest, AgentSubmissionResult, AgentSubmissionSource,
+    AgentThreadGoalCreateRequest, AgentThreadGoalDeliveryRequest, AgentThreadGoalGetRequest,
+    AgentThreadGoalManagementPort, AgentThreadGoalUpdateStatusRequest, AgentTurnCancellationPort,
+    AgentTurnCancellationRequest, AgentTurnCancellationResult, AgentTurnSettlementPort,
+    AgentTurnSettlementRequest, ClockPort, DialogSubmissionPolicy, DialogSubmitOutcome,
     FileSystemPort, GitPort, McpCatalogPort, NetworkPort, PermissionDecision, PermissionPort,
-    PermissionRequest, PortError, PortResult, RemoteAssistantWorkspaceFacts, RemoteCapabilityPort,
-    RemoteConnectionPort, RemoteProjectionPort, RemoteRecentWorkspaceFacts, RemoteWorkspaceFacts,
-    RemoteWorkspaceFileRuntimeHost, RemoteWorkspaceKind, RemoteWorkspacePort,
+    PermissionRequest, PortError, PortErrorKind, PortResult, RemoteAssistantWorkspaceFacts,
+    RemoteCapabilityPort, RemoteConnectionPort, RemoteProjectionPort, RemoteRecentWorkspaceFacts,
+    RemoteWorkspaceFacts, RemoteWorkspaceFileRuntimeHost, RemoteWorkspaceKind, RemoteWorkspacePort,
     RemoteWorkspaceRuntimeHost, RemoteWorkspaceUpdate, RuntimeEventEnvelope, RuntimeEventSink,
     RuntimeEventType, RuntimeServiceCapability, RuntimeServicePort, SessionStorageKind,
     SessionStoragePathRequest, SessionStoragePathResolution, SessionStorePort, SessionTranscript,
@@ -114,8 +121,41 @@ impl AgentRuntimeBuilder {
         self
     }
 
+    pub fn with_session_model_port(mut self, port: Arc<dyn AgentSessionModelPort>) -> Self {
+        self.inner = self.inner.with_session_model_port(port);
+        self
+    }
+
+    pub fn with_session_mode_port(mut self, port: Arc<dyn AgentSessionModePort>) -> Self {
+        self.inner = self.inner.with_session_mode_port(port);
+        self
+    }
+
+    pub fn with_session_fork_port(mut self, port: Arc<dyn AgentSessionForkPort>) -> Self {
+        self.inner = self.inner.with_session_fork_port(port);
+        self
+    }
+
+    pub fn with_session_usage_port(mut self, port: Arc<dyn AgentSessionUsagePort>) -> Self {
+        self.inner = self.inner.with_session_usage_port(port);
+        self
+    }
+
+    pub fn with_turn_settlement_port(mut self, port: Arc<dyn AgentTurnSettlementPort>) -> Self {
+        self.inner = self.inner.with_turn_settlement_port(port);
+        self
+    }
+
     pub fn with_session_restore_port(mut self, port: Arc<dyn AgentSessionRestorePort>) -> Self {
         self.inner = self.inner.with_session_restore_port(port);
+        self
+    }
+
+    pub fn with_local_command_turn_port(
+        mut self,
+        port: Arc<dyn AgentLocalCommandTurnPort>,
+    ) -> Self {
+        self.inner = self.inner.with_local_command_turn_port(port);
         self
     }
 
@@ -240,6 +280,14 @@ impl AgentRuntime {
         self.inner.create_session(request).await
     }
 
+    pub async fn create_session_with_id(
+        &self,
+        session_id: String,
+        request: AgentSessionCreateRequest,
+    ) -> Result<AgentSessionCreateResult, RuntimeError> {
+        self.inner.create_session_with_id(session_id, request).await
+    }
+
     pub async fn list_sessions(
         &self,
         request: AgentSessionListRequest,
@@ -252,6 +300,78 @@ impl AgentRuntime {
         request: AgentSessionDeleteRequest,
     ) -> Result<(), RuntimeError> {
         self.inner.delete_session(request).await
+    }
+
+    pub async fn rename_session(
+        &self,
+        request: AgentSessionRenameRequest,
+    ) -> Result<(), RuntimeError> {
+        self.inner.rename_session(request).await
+    }
+
+    pub async fn archive_session(
+        &self,
+        request: AgentSessionArchiveRequest,
+    ) -> Result<(), RuntimeError> {
+        self.inner.archive_session(request).await
+    }
+
+    pub async fn set_session_archived(
+        &self,
+        request: AgentSessionArchiveStateRequest,
+    ) -> Result<(), RuntimeError> {
+        self.inner.set_session_archived(request).await
+    }
+
+    pub async fn record_completed_local_command_turn(
+        &self,
+        request: AgentLocalCommandTurnRecordRequest,
+    ) -> Result<(), RuntimeError> {
+        self.inner
+            .record_completed_local_command_turn(request)
+            .await
+    }
+
+    pub async fn update_session_model(
+        &self,
+        request: AgentSessionModelUpdateRequest,
+    ) -> Result<(), RuntimeError> {
+        self.inner.update_session_model(request).await
+    }
+
+    pub async fn update_session_mode(
+        &self,
+        request: AgentSessionModeUpdateRequest,
+    ) -> Result<(), RuntimeError> {
+        self.inner.update_session_mode(request).await
+    }
+
+    pub async fn fork_session(
+        &self,
+        request: AgentSessionForkRequest,
+    ) -> Result<AgentSessionForkResult, RuntimeError> {
+        self.inner.fork_session(request).await
+    }
+
+    pub async fn fork_session_at_turn(
+        &self,
+        request: AgentSessionForkAtTurnRequest,
+    ) -> Result<AgentSessionForkResult, RuntimeError> {
+        self.inner.fork_session_at_turn(request).await
+    }
+
+    pub async fn generate_session_usage(
+        &self,
+        request: AgentSessionUsageRequest,
+    ) -> Result<SessionUsageReport, RuntimeError> {
+        self.inner.generate_session_usage(request).await
+    }
+
+    pub async fn wait_for_turn_settlement(
+        &self,
+        request: AgentTurnSettlementRequest,
+    ) -> Result<(), RuntimeError> {
+        self.inner.wait_for_turn_settlement(request).await
     }
 
     pub async fn restore_session(
