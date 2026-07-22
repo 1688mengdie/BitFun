@@ -28,6 +28,7 @@ use std::sync::{
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::Emitter;
 use tauri::Manager;
+use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
 // Re-export API
 pub use api::*;
@@ -250,6 +251,16 @@ fn handle_secondary_launch(app: &tauri::AppHandle) {
     }
 }
 
+fn main_window_state_flags() -> StateFlags {
+    StateFlags::SIZE | StateFlags::POSITION | StateFlags::MAXIMIZED | StateFlags::FULLSCREEN
+}
+
+pub(crate) fn save_main_window_state(app: &tauri::AppHandle) {
+    if let Err(error) = app.save_window_state(main_window_state_flags()) {
+        log::warn!("Failed to save main window state: {}", error);
+    }
+}
+
 #[tauri::command]
 async fn webdriver_bridge_result(request: WebdriverBridgeResultRequest) -> Result<(), String> {
     log::debug!("webdriver_bridge_result command invoked");
@@ -446,6 +457,12 @@ pub async fn run() {
         )
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(main_window_state_flags())
+                .with_filter(|label| label == "main")
+                .build(),
+        )
         .manage(app_state)
         .manage(desktop_runtime)
         .manage(coordinator_state)
@@ -836,6 +853,12 @@ pub async fn run() {
         })
         .on_window_event({
             move |window, event| {
+                if window.label() == "main"
+                    && matches!(event, tauri::WindowEvent::CloseRequested { .. })
+                {
+                    save_main_window_state(window.app_handle());
+                }
+
                 if let tauri::WindowEvent::CloseRequested { api: _api, .. } = event {
                     if window.label() == "main" {
                         #[cfg(target_os = "macos")]
