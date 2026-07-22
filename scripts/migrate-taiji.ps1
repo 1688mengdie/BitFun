@@ -164,7 +164,8 @@ $integrationFiles = @(
 # ── Step 1: create branch ────────────────────────────────────────────
 
 warn "Step 1/5: Creating $TargetBranch from origin/main ..."
-_git checkout -b $TargetBranch origin/main | Out-Null
+_git checkout -B $TargetBranch origin/main | Out-Null
+_git clean -fd | Out-Null
 assert-ok "git checkout -b $TargetBranch"
 ok "Created $TargetBranch at $mainHead"
 
