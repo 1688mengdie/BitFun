@@ -55,6 +55,7 @@ import {
   subscribeHistorySessionOpenTransition,
 } from '../services/sessionOpenIntent';
 import { useThreadGoalController } from '../hooks/useThreadGoalController';
+import { useComposerDefaultFocus } from '../hooks/useComposerDefaultFocus';
 import { ThreadGoalDialogs } from './thread-goal/ThreadGoalDialogs';
 import { FlowChatManager } from '@/flow_chat/services/FlowChatManager';
 import {
@@ -129,6 +130,7 @@ const log = createLogger('ChatInput');
 export interface ChatInputProps {
   className?: string;
   onSendMessage?: (message: string) => void;
+  isSceneActive?: boolean;
 }
 
 type SlashActionItem = {
@@ -277,7 +279,8 @@ function renderMcpPromptMessages(messages: MCPPromptMessage[]): string {
 
 export const ChatInput: React.FC<ChatInputProps> = ({
   className = '',
-  onSendMessage
+  onSendMessage,
+  isSceneActive = true,
 }) => {
   const { t } = useTranslation('flow-chat');
   const canLaunchReview = isTauriRuntime();
@@ -336,6 +339,12 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     inputTarget === 'btw' && activeBtwSessionId ? activeBtwSessionId : currentSessionId;
   const effectiveTargetSessionIdRef = useRef<string | null>(effectiveTargetSessionId);
   effectiveTargetSessionIdRef.current = effectiveTargetSessionId;
+
+  useComposerDefaultFocus({
+    editorRef: richTextInputRef,
+    sessionId: effectiveTargetSessionId,
+    isSceneActive,
+  });
 
   const dispatchInput = useCallback((action: InputAction) => {
     dispatchLocalInput(action);
