@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use tracing::{debug, info, warn};
 
 use taiji_engine::compliance;
 use taiji_engine::config::PipelineConfig;
@@ -73,6 +74,15 @@ enum Command {
 }
 
 // ── CSV helpers ────────────────────────────────────────────────────────
+//
+// TODO(P1-4): Replace hand-written CSV parser with the `csv` crate.
+// `taiji-engine` already depends on `csv`; adding `csv` to taiji-cli's
+// Cargo.toml and using `csv::ReaderBuilder` would eliminate ~76 lines of
+// manual parsing code (parse_csv_line, get_csv_f64, get_csv_str,
+// get_csv_f64_alt, fields_as_strs) and handle edge cases such as embedded
+// newlines, escaped quotes, and BOM headers correctly.
+// Expected dependencies: `csv = { workspace = true }` in taiji-cli/Cargo.toml.
+// See: reports/taiji-cli-duplication-audit.md
 
 /// Extract f64 from a CSV field via column map.
 fn get_csv_f64(fields: &[&str], col_map: &HashMap<String, usize>, name: &str) -> Option<f64> {
@@ -189,9 +199,9 @@ fn run_pipeline(
     let config = PipelineConfig::from_yaml(&yaml_str)
         .map_err(|e| anyhow::anyhow!("Failed to parse config: {}", e))?;
 
-    eprintln!("Pipeline: {} v{}", config.name, config.version);
-    eprintln!("  bar_gen: {:?}", config.bar_gen.time_freqs);
-    eprintln!("  nodes: {}", config.nodes.len());
+    info!("Pipeline: {} v{}", config.name, config.version);
+    debug!("  bar_gen: {:?}", config.bar_gen.time_freqs);
+    info!("  nodes: {}", config.nodes.len());
 
     // 2. Build pipeline
     let mut pipeline = Pipeline::from_config(config.clone())
@@ -228,7 +238,7 @@ fn run_pipeline(
         node.on_init(&node_config, &store)
             .map_err(|e| anyhow::anyhow!("Failed to init node '{}': {}", spec.id, e))?;
 
-        eprintln!("  + node: id={}, type={}", spec.id, spec.type_name);
+        info!("  + node: id={}, type={}", spec.id, spec.type_name);
         pipeline.add_node(node);
     }
 
@@ -254,10 +264,10 @@ fn run_pipeline(
     }
 
     let total_data_lines = lines.len().saturating_sub(1);
-    eprintln!("CSV: {} data rows, resume={}", total_data_lines, resume);
+    info!("CSV: {} data rows, resume={}", total_data_lines, resume);
 
     if resume > 0 {
-        eprintln!(
+        info!(
             "Resuming from data row {} (skipping {} rows)",
             resume, resume
         );
@@ -333,7 +343,7 @@ fn run_pipeline(
                 all_signals.extend(result.signals);
 
                 if ticks_processed.is_multiple_of(5000) {
-                    eprintln!(
+                    info!(
                         "Progress: {} ticks, {} bars, {} signals",
                         ticks_processed,
                         bars_generated,
@@ -342,12 +352,12 @@ fn run_pipeline(
                 }
             }
             Err(e) => {
-                eprintln!("Warning: error at line {}: {}", line_idx + 1, e);
+                warn!("error at line {}: {}", line_idx + 1, e);
             }
         }
     }
 
-    eprintln!(
+    info!(
         "Done: {} ticks, {} bars, {} signals",
         ticks_processed,
         bars_generated,
@@ -364,7 +374,7 @@ fn run_pipeline(
         }
         std::fs::write(output_path, &signals_json)
             .with_context(|| format!("Failed to write output: {}", output_path.display()))?;
-        eprintln!("Signals written to: {}", output_path.display());
+        info!("Signals written to: {}", output_path.display());
     } else {
         println!("{}", signals_json);
     }
@@ -389,7 +399,7 @@ fn run_backtest(config_path: &PathBuf, csv_path: &Option<PathBuf>, parallel: boo
             .map(|inst| config.with_instrument(inst))
             .collect();
         let n = configs.len();
-        eprintln!("Parallel backtest: {} instrument(s)", n);
+        info!("Parallel backtest: {} instrument(s)", n);
 
         let results = taiji_backtest::BacktestRunner::run_parallel(configs)
             .map_err(|e| anyhow::anyhow!("Parallel backtest failed: {}", e))?;
@@ -457,20 +467,22 @@ fn run_reload_config(config_path: &PathBuf) -> Result<()> {
     let config = PipelineConfig::from_yaml(&yaml_str)
         .map_err(|e| anyhow::anyhow!("Failed to parse config: {}", e))?;
 
-    eprintln!("Reload config: {} v{}", config.name, config.version);
-    eprintln!("  bar_gen modes: {:?}", config.bar_gen.modes);
-    eprintln!("  bar_gen time_freqs: {:?}", config.bar_gen.time_freqs);
-    eprintln!("  nodes: {}", config.nodes.len());
+    info!("Reload config: {} v{}", config.name, config.version);
+    debug!("  bar_gen modes: {:?}", config.bar_gen.modes);
+    debug!("  bar_gen time_freqs: {:?}", config.bar_gen.time_freqs);
+    info!("  nodes: {}", config.nodes.len());
     for node in &config.nodes {
-        eprintln!("    - id={}, type={}", node.id, node.type_name);
+        info!("    - id={}, type={}", node.id, node.type_name);
     }
-    eprintln!("Config validated successfully — ready for hot-reload.");
+    info!("Config validated successfully — ready for hot-reload.");
     Ok(())
 }
 
 // ── main ───────────────────────────────────────────────────────────────
 
 fn main() -> Result<()> {
+    tracing_subscriber::fmt::init();
+
     let cli = Cli::parse();
 
     // Check for backtest subcommand first
@@ -482,7 +494,7 @@ fn main() -> Result<()> {
     {
         // R6.3: Compliance — require risk acknowledgement before any execution.
         if !compliance::show_risk_disclaimer() {
-            eprintln!("风险揭示未确认，程序退出。");
+            warn!("风险揭示未确认，程序退出。");
             std::process::exit(1);
         }
         return run_backtest(&config, &csv, parallel);
@@ -503,7 +515,7 @@ fn main() -> Result<()> {
 
     // R6.3: Compliance
     if !compliance::show_risk_disclaimer() {
-        eprintln!("风险揭示未确认，程序退出。");
+        warn!("风险揭示未确认，程序退出。");
         std::process::exit(1);
     }
 

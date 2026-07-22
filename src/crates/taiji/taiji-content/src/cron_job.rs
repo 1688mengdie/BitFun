@@ -141,6 +141,9 @@ mod tests {
 
 /// Register the 4 Taiji cron job types with CronService.
 ///
+/// Idempotent — checks for existing jobs by name before creating, so
+/// restarting the app does not produce duplicates.
+///
 /// # Panics
 ///
 /// Will not panic. If CronService is not initialized or current directory retrieval
@@ -164,6 +167,11 @@ pub async fn register_taiji_cron_jobs() {
             return;
         }
     };
+
+    // Collect existing job names so we skip duplicates on restart.
+    let existing = cron_service.list_jobs().await;
+    let existing_names: std::collections::HashSet<&str> =
+        existing.iter().map(|j| j.name.as_str()).collect();
 
     let jobs: [(&str, &str, &str); 4] = [
         (
@@ -189,6 +197,11 @@ pub async fn register_taiji_cron_jobs() {
     ];
 
     for (name, expr, text) in &jobs {
+        if existing_names.contains(name) {
+            log::info!("Taiji cron job already registered, skipping: {}", name);
+            continue;
+        }
+
         let request = bitfun_core::service::cron::CreateCronJobRequest {
             name: name.to_string(),
             schedule: bitfun_core::service::cron::CronSchedule::Cron {

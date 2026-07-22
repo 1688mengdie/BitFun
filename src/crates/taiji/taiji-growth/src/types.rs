@@ -1,14 +1,10 @@
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-/// 日期范围（与 taiji-publisher / taiji-content 中定义一致，本地副本避免跨 crate 依赖）。
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DateRange {
-    pub start: NaiveDate,
-    pub end: NaiveDate,
-}
+/// Re-exported from [`taiji_content::DateRange`], the canonical definition.
+pub use taiji_content::DateRange;
 
 /// 内容类型。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -97,6 +93,11 @@ pub struct WebsiteConfig {
 // ── 邮件与订阅类型 ──
 
 /// SMTP 连接配置。
+//
+// TODO(P2-1): Deduplicate with `taiji-alert::SmtpConfig`.
+// This version adds `from_name` + `from_email` that the alert version
+// lacks. Extract a shared `SmtpConfig` with all fields into
+// `taiji-engine` or a new `taiji-shared` crate.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SmtpConfig {
     /// SMTP 服务器地址
@@ -246,6 +247,7 @@ pub struct BatchResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::NaiveDate;
 
     #[test]
     fn test_content_asset_roundtrip() {

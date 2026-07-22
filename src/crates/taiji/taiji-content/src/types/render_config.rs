@@ -19,7 +19,11 @@ pub struct VideoRenderConfig {
     pub annotation_mapping: PathBuf,
 }
 
-/// Shared DateRange DTO (reused across multiple types).
+/// Date range with start/end bounds.
+///
+/// **Canonical definition.** `taiji-growth`, `taiji-publisher`, and `taiji-backtest`
+/// re-export this type from here to avoid duplication.
+/// Import via `taiji_content::DateRange` or `taiji_content::types::render_config::DateRange`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DateRange {
     pub start: NaiveDate,

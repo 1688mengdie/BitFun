@@ -12,6 +12,13 @@ pub mod vol_regime;
 
 use taiji_engine::node::ComputeNode;
 use taiji_engine::types::bar::RawBar;
+use statrs::statistics::Statistics;
+
+// ── 共享常量 ──────────────────────────────────────────────────────────
+
+/// 在线缓冲区最大 bar 数量（≈ 1 年日线）。
+/// 超过此限制后从头部丢弃旧数据，保持内存有界。
+pub(crate) const MAX_BARS: usize = 300;
 
 // ── 共享类型 ──────────────────────────────────────────────────────────
 
@@ -62,23 +69,23 @@ impl Default for AlertThresholds {
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
 )]
-pub enum AlertLevel {
+pub enum AbnormalLevel {
     Normal,
     Warn,
     Reduce,
     Emergency,
 }
 
-impl AlertLevel {
+impl AbnormalLevel {
     pub fn from_score(score: f64, thresholds: &AlertThresholds) -> Self {
         if score >= thresholds.emergency {
-            AlertLevel::Emergency
+            AbnormalLevel::Emergency
         } else if score >= thresholds.reduce {
-            AlertLevel::Reduce
+            AbnormalLevel::Reduce
         } else if score >= thresholds.warn {
-            AlertLevel::Warn
+            AbnormalLevel::Warn
         } else {
-            AlertLevel::Normal
+            AbnormalLevel::Normal
         }
     }
 }
@@ -93,14 +100,14 @@ pub trait AbnormalIndicator: ComputeNode {
     fn compute_score(&self, bars: &[RawBar], lookback: usize) -> f64;
 }
 
-// ── 统计工具函数（零外部依赖）────────────────────────────────────────
+// ── 统计工具函数（委托给 statrs crate）───────────────────────────────
 
 /// 算术平均
 pub(crate) fn mean(data: &[f64]) -> f64 {
     if data.is_empty() {
         return 0.0;
     }
-    data.iter().sum::<f64>() / data.len() as f64
+    data.mean()
 }
 
 /// 样本标准差（除以 n-1）
@@ -108,12 +115,10 @@ pub(crate) fn std_dev(data: &[f64]) -> f64 {
     if data.len() < 2 {
         return 0.0;
     }
-    let m = mean(data);
-    let variance = data.iter().map(|x| (x - m).powi(2)).sum::<f64>() / (data.len() - 1) as f64;
-    variance.sqrt()
+    data.std_dev()
 }
 
-/// Pearson 相关系数
+/// Pearson 相关系数（statrs 不提供，保留手写实现）
 pub(crate) fn pearson_r(x: &[f64], y: &[f64]) -> f64 {
     if x.len() != y.len() || x.len() < 2 {
         return 0.0;
@@ -134,7 +139,9 @@ pub(crate) fn pearson_r(x: &[f64], y: &[f64]) -> f64 {
     cov / (sx * sy)
 }
 
-/// 排序数组的百分位数（线性插值）
+/// 排序数组的百分位数（线性插值）。
+/// 注意：statrs 的 `OrderStatistics::percentile` 需要 `&mut self`、
+/// 接受 `usize` 参数且使用不同的插值公式，不适合替换此函数。
 pub(crate) fn percentile(sorted: &[f64], pct: f64) -> f64 {
     if sorted.is_empty() {
         return 0.0;
@@ -149,7 +156,7 @@ pub(crate) fn percentile(sorted: &[f64], pct: f64) -> f64 {
     sorted[lo] + frac * (sorted[hi] - sorted[lo])
 }
 
-/// 简单线性回归：`(slope, intercept)`
+/// 简单线性回归：`(slope, intercept)`（statrs 不提供，保留手写实现）
 pub(crate) fn linear_regression(x: &[f64], y: &[f64]) -> (f64, f64) {
     if x.len() != y.len() || x.len() < 2 {
         return (0.0, 0.0);
@@ -221,27 +228,27 @@ mod tests {
     fn test_alert_level_from_score() {
         let thresholds = AlertThresholds::default();
         assert_eq!(
-            AlertLevel::from_score(50.0, &thresholds),
-            AlertLevel::Normal
+            AbnormalLevel::from_score(50.0, &thresholds),
+            AbnormalLevel::Normal
         );
-        assert_eq!(AlertLevel::from_score(75.0, &thresholds), AlertLevel::Warn);
+        assert_eq!(AbnormalLevel::from_score(75.0, &thresholds), AbnormalLevel::Warn);
         assert_eq!(
-            AlertLevel::from_score(90.0, &thresholds),
-            AlertLevel::Reduce
+            AbnormalLevel::from_score(90.0, &thresholds),
+            AbnormalLevel::Reduce
         );
         assert_eq!(
-            AlertLevel::from_score(98.0, &thresholds),
-            AlertLevel::Emergency
+            AbnormalLevel::from_score(98.0, &thresholds),
+            AbnormalLevel::Emergency
         );
         // 边界值
-        assert_eq!(AlertLevel::from_score(70.0, &thresholds), AlertLevel::Warn);
+        assert_eq!(AbnormalLevel::from_score(70.0, &thresholds), AbnormalLevel::Warn);
         assert_eq!(
-            AlertLevel::from_score(85.0, &thresholds),
-            AlertLevel::Reduce
+            AbnormalLevel::from_score(85.0, &thresholds),
+            AbnormalLevel::Reduce
         );
         assert_eq!(
-            AlertLevel::from_score(95.0, &thresholds),
-            AlertLevel::Emergency
+            AbnormalLevel::from_score(95.0, &thresholds),
+            AbnormalLevel::Emergency
         );
     }
 }

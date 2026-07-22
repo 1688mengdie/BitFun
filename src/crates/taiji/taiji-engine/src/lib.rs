@@ -9,7 +9,6 @@ pub mod error;
 pub mod factory;
 pub mod feature_flags;
 pub mod fusion;
-pub mod log;
 pub mod node;
 pub mod pipeline;
 pub mod risk;

@@ -137,6 +137,9 @@ jobs:
       - name: Check compilation
         run: cargo check --locked --workspace
 
+      - name: Check compilation with video feature
+        run: cargo check --locked -p bitfun-desktop --features video
+
       - name: Run Windows ConPTY CLI smoke test
         if: runner.os == 'Windows'
         run: cargo test --locked -p bitfun-cli --test terminal_process_contracts

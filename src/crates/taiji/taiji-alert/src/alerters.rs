@@ -13,6 +13,11 @@ use tracing::{debug, warn};
 ///
 /// Uses the Feishu custom bot webhook API (`POST /open-apis/bot/v2/hook/{token}`)
 /// with `interactive` card messages for rich alert formatting.
+///
+/// TODO(tool-audit): This struct owns an independent `reqwest::Client` (default config).
+/// Consider injecting a shared `reqwest::Client` via the constructor instead of
+/// calling `Client::new()` here. Consolidating HTTP clients across taiji crates
+/// would reduce socket/file-descriptor usage and enable uniform timeout/retry policy.
 #[derive(Debug, Clone)]
 pub struct FeishuWebhookAlerter {
     webhook_url: String,
@@ -20,6 +25,8 @@ pub struct FeishuWebhookAlerter {
 }
 
 impl FeishuWebhookAlerter {
+    /// TODO(tool-audit): Replace `Client::new()` with an injected shared
+    /// `reqwest::Client`. See struct-level TODO for rationale.
     pub fn new(webhook_url: String) -> Self {
         Self {
             webhook_url,
@@ -87,6 +94,12 @@ impl FeishuWebhookAlerter {
 ///
 /// The consumer (desktop app) provides a function that delivers a native OS
 /// notification (e.g. via `send_system_notification` Tauri command).
+//
+// TODO(P2-6): Unify callback interfaces into a single `Alerter` trait.
+// Currently DesktopNotifyFn, HeartbeatAlertFn, and ad-hoc closures serve as
+// three separate callback shapes. BitFun's `EventSubscriber` trait provides a
+// standard pattern — each channel (desktop/feishu/email/heartbeat) should
+// implement a common trait rather than passing raw function pointers.
 pub type DesktopNotifyFn = Arc<dyn Fn(String, String) + Send + Sync + 'static>;
 
 /// Sends alert messages as native desktop notifications.

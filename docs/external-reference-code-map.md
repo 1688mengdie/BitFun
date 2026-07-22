@@ -23,60 +23,6 @@
 3. 新增：czsc 没有的量/幅聚合模式（量价时空需要）
 4. Rust↔Python 桥接 Tauri command（调用 openctp-ctp Python SDK）
 
-### 拐点与双线
-
-| 参考项目 | 语言 | 许可证 | 核心文件 | 行数 | 关键算法 |
-|---------|:--:|------|---------|:--:|---------|
-| **trendln** | Python | MIT | `trendln/__init__.py` | 1188 | 3 种极值检测（滚动窗口/去重/数值导数），5 种趋势线搜索（暴力 O(n³)→优化 O(n²log n)→Hough），自定义 Hough 累加器（纯 numpy） |
-| **trendln** | Python | MIT | 同上 | 897-969 | `get_levels()` 支撑/阻力 + 风险回报比 |
-| **pytrendline** | Python | MIT | `detect.py` | 505 | O(n²) 穷举趋势线枚举 + `(price, slope)` 2D 聚类去重 + 评分排序 |
-| **support_resistance** | Python | 未标注 | `cluster.py` + `touch_scorer.py` | 61+190 | ZigZag→AgglomerativeClustering→TouchScorer 磁体定位流水线 |
-
-**taiji-dvmi 实现路线**：
-1. 极值检测：参考 trendln 的 `METHOD_NUMDIFF`（数值导数法，最准确）
-2. 趋势线：参考 trendln 的 `get_trend_opt`（O(n²log n)，默认最优）
-3. 磁体定位：参考 support_resistance 的 ZigZag→聚类→TouchScorer 流水线
-4. 拐点去重：参考 pytrendline 的 2D 聚类合并
-
-### 磁体定位
-
-| 参考项目 | 语言 | 许可证 | 核心文件 | 行数 | 关键算法 |
-|---------|:--:|------|---------|:--:|---------|
-| **support_resistance** | Python | 未标注 | `_abstract.py` | 56-84 | ZigZag `peak_valley_pivots(X, delta, -delta)` |
-| **support_resistance** | Python | 未标注 | `touch_scorer.py` | 38-190 | TouchScorer：CUT_BODY(-2)/CUT_WICK(-1)/TOUCH_UP(+2)/TOUCH_DOWN(+2) 加权评分 |
-
-**taiji-magnet 实现路线**：
-1. 枢轴检测：`peak_valley_pivots` 等效 Rust 实现
-2. 层次聚类：`AgglomerativeClustering`（可用 `kodama` Rust crate）
-3. TouchScorer 评分：100+ bar 扫描，事件加权
-
-### 三推计数
-
-| 参考项目 | 语言 | 许可证 | 核心文件 | 行数 | 关键算法 |
-|---------|:--:|------|---------|:--:|---------|
-| **smc-toolkit** | Python | MIT | `core.py` | 361 | `calc_swing_structures()` — 前向滚动窗口 Swing High/Low，BOS（收盘突破），CHoCH（BOS 方向翻转），双结构（size=40 + size=5） |
-| **smc-toolkit** | Python | MIT | `core.py` | 128-189 | FVG 向量化检测（3 烛间隙 + 自适应阈值 + mitigation 检查） |
-
-**taiji-thrust 实现路线**：
-1. Swing 检测：参考 `swing_pre` 前向窗口逻辑 → `swing_hl_sim` 状态机 → `swing_h_l` 差分
-2. BOS：参考收盘价突破 + shift(1) 首次检测
-3. CHoCH：参考 ffill→diff 方向翻转
-4. 三推：在 CHoCH 序列上叠加推力衰减检测（量价时空专属）
-
-### 风控计算
-
-| 参考项目 | 语言 | 许可证 | 核心文件 | 行数 | 关键算法 |
-|---------|:--:|------|---------|:--:|---------|
-| **stolgo** | Python | MIT | `pa/_core.py` | 169 | Rule DSL：`&`/`|`/`~` 组合 + `ThenRule`（`.shift(1)` 无未来函数保证） |
-| **stolgo** | Python | MIT | `core/engine.py` | 166 | 回测引擎：矢量掩码预计算→Bar 循环→成交匹配（FIFO）→权益曲线 |
-| **stolgo** | Python | MIT | `strategy/context.py` | 104 | `BarDataView._limit` 截断防超前，`LookaheadError` 运行时检测 |
-
-**taiji-risk 实现路线**：
-1. 仓位计算：参考 stolgo 的 `resolve_qty`（固定数量/资金百分比）
-2. 止损：ATR 止损（已有 stolgo ATR 参考）
-3. 凯利公式：自行实现
-4. 无未来函数：参考 `BarDataView._limit` + `LookaheadError` 模式
-
 ### 缠论完整实现参考
 
 | 参考项目 | 语言 | 许可证 | 核心文件 | 行数 | 关键特征 |

@@ -22,6 +22,7 @@
 //! 如果不希望开源，放在独立私有仓库中，通过 `path` 依赖引用。
 
 use chrono::{DateTime, NaiveTime, Utc};
+use std::collections::HashMap;
 use taiji_engine::error::Result;
 use taiji_engine::node::{ComputeNode, NodeConfig};
 use taiji_engine::store::StateStore;
@@ -113,7 +114,7 @@ impl DualThrust {
 
     /// 判断是否新交易时段开盘（触发重新计算上下轨）
     fn is_session_open(&self, bar: &RawBar) -> bool {
-        let time = bar.close_time.time();
+        let time = bar.dt.time();
         let day_open = NaiveTime::parse_from_str(&self.params.day_open, "%H:%M").ok();
         let night_open = self.params.night_open.as_ref()
             .and_then(|s| NaiveTime::parse_from_str(s, "%H:%M").ok());
@@ -139,30 +140,44 @@ impl DualThrust {
             self.day_open_triggered = true;
         }
         // 收盘后重置
-        if bar.close_time.time() >= NaiveTime::from_hms_opt(15, 15, 0).unwrap() {
+        if bar.dt.time() >= NaiveTime::from_hms_opt(15, 15, 0).unwrap() {
             self.day_open_triggered = false;
         }
 
         // 突破信号
         if self.upper_bound > 0.0 && bar.close > self.upper_bound && self.position <= 0 {
             self.position = self.params.max_position as i32;
-            return Some(Signal::new(
-                self.id.clone(),
-                SignalAction::Long,
-                bar.close,
-                1.0,
-                format!("上轨突破: {:.2} > {:.2}", bar.close, self.upper_bound),
-            ));
+            return Some(Signal {
+                timestamp: bar.dt,
+                instrument: bar.symbol.to_string(),
+                freq: bar.freq,
+                action: SignalAction::Long,
+                entry: Some(bar.close),
+                stop_loss: None,
+                take_profit: None,
+                size: Some(self.params.max_position as f64),
+                source: self.id.clone(),
+                confidence: 1.0,
+                metadata: HashMap::new(),
+                disclaimer: Some(format!("上轨突破: {:.2} > {:.2}", bar.close, self.upper_bound)),
+            });
         }
         if self.lower_bound > 0.0 && bar.close < self.lower_bound && self.position >= 0 {
             self.position = -(self.params.max_position as i32);
-            return Some(Signal::new(
-                self.id.clone(),
-                SignalAction::Short,
-                bar.close,
-                1.0,
-                format!("下轨突破: {:.2} < {:.2}", bar.close, self.lower_bound),
-            ));
+            return Some(Signal {
+                timestamp: bar.dt,
+                instrument: bar.symbol.to_string(),
+                freq: bar.freq,
+                action: SignalAction::Short,
+                entry: Some(bar.close),
+                stop_loss: None,
+                take_profit: None,
+                size: Some(self.params.max_position as f64),
+                source: self.id.clone(),
+                confidence: 1.0,
+                metadata: HashMap::new(),
+                disclaimer: Some(format!("下轨突破: {:.2} < {:.2}", bar.close, self.lower_bound)),
+            });
         }
 
         None
@@ -224,14 +239,14 @@ mod tests {
     fn make_bar(open: f64, high: f64, low: f64, close: f64, time: &str) -> RawBar {
         RawBar {
             symbol: "rb0".into(),
-            freq: Freq::M1,
+            freq: Freq::F1,
+            id: 0,
             open, high, low, close,
-            volume: 1000.0,
-            open_interest: 5000.0,
-            close_time: DateTime::parse_from_rfc3339(&format!("2026-07-22T{}:00+08:00", time)).unwrap().into(),
-            delta_volume: 0.0,
-            delta_oi: 0.0,
-            tick_count: 10,
+            vol: 1000.0,
+            amount: 0.0,
+            open_interest: Some(5000.0),
+            delta: None,
+            dt: DateTime::parse_from_rfc3339(&format!("2026-07-22T{}:00+08:00", time)).unwrap().into(),
         }
     }
 

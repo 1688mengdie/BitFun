@@ -1,3 +1,40 @@
+//! 太极博客生成器 — 将 Agent 分析 JSON 转换为 Hugo Markdown 博文。
+//!
+//! ## Template rendering: Tera
+//!
+//! This crate uses the **Tera** template engine (`tera::Tera`) for rendering
+//! Hugo Markdown from agent analysis JSON. Templates are compiled at build time
+//! via `include_str!` and registered with `tera.add_raw_template()`.
+//!
+//! ### Cross-reference: `taiji-content` uses manual `String::replace`
+//!
+//! [`taiji-content::chart_option`](../taiji-content/src/chart_option.rs) renders
+//! ECharts option JSON templates using **manual `String::replace`** on
+//! `{{variable}}` placeholders. That approach has zero dependencies and compiles
+//! fast, but lacks conditionals, loops, and filters.
+//!
+//! ### Recommended unification
+//!
+//! The two crates currently use **different template rendering strategies**:
+//!
+//! | Crate | Engine | Pros | Cons |
+//! |---|---|---|---|
+//! | `taiji-blog-gen` (`main.rs`) | Tera v1 | Full template logic, typed context | Adds a dependency |
+//! | `taiji-content` (`chart_option.rs`) | Manual `String::replace` | Zero deps, fast compile | Fragile; no conditionals/loops/filters |
+//!
+//! **Recommendation**: Eventually migrate `taiji-content::chart_option` to Tera
+//! (or extract a shared `taiji-templates` helper crate) so all taiji crates use
+//! one rendering engine. The current Tera usage in this crate serves as the
+//! **reference pattern** for template features — prefer extending Tera rather
+//! than adding more `String::replace` variants elsewhere.
+//!
+//! ## File system access
+//!
+//! This crate uses raw `std::fs` for file I/O and directory traversal.
+//! TODO(taiji): Migrate to bitfun_services FileSystemService (`src/crates/services`)
+//! for platform-agnostic path canonicalization, file reads, and directory operations.
+//! The FileSystemService abstraction supports desktop, remote workspace, and
+//! future WASM targets.
 use anyhow::{Context, Result};
 use chrono::Utc;
 use clap::Parser;
@@ -243,6 +280,8 @@ fn render_markdown(template_name: &str, ctx: &TeraContext) -> Result<String> {
 // ── Main ──
 
 fn process_single(input_path: &Path, output_dir: &Path, template: &str) -> Result<()> {
+    // TODO(taiji): Migrate std::fs::canonicalize / read_to_string / create_dir_all / write
+    // to bitfun_services FileSystemService for cross-platform and remote-workspace support.
     let input_path = std::fs::canonicalize(input_path)
         .with_context(|| format!("failed to resolve input path: {}", input_path.display()))?;
     let output_dir = std::fs::canonicalize(output_dir).unwrap_or_else(|_| output_dir.to_path_buf()); // output dir may not exist yet
@@ -273,6 +312,7 @@ fn process_single(input_path: &Path, output_dir: &Path, template: &str) -> Resul
 }
 
 fn process_batch(input_dir: &Path, output_dir: &Path, template: &str) -> Result<()> {
+    // TODO(taiji): Migrate fs::read_dir to bitfun_services FileSystemService.
     let mut count = 0;
     for entry in fs::read_dir(input_dir)
         .with_context(|| format!("failed to read input dir: {}", input_dir.display()))?

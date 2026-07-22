@@ -2,6 +2,14 @@ use crate::types::compose_config::{ComposeConfig, EncodingProfile};
 use std::process::Command;
 
 /// FFmpeg composer: combine PNG frame sequence + MP3 audio + optional SRT subtitles into H.264 MP4.
+///
+/// ## File system access
+///
+/// This struct uses raw `std::fs` for path canonicalization and file I/O.
+/// TODO(taiji): Migrate to bitfun_services FileSystemService for platform-agnostic
+/// path handling and file operations. The FileSystemService abstraction lives in
+/// `src/crates/services` and provides canonicalize, read, write, and directory
+/// traversal primitives that work across desktop, remote, and WASM targets.
 pub struct FfmpegComposer {
     config: ComposeConfig,
 }
@@ -23,7 +31,11 @@ impl FfmpegComposer {
     pub fn compose(&self) -> Result<(), String> {
         let cfg = &self.config;
 
-        // Canonicalize paths to prevent path traversal
+        // Canonicalize paths to prevent path traversal.
+        //
+        // TODO(taiji): Replace std::fs::canonicalize with
+        // bitfun_services FileSystemService::canonicalize for cross-platform safety
+        // and remote-workspace support.
         let frames_dir = std::fs::canonicalize(&cfg.frames_dir).map_err(|e| {
             format!(
                 "Failed to resolve frames_dir {}: {}",

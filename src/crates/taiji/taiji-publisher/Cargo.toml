@@ -14,6 +14,7 @@ crate-type = ["rlib"]
 serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
+taiji-content = { path = "../taiji-content" }
 async-trait = { workspace = true }
 futures = { workspace = true }
 tokio = { workspace = true }

@@ -4,15 +4,19 @@
 //! 当 |Δρ| > 0.3 时判定为相关性断裂。
 //! Score = min(|Δρ| / 0.3, 1.0) * 100。
 
-use crate::{pearson_r, AbnormalIndicator};
+use crate::{pearson_r, AbnormalIndicator, MAX_BARS};
 use taiji_engine::error::Result;
 use taiji_engine::node::{ComputeNode, NodeConfig, NodeId};
 use taiji_engine::store::StateStore;
 use taiji_engine::types::bar::{Freq, RawBar};
 use taiji_engine::types::state::{StateKey, StateValue};
 
+/// 相关性滚动窗口 — 20 天（一个交易月）。
+/// 领域常量：价格-成交量相关性的标准观测窗口，无需参数化。
 const CORR_WINDOW: usize = 20;
-const MAX_BARS: usize = 300;
+/// 相关性断裂阈值 — |Δρ| ≥ 0.3 视为断裂。
+/// 领域常量：经验阈值，ρ 变化超过 0.3 意味着量价关系发生结构性改变。
+const CORR_BREAK_THRESHOLD: f64 = 0.3;
 const OUTPUT_KEY: &str = "abnormal:corr_fracture";
 
 pub struct CorrFractureNode {
@@ -68,7 +72,7 @@ impl AbnormalIndicator for CorrFractureNode {
         };
 
         let delta = (rho_current - rho_prev).abs();
-        (delta / 0.3).min(1.0) * 100.0
+        (delta / CORR_BREAK_THRESHOLD).min(1.0) * 100.0
     }
 }
 
@@ -123,7 +127,7 @@ impl CorrFractureNode {
         let rho_current = pearson_r(c, v);
 
         let delta = (rho_current - self.prev_rho).abs();
-        (delta / 0.3).min(1.0) * 100.0
+        (delta / CORR_BREAK_THRESHOLD).min(1.0) * 100.0
     }
 }
 

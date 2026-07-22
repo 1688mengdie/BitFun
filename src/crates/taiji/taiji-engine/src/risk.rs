@@ -8,9 +8,9 @@ use std::collections::HashMap;
 /// Pluggable risk monitor. Each monitor checks one risk dimension.
 pub trait RiskMonitor: Send + Sync {
     fn init(&mut self, config: &RiskConfig) -> Result<()>;
-    fn check_order(&self, order: &OrderRequest, state: &StateStore) -> Result<OrderDecision>;
-    fn check_position(&self, position: &Position, state: &StateStore) -> Result<RiskAction>;
-    fn on_fill(&mut self, fill: &Fill, state: &StateStore);
+    fn check_order(&self, order: &RiskOrderRequest, state: &StateStore) -> Result<OrderDecision>;
+    fn check_position(&self, position: &RiskPosition, state: &StateStore) -> Result<RiskAction>;
+    fn on_fill(&mut self, fill: &RiskFill, state: &StateStore);
     fn on_calculate(&mut self, state: &StateStore) -> Result<Vec<RiskAlert>>;
     fn enabled(&self) -> bool;
 }
@@ -21,7 +21,7 @@ pub struct RiskConfig {
 }
 
 #[derive(Debug, Clone)]
-pub struct OrderRequest {
+pub struct RiskOrderRequest {
     pub instrument: String,
     pub action: String,
     pub price: f64,
@@ -36,7 +36,7 @@ pub enum OrderDecision {
 }
 
 #[derive(Debug, Clone)]
-pub struct Position {
+pub struct RiskPosition {
     pub instrument: String,
     pub volume: f64,
     pub avg_price: f64,
@@ -50,7 +50,7 @@ pub enum RiskAction {
 }
 
 #[derive(Debug, Clone)]
-pub struct Fill {
+pub struct RiskFill {
     pub instrument: String,
     pub price: f64,
     pub volume: f64,

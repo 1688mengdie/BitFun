@@ -4,7 +4,7 @@
 //! 阈值：warn=70 → 告警, reduce=85 → 降仓位, emergency=95 → 熔断
 //! 输出：abnormal:score (f64) + abnormal:alert_level (JSON string)
 
-use crate::{AbnormalWeights, AlertLevel, AlertThresholds};
+use crate::{AbnormalWeights, AbnormalLevel, AlertThresholds};
 use taiji_engine::error::Result;
 use taiji_engine::node::{ComputeNode, NodeConfig, NodeId};
 use taiji_engine::store::StateStore;
@@ -118,7 +118,7 @@ impl ComputeNode for ScorecardFusionNode {
     fn on_bar(&mut self, _bar: &RawBar, _period: Freq, state: &StateStore) -> Result<()> {
         let scores = self.read_scores(state);
         let abnormal_score = self.fuse(&scores).clamp(0.0, 100.0);
-        let level = AlertLevel::from_score(abnormal_score, &self.alert_thresholds);
+        let level = AbnormalLevel::from_score(abnormal_score, &self.alert_thresholds);
 
         state.set(
             OUTPUT_SCORE_KEY.into(),
@@ -128,10 +128,10 @@ impl ComputeNode for ScorecardFusionNode {
 
         // 告警等级存为 JSON string
         let level_str = match level {
-            AlertLevel::Normal => "normal",
-            AlertLevel::Warn => "warn",
-            AlertLevel::Reduce => "reduce",
-            AlertLevel::Emergency => "emergency",
+            AbnormalLevel::Normal => "normal",
+            AbnormalLevel::Warn => "warn",
+            AbnormalLevel::Reduce => "reduce",
+            AbnormalLevel::Emergency => "emergency",
         };
         state.set(
             OUTPUT_LEVEL_KEY.into(),

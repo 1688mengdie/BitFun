@@ -1,15 +1,12 @@
+use crate::process_util::{create_command, run_with_timeout, sanitize_cli_arg};
 use crate::{PlatformPublisher, PublishResult, PublishStatus, VideoAsset};
 use std::fs;
 use std::path::PathBuf;
-use std::process::Command;
+use std::time::Duration;
 
-/// Strip control characters from a user-supplied string to prevent CLI injection.
-/// Rejects newlines, carriage returns, and null bytes.
-fn sanitize_cli_arg(s: &str) -> String {
-    s.chars()
-        .filter(|c| !matches!(*c, '\n' | '\r' | '\x00'))
-        .collect()
-}
+/// Default timeout for subprocess invocations (60 seconds — biliup uploads
+/// may take longer than a simple probe).
+const DEFAULT_CMD_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Bilibili publishing adapter — wraps the biliup CLI.
 pub struct BiliupPublisher {
@@ -27,11 +24,16 @@ impl BiliupPublisher {
         }
     }
 
-    /// Check if biliup CLI is available
+    /// Check if biliup CLI is available.
+    ///
+    /// Uses [`create_command`] (which adds `CREATE_NO_WINDOW` on Windows) and
+    /// [`run_with_timeout`] so a hung `biliup --version` cannot block the caller.
+    /// TODO: migrate to `bitfun_services_core::process_manager::create_command`
+    ///       once taiji-publisher depends on services-core.
     pub fn check_cli(&self) -> Result<String, String> {
-        let output = Command::new(&self.biliup_bin)
-            .arg("--version")
-            .output()
+        let mut cmd = create_command(&self.biliup_bin);
+        cmd.arg("--version");
+        let output = run_with_timeout(cmd, DEFAULT_CMD_TIMEOUT)
             .map_err(|e| format!("biliup CLI unavailable: {}", e))?;
         if output.status.success() {
             Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
@@ -101,9 +103,9 @@ impl PlatformPublisher for BiliupPublisher {
 
         // 2. Execute biliup upload
         let args = self.build_upload_args(video);
-        let output = Command::new(&self.biliup_bin)
-            .args(&args)
-            .output()
+        let mut cmd = create_command(&self.biliup_bin);
+        cmd.args(&args);
+        let output = run_with_timeout(cmd, DEFAULT_CMD_TIMEOUT)
             .map_err(|e| format!("biliup execution failed: {}", e))?;
 
         let stdout = String::from_utf8_lossy(&output.stdout);

@@ -1,13 +1,9 @@
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-/// Date range (consistent with definition in taiji-content; local copy to avoid cross-crate dependency).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DateRange {
-    pub start: NaiveDate,
-    pub end: NaiveDate,
-}
+/// Re-exported from [`taiji_content::DateRange`], the canonical definition.
+pub use taiji_content::DateRange;
 
 /// Video publishing asset — only contains fields required for the publishing stage.
 /// Render intermediates (frame sequences, echarts options, TTS scripts, audio) are managed
@@ -109,6 +105,7 @@ pub enum PublishStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::NaiveDate;
 
     #[test]
     fn test_video_asset_roundtrip() {
@@ -154,6 +151,7 @@ mod tests {
 }
 
 pub mod biliup;
+pub mod process_util;
 pub mod publish_scheduler;
 pub mod publisher_twitter;
 pub mod publisher_wechat_mp;

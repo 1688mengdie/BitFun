@@ -1,6 +1,6 @@
 //! taiji-llm — LLM 客户端抽象层。
 //!
-//! 提供统一的 [`LlmClient`] trait，以及 OpenAI / Claude / DeepSeek 三个 provider 实现。
+//! 提供统一的 [`LlmClient`] trait，以及 BitFun AIClientFactory 适配器实现。
 //! 上层 Agent 通过 trait 调用，不依赖具体 provider。
 //!
 //! # 架构
@@ -8,10 +8,9 @@
 //! ```text
 //! Agent (decision_agent / analysis agents)
 //!   └── LlmClient trait (client.rs)
-//!         ├── OpenAiClient  (provider/openai.rs)
-//!         ├── ClaudeClient  (provider/claude.rs)
-//!         ├── DeepSeekClient (provider/deepseek.rs)
-//!         └── MockClient    (client.rs, 测试用)
+//!         ├── BitFunAiAdapter  (provider/bitfun.rs)  ← 通过 AIClientFactory
+//!         ├── LocalProvider    (provider/local.rs)   ← candle 本地推理
+//!         └── MockClient       (client.rs, 测试用)
 //!   └── ChatMessage / ChatResponse / LlmConfig (client.rs)
 //!   └── DecisionOutput (types.rs)
 //! ```
@@ -19,21 +18,19 @@
 //! # 使用示例
 //!
 //! ```ignore
-//! use taiji_llm::client::{ChatMessage, LlmClient, LlmConfig};
-//! use taiji_llm::provider::openai::OpenAiClient;
+//! use taiji_llm::client::{ChatMessage, LlmClient};
+//! use taiji_llm::provider::bitfun::BitFunAiAdapter;
 //!
-//! async fn example() {
-//!     let client = OpenAiClient::new();
+//! async fn example() -> anyhow::Result<()> {
+//!     let client = BitFunAiAdapter::from_factory("primary").await?;
 //!     let messages = vec![
 //!         ChatMessage::system("你是一个交易分析助手"),
 //!         ChatMessage::user("分析 rb9999 的趋势方向"),
 //!     ];
-//!     let config = LlmConfig {
-//!         model: "gpt-4o".into(),
-//!         ..Default::default()
-//!     };
-//!     let response = client.chat(&messages, &config).await.unwrap();
+//!     let config = LlmConfig::default();
+//!     let response = client.chat(&messages, &config).await?;
 //!     println!("{}", response.content);
+//!     Ok(())
 //! }
 //! ```
 

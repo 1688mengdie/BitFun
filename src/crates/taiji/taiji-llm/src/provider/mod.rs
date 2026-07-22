@@ -1,4 +1,2 @@
-pub mod claude;
-pub mod deepseek;
+pub mod bitfun;
 pub mod local;
-pub mod openai;

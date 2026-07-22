@@ -1,5 +1,5 @@
 {
-  "_description": "金融情绪词典 — 太极情绪分析节点（闭源，不随开源分发）",
+  "_description": "金融情绪词典 — 太极情绪分析节点",
   "_format": "word → { polarity (1.0=强烈正面, -1.0=强烈负面), category }",
   "entries": [
     { "word": "看好", "polarity": 0.8, "category": "sentiment" },

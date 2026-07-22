@@ -44,7 +44,7 @@ pub struct TaijiRLEnv {
     total_steps: usize,
 
     /// 当前持仓列表
-    positions: Vec<taiji_engine::risk::Position>,
+    positions: Vec<taiji_engine::risk::RiskPosition>,
 
     /// 初始资金
     initial_capital: f64,
@@ -156,7 +156,7 @@ impl TaijiRLEnv {
         if traded {
             match action {
                 0 => {
-                    self.positions.push(taiji_engine::risk::Position {
+                    self.positions.push(taiji_engine::risk::RiskPosition {
                         instrument: "default".into(),
                         volume: 1.0,
                         avg_price: current_price,
@@ -164,7 +164,7 @@ impl TaijiRLEnv {
                 }
                 2 => {
                     self.positions.clear();
-                    self.positions.push(taiji_engine::risk::Position {
+                    self.positions.push(taiji_engine::risk::RiskPosition {
                         instrument: "default".into(),
                         volume: -1.0,
                         avg_price: current_price,

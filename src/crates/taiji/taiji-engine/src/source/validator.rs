@@ -38,7 +38,7 @@ impl TickValidator {
             stale_count: HashMap::new(),
             max_interval: Duration::from_secs(5),
             late_window: Duration::from_secs(5),
-            future_tolerance: Duration::from_secs(3600), // 1h, copied from WT
+            future_tolerance: Duration::from_secs(3600), // 1h, reference from WT
             max_stale_count: 3,
         }
     }

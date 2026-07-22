@@ -83,3 +83,5 @@ ASSETS_LICENSES.md
 external/
 /.bitfun/search/flashgrep-index/
 .agents/
+/target/debug/.bitfun/search/flashgrep-index/
+/src/apps/desktop/.bitfun/search/flashgrep-index/

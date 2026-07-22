@@ -3,15 +3,22 @@
 //! HV(t) = std(log returns[20d]) * sqrt(252)。
 //! Score = clamp(HV_current / HV_80th * 100, 0, 100)。
 
-use crate::{percentile, std_dev, AbnormalIndicator};
+use crate::{percentile, std_dev, AbnormalIndicator, MAX_BARS};
 use taiji_engine::error::Result;
 use taiji_engine::node::{ComputeNode, NodeConfig, NodeId};
 use taiji_engine::store::StateStore;
 use taiji_engine::types::bar::{Freq, RawBar};
 use taiji_engine::types::state::{StateKey, StateValue};
 
+/// 历史波动率滚动窗口 — 20 天（一个交易月）。
+/// 领域常量：HV 的标准计算周期，无需参数化。
 const HV_WINDOW: usize = 20;
-const MAX_BARS: usize = 300;
+/// 年化因子 √252 — 将日波动率年化。
+/// 领域常量：标准 A 股年交易日数。
+const ANNUALIZATION: f64 = 252.0;
+/// HV 80 分位数基准 — 判断当前波动率是否偏高。
+/// 领域常量：取分位数上限而非均值，避免被极端值拖拽。
+const HV_PERCENTILE: f64 = 80.0;
 const OUTPUT_KEY: &str = "abnormal:vol_regime";
 
 pub struct VolRegimeNode {
@@ -40,18 +47,18 @@ impl AbnormalIndicator for VolRegimeNode {
         // 最新 HV
         let recent = &closes[n - eff_lookback..];
         let returns: Vec<f64> = recent.windows(2).map(|w| (w[1] / w[0]).ln()).collect();
-        let hv_current = std_dev(&returns) * (252.0_f64).sqrt();
+        let hv_current = std_dev(&returns) * ANNUALIZATION.sqrt();
 
         // 全历史 HV 序列 → 80 分位数
         let mut hvs = Vec::with_capacity(n.saturating_sub(HV_WINDOW));
         for i in HV_WINDOW..n {
             let w = &closes[i - HV_WINDOW..=i];
             let r: Vec<f64> = w.windows(2).map(|c| (c[1] / c[0]).ln()).collect();
-            hvs.push(std_dev(&r) * (252.0_f64).sqrt());
+            hvs.push(std_dev(&r) * ANNUALIZATION.sqrt());
         }
         hvs.sort_by(|a, b| a.partial_cmp(b).unwrap());
 
-        let hv_80 = percentile(&hvs, 80.0);
+        let hv_80 = percentile(&hvs, HV_PERCENTILE);
         if hv_80 < 1e-10 {
             return 0.0;
         }
@@ -114,11 +121,11 @@ impl VolRegimeNode {
         for i in HV_WINDOW..n {
             let w = &self.closes[i - HV_WINDOW..=i];
             let r: Vec<f64> = w.windows(2).map(|c| (c[1] / c[0]).ln()).collect();
-            hvs.push(std_dev(&r) * (252.0_f64).sqrt());
+            hvs.push(std_dev(&r) * ANNUALIZATION.sqrt());
         }
         hvs.sort_by(|a, b| a.partial_cmp(b).unwrap());
 
-        let hv_80 = percentile(&hvs, 80.0);
+        let hv_80 = percentile(&hvs, HV_PERCENTILE);
         if hv_80 < 1e-10 {
             return 0.0;
         }

@@ -1,16 +1,12 @@
+use crate::process_util::{create_command, run_with_timeout, sanitize_cli_arg};
 use crate::{PlatformPublisher, PublishResult, PublishStatus, VideoAsset};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
-use std::process::Command;
+use std::time::Duration;
 
-/// Strip control characters from a user-supplied string to prevent CLI injection.
-/// Rejects newlines, carriage returns, null bytes, and shell metacharacters.
-fn sanitize_cli_arg(s: &str) -> String {
-    s.chars()
-        .filter(|c| !matches!(*c, '\n' | '\r' | '\x00'))
-        .collect()
-}
+/// Default timeout for subprocess invocations (30 seconds).
+const DEFAULT_CMD_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Supported social media platforms.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -61,12 +57,17 @@ impl SocialPublisher {
         }
     }
 
-    /// Probe whether the specified platform is available (check Python + social-auto-upload script existence)
+    /// Probe whether the specified platform is available (check Python + social-auto-upload script existence).
+    ///
+    /// Uses [`create_command`] (which adds `CREATE_NO_WINDOW` on Windows) and
+    /// [`run_with_timeout`] so a hung `python --version` cannot block the caller.
+    /// TODO: migrate to `bitfun_services_core::process_manager::create_command`
+    ///       once taiji-publisher depends on services-core.
     pub fn probe(&self) -> Result<bool, String> {
         // Check Python availability
-        Command::new(&self.python_bin)
-            .arg("--version")
-            .output()
+        let mut cmd = create_command(&self.python_bin);
+        cmd.arg("--version");
+        run_with_timeout(cmd, DEFAULT_CMD_TIMEOUT)
             .map_err(|e| format!("Python unavailable: {}", e))?;
 
         // Check upload script exists
@@ -148,9 +149,9 @@ impl PlatformPublisher for SocialPublisher {
 
         // 3. Execute upload script
         let args = self.build_upload_args(video);
-        let output = Command::new(&self.python_bin)
-            .args(&args)
-            .output()
+        let mut cmd = create_command(&self.python_bin);
+        cmd.args(&args);
+        let output = run_with_timeout(cmd, DEFAULT_CMD_TIMEOUT)
             .map_err(|e| format!("social-auto-upload execution failed: {}", e))?;
 
         let stdout = String::from_utf8_lossy(&output.stdout);

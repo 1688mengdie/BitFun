@@ -25,3 +25,14 @@
 - Adapter 可以依赖 `contracts`、`execution`，必要时可窄依赖 `services` 以通过协议暴露 service 能力。
 - Adapter 不得依赖 `assembly/core`、产品 UI、app command handler 或 Tauri API，除非该宿主边界有明确 feature gate。
 - 优先通过稳定契约解耦 adapter。Adapter 之间直接依赖必须有明确边界理由。
+
+## Adapter 模式的领域应用
+
+Adapter 模式（稳定 trait 契约 + 独立平台/协议实现 + 仅面向 trait 的调度器）也在本层之外的 Taiji 领域 crate 中使用：
+
+| Crate | 模式映射 | 交叉引用 |
+|---|---|---|
+| `taiji-publisher` | `PlatformPublisher` trait = adapter 契约；`BiliupPublisher` / `TwitterPublisher` / `SocialPublisher` = 平台 adapter；`PublishScheduler` = assembly 式调度器 | [`src/crates/taiji/taiji-publisher/AGENTS.md`](../taiji/taiji-publisher/AGENTS.md) |
+
+在核心层新增 adapter 时，检查已有的 Taiji 领域 adapter 是否展现了相同的结构模式 —
+trait 方法形态可能不同，但契约 / 转换 / 调度三层分离是共享的。

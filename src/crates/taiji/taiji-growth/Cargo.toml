@@ -20,6 +20,7 @@ reqwest = { workspace = true }
 lettre = { workspace = true }
 thiserror = { workspace = true }
 async-trait = { workspace = true }
+taiji-content = { path = "../taiji-content" }
 taiji-engine = { path = "../taiji-engine" }
 
 [dev-dependencies]

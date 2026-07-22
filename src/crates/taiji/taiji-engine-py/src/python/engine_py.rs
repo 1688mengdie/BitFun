@@ -70,21 +70,36 @@ impl PipelinePy {
     /// 获取内部 Pipeline 的 StateStore 引用（用于观测构建）。
     /// 返回 None 当 Pipeline 尚未初始化。
     ///
-    /// Safety: StateStore 使用 DashMap（全 interior mutability），
-    /// 返回的引用仅在当前 Python GIL 帧内有效。
+    /// # Safety precondition（调用者契约）
+    ///
+    /// 返回的 `&StateStore` 引用通过 unsafe 从 `Arc<StateStore>` 裸指针转换而来。
+    /// 调用者 **不得** 在引用存活期间调用任何会替换 `self.state` 的方法
+    /// （如 `from_yaml`）。违反此契约会导致 use-after-free。
+    ///
+    /// 在当前代码库中该契约由以下机制保证：
+    /// - 所有调用者都持有 Python GIL（`Python::with_gil`），
+    ///   使得 `from_yaml`（pyo3 方法）无法在 GIL 帧内并发执行。
+    /// - 没有调用者在 `state_store()` 返回后、引用最后一次使用前调用 `from_yaml`。
+    /// - `StateStore` 内部全量使用 `DashMap`（interior mutability），
+    ///   因此通过 `&StateStore` 的并发读取始终是 data-race-free 的。
     pub fn state_store(&self) -> Option<&StateStore> {
         let guard = self.state.lock().unwrap();
         match guard.as_ref() {
             Some(arc) => {
                 let ptr: *const StateStore = Arc::as_ptr(arc);
-                // SAFETY: The Arc<StateStore> is owned by self (PipelinePy holds it
-                // in `state: Mutex<Option<Arc<StateStore>>>`). The returned reference
-                // borrows from the Arc whose lifetime is tied to self (the PyClass).
-                // The Mutex guard ensures no concurrent mutation while the reference
-                // is borrowed. This pointer-to-reference cast is sound because:
-                // 1. The Arc keeps the StateStore alive for the lifetime of PipelinePy.
-                // 2. The Mutex lock guarantees exclusive access (no data race).
-                // 3. Python GIL ensures the PyClass is not dropped while this method runs.
+                // SAFETY:
+                // - `Arc::as_ptr` 返回的指针指向 Arc 持有的堆分配。只要该 Arc
+                //   的引用计数 > 0，堆分配就保持有效。
+                // - 当前函数持有 `self.state` 的 Mutex 锁，在此期间 `self.state`
+                //   不会被替换。但锁在函数返回时释放，此后安全性依赖调用者契约：
+                //   在返回的 `&StateStore` 引用存活期间不得调用 `from_yaml`。
+                // - 所有调用者均在 Python GIL 帧内运行，因此 pyo3 方法 `from_yaml`
+                //   不会并发执行。
+                // - `StateStore` 内部使用 `DashMap` 提供 interior mutability，
+                //   因此即使存在多个 `&StateStore` 引用，读取操作也不会产生数据竞争。
+                // - 返回引用的生命周期与 `&self` 绑定。在 pyo3 中 `&self` 来自
+                //   `Py<PipelinePy>::borrow(py)`，该 borrow 在 GIL 闭包结束时释放，
+                //   因此返回引用无法逃逸出 GIL 帧。
                 Some(unsafe { &*ptr })
             }
             None => None,

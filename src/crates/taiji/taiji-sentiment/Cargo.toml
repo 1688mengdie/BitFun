@@ -13,9 +13,6 @@ crate-type = ["rlib"]
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
-tokio = { workspace = true }
-reqwest = { workspace = true }
-async-trait = { workspace = true }
 taiji-engine = { path = "../taiji-engine" }
 jieba-rs = "0.7"
 

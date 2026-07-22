@@ -3,15 +3,22 @@
 //! 10 天滚动波动率，与自身历史均值和标准差比较。
 //! z = (vol_10d - mean_vol) / std_vol；Score = min(|z| / 2.0, 1.0) * 100。
 
-use crate::{mean, std_dev, AbnormalIndicator};
+use crate::{mean, std_dev, AbnormalIndicator, MAX_BARS};
 use taiji_engine::error::Result;
 use taiji_engine::node::{ComputeNode, NodeConfig, NodeId};
 use taiji_engine::store::StateStore;
 use taiji_engine::types::bar::{Freq, RawBar};
 use taiji_engine::types::state::{StateKey, StateValue};
 
+/// 波动率异常滚动窗口 — 10 天（半交易月）。
+/// 领域常量：短期波动检测的敏感窗口，无需参数化。
 const VOL_WINDOW: usize = 10;
-const MAX_BARS: usize = 300;
+/// 年化因子 √252 — 将日波动率年化。
+/// 领域常量：标准 A 股年交易日数。
+const ANNUALIZATION: f64 = 252.0;
+/// z-score 归一化因子 — 将 z-score 映射到 [0, 100]。
+/// 领域常量：|z| ≥ 2 视为满分异常。
+const Z_SCORE_DIVISOR: f64 = 2.0;
 const OUTPUT_KEY: &str = "abnormal:vol_anomaly";
 
 pub struct VolAnomalyNode {
@@ -42,14 +49,14 @@ impl AbnormalIndicator for VolAnomalyNode {
         // 最新 10 天波动率
         let recent = &closes[n - eff_lookback..];
         let returns: Vec<f64> = recent.windows(2).map(|w| (w[1] / w[0]).ln()).collect();
-        let vol_current = std_dev(&returns) * (252.0_f64).sqrt();
+        let vol_current = std_dev(&returns) * ANNUALIZATION.sqrt();
 
         // 全历史 10 天滚动波动率 → 基线 mean + std
         let mut vols = Vec::with_capacity(n.saturating_sub(VOL_WINDOW));
         for i in VOL_WINDOW..n {
             let w = &closes[i - VOL_WINDOW..=i];
             let r: Vec<f64> = w.windows(2).map(|c| (c[1] / c[0]).ln()).collect();
-            vols.push(std_dev(&r) * (252.0_f64).sqrt());
+            vols.push(std_dev(&r) * ANNUALIZATION.sqrt());
         }
 
         if vols.len() < 2 {
@@ -61,7 +68,7 @@ impl AbnormalIndicator for VolAnomalyNode {
             return 0.0;
         }
         let z = (vol_current - mean_vol) / std_vol;
-        (z.abs() / 2.0).min(1.0) * 100.0
+        (z.abs() / Z_SCORE_DIVISOR).min(1.0) * 100.0
     }
 }
 
@@ -117,14 +124,14 @@ impl VolAnomalyNode {
         // 最新波动率
         let recent = &self.closes[n - VOL_WINDOW..];
         let returns: Vec<f64> = recent.windows(2).map(|w| (w[1] / w[0]).ln()).collect();
-        let vol_current = std_dev(&returns) * (252.0_f64).sqrt();
+        let vol_current = std_dev(&returns) * ANNUALIZATION.sqrt();
 
         // 滚动波动率历史
         let mut vols = Vec::with_capacity(n.saturating_sub(VOL_WINDOW));
         for i in VOL_WINDOW..n {
             let w = &self.closes[i - VOL_WINDOW..=i];
             let r: Vec<f64> = w.windows(2).map(|c| (c[1] / c[0]).ln()).collect();
-            vols.push(std_dev(&r) * (252.0_f64).sqrt());
+            vols.push(std_dev(&r) * ANNUALIZATION.sqrt());
         }
 
         if vols.len() < 2 {
@@ -136,7 +143,7 @@ impl VolAnomalyNode {
             return 0.0;
         }
         let z = (vol_current - mean_vol) / std_vol;
-        (z.abs() / 2.0).min(1.0) * 100.0
+        (z.abs() / Z_SCORE_DIVISOR).min(1.0) * 100.0
     }
 }
 

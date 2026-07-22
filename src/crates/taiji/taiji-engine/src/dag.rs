@@ -1,11 +1,14 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
+
+use petgraph::algo::toposort;
+use petgraph::graph::{DiGraph, NodeIndex};
+use petgraph::Direction;
 
 pub type NodeId = String;
 
 pub struct Dag {
-    edges: HashMap<NodeId, Vec<NodeId>>, // from → [to]
-    in_degree: HashMap<NodeId, usize>,
-    nodes: Vec<NodeId>,
+    graph: DiGraph<NodeId, ()>,
+    node_map: HashMap<NodeId, NodeIndex>,
 }
 
 impl Default for Dag {
@@ -17,18 +20,16 @@ impl Default for Dag {
 impl Dag {
     pub fn new() -> Self {
         Self {
-            edges: HashMap::new(),
-            in_degree: HashMap::new(),
-            nodes: Vec::new(),
+            graph: DiGraph::new(),
+            node_map: HashMap::new(),
         }
     }
 
     /// 添加节点
     pub fn add_node(&mut self, id: NodeId) {
-        if !self.in_degree.contains_key(&id) {
-            self.in_degree.insert(id.clone(), 0);
-            self.edges.entry(id.clone()).or_default();
-            self.nodes.push(id);
+        if !self.node_map.contains_key(&id) {
+            let idx = self.graph.add_node(id.clone());
+            self.node_map.insert(id, idx);
         }
     }
 
@@ -36,66 +37,86 @@ impl Dag {
     pub fn add_edge(&mut self, from: NodeId, to: NodeId) {
         self.add_node(from.clone());
         self.add_node(to.clone());
-        let neighbors = self.edges.entry(from.clone()).or_default();
-        if neighbors.contains(&to) {
+        let from_idx = self.node_map[&from];
+        let to_idx = self.node_map[&to];
+        if self.graph.find_edge(from_idx, to_idx).is_some() {
             return; // 重复边，跳过
         }
-        neighbors.push(to.clone());
-        *self.in_degree.entry(to).or_insert(0) += 1;
+        self.graph.add_edge(from_idx, to_idx, ());
     }
 
-    /// Kahn 拓扑排序。返回按层分组的执行顺序。
+    /// 使用 petgraph 拓扑排序。返回按层分组的执行顺序。
     /// 如果有循环依赖，返回 Err 并列出环中节点。
     pub fn sort(&self) -> Result<Vec<Vec<NodeId>>, Vec<NodeId>> {
-        let mut in_deg = self.in_degree.clone();
-        let mut queue: VecDeque<NodeId> = VecDeque::new();
+        match toposort(&self.graph, None) {
+            Ok(order) => {
+                // 在拓扑序上 DP 计算每层深度
+                let mut depth: HashMap<NodeIndex, usize> = HashMap::new();
+                for &node in &order {
+                    let current = depth.entry(node).or_insert(0);
+                    let current_depth = *current;
+                    for succ in self.graph.neighbors_directed(node, Direction::Outgoing) {
+                        let d = depth.entry(succ).or_insert(0);
+                        *d = (*d).max(current_depth + 1);
+                    }
+                }
 
-        for (id, deg) in &in_deg {
-            if *deg == 0 {
-                queue.push_back(id.clone());
+                let max_depth = depth.values().copied().max().unwrap_or(0);
+                let mut layers: Vec<Vec<NodeId>> = vec![Vec::new(); max_depth + 1];
+                for &node in &order {
+                    let l = depth[&node];
+                    layers[l].push(self.graph[node].clone());
+                }
+                // 防御性：不应有空层
+                layers.retain(|l| !l.is_empty());
+
+                let total: usize = layers.iter().map(|l| l.len()).sum();
+                debug_assert_eq!(
+                    total,
+                    self.graph.node_count(),
+                    "duplicate nodes in sort result: {} unique positions for {} nodes",
+                    total,
+                    self.graph.node_count()
+                );
+                Ok(layers)
             }
-        }
+            Err(_cycle) => {
+                // 用 Kahn 归约找出所有环中节点（入度仍 > 0 的节点）
+                let mut in_deg: HashMap<NodeIndex, usize> = self
+                    .graph
+                    .node_indices()
+                    .map(|n| {
+                        let deg = self
+                            .graph
+                            .neighbors_directed(n, Direction::Incoming)
+                            .count();
+                        (n, deg)
+                    })
+                    .collect();
 
-        let mut layers: Vec<Vec<NodeId>> = Vec::new();
-        let mut processed = 0usize;
+                let mut queue: Vec<NodeIndex> = in_deg
+                    .iter()
+                    .filter(|(_, &d)| d == 0)
+                    .map(|(&n, _)| n)
+                    .collect();
 
-        while !queue.is_empty() {
-            let layer: Vec<NodeId> = queue.drain(..).collect();
-            for id in &layer {
-                processed += 1;
-                if let Some(neighbors) = self.edges.get(id) {
-                    for n in neighbors {
-                        if let Some(d) = in_deg.get_mut(n) {
-                            *d -= 1;
-                            if *d == 0 {
-                                queue.push_back(n.clone());
-                            }
+                while let Some(n) = queue.pop() {
+                    for succ in self.graph.neighbors_directed(n, Direction::Outgoing) {
+                        let d = in_deg.get_mut(&succ).unwrap();
+                        *d = d.saturating_sub(1);
+                        if *d == 0 {
+                            queue.push(succ);
                         }
                     }
                 }
-            }
-            layers.push(layer);
-        }
 
-        if processed < self.nodes.len() {
-            // 环中节点 = 仍有余入度的节点
-            let cycle_nodes: Vec<NodeId> = in_deg
-                .iter()
-                .filter(|(_, &d)| d > 0)
-                .map(|(id, _)| id.clone())
-                .collect();
-            Err(cycle_nodes)
-        } else {
-            // 防御性检查：排序结果中不应有重复节点
-            let total: usize = layers.iter().map(|l| l.len()).sum();
-            debug_assert_eq!(
-                total,
-                self.nodes.len(),
-                "duplicate nodes in sort result: {} unique positions for {} nodes",
-                total,
-                self.nodes.len()
-            );
-            Ok(layers)
+                let cycle_nodes: Vec<NodeId> = in_deg
+                    .iter()
+                    .filter(|(_, &d)| d > 0)
+                    .map(|(&n, _)| self.graph[n].clone())
+                    .collect();
+                Err(cycle_nodes)
+            }
         }
     }
 }

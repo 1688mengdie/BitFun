@@ -171,8 +171,8 @@ mod tests {
             .params
             .insert("slow_period".into(), serde_json::json!(30));
 
-        let mut state = StateStore::new();
-        node.on_init(&config, &mut state).unwrap();
+        let state = StateStore::new();
+        node.on_init(&config, &state).unwrap();
         assert_eq!(node.fast_period, 10);
         assert_eq!(node.slow_period, 30);
     }
@@ -191,7 +191,7 @@ mod tests {
     #[test]
     fn test_no_signal_without_enough_bars() {
         let mut node = MaCross::new("test_ma");
-        let mut state = StateStore::new();
+        let state = StateStore::new();
 
         // Feed fewer bars than slow_period
         let bar = RawBar {
@@ -209,17 +209,17 @@ mod tests {
             delta: None,
         };
         for _ in 0..10 {
-            node.on_bar(&bar, Freq::F1, &mut state).unwrap();
+            node.on_bar(&bar, Freq::F1, &state).unwrap();
         }
 
-        let signals = node.on_calculate(&mut state).unwrap();
+        let signals = node.on_calculate(&state).unwrap();
         assert!(signals.is_empty());
     }
 
     #[test]
     fn test_golden_cross_signal() {
         let mut node = MaCross::new("test_ma");
-        let mut state = StateStore::new();
+        let state = StateStore::new();
 
         // 前 21 根 bar：所有 close = 100.0（fast_ma == slow_ma）
         for i in 0..21 {
@@ -237,7 +237,7 @@ mod tests {
                 open_interest: None,
                 delta: None,
             };
-            node.on_bar(&bar, Freq::F1, &mut state).unwrap();
+            node.on_bar(&bar, Freq::F1, &state).unwrap();
         }
 
         // 第 22 根 bar：大幅拉升 → fast_ma(104.0) > slow_ma(≈100.95) → 金叉
@@ -255,9 +255,9 @@ mod tests {
             open_interest: None,
             delta: None,
         };
-        node.on_bar(&bar_up, Freq::F1, &mut state).unwrap();
+        node.on_bar(&bar_up, Freq::F1, &state).unwrap();
 
-        let signals = node.on_calculate(&mut state).unwrap();
+        let signals = node.on_calculate(&state).unwrap();
         assert_eq!(signals.len(), 1);
         assert!(matches!(signals[0].action, SignalAction::Long));
         assert_eq!(signals[0].metadata.get("reason").unwrap(), "golden_cross");
@@ -266,7 +266,7 @@ mod tests {
     #[test]
     fn test_death_cross_signal() {
         let mut node = MaCross::new("test_ma");
-        let mut state = StateStore::new();
+        let state = StateStore::new();
 
         // 前 21 根 bar：所有 close = 100.0（fast_ma == slow_ma）
         for i in 0..21 {
@@ -284,7 +284,7 @@ mod tests {
                 open_interest: None,
                 delta: None,
             };
-            node.on_bar(&bar, Freq::F1, &mut state).unwrap();
+            node.on_bar(&bar, Freq::F1, &state).unwrap();
         }
 
         // 第 22 根 bar：大幅下跌 → fast_ma(96.0) < slow_ma(≈99.05) → 死叉
@@ -302,9 +302,9 @@ mod tests {
             open_interest: None,
             delta: None,
         };
-        node.on_bar(&bar_down, Freq::F1, &mut state).unwrap();
+        node.on_bar(&bar_down, Freq::F1, &state).unwrap();
 
-        let signals = node.on_calculate(&mut state).unwrap();
+        let signals = node.on_calculate(&state).unwrap();
         assert_eq!(signals.len(), 1);
         assert!(matches!(signals[0].action, SignalAction::Short));
         assert_eq!(signals[0].metadata.get("reason").unwrap(), "death_cross");

@@ -1,13 +1,8 @@
-use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-/// Date range for backtest data window.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DateRange {
-    pub start: NaiveDate,
-    pub end: NaiveDate,
-}
+/// Re-exported from [`taiji_content::DateRange`], the canonical definition.
+pub use taiji_content::DateRange;
 
 /// Walk-forward cross-validation configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -82,6 +77,7 @@ impl Default for WalkForwardConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::NaiveDate;
 
     #[test]
     fn test_default_walk_forward_config() {

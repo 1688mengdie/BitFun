@@ -10,7 +10,7 @@ use crate::error::{Result, TaijiError};
 use crate::factory::NodeFactory;
 use crate::node::{ComputeNode, NodeConfig, NodeId};
 use crate::pipeline::bar_gen::{AggMode, BarGenerator};
-use crate::risk::{OrderDecision, OrderRequest, RiskMonitor};
+use crate::risk::{OrderDecision, RiskMonitor, RiskOrderRequest};
 use crate::source::datasource::DataSource;
 use crate::store::StateStore;
 use crate::types::bar::{Freq, RawBar};
@@ -417,7 +417,7 @@ impl Pipeline {
         signals
             .into_iter()
             .filter_map(|signal| {
-                let order = OrderRequest {
+                let order = RiskOrderRequest {
                     instrument: signal.instrument.clone(),
                     action: format!("{:?}", signal.action),
                     price: signal.entry.unwrap_or(bar.close),
@@ -1046,7 +1046,7 @@ mod tests {
 
     // ── RiskMonitor integration tests ──
 
-    use crate::risk::{Fill, Position, RiskAction, RiskAlert, RiskConfig};
+    use crate::risk::{RiskFill, RiskPosition, RiskAction, RiskAlert, RiskConfig};
     use crate::types::signal::{Signal, SignalAction};
 
     /// Mock that rejects every order.
@@ -1055,13 +1055,13 @@ mod tests {
         fn init(&mut self, _config: &RiskConfig) -> Result<()> {
             Ok(())
         }
-        fn check_order(&self, _order: &OrderRequest, _state: &StateStore) -> Result<OrderDecision> {
+        fn check_order(&self, _order: &RiskOrderRequest, _state: &StateStore) -> Result<OrderDecision> {
             Ok(OrderDecision::Reject("blocked by test monitor".into()))
         }
-        fn check_position(&self, _position: &Position, _state: &StateStore) -> Result<RiskAction> {
+        fn check_position(&self, _position: &RiskPosition, _state: &StateStore) -> Result<RiskAction> {
             Ok(RiskAction::None)
         }
-        fn on_fill(&mut self, _fill: &Fill, _state: &StateStore) {}
+        fn on_fill(&mut self, _fill: &RiskFill, _state: &StateStore) {}
         fn on_calculate(&mut self, _state: &StateStore) -> Result<Vec<RiskAlert>> {
             Ok(vec![])
         }
@@ -1078,17 +1078,17 @@ mod tests {
         fn init(&mut self, _config: &RiskConfig) -> Result<()> {
             Ok(())
         }
-        fn check_order(&self, order: &OrderRequest, _state: &StateStore) -> Result<OrderDecision> {
+        fn check_order(&self, order: &RiskOrderRequest, _state: &StateStore) -> Result<OrderDecision> {
             if order.volume > self.max_vol {
                 Ok(OrderDecision::Reduce(self.max_vol))
             } else {
                 Ok(OrderDecision::Allow)
             }
         }
-        fn check_position(&self, _position: &Position, _state: &StateStore) -> Result<RiskAction> {
+        fn check_position(&self, _position: &RiskPosition, _state: &StateStore) -> Result<RiskAction> {
             Ok(RiskAction::None)
         }
-        fn on_fill(&mut self, _fill: &Fill, _state: &StateStore) {}
+        fn on_fill(&mut self, _fill: &RiskFill, _state: &StateStore) {}
         fn on_calculate(&mut self, _state: &StateStore) -> Result<Vec<RiskAlert>> {
             Ok(vec![])
         }

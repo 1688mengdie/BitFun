@@ -11,6 +11,9 @@ use taiji_engine::store::StateStore;
 use taiji_engine::types::bar::{Freq, RawBar};
 use taiji_engine::types::state::{StateKey, StateValue};
 
+/// 跳空阈值 — 3% 缺口 → 满分 100。
+/// 领域常量：经验阈值，3% 以上跳空视为极端异常。
+const GAP_FULL_SCORE: f64 = 0.03;
 const OUTPUT_KEY: &str = "abnormal:gap_alert";
 
 pub struct GapAlertNode {
@@ -42,7 +45,7 @@ impl AbnormalIndicator for GapAlertNode {
                 continue;
             }
             let gap = (curr.open - prev.close).abs() / prev.close;
-            let score = (gap / 0.03).min(1.0) * 100.0;
+            let score = (gap / GAP_FULL_SCORE).min(1.0) * 100.0;
             max_score = max_score.max(score);
         }
         max_score
@@ -74,7 +77,7 @@ impl ComputeNode for GapAlertNode {
         let score = if let Some(prev_close) = self.prev_close {
             if prev_close > 0.0 {
                 let gap = (bar.open - prev_close).abs() / prev_close;
-                (gap / 0.03).min(1.0) * 100.0
+                (gap / GAP_FULL_SCORE).min(1.0) * 100.0
             } else {
                 0.0
             }

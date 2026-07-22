@@ -1,3 +1,39 @@
+//! ECharts option template rendering.
+//!
+//! ## Template rendering approach
+//!
+//! This module uses **manual `String::replace`** for template variable substitution
+//! (step 8 in `build_echarts_option`). The template is a JSON file with
+//! `{{variable}}` placeholders; each placeholder is replaced by a pre-serialized
+//! JSON value or string literal.
+//!
+//! ### Cross-reference: `taiji-blog-gen` uses Tera
+//!
+//! [`taiji-blog-gen`](../taiji-blog-gen/src/main.rs) renders Hugo Markdown templates
+//! via the **Tera** engine (`tera::Tera`), which provides typed context insertion,
+//! conditionals, loops, and filters. That is a richer, more maintainable approach
+//! for template-heavy workflows.
+//!
+//! ### Recommended unification
+//!
+//! The two crates currently use **different template rendering strategies** for
+//! similar `{{variable}}` substitution tasks:
+//!
+//! | Crate | Engine | Pros | Cons |
+//! |---|---|---|---|
+//! | `taiji-content` (`chart_option.rs`) | Manual `String::replace` | Zero deps, fast compile | No conditionals, loops, or filters; fragile to template syntax changes |
+//! | `taiji-blog-gen` (`main.rs`) | Tera v1 | Full template logic, typed context | Adds a dependency |
+//!
+//! **Recommendation**: Eventually migrate `chart_option.rs` to Tera (or share a
+//! common `taiji-templates` helper crate) so all taiji crates use one rendering
+//! engine. The `String::replace` approach is adequate for the current
+//! simple-substitution ECharts template but will not scale if templates grow
+//! conditional blocks or partials.
+//!
+//! For now, be aware when adding template features: **prefer extending Tera in
+//! `taiji-blog-gen` as the reference pattern** rather than adding more
+//! `String::replace` variants here.
+
 use crate::types::render_config::VideoRenderConfig;
 use serde_json::Value;
 
@@ -48,6 +84,11 @@ pub fn build_echarts_option(
     let volume_data: Vec<f64> = bars.iter().map(|bar| get_f64(bar, "vol")).collect();
 
     // 6. Read template file
+    //
+    // TODO(taiji): Migrate to bitfun_services FileSystemService for path canonicalization
+    // and file reads. Raw std::fs::canonicalize / std::fs::read_to_string should be
+    // replaced with the platform-agnostic FileSystemService abstraction provided by
+    // the BitFun services layer (src/crates/services).
     let template_path = std::fs::canonicalize(&config.kline_echarts_template).map_err(|e| {
         format!(
             "Failed to resolve template path {}: {}",
@@ -133,6 +174,9 @@ mod tests {
     }
 
     /// Write template content into a temp directory, returning (path, temp dir guard).
+    ///
+    /// TODO(taiji): Migrate temp file writes to bitfun_services FileSystemService
+    /// when test infrastructure supports it.
     fn write_temp_template(content: &str) -> (PathBuf, tempfile::TempDir) {
         let dir = tempfile::tempdir().expect("Failed to create temp dir");
         let path = dir.path().join("kline_echarts_option.json");

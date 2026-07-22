@@ -26,9 +26,6 @@
 | **CNN Fear & Greed Index** | 方法论（无代码） | 五因子情绪温度计计算框架 | `taiji-sentiment/src/fgi.rs` |
 | **SnowNLP** (MIT) | [MIT](https://github.com/isnowfy/snownlp) | 中文情感分析流程设计 | `taiji-sentiment/src/tokenizer.rs` |
 | **cnsenti** (MIT) | [MIT](https://github.com/duanyifei1937/cnsenti) | 金融情感词典结构 | `taiji-sentiment/src/tokenizer.rs` |
-| **trendln** (MIT) | [MIT](https://github.com/GregoryMorse/trendln) | 拐点识别算法 | `taiji-dvmi`（闭源） |
-| **pytrendline** (MIT) | [MIT](https://github.com/edilio/pytrendline) | 趋势线检测算法 | `taiji-dvmi`（闭源） |
-| **smc-toolkit** (MIT) | [MIT](https://github.com/nategeorge/smc-toolkit) | 三推计数方法论 | `taiji-thrust`（闭源） |
 | **stolgo** (MIT) | [MIT](https://github.com/stolgo/stolgo) | 无未来函数保障模式（BarDataView._limit + LookaheadError） | `taiji-engine/src/source/` |
 
 ## 三、工具库参考（设计模式启发）
@@ -48,7 +45,7 @@
 1. 本系统对上述第三方项目的任何引用均为"算法逻辑参考"或"设计模式启发"，**未复制原项目源代码**。
 2. 所有代码为独立 Rust 实现，与原项目的 Python/Go 代码无直接对应关系。
 3. 如任何第三方权利人认为本系统的参考方式超出"合理使用"范围，请联系我们，我们将立即调整。
-4. 闭源 crate（taiji-dvmi / taiji-magnet / taiji-thrust / taiji-risk）的完整实现不在本仓库中，其参考的第三方项目已在上方标注。
+4. 闭源 crate（taiji-dvmi / taiji-magnet / taiji-thrust / taiji-risk）的完整实现不在本仓库中。
 
 ---
 

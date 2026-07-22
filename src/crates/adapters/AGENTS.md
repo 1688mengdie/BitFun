@@ -39,3 +39,17 @@ services.
   host boundary.
 - Prefer stable contracts over adapter-to-adapter coupling. Cross-adapter
   dependencies require a clear boundary reason.
+
+## Domain Applications of the Adapter Pattern
+
+The adapter pattern (stable trait contract + independent platform/protocol
+implementations + orchestrator that only sees the trait) is also applied outside
+this layer in Taiji domain crates:
+
+| Crate | Pattern mapping | Cross-reference |
+|---|---|---|
+| `taiji-publisher` | `PlatformPublisher` trait = adapter contract; `BiliupPublisher` / `TwitterPublisher` / `SocialPublisher` = platform adapters; `PublishScheduler` = assembly-style orchestrator | [`src/crates/taiji/taiji-publisher/AGENTS.md`](../taiji/taiji-publisher/AGENTS.md) |
+
+When adding a new adapter in the core layer, check whether an existing Taiji domain
+adapter already demonstrates the same structural pattern — the trait-method shapes
+may differ, but the separation of contract / translation / orchestration is shared.

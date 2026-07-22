@@ -106,30 +106,6 @@
 
 ---
 
-## 闭源策略参考
-
-以下项目的方法论被闭源策略 crate 参考。闭源 crate 的完整实现不在本仓库中。
-
-### trendln — 趋势线检测
-
-- 项目地址：[https://github.com/GregoryMorse/trendln](https://github.com/GregoryMorse/trendln)
-- 许可证：MIT
-- 参考：taiji-dvmi 拐点识别算法
-
-### pytrendline — Python 趋势线
-
-- 项目地址：[https://github.com/edilio/pytrendline](https://github.com/edilio/pytrendline)
-- 许可证：MIT
-- 参考：taiji-dvmi 趋势线检测算法
-
-### smc-toolkit — SMC 交易工具箱
-
-- 项目地址：[https://github.com/nategeorge/smc-toolkit](https://github.com/nategeorge/smc-toolkit)
-- 许可证：MIT
-- 参考：taiji-thrust 三推计数方法论
-
----
-
 ## 方法论参考（无代码）
 
 ### CNN Fear & Greed Index

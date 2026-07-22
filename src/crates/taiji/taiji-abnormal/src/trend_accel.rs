@@ -4,15 +4,19 @@
 //! 加速度 = trend_current - trend_prev。
 //! z-score = (accel - mean_accel) / std_accel；Score = min(|z| / 2.0, 1.0) * 100。
 
-use crate::{linear_regression, mean, std_dev, AbnormalIndicator};
+use crate::{linear_regression, mean, std_dev, AbnormalIndicator, MAX_BARS};
 use taiji_engine::error::Result;
 use taiji_engine::node::{ComputeNode, NodeConfig, NodeId};
 use taiji_engine::store::StateStore;
 use taiji_engine::types::bar::{Freq, RawBar};
 use taiji_engine::types::state::{StateKey, StateValue};
 
+/// 趋势回归窗口 — 20 天（一个交易月）。
+/// 领域常量：线性回归的标准窗口，无需参数化。
 const TREND_WINDOW: usize = 20;
-const MAX_BARS: usize = 300;
+/// z-score 归一化因子 — 将加速度 z-score 映射到 [0, 100]。
+/// 领域常量：|z| ≥ 2 视为满分异常加速度。
+const Z_SCORE_DIVISOR: f64 = 2.0;
 const OUTPUT_KEY: &str = "abnormal:trend_accel";
 
 pub struct TrendAccelNode {
@@ -68,7 +72,7 @@ impl AbnormalIndicator for TrendAccelNode {
             return 0.0;
         }
         let z = (accel - mean_accel) / std_accel;
-        (z.abs() / 2.0).min(1.0) * 100.0
+        (z.abs() / Z_SCORE_DIVISOR).min(1.0) * 100.0
     }
 }
 
@@ -148,7 +152,7 @@ impl TrendAccelNode {
             return 0.0;
         }
         let z = (accel - mean_accel) / std_accel;
-        (z.abs() / 2.0).min(1.0) * 100.0
+        (z.abs() / Z_SCORE_DIVISOR).min(1.0) * 100.0
     }
 }
 

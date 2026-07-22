@@ -1,7 +1,7 @@
 //! BarGenerator — tick→bar OI/Delta aggregation.
 //!
-//! 算法参考自 czsc bar_generator.rs（Apache 2.0, zengbin93）。
-//! 从 Python 移植为 Rust，重构为 ComputeNode 管线架构。
+//! 逻辑参考自 czsc bar_generator.rs（Apache 2.0, zengbin93）。
+//! 以 Rust 独立实现，重构为 ComputeNode 管线架构。
 //! 仅实现了时间聚合（AggMode::Time）；成交量/范围聚合预留扩展。
 
 use std::collections::BTreeMap;

@@ -30,6 +30,9 @@ bitfun-transport = { path = "../../crates/adapters/transport", features = ["taur
 bitfun-events = { path = "../../crates/contracts/events" }
 bitfun-webdriver = { path = "../../crates/adapters/webdriver" }
 bitfun-acp = { path = "../../crates/interfaces/acp" }
+taiji-content = { path = "../../crates/taiji/taiji-content", optional = true }
+ffmpeg-sidecar = { workspace = true, optional = true }
+dunce = { workspace = true, optional = true }
 
 # Tauri
 tauri = { workspace = true }
@@ -133,7 +136,7 @@ default = []
 # Never enabled in release profile intended for end users.
 devtools = ["tauri/devtools", "bitfun-webdriver/embedded"]
 # Enable ffmpeg-sidecar video pipeline (taiji content workshop).
-video = []
+video = ["taiji-content", "ffmpeg-sidecar", "dunce"]
 
 [target.'cfg(target_os = "linux")'.dependencies]
 atspi = { workspace = true }

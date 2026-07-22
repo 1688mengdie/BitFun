@@ -108,6 +108,11 @@ struct TokenCache {
 /// 2. Upload video material → media_id (optional; if no video, pure article with images/text)
 /// 3. Create draft (article message, body = VideoAsset.description)
 /// 4. Publish draft (limited to 1 per day for service accounts)
+///
+/// TODO(tool-audit): This struct owns an independent `reqwest::Client`
+/// (`redirect = Policy::none()`). Its builder config is identical to
+/// `TwitterPublisher` — both crates could share a single no-redirect
+/// `reqwest::Client` instance injected via constructor.
 pub struct WechatMpPublisher {
     app_id: String,
     app_secret: String,
@@ -116,6 +121,9 @@ pub struct WechatMpPublisher {
 }
 
 impl WechatMpPublisher {
+    /// TODO(tool-audit): Replace inline `Client::builder()...build()` with
+    /// an injected shared `reqwest::Client`. Identical no-redirect config as
+    /// `TwitterPublisher` — these two can share a single client instance.
     pub fn new(app_id: String, app_secret: String) -> Self {
         Self {
             app_id,

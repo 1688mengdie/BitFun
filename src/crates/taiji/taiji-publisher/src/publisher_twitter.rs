@@ -32,12 +32,20 @@ struct TweetData {
 /// Token acquisition methods (choose one):
 /// - Twitter Developer Portal → App → Keys & Tokens → Bearer Token (directly usable)
 /// - OAuth 2.0 PKCE flow → obtain access_token (requires external tool to complete auth flow)
+///
+/// TODO(tool-audit): This struct owns an independent `reqwest::Client`
+/// (`redirect = Policy::none()`). Its builder config is identical to
+/// `WechatMpPublisher` — both crates could share a single no-redirect
+/// `reqwest::Client` instance injected via constructor.
 pub struct TwitterPublisher {
     access_token: Mutex<String>,
     http: Client,
 }
 
 impl TwitterPublisher {
+    /// TODO(tool-audit): Replace inline `Client::builder()...build()` with
+    /// an injected shared `reqwest::Client`. Identical no-redirect config as
+    /// `WechatMpPublisher` — these two can share a single client instance.
     pub fn new(access_token: String) -> Self {
         Self {
             access_token: Mutex::new(access_token),

@@ -2,6 +2,62 @@
 //!
 //! Provides alert level classification, configuration, message types,
 //! and channel-specific alerters (Feishu webhook, email, desktop).
+//!
+//! # Relationship to BitFun AgenticEvent
+//!
+//! `taiji-alert` is a **self-contained alert infrastructure** designed for
+//! trading-system operational monitoring (cron job failures, heartbeat timeouts,
+//! pipeline errors). It is independent of BitFun's agentic event system and
+//! focuses on *human-operator notification* rather than *agent-to-agent
+//! messaging*.
+//!
+//! ## AlertLevel → AgenticEventPriority mapping
+//!
+//! When an alert needs to be bridged into BitFun's event bus (e.g. surfaced in
+//! the desktop UI or relayed to a remote session), the severity levels map as
+//! follows:
+//!
+//! | `AlertLevel`   | `AgenticEventPriority` | Rationale |
+//! |----------------|------------------------|-----------|
+//! | `Heartbeat`    | `Low`                  | Informational liveness check; non-urgent. |
+//! | `Warn`         | `Normal`               | Degradation warning; does not block trading. |
+//! | `Error`        | `High`                 | Job/pipeline failure requiring operator attention. |
+//! | `Critical`     | `Critical`             | System-wide failure or data-loss risk; immediate action needed. |
+//!
+//! ## AlertMessage → AgenticEvent mapping
+//!
+//! An [`AlertMessage`] can be projected into a BitFun [`AgenticEvent::SystemError`]
+//! variant for consumption by the desktop UI or remote relay:
+//!
+//! ```ignore
+//! // Conceptual bridge (not compiled — bitfun-events is not a dependency):
+//! fn to_system_error(msg: &AlertMessage) -> bitfun_events::AgenticEvent {
+//!     bitfun_events::AgenticEvent::SystemError {
+//!         session_id: None,
+//!         error: format!("[{}] {}: {}", msg.level.label_cn(), msg.title, msg.body),
+//!         recoverable: msg.level < AlertLevel::Critical,
+//!     }
+//! }
+//! ```
+//!
+//! The `SystemError` variant is the natural target because:
+//! - It carries an error string (maps to alert title + body)
+//! - Its `recoverable` flag distinguishes Critical (unrecoverable) from lower levels
+//! - It does not require a session context (alerts are system-wide)
+//!
+//! ## Cross-reference
+//!
+//! - [`bitfun_events::AgenticEvent`] — 35+ variants covering session lifecycle,
+//!   dialog turns, tool execution, token usage, context compression, and Deep Review.
+//! - [`bitfun_events::AgenticEventPriority`] — 4-tier priority (Critical/High/Normal/Low)
+//!   used for event ordering and UI badge severity.
+//! - [`bitfun_events::AgenticEventEnvelope`] — wraps an event with a unique id,
+//!   priority, and timestamp for ordered delivery through the event bus.
+//!
+//! For trading-system alerts that *must* flow through the BitFun event bus
+//! (e.g. to show a desktop notification or to be relayed to a remote workspace),
+//! bridge code should construct an `AgenticEvent::SystemError` with the
+//! appropriate priority from the mapping table above.
 
 pub mod alerters;
 pub mod heartbeat;
@@ -12,6 +68,18 @@ use std::sync::{Arc, Mutex};
 use tracing::warn;
 
 /// Alert severity level, ordered from lowest to highest urgency.
+///
+/// # BitFun event priority mapping
+///
+/// Each level corresponds to a [`bitfun_events::AgenticEventPriority`]:
+///
+/// - `Heartbeat` → `AgenticEventPriority::Low` — informational liveness check.
+/// - `Warn` → `AgenticEventPriority::Normal` — degradation warning.
+/// - `Error` → `AgenticEventPriority::High` — job/pipeline failure.
+/// - `Critical` → `AgenticEventPriority::Critical` — system-wide failure.
+///
+/// See the [module-level documentation](self) for the full mapping table and
+/// bridge guidance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum AlertLevel {
@@ -22,6 +90,12 @@ pub enum AlertLevel {
 }
 
 /// SMTP configuration for email alerts.
+//
+// TODO(P2-1): Deduplicate with `taiji-growth::types::SmtpConfig`.
+// Both crates define nearly identical SMTP configs; the growth version
+// adds `from_name` + `from_email` fields. Extract a shared `SmtpConfig`
+// into `taiji-engine` or a new `taiji-shared` crate so alert and growth
+// can both depend on a single definition.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SmtpConfig {
     /// SMTP server hostname.
@@ -55,6 +129,23 @@ pub struct AlertConfig {
 }
 
 /// A single alert message ready for delivery.
+///
+/// # BitFun event envelope mapping
+///
+/// [`AlertMessage`] is a self-contained alert payload. To bridge into BitFun's
+/// event bus, project it into an [`AgenticEvent::SystemError`](bitfun_events::AgenticEvent::SystemError)
+/// wrapped in an [`AgenticEventEnvelope`](bitfun_events::AgenticEventEnvelope):
+///
+/// | Field         | Maps to                                      |
+/// |---------------|----------------------------------------------|
+/// | `level`       | `AgenticEventPriority` (see [`AlertLevel`] mapping) |
+/// | `title`       | First line of the `SystemError.error` string |
+/// | `body`        | Remaining detail in `SystemError.error`      |
+/// | `source`      | Prepended to the error string as context     |
+/// | `timestamp`   | `AgenticEventEnvelope.timestamp` (`SystemTime`) |
+/// | `count`       | Included in the error string (e.g. "(×N)")   |
+///
+/// The `SystemError.recoverable` flag is `true` for levels below `Critical`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AlertMessage {
     /// Severity level of this alert.
@@ -220,6 +311,11 @@ impl AlertManager {
     fn send_feishu(&self, msg: &AlertMessage) {
         let feishu = self.feishu.clone();
         let msg = msg.clone();
+        // TODO(P2-6): Replace `Handle::try_current()` + `spawn` with an injected
+        // async runtime handle or channel. The current pattern silently drops
+        // delivery when no tokio runtime is active (e.g. sync tests), which can
+        // mask real failures. BitFun's `EventEmitter` / `EventRouter` provide
+        // runtime-aware dispatch without manual Handle probing.
         match tokio::runtime::Handle::try_current() {
             Ok(handle) => {
                 handle.spawn(async move {
