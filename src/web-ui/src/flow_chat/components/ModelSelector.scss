@@ -143,8 +143,8 @@
     position: absolute;
     bottom: calc(100% + 6px);
     left: 0;
-    min-width: 220px;
-    max-width: 280px;
+    min-width: clamp(0px, 220px, calc(100vw - 16px));
+    max-width: clamp(0px, 280px, calc(100vw - 16px));
     background: var(--color-bg-elevated);
     border: 1px solid var(--color-overlay-white-12);
     border-radius: 6px;

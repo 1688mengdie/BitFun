@@ -29,6 +29,7 @@ import {
   type ContextUsageSource,
 } from '../utils/tokenUsageDisplay';
 import { createLogger } from '@/shared/utils/logger';
+import { getModelSelectorDropdownStyle } from './modelSelectorDropdownPosition';
 import './ModelSelector.scss';
 
 const log = createLogger('ModelSelector');
@@ -351,27 +352,29 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     if (!dropdownOpen || !dropdownRef.current) return;
 
     const updatePosition = () => {
-      if (!dropdownRef.current) return;
-      const rect = dropdownRef.current.getBoundingClientRect();
-      const placementStyle = dropdownPlacement === 'bottom'
-        ? { top: `${rect.bottom + 6}px`, bottom: 'auto' }
-        : { top: 'auto', bottom: `${window.innerHeight - rect.top + 6}px` };
-      setDropdownStyle({
-        position: 'fixed',
-        visibility: 'visible',
-        left: `${rect.left}px`,
-        minWidth: '220px',
-        maxWidth: '280px',
-        ...placementStyle,
-      });
+      if (!dropdownRef.current || !portalDropdownRef.current) return;
+      const anchorRect = dropdownRef.current.getBoundingClientRect();
+      const dropdownRect = portalDropdownRef.current.getBoundingClientRect();
+      setDropdownStyle(getModelSelectorDropdownStyle(
+        anchorRect,
+        dropdownRect,
+        dropdownPlacement,
+        { width: window.innerWidth, height: window.innerHeight },
+      ));
     };
 
     updatePosition();
+
+    const resizeObserver = new ResizeObserver(updatePosition);
+    if (portalDropdownRef.current) {
+      resizeObserver.observe(portalDropdownRef.current);
+    }
 
     window.addEventListener('scroll', updatePosition, true);
     window.addEventListener('resize', updatePosition);
 
     return () => {
+      resizeObserver.disconnect();
       window.removeEventListener('scroll', updatePosition, true);
       window.removeEventListener('resize', updatePosition);
     };
