@@ -85,3 +85,10 @@ external/
 .agents/
 /target/debug/.bitfun/search/flashgrep-index/
 /src/apps/desktop/.bitfun/search/flashgrep-index/
+
+# Taiji generated outputs
+/output/
+/data/pipeline/
+/taiji-website/public/
+/taiji-website/.hugo_build.lock
+/scripts/__pycache__/
