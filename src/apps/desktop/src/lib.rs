@@ -1667,14 +1667,13 @@ async fn init_agentic_system() -> anyhow::Result<(
     .map_err(|e| anyhow::anyhow!("Failed to initialize cron service: {}", e))?;
     bitfun_core::service::cron::set_global_cron_service(cron_service.clone());
 
+    // TODO(taiji): 定时任务暂时禁用，待重构后再启用。
     // Register Taiji cron jobs (video feature gate).
     // Idempotent — skips jobs that already exist by name.
-    // Awaited inline (not fire-and-forget) so that registration is
-    // guaranteed to complete before init_agentic_system returns.
-    #[cfg(feature = "video")]
-    {
-        taiji_content::cron_job::register_taiji_cron_jobs().await;
-    }
+    // #[cfg(feature = "video")]
+    // {
+    //     taiji_content::cron_job::register_taiji_cron_jobs().await;
+    // }
 
     let cron_subscriber = Arc::new(bitfun_core::service::cron::CronEventSubscriber::new(
         cron_service.clone(),
