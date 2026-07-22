@@ -3,6 +3,8 @@ impl ChatView {
 
     pub(crate) fn show_info_popup(&mut self, message: String) {
         self.info_popup = Some(message);
+        self.info_popup_scroll = 0;
+        self.info_popup_max_scroll = 0;
         self.popup_stack.push(PopupType::InfoPopup);
     }
 
@@ -12,12 +14,33 @@ impl ChatView {
 
     pub(crate) fn dismiss_info_popup(&mut self) {
         self.info_popup = None;
+        self.info_popup_scroll = 0;
+        self.info_popup_max_scroll = 0;
+    }
+
+    pub(crate) fn info_popup_scroll_up(&mut self, amount: u16) {
+        self.info_popup_scroll = self.info_popup_scroll.saturating_sub(amount);
+    }
+
+    pub(crate) fn info_popup_scroll_down(&mut self, amount: u16) {
+        self.info_popup_scroll = self
+            .info_popup_scroll
+            .saturating_add(amount)
+            .min(self.info_popup_max_scroll);
+    }
+
+    pub(crate) fn info_popup_scroll_to_start(&mut self) {
+        self.info_popup_scroll = 0;
+    }
+
+    pub(crate) fn info_popup_scroll_to_end(&mut self) {
+        self.info_popup_scroll = self.info_popup_max_scroll;
     }
 
     // ============ Command palette methods ============
 
-    pub(crate) fn show_command_palette(&mut self) {
-        self.command_palette.show();
+    pub(crate) fn show_command_palette(&mut self, action_state: crate::actions::ActionState) {
+        self.command_palette.show(action_state);
         self.popup_stack.push(PopupType::CommandPalette);
     }
 
@@ -26,7 +49,7 @@ impl ChatView {
     }
 
     pub(crate) fn reshow_command_palette(&mut self) {
-        self.command_palette.show();
+        self.command_palette.reshow();
     }
 
     pub(crate) fn command_palette_visible(&self) -> bool {
@@ -134,8 +157,15 @@ impl ChatView {
         &mut self,
         agents: Vec<AgentItem>,
         current_agent_id: Option<String>,
+        include_external_sources: bool,
+        allow_mode_switch: bool,
     ) {
-        self.agent_selector.show(agents, current_agent_id);
+        self.agent_selector.show(
+            agents,
+            current_agent_id,
+            include_external_sources,
+            allow_mode_switch,
+        );
         self.popup_stack.push(PopupType::AgentSelector);
     }
 
@@ -159,7 +189,7 @@ impl ChatView {
         self.agent_selector.move_down();
     }
 
-    pub(crate) fn agent_selector_confirm(&self) -> Option<AgentItem> {
+    pub(crate) fn agent_selector_confirm(&self) -> Option<AgentSelectorAction> {
         self.agent_selector.confirm_selection()
     }
 
@@ -207,6 +237,7 @@ impl ChatView {
     // ============ Subagent selector methods ============
 
     pub(crate) fn show_subagent_menu(&mut self) {
+        self.agent_selector.hide();
         self.subagent_selector.show_menu();
         self.popup_stack.push(PopupType::SubagentSelector);
     }
@@ -285,7 +316,7 @@ impl ChatView {
     }
 
     /// Take the pending MCP toggle (set by mouse click)
-    pub(crate) fn take_pending_mcp_toggle(&mut self) -> Option<String> {
+    pub(crate) fn take_pending_mcp_toggle(&mut self) -> Option<McpItem> {
         self.pending_mcp_toggle.take()
     }
 
@@ -299,6 +330,18 @@ impl ChatView {
 
     pub(crate) fn mcp_selector_is_confirm_delete(&self, server_id: &str) -> bool {
         self.mcp_selector.is_confirm_delete(server_id)
+    }
+
+    pub(crate) fn mcp_selector_start_confirm_external(&mut self, server_id: String) {
+        self.mcp_selector.start_confirm_external(server_id);
+    }
+
+    pub(crate) fn mcp_selector_is_confirm_external(&self, server_id: &str) -> bool {
+        self.mcp_selector.is_confirm_external(server_id)
+    }
+
+    pub(crate) fn mcp_selector_cancel_confirm_external(&mut self) {
+        self.mcp_selector.cancel_confirm_external();
     }
 
     // ============ MCP add dialog methods ============
@@ -508,5 +551,31 @@ impl ChatView {
     ) {
         self.login_form
             .update_account_progress(devices, sync_progress);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ChatView;
+    use crate::ui::agent_selector::AgentItem;
+    use crate::ui::theme::Theme;
+
+    #[test]
+    fn opening_subagent_management_hides_the_parent_agent_selector() {
+        let mut view = ChatView::new(Theme::dark(), Vec::new());
+        view.show_agent_selector(
+            vec![AgentItem {
+                id: "agentic".to_string(),
+                description: "General purpose".to_string(),
+            }],
+            Some("agentic".to_string()),
+            true,
+            true,
+        );
+
+        view.show_subagent_menu();
+
+        assert!(!view.agent_selector_visible());
+        assert!(view.subagent_selector_visible());
     }
 }

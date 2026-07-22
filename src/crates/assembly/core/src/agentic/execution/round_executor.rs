@@ -11,30 +11,32 @@ use crate::agentic::memories::{
     parse_bitfun_memory_citation, parse_bitfun_memory_citation_payloads,
     strip_bitfun_memory_citations,
 };
+use crate::agentic::permission_policy::resolve_effective_permission_rules;
 use crate::agentic::tools::computer_use_host::ComputerUseHostRef;
 use crate::agentic::tools::pipeline::{
     SubagentBatchExecutionPolicy as PipelineSubagentBatchExecutionPolicy, ToolExecutionContext,
     ToolExecutionOptions, ToolPipeline,
 };
-use crate::agentic::tools::registry::get_global_tool_registry;
 use crate::agentic::tools::tool_context_runtime;
 use crate::agentic::tools::tool_result_storage;
 use crate::agentic::MessageContent;
 use crate::infrastructure::ai::AIClient;
+use crate::service::config::project_permission_store::{
+    load_project_permission_config_local, load_project_permission_config_remote,
+};
+use crate::service::config::types::AgentProfileConfig;
 use crate::service::config::types::SubagentBatchExecutionPolicy as ConfigSubagentBatchExecutionPolicy;
 use crate::service::config::GlobalConfigManager;
 use crate::util::elapsed_ms_u64;
 use crate::util::errors::{BitFunError, BitFunResult};
 use crate::util::types::Message as AIMessage;
 use crate::util::types::ToolDefinition;
-use bitfun_agent_runtime::tool_confirmation::{
-    resolve_tool_confirmation_policy_gate, ToolConfirmationContextPolicy,
-    ToolConfirmationPolicyGateFacts,
-};
+use bitfun_agent_runtime::permission::AUTO_APPROVE_ASK_CONTEXT_KEY;
 use bitfun_agent_runtime::turn_cancellation::DialogTurnCancellationTokenStore;
 use bitfun_ai_adapters::{
     ModelExchangeRequestTraceHandle, ModelExchangeResponseTrace, ModelExchangeTraceConfig,
 };
+use bitfun_runtime_ports::PermissionRule;
 use log::{debug, error, warn};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -51,6 +53,10 @@ pub struct RoundExecutor {
 impl RoundExecutor {
     const MAX_STREAM_ATTEMPTS: usize = 10;
     const RETRY_BASE_DELAY_MS: u64 = 500;
+    const RATE_LIMIT_RETRY_BASE_DELAY_MS: u64 = 2_000;
+    const MAX_EXPONENTIAL_DELAY_MS: u64 = 30_000;
+    const MAX_RATE_LIMIT_DELAY_MS: u64 = 60_000;
+    const MAX_RETRY_EXPONENT_SHIFT: u32 = 6;
 
     fn has_user_visible_assistant_text(text: &str) -> bool {
         !text.trim().is_empty()
@@ -85,6 +91,31 @@ impl RoundExecutor {
                 PipelineSubagentBatchExecutionPolicy::Serial
             }
         }
+    }
+
+    fn resolve_permission_rules(
+        global: &crate::service::config::types::GlobalConfig,
+        project_rules: &[PermissionRule],
+        agent_profile: Option<&AgentProfileConfig>,
+        parent_runtime_ceiling: Option<&bitfun_runtime_ports::PermissionRuntimeCeiling>,
+    ) -> Vec<PermissionRule> {
+        resolve_effective_permission_rules(
+            global,
+            project_rules,
+            agent_profile,
+            parent_runtime_ceiling,
+            &[],
+        )
+    }
+
+    fn resolve_auto_approve_ask(
+        global: &crate::service::config::types::GlobalConfig,
+        context_vars: &std::collections::HashMap<String, String>,
+    ) -> bool {
+        context_vars
+            .get(AUTO_APPROVE_ASK_CONTEXT_KEY)
+            .and_then(|value| value.parse::<bool>().ok())
+            .unwrap_or(global.tool_permissions.interaction.auto_approve_ask)
     }
 
     async fn sleep_with_cancellation(
@@ -144,7 +175,8 @@ impl RoundExecutor {
                 round_id: round_id.clone(),
                 round_group_id: context.round_group_id.clone(),
                 round_index: context.round_number,
-                model_id: Some(context.model_name.clone()),
+                model_config_id: context.model_config_id.clone(),
+                effective_model_name: context.effective_model_name.clone(),
             },
             EventPriority::High,
         )
@@ -170,7 +202,7 @@ impl RoundExecutor {
             let request_started_at = Instant::now();
             debug!(
                 "Sending request: model={}, messages={}, tools={}, attempt={}/{}",
-                context.model_name,
+                context.effective_model_name,
                 ai_messages.len(),
                 tool_definitions.as_ref().map(|t| t.len()).unwrap_or(0),
                 attempt_index + 1,
@@ -207,7 +239,7 @@ impl RoundExecutor {
                     if Self::is_transient_network_error(&err_msg)
                         && attempt_index < max_attempts - 1
                     {
-                        let delay_ms = Self::retry_delay_ms(attempt_index);
+                        let delay_ms = Self::retry_delay_ms_for_error(attempt_index, &err_msg);
                         warn!(
                             "Retrying AI request after connection failure: session_id={}, round_id={}, attempt={}/{}, delay_ms={}, error={}",
                             context.session_id,
@@ -311,7 +343,7 @@ impl RoundExecutor {
                                 Self::trace_response_from_stream_result("partial", &result),
                             )
                             .await;
-                            let delay_ms = Self::retry_delay_ms(attempt_index);
+                            let delay_ms = Self::retry_delay_ms_for_error(attempt_index, &err_msg);
                             warn!(
                                 "Retrying stream because tool arguments were interrupted before valid JSON completed: session_id={}, round_id={}, attempt={}/{}, delay_ms={}, invalid_tool_calls={}, error={}",
                                 context.session_id,
@@ -402,7 +434,8 @@ impl RoundExecutor {
                             Self::trace_response_from_stream_result("partial", &result),
                         )
                         .await;
-                        let delay_ms = Self::retry_delay_ms(attempt_index);
+                        let delay_ms =
+                            Self::retry_delay_ms_for_error(attempt_index, partial_recovery_reason);
                         warn!(
                             "Retrying stream because tool calls arrived on an interrupted network stream without assistant text: session_id={}, round_id={}, attempt={}/{}, delay_ms={}, tool_calls={}, reason={}",
                             context.session_id,
@@ -526,7 +559,7 @@ impl RoundExecutor {
                     )
                     .await;
                     if can_retry {
-                        let delay_ms = Self::retry_delay_ms(attempt_index);
+                        let delay_ms = Self::retry_delay_ms_for_error(attempt_index, &err_msg);
                         warn!(
                             "Retrying stream after transient error with no effective output: session_id={}, round_id={}, attempt={}/{}, delay_ms={}, error={}",
                             context.session_id,
@@ -621,8 +654,8 @@ impl RoundExecutor {
                 has_tool_calls: !stream_result.tool_calls.is_empty(),
                 duration_ms: Some(elapsed_ms_u64(round_started_at)),
                 provider_id: None,
-                model_id: Some(context.model_name.clone()),
-                model_alias: Some(context.model_name.clone()),
+                model_config_id: context.model_config_id.clone(),
+                effective_model_name: context.effective_model_name.clone(),
                 first_chunk_ms: stream_result.first_chunk_ms,
                 first_visible_output_ms: stream_result.first_visible_output_ms,
                 stream_duration_ms: Some(stream_processing_ms),
@@ -714,6 +747,11 @@ impl RoundExecutor {
         let tool_results = if let Some(tool_pipeline) = &self.tool_pipeline {
             // Create tool execution context
             let allowed_tools = context.available_tools.clone();
+            let permission_delegation = context.permission_delegation.clone().or_else(|| {
+                subagent_parent_info
+                    .as_ref()
+                    .map(|parent| parent.permission_delegation_context(&context.agent_type))
+            });
             let tool_context = ToolExecutionContext {
                 session_id: context.session_id.clone(),
                 dialog_turn_id: context.dialog_turn_id.clone(),
@@ -725,9 +763,10 @@ impl RoundExecutor {
                 primary_model_facts: context.primary_model_facts.clone(),
                 context_vars: context.context_vars.clone(),
                 subagent_parent_info,
+                permission_delegation,
                 delegation_policy: context.delegation_policy,
-                collapsed_tools: context.collapsed_tools.clone(),
-                unlocked_collapsed_tools: context.unlocked_collapsed_tools.clone(),
+                deferred_tools: context.deferred_tools.clone(),
+                loaded_deferred_tool_specs: context.loaded_deferred_tool_specs.clone(),
                 allowed_tools,
                 runtime_tool_restrictions: context.runtime_tool_restrictions.clone(),
                 steering_interrupt: context.steering_interrupt.clone(),
@@ -736,95 +775,60 @@ impl RoundExecutor {
                 remote_exec_port: context.remote_exec_port.clone(),
             };
 
-            // Read tool execution related configuration from global config
-            let (
-                needs_confirmation,
-                tool_execution_timeout,
-                tool_confirmation_timeout,
-                subagent_batch_execution_policy,
-            ) = {
-                let config_service = GlobalConfigManager::get_service().await.ok();
+            // Read tool execution related configuration from global config.
+            let global_config: crate::service::config::types::GlobalConfig =
+                match GlobalConfigManager::get_service().await {
+                    Ok(service) => service.get_config(None).await.unwrap_or_default(),
+                    Err(_) => Default::default(),
+                };
+            let tool_execution_timeout = global_config.ai.tool_execution_timeout_secs;
+            let subagent_batch_execution_policy = Self::map_subagent_batch_execution_policy(
+                global_config.ai.subagent_batch_execution_policy,
+            );
+            let auto_approve_ask =
+                Self::resolve_auto_approve_ask(&global_config, &context.context_vars);
 
-                // Timeout and skip confirmation settings
-                let (exec_timeout, confirm_timeout, skip_confirmation, task_policy) =
-                    if let Some(ref service) = config_service {
-                        let ai_config: crate::service::config::types::AIConfig =
-                            service.get_config(Some("ai")).await.unwrap_or_default();
-
-                        if ai_config.skip_tool_confirmation {
-                            debug!("Global config skips tool confirmation");
+            let project_rules = match context.workspace.as_ref() {
+                Some(workspace) if workspace.is_remote() => {
+                    match context.workspace_services.as_ref() {
+                        Some(services) => {
+                            load_project_permission_config_remote(
+                                services.fs.as_ref(),
+                                &workspace.root_path_string(),
+                            )
+                            .await?
+                            .rules
                         }
-
-                        (
-                            ai_config.tool_execution_timeout_secs,
-                            ai_config.tool_confirmation_timeout_secs,
-                            ai_config.skip_tool_confirmation,
-                            Self::map_subagent_batch_execution_policy(
-                                ai_config.subagent_batch_execution_policy,
-                            ),
-                        )
-                    } else {
-                        (
-                            None,
-                            None,
-                            false,
-                            PipelineSubagentBatchExecutionPolicy::default(),
-                        ) // Default: no timeout, requires confirmation
-                    };
-
-                let skip_from_context = context
-                    .context_vars
-                    .get("skip_tool_confirmation")
-                    .map(|v| v == "true")
-                    .unwrap_or(false);
-                let require_from_context = context
-                    .context_vars
-                    .get("require_tool_confirmation")
-                    .map(|v| v == "true")
-                    .unwrap_or(false);
-                let context_policy = if require_from_context {
-                    ToolConfirmationContextPolicy::Require
-                } else if skip_from_context {
-                    ToolConfirmationContextPolicy::Skip
-                } else {
-                    ToolConfirmationContextPolicy::Inherit
-                };
-
-                let skips_confirmation = match context_policy {
-                    ToolConfirmationContextPolicy::Require => false,
-                    ToolConfirmationContextPolicy::Skip => true,
-                    ToolConfirmationContextPolicy::Inherit => skip_confirmation,
-                };
-                let any_tool_needs_permission = if skips_confirmation {
-                    false
-                } else {
-                    let registry = get_global_tool_registry();
-                    let tool_registry = registry.read().await;
-
-                    stream_result.tool_calls.iter().any(|tool_call| {
-                        tool_registry
-                            .get_tool(&tool_call.tool_name)
-                            .map(|tool| tool.needs_permissions(Some(&tool_call.arguments)))
-                            .unwrap_or(false)
-                    })
-                };
-                let needs_confirm =
-                    resolve_tool_confirmation_policy_gate(ToolConfirmationPolicyGateFacts {
-                        global_skip_tool_confirmation: skip_confirmation,
-                        context_policy,
-                        any_tool_needs_permission,
-                    })
-                    .confirm_before_run();
-
-                (needs_confirm, exec_timeout, confirm_timeout, task_policy)
+                        None => Vec::new(),
+                    }
+                }
+                Some(workspace) => {
+                    load_project_permission_config_local(workspace.root_path())
+                        .await?
+                        .rules
+                }
+                None => Vec::new(),
             };
+
+            let agent_profile_id =
+                crate::agentic::agents::resolve_mode_config_profile_id(&context.agent_type);
+            let agent_profile = global_config
+                .ai
+                .agent_profiles
+                .get(agent_profile_id.as_ref());
+            let permission_rules = Self::resolve_permission_rules(
+                &global_config,
+                &project_rules,
+                agent_profile,
+                context.permission_runtime_ceiling.as_ref(),
+            );
 
             // Create tool execution options (use configured timeout values)
             let tool_options = ToolExecutionOptions {
-                confirm_before_run: needs_confirmation,
                 timeout_secs: tool_execution_timeout,
-                confirmation_timeout_secs: tool_confirmation_timeout,
                 subagent_batch_execution_policy,
+                permission_rules,
+                auto_approve_ask,
                 ..ToolExecutionOptions::default()
             };
 
@@ -854,9 +858,11 @@ impl RoundExecutor {
                         .map(|tc| crate::agentic::tools::pipeline::ToolExecutionResult {
                             tool_id: tc.tool_id.clone(),
                             tool_name: tc.tool_name.clone(),
+                            effective_tool_name: tc.tool_name.clone(),
                             result: crate::agentic::core::ToolResult {
                                 tool_id: tc.tool_id.clone(),
                                 tool_name: tc.tool_name.clone(),
+                                effective_tool_name: None,
                                 result: serde_json::json!({
                                     "error": e.to_string(),
                                     "message": format!("Tool pipeline execution failed: {}", e)
@@ -873,7 +879,15 @@ impl RoundExecutor {
             };
 
             // Convert to ToolResult, then enforce the aggregate budget for this model round.
-            let tool_results = execution_results.into_iter().map(|r| r.result).collect();
+            let tool_results = execution_results
+                .into_iter()
+                .map(|mut execution_result| {
+                    execution_result.result.effective_tool_name = (execution_result.tool_name
+                        != execution_result.effective_tool_name)
+                        .then_some(execution_result.effective_tool_name);
+                    execution_result.result
+                })
+                .collect();
             tool_result_storage::apply_round_tool_result_budget(tool_results, &storage_context)
                 .await
         } else {
@@ -1032,7 +1046,8 @@ impl RoundExecutor {
             AgenticEvent::TokenUsageUpdated {
                 session_id: context.session_id.clone(),
                 turn_id: context.dialog_turn_id.clone(),
-                model_id: context.model_name.clone(),
+                model_config_id: context.model_config_id.clone(),
+                effective_model_name: context.effective_model_name.clone(),
                 input_tokens: usage.prompt_token_count as usize,
                 output_tokens: Some(usage.candidates_token_count as usize),
                 total_tokens: usage.total_token_count as usize,
@@ -1062,8 +1077,10 @@ impl RoundExecutor {
                     attempt_id: None,
                     attempt_index: None,
                     tool_event: ToolEventData::Failed {
-                        tool_id: tool_call.tool_id.clone(),
-                        tool_name: tool_call.tool_name.clone(),
+                        identity: bitfun_events::ToolEventIdentity::direct(
+                            tool_call.tool_id.clone(),
+                            tool_call.tool_name.clone(),
+                        ),
                         error: format!("Tool arguments stream interrupted: {}", error),
                         duration_ms: None,
                         queue_wait_ms: None,
@@ -1189,7 +1206,26 @@ impl RoundExecutor {
     }
 
     fn retry_delay_ms(attempt_index: usize) -> u64 {
-        Self::RETRY_BASE_DELAY_MS * (1u64 << attempt_index.min(3))
+        Self::retry_delay_ms_for_error(attempt_index, "")
+    }
+
+    fn retry_delay_ms_for_error(attempt_index: usize, error_message: &str) -> u64 {
+        let shift = u32::try_from(attempt_index)
+            .unwrap_or(u32::MAX)
+            .min(Self::MAX_RETRY_EXPONENT_SHIFT);
+        let msg = error_message.to_lowercase();
+        let is_rate_limit =
+            msg.contains("429") || msg.contains("rate limit") || msg.contains("too many requests");
+
+        if is_rate_limit {
+            Self::RATE_LIMIT_RETRY_BASE_DELAY_MS
+                .saturating_mul(1u64 << shift)
+                .min(Self::MAX_RATE_LIMIT_DELAY_MS)
+        } else {
+            Self::RETRY_BASE_DELAY_MS
+                .saturating_mul(1u64 << shift)
+                .min(Self::MAX_EXPONENTIAL_DELAY_MS)
+        }
     }
 
     /// Check whether an error message represents a transient (retryable) condition.
@@ -1334,10 +1370,15 @@ mod tests {
     use crate::agentic::execution::stream_processor::StreamResult;
     use crate::agentic::execution::types::RoundContext;
     use crate::agentic::tools::ToolRuntimeRestrictions;
+    use crate::service::config::types::{AgentProfileConfig, GlobalConfig};
     use crate::util::errors::BitFunError;
     use crate::util::types::ai::GeminiUsage;
+    use bitfun_agent_runtime::permission::AUTO_APPROVE_ASK_CONTEXT_KEY;
     use bitfun_agent_runtime::turn_cancellation::DialogTurnCancellationTokenStore;
-    use bitfun_runtime_ports::DelegationPolicy;
+    use bitfun_runtime_ports::{
+        DelegationPolicy, PermissionEffect, PermissionEvaluator, PermissionPolicyPreset,
+        PermissionRule,
+    };
     use serde_json::json;
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -1358,6 +1399,7 @@ mod tests {
         RoundContext {
             session_id: "session-1".to_string(),
             subagent_parent_info: None,
+            permission_delegation: None,
             dialog_turn_id: "turn-1".to_string(),
             turn_index: 0,
             round_number: 0,
@@ -1365,14 +1407,16 @@ mod tests {
             workspace: None,
             model_exchange_trace_dir: None,
             available_tools: Vec::new(),
-            collapsed_tools: Vec::new(),
-            unlocked_collapsed_tools: Vec::new(),
-            model_name: "model-1".to_string(),
+            deferred_tools: Vec::new(),
+            loaded_deferred_tool_specs: Vec::new(),
+            model_config_id: "model-1".to_string(),
+            effective_model_name: "model-1".to_string(),
             primary_model_facts: tool_runtime::context::PrimaryModelFacts::new(
                 "model-1", "model-1", "openai", true,
             ),
             agent_type: "agentic".to_string(),
             context_vars: HashMap::new(),
+            permission_runtime_ceiling: None,
             delegation_policy: DelegationPolicy::top_level(),
             runtime_tool_restrictions: ToolRuntimeRestrictions::default(),
             steering_interrupt: None,
@@ -1382,6 +1426,83 @@ mod tests {
             remote_exec_port: None,
             recover_partial_on_cancel: false,
         }
+    }
+
+    #[test]
+    fn resolves_global_project_and_agent_permission_rules_before_execution() {
+        let mut global = GlobalConfig::default();
+        global.tool_permissions.policy.preset = PermissionPolicyPreset::FullAccess;
+        global.tool_permissions.policy.rules =
+            vec![PermissionRule::new("bash", "rm *", PermissionEffect::Ask)];
+        let project_rules = vec![PermissionRule::new(
+            "edit",
+            "generated/*",
+            PermissionEffect::Deny,
+        )];
+        let agent = AgentProfileConfig {
+            tool_permission_rules: vec![PermissionRule::new(
+                "edit",
+                "generated/review.md",
+                PermissionEffect::Allow,
+            )],
+            ..AgentProfileConfig::default()
+        };
+
+        let resolved =
+            RoundExecutor::resolve_permission_rules(&global, &project_rules, Some(&agent), None);
+        let evaluator = PermissionEvaluator::case_sensitive();
+
+        assert_eq!(
+            evaluator.evaluate_resource("bash", "rm -rf target", &resolved),
+            PermissionEffect::Ask
+        );
+        assert_eq!(
+            evaluator.evaluate_resource("edit", "generated/review.md", &resolved),
+            PermissionEffect::Allow
+        );
+        assert_eq!(
+            evaluator.evaluate_resource("edit", "generated/api.rs", &resolved),
+            PermissionEffect::Deny
+        );
+        assert_eq!(
+            evaluator.evaluate_resource("read", "src/main.rs", &resolved),
+            PermissionEffect::Allow
+        );
+    }
+
+    #[test]
+    fn auto_approve_context_overrides_persisted_interaction_preference() {
+        let mut global = GlobalConfig::default();
+        global.tool_permissions.interaction.auto_approve_ask = true;
+        let mut context_vars = std::collections::HashMap::new();
+
+        assert!(RoundExecutor::resolve_auto_approve_ask(
+            &global,
+            &context_vars
+        ));
+        context_vars.insert(
+            AUTO_APPROVE_ASK_CONTEXT_KEY.to_string(),
+            "false".to_string(),
+        );
+
+        assert!(!RoundExecutor::resolve_auto_approve_ask(
+            &global,
+            &context_vars
+        ));
+        context_vars.insert(AUTO_APPROVE_ASK_CONTEXT_KEY.to_string(), "true".to_string());
+        assert!(RoundExecutor::resolve_auto_approve_ask(
+            &global,
+            &context_vars
+        ));
+
+        context_vars.insert(
+            AUTO_APPROVE_ASK_CONTEXT_KEY.to_string(),
+            "invalid".to_string(),
+        );
+        assert!(RoundExecutor::resolve_auto_approve_ask(
+            &global,
+            &context_vars
+        ));
     }
 
     #[tokio::test]
@@ -1437,7 +1558,8 @@ mod tests {
             crate::agentic::events::AgenticEvent::TokenUsageUpdated {
                 session_id,
                 turn_id,
-                model_id,
+                model_config_id,
+                effective_model_name,
                 input_tokens: 100,
                 output_tokens: Some(20),
                 total_tokens: 120,
@@ -1445,7 +1567,10 @@ mod tests {
                 is_subagent: false,
                 cached_tokens: Some(30),
                 ..
-            } if session_id == "session-1" && turn_id == "turn-1" && model_id == "model-1"
+            } if session_id == "session-1"
+                && turn_id == "turn-1"
+                && model_config_id == "model-1"
+                && effective_model_name == "model-1"
         )));
     }
 
@@ -1631,6 +1756,32 @@ mod tests {
         assert!(RoundExecutor::is_transient_network_error(
             "rate limit exceeded"
         ));
+    }
+
+    #[test]
+    fn retry_delay_grows_beyond_previous_four_second_cap() {
+        assert_eq!(RoundExecutor::retry_delay_ms(0), 500);
+        assert_eq!(RoundExecutor::retry_delay_ms(3), 4_000);
+        assert_eq!(RoundExecutor::retry_delay_ms(5), 16_000);
+        assert_eq!(RoundExecutor::retry_delay_ms(6), 30_000);
+        assert_eq!(RoundExecutor::retry_delay_ms(9), 30_000);
+    }
+
+    #[test]
+    fn rate_limit_retry_delay_uses_longer_ladder() {
+        assert_eq!(
+            RoundExecutor::retry_delay_ms_for_error(0, "error 429 Too Many Requests"),
+            2_000
+        );
+        assert_eq!(
+            RoundExecutor::retry_delay_ms_for_error(3, "rate limit exceeded"),
+            16_000
+        );
+        assert_eq!(
+            RoundExecutor::retry_delay_ms_for_error(5, "too many requests"),
+            60_000
+        );
+        assert_eq!(RoundExecutor::retry_delay_ms_for_error(9, "429"), 60_000);
     }
 
     #[test]

@@ -276,7 +276,7 @@ Arguments:
     }
 
     fn default_exposure(&self) -> ToolExposure {
-        ToolExposure::Collapsed
+        ToolExposure::Deferred
     }
 
     fn input_schema(&self) -> Value {
@@ -312,10 +312,6 @@ Arguments:
     }
 
     fn is_readonly(&self) -> bool {
-        false
-    }
-
-    fn needs_permissions(&self, _input: Option<&Value>) -> bool {
         false
     }
 
@@ -379,8 +375,10 @@ Arguments:
                         session_name,
                         agent_type,
                         workspace_path: Some(workspace.display_workspace.clone()),
+                        workspace_id: None,
                         remote_connection_id: workspace.remote_connection_id.clone(),
                         remote_ssh_host: workspace.remote_ssh_host.clone(),
+                        model_id: None,
                         metadata,
                     })
                     .await
@@ -616,7 +614,7 @@ mod tests {
             session_id: None,
             dialog_turn_id: None,
             workspace: None,
-            unlocked_collapsed_tools: Vec::new(),
+            loaded_deferred_tool_specs: Vec::new(),
             primary_model_facts: tool_runtime::context::PrimaryModelFacts::default(),
             custom_data: HashMap::new(),
             computer_use_host: None,

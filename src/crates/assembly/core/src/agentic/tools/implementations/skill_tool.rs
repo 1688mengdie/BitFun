@@ -4,7 +4,7 @@
 //! Manages skill enabled/disabled status through SkillRegistry
 
 use crate::agentic::tools::framework::{
-    Tool, ToolRenderOptions, ToolResult, ToolUseContext, ValidationResult,
+    PermissionIntent, Tool, ToolRenderOptions, ToolResult, ToolUseContext, ValidationResult,
 };
 use crate::util::errors::{BitFunError, BitFunResult};
 use async_trait::async_trait;
@@ -150,8 +150,21 @@ impl Tool for SkillTool {
         true
     }
 
-    fn needs_permissions(&self, _input: Option<&Value>) -> bool {
-        false
+    fn permission_intents(
+        &self,
+        input: &Value,
+        _context: &ToolUseContext,
+    ) -> BitFunResult<Vec<PermissionIntent>> {
+        let skill_name = input
+            .get("command")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|skill_name| !skill_name.is_empty())
+            .ok_or_else(|| BitFunError::validation("command is required".to_string()))?;
+        Ok(vec![PermissionIntent::new(
+            "skill",
+            vec![skill_name.to_string()],
+        )])
     }
 
     async fn validate_input(
@@ -407,7 +420,7 @@ Use the remote project skill.
             session_id: None,
             dialog_turn_id: None,
             workspace: Some(workspace),
-            unlocked_collapsed_tools: Vec::new(),
+            loaded_deferred_tool_specs: Vec::new(),
             primary_model_facts: tool_runtime::context::PrimaryModelFacts::default(),
             custom_data: Default::default(),
             computer_use_host: None,
@@ -449,7 +462,7 @@ Use the remote project skill.
             session_id: None,
             dialog_turn_id: None,
             workspace: Some(workspace),
-            unlocked_collapsed_tools: Vec::new(),
+            loaded_deferred_tool_specs: Vec::new(),
             primary_model_facts: tool_runtime::context::PrimaryModelFacts::default(),
             custom_data: Default::default(),
             computer_use_host: None,
@@ -497,7 +510,7 @@ Use the remote project skill.
             session_id: None,
             dialog_turn_id: None,
             workspace: None,
-            unlocked_collapsed_tools: Vec::new(),
+            loaded_deferred_tool_specs: Vec::new(),
             primary_model_facts: tool_runtime::context::PrimaryModelFacts::default(),
             custom_data: Default::default(),
             computer_use_host: None,

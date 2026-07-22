@@ -298,7 +298,7 @@ Allowed agent types when creating a session:
     }
 
     fn default_exposure(&self) -> ToolExposure {
-        ToolExposure::Collapsed
+        ToolExposure::Deferred
     }
 
     fn input_schema(&self) -> Value {
@@ -333,10 +333,6 @@ Allowed agent types when creating a session:
     }
 
     fn is_readonly(&self) -> bool {
-        false
-    }
-
-    fn needs_permissions(&self, _input: Option<&Value>) -> bool {
         false
     }
 
@@ -636,8 +632,10 @@ Allowed agent types when creating a session:
                         session_name,
                         agent_type: agent_type.clone(),
                         workspace_path: Some(workspace_target.workspace_path.clone()),
+                        workspace_id: None,
                         remote_connection_id: workspace_target.remote_connection_id.clone(),
                         remote_ssh_host: workspace_target.remote_ssh_host.clone(),
+                        model_id: None,
                         metadata,
                     })
                     .await
@@ -723,7 +721,7 @@ mod tests {
             session_id: None,
             dialog_turn_id: None,
             workspace: None,
-            unlocked_collapsed_tools: Vec::new(),
+            loaded_deferred_tool_specs: Vec::new(),
             primary_model_facts: tool_runtime::context::PrimaryModelFacts::default(),
             custom_data: HashMap::new(),
             computer_use_host: None,
@@ -842,6 +840,9 @@ mod tests {
             session_id: "worker_1".to_string(),
             session_name: "Worker".to_string(),
             agent_type: "agentic".to_string(),
+            model_id: None,
+            last_user_dialog_agent_type: None,
+            last_submitted_agent_type: None,
             turn_count: 0,
             created_at_ms: 1,
             last_active_at_ms: 2,
@@ -859,6 +860,9 @@ mod tests {
             session_id: "worker_1".to_string(),
             session_name: "Worker".to_string(),
             agent_type: " ".to_string(),
+            model_id: None,
+            last_user_dialog_agent_type: None,
+            last_submitted_agent_type: None,
             turn_count: 0,
             created_at_ms: 1,
             last_active_at_ms: 2,

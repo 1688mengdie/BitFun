@@ -4,8 +4,10 @@
 pub mod api;
 pub mod computer_use;
 pub mod crash_diagnostics;
+mod embedded_relay_host;
 pub mod logging;
 pub mod macos_menubar;
+pub mod runtime;
 pub mod startup_trace;
 pub mod theme;
 pub mod tray;
@@ -41,6 +43,7 @@ use api::custom_agent_api::{
     update_custom_agent,
 };
 use api::diff_api::*;
+use api::external_sources_api::*;
 use api::git_agent_api::*;
 use api::git_api::*;
 use api::i18n_api::*;
@@ -85,6 +88,7 @@ static MAIN_WINDOW_HIDDEN_ON_MACOS: AtomicBool = AtomicBool::new(false);
 static MAIN_WINDOW_CLOSE_PENDING_ON_MACOS: AtomicBool = AtomicBool::new(false);
 
 const MAIN_WINDOW_CLOSE_REQUESTED_EVENT: &str = "bitfun_main_window_close_requested";
+const BROWSER_WEBVIEW_PAGE_LOAD_EVENT: &str = "browser-webview-page-load";
 const CRON_DESKTOP_START_FALLBACK_DELAY: Duration = Duration::from_secs(120);
 
 #[cfg(target_os = "macos")]
@@ -280,7 +284,6 @@ pub async fn run() {
     // Install the rustls ring CryptoProvider as the process-level default early,
     // so that all subsequent TLS operations (relay_client, reqwest, tokio-tungstenite)
     // reuse the same provider instead of each attempting their own install_default().
-    // This is a no-op on non-Windows platforms where tokio-tungstenite handles it.
     bitfun_core::service::remote_connect::ensure_rustls_crypto_provider();
 
     eprintln!("=== BitFun Desktop Starting ===");
@@ -383,6 +386,28 @@ pub async fn run() {
     startup_timings.record_elapsed("initialize_app_state", step_started);
     startup_trace.record_elapsed_step("native_pre_tauri", "initialize_app_state", step_started);
 
+    let step_started = Instant::now();
+    let desktop_runtime = match runtime::DesktopRuntimeContext::build(
+        coordinator.clone(),
+        scheduler.clone(),
+        app_state.token_usage_service.clone(),
+        app_state.workspace_service.clone(),
+        app_state.ssh_manager.clone(),
+        app_state.acp_client_service.clone(),
+    ) {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            log::error!("Failed to initialize Desktop Agent Runtime: {}", error);
+            return;
+        }
+    };
+    startup_timings.record_elapsed("initialize_desktop_agent_runtime", step_started);
+    startup_trace.record_elapsed_step(
+        "native_pre_tauri",
+        "initialize_desktop_agent_runtime",
+        step_started,
+    );
+
     let coordinator_state = CoordinatorState {
         coordinator: coordinator.clone(),
     };
@@ -422,6 +447,7 @@ pub async fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(app_state)
+        .manage(desktop_runtime)
         .manage(coordinator_state)
         .manage(scheduler_state)
         .manage(path_manager)
@@ -429,6 +455,26 @@ pub async fn run() {
         .manage(scheduler)
         .manage(terminal_state)
         .manage(startup_trace.clone())
+        .on_page_load(|webview, payload| {
+            let label = webview.label();
+            if label.starts_with("embedded-browser-view-")
+                || label.starts_with("embedded-browser-panel-view-")
+            {
+                let event = match payload.event() {
+                    tauri::webview::PageLoadEvent::Started => "started",
+                    tauri::webview::PageLoadEvent::Finished => "finished",
+                };
+                let _ = webview.emit_to(
+                    "main",
+                    BROWSER_WEBVIEW_PAGE_LOAD_EVENT,
+                    serde_json::json!({
+                        "label": label,
+                        "event": event,
+                        "url": payload.url(),
+                    }),
+                );
+            }
+        })
         .setup(move |app| {
             let setup_started = Instant::now();
             startup_trace.record_phase("tauri_setup_start", "native_setup");
@@ -879,8 +925,16 @@ pub async fn run() {
             webdriver_bridge_result,
             get_startup_native_trace,
             api::agentic_api::list_sessions,
-            api::agentic_api::confirm_tool_execution,
-            api::agentic_api::reject_tool_execution,
+            api::agentic_api::list_pending_permission_requests,
+            api::agentic_api::subscribe_permission_requests,
+            api::agentic_api::respond_permission,
+            api::agentic_api::respond_permission_batch,
+            api::agentic_api::list_project_permission_grants,
+            api::agentic_api::remove_project_permission_grant,
+            api::agentic_api::clear_project_permission_grants,
+            api::agentic_api::list_project_permission_audit,
+            api::agentic_api::get_project_permission_rules,
+            api::agentic_api::save_project_permission_rules,
             api::agentic_api::cancel_tool,
             api::agentic_api::generate_session_title,
             api::agentic_api::get_available_modes,
@@ -889,6 +943,19 @@ pub async fn run() {
             api::btw_api::btw_cancel,
             api::editor_ai_api::editor_ai_stream,
             api::editor_ai_api::editor_ai_cancel,
+            get_external_source_snapshot,
+            reveal_external_source_location,
+            get_external_source_control_snapshot,
+            apply_external_source_control_action_command,
+            update_external_integration_policy_command,
+            set_external_source_enabled_command,
+            set_external_source_conflict_choice_command,
+            set_external_tool_target_decision_command,
+            set_external_tool_conflict_choice_command,
+            set_external_subagent_activation_command,
+            choose_external_subagent_conflict_command,
+            set_external_mcp_server_decision_command,
+            choose_external_mcp_conflict_command,
             api::context_upload_api::upload_image_contexts,
             get_all_tools_info,
             get_readonly_tools_info,
@@ -904,11 +971,13 @@ pub async fn run() {
             test_ai_connection,
             test_ai_config_connection,
             list_ai_models_by_config,
-            discover_cli_credentials,
-            refresh_cli_credential,
+            list_subscription_accounts,
+            start_subscription_login,
+            get_subscription_login_status,
+            cancel_subscription_login,
+            logout_subscription_account,
+            refresh_subscription_account,
             initialize_ai,
-            set_agent_model,
-            get_agent_models,
             refresh_model_client,
             get_app_state,
             update_app_status,
@@ -1006,6 +1075,7 @@ pub async fn run() {
             git_resolve_revision,
             git_get_repository,
             review_platform_get_workspace_snapshot,
+            review_platform_get_workspace_context,
             review_platform_get_pull_request_detail,
             review_platform_get_pull_request_review_target,
             review_platform_get_issue,
@@ -1256,6 +1326,7 @@ pub async fn run() {
             api::remote_connect_api::remote_connect_set_bot_verbose_mode,
             // Account API
             api::remote_connect_api::account_login,
+            api::remote_connect_api::account_finalize_login,
             api::remote_connect_api::account_status,
             api::remote_connect_api::account_logout,
             api::remote_connect_api::account_connect_devices,
@@ -1278,6 +1349,15 @@ pub async fn run() {
             api::remote_connect_api::account_delete_device,
             api::remote_connect_api::account_device_rpc,
             api::remote_connect_api::account_delegate_to_paired,
+            // BitFun Page API
+            api::pages_api::page_publish,
+            api::pages_api::page_save_version,
+            api::pages_api::page_list,
+            api::pages_api::page_list_versions,
+            api::pages_api::page_deploy,
+            api::pages_api::page_delete_version,
+            api::pages_api::page_update,
+            api::pages_api::page_unpublish,
             api::peer_host_invoke::peer_host_invoke_complete,
             api::peer_host_invoke::peer_control_attach,
             api::peer_host_invoke::peer_control_detach,
@@ -1334,6 +1414,10 @@ pub async fn run() {
             api::miniapp_export_api::miniapp_render_slide_page,
             // Browser API (embedded webview)
             api::browser_api::browser_webview_eval,
+            api::browser_api::browser_webview_create,
+            api::browser_api::browser_webview_navigate,
+            api::browser_api::browser_webview_reload,
+            api::browser_api::browser_webview_set_bounds,
             api::browser_api::browser_get_url,
             // Browser Control API (CDP-based user browser control)
             api::browser_control_api::browser_control_list_browsers,
@@ -1375,6 +1459,14 @@ pub async fn run() {
             api::ssh_api::remote_close_workspace,
             api::ssh_api::remote_remove_workspace,
             api::ssh_api::remote_get_workspace_info,
+            // Relay self-deploy API
+            api::relay_deploy_api::relay_deploy_preflight,
+            api::relay_deploy_api::relay_deploy_install_docker,
+            api::relay_deploy_api::relay_deploy_start,
+            api::relay_deploy_api::relay_deploy_poll,
+            api::relay_deploy_api::relay_deploy_cancel,
+            api::relay_deploy_api::relay_deploy_register,
+            api::relay_deploy_api::relay_deploy_verify,
             // Announcement / feature-demo / tips API
             api::announcement_api::get_pending_announcements,
             api::announcement_api::mark_announcement_seen,
@@ -1447,16 +1539,22 @@ async fn init_agentic_system() -> anyhow::Result<(
 
     let tool_registry = tools::registry::get_global_tool_registry();
     let tool_state_manager = Arc::new(tools::pipeline::ToolStateManager::new(event_queue.clone()));
+    let permission_request_manager =
+        bitfun_core::product_runtime::core_permission_request_manager()
+            .map_err(anyhow::Error::msg)?;
 
     let computer_use_host: ComputerUseHostRef =
         Arc::new(computer_use::DesktopComputerUseHost::new());
     set_computer_use_desktop_available(true);
 
-    let tool_pipeline = Arc::new(tools::pipeline::ToolPipeline::new(
-        tool_registry,
-        tool_state_manager,
-        Some(computer_use_host),
-    ));
+    let tool_pipeline = Arc::new(
+        tools::pipeline::ToolPipeline::new(
+            tool_registry,
+            tool_state_manager,
+            Some(computer_use_host),
+        )
+        .with_permission_request_manager(permission_request_manager),
+    );
 
     let stream_processor = Arc::new(execution::StreamProcessor::new(event_queue.clone()));
     let round_executor = Arc::new(execution::RoundExecutor::new(
@@ -1722,7 +1820,7 @@ fn start_event_loop_with_transport(
                     }
 
                     let event_for_fanout = envelope.event.clone();
-                    if let Err(e) = transport.emit_event("", envelope.event).await {
+                    if let Err(e) = transport.emit_event(envelope.event).await {
                         log::error!("Failed to emit event: {:?}", e);
                     }
 

@@ -1878,7 +1878,7 @@ impl Tool for ControlHubTool {
     }
 
     fn default_exposure(&self) -> ToolExposure {
-        ToolExposure::Collapsed
+        ToolExposure::Deferred
     }
 
     async fn description_with_context(
@@ -1913,10 +1913,6 @@ impl Tool for ControlHubTool {
             },
             "required": ["domain", "action"]
         })
-    }
-
-    fn needs_permissions(&self, _input: Option<&Value>) -> bool {
-        true
     }
 
     fn is_concurrency_safe(&self, _input: Option<&Value>) -> bool {
@@ -2131,7 +2127,7 @@ mod control_hub_tests {
             session_id: None,
             dialog_turn_id: None,
             workspace: None,
-            unlocked_collapsed_tools: Vec::new(),
+            loaded_deferred_tool_specs: Vec::new(),
             primary_model_facts: tool_runtime::context::PrimaryModelFacts::default(),
             custom_data: std::collections::HashMap::new(),
             computer_use_host: None,

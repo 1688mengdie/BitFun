@@ -1,4 +1,4 @@
-//! Dialog / tool confirmation HostInvoke handlers.
+//! Dialog HostInvoke handlers.
 
 use serde_json::{json, Value};
 
@@ -24,10 +24,10 @@ fn peer_dialog_metadata(request: &Value) -> Result<serde_json::Map<String, Value
         "parentDialogTurnId",
         "subagentSessionId",
         "subagentDialogTurnId",
+        "require_tool_confirmation",
     ] {
         metadata.remove(reserved_key);
     }
-    metadata.insert("require_tool_confirmation".to_string(), Value::Bool(true));
     Ok(metadata)
 }
 
@@ -82,7 +82,10 @@ pub(crate) async fn start_dialog_turn(
         .await;
     if let Err(error) = submit_result {
         state.turns.finish_turn(&turn);
-        return Err(format!("Failed to start dialog turn: {error}"));
+        return Err(format!(
+            "Failed to start dialog turn: {}",
+            error.into_message()
+        ));
     }
     if !state
         .turns
@@ -101,6 +104,7 @@ pub(crate) async fn start_dialog_turn(
             })
             .await;
         if let Err(error) = cancellation {
+            let error = error.into_message();
             return Err(format!(
                 "Peer continuity was lost after dialog submission and cancellation could not be confirmed: session_id={session_id}, turn_id={turn_id}, error={error}"
             ));
@@ -135,64 +139,8 @@ pub(crate) async fn cancel_dialog_turn(
             wait_timeout_ms: Some(1_500),
         })
         .await
-        .map_err(|e| format!("Failed to cancel dialog turn: {e}"))?;
+        .map_err(|error| format!("Failed to cancel dialog turn: {}", error.into_message()))?;
     Ok(json!({ "success": true }))
-}
-
-pub(crate) async fn confirm_tool_execution(
-    state: &PeerHostState,
-    args: &Value,
-) -> Result<Value, String> {
-    let request = request_value(args);
-    let tool_id = get_string(request, "toolId")?;
-    let ownership = state
-        .turns
-        .claim_confirmation(&tool_id)
-        .ok_or_else(|| "Tool confirmation is not owned by an active Peer turn".to_string())?;
-    if optional_string(request, "sessionId")
-        .is_some_and(|value| value.as_str() != ownership.session_id.as_str())
-        || optional_string(request, "dialogTurnId")
-            .is_some_and(|value| value.as_str() != ownership.turn_id.as_str())
-    {
-        state.turns.restore_confirmation(tool_id, ownership);
-        return Err("Tool confirmation session or turn does not match its Peer owner".to_string());
-    }
-    let updated_input = request.get("updatedInput").cloned();
-    if let Err(error) = state
-        .compatibility
-        .confirm_tool(&tool_id, updated_input)
-        .await
-    {
-        state.turns.restore_confirmation(tool_id, ownership);
-        return Err(format!("Confirm tool failed: {error}"));
-    }
-    Ok(Value::Null)
-}
-
-pub(crate) async fn reject_tool_execution(
-    state: &PeerHostState,
-    args: &Value,
-) -> Result<Value, String> {
-    let request = request_value(args);
-    let tool_id = get_string(request, "toolId")?;
-    let ownership = state
-        .turns
-        .claim_confirmation(&tool_id)
-        .ok_or_else(|| "Tool confirmation is not owned by an active Peer turn".to_string())?;
-    if optional_string(request, "sessionId")
-        .is_some_and(|value| value.as_str() != ownership.session_id.as_str())
-        || optional_string(request, "dialogTurnId")
-            .is_some_and(|value| value.as_str() != ownership.turn_id.as_str())
-    {
-        state.turns.restore_confirmation(tool_id, ownership);
-        return Err("Tool confirmation session or turn does not match its Peer owner".to_string());
-    }
-    let reason = optional_string(request, "reason").unwrap_or_else(|| "User rejected".to_string());
-    if let Err(error) = state.compatibility.reject_tool(&tool_id, reason).await {
-        state.turns.restore_confirmation(tool_id, ownership);
-        return Err(format!("Reject tool failed: {error}"));
-    }
-    Ok(Value::Null)
 }
 
 #[cfg(test)]
@@ -202,7 +150,7 @@ mod tests {
     use super::peer_dialog_metadata;
 
     #[test]
-    fn peer_metadata_forces_confirmation_and_cannot_claim_acp_transport() {
+    fn peer_metadata_removes_reserved_runtime_fields() {
         let metadata = peer_dialog_metadata(&json!({
             "userMessageMetadata": {
                 "acp_transport": true,
@@ -219,10 +167,7 @@ mod tests {
         }))
         .expect("metadata");
 
-        assert_eq!(
-            metadata.get("require_tool_confirmation"),
-            Some(&json!(true))
-        );
+        assert!(!metadata.contains_key("require_tool_confirmation"));
         assert!(!metadata.contains_key("acp_transport"));
         for reserved_key in [
             "backgroundTaskId",

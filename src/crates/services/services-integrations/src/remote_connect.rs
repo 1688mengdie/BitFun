@@ -15,6 +15,7 @@ pub mod encryption;
 mod lan;
 mod mobile_web_upload;
 mod ngrok;
+mod page_upload;
 pub mod pairing;
 pub mod qr_generator;
 pub mod relay_client;
@@ -47,6 +48,13 @@ use log::info;
 pub use mobile_web_upload::upload_mobile_web_to_relay;
 pub use ngrok::{
     cleanup_all_ngrok, detect_running_ngrok, is_ngrok_available, start_ngrok_tunnel, NgrokTunnel,
+};
+pub use page_upload::{
+    delete_page_version_on_relay, deploy_page_version_on_relay, join_relay_url,
+    list_page_versions_from_relay, list_pages_from_relay, publish_page_content_on_relay,
+    publish_page_to_relay, save_page_version_from_inline_files, save_page_version_to_relay,
+    unpublish_page_from_relay, update_page_on_relay, PageContentPublishResult, PageInfo,
+    PagePublishResult, PageSaveVersionResult, PageVersionInfo,
 };
 pub use pairing::{PairingChallenge, PairingProtocol, PairingResponse, PairingState, QrPayload};
 pub use qr_generator::QrGenerator;
@@ -100,8 +108,10 @@ pub fn build_remote_session_create_request(
         session_name: session_name.into(),
         agent_type: agent_type.into(),
         workspace_path: workspace_path.map(Into::into),
+        workspace_id: None,
         remote_connection_id: workspace_identity.remote_connection_id,
         remote_ssh_host: workspace_identity.remote_ssh_host,
+        model_id: None,
         metadata,
     }
 }
@@ -321,7 +331,6 @@ pub enum RemoteDialogQueuePriority {
 pub struct RemoteDialogSubmissionPolicy {
     pub source: RemoteConnectSubmissionSource,
     pub queue_priority: RemoteDialogQueuePriority,
-    pub skip_tool_confirmation: bool,
 }
 
 impl RemoteDialogSubmissionPolicy {
@@ -329,7 +338,6 @@ impl RemoteDialogSubmissionPolicy {
         Self {
             source,
             queue_priority: RemoteDialogQueuePriority::Normal,
-            skip_tool_confirmation: true,
         }
     }
 }
@@ -532,14 +540,13 @@ fn is_remote_absolute_workspace_path(path: &str) -> bool {
 
 pub fn resolve_remote_workspace_path(raw: &str, workspace_root: Option<&Path>) -> Option<PathBuf> {
     let stripped = strip_remote_workspace_path_prefix(raw);
-
-    if is_remote_absolute_workspace_path(stripped) {
-        return Some(PathBuf::from(stripped));
-    }
-
     let workspace_root = workspace_root?;
     let canonical_root = std::fs::canonicalize(workspace_root).ok()?;
-    let candidate = canonical_root.join(stripped);
+    let candidate = if is_remote_absolute_workspace_path(stripped) {
+        PathBuf::from(stripped)
+    } else {
+        canonical_root.join(stripped)
+    };
     let canonical_candidate = std::fs::canonicalize(candidate).ok()?;
 
     if canonical_candidate.starts_with(&canonical_root) {
@@ -896,6 +903,8 @@ pub fn remote_recent_workspaces_response(
                 name: workspace.name,
                 last_opened: workspace.last_opened,
                 workspace_kind: Some(workspace.kind.as_wire_str().to_string()),
+                remote_connection_id: workspace.remote_connection_id,
+                remote_ssh_host: workspace.remote_ssh_host,
             })
             .collect(),
     }
@@ -924,12 +933,16 @@ pub fn remote_workspace_updated_response(
             success: true,
             path: Some(update.path),
             project_name: Some(update.name),
+            remote_connection_id: update.remote_connection_id,
+            remote_ssh_host: update.remote_ssh_host,
             error: None,
         },
         Err(message) => RemoteResponse::WorkspaceUpdated {
             success: false,
             path: None,
             project_name: None,
+            remote_connection_id: None,
+            remote_ssh_host: None,
             error: Some(message),
         },
     }
@@ -1052,9 +1065,18 @@ where
         RemoteCommand::ListRecentWorkspaces => {
             remote_recent_workspaces_response(host.recent_workspaces().await)
         }
-        RemoteCommand::SetWorkspace { path } => {
-            remote_workspace_updated_response(host.open_workspace(path).await)
-        }
+        RemoteCommand::SetWorkspace {
+            path,
+            remote_connection_id,
+            remote_ssh_host,
+        } => remote_workspace_updated_response(
+            host.open_workspace(
+                path,
+                remote_connection_id.as_deref(),
+                remote_ssh_host.as_deref(),
+            )
+            .await,
+        ),
         RemoteCommand::ListAssistants => {
             remote_assistant_list_response(host.assistant_workspaces().await)
         }
@@ -1450,12 +1472,6 @@ where
 
 #[async_trait::async_trait]
 pub trait RemoteInteractionRuntimeHost: Send + Sync {
-    async fn confirm_tool(
-        &self,
-        tool_id: &str,
-        updated_input: Option<serde_json::Value>,
-    ) -> Result<(), String>;
-    async fn reject_tool(&self, tool_id: &str, reason: String) -> Result<(), String>;
     async fn cancel_tool(&self, tool_id: &str, reason: String) -> Result<(), String>;
     fn answer_question(&self, tool_id: &str, answers: serde_json::Value) -> Result<(), String>;
 }
@@ -1468,24 +1484,6 @@ where
     H: RemoteInteractionRuntimeHost + ?Sized,
 {
     match command {
-        RemoteCommand::ConfirmTool {
-            tool_id,
-            updated_input,
-        } => remote_interaction_accepted_response(
-            "confirm_tool",
-            tool_id.clone(),
-            host.confirm_tool(tool_id, updated_input.clone()).await,
-        ),
-        RemoteCommand::RejectTool { tool_id, reason } => {
-            let reject_reason = reason
-                .clone()
-                .unwrap_or_else(|| "User rejected".to_string());
-            remote_interaction_accepted_response(
-                "reject_tool",
-                tool_id.clone(),
-                host.reject_tool(tool_id, reject_reason).await,
-            )
-        }
         RemoteCommand::CancelTool { tool_id, reason } => {
             let cancel_reason = reason
                 .clone()
@@ -1982,6 +1980,10 @@ pub struct RecentWorkspaceEntry {
     pub last_opened: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub workspace_kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_connection_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_ssh_host: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2026,6 +2028,10 @@ pub enum RemoteCommand {
     ListRecentWorkspaces,
     SetWorkspace {
         path: String,
+        #[serde(default)]
+        remote_connection_id: Option<String>,
+        #[serde(default)]
+        remote_ssh_host: Option<String>,
     },
     ListAssistants,
     SetAssistant {
@@ -2080,14 +2086,6 @@ pub enum RemoteCommand {
     DeleteSession {
         session_id: String,
     },
-    ConfirmTool {
-        tool_id: String,
-        updated_input: Option<serde_json::Value>,
-    },
-    RejectTool {
-        tool_id: String,
-        reason: Option<String>,
-    },
     CancelTool {
         tool_id: String,
         reason: Option<String>,
@@ -2116,6 +2114,11 @@ pub enum RemoteCommand {
         path: String,
         session_id: Option<String>,
     },
+    /// Ask the paired desktop to delegate its logged-in account identity
+    /// (token + master_key) to this room-channel client so it can call the
+    /// relay device APIs directly. Answered by the host runtime; other hosts
+    /// return an error response.
+    GetDelegatedIdentity,
     Ping,
 
     // ── Device-to-device distributed control ──────────────────────────────
@@ -2188,6 +2191,10 @@ pub enum RemoteResponse {
         success: bool,
         path: Option<String>,
         project_name: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        remote_connection_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        remote_ssh_host: Option<String>,
         error: Option<String>,
     },
     AssistantList {
@@ -2306,6 +2313,12 @@ pub enum RemoteResponse {
     DeviceInfo {
         device_name: Option<String>,
         workspace_path: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        workspace_kind: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        remote_connection_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        remote_ssh_host: Option<String>,
         session_count: Option<usize>,
     },
     /// Result of a HostInvoke proxy call (JSON-compatible with local invoke).
@@ -2318,6 +2331,14 @@ pub enum RemoteResponse {
     },
     /// Event already delivered out-of-band; ack only.
     DeviceEventAccepted,
+    /// Delegated account identity for a paired room-channel client.
+    /// `master_key` is base64-encoded; `device_id` is the delegating host.
+    DelegateIdentity {
+        token: String,
+        user_id: String,
+        master_key: String,
+        device_id: String,
+    },
     Error {
         message: String,
     },
@@ -2390,10 +2411,9 @@ where
         | RemoteCommand::ReadFileChunk { .. }
         | RemoteCommand::GetFileInfo { .. } => host.handle_workspace_file_command(command).await,
 
-        RemoteCommand::ConfirmTool { .. }
-        | RemoteCommand::RejectTool { .. }
-        | RemoteCommand::CancelTool { .. }
-        | RemoteCommand::AnswerQuestion { .. } => host.handle_interaction_command(command).await,
+        RemoteCommand::CancelTool { .. } | RemoteCommand::AnswerQuestion { .. } => {
+            host.handle_interaction_command(command).await
+        }
 
         RemoteCommand::SendMessage {
             session_id,
@@ -2438,6 +2458,13 @@ where
             })
             .await,
         ),
+
+        // Answered by the host runtime (which owns the delegated identity
+        // provider) before dispatch reaches this router; this is the fallback
+        // for hosts that cannot delegate an account identity.
+        RemoteCommand::GetDelegatedIdentity => RemoteResponse::Error {
+            message: "Delegated identity is not available on this host".to_string(),
+        },
 
         RemoteCommand::SendSessionToDevice { .. }
         | RemoteCommand::ExecuteOnDevice { .. }
@@ -2840,22 +2867,26 @@ impl RemoteSessionStateTracker {
                 }
             }
             AE::ToolEvent { tool_event, .. } => {
+                let tool_id = tool_event.tool_id().to_string();
+                let tool_name = tool_event.effective_tool_name().to_string();
+                let effective_params = match tool_event {
+                    bitfun_events::ToolEventData::Started {
+                        identity, params, ..
+                    }
+                    | bitfun_events::ToolEventData::ConfirmationNeeded {
+                        identity, params, ..
+                    } => Some(
+                        bitfun_agent_tools::effective_tool_invocation(&identity.tool_name, params)
+                            .1
+                            .clone(),
+                    ),
+                    _ => None,
+                };
                 if let Ok(value) = serde_json::to_value(tool_event) {
                     let event_type = value
                         .get("event_type")
                         .and_then(|value| value.as_str())
                         .unwrap_or("");
-                    let tool_id = value
-                        .get("tool_id")
-                        .and_then(|value| value.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    let tool_name = value
-                        .get("tool_name")
-                        .and_then(|value| value.as_str())
-                        .unwrap_or("")
-                        .to_string();
-
                     let mut state = self.state.write().unwrap();
                     let allow_name_fallback = tool_id.is_empty() && !tool_name.is_empty();
                     let mut pending_tool_event: Option<TrackerEvent> = None;
@@ -2872,7 +2903,7 @@ impl RemoteSessionStateTracker {
                             );
                         }
                         "ConfirmationNeeded" => {
-                            let params = value.get("params").cloned();
+                            let params = effective_params.clone();
                             let input_preview = params.as_ref().and_then(make_slim_tool_params);
                             Self::upsert_active_tool(
                                 &mut state,
@@ -2885,7 +2916,7 @@ impl RemoteSessionStateTracker {
                             );
                         }
                         "Started" => {
-                            let params = value.get("params").cloned();
+                            let params = effective_params.clone();
                             let input_preview = params.as_ref().and_then(make_slim_tool_params);
                             let tool_input = if tool_name == "AskUserQuestion"
                                 || tool_name == "Task"
@@ -3304,13 +3335,22 @@ mod tests {
                 name: "project".to_string(),
                 last_opened: "2026-05-29T00:00:00Z".to_string(),
                 kind: RemoteWorkspaceKind::Normal,
+                remote_connection_id: None,
+                remote_ssh_host: None,
             }]
         }
 
-        async fn open_workspace(&self, path: &str) -> Result<RemoteWorkspaceUpdate, String> {
+        async fn open_workspace(
+            &self,
+            path: &str,
+            _remote_connection_id: Option<&str>,
+            _remote_ssh_host: Option<&str>,
+        ) -> Result<RemoteWorkspaceUpdate, String> {
             Ok(RemoteWorkspaceUpdate {
                 path: path.to_string(),
                 name: "opened".to_string(),
+                remote_connection_id: None,
+                remote_ssh_host: None,
             })
         }
 
@@ -3329,6 +3369,8 @@ mod tests {
             Ok(RemoteWorkspaceUpdate {
                 path: path.to_string(),
                 name: "assistant".to_string(),
+                remote_connection_id: None,
+                remote_ssh_host: None,
             })
         }
     }
@@ -3356,6 +3398,8 @@ mod tests {
                 &host,
                 &RemoteCommand::SetWorkspace {
                     path: "/workspace/next".to_string(),
+                    remote_connection_id: None,
+                    remote_ssh_host: None,
                 },
             )
             .await,
@@ -3363,6 +3407,8 @@ mod tests {
                 success: true,
                 path: Some("/workspace/next".to_string()),
                 project_name: Some("opened".to_string()),
+                remote_connection_id: None,
+                remote_ssh_host: None,
                 error: None,
             }
         );
@@ -3641,28 +3687,10 @@ mod tests {
     }
 
     #[derive(Default)]
-    struct FakeInteractionHost {
-        rejected: Mutex<Vec<(String, String)>>,
-    }
+    struct FakeInteractionHost;
 
     #[async_trait::async_trait]
     impl RemoteInteractionRuntimeHost for FakeInteractionHost {
-        async fn confirm_tool(
-            &self,
-            _tool_id: &str,
-            _updated_input: Option<serde_json::Value>,
-        ) -> Result<(), String> {
-            Ok(())
-        }
-
-        async fn reject_tool(&self, tool_id: &str, reason: String) -> Result<(), String> {
-            self.rejected
-                .lock()
-                .unwrap()
-                .push((tool_id.to_string(), reason));
-            Ok(())
-        }
-
         async fn cancel_tool(&self, _tool_id: &str, _reason: String) -> Result<(), String> {
             Ok(())
         }
@@ -3674,31 +3702,5 @@ mod tests {
         ) -> Result<(), String> {
             Ok(())
         }
-    }
-
-    #[tokio::test]
-    async fn remote_interaction_handler_preserves_default_reject_reason() {
-        let host = FakeInteractionHost::default();
-
-        let response = handle_remote_interaction_command(
-            &host,
-            &RemoteCommand::RejectTool {
-                tool_id: "tool-1".to_string(),
-                reason: None,
-            },
-        )
-        .await;
-
-        assert_eq!(
-            response,
-            RemoteResponse::InteractionAccepted {
-                action: "reject_tool".to_string(),
-                target_id: "tool-1".to_string(),
-            }
-        );
-        assert_eq!(
-            host.rejected.lock().unwrap().as_slice(),
-            [("tool-1".to_string(), "User rejected".to_string())]
-        );
     }
 }

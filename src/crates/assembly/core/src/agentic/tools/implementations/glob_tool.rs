@@ -194,10 +194,6 @@ impl Tool for GlobTool {
         true
     }
 
-    fn needs_permissions(&self, _input: Option<&Value>) -> bool {
-        false
-    }
-
     async fn call_impl(
         &self,
         input: &Value,
@@ -573,7 +569,7 @@ mod tests {
                 "Dev SSH".to_string(),
                 session_identity,
             )),
-            unlocked_collapsed_tools: Vec::new(),
+            loaded_deferred_tool_specs: Vec::new(),
             primary_model_facts: tool_runtime::context::PrimaryModelFacts::default(),
             custom_data: HashMap::new(),
             computer_use_host: None,

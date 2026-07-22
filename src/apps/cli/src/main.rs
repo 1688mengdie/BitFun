@@ -7,14 +7,16 @@
 mod account;
 mod account_sync;
 mod acp_cli;
+mod actions;
 mod agent;
 #[allow(dead_code)]
 mod chat_state;
-mod commands;
 mod config;
+mod daemon;
 mod diagnostics;
 mod logging;
 mod management;
+mod model_selection;
 mod modes;
 mod peer_host;
 mod plugin_diagnostics;
@@ -26,7 +28,7 @@ mod ui;
 
 use anyhow::{anyhow, Result};
 use bitfun_core::service::remote_connect::DeviceIdentity;
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::OnceLock;
 
@@ -183,6 +185,16 @@ enum Commands {
     /// Health check
     Health,
 
+    /// Manage the always-on account device host daemon
+    ///
+    /// The daemon holds the relay device-routing connection in a headless
+    /// process so this device stays reachable by account peers whenever the
+    /// machine is up, even without an interactive CLI running.
+    Daemon {
+        #[command(subcommand)]
+        action: DaemonAction,
+    },
+
     /// Start or inspect the Agent Client Protocol (ACP) server
     Acp {
         #[command(subcommand)]
@@ -249,13 +261,13 @@ enum AcpAction {
     /// Show ACP server status and capabilities
     Status {
         /// Command name or path to show in generated examples
-        #[arg(long, default_value = "bitfun-cli")]
+        #[arg(long, default_value = "bitfun")]
         command: String,
     },
     /// Check local readiness for ACP clients
     Doctor {
         /// Command name or path to show in generated examples
-        #[arg(long, default_value = "bitfun-cli")]
+        #[arg(long, default_value = "bitfun")]
         command: String,
     },
     /// Print editor/client integration snippets
@@ -265,7 +277,7 @@ enum AcpAction {
         client: acp_cli::AcpConfigClient,
 
         /// Command name or path your editor should execute
-        #[arg(long, default_value = "bitfun-cli")]
+        #[arg(long, default_value = "bitfun")]
         command: String,
     },
     /// Manage external ACP agents that BitFun can launch
@@ -388,6 +400,90 @@ enum ConfigAction {
     Edit,
     /// Reset to default configuration
     Reset,
+    /// Inspect or change external AI application compatibility
+    External {
+        #[command(subcommand)]
+        action: ExternalConfigAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum ExternalConfigAction {
+    /// Show effective global and project compatibility settings
+    Status,
+    /// Enable or disable external compatibility
+    SetEnabled {
+        enabled: bool,
+        #[arg(long, value_enum, default_value = "project")]
+        scope: ExternalPolicyScopeArg,
+    },
+    /// Select an external ecosystem compatibility mode
+    SetMode {
+        #[arg(value_enum)]
+        mode: ExternalPolicyModeArg,
+        /// Ecosystem id; optional when exactly one ecosystem is registered
+        #[arg(long)]
+        ecosystem: Option<String>,
+        #[arg(long, value_enum, default_value = "project")]
+        scope: ExternalPolicyScopeArg,
+    },
+    /// Customize one external ecosystem capability
+    SetCapability {
+        #[arg(value_enum)]
+        capability: ExternalCapabilityArg,
+        #[arg(value_enum)]
+        access: ExternalAccessArg,
+        /// Ecosystem id; optional when exactly one ecosystem is registered
+        #[arg(long)]
+        ecosystem: Option<String>,
+        #[arg(long, value_enum, default_value = "project")]
+        scope: ExternalPolicyScopeArg,
+    },
+    /// Remove this project's overrides and inherit global settings
+    ResetProject,
+    /// Back up and reset a policy written by an incompatible BitFun version
+    ResetIncompatible,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum ExternalPolicyScopeArg {
+    Global,
+    Project,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum ExternalPolicyModeArg {
+    Recommended,
+    DiscoverOnly,
+    Off,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum ExternalCapabilityArg {
+    Command,
+    Tool,
+    Agent,
+    Mcp,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum ExternalAccessArg {
+    Off,
+    Discover,
+    Ask,
+    Auto,
+}
+
+#[derive(Subcommand)]
+enum DaemonAction {
+    /// Run the daemon in the foreground (used by the service manager)
+    Run,
+    /// Install and start the auto-start service (systemd user unit / LaunchAgent)
+    Install,
+    /// Stop and remove the auto-start service
+    Uninstall,
+    /// Show daemon and auto-start service status
+    Status,
 }
 
 // ======================== System Initialization ========================
@@ -512,6 +608,7 @@ async fn initialize_core_services(
                 Ok(mcp_service) => {
                     let mcp_service = std::sync::Arc::new(mcp_service);
                     MCP_SERVICE.set(mcp_service.clone()).ok();
+                    bitfun_core::service::mcp::set_global_mcp_service(mcp_service.clone());
 
                     // Mark as in progress
                     get_mcp_init_status().store(1, Ordering::Relaxed);
@@ -557,7 +654,7 @@ async fn shutdown_mcp_servers() {
 
 /// Run the full interactive TUI flow: loading screen → startup page → chat
 async fn run_interactive(
-    _config: CliConfig,
+    config: CliConfig,
     default_agent: String,
     _workspace_str: String,
 ) -> Result<()> {
@@ -586,15 +683,28 @@ async fn run_interactive(
     if let Some(user_id) = account::try_restore_session().await {
         tracing::info!("Restored account session for user {user_id}");
         // Re-establish device routing so the CLI becomes RPC-controllable.
-        let device =
-            DeviceIdentity::from_current_machine().map_err(|e| anyhow!("detect device: {e}"))?;
-        if let Err(e) = account::restore_device_routing(&device.device_name).await {
-            tracing::warn!("Failed to restore device routing: {e}");
+        // The daemon owns device routing when it is running: same-machine
+        // processes share one device_id and last AuthConnect wins.
+        if daemon::is_daemon_running() {
+            tracing::info!(
+                "CLI daemon is running; skipping in-process device routing (daemon owns it)"
+            );
+        } else {
+            let device = DeviceIdentity::from_current_machine()
+                .map_err(|e| anyhow!("detect device: {e}"))?;
+            if let Err(e) = account::restore_device_routing(&device.device_name).await {
+                tracing::warn!("Failed to restore device routing: {e}");
+            }
         }
     }
 
+    // 3.6 Continuous account settings sync (30s pull + debounced push).
+    // Safe to start before login: cycles skip while logged out.
+    account_sync::start_settings_sync_loop();
+
     // 4. Show startup page (with full command support)
     let mut startup_page = StartupPage::new(
+        config,
         runtime.agent_runtime().clone(),
         runtime.compatibility().clone(),
         default_agent,
@@ -677,6 +787,12 @@ async fn run_cli() -> Result<()> {
 
     let is_tui_mode = matches!(cli.command, None | Some(Commands::Chat { .. }));
     let is_exec_mode = matches!(cli.command, Some(Commands::Exec { .. }));
+    let is_daemon_run = matches!(
+        cli.command,
+        Some(Commands::Daemon {
+            action: DaemonAction::Run,
+        })
+    );
     let file_log_level = logging::default_log_level(cli.verbose);
     let stderr_log_level = if cli.verbose {
         tracing::Level::TRACE
@@ -684,7 +800,7 @@ async fn run_cli() -> Result<()> {
         tracing::Level::ERROR
     };
 
-    if is_tui_mode || is_exec_mode {
+    if is_tui_mode || is_exec_mode || is_daemon_run {
         logging::init_file_logging(file_log_level);
     } else {
         tracing_subscriber::fmt()
@@ -825,13 +941,11 @@ async fn run_cli() -> Result<()> {
         Some(Commands::Doctor) => {
             use std::sync::Arc;
 
-            use runtime::approval::{CliApprovalPolicy, CliPermissionService};
             use runtime::services::{CliClock, CliRuntimeEventSink, CliRuntimeServicesProvider};
 
             let workspace = std::env::current_dir()?;
             let services = CliRuntimeServicesProvider::new(
                 &workspace,
-                Arc::new(CliPermissionService::new(CliApprovalPolicy::Reject)),
                 Arc::new(CliRuntimeEventSink::new(16)),
                 Arc::new(CliClock),
             )?
@@ -843,12 +957,19 @@ async fn run_cli() -> Result<()> {
         }
 
         Some(Commands::Config { action }) => {
-            root_handlers::handle_config_action(action, &config)?;
+            root_handlers::handle_config_action(action, &config).await?;
         }
 
         Some(Commands::Health) => {
             root_handlers::handle_health_command()?;
         }
+
+        Some(Commands::Daemon { action }) => match action {
+            DaemonAction::Run => daemon::run_daemon().await?,
+            DaemonAction::Install => daemon::install_service()?,
+            DaemonAction::Uninstall => daemon::uninstall_service()?,
+            DaemonAction::Status => daemon::print_status()?,
+        },
 
         Some(Commands::Acp {
             action: None | Some(AcpAction::Serve),
@@ -953,7 +1074,7 @@ async fn run_interactive_with_session(
             remote_ssh_host: None,
         })
         .await
-        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        .map_err(|error| anyhow::anyhow!(error.into_message()))?;
     let agent_type = sessions
         .iter()
         .find(|session| session.session_id == session_id)
@@ -977,6 +1098,11 @@ async fn run_interactive_with_session(
 }
 
 fn main() {
+    // Install rustls CryptoProvider before any TLS-capable work (relay WS,
+    // reqwest rustls paths, Feishu wss). Required when both ring and aws-lc-rs
+    // are linked: rustls cannot auto-select a provider.
+    bitfun_core::service::remote_connect::ensure_rustls_crypto_provider();
+
     let worker = std::thread::Builder::new()
         .stack_size(16 * 1024 * 1024)
         .spawn(|| {
@@ -986,7 +1112,7 @@ fn main() {
                 .expect("failed to build tokio runtime");
             runtime.block_on(run_cli())
         })
-        .expect("failed to spawn bitfun-cli worker thread");
+        .expect("failed to spawn bitfun worker thread");
 
     match worker.join() {
         Ok(Ok(())) => {}
@@ -998,7 +1124,7 @@ fn main() {
             std::process::exit(1);
         }
         Err(_) => {
-            eprintln!("Error: bitfun-cli worker thread panicked");
+            eprintln!("Error: bitfun worker thread panicked");
             std::process::exit(1);
         }
     }
@@ -1011,15 +1137,14 @@ mod plugin_command_tests {
 
     #[test]
     fn plugin_commands_parse_list_and_source_review_actions() {
-        let list = Cli::try_parse_from(["bitfun-cli", "plugins"]).expect("parse plugin list");
+        let list = Cli::try_parse_from(["bitfun", "plugins"]).expect("parse plugin list");
         assert!(matches!(
             list.command,
             Some(Commands::Plugins { action: None })
         ));
 
-        let approval =
-            Cli::try_parse_from(["bitfun-cli", "plugins", "approve-source", "acme.demo"])
-                .expect("parse plugin source approval");
+        let approval = Cli::try_parse_from(["bitfun", "plugins", "approve-source", "acme.demo"])
+            .expect("parse plugin source approval");
         assert!(matches!(
             approval.command,
             Some(Commands::Plugins {
@@ -1027,7 +1152,7 @@ mod plugin_command_tests {
             }) if package_id == "acme.demo"
         ));
 
-        let deny = Cli::try_parse_from(["bitfun-cli", "plugins", "deny", "acme.demo"])
+        let deny = Cli::try_parse_from(["bitfun", "plugins", "deny", "acme.demo"])
             .expect("parse plugin deny");
         assert!(matches!(
             deny.command,
@@ -1036,7 +1161,7 @@ mod plugin_command_tests {
             }) if package_id == "acme.demo"
         ));
 
-        let revoke = Cli::try_parse_from(["bitfun-cli", "plugins", "revoke", "acme.demo"])
+        let revoke = Cli::try_parse_from(["bitfun", "plugins", "revoke", "acme.demo"])
             .expect("parse plugin revoke");
         assert!(matches!(
             revoke.command,
@@ -1045,7 +1170,7 @@ mod plugin_command_tests {
             }) if package_id == "acme.demo"
         ));
 
-        let preview = Cli::try_parse_from(["bitfun-cli", "plugins", "activate", "acme.demo"])
+        let preview = Cli::try_parse_from(["bitfun", "plugins", "activate", "acme.demo"])
             .expect("parse plugin activation preview");
         assert!(matches!(
             preview.command,
@@ -1058,7 +1183,7 @@ mod plugin_command_tests {
         ));
 
         let confirm = Cli::try_parse_from([
-            "bitfun-cli",
+            "bitfun",
             "plugins",
             "activate",
             "acme.demo",
@@ -1076,13 +1201,95 @@ mod plugin_command_tests {
             }) if package_id == "acme.demo" && content_hash == "sha256:previewed"
         ));
 
-        let deactivate = Cli::try_parse_from(["bitfun-cli", "plugins", "deactivate", "acme.demo"])
+        let deactivate = Cli::try_parse_from(["bitfun", "plugins", "deactivate", "acme.demo"])
             .expect("parse plugin deactivation");
         assert!(matches!(
             deactivate.command,
             Some(Commands::Plugins {
                 action: Some(PluginAction::Deactivate { package_id })
             }) if package_id == "acme.demo"
+        ));
+    }
+}
+
+#[cfg(test)]
+mod external_config_command_tests {
+    use super::{
+        Cli, Commands, ConfigAction, ExternalAccessArg, ExternalCapabilityArg,
+        ExternalConfigAction, ExternalPolicyModeArg, ExternalPolicyScopeArg,
+    };
+    use clap::Parser;
+
+    #[test]
+    fn external_config_commands_keep_scope_and_capability_explicit() {
+        let status = Cli::try_parse_from(["bitfun", "config", "external", "status"])
+            .expect("parse external status");
+        assert!(matches!(
+            status.command,
+            Some(Commands::Config {
+                action: ConfigAction::External {
+                    action: ExternalConfigAction::Status
+                }
+            })
+        ));
+
+        let mode = Cli::try_parse_from([
+            "bitfun",
+            "config",
+            "external",
+            "set-mode",
+            "discover-only",
+            "--scope",
+            "global",
+        ])
+        .expect("parse external mode");
+        assert!(matches!(
+            mode.command,
+            Some(Commands::Config {
+                action: ConfigAction::External {
+                    action: ExternalConfigAction::SetMode {
+                        mode: ExternalPolicyModeArg::DiscoverOnly,
+                        ecosystem: None,
+                        scope: ExternalPolicyScopeArg::Global,
+                    }
+                }
+            })
+        ));
+
+        let capability = Cli::try_parse_from([
+            "bitfun",
+            "config",
+            "external",
+            "set-capability",
+            "mcp",
+            "ask",
+            "--ecosystem",
+            "opencode",
+        ])
+        .expect("parse external capability");
+        assert!(matches!(
+            capability.command,
+            Some(Commands::Config {
+                action: ConfigAction::External {
+                    action: ExternalConfigAction::SetCapability {
+                        capability: ExternalCapabilityArg::Mcp,
+                        access: ExternalAccessArg::Ask,
+                        ecosystem: Some(ref ecosystem),
+                        scope: ExternalPolicyScopeArg::Project,
+                    }
+                }
+            }) if ecosystem == "opencode"
+        ));
+
+        let reset = Cli::try_parse_from(["bitfun", "config", "external", "reset-incompatible"])
+            .expect("parse incompatible policy reset");
+        assert!(matches!(
+            reset.command,
+            Some(Commands::Config {
+                action: ConfigAction::External {
+                    action: ExternalConfigAction::ResetIncompatible
+                }
+            })
         ));
     }
 }

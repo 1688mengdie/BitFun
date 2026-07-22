@@ -51,6 +51,7 @@ export interface FlowThinkingItem extends FlowItem {
 
 export interface FlowToolItem extends FlowItem {
   type: 'tool';
+  /** Provider-facing identity. Deferred calls remain `CallDeferredTool`. */
   toolName: string;
   terminalSessionId?: string;
   interruptionReason?: 'app_restart' | 'retry_superseded';
@@ -87,7 +88,6 @@ export interface FlowToolItem extends FlowItem {
   };
   aiIntent?: string; // AI rationale for calling the tool.
   startTime?: number;  // Tool start time.
-  confirmationTimeoutAt?: number;
   endTime?: number;    // Tool end time.
   durationMs?: number;
   queueWaitMs?: number;
@@ -95,8 +95,9 @@ export interface FlowToolItem extends FlowItem {
   confirmationWaitMs?: number;
   executionMs?: number;
 
-  /** Subagent model identity captured on the parent Task tool. */
+  /** Resolved subagent AI model configuration ID captured on the parent Task tool. */
   subagentModelId?: string;
+  /** Provider model name used by the subagent's round. */
   subagentModelDisplayName?: string;
 
   /** Child dialog turn produced by this parent Task call. */
@@ -179,8 +180,8 @@ export interface ModelRound {
   endTime?: number;
   durationMs?: number;
   providerId?: string;
-  modelId?: string;
-  modelAlias?: string;
+  modelConfigId?: string;
+  effectiveModelName?: string;
   firstChunkMs?: number;
   firstVisibleOutputMs?: number;
   streamDurationMs?: number;
@@ -584,7 +585,7 @@ export interface FlowChatActions {
   sendMessage: (message: string, sessionId?: string) => Promise<void>;
   createSession: (config?: Partial<SessionConfig>) => Promise<string>;
   switchSession: (sessionId: string) => void;
-  confirmTool: (toolId: string, updatedInput?: any) => void;
+  confirmTool: (toolId: string) => void;
   rejectTool: (toolId: string) => void;
   clearSession: (sessionId?: string) => void;
   deleteSession: (sessionId: string) => Promise<void>; // Now async.

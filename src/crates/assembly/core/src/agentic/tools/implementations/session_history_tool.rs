@@ -106,7 +106,7 @@ Examples:
     }
 
     fn default_exposure(&self) -> ToolExposure {
-        ToolExposure::Collapsed
+        ToolExposure::Deferred
     }
 
     fn input_schema(&self) -> Value {
@@ -144,10 +144,6 @@ Examples:
 
     fn is_readonly(&self) -> bool {
         true
-    }
-
-    fn needs_permissions(&self, _input: Option<&Value>) -> bool {
-        false
     }
 
     async fn validate_input(

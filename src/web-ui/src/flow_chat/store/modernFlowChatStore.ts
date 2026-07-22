@@ -16,6 +16,7 @@ import {
 } from '../tool-cards/toolCardMetadata';
 import { isCompletedToolInTransientWindow } from '../components/modern/modelRoundItemGrouping';
 import { flowChatStore } from './FlowChatStore';
+import { getEffectiveToolName } from '../utils/toolInvocationIdentity';
 import {
   getTurnCompletionNotice,
   type TurnCompletionNotice,
@@ -174,7 +175,7 @@ function isExploreOnlyRound(round: ModelRound, nowMs: number): boolean {
   }
   
   const hasCollapsibleTool = round.items.some(item => 
-    item.type === 'tool' && isCollapsibleTool((item as FlowToolItem).toolName)
+    item.type === 'tool' && isCollapsibleTool(getEffectiveToolName(item as FlowToolItem))
   );
   
   const hasAnyTool = round.items.some(item => item.type === 'tool');
@@ -184,7 +185,7 @@ function isExploreOnlyRound(round: ModelRound, nowMs: number): boolean {
   
   const allItemsCollapsible = round.items.every(item => {
     if (item.type === 'tool') {
-      return isCollapsibleTool((item as FlowToolItem).toolName);
+      return isCollapsibleTool(getEffectiveToolName(item as FlowToolItem));
     }
     return item.type === 'text' || item.type === 'thinking';
   });
@@ -207,7 +208,15 @@ function shouldSplitModelRoundForVirtualItems(
   round: ModelRound,
   isTurnComplete: boolean,
   nowMs: number,
+  isLastRound: boolean,
 ): boolean {
+  // Never split the turn-tail round on completion: replacing one Virtuoso key
+  // with N segment keys remounts the visible assistant message and flashes the
+  // chat pane. Older non-tail rounds may still split for virtualization.
+  if (isLastRound) {
+    return false;
+  }
+
   return (
     isTurnComplete &&
     isTerminalRoundStatus(round.status) &&
@@ -224,8 +233,9 @@ function splitModelRoundForVirtualItems(
   round: ModelRound,
   isTurnComplete: boolean,
   nowMs: number,
+  isLastRound: boolean,
 ): ModelRoundVirtualChunk[] {
-  if (!shouldSplitModelRoundForVirtualItems(round, isTurnComplete, nowMs)) {
+  if (!shouldSplitModelRoundForVirtualItems(round, isTurnComplete, nowMs, isLastRound)) {
     return [{ round }];
   }
 
@@ -264,7 +274,7 @@ function computeRoundStats(round: ModelRound): ExploreGroupStats {
   
   for (const item of round.items) {
     if (item.type === 'tool') {
-      const toolName = (item as FlowToolItem).toolName;
+      const toolName = getEffectiveToolName(item as FlowToolItem);
       if (READ_TOOL_NAMES.has(toolName)) readCount++;
       else if (SEARCH_TOOL_NAMES.has(toolName)) searchCount++;
       else if (COMMAND_TOOL_NAMES.has(toolName)) commandCount++;
@@ -540,7 +550,7 @@ export function sessionToVirtualItems(session: Session | null): VirtualItem[] {
           groupIndex++;
         } else {
           const isLastRound = roundIndex === rounds.length - 1;
-          const roundChunks = splitModelRoundForVirtualItems(round, isTurnComplete, nowMs);
+          const roundChunks = splitModelRoundForVirtualItems(round, isTurnComplete, nowMs, isLastRound);
           roundChunks.forEach((chunk, chunkIndex) => {
             items.push({
               type: 'model-round',

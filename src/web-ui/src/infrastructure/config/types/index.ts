@@ -7,9 +7,32 @@ export interface GlobalConfig {
   terminal: TerminalConfig;
   workspace: WorkspaceConfig;
   ai: AIConfig;
+  tool_permissions: ToolPermissionConfig;
   memories: MemoriesConfig;
   version: string;
   last_modified: number;
+}
+
+export type PermissionEffect = 'allow' | 'ask' | 'deny';
+
+export interface PermissionRule {
+  action: string;
+  resource: string;
+  effect: PermissionEffect;
+}
+
+export interface PermissionPolicyConfig {
+  preset: 'ask' | 'full_access';
+  rules: PermissionRule[];
+}
+
+export interface PermissionInteractionConfig {
+  auto_approve_ask: boolean;
+}
+
+export interface ToolPermissionConfig {
+  policy: PermissionPolicyConfig;
+  interaction: PermissionInteractionConfig;
 }
 
 export type MemoryExternalContextPolicy = 'clear_tool_results' | 'allow' | 'skip_session';
@@ -48,6 +71,30 @@ export interface AppConfig {
   notifications: NotificationConfig;
   flow_chat?: AppFlowChatConfig;
   ai_experience: AIExperienceConfig;
+  user_tool_groups?: UserToolGroupsConfig;
+  user_skill_groups?: UserSkillGroupsConfig;
+}
+
+export interface UserToolGroupsConfig {
+  version: number;
+  groups: UserToolGroup[];
+}
+
+export interface UserToolGroup {
+  id: string;
+  name: string;
+  toolNames: string[];
+}
+
+export interface UserSkillGroupsConfig {
+  version: number;
+  groups: UserSkillGroup[];
+}
+
+export interface UserSkillGroup {
+  id: string;
+  name: string;
+  skillKeys: string[];
 }
 
 export type BackendLogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'off';
@@ -187,11 +234,13 @@ export interface AIModelConfig {
   auth?: AuthConfig;
 }
 
+/** Subscription provider for in-app OAuth auth. */
+export type SubscriptionProvider = 'codex' | 'antigravity' | 'opencode';
+
 /** Authentication source persisted on each model entry. */
 export type AuthConfig =
   | { type: 'api_key' }
-  | { type: 'codex_cli' }
-  | { type: 'gemini_cli' };
+  | { type: 'subscription'; provider: SubscriptionProvider };
 
 export interface ProxyConfig {
   enabled: boolean;
@@ -206,10 +255,23 @@ export interface DefaultModelsConfig {
   image_understanding?: string | null;
 }
 
+export type SubagentModelSelection =
+  | { kind: 'fixed'; model_id: string }
+  | { kind: 'inherit' };
+
+export interface AgentModelDefaultsConfig {
+  mode: string;
+  subagents: {
+    default: SubagentModelSelection;
+    builtin: Record<string, SubagentModelSelection>;
+    fork: SubagentModelSelection;
+  };
+}
+
 export interface AIConfig {
   models: AIModelConfig[];
   default_models: DefaultModelsConfig;
-  agent_models: Record<string, string>;
+  agent_model_defaults: AgentModelDefaultsConfig;
   func_agent_models: Record<string, string>;
   agent_profiles: Record<string, StoredAgentProfileConfigItem>;
   proxy: ProxyConfig;
@@ -224,9 +286,7 @@ export interface AIConfig {
   stream_idle_timeout_secs?: number | null;
   stream_ttft_timeout_secs?: number | null;
   tool_execution_timeout_secs?: number | null;
-  tool_confirmation_timeout_secs?: number | null;
   subagent_batch_execution_policy?: 'safe_only' | 'force_parallel' | 'serial';
-  skip_tool_confirmation?: boolean;
   computer_use_enabled?: boolean;
   browser_control_preferred_browser?: string;
 }
@@ -238,6 +298,7 @@ export interface StoredAgentProfileConfigItem {
   disabled_user_skills?: string[];
   enabled_user_skills?: string[];
   subagent_overrides?: ParentSubagentOverrideConfig;
+  tool_permission_rules?: PermissionRule[];
 }
 
 export interface AgentProfileConfigItem {
@@ -260,6 +321,10 @@ export interface SkillInfo {
   path: string;
   level: SkillLevel;
   sourceSlot: string;
+  /** Provider-neutral ecosystem identity shared by related discovery slots. */
+  sourceId?: string;
+  /** Stable product name supplied by the skill source definition. */
+  sourceLabel?: string;
   dirName: string;
   isBuiltin: boolean;
   groupKey?: string | null;

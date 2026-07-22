@@ -83,11 +83,6 @@ body {
   30% { transform: translateY(-4px); opacity: 1; }
 }
 
-@keyframes cubeRotate {
-  0% { transform: rotateX(-20deg) rotateY(0deg); }
-  100% { transform: rotateX(-20deg) rotateY(360deg); }
-}
-
 @keyframes focusBorderFlow {
   0% { background-position: 0% 50%; }
   50% { background-position: 100% 50%; }
@@ -204,6 +199,17 @@ html.theme-switching {
   font-size: var(--font-size-sm);
   font-weight: var(--font-weight-medium);
   animation: slideDown var(--motion-fast) var(--easing-standard);
+
+  button {
+    margin-left: 4px;
+    padding: 3px 9px;
+    border: 1px solid currentColor;
+    border-radius: var(--size-radius-full);
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+  }
 }
 
 .mobile-reconnect-spinner {

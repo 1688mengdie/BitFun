@@ -2,6 +2,14 @@
 
 export const optionalDependencyFeatureOwnerRules = [
   {
+    crateName: 'runtime-ports',
+    reason:
+      'runtime-ports may expose product-domain permission ports only through the explicit permission contract slice',
+    dependencies: [
+      { depName: 'bitfun-product-domains', ownerFeatures: ['permission'] },
+    ],
+  },
+  {
     crateName: 'core',
     reason:
       'bitfun-core product/runtime optional dependencies must stay owned by explicit feature gates',
@@ -11,7 +19,6 @@ export const optionalDependencyFeatureOwnerRules = [
       { depName: 'bitfun-ai-adapters', ownerFeatures: ['ai-adapter-runtime'] },
       { depName: 'bitfun-product-capabilities', ownerFeatures: ['product-capabilities'] },
       { depName: 'bitfun-product-domains', ownerFeatures: ['product-domains'] },
-      { depName: 'bitfun-relay-server', ownerFeatures: ['service-integrations'] },
       { depName: 'bitfun-tool-packs', ownerFeatures: ['tool-packs'] },
       { depName: 'chrono-tz', ownerFeatures: ['product-full'] },
       { depName: 'cron', ownerFeatures: ['product-full'] },
@@ -48,7 +55,7 @@ export const optionalDependencyFeatureOwnerRules = [
       { depName: 'anyhow', ownerFeatures: ['browser-control', 'debug-log', 'mcp', 'remote-connect', 'remote-ssh', 'remote-ssh-concrete'] },
       {
         depName: 'async-trait',
-        ownerFeatures: ['mcp', 'remote-connect', 'remote-ssh', 'remote-ssh-concrete', 'review-platform', 'workspace-search'],
+        ownerFeatures: ['mcp', 'remote-connect', 'remote-ssh', 'remote-ssh-concrete', 'review-platform', 'script-tool-runtime', 'workspace-search'],
       },
       {
         depName: 'base64',
@@ -56,10 +63,10 @@ export const optionalDependencyFeatureOwnerRules = [
       },
       { depName: 'bitfun-agent-runtime', ownerFeatures: ['deep-research'] },
       { depName: 'bitfun-product-domains', ownerFeatures: ['canvas-runtime', 'function-agents', 'miniapp-runtime', 'plugin-source'] },
-      { depName: 'bitfun-runtime-ports', ownerFeatures: ['remote-connect', 'remote-ssh', 'remote-ssh-concrete'] },
+      { depName: 'bitfun-runtime-ports', ownerFeatures: ['remote-connect', 'remote-ssh', 'remote-ssh-concrete', 'script-tool-runtime'] },
       {
         depName: 'bitfun-services-core',
-        ownerFeatures: ['browser-control', 'git', 'mcp', 'miniapp-runtime', 'remote-connect', 'review-platform', 'workspace-search'],
+        ownerFeatures: ['browser-control', 'git', 'mcp', 'miniapp-runtime', 'process-tree', 'remote-connect', 'review-platform', 'workspace-search'],
       },
       { depName: 'chrono', ownerFeatures: ['debug-log', 'git', 'remote-connect', 'remote-ssh-concrete', 'review-platform'] },
       { depName: 'dirs', ownerFeatures: ['browser-control', 'miniapp-runtime', 'remote-connect', 'remote-ssh-concrete'] },
@@ -96,7 +103,7 @@ export const optionalDependencyFeatureOwnerRules = [
       { depName: 'tokio-util', ownerFeatures: ['remote-ssh'] },
       { depName: 'urlencoding', ownerFeatures: ['canvas-runtime', 'remote-connect', 'review-platform'] },
       { depName: 'uuid', ownerFeatures: ['canvas-runtime', 'debug-log', 'miniapp-runtime', 'plugin-source', 'remote-connect', 'remote-ssh-concrete'] },
-      { depName: 'which', ownerFeatures: ['miniapp-runtime', 'remote-connect', 'workspace-search'] },
+      { depName: 'which', ownerFeatures: ['miniapp-runtime', 'remote-connect', 'script-tool-runtime', 'workspace-search'] },
       { depName: 'windows', ownerFeatures: ['plugin-source', 'review-platform'] },
       { depName: 'x25519-dalek', ownerFeatures: ['remote-connect'] },
     ],
@@ -108,8 +115,8 @@ export const optionalDependencyFeatureOwnerRules = [
     dependencies: [
       { depName: 'dirs', ownerFeatures: ['miniapp'] },
       { depName: 'log', ownerFeatures: ['function-agents'] },
-      { depName: 'hex', ownerFeatures: ['plugin-source'] },
-      { depName: 'sha2', ownerFeatures: ['miniapp', 'plugin-source'] },
+      { depName: 'hex', ownerFeatures: ['external-sources', 'plugin-source'] },
+      { depName: 'sha2', ownerFeatures: ['external-sources', 'miniapp', 'plugin-source'] },
       { depName: 'which', ownerFeatures: ['miniapp'] },
     ],
   },
@@ -127,6 +134,12 @@ export const productCoreFeatureAssemblyRules = [
     dependencyName: 'bitfun-core',
     requiredFeatures: ['product-full'],
     reason: 'CLI must explicitly assemble the full bitfun-core product runtime',
+  },
+  {
+    manifestPath: 'src/apps/server/Cargo.toml',
+    dependencyName: 'bitfun-core',
+    requiredFeatures: ['product-full'],
+    reason: 'Server must explicitly assemble the full bitfun-core product runtime',
   },
   {
     manifestPath: 'src/crates/interfaces/acp/Cargo.toml',
@@ -189,6 +202,7 @@ export const ownerCrateFeatureAssemblyRules = [
       'remote-ssh',
       'remote-ssh-concrete',
       'review-platform',
+      'script-tool-runtime',
       'web-tools',
       'workspace-search',
     ],
@@ -196,6 +210,6 @@ export const ownerCrateFeatureAssemblyRules = [
   {
     manifestPath: 'src/crates/contracts/product-domains/Cargo.toml',
     reason: 'product-domains must keep product domain feature groups explicit and default-light',
-    requiredProductFullFeatures: ['plugin-source', 'miniapp', 'function-agents'],
+    requiredProductFullFeatures: ['plugin-source', 'miniapp', 'function-agents', 'external-sources'],
   },
 ];

@@ -6,17 +6,20 @@ use bitfun_agent_runtime::sdk::AgentRuntime;
 use bitfun_core::agentic::coordination::{self, DialogScheduler};
 use bitfun_core::agentic::system::AgenticSystem;
 use bitfun_core::product_assembly::{ProductAssemblyPlan, ProductServiceCapabilityAvailability};
-use bitfun_core::product_runtime::{CoreAgentRuntimeCompatibility, CoreProductAgentRuntime};
+use bitfun_core::product_runtime::{
+    CoreAgentRuntimeCompatibility, CoreLocalWorkspaceSnapshot, CoreProductAgentRuntime,
+};
 use bitfun_core::runtime_ports::PluginRuntimeAvailability;
+use bitfun_runtime_ports::LocalWorkspaceSnapshotPort;
 use bitfun_runtime_services::RuntimeServices;
 
-use crate::product_assembly::assemble_cli_runtime_parts;
+use crate::product_assembly::{assemble_acp_runtime_parts, assemble_cli_runtime_parts};
 
 pub(crate) mod approval;
 pub(crate) mod events;
 pub(crate) mod services;
 
-use approval::{CliApprovalController, CliApprovalPolicy, CliPermissionService};
+use approval::CliApprovalPolicy;
 use events::CliAgentEventSource;
 use services::{CliClock, CliRuntimeEventSink, CliRuntimeServicesProvider};
 
@@ -52,12 +55,12 @@ impl CliProductRuntimeState {
 pub(crate) struct CliRuntimeContext {
     workspace_root: PathBuf,
     agent_runtime: AgentRuntime,
+    local_workspace_snapshot: Arc<dyn LocalWorkspaceSnapshotPort>,
     compatibility: CoreAgentRuntimeCompatibility,
     agent_events: CliAgentEventSource,
     services: RuntimeServices,
     product: CliProductRuntimeState,
     approval_policy: CliApprovalPolicy,
-    approval_controller: Arc<CliApprovalController>,
 }
 
 impl CliRuntimeContext {
@@ -70,7 +73,6 @@ impl CliRuntimeContext {
         let runtime_events = Arc::new(CliRuntimeEventSink::new(RUNTIME_EVENT_BUFFER));
         let provider = CliRuntimeServicesProvider::new(
             workspace_root,
-            Arc::new(CliPermissionService::new(approval_policy)),
             runtime_events.clone(),
             Arc::new(CliClock),
         )?;
@@ -90,19 +92,19 @@ impl CliRuntimeContext {
                 .collect(),
         };
         let (services, harness_registry, _disabled_plugin_runtime) = parts.into_runtime_parts();
+        let agent_events = CliAgentEventSource::new(agentic_system.event_queue.clone());
         let agent_runtime = CoreProductAgentRuntime::build(
             agentic_system.coordinator.clone(),
             scheduler.clone(),
+            agentic_system.token_usage_service.clone(),
             services.clone(),
             harness_registry,
         )
         .map_err(anyhow::Error::msg)
         .context("Failed to build CLI Agent Runtime SDK")?;
-        let compatibility = CoreAgentRuntimeCompatibility::build(
-            agentic_system.coordinator.clone(),
-            scheduler,
-            agentic_system.token_usage_service.clone(),
-        );
+        let compatibility =
+            CoreAgentRuntimeCompatibility::build(agentic_system.coordinator.clone(), scheduler);
+        let local_workspace_snapshot = CoreLocalWorkspaceSnapshot::build();
 
         debug_assert_eq!(
             agent_runtime.harness_provider_ids(),
@@ -115,13 +117,13 @@ impl CliRuntimeContext {
 
         Ok(Self {
             workspace_root,
-            agent_events: CliAgentEventSource::new(agentic_system.event_queue.clone()),
+            agent_events,
             agent_runtime,
+            local_workspace_snapshot,
             compatibility,
             services,
             product,
             approval_policy,
-            approval_controller: Arc::new(CliApprovalController::new()),
         })
     }
 
@@ -135,6 +137,10 @@ impl CliRuntimeContext {
 
     pub(crate) fn compatibility(&self) -> &CoreAgentRuntimeCompatibility {
         &self.compatibility
+    }
+
+    pub(crate) fn local_workspace_snapshot(&self) -> &Arc<dyn LocalWorkspaceSnapshotPort> {
+        &self.local_workspace_snapshot
     }
 
     pub(crate) fn agent_events(&self) -> &CliAgentEventSource {
@@ -152,9 +158,49 @@ impl CliRuntimeContext {
     pub(crate) const fn approval_policy(&self) -> CliApprovalPolicy {
         self.approval_policy
     }
+}
 
-    pub(crate) fn approval_controller(&self) -> &Arc<CliApprovalController> {
-        &self.approval_controller
+#[derive(Clone)]
+pub(crate) struct AcpRuntimeContext {
+    _agent_events: CliAgentEventSource,
+    agent_runtime: AgentRuntime,
+    compatibility: CoreAgentRuntimeCompatibility,
+}
+
+impl AcpRuntimeContext {
+    pub(crate) fn build(
+        agentic_system: AgenticSystem,
+        workspace_root: impl AsRef<Path>,
+    ) -> Result<Self> {
+        let scheduler = ensure_dialog_scheduler(&agentic_system);
+        let runtime_events = Arc::new(CliRuntimeEventSink::new(RUNTIME_EVENT_BUFFER));
+        let provider =
+            CliRuntimeServicesProvider::new(workspace_root, runtime_events, Arc::new(CliClock))?;
+        let parts = assemble_acp_runtime_parts(provider.build()?)
+            .context("Failed to assemble ACP product runtime")?;
+        let (services, harness_registry, _disabled_plugin_runtime) = parts.into_runtime_parts();
+        let agent_events = CliAgentEventSource::new(agentic_system.event_queue.clone());
+        let agent_runtime = CoreProductAgentRuntime::build_acp(
+            agentic_system.coordinator.clone(),
+            scheduler.clone(),
+            agent_events.runtime_source(),
+            services,
+            harness_registry,
+        )
+        .map_err(anyhow::Error::msg)
+        .context("Failed to build ACP Agent Runtime SDK")?;
+        let compatibility =
+            CoreAgentRuntimeCompatibility::build(agentic_system.coordinator, scheduler);
+
+        Ok(Self {
+            _agent_events: agent_events,
+            agent_runtime,
+            compatibility,
+        })
+    }
+
+    pub(crate) fn parts(&self) -> (AgentRuntime, CoreAgentRuntimeCompatibility) {
+        (self.agent_runtime.clone(), self.compatibility.clone())
     }
 }
 

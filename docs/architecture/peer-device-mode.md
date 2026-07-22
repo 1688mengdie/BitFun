@@ -25,6 +25,13 @@ Do **not** treat cloud session blobs as the Remote data plane. Do **not** merge
 cloud session metadata into local disk on login or periodic pull — that pollutes
 A and conflicts with Peer Mode.
 
+Settings sync is continuous on every logged-in host (Desktop, interactive CLI,
+and the CLI daemon): local changes upload after a ~5s debounce (content-hash
+deduped); cloud changes are pulled at process start and then every ~30s. After
+applying or uploading settings, a host fans out `account://settings-applied`
+to attached controllers; the controller re-emits it locally so the frontend
+config cache and model selectors refresh without reconnecting.
+
 SSH `WorkspaceKind.Remote` remains a separate path (local session mirror + remote
 FS) and must not be mixed with Peer Device Mode.
 
@@ -45,7 +52,9 @@ FS) and must not be mixed with Peer Device Mode.
 - HostInvoke on the controller is **priority-queued** (max 2 in flight). Session
   restore / session-list / dialog / workspace-startup commands outrank background
   `git_*` / `ssh_*` / `lsp_*` / `search_*` / FS / canvas / editor RPCs so hydrate
-  is not starved into relay HTTP 504s.
+  is not starved into relay HTTP 504s. Terminal commands are always interactive
+  priority, and one slot is kept free from low-priority background work so input
+  cannot be trapped behind two slow polling requests.
 - While Peer Mode is active, background noise is reduced further:
   - controller-local SSH heartbeats and remote-workspace auto-reconnect pause
   - Git / FilesPanel window-focus refresh pauses
@@ -62,7 +71,9 @@ FS) and must not be mixed with Peer Device Mode.
     return empty or no-op so hydrate does not fail.
 - Events: peer agentic projection (and other product events such as terminal /
   FS / MCP interaction) fan-out as `RemoteCommand::DeviceEvent` to attached
-  controllers; controller re-emits the same event names locally.
+  controllers; controller re-emits the same event names locally. This includes
+  SSH-backed remote PTY Ready / Data / Exit events created on B, not only B's
+  local terminal service events.
 - CLI Peer Host forwards only turns submitted through Peer Host and linked
   child turns. A background-result follow-up inherits ownership only when its
   Core-internal metadata identifies the exact tracked parent and source child
@@ -106,6 +117,17 @@ call `pickWorkspaceDirectory()`:
 Still use normal `openWorkspace` / create-workspace flows (not SSH
 `openRemoteWorkspace` / `WorkspaceKind.Remote`).
 
+## File download ownership
+
+The native save/folder dialog always selects a destination on controller A,
+while the workspace source belongs to peer B. A download is therefore a
+split-endpoint operation: B returns file bytes through the existing
+`GetFileInfo` / `ReadFileChunk` protocol and A writes those chunks through its
+local filesystem adapter. Directory downloads enumerate B recursively and
+create the corresponding tree on A. Never forward A's selected destination to
+B through `export_local_file_to_path`; paths and permissions are host-specific
+and may represent a different operating system.
+
 ## Ownership
 
 - Desktop host invoke / fan-out: `src/apps/desktop/src/api/peer_host_invoke.rs`,
@@ -114,7 +136,21 @@ Still use normal `openWorkspace` / create-workspace flows (not SSH
   webview bridge). Device routing in `src/apps/cli/src/account.rs` special-cases
   `HostInvoke` / `DeviceEvent`. Same machine Desktop+CLI share one `device_id`;
   last `AuthConnect` wins.
+- Shared account settings sync engine:
+  `src/crates/assembly/core/src/service/remote_connect/settings_sync.rs`
+  (debounced push, 30s pull, persisted cursor); app wiring in
+  `src/apps/desktop/src/api/remote_connect_api.rs` and
+  `src/apps/cli/src/account_sync.rs`.
 - Frontend mode + transport: `src/web-ui/src/infrastructure/peer-device/`,
   `adapters/peer-device-adapter.ts`
 - Peer directory picker: `pickWorkspaceDirectory.ts`, `PeerDirectoryBrowser.tsx`,
   `PeerDirectoryPickerHost.tsx`
+
+## Regression guards (read before changing session/account paths)
+
+Frontend invariants and known failure modes:
+[`src/web-ui/src/infrastructure/peer-device/README.md`](../../src/web-ui/src/infrastructure/peer-device/README.md).
+
+Especially: Peer Mode must not call fail-closed `account_fetch_session_turns`
+during hydrate; clear stale `currentWorkspacePath` on peer switch; pass live
+workspace into `create_session`; keep config HostInvokes high-priority.

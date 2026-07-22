@@ -35,6 +35,7 @@ import {
   featureReferencesFeature,
   unexpectedDependencyOwnerFeatures,
 } from './manifest-feature-helpers.mjs';
+import { checkCargoDependencyLayersSafely } from './cargo-dependency-boundaries.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..', '..');
@@ -918,7 +919,7 @@ function collectRustUseReexportSymbols(usePath) {
 }
 
 function collectTopLevelRustPublicSymbols(text) {
-  const symbols = [];
+  const symbols = Array.from(text.matchAll(/\bexternal_subagent_id!\(\s*([A-Za-z_][A-Za-z0-9_]*)/g), (match) => match[1]);
   let braceDepth = 0;
   let pendingUsePath = null;
   for (const line of text.split(/\r?\n/)) {
@@ -1125,6 +1126,7 @@ export function runCoreBoundaryCheck() {
   }
 
   checkCrateLayoutRules();
+  failures.push(...checkCargoDependencyLayersSafely({ root: ROOT, crateLayoutRules }));
 
   for (const rule of forbiddenManifestDependencyRules) {
     checkForbiddenManifestDependencyRule(rule);

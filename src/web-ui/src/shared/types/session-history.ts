@@ -33,6 +33,7 @@ export interface SessionCustomMetadata extends Record<string, unknown> {
     sessionId?: string | null;
     turnId?: string | null;
     turnIndex?: number | null;
+    baseTitle?: string | null;
   } | null;
   lastFinishedAt?: number | null;
   titleSource?: SessionTitleSource | null;
@@ -198,8 +199,8 @@ export interface ModelRoundData {
   endTime?: number;
   durationMs?: number;
   providerId?: string;
-  modelId?: string;
-  modelAlias?: string;
+  modelConfigId?: string;
+  effectiveModelName?: string;
   firstChunkMs?: number;
   firstVisibleOutputMs?: number;
   streamDurationMs?: number;

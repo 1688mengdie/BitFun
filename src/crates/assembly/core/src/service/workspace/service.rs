@@ -13,8 +13,8 @@ use crate::service::bootstrap::{
     ensure_workspace_gitignore_ignores_bitfun, initialize_workspace_persona_files,
 };
 use crate::service::remote_ssh::workspace_state::{
-    canonicalize_local_workspace_root, get_remote_workspace_manager, local_workspace_roots_equal,
-    normalize_remote_workspace_path, remote_workspace_stable_id,
+    canonicalize_local_workspace_root, get_remote_workspace_manager, init_remote_workspace_manager,
+    local_workspace_roots_equal, normalize_remote_workspace_path, remote_workspace_stable_id,
 };
 use crate::service::workspace_runtime::{
     try_get_workspace_runtime_service_arc, WorkspaceRuntimeService,
@@ -28,6 +28,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::fs;
 use tokio::sync::RwLock;
+
+const MAX_WORKSPACE_NAME_CHARS: usize = 80;
 
 /// Workspace service.
 pub struct WorkspaceService {
@@ -103,6 +105,28 @@ struct AssistantWorkspaceDescriptor {
 }
 
 impl WorkspaceService {
+    fn normalize_workspace_name(name: String) -> BitFunResult<String> {
+        let name = name.trim();
+
+        if name.is_empty() {
+            return Err(BitFunError::service("Workspace name cannot be empty"));
+        }
+
+        if name.chars().any(char::is_control) {
+            return Err(BitFunError::service(
+                "Workspace name cannot contain control characters",
+            ));
+        }
+
+        if name.chars().count() > MAX_WORKSPACE_NAME_CHARS {
+            return Err(BitFunError::service(format!(
+                "Workspace name cannot exceed {MAX_WORKSPACE_NAME_CHARS} characters"
+            )));
+        }
+
+        Ok(name.to_string())
+    }
+
     fn collect_startup_restored_workspaces(manager: &WorkspaceManager) -> Vec<WorkspaceInfo> {
         let mut targets = Vec::new();
         let mut seen_workspace_ids = HashSet::new();
@@ -271,6 +295,48 @@ impl WorkspaceService {
             .await
     }
 
+    /// Opens a workspace by path, recovering remote SSH metadata from known
+    /// workspace history when the caller only has a remote POSIX path.
+    ///
+    /// IM bots, mobile Remote Connect, and similar path-only surfaces must use
+    /// this instead of [`Self::open_workspace`]: remote roots such as
+    /// `/root/repos` do not exist on the desktop host filesystem, so a bare
+    /// local open fails with "Workspace path does not exist".
+    pub async fn open_workspace_resolving_known(
+        &self,
+        path: PathBuf,
+        preferred_connection_id: Option<&str>,
+        preferred_ssh_host: Option<&str>,
+    ) -> BitFunResult<WorkspaceInfo> {
+        let path_str = path.to_string_lossy().to_string();
+        if let Some(known) = self
+            .find_known_remote_workspace_for_path(
+                &path_str,
+                preferred_connection_id,
+                preferred_ssh_host,
+            )
+            .await
+        {
+            return self.open_known_remote_workspace(&known).await;
+        }
+
+        match self.open_workspace(path).await {
+            Ok(info) => Ok(info),
+            Err(error) => {
+                let message = error.to_string();
+                if message.contains("Workspace path does not exist") {
+                    Err(BitFunError::service(format!(
+                        "Workspace path does not exist locally and is not a known remote SSH \
+                         workspace: {path_str}. Open it once from the desktop SSH remote UI so \
+                         BitFun can remember the connection, then try again."
+                    )))
+                } else {
+                    Err(error)
+                }
+            }
+        }
+    }
+
     /// Opens a workspace with explicit workspace metadata.
     pub async fn open_workspace_with_options(
         &self,
@@ -290,6 +356,9 @@ impl WorkspaceService {
                 .await;
             self.ensure_workspace_runtime_best_effort(workspace, "opened")
                 .await;
+            if workspace.workspace_kind == WorkspaceKind::Remote {
+                self.register_remote_workspace_runtime(workspace).await;
+            }
         }
 
         if result.is_ok() {
@@ -299,6 +368,163 @@ impl WorkspaceService {
         }
 
         result
+    }
+
+    async fn find_known_remote_workspace_for_path(
+        &self,
+        path: &str,
+        preferred_connection_id: Option<&str>,
+        preferred_ssh_host: Option<&str>,
+    ) -> Option<WorkspaceInfo> {
+        let want_path = normalize_remote_workspace_path(path);
+        let preferred_connection_id = preferred_connection_id
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let preferred_ssh_host = preferred_ssh_host
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+
+        let manager = self.manager.read().await;
+        let mut matches: Vec<&WorkspaceInfo> = manager
+            .get_workspaces()
+            .values()
+            .filter(|workspace| {
+                workspace.workspace_kind == WorkspaceKind::Remote
+                    && normalize_remote_workspace_path(&workspace.root_path.to_string_lossy())
+                        == want_path
+            })
+            .collect();
+
+        if matches.is_empty() {
+            return None;
+        }
+
+        if let Some(connection_id) = preferred_connection_id {
+            if let Some(matched) = matches
+                .iter()
+                .find(|workspace| workspace.remote_ssh_connection_id() == Some(connection_id))
+            {
+                return Some((*matched).clone());
+            }
+        }
+
+        if let Some(ssh_host) = preferred_ssh_host {
+            if let Some(matched) = matches.iter().find(|workspace| {
+                workspace
+                    .metadata
+                    .get("sshHost")
+                    .and_then(|value| value.as_str())
+                    .map(str::trim)
+                    == Some(ssh_host)
+            }) {
+                return Some((*matched).clone());
+            }
+        }
+
+        // Prefer the most recently accessed match when the path alone is ambiguous
+        // (e.g. the same POSIX root opened on two SSH hosts).
+        matches.sort_by(|left, right| right.last_accessed.cmp(&left.last_accessed));
+        matches.first().map(|workspace| (*workspace).clone())
+    }
+
+    async fn open_known_remote_workspace(
+        &self,
+        known: &WorkspaceInfo,
+    ) -> BitFunResult<WorkspaceInfo> {
+        let connection_id = known.remote_ssh_connection_id().ok_or_else(|| {
+            BitFunError::service(format!(
+                "Remote workspace is missing connectionId metadata: {}",
+                known.id
+            ))
+        })?;
+        let ssh_host = known
+            .metadata
+            .get("sshHost")
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                BitFunError::service(format!(
+                    "Remote workspace is missing sshHost metadata: {}",
+                    known.id
+                ))
+            })?;
+
+        let remote_path = normalize_remote_workspace_path(&known.root_path.to_string_lossy());
+        let options = WorkspaceCreateOptions {
+            workspace_kind: WorkspaceKind::Remote,
+            display_name: Some(known.name.clone()),
+            remote_connection_id: Some(connection_id.to_string()),
+            remote_ssh_host: Some(ssh_host.to_string()),
+            stable_workspace_id: Some(known.id.clone()),
+            ..Default::default()
+        };
+
+        let mut opened = self
+            .open_workspace_with_options(PathBuf::from(&remote_path), options)
+            .await?;
+
+        // Preserve desktop-authored metadata keys (connectionName, etc.) that are
+        // not reconstructed from open options alone.
+        {
+            let mut manager = self.manager.write().await;
+            if let Some(workspace) = manager.get_workspaces_mut().get_mut(&opened.id) {
+                for (key, value) in &known.metadata {
+                    workspace
+                        .metadata
+                        .entry(key.clone())
+                        .or_insert(value.clone());
+                }
+                opened.metadata = workspace.metadata.clone();
+            }
+        }
+
+        Ok(opened)
+    }
+
+    async fn register_remote_workspace_runtime(&self, workspace: &WorkspaceInfo) {
+        let Some(connection_id) = workspace.remote_ssh_connection_id() else {
+            warn!(
+                "Skipping remote workspace registry update: missing connectionId for {}",
+                workspace.id
+            );
+            return;
+        };
+        let Some(ssh_host) = workspace
+            .metadata
+            .get("sshHost")
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            warn!(
+                "Skipping remote workspace registry update: missing sshHost for {}",
+                workspace.id
+            );
+            return;
+        };
+        let connection_name = workspace
+            .metadata
+            .get("connectionName")
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(ssh_host)
+            .to_string();
+        let remote_path = normalize_remote_workspace_path(&workspace.root_path.to_string_lossy());
+
+        let state_manager = init_remote_workspace_manager();
+        state_manager
+            .register_remote_workspace(
+                remote_path,
+                connection_id.to_string(),
+                connection_name,
+                ssh_host.to_string(),
+            )
+            .await;
+        state_manager
+            .set_active_connection_hint(Some(connection_id.to_string()))
+            .await;
     }
 
     /// Registers or refreshes workspace activity without marking it as opened in the UI.
@@ -891,6 +1117,11 @@ impl WorkspaceService {
             related_paths,
         } = updates;
 
+        let normalized_name = match name {
+            Some(name) => Some(Self::normalize_workspace_name(name)?),
+            None => None,
+        };
+
         let existing_workspace = {
             let manager = self.manager.read().await;
             manager
@@ -919,7 +1150,7 @@ impl WorkspaceService {
                     BitFunError::service(format!("Workspace not found: {}", workspace_id))
                 })?;
 
-            if let Some(name) = name {
+            if let Some(name) = normalized_name {
                 workspace.name = name;
             }
 
@@ -2305,6 +2536,126 @@ mod tests {
         );
         assert_eq!(tracked.root_path, remote_workspace_root);
         assert!(service.get_opened_workspaces().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn open_workspace_resolving_known_reopens_remote_without_local_exists() {
+        let env = TestEnvironment::new();
+        let service = build_test_workspace_service(env.path_manager.clone()).await;
+        let remote_path = PathBuf::from("/root/repos");
+
+        service
+            .track_workspace_activity(
+                remote_path.clone(),
+                WorkspaceCreateOptions {
+                    workspace_kind: WorkspaceKind::Remote,
+                    remote_connection_id: Some("conn-remote-open".to_string()),
+                    remote_ssh_host: Some("remote-host".to_string()),
+                    display_name: Some("repos".to_string()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("remote workspace should be remembered");
+
+        let opened = service
+            .open_workspace_resolving_known(remote_path.clone(), None, None)
+            .await
+            .expect("known remote workspace must open without a local path");
+
+        assert_eq!(opened.workspace_kind, WorkspaceKind::Remote);
+        assert_eq!(opened.root_path, remote_path);
+        assert_eq!(opened.remote_ssh_connection_id(), Some("conn-remote-open"));
+        assert_eq!(
+            opened
+                .metadata
+                .get("sshHost")
+                .and_then(|value| value.as_str()),
+            Some("remote-host")
+        );
+
+        let entry = get_remote_workspace_manager()
+            .expect("remote workspace manager should exist")
+            .lookup_connection("/root/repos", Some("conn-remote-open"))
+            .await
+            .expect("opened remote workspace must be registered");
+        assert_eq!(entry.connection_id, "conn-remote-open");
+        assert_eq!(entry.ssh_host, "remote-host");
+    }
+
+    #[tokio::test]
+    async fn open_workspace_resolving_known_reports_unknown_remote_paths_clearly() {
+        let env = TestEnvironment::new();
+        let service = build_test_workspace_service(env.path_manager.clone()).await;
+
+        let error = service
+            .open_workspace_resolving_known(
+                PathBuf::from("/bitfun-tests/unknown-remote-path"),
+                None,
+                None,
+            )
+            .await
+            .expect_err("unknown remote paths must fail with a clear message");
+
+        assert!(
+            error
+                .to_string()
+                .contains("not a known remote SSH workspace"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_workspace_info_normalizes_and_validates_project_name() {
+        let env = TestEnvironment::new();
+        let service = build_test_workspace_service(env.path_manager.clone()).await;
+        let workspace_root = env.create_workspace_dir("rename-project");
+        let workspace = service
+            .open_workspace(workspace_root)
+            .await
+            .expect("workspace should open");
+
+        let renamed = service
+            .update_workspace_info(
+                &workspace.id,
+                WorkspaceInfoUpdates {
+                    name: Some("  Renamed project  ".to_string()),
+                    description: None,
+                    tags: None,
+                    related_paths: None,
+                },
+            )
+            .await
+            .expect("valid project name should be accepted");
+        assert_eq!(renamed.name, "Renamed project");
+        assert_eq!(
+            service
+                .get_workspace(&workspace.id)
+                .await
+                .expect("renamed workspace should remain available")
+                .name,
+            "Renamed project"
+        );
+
+        for invalid_name in [
+            "   ".to_string(),
+            "Project\nName".to_string(),
+            "x".repeat(MAX_WORKSPACE_NAME_CHARS + 1),
+        ] {
+            let error = service
+                .update_workspace_info(
+                    &workspace.id,
+                    WorkspaceInfoUpdates {
+                        name: Some(invalid_name),
+                        description: None,
+                        tags: None,
+                        related_paths: None,
+                    },
+                )
+                .await
+                .expect_err("invalid project name should be rejected");
+            assert!(error.to_string().contains("Workspace name"));
+        }
     }
 
     #[test]

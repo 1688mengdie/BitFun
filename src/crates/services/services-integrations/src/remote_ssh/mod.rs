@@ -4,6 +4,7 @@
 //! the legacy public path.
 
 pub mod paths;
+pub mod remote_git;
 mod shell;
 pub mod types;
 pub mod workspace_registry;
@@ -18,6 +19,8 @@ pub mod manager;
 #[cfg(feature = "remote-ssh-concrete")]
 mod password_vault;
 #[cfg(feature = "remote-ssh-concrete")]
+pub mod relay_deploy;
+#[cfg(feature = "remote-ssh-concrete")]
 mod remote_exec;
 #[cfg(feature = "remote-ssh-concrete")]
 mod remote_exec_runtime_port;
@@ -27,6 +30,7 @@ pub mod remote_fs;
 pub mod remote_terminal;
 
 pub use paths::*;
+pub use remote_git::{build_remote_git_command, shell_quote_posix};
 pub use types::*;
 pub use workspace_registry::*;
 pub use workspace_services::{remote_workspace_services, RemoteWorkspaceFs, RemoteWorkspaceShell};

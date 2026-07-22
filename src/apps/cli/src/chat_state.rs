@@ -1,15 +1,16 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 /// Chat state module
 ///
 /// Pure UI rendering state for the chat interface.
 /// All session lifecycle and persistence is handled by bitfun-core.
 /// This module only maintains transient state needed for TUI rendering.
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use bitfun_core::agentic::core::message::{
-    Message as CoreMessage, MessageContent, MessageRole as CoreMessageRole,
+use bitfun_agent_runtime::prompt_markup::strip_prompt_markup;
+use bitfun_agent_runtime::sdk::{
+    PermissionRequest, SessionTranscript, TranscriptContent, TranscriptMessage,
 };
-use bitfun_core::agentic::core::strip_prompt_markup;
+use bitfun_agent_tools::effective_tool_invocation;
 use bitfun_events::ToolEventData;
 
 use crate::ui::permission::PermissionPrompt;
@@ -63,13 +64,48 @@ pub(crate) enum MessageRole {
     Tool,
 }
 
-impl From<&CoreMessageRole> for MessageRole {
-    fn from(role: &CoreMessageRole) -> Self {
+impl From<&str> for MessageRole {
+    fn from(role: &str) -> Self {
         match role {
-            CoreMessageRole::User => MessageRole::User,
-            CoreMessageRole::Assistant => MessageRole::Assistant,
-            CoreMessageRole::System => MessageRole::System,
-            CoreMessageRole::Tool => MessageRole::Tool,
+            "user" => MessageRole::User,
+            "assistant" => MessageRole::Assistant,
+            "tool" => MessageRole::Tool,
+            _ => MessageRole::System,
+        }
+    }
+}
+
+pub(crate) fn transcript_role_label(role: &str) -> &'static str {
+    match role {
+        "user" => "User",
+        "assistant" => "Assistant",
+        "tool" => "Tool",
+        "system" => "System",
+        _ => "Unknown",
+    }
+}
+
+pub(crate) fn transcript_message_preview(message: &TranscriptMessage) -> String {
+    match &message.content {
+        TranscriptContent::Text(text) => text.lines().next().unwrap_or("").to_string(),
+        TranscriptContent::Multimodal { text, image_count } => {
+            if text.is_empty() {
+                format!("[{image_count} images]")
+            } else {
+                text.lines().next().unwrap_or("").to_string()
+            }
+        }
+        TranscriptContent::Mixed {
+            text, tool_calls, ..
+        } => {
+            if text.is_empty() {
+                format!("[{} tool calls]", tool_calls.len())
+            } else {
+                text.lines().next().unwrap_or("").to_string()
+            }
+        }
+        TranscriptContent::ToolResult { tool_name, .. } => {
+            format!("[Tool result: {tool_name}]")
         }
     }
 }
@@ -136,13 +172,13 @@ pub(crate) struct ChatMessage {
 }
 
 impl ChatMessage {
-    /// Convert a core Message to a UI ChatMessage
-    pub(crate) fn from_core_message(msg: &CoreMessage) -> Self {
-        let role = MessageRole::from(&msg.role);
+    /// Convert a portable session transcript message to UI state.
+    fn from_transcript_message(msg: &TranscriptMessage, index: usize) -> Self {
+        let role = MessageRole::from(msg.role.as_str());
         let mut flow_items = Vec::new();
 
         match &msg.content {
-            MessageContent::Text(text) => {
+            TranscriptContent::Text(text) => {
                 if !text.is_empty() {
                     flow_items.push(FlowItem::Text {
                         content: display_text_for_role(&role, text),
@@ -150,7 +186,7 @@ impl ChatMessage {
                     });
                 }
             }
-            MessageContent::Mixed {
+            TranscriptContent::Mixed {
                 reasoning_content,
                 text,
                 tool_calls,
@@ -174,11 +210,13 @@ impl ChatMessage {
 
                 // Add tool call blocks
                 for tc in tool_calls {
+                    let (tool_name, parameters) =
+                        effective_tool_invocation(&tc.tool_name, &tc.arguments);
                     flow_items.push(FlowItem::Tool {
                         tool_state: ToolDisplayState {
                             tool_id: tc.tool_id.clone(),
-                            tool_name: tc.tool_name.clone(),
-                            parameters: tc.arguments.clone(),
+                            tool_name: tool_name.to_string(),
+                            parameters: parameters.clone(),
                             status: ToolDisplayStatus::Success, // Historical messages are completed
                             result: None,
                             progress_message: None,
@@ -189,7 +227,7 @@ impl ChatMessage {
                     });
                 }
             }
-            MessageContent::Multimodal { text, .. } => {
+            TranscriptContent::Multimodal { text, .. } => {
                 if !text.is_empty() {
                     flow_items.push(FlowItem::Text {
                         content: display_text_for_role(&role, text),
@@ -197,18 +235,21 @@ impl ChatMessage {
                     });
                 }
             }
-            MessageContent::ToolResult {
+            TranscriptContent::ToolResult {
                 tool_id,
                 tool_name,
+                effective_tool_name,
                 result,
                 is_error,
-                ..
             } => {
                 let result_str = extract_fallback_summary(result);
                 flow_items.push(FlowItem::Tool {
                     tool_state: ToolDisplayState {
                         tool_id: tool_id.clone(),
-                        tool_name: tool_name.clone(),
+                        tool_name: effective_tool_name
+                            .as_deref()
+                            .unwrap_or(tool_name)
+                            .to_string(),
                         parameters: serde_json::Value::Null,
                         status: if *is_error {
                             ToolDisplayStatus::Failed
@@ -226,9 +267,14 @@ impl ChatMessage {
         }
 
         Self {
-            id: msg.id.clone(),
+            id: msg
+                .id
+                .clone()
+                .unwrap_or_else(|| format!("transcript-message-{index}")),
             role,
-            timestamp: msg.timestamp,
+            timestamp: UNIX_EPOCH
+                .checked_add(Duration::from_millis(msg.timestamp_ms.unwrap_or_default()))
+                .unwrap_or(UNIX_EPOCH),
             flow_items,
             is_streaming: false,
             version: 0,
@@ -263,6 +309,8 @@ pub(crate) struct ChatState {
     pub workspace: Option<String>,
     /// Current model display name (shown in shortcuts bar)
     pub current_model_name: String,
+    /// Effective Auto mode for permission results that evaluate to Ask.
+    pub auto_approve_ask: bool,
     /// Messages for UI rendering
     pub messages: Vec<ChatMessage>,
     /// Session statistics
@@ -283,6 +331,8 @@ pub(crate) struct ChatState {
     // -- Permission state --
     /// Current pending permission prompt (if a tool needs user confirmation)
     pub permission_prompt: Option<PermissionPrompt>,
+    /// Additional permission requests waiting behind the visible prompt.
+    permission_queue: VecDeque<PermissionRequest>,
 
     // -- Question state --
     /// Current pending question prompt (if AskUserQuestion tool is waiting for answers)
@@ -303,6 +353,7 @@ impl ChatState {
             agent_type,
             workspace,
             current_model_name: String::new(),
+            auto_approve_ask: false,
             messages: Vec::new(),
             metadata: ChatMetadata::default(),
             current_turn_id: None,
@@ -310,26 +361,108 @@ impl ChatState {
             tool_index: HashMap::new(),
             is_processing: false,
             permission_prompt: None,
+            permission_queue: VecDeque::new(),
             question_prompt: None,
         }
     }
 
-    /// Load historical messages from core and create ChatState.
+    pub(crate) fn enqueue_permission_request(&mut self, request: PermissionRequest) -> bool {
+        let request_id = request.request_id.as_str();
+        if self
+            .permission_prompt
+            .as_ref()
+            .is_some_and(|prompt| prompt.request.request_id == request_id)
+            || self
+                .permission_queue
+                .iter()
+                .any(|queued| queued.request_id == request_id)
+        {
+            return false;
+        }
+
+        if self.permission_prompt.is_none() {
+            self.permission_prompt = Some(PermissionPrompt::new(request));
+        } else if self.permission_prompt.as_ref().is_some_and(|prompt| {
+            prompt.request.round_id == request.round_id && request.order < prompt.request.order
+        }) {
+            let current = self
+                .permission_prompt
+                .take()
+                .expect("permission prompt should exist when reordering");
+            self.permission_prompt = Some(PermissionPrompt::new(request));
+            self.insert_permission_request_sorted(current.request);
+        } else {
+            self.insert_permission_request_sorted(request);
+        }
+        true
+    }
+
+    fn insert_permission_request_sorted(&mut self, request: PermissionRequest) {
+        let same_round_positions = self
+            .permission_queue
+            .iter()
+            .enumerate()
+            .filter_map(|(index, queued)| (queued.round_id == request.round_id).then_some(index))
+            .collect::<Vec<_>>();
+
+        let insert_position = if let Some(position) = same_round_positions
+            .iter()
+            .copied()
+            .find(|&index| request.order < self.permission_queue[index].order)
+        {
+            position
+        } else if let Some(position) = same_round_positions.last().copied() {
+            position + 1
+        } else if self
+            .permission_prompt
+            .as_ref()
+            .is_some_and(|prompt| prompt.request.round_id == request.round_id)
+        {
+            0
+        } else {
+            self.permission_queue.len()
+        };
+
+        self.permission_queue.insert(insert_position, request);
+    }
+
+    pub(crate) fn resolve_permission_request(&mut self, request_id: &str) -> bool {
+        if self
+            .permission_prompt
+            .as_ref()
+            .is_some_and(|prompt| prompt.request.request_id == request_id)
+        {
+            self.permission_prompt = self.permission_queue.pop_front().map(PermissionPrompt::new);
+            return true;
+        }
+
+        let Some(position) = self
+            .permission_queue
+            .iter()
+            .position(|request| request.request_id == request_id)
+        else {
+            return false;
+        };
+        self.permission_queue.remove(position);
+        true
+    }
+
+    /// Load historical messages from the portable runtime transcript.
     ///
     /// Tool results (ToolResult messages) are merged back into the corresponding
     /// tool calls (in Mixed messages) so that tool cards render with full result data.
-    pub(crate) fn from_core_messages(
+    pub(crate) fn from_session_transcript(
         core_session_id: String,
         session_name: String,
         agent_type: String,
         workspace: Option<String>,
-        core_messages: &[CoreMessage],
+        transcript: &SessionTranscript,
     ) -> Self {
         // Step 1: Build tool_id -> (result_summary, metadata, is_error) lookup from ToolResult messages
         let mut tool_results: HashMap<String, (String, Option<serde_json::Value>, bool)> =
             HashMap::new();
-        for msg in core_messages {
-            if let MessageContent::ToolResult {
+        for msg in &transcript.messages {
+            if let TranscriptContent::ToolResult {
                 tool_id,
                 result,
                 is_error,
@@ -345,16 +478,18 @@ impl ChatState {
         }
 
         // Step 2: Convert messages, merging tool results into tool call display states
-        let messages: Vec<ChatMessage> = core_messages
+        let messages: Vec<ChatMessage> = transcript
+            .messages
             .iter()
+            .enumerate()
             .filter(|msg| {
                 // Skip tool result messages (merged into tool cards above)
-                !matches!(msg.role, CoreMessageRole::Tool)
+                msg.1.role != "tool"
                 // Skip system messages (internal)
-                && !matches!(msg.role, CoreMessageRole::System)
+                && msg.1.role != "system"
             })
-            .map(|msg| {
-                let mut chat_msg = ChatMessage::from_core_message(msg);
+            .map(|(index, msg)| {
+                let mut chat_msg = ChatMessage::from_transcript_message(msg, index);
                 // Merge tool results into corresponding tool display states
                 for item in &mut chat_msg.flow_items {
                     if let FlowItem::Tool { tool_state } = item {
@@ -465,15 +600,15 @@ impl ChatState {
     /// Existing tools are updated in-place via tool_index for O(1) lookup.
     pub(crate) fn handle_tool_event(&mut self, tool_event: &ToolEventData) {
         match tool_event {
-            ToolEventData::EarlyDetected { tool_id, tool_name } => {
+            ToolEventData::EarlyDetected { identity } => {
                 self.insert_or_update_tool(
-                    tool_id,
+                    &identity.tool_id,
                     |_existing| {
                         // Should not exist yet, but handle gracefully
                     },
                     || ToolDisplayState {
-                        tool_id: tool_id.clone(),
-                        tool_name: tool_name.clone(),
+                        tool_id: identity.tool_id.clone(),
+                        tool_name: identity.effective_name().to_string(),
                         parameters: serde_json::Value::Null,
                         status: ToolDisplayStatus::EarlyDetected,
                         result: None,
@@ -487,9 +622,9 @@ impl ChatState {
             }
 
             ToolEventData::ParamsPartial {
-                tool_id, params, ..
+                identity, params, ..
             } => {
-                self.update_tool(tool_id, |tool| {
+                self.update_tool(&identity.tool_id, |tool| {
                     // Only update status if not yet in an advanced execution state.
                     // Due to priority queue ordering, ParamsPartial (Normal priority) may
                     // arrive after Started (High priority), which would incorrectly
@@ -503,9 +638,9 @@ impl ChatState {
             }
 
             ToolEventData::Queued {
-                tool_id, position, ..
+                identity, position, ..
             } => {
-                self.update_tool(tool_id, |tool| {
+                self.update_tool(&identity.tool_id, |tool| {
                     if !tool.status.is_execution_phase() {
                         tool.status = ToolDisplayStatus::Queued;
                     }
@@ -515,11 +650,11 @@ impl ChatState {
             }
 
             ToolEventData::Waiting {
-                tool_id,
+                identity,
                 dependencies,
                 ..
             } => {
-                self.update_tool(tool_id, |tool| {
+                self.update_tool(&identity.tool_id, |tool| {
                     if !tool.status.is_execution_phase() {
                         tool.status = ToolDisplayStatus::Waiting;
                     }
@@ -529,23 +664,27 @@ impl ChatState {
             }
 
             ToolEventData::Started {
-                tool_id,
-                tool_name,
+                identity,
                 params,
                 timeout_seconds: _,
             } => {
-                let params_for_update = params.clone();
-                let params_for_create = params.clone();
-                let tool_name_clone = tool_name.clone();
+                let (tool_name, effective_params) =
+                    effective_tool_invocation(&identity.tool_name, params);
+                debug_assert_eq!(identity.effective_name(), tool_name);
+                let params_for_update = effective_params.clone();
+                let params_for_create = effective_params.clone();
+                let tool_name_for_update = tool_name.to_string();
+                let tool_name_for_create = tool_name.to_string();
                 self.insert_or_update_tool(
-                    tool_id,
+                    &identity.tool_id,
                     |tool| {
                         tool.status = ToolDisplayStatus::Running;
+                        tool.tool_name = tool_name_for_update;
                         tool.parameters = params_for_update;
                     },
                     || ToolDisplayState {
-                        tool_id: tool_id.clone(),
-                        tool_name: tool_name_clone,
+                        tool_id: identity.tool_id.clone(),
+                        tool_name: tool_name_for_create,
                         parameters: params_for_create,
                         status: ToolDisplayStatus::Running,
                         result: None,
@@ -559,7 +698,9 @@ impl ChatState {
 
                 // Auto-create question prompt for AskUserQuestion tool
                 if tool_name == "AskUserQuestion" {
-                    if let Some(prompt) = QuestionPrompt::from_params(tool_id.clone(), params) {
+                    if let Some(prompt) =
+                        QuestionPrompt::from_params(identity.tool_id.clone(), effective_params)
+                    {
                         self.question_prompt = Some(prompt);
                     }
                 }
@@ -568,20 +709,20 @@ impl ChatState {
             }
 
             ToolEventData::Progress {
-                tool_id, message, ..
+                identity, message, ..
             } => {
-                self.update_tool(tool_id, |tool| {
+                self.update_tool(&identity.tool_id, |tool| {
                     tool.progress_message = Some(message.clone());
                 });
                 self.rebuild_streaming_message();
             }
 
             ToolEventData::Streaming {
-                tool_id,
+                identity,
                 chunks_received,
                 ..
             } => {
-                self.update_tool(tool_id, |tool| {
+                self.update_tool(&identity.tool_id, |tool| {
                     tool.status = ToolDisplayStatus::Streaming;
                     tool.progress_message = Some(format!("Received {} chunks", chunks_received));
                 });
@@ -589,50 +730,37 @@ impl ChatState {
             }
 
             ToolEventData::ConfirmationNeeded {
-                tool_id,
-                tool_name,
-                params,
-                ..
+                identity, params, ..
             } => {
-                self.update_tool(tool_id, |tool| {
+                let (tool_name, effective_params) =
+                    effective_tool_invocation(&identity.tool_name, params);
+                debug_assert_eq!(identity.effective_name(), tool_name);
+                self.update_tool(&identity.tool_id, |tool| {
                     tool.status = ToolDisplayStatus::ConfirmationNeeded;
+                    tool.tool_name = tool_name.to_string();
+                    tool.parameters = effective_params.clone();
                     tool.progress_message = Some("Waiting for user confirmation".to_string());
                 });
-                // Auto-create permission prompt for user interaction
-                self.permission_prompt = Some(PermissionPrompt::new(
-                    tool_id.clone(),
-                    tool_name.clone(),
-                    params.clone(),
-                ));
                 self.rebuild_streaming_message();
             }
 
-            ToolEventData::Confirmed { tool_id, .. } => {
-                self.update_tool(tool_id, |tool| {
+            ToolEventData::Confirmed { identity } => {
+                self.update_tool(&identity.tool_id, |tool| {
                     tool.status = ToolDisplayStatus::Confirmed;
                 });
-                // Clear permission prompt if it matches this tool
-                if self.permission_prompt.as_ref().map(|p| &p.tool_id) == Some(tool_id) {
-                    self.permission_prompt = None;
-                }
                 self.rebuild_streaming_message();
             }
 
-            ToolEventData::Rejected { tool_id, .. } => {
-                self.update_tool(tool_id, |tool| {
+            ToolEventData::Rejected { identity } => {
+                self.update_tool(&identity.tool_id, |tool| {
                     tool.status = ToolDisplayStatus::Rejected;
                     tool.result = Some("User rejected execution".to_string());
                 });
-                // Clear permission prompt if it matches this tool
-                if self.permission_prompt.as_ref().map(|p| &p.tool_id) == Some(tool_id) {
-                    self.permission_prompt = None;
-                }
                 self.rebuild_streaming_message();
             }
 
             ToolEventData::Completed {
-                tool_id,
-                tool_name,
+                identity,
                 result,
                 result_for_assistant,
                 duration_ms,
@@ -644,8 +772,9 @@ impl ChatState {
                     .unwrap_or_else(|| extract_fallback_summary(result));
                 let metadata = result.clone();
                 let dur = *duration_ms;
-                self.update_tool(tool_id, |tool| {
-                    let is_hmos_failed = tool_name == "HmosCompilation"
+                self.update_tool(&identity.tool_id, |tool| {
+                    tool.tool_name = identity.effective_name().to_string();
+                    let is_hmos_failed = identity.effective_name() == "HmosCompilation"
                         && result.get("success").and_then(|v| v.as_bool()) == Some(false);
                     tool.status = if is_hmos_failed {
                         ToolDisplayStatus::Failed
@@ -657,35 +786,39 @@ impl ChatState {
                     tool.duration_ms = Some(dur);
                 });
                 // Clear question prompt if this tool completed
-                if self.question_prompt.as_ref().map(|p| &p.tool_id) == Some(tool_id) {
+                if self.question_prompt.as_ref().map(|p| &p.tool_id) == Some(&identity.tool_id) {
                     self.question_prompt = None;
                 }
                 self.rebuild_streaming_message();
             }
 
-            ToolEventData::Failed { tool_id, error, .. } => {
+            ToolEventData::Failed {
+                identity, error, ..
+            } => {
                 let err = error.clone();
-                self.update_tool(tool_id, |tool| {
+                self.update_tool(&identity.tool_id, |tool| {
+                    tool.tool_name = identity.effective_name().to_string();
                     tool.status = ToolDisplayStatus::Failed;
                     tool.result = Some(err);
                 });
                 // Clear question prompt if this tool failed
-                if self.question_prompt.as_ref().map(|p| &p.tool_id) == Some(tool_id) {
+                if self.question_prompt.as_ref().map(|p| &p.tool_id) == Some(&identity.tool_id) {
                     self.question_prompt = None;
                 }
                 self.rebuild_streaming_message();
             }
 
             ToolEventData::Cancelled {
-                tool_id, reason, ..
+                identity, reason, ..
             } => {
                 let rsn = reason.clone();
-                self.update_tool(tool_id, |tool| {
+                self.update_tool(&identity.tool_id, |tool| {
+                    tool.tool_name = identity.effective_name().to_string();
                     tool.status = ToolDisplayStatus::Cancelled;
                     tool.result = Some(rsn);
                 });
                 // Clear question prompt if this tool was cancelled
-                if self.question_prompt.as_ref().map(|p| &p.tool_id) == Some(tool_id) {
+                if self.question_prompt.as_ref().map(|p| &p.tool_id) == Some(&identity.tool_id) {
                     self.question_prompt = None;
                 }
                 self.rebuild_streaming_message();
@@ -710,45 +843,50 @@ impl ChatState {
         match event {
             AgenticEvent::ToolEvent { tool_event, .. } => match tool_event {
                 ToolEventData::Started {
-                    tool_name, params, ..
+                    identity, params, ..
                 } => {
-                    let title = extract_tool_title(tool_name, params);
+                    let (tool_name, effective_params) =
+                        effective_tool_invocation(&identity.tool_name, params);
+                    debug_assert_eq!(identity.effective_name(), tool_name);
+                    let title = extract_tool_title(tool_name, effective_params);
                     self.update_tool(parent_tool_id, |tool| {
                         let progress = tool
                             .subagent_progress
                             .get_or_insert_with(SubagentProgress::default);
                         progress.tool_count += 1;
-                        progress.current_tool_name = Some(tool_name.clone());
+                        progress.current_tool_name = Some(tool_name.to_string());
                         progress.current_tool_title = title;
                     });
                     self.rebuild_streaming_message();
                 }
                 ToolEventData::Completed {
-                    tool_name,
+                    identity,
                     result_for_assistant,
                     result: _,
                     ..
                 } => {
+                    let tool_name = identity.effective_name();
                     let summary = result_for_assistant
                         .clone()
-                        .unwrap_or_else(|| tool_name.clone());
+                        .unwrap_or_else(|| tool_name.to_string());
                     self.update_tool(parent_tool_id, |tool| {
                         let progress = tool
                             .subagent_progress
                             .get_or_insert_with(SubagentProgress::default);
-                        progress.current_tool_name = Some(tool_name.clone());
+                        progress.current_tool_name = Some(tool_name.to_string());
                         progress.current_tool_title = Some(summary);
                     });
                     self.rebuild_streaming_message();
                 }
                 ToolEventData::Failed {
-                    tool_name, error, ..
+                    identity, error, ..
                 } => {
+                    let tool_name = identity.effective_name();
                     self.update_tool(parent_tool_id, |tool| {
                         let progress = tool
                             .subagent_progress
                             .get_or_insert_with(SubagentProgress::default);
-                        progress.current_tool_name = Some(tool_name.clone());
+                        progress.current_tool_name = Some(tool_name.to_string());
                         progress.current_tool_title =
                             Some(format!("Error: {}", truncate_string(error, 60)));
                     });
@@ -791,7 +929,6 @@ impl ChatState {
         self.current_flow_items.clear();
         self.tool_index.clear();
         self.is_processing = false;
-        self.permission_prompt = None;
         self.question_prompt = None;
     }
 
@@ -813,7 +950,6 @@ impl ChatState {
         self.current_flow_items.clear();
         self.tool_index.clear();
         self.is_processing = false;
-        self.permission_prompt = None;
         self.question_prompt = None;
     }
 
@@ -834,7 +970,6 @@ impl ChatState {
         self.current_flow_items.clear();
         self.tool_index.clear();
         self.is_processing = false;
-        self.permission_prompt = None;
         self.question_prompt = None;
     }
 
@@ -1062,5 +1197,291 @@ fn truncate_string(s: &str, max_len: usize) -> String {
     } else {
         let truncated: String = s.chars().take(max_len).collect();
         format!("{}...", truncated)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ChatState, FlowItem, ToolDisplayStatus};
+    use bitfun_agent_runtime::sdk::{
+        PermissionDelegationContext, PermissionRequest, PermissionRequestSource,
+        PermissionRequestSourceKind, SessionTranscript, TranscriptContent, TranscriptMessage,
+        TranscriptToolCall,
+    };
+    use bitfun_events::{ToolEventData, ToolEventIdentity};
+    use serde_json::json;
+
+    fn permission_request(request_id: &str, child_session_id: &str) -> PermissionRequest {
+        PermissionRequest {
+            request_id: request_id.to_string(),
+            round_id: format!("synthetic:{request_id}"),
+            order: 0,
+            tool_call_id: Some(format!("{request_id}-tool")),
+            project_path: None,
+            project_id: "project-1".to_string(),
+            session_id: child_session_id.to_string(),
+            agent_id: "Explore".to_string(),
+            action: "edit".to_string(),
+            resources: vec!["src/main.rs".to_string()],
+            save_resources: Vec::new(),
+            source: PermissionRequestSource {
+                kind: PermissionRequestSourceKind::ToolCall,
+                identity: "Write".to_string(),
+            },
+            delegation: Some(PermissionDelegationContext {
+                parent_session_id: "parent-session".to_string(),
+                parent_dialog_turn_id: Some("parent-turn".to_string()),
+                parent_tool_call_id: format!("{request_id}-parent-task"),
+                subagent_type: "Explore".to_string(),
+            }),
+            display_metadata: serde_json::Map::new(),
+        }
+    }
+
+    fn deferred_input() -> serde_json::Value {
+        json!({
+            "tool_name": "CreatePlan",
+            "args": {
+                "title": "Deferred tool plan",
+                "steps": ["Inspect", "Implement"]
+            }
+        })
+    }
+
+    fn assert_create_plan_item(item: &FlowItem) {
+        let FlowItem::Tool { tool_state } = item else {
+            panic!("expected tool item");
+        };
+        assert_eq!(tool_state.tool_name, "CreatePlan");
+        assert_eq!(
+            tool_state.parameters,
+            json!({
+                "title": "Deferred tool plan",
+                "steps": ["Inspect", "Implement"]
+            })
+        );
+    }
+
+    #[test]
+    fn permission_queue_deduplicates_and_advances_in_fifo_order() {
+        let mut state = ChatState::new(
+            "parent-session".to_string(),
+            "Session".to_string(),
+            "agentic".to_string(),
+            None,
+        );
+        let first = permission_request("request-z", "child-a");
+        let second = permission_request("request-a", "child-b");
+        let third = permission_request("request-m", "child-c");
+
+        assert!(state.enqueue_permission_request(first.clone()));
+        assert!(state.enqueue_permission_request(second.clone()));
+        assert!(state.enqueue_permission_request(third.clone()));
+        assert!(!state.enqueue_permission_request(second));
+        assert_eq!(
+            state
+                .permission_prompt
+                .as_ref()
+                .map(|prompt| prompt.request.request_id.as_str()),
+            Some("request-z")
+        );
+
+        assert!(state.resolve_permission_request("request-a"));
+        assert!(state.resolve_permission_request("request-z"));
+        assert_eq!(
+            state
+                .permission_prompt
+                .as_ref()
+                .map(|prompt| prompt.request.request_id.as_str()),
+            Some("request-m")
+        );
+        assert!(!state.resolve_permission_request("unrelated"));
+        assert!(state.resolve_permission_request("request-m"));
+        assert!(state.permission_prompt.is_none());
+    }
+
+    #[test]
+    fn permission_queue_orders_requests_within_their_round() {
+        let mut state = ChatState::new(
+            "session-1".to_string(),
+            "Session".to_string(),
+            "agentic".to_string(),
+            None,
+        );
+        let first = PermissionRequest {
+            round_id: "round-1".to_string(),
+            order: 2,
+            ..permission_request("request-2", "session-1")
+        };
+        let second = PermissionRequest {
+            round_id: "round-1".to_string(),
+            order: 0,
+            ..permission_request("request-0", "session-1")
+        };
+        let third = PermissionRequest {
+            round_id: "round-1".to_string(),
+            order: 1,
+            ..permission_request("request-1", "session-1")
+        };
+
+        assert!(state.enqueue_permission_request(first));
+        assert!(state.enqueue_permission_request(second));
+        assert!(state.enqueue_permission_request(third));
+        assert_eq!(
+            state
+                .permission_prompt
+                .as_ref()
+                .map(|prompt| prompt.request.request_id.as_str()),
+            Some("request-0")
+        );
+
+        assert!(state.resolve_permission_request("request-0"));
+        assert_eq!(
+            state
+                .permission_prompt
+                .as_ref()
+                .map(|prompt| prompt.request.request_id.as_str()),
+            Some("request-1")
+        );
+        assert!(state.resolve_permission_request("request-1"));
+        assert_eq!(
+            state
+                .permission_prompt
+                .as_ref()
+                .map(|prompt| prompt.request.request_id.as_str()),
+            Some("request-2")
+        );
+    }
+
+    #[test]
+    fn deferred_started_event_replaces_early_wire_display_with_effective_view() {
+        let mut state = ChatState::new(
+            "session-1".to_string(),
+            "Session".to_string(),
+            "agentic".to_string(),
+            None,
+        );
+        state.handle_turn_started("turn-1", "Create a plan");
+        state.handle_tool_event(&ToolEventData::EarlyDetected {
+            identity: ToolEventIdentity::direct(
+                "tool-1",
+                bitfun_agent_tools::CALL_DEFERRED_TOOL_NAME,
+            ),
+        });
+        state.handle_tool_event(&ToolEventData::Started {
+            identity: ToolEventIdentity::resolved(
+                "tool-1",
+                bitfun_agent_tools::CALL_DEFERRED_TOOL_NAME,
+                "CreatePlan",
+            ),
+            params: deferred_input(),
+            timeout_seconds: None,
+        });
+
+        assert_create_plan_item(&state.current_flow_items[0]);
+    }
+
+    #[test]
+    fn deferred_history_projects_effective_view_without_mutating_wire_message() {
+        let wire_input = deferred_input();
+        let transcript = SessionTranscript {
+            session_id: "session-1".to_string(),
+            messages: vec![TranscriptMessage {
+                id: Some("message-1".to_string()),
+                role: "assistant".to_string(),
+                turn_id: Some("turn-1".to_string()),
+                timestamp_ms: Some(1234),
+                content: TranscriptContent::Mixed {
+                    reasoning_content: None,
+                    text: String::new(),
+                    tool_calls: vec![TranscriptToolCall {
+                        tool_id: "tool-1".to_string(),
+                        tool_name: bitfun_agent_tools::CALL_DEFERRED_TOOL_NAME.to_string(),
+                        arguments: wire_input.clone(),
+                    }],
+                },
+            }],
+        };
+
+        let state = ChatState::from_session_transcript(
+            "session-1".to_string(),
+            "Session".to_string(),
+            "agentic".to_string(),
+            None,
+            &transcript,
+        );
+
+        assert_create_plan_item(&state.messages[0].flow_items[0]);
+        assert_eq!(
+            match &transcript.messages[0].content {
+                TranscriptContent::Mixed { tool_calls, .. } => tool_calls[0].tool_name.as_str(),
+                _ => panic!("expected mixed transcript content"),
+            },
+            bitfun_agent_tools::CALL_DEFERRED_TOOL_NAME
+        );
+        assert_eq!(
+            match &transcript.messages[0].content {
+                TranscriptContent::Mixed { tool_calls, .. } => &tool_calls[0].arguments,
+                _ => panic!("expected mixed transcript content"),
+            },
+            &wire_input
+        );
+    }
+
+    #[test]
+    fn transcript_history_merges_tool_results_into_the_rendered_tool_card() {
+        let transcript = SessionTranscript {
+            session_id: "session-1".to_string(),
+            messages: vec![
+                TranscriptMessage {
+                    id: Some("assistant-1".to_string()),
+                    role: "assistant".to_string(),
+                    turn_id: Some("turn-1".to_string()),
+                    timestamp_ms: Some(1234),
+                    content: TranscriptContent::Mixed {
+                        reasoning_content: None,
+                        text: String::new(),
+                        tool_calls: vec![TranscriptToolCall {
+                            tool_id: "tool-1".to_string(),
+                            tool_name: "Read".to_string(),
+                            arguments: json!({ "file_path": "README.md" }),
+                        }],
+                    },
+                },
+                TranscriptMessage {
+                    id: Some("tool-result-1".to_string()),
+                    role: "tool".to_string(),
+                    turn_id: Some("turn-1".to_string()),
+                    timestamp_ms: Some(1300),
+                    content: TranscriptContent::ToolResult {
+                        tool_id: "tool-1".to_string(),
+                        tool_name: "Read".to_string(),
+                        effective_tool_name: None,
+                        result: json!({ "display_summary": "README contents" }),
+                        is_error: true,
+                    },
+                },
+            ],
+        };
+
+        let state = ChatState::from_session_transcript(
+            "session-1".to_string(),
+            "Session".to_string(),
+            "agentic".to_string(),
+            None,
+            &transcript,
+        );
+
+        assert_eq!(state.messages.len(), 1);
+        assert_eq!(state.messages[0].id, "assistant-1");
+        let FlowItem::Tool { tool_state } = &state.messages[0].flow_items[0] else {
+            panic!("expected tool item");
+        };
+        assert_eq!(tool_state.status, ToolDisplayStatus::Failed);
+        assert_eq!(tool_state.result.as_deref(), Some("README contents"));
+        assert_eq!(
+            tool_state.metadata,
+            Some(json!({ "display_summary": "README contents" }))
+        );
     }
 }

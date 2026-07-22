@@ -20,7 +20,6 @@ pub(crate) fn tool_task_state_kind(state: &ToolExecutionState) -> ToolTaskStateK
         ToolExecutionState::Waiting { .. } => ToolTaskStateKind::Waiting,
         ToolExecutionState::Running { .. } => ToolTaskStateKind::Running,
         ToolExecutionState::Streaming { .. } => ToolTaskStateKind::Streaming,
-        ToolExecutionState::AwaitingConfirmation { .. } => ToolTaskStateKind::AwaitingConfirmation,
         ToolExecutionState::Completed { .. } => ToolTaskStateKind::Completed,
         ToolExecutionState::Failed { .. } => ToolTaskStateKind::Failed,
         ToolExecutionState::Rejected { .. } => ToolTaskStateKind::Rejected,
@@ -92,17 +91,6 @@ impl ToolStateManager {
         self.tasks.get(tool_id).map(|t| t.clone())
     }
 
-    /// Update task arguments
-    pub fn update_task_arguments(&self, tool_id: &str, new_arguments: serde_json::Value) {
-        if let Some(mut task) = self.tasks.get_mut(tool_id) {
-            debug!(
-                "Updated tool arguments: tool_id={}, old_args={:?}, new_args={:?}",
-                tool_id, task.tool_call.arguments, new_arguments
-            );
-            task.tool_call.arguments = new_arguments;
-        }
-    }
-
     /// Get all tasks of a session
     pub fn get_session_tasks(&self, session_id: &str) -> Vec<ToolTask> {
         self.tasks
@@ -152,7 +140,7 @@ impl ToolStateManager {
                 dependencies: dependencies.clone(),
             },
             ToolExecutionState::Running { .. } => ToolStateEventKind::Running {
-                params: task.tool_call.arguments.clone(),
+                params: task.invocation.wire_arguments.clone(),
                 timeout_seconds: task.options.timeout_secs,
             },
             ToolExecutionState::Streaming {
@@ -160,22 +148,6 @@ impl ToolStateManager {
             } => ToolStateEventKind::Streaming {
                 chunks_received: *chunks_received,
             },
-            ToolExecutionState::AwaitingConfirmation { params, timeout_at } => {
-                let confirmation_timeout_secs = task
-                    .options
-                    .confirmation_timeout_secs
-                    .filter(|seconds| *seconds > 0);
-                ToolStateEventKind::AwaitingConfirmation {
-                    params: params.clone(),
-                    timeout_at: confirmation_timeout_secs.map(|_| {
-                        timeout_at
-                            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_millis()
-                            .min(u128::from(u64::MAX)) as u64
-                    }),
-                }
-            }
             ToolExecutionState::Completed {
                 result,
                 duration_ms,
@@ -232,8 +204,11 @@ impl ToolStateManager {
             },
         };
         let tool_event = tool_state_event_data(ToolStateEventFacts {
-            tool_id: task.tool_call.tool_id.clone(),
-            tool_name: task.tool_call.tool_name.clone(),
+            identity: bitfun_events::ToolEventIdentity::resolved(
+                task.tool_call.tool_id.clone(),
+                task.invocation.wire_tool_name.clone(),
+                task.effective_tool_name().to_string(),
+            ),
             state,
         });
 
@@ -260,7 +235,6 @@ impl ToolStateManager {
             waiting: counts.waiting,
             running: counts.running,
             streaming: counts.streaming,
-            awaiting_confirmation: counts.awaiting_confirmation,
             completed: counts.completed,
             failed: counts.failed,
             rejected: counts.rejected,
@@ -277,6 +251,22 @@ mod tests {
     use std::collections::HashMap;
     use std::time::Duration;
     use tokio::time::timeout;
+
+    #[derive(Default)]
+    struct CapturingEventSink {
+        events: tokio::sync::Mutex<Vec<AgenticEvent>>,
+    }
+
+    #[async_trait::async_trait]
+    impl StreamEventSink for CapturingEventSink {
+        async fn enqueue(
+            &self,
+            event: AgenticEvent,
+            _priority: Option<bitfun_events::AgenticEventPriority>,
+        ) {
+            self.events.lock().await.push(event);
+        }
+    }
 
     struct BlockingEventSink {
         started: tokio::sync::Notify,
@@ -316,9 +306,10 @@ mod tests {
                 primary_model_facts: tool_runtime::context::PrimaryModelFacts::default(),
                 context_vars: HashMap::new(),
                 subagent_parent_info: None,
+                permission_delegation: None,
                 delegation_policy: bitfun_runtime_ports::DelegationPolicy::top_level(),
-                collapsed_tools: Vec::new(),
-                unlocked_collapsed_tools: Vec::new(),
+                deferred_tools: Vec::new(),
+                loaded_deferred_tool_specs: Vec::new(),
                 allowed_tools: Vec::new(),
                 runtime_tool_restrictions: Default::default(),
                 steering_interrupt: None,
@@ -371,6 +362,53 @@ mod tests {
             .expect("state update should finish after event queue is released")
             .expect("state update task should not panic");
     }
+
+    #[tokio::test]
+    async fn deferred_started_event_keeps_wire_input_and_effective_name() {
+        let wire_arguments = serde_json::json!({
+            "tool_name": "CreatePlan",
+            "args": { "name": "Plan" }
+        });
+        let mut task = test_task("tool-1");
+        task.tool_call.tool_name = bitfun_agent_tools::CALL_DEFERRED_TOOL_NAME.to_string();
+        task.tool_call.arguments = wire_arguments.clone();
+        task.invocation = bitfun_agent_tools::ResolvedToolInvocation::from_wire_call(
+            bitfun_agent_tools::CALL_DEFERRED_TOOL_NAME,
+            wire_arguments.clone(),
+        )
+        .expect("valid deferred invocation");
+
+        let sink = Arc::new(CapturingEventSink::default());
+        let manager = ToolStateManager::new(sink.clone());
+        let tool_id = manager.create_task(task).await;
+        manager
+            .update_state(
+                &tool_id,
+                ToolExecutionState::Running {
+                    started_at: std::time::SystemTime::now(),
+                    progress: None,
+                },
+            )
+            .await;
+
+        let events = sink.events.lock().await;
+        let AgenticEvent::ToolEvent {
+            tool_event:
+                bitfun_events::ToolEventData::Started {
+                    identity, params, ..
+                },
+            ..
+        } = &events[0]
+        else {
+            panic!("expected started event");
+        };
+        assert_eq!(
+            identity.tool_name,
+            bitfun_agent_tools::CALL_DEFERRED_TOOL_NAME
+        );
+        assert_eq!(identity.effective_name(), "CreatePlan");
+        assert_eq!(params, &wire_arguments);
+    }
 }
 
 /// Tool statistics
@@ -381,7 +419,6 @@ pub struct ToolStats {
     pub waiting: usize,
     pub running: usize,
     pub streaming: usize,
-    pub awaiting_confirmation: usize,
     pub completed: usize,
     pub failed: usize,
     pub rejected: usize,

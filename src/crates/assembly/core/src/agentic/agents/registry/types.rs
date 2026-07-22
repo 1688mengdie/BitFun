@@ -26,6 +26,8 @@ use std::sync::Arc;
 pub struct CustomAgentConfig {
     /// used model ID
     pub model: String,
+    /// Whether the custom agent Markdown explicitly overrides the model.
+    pub model_is_explicit: bool,
 }
 
 pub type CustomSubagentConfig = CustomAgentConfig;
@@ -36,6 +38,7 @@ pub enum AgentSource {
     Builtin,
     Project,
     User,
+    External,
 }
 
 #[derive(Debug, Clone)]
@@ -96,8 +99,15 @@ pub struct AgentInfo {
     /// model configuration, only custom subagent has value (read from file)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Whether `model` is an explicit custom Subagent override.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_is_explicit: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub visibility: Option<SubagentVisibilitySummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_provider_label: Option<String>,
+    #[serde(default = "default_true")]
+    pub supports_follow_up: bool,
 }
 
 fn default_true() -> bool {
@@ -133,11 +143,13 @@ pub(super) fn subagent_key_for(
             let _custom = agent.as_any().downcast_ref::<CustomSubagent>()?;
             "bitfun"
         }
+        SubAgentSource::External => "external",
     };
     let prefix = match source {
         SubAgentSource::Builtin => "builtin",
         SubAgentSource::Project => "project",
         SubAgentSource::User => "user",
+        SubAgentSource::External => "external",
     };
     Some(format!("{prefix}::{slot}::{}", agent.id()))
 }
@@ -172,6 +184,10 @@ impl AgentInfo {
             .custom_config
             .as_ref()
             .map(|config| config.model.clone());
+        let model_is_explicit = entry
+            .custom_config
+            .as_ref()
+            .map(|config| config.model_is_explicit);
 
         // get path by downcast to CustomSubagent (only custom subagent has path)
         let path = custom_agent_path(agent);
@@ -201,8 +217,11 @@ impl AgentInfo {
             subagent_source: entry.subagent_source,
             path,
             model,
+            model_is_explicit,
             visibility: (entry.category == AgentCategory::SubAgent)
                 .then(|| entry.visibility_policy.summary()),
+            external_provider_label: None,
+            supports_follow_up: true,
         }
     }
 }

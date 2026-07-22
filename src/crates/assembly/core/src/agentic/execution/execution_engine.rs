@@ -30,7 +30,7 @@ use crate::agentic::session::{
 use crate::agentic::skill_agent_snapshot::build_skill_agent_tool_listing_sections_from_snapshot;
 use crate::agentic::tools::implementations::{SkillTool, TaskTool};
 use crate::agentic::tools::product_runtime::{
-    collect_product_unlocked_collapsed_tools, GetToolSpecTool,
+    collect_product_loaded_deferred_tool_specs, GetToolSpecTool,
 };
 use crate::agentic::tools::{
     resolve_tool_manifest, tool_context_runtime, ResolvedToolManifest, ToolRuntimeRestrictions,
@@ -38,7 +38,9 @@ use crate::agentic::tools::{
 use crate::agentic::WorkspaceBinding;
 use crate::infrastructure::ai::get_global_ai_client_factory;
 use crate::service::config::get_global_config_service;
-use crate::service::config::types::{ModelCapability, ModelCategory};
+use crate::service::config::types::{
+    automatic_max_output_tokens, model_runtime_binding_fingerprint, ModelCapability, ModelCategory,
+};
 use crate::util::errors::{BitFunError, BitFunResult};
 use crate::util::token_counter::TokenCounter;
 use crate::util::types::Message as AIMessage;
@@ -47,6 +49,7 @@ use crate::util::{elapsed_ms_u64, truncate_at_char_boundary};
 use bitfun_agent_runtime::output_surface::TOOL_CONTEXT_INLINE_MARKDOWN_IMAGE_DISPLAY_KEY;
 use bitfun_agent_runtime::remote_file_delivery::TOOL_CONTEXT_REMOTE_FILE_DELIVERY_KEY;
 use bitfun_ai_adapters::ModelExchangeTraceConfig;
+use bitfun_core_types::SessionModelBindingPolicy;
 use log::{debug, error, info, trace, warn};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
@@ -339,7 +342,6 @@ pub struct ExecutionEngine {
 }
 
 impl ExecutionEngine {
-    const AUTO_COMPRESSION_DEFAULT_OUTPUT_RESERVE_TOKENS: usize = 16_000;
     const AUTO_COMPRESSION_SAFETY_RESERVE_TOKENS: usize = 10_000;
     const FINALIZE_AFTER_REPEATED_TOOL_FAILURES_REMINDER: &'static str = "This turn must end now because repeated tool failures have prevented further progress. Ignore any unfinished work. Your task now is to give the user a final answer. Do not call any more tools; any tool call will fail. Respond in plain text only. Summarize what was completed, what failed, the evidence available from the tool results, and the single best next step for the user.";
     const FINALIZE_AFTER_MAX_ROUNDS_REMINDER: &'static str = "This turn must end now because it has reached the round limit. Ignore any unfinished work. Your task now is to give the user a final answer. Do not call any more tools; any tool call will fail. Respond in plain text only. Summarize the most useful completed work and evidence collected so far, and clearly distinguish resolved items from anything still unresolved.";
@@ -513,7 +515,7 @@ impl ExecutionEngine {
     ) -> CompressionTriggerBudget {
         let output_reserve_tokens = configured_max_tokens
             .map(|value| value as usize)
-            .unwrap_or(Self::AUTO_COMPRESSION_DEFAULT_OUTPUT_RESERVE_TOKENS);
+            .unwrap_or_else(|| automatic_max_output_tokens(context_window as u32) as usize);
         let safety_reserve_tokens = Self::AUTO_COMPRESSION_SAFETY_RESERVE_TOKENS;
         let input_limit =
             context_window.saturating_sub(output_reserve_tokens + safety_reserve_tokens);
@@ -886,6 +888,7 @@ impl ExecutionEngine {
 
     async fn resolve_primary_model_context(
         model_id: &str,
+        model_binding_policy: SessionModelBindingPolicy,
         ai_client_model: &str,
         ai_client_api_format: &str,
         unavailable_log_message: &str,
@@ -895,23 +898,17 @@ impl ExecutionEngine {
             let ai_config: crate::service::config::types::AIConfig =
                 service.get_config(Some("ai")).await.unwrap_or_default();
 
-            let resolved_id = Self::resolve_configured_model_id(&ai_config, model_id);
-            let model_cfg = ai_config
-                .models
-                .iter()
-                .find(|m| m.id == resolved_id)
-                .or_else(|| ai_config.models.iter().find(|m| m.name == resolved_id))
-                .or_else(|| {
-                    ai_config
-                        .models
-                        .iter()
-                        .find(|m| m.model_name == resolved_id)
-                })
-                .or_else(|| {
-                    ai_config.models.iter().find(|m| {
-                        m.model_name == ai_client_model && m.provider == ai_client_api_format
-                    })
-                });
+            let resolved_id = if matches!(
+                model_binding_policy,
+                SessionModelBindingPolicy::ApprovedImmutable
+            ) {
+                ai_config
+                    .resolve_model_reference(model_id)
+                    .unwrap_or_else(|| model_id.to_string())
+            } else {
+                Self::resolve_configured_model_id(&ai_config, model_id)
+            };
+            let model_cfg = ai_config.models.iter().find(|m| m.id == resolved_id);
 
             let supports = model_cfg.is_some_and(|m| {
                 m.capabilities
@@ -949,9 +946,9 @@ impl ExecutionEngine {
             } else {
                 None
             },
-            collapsed_tool_listing: if has_tool_definition("GetToolSpec") {
-                GetToolSpecTool::build_collapsed_tools_context_section(
-                    &manifest.collapsed_tool_summaries,
+            deferred_tool_listing: if has_tool_definition("GetToolSpec") {
+                GetToolSpecTool::build_deferred_tools_context_section(
+                    &manifest.deferred_tool_summaries,
                 )
             } else {
                 None
@@ -1077,7 +1074,7 @@ impl ExecutionEngine {
         let runtime_context = prompt_builder.build_runtime_context_reminder().await;
 
         PrependedPromptReminders {
-            collapsed_tool_listing: prompt_builder.build_collapsed_tool_listing_reminder(),
+            deferred_tool_listing: prompt_builder.build_deferred_tool_listing_reminder(),
             skill_listing: baseline_tool_sections
                 .as_ref()
                 .and_then(|sections| sections.render_skill_listing_reminder()),
@@ -1183,7 +1180,7 @@ impl ExecutionEngine {
         prepended_prompt_reminders: &PrependedPromptReminders,
     ) {
         debug!(
-            "Turn prompt scaffold resolved: session_id={}, turn_id={}, stage={}, system_prompt_len={} bytes, skill_listing_len={}, agent_listing_len={}, collapsed_tool_listing_len={}, user_context_len={}, runtime_context_len={}",
+            "Turn prompt scaffold resolved: session_id={}, turn_id={}, stage={}, system_prompt_len={} bytes, skill_listing_len={}, agent_listing_len={}, deferred_tool_listing_len={}, user_context_len={}, runtime_context_len={}",
             session_id,
             turn_id,
             stage,
@@ -1199,7 +1196,7 @@ impl ExecutionEngine {
                 .map(|text| text.len())
                 .unwrap_or(0),
             prepended_prompt_reminders
-                .collapsed_tool_listing
+                .deferred_tool_listing
                 .as_ref()
                 .map(|text| text.len())
                 .unwrap_or(0),
@@ -1236,11 +1233,6 @@ impl ExecutionEngine {
         original_user_input: &str,
         turn_index: usize,
     ) -> BitFunResult<String> {
-        let agent_registry = get_agent_registry();
-        let fallback_model_id = agent_registry
-            .get_model_id_for_agent(agent_type, workspace.map(|binding| binding.root_path()))
-            .await
-            .map_err(|e| BitFunError::AIClient(format!("Failed to get model ID: {}", e)))?;
         let config_service = get_global_config_service().await.map_err(|e| {
             BitFunError::AIClient(format!(
                 "Failed to get config service for model resolution: {}",
@@ -1251,6 +1243,56 @@ impl ExecutionEngine {
             .get_config(Some("ai"))
             .await
             .unwrap_or_default();
+        if matches!(
+            session.config.model_binding_policy,
+            SessionModelBindingPolicy::ApprovedImmutable
+        ) {
+            let model_id = session
+                .config
+                .model_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|model_id| !model_id.is_empty())
+                .ok_or_else(|| {
+                    BitFunError::AIClient(
+                        "Approved immutable session has no concrete model id".to_string(),
+                    )
+                })?;
+            let expected_fingerprint = session
+                .config
+                .model_binding_fingerprint
+                .as_deref()
+                .ok_or_else(|| {
+                    BitFunError::AIClient(
+                        "Approved immutable session has no model binding fingerprint".to_string(),
+                    )
+                })?;
+            let mut matches = ai_config
+                .models
+                .iter()
+                .filter(|model| model.enabled && model.id == model_id);
+            let model = matches.next().ok_or_else(|| {
+                BitFunError::AIClient(format!(
+                    "Approved model configuration is unavailable: {}",
+                    model_id
+                ))
+            })?;
+            if matches.next().is_some()
+                || model_runtime_binding_fingerprint(model) != expected_fingerprint
+            {
+                return Err(BitFunError::AIClient(format!(
+                    "Approved model binding changed before execution: {}",
+                    model_id
+                )));
+            }
+            return Ok(model_id.to_string());
+        }
+
+        let agent_registry = get_agent_registry();
+        let fallback_model_id = agent_registry
+            .get_model_id_for_agent(agent_type, workspace.map(|binding| binding.root_path()))
+            .await
+            .map_err(|e| BitFunError::AIClient(format!("Failed to get model ID: {}", e)))?;
         let configured_model_id = session
             .config
             .model_id
@@ -1370,6 +1412,7 @@ impl ExecutionEngine {
         let round_context = RoundContext {
             session_id: input.context.session_id.clone(),
             subagent_parent_info: input.context.subagent_parent_info.clone(),
+            permission_delegation: input.context.permission_delegation.clone(),
             dialog_turn_id: input.context.dialog_turn_id.clone(),
             turn_index: input.context.turn_index,
             round_number: input.round_number,
@@ -1377,12 +1420,14 @@ impl ExecutionEngine {
             workspace: input.context.workspace.clone(),
             model_exchange_trace_dir,
             available_tools: finalize_tool_names,
-            collapsed_tools: Vec::new(),
-            unlocked_collapsed_tools: Vec::new(),
-            model_name: input.ai_client.config.model.clone(),
+            deferred_tools: Vec::new(),
+            loaded_deferred_tool_specs: Vec::new(),
+            model_config_id: input.primary_model_facts.model_id.clone(),
+            effective_model_name: input.ai_client.config.model.clone(),
             primary_model_facts: input.primary_model_facts.clone(),
             agent_type: input.agent_type,
             context_vars: input.execution_context_vars.clone(),
+            permission_runtime_ceiling: input.context.permission_runtime_ceiling.clone(),
             delegation_policy: input.context.delegation_policy,
             runtime_tool_restrictions: finalize_runtime_tool_restrictions,
             steering_interrupt: None,
@@ -1784,18 +1829,33 @@ impl ExecutionEngine {
         let ai_client_factory = get_global_ai_client_factory().await.map_err(|e| {
             BitFunError::AIClient(format!("Failed to get AI client factory: {}", e))
         })?;
-        let ai_client = ai_client_factory
-            .get_client_resolved(&model_id)
-            .await
-            .map_err(|e| {
-                BitFunError::AIClient(format!(
-                    "Failed to get AI client (model_id={}): {}",
-                    model_id, e
-                ))
-            })?;
+        let ai_client_result = if matches!(
+            session.config.model_binding_policy,
+            SessionModelBindingPolicy::ApprovedImmutable
+        ) {
+            ai_client_factory
+                .get_client_by_approved_binding(
+                    &model_id,
+                    session
+                        .config
+                        .model_binding_fingerprint
+                        .as_deref()
+                        .unwrap_or_default(),
+                )
+                .await
+        } else {
+            ai_client_factory.get_client_resolved(&model_id).await
+        };
+        let ai_client = ai_client_result.map_err(|e| {
+            BitFunError::AIClient(format!(
+                "Failed to get AI client (model_id={}): {}",
+                model_id, e
+            ))
+        })?;
 
         let primary_model_facts = Self::resolve_primary_model_context(
             &model_id,
+            session.config.model_binding_policy,
             &ai_client.config.model,
             &ai_client.config.format,
             "Config service unavailable, assuming compression model is text-only for image input gating",
@@ -1865,8 +1925,8 @@ impl ExecutionEngine {
             })
             .unwrap_or_default();
         // Snapshot prompt-visible tool definitions once for this turn. Do not
-        // re-resolve or rewrite them after GetToolSpec unlocks a collapsed tool:
-        // the unlocked detail travels in tool results, while mutating the tool
+        // re-resolve or rewrite them after GetToolSpec loads a deferred tool spec:
+        // the loaded detail travels in tool results, while mutating the tool
         // definitions would change the request prefix and trigger provider
         // prefix/KV cache misses on subsequent rounds.
         let tool_definitions = tool_manifest.map(|manifest| manifest.tool_definitions);
@@ -2575,19 +2635,34 @@ impl ExecutionEngine {
         })?;
 
         // Get AI client by model ID
-        let ai_client = ai_client_factory
-            .get_client_resolved(&model_id)
-            .await
-            .map_err(|e| {
-                BitFunError::AIClient(format!(
-                    "Failed to get AI client (model_id={}): {}",
-                    model_id, e
-                ))
-            })?;
+        let ai_client_result = if matches!(
+            session.config.model_binding_policy,
+            SessionModelBindingPolicy::ApprovedImmutable
+        ) {
+            ai_client_factory
+                .get_client_by_approved_binding(
+                    &model_id,
+                    session
+                        .config
+                        .model_binding_fingerprint
+                        .as_deref()
+                        .unwrap_or_default(),
+                )
+                .await
+        } else {
+            ai_client_factory.get_client_resolved(&model_id).await
+        };
+        let ai_client = ai_client_result.map_err(|e| {
+            BitFunError::AIClient(format!(
+                "Failed to get AI client (model_id={}): {}",
+                model_id, e
+            ))
+        })?;
 
         // Primary model vision capability (tools + system prompt appendix; also used below for API message stripping).
         let primary_model_facts = Self::resolve_primary_model_context(
             &model_id,
+            session.config.model_binding_policy,
             &ai_client.config.model,
             &ai_client.config.format,
             "Config service unavailable, assuming primary model is text-only for image input gating",
@@ -2646,7 +2721,20 @@ impl ExecutionEngine {
             .get("enable_tools")
             .and_then(|v| v.parse::<bool>().ok())
             .unwrap_or(true);
-        let tool_manifest_context_vars = context.context.clone();
+        let deferred_tool_loading_enabled = match get_global_config_service().await {
+            Ok(service) => service
+                .get_config::<bool>(Some("ai.enable_deferred_tool_loading"))
+                .await
+                .unwrap_or(true),
+            Err(_) => true,
+        };
+        let mut execution_context_vars = context.context.clone();
+        execution_context_vars.insert(
+            "enable_deferred_tool_loading".to_string(),
+            deferred_tool_loading_enabled.to_string(),
+        );
+        execution_context_vars.insert("turn_index".to_string(), context.turn_index.to_string());
+        let tool_manifest_context_vars = execution_context_vars.clone();
 
         let tool_description_context = tool_context_runtime::build_tool_description_context(
             &agent_type,
@@ -2673,9 +2761,9 @@ impl ExecutionEngine {
         } else {
             None
         };
-        let collapsed_tools = tool_manifest
+        let deferred_tools = tool_manifest
             .as_ref()
-            .map(|manifest| manifest.collapsed_tool_names.clone())
+            .map(|manifest| manifest.deferred_tool_names.clone())
             .unwrap_or_default();
         let tool_listing_sections = if let Some(manifest) = tool_manifest.as_ref() {
             Self::build_tool_listing_sections(manifest, &tool_description_context).await
@@ -2708,7 +2796,7 @@ impl ExecutionEngine {
         };
         let final_tool_names = Self::finalize_tool_names(tool_definitions.as_deref());
         debug!(
-            "Primary model and tool manifest resolved: session_id={}, turn_id={}, resolved_primary_model_id={}, primary_model_api_format={}, primary_model_supports_image_inputs={}, final_tool_count={}, final_tool_names={:?}, collapsed_tool_names={:?}",
+            "Primary model and tool manifest resolved: session_id={}, turn_id={}, resolved_primary_model_id={}, primary_model_api_format={}, primary_model_supports_image_inputs={}, final_tool_count={}, final_tool_names={:?}, deferred_tool_names={:?}",
             context.session_id,
             context.dialog_turn_id,
             primary_model_facts.model_id,
@@ -2716,7 +2804,7 @@ impl ExecutionEngine {
             primary_model_facts.supports_image_inputs,
             final_tool_names.len(),
             final_tool_names,
-            collapsed_tools,
+            deferred_tools,
         );
 
         // 4. Resolve the prompt scaffold used by model requests in this turn.
@@ -2786,9 +2874,6 @@ impl ExecutionEngine {
         let enable_context_compression = session.config.enable_context_compression;
         let compression_trigger_budget =
             Self::compression_trigger_budget(context_window, ai_client.config.max_tokens);
-
-        let mut execution_context_vars = context.context.clone();
-        execution_context_vars.insert("turn_index".to_string(), context.turn_index.to_string());
 
         // If the primary model is text-only, do not send image payloads to the provider.
         // Instead, keep a text-only placeholder (including `image_id`).
@@ -3090,12 +3175,9 @@ impl ExecutionEngine {
             );
 
             // Create round context
-            let mut round_context_vars = execution_context_vars.clone();
-            if context.skip_tool_confirmation {
-                round_context_vars.insert("skip_tool_confirmation".to_string(), "true".to_string());
-            }
-            let unlocked_collapsed_tools =
-                collect_product_unlocked_collapsed_tools(&messages, &collapsed_tools);
+            let round_context_vars = execution_context_vars.clone();
+            let loaded_deferred_tool_specs =
+                collect_product_loaded_deferred_tool_specs(&messages, &deferred_tools);
 
             let model_exchange_trace_dir = self
                 .session_manager
@@ -3104,6 +3186,7 @@ impl ExecutionEngine {
             let round_context = RoundContext {
                 session_id: context.session_id.clone(),
                 subagent_parent_info: context.subagent_parent_info.clone(),
+                permission_delegation: context.permission_delegation.clone(),
                 dialog_turn_id: context.dialog_turn_id.clone(),
                 turn_index: context.turn_index,
                 round_number: round_index,
@@ -3111,12 +3194,14 @@ impl ExecutionEngine {
                 workspace: context.workspace.clone(),
                 model_exchange_trace_dir,
                 available_tools: available_tools.clone(),
-                collapsed_tools: collapsed_tools.clone(),
-                unlocked_collapsed_tools,
-                model_name: ai_client.config.model.clone(),
+                deferred_tools: deferred_tools.clone(),
+                loaded_deferred_tool_specs,
+                model_config_id: model_id.clone(),
+                effective_model_name: ai_client.config.model.clone(),
                 primary_model_facts: primary_model_facts.clone(),
                 agent_type: agent_type.clone(),
                 context_vars: round_context_vars,
+                permission_runtime_ceiling: context.permission_runtime_ceiling.clone(),
                 delegation_policy: context.delegation_policy,
                 runtime_tool_restrictions: context.runtime_tool_restrictions.clone(),
                 steering_interrupt: context.round_injection.as_ref().map(|source| {
@@ -3989,12 +4074,12 @@ mod tests {
     }
 
     #[test]
-    fn compression_trigger_budget_uses_16k_output_reserve_when_max_tokens_is_unset() {
+    fn compression_trigger_budget_uses_the_automatic_output_tier_when_max_tokens_is_unset() {
         let budget = ExecutionEngine::compression_trigger_budget(128_000, None);
 
-        assert_eq!(budget.output_reserve_tokens, 16_000);
+        assert_eq!(budget.output_reserve_tokens, 32_000);
         assert_eq!(budget.safety_reserve_tokens, 10_000);
-        assert_eq!(budget.input_limit, 102_000);
+        assert_eq!(budget.input_limit, 86_000);
     }
 
     #[test]
@@ -4252,8 +4337,9 @@ mod tests {
             workspace: None,
             context: HashMap::new(),
             subagent_parent_info: None,
+            permission_delegation: None,
+            permission_runtime_ceiling: None,
             delegation_policy: bitfun_runtime_ports::DelegationPolicy::top_level(),
-            skip_tool_confirmation: false,
             runtime_tool_restrictions: ToolRuntimeRestrictions::default(),
             workspace_services: None,
             terminal_port: None,
@@ -4347,6 +4433,7 @@ mod tests {
         let results = vec![Message::tool_result(ToolResult {
             tool_id: "tool-1".to_string(),
             tool_name: "PollStatus".to_string(),
+            effective_tool_name: None,
             result: json!({ "status": "pending", "success": true }),
             result_for_assistant: Some("The job is still pending.".to_string()),
             is_error: false,
@@ -4373,6 +4460,7 @@ mod tests {
         let results = vec![Message::tool_result(ToolResult {
             tool_id: "tool-1".to_string(),
             tool_name: "Read".to_string(),
+            effective_tool_name: None,
             result: json!({ "success": false, "error": "not found" }),
             result_for_assistant: Some("File not found.".to_string()),
             is_error: true,
@@ -4522,6 +4610,7 @@ mod tests {
         Message::tool_result(ToolResult {
             tool_id: format!("{}-tool", tool_name),
             tool_name: tool_name.to_string(),
+            effective_tool_name: None,
             result: json!({
                 "success": success,
                 "exit_code": exit_code,

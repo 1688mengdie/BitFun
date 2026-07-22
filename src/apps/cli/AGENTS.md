@@ -37,19 +37,38 @@ before product-definition, TUI layout, branding, packaging, runtime, or plugin a
 - Product assembly may expose only the immutable protection IDs allowed by the
   customization design. CLI must not turn them into user/source plugin policy or
   store plugin activation, update, permission, or health state in the assembly result.
-- Current OpenCode adapter code is a managed-package/static-preview path only. After the matching
-  OC-R phases are implemented, OpenCode standard config and plugin sources become
-  read-only source files whose valid results can affect runtime behavior without
-  a BitFun import or second activation. Codex and Claude remain import/reference
-  sources unless their own design explicitly changes. Never copy credentials or
-  silently ignore unsupported fields.
+- OpenCode Prompt Commands from standard user and project configuration are
+  read-only live sources. CLI may execute only the expanded prompt through the
+  existing agent owner; it must re-confirm changed conflict participants and
+  must not execute shell/file directives that the prompt-command contract marks
+  unsupported.
+- OpenCode standalone JavaScript tools may execute only through the shared
+  external-source approval, conflict, Tool Runtime, and script-worker owners.
+  CLI/TUI consumes typed snapshots and actions; it must not import modules,
+  spawn tool workers, bypass a pending decision, or implement a second approval
+  store. TypeScript, dependency loading, package plugins, and hooks remain
+  non-executable until their own reviewed capability slice lands.
+- OpenCode external subagents may execute only through the shared source
+  decision and existing Subagent owner. TUI consumes typed summaries and
+  generation-checked actions; it must not parse agent files, inject source
+  prompts directly, invent model fallbacks, or offer follow-up for the current
+  fresh single-run compatibility slice.
+- The managed-package OpenCode adapter remains a static-preview path. Other
+  OpenCode plugin capabilities, Codex, and Claude remain import/reference sources
+  unless their own reviewed adapter design explicitly changes. Never copy
+  credentials or silently ignore unsupported fields.
 - Keep native instruction references, explicit import records, executable plugin
   sources, and credentials as separate asset classes. Importing non-executable
-  config must not establish executable-source policy; live OpenCode execution is
-  governed by the source/target policy resolved before module import.
+  config must not establish executable-source policy. CLI consumes the external
+  source status and typed actions; it must not add another activation layer on top
+  of the source/target decision or claim that post-import confirmation can undo
+  candidate-module side effects.
 - CLI plugin screens consume capability services, read-only status, and typed
   diagnostics. They must not depend on Plugin Runtime Host ABI or raw ecosystem
   payloads.
+- Non-interactive commands return `action-required` only when the current operation
+  actually depends on a pending external asset. Unrelated confirmations remain in
+  structured status or `stderr` summaries and must not block the command.
 - External ACP agents, external config import, and managed plugins are separate
   capabilities with separate trust and lifecycle state.
 
@@ -62,6 +81,10 @@ before product-definition, TUI layout, branding, packaging, runtime, or plugin a
   stable capability requests instead of reimplementing behavior per entrypoint.
 - `json` is one result document; `stream-json` is one complete event per line.
   Keep protocol stdout free of logs and preserve schema/exit-code compatibility.
+- Keep `src/modes/exec.rs` as the stable module facade. The current private split
+  keeps lifecycle/event settlement in `exec/lifecycle.rs` and Patch capture/write
+  behavior in `exec/patch.rs`; further private splits are allowed when they keep
+  one executor, one output schema, and one lifecycle owner.
 - Approval policy is invocation-scoped: interactive TUI defaults to ask;
   non-interactive execution fails when confirmation is required unless an
   explicit argument or managed policy approves it. Do not mutate a global
@@ -89,6 +112,6 @@ two-product build assertion.
 
 ## Install for end users
 
-Prefer [`install.sh`](install.sh) / [`README.md`](README.md): release build, copy to
-`~/.local/bin`, and idempotent `~/.bashrc` / `~/.zshrc` PATH wiring so users can
-run `bitfun-cli` after install.
+Use [`install.ps1`](install.ps1), [`install.sh`](install.sh), and [`README.md`](README.md) for
+platform-native per-user installation. Document `bitfun` as primary; ship `bitfun-cli` only as the
+deprecated compatibility entrypoint, and use `bitfun` in all new examples and integrations.

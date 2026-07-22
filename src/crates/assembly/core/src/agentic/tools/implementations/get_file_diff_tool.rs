@@ -1264,7 +1264,7 @@ Usage:
     }
 
     fn default_exposure(&self) -> ToolExposure {
-        ToolExposure::Collapsed
+        ToolExposure::Deferred
     }
 
     fn input_schema(&self) -> Value {
@@ -1301,10 +1301,6 @@ Usage:
 
     fn is_concurrency_safe(&self, _input: Option<&Value>) -> bool {
         true
-    }
-
-    fn needs_permissions(&self, _input: Option<&Value>) -> bool {
-        false
     }
 
     async fn validate_input(

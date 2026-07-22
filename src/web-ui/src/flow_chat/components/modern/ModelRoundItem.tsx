@@ -15,10 +15,14 @@ import { useI18n } from '@/infrastructure/i18n';
 import { FlowTextBlock } from '../FlowTextBlock';
 import { FlowToolCard } from '../FlowToolCard';
 import { ModelThinkingDisplay } from '../../tool-cards/ModelThinkingDisplay';
+import { TypewriterRevealGateProvider } from '../../hooks/TypewriterRevealGate';
+import { useCreateTypewriterRevealGate } from '../../hooks/typewriterRevealGateContext';
+import { getModelRoundItemClassName } from './modelRoundItemClassName';
 import { isCollapsibleTool } from '../../tool-cards/toolCardMetadata';
 import { useFlowChatContext } from './FlowChatContext';
 import { FlowChatStore } from '../../store/FlowChatStore';
 import { taskCollapseStateManager } from '../../store/TaskCollapseStateManager';
+import { getEffectiveToolName, projectEffectiveToolItem } from '../../utils/toolInvocationIdentity';
 import { ExportImageButton } from './ExportImageButton';
 import { ForkSessionButton } from './ForkSessionButton';
 import {
@@ -244,6 +248,11 @@ export const ModelRoundItem = React.memo<ModelRoundItemProps>(
     const { t } = useTranslation('flow-chat');
     const { formatDate, formatNumber } = useI18n('flow-chat');
     const { sessionId } = useFlowChatContext();
+    const typewriterRevealGate = useCreateTypewriterRevealGate();
+    // Capture mount-time streaming state once: history rounds may fade in,
+    // but a round that started as streaming must never replay fadeIn when it
+    // later flips to complete (that looked like a full chat refresh).
+    const [shouldPlayEnterAnimation] = useState(() => !round.isStreaming);
     const [copied, setCopied] = useState(false);
     const [showRetryHistory, setShowRetryHistory] = useState(false);
     const [showRoundHistory, setShowRoundHistory] = useState(false);
@@ -449,7 +458,7 @@ export const ModelRoundItem = React.memo<ModelRoundItemProps>(
             ));
 
           case 'critical': {
-            const projectedSubagent = group.item.type === 'tool' && (group.item as FlowToolItem).toolName === 'Task'
+            const projectedSubagent = group.item.type === 'tool' && getEffectiveToolName(group.item as FlowToolItem) === 'Task'
               ? group.item as FlowToolItem
               : undefined;
             if (projectedSubagent) {
@@ -519,13 +528,14 @@ export const ModelRoundItem = React.memo<ModelRoundItemProps>(
           } else if (item.type === 'thinking' && item.content?.trim()) {
             roundContent.push(`[Thinking]\n${item.content.trim()}`);
           } else if (item.type === 'tool' && item.toolCall) {
-            const toolName = item.toolName || t('copyOutput.unknownTool');
+            const effectiveItem = projectEffectiveToolItem(item);
+            const toolName = effectiveItem.toolName || t('copyOutput.unknownTool');
             let toolContent = t('modelRound.toolCallLabel', { name: toolName }) + '\n';
             
-            if (item.toolCall.input) {
-              const inputStr = typeof item.toolCall.input === 'string'
-                ? item.toolCall.input
-                : JSON.stringify(item.toolCall.input, null, 2);
+            if (effectiveItem.toolCall.input) {
+              const inputStr = typeof effectiveItem.toolCall.input === 'string'
+                ? effectiveItem.toolCall.input
+                : JSON.stringify(effectiveItem.toolCall.input, null, 2);
               toolContent += `\n[Input]\n\`\`\`json\n${inputStr}\n\`\`\`\n`;
             }
             
@@ -592,21 +602,30 @@ export const ModelRoundItem = React.memo<ModelRoundItemProps>(
       formatNumber,
       t,
     }), [completedAt, effectiveDurationMs, formatDate, formatNumber, round.status, t, turnTokenUsage]);
-    const shouldRenderFooter = isTurnComplete &&
+    // Wait for typewriter catch-up before revealing footer controls. Reserve
+    // footer layout as soon as the model round completes so the eventual
+    // reveal does not resize the list (that resize flashed the chat pane).
+    const isVisuallyStreaming = round.isStreaming || typewriterRevealGate.isAnyRevealing;
+    const shouldReserveFooter = isTurnComplete &&
       isLastRound &&
       !round.isStreaming &&
       (hasContent || usageMetaItems.length > 0);
+    const shouldRevealFooter = shouldReserveFooter && !typewriterRevealGate.isAnyRevealing;
     
     return (
+      <TypewriterRevealGateProvider value={typewriterRevealGate}>
       <div 
-        className={`model-round-item model-round-item--${round.isStreaming ? 'streaming' : 'complete'}`}
+        className={getModelRoundItemClassName({
+          isVisuallyStreaming,
+          shouldPlayEnterAnimation,
+        })}
         data-testid="chat-assistant-message"
         data-turn-id={turnId}
         data-round-id={round.id}
         data-status={round.status}
-        data-model-id={round.modelId || ''}
-        data-model-alias={round.modelAlias || ''}
-        data-streaming={round.isStreaming ? 'true' : 'false'}
+        data-model-config-id={round.modelConfigId || ''}
+        data-effective-model-name={round.effectiveModelName || ''}
+        data-streaming={isVisuallyStreaming ? 'true' : 'false'}
       >
         {renderTraceEnabled && renderTraceStartedAtMs !== null && allGroupSummary && visibleGroupSummary && (
           <ModelRoundRenderTrace
@@ -758,8 +777,11 @@ export const ModelRoundItem = React.memo<ModelRoundItemProps>(
           </div>
         )}
 
-        {shouldRenderFooter && (
-          <div className="model-round-item__footer">
+        {shouldReserveFooter && (
+          <div
+            className={`model-round-item__footer${shouldRevealFooter ? '' : ' model-round-item__footer--pending'}`}
+            aria-hidden={!shouldRevealFooter}
+          >
             {usageMetaItems.length > 0 && (
               <div
                 className="model-round-item__meta"
@@ -781,6 +803,8 @@ export const ModelRoundItem = React.memo<ModelRoundItemProps>(
                 ref={copyButtonRef}
                 className={`model-round-item__action-btn model-round-item__copy-btn ${copied ? 'copied' : ''}`}
                 onClick={handleCopy}
+                tabIndex={shouldRevealFooter ? 0 : -1}
+                disabled={!shouldRevealFooter}
               >
                 {copied ? <Check size={14} /> : <Copy size={14} />}
               </button>
@@ -790,6 +814,7 @@ export const ModelRoundItem = React.memo<ModelRoundItemProps>(
           </div>
         )}
       </div>
+      </TypewriterRevealGateProvider>
     );
   },
   (prev, next) => {
@@ -871,7 +896,7 @@ const FlowItemRenderer: React.FC<FlowItemRendererProps> = ({
     case 'tool': {
       const toolItem = item as FlowToolItem;
       const isCompletedTool = toolItem.status === 'completed';
-      const isCollapsible = isCollapsibleTool(toolItem.toolName);
+      const isCollapsible = isCollapsibleTool(getEffectiveToolName(toolItem));
       const shouldAnimateCompletedExit =
         allowCompletedToolExit &&
         isCollapsible &&
@@ -891,9 +916,9 @@ const FlowItemRenderer: React.FC<FlowItemRendererProps> = ({
         <div className={toolClassName} data-flow-item-id={item.id} data-flow-item-type="tool">
           <FlowToolCard
             toolItem={toolItem}
-            onConfirm={async (toolId: string, updatedInput?: any, permissionOptionId?: string, approve?: boolean) => {
+            onConfirm={async (toolId: string, permissionOptionId?: string, approve?: boolean) => {
               if (onToolConfirm) {
-                await onToolConfirm(toolId, updatedInput, permissionOptionId, approve);
+                await onToolConfirm(toolId, permissionOptionId, approve);
               }
             }}
             onReject={async (_toolId: string, options?: ToolRejectOptions) => {

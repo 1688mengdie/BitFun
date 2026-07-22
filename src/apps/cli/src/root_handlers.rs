@@ -1,16 +1,30 @@
 use anyhow::{Context, Result};
 
+use std::collections::BTreeSet;
 use std::io::IsTerminal;
 use std::path::Path;
 
+use bitfun_agent_runtime::sdk::{AgentSessionRestoreRequest, SessionTranscriptRequest};
+use bitfun_core::external_sources::{
+    external_source_snapshot, sanitize_external_source_operation_error,
+    update_external_integration_policy, EcosystemId, ExternalIntegrationAccess,
+    ExternalIntegrationCapabilityId, ExternalIntegrationMode, ExternalIntegrationPolicyMutation,
+    ExternalIntegrationPolicyOperation, ExternalIntegrationPolicyScope,
+    ExternalIntegrationPolicyStatus, ExternalSourceCatalogSnapshot,
+    ExternalSourceOperationErrorCode, EXTERNAL_CAPABILITY_COMMAND, EXTERNAL_CAPABILITY_MCP,
+    EXTERNAL_CAPABILITY_SUBAGENT, EXTERNAL_CAPABILITY_TOOL,
+};
+
 use crate::{
+    chat_state::{transcript_message_preview, transcript_role_label},
     config::CliConfig,
     diagnostics::{emit_exit_diagnostic, ExitContext, ExitKind},
     modes::exec::{
         emit_preflight_json_error, ExecApprovalMode, ExecMode, ExecOutputFormat, ExecSessionOptions,
     },
     ui::string_utils::truncate_str,
-    ConfigAction, SessionAction,
+    ConfigAction, ExternalAccessArg, ExternalCapabilityArg, ExternalConfigAction,
+    ExternalPolicyModeArg, ExternalPolicyScopeArg, SessionAction,
 };
 
 pub(crate) struct ExecCommandArgs {
@@ -223,55 +237,40 @@ pub(crate) async fn handle_session_action(
             let session_id =
                 resolve_cli_session_id(runtime.agent_runtime(), &workspace_path, &id).await?;
 
-            let session = runtime
-                .compatibility()
-                .restore_session(&workspace_path, &session_id)
-                .await?;
-            let messages = runtime.compatibility().get_messages(&session_id).await?;
+            let restored = runtime
+                .agent_runtime()
+                .restore_session(AgentSessionRestoreRequest {
+                    workspace_path: workspace_path.to_string_lossy().to_string(),
+                    session_id: session_id.clone(),
+                    include_internal: false,
+                    remote_connection_id: None,
+                    remote_ssh_host: None,
+                })
+                .await
+                .map_err(|error| anyhow::anyhow!(error.into_message()))?;
+            let transcript = runtime
+                .agent_runtime()
+                .read_session_transcript(SessionTranscriptRequest {
+                    session_id: session_id.clone(),
+                    turn_id: None,
+                })
+                .await
+                .map_err(|error| anyhow::anyhow!(error.into_message()))?;
 
             println!("Session Details\n");
-            println!("Name: {}", session.session_name);
-            println!("ID: {}", session.session_id);
-            println!("Agent: {}", session.agent_type);
-            println!("State: {:?}", session.state);
-            println!("Messages: {}", messages.len());
+            println!("Name: {}", restored.session.session_name);
+            println!("ID: {}", restored.session.session_id);
+            println!("Agent: {}", restored.session.agent_type);
+            println!("State: {:?}", restored.state);
+            println!("Messages: {}", transcript.messages.len());
             println!();
 
-            if !messages.is_empty() {
+            if !transcript.messages.is_empty() {
                 println!("Recent messages:");
-                let recent: Vec<_> = messages.iter().rev().take(5).collect();
+                let recent: Vec<_> = transcript.messages.iter().rev().take(5).collect();
                 for msg in recent.iter().rev() {
-                    let role = format!("{:?}", msg.role);
-                    let content_preview = match &msg.content {
-                        bitfun_core::agentic::core::message::MessageContent::Text(text) => {
-                            text.lines().next().unwrap_or("").to_string()
-                        }
-                        bitfun_core::agentic::core::message::MessageContent::Multimodal {
-                            text,
-                            images,
-                        } => {
-                            if text.is_empty() {
-                                format!("[{} images]", images.len())
-                            } else {
-                                text.lines().next().unwrap_or("").to_string()
-                            }
-                        }
-                        bitfun_core::agentic::core::message::MessageContent::Mixed {
-                            text,
-                            tool_calls,
-                            ..
-                        } => {
-                            if text.is_empty() {
-                                format!("[{} tool calls]", tool_calls.len())
-                            } else {
-                                text.lines().next().unwrap_or("").to_string()
-                            }
-                        }
-                        bitfun_core::agentic::core::message::MessageContent::ToolResult {
-                            tool_name,
-                            ..
-                        } => format!("[Tool result: {}]", tool_name),
-                    };
+                    let role = transcript_role_label(&msg.role);
+                    let content_preview = transcript_message_preview(msg);
                     let preview = if content_preview.len() > 80 {
                         truncate_str(&content_preview, 77)
                     } else {
@@ -294,7 +293,7 @@ pub(crate) async fn handle_session_action(
                     remote_ssh_host: None,
                 })
                 .await
-                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+                .map_err(|error| anyhow::anyhow!(error.into_message()))?;
             println!("Deleted session from current project: {}", id);
         }
 
@@ -314,9 +313,15 @@ pub(crate) async fn handle_session_action(
             let session_id =
                 resolve_cli_session_id(runtime.agent_runtime(), &workspace_path, &id).await?;
             let result = runtime
-                .compatibility()
-                .branch_session_at_latest_turn(&workspace_path, &session_id)
-                .await?;
+                .agent_runtime()
+                .fork_session(bitfun_agent_runtime::sdk::AgentSessionForkRequest {
+                    workspace_path: workspace_path.to_string_lossy().to_string(),
+                    source_session_id: session_id.clone(),
+                    remote_connection_id: None,
+                    remote_ssh_host: None,
+                })
+                .await
+                .map_err(|error| anyhow::anyhow!(error.into_message()))?;
 
             if id_only {
                 println!("{}", result.session_id);
@@ -361,10 +366,10 @@ async fn list_cli_sessions(
             remote_ssh_host: None,
         })
         .await
-        .map_err(|error| anyhow::anyhow!(error.to_string()))
+        .map_err(|error| anyhow::anyhow!(error.into_message()))
 }
 
-pub(crate) fn handle_config_action(action: ConfigAction, config: &CliConfig) -> Result<()> {
+pub(crate) async fn handle_config_action(action: ConfigAction, config: &CliConfig) -> Result<()> {
     match action {
         ConfigAction::Show => {
             println!("Current Configuration\n");
@@ -400,8 +405,369 @@ pub(crate) fn handle_config_action(action: ConfigAction, config: &CliConfig) -> 
             default_config.save()?;
             println!("Reset to default configuration");
         }
+        ConfigAction::External { action } => handle_external_config_action(action).await?,
     }
 
+    Ok(())
+}
+
+fn external_policy_scope(scope: ExternalPolicyScopeArg) -> ExternalIntegrationPolicyScope {
+    match scope {
+        ExternalPolicyScopeArg::Global => ExternalIntegrationPolicyScope::User,
+        ExternalPolicyScopeArg::Project => ExternalIntegrationPolicyScope::Workspace,
+    }
+}
+
+fn external_policy_mode(mode: ExternalPolicyModeArg) -> ExternalIntegrationMode {
+    match mode {
+        ExternalPolicyModeArg::Recommended => ExternalIntegrationMode::Recommended,
+        ExternalPolicyModeArg::DiscoverOnly => ExternalIntegrationMode::DiscoverOnly,
+        ExternalPolicyModeArg::Off => ExternalIntegrationMode::Disabled,
+    }
+}
+
+fn external_capability_id(
+    capability: ExternalCapabilityArg,
+) -> Result<ExternalIntegrationCapabilityId> {
+    let capability = match capability {
+        ExternalCapabilityArg::Command => EXTERNAL_CAPABILITY_COMMAND,
+        ExternalCapabilityArg::Tool => EXTERNAL_CAPABILITY_TOOL,
+        ExternalCapabilityArg::Agent => EXTERNAL_CAPABILITY_SUBAGENT,
+        ExternalCapabilityArg::Mcp => EXTERNAL_CAPABILITY_MCP,
+    };
+    ExternalIntegrationCapabilityId::new(capability).map_err(anyhow::Error::msg)
+}
+
+fn external_access(access: ExternalAccessArg) -> ExternalIntegrationAccess {
+    match access {
+        ExternalAccessArg::Off => ExternalIntegrationAccess::Disabled,
+        ExternalAccessArg::Discover => ExternalIntegrationAccess::DiscoverOnly,
+        ExternalAccessArg::Ask => ExternalIntegrationAccess::AskBeforeUse,
+        ExternalAccessArg::Auto => ExternalIntegrationAccess::Auto,
+    }
+}
+
+fn print_external_policy_status(snapshot: &ExternalSourceCatalogSnapshot) {
+    let policy = &snapshot.integration_policy;
+    println!("External compatibility");
+    if policy.status == ExternalIntegrationPolicyStatus::IncompatibleSchema {
+        println!(
+            "Status: safely off (policy schema {} is not supported by this version)",
+            policy.schema_major
+        );
+        println!("Recovery: bitfun config external reset-incompatible");
+        println!("The original policy will be backed up before safe defaults are restored.");
+        return;
+    }
+    if !policy.status.is_compatible() {
+        println!(
+            "Status: safely off (policy status '{}' is not supported by this version)",
+            policy.status.as_str()
+        );
+        println!("Recovery: upgrade BitFun or connect through a compatible workspace host.");
+        return;
+    }
+
+    println!("Global defaults");
+    println!(
+        "  Status: {}",
+        if policy.global_effective.enabled {
+            "enabled"
+        } else {
+            "disabled"
+        }
+    );
+    print_external_policy_ecosystems(policy, &policy.global_effective, "  ");
+
+    println!("Project overrides");
+    if let Some(project) = &policy.workspace_override {
+        let has_override = project.enabled.is_some()
+            || project.ecosystems.values().any(|ecosystem| {
+                ecosystem.mode.is_some() || !ecosystem.capability_overrides.is_empty()
+            });
+        println!(
+            "  {}",
+            if has_override {
+                "Explicit project override"
+            } else {
+                "Inherited from global defaults"
+            }
+        );
+    } else {
+        println!("  Inherited from global defaults");
+    }
+
+    println!("Effective for this project");
+    println!(
+        "  Status: {}",
+        if policy.effective.enabled {
+            "enabled"
+        } else {
+            "disabled"
+        }
+    );
+    print_external_policy_ecosystems(policy, &policy.effective, "  ");
+    let locations = snapshot
+        .sources
+        .iter()
+        .map(|source| source.record.location.as_str())
+        .collect::<BTreeSet<_>>();
+    println!("Detected source locations: {}", locations.len());
+    println!("Preference revision: {}", snapshot.preference_revision);
+    println!();
+    println!("Changes are applied by the workspace host. Project settings never fall back to files from another device.");
+}
+
+fn external_cli_operation_error(error: String) -> anyhow::Error {
+    let error = sanitize_external_source_operation_error(error);
+    let reason = match error.code {
+        ExternalSourceOperationErrorCode::InvalidRequest => "The requested change is not valid.",
+        ExternalSourceOperationErrorCode::HostUnavailable => "The workspace host is not available.",
+        ExternalSourceOperationErrorCode::HostCapabilityUnavailable => {
+            "This workspace host is read-only for external integrations."
+        }
+        ExternalSourceOperationErrorCode::TrustRequired => {
+            "This external integration requires review before it can run."
+        }
+        ExternalSourceOperationErrorCode::PolicyIncompatible => {
+            "Compatibility settings were written by a newer BitFun version."
+        }
+        ExternalSourceOperationErrorCode::PolicyLimited => {
+            "The current safety policy does not allow this change."
+        }
+        ExternalSourceOperationErrorCode::StaleRevision => {
+            "Compatibility settings changed; run the command again."
+        }
+        ExternalSourceOperationErrorCode::Conflict => {
+            "The available choices changed; inspect the current status and retry."
+        }
+        ExternalSourceOperationErrorCode::NotFound => "That external item is no longer available.",
+        ExternalSourceOperationErrorCode::Unavailable => {
+            "The external integration is temporarily unavailable."
+        }
+        ExternalSourceOperationErrorCode::RuntimeUnavailable
+        | ExternalSourceOperationErrorCode::DependencyFailed
+        | ExternalSourceOperationErrorCode::ProcessLost => {
+            "The external integration runtime is unavailable."
+        }
+        ExternalSourceOperationErrorCode::Unsupported
+        | ExternalSourceOperationErrorCode::IncompatibleVersion => {
+            "This external integration is not supported by the current BitFun version."
+        }
+        ExternalSourceOperationErrorCode::Timeout
+        | ExternalSourceOperationErrorCode::Overloaded
+        | ExternalSourceOperationErrorCode::TemporarilyUnavailable => {
+            "The external integration is temporarily unavailable."
+        }
+        ExternalSourceOperationErrorCode::Cancelled => {
+            "The external integration operation was cancelled."
+        }
+        ExternalSourceOperationErrorCode::InvalidResponse
+        | ExternalSourceOperationErrorCode::Internal => {
+            "BitFun could not complete the external integration operation."
+        }
+    };
+    let reference = error
+        .correlation_id
+        .as_deref()
+        .map(|id| format!(" Reference: {id}."))
+        .unwrap_or_default();
+    anyhow::anyhow!("{reason}{reference}")
+}
+
+fn select_external_ecosystem(
+    status: &ExternalIntegrationPolicyStatus,
+    ecosystems: &[EcosystemId],
+    requested: Option<&str>,
+) -> Result<EcosystemId> {
+    if !status.is_compatible() {
+        return Err(anyhow::anyhow!(
+            "External compatibility policy is unsupported and safely off; upgrade BitFun or reset an incompatible policy before changing it"
+        ));
+    }
+    if let Some(requested) = requested {
+        let ecosystem = ecosystems
+            .iter()
+            .find(|ecosystem| ecosystem.as_str() == requested)
+            .ok_or_else(|| anyhow::anyhow!("Unknown external ecosystem '{requested}'"))?;
+        return Ok(ecosystem.clone());
+    }
+    match ecosystems {
+        [only] => Ok(only.clone()),
+        [] => Err(anyhow::anyhow!("No external ecosystems are registered")),
+        _ => Err(anyhow::anyhow!(
+            "More than one external ecosystem is registered; choose one with --ecosystem <id>"
+        )),
+    }
+}
+
+async fn resolve_external_ecosystem(requested: Option<String>) -> Result<EcosystemId> {
+    let workspace = std::env::current_dir().context("Failed to resolve current workspace")?;
+    let snapshot = external_source_snapshot(Some(&workspace), false)
+        .await
+        .map_err(external_cli_operation_error)?;
+    let ecosystems = snapshot
+        .integration_policy
+        .registered_ecosystems
+        .iter()
+        .map(|descriptor| descriptor.ecosystem_id.clone())
+        .collect::<Vec<_>>();
+    select_external_ecosystem(
+        &snapshot.integration_policy.status,
+        &ecosystems,
+        requested.as_deref(),
+    )
+}
+
+fn print_external_policy_ecosystems(
+    policy: &bitfun_core::external_sources::ExternalIntegrationPolicySnapshot,
+    effective: &bitfun_core::external_sources::EffectiveExternalIntegrationPolicy,
+    indent: &str,
+) {
+    for descriptor in &policy.registered_ecosystems {
+        let Some(ecosystem) = effective.ecosystems.get(&descriptor.ecosystem_id) else {
+            println!("{indent}{}: unavailable", descriptor.display_name);
+            continue;
+        };
+        let mode = match ecosystem.mode.as_str() {
+            "recommended" | "discover_only" | "disabled" | "custom" => ecosystem.mode.as_str(),
+            _ => "unsupported (safely off)",
+        };
+        println!("{indent}{} mode: {mode}", descriptor.display_name);
+        for capability in &descriptor.capabilities {
+            let access = ecosystem
+                .capabilities
+                .get(&capability.capability_id)
+                .map(|access| match access.as_str() {
+                    "disabled" | "discover_only" | "ask_before_use" | "auto" => access.as_str(),
+                    _ => "unsupported (safely off)",
+                })
+                .unwrap_or("unavailable");
+            let suffix = if ecosystem
+                .policy_limited_capabilities
+                .contains(&capability.capability_id)
+            {
+                " (limited by safety policy)"
+            } else {
+                ""
+            };
+            println!(
+                "{indent}  {}: {access}{suffix}",
+                capability.capability_id.as_str()
+            );
+        }
+    }
+}
+
+async fn update_external_policy(
+    scope: ExternalPolicyScopeArg,
+    change: ExternalIntegrationPolicyOperation,
+) -> Result<()> {
+    let workspace = std::env::current_dir().context("Failed to resolve current workspace")?;
+    let snapshot = external_source_snapshot(Some(&workspace), false)
+        .await
+        .map_err(external_cli_operation_error)?;
+    let reset_incompatible = matches!(
+        &change,
+        ExternalIntegrationPolicyOperation::ResetIncompatiblePolicy
+    );
+    if !snapshot.integration_policy.status.is_compatible()
+        && !(reset_incompatible
+            && snapshot.integration_policy.status
+                == ExternalIntegrationPolicyStatus::IncompatibleSchema)
+    {
+        return Err(anyhow::anyhow!(
+            "External compatibility policy is unsupported and safely off; upgrade BitFun or reset an incompatible policy before changing it"
+        ));
+    }
+    let snapshot = update_external_integration_policy(
+        Some(&workspace),
+        ExternalIntegrationPolicyMutation {
+            expected_preference_revision: snapshot.preference_revision,
+            scope: external_policy_scope(scope),
+            change,
+        },
+    )
+    .await
+    .map_err(external_cli_operation_error)?;
+    println!("External compatibility settings saved.\n");
+    print_external_policy_status(&snapshot);
+    Ok(())
+}
+
+async fn handle_external_config_action(action: ExternalConfigAction) -> Result<()> {
+    match action {
+        ExternalConfigAction::Status => {
+            let workspace =
+                std::env::current_dir().context("Failed to resolve current workspace")?;
+            let snapshot = external_source_snapshot(Some(&workspace), false)
+                .await
+                .map_err(external_cli_operation_error)?;
+            print_external_policy_status(&snapshot);
+        }
+        ExternalConfigAction::SetEnabled { enabled, scope } => {
+            update_external_policy(
+                scope,
+                ExternalIntegrationPolicyOperation::SetEnabled { enabled },
+            )
+            .await?;
+        }
+        ExternalConfigAction::SetMode {
+            mode,
+            ecosystem,
+            scope,
+        } => {
+            let ecosystem_id = resolve_external_ecosystem(ecosystem).await?;
+            update_external_policy(
+                scope,
+                ExternalIntegrationPolicyOperation::SetEcosystemMode {
+                    ecosystem_id,
+                    mode: external_policy_mode(mode),
+                },
+            )
+            .await?;
+        }
+        ExternalConfigAction::SetCapability {
+            capability,
+            access,
+            ecosystem,
+            scope,
+        } => {
+            let ecosystem_id = resolve_external_ecosystem(ecosystem).await?;
+            let capability_id = external_capability_id(capability)?;
+            let access = external_access(access);
+            if access == ExternalIntegrationAccess::Auto
+                && capability_id.as_str() != EXTERNAL_CAPABILITY_COMMAND
+            {
+                return Err(anyhow::anyhow!(
+                    "Automatic use is available only for commands; tools, agents, and MCP servers require confirmation"
+                ));
+            }
+            update_external_policy(
+                scope,
+                ExternalIntegrationPolicyOperation::SetCapabilityAccess {
+                    ecosystem_id,
+                    capability_id,
+                    access,
+                },
+            )
+            .await?;
+        }
+        ExternalConfigAction::ResetProject => {
+            update_external_policy(
+                ExternalPolicyScopeArg::Project,
+                ExternalIntegrationPolicyOperation::ResetWorkspace,
+            )
+            .await?;
+        }
+        ExternalConfigAction::ResetIncompatible => {
+            update_external_policy(
+                ExternalPolicyScopeArg::Global,
+                ExternalIntegrationPolicyOperation::ResetIncompatiblePolicy,
+            )
+            .await?;
+        }
+    }
     Ok(())
 }
 
@@ -410,13 +776,11 @@ pub(crate) fn handle_health_command() -> Result<()> {
 
     use bitfun_core::runtime_ports::PluginRuntimeAvailability;
 
-    use crate::runtime::approval::{CliApprovalPolicy, CliPermissionService};
     use crate::runtime::services::{CliClock, CliRuntimeEventSink, CliRuntimeServicesProvider};
 
     let workspace = std::env::current_dir().context("Failed to resolve current directory")?;
     let services = CliRuntimeServicesProvider::new(
         &workspace,
-        Arc::new(CliPermissionService::new(CliApprovalPolicy::Reject)),
         Arc::new(CliRuntimeEventSink::new(16)),
         Arc::new(CliClock),
     )?
@@ -469,6 +833,64 @@ pub(crate) async fn serve_acp_stdio() -> Result<()> {
         .context("Failed to initialize agentic system")?;
     tracing::info!("Agentic system initialized");
 
-    bitfun_acp::BitfunAcpRuntime::serve_stdio(agentic_system).await?;
+    let workspace_root = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let runtime = crate::runtime::AcpRuntimeContext::build(agentic_system, workspace_root)?;
+    let (agent_runtime, compatibility) = runtime.parts();
+    bitfun_acp::BitfunAcpRuntime::serve_stdio(agent_runtime, compatibility).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod external_ecosystem_selection_tests {
+    use super::*;
+
+    fn ecosystem(id: &str) -> EcosystemId {
+        EcosystemId::new(id).unwrap()
+    }
+
+    #[test]
+    fn ecosystem_selection_covers_zero_one_many_and_explicit_choices() {
+        let compatible = ExternalIntegrationPolicyStatus::Compatible;
+        assert!(select_external_ecosystem(&compatible, &[], None)
+            .unwrap_err()
+            .to_string()
+            .contains("No external ecosystems"));
+
+        let only = vec![ecosystem("opencode")];
+        assert_eq!(
+            select_external_ecosystem(&compatible, &only, None)
+                .unwrap()
+                .as_str(),
+            "opencode"
+        );
+        assert!(
+            select_external_ecosystem(&compatible, &only, Some("missing"))
+                .unwrap_err()
+                .to_string()
+                .contains("Unknown external ecosystem")
+        );
+
+        let many = vec![ecosystem("opencode"), ecosystem("another")];
+        assert!(select_external_ecosystem(&compatible, &many, None)
+            .unwrap_err()
+            .to_string()
+            .contains("--ecosystem"));
+        assert_eq!(
+            select_external_ecosystem(&compatible, &many, Some("another"))
+                .unwrap()
+                .as_str(),
+            "another"
+        );
+    }
+
+    #[test]
+    fn unknown_policy_status_is_always_safely_off() {
+        let error = select_external_ecosystem(
+            &ExternalIntegrationPolicyStatus::Unknown("future_status".to_string()),
+            &[ecosystem("opencode")],
+            Some("opencode"),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("unsupported and safely off"));
+    }
 }

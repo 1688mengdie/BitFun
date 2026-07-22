@@ -1,7 +1,5 @@
 import React, {
-  createContext,
   useCallback,
-  useContext,
   useEffect,
   useMemo,
   useRef,
@@ -24,6 +22,10 @@ import { lspAdapterManager } from '@/tools/lsp/services/LspAdapterManager';
 import { createLogger } from '@/shared/utils/logger';
 import { setPeerDeviceModeActiveFlag } from './peerModeFlag';
 import { shouldSurfacePeerDetachFailure } from './peerDetachPolicy';
+import {
+  PeerDeviceContext,
+  type PeerModeState,
+} from './peerDeviceContextState';
 
 const log = createLogger('PeerDeviceMode');
 
@@ -36,23 +38,19 @@ function emitPeerModeChanged(detail: { active: boolean; deviceId?: string }): vo
   window.dispatchEvent(new CustomEvent('peer-mode:changed', { detail }));
 }
 
-export type PeerModeState =
-  | { active: false }
-  | { active: true; deviceId: string; deviceName: string };
-
-interface PeerDeviceContextValue {
-  peerMode: PeerModeState;
-  enterPeerMode: (deviceId: string, deviceName: string) => Promise<void>;
-  exitPeerMode: (reason?: string) => Promise<void>;
-}
-
-const PeerDeviceContext = createContext<PeerDeviceContextValue | null>(null);
-
 async function resetProductSurface(): Promise<void> {
   try {
     FlowChatManager.getInstance().resetForPeerModeSwitch();
   } catch (error) {
     log.warn('Failed to reset FlowChat during peer mode switch', error);
+  }
+
+  // Clear before peer flag / emit so SessionModule cannot read a stale
+  // controller workspace while rebootstrap is still running.
+  try {
+    workspaceManager.clearForPeerModeSwitch();
+  } catch (error) {
+    log.warn('Failed to clear workspace during peer mode switch', error);
   }
 
   try {
@@ -369,15 +367,3 @@ export const PeerDeviceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     </PeerDeviceContext.Provider>
   );
 };
-
-export function usePeerDeviceMode(): PeerDeviceContextValue {
-  const ctx = useContext(PeerDeviceContext);
-  if (!ctx) {
-    throw new Error('usePeerDeviceMode must be used within PeerDeviceProvider');
-  }
-  return ctx;
-}
-
-export function usePeerDeviceModeOptional(): PeerDeviceContextValue | null {
-  return useContext(PeerDeviceContext);
-}

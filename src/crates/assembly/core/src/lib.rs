@@ -7,6 +7,15 @@
 
 #[cfg(feature = "product-full")]
 pub mod agentic; // Agent system, tool system, and product runtime orchestration
+#[cfg(feature = "product-full")]
+mod external_mcp;
+#[cfg(all(test, feature = "product-full"))]
+mod external_mcp_tests;
+#[cfg(feature = "product-full")]
+pub mod external_sources;
+mod external_subagents;
+#[cfg(feature = "product-full")]
+mod external_tools;
 #[cfg(feature = "product-domains")]
 pub mod function_agents; // Function-based agents
 pub mod infrastructure; // AI clients, storage, logging, events

@@ -2,14 +2,23 @@
 
 use log::{debug, warn};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use sha1::{Digest, Sha1};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 use tauri::{AppHandle, State};
 
 use crate::api::app_state::AppState;
 use crate::api::session_storage_path::desktop_effective_session_storage_path;
+use crate::runtime::{
+    DesktopRuntimeContext, DesktopSessionApplicationError, DesktopSessionScopeRequest,
+};
 use crate::startup_trace::DesktopStartupTrace;
+use bitfun_agent_runtime::sdk::{
+    AgentDialogTurnRequest, AgentInputAttachment, AgentSessionModelUpdateRequest,
+    AgentSubmissionSource, AgentTurnCancellationRequest, PermissionAuditRecord, PermissionGrant,
+    PermissionGrantKey, PermissionReply, PermissionRequest,
+};
 use bitfun_core::agentic::agents::AgentSource;
 use bitfun_core::agentic::coordination::{
     AssistantBootstrapBlockReason, AssistantBootstrapEnsureOutcome, AssistantBootstrapSkipReason,
@@ -34,15 +43,34 @@ use bitfun_core::agentic::tools::implementations::exec_command::{
     ReadBackgroundCommandOutputRequest as CoreReadBackgroundCommandOutputRequest,
     ReadBackgroundCommandOutputResponse,
 };
+use bitfun_core::service::config::project_permission_store::{
+    deserialize_project_permission_config, project_permission_file_path,
+    project_permission_file_path_for_remote, ProjectPermissionConfig,
+};
+use bitfun_core::service::remote_ssh::workspace_state::resolve_workspace_session_identity;
 use bitfun_core::service::session::{
     DialogTurnData, SessionMemoryMode, SessionMetadata, SessionRelationship,
     SessionRelationshipKind,
 };
+use bitfun_core::service::workspace::WorkspaceKind;
+use bitfun_product_domains::tool_permissions::PermissionRule;
 
 const SESSION_VIEW_TOOL_RESULT_TOTAL_CHAR_BUDGET: usize = 512 * 1024;
 const SESSION_VIEW_TOOL_RESULT_STRING_CHAR_LIMIT: usize = 16 * 1024;
 const SESSION_VIEW_TRUNCATED_MARKER: &str = "\n... Output truncated for session preview";
 const SESSION_VIEW_OMITTED_MARKER: &str = "Output omitted from session preview";
+
+fn desktop_session_scope(
+    workspace_path: String,
+    remote_connection_id: Option<String>,
+    remote_ssh_host: Option<String>,
+) -> DesktopSessionScopeRequest {
+    DesktopSessionScopeRequest {
+        workspace_path,
+        remote_connection_id,
+        remote_ssh_host,
+    }
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -702,20 +730,446 @@ pub struct ListSessionsRequest {
     pub remote_ssh_host: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ConfirmToolRequest {
-    pub session_id: String,
-    pub tool_id: String,
-    pub updated_input: Option<serde_json::Value>,
+pub struct PermissionResponseRequest {
+    pub request_id: String,
+    pub reply: PermissionReplyKind,
+    pub feedback: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct RejectToolRequest {
-    pub session_id: String,
-    pub tool_id: String,
-    pub reason: Option<String>,
+pub struct PermissionProjectRequest {
+    pub workspace_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemovePermissionGrantRequest {
+    pub workspace_id: String,
+    pub action: String,
+    pub resource: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionAuditRequest {
+    pub workspace_id: String,
+    #[serde(default)]
+    pub page: usize,
+    #[serde(default = "default_permission_audit_page_size")]
+    pub page_size: usize,
+}
+
+const fn default_permission_audit_page_size() -> usize {
+    50
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionAuditPage {
+    pub project_id: String,
+    pub records: Vec<PermissionAuditRecord>,
+    pub page: usize,
+    pub page_size: usize,
+    pub total: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectPermissionRulesResponse {
+    pub rules: Vec<PermissionRule>,
+    pub revision: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveProjectPermissionRulesRequest {
+    pub workspace_id: String,
+    pub rules: Vec<PermissionRule>,
+    pub revision: String,
+}
+
+#[derive(Debug, Clone)]
+struct ProjectPermissionConfigTarget {
+    path: String,
+    remote_connection_id: Option<String>,
+}
+
+async fn permission_project_id_for_workspace(
+    state: &AppState,
+    workspace_id: &str,
+) -> Result<String, String> {
+    let workspace = state
+        .workspace_service
+        .get_workspace(workspace_id)
+        .await
+        .ok_or_else(|| format!("Workspace not found: {workspace_id}"))?;
+    let remote = workspace.workspace_kind == WorkspaceKind::Remote;
+    let connection_id = workspace
+        .metadata
+        .get("connectionId")
+        .and_then(|value| value.as_str());
+    let ssh_host = workspace
+        .metadata
+        .get("sshHost")
+        .and_then(|value| value.as_str());
+    let identity = resolve_workspace_session_identity(
+        &workspace.root_path.to_string_lossy(),
+        connection_id,
+        ssh_host,
+    )
+    .await
+    .ok_or_else(|| format!("Workspace identity is unavailable: {workspace_id}"))?;
+    bitfun_core::agentic::tools::pipeline::permission_project_id_for_workspace_identity(
+        &identity, remote,
+    )
+    .map_err(|error| error.to_string())
+}
+
+async fn project_permission_config_target_for_workspace(
+    state: &AppState,
+    workspace_id: &str,
+) -> Result<ProjectPermissionConfigTarget, String> {
+    let workspace = state
+        .workspace_service
+        .get_workspace(workspace_id)
+        .await
+        .ok_or_else(|| format!("Workspace not found: {workspace_id}"))?;
+
+    if workspace.workspace_kind == WorkspaceKind::Remote {
+        let remote_connection_id = workspace
+            .metadata
+            .get("connectionId")
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                format!(
+                    "Remote workspace is missing a connection ID: {}",
+                    workspace.id
+                )
+            })?
+            .to_string();
+        return Ok(ProjectPermissionConfigTarget {
+            path: project_permission_file_path_for_remote(&workspace.root_path.to_string_lossy()),
+            remote_connection_id: Some(remote_connection_id),
+        });
+    }
+
+    Ok(ProjectPermissionConfigTarget {
+        path: project_permission_file_path(&workspace.root_path)
+            .to_string_lossy()
+            .to_string(),
+        remote_connection_id: None,
+    })
+}
+
+async fn read_project_permission_config_content(
+    state: &AppState,
+    target: &ProjectPermissionConfigTarget,
+) -> Result<Option<String>, String> {
+    let Some(connection_id) = target.remote_connection_id.as_deref() else {
+        return match tokio::fs::read_to_string(&target.path).await {
+            Ok(content) => Ok(Some(content)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(format!(
+                "Failed to read project permission rules '{}': {error}",
+                target.path
+            )),
+        };
+    };
+
+    let remote_fs = state
+        .get_remote_file_service_async()
+        .await
+        .map_err(|error| format!("Remote file service is not available: {error}"))?;
+    let exists = remote_fs
+        .exists(connection_id, &target.path)
+        .await
+        .map_err(|error| format!("Failed to check remote project permission rules: {error}"))?;
+    if !exists {
+        return Ok(None);
+    }
+    let bytes = remote_fs
+        .read_file(connection_id, &target.path)
+        .await
+        .map_err(|error| format!("Failed to read remote project permission rules: {error}"))?;
+    String::from_utf8(bytes)
+        .map(Some)
+        .map_err(|error| format!("Project permission rules are not valid UTF-8: {error}"))
+}
+
+async fn write_project_permission_config_content(
+    state: &AppState,
+    target: &ProjectPermissionConfigTarget,
+    content: &str,
+) -> Result<(), String> {
+    let Some(connection_id) = target.remote_connection_id.as_deref() else {
+        let parent = Path::new(&target.path).parent().ok_or_else(|| {
+            format!(
+                "Project permission rules path has no parent directory: {}",
+                target.path
+            )
+        })?;
+        tokio::fs::create_dir_all(parent).await.map_err(|error| {
+            format!(
+                "Failed to create project permission rules directory '{}': {error}",
+                parent.display()
+            )
+        })?;
+        return tokio::fs::write(&target.path, content)
+            .await
+            .map_err(|error| {
+                format!(
+                    "Failed to write project permission rules '{}': {error}",
+                    target.path
+                )
+            });
+    };
+
+    let remote_fs = state
+        .get_remote_file_service_async()
+        .await
+        .map_err(|error| format!("Remote file service is not available: {error}"))?;
+    let parent = target
+        .path
+        .rsplit_once('/')
+        .map(|(parent, _)| parent)
+        .ok_or_else(|| {
+            format!(
+                "Remote project permission rules path has no parent directory: {}",
+                target.path
+            )
+        })?;
+    remote_fs
+        .create_dir_all(connection_id, parent)
+        .await
+        .map_err(|error| {
+            format!("Failed to create remote project permission rules directory: {error}")
+        })?;
+    remote_fs
+        .write_file(connection_id, &target.path, content.as_bytes())
+        .await
+        .map_err(|error| format!("Failed to write remote project permission rules: {error}"))
+}
+
+fn project_permission_rules_revision(content: Option<&str>) -> String {
+    let mut hasher = Sha1::new();
+    match content {
+        Some(content) => {
+            hasher.update(b"present\0");
+            hasher.update(content.as_bytes());
+        }
+        None => hasher.update(b"missing\0"),
+    }
+    format!("{:x}", hasher.finalize())
+}
+
+fn validate_project_permission_rules(rules: &[PermissionRule]) -> Result<(), String> {
+    if rules
+        .iter()
+        .any(|rule| rule.action.trim().is_empty() || rule.resource.trim().is_empty())
+    {
+        return Err("Project permission rule action and resource must be non-empty".to_string());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_project_permission_rules(
+    state: State<'_, AppState>,
+    request: PermissionProjectRequest,
+) -> Result<ProjectPermissionRulesResponse, String> {
+    let target =
+        project_permission_config_target_for_workspace(&state, &request.workspace_id).await?;
+    let content = read_project_permission_config_content(&state, &target).await?;
+    let rules = content
+        .as_deref()
+        .map(deserialize_project_permission_config)
+        .transpose()
+        .map_err(|error| error.to_string())?
+        .unwrap_or_default()
+        .rules;
+    Ok(ProjectPermissionRulesResponse {
+        rules,
+        revision: project_permission_rules_revision(content.as_deref()),
+    })
+}
+
+#[tauri::command]
+pub async fn save_project_permission_rules(
+    state: State<'_, AppState>,
+    request: SaveProjectPermissionRulesRequest,
+) -> Result<ProjectPermissionRulesResponse, String> {
+    validate_project_permission_rules(&request.rules)?;
+
+    let target =
+        project_permission_config_target_for_workspace(&state, &request.workspace_id).await?;
+    let current_content = read_project_permission_config_content(&state, &target).await?;
+    let current_revision = project_permission_rules_revision(current_content.as_deref());
+    if request.revision != current_revision {
+        return Err(
+            "Project permission rules changed outside BitFun. Reload before saving.".to_string(),
+        );
+    }
+
+    let content = format!(
+        "{}\n",
+        serde_json::to_string_pretty(&ProjectPermissionConfig {
+            rules: request.rules.clone(),
+        })
+        .map_err(|error| format!("Failed to serialize project permission rules: {error}"))?
+    );
+    write_project_permission_config_content(&state, &target, &content).await?;
+    Ok(ProjectPermissionRulesResponse {
+        rules: request.rules,
+        revision: project_permission_rules_revision(Some(&content)),
+    })
+}
+
+#[tauri::command]
+pub async fn list_project_permission_grants(
+    state: State<'_, AppState>,
+    runtime: State<'_, DesktopRuntimeContext>,
+    request: PermissionProjectRequest,
+) -> Result<Vec<PermissionGrant>, String> {
+    let project_id = permission_project_id_for_workspace(&state, &request.workspace_id).await?;
+    runtime
+        .agent_runtime()
+        .list_project_permission_grants(&project_id)
+        .await
+        .map_err(|error| error.into_message())
+}
+
+#[tauri::command]
+pub async fn remove_project_permission_grant(
+    state: State<'_, AppState>,
+    runtime: State<'_, DesktopRuntimeContext>,
+    request: RemovePermissionGrantRequest,
+) -> Result<bool, String> {
+    let project_id = permission_project_id_for_workspace(&state, &request.workspace_id).await?;
+    runtime
+        .agent_runtime()
+        .remove_project_permission_grant(PermissionGrantKey {
+            project_id,
+            action: request.action,
+            resource: request.resource,
+        })
+        .await
+        .map_err(|error| error.into_message())
+}
+
+#[tauri::command]
+pub async fn clear_project_permission_grants(
+    state: State<'_, AppState>,
+    runtime: State<'_, DesktopRuntimeContext>,
+    request: PermissionProjectRequest,
+) -> Result<usize, String> {
+    let project_id = permission_project_id_for_workspace(&state, &request.workspace_id).await?;
+    runtime
+        .agent_runtime()
+        .clear_project_permission_grants(&project_id)
+        .await
+        .map_err(|error| error.into_message())
+}
+
+#[tauri::command]
+pub async fn list_project_permission_audit(
+    state: State<'_, AppState>,
+    runtime: State<'_, DesktopRuntimeContext>,
+    request: PermissionAuditRequest,
+) -> Result<PermissionAuditPage, String> {
+    let project_id = permission_project_id_for_workspace(&state, &request.workspace_id).await?;
+    let mut records = runtime
+        .agent_runtime()
+        .list_project_permission_audit(&project_id)
+        .await
+        .map_err(|error| error.into_message())?;
+    records.sort_by(|left, right| {
+        right
+            .timestamp_ms
+            .cmp(&left.timestamp_ms)
+            .then_with(|| right.audit_id.cmp(&left.audit_id))
+    });
+    let total = records.len();
+    let page_size = request.page_size.clamp(1, 100);
+    let offset = request.page.saturating_mul(page_size).min(total);
+    let records = records.into_iter().skip(offset).take(page_size).collect();
+    Ok(PermissionAuditPage {
+        project_id,
+        records,
+        page: request.page,
+        page_size,
+        total,
+    })
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PermissionReplyKind {
+    Once,
+    Always,
+    Reject,
+}
+
+fn permission_reply(request: PermissionResponseRequest) -> PermissionReply {
+    match request.reply {
+        PermissionReplyKind::Once => PermissionReply::Once,
+        PermissionReplyKind::Always => PermissionReply::Always,
+        PermissionReplyKind::Reject => PermissionReply::Reject {
+            feedback: request.feedback,
+        },
+    }
+}
+
+#[tauri::command]
+pub fn list_pending_permission_requests(
+    runtime: State<'_, DesktopRuntimeContext>,
+) -> Result<Vec<PermissionRequest>, String> {
+    runtime
+        .agent_runtime()
+        .pending_permission_requests()
+        .map_err(|error| error.into_message())
+}
+
+#[tauri::command]
+pub fn subscribe_permission_requests(
+    app: AppHandle,
+    runtime: State<'_, DesktopRuntimeContext>,
+) -> Result<(), String> {
+    runtime
+        .start_permission_event_forwarding(app)
+        .map_err(|error| error.into_message())
+}
+
+#[tauri::command]
+pub async fn respond_permission(
+    runtime: State<'_, DesktopRuntimeContext>,
+    request: PermissionResponseRequest,
+) -> Result<(), String> {
+    let request_id = request.request_id.clone();
+    let reply = permission_reply(request);
+    runtime
+        .agent_runtime()
+        .respond_permission(&request_id, reply)
+        .await
+        .map_err(|error| error.into_message())
+}
+
+#[tauri::command]
+pub async fn respond_permission_batch(
+    runtime: State<'_, DesktopRuntimeContext>,
+    request: PermissionResponseRequest,
+) -> Result<Vec<String>, String> {
+    let request_id = request.request_id.clone();
+    let reply = permission_reply(request);
+    runtime
+        .agent_runtime()
+        .respond_permission_batch(&request_id, reply)
+        .await
+        .map_err(|error| error.into_message())
 }
 
 #[derive(Debug, Deserialize)]
@@ -785,9 +1239,22 @@ pub async fn create_session(
                 repaired = true;
             }
             if repaired {
+                let relationship = request.relationship.clone();
+                let deep_review_run_manifest = request.deep_review_run_manifest.clone();
+                let review_target_evidence = request.review_target_evidence.clone();
                 coordinator
                     .get_session_manager()
-                    .save_session_metadata(&effective_path, &metadata)
+                    .update_session_metadata(&effective_path, session_id, |current| {
+                        if current.relationship.is_none() {
+                            current.relationship = relationship;
+                        }
+                        if current.deep_review_run_manifest.is_none() {
+                            current.deep_review_run_manifest = deep_review_run_manifest;
+                        }
+                        if current.review_target_evidence.is_none() {
+                            current.review_target_evidence = review_target_evidence;
+                        }
+                    })
                     .await
                     .map_err(|error| {
                         format!("Failed to repair Review session metadata: {error}")
@@ -811,6 +1278,7 @@ pub async fn create_session(
             remote_connection_id: remote_conn.clone(),
             remote_ssh_host: remote_ssh_host.clone(),
             model_id: c.model_name,
+            ..Default::default()
         })
         .unwrap_or(SessionConfig {
             workspace_path: Some(request.workspace_path.clone()),
@@ -882,19 +1350,22 @@ pub async fn create_session(
 
 #[tauri::command]
 pub async fn update_session_model(
-    coordinator: State<'_, Arc<ConversationCoordinator>>,
+    runtime: State<'_, DesktopRuntimeContext>,
     request: UpdateSessionModelRequest,
 ) -> Result<(), String> {
-    coordinator
-        .update_session_model(&request.session_id, &request.model_name)
+    runtime
+        .agent_runtime()
+        .update_session_model(AgentSessionModelUpdateRequest {
+            session_id: request.session_id,
+            model_id: request.model_name,
+        })
         .await
-        .map_err(|e| format!("Failed to update session model: {}", e))
+        .map_err(|error| format!("Failed to update session model: {}", error.into_message()))
 }
 
 #[tauri::command]
 pub async fn update_session_title(
-    coordinator: State<'_, Arc<ConversationCoordinator>>,
-    app_state: State<'_, AppState>,
+    runtime: State<'_, DesktopRuntimeContext>,
     request: UpdateSessionTitleRequest,
 ) -> Result<String, String> {
     let session_id = request.session_id.trim();
@@ -902,97 +1373,78 @@ pub async fn update_session_title(
         return Err("session_id is required".to_string());
     }
 
-    if coordinator
-        .get_session_manager()
-        .get_session(session_id)
-        .is_none()
-    {
-        let workspace_path = request
-            .workspace_path
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| {
-                "workspace_path is required when the session is not loaded".to_string()
-            })?;
-
-        let effective = desktop_effective_session_storage_path(
-            &app_state,
-            workspace_path,
-            request.remote_connection_id.as_deref(),
-            request.remote_ssh_host.as_deref(),
-        )
-        .await;
-
-        coordinator
-            .restore_session_from_storage_path(&effective, session_id)
-            .await
-            .map_err(|e| format!("Failed to restore session before renaming: {}", e))?;
-    }
-
-    let result = coordinator
-        .update_session_title(session_id, &request.title)
+    let scope = request
+        .workspace_path
+        .filter(|workspace_path| !workspace_path.trim().is_empty())
+        .map(|workspace_path| {
+            desktop_session_scope(
+                workspace_path,
+                request.remote_connection_id,
+                request.remote_ssh_host,
+            )
+        });
+    runtime
+        .session_application()
+        .rename_session(scope, session_id.to_string(), request.title)
         .await
-        .map_err(|e| format!("Failed to update session title: {}", e));
-
-    // Notify auto-sync: metadata changed (title)
-    let wp = request.workspace_path.as_deref().unwrap_or("");
-    crate::api::remote_connect_api::notify_session_changed(session_id, wp);
-
-    result
+        .map_err(|error| match error {
+            DesktopSessionApplicationError::Validation(message) => message,
+            DesktopSessionApplicationError::RestoreBeforeRename(message) => {
+                format!("Failed to restore session before renaming: {message}")
+            }
+            error => format!("Failed to update session title: {error}"),
+        })
 }
 
 /// Load the session into the coordinator process when it exists on disk but is not in memory.
 /// Uses the same remote→local session path mapping as `restore_session`.
 #[tauri::command]
 pub async fn ensure_coordinator_session(
-    coordinator: State<'_, Arc<ConversationCoordinator>>,
-    app_state: State<'_, AppState>,
+    runtime: State<'_, DesktopRuntimeContext>,
     request: EnsureCoordinatorSessionRequest,
 ) -> Result<(), String> {
     let session_id = request.session_id.trim();
     if session_id.is_empty() {
         return Err("session_id is required".to_string());
     }
-    if coordinator
-        .get_session_manager()
-        .get_session(session_id)
-        .is_some()
-    {
-        return Ok(());
-    }
-
-    let wp = request.workspace_path.trim();
-    if wp.is_empty() {
-        return Err("workspace_path is required when the session is not loaded".to_string());
-    }
-
-    let effective = desktop_effective_session_storage_path(
-        &app_state,
-        wp,
-        request.remote_connection_id.as_deref(),
-        request.remote_ssh_host.as_deref(),
-    )
-    .await;
-    let restore_result = if request.include_internal {
-        coordinator
-            .restore_internal_session_from_storage_path(&effective, session_id)
-            .await
-    } else {
-        coordinator
-            .restore_session_from_storage_path(&effective, session_id)
-            .await
-    };
-    restore_result.map(|_| ()).map_err(|e| e.to_string())
+    runtime
+        .session_application()
+        .ensure_session_loaded(
+            desktop_session_scope(
+                request.workspace_path.clone(),
+                request.remote_connection_id.clone(),
+                request.remote_ssh_host.clone(),
+            ),
+            session_id,
+            request.include_internal,
+        )
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
 pub async fn start_dialog_turn(
     _app: AppHandle,
-    _coordinator: State<'_, Arc<ConversationCoordinator>>,
-    scheduler: State<'_, Arc<DialogScheduler>>,
+    runtime: State<'_, DesktopRuntimeContext>,
     request: StartDialogTurnRequest,
 ) -> Result<StartDialogTurnResponse, String> {
+    let runtime_request = desktop_dialog_turn_request(request)?;
+
+    runtime
+        .agent_runtime()
+        .submit_dialog_turn(runtime_request)
+        .await
+        .map_err(|error| format!("Failed to start dialog turn: {}", error.into_message()))?;
+
+    Ok(StartDialogTurnResponse {
+        success: true,
+        message: "Dialog turn started".to_string(),
+    })
+}
+
+fn desktop_dialog_turn_request(
+    request: StartDialogTurnRequest,
+) -> Result<AgentDialogTurnRequest, String> {
     let StartDialogTurnRequest {
         session_id,
         user_input,
@@ -1007,38 +1459,66 @@ pub async fn start_dialog_turn(
     } = request;
 
     let policy = DialogSubmissionPolicy::for_source(DialogTriggerSource::DesktopUi);
-    let resolved_images = if let Some(image_contexts) = image_contexts
-        .as_ref()
-        .filter(|images| !images.is_empty())
-        .cloned()
-    {
-        Some(resolve_missing_image_payloads(image_contexts)?)
-    } else {
-        None
+    let attachments = match image_contexts.filter(|images| !images.is_empty()) {
+        Some(images) => resolve_missing_image_payloads(images)?
+            .into_iter()
+            .map(desktop_image_attachment)
+            .collect(),
+        None => Vec::new(),
     };
+    let metadata = desktop_user_message_metadata(user_message_metadata);
 
-    scheduler
-        .submit(
-            session_id,
-            user_input,
-            original_user_input,
-            turn_id,
-            agent_type,
-            workspace_path,
-            remote_connection_id,
-            remote_ssh_host,
-            policy,
-            None,
-            user_message_metadata,
-            resolved_images,
-        )
-        .await
-        .map_err(|e| format!("Failed to start dialog turn: {}", e))?;
-
-    Ok(StartDialogTurnResponse {
-        success: true,
-        message: "Dialog turn started".to_string(),
+    Ok(AgentDialogTurnRequest {
+        session_id,
+        message: user_input,
+        original_message: original_user_input,
+        turn_id,
+        agent_type,
+        workspace_path,
+        remote_connection_id,
+        remote_ssh_host,
+        policy,
+        reply_route: None,
+        prepended_reminders: Vec::new(),
+        attachments,
+        metadata,
     })
+}
+
+fn desktop_user_message_metadata(
+    metadata: Option<serde_json::Value>,
+) -> serde_json::Map<String, serde_json::Value> {
+    match metadata {
+        Some(serde_json::Value::Object(metadata)) => metadata,
+        Some(metadata) => serde_json::Map::from_iter([("raw_metadata".to_string(), metadata)]),
+        None => serde_json::Map::new(),
+    }
+}
+
+fn desktop_image_attachment(image: ImageContextData) -> AgentInputAttachment {
+    let mut metadata = serde_json::Map::new();
+    if let Some(image_path) = image.image_path {
+        metadata.insert(
+            "imagePath".to_string(),
+            serde_json::Value::String(image_path),
+        );
+    }
+    if let Some(data_url) = image.data_url {
+        metadata.insert("dataUrl".to_string(), serde_json::Value::String(data_url));
+    }
+    metadata.insert(
+        "mimeType".to_string(),
+        serde_json::Value::String(image.mime_type),
+    );
+    if let Some(image_metadata) = image.metadata {
+        metadata.insert("metadata".to_string(), image_metadata);
+    }
+
+    AgentInputAttachment {
+        kind: "remote_image".to_string(),
+        id: image.id,
+        metadata,
+    }
 }
 
 #[tauri::command]
@@ -1573,7 +2053,7 @@ fn resolve_missing_image_payloads(
 
 #[tauri::command]
 pub async fn cancel_dialog_turn(
-    coordinator: State<'_, Arc<ConversationCoordinator>>,
+    runtime: State<'_, DesktopRuntimeContext>,
     app_state: State<'_, AppState>,
     request: CancelDialogTurnRequest,
 ) -> Result<(), String> {
@@ -1596,8 +2076,16 @@ pub async fn cancel_dialog_turn(
         }
     }
 
-    coordinator
-        .cancel_dialog_turn(&request.session_id, &request.dialog_turn_id)
+    runtime
+        .agent_runtime()
+        .cancel_turn(AgentTurnCancellationRequest {
+            session_id: request.session_id.clone(),
+            turn_id: Some(request.dialog_turn_id.clone()),
+            source: Some(AgentSubmissionSource::DesktopUi),
+            requester_session_id: None,
+            reason: None,
+            wait_timeout_ms: None,
+        })
         .await
         .map_err(|e| {
             log::error!(
@@ -1606,8 +2094,9 @@ pub async fn cancel_dialog_turn(
                 request.dialog_turn_id,
                 e
             );
-            format!("Failed to cancel dialog turn: {}", e)
+            format!("Failed to cancel dialog turn: {}", e.into_message())
         })
+        .map(|_| ())
 }
 
 #[tauri::command]
@@ -1945,63 +2434,48 @@ pub async fn cancel_tool(
 
 #[tauri::command]
 pub async fn delete_session(
-    coordinator: State<'_, Arc<ConversationCoordinator>>,
-    app_state: State<'_, AppState>,
+    runtime: State<'_, DesktopRuntimeContext>,
     request: DeleteSessionRequest,
 ) -> Result<(), String> {
-    let effective_path = desktop_effective_session_storage_path(
-        &app_state,
-        &request.workspace_path,
-        request.remote_connection_id.as_deref(),
-        request.remote_ssh_host.as_deref(),
-    )
-    .await;
-    if let Some(acp_client_service) = app_state.acp_client_service.as_ref() {
-        acp_client_service
-            .release_bitfun_session(&request.session_id)
-            .await;
-    }
-    coordinator
-        .delete_session(&effective_path, &request.session_id)
+    runtime
+        .session_application()
+        .delete_session(
+            desktop_session_scope(
+                request.workspace_path,
+                request.remote_connection_id,
+                request.remote_ssh_host,
+            ),
+            request.session_id,
+        )
         .await
-        .map_err(|e| format!("Failed to delete session: {}", e))?;
-
-    // Notify auto-sync: tombstone this session on the relay
-    crate::api::remote_connect_api::notify_session_deleted(&request.session_id);
-    Ok(())
+        .map_err(|error| format!("Failed to delete session: {error}"))
 }
 
 #[tauri::command]
 pub async fn restore_session(
-    coordinator: State<'_, Arc<ConversationCoordinator>>,
-    app_state: State<'_, AppState>,
+    runtime: State<'_, DesktopRuntimeContext>,
     request: RestoreSessionRequest,
 ) -> Result<SessionResponse, String> {
-    let effective_path = desktop_effective_session_storage_path(
-        &app_state,
-        &request.workspace_path,
-        request.remote_connection_id.as_deref(),
-        request.remote_ssh_host.as_deref(),
-    )
-    .await;
-    let session = if request.include_internal {
-        coordinator
-            .restore_internal_session_from_storage_path(&effective_path, &request.session_id)
-            .await
-    } else {
-        coordinator
-            .restore_session_from_storage_path(&effective_path, &request.session_id)
-            .await
-    }
-    .map_err(|e| format!("Failed to restore session: {}", e))?;
+    let session = runtime
+        .session_application()
+        .restore_session(
+            desktop_session_scope(
+                request.workspace_path.clone(),
+                request.remote_connection_id.clone(),
+                request.remote_ssh_host.clone(),
+            ),
+            &request.session_id,
+            request.include_internal,
+        )
+        .await
+        .map_err(|error| format!("Failed to restore session: {error}"))?;
 
     Ok(session_to_response(session))
 }
 
 #[tauri::command]
 pub async fn restore_session_view(
-    coordinator: State<'_, Arc<ConversationCoordinator>>,
-    app_state: State<'_, AppState>,
+    runtime: State<'_, DesktopRuntimeContext>,
     startup_trace: State<'_, DesktopStartupTrace>,
     request: RestoreSessionRequest,
 ) -> Result<RestoreSessionViewResponse, String> {
@@ -2012,72 +2486,36 @@ pub async fn restore_session_view(
             "restore_session_view request received: trace_id={}, session_id={}",
             trace_id, request.session_id
         );
-        let path_started_at = Instant::now();
-        let effective_path = desktop_effective_session_storage_path(
-            &app_state,
-            &request.workspace_path,
-            request.remote_connection_id.as_deref(),
-            request.remote_ssh_host.as_deref(),
-        )
-        .await;
-        let resolve_storage_path_duration_ms =
-            path_started_at.elapsed().as_millis().min(u64::MAX as u128) as u64;
-        debug!(
-            "restore_session_view storage path resolved: trace_id={}, session_id={}, duration_ms={}",
-            trace_id,
-            request.session_id,
-            resolve_storage_path_duration_ms
-        );
-
-        let session_storage_path = effective_path;
         let tail_turn_count = request
             .tail_turn_count
             .filter(|count| *count > 0)
             .map(|count| count.min(16));
-        let (session, mut turns, total_turn_count, mut timings) =
-            if let Some(tail_turn_count) = tail_turn_count {
-                if request.include_internal {
-                    coordinator
-                        .restore_internal_session_view_from_storage_path_tail_timed(
-                            &session_storage_path,
-                            &request.session_id,
-                            tail_turn_count,
-                        )
-                        .await
-                } else {
-                    coordinator
-                        .restore_session_view_from_storage_path_tail_timed(
-                            &session_storage_path,
-                            &request.session_id,
-                            tail_turn_count,
-                        )
-                        .await
-                }
-            } else if request.include_internal {
-                coordinator
-                    .restore_internal_session_view_from_storage_path_timed(
-                        &session_storage_path,
-                        &request.session_id,
-                    )
-                    .await
-                    .map(|(session, turns, timings)| {
-                        let total_turn_count = turns.len();
-                        (session, turns, total_turn_count, timings)
-                    })
-            } else {
-                coordinator
-                    .restore_session_view_from_storage_path_timed(
-                        &session_storage_path,
-                        &request.session_id,
-                    )
-                    .await
-                    .map(|(session, turns, timings)| {
-                        let total_turn_count = turns.len();
-                        (session, turns, total_turn_count, timings)
-                    })
-            }
-            .map_err(|e| format!("Failed to restore session view: {}", e))?;
-        timings.resolve_storage_path_duration_ms = resolve_storage_path_duration_ms;
+        let restored = runtime
+            .session_application()
+            .restore_session_view(
+                desktop_session_scope(
+                    request.workspace_path.clone(),
+                    request.remote_connection_id.clone(),
+                    request.remote_ssh_host.clone(),
+                ),
+                &request.session_id,
+                request.include_internal,
+                tail_turn_count,
+                |resolve_storage_path_duration_ms| {
+                    debug!(
+                        "restore_session_view storage path resolved: trace_id={}, session_id={}, duration_ms={}",
+                        trace_id,
+                        request.session_id,
+                        resolve_storage_path_duration_ms
+                    );
+                },
+            )
+            .await
+            .map_err(|error| format!("Failed to restore session view: {error}"))?;
+        let session = restored.session;
+        let mut turns = restored.turns;
+        let total_turn_count = restored.total_turn_count;
+        let timings = restored.timings;
         let loaded_turn_count = turns.len();
         let is_partial = loaded_turn_count < total_turn_count;
 
@@ -2132,8 +2570,7 @@ pub async fn restore_session_view(
 
 #[tauri::command]
 pub async fn restore_session_with_turns(
-    coordinator: State<'_, Arc<ConversationCoordinator>>,
-    app_state: State<'_, AppState>,
+    runtime: State<'_, DesktopRuntimeContext>,
     request: RestoreSessionRequest,
 ) -> Result<RestoreSessionWithTurnsResponse, String> {
     let started_at = std::time::Instant::now();
@@ -2142,33 +2579,29 @@ pub async fn restore_session_with_turns(
         "restore_session_with_turns request received: trace_id={}, session_id={}",
         trace_id, request.session_id
     );
-    let path_started_at = std::time::Instant::now();
-    let effective_path = desktop_effective_session_storage_path(
-        &app_state,
-        &request.workspace_path,
-        request.remote_connection_id.as_deref(),
-        request.remote_ssh_host.as_deref(),
-    )
-    .await;
-    debug!(
-        "restore_session_with_turns storage path resolved: trace_id={}, session_id={}, duration_ms={}",
-        trace_id,
-        request.session_id,
-        path_started_at.elapsed().as_millis()
-    );
-    let (session, turns) = if request.include_internal {
-        coordinator
-            .restore_internal_session_with_turns_from_storage_path(
-                &effective_path,
-                &request.session_id,
-            )
-            .await
-    } else {
-        coordinator
-            .restore_session_with_turns_from_storage_path(&effective_path, &request.session_id)
-            .await
-    }
-    .map_err(|e| format!("Failed to restore session: {}", e))?;
+    let restored = runtime
+        .session_application()
+        .restore_session_with_turns(
+            desktop_session_scope(
+                request.workspace_path.clone(),
+                request.remote_connection_id.clone(),
+                request.remote_ssh_host.clone(),
+            ),
+            &request.session_id,
+            request.include_internal,
+            |resolve_storage_path_duration_ms| {
+                debug!(
+                    "restore_session_with_turns storage path resolved: trace_id={}, session_id={}, duration_ms={}",
+                    trace_id,
+                    request.session_id,
+                    resolve_storage_path_duration_ms
+                );
+            },
+        )
+        .await
+        .map_err(|error| format!("Failed to restore session: {error}"))?;
+    let session = restored.session;
+    let turns = restored.turns;
 
     if log::log_enabled!(log::Level::Debug) {
         let payload_stats = restore_turn_payload_stats(&turns);
@@ -2238,32 +2671,6 @@ pub async fn list_sessions(
         .collect();
 
     Ok(responses)
-}
-
-#[tauri::command]
-pub async fn confirm_tool_execution(
-    coordinator: State<'_, Arc<ConversationCoordinator>>,
-    request: ConfirmToolRequest,
-) -> Result<(), String> {
-    coordinator
-        .confirm_tool(&request.tool_id, request.updated_input)
-        .await
-        .map_err(|e| format!("Confirm tool failed: {}", e))
-}
-
-#[tauri::command]
-pub async fn reject_tool_execution(
-    coordinator: State<'_, Arc<ConversationCoordinator>>,
-    request: RejectToolRequest,
-) -> Result<(), String> {
-    let reason = request
-        .reason
-        .unwrap_or_else(|| "User rejected".to_string());
-
-    coordinator
-        .reject_tool(&request.tool_id, reason)
-        .await
-        .map_err(|e| format!("Reject tool failed: {}", e))
 }
 
 #[tauri::command]
@@ -2431,7 +2838,187 @@ mod tests {
     use bitfun_core::service::session::{
         ModelRoundData, ToolCallData, ToolItemData, ToolResultData, TurnStatus, UserMessageData,
     };
+    use bitfun_product_domains::tool_permissions::{PermissionEffect, PermissionRule};
     use serde_json::json;
+
+    #[test]
+    fn project_permission_rule_revisions_distinguish_missing_and_present_files() {
+        assert_eq!(
+            project_permission_rules_revision(Some("{\"rules\":[]}")),
+            project_permission_rules_revision(Some("{\"rules\":[]}"))
+        );
+        assert_ne!(
+            project_permission_rules_revision(None),
+            project_permission_rules_revision(Some(""))
+        );
+    }
+
+    #[test]
+    fn project_permission_rule_validation_requires_action_and_resource() {
+        assert!(validate_project_permission_rules(&[PermissionRule::new(
+            "edit",
+            "src/*",
+            PermissionEffect::Ask,
+        )])
+        .is_ok());
+        assert!(validate_project_permission_rules(&[PermissionRule::new(
+            " ",
+            "src/*",
+            PermissionEffect::Ask,
+        )])
+        .is_err());
+    }
+
+    #[test]
+    fn desktop_dialog_turn_request_preserves_runtime_contract() {
+        let request: StartDialogTurnRequest = serde_json::from_value(json!({
+            "sessionId": "session-1",
+            "userInput": "resolved input",
+            "originalUserInput": "original input",
+            "agentType": "agentic",
+            "workspacePath": "/workspace/project",
+            "remoteConnectionId": "connection-1",
+            "remoteSshHost": "host-1",
+            "turnId": "turn-1",
+            "imageContexts": [{
+                "id": "image-1",
+                "image_path": "/workspace/clip.png",
+                "data_url": "data:image/png;base64,abc",
+                "mime_type": "image/png",
+                "metadata": {
+                    "name": "clip.png",
+                    "source": "upload"
+                }
+            }],
+            "userMessageMetadata": {
+                "surface": "flow_chat",
+                "requestId": "request-1"
+            }
+        }))
+        .expect("current Tauri request shape");
+
+        let runtime_request =
+            desktop_dialog_turn_request(request).expect("Desktop runtime request");
+
+        assert_eq!(runtime_request.session_id, "session-1");
+        assert_eq!(runtime_request.message, "resolved input");
+        assert_eq!(
+            runtime_request.original_message.as_deref(),
+            Some("original input")
+        );
+        assert_eq!(runtime_request.turn_id.as_deref(), Some("turn-1"));
+        assert_eq!(runtime_request.agent_type, "agentic");
+        assert_eq!(
+            runtime_request.workspace_path.as_deref(),
+            Some("/workspace/project")
+        );
+        assert_eq!(
+            runtime_request.remote_connection_id.as_deref(),
+            Some("connection-1")
+        );
+        assert_eq!(runtime_request.remote_ssh_host.as_deref(), Some("host-1"));
+        assert_eq!(
+            runtime_request.policy.trigger_source,
+            AgentSubmissionSource::DesktopUi
+        );
+        assert_eq!(
+            runtime_request.policy,
+            DialogSubmissionPolicy::for_source(DialogTriggerSource::DesktopUi)
+        );
+        assert!(runtime_request.reply_route.is_none());
+        assert!(runtime_request.prepended_reminders.is_empty());
+        assert_eq!(runtime_request.attachments.len(), 1);
+        let attachment = &runtime_request.attachments[0];
+        assert_eq!(attachment.kind, "remote_image");
+        assert_eq!(attachment.id, "image-1");
+        assert_eq!(
+            attachment.metadata.get("imagePath"),
+            Some(&json!("/workspace/clip.png"))
+        );
+        assert_eq!(
+            attachment.metadata.get("dataUrl"),
+            Some(&json!("data:image/png;base64,abc"))
+        );
+        assert_eq!(
+            attachment.metadata.get("mimeType"),
+            Some(&json!("image/png"))
+        );
+        assert_eq!(
+            attachment
+                .metadata
+                .get("metadata")
+                .and_then(|value| value.get("source")),
+            Some(&json!("upload"))
+        );
+        assert_eq!(
+            runtime_request.metadata.get("surface"),
+            Some(&json!("flow_chat"))
+        );
+        assert_eq!(
+            runtime_request.metadata.get("requestId"),
+            Some(&json!("request-1"))
+        );
+    }
+
+    #[test]
+    fn permission_response_dto_uses_stable_camel_case_wire_shape() {
+        let request: PermissionResponseRequest = serde_json::from_value(json!({
+            "requestId": "permission-1",
+            "reply": "reject",
+            "feedback": "Use a read-only path"
+        }))
+        .expect("permission response request");
+
+        assert_eq!(request.request_id, "permission-1");
+        assert!(matches!(request.reply, PermissionReplyKind::Reject));
+        assert_eq!(request.feedback.as_deref(), Some("Use a read-only path"));
+        assert_eq!(
+            permission_reply(request),
+            PermissionReply::Reject {
+                feedback: Some("Use a read-only path".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn desktop_interaction_dtos_keep_existing_camel_case_shape() {
+        let cancel: CancelDialogTurnRequest = serde_json::from_value(json!({
+            "sessionId": "session-1",
+            "dialogTurnId": "turn-1"
+        }))
+        .expect("cancel request");
+        assert_eq!(cancel.session_id, "session-1");
+        assert_eq!(cancel.dialog_turn_id, "turn-1");
+        assert_eq!(
+            serde_json::to_value(StartDialogTurnResponse {
+                success: true,
+                message: "Dialog turn started".to_string(),
+            })
+            .expect("response"),
+            json!({
+                "success": true,
+                "message": "Dialog turn started"
+            })
+        );
+    }
+
+    #[test]
+    fn desktop_dialog_turn_accepts_and_normalizes_legacy_non_object_metadata() {
+        let request = serde_json::from_value::<StartDialogTurnRequest>(json!({
+            "sessionId": "session-1",
+            "userInput": "hello",
+            "agentType": "agentic",
+            "userMessageMetadata": "not-an-object"
+        }))
+        .expect("legacy metadata request");
+        let runtime_request =
+            desktop_dialog_turn_request(request).expect("Desktop runtime request");
+
+        assert_eq!(
+            runtime_request.metadata.get("raw_metadata"),
+            Some(&json!("not-an-object"))
+        );
+    }
 
     fn idempotent_create_request() -> CreateSessionRequest {
         CreateSessionRequest {
@@ -2622,8 +3209,8 @@ mod tests {
                 end_time: Some(2),
                 duration_ms: Some(1),
                 provider_id: None,
-                model_id: None,
-                model_alias: None,
+                model_config_id: None,
+                effective_model_name: None,
                 first_chunk_ms: None,
                 first_visible_output_ms: None,
                 stream_duration_ms: None,
@@ -2703,8 +3290,8 @@ mod tests {
                 end_time: Some(2),
                 duration_ms: Some(1),
                 provider_id: None,
-                model_id: None,
-                model_alias: None,
+                model_config_id: None,
+                effective_model_name: None,
                 first_chunk_ms: None,
                 first_visible_output_ms: None,
                 stream_duration_ms: None,
@@ -2765,8 +3352,8 @@ mod tests {
                 end_time: Some(2),
                 duration_ms: Some(1),
                 provider_id: None,
-                model_id: None,
-                model_alias: None,
+                model_config_id: None,
+                effective_model_name: None,
                 first_chunk_ms: None,
                 first_visible_output_ms: None,
                 stream_duration_ms: None,

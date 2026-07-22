@@ -37,6 +37,12 @@ static DEVICE_RELAY_CLIENT: OnceLock<RwLock<Option<Arc<RelayClient>>>> = OnceLoc
 /// The chat loop checks this via `is_token_expired()` and prompts the user.
 static TOKEN_EXPIRED: AtomicBool = AtomicBool::new(false);
 
+/// True while credentials succeeded but the user has not yet chosen
+/// cloud-vs-local settings. Session is held in memory only; a process kill
+/// must not restore a logged-in state (same contract as desktop
+/// `account_login` / `account_finalize_login`).
+static PENDING_SYNC_CHOICE: AtomicBool = AtomicBool::new(false);
+
 fn account_session() -> &'static Arc<RwLock<Option<AccountSession>>> {
     ACCOUNT_SESSION.get_or_init(|| Arc::new(RwLock::new(None)))
 }
@@ -60,23 +66,34 @@ pub(crate) async fn read_account_context() -> Result<(AccountSession, String)> {
     }
 }
 
-/// Whether an account session is currently held.
+/// Whether an account session is currently held and login is finalized.
+/// Matches desktop `account_status`: pending cloud/local sync choice is not
+/// treated as logged in.
 pub(crate) async fn is_logged_in() -> bool {
+    if PENDING_SYNC_CHOICE.load(Ordering::Relaxed) {
+        return false;
+    }
     account_session().read().await.is_some()
 }
 
 /// Attempt to restore a persisted session from disk.  Called at startup.
 /// Returns `Some(user_id)` if a session was restored.
 pub(crate) async fn try_restore_session() -> Option<String> {
-    match session_store::load_session() {
-        Ok(Some((token, user_id, master_key, relay_url))) => {
+    match session_store::load_session_detailed() {
+        Ok(Some(loaded)) => {
+            let user_id = loaded.user_id.clone();
+            if let Some(device_id) = loaded.device_id.as_deref() {
+                if let Err(e) = DeviceIdentity::adopt_account_device_id(device_id) {
+                    tracing::warn!("Failed to adopt restored session device_id: {e}");
+                }
+            }
             let session = AccountSession {
-                token,
+                token: loaded.token,
                 user_id: user_id.clone(),
-                master_key,
+                master_key: loaded.master_key,
             };
             *account_session().write().await = Some(session);
-            *account_relay_url().write().await = Some(relay_url);
+            *account_relay_url().write().await = Some(loaded.relay_url);
             tracing::info!("Restored account session for user {user_id}");
             Some(user_id)
         }
@@ -89,10 +106,15 @@ pub(crate) async fn try_restore_session() -> Option<String> {
 }
 
 /// Whether the relay has reported the account token as expired/invalid.
-/// Intended for the TUI to prompt re-login when account pages open.
-#[allow(dead_code)]
+/// The TUI prompts re-login via this; the daemon exits on it.
 pub(crate) fn is_token_expired() -> bool {
     TOKEN_EXPIRED.load(Ordering::Relaxed)
+}
+
+/// Mark the account token as rejected by the relay (expired / revoked).
+/// Called by the settings sync engine when a sync request gets a 401.
+pub(crate) fn mark_token_expired() {
+    TOKEN_EXPIRED.store(true, Ordering::Relaxed);
 }
 
 /// Resolve the current device identity (machine-based).
@@ -151,18 +173,44 @@ pub(crate) async fn login_with_credentials(
     let master_key = session.master_key;
     *account_session().write().await = Some(session);
     *account_relay_url().write().await = Some(relay_url.to_string());
-
-    if let Err(e) = session_store::save_session(&token, &user_id, &master_key, relay_url) {
-        tracing::warn!("Failed to persist session: {e}");
-    }
     session_store::save_credential_hint(username, relay_url);
-
     TOKEN_EXPIRED.store(false, Ordering::Relaxed);
 
-    let connect_result = spawn_device_routing(relay_url, &device_name).await;
-    let routing_msg = match connect_result {
-        Ok(()) => " Device routing connected (Peer Host ready).".to_string(),
-        Err(e) => format!(" (Warning: device routing failed: {e})"),
+    if has_cloud_settings {
+        // Defer disk persist until the sync choice is accepted. Killing the
+        // process during the choice panel must not restore a logged-in session.
+        PENDING_SYNC_CHOICE.store(true, Ordering::Relaxed);
+        return Ok(LoginResult {
+            user_id: user_id.clone(),
+            relay_url: relay_url.to_string(),
+            has_cloud_settings,
+            status_message: format!(
+                "Authenticated as user {} on {}. Choose cloud or local settings to finish login.",
+                user_id, relay_url
+            ),
+        });
+    }
+
+    PENDING_SYNC_CHOICE.store(false, Ordering::Relaxed);
+    if let Err(e) = session_store::save_session_with_device(
+        &token,
+        &user_id,
+        &master_key,
+        relay_url,
+        Some(device.device_id.as_str()),
+    ) {
+        tracing::warn!("Failed to persist session: {e}");
+    }
+
+    let routing_msg = if crate::daemon::is_daemon_running() {
+        // The daemon already holds the relay connection; a second connection
+        // from this process would flap the shared device_id registration.
+        " Device routing is handled by the running CLI daemon.".to_string()
+    } else {
+        match spawn_device_routing(relay_url, &device_name).await {
+            Ok(()) => " Device routing connected (Peer Host ready). Tip: `bitfun daemon install` keeps this device reachable after exit or reboot.".to_string(),
+            Err(e) => format!(" (Warning: device routing failed: {e})"),
+        }
     };
 
     Ok(LoginResult {
@@ -174,6 +222,29 @@ pub(crate) async fn login_with_credentials(
             user_id, relay_url, routing_msg
         ),
     })
+}
+
+/// Persist the in-memory session after the user accepts the sync choice, then
+/// start device routing (same as a first login with no cloud settings).
+pub(crate) async fn finalize_login_after_sync_choice() -> Result<()> {
+    let device = current_device_identity()?;
+    let (session, relay_url) = read_account_context().await?;
+    session_store::save_session_with_device(
+        &session.token,
+        &session.user_id,
+        &session.master_key,
+        &relay_url,
+        Some(device.device_id.as_str()),
+    )
+    .map_err(|e| anyhow!("persist session: {e}"))?;
+    PENDING_SYNC_CHOICE.store(false, Ordering::Relaxed);
+
+    if crate::daemon::is_daemon_running() {
+        return Ok(());
+    }
+    spawn_device_routing(&relay_url, &device.device_name)
+        .await
+        .map_err(|e| anyhow!("device routing failed: {e}"))
 }
 
 /// Snapshot of the logged-in account for the Account status page.
@@ -270,6 +341,12 @@ async fn is_current_routing_client(client: &Arc<RelayClient>) -> bool {
 /// Log out: tear down routing, revoke the token (best-effort), clear state.
 pub(crate) async fn logout() -> Result<()> {
     stop_device_routing().await;
+    // Take the always-on daemon down with the account: the token is revoked
+    // below, so leaving the daemon connected would keep this device online
+    // with a doomed token until its next reconnect fails.
+    if crate::daemon::request_daemon_shutdown() {
+        tracing::info!("Signalled the CLI daemon to shut down after logout");
+    }
     let result = read_account_context().await;
     if let Ok((session, relay_url)) = result {
         let _ = AccountClient::new()
@@ -278,6 +355,7 @@ pub(crate) async fn logout() -> Result<()> {
     }
     *account_session().write().await = None;
     *account_relay_url().write().await = None;
+    PENDING_SYNC_CHOICE.store(false, Ordering::Relaxed);
     session_store::clear_session();
     session_store::clear_credential_hint();
     TOKEN_EXPIRED.store(false, Ordering::Relaxed);
@@ -297,10 +375,34 @@ async fn handle_relay_event(
     match event {
         RelayEvent::AuthOk { user_id, device_id } => {
             tracing::info!("Device routing auth ok: user={user_id} device={device_id}");
+            if let Err(e) = DeviceIdentity::adopt_account_device_id(&device_id) {
+                tracing::warn!("Failed to adopt AuthOk device_id: {e}");
+            } else if let Some(session) = session_arc.read().await.clone() {
+                if let Some(relay_url) = account_relay_url().read().await.clone() {
+                    if let Err(e) = session_store::save_session_with_device(
+                        &session.token,
+                        &session.user_id,
+                        &session.master_key,
+                        &relay_url,
+                        Some(device_id.as_str()),
+                    ) {
+                        tracing::warn!("Failed to persist AuthOk device_id into session: {e}");
+                    }
+                }
+            }
         }
         RelayEvent::AuthError { message } => {
             tracing::warn!("Device routing auth error: {message}");
             TOKEN_EXPIRED.store(true, Ordering::Relaxed);
+            // Keep CLI/daemon semantics aligned with Desktop: a relay-rejected
+            // token is no longer a usable local login and must not be restored
+            // again on the next process start. Preserve the non-secret hint so
+            // the re-login form can still be prefilled.
+            relay_client.disconnect().await;
+            *session_arc.write().await = None;
+            *account_relay_url().write().await = None;
+            PENDING_SYNC_CHOICE.store(false, Ordering::Relaxed);
+            session_store::clear_session();
             crate::peer_host::update_controller_presence(Vec::new()).await;
         }
         RelayEvent::DevicePresence { devices } => {

@@ -2,6 +2,7 @@ use anyhow::{anyhow, Context, Result};
 use std::path::Path;
 use std::time::Duration;
 
+use bitfun_agent_runtime::sdk::AgentSessionUsageRequest;
 use bitfun_core::agentic::get_agent_registry;
 use bitfun_core::infrastructure::try_get_path_manager_arc;
 use bitfun_core::plugin_runtime::{
@@ -16,9 +17,7 @@ use bitfun_core::plugin_source::{
 use bitfun_core::product_assembly::ProductRuntimeParts;
 use bitfun_core::runtime_ports::PluginRuntimeAvailability;
 use bitfun_core::service::config::initialize_global_config;
-use bitfun_core::service::session_usage::{
-    render_usage_report_markdown, SessionUsageReportRequest,
-};
+use bitfun_core::service::session_usage::render_usage_report_markdown;
 
 async fn ensure_global_config_service(
 ) -> Result<std::sync::Arc<bitfun_core::service::config::ConfigService>> {
@@ -83,6 +82,7 @@ pub(crate) async fn print_models() -> Result<()> {
         config_service.get_config(None).await?;
 
     let primary_model_id = global_config.ai.default_models.primary.clone();
+    let mode_model_id = crate::model_selection::resolve_mode_model_id(&global_config.ai);
 
     println!("AI models");
     println!();
@@ -93,12 +93,7 @@ pub(crate) async fn print_models() -> Result<()> {
 
     for model in models {
         let is_primary = primary_model_id.as_deref() == Some(model.id.as_str());
-        let current_modes: Vec<String> = global_config
-            .ai
-            .agent_models
-            .iter()
-            .filter_map(|(mode, model_id)| (model_id == &model.id).then_some(mode.clone()))
-            .collect();
+        let is_mode_default = mode_model_id.as_deref() == Some(model.id.as_str());
 
         println!(
             "- {}{} ({})",
@@ -109,8 +104,8 @@ pub(crate) async fn print_models() -> Result<()> {
         println!("  Name: {}", model.name);
         println!("  Provider: {}", model.provider);
         println!("  Model: {}", model.model_name);
-        if !current_modes.is_empty() {
-            println!("  Used by modes: {}", current_modes.join(", "));
+        if is_mode_default {
+            println!("  Used by modes: all");
         }
     }
 
@@ -170,18 +165,18 @@ pub(crate) async fn print_mcp_servers() -> Result<()> {
 
 pub(crate) async fn set_default_model(model_id: &str) -> Result<()> {
     let config_service = ensure_global_config_service().await?;
-    let agent_registry = get_agent_registry();
-    let modes = agent_registry.get_modes_info().await;
-
     config_service
         .set_config("ai.default_models.primary", model_id)
         .await?;
-    for mode in modes {
-        let path = format!("ai.agent_models.{}", mode.id);
-        config_service.set_config(&path, model_id).await?;
-    }
+    config_service
+        .set_config("ai.agent_model_defaults.mode", model_id)
+        .await?;
 
     println!("Default model set to: {}", model_id);
+
+    // Short-lived management process: the sync loop never runs here, so push
+    // the change directly (no-op when logged out).
+    crate::account_sync::push_settings_after_local_change().await;
     Ok(())
 }
 
@@ -249,8 +244,8 @@ pub(crate) async fn print_usage_report(session_id: Option<&str>) -> Result<()> {
     };
 
     let report = runtime
-        .compatibility()
-        .generate_session_usage_report(SessionUsageReportRequest {
+        .agent_runtime()
+        .generate_session_usage(AgentSessionUsageRequest {
             session_id: resolved_session_id,
             workspace_path: Some(workspace_path.to_string_lossy().to_string()),
             remote_connection_id: None,
@@ -258,7 +253,7 @@ pub(crate) async fn print_usage_report(session_id: Option<&str>) -> Result<()> {
             include_hidden_subagents: true,
         })
         .await
-        .map_err(|error| anyhow!(error.to_string()))?;
+        .map_err(|error| anyhow!(error.into_message()))?;
 
     println!("{}", render_usage_report_markdown(&report));
     Ok(())
@@ -351,7 +346,7 @@ pub(crate) async fn activate_plugin(package_id: &str, confirm: Option<&str>) -> 
         let diagnostic = crate::plugin_diagnostics::escape_terminal_text(&error.to_string());
         if confirm.is_some() {
             anyhow!(
-                "{}\nRe-run `bitfun-cli plugins activate {}` to preview the current content, then confirm with the new content hash.",
+                "{}\nRe-run `bitfun plugins activate {}` to preview the current content, then confirm with the new content hash.",
                 diagnostic,
                 crate::plugin_diagnostics::escape_terminal_text(package_id)
             )
@@ -364,7 +359,7 @@ pub(crate) async fn activate_plugin(package_id: &str, confirm: Option<&str>) -> 
     if confirm.is_none() {
         println!();
         println!(
-            "No activation state changed. Re-run `bitfun-cli plugins activate {} --confirm {}` to confirm this exact package content.",
+            "No activation state changed. Re-run `bitfun plugins activate {} --confirm {}` to confirm this exact package content.",
             crate::plugin_diagnostics::escape_terminal_text(package_id),
             crate::plugin_diagnostics::escape_terminal_text(&view.content_hash)
         );
@@ -383,7 +378,7 @@ pub(crate) async fn deactivate_plugin(package_id: &str) -> Result<()> {
                 ManagedPluginSourceError::DeactivationPersistenceUncertain { .. }
             ) {
                 anyhow!(
-                    "{diagnostic}\nThe saved state may already be cleared. Retry `bitfun-cli plugins deactivate {}` to confirm the result; the operation is idempotent.",
+                    "{diagnostic}\nThe saved state may already be cleared. Retry `bitfun plugins deactivate {}` to confirm the result; the operation is idempotent.",
                     crate::plugin_diagnostics::escape_terminal_text(package_id)
                 )
             } else {

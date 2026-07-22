@@ -1,8 +1,7 @@
-import React, { useState, useCallback, useRef, useEffect } from 'react';
+import React, { Suspense, lazy, useState, useCallback, useRef, useEffect } from 'react';
 import PairingPage from './pages/PairingPage';
 import WorkspacePage from './pages/WorkspacePage';
 import SessionListPage from './pages/SessionListPage';
-import ChatPage from './pages/ChatPage';
 import DevicesPage from './pages/DevicesPage';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { I18nProvider, useI18n } from './i18n';
@@ -17,6 +16,7 @@ type Page = 'pairing' | 'workspace' | 'sessions' | 'chat' | 'devices';
 type NavDirection = 'push' | 'pop' | null;
 
 const NAV_DURATION = 300;
+const ChatPage = lazy(() => import('./pages/ChatPage'));
 
 function getNavClass(
   targetPage: Page,
@@ -38,7 +38,7 @@ const AppContent: React.FC = () => {
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [activeSessionName, setActiveSessionName] = useState<string>('Session');
   const [chatAutoFocus, setChatAutoFocus] = useState(false);
-  const [isReconnecting, setIsReconnecting] = useState(false);
+  const connectionHealth = useMobileStore((state) => state.connectionHealth);
   const clientRef = useRef<RelayHttpClient | null>(null);
   const sessionMgrRef = useRef<RemoteSessionManager | null>(null);
   const [sessionMgr, setSessionMgr] = useState<RemoteSessionManager | null>(null);
@@ -119,50 +119,6 @@ const AppContent: React.FC = () => {
     [],
   );
 
-  // Periodic connection health check
-  useEffect(() => {
-    const shouldMonitor = page === 'sessions' || page === 'chat';
-    if (!shouldMonitor || !sessionMgr) {
-      setIsReconnecting(false);
-      return;
-    }
-
-    let cancelled = false;
-    let timer: ReturnType<typeof setTimeout>;
-
-    const pingWithTimeout = (ms: number): Promise<void> => {
-      let timeoutId: ReturnType<typeof setTimeout> | undefined;
-      return Promise.race([
-        sessionMgr.ping(),
-        new Promise<void>((_, reject) => {
-          timeoutId = setTimeout(() => reject(new Error('ping timeout')), ms);
-        }),
-      ]).finally(() => {
-        if (timeoutId) clearTimeout(timeoutId);
-      });
-    };
-
-    const loop = async () => {
-      try {
-        await pingWithTimeout(10000);
-        if (!cancelled) setIsReconnecting(false);
-      } catch {
-        if (!cancelled) setIsReconnecting(true);
-      }
-
-      if (!cancelled) {
-        timer = setTimeout(loop, 15000);
-      }
-    };
-
-    loop();
-
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-  }, [sessionMgr, page]);
-
   // Pop navigation handlers that can be called from both UI buttons and popstate
   const doPopFromChat = useCallback(() => {
     navigateTo('sessions', 'pop');
@@ -170,6 +126,10 @@ const AppContent: React.FC = () => {
   }, [navigateTo]);
 
   const doPopFromWorkspace = useCallback(() => {
+    navigateTo('sessions', 'pop');
+  }, [navigateTo]);
+
+  const doPopFromDevices = useCallback(() => {
     navigateTo('sessions', 'pop');
   }, [navigateTo]);
 
@@ -191,6 +151,8 @@ const AppContent: React.FC = () => {
           doPopFromChat();
         } else if (currentPage === 'workspace') {
           doPopFromWorkspace();
+        } else if (currentPage === 'devices') {
+          doPopFromDevices();
         }
       } finally {
         isPopstateNavRef.current = false;
@@ -199,7 +161,7 @@ const AppContent: React.FC = () => {
 
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
-  }, [doPopFromChat, doPopFromWorkspace]);
+  }, [doPopFromChat, doPopFromWorkspace, doPopFromDevices]);
 
   const handleOpenWorkspace = useCallback(() => {
     navigateTo('workspace', 'push');
@@ -225,7 +187,6 @@ const AppContent: React.FC = () => {
     clientRef.current = null;
     sessionMgrRef.current = null;
     setSessionMgr(null);
-    setIsReconnecting(false);
     setActiveSessionId(null);
     setActiveSessionName('Session');
     setChatAutoFocus(false);
@@ -245,10 +206,13 @@ const AppContent: React.FC = () => {
 
   return (
     <div className="mobile-app">
-      {isReconnecting && (
-        <div className="mobile-reconnect-banner">
+      {connectionHealth === 'unreachable' && page !== 'pairing' && (
+        <div className="mobile-reconnect-banner" role="alert">
           <span className="mobile-reconnect-spinner" />
-          {t('sessions.reconnecting')}
+          <span>{t('sessions.reconnecting')}</span>
+          <button type="button" onClick={handleDisconnect}>
+            {t('sessions.repair')}
+          </button>
         </div>
       )}
       {page === 'pairing' && <PairingPage onPaired={handlePaired} />}
@@ -260,14 +224,13 @@ const AppContent: React.FC = () => {
           />
         </div>
       )}
-      {page === 'devices' && clientRef.current && (
-        <DevicesPage
-          client={clientRef.current}
-          onBack={() => {
-            pageStackRef.current = pageStackRef.current.slice(0, -1);
-            setPage('sessions');
-          }}
-        />
+      {shouldShow('devices') && clientRef.current && (
+        <div className={`nav-page ${getNavClass('devices', currentPage, navDir, isAnimating)}`}>
+          <DevicesPage
+            client={clientRef.current}
+            onBack={doPopFromDevices}
+          />
+        </div>
       )}
       {shouldShow('sessions') && sessionMgrRef.current && (
         <div className={`nav-page ${getNavClass('sessions', currentPage, navDir, isAnimating)}`}>
@@ -276,23 +239,21 @@ const AppContent: React.FC = () => {
             onSelectSession={handleSelectSession}
             onOpenWorkspace={handleOpenWorkspace}
             onDisconnect={handleDisconnect}
-            onOpenDevices={() => {
-              pageStackRef.current = [...pageStackRef.current, 'devices'];
-              history.pushState({ page: 'devices' }, '');
-              setPage('devices');
-            }}
+            onOpenDevices={() => navigateTo('devices', 'push')}
           />
         </div>
       )}
       {shouldShow('chat') && sessionMgrRef.current && activeSessionId && (
         <div className={`nav-page ${getNavClass('chat', currentPage, navDir, isAnimating)}`}>
-          <ChatPage
-            sessionMgr={sessionMgrRef.current}
-            sessionId={activeSessionId}
-            sessionName={activeSessionName}
-            onBack={handleBackToSessions}
-            autoFocus={chatAutoFocus}
-          />
+          <Suspense fallback={<div className="spinner" aria-hidden="true" />}>
+            <ChatPage
+              sessionMgr={sessionMgrRef.current}
+              sessionId={activeSessionId}
+              sessionName={activeSessionName}
+              onBack={handleBackToSessions}
+              autoFocus={chatAutoFocus}
+            />
+          </Suspense>
         </div>
       )}
     </div>

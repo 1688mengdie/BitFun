@@ -47,6 +47,17 @@ impl Default for KdfParams {
 
 impl KdfParams {
     fn build(&self) -> Result<Argon2<'static>> {
+        // KDF parameters come from a remote server. Bound them before Argon2
+        // allocates memory so a malicious or corrupted relay cannot force the
+        // client into multi-gigabyte allocation or an excessive CPU loop.
+        if !(8 * 1024..=256 * 1024).contains(&self.m)
+            || !(1..=10).contains(&self.t)
+            || !(1..=16).contains(&self.p)
+        {
+            return Err(anyhow!(
+                "argon2 parameters are outside the supported safety range"
+            ));
+        }
         let params = Params::new(self.m, self.t, self.p, Some(MASTER_KEY_LEN))
             .map_err(|e| anyhow!("invalid argon2 params: {e}"))?;
         Ok(Argon2::new(Algorithm::Argon2id, Version::V0x13, params))
@@ -183,6 +194,37 @@ pub struct AccountClient {
     http: reqwest::Client,
 }
 
+/// Check whether an account/relay error message indicates an invalid or
+/// expired account token (relay auth failure). Shared by Desktop, CLI, and
+/// the settings sync engine so they all react to the same relay wording.
+pub fn error_indicates_expired_token(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("http 401")
+        || lower.contains("unauthorized")
+        || lower.contains("invalid or expired token")
+        || lower.contains("relay auth error")
+}
+
+/// Parse a user/config supplied relay base URL at the shared transport
+/// boundary. Paths are allowed for reverse-proxy prefixes; credentials,
+/// query strings, fragments, and non-HTTP schemes are not.
+pub fn validate_relay_base_url(relay_url: &str) -> Result<reqwest::Url> {
+    let url = reqwest::Url::parse(relay_url.trim())
+        .map_err(|error| anyhow!("invalid relay URL: {error}"))?;
+    if !matches!(url.scheme(), "http" | "https")
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(anyhow!(
+            "relay URL must be an http(s) server address without credentials, query, or fragment"
+        ));
+    }
+    Ok(url)
+}
+
 impl Default for AccountClient {
     fn default() -> Self {
         Self::new()
@@ -201,9 +243,11 @@ impl AccountClient {
         }
     }
 
-    fn endpoint(relay_url: &str, path: &str) -> String {
-        let base = relay_url.trim_end_matches('/');
-        format!("{base}{path}")
+    fn endpoint(relay_url: &str, path: &str) -> Result<reqwest::Url> {
+        let mut url = validate_relay_base_url(relay_url)?;
+        let base_path = url.path().trim_end_matches('/').to_string();
+        url.set_path(&format!("{base_path}{path}"));
+        Ok(url)
     }
 
     /// Map a non-2xx relay response into a human-readable error.
@@ -215,6 +259,11 @@ impl AccountClient {
                  (encrypted session/settings blob exceeds relay body limit; \
                   raise Axum DefaultBodyLimit on /api/sync/* and any reverse-proxy \
                   client_max_body_size)"
+            );
+        }
+        if status == reqwest::StatusCode::INSUFFICIENT_STORAGE {
+            return anyhow!(
+                "relay returned HTTP 507 Insufficient Storage (the configured account or asset quota is full)"
             );
         }
         match resp.json::<ErrorBody>().await {
@@ -230,21 +279,25 @@ impl AccountClient {
         }
     }
 
-    /// Log in to an existing account. Fetches the KDF challenge, derives the KEK
-    /// locally, unwraps the master key (GCM failure ⇒ wrong password), then
-    /// verifies the password hash with the relay to obtain a token.
-    pub async fn login(
+    /// Fetch the login challenge and unwrap the master key locally.
+    /// Does not call `/api/auth/login` and does not mint a token.
+    async fn unwrap_master_key_for_credentials(
         &self,
         relay_url: &str,
         username: &str,
         password: &str,
-        device: &DeviceIdentity,
-    ) -> Result<AccountSession> {
-        // 1. Challenge: fetch salts + wrapped master key.
+    ) -> Result<([u8; MASTER_KEY_LEN], ChallengeResponse)> {
+        if username.trim().is_empty()
+            || username.len() > 128
+            || password.is_empty()
+            || password.len() > 1024
+        {
+            return Err(anyhow!("invalid account credential fields"));
+        }
         let challenge_req = serde_json::json!({ "username": username });
         let resp = self
             .http
-            .post(Self::endpoint(relay_url, "/api/auth/login/challenge"))
+            .post(Self::endpoint(relay_url, "/api/auth/login/challenge")?)
             .json(&challenge_req)
             .send()
             .await?;
@@ -256,19 +309,62 @@ impl AccountClient {
         let salt = BASE64
             .decode(&challenge.salt)
             .map_err(|e| anyhow!("b64 decode salt: {e}"))?;
-        let kdf_salt = BASE64
-            .decode(&challenge.kdf_salt)
-            .map_err(|e| anyhow!("b64 decode kdf_salt: {e}"))?;
+        if salt.len() != SALT_LEN {
+            return Err(anyhow!("invalid account salt length"));
+        }
         let params: KdfParams = serde_json::from_str(&challenge.argon2_params)
             .map_err(|e| anyhow!("parse argon2_params: {e}"))?;
 
-        // 2. Derive KEK and unwrap the master key. A failure here means the
-        //    password is wrong (the GCM tag won't verify).
+        // GCM tag failure means the password is wrong.
         let kek = derive_kek(password, &salt, &params)?;
         let master_key = unwrap_master_key(&kek, &challenge.wrapped_master_key)
             .map_err(|_| anyhow!("invalid username or password"))?;
+        Ok((master_key, challenge))
+    }
 
-        // 3. Derive the server-verifiable hash and submit it.
+    /// Verify username/password against an existing session without minting a
+    /// new relay token. Uses the same challenge + KEK unwrap path as `login`.
+    /// Succeeds only when the unwrapped master key matches `expected_master_key`.
+    pub async fn verify_password_for_master_key(
+        &self,
+        relay_url: &str,
+        username: &str,
+        password: &str,
+        expected_master_key: &[u8; MASTER_KEY_LEN],
+    ) -> Result<()> {
+        let (master_key, _) = self
+            .unwrap_master_key_for_credentials(relay_url, username, password)
+            .await?;
+        if master_key != *expected_master_key {
+            return Err(anyhow!("invalid username or password"));
+        }
+        Ok(())
+    }
+
+    /// Log in to an existing account. Fetches the KDF challenge, derives the KEK
+    /// locally, unwraps the master key (GCM failure ⇒ wrong password), then
+    /// verifies the password hash with the relay to obtain a token.
+    pub async fn login(
+        &self,
+        relay_url: &str,
+        username: &str,
+        password: &str,
+        device: &DeviceIdentity,
+    ) -> Result<AccountSession> {
+        let (master_key, challenge) = self
+            .unwrap_master_key_for_credentials(relay_url, username, password)
+            .await?;
+
+        let kdf_salt = BASE64
+            .decode(&challenge.kdf_salt)
+            .map_err(|e| anyhow!("b64 decode kdf_salt: {e}"))?;
+        if kdf_salt.len() != SALT_LEN {
+            return Err(anyhow!("invalid account KDF salt length"));
+        }
+        let params: KdfParams = serde_json::from_str(&challenge.argon2_params)
+            .map_err(|e| anyhow!("parse argon2_params: {e}"))?;
+
+        // Derive the server-verifiable hash and submit it.
         let password_hash = derive_password_hash(password, &kdf_salt, &params)?;
         let login_req = serde_json::json!({
             "username": username,
@@ -278,7 +374,7 @@ impl AccountClient {
         });
         let resp = self
             .http
-            .post(Self::endpoint(relay_url, "/api/auth/login"))
+            .post(Self::endpoint(relay_url, "/api/auth/login")?)
             .json(&login_req)
             .send()
             .await?;
@@ -347,7 +443,7 @@ impl AccountClient {
         });
         let resp = self
             .http
-            .post(Self::endpoint(relay_url, "/api/sync/sessions"))
+            .post(Self::endpoint(relay_url, "/api/sync/sessions")?)
             .header("Authorization", Self::auth_header(session))
             .json(&body)
             .send()
@@ -366,11 +462,9 @@ impl AccountClient {
         session: &AccountSession,
         since: i64,
     ) -> Result<Vec<ListedSessionEntry>> {
-        let url = format!(
-            "{}?since={}",
-            Self::endpoint(relay_url, "/api/sync/sessions"),
-            since.max(0)
-        );
+        let mut url = Self::endpoint(relay_url, "/api/sync/sessions")?;
+        url.query_pairs_mut()
+            .append_pair("since", &since.max(0).to_string());
         let resp = self
             .http
             .get(url)
@@ -434,8 +528,8 @@ impl AccountClient {
             .http
             .get(Self::endpoint(
                 relay_url,
-                &format!("/api/sync/sessions/{session_id}"),
-            ))
+                &format!("/api/sync/sessions/{}", urlencoding::encode(session_id)),
+            )?)
             .header("Authorization", Self::auth_header(session))
             .send()
             .await?;
@@ -465,8 +559,8 @@ impl AccountClient {
             .http
             .delete(Self::endpoint(
                 relay_url,
-                &format!("/api/sync/sessions/{session_id}"),
-            ))
+                &format!("/api/sync/sessions/{}", urlencoding::encode(session_id)),
+            )?)
             .header("Authorization", Self::auth_header(session))
             .send()
             .await?;
@@ -477,21 +571,24 @@ impl AccountClient {
     }
 
     /// Upload an encrypted settings blob (keyed by the user, not per-device).
+    /// Returns the version sent with the upload so callers can record a sync
+    /// cursor that matches what the relay actually stored.
     pub async fn upload_settings(
         &self,
         relay_url: &str,
         session: &AccountSession,
         plaintext: &str,
-    ) -> Result<()> {
+    ) -> Result<i64> {
         let (data, nonce) = Self::seal(session, plaintext)?;
+        let version = chrono::Utc::now().timestamp_millis();
         let body = serde_json::json!({
             "encrypted_data": data,
             "nonce": nonce,
-            "version": chrono::Utc::now().timestamp_millis(),
+            "version": version,
         });
         let resp = self
             .http
-            .post(Self::endpoint(relay_url, "/api/sync/settings"))
+            .post(Self::endpoint(relay_url, "/api/sync/settings")?)
             .header("Authorization", Self::auth_header(session))
             .json(&body)
             .send()
@@ -499,7 +596,7 @@ impl AccountClient {
         if !resp.status().is_success() {
             return Err(Self::into_error(resp).await);
         }
-        Ok(())
+        Ok(version)
     }
 
     /// Fetch and decrypt the settings blob. Returns `None` if no settings exist.
@@ -524,7 +621,7 @@ impl AccountClient {
     ) -> Result<Option<SettingsBlob>> {
         let resp = self
             .http
-            .get(Self::endpoint(relay_url, "/api/sync/settings"))
+            .get(Self::endpoint(relay_url, "/api/sync/settings")?)
             .header("Authorization", Self::auth_header(session))
             .send()
             .await?;
@@ -559,7 +656,7 @@ impl AccountClient {
     ) -> Result<DelegateToken> {
         let resp = self
             .http
-            .post(Self::endpoint(relay_url, "/api/auth/delegate"))
+            .post(Self::endpoint(relay_url, "/api/auth/delegate")?)
             .header("Authorization", Self::auth_header(session))
             .send()
             .await?;
@@ -577,7 +674,7 @@ impl AccountClient {
     pub async fn revoke_token(&self, relay_url: &str, session: &AccountSession) -> Result<()> {
         let resp = self
             .http
-            .post(Self::endpoint(relay_url, "/api/auth/logout"))
+            .post(Self::endpoint(relay_url, "/api/auth/logout")?)
             .header("Authorization", Self::auth_header(session))
             .send()
             .await?;
@@ -597,7 +694,7 @@ impl AccountClient {
     ) -> Result<Vec<DeviceInfo>> {
         let resp = self
             .http
-            .get(Self::endpoint(relay_url, "/api/devices"))
+            .get(Self::endpoint(relay_url, "/api/devices")?)
             .header("Authorization", Self::auth_header(session))
             .send()
             .await?;
@@ -629,8 +726,8 @@ impl AccountClient {
             .http
             .delete(Self::endpoint(
                 relay_url,
-                &format!("/api/devices/{target_device_id}"),
-            ))
+                &format!("/api/devices/{}", urlencoding::encode(target_device_id)),
+            )?)
             .header("Authorization", Self::auth_header(session))
             .send()
             .await?;
@@ -662,8 +759,8 @@ impl AccountClient {
             .http
             .post(Self::endpoint(
                 relay_url,
-                &format!("/api/devices/{target_device_id}/rpc"),
-            ))
+                &format!("/api/devices/{}/rpc", urlencoding::encode(target_device_id)),
+            )?)
             .header("Authorization", Self::auth_header(session))
             .json(&body)
             .send()
@@ -794,5 +891,32 @@ mod tests {
         assert_eq!(parsed.m, params.m);
         assert_eq!(parsed.t, params.t);
         assert_eq!(parsed.p, params.p);
+        assert!(params.build().is_ok());
+        assert!(KdfParams {
+            m: u32::MAX,
+            t: 3,
+            p: 4,
+        }
+        .build()
+        .is_err());
+    }
+
+    #[test]
+    fn relay_endpoint_accepts_http_servers_and_rejects_ambiguous_urls() {
+        let endpoint =
+            AccountClient::endpoint("https://relay.example.com/prefix/", "/api/devices").unwrap();
+        assert_eq!(
+            endpoint.as_str(),
+            "https://relay.example.com/prefix/api/devices"
+        );
+
+        for invalid in [
+            "file:///tmp/relay",
+            "https://user:pass@relay.example.com",
+            "https://relay.example.com?target=other",
+            "https://relay.example.com/#fragment",
+        ] {
+            assert!(AccountClient::endpoint(invalid, "/api/devices").is_err());
+        }
     }
 }

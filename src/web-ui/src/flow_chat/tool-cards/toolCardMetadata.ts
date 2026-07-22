@@ -8,6 +8,7 @@
 import type { FlowItem, FlowToolItem, ToolCardConfig } from '../types/flow-chat';
 import { isMcpToolName, parseMcpToolName } from '@/infrastructure/mcp/toolName';
 import { UI_EXCEPTION_ACCENTS } from '@/shared/theme/uiExceptionAccents';
+import { getEffectiveToolName } from '../utils/toolInvocationIdentity';
 
 // Tool card config map - uses backend tool names
 export const TOOL_CARD_CONFIGS: Record<string, ToolCardConfig> = {
@@ -154,7 +155,7 @@ export const TOOL_CARD_CONFIGS: Record<string, ToolCardConfig> = {
     icon: 'SPEC',
     requiresConfirmation: false,
     resultDisplayType: 'detailed',
-    description: 'Read usage instructions and schema for a collapsed tool',
+    description: 'Read usage instructions and schema for a deferred tool',
     displayMode: 'compact',
     primaryColor: UI_EXCEPTION_ACCENTS.tealAction
   },
@@ -320,6 +321,26 @@ export const TOOL_CARD_CONFIGS: Record<string, ToolCardConfig> = {
     displayMode: 'standard',
     primaryColor: UI_EXCEPTION_ACCENTS.miniApp
   },
+  'PageDeploy': {
+    toolName: 'PageDeploy',
+    displayName: 'Deploy Page',
+    icon: 'WEB',
+    requiresConfirmation: false,
+    resultDisplayType: 'detailed',
+    description: 'Deploy a saved BitFun Page version to production',
+    displayMode: 'standard',
+    primaryColor: UI_EXCEPTION_ACCENTS.toolIdentity.terminal
+  },
+  'PagePublish': {
+    toolName: 'PagePublish',
+    displayName: 'Publish Page',
+    icon: 'WEB',
+    requiresConfirmation: true,
+    resultDisplayType: 'detailed',
+    description: 'Publish BitFun Page content (upload, save version, deploy)',
+    displayMode: 'standard',
+    primaryColor: UI_EXCEPTION_ACCENTS.toolIdentity.terminal
+  },
   'GenerativeUI': {
     toolName: 'GenerativeUI',
     displayName: 'Generative UI',
@@ -474,7 +495,7 @@ export function isCollapsibleItem(item: FlowItem): boolean {
 
   // Tools: only explorer tools are collapsible.
   if (item.type === 'tool') {
-    return isCollapsibleTool((item as FlowToolItem).toolName);
+    return isCollapsibleTool(getEffectiveToolName(item as FlowToolItem));
   }
 
   return false;
@@ -498,7 +519,7 @@ export function isCollapsibleItemWithContext(
 
     // If followed by an explorer tool, collapse together.
     if (nextItem.type === 'tool') {
-      return isCollapsibleTool((nextItem as FlowToolItem).toolName);
+      return isCollapsibleTool(getEffectiveToolName(nextItem as FlowToolItem));
     }
 
     // If followed by text or thinking, treat as collapsible for grouping.
@@ -512,7 +533,7 @@ export function isCollapsibleItemWithContext(
 
   // Tools: only explorer tools are collapsible.
   if (item.type === 'tool') {
-    return isCollapsibleTool((item as FlowToolItem).toolName);
+    return isCollapsibleTool(getEffectiveToolName(item as FlowToolItem));
   }
 
   return false;

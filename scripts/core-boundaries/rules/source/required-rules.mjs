@@ -240,7 +240,7 @@ export const requiredContentRules = [
   {
     path: 'src/crates/contracts/events/src/frontend_projection.rs',
     reason:
-      'events contract must own framework-neutral agentic frontend event projection for Tauri, WebSocket, and future extension hosts',
+      'events contract must own the framework-neutral agentic frontend event projection used by current hosts',
     patterns: [
       {
         regex: /\bpub struct AgenticFrontendEvent\b/,
@@ -251,43 +251,8 @@ export const requiredContentRules = [
         message: 'missing shared agentic frontend event projection function',
       },
       {
-        regex: /\bpub fn legacy_flat_message\b/,
-        message: 'missing legacy flat payload projection helper',
-      },
-      {
         regex: /\bdeep_review_queue_projection_preserves_camel_case_contract\b/,
         message: 'missing camelCase queue projection regression test',
-      },
-      {
-        regex: /\blegacy_flat_message_keeps_projection_type_authoritative\b/,
-        message: 'missing WebSocket type precedence regression test',
-      },
-      {
-        regex: /\blegacy_flat_dialog_turn_started_preserves_existing_shape\b/,
-        message: 'missing WebSocket dialog-turn-started shape regression test',
-      },
-    ],
-  },
-  {
-    path: 'src/crates/contracts/events/src/agentic_projection_manifest.rs',
-    reason:
-      'events contract must own the public AgenticEvent projection manifest, event versions, aggregate classification, and legacy transport allowlist',
-    patterns: [
-      {
-        regex: /\bpub const AGENTIC_EVENT_PROJECTION_MANIFEST\b/,
-        message: 'missing public AgenticEvent projection manifest',
-      },
-      {
-        regex: /\bpub fn public_agentic_event_projection_manifest\b/,
-        message: 'missing public AgenticEvent projection manifest accessor',
-      },
-      {
-        regex: /\bpub fn is_legacy_websocket_agentic_event_type\b/,
-        message: 'missing manifest-owned legacy WebSocket event allowlist helper',
-      },
-      {
-        regex: /\bpublic_event_projection_manifest_describes_projected_events_and_websocket_allowlist\b/,
-        message: 'missing public projection manifest regression test',
       },
     ],
   },
@@ -303,25 +268,6 @@ export const requiredContentRules = [
       {
         regex: /\.emit\(projected\.event_name\.as_str\(\), projected\.payload\)/,
         message: 'Tauri transport must emit projected event name and payload',
-      },
-    ],
-  },
-  {
-    path: 'src/crates/adapters/transport/src/adapters/websocket.rs',
-    reason:
-      'WebSocket transport adapter must consume shared event projection while preserving the legacy WebSocket event allowlist',
-    patterns: [
-      {
-        regex: /\bproject_agentic_frontend_event\b/,
-        message: 'missing shared frontend projection usage in WebSocket transport',
-      },
-      {
-        regex: /\bis_legacy_websocket_agentic_event_type\b/,
-        message: 'missing legacy WebSocket agentic event allowlist',
-      },
-      {
-        regex: /\bwebsocket_keeps_legacy_agentic_event_allowlist\b/,
-        message: 'missing WebSocket legacy event allowlist regression',
       },
     ],
   },
@@ -1877,69 +1823,6 @@ export const requiredContentRules = [
     ],
   },
   {
-    path: 'src/crates/execution/agent-runtime/src/tool_confirmation.rs',
-    reason:
-      'agent-runtime must own portable tool confirmation planning, failure mapping, and wait-channel lifecycle state',
-    patterns: [
-      {
-        regex: /\bpub struct ToolConfirmationRequestFacts\b/,
-        message: 'missing tool confirmation request facts',
-      },
-      {
-        regex: /\bpub struct ToolConfirmationGateFacts\b/,
-        message: 'missing tool confirmation gate facts',
-      },
-      {
-        regex: /\bpub enum ToolConfirmationGatePlan\b/,
-        message: 'missing tool confirmation gate plan',
-      },
-      {
-        regex: /\bpub enum ToolConfirmationPlan\b/,
-        message: 'missing tool confirmation plan contract',
-      },
-      {
-        regex: /\bpub enum ToolConfirmationOutcome\b/,
-        message: 'missing tool confirmation outcome contract',
-      },
-      {
-        regex: /\bpub enum ToolConfirmationWaitResult\b/,
-        message: 'missing tool confirmation wait-result contract',
-      },
-      {
-        regex: /\bpub enum ToolConfirmationResponse\b/,
-        message: 'missing tool confirmation channel response',
-      },
-      {
-        regex: /\bpub enum ConfirmationFailureKind\b/,
-        message: 'missing tool confirmation failure kind',
-      },
-      {
-        regex: /\bpub struct ToolConfirmationChannelStore\b/,
-        message: 'missing tool confirmation channel store',
-      },
-      {
-        regex: /\bpub fn resolve_tool_confirmation_plan\b/,
-        message: 'missing tool confirmation plan resolver',
-      },
-      {
-        regex: /\bpub fn resolve_tool_confirmation_gate\b/,
-        message: 'missing tool confirmation gate resolver',
-      },
-      {
-        regex: /\bpub fn resolve_confirmation_failure\b/,
-        message: 'missing tool confirmation failure resolver',
-      },
-      {
-        regex: /\bpub fn resolve_confirmation_wait_result\b/,
-        message: 'missing tool confirmation wait-result resolver',
-      },
-      {
-        regex: /\bconfirmation_channel_store_delivers_confirmation_once\b/,
-        message: 'missing confirmation channel delivery regression',
-      },
-    ],
-  },
-  {
     path: 'src/crates/execution/agent-runtime/src/checkpoint.rs',
     reason:
       'agent-runtime must own provider-neutral light-checkpoint summary policy while core keeps concrete Git/session IO',
@@ -1959,37 +1842,6 @@ export const requiredContentRules = [
       {
         regex: /\bpub fn build_light_checkpoint\b/,
         message: 'missing light checkpoint builder',
-      },
-    ],
-  },
-  {
-    path: 'src/crates/execution/agent-runtime/tests/tool_confirmation_contracts.rs',
-    reason:
-      'agent-runtime tool confirmation owner must keep behavior-equivalence contracts for legacy permission planning and failures',
-    patterns: [
-      {
-        regex: /\bconfirmation_plan_requires_permission_only_when_both_flags_are_true\b/,
-        message: 'missing tool confirmation gate regression',
-      },
-      {
-        regex: /\bconfirmation_gate_preserves_skip_policy_precedence\b/,
-        message: 'missing tool confirmation skip-policy regression',
-      },
-      {
-        regex: /\bconfirmation_gate_requires_confirmation_only_for_permissioned_tools\b/,
-        message: 'missing tool confirmation permissioned-tool regression',
-      },
-      {
-        regex: /\bconfirmation_plan_preserves_legacy_no_timeout_one_year_deadline\b/,
-        message: 'missing tool confirmation no-timeout regression',
-      },
-      {
-        regex: /\bconfirmation_failure_mapping_preserves_legacy_reasons_and_errors\b/,
-        message: 'missing tool confirmation failure mapping regression',
-      },
-      {
-        regex: /\bconfirmation_wait_result_mapping_preserves_legacy_timeout_and_rejection\b/,
-        message: 'missing tool confirmation wait-result mapping regression',
       },
     ],
   },
@@ -2845,27 +2697,15 @@ export const requiredContentRules = [
   {
     path: 'src/crates/assembly/core/src/agentic/tools/pipeline/tool_pipeline.rs',
     reason:
-      'core tool pipeline must delegate portable confirmation planning, failure mapping, and channel ownership to agent-runtime while retaining state/event/tool execution wiring',
+      'core tool pipeline must delegate portable cancellation and retry policy while retaining state/event/tool execution wiring',
     patterns: [
       {
-        regex: /\bresolve_tool_confirmation_plan\b/,
-        message: 'missing tool confirmation plan delegation',
+        regex: /\bremote_workspace_route_root_isolated_from_same_local_path\b/,
+        message: 'missing remote workspace permission identity isolation regression',
       },
       {
-        regex: /\bresolve_confirmation_failure\b/,
-        message: 'missing tool confirmation failure mapping delegation',
-      },
-      {
-        regex: /\bresolve_confirmation_wait_result\b/,
-        message: 'missing tool confirmation wait-result mapping delegation',
-      },
-      {
-        regex: /\bToolConfirmationPlan::Await\b/,
-        message: 'missing tool confirmation await-plan handling',
-      },
-      {
-        regex: /\bToolConfirmationChannelStore\b/,
-        message: 'missing tool confirmation channel owner delegation',
+        regex: /\bonce_and_always_replies_control_execution_and_remembered_grants\b/,
+        message: 'missing permission project and remote grant isolation regression',
       },
       {
         regex: /\bToolCancellationTokenStore\b/,
@@ -4011,8 +3851,8 @@ export const requiredContentRules = [
         message: 'AI client runtime must stay behind ai-adapter-runtime',
       },
       {
-        regex: /#\[cfg\(feature = "ai-adapter-runtime"\)\]\s*pub mod cli_credentials\b/s,
-        message: 'AI CLI credential runtime must stay behind ai-adapter-runtime',
+        regex: /#\[cfg\(feature = "ai-adapter-runtime"\)\]\s*pub mod subscription_auth\b/s,
+        message: 'AI subscription auth runtime must stay behind ai-adapter-runtime',
       },
       {
         regex: /#\[cfg\(feature = "product-full"\)\]\s*pub mod debug_log\b/s,
@@ -5313,10 +5153,6 @@ export const requiredContentRules = [
         message: 'missing registry snapshot to manifest policy input helper',
       },
       {
-        regex: /\bpub fn build_collapsed_tool_stub_definition\b/,
-        message: 'missing collapsed-tool prompt stub contract',
-      },
-      {
         regex: /\bpub enum PromptVisibleToolManifestItem\b/,
         message: 'missing prompt-visible manifest item contract',
       },
@@ -5373,16 +5209,16 @@ export const requiredContentRules = [
         message: 'missing pure GetToolSpec prompt description contract',
       },
       {
-        regex: /\bpub struct GetToolSpecCollapsedToolSummary\b/,
-        message: 'missing pure GetToolSpec collapsed catalog summary',
+        regex: /\bpub struct GetToolSpecDeferredToolSummary\b/,
+        message: 'missing pure GetToolSpec deferred catalog summary',
       },
       {
         regex: /\bpub struct GetToolSpecDetail\b/,
         message: 'missing pure GetToolSpec detail contract',
       },
       {
-        regex: /\bpub fn summarize_get_tool_spec_collapsed_tools\b/,
-        message: 'missing pure GetToolSpec collapsed summary helper',
+        regex: /\bpub fn summarize_get_tool_spec_deferred_tools\b/,
+        message: 'missing pure GetToolSpec deferred summary helper',
       },
       {
         regex: /\bpub async fn resolve_get_tool_spec_detail\b/,
@@ -5411,10 +5247,6 @@ export const requiredContentRules = [
       {
         regex: /\bpub fn get_tool_spec_is_concurrency_safe\b/,
         message: 'missing pure GetToolSpec concurrency metadata contract',
-      },
-      {
-        regex: /\bpub fn get_tool_spec_needs_permissions\b/,
-        message: 'missing pure GetToolSpec permission metadata contract',
       },
       {
         regex: /\bpub fn validate_get_tool_spec_input\b/,
@@ -5461,12 +5293,12 @@ export const requiredContentRules = [
         message: 'missing pure GetToolSpec load observation contract',
       },
       {
-        regex: /\bpub fn collect_loaded_collapsed_tool_names\b/,
-        message: 'missing pure collapsed-tool load collection contract',
+        regex: /\bpub fn collect_loaded_deferred_tool_specs\b/,
+        message: 'missing pure deferred-tool load collection contract',
       },
       {
-        regex: /\bpub enum CollapsedToolUsageError\b/,
-        message: 'missing collapsed-tool execution gate error contract',
+        regex: /\bpub enum DeferredToolUsageError\b/,
+        message: 'missing deferred-tool execution gate error contract',
       },
       {
         regex: /\bpub enum ToolExecutionAccessError\b/,
@@ -5477,8 +5309,8 @@ export const requiredContentRules = [
         message: 'missing tool execution allowed-list gate policy',
       },
       {
-        regex: /\bpub fn validate_collapsed_tool_usage\b/,
-        message: 'missing collapsed-tool execution gate policy',
+        regex: /\bpub fn validate_deferred_tool_usage\b/,
+        message: 'missing deferred-tool execution gate policy',
       },
       {
         regex: /\bpub fn is_tool_path_allowed_by_resolved_roots\b/,
@@ -5553,12 +5385,12 @@ export const requiredContentRules = [
         message: 'missing generic static-provider plan-to-registry assembly helper',
       },
       {
-        regex: /\bpub fn is_tool_collapsed\b/,
-        message: 'missing generic collapsed-tool registry query',
+        regex: /\bpub fn is_tool_deferred\b/,
+        message: 'missing generic deferred-tool registry query',
       },
       {
-        regex: /\bpub fn get_collapsed_tool_names\b/,
-        message: 'missing generic collapsed-tool registry catalog query',
+        regex: /\bpub fn get_deferred_tool_names\b/,
+        message: 'missing generic deferred-tool registry catalog query',
       },
       {
         regex: /\bpub async fn resolve_readonly_enabled_tools\b/,
@@ -6685,10 +6517,6 @@ export const requiredContentRules = [
         regex: /\bremote_poll_handler_preserves_missing_workspace_error\b/,
         message: 'missing remote poll missing-workspace regression',
       },
-      {
-        regex: /\bremote_interaction_handler_preserves_default_reject_reason\b/,
-        message: 'missing remote interaction default reject regression',
-      },
     ],
   },
   {
@@ -7008,12 +6836,8 @@ export const requiredContentRules = [
   {
     path: 'src/crates/assembly/core/src/agentic/coordination/scheduler.rs',
     reason:
-      'core scheduler keeps remote queue policy semantics until agent-runtime migration is reviewed',
+      'core scheduler must keep dialog lifecycle and requester-aware cancellation adapters',
     patterns: [
-      {
-        regex: /\bremote_queue_policy_preserves_confirmation_boundary\b/,
-        message: 'missing remote queue policy regression',
-      },
       {
         regex: /\bimpl AgentDialogTurnPort for DialogScheduler\b/,
         message: 'missing dialog lifecycle port implementation',
@@ -7086,8 +6910,8 @@ export const requiredContentRules = [
         message: 'missing product tool runtime owner delegation',
       },
       {
-        regex: /\bget_collapsed_tool_names\b/,
-        message: 'missing collapsed-tool catalog owner',
+        regex: /\bget_deferred_tool_names\b/,
+        message: 'missing deferred-tool catalog owner',
       },
       {
         regex: /\bresolve_product_readonly_enabled_tools\b/,
@@ -7095,11 +6919,11 @@ export const requiredContentRules = [
       },
       {
         regex: /\bproduct_tool_runtime_owner_preserves_registry_contract\b/,
-        message: 'missing collapsed-tool manifest migration baseline',
+        message: 'missing deferred-tool manifest migration baseline',
       },
       {
-        regex: /\binner\.is_tool_collapsed\b/,
-        message: 'missing collapsed exposure lookup delegation',
+        regex: /\binner\.is_tool_deferred\b/,
+        message: 'missing deferred exposure lookup delegation',
       },
     ],
   },
@@ -7254,8 +7078,8 @@ export const requiredContentRules = [
         message: 'missing product GetToolSpec Tool-result vector facade',
       },
       {
-        regex: /\bunlocked_collapsed_tools\b/,
-        message: 'missing product runtime collapsed-tool unlock state source',
+        regex: /\bloaded_deferred_tool_specs\b/,
+        message: 'missing product runtime deferred-tool loaded-spec state source',
       },
       {
         regex: /\bproduct_catalog_provider_default_get_tool_spec_catalog_matches_registry\b/,
@@ -7496,8 +7320,8 @@ export const requiredContentRules = [
         message: 'missing core product manifest facade delegation',
       },
       {
-        regex: /\bcollapsed_tool_names\b/,
-        message: 'missing collapsed-tool name tracking',
+        regex: /\bdeferred_tool_names\b/,
+        message: 'missing deferred-tool name tracking',
       },
       {
         regex: /\bmanifest_resolver_facade_preserves_product_owner_output\b/,
@@ -7523,8 +7347,8 @@ export const requiredContentRules = [
         message: 'missing core GetToolSpec execution error mapping boundary',
       },
       {
-        regex: /\bbuild_collapsed_tools_context_section\b/,
-        message: 'missing core collapsed-tool request-context section renderer',
+        regex: /\bbuild_deferred_tools_context_section\b/,
+        message: 'missing core deferred-tool request-context section renderer',
       },
       {
         regex: /\bproduct_get_tool_spec_runtime\b/,
@@ -7593,8 +7417,8 @@ export const requiredContentRules = [
         message: 'missing cancellation token runtime-only facts guard',
       },
       {
-        regex: /\bunlocked_collapsed_tools\b/,
-        message: 'missing collapsed-tool unlock state',
+        regex: /\bloaded_deferred_tool_specs\b/,
+        message: 'missing deferred-tool loaded-spec state',
       },
       {
         regex: /\bimpl ToolUseContext\b/,
@@ -7697,15 +7521,15 @@ export const requiredContentRules = [
   {
     path: 'src/crates/assembly/core/src/agentic/tools/pipeline/tool_pipeline.rs',
     reason:
-      'core must continue carrying collapsed-tool unlock state while delegating provider-neutral execution gate policy to agent-tools',
+      'core must continue carrying deferred-tool loaded-spec state while delegating provider-neutral execution gate policy to agent-tools',
     patterns: [
       {
         regex: /\bvalidate_tool_execution_admission\b/,
         message: 'missing provider-neutral tool execution admission gate delegation',
       },
       {
-        regex: /\bunlocked_collapsed_tools\b/,
-        message: 'missing collapsed-tool unlock state propagation',
+        regex: /\bloaded_deferred_tool_specs\b/,
+        message: 'missing deferred-tool loaded-spec state propagation',
       },
       {
         regex: /\bpipeline_preserves_core_owned_tool_context_without_portable_runtime_leak\b/,
@@ -7740,19 +7564,19 @@ export const requiredContentRules = [
   {
     path: 'src/crates/assembly/core/src/agentic/execution/execution_engine.rs',
     reason:
-      'core execution must pass collapsed-tool unlock state through product runtime owner and keep DeepResearch post-turn hooks',
+      'core execution must pass deferred-tool loaded-spec state through product runtime owner and keep DeepResearch post-turn hooks',
     patterns: [
       {
-        regex: /\bcollect_product_unlocked_collapsed_tools\b/,
-        message: 'missing product runtime collapsed-tool unlock state handoff',
+        regex: /\bcollect_product_loaded_deferred_tool_specs\b/,
+        message: 'missing product runtime deferred-tool loaded-spec state handoff',
       },
       {
-        regex: /\bunlocked_collapsed_tools\b/,
-        message: 'missing collapsed-tool unlock propagation into round context',
+        regex: /\bloaded_deferred_tool_specs\b/,
+        message: 'missing deferred-tool loaded-spec propagation into round context',
       },
       {
-        regex: /\bcollapsed_tool_names\b/,
-        message: 'missing manifest collapsed-tool handoff',
+        regex: /\bdeferred_tool_names\b/,
+        message: 'missing manifest deferred-tool handoff',
       },
       {
         regex: /\bGetToolSpec\b/,
@@ -7769,25 +7593,25 @@ export const requiredContentRules = [
     ],
   },
   {
-    path: 'src/crates/assembly/core/src/agentic/tools/product_runtime/unlock_state.rs',
+    path: 'src/crates/assembly/core/src/agentic/tools/product_runtime/loaded_spec_state.rs',
     reason:
-      'product runtime owns collapsed-tool unlock observation adaptation while preserving generic agent-tools policy',
+      'product runtime owns deferred-tool loaded-spec observation adaptation while preserving generic agent-tools policy',
     patterns: [
       {
-        regex: /\bcollect_product_unlocked_collapsed_tools\b/,
-        message: 'missing product runtime collapsed-tool unlock collector',
+        regex: /\bcollect_product_loaded_deferred_tool_specs\b/,
+        message: 'missing product runtime deferred-tool loaded-spec collector',
       },
       {
         regex: /\bGetToolSpecLoadObservation\b/,
         message: 'missing GetToolSpec load observation adapter',
       },
       {
-        regex: /\bcollect_loaded_collapsed_tool_names\b/,
-        message: 'missing generic collapsed-tool load collector delegation',
+        regex: /\bcollect_loaded_deferred_tool_specs\b/,
+        message: 'missing generic deferred-tool load collector delegation',
       },
       {
-        regex: /\bproduct_unlock_state_dedupes_and_filters_runtime_unlocks\b/,
-        message: 'missing collapsed-tool unlock filtering regression',
+        regex: /\bproduct_loaded_spec_state_dedupes_and_filters_results\b/,
+        message: 'missing deferred-tool loaded-spec filtering regression',
       },
     ],
   },
@@ -7946,15 +7770,15 @@ export const requiredContentRules = [
         message: 'missing background subagent launch path',
       },
       {
-        regex: /\bbackground_task_id\b/,
-        message: 'missing background task id result contract',
+        regex: /\bbg_task_id\b/,
+        message: 'missing parent-scoped background task id result contract',
       },
     ],
   },
   {
     path: 'src/crates/assembly/core/src/agentic/tools/implementations/task/background.rs',
     reason:
-      'core Task background acknowledgement must remain assistant-visible and not expose internal background task ids',
+      'core Task background acknowledgement must remain assistant-visible and expose the task id needed for explicit result collection',
     patterns: [
       {
         regex: /Background subagent started successfully/,
@@ -7968,7 +7792,7 @@ export const requiredContentRules = [
       'core Task tests must preserve background acknowledgement shape',
     patterns: [
       {
-        regex: /\bbackground_subagent_start_acknowledgement_uses_session_id_only\b/,
+        regex: /\bbackground_subagent_start_acknowledgement_exposes_agent_wait_task_id\b/,
         message: 'missing background task start acknowledgement regression',
       },
       {
