@@ -90,6 +90,10 @@ external/
 /output/
 /data/pipeline/
 /taiji-website/
+
+# Taiji legal evidence (private, do NOT commit)
+/docs/legal/evidence/official-reply-20260722.json
+/docs/legal/screenshots/official-reply.png
 /scripts/__pycache__/
 /scripts/build_website.cjs
 /scripts/compose/
