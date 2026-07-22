@@ -1,7 +1,7 @@
 use crate::agentic::tools::file_permissions::file_permission_intents;
 use crate::agentic::tools::file_read_state_runtime::{
     assert_file_not_unexpectedly_modified, file_mutation_timestamp_ms, get_stored_file_read_state,
-    local_file_modification_time_ms, read_current_file_content, read_state_tracking_enabled,
+    local_file_modification_time_ms, read_state_tracking_enabled,
     update_file_read_state_after_mutation, validate_edit_against_read_state,
     validate_edit_has_prior_read, FILE_UNEXPECTEDLY_MODIFIED_ERROR,
 };
@@ -223,7 +223,7 @@ impl Tool for FileEditTool {
             .get("new_string")
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        let replace_all = input
+        let _replace_all = input
             .get("replace_all")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
@@ -270,36 +270,11 @@ impl Tool for FileEditTool {
             if let Some(message) = Self::edit_read_state_guardrail_error(ctx, &resolved).await {
                 return Self::guidance_failure(message);
             }
-
-            let file_content = match read_current_file_content(ctx, &resolved).await {
-                Ok(content) => content,
-                Err(error) => {
-                    return ValidationResult {
-                        result: false,
-                        message: Some(format!(
-                            "Failed to read file {}: {}",
-                            resolved.logical_path, error
-                        )),
-                        error_code: Some(400),
-                        meta: None,
-                    };
-                }
-            };
-
-            if let Err(error) =
-                apply_edit_to_content(&file_content, old_string, new_string, replace_all)
-            {
-                if is_edit_content_guardrail_error(&error) {
-                    return Self::guidance_failure(error);
-                }
-
-                return ValidationResult {
-                    result: false,
-                    message: Some(error),
-                    error_code: Some(400),
-                    meta: None,
-                };
-            }
+            // Dry-run (read_current_file_content + apply_edit_to_content) removed from
+            // validate_input per #1650: the expensive whitespace-normalization candidate
+            // scanning was causing token amplification (957K) and hangs (1m23s) on large
+            // files. The guardrail above already fast-fails when read-state is stale; the
+            // actual edit is validated in call_impl → edit_local_file_with_content.
         }
 
         ValidationResult::default()

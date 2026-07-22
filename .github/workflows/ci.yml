@@ -235,3 +235,166 @@ jobs:
           name: frontend-dist
           path: dist
           retention-days: 1
+
+  # ── Taiji: cargo test ──────────────────────────────────────────────
+  taiji-cargo-test:
+    name: Taiji Cargo Test (ubuntu-latest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Linux system dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config \
+            build-essential \
+            libssl-dev \
+            libglib2.0-dev \
+            libgtk-3-dev \
+            libxdo-dev \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libleptonica-dev \
+            libtesseract-dev \
+            tesseract-ocr \
+            tesseract-ocr-eng
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Generate dependency lockfile
+        run: cargo generate-lockfile
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          shared-key: "taiji-ci-test-v1"
+          cache-bin: false
+          save-if: ${{ github.event_name != 'pull_request' }}
+
+      - name: Run taiji crate tests
+        run: cargo test --workspace --exclude taiji-dvmi --exclude taiji-magnet --exclude taiji-thrust --exclude taiji-risk
+
+  # ── Taiji: cargo check ─────────────────────────────────────────────
+  taiji-cargo-check:
+    name: Taiji Cargo Check (ubuntu-latest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Linux system dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config \
+            build-essential \
+            libssl-dev \
+            libglib2.0-dev \
+            libgtk-3-dev \
+            libxdo-dev \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libleptonica-dev \
+            libtesseract-dev \
+            tesseract-ocr \
+            tesseract-ocr-eng
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Generate dependency lockfile
+        run: cargo generate-lockfile
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          shared-key: "taiji-ci-check-v1"
+          cache-bin: false
+          save-if: ${{ github.event_name != 'pull_request' }}
+
+      - name: Check taiji crates compilation
+        run: cargo check --workspace --exclude taiji-dvmi --exclude taiji-magnet --exclude taiji-thrust --exclude taiji-risk
+
+  # ── Taiji: clippy ───────────────────────────────────────────────────
+  taiji-clippy:
+    name: Taiji Clippy (ubuntu-latest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Linux system dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config \
+            build-essential \
+            libssl-dev \
+            libglib2.0-dev \
+            libgtk-3-dev \
+            libxdo-dev \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libleptonica-dev \
+            libtesseract-dev \
+            tesseract-ocr \
+            tesseract-ocr-eng
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Generate dependency lockfile
+        run: cargo generate-lockfile
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          shared-key: "taiji-clippy-ci-v1"
+          cache-bin: false
+          save-if: ${{ github.event_name != 'pull_request' }}
+
+      - name: Install clippy
+        run: rustup component add clippy
+
+      - name: Run clippy on taiji crates
+        run: cargo clippy --workspace --exclude taiji-dvmi --exclude taiji-magnet --exclude taiji-thrust --exclude taiji-risk -- -D warnings
+
+  # ── Taiji: cargo audit ─────────────────────────────────────────────
+  taiji-cargo-audit:
+    name: Taiji Cargo Audit (ubuntu-latest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Linux system dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config \
+            build-essential \
+            libssl-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Generate dependency lockfile
+        run: cargo generate-lockfile
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          shared-key: "taiji-ci-audit-v1"
+          cache-bin: false
+          save-if: ${{ github.event_name != 'pull_request' }}
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit
+
+      - name: Run cargo audit
+        run: cargo audit

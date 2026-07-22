@@ -1,0 +1,19 @@
+[package]
+name = "taiji-risk"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "Risk management engine (position sizing, ATR stops, Kelly)"
+
+[lib]
+name = "taiji_risk"
+crate-type = ["rlib"]
+
+[dependencies]
+taiji-engine = { path = "../taiji-engine" }
+taiji-executor = { path = "../taiji-executor" }
+chrono = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

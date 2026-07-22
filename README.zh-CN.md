@@ -119,6 +119,18 @@ BitFun 的扩展路径从轻到重连续展开：
 
 ---
 
+## Taiji 量化交易子系统
+
+Taiji 是 BitFun workspace 中的量化交易子系统，基于自研的量价时空理论构建，以独立 crate 族的形式运行于 workspace 内：
+
+- **taiji-engine** — 基于 DAG 的计算引擎，驱动策略执行
+- **taiji-realtime** — 实时行情数据接入与处理
+- **taiji-backtest** — 历史回测与绩效评估
+
+子系统包含 20 个活跃 crate 及 4 个闭源 crate，覆盖形态识别、订单流分析、情绪追踪、告警、知识图谱和策略生成等能力。
+
+---
+
 ## 贡献
 
 欢迎 Star、Issue 和 PR。我们尤其关注：

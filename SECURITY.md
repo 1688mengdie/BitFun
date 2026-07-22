@@ -57,3 +57,36 @@ Out of scope:
 We will not pursue or support legal action against researchers who, in good faith, discover and report vulnerabilities in accordance with this policy and who avoid privacy violations, data destruction, and service disruption during testing.
 
 Thank you for helping keep BitFun and its users safe.
+
+## Taiji Module Security
+
+### 1. Taiji Module Security Boundaries
+
+- **Data source security assumptions (CTP / Replay / TTS)**:
+  - CTP data feeds are assumed to originate from authorized brokerage connections. The taiji module does not validate CTP credentials; it relies on the upstream CTP adapter for authentication.
+  - Replay data is treated as trusted local input. Any replay file sourced from an untrusted origin must be sanitized before ingestion.
+  - TTS (time-tick simulation) data is synthetic and carries no external trust dependency, but parameter tampering could skew backtest results.
+
+- **Strategy engine sandbox boundaries**:
+  - User-defined strategies run in-process and are not sandboxed. Strategy code has the same OS-level privileges as the taiji runtime. Review all third-party strategy code before execution.
+  - Network access from strategies is not restricted by default. Strategies that require isolation should be executed in a dedicated container or VM.
+
+- **Real-time data transport encryption**:
+  - Real-time market data over TCP/UDP should be transported over encrypted channels (TLS) in production environments. Plaintext CTP connections are acceptable only in isolated test networks.
+
+### 2. Taiji Dependency Security
+
+- **Non-crates.io dependency audit**:
+  - Any dependency sourced outside crates.io (Git repositories, local paths, vendor forks) must go through a manual audit before inclusion. Record the audit result in the dependency's commit history or a tracked decision log.
+  - Pin non-crates.io dependencies to a specific commit hash; do not use floating branches.
+
+- **ffmpeg-sidecar security notes**:
+  - `ffmpeg-sidecar` downloads a prebuilt ffmpeg binary at runtime. Verify the binary's checksum against a trusted baseline before first use in production.
+  - Bundle a known-good ffmpeg binary with the taiji distribution if the runtime download path is unacceptable for your environment.
+
+### 3. Sensitive Information Handling
+
+- **Strategy parameters and API keys**:
+  - Always prefer environment variables for strategy parameters, API keys, and broker credentials. Do not hardcode secrets in strategy source files, YAML configuration, or commit them to version control.
+  - Use a `.env` file (excluded from Git via `.gitignore`) for local development. In production, inject secrets through the platform's secret management mechanism.
+  - Logging must never emit full API keys or credential strings. Mask sensitive fields before writing to log output.

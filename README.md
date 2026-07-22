@@ -119,6 +119,18 @@ You can use BitFun's Code Agent to extend BitFun itself.
 
 ---
 
+## Taiji — Quantitative Trading Subsystem
+
+Taiji is a quantitative trading subsystem within the BitFun workspace, built on the proprietary Volume-Price-Time-Space (量价时空) theory. It operates as a standalone crate family inside the workspace:
+
+- **taiji-engine** — DAG-based computation engine for strategy execution
+- **taiji-realtime** — real-time market data ingestion and processing
+- **taiji-backtest** — historical backtesting and performance evaluation
+
+The subsystem consists of 20 active crates plus 4 closed-source crates, covering pattern recognition, order flow analysis, sentiment tracking, alerting, knowledge graph, and strategy generation.
+
+---
+
 ## Contributing
 
 Stars, Issues, and PRs are welcome. We especially care about:

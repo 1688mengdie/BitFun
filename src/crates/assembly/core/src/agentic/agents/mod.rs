@@ -5,6 +5,7 @@
 mod definitions;
 mod prompt_builder;
 mod registry;
+pub mod team_presets;
 
 use crate::agentic::session::{SystemPromptCacheIdentity, UserContextCacheIdentity};
 use crate::agentic::tools::framework::ToolExposure;
@@ -31,7 +32,8 @@ pub use definitions::modes::{
 pub use definitions::review::{ReviewFixerAgent, ReviewJudgeAgent, ReviewWorkerAgent};
 pub use definitions::shared::ReadonlySubagent;
 pub use definitions::subagents::{
-    ComputerUseMode, ExploreAgent, FileFinderAgent, GeneralPurposeAgent, ResearchSpecialistAgent,
+    AcpAgent, ComputerUseMode, ExploreAgent, FileFinderAgent, GeneralPurposeAgent,
+    ResearchSpecialistAgent,
 };
 use indexmap::IndexMap;
 pub use prompt_builder::{

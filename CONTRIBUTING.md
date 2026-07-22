@@ -168,3 +168,41 @@ manual verification path.
 ## Thanks
 
 Every contribution matters. Issues, PRs, and suggestions are all welcome!
+
+## Taiji Module
+
+This repository also hosts the **Taiji** multi-agent quant system under `src/crates/taiji/`.
+
+### Crate layout
+
+| Category | Count | Crates |
+| --- | --- | --- |
+| Active | 20 | `taiji-bar`, `taiji-cli`, `taiji-engine`, `taiji-engine-py`, `taiji-content`, `taiji-publisher`, `taiji-growth`, `taiji-alert`, `taiji-knowledge-graph`, `taiji-blog-gen`, `taiji-example`, `taiji-llm`, `taiji-backtest`, `taiji-executor`, `taiji-realtime`, `taiji-pattern`, `taiji-abnormal`, `taiji-sentiment`, `taiji-orderflow`, `taiji-strategen` |
+| Closed-source (commented out) | 4 | `taiji-dvmi`, `taiji-magnet`, `taiji-thrust`, `taiji-risk` |
+
+### Closed-source policy
+
+The 4 closed-source crates listed above are **commented out** in `Cargo.toml` workspace members. **Do not uncomment or submit closed-source code to the public repository.** CI test jobs also exclude these crates.
+
+### Before you start
+
+- Read `docs/architecture/product-architecture.md` for architecture-sensitive rules and module boundaries.
+- Familiarize yourself with the taiji crate dependency matrix: see `.bitfun/team/type-contract-phase8-10.md` for inter-crate dependencies and merge rules.
+
+### Verification
+
+Run per-crate checks before committing taiji changes:
+
+```bash
+cargo check -p <crate>
+cargo test -p <crate>
+```
+
+For workspace-wide taiji verification, use:
+
+```bash
+cargo check --workspace
+cargo test --workspace
+```
+
+Keep PRs focused on one functional area and note any skipped verification with a reason.

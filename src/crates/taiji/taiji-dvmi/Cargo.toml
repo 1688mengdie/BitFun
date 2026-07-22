@@ -1,0 +1,22 @@
+[package]
+name = "taiji-dvmi"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "Pivot detection + dual-line three-state engine (ref: trendln MIT, pytrendline MIT)"
+
+[lib]
+name = "taiji_dvmi"
+crate-type = ["rlib"]
+
+[dependencies]
+taiji-engine = { path = "../taiji-engine" }
+chrono = { workspace = true }
+serde_json = "1"
+
+[dev-dependencies]
+chrono = { workspace = true }
+serde = { version = "1", features = ["derive"] }
+
+[lints]
+workspace = true

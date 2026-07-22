@@ -1,0 +1,21 @@
+[package]
+name = "taiji-magnet"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "Magnet coordinate positioning engine (ref: support_resistance)"
+
+[lib]
+name = "taiji_magnet"
+crate-type = ["rlib"]
+
+[dependencies]
+taiji-engine = { path = "../taiji-engine" }
+chrono = { workspace = true }
+serde_json = "1"
+
+[dev-dependencies]
+chrono = { workspace = true }
+
+[lints]
+workspace = true
