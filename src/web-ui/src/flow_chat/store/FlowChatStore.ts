@@ -62,6 +62,7 @@ import { sessionBelongsToWorkspaceNavRow } from '../utils/sessionOrdering';
 import { sessionMatchesWorkspace } from '../utils/workspaceScope';
 import { resolveThreadGoalUserMessageDisplay } from '../utils/threadGoalDisplay';
 import { useBackgroundSubagentActivityStore } from './backgroundSubagentActivityStore';
+import { sessionComposerStore } from './sessionComposerStore';
 import { recordHistorySessionDiagnosticEvent } from '../services/historySessionDiagnostics';
 
 const log = createLogger('FlowChatStore');
@@ -1990,7 +1991,8 @@ export class FlowChatStore {
       log.error('Failed to delete session on backend', { sessionId, error });
     }
 
-    this.removeSession(sessionId, options);
+    const removedSessionIds = this.removeSession(sessionId, options);
+    sessionComposerStore.getState().removeDrafts(removedSessionIds);
     this.pendingRemoveSessionOptions.delete(sessionId);
   }
 
