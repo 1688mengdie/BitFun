@@ -1111,6 +1111,24 @@ class WorkspaceManager {
     }
   }
 
+  public async renameWorkspace(workspaceId: string, name: string): Promise<WorkspaceInfo> {
+    try {
+      this.setError(null);
+
+      const updatedWorkspace = await globalStateAPI.updateWorkspaceInfo(workspaceId, {
+        name: name.trim(),
+      });
+
+      this.applyWorkspaceRecordUpdate(updatedWorkspace);
+      return updatedWorkspace;
+    } catch (error) {
+      log.error('Failed to rename workspace', { workspaceId, error });
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.updateState({ error: errorMessage }, { type: 'workspace:error', error: errorMessage });
+      throw error;
+    }
+  }
+
   public async cleanupInvalidWorkspaces(): Promise<number> {
     try {
       const removedCount = await globalStateAPI.cleanupInvalidWorkspaces();
