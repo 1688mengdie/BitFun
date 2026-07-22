@@ -217,12 +217,18 @@ function sleepMs(ms) {
 export function isCompilerBusy({ exec = execFileSync, platform = process.platform } = {}) {
   try {
     if (platform === 'win32') {
-      const out = exec(
-        'cmd.exe',
-        ['/d', '/s', '/c', 'tasklist /FI "IMAGENAME eq cargo.exe" & tasklist /FI "IMAGENAME eq rustc.exe"'],
-        { encoding: 'utf8' }
-      );
-      return /\bcargo\.exe\b/i.test(out) || /\brustc\.exe\b/i.test(out);
+      // Use two separate tasklist calls to avoid quoting/escaping issues with &
+      // when passed through cmd.exe /d /s /c on non-English Windows locales.
+      const cargoOut = exec('cmd.exe', ['/d', '/s', '/c', 'tasklist /FI "IMAGENAME eq cargo.exe" /NH'], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+      });
+      if (/\bcargo\.exe\b/i.test(cargoOut)) return true;
+      const rustcOut = exec('cmd.exe', ['/d', '/s', '/c', 'tasklist /FI "IMAGENAME eq rustc.exe" /NH'], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+      });
+      return /\brustc\.exe\b/i.test(rustcOut);
     }
     const cargo = exec('pgrep', ['-x', 'cargo'], { encoding: 'utf8' }).trim();
     if (cargo) {
