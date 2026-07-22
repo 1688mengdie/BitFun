@@ -89,6 +89,21 @@ external/
 # Taiji generated outputs
 /output/
 /data/pipeline/
-/taiji-website/public/
-/taiji-website/.hugo_build.lock
+/taiji-website/
 /scripts/__pycache__/
+/scripts/build_website.cjs
+/scripts/compose/
+/scripts/create-files.cjs
+/scripts/fetch_real_data.py
+/scripts/generate_ag_report.py
+/scripts/generate_daily_report.py
+/scripts/generate_daily_video.py
+/scripts/generate_tech_analysis_video.py
+/scripts/generate_video_from_pipeline.py
+/scripts/render/
+/scripts/tts/
+/scripts/video-render-template/
+/reports/RB0-*.md
+/reports/ai-llm-api-reference.md
+/reports/daily_report_*.md
+/reports/taiji-cli-duplication-audit.md
