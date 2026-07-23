@@ -55,6 +55,7 @@ export class RemotePageState {
   @Trace selectedImages: SelectedImageAttachment[] = [];
   @Trace isVoiceListening: boolean = false;
   @Trace sessionQuery: string = '';
+  @Trace sessionFilter: string = 'all';
   @Trace hasMoreSessions: boolean = false;
   @Trace isLoadingSessions: boolean = false;
   @Trace sessionErrorText: string = '';
@@ -62,6 +63,10 @@ export class RemotePageState {
 
   setQuery(query: string): void {
     this.sessionQuery = query;
+  }
+
+  setFilter(filter: string): void {
+    this.sessionFilter = filter;
   }
 
   setDesktopName(desktopName: string): void {
@@ -188,6 +193,10 @@ export class RemotePageState {
       RemoteUiState.emptyActiveTurn();
     this.hasMoreMessages = hasMoreMessages;
     this.timelineItems = timelineItems.slice();
+  }
+
+  setHasMoreMessages(hasMoreMessages: boolean): void {
+    this.hasMoreMessages = hasMoreMessages;
   }
 
   clearTimeline(): void {

@@ -31,6 +31,7 @@ export struct ConnectView {
   @Prop deviceId: string = '';
   @Prop requiresAccountAuth: boolean = false;
   @Prop accountUsername: string = '';
+  @Prop startWithScanner: boolean = true;
   onBack: () => void = () => {};
   onConnect: (password?: string) => void = (_password?: string) => {};
   onClearPairing: () => void = () => {};
@@ -47,6 +48,12 @@ export struct ConnectView {
   @State accountPassword: string = '';
   @State cameraPermissionReady: boolean = false;
   @State requestingCameraPermission: boolean = false;
+
+  aboutToAppear(): void {
+    if (this.startWithScanner && this.remoteUrl.trim().length === 0) {
+      this.pairingStep = 'scan';
+    }
+  }
 
   aboutToDisappear(): void {
     this.stopInlineScan();
@@ -357,6 +364,7 @@ export struct ConnectView {
         .onClick(() => {
           this.stopInlineScan();
           this.showManualPairing = false;
+          this.resumeInlineScan();
         })
 
       Column({ space: 20 }) {
@@ -421,6 +429,7 @@ export struct ConnectView {
             .onClick(() => {
               this.stopInlineScan();
               this.showManualPairing = false;
+              this.resumeInlineScan();
             })
           Button(RemoteI18n.t('connect.pair'))
             .layoutWeight(1)
@@ -944,6 +953,18 @@ export struct ConnectView {
       return customScan.release();
     }).catch((_err: Object) => {
     });
+  }
+
+  private resumeInlineScan(): void {
+    if (this.remoteUrl.trim().length > 0 || this.pairingStep !== 'scan') {
+      return;
+    }
+    this.scanCompleted = false;
+    setTimeout(() => {
+      if (!this.showManualPairing) {
+        void this.startInlineScan();
+      }
+    }, 80);
   }
 
   private async ensureCameraPermission(): Promise<void> {

@@ -1,4 +1,4 @@
-import { ChatMessage, ChatMessageItemResponse, RemoteQuestionAnswerPayload } from '../../model/RemoteModels';
+import { ConversationUiMessage, ConversationUiMessageItem, ConversationUiQuestionAnswer, toConversationUiMessage } from './ConversationUiModels';
 import { RemoteI18n } from '../../i18n/RemoteI18n';
 import { ChatTimelineItem } from '../../services/ChatTimelineProjector';
 import { ChatSurface } from './ChatSurface';
@@ -24,8 +24,8 @@ export struct ChatTimeline {
     (_toolId: string, _updatedInput?: Object) => {};
   @Event onRejectTool: (toolId: string) => void = (_toolId: string) => {};
   @Event onCancelTool: (toolId: string) => void = (_toolId: string) => {};
-  @Event onAnswerQuestion: (toolId: string, answers: RemoteQuestionAnswerPayload) => void =
-    (_toolId: string, _answers: RemoteQuestionAnswerPayload) => {};
+  @Event onAnswerQuestion: (toolId: string, answers: ConversationUiQuestionAnswer) => void =
+    (_toolId: string, _answers: ConversationUiQuestionAnswer) => {};
   @Event onCopyMessage: (text: string) => void = (_text: string) => {};
   @Event onRetryMessage: (text: string) => void = (_text: string) => {};
   @Event onDownloadFile: (path: string) => void = (_path: string) => {};
@@ -119,7 +119,7 @@ export struct ChatTimeline {
       .onAppear(() => {
         this.logRenderedItem(item);
       })
-    } else if (item.message && this.shouldRenderMessage(item.message)) {
+    } else if (item.message && this.shouldRenderMessage(toConversationUiMessage(item.message))) {
       ListItem() {
         this.MessageBubble(item)
       }
@@ -137,7 +137,7 @@ export struct ChatTimeline {
   @Builder
   MessageBubble(item: ChatTimelineItem) {
     ChatMessageBubble({
-      item: item.message as ChatMessage,
+      item: toConversationUiMessage(item.message!),
       isStreaming: item.isStreaming,
       isFinalizing: item.isFinalizing,
       isBusy: this.isBusy,
@@ -153,7 +153,7 @@ export struct ChatTimeline {
       onCancelTool: (toolId: string) => {
         this.onCancelTool(toolId);
       },
-      onAnswerQuestion: (toolId: string, answers: RemoteQuestionAnswerPayload) => {
+      onAnswerQuestion: (toolId: string, answers: ConversationUiQuestionAnswer) => {
         this.onAnswerQuestion(toolId, answers);
       },
       onCopyMessage: (text: string) => {
@@ -168,7 +168,7 @@ export struct ChatTimeline {
     })
   }
 
-  private shouldRenderMessage(item: ChatMessage): boolean {
+  private shouldRenderMessage(item: ConversationUiMessage): boolean {
     return item.role === 'user' ||
       this.visibleMessageText(item).length > 0 ||
       (item.thinking || '').trim().length > 0 ||
@@ -179,8 +179,8 @@ export struct ChatTimeline {
       item.status === 'failed';
   }
 
-  private hasRenderableItems(items: ChatMessageItemResponse[]): boolean {
-    return items.some((entry: ChatMessageItemResponse) => {
+  private hasRenderableItems(items: ConversationUiMessageItem[]): boolean {
+    return items.some((entry: ConversationUiMessageItem) => {
       if ((entry.content || '').trim().length > 0 || !!entry.tool) {
         return true;
       }
@@ -188,7 +188,7 @@ export struct ChatTimeline {
     });
   }
 
-  private visibleMessageText(item: ChatMessage): string {
+  private visibleMessageText(item: ConversationUiMessage): string {
     const text = item.text.trim();
     if (text === '(空消息)' || text === '(empty message)') {
       return '';

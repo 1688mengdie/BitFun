@@ -34,14 +34,7 @@ export struct RemoteHomeView {
   @Event onOpenSession: (session: RemoteSession) => void = (_session: RemoteSession) => {};
   @Event onDeleteSession: (session: RemoteSession) => void = (_session: RemoteSession) => {};
   @Local showRemoteActions: boolean = false;
-  @Local shimmerOffset: number = -72;
   @Local sortMode: string = 'project';
-
-  aboutToAppear(): void {
-    setTimeout(() => {
-      this.shimmerOffset = 380;
-    }, 60);
-  }
 
   build() {
     Stack() {
@@ -56,7 +49,7 @@ export struct RemoteHomeView {
             this.openRemoteActions();
           }
         })
-        if (this.canUseRemote()) {
+        if (this.canUseRemote() || this.isConnecting()) {
             RemoteSessionList({
             sessions: this.pageState.visibleSessions(),
             query: this.pageState.sessionQuery,
@@ -101,8 +94,6 @@ export struct RemoteHomeView {
               this.onCreateAssistantSession();
             }
             })
-        } else if (this.isConnecting()) {
-          this.ConnectingState()
         } else {
           this.DisconnectedState()
         }
@@ -231,59 +222,6 @@ export struct RemoteHomeView {
     .justifyContent(FlexAlign.Center)
     .alignItems(HorizontalAlign.Center)
     .padding({ bottom: 72 })
-  }
-
-  @Builder
-  ConnectingState() {
-    Column() {
-      Column({ space: 26 }) {
-        this.SkeletonLine(110, 0)
-        this.SkeletonLine(220, 110)
-        this.SkeletonLine(330, 220)
-        this.SkeletonLine(130, 330)
-        this.SkeletonLine(240, 440)
-        this.SkeletonLine(340, 550)
-        this.SkeletonLine(150, 660)
-        this.SkeletonLine(260, 770)
-        this.SkeletonLine(100, 880)
-        this.SkeletonLine(220, 990)
-      }
-      .width('100%')
-      .padding({ top: 24, left: 12, right: 12 })
-      .layoutWeight(1)
-
-      RemoteBottomBar({
-        query: '',
-        isBusy: true,
-        onQueryChange: (_value: string) => {},
-        onSearch: () => {},
-        onCreate: () => {}
-      })
-    }
-    .width('100%')
-    .layoutWeight(1)
-  }
-
-  @Builder
-  SkeletonLine(width: number, delay: number) {
-    Stack({ alignContent: Alignment.Start }) {
-      Text('')
-        .width('100%')
-        .height('100%')
-        .backgroundColor('#EFEFEF')
-      Text('')
-        .width(46)
-        .height('100%')
-        .borderRadius(10)
-        .backgroundColor('#7AFFFFFF')
-        .translate({ x: this.shimmerOffset })
-        .animation({ duration: 1550, delay, curve: Curve.Linear, iterations: -1 })
-    }
-    .width(width)
-    .height(20)
-    .borderRadius(10)
-    .clip(true)
-    .alignSelf(ItemAlign.Start)
   }
 
   @Builder
