@@ -39,6 +39,7 @@ const flowChatStoreMock = vi.hoisted(() => ({
     sessions: new Map(),
     activeSessionId: null,
   })),
+  subscribeSelector: vi.fn(() => () => {}),
   truncateDialogTurnsFrom: vi.fn(),
 }));
 
