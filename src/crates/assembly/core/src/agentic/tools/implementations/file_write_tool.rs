@@ -254,7 +254,7 @@ impl FileWriteTool {
                 .collect::<Vec<_>>()
                 .join(", ");
             assistant_message.push_str(&format!(
-                " The Write tool accepts `payload` and the optional `force` escape hatch; these additional parameters were ignored and should not be passed again: {}.",
+                " The Write tool accepts only the `payload` parameter; these additional parameters were ignored and should not be passed again: {}.",
                 formatted_names
             ));
         }
@@ -419,25 +419,22 @@ impl Tool for FileWriteTool {
             None
         };
 
-        if let Some(ctx) = context {
-            if let ParsedWritePayload::Target { file_path, .. } = &parsed {
-                let force_requested = input
-                    .get("force")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false);
-                if let Some(rejection) =
-                    crate::agentic::execution::edit_constraint_guard::check_write(
-                        context,
-                        "Write",
-                        "write",
-                        file_path,
-                        force_requested,
-                    )
-                    .await
-                {
-                    return rejection;
-                }
+        if let ParsedWritePayload::Target { file_path, .. } = &parsed {
+            let force_requested = input.get("force").and_then(Value::as_bool).unwrap_or(false);
+            if let Some(rejection) = crate::agentic::execution::edit_constraint_guard::check_write(
+                context,
+                "Write",
+                "write",
+                file_path,
+                force_requested,
+            )
+            .await
+            {
+                return rejection;
             }
+        }
+
+        if let Some(ctx) = context {
             let preflight_error = match &parsed {
                 ParsedWritePayload::Target { file_path, .. } => {
                     Self::preflight_write_error(ctx, file_path).await
@@ -784,6 +781,30 @@ mod tests {
         );
         assert_eq!(result_for_assistant.as_deref(), Some(expected.as_str()));
         assert_eq!(data["message"], expected);
+    }
+
+    #[tokio::test]
+    async fn validate_input_rejects_stale_force_without_runtime_context() {
+        let tool = FileWriteTool::new();
+        let validation = tool
+            .validate_input(
+                &json!({
+                    "payload": "+++ new.txt\nalpha",
+                    "force": true
+                }),
+                None,
+            )
+            .await;
+
+        assert!(!validation.result);
+        assert_eq!(validation.error_code, Some(403));
+        assert_eq!(
+            validation
+                .meta
+                .as_ref()
+                .and_then(|meta| meta["guard_decision"].as_str()),
+            Some("force_denied")
+        );
     }
 
     #[tokio::test]
