@@ -1,9 +1,3 @@
-import {
-  RemoteModelCatalog,
-  RemoteQuestionAnswerPayload,
-  SelectedImageAttachment,
-  SessionSummary
-} from '../../model/RemoteModels';
 import { RemoteI18n } from '../../i18n/RemoteI18n';
 import { ChatTimelineItem } from '../../services/ChatTimelineProjector';
 import { ConnectionStatusPresenter } from '../../services/ConnectionStatusPresenter';
@@ -12,75 +6,82 @@ import { ChatSurface } from './ChatSurface';
 import { ChatStatusBar } from './ChatStatusBar';
 import { ChatTimeline } from './ChatTimeline';
 import { ConversationViewContract } from './ConversationViewContract';
+import {
+  ConversationUiModelCatalog,
+  ConversationUiQuestionAnswer,
+  ConversationUiSelectedImage,
+  ConversationUiSession
+} from './ConversationUiModels';
 import { ComposerBar } from './ComposerBar';
 import { GeneralChatHeader } from './GeneralChatHeader';
 import { RemoteChatHeader } from './RemoteChatHeader';
 import { CARD, GREEN, INK, LINE, MUTED, PAGE_BG, RED } from './Theme';
 
-@Component
+@ComponentV2
 export struct ConversationView {
-  @Prop surface: ChatSurface = ChatSurface.Remote;
-  @Prop activeSession: SessionSummary = {
+  @Param surface: ChatSurface = ChatSurface.Remote;
+  @Param activeSession: ConversationUiSession = {
     sessionId: '',
     title: '',
     workspacePath: '',
     agentType: 'code'
   };
-  @Prop desktopName: string = '';
-  @Prop workspaceBranch: string = '';
-  @Prop statusText: string = '';
-  @Prop inlineStatusText: string = '';
-  @Prop connectionState: string = 'connected';
-  @Prop composerCapabilities: ChatComposerCapabilities = REMOTE_CHAT_COMPOSER_CAPABILITIES;
-  @Prop isBusy: boolean = false;
-  @Prop canStop: boolean = false;
-  @Prop hasMoreMessages: boolean = false;
-  @Prop timelineItems: ChatTimelineItem[] = [];
-  @Prop timelineRevision: number = 0;
-  @Prop showSuggestionsWhenEmpty: boolean = false;
-  @Prop supportsSearch: boolean = false;
-  @Prop supportsImages: boolean = false;
-  @Prop supportsFiles: boolean = false;
-  @Prop modelCatalog: RemoteModelCatalog = {
+  @Param desktopName: string = '';
+  @Param workspaceBranch: string = '';
+  @Param statusText: string = '';
+  @Param inlineStatusText: string = '';
+  @Param connectionState: string = 'connected';
+  @Param composerCapabilities: ChatComposerCapabilities = REMOTE_CHAT_COMPOSER_CAPABILITIES;
+  @Param isBusy: boolean = false;
+  @Param canStop: boolean = false;
+  @Param hasMoreMessages: boolean = false;
+  @Param timelineItems: ChatTimelineItem[] = [];
+  @Param timelineRevision: number = 0;
+  @Param showSuggestionsWhenEmpty: boolean = false;
+  @Param supportsSearch: boolean = false;
+  @Param supportsImages: boolean = false;
+  @Param supportsFiles: boolean = false;
+  @Param modelCatalog: ConversationUiModelCatalog = {
     version: 0,
     models: [],
     default_models: {}
   };
-  @Prop selectedModelId: string = '';
-  @Prop downloadingFilePath: string = '';
-  @Prop downloadedFilePath: string = '';
-  @Prop fileDownloadStatus: string = '';
-  @Prop selectedImages: SelectedImageAttachment[] = [];
-  @Prop isVoiceListening: boolean = false;
-  @Prop chatInput: string = '';
-  onOpenSidebar: () => void = () => {};
-  onBack: () => void = () => {};
-  onNewSession: () => void = () => {};
-  @Prop isSessionPinned: boolean = false;
-  onTogglePinSession: () => void = () => {};
-  onArchiveSession: () => void = () => {};
-  onDeleteSession: () => void = () => {};
-  onShowUploadedFiles: () => void = () => {};
-  onStop: () => void = () => {};
-  onLoadOlder: () => void = () => {};
-  onApproveTool: (toolId: string, updatedInput?: Object) => void =
+  @Param selectedModelId: string = '';
+  @Param downloadingFilePath: string = '';
+  @Param downloadedFilePath: string = '';
+  @Param fileDownloadStatus: string = '';
+  @Param selectedImages: ConversationUiSelectedImage[] = [];
+  @Param isVoiceListening: boolean = false;
+  @Param chatInput: string = '';
+  @Event onOpenSidebar: () => void = () => {};
+  @Event onBack: () => void = () => {};
+  @Event onNewSession: () => void = () => {};
+  @Param isSessionPinned: boolean = false;
+  @Event onTogglePinSession: () => void = () => {};
+  @Event onArchiveSession: () => void = () => {};
+  @Event onDeleteSession: () => void = () => {};
+  @Event onShowUploadedFiles: () => void = () => {};
+  @Event onStop: () => void = () => {};
+  @Event onLoadOlder: () => void = () => {};
+  @Event onApproveTool: (toolId: string, updatedInput?: Object) => void =
     (_toolId: string, _updatedInput?: Object) => {};
-  onRejectTool: (toolId: string) => void = (_toolId: string) => {};
-  onCancelTool: (toolId: string) => void = (_toolId: string) => {};
-  onAnswerQuestion: (toolId: string, answers: RemoteQuestionAnswerPayload) => void =
-    (_toolId: string, _answers: RemoteQuestionAnswerPayload) => {};
-  onRenameSession: (title: string) => void = (_title: string) => {};
-  onCopyMessage: (text: string) => void = (_text: string) => {};
-  onRetryMessage: (text: string) => void = (_text: string) => {};
-  onSelectModel: (modelId: string) => void = (_modelId: string) => {};
-  onPickImages: () => void = () => {};
-  onRemoveImage: (imageId: string) => void = (_imageId: string) => {};
-  onDownloadFile: (path: string) => void = (_path: string) => {};
-  onSend: () => void = () => {};
-  onVoiceInput: () => void = () => {};
-  onChatInputChange: (value: string) => void = (_value: string) => {};
-  @State showQuickActions: boolean = false;
-  @State showHeaderActions: boolean = false;
+  @Event onRejectTool: (toolId: string) => void = (_toolId: string) => {};
+  @Event onCancelTool: (toolId: string) => void = (_toolId: string) => {};
+  @Event onAnswerQuestion: (toolId: string, answers: ConversationUiQuestionAnswer) => void =
+    (_toolId: string, _answers: ConversationUiQuestionAnswer) => {};
+  @Event onRenameSession: (title: string) => void = (_title: string) => {};
+  @Event onCopyMessage: (text: string) => void = (_text: string) => {};
+  @Event onRetryMessage: (text: string) => void = (_text: string) => {};
+  @Event onSelectModel: (modelId: string) => void = (_modelId: string) => {};
+  @Event onPickImages: () => void = () => {};
+  @Event onRemoveImage: (imageId: string) => void = (_imageId: string) => {};
+  @Event onDownloadFile: (path: string) => void = (_path: string) => {};
+  @Event onSend: () => void = () => {};
+  @Event onVoiceInput: () => void = () => {};
+  @Event onChatInputChange: (value: string) => void = (_value: string) => {};
+  @Event onToggleQuickActions: () => void = () => {};
+  @Local showQuickActions: boolean = false;
+  @Local showHeaderActions: boolean = false;
 
   build() {
     Stack() {
@@ -202,7 +203,7 @@ export struct ConversationView {
       onCancelTool: (toolId: string) => {
         this.onCancelTool(toolId);
       },
-      onAnswerQuestion: (toolId: string, answers: RemoteQuestionAnswerPayload) => {
+      onAnswerQuestion: (toolId: string, answers: ConversationUiQuestionAnswer) => {
         this.onAnswerQuestion(toolId, answers);
       },
       onCopyMessage: (text: string) => {
@@ -256,7 +257,10 @@ export struct ConversationView {
     ComposerBar({
       capabilities: this.composerCapabilities,
       chatInput: this.chatInput,
-      showQuickActions: $showQuickActions,
+      showQuickActions: this.showQuickActions,
+      onToggleQuickActions: () => {
+        this.showQuickActions = !this.showQuickActions;
+      },
       selectedImages: this.selectedImages,
       isBusy: this.isBusy,
       connectionState: this.connectionState,

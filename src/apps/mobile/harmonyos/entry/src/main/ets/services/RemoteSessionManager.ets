@@ -26,7 +26,6 @@ export class RemoteSessionManager implements RemoteChatCommandClient, RemoteFile
     this.crypto = new RemoteCrypto();
     this.client.bind(descriptor, this.crypto);
     const initialSync = await this.client.pair(deviceId, identity);
-    await this.client.requestDelegatedIdentity();
     this.workspace = RemoteResponseMapper.workspaceFromInitialSync(initialSync);
     return {
       workspace: this.workspace,

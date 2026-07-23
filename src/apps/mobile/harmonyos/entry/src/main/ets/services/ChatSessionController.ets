@@ -45,6 +45,8 @@ export class ChatSessionController {
   private timerId: number = 0;
   private polling: boolean = false;
   private stopped: boolean = true;
+  // Invalidates in-flight requests when the session or lifecycle changes.
+  private generation: number = 0;
   private hasActiveRunningTurn: boolean = false;
   private turnJustEndedAt: number = 0;
   private readonly activeIntervalMs: number = 350;
@@ -74,6 +76,7 @@ export class ChatSessionController {
   }
 
   stop(clearActiveTurn: boolean = true): void {
+    this.generation += 1;
     if (this.timerId !== 0) {
       clearTimeout(this.timerId);
       this.timerId = 0;
@@ -135,22 +138,42 @@ export class ChatSessionController {
       return;
     }
 
+    const requestGeneration = this.generation;
+    const requestSessionId = this.sessionId;
+    const requestCursor: ChatSessionCursor = {
+      pollVersion: this.cursor.pollVersion,
+      knownMessageCount: this.cursor.knownMessageCount,
+      knownModelCatalogVersion: this.cursor.knownModelCatalogVersion
+    };
     this.polling = true;
     try {
-      RemoteLogger.info(`poller tick session=${ChatSessionController.shortId(this.sessionId)} version=${this.cursor.pollVersion} known=${this.cursor.knownMessageCount}`);
+      RemoteLogger.info(`poller tick session=${ChatSessionController.shortId(requestSessionId)} version=${requestCursor.pollVersion} known=${requestCursor.knownMessageCount}`);
       const result = await this.sessionManager.pollSession(
-        this.sessionId,
-        this.cursor.pollVersion,
-        this.cursor.knownMessageCount,
-        this.cursor.knownModelCatalogVersion
+        requestSessionId,
+        requestCursor.pollVersion,
+        requestCursor.knownMessageCount,
+        requestCursor.knownModelCatalogVersion
       );
+      if (!this.isCurrentRequest(requestGeneration, requestSessionId)) {
+        return;
+      }
       this.applyPollResult(result);
     } catch (err) {
-      this.callbacks.onError(err);
+      if (this.isCurrentRequest(requestGeneration, requestSessionId)) {
+        this.callbacks.onError(err);
+      }
     } finally {
-      this.polling = false;
-      this.scheduleNext();
+      if (this.isCurrentRequest(requestGeneration, requestSessionId)) {
+        this.polling = false;
+        this.scheduleNext();
+      }
     }
+  }
+
+  private isCurrentRequest(requestGeneration: number, requestSessionId: string): boolean {
+    return requestGeneration === this.generation &&
+      !this.stopped &&
+      requestSessionId === this.sessionId;
   }
 
   private applyPollResult(result: PollSessionResult): void {
@@ -234,8 +257,13 @@ export class ChatSessionController {
       this.timerId = 0;
     }
     const nextDelay = delayMs !== undefined ? delayMs : this.pollIntervalMs();
+    const timerGeneration = this.generation;
+    const timerSessionId = this.sessionId;
     RemoteLogger.info(`poller schedule session=${ChatSessionController.shortId(this.sessionId)} delay=${nextDelay}`);
     this.timerId = setTimeout(() => {
+      if (timerGeneration !== this.generation || timerSessionId !== this.sessionId || this.stopped) {
+        return;
+      }
       this.timerId = 0;
       this.pollNow();
     }, nextDelay);

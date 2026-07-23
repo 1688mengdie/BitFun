@@ -1,24 +1,25 @@
-import { SelectedImageAttachment } from '../../model/RemoteModels';
 import { RemoteI18n } from '../../i18n/RemoteI18n';
 import { ChatComposerPolicy } from '../../services/ChatComposerPolicy';
 import { ChatComposerCapabilities, REMOTE_CHAT_COMPOSER_CAPABILITIES } from './ChatComposerCapabilities';
 import { ChatSurface } from './ChatSurface';
+import { ConversationUiSelectedImage } from './ConversationUiModels';
 import { CARD, GREEN, INK, MUTED } from './Theme';
 
-@Component
+@ComponentV2
 export struct ComposerBar {
-  @Prop capabilities: ChatComposerCapabilities = REMOTE_CHAT_COMPOSER_CAPABILITIES;
-  @Prop chatInput: string = '';
-  @Link showQuickActions: boolean;
-  @Prop selectedImages: SelectedImageAttachment[] = [];
-  @Prop isBusy: boolean = false;
-  @Prop connectionState: string = 'connected';
-  @Prop isVoiceListening: boolean = false;
-  onPickImages: () => void = () => {};
-  onRemoveImage: (imageId: string) => void = (_imageId: string) => {};
-  onSend: () => void = () => {};
-  onVoiceInput: () => void = () => {};
-  onChatInputChange: (value: string) => void = (_value: string) => {};
+  @Param capabilities: ChatComposerCapabilities = REMOTE_CHAT_COMPOSER_CAPABILITIES;
+  @Param chatInput: string = '';
+  @Param showQuickActions: boolean = false;
+  @Param selectedImages: ConversationUiSelectedImage[] = [];
+  @Param isBusy: boolean = false;
+  @Param connectionState: string = 'connected';
+  @Param isVoiceListening: boolean = false;
+  @Event onToggleQuickActions: () => void = () => {};
+  @Event onPickImages: () => void = () => {};
+  @Event onRemoveImage: (imageId: string) => void = (_imageId: string) => {};
+  @Event onSend: () => void = () => {};
+  @Event onVoiceInput: () => void = () => {};
+  @Event onChatInputChange: (value: string) => void = (_value: string) => {};
 
   build() {
     Column({ space: 8 }) {
@@ -37,7 +38,7 @@ export struct ComposerBar {
                 return;
               }
               if (this.capabilities.supportsAttachments) {
-                this.showQuickActions = !this.showQuickActions;
+                this.onToggleQuickActions();
                 return;
               }
               this.onPickImages();
@@ -182,9 +183,9 @@ export struct ComposerBar {
   SelectedImageStrip() {
     Scroll() {
       Row({ space: 10 }) {
-        ForEach(this.selectedImages, (image: SelectedImageAttachment) => {
+        ForEach(this.selectedImages, (image: ConversationUiSelectedImage) => {
           this.SelectedImageCard(image)
-        }, (image: SelectedImageAttachment) => image.id)
+        }, (image: ConversationUiSelectedImage) => image.id)
       }
       .padding({ right: 4 })
     }
@@ -194,7 +195,7 @@ export struct ComposerBar {
   }
 
   @Builder
-  SelectedImageCard(image: SelectedImageAttachment) {
+  SelectedImageCard(image: ConversationUiSelectedImage) {
     Stack({ alignContent: Alignment.TopEnd }) {
       Image(image.data_url)
         .width(64)

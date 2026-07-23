@@ -1,32 +1,32 @@
-import { RemoteModelCatalog, RemoteModelConfig, SessionSummary } from '../../model/RemoteModels';
 import { RemoteI18n } from '../../i18n/RemoteI18n';
+import { ConversationUiModel, ConversationUiModelCatalog, ConversationUiSession } from './ConversationUiModels';
 import { ACCENT, CARD, GREEN, INK, LINE, MUTED, PAGE_BG } from './Theme';
 
-@Component
+@ComponentV2
 export struct RemoteChatHeader {
-  @Prop activeSession: SessionSummary = {
+  @Param activeSession: ConversationUiSession = {
     sessionId: '',
     title: '',
     workspacePath: '',
     agentType: 'code'
   };
-  @Prop workspaceBranch: string = '';
-  @Prop desktopName: string = '';
-  @Prop canStop: boolean = false;
-  @Prop modelCatalog: RemoteModelCatalog = {
+  @Param workspaceBranch: string = '';
+  @Param desktopName: string = '';
+  @Param canStop: boolean = false;
+  @Param modelCatalog: ConversationUiModelCatalog = {
     version: 0,
     models: [],
     default_models: {}
   };
-  @Prop selectedModelId: string = '';
-  onBack: () => void = () => {};
-  onNewSession: () => void = () => {};
-  onStop: () => void = () => {};
-  onRenameSession: (title: string) => void = (_title: string) => {};
-  onSelectModel: (modelId: string) => void = (_modelId: string) => {};
-  @State showTitleEditor: boolean = false;
-  @State showModelSelector: boolean = false;
-  @State renameTitle: string = '';
+  @Param selectedModelId: string = '';
+  @Event onBack: () => void = () => {};
+  @Event onNewSession: () => void = () => {};
+  @Event onStop: () => void = () => {};
+  @Event onRenameSession: (title: string) => void = (_title: string) => {};
+  @Event onSelectModel: (modelId: string) => void = (_modelId: string) => {};
+  @Local showTitleEditor: boolean = false;
+  @Local showModelSelector: boolean = false;
+  @Local renameTitle: string = '';
 
   build() {
     Column() {
@@ -205,11 +205,11 @@ export struct RemoteChatHeader {
         })
       }
       List({ space: 8 }) {
-        ForEach(this.enabledModels(), (model: RemoteModelConfig) => {
+        ForEach(this.enabledModels(), (model: ConversationUiModel) => {
           ListItem() {
             this.ModelRow(model)
           }
-        }, (model: RemoteModelConfig) => model.id)
+        }, (model: ConversationUiModel) => model.id)
       }
       .width('100%')
       .height(this.modelListHeight())
@@ -223,7 +223,7 @@ export struct RemoteChatHeader {
   }
 
   @Builder
-  ModelRow(model: RemoteModelConfig) {
+  ModelRow(model: ConversationUiModel) {
     Row({ space: 10 }) {
       Text(this.selectedModelId === model.id ? '●' : '○')
         .fontSize(12)
@@ -265,8 +265,8 @@ export struct RemoteChatHeader {
     return this.workspaceBranch.length > 0 ? `${brand} · ${this.workspaceBranch}` : brand;
   }
 
-  private enabledModels(): RemoteModelConfig[] {
-    return this.modelCatalog.models.filter((model: RemoteModelConfig) => model.enabled);
+  private enabledModels(): ConversationUiModel[] {
+    return this.modelCatalog.models.filter((model: ConversationUiModel) => model.enabled);
   }
 
   private modelListHeight(): number {
@@ -287,15 +287,15 @@ export struct RemoteChatHeader {
     return RemoteI18n.t('chat.model');
   }
 
-  private selectedModel(): RemoteModelConfig | undefined {
+  private selectedModel(): ConversationUiModel | undefined {
     const modelId = this.selectedModelId || this.modelCatalog.session_model_id || this.modelCatalog.default_models.primary || '';
     if (modelId.length === 0) {
       return undefined;
     }
-    return this.modelCatalog.models.find((model: RemoteModelConfig) => model.id === modelId);
+    return this.modelCatalog.models.find((model: ConversationUiModel) => model.id === modelId);
   }
 
-  private primaryModelLabel(model: RemoteModelConfig): string {
+  private primaryModelLabel(model: ConversationUiModel): string {
     const modelName = this.cleanModelLabel(model.model_name || '');
     if (this.isSpecificModelLabel(modelName)) {
       return modelName;
@@ -311,7 +311,7 @@ export struct RemoteChatHeader {
     return RemoteI18n.t('chat.model');
   }
 
-  private secondaryModelLabel(model: RemoteModelConfig): string {
+  private secondaryModelLabel(model: ConversationUiModel): string {
     const provider = this.cleanModelLabel(model.provider || '');
     const name = this.cleanModelLabel(model.name || '');
     const primary = this.primaryModelLabel(model);
