@@ -27,6 +27,20 @@ fn should_skip_dir_in_prompt_preview(name: &str) -> bool {
     )
 }
 
+/// Extract a basename using remote POSIX semantics on every client platform.
+///
+/// `std::path::Path` uses host semantics and would treat `\` as a separator on
+/// Windows even though it is a valid character in a Unix remote filename.
+fn remote_posix_basename(path: &str) -> String {
+    let trimmed = path.trim_end_matches('/');
+    trimmed
+        .rsplit('/')
+        .next()
+        .filter(|name| !name.is_empty())
+        .unwrap_or(path)
+        .to_string()
+}
+
 /// Remote file service using SFTP protocol
 #[derive(Clone)]
 pub struct RemoteFileService {
@@ -72,12 +86,9 @@ impl RemoteFileService {
     ) -> anyhow::Result<Vec<u8>> {
         let manager = self.get_manager(connection_id).await?;
         if manager.is_container_workspace(connection_id).await {
-            let bytes = manager.container_read_file(connection_id, path).await?;
-            let total = bytes.len() as u64;
-            if !on_progress(total, total) {
-                return Err(anyhow!("Transfer cancelled"));
-            }
-            return Ok(bytes);
+            return manager
+                .container_read_file_with_progress(connection_id, path, on_progress)
+                .await;
         }
         manager
             .sftp_read_with_progress(connection_id, path, 262_144, on_progress)
@@ -112,14 +123,9 @@ impl RemoteFileService {
     ) -> anyhow::Result<()> {
         let manager = self.get_manager(connection_id).await?;
         if manager.is_container_workspace(connection_id).await {
-            manager
-                .container_write_file(connection_id, path, content)
-                .await?;
-            let total = content.len() as u64;
-            if !on_progress(total, total) {
-                return Err(anyhow!("Transfer cancelled"));
-            }
-            return Ok(());
+            return manager
+                .container_write_file_with_progress(connection_id, path, content, on_progress)
+                .await;
         }
         manager
             .sftp_write_with_progress(connection_id, path, content, 262_144, on_progress)
@@ -229,10 +235,7 @@ impl RemoteFileService {
         path: &str,
     ) -> anyhow::Result<RemoteTreeNode> {
         const MAX_ENTRIES: usize = 80;
-        let name = std::path::Path::new(path)
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| path.to_string());
+        let name = remote_posix_basename(path);
 
         let mut entries = self.read_dir(connection_id, path).await?;
         entries.retain(|e| {
@@ -274,10 +277,7 @@ impl RemoteFileService {
         current_depth: u32,
         max_depth: u32,
     ) -> anyhow::Result<RemoteTreeNode> {
-        let name = std::path::Path::new(path)
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| path.to_string());
+        let name = remote_posix_basename(path);
 
         // Check if this is a directory
         let is_dir: bool = self.exists(connection_id, path).await.unwrap_or_default();
@@ -448,10 +448,7 @@ impl RemoteFileService {
 
         match manager.sftp_stat(connection_id, path).await {
             Ok(attrs) => {
-                let name = std::path::Path::new(path)
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_else(|| path.to_string());
+                let name = remote_posix_basename(path);
 
                 let is_dir = attrs.is_dir();
                 let is_symlink = attrs.is_symlink();
@@ -512,4 +509,19 @@ fn format_permissions(mode: Option<u32>) -> String {
         .collect();
 
     format!("{}{}", file_type, perm_str)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::remote_posix_basename;
+
+    #[test]
+    fn remote_basename_never_uses_host_path_separators() {
+        assert_eq!(
+            remote_posix_basename("/workspace/目录/name\\with\\slashes.txt"),
+            "name\\with\\slashes.txt"
+        );
+        assert_eq!(remote_posix_basename("/workspace/目录/"), "目录");
+        assert_eq!(remote_posix_basename("/"), "/");
+    }
 }
