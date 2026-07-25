@@ -24,6 +24,7 @@
 
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 
 use super::manager::SSHConnectionManager;
 use super::remote_git::shell_quote_posix;
@@ -51,14 +52,43 @@ const REPO_GIT_BRANCH: &str = "main";
 const REPO_TARBALL_URL: &str = "https://github.com/GCWing/BitFun/archive/refs/heads/main.tar.gz";
 /// Release asset base. Asset names are stable across tags so the embedded
 /// Desktop version can address its matching server build without a GitHub API call.
-const RELEASE_DOWNLOAD_BASE: &str = "https://github.com/GCWing/BitFun/releases/download";
+const RELEASE_BASE: &str = "https://github.com/GCWing/BitFun/releases";
 const OPENBITFUN_RELEASE_BASE: &str = "https://openbitfun.com/release";
 const RELEASE_VERSION: &str = env!("CARGO_PKG_VERSION");
+/// Ranked-source download tuning, shared with the CLI self-updater
+/// (`src/apps/cli/src/self_update.rs`) so both paths behave the same on a slow
+/// link. Each candidate gets a fixed-length ranged request; bytes delivered in
+/// that window is the throughput estimate used to rank sources.
+const SOURCE_PROBE_SECONDS: u64 = 10;
+const SOURCE_PROBE_BYTES: u64 = 4 * 1024 * 1024;
+/// A source at or above this is used without hesitation.
+const HEALTHY_THROUGHPUT_BYTES_PER_SEC: u64 = 128 * 1024;
+/// Below this for `STALL_WINDOW_SECONDS` the source counts as dead and we fail
+/// over. Deliberately far under the healthy bar: a genuinely slow but only
+/// available link must still be allowed to finish rather than loop forever.
+const STALL_THROUGHPUT_BYTES_PER_SEC: u64 = 8 * 1024;
+const STALL_WINDOW_SECONDS: u64 = 30;
+/// Free space the source-build fallback needs under `$HOME` (Cargo registry,
+/// target dir and Docker layers). Checked before the build rather than
+/// discovered as an opaque compiler failure part-way through.
+const SOURCE_BUILD_FREE_KB: u64 = 6 * 1024 * 1024;
+/// Trust root for published relay archives, injected at build time from the
+/// same `TAURI_UPDATER_PUBKEY` the Desktop updater uses. Absent in local and
+/// fork builds, which then fall back to the cross-origin checksum.
+const RELEASE_PUBKEY: Option<&str> = option_env!("BITFUN_RELEASE_PUBKEY");
+/// Targets a published relay archive exists for.
+const RELEASE_TARGETS: [&str; 2] = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"];
 /// Canonical China-mirror helper (shared with `src/apps/relay-server/deploy.sh`).
 /// Embedded so Desktop orchestration can apply mirrors before the git clone.
 const RELAY_MIRROR_SH: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../../apps/relay-server/mirror.sh"
+));
+/// Published-binary download + runtime deploy (shared with `deploy.sh`, so the
+/// manual and one-click paths run the same code).
+const RELAY_RELEASE_DOWNLOAD_SH: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../../apps/relay-server/release-download.sh"
 ));
 /// Remote directory (relative to the SSH user's home) holding deploy state.
 const DEPLOY_STATE_DIR: &str = ".bitfun/relay-deploy";
@@ -133,6 +163,10 @@ pub struct RelayPreflight {
     /// `sudo` exists but `sudo -n` fails (password required).
     pub sudo_needs_password: bool,
     pub mem_total_mb: u64,
+    /// Free space under `$HOME` in MB (archive staging + source checkout).
+    pub home_free_mb: u64,
+    /// Free space on Docker's data root in MB (images and layers).
+    pub docker_free_mb: u64,
     /// Selected listen port already bound by another process.
     pub port_busy: bool,
     /// Port that was probed (`port_busy` / selected-port health).
@@ -215,6 +249,13 @@ if [ ! -e "$HOME/.docker" ]; then echo "docker_home_writable=1"
 elif [ -w "$HOME/.docker" ] && {{ [ ! -e "$HOME/.docker/buildx" ] || [ -w "$HOME/.docker/buildx" ]; }}; then echo "docker_home_writable=1"
 else echo "docker_home_writable=0"; fi
 echo "mem_kb=$(awk '/MemTotal/ {{print $2}}' /proc/meminfo 2>/dev/null || echo 0)"
+# Free space where the work actually lands: ~/.bitfun holds the downloaded
+# archive and the source checkout, Docker's data root holds images and layers.
+echo "home_free_kb=$(df -Pk "$HOME" 2>/dev/null | awk 'NR==2 {{print $4}}' || echo 0)"
+DOCKER_ROOT=$(docker info -f '{{{{.DockerRootDir}}}}' 2>/dev/null \
+  || sudo -n docker info -f '{{{{.DockerRootDir}}}}' 2>/dev/null || echo /var/lib/docker)
+[ -d "$DOCKER_ROOT" ] || DOCKER_ROOT=/var
+echo "docker_free_kb=$(df -Pk "$DOCKER_ROOT" 2>/dev/null | awk 'NR==2 {{print $4}}' || echo 0)"
 if command -v ss >/dev/null 2>&1; then PORTS=$(ss -ltn 2>/dev/null); else PORTS=$(netstat -ltn 2>/dev/null); fi
 if printf '%s\n' "$PORTS" | awk '{{print $4}}' | grep -q ":${{PORT}}$"; then echo "port_busy=1"; else echo "port_busy=0"; fi
 # Prefer a docker CLI that can talk to the daemon (plain or passwordless sudo).
@@ -283,6 +324,8 @@ fn parse_preflight(out: &str, fallback_port: u16) -> RelayPreflight {
     let arch_supported = os == "Linux"
         && (arch == "x86_64" || arch == "amd64" || arch == "aarch64" || arch == "arm64");
     let mem_kb: u64 = get("mem_kb").parse().unwrap_or(0);
+    let home_free_kb: u64 = get("home_free_kb").parse().unwrap_or(0);
+    let docker_free_kb: u64 = get("docker_free_kb").parse().unwrap_or(0);
     let docker_installed = get("docker") == "1";
     let active_has_docker_group = get("active_docker_group") == "1";
     let in_docker_group_file = get("in_docker_group_file") == "1";
@@ -329,6 +372,8 @@ fn parse_preflight(out: &str, fallback_port: u16) -> RelayPreflight {
         sudo_available,
         sudo_needs_password,
         mem_total_mb: mem_kb / 1024,
+        home_free_mb: home_free_kb / 1024,
+        docker_free_mb: docker_free_kb / 1024,
         port_busy: get("port_busy") == "1",
         probed_port,
         port_owned_by_relay: get("port_owned") == "1",
@@ -408,7 +453,13 @@ pub async fn start_task(
 
     let body = match task {
         RelayDeployTask::InstallDocker => install_docker_body_script(),
-        RelayDeployTask::Deploy => deploy_body_script(port),
+        RelayDeployTask::Deploy => {
+            // Verify the signed checksums here, where a trust root exists; the
+            // relay host has none.
+            let verified =
+                verified_release_checksums(&release_tag_for_version(RELEASE_VERSION)).await;
+            deploy_body_script_with_checksums(port, &verified_checksum_exports(&verified))
+        }
     };
     let driver = match task {
         RelayDeployTask::InstallDocker => interactive_driver_script(stem, "install"),
@@ -1346,213 +1397,141 @@ bitfun_sync_source() {{
     )
 }
 
-/// Download the matching published Relay archive and build only a small runtime
-/// image around it. The existing container name, volumes, ports, and relay-admin
-/// path stay identical to the source-compose deployment.
+/// Preamble + shared script that downloads the matching published Relay archive
+/// and builds a small runtime image around it. The container name, volumes,
+/// ports and relay-admin path stay identical to the source-compose deployment.
+///
+/// The body lives in `src/apps/relay-server/release-download.sh` so the manual
+/// `deploy.sh` path runs exactly the same code, the same way `mirror.sh` is
+/// shared. Only the configuration differs: Desktop pins the release tag to its
+/// own version, the manual path tracks `latest`.
 fn release_binary_deploy_bash() -> String {
-    let release_tag = release_tag_for_version(RELEASE_VERSION);
     format!(
         r#"
-bitfun_try_release_deploy() {{
-  local release_dir="$HOME/.bitfun/relay-release"
-  local target archive upstream_url openbitfun_url proxy_url download_dir extracted context image
-  case "$(uname -m 2>/dev/null)" in
-    x86_64|amd64) target="x86_64-unknown-linux-gnu" ;;
-    aarch64|arm64) target="aarch64-unknown-linux-gnu" ;;
-    *)
-      echo ">>> No published Relay binary for architecture $(uname -m); using source build."
-      return 1
-      ;;
-  esac
-
-  archive="bitfun-relay-server-${{target}}.tar.gz"
-  upstream_url="{RELEASE_DOWNLOAD_BASE}/{release_tag}/${{archive}}"
-  openbitfun_url="{OPENBITFUN_RELEASE_BASE}/{release_version}/${{archive}}"
-  mkdir -p "$release_dir"
-  chmod 700 "$release_dir" 2>/dev/null || true
-  download_dir="$(mktemp -d "$release_dir/download.XXXXXX")"
-
-  bitfun_verify_release_archive() {{
-    (
-      cd "$download_dir"
-      if command -v sha256sum >/dev/null 2>&1; then
-        sha256sum -c "${{archive}}.sha256"
-      elif command -v shasum >/dev/null 2>&1; then
-        shasum -a 256 -c "${{archive}}.sha256"
-      else
-        echo "ERROR: sha256sum or shasum is required to verify the Relay release." >&2
-        return 1
-      fi
-    )
-  }}
-
-  bitfun_download_release_pair() {{
-    local url="$1"
-    rm -f "$download_dir/$archive" "$download_dir/${{archive}}.sha256"
-    echo ">>> Downloading published Relay binary: $url"
-    curl -fsSL --retry 3 --connect-timeout 15 --max-time 900 \
-      -o "$download_dir/$archive" "$url" \
-      && curl -fsSL --retry 3 --connect-timeout 15 --max-time 60 \
-        -o "$download_dir/${{archive}}.sha256" "${{url}}.sha256" \
-      && bitfun_verify_release_archive
-  }}
-
-  proxy_url=""
-  if [ "${{BITFUN_MIRROR_MODE:-global}}" = "cn" ] && [ -n "${{BITFUN_GITHUB_PROXY:-}}" ]; then
-    proxy_url="${{BITFUN_GITHUB_PROXY%/}}/${{upstream_url}}"
-  fi
-  if [ -n "$proxy_url" ] && bitfun_download_release_pair "$proxy_url"; then
-    :
-  elif bitfun_download_release_pair "$upstream_url"; then
-    :
-  elif bitfun_download_release_pair "$openbitfun_url"; then
-    :
-  else
-    echo ">>> Published Relay binary unavailable from GitHub and openbitfun.com; falling back to source build."
-    rm -rf "$download_dir"
-    return 1
-  fi
-
-  mkdir -p "$download_dir/extracted"
-  if ! tar xzf "$download_dir/$archive" -C "$download_dir/extracted"; then
-    echo ">>> Published Relay archive could not be extracted; falling back to source build."
-    rm -rf "$download_dir"
-    return 1
-  fi
-  extracted="$(find "$download_dir/extracted" -mindepth 1 -maxdepth 1 -type d \
-    -name 'bitfun-relay-server-*' | head -n 1)"
-  if [ -z "$extracted" ] \
-    || [ ! -x "$extracted/bitfun-relay-server" ] \
-    || [ ! -x "$extracted/relay-admin" ] \
-    || [ ! -f "$extracted/static/index.html" ]; then
-    echo ">>> Published Relay archive layout is invalid; falling back to source build."
-    rm -rf "$download_dir"
-    return 1
-  fi
-
-  context="$release_dir/runtime"
-  rm -rf "$context.new"
-  mkdir -p "$context.new"
-  cp "$extracted/bitfun-relay-server" "$extracted/relay-admin" "$context.new/"
-  cp -R "$extracted/static" "$context.new/static"
-  cat >"$context.new/Dockerfile" <<'DOCKERFILE'
-FROM debian:bookworm-slim
-ENV DEBIAN_FRONTEND=noninteractive
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl \
-    && rm -rf /var/lib/apt/lists/*
-WORKDIR /app
-COPY bitfun-relay-server relay-admin /app/
-COPY static /app/static
-RUN chmod 755 /app/bitfun-relay-server /app/relay-admin \
-    && mkdir -p /app/data /app/room-web
-HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=5 \
-  CMD curl -fsS "http://127.0.0.1:${{RELAY_PORT:-9700}}/health" || exit 1
-CMD ["/app/bitfun-relay-server"]
-DOCKERFILE
-  rm -rf "$context"
-  mv "$context.new" "$context"
-  rm -rf "$download_dir"
-
-  image="bitfun-relay:release-{release_tag}"
-  echo ">>> Building lightweight Relay runtime image (no Rust/Cargo compilation)..."
-  if ! bitfun_docker build -t "$image" "$context"; then
-    echo ">>> Published binary image build failed; falling back to source build."
-    return 1
-  fi
-
-  bitfun_docker volume create relay-server_relay-db >/dev/null
-  bitfun_docker volume create relay-server_room-web >/dev/null
-
-  local backup_container=""
-  if bitfun_docker container inspect bitfun-relay >/dev/null 2>&1; then
-    backup_container="bitfun-relay-before-release-$$"
-    bitfun_docker stop bitfun-relay >/dev/null 2>&1 || true
-    if ! bitfun_docker rename bitfun-relay "$backup_container"; then
-      echo ">>> Could not stage the existing Relay container; falling back to source build."
-      bitfun_docker start bitfun-relay >/dev/null 2>&1 || true
-      return 1
-    fi
-  fi
-
-  bitfun_restore_previous_relay() {{
-    bitfun_docker rm -f bitfun-relay >/dev/null 2>&1 || true
-    if [ -n "$backup_container" ]; then
-      bitfun_docker rename "$backup_container" bitfun-relay >/dev/null 2>&1 || true
-      bitfun_docker start bitfun-relay >/dev/null 2>&1 || true
-    fi
-  }}
-
-  # Wizard-close cancels this script with TERM/INT. Without a trap the user's
-  # relay would stay stopped under its backup name and disappear from the
-  # "already deployed" probe, so always put the previous container back.
-  trap 'bitfun_restore_previous_relay; trap - INT TERM; exit 1' INT TERM
-
-  echo ">>> Starting published Relay binary on port $RELAY_PORT..."
-  if ! bitfun_docker run -d \
-    --name bitfun-relay \
-    --restart unless-stopped \
-    --label com.docker.compose.project=relay-server \
-    --label com.docker.compose.service=relay-server \
-    -p "${{RELAY_HOST_BIND_IP:-0.0.0.0}}:${{RELAY_PORT}}:${{RELAY_PORT}}" \
-    -e "RELAY_PORT=${{RELAY_PORT}}" \
-    -e RELAY_STATIC_DIR=/app/static \
-    -e RELAY_ROOM_WEB_DIR=/app/room-web \
-    -e RELAY_ROOM_TTL=300 \
-    -e RELAY_ASSET_STORE_MAX_BYTES=1073741824 \
-    -e RELAY_DB_PATH=/app/data/bitfun_relay.db \
-    -v relay-server_room-web:/app/room-web \
-    -v relay-server_relay-db:/app/data \
-    "$image" >/dev/null; then
-    echo ">>> Published Relay binary could not start; restoring previous container."
-    bitfun_restore_previous_relay
-    trap - INT TERM
-    return 1
-  fi
-
-  # Probe the address the container is actually published on; a wildcard bind
-  # is reachable through loopback.
-  local attempt stale probe_host="${{RELAY_HOST_BIND_IP:-0.0.0.0}}"
-  if [ "$probe_host" = "0.0.0.0" ] || [ "$probe_host" = "::" ]; then
-    probe_host="127.0.0.1"
-  fi
-  for attempt in $(seq 1 20); do
-    if curl -fsS --max-time 3 "http://${{probe_host}}:${{RELAY_PORT}}/health" >/dev/null 2>&1; then
-      trap - INT TERM
-      if [ -n "$backup_container" ]; then
-        bitfun_docker rm "$backup_container" >/dev/null 2>&1 || true
-      fi
-      # Sweep backups orphaned by an earlier interrupted release deploy.
-      for stale in $(bitfun_docker ps -aq \
-        --filter 'name=^bitfun-relay-before-release-' 2>/dev/null); do
-        bitfun_docker rm -f "$stale" >/dev/null 2>&1 || true
-      done
-      echo ">>> Published Relay binary is healthy."
-      return 0
-    fi
-    if ! bitfun_docker inspect -f '{{{{.State.Running}}}}' bitfun-relay 2>/dev/null \
-      | grep -qx true; then
-      break
-    fi
-    sleep 2
-  done
-
-  echo ">>> Published Relay binary failed its health check; restoring previous container."
-  bitfun_docker logs --tail 40 bitfun-relay 2>/dev/null || true
-  bitfun_restore_previous_relay
-  trap - INT TERM
-  return 1
-}}
+export BITFUN_RELEASE_TAG="{release_tag}"
+export BITFUN_GITHUB_RELEASE_BASE="{RELEASE_BASE}"
+export BITFUN_OPENBITFUN_RELEASE_BASE="{OPENBITFUN_RELEASE_BASE}"
+export BITFUN_PROBE_SECONDS="{probe_seconds}"
+export BITFUN_PROBE_BYTES="{probe_bytes}"
+export BITFUN_HEALTHY_BPS="{healthy_floor}"
+export BITFUN_STALL_BPS="{stall_floor}"
+export BITFUN_STALL_SECONDS="{stall_seconds}"
+# --- begin BitFun relay release-download.sh ---
+{release_download}
+# --- end BitFun relay release-download.sh ---
 "#,
-        RELEASE_DOWNLOAD_BASE = RELEASE_DOWNLOAD_BASE,
+        release_tag = release_tag_for_version(RELEASE_VERSION),
+        RELEASE_BASE = RELEASE_BASE,
         OPENBITFUN_RELEASE_BASE = OPENBITFUN_RELEASE_BASE,
-        release_tag = release_tag,
-        release_version = RELEASE_VERSION,
+        probe_seconds = SOURCE_PROBE_SECONDS,
+        probe_bytes = SOURCE_PROBE_BYTES,
+        healthy_floor = HEALTHY_THROUGHPUT_BYTES_PER_SEC,
+        stall_floor = STALL_THROUGHPUT_BYTES_PER_SEC,
+        stall_seconds = STALL_WINDOW_SECONDS,
+        release_download = RELAY_RELEASE_DOWNLOAD_SH,
     )
 }
 
+/// Checksums for the published relay archives, each proven by a signature this
+/// machine verified.
+///
+/// A relay host is an arbitrary user server with no minisign and no trust root,
+/// so it cannot check a signature itself. It does not have to: the signature
+/// covers the `.sha256` file, which is a couple of hundred bytes, so Desktop
+/// verifies that here and sends the resulting hash down with the deploy script.
+/// The server then needs nothing but `sha256sum`.
+///
+/// Best effort by design — an empty map simply leaves the remote on the
+/// cross-origin checksum path.
+async fn verified_release_checksums(release_tag: &str) -> std::collections::HashMap<String, String> {
+    let mut verified = std::collections::HashMap::new();
+    let Some(pubkey) = RELEASE_PUBKEY.filter(|key| !key.trim().is_empty()) else {
+        return verified;
+    };
+    let Ok(client) = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(8))
+        .timeout(Duration::from_secs(30))
+        .build()
+    else {
+        return verified;
+    };
+
+    for target in RELEASE_TARGETS {
+        let checksum_url =
+            format!("{RELEASE_BASE}/download/{release_tag}/bitfun-relay-server-{target}.tar.gz.sha256");
+        let Some(checksum) = fetch_text(&client, &checksum_url).await else {
+            continue;
+        };
+        let Some(signature) = fetch_text(&client, &format!("{checksum_url}.sig")).await else {
+            continue;
+        };
+        if let Err(error) = verify_minisign(checksum.as_bytes(), &signature, pubkey) {
+            log::warn!("Relay checksum signature for {target} did not verify: {error}");
+            continue;
+        }
+        let Some(hash) = checksum
+            .split_whitespace()
+            .next()
+            .filter(|value| value.len() == 64 && value.chars().all(|c| c.is_ascii_hexdigit()))
+        else {
+            continue;
+        };
+        verified.insert(target.to_string(), hash.to_ascii_lowercase());
+    }
+    verified
+}
+
+async fn fetch_text(client: &reqwest::Client, url: &str) -> Option<String> {
+    client
+        .get(url)
+        .send()
+        .await
+        .ok()?
+        .error_for_status()
+        .ok()?
+        .text()
+        .await
+        .ok()
+}
+
+/// Verify a Tauri-format `.sig` (base64 of a minisign signature file) over
+/// `data`, using the base64-wrapped public key.
+fn verify_minisign(data: &[u8], signature_b64: &str, pubkey_b64: &str) -> Result<()> {
+    use base64::Engine as _;
+    let decode = |value: &str, what: &str| -> Result<String> {
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(value.trim().as_bytes())
+            .map_err(|error| anyhow!("decode {what}: {error}"))?;
+        String::from_utf8(bytes).map_err(|error| anyhow!("decode {what} as UTF-8: {error}"))
+    };
+    let public_key = minisign_verify::PublicKey::decode(&decode(pubkey_b64, "public key")?)
+        .map_err(|error| anyhow!("invalid release public key: {error}"))?;
+    let signature = minisign_verify::Signature::decode(&decode(signature_b64, "signature")?)
+        .map_err(|error| anyhow!("invalid release signature: {error}"))?;
+    public_key
+        .verify(data, &signature, false)
+        .map_err(|error| anyhow!("signature does not match: {error}"))
+}
+
+/// Shell assignments exporting the verified hashes the remote script consumes.
+fn verified_checksum_exports(verified: &std::collections::HashMap<String, String>) -> String {
+    let mut exports = String::new();
+    for target in RELEASE_TARGETS {
+        if let Some(hash) = verified.get(target) {
+            exports.push_str(&format!(
+                "export BITFUN_EXPECTED_SHA256_{}=\"{hash}\"\n",
+                target.replace(['-', '.'], "_").to_uppercase()
+            ));
+        }
+    }
+    exports
+}
+
 /// Non-interactive body for deploy (runs under nohup after prepare).
-fn deploy_body_script(port: u16) -> String {
+///
+/// `verified_checksums` carries hashes this device proved by signature; empty
+/// leaves the remote on the cross-origin checksum path.
+fn deploy_body_script_with_checksums(port: u16, verified_checksums: &str) -> String {
     let helpers = prepare_helpers_bash();
     let sync = sync_source_bash();
     let release_binary_deploy = release_binary_deploy_bash();
@@ -1561,7 +1540,7 @@ fn deploy_body_script(port: u16) -> String {
 set -euo pipefail
 {helpers}
 {sync}
-{release_binary_deploy}
+{verified_checksums}{release_binary_deploy}
 export DOCKER_CONFIG="${{DOCKER_CONFIG:-$HOME/.bitfun/docker-config}}"
 export DOCKER_BUILDKIT=1
 export COMPOSE_DOCKER_CLI_BUILD=1
@@ -1586,6 +1565,16 @@ if bitfun_try_release_deploy; then
   exit 0
 fi
 echo ">>> Release binary path did not complete; starting source-build fallback."
+# Compiling the relay pulls a Cargo registry, a target dir and Docker layers.
+# Running out of disk halfway through surfaces as an opaque compiler or BuildKit
+# error, so refuse up front with something the user can act on.
+SRC_FREE_KB=$(df -Pk "$HOME" 2>/dev/null | awk 'NR==2 {{print $4}}' || echo 0)
+if [ "${{SRC_FREE_KB:-0}}" -lt {source_build_free_kb} ]; then
+  echo ">>> ERROR: the source build needs about {source_build_free_gb} GB free under $HOME,"
+  echo ">>>        but only $(( SRC_FREE_KB / 1024 )) MB is available."
+  echo ">>>        Free up space, or install a published Relay binary manually."
+  exit 1
+fi
 SRC="$HOME/{SOURCE_DIR}"
 bitfun_sync_source "$SRC"
 cd "$SRC/src/apps/relay-server"
@@ -1611,6 +1600,7 @@ echo {TASK_DONE_MARKER}
 "#,
         helpers = helpers,
         sync = sync,
+        verified_checksums = verified_checksums,
         release_binary_deploy = release_binary_deploy,
         DEPLOY_STATE_DIR = DEPLOY_STATE_DIR,
         SOURCE_DIR = SOURCE_DIR,
@@ -1618,15 +1608,20 @@ echo {TASK_DONE_MARKER}
         TASK_DONE_MARKER = TASK_DONE_MARKER,
         REPO_GIT_URL = REPO_GIT_URL,
         REPO_TARBALL_URL = REPO_TARBALL_URL,
+        source_build_free_kb = SOURCE_BUILD_FREE_KB,
+        source_build_free_gb = SOURCE_BUILD_FREE_KB / 1024 / 1024,
     )
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_docker_access, decide_task_status, deploy_body_script, parse_preflight,
+        classify_docker_access, decide_task_status, deploy_body_script_with_checksums,
+        parse_preflight,
         prepare_helpers_bash, release_binary_deploy_bash, release_tag_for_version,
-        split_poll_stdout, sync_source_bash, DockerAccessMode, RelayTaskStatus, RELAY_MIRROR_SH,
+        split_poll_stdout, sync_source_bash, verified_checksum_exports,
+        verified_release_checksums, verify_minisign, DockerAccessMode, RelayTaskStatus,
+        RELAY_MIRROR_SH, RELEASE_PUBKEY,
     };
 
     #[test]
@@ -1692,7 +1687,7 @@ mod tests {
         let script = release_binary_deploy_bash();
         assert!(script.contains("bitfun-relay-server-${target}.tar.gz"));
         assert!(script.contains("sha256sum -c"));
-        assert!(script.contains("https://openbitfun.com/release/"));
+        assert!(script.contains("https://openbitfun.com/release"));
         assert!(script.contains("no Rust/Cargo compilation"));
         assert!(script.contains("--name bitfun-relay"));
         assert!(script.contains("relay-server_relay-db:/app/data"));
@@ -1703,13 +1698,101 @@ mod tests {
         assert!(script.contains("trap 'bitfun_restore_previous_relay"));
         assert!(script.contains("name=^bitfun-relay-before-release-"));
         // Port publishing keeps compose's configurable bind address.
-        assert!(script.contains("${RELAY_HOST_BIND_IP:-0.0.0.0}:${RELAY_PORT}:${RELAY_PORT}"));
+        assert!(script
+            .contains("${RELAY_HOST_BIND_IP:-0.0.0.0}:${RELAY_PORT:-9700}:${RELAY_PORT:-9700}"));
+
+        // Slow-link contract. A wall-clock ceiling alone made a 20 KB/s link
+        // fail forever: each attempt timed out mid-archive and restarted from
+        // zero. Throughput floor + resume + ranking replace that.
+        assert!(script.contains("--speed-limit"));
+        assert!(script.contains("--speed-time"));
+        assert!(script.contains("-C -"));
+        assert!(script.contains("--retry-max-time"));
+        assert!(script.contains("bitfun_probe_source"));
+        assert!(script.contains("sort -rn -k1,1"));
+        // The mirror URL must come from the mirror's manifest, never a pinned
+        // /<version>/ path that 404s for older Desktop builds.
+        assert!(script.contains("linux-binaries.json"));
+        assert!(!script.contains("release/0.2"));
+        // Checksums bind to a canonical GitHub URL, so a compromised mirror or
+        // third-party proxy cannot serve matching bytes and checksum together.
+        assert!(script.contains("bitfun_canonical_checksum_url"));
+        // The shared file backs both this path and deploy.sh.
+        assert!(script.contains("release-download.sh"));
+        assert!(script.contains("export BITFUN_RELEASE_TAG=\"v0.2"));
+    }
+
+    /// `bash -n` only proves the generated script parses. This runs its source
+    /// ranking and download loop against a stubbed curl so the slow-link
+    /// behaviour is actually exercised.
+    /// Same fixture as the CLI updater, produced with the real `minisign` CLI.
+    /// A relay host cannot check a signature itself, so this is the check that
+    /// stands between a hostile mirror and the user's server.
+    const FIXTURE_PUBKEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXkgRTNFMDg3NENFQzFDMjJDMwpSV1RESWh6c1RJZmc0MXcyR3dpZWkwek5ES2FMWW05ZFFWcEVXTlEvVWxweXQybWJTMkpFMVUyTQo=";
+    const FIXTURE_SIGNATURE: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIG1pbmlzaWduIHNlY3JldCBrZXkKUlVUREloenNUSWZnNDBMTitwb25aT3RCVy9VYmJtNWhkR1poM0lCb3IwUDBKaVZmZmM1cFJaNlZSNUpaSzNUUm1yWWpYMXFLQ2svWTdZUDhHdkRZT3YvanVoZlpnZmhyWEFRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg0OTUxOTM1CWZpbGU6YXJjaGl2ZS50YXIuZ3oJaGFzaGVkCjhWL21EUVAwZGdlZXVNU1lxWlpsOWdFSGUwOTJQTk9yRG1BMUV6ZHNQOUlEYkcyT1dneTFsQ1puUDBJaFIwQnJpMFBCeENRcUdDR2dpb0l0UGtSMUN3PT0K";
+    const FIXTURE_DATA: &[u8] = b"hello-bitfun\n";
+
+    #[test]
+    fn checksum_signature_verifies_and_rejects_tampering() {
+        verify_minisign(FIXTURE_DATA, FIXTURE_SIGNATURE, FIXTURE_PUBKEY)
+            .expect("minisign signature in Tauri's base64 wrapper must verify");
+        assert!(verify_minisign(b"tampered\n", FIXTURE_SIGNATURE, FIXTURE_PUBKEY).is_err());
+        assert!(verify_minisign(FIXTURE_DATA, "bm90LWEtc2ln", FIXTURE_PUBKEY).is_err());
+    }
+
+    #[test]
+    fn verified_checksums_reach_the_remote_script_as_exports() {
+        let mut verified = std::collections::HashMap::new();
+        verified.insert("x86_64-unknown-linux-gnu".to_string(), "a".repeat(64));
+        let exports = verified_checksum_exports(&verified);
+        assert!(exports.contains(&format!(
+            "export BITFUN_EXPECTED_SHA256_X86_64_UNKNOWN_LINUX_GNU=\"{}\"",
+            "a".repeat(64)
+        )));
+        // No entry for a target we could not verify: the remote must fall back
+        // rather than trust an unverified hash.
+        assert!(!exports.contains("AARCH64"));
+
+        // The generated script must consume exactly those names.
+        let script = deploy_body_script_with_checksums(9700, &exports);
+        assert!(script.contains("BITFUN_EXPECTED_SHA256_X86_64_UNKNOWN_LINUX_GNU"));
+        assert!(script.contains("BITFUN_EXPECTED_SHA256_AARCH64_UNKNOWN_LINUX_GNU"));
+    }
+
+    /// Without a trust root there is nothing to verify against, so no hash may
+    /// be asserted to the remote.
+    #[tokio::test]
+    async fn unsigned_builds_supply_no_checksums() {
+        assert!(RELEASE_PUBKEY.is_none() || RELEASE_PUBKEY == Some(""));
+        assert!(verified_release_checksums("v0.0.0").await.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn release_download_picks_the_fastest_working_source() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let script = dir.path().join("release.sh");
+        std::fs::write(&script, release_binary_deploy_bash()).expect("write script");
+
+        let harness = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../../scripts/relay/release-download-harness.sh");
+        let output = std::process::Command::new("bash")
+            .arg(&harness)
+            .arg(&script)
+            .output()
+            .expect("run release download harness");
+        assert!(
+            output.status.success(),
+            "release download harness failed:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     #[cfg(unix)]
     #[test]
     fn generated_deploy_script_is_valid_bash() {
-        let script = deploy_body_script(9700);
+        let script = deploy_body_script_with_checksums(9700, "");
         let output = std::process::Command::new("bash")
             .args(["-n", "-c", &script])
             .output()
@@ -1876,6 +1959,8 @@ active_docker_group=0
 in_docker_group_file=1
 docker_home_writable=0
 mem_kb=2097152
+home_free_kb=12582912
+docker_free_kb=8388608
 port_busy=0
 container=1
 container_running=1
@@ -1896,5 +1981,7 @@ port_owned=0
         assert_eq!(pf.existing_relay_port, 9700);
         assert!(pf.relay_healthy);
         assert!(!pf.port_owned_by_relay);
+        assert_eq!(pf.home_free_mb, 12288);
+        assert_eq!(pf.docker_free_mb, 8192);
     }
 }

@@ -15,6 +15,16 @@ on:
         description: "Stable prefix that isolates artifacts in the caller run."
         required: true
         type: string
+    secrets:
+      release_signing_key:
+        description: "Tauri/minisign private key, base64. Absent on forks: archives ship unsigned."
+        required: false
+      release_signing_password:
+        description: "Password for release_signing_key."
+        required: false
+      release_pubkey:
+        description: "Tauri/minisign public key, base64. Compiled into the CLI as its trust root."
+        required: false
 
 permissions:
   contents: read
@@ -91,6 +101,11 @@ jobs:
 
       - name: Build CLI and Relay Server
         shell: bash
+        env:
+          # Compiled into the CLI; its presence makes signature verification
+          # mandatory for self-update. Unset on forks, which then fall back to
+          # checksum-only.
+          BITFUN_RELEASE_PUBKEY: ${{ secrets.release_pubkey }}
         run: |
           cargo build --release \
             --target ${{ matrix.platform.target }} \
@@ -118,6 +133,24 @@ jobs:
           TARGET: ${{ matrix.platform.target }}
         run: bash scripts/relay/package-unix.sh "$ASSET_VERSION" "$TARGET"
 
+      - name: Sign release archives
+        shell: bash
+        env:
+          BITFUN_SIGNING_KEY: ${{ secrets.release_signing_key }}
+          BITFUN_SIGNING_PASSWORD: ${{ secrets.release_signing_password }}
+          BITFUN_SIGNING_PUBKEY: ${{ secrets.release_pubkey }}
+          CLI_ARCHIVE: ${{ steps.cli-stage.outputs.archive }}
+          RELAY_ARCHIVE: ${{ steps.relay-stage.outputs.archive }}
+        run: |
+          set -euo pipefail
+          # The .sha256 files are signed too: remote relay hosts have no
+          # minisign, so Desktop verifies the signature over the tiny checksum
+          # file locally and hands the trusted hash to the server, which then
+          # only needs sha256sum.
+          bash scripts/sign-release-assets.sh \
+            "$CLI_ARCHIVE" "${CLI_ARCHIVE}.sha256" \
+            "$RELAY_ARCHIVE" "${RELAY_ARCHIVE}.sha256"
+
       - name: Upload Linux binary artifacts
         uses: actions/upload-artifact@v6
         with:
@@ -129,3 +162,5 @@ jobs:
             ${{ steps.cli-stage.outputs.checksum }}
             ${{ steps.relay-stage.outputs.archive }}
             ${{ steps.relay-stage.outputs.checksum }}
+            *.tar.gz.sig
+            *.tar.gz.sha256.sig
