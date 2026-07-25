@@ -319,10 +319,10 @@ export class ChatTimelineStore {
   applyEvent(event: ConversationEvent): void {
     switch (event.type) {
       case 'user_message':
-        if ((event.message.status || '').toLowerCase() === 'pending') {
-          this.appendOptimisticMessage(event.message);
-        } else {
+        if (event.persisted) {
           this.mergePersistedMessages([event.message]);
+        } else {
+          this.appendOptimisticMessage(event.message);
         }
         return;
       case 'turn_started':
@@ -585,18 +585,31 @@ export class ChatTimelineStore {
     if (incomingItems.length === 0) {
       return previousItems;
     }
-    const merged: ChatMessageItemResponse[] = [];
-    incomingItems.forEach((incoming: ChatMessageItemResponse, index: number) => {
-      const previous = previousItems[index];
-      if (previous && ChatTimelineStore.sameActiveItem(previous, incoming)) {
-        merged.push(ChatTimelineStore.mergeActiveItem(previous, incoming));
+    // Poll snapshots can temporarily omit an item while the desktop turn is
+    // being assembled. Keep the existing order and merge tool rows by their
+    // stable id instead of treating the array index as identity.
+    const merged = previousItems.slice();
+    const matched = new Set<number>();
+    incomingItems.forEach((incoming: ChatMessageItemResponse, incomingIndex: number) => {
+      let matchIndex = -1;
+      const incomingToolId = incoming.tool ? (incoming.tool.id || '') : '';
+      if (incomingToolId.length > 0) {
+        matchIndex = previousItems.findIndex((previous: ChatMessageItemResponse, index: number) => {
+          return !matched.has(index) && previous.tool !== undefined &&
+            (previous.tool.id || '') === incomingToolId;
+        });
+      } else if (incomingIndex < previousItems.length &&
+        !matched.has(incomingIndex) &&
+        ChatTimelineStore.sameActiveItem(previousItems[incomingIndex], incoming)) {
+        matchIndex = incomingIndex;
+      }
+      if (matchIndex >= 0) {
+        merged[matchIndex] = ChatTimelineStore.mergeActiveItem(previousItems[matchIndex], incoming);
+        matched.add(matchIndex);
       } else {
         merged.push(incoming);
       }
     });
-    for (let index = incomingItems.length; index < previousItems.length; index++) {
-      merged.push(previousItems[index]);
-    }
     return merged;
   }
 
@@ -666,7 +679,28 @@ export class ChatTimelineStore {
     if (!incoming) {
       return previous;
     }
-    return incoming;
+    if (!previous) {
+      return incoming;
+    }
+    const previousStatus = (previous.status || '').toLowerCase();
+    const incomingStatus = (incoming.status || '').toLowerCase();
+    const rank = (status: string): number => {
+      if (status === 'pending_confirmation' || status === 'needs_confirmation' || status === 'pending') {
+        return 1;
+      }
+      if (status === 'running' || status === 'active') {
+        return 2;
+      }
+      if (status === 'completed' || status === 'success' || status === 'finished') {
+        return 3;
+      }
+      if (status === 'rejected' || status === 'cancelled' || status === 'canceled' || status === 'error' || status === 'failed') {
+        return 4;
+      }
+      return 0;
+    };
+    // A delayed poll must not move a completed tool back to running/pending.
+    return rank(incomingStatus) < rank(previousStatus) ? previous : incoming;
   }
 
   private static isActiveTurnId(id: string): boolean {

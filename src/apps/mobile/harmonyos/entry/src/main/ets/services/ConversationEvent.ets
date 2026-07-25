@@ -8,6 +8,7 @@ import {
 export interface ConversationUserMessageEvent {
   type: 'user_message';
   message: ChatMessage;
+  persisted: boolean;
 }
 
 export interface ConversationAssistantDeltaEvent {

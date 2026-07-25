@@ -139,20 +139,18 @@ export struct ToolStatusList {
         Row({ space: 8 }) {
           Text(RemoteI18n.t('chat.approve'))
             .fontSize(12)
-            .fontColor(this.isBusy ? MUTED : CARD)
+            .fontColor(CARD)
             .textAlign(TextAlign.Center)
             .height(32)
             .layoutWeight(1)
-            .backgroundColor(this.isBusy ? '#EDEBE6' : ACCENT)
+            .backgroundColor(ACCENT)
             .borderRadius(16)
             .onClick(() => {
-              if (!this.isBusy) {
-                this.approveToolWithInput(tool);
-              }
+              this.approveToolWithInput(tool);
             })
           Text(RemoteI18n.t('chat.reject'))
             .fontSize(12)
-            .fontColor(this.isBusy ? MUTED : INK)
+            .fontColor(INK)
             .textAlign(TextAlign.Center)
             .height(32)
             .layoutWeight(1)
@@ -160,9 +158,7 @@ export struct ToolStatusList {
             .borderRadius(16)
             .border({ width: 1, color: LINE })
             .onClick(() => {
-              if (!this.isBusy) {
-                this.onRejectTool(tool.id || '');
-              }
+              this.onRejectTool(tool.id || '');
             })
         }
         .width('100%')
@@ -176,7 +172,7 @@ export struct ToolStatusList {
           Blank()
           Text(RemoteI18n.t('chat.cancelTool'))
             .fontSize(12)
-            .fontColor(this.isBusy ? MUTED : INK)
+            .fontColor(INK)
             .textAlign(TextAlign.Center)
             .height(32)
             .padding({ left: 14, right: 14 })
@@ -184,9 +180,7 @@ export struct ToolStatusList {
             .borderRadius(16)
             .border({ width: 1, color: LINE })
             .onClick(() => {
-              if (!this.isBusy) {
-                this.onCancelTool(tool.id || '');
-              }
+              this.onCancelTool(tool.id || '');
             })
         }
         .width('100%')
@@ -489,11 +483,9 @@ export struct ToolStatusList {
           .fontSize(11)
           .fontColor(MUTED)
           .onClick(() => {
-            if (!this.isBusy) {
-              this.toolInputEditToolId = tool.id || '';
-              this.toolInputEditText = this.defaultToolInputText(tool);
-              this.toolInputEditError = '';
-            }
+            this.toolInputEditToolId = tool.id || '';
+            this.toolInputEditText = this.defaultToolInputText(tool);
+            this.toolInputEditError = '';
           })
       }
       .width('100%')
@@ -507,13 +499,11 @@ export struct ToolStatusList {
         .padding(10)
         .border({ width: 1, color: this.toolInputErrorForTool(tool.id || '').length > 0 ? RED : LINE })
         .defaultFocus(false)
-        .enabled(!this.isBusy)
+        .enabled(true)
         .onChange((value: string) => {
-          if (!this.isBusy) {
-            this.toolInputEditToolId = tool.id || '';
-            this.toolInputEditText = value;
-            this.toolInputEditError = '';
-          }
+          this.toolInputEditToolId = tool.id || '';
+          this.toolInputEditText = value;
+          this.toolInputEditError = '';
         })
       if (this.toolInputErrorForTool(tool.id || '').length > 0) {
         Text(this.toolInputErrorForTool(tool.id || ''))
@@ -541,12 +531,10 @@ export struct ToolStatusList {
         .padding(12)
         .border({ width: 1, color: LINE })
         .defaultFocus(false)
-        .enabled(!this.isBusy)
+        .enabled(true)
         .onChange((value: string) => {
-          if (!this.isBusy) {
-            this.questionAnswerToolId = tool.id || '';
-            this.questionAnswerText = value;
-          }
+          this.questionAnswerToolId = tool.id || '';
+          this.questionAnswerText = value;
         })
       Row({ space: 8 }) {
         Text(RemoteI18n.t('chat.submitAnswer'))
@@ -1370,9 +1358,6 @@ export struct ToolStatusList {
   }
 
   private approveToolWithInput(tool: ConversationUiToolStatus): void {
-    if (this.isBusy) {
-      return;
-    }
     const toolId = tool.id || '';
     if (toolId.length === 0) {
       return;
@@ -1474,8 +1459,7 @@ export struct ToolStatusList {
   private canSubmitQuestion(toolId: string): boolean {
     return toolId.length > 0 &&
       this.questionAnswerToolId === toolId &&
-      this.questionAnswerText.trim().length > 0 &&
-      !this.isBusy;
+      this.questionAnswerText.trim().length > 0;
   }
 
   private toolKey(tool: ConversationUiToolStatus, index: number): string {

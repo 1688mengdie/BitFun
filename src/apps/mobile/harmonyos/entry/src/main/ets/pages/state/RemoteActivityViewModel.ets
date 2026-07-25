@@ -13,6 +13,7 @@ export class RemoteActivityViewModelHooks {
   readonly activeSession: () => SessionSummary;
   readonly onConnectionState: (state: string) => void;
   readonly onStatus: (status: string) => void;
+  readonly onConnectionError: (err: Object) => Promise<boolean>;
   readonly onStopHeartbeat: () => void;
   readonly onStartPolling: () => void;
   readonly onStopPolling: () => void;
@@ -28,6 +29,7 @@ export class RemoteActivityViewModelHooks {
     activeSession: () => SessionSummary,
     onConnectionState: (state: string) => void,
     onStatus: (status: string) => void,
+    onConnectionError: (err: Object) => Promise<boolean>,
     onStopHeartbeat: () => void,
     onStartPolling: () => void,
     onStopPolling: () => void,
@@ -42,6 +44,7 @@ export class RemoteActivityViewModelHooks {
     this.activeSession = activeSession;
     this.onConnectionState = onConnectionState;
     this.onStatus = onStatus;
+    this.onConnectionError = onConnectionError;
     this.onStopHeartbeat = onStopHeartbeat;
     this.onStartPolling = onStartPolling;
     this.onStopPolling = onStopPolling;
@@ -85,9 +88,13 @@ export class RemoteActivityViewModel {
     try {
       await this.connection.ping();
     } catch (err) {
+      if (await this.hooks.onConnectionError(err)) {
+        return;
+      }
       const message = ConnectionErrorPolicy.errorText(err);
       this.hooks.onConnectionState('failed');
       this.hooks.onStatus(message);
+      this.hooks.onStopPolling();
       this.hooks.onStopHeartbeat();
     }
   }
@@ -122,6 +129,9 @@ export class RemoteActivityViewModel {
       }
     } catch (err) {
       if (!this.gate.isCurrent(token)) {
+        return;
+      }
+      if (await this.hooks.onConnectionError(err)) {
         return;
       }
       this.hooks.onStatus(ConnectionErrorPolicy.errorText(err));

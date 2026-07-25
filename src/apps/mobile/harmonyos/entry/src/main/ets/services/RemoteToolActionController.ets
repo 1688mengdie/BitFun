@@ -104,7 +104,7 @@ export class RemoteToolActionController {
     successText: string,
     action: () => Promise<void>
   ): Promise<void> {
-    if (sessionId.length === 0 || toolId.length === 0 || isBusy || !remoteAvailable) {
+    if (sessionId.length === 0 || toolId.length === 0 || !remoteAvailable) {
       return;
     }
     try {

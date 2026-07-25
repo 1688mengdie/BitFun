@@ -46,6 +46,21 @@ export class AppShellViewModel {
     }
   }
 
+  replaceCurrentRoute(route: AppRoute, sessionId: string = ''): void {
+    if (this.navigationStack.getAllPathName().length === 0) {
+      this.pushRoute(route, sessionId);
+      return;
+    }
+    if (sessionId.length > 0) {
+      this.navigationStack.replacePath({
+        name: route,
+        param: AppRouteContract.routeParam(sessionId)
+      }, false);
+      return;
+    }
+    this.navigationStack.replacePath({ name: route }, false);
+  }
+
   popRoute(fallback: AppRoute): void {
     if (this.navigationStack.getAllPathName().length > 0) {
       this.navigationStack.pop();

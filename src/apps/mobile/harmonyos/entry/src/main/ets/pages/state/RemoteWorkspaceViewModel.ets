@@ -82,9 +82,25 @@ export class RemoteWorkspaceViewModel {
   async loadRecentWorkspacesInBackground(): Promise<void> {
     try {
       const recent = await this.coordinator.recentWorkspaces();
-      this.pageState.setRecentWorkspaces(recent);
+      const assistants = await this.coordinator.assistants();
+      const assistantWorkspaces: RecentWorkspaceEntry[] = [];
+      assistants.forEach((item) => {
+        assistantWorkspaces.push({
+          path: item.path,
+          name: item.name,
+          lastOpened: '',
+          workspaceKind: 'assistant'
+        } as RecentWorkspaceEntry);
+      });
+      const allWorkspaces = recent.slice();
+      assistantWorkspaces.forEach((item: RecentWorkspaceEntry) => {
+        if (!allWorkspaces.some((existing: RecentWorkspaceEntry) => existing.path === item.path)) {
+          allWorkspaces.push(item);
+        }
+      });
+      this.pageState.setRecentWorkspaces(allWorkspaces);
       const sessions = await this.coordinator.sessionsForWorkspaces(
-        recent.map((item: RecentWorkspaceEntry) => item.path)
+        allWorkspaces.map((item: RecentWorkspaceEntry) => item.path)
       );
       this.hooks.onSessionsDiscovered(sessions);
     } catch (err) {

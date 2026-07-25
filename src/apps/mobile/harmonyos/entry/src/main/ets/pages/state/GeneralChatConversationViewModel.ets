@@ -90,7 +90,7 @@ export class GeneralChatConversationViewModel {
       this.beginStream(sessionId);
       const observer = new GeneralChatStreamCallbacks(
         async (message: ChatMessage): Promise<void> => {
-          this.timeline.dispatch({ type: 'user_message', message });
+          this.timeline.dispatch({ type: 'user_message', message, persisted: true });
           this.hooks.syncTimeline();
         },
         (delta: string): void => {
@@ -111,7 +111,7 @@ export class GeneralChatConversationViewModel {
         this.finishStream(sessionId, result);
       } else {
         this.resetStream();
-        this.timeline.dispatch({ type: 'user_message', message: result.userMessage });
+        this.timeline.dispatch({ type: 'user_message', message: result.userMessage, persisted: true });
         this.timeline.dispatch({
           type: 'turn_finished',
           sessionId,
@@ -227,7 +227,7 @@ export class GeneralChatConversationViewModel {
     if (currentSessionId !== sessionId && !visible) {
       return;
     }
-    this.timeline.dispatch({ type: 'user_message', message: result.userMessage });
+    this.timeline.dispatch({ type: 'user_message', message: result.userMessage, persisted: true });
     this.timeline.dispatch({
       type: 'turn_finished',
       sessionId,

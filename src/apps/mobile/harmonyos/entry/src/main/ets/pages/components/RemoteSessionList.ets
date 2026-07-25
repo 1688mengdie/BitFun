@@ -12,21 +12,24 @@ export struct RemoteSessionList {
   @Param isBusy: boolean = false;
   @Param workspaceName: string = '';
   @Param workspacePath: string = '';
+  @Param workspaceKind: string = 'normal';
   @Param recentWorkspaces: RecentWorkspaceEntry[] = [];
   @Event onCreate: () => void = () => {};
   @Event onOpenSession: (session: RemoteSession) => void = (_session: RemoteSession) => {};
   @Event onDeleteSession: (session: RemoteSession) => void = (_session: RemoteSession) => {};
   @Event onLoadMore: () => void = () => {};
   @Event onCreateAssistantSession: () => void = () => {};
-  @Event onCreateInWorkspace: (path: string) => void = (_path: string) => {};
+  @Event onCreateInWorkspace: (path: string, agentType: string) => void = (_path: string, _agentType: string) => {};
   @Event onSelectWorkspace: (path: string) => void = (_path: string) => {};
   @Local collapsedWorkspacePaths: string[] = [];
   @Local projectVisibleSteps: string[] = [];
+  @Local visibleProjectCount: number = 3;
   @Local chatsCollapsed: boolean = false;
   @Local chatVisibleCount: number = 3;
   @Local todayCollapsed: boolean = false;
   @Local yesterdayCollapsed: boolean = false;
   @Local earlierCollapsed: boolean = false;
+  @Local createMenuPath: string = '';
 
   build() {
     Column() {
@@ -152,13 +155,22 @@ export struct RemoteSessionList {
   @Builder
   private ProjectSection() {
     Column({ space: 4 }) {
-      Text(RemoteI18n.t('sidebar.projects'))
-        .fontSize(20)
-        .fontWeight(FontWeight.Bold)
-        .fontColor(INK)
-        .width('100%')
-        .margin({ bottom: 8 })
-      ForEach(this.projectEntries(), (project: RecentWorkspaceEntry) => {
+      Row() {
+        Row({ space: 8 }) {
+          Text(RemoteI18n.t('sidebar.projects'))
+            .fontSize(20)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(INK)
+          Text(`${this.projectEntries().length}`)
+            .fontSize(14)
+            .fontColor(MUTED)
+        }
+        Blank()
+      }
+      .width('100%')
+      .height(58)
+      .alignItems(VerticalAlign.Center)
+      ForEach(this.visibleProjectEntries(), (project: RecentWorkspaceEntry) => {
         Column({ space: 2 }) {
           Row({ space: 10 }) {
             Image($r('app.media.remote_ref_folder'))
@@ -187,8 +199,24 @@ export struct RemoteSessionList {
               .height(25)
               .objectFit(ImageFit.Contain)
               .opacity(0.52)
+              .bindPopup(this.createMenuPath === project.path, {
+                builder: () => {
+                  this.ProjectCreateMenu(project.path)
+                },
+                placement: Placement.Top,
+                popupColor: '#00000000',
+                enableArrow: false,
+                autoCancel: true,
+                mask: false,
+                targetSpace: 6,
+                onStateChange: (event) => {
+                  if (!event.isVisible) {
+                    this.createMenuPath = '';
+                  }
+                }
+              })
               .onClick(() => {
-                this.onCreateInWorkspace(project.path);
+                this.createMenuPath = this.createMenuPath === project.path ? '' : project.path;
               })
           }
           .width('100%')
@@ -202,10 +230,52 @@ export struct RemoteSessionList {
         }
         .width('100%')
         .margin({ bottom: 8 })
-      })
+      }, (project: RecentWorkspaceEntry): string => project.path)
+      if (this.visibleProjectCount < this.projectEntries().length) {
+        Text(RemoteI18n.f('remote.projects.showMore', String(this.nextProjectEntryBatchSize())))
+          .fontSize(15)
+          .fontColor(MUTED)
+          .height(48)
+          .width('100%')
+          .textAlign(TextAlign.Center)
+          .onClick(() => {
+            this.visibleProjectCount += 3;
+          })
+      }
     }
     .width('100%')
     .margin({ top: 18 })
+  }
+
+  @Builder
+  private ProjectCreateMenu(path: string) {
+    Column({ space: 2 }) {
+      this.ProjectCreateMenuItem('Code', 'code', path)
+      this.ProjectCreateMenuItem('Cowork', 'Cowork', path)
+    }
+    .width(150)
+    .padding({ top: 8, bottom: 8 })
+    .backgroundColor(CARD)
+    .borderRadius(14)
+    .border({ width: 1, color: '#18000000' })
+    .shadow({ radius: 20, color: '#1A000000', offsetY: 8 })
+  }
+
+  @Builder
+  private ProjectCreateMenuItem(label: string, agentType: string, path: string) {
+    Row() {
+      Text(label)
+        .fontSize(15)
+        .fontColor(INK)
+        .fontWeight(FontWeight.Medium)
+    }
+    .width('100%')
+    .height(42)
+    .padding({ left: 18, right: 18 })
+    .onClick(() => {
+      this.createMenuPath = '';
+      this.onCreateInWorkspace(path, agentType);
+    })
   }
 
   @Builder
@@ -252,7 +322,7 @@ export struct RemoteSessionList {
           this.SessionRow(item)
         })
         if (this.chatVisibleCount < this.visibleChatSessions().length) {
-          Text(`再显示 ${this.nextChatBatchSize()} 条`)
+          Text(RemoteI18n.f('remote.sessions.showMore', String(this.nextChatBatchSize())))
             .fontSize(15)
             .fontColor(MUTED)
             .height(48)
@@ -285,7 +355,7 @@ export struct RemoteSessionList {
         })
     })
     if (this.projectVisibleCount(path) < this.projectSessions(path).length) {
-      Text(`再显示 ${this.nextProjectBatchSize(path)} 条`)
+      Text(RemoteI18n.f('remote.sessions.showMore', String(this.nextProjectBatchSize(path))))
         .fontSize(15)
         .fontColor(MUTED)
         .height(44)
@@ -299,15 +369,24 @@ export struct RemoteSessionList {
 
   private projectEntries(): RecentWorkspaceEntry[] {
     const entries: RecentWorkspaceEntry[] = [];
-    if (this.workspacePath.length > 0 || this.workspaceName.length > 0) {
+    if ((this.workspacePath.length > 0 || this.workspaceName.length > 0) && !this.isAssistantWorkspace(this.workspacePath)) {
       entries.push({ path: this.workspacePath, name: this.workspaceName, lastOpened: '', workspaceKind: 'normal' });
     }
     this.recentWorkspaces.forEach((item: RecentWorkspaceEntry) => {
-      if (item.path.length > 0 && !entries.some((entry: RecentWorkspaceEntry) => entry.path === item.path)) {
+      if (item.path.length > 0 && !this.isAssistantWorkspace(item.path) &&
+        !entries.some((entry: RecentWorkspaceEntry) => entry.path === item.path)) {
         entries.push(item);
       }
     });
     return entries;
+  }
+
+  private visibleProjectEntries(): RecentWorkspaceEntry[] {
+    return this.projectEntries().slice(0, this.visibleProjectCount);
+  }
+
+  private nextProjectEntryBatchSize(): number {
+    return Math.min(3, this.projectEntries().length - this.visibleProjectCount);
   }
 
   private basename(path: string): string {
@@ -397,7 +476,20 @@ export struct RemoteSessionList {
 
   private isAssistantSession(item: RemoteSession): boolean {
     const agentType = (item.agentType || '').toLowerCase();
-    return agentType === 'claw' || agentType === 'assistant' || agentType === 'chat';
+    return agentType === 'claw' || agentType === 'assistant' || agentType === 'chat' ||
+      this.isAssistantWorkspace(item.workspacePath || '');
+  }
+
+  private isAssistantWorkspace(path: string): boolean {
+    if (path.length === 0) {
+      return this.workspaceKind.toLowerCase() === 'assistant';
+    }
+    if (path === this.workspacePath && this.workspaceKind.toLowerCase() === 'assistant') {
+      return true;
+    }
+    return this.recentWorkspaces.some((item: RecentWorkspaceEntry) => {
+      return item.path === path && item.workspaceKind.toLowerCase() === 'assistant';
+    });
   }
 
 

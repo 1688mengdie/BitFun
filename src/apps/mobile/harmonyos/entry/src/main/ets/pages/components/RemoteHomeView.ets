@@ -30,7 +30,7 @@ export struct RemoteHomeView {
   @Event onClearPairing: () => void = () => {};
   @Event onCreate: (agentType: string) => void = (_agentType: string) => {};
   @Event onCreateAssistantSession: () => void = () => {};
-  @Event onCreateInWorkspace: (path: string) => void = (_path: string) => {};
+  @Event onCreateInWorkspace: (path: string, agentType: string) => void = (_path: string, _agentType: string) => {};
   @Event onOpenSession: (session: RemoteSession) => void = (_session: RemoteSession) => {};
   @Event onDeleteSession: (session: RemoteSession) => void = (_session: RemoteSession) => {};
   @Local showRemoteActions: boolean = false;
@@ -56,6 +56,7 @@ export struct RemoteHomeView {
             sortMode: this.sortMode,
             workspaceName: this.pageState.workspaceName,
             workspacePath: this.pageState.workspacePath,
+            workspaceKind: this.pageState.workspaceKind,
             recentWorkspaces: this.pageState.recentWorkspaces,
             hasMoreSessions: this.pageState.hasMoreSessions,
             isBusy: this.isBusy || this.pageState.isLoadingSessions,
@@ -65,8 +66,8 @@ export struct RemoteHomeView {
             onCreateAssistantSession: () => {
               this.onCreateAssistantSession();
             },
-            onCreateInWorkspace: (path: string) => {
-              this.onCreateInWorkspace(path);
+            onCreateInWorkspace: (path: string, agentType: string) => {
+              this.onCreateInWorkspace(path, agentType);
             },
             onSelectWorkspace: (path: string) => {
               this.onSelectWorkspace(path);

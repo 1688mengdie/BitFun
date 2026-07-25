@@ -6038,7 +6038,7 @@ export const requiredContentRules = [
         message: 'missing remote chat history conversion regression',
       },
       {
-        regex: /\bcore_service_agent_runtime_owner_skips_in_progress_remote_assistant_history\b/,
+        regex: /\bcore_service_agent_runtime_owner_preserves_in_progress_remote_assistant_history\b/,
         message: 'missing in-progress remote assistant history regression',
       },
       {

@@ -1,6 +1,8 @@
 import {
   ChatMessage,
+  RecentWorkspaceEntry,
   RemoteModelCatalog,
+  RemotePermissionMode,
   RemoteImageContext,
   RemoteQuestionAnswerPayload,
   RemoteSession,
@@ -34,6 +36,9 @@ import {
   GeneralChatStreamCallbacks
 } from '../../services/general-chat/GeneralChatPort';
 import { MobileIdentityStore } from '../../services/MobileIdentityStore';
+import { CloudAccountClient, CloudAccountDevice, CloudAccountRequestError, CloudAccountSession } from '../../services/CloudAccountClient';
+import { CloudAccountSessionStore } from '../../services/CloudAccountSessionStore';
+import { Encoding } from '../../services/Encoding';
 import { AppRootRouteState } from '../../services/AppRootRouteState';
 import { RemoteActivityLifecycleController } from '../../services/RemoteActivityLifecycleController';
 import { RemoteChatCommandController } from '../../services/RemoteChatCommandController';
@@ -66,6 +71,7 @@ import {
   AppRootPresentation,
   AppRootPresentationActions,
   ConnectPresentationActions,
+  RemoteCreatePresentationActions,
   RemoteHomePresentationActions,
   SettingsPresentationActions,
   SidebarPresentationActions
@@ -90,6 +96,7 @@ import {
 } from './ConversationIntentDispatcher';
 import { GeneralChatPageState } from './GeneralChatPageState';
 import { RemotePageState } from './RemotePageState';
+import { RemoteCreateSessionState } from './RemoteCreateSessionState';
 import { ConversationViewModel } from './ConversationViewModel';
 import {
   RemoteWorkspaceViewModel,
@@ -132,6 +139,11 @@ export class AppRootRuntime {
   readonly remoteResumeGate: AsyncLifecycleGate = new AsyncLifecycleGate();
   readonly remoteConnectionGate: AsyncLifecycleGate = new AsyncLifecycleGate();
   readonly identityStore: MobileIdentityStore = new MobileIdentityStore();
+  readonly cloudAccountClient: CloudAccountClient = new CloudAccountClient();
+  readonly cloudAccountSessionStore: CloudAccountSessionStore = new CloudAccountSessionStore();
+  private cloudAccountSession?: CloudAccountSession;
+  private cloudAccountRelayUrl: string = '';
+  private cloudTargetRestoreAttempted: boolean = false;
   readonly clipboardService: ClipboardService = new ClipboardService();
   readonly qrScanService: QrScanService = new QrScanService();
   readonly imagePickerService: ImagePickerService = new ImagePickerService();
@@ -231,6 +243,7 @@ export class AppRootRuntime {
         (): SessionSummary => this.activeSession,
         (state: string): void => this.setRemoteConnectionState(state as ConnectionState),
         (status: string): void => this.setRemoteStatusText(status),
+        async (err: Object): Promise<boolean> => this.handleRemoteConnectionError(err),
         (): void => this.stopHeartbeat(),
         (): void => this.startPolling(),
         (): void => this.stopPolling(),
@@ -238,7 +251,7 @@ export class AppRootRuntime {
           await this.pollActiveSession();
         },
         async (): Promise<void> => {
-          await this.connect(true);
+          await this.reconnectActiveRemote();
         },
         async (session: SessionSummary): Promise<void> => {
           this.remotePageState.setActiveSession(session);
@@ -254,6 +267,7 @@ export class AppRootRuntime {
     new GeneralChatStreamLifecycleController();
   readonly generalChatPageState: GeneralChatPageState = new GeneralChatPageState();
   readonly remotePageState: RemotePageState = new RemotePageState();
+  readonly remoteCreateState: RemoteCreateSessionState = new RemoteCreateSessionState();
   readonly remoteWorkspaceViewModel: RemoteWorkspaceViewModel =
     new RemoteWorkspaceViewModel(
       this.remotePageState,
@@ -479,7 +493,7 @@ export class AppRootRuntime {
         (): boolean => this.connectionState === ConnectionState.Connected,
         (): boolean => this.isBusy,
         (busy: boolean): void => this.setRemoteBusy(busy),
-        (sessionId: string): void => this.pushRoute(AppRoute.RemoteChat, sessionId),
+        (sessionId: string): void => this.routeCreatedRemoteSession(sessionId),
         (): void => this.replaceRoute(AppRoute.RemoteHome),
         (): void => this.stopPolling(),
         (): void => this.startPolling(),
@@ -617,10 +631,19 @@ export class AppRootRuntime {
       (query: string): void => this.remotePageState.setQuery(query), (): void => { this.refreshSessions(); },
       (): void => { this.loadMoreSessions(); }, (): void => { this.reconnect(); },
       (): void => { this.disconnect(false); }, (): void => { this.disconnect(true); },
-      (agentType: string): void => { this.createSession(agentType); }, (): void => { this.createSession('Claw'); },
-      (path: string): void => { this.createSessionInWorkspace(path); },
+      (agentType: string): void => { this.createSession(agentType); }, (): void => { this.openRemoteCreateSession(); },
+      (path: string, agentType: string): void => { this.createSessionInWorkspace(path, agentType); },
       (session: RemoteSession): void => this.openHomeSession(session),
       (session: RemoteSession): void => { this.deleteHomeSession(session); }
+    ),
+    new RemoteCreatePresentationActions(
+      (): void => this.closeRemoteCreateSession(),
+      (): void => { this.toggleRemoteCreateDevices(); },
+      (): void => { this.toggleRemoteCreateWorkspaces(); },
+      (device: CloudAccountDevice): void => { this.selectRemoteCreateDevice(device); },
+      (path: string): void => this.selectRemoteCreateWorkspace(path),
+      (value: string): void => this.remoteCreateState.setDraft(value),
+      (): void => { this.submitRemoteCreateSession(); }
     ),
     new SidebarPresentationActions(
       (): void => this.closeAppSidebar(),
@@ -636,18 +659,37 @@ export class AppRootRuntime {
       (): void => this.appShellState.setSettingsVisible(false),
       (): void => this.openAddConnectionFromSettings(), (): void => { this.disconnect(false); },
       (): void => { this.reconnect(); },
+      (): void => {
+        this.appShellState.setSettingsVisible(false);
+        setTimeout(() => this.appShellState.openSettings('account'), 180);
+      },
+      (relayUrl: string, username: string, password: string): Promise<string> =>
+        this.loginCloudAccount(relayUrl, username, password),
+      (): Promise<string> => this.syncCloudAccount(),
+      (): Promise<void> => this.logoutCloudAccount(),
+      (): Promise<CloudAccountDevice[]> => this.listCloudAccountDevices(),
+      (): Promise<RemotePermissionMode> => this.getRemotePermissionMode(),
+      (mode: RemotePermissionMode): Promise<RemotePermissionMode> => this.setRemotePermissionMode(mode),
       async (url: string, key: string, model: string, clear: boolean): Promise<string> =>
         this.saveGeneralChatConfig(url, key, model, clear)
     ),
     new ConnectPresentationActions(
       (): void => this.appShellState.setConnectSheetVisible(false),
-      (password?: string): void => { this.connect(false, password || ''); },
+      (password?: string): void => {
+        // Keep connection progress on the same RemoteHome surface as the
+        // connected state instead of showing a separate loading sheet.
+        this.appShellState.setConnectSheetVisible(false);
+        this.replaceRoute(AppRoute.RemoteHome);
+        this.connect(false, password || '');
+      },
       (): void => { this.appShellState.setConnectSheetVisible(false); this.disconnect(true); },
       (url: string): void => { this.setRemoteUrl(url); this.applyRemotePairingProjection(url); },
       (user: string): void => this.setRemoteUserId(user),
       (url: string): boolean => this.handleDetectedRemoteUrl(url),
       (visible: boolean): void => this.setRemoteUrlInputVisible(visible),
-      (): void => { this.pasteRemoteUrl(); }, (): void => { this.scanRemoteUrl(); }
+      (): void => { this.pasteRemoteUrl(); }, (): void => { this.scanRemoteUrl(); },
+      (): Promise<CloudAccountDevice[]> => this.listCloudAccountDevices(),
+      (device: CloudAccountDevice): Promise<void> => this.selectCloudAccountDevice(device)
     ),
     (): string => this.generalChatHomeStatusText()
   );
@@ -679,6 +721,8 @@ export class AppRootRuntime {
   async aboutToAppear(): Promise<void> {
     this.syncRemotePageSummary();
     await this.generalChatBootstrapController.restore(this.host.context());
+    await this.cloudAccountSessionStore.init(this.host.context());
+    await this.restoreCloudAccountSession();
     await this.restoreIdentity();
   }
 
@@ -792,6 +836,14 @@ export class AppRootRuntime {
     this.appShellViewModel.popRoute(fallback);
   }
 
+  private routeCreatedRemoteSession(sessionId: string): void {
+    if (this.isRoute(AppRoute.RemoteCreate)) {
+      this.appShellViewModel.replaceCurrentRoute(AppRoute.RemoteChat, sessionId);
+      return;
+    }
+    this.pushRoute(AppRoute.RemoteChat, sessionId);
+  }
+
   handleNavigationBack(route: AppRoute): boolean {
     const action = this.appShellViewModel.backAction(route);
     if (action === AppNavigationBackAction.CloseSidebar) {
@@ -845,14 +897,47 @@ export class AppRootRuntime {
   }
 
   async restoreIdentity(): Promise<void> {
+    if (this.remotePageState.controlTargetType === 'account_device' || this.cloudTargetRestoreAttempted) {
+      return;
+    }
     await this.remoteConnectionViewModel.restore(this.host.context());
   }
 
   async connect(autoReconnect: boolean = false, accountPassword: string = ''): Promise<void> {
     await this.remoteConnectionViewModel.connect(autoReconnect, accountPassword);
+    await this.persistDelegatedAccountSession();
+  }
+
+  private async persistDelegatedAccountSession(): Promise<void> {
+    if (this.cloudAccountSession) {
+      return;
+    }
+    const delegated = this.sessionManager.delegatedAccountSession();
+    if (!delegated) {
+      return;
+    }
+    this.cloudAccountSession = delegated.session;
+    this.cloudAccountRelayUrl = delegated.relayUrl;
+    await this.cloudAccountSessionStore.save({
+      relayUrl: delegated.relayUrl,
+      username: delegated.session.userId,
+      token: delegated.session.token,
+      userId: delegated.session.userId,
+      masterKey: Encoding.bytesToBase64(delegated.session.masterKey)
+    });
+    this.remotePageState.setAccountUserId(delegated.session.userId);
+    this.remotePageState.setAccountUsername(delegated.session.userId);
+    RemoteLogger.info('delegated account session persisted after room pairing');
   }
 
   async reconnect(): Promise<void> {
+    if (this.remotePageState.controlTargetType === 'account_device') {
+      await this.restoreCloudTarget(
+        this.remotePageState.controlTargetDeviceId,
+        this.remotePageState.controlTargetDeviceName
+      );
+      return;
+    }
     await this.remoteConnectionViewModel.reconnect();
   }
 
@@ -990,6 +1075,10 @@ export class AppRootRuntime {
   }
 
   enterCodeEntry(): void {
+    if (this.cloudAccountSession && this.remotePageState.accountUserId.trim().length > 0) {
+      this.appShellState.setConnectSheetVisible(true);
+      return;
+    }
     if (RemoteUiState.canUseRemote(this.connectionState)) {
       this.appShellState.setConnectSheetVisible(false);
       this.pushRoute(AppRoute.RemoteHome);
@@ -1013,6 +1102,264 @@ export class AppRootRuntime {
     setTimeout(() => {
       this.openAddConnection();
     }, 220);
+  }
+
+  async loginCloudAccount(relayUrl: string, username: string, password: string): Promise<string> {
+    RemoteLogger.info('cloud account UI login requested');
+    const session = await this.cloudAccountClient.login(relayUrl, username, password, this.identityStoreSnapshotInstallId());
+    this.cloudAccountSession = session;
+    this.cloudAccountRelayUrl = relayUrl.trim();
+    this.cloudTargetRestoreAttempted = false;
+    await this.cloudAccountSessionStore.save({
+      relayUrl: relayUrl.trim(), username: username.trim(), token: session.token, userId: session.userId,
+      masterKey: Encoding.bytesToBase64(session.masterKey)
+    });
+    this.remotePageState.setAccountUserId(session.userId);
+    this.remotePageState.setAccountUsername(username.trim());
+    RemoteLogger.info('cloud account credentials persisted, refreshing account devices');
+    RemoteLogger.info(`cloud account login success user=${session.userId}`);
+    return session.userId;
+  }
+
+  private async restoreCloudAccountSession(): Promise<void> {
+    try {
+      const persisted = await this.cloudAccountSessionStore.load();
+      if (!persisted) return;
+      const session: CloudAccountSession = {
+        token: persisted.token,
+        userId: persisted.userId,
+        masterKey: Encoding.base64ToBytes(persisted.masterKey)
+      };
+      this.cloudAccountSession = session;
+      this.cloudAccountRelayUrl = persisted.relayUrl;
+      this.remotePageState.setAccountUserId(session.userId);
+      this.remotePageState.setAccountUsername(persisted.username || session.userId);
+      this.cloudTargetRestoreAttempted = (persisted.targetDeviceId || '').trim().length > 0;
+      await this.restoreCloudTarget(persisted.targetDeviceId || '', persisted.targetDeviceName || '');
+    } catch (err) {
+      RemoteLogger.warn(`cloud account restore failed: ${err instanceof Error ? err.message : 'unknown error'}`);
+      await this.cloudAccountSessionStore.clear();
+    }
+  }
+
+  async syncCloudAccount(): Promise<string> {
+    if (!this.cloudAccountSession || this.cloudAccountRelayUrl.length === 0) {
+      throw new Error(RemoteI18n.t('remote.settings.accountNotSignedIn'));
+    }
+    let bundles: Object[];
+    try {
+      bundles = await this.cloudAccountClient.fetchSessions(this.cloudAccountRelayUrl, this.cloudAccountSession, 0);
+    } catch (err) {
+      if (err instanceof CloudAccountRequestError && err.statusCode === 401) {
+        await this.expireCloudAccountSession();
+        throw new Error(RemoteI18n.t('remote.settings.accountExpired'));
+      }
+      throw new Error(err instanceof Error ? err.message : RemoteI18n.t('remote.settings.accountSyncFailed'));
+    }
+    RemoteLogger.info(`cloud account backup sync completed count=${bundles.length}`);
+    return String(bundles.length);
+  }
+
+  async logoutCloudAccount(): Promise<void> {
+    if (this.remotePageState.controlTargetType === 'account_device') {
+      this.remoteActivityViewModel.invalidate();
+      this.stopPolling();
+      this.stopHeartbeat();
+      this.sessionManager.reset();
+      this.remotePageState.clearActiveSession();
+      this.remotePageState.setSessions([], false);
+      this.remotePageState.setWorkspace(RemoteI18n.t('status.notConnected'), '', '', '', 'normal');
+      this.remotePageState.setConnectionState(ConnectionState.Disconnected);
+      this.remotePageState.setAuthenticatedUserId('');
+    }
+    this.cloudAccountSession = undefined;
+    this.cloudAccountRelayUrl = '';
+    this.cloudTargetRestoreAttempted = false;
+    await this.cloudAccountSessionStore.clear();
+    this.remotePageState.setAccountUserId('');
+    this.remotePageState.setAccountUsername('');
+    this.remotePageState.clearControlTarget();
+    RemoteLogger.info('cloud account logout success');
+  }
+
+  async listCloudAccountDevices(): Promise<CloudAccountDevice[]> {
+    if (!this.cloudAccountSession || this.cloudAccountRelayUrl.length === 0) {
+      return [];
+    }
+    try {
+      return await this.cloudAccountClient.listDevices(this.cloudAccountRelayUrl, this.cloudAccountSession);
+    } catch (err) {
+      if (err instanceof CloudAccountRequestError && err.statusCode === 401) {
+        await this.expireCloudAccountSession();
+        throw new Error(RemoteI18n.t('remote.settings.accountExpired'));
+      }
+      if (err instanceof CloudAccountRequestError &&
+        (err.statusCode === 404 || err.statusCode === 503 || err.statusCode === 504)) {
+        throw new Error(RemoteI18n.t('remote.settings.deviceUnavailable'));
+      }
+      throw new Error(err instanceof Error ? err.message : RemoteI18n.t('remote.settings.deviceLoadFailed'));
+    }
+  }
+
+  async getRemotePermissionMode(): Promise<RemotePermissionMode> {
+    if (!this.ensureRemoteAvailable()) {
+      throw new Error(RemoteI18n.t('remote.permissions.connectionRequired'));
+    }
+    return this.sessionManager.getPermissionMode();
+  }
+
+  async setRemotePermissionMode(mode: RemotePermissionMode): Promise<RemotePermissionMode> {
+    if (!this.ensureRemoteAvailable()) {
+      throw new Error(RemoteI18n.t('remote.permissions.connectionRequired'));
+    }
+    return this.sessionManager.setPermissionMode(mode);
+  }
+
+  private async restoreCloudTarget(targetDeviceId: string, targetDeviceName: string): Promise<void> {
+    const targetId = targetDeviceId.trim();
+    if (targetId.length === 0) {
+      return;
+    }
+    try {
+      const devices = await this.listCloudAccountDevices();
+      const target = devices.find((device: CloudAccountDevice): boolean => device.deviceId === targetId);
+      if (!target || !target.online) {
+        const targetName = target?.deviceName || targetDeviceName || targetId;
+        this.remotePageState.setControlTarget('account_device', targetId, targetName);
+        this.remotePageState.setDesktopIdentity(targetName, targetId);
+        this.remotePageState.setConnectionState(ConnectionState.Failed);
+        this.remotePageState.setStatusText(RemoteI18n.t('remote.settings.deviceUnavailable'));
+        return;
+      }
+      await this.selectCloudAccountDevice({
+        deviceId: target.deviceId,
+        deviceName: target.deviceName || targetDeviceName || target.deviceId,
+        online: target.online,
+        lastSeenAt: target.lastSeenAt
+      });
+    } catch (err) {
+      RemoteLogger.warn(`cloud target restore failed: ${err instanceof Error ? err.message : 'unknown error'}`);
+    }
+  }
+
+  private async expireCloudAccountSession(): Promise<void> {
+    this.cloudAccountSession = undefined;
+    this.cloudAccountRelayUrl = '';
+    this.cloudTargetRestoreAttempted = false;
+    await this.cloudAccountSessionStore.clear();
+    this.remotePageState.setAccountUserId('');
+    this.remotePageState.setAccountUsername('');
+    if (this.remotePageState.controlTargetType === 'account_device') {
+      this.remoteActivityViewModel.invalidate();
+      this.stopPolling();
+      this.stopHeartbeat();
+      this.sessionManager.reset();
+      this.remotePageState.clearActiveSession();
+      this.remotePageState.setSessions([], false);
+      this.remotePageState.clearControlTarget();
+      this.remotePageState.setConnectionState(ConnectionState.Disconnected);
+    }
+  }
+
+  private async handleRemoteConnectionError(err: Object): Promise<boolean> {
+    if (this.remotePageState.controlTargetType !== 'account_device' ||
+      !(err instanceof CloudAccountRequestError) || err.statusCode !== 401) {
+      return false;
+    }
+    await this.expireCloudAccountSession();
+    this.remotePageState.setStatusText(RemoteI18n.t('remote.settings.accountExpired'));
+    return true;
+  }
+
+  async selectCloudAccountDevice(device: CloudAccountDevice, navigateHome: boolean = true): Promise<void> {
+    if (!device.online) {
+      throw new Error(RemoteI18n.t('remote.settings.deviceOffline'));
+    }
+    if (!this.cloudAccountSession || this.cloudAccountRelayUrl.length === 0) {
+      throw new Error(RemoteI18n.t('remote.settings.accountNotSignedIn'));
+    }
+    const deviceId = device.deviceId.trim();
+    if (deviceId.length === 0 || deviceId === this.remoteConnectionViewModel.getDeviceId()) {
+      return;
+    }
+    if (deviceId === this.remotePageState.controlTargetDeviceId &&
+      this.connectionState === ConnectionState.Connected) {
+      this.appShellState.setConnectSheetVisible(false);
+      if (navigateHome) {
+        this.replaceRoute(AppRoute.RemoteHome);
+      }
+      return;
+    }
+    this.remoteActivityViewModel.invalidate();
+    this.remoteConnectionCoordinator.invalidate();
+    this.stopPolling();
+    this.stopHeartbeat();
+    // Do not keep presenting the previous device while the new account device
+    // is being handshaken. Clear its projection before the async connect.
+    this.remotePageState.setConnectionState(ConnectionState.Reconnecting);
+    this.remotePageState.clearControlTarget();
+    this.remotePageState.setWorkspace(RemoteI18n.t('status.notConnected'), '', '', '', 'normal');
+    this.remotePageState.setBusy(true);
+    this.remotePageState.setStatusText(RemoteI18n.t('remote.settings.deviceConnecting'));
+    this.remotePageState.clearActiveSession();
+    this.resetChatTimeline('');
+    this.knownPollVersion = 0;
+    this.knownModelCatalogVersion = 0;
+    this.knownRemoteMessageCount = 0;
+    this.remotePageState.setSessions([], false);
+    try {
+      const initialSync = await this.sessionManager.connectAccountDevice(
+        this.cloudAccountClient,
+        this.cloudAccountRelayUrl,
+        this.cloudAccountSession,
+        deviceId
+      );
+      this.remotePageState.setControlTarget('account_device', deviceId, device.deviceName);
+      this.remotePageState.setDesktopIdentity(device.deviceName, deviceId);
+      this.remotePageState.setWorkspace(
+        initialSync.workspace.name,
+        initialSync.workspace.path,
+        initialSync.workspace.assistantId || '',
+        initialSync.workspace.gitBranch,
+        initialSync.workspace.workspaceKind || 'normal'
+      );
+      this.remotePageState.setSessions(initialSync.sessions, initialSync.hasMoreSessions);
+      this.remotePageState.setAuthenticatedUserId(initialSync.authenticatedUserId);
+      this.remotePageState.setConnectionState(ConnectionState.Connected);
+      this.remotePageState.setStatusText(RemoteI18n.t('connection.connected'));
+      this.appShellState.setSettingsVisible(false);
+      this.appShellState.setConnectSheetVisible(false);
+      if (navigateHome) {
+        this.replaceRoute(AppRoute.RemoteHome);
+      }
+      await this.cloudAccountSessionStore.save({
+        relayUrl: this.cloudAccountRelayUrl,
+        username: this.remotePageState.accountUsername,
+        token: this.cloudAccountSession.token,
+        userId: this.cloudAccountSession.userId,
+        masterKey: Encoding.bytesToBase64(this.cloudAccountSession.masterKey),
+        targetDeviceId: deviceId,
+        targetDeviceName: device.deviceName
+      });
+      this.startHeartbeat();
+      await this.loadRecentWorkspacesInBackground();
+    } catch (err) {
+      if (err instanceof CloudAccountRequestError && err.statusCode === 401) {
+        await this.expireCloudAccountSession();
+      }
+      this.remotePageState.clearControlTarget();
+      this.remotePageState.setConnectionState(ConnectionState.Failed);
+      const message = ConnectionErrorPolicy.errorText(err);
+      this.remotePageState.setStatusText(message);
+      this.sessionManager.reset();
+      throw new Error(message);
+    } finally {
+      this.remotePageState.setBusy(false);
+    }
+  }
+
+  private identityStoreSnapshotInstallId(): string {
+    return this.remoteConnectionViewModel.getDeviceId();
   }
 
   openHomeSession(session: RemoteSession): void {
@@ -1183,8 +1530,147 @@ export class AppRootRuntime {
     await this.remoteSessionViewModel.createSession(agentType);
   }
 
-  async createSessionInWorkspace(path: string): Promise<void> {
-    await this.remoteSessionViewModel.createSessionInWorkspace(path, this.workspacePath);
+  openRemoteCreateSession(): void {
+    if (!this.ensureRemoteAvailable()) {
+      return;
+    }
+    const deviceId = this.remotePageState.controlTargetDeviceId || this.remotePageState.desktopId;
+    const deviceName = this.remotePageState.controlTargetDeviceName || this.remotePageState.desktopName;
+    this.remoteCreateState.prepare(deviceId, deviceName);
+    if (deviceId.length > 0) {
+      this.remoteCreateState.setDevices([{
+        deviceId,
+        deviceName: deviceName || deviceId,
+        online: true
+      }]);
+    }
+    this.remoteCreateState.setWorkspaces(this.remotePageState.recentWorkspaces);
+    this.pushRoute(AppRoute.RemoteCreate);
+    this.loadRemoteCreateChoices();
+  }
+
+  closeRemoteCreateSession(): void {
+    this.remoteCreateState.closeMenu();
+    this.popRoute(AppRoute.RemoteHome);
+  }
+
+  async loadRemoteCreateChoices(): Promise<void> {
+    await Promise.all([
+      this.loadRemoteCreateDevices(),
+      this.loadRemoteCreateWorkspaces()
+    ]);
+  }
+
+  async loadRemoteCreateDevices(): Promise<void> {
+    this.remoteCreateState.isLoadingDevices = this.remoteCreateState.devices.length === 0;
+    try {
+      const phoneDeviceId = this.remoteConnectionViewModel.getDeviceId();
+      const accountDevices = await this.listCloudAccountDevices();
+      const devices = accountDevices.filter((device: CloudAccountDevice): boolean =>
+        device.online && device.deviceId !== phoneDeviceId
+      );
+      const currentId = this.remoteCreateState.selectedDeviceId;
+      if (currentId.length > 0 && !devices.some((device: CloudAccountDevice): boolean => device.deviceId === currentId)) {
+        devices.unshift({
+          deviceId: currentId,
+          deviceName: this.remoteCreateState.selectedDeviceName || currentId,
+          online: true
+        });
+      }
+      this.remoteCreateState.setDevices(devices);
+    } catch (err) {
+      const currentId = this.remoteCreateState.selectedDeviceId;
+      if (currentId.length > 0) {
+        this.remoteCreateState.setDevices([{
+          deviceId: currentId,
+          deviceName: this.remoteCreateState.selectedDeviceName || currentId,
+          online: true
+        }]);
+      } else {
+        this.remoteCreateState.setDevices([]);
+      }
+      this.remoteCreateState.errorText = RemoteI18n.t('remote.create.deviceLoadFailed');
+    }
+  }
+
+  async loadRemoteCreateWorkspaces(): Promise<void> {
+    this.remoteCreateState.isLoadingWorkspaces = this.remoteCreateState.workspaces.length === 0;
+    try {
+      const workspaces = await this.workspaceCoordinator.recentWorkspaces();
+      this.remoteCreateState.setWorkspaces(workspaces);
+    } catch (err) {
+      this.remoteCreateState.setWorkspaces([]);
+      this.remoteCreateState.errorText = RemoteI18n.t('remote.create.workspaceLoadFailed');
+    }
+  }
+
+  toggleRemoteCreateDevices(): void {
+    this.remoteCreateState.toggleMenu('devices');
+    if (this.remoteCreateState.openMenu === 'devices' && this.remoteCreateState.devices.length === 0) {
+      this.loadRemoteCreateDevices();
+    }
+  }
+
+  toggleRemoteCreateWorkspaces(): void {
+    this.remoteCreateState.toggleMenu('workspaces');
+    if (this.remoteCreateState.openMenu === 'workspaces' && this.remoteCreateState.workspaces.length === 0) {
+      this.loadRemoteCreateWorkspaces();
+    }
+  }
+
+  async selectRemoteCreateDevice(device: CloudAccountDevice): Promise<void> {
+    if (device.deviceId === this.remoteCreateState.selectedDeviceId) {
+      this.remoteCreateState.closeMenu();
+      return;
+    }
+    const draft = this.remoteCreateState.draft;
+    this.remoteCreateState.closeMenu();
+    this.remoteCreateState.isLoadingWorkspaces = true;
+    try {
+      await this.selectCloudAccountDevice(device, false);
+      this.remoteCreateState.selectDevice(device);
+      this.remoteCreateState.setDraft(draft);
+      await this.loadRemoteCreateWorkspaces();
+    } catch (err) {
+      this.remoteCreateState.isLoadingWorkspaces = false;
+      this.remoteCreateState.errorText = err instanceof Error ? err.message :
+        RemoteI18n.t('remote.settings.deviceSwitchFailed');
+    }
+  }
+
+  selectRemoteCreateWorkspace(path: string): void {
+    const workspace = this.remoteCreateState.workspaces.find((item: RecentWorkspaceEntry): boolean => item.path === path);
+    this.remoteCreateState.selectWorkspace(workspace);
+  }
+
+  async submitRemoteCreateSession(): Promise<void> {
+    const instruction = this.remoteCreateState.draft.trim();
+    if (instruction.length === 0 || this.remoteCreateState.isSubmitting || !this.ensureRemoteAvailable()) {
+      return;
+    }
+    this.remoteCreateState.isSubmitting = true;
+    this.remoteCreateState.errorText = '';
+    this.remoteCreateState.closeMenu();
+    const workspacePath = this.remoteCreateState.selectedWorkspacePath;
+    try {
+      if (workspacePath.length > 0) {
+        await this.remoteSessionViewModel.createSessionInWorkspace(workspacePath, this.workspacePath, instruction);
+      } else {
+        await this.remoteSessionViewModel.createSession('Claw', instruction);
+      }
+      if (this.isRoute(AppRoute.RemoteCreate)) {
+        this.remoteCreateState.errorText = this.statusText || RemoteI18n.t('remote.create.submitFailed');
+      }
+    } catch (err) {
+      this.remoteCreateState.errorText = err instanceof Error ? err.message :
+        RemoteI18n.t('remote.create.submitFailed');
+    } finally {
+      this.remoteCreateState.isSubmitting = false;
+    }
+  }
+
+  async createSessionInWorkspace(path: string, agentType: string = 'code'): Promise<void> {
+    await this.remoteSessionViewModel.createSessionInWorkspace(path, this.workspacePath, '', agentType);
   }
 
   applyDiscoveredWorkspaceSessions(all: RemoteSession[]): void {
@@ -1648,12 +2134,31 @@ export class AppRootRuntime {
   }
 
   hasRemoteBindingForResume(): boolean {
+    if (this.remotePageState.controlTargetType === 'account_device') {
+      return this.remotePageState.accountUserId.trim().length > 0 &&
+        this.remotePageState.controlTargetDeviceId.trim().length > 0 &&
+        this.connectionState !== ConnectionState.Idle &&
+        this.connectionState !== ConnectionState.Disconnected;
+    }
     return this.remoteUrl.trim().length > 0 &&
       this.userId.trim().length > 0 &&
       this.connectionState !== ConnectionState.Idle &&
       this.connectionState !== ConnectionState.Parsing &&
       this.connectionState !== ConnectionState.Pairing &&
       this.connectionState !== ConnectionState.Disconnected;
+  }
+
+  private async reconnectActiveRemote(): Promise<void> {
+    if (this.remotePageState.controlTargetType !== 'account_device') {
+      await this.connect(true);
+      return;
+    }
+    const targetId = this.remotePageState.controlTargetDeviceId;
+    const device = (await this.listCloudAccountDevices()).find((item: CloudAccountDevice): boolean => item.deviceId === targetId);
+    if (!device) {
+      throw new Error(RemoteI18n.t('remote.settings.deviceOffline'));
+    }
+    await this.selectCloudAccountDevice(device);
   }
 
   hasRemoteBindingForCodeHome(): boolean {
