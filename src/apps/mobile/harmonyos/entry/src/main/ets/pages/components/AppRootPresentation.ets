@@ -1,10 +1,12 @@
-import { RemoteSession } from '../../model/RemoteModels';
+import { RemotePermissionMode, RemoteSession } from '../../model/RemoteModels';
+import { CloudAccountDevice } from '../../services/CloudAccountClient';
 import { AppShell } from './AppShell';
 import { AppSidebar } from './AppSidebar';
 import { ConnectView } from './ConnectView';
 import { ConversationIntent } from './ConversationIntent';
 import { ConversationViewHost } from './ConversationViewHost';
 import { RemoteControlSettingsSheet } from './RemoteControlSettingsSheet';
+import { RemoteCreateSessionView } from './RemoteCreateSessionView';
 import { RemoteHomeView } from './RemoteHomeView';
 import { SettingsSheet } from './SettingsSheet';
 import { PAGE_BG } from './Theme';
@@ -12,6 +14,7 @@ import { AppNavigationBackAction, AppRoute } from '../navigation/AppRouteContrac
 import { AppShellState } from '../state/AppShellState';
 import { GeneralChatPageState } from '../state/GeneralChatPageState';
 import { RemotePageState } from '../state/RemotePageState';
+import { RemoteCreateSessionState } from '../state/RemoteCreateSessionState';
 import { ConversationViewState } from '../state/ConversationViewState';
 
 export class AppRootPresentationActions {
@@ -19,6 +22,7 @@ export class AppRootPresentationActions {
   readonly onConversationIntent: (route: AppRoute, intent: ConversationIntent) => void;
   readonly onCloseSidebar: () => void;
   readonly onRemoteHome: RemoteHomePresentationActions;
+  readonly onRemoteCreate: RemoteCreatePresentationActions;
   readonly onSidebar: SidebarPresentationActions;
   readonly onSettings: SettingsPresentationActions;
   readonly onConnect: ConnectPresentationActions;
@@ -29,6 +33,7 @@ export class AppRootPresentationActions {
     onConversationIntent: (route: AppRoute, intent: ConversationIntent) => void,
     onCloseSidebar: () => void,
     onRemoteHome: RemoteHomePresentationActions,
+    onRemoteCreate: RemoteCreatePresentationActions,
     onSidebar: SidebarPresentationActions,
     onSettings: SettingsPresentationActions,
     onConnect: ConnectPresentationActions,
@@ -38,10 +43,39 @@ export class AppRootPresentationActions {
     this.onConversationIntent = onConversationIntent;
     this.onCloseSidebar = onCloseSidebar;
     this.onRemoteHome = onRemoteHome;
+    this.onRemoteCreate = onRemoteCreate;
     this.onSidebar = onSidebar;
     this.onSettings = onSettings;
     this.onConnect = onConnect;
     this.generalStatus = generalStatus;
+  }
+}
+
+export class RemoteCreatePresentationActions {
+  readonly back: () => void;
+  readonly toggleDevices: () => void;
+  readonly toggleWorkspaces: () => void;
+  readonly selectDevice: (device: CloudAccountDevice) => void;
+  readonly selectWorkspace: (path: string) => void;
+  readonly draftChanged: (value: string) => void;
+  readonly send: () => void;
+
+  constructor(
+    back: () => void,
+    toggleDevices: () => void,
+    toggleWorkspaces: () => void,
+    selectDevice: (device: CloudAccountDevice) => void,
+    selectWorkspace: (path: string) => void,
+    draftChanged: (value: string) => void,
+    send: () => void
+  ) {
+    this.back = back;
+    this.toggleDevices = toggleDevices;
+    this.toggleWorkspaces = toggleWorkspaces;
+    this.selectDevice = selectDevice;
+    this.selectWorkspace = selectWorkspace;
+    this.draftChanged = draftChanged;
+    this.send = send;
   }
 }
 
@@ -54,7 +88,7 @@ export class RemoteHomePresentationActions {
   readonly queryChanged: (query: string) => void; readonly search: () => void; readonly loadMore: () => void;
   readonly reconnect: () => void; readonly disconnect: () => void; readonly clearPairing: () => void;
   readonly create: (agentType: string) => void; readonly createAssistant: () => void;
-  readonly createInWorkspace: (path: string) => void; readonly openSession: (session: RemoteSession) => void;
+  readonly createInWorkspace: (path: string, agentType: string) => void; readonly openSession: (session: RemoteSession) => void;
   readonly deleteSession: (session: RemoteSession) => void;
 
   constructor(
@@ -64,7 +98,7 @@ export class RemoteHomePresentationActions {
     cancelWorkspace: () => void, cancelAssistant: () => void, queryChanged: (query: string) => void,
     search: () => void, loadMore: () => void, reconnect: () => void, disconnect: () => void,
     clearPairing: () => void, create: (agentType: string) => void, createAssistant: () => void,
-    createInWorkspace: (path: string) => void, openSession: (session: RemoteSession) => void,
+    createInWorkspace: (path: string, agentType: string) => void, openSession: (session: RemoteSession) => void,
     deleteSession: (session: RemoteSession) => void
   ) {
     this.openSidebar = openSidebar; this.connectWorkspace = connectWorkspace; this.addConnection = addConnection;
@@ -95,13 +129,29 @@ export class SidebarPresentationActions {
 export class SettingsPresentationActions {
   readonly close: () => void; readonly addConnection: () => void; readonly disconnect: () => void;
   readonly reconnect: () => void;
+  readonly openAccount: () => void;
+  readonly cloudLogin: (relayUrl: string, username: string, password: string) => Promise<string>;
+  readonly cloudSync: () => Promise<string>;
+  readonly cloudLogout: () => Promise<void>;
+  readonly cloudListDevices: () => Promise<CloudAccountDevice[]>;
+  readonly getPermissionMode: () => Promise<RemotePermissionMode>;
+  readonly setPermissionMode: (mode: RemotePermissionMode) => Promise<RemotePermissionMode>;
   readonly saveGeneral: (url: string, key: string, model: string, clear: boolean) => Promise<string>;
   constructor(
     close: () => void, addConnection: () => void, disconnect: () => void, reconnect: () => void,
+    openAccount: () => void,
+    cloudLogin: (relayUrl: string, username: string, password: string) => Promise<string>,
+    cloudSync: () => Promise<string>, cloudLogout: () => Promise<void>,
+    cloudListDevices: () => Promise<CloudAccountDevice[]>,
+    getPermissionMode: () => Promise<RemotePermissionMode>,
+    setPermissionMode: (mode: RemotePermissionMode) => Promise<RemotePermissionMode>,
     saveGeneral: (url: string, key: string, model: string, clear: boolean) => Promise<string>
   ) {
     this.close = close; this.addConnection = addConnection; this.disconnect = disconnect;
-    this.reconnect = reconnect; this.saveGeneral = saveGeneral;
+    this.reconnect = reconnect; this.openAccount = openAccount; this.cloudLogin = cloudLogin; this.cloudSync = cloudSync;
+    this.cloudLogout = cloudLogout; this.cloudListDevices = cloudListDevices;
+    this.getPermissionMode = getPermissionMode; this.setPermissionMode = setPermissionMode;
+    this.saveGeneral = saveGeneral;
   }
 }
 
@@ -110,15 +160,19 @@ export class ConnectPresentationActions {
   readonly urlChanged: (url: string) => void; readonly userChanged: (user: string) => void;
   readonly detected: (url: string) => boolean; readonly inputVisible: (visible: boolean) => void;
   readonly paste: () => void; readonly scan: () => void;
+  readonly cloudListDevices: () => Promise<CloudAccountDevice[]>;
+  readonly cloudSelectDevice: (device: CloudAccountDevice) => Promise<void>;
   constructor(
     back: () => void, connect: (password?: string) => void, clearPairing: () => void,
     urlChanged: (url: string) => void, userChanged: (user: string) => void,
     detected: (url: string) => boolean, inputVisible: (visible: boolean) => void,
-    paste: () => void, scan: () => void
+    paste: () => void, scan: () => void, cloudListDevices: () => Promise<CloudAccountDevice[]>,
+    cloudSelectDevice: (device: CloudAccountDevice) => Promise<void>
   ) {
     this.back = back; this.connect = connect; this.clearPairing = clearPairing;
     this.urlChanged = urlChanged; this.userChanged = userChanged; this.detected = detected;
     this.inputVisible = inputVisible; this.paste = paste; this.scan = scan;
+    this.cloudListDevices = cloudListDevices; this.cloudSelectDevice = cloudSelectDevice;
   }
 }
 
@@ -127,6 +181,7 @@ export struct AppRootPresentation {
   @Param shellState: AppShellState = new AppShellState();
   @Param navigationStack: NavPathStack = new NavPathStack();
   @Param remotePageState: RemotePageState = new RemotePageState();
+  @Param remoteCreateState: RemoteCreateSessionState = new RemoteCreateSessionState();
   @Param generalPageState: GeneralChatPageState = new GeneralChatPageState();
   @Param deviceId: string = '';
   @Param currentRoute: AppRoute = AppRoute.ChatHome;
@@ -135,9 +190,11 @@ export struct AppRootPresentation {
     new RemoteHomePresentationActions(() => {}, () => {}, () => {}, () => {}, () => {}, () => {}, () => {},
       () => {}, () => {}, () => {}, () => {}, () => {}, () => {}, () => {}, () => {}, () => {}, () => {},
       () => {}, () => {}, () => {}, () => {}, () => {}),
+    new RemoteCreatePresentationActions(() => {}, () => {}, () => {}, () => {}, () => {}, () => {}, () => {}),
     new SidebarPresentationActions(() => {}, () => {}, () => {}, () => {}, () => {}, () => {}, () => {}, () => {}),
-    new SettingsPresentationActions(() => {}, () => {}, () => {}, () => {}, async () => ''),
-    new ConnectPresentationActions(() => {}, () => {}, () => {}, () => {}, () => {}, () => false, () => {}, () => {}, () => {}),
+    new SettingsPresentationActions(() => {}, () => {}, () => {}, () => {}, () => {}, async (_relayUrl: string, _username: string, _password: string): Promise<string> => '', async (): Promise<string> => '', async (): Promise<void> => {}, async (): Promise<CloudAccountDevice[]> => [], async (): Promise<RemotePermissionMode> => 'ask', async (mode: RemotePermissionMode): Promise<RemotePermissionMode> => mode, async (_url: string, _key: string, _model: string, _clear: boolean): Promise<string> => ''),
+    new ConnectPresentationActions(() => {}, () => {}, () => {}, () => {}, () => {}, () => false, () => {}, () => {},
+      () => {}, async (): Promise<CloudAccountDevice[]> => [], async (_device: CloudAccountDevice): Promise<void> => {}),
     () => ''
   );
 
@@ -186,6 +243,17 @@ export struct AppRootPresentation {
           onCreateInWorkspace: this.actions.onRemoteHome.createInWorkspace,
           onOpenSession: this.actions.onRemoteHome.openSession,
           onDeleteSession: this.actions.onRemoteHome.deleteSession })
+      } else if (route === AppRoute.RemoteCreate) {
+        RemoteCreateSessionView({
+          state: this.remoteCreateState,
+          onBack: this.actions.onRemoteCreate.back,
+          onToggleDeviceMenu: this.actions.onRemoteCreate.toggleDevices,
+          onToggleWorkspaceMenu: this.actions.onRemoteCreate.toggleWorkspaces,
+          onSelectDevice: this.actions.onRemoteCreate.selectDevice,
+          onSelectWorkspace: (workspace) => this.actions.onRemoteCreate.selectWorkspace(workspace?.path || ''),
+          onDraftChange: this.actions.onRemoteCreate.draftChanged,
+          onSend: this.actions.onRemoteCreate.send
+        })
       } else {
         ConversationViewHost({
           viewState: ConversationViewState.project(route, this.remotePageState, this.generalPageState,
@@ -209,17 +277,30 @@ export struct AppRootPresentation {
   }
 
   @Builder SettingsContent() {
-    if (this.shellState.settingsMode === 'remote') {
+    if (this.shellState.settingsMode === 'remote' || this.shellState.settingsMode === 'account') {
       RemoteControlSettingsSheet({ desktopName: this.remotePageState.desktopName, desktopId: this.remotePageState.desktopId,
         userId: this.remotePageState.userId, accountUsername: this.remotePageState.accountUsername,
-        authenticatedUserId: this.remotePageState.authenticatedUserId, deviceId: this.deviceId,
+        accountUserId: this.remotePageState.accountUserId, deviceId: this.deviceId,
+        controlTargetType: this.remotePageState.controlTargetType,
+        controlTargetDeviceId: this.remotePageState.controlTargetDeviceId,
         connectionState: this.remotePageState.connectionState, statusText: this.remotePageState.statusText,
         isBusy: this.remotePageState.isBusy, onClose: this.actions.onSettings.close,
         onAddConnection: this.actions.onSettings.addConnection,
+        cloudLogin: this.actions.onSettings.cloudLogin,
+        cloudSync: this.actions.onSettings.cloudSync,
+        cloudLogout: this.actions.onSettings.cloudLogout,
+        cloudListDevices: this.actions.onSettings.cloudListDevices,
+        getPermissionMode: this.actions.onSettings.getPermissionMode,
+        setPermissionMode: this.actions.onSettings.setPermissionMode,
+        openProfileOnAppear: this.shellState.settingsMode === 'account',
         onDisconnect: this.actions.onSettings.disconnect, onReconnect: this.actions.onSettings.reconnect })
     } else {
       SettingsSheet({ generalChatApiUrl: this.generalPageState.apiUrl, generalChatModelName: this.generalPageState.modelName,
         hasGeneralChatApiKey: this.generalPageState.hasApiKey,
+        accountUsername: this.remotePageState.accountUsername,
+        authenticatedUserId: this.remotePageState.accountUserId,
+        deviceId: this.deviceId,
+        onOpenAccount: this.actions.onSettings.openAccount,
         onSaveGeneralChatConfig: this.actions.onSettings.saveGeneral,
         onClose: this.actions.onSettings.close })
     }
@@ -231,13 +312,17 @@ export struct AppRootPresentation {
       connectionState: this.remotePageState.connectionState, connectionFailureKind: this.remotePageState.connectionFailureKind,
       isBusy: this.remotePageState.isBusy, isConnected: this.remotePageState.connectionState === 'connected',
       desktopName: this.remotePageState.desktopName, desktopId: this.remotePageState.desktopId, deviceId: this.deviceId,
+      accountUserId: this.remotePageState.accountUserId,
+      controlTargetDeviceId: this.remotePageState.controlTargetDeviceId,
       requiresAccountAuth: this.remotePageState.requiresAccountAuth, accountUsername: this.remotePageState.accountUsername,
       startWithScanner: true,
       onBack: this.actions.onConnect.back, onConnect: this.actions.onConnect.connect,
       onClearPairing: this.actions.onConnect.clearPairing, onRemoteUrlChange: this.actions.onConnect.urlChanged,
       onUserIdChange: this.actions.onConnect.userChanged, onRemoteUrlDetected: this.actions.onConnect.detected,
       onRemoteUrlInputVisibleChange: this.actions.onConnect.inputVisible,
-      onPasteRemoteUrl: this.actions.onConnect.paste, onScanRemoteUrl: this.actions.onConnect.scan })
+      onPasteRemoteUrl: this.actions.onConnect.paste, onScanRemoteUrl: this.actions.onConnect.scan,
+      cloudListDevices: this.actions.onConnect.cloudListDevices,
+      cloudSelectDevice: this.actions.onConnect.cloudSelectDevice })
       .width('100%').height('100%')
   }
 }

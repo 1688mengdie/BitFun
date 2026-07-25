@@ -177,30 +177,27 @@ export class ChatSessionController {
   }
 
   private applyPollResult(result: PollSessionResult): void {
-    if (!result.changed) {
-      this.emitSnapshot(false, result, [], false);
-      return;
-    }
-
     const hadRunningTurn = this.hasActiveRunningTurn;
     const incomingMessages = result.newMessages || [];
     const hasAssistantMessage = incomingMessages.some((message: ChatMessage) => {
       return message.role === 'assistant';
     });
 
-    this.cursor = {
-      pollVersion: result.version,
-      knownMessageCount: result.totalMessageCount > 0
-        ? result.totalMessageCount
-        : this.cursor.knownMessageCount,
-      knownModelCatalogVersion: result.modelCatalog
-        ? (result.modelCatalog.version || 0)
-        : this.cursor.knownModelCatalogVersion
-    };
+    if (result.changed) {
+      this.cursor = {
+        pollVersion: result.version,
+        knownMessageCount: result.totalMessageCount > 0
+          ? result.totalMessageCount
+          : this.cursor.knownMessageCount,
+        knownModelCatalogVersion: result.modelCatalog
+          ? (result.modelCatalog.version || 0)
+          : this.cursor.knownModelCatalogVersion
+      };
+    }
 
     if (result.activeTurn && result.activeTurn.id.length > 0) {
       this.activeTurn = result.activeTurn;
-    } else if (hasAssistantMessage || this.shouldClearMissingActiveTurn(result)) {
+    } else if (result.changed && (hasAssistantMessage || this.shouldClearMissingActiveTurn(result))) {
       this.activeTurn = undefined;
     }
 
@@ -213,7 +210,13 @@ export class ChatSessionController {
 
     const isSettlingEndedTurn = this.turnJustEndedAt > 0 &&
       Date.now() - this.turnJustEndedAt < this.turnEndedGracePeriodMs;
-    this.emitSnapshot(true, result, incomingMessages, turnEndedNow || (isSettlingEndedTurn && !isRunningNow));
+    const activeTurnChanged = result.activeTurn !== undefined;
+    this.emitSnapshot(
+      result.changed || activeTurnChanged,
+      result,
+      incomingMessages,
+      turnEndedNow || (isSettlingEndedTurn && !isRunningNow)
+    );
   }
 
   private shouldClearMissingActiveTurn(result: PollSessionResult): boolean {

@@ -13,6 +13,12 @@ interface FileReference {
   path: string;
   label: string;
 }
+
+interface SubagentTaskInput {
+  description?: string;
+  title?: string;
+  prompt?: string;
+}
 interface StructuredRenderGroup {
   type: string;
   items: ConversationUiMessageItem[];
@@ -60,7 +66,7 @@ export struct ChatMessageBubble {
   private typingTimerId: number = 0;
 
   aboutToAppear(): void {
-    if (!this.shouldShowTypingDots(this.item)) {
+    if (!this.shouldShowTypingDots(this.item) && !this.hasRunningSubagentTask(this.item)) {
       return;
     }
     this.typingTimerId = setInterval(() => {
@@ -338,6 +344,9 @@ export struct ChatMessageBubble {
           .textOverflow({ overflow: TextOverflow.Ellipsis })
       }
       .width('100%')
+      if (entry.tool && this.isRunningTool(entry.tool)) {
+        this.TypingDots()
+      }
       if (entry.content && entry.content.trim().length > 0 && !this.isTextEntry(entry) && !this.isThinkingEntry(entry)) {
         this.MessageText(entry.content, activeScope && (!entry.subItems || entry.subItems.length === 0), `${this.item.id}-${path}-subagent`)
       }
@@ -1053,7 +1062,8 @@ export struct ChatMessageBubble {
 
   private isSubagentEntry(entry: ConversationUiMessageItem): boolean {
     const type = (entry.type || '').toLowerCase();
-    return entry.is_subagent === true || type === 'subagent' || type === 'agent';
+    return entry.is_subagent === true || type === 'subagent' || type === 'agent' ||
+      (!!entry.tool && this.normalizedToolName(entry.tool) === 'task');
   }
 
   private subagentTitle(entry: ConversationUiMessageItem): string {
@@ -1061,10 +1071,38 @@ export struct ChatMessageBubble {
     if (content.length > 0 && content.length <= 80) {
       return content;
     }
+    if (entry.tool && this.normalizedToolName(entry.tool) === 'task') {
+      const title = this.subagentTaskTitle(entry.tool);
+      if (title.length > 0) {
+        return title;
+      }
+    }
     if (entry.tool && entry.tool.name) {
       return entry.tool.name;
     }
     return 'Subagent';
+  }
+
+  private subagentTaskTitle(tool: ConversationUiToolStatus): string {
+    const raw = tool.input_preview || '';
+    if (raw.length > 0) {
+      try {
+        const input = JSON.parse(raw) as SubagentTaskInput;
+        const title = input.description || input.title || '';
+        if (title.trim().length > 0) {
+          return title.trim();
+        }
+      } catch (_err) {
+      }
+    }
+    return '';
+  }
+
+  private hasRunningSubagentTask(item: ConversationUiMessage): boolean {
+    return (item.items || []).some((entry: ConversationUiMessageItem) => {
+      return !!entry.tool && this.normalizedToolName(entry.tool) === 'task' &&
+        this.isRunningTool(entry.tool);
+    });
   }
 
   private structuredItemKey(entry: ConversationUiMessageItem, path: string): string {

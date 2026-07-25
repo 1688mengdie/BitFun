@@ -22,6 +22,7 @@ export struct AppSidebar {
   @State pendingDeleteSessionId: string = '';
   @State showSearch: boolean = false;
   @State sessionSearchQuery: string = '';
+  @State archivedSessionsExpanded: boolean = false;
 
   build() {
     Column() {
@@ -94,30 +95,42 @@ export struct AppSidebar {
         .margin({ top: 18, bottom: 10 })
 
       Stack({ alignContent: Alignment.Bottom }) {
-        if (this.visibleSessions().length === 0) {
-          Column() {
-            this.EmptyRecent()
+        List({ space: 2 }) {
+          if (this.visibleRecentSessions().length === 0) {
+            ListItem() {
+              this.EmptyRecent()
+            }
           }
-          .width('100%')
-          .height('100%')
-        } else {
-          List({ space: 2 }) {
-            Repeat<RemoteSession>(this.visibleSessions())
+          Repeat<RemoteSession>(this.visibleRecentSessions())
+            .each((obj: RepeatItem<RemoteSession>) => {
+              ListItem() {
+                this.RecentRow(obj)
+              }
+            })
+            .key((item: RemoteSession) => item.id)
+            .virtualScroll({ totalCount: this.visibleRecentSessions().length })
+          if (this.archivedSessionCount() > 0) {
+            ListItem() {
+              this.ArchivedDisclosureRow()
+            }
+          }
+          if (this.archivedSessionsExpanded) {
+            Repeat<RemoteSession>(this.visibleArchivedSessions())
               .each((obj: RepeatItem<RemoteSession>) => {
                 ListItem() {
                   this.RecentRow(obj)
                 }
               })
               .key((item: RemoteSession) => item.id)
-              .virtualScroll({ totalCount: this.visibleSessions().length })
+              .virtualScroll({ totalCount: this.visibleArchivedSessions().length })
           }
-          .width('110%')
-          .height('100%')
-          .margin({ left: -14 })
-          .padding({ bottom: 72 })
-          .scrollBar(BarState.Off)
-          .divider(null)
         }
+        .width('110%')
+        .height('100%')
+        .margin({ left: -14 })
+        .padding({ bottom: 72 })
+        .scrollBar(BarState.Off)
+        .divider(null)
 
         Row() {
           Button() {
@@ -181,6 +194,60 @@ export struct AppSidebar {
     .backgroundColor(isActive ? '#F3F3F3' : '#00000000')
     .borderRadius(12)
     .onClick(action)
+  }
+
+  @Builder
+  ArchivedDisclosureRow() {
+    Row({ space: 12 }) {
+      SymbolGlyph($r('sys.symbol.archivebox'))
+        .fontSize(20)
+        .fontColor([MUTED])
+        .width(22)
+        .height(22)
+      Text(RemoteI18n.t('sidebar.archived'))
+        .fontSize(16)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(INK)
+      Blank()
+      Row({ space: 8 }) {
+        Text(`${this.archivedSessionCount()}`)
+          .fontSize(12)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(MUTED)
+          .width(24)
+          .height(22)
+          .textAlign(TextAlign.Center)
+          .backgroundColor('#EFEFED')
+          .borderRadius(11)
+        Stack({ alignContent: Alignment.Center }) {
+          if (this.archivedSessionsExpanded) {
+            SymbolGlyph($r('sys.symbol.chevron_up'))
+              .fontSize(13)
+              .fontColor([MUTED])
+          } else {
+            SymbolGlyph($r('sys.symbol.chevron_down'))
+              .fontSize(13)
+              .fontColor([MUTED])
+          }
+        }
+        .width(20)
+        .height(22)
+      }
+      .width(52)
+      .height(22)
+      .alignItems(VerticalAlign.Center)
+    }
+    .width('100%')
+    .height(46)
+    .padding({ left: 14, right: 68 })
+    .margin({ top: 8 })
+    .backgroundColor(this.archivedSessionsExpanded ? '#F7F7F5' : '#00000000')
+    .borderRadius(14)
+    .onClick(() => {
+      this.archivedSessionsExpanded = !this.archivedSessionsExpanded;
+      this.activeActionSessionId = '';
+      this.pendingDeleteSessionId = '';
+    })
   }
 
   @Builder
@@ -500,20 +567,28 @@ export struct AppSidebar {
       .translate({ x: -5 })
   }
 
-  private visibleSessions(): RemoteSession[] {
+  private visibleRecentSessions(): RemoteSession[] {
     const query = this.sessionSearchQuery.trim().toLowerCase();
     return this.sessions.filter((session: RemoteSession) => {
-      if (session.agentType !== 'chat') {
+      if (session.agentType !== 'chat' || session.status === 'archived' || session.id === this.pinnedSessionId) {
         return false;
       }
-      if (session.id === this.pinnedSessionId) {
-        return false;
-      }
-      if (query.length > 0) {
-        return session.title.toLowerCase().indexOf(query) >= 0;
-      }
-      return session.status !== 'archived';
+      return query.length === 0 || session.title.toLowerCase().indexOf(query) >= 0;
     });
+  }
+
+  private visibleArchivedSessions(): RemoteSession[] {
+    const query = this.sessionSearchQuery.trim().toLowerCase();
+    return this.sessions.filter((session: RemoteSession) => {
+      return session.agentType === 'chat' && session.status === 'archived' &&
+        (query.length === 0 || session.title.toLowerCase().indexOf(query) >= 0);
+    });
+  }
+
+  private archivedSessionCount(): number {
+    return this.sessions.filter((session: RemoteSession) => {
+      return session.agentType === 'chat' && session.status === 'archived';
+    }).length;
   }
 
   private visiblePinnedSessions(): RemoteSession[] {

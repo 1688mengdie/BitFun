@@ -1,6 +1,7 @@
 import { abilityAccessCtrl, Context, Permissions } from '@kit.AbilityKit';
 import { customScan, scanBarcode, scanCore } from '@kit.ScanKit';
 import { RemoteI18n } from '../../i18n/RemoteI18n';
+import { CloudAccountDevice } from '../../services/CloudAccountClient';
 import { ACCENT, CARD, GREEN, INK, LINE, MUTED, RED, SOFT, SUBTLE } from './Theme';
 
 const CONNECT_HERO: string = '#E6EDFF';
@@ -29,6 +30,8 @@ export struct ConnectView {
   @Prop desktopName: string = 'MacBook Pro';
   @Prop desktopId: string = '';
   @Prop deviceId: string = '';
+  @Prop accountUserId: string = '';
+  @Prop controlTargetDeviceId: string = '';
   @Prop requiresAccountAuth: boolean = false;
   @Prop accountUsername: string = '';
   @Prop startWithScanner: boolean = true;
@@ -41,6 +44,9 @@ export struct ConnectView {
   onRemoteUrlInputVisibleChange: (visible: boolean) => void = (_visible: boolean) => {};
   onPasteRemoteUrl: () => void = () => {};
   onScanRemoteUrl: () => void = () => {};
+  cloudListDevices: () => Promise<CloudAccountDevice[]> = async (): Promise<CloudAccountDevice[]> => [];
+  cloudSelectDevice: (device: CloudAccountDevice) => Promise<void> =
+    async (_device: CloudAccountDevice): Promise<void> => {};
   @State showHelp: boolean = false;
   @State pairingStep: string = 'intro';
   @State showManualPairing: boolean = false;
@@ -48,9 +54,16 @@ export struct ConnectView {
   @State accountPassword: string = '';
   @State cameraPermissionReady: boolean = false;
   @State requestingCameraPermission: boolean = false;
+  @State accountDevices: CloudAccountDevice[] = [];
+  @State accountDevicesBusy: boolean = false;
+  @State accountDevicesError: string = '';
+  @State switchingDeviceId: string = '';
 
   aboutToAppear(): void {
-    if (this.startWithScanner && this.remoteUrl.trim().length === 0) {
+    if (this.isAccountAuthenticated()) {
+      this.pairingStep = 'account';
+      this.refreshAccountDevices();
+    } else if (this.startWithScanner && this.remoteUrl.trim().length === 0) {
       this.pairingStep = 'scan';
     }
   }
@@ -61,7 +74,9 @@ export struct ConnectView {
 
   build() {
     Stack() {
-      if (this.currentStep() === 'scan') {
+      if (this.currentStep() === 'account') {
+        this.AccountDeviceSelectionPage()
+      } else if (this.currentStep() === 'scan') {
         this.ScanPairingPage()
       } else {
         this.IntroPairingPage()
@@ -73,6 +88,219 @@ export struct ConnectView {
     .width('100%')
     .height('100%')
     .backgroundColor(CARD)
+  }
+
+  @Builder
+  AccountDeviceSelectionPage() {
+    Column() {
+      Row({ space: 16 }) {
+        Stack() {
+          this.BackGlyph()
+        }
+        .width(48)
+        .height(48)
+        .backgroundColor(SOFT)
+        .borderRadius(24)
+        .onClick(() => {
+          this.stopInlineScan();
+          this.onBack();
+        })
+        Column({ space: 4 }) {
+          Text(RemoteI18n.t('connect.accountDevicesTitle'))
+            .fontSize(22)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(INK)
+            .width('100%')
+          Text(RemoteI18n.t('connect.accountDevicesSubtitle'))
+            .fontSize(13)
+            .fontColor(MUTED)
+            .width('100%')
+        }
+        .layoutWeight(1)
+        .alignItems(HorizontalAlign.Start)
+      }
+      .width('100%')
+      .height(92)
+      .padding({ left: 28, right: 28, top: 18 })
+      .alignItems(VerticalAlign.Top)
+
+      Scroll() {
+        Column({ space: 18 }) {
+          Text(RemoteI18n.t('connect.accountDevicesBody'))
+            .fontSize(14)
+            .lineHeight(21)
+            .fontColor(MUTED)
+            .width('100%')
+
+          this.AccountDeviceList()
+          this.OrDivider()
+
+          Button(RemoteI18n.t('connect.scanPairCodeAction'))
+            .width('100%')
+            .height(54)
+            .fontSize(18)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(CARD)
+            .backgroundColor(ACCENT)
+            .borderRadius(8)
+            .onClick(() => {
+              this.openScannerAfterPermission();
+            })
+
+          Button(RemoteI18n.t('connect.switchManualPair'))
+            .width('100%')
+            .height(52)
+            .fontSize(17)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(INK)
+            .backgroundColor(CARD)
+            .borderRadius(8)
+            .border({ width: 1.5, color: CONNECT_DISABLED })
+            .onClick(() => {
+              this.stopInlineScan();
+              this.showManualPairing = true;
+              this.onRemoteUrlInputVisibleChange(true);
+            })
+        }
+        .width('100%')
+        .constraintSize({ minHeight: '100%' })
+        .padding({ left: 28, right: 28, top: 10, bottom: 34 })
+      }
+      .layoutWeight(1)
+      .width('100%')
+      .scrollBar(BarState.Off)
+    }
+    .width('100%')
+    .height('100%')
+    .backgroundColor('#FAFAF9')
+  }
+
+  @Builder
+  AccountDeviceList() {
+    Column({ space: 4 }) {
+      Row() {
+        Text(RemoteI18n.t('connect.availableDevices'))
+          .fontSize(16)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(INK)
+        Blank()
+        Text(this.accountDevicesBusy ? RemoteI18n.t('common.loading') :
+          (this.accountDevicesError.length > 0 ? RemoteI18n.t('common.retry') : RemoteI18n.t('common.refresh')))
+          .fontSize(14)
+          .fontColor(this.accountDevicesBusy ? MUTED :
+            (this.accountDevicesError.length > 0 ? RED : ACCENT))
+          .onClick(async () => {
+            await this.refreshAccountDevices();
+          })
+      }
+      .width('100%')
+      .height(38)
+
+      if (this.accountDevicesBusy && this.accountDevices.length === 0) {
+        Column() {
+          this.AccountDeviceSkeletonRow()
+          this.AccountDeviceSkeletonRow()
+        }
+        .width('100%')
+        .height(120)
+      } else if (this.desktopDevices().length === 0) {
+        Row() {
+          Text(this.accountDevicesError || RemoteI18n.t('remote.settings.deviceEmpty'))
+            .fontSize(14).lineHeight(20).fontColor(MUTED).width('100%')
+        }
+        .width('100%')
+        .height(120)
+        .alignItems(VerticalAlign.Center)
+      } else {
+        Scroll() {
+          Column() {
+            ForEach(this.desktopDevices(), (device: CloudAccountDevice) => {
+              this.AccountConnectDeviceRow(device)
+            }, (device: CloudAccountDevice): string =>
+              `${device.deviceId}:${device.online ? 'online' : 'offline'}:${device.lastSeenAt || 0}:${device.deviceName}`)
+          }
+          .width('100%')
+        }
+        .width('100%')
+        .height(120)
+        .scrollBar(BarState.Off)
+      }
+
+    }
+    .width('100%')
+    .height(174)
+    .padding({ left: 16, right: 16, top: 8, bottom: 8 })
+    .backgroundColor(CARD)
+    .borderRadius(8)
+    .border({ width: 1, color: LINE })
+  }
+
+  @Builder
+  AccountDeviceSkeletonRow() {
+    Row({ space: 12 }) {
+      Text('')
+        .width(26)
+        .height(22)
+        .backgroundColor('#ECECE9')
+        .borderRadius(5)
+      Column({ space: 7 }) {
+        Text('')
+          .width('58%')
+          .height(12)
+          .backgroundColor('#ECECE9')
+          .borderRadius(4)
+        Text('')
+          .width(52)
+          .height(9)
+          .backgroundColor('#F0F0ED')
+          .borderRadius(4)
+      }
+      .layoutWeight(1)
+      .alignItems(HorizontalAlign.Start)
+    }
+    .width('100%')
+    .height(60)
+    .padding({ left: 4, right: 4 })
+    .alignItems(VerticalAlign.Center)
+  }
+
+  @Builder
+  AccountConnectDeviceRow(device: CloudAccountDevice) {
+    Row({ space: 12 }) {
+      Image($r('app.media.remote_ref_device'))
+        .width(26).height(24).objectFit(ImageFit.Contain).opacity(device.online ? 0.68 : 0.38)
+      Column({ space: 3 }) {
+        Text(device.deviceName || device.deviceId)
+          .fontSize(15).fontWeight(FontWeight.Medium).fontColor(INK)
+          .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+        Text(this.accountDeviceStatus(device))
+          .fontSize(13).fontColor(device.online ? GREEN : MUTED)
+      }
+      .layoutWeight(1)
+      .alignItems(HorizontalAlign.Start)
+      if (device.online) {
+        Image($r('app.media.settings_chevron_right'))
+          .width(8).height(12).objectFit(ImageFit.Contain).opacity(0.44)
+      }
+    }
+    .width('100%')
+    .height(60)
+    .padding({ left: 4, right: 4 })
+    .alignItems(VerticalAlign.Center)
+    .opacity(this.canSelectAccountDevice(device) ? 1 : 0.64)
+    .onClick(async () => {
+      if (!this.canSelectAccountDevice(device)) return;
+      this.switchingDeviceId = device.deviceId;
+      this.accountDevicesError = '';
+      try {
+        await this.cloudSelectDevice(device);
+      } catch (err) {
+        this.accountDevicesError = err instanceof Error ? err.message :
+          RemoteI18n.t('remote.settings.deviceSwitchFailed');
+      } finally {
+        this.switchingDeviceId = '';
+      }
+    })
   }
 
   @Builder
@@ -236,26 +464,31 @@ export struct ConnectView {
 
   @Builder
   BackButton() {
-    Text('‹')
+    Stack() {
+      this.BackGlyph()
+    }
       .width(48)
       .height(48)
-      .fontSize(38)
-      .fontColor('#0D1A33')
-      .fontWeight(FontWeight.Medium)
-      .textAlign(TextAlign.Center)
-      .backgroundColor('#EEF4FF')
+      .backgroundColor(SOFT)
       .borderRadius(24)
-      .border({ width: 1, color: '#FFFFFF' })
-      .position({ x: 36, y: 38 })
+      .position({ x: 28, y: 18 })
       .onClick(() => {
         if (this.currentStep() === 'scan' && this.remoteUrl.trim().length === 0 && !this.showManualPairing) {
           this.stopInlineScan();
-          this.pairingStep = 'intro';
+          this.pairingStep = this.isAccountAuthenticated() ? 'account' : 'intro';
           return;
         }
         this.stopInlineScan();
         this.onBack();
       })
+  }
+
+  @Builder
+  BackGlyph() {
+    Image($r('app.media.remote_ref_back'))
+      .width(12)
+      .height(20)
+      .objectFit(ImageFit.Contain)
   }
 
   @Builder
@@ -841,6 +1074,9 @@ export struct ConnectView {
   }
 
   private currentStep(): string {
+    if (this.pairingStep === 'account' && this.isAccountAuthenticated()) {
+      return 'account';
+    }
     if (this.pairingStep === 'scan' ||
       this.remoteUrl.trim().length > 0 ||
       this.isBusy ||
@@ -851,6 +1087,48 @@ export struct ConnectView {
       return 'scan';
     }
     return 'intro';
+  }
+
+  private async refreshAccountDevices(): Promise<void> {
+    if (!this.isAccountAuthenticated() || this.accountDevicesBusy) return;
+    this.accountDevicesBusy = true;
+    this.accountDevicesError = '';
+    try {
+      this.accountDevices = await this.cloudListDevices();
+    } catch (err) {
+      this.accountDevicesError = err instanceof Error ? err.message :
+        RemoteI18n.t('remote.settings.deviceLoadFailed');
+    } finally {
+      this.accountDevicesBusy = false;
+    }
+  }
+
+  private desktopDevices(): CloudAccountDevice[] {
+    return this.accountDevices.filter((device: CloudAccountDevice): boolean =>
+      device.deviceId !== this.deviceId && device.deviceName !== 'HarmonyOS Phone');
+  }
+
+  private canSelectAccountDevice(device: CloudAccountDevice): boolean {
+    return device.online && device.deviceId !== this.deviceId && this.switchingDeviceId.length === 0;
+  }
+
+  private accountDeviceStatus(device: CloudAccountDevice): string {
+    if (device.deviceId === this.switchingDeviceId) {
+      return RemoteI18n.t('remote.settings.deviceConnecting');
+    }
+    const presence = device.online ? RemoteI18n.t('remote.settings.deviceOnline') :
+      RemoteI18n.t('remote.settings.deviceOffline');
+    if (device.deviceId === this.controlTargetDeviceId && this.connectionState === 'connected') {
+      return `${RemoteI18n.t('remote.settings.deviceControlling')} · ${presence}`;
+    }
+    if (device.deviceId === this.controlTargetDeviceId) {
+      return `${RemoteI18n.t('connect.deviceLastUsed')} · ${presence}`;
+    }
+    return presence;
+  }
+
+  private isAccountAuthenticated(): boolean {
+    return this.accountUserId.trim().length > 0;
   }
 
   private shouldShowStatusStrip(): boolean {

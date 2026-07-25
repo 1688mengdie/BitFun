@@ -15,6 +15,7 @@ export class RelayHttpClient {
   private readonly deviceName: string = 'HarmonyOS Phone';
   delegatedToken: string = '';
   delegatedMasterKey: string = '';
+  delegatedUserId: string = '';
   pairedDeviceId: string = '';
   homeDeviceId: string = '';
 
@@ -79,6 +80,7 @@ export class RelayHttpClient {
       if (response.resp === 'delegate_identity' && response.token && response.master_key) {
         this.delegatedToken = response.token;
         this.delegatedMasterKey = response.master_key;
+        this.delegatedUserId = response.user_id || '';
         if (response.device_id) {
           this.homeDeviceId = response.device_id;
           if (!this.pairedDeviceId) {
@@ -96,6 +98,7 @@ export class RelayHttpClient {
   clearDelegatedIdentity(): void {
     this.delegatedToken = '';
     this.delegatedMasterKey = '';
+    this.delegatedUserId = '';
   }
 
   hasDelegatedIdentity(): boolean {

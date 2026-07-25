@@ -159,14 +159,12 @@ export class RemoteConnectionViewModel {
       this.lockUntil = 0;
       this.applyWorkspace(initialSync.workspace);
       this.pageState.setAuthenticatedUserId(initialSync.authenticatedUserId);
+      this.pageState.setControlTarget('room', this.pageState.desktopId, this.pageState.desktopName);
       this.sessions.setSessions(initialSync.sessions, initialSync.hasMoreSessions);
       this.setState(RemoteConnectionState.Connected);
       this.pageState.setConnectionFailureKind('');
       this.pageState.setStatusText(RemoteI18n.t('connection.connected'));
       this.closeConnectSheet();
-      if (!autoReconnect) {
-        this.replaceRoute(AppRoute.RemoteHome);
-      }
       this.startHeartbeat();
       void this.loadRecentWorkspaces();
       RemoteLogger.info('connect success');
@@ -224,6 +222,7 @@ export class RemoteConnectionViewModel {
     this.files.clear();
     this.pageState.setWorkspace(RemoteI18n.t('status.notConnected'), '', '', '', 'normal');
     this.pageState.setAuthenticatedUserId('');
+    this.pageState.clearControlTarget();
     this.pageState.clearWorkspaceActions();
     this.setState(RemoteConnectionState.Disconnected);
     this.pageState.setConnectionFailureKind('');

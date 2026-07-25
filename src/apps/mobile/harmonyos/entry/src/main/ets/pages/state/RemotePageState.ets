@@ -23,7 +23,11 @@ export class RemotePageState {
   @Trace userId: string = '';
   @Trace requiresAccountAuth: boolean = false;
   @Trace accountUsername: string = '';
+  @Trace accountUserId: string = '';
   @Trace authenticatedUserId: string = '';
+  @Trace controlTargetType: string = 'none';
+  @Trace controlTargetDeviceId: string = '';
+  @Trace controlTargetDeviceName: string = '';
   @Trace statusText: string = '';
   @Trace connectionState: string = 'idle';
   @Trace connectionFailureKind: string = '';
@@ -87,6 +91,24 @@ export class RemotePageState {
   setAccountPairing(requiresAccountAuth: boolean, accountUsername: string): void {
     this.requiresAccountAuth = requiresAccountAuth;
     this.accountUsername = accountUsername;
+  }
+
+  setAccountUsername(accountUsername: string): void {
+    this.accountUsername = accountUsername;
+  }
+
+  setAccountUserId(accountUserId: string): void {
+    this.accountUserId = accountUserId;
+  }
+
+  setControlTarget(type: string, deviceId: string, deviceName: string): void {
+    this.controlTargetType = type;
+    this.controlTargetDeviceId = deviceId;
+    this.controlTargetDeviceName = deviceName;
+  }
+
+  clearControlTarget(): void {
+    this.setControlTarget('none', '', '');
   }
 
   setRemoteUrl(remoteUrl: string): void {

@@ -109,7 +109,7 @@ export class RemoteSessionViewModel {
     await this.refreshSessions();
   }
 
-  async createSession(agentType: string): Promise<void> {
+  async createSession(agentType: string, instruction: string = ''): Promise<void> {
     await this.sessions.create(
       agentType,
       this.hooks.isBusy(),
@@ -124,18 +124,24 @@ export class RemoteSessionViewModel {
         await this.refreshSessions();
         await this.hooks.onLoadActiveMessages();
         this.hooks.onStartPolling();
-      }
+      },
+      instruction
     );
   }
 
-  async createSessionInWorkspace(path: string, currentPath: string): Promise<void> {
+  async createSessionInWorkspace(
+    path: string,
+    currentPath: string,
+    instruction: string = '',
+    agentType: string = 'code'
+  ): Promise<void> {
     if (path.length > 0 && path !== currentPath) {
       await this.hooks.onSelectWorkspace(path);
-      await this.createSession('code');
+      await this.createSession(agentType, instruction);
       return;
     }
     if (path.length === 0 || path === currentPath) {
-      await this.createSession('code');
+      await this.createSession(agentType, instruction);
     }
   }
 
