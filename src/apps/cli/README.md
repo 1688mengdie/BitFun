@@ -20,7 +20,16 @@ bitfun sessions list
 bitfun usage
 bitfun doctor
 bitfun health
+bitfun update                           # GitHub first, openbitfun.com fallback
+bitfun update --check                   # report only; do not install
 ```
+
+Official Linux archive installations check for updates before interactive TUI
+startup at most once every six hours. The check uses GitHub first, then
+`https://openbitfun.com/release/linux-binaries.json` when GitHub or its asset
+download fails. Set `behavior.auto_update = false` in the CLI config or export
+`BITFUN_CLI_DISABLE_AUTO_UPDATE=1` to disable automatic checks. Development and
+nightly binaries are never replaced by the stable automatic updater.
 
 `bitfun-cli` is a deprecated compatibility entrypoint. It writes
 `Warning: \`bitfun-cli\` is deprecated; use \`bitfun\` instead.` to stderr; new scripts and
@@ -172,6 +181,14 @@ macOS/Linux or `.\bitfun.exe` in PowerShell, then add that directory to `PATH` i
 Do not copy only `bitfun-cli` from an archive. The deprecated command is intentionally a thin
 launcher for its sibling `bitfun`; if the sibling is missing, it reports an incomplete installation
 with recovery guidance instead of attempting another lookup.
+
+Every archive ships an adjacent `<archive>.sha256` — the complete verification surface across all
+platforms and both the stable and nightly channels. The release also carries a `SHA256SUMS`
+aggregate, but it covers only the macOS and Windows archives: Linux archives are published by
+`.github/workflows/linux-binaries.yml` in a separate workflow run (the only producer that also
+covers nightly, and the one that must hold the CLI and Relay archives together to emit
+`linux-binaries.json`), so they cannot be folded into that file deterministically. Verify Linux
+downloads with their `.sha256` sidecar.
 
 On a server that should stay reachable for account multi-device access, continue with the
 [daemon section](#always-on-account-device-host-daemon) above after `/login`.
