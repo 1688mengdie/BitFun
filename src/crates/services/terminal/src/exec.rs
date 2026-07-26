@@ -238,7 +238,8 @@ struct HeadTailText {
     head_budget: usize,
     tail_budget: usize,
     head: String,
-    tail: VecDeque<char>,
+    /// UTF-8 bytes of the tail window; whole chars only (boundary-aligned).
+    tail: VecDeque<u8>,
     head_chars: usize,
     tail_chars: usize,
     omitted_chars: usize,
@@ -922,7 +923,7 @@ impl HeadTailText {
             max_chars,
             head_budget,
             tail_budget,
-            head: String::new(),
+            head: String::with_capacity(head_budget.min(64 * 1024)),
             tail: VecDeque::new(),
             head_chars: 0,
             tail_chars: 0,
@@ -932,43 +933,92 @@ impl HeadTailText {
     }
 
     fn push_str(&mut self, text: &str) {
-        for ch in text.chars() {
-            self.total_chars = self.total_chars.saturating_add(1);
-            if self.max_chars == 0 {
-                self.omitted_chars = self.omitted_chars.saturating_add(1);
-                continue;
-            }
-            if self.head_chars < self.head_budget {
-                self.head.push(ch);
-                self.head_chars += 1;
-                continue;
-            }
+        let incoming_chars = text.chars().count();
+        self.total_chars = self.total_chars.saturating_add(incoming_chars);
 
-            if self.tail_budget == 0 {
-                self.omitted_chars = self.omitted_chars.saturating_add(1);
-                continue;
-            }
+        if self.max_chars == 0 {
+            self.omitted_chars = self.omitted_chars.saturating_add(incoming_chars);
+            return;
+        }
 
-            self.tail.push_back(ch);
-            self.tail_chars += 1;
-            if self.tail_chars > self.tail_budget {
-                self.tail.pop_front();
-                self.tail_chars -= 1;
-                self.omitted_chars = self.omitted_chars.saturating_add(1);
+        let mut remainder = text;
+        let mut remainder_chars = incoming_chars;
+
+        // Fill the head budget with one bulk copy.
+        if self.head_chars < self.head_budget {
+            let head_room = self.head_budget - self.head_chars;
+            if remainder_chars <= head_room {
+                self.head.push_str(remainder);
+                self.head_chars += remainder_chars;
+                return;
             }
+            let split = remainder
+                .char_indices()
+                .nth(head_room)
+                .map(|(index, _)| index)
+                .unwrap_or(remainder.len());
+            self.head.push_str(&remainder[..split]);
+            self.head_chars += head_room;
+            remainder = &remainder[split..];
+            remainder_chars -= head_room;
+        }
+
+        if remainder.is_empty() {
+            return;
+        }
+
+        if self.tail_budget == 0 {
+            self.omitted_chars = self.omitted_chars.saturating_add(remainder_chars);
+            return;
+        }
+
+        if remainder_chars >= self.tail_budget {
+            // The new text alone fills the whole tail window: drop the current
+            // tail and keep only the last `tail_budget` chars.
+            self.omitted_chars = self
+                .omitted_chars
+                .saturating_add(self.tail_chars)
+                .saturating_add(remainder_chars - self.tail_budget);
+            self.tail.clear();
+            let skip = remainder_chars - self.tail_budget;
+            let start = remainder
+                .char_indices()
+                .nth(skip)
+                .map(|(index, _)| index)
+                .unwrap_or(0);
+            self.tail.extend(remainder[start..].bytes());
+            self.tail_chars = self.tail_budget;
+            return;
+        }
+
+        self.tail.extend(remainder.bytes());
+        self.tail_chars += remainder_chars;
+        while self.tail_chars > self.tail_budget {
+            self.pop_front_char();
+            self.tail_chars -= 1;
+            self.omitted_chars = self.omitted_chars.saturating_add(1);
+        }
+    }
+
+    /// Removes one whole UTF-8 char from the front of the tail ring buffer.
+    fn pop_front_char(&mut self) {
+        if self.tail.pop_front().is_none() {
+            return;
+        }
+        while matches!(self.tail.front(), Some(byte) if byte & 0b1100_0000 == 0b1000_0000) {
+            self.tail.pop_front();
         }
     }
 
     fn render(self) -> String {
-        if self.omitted_chars == 0 {
-            let mut output = self.head;
-            output.extend(self.tail);
-            return output;
-        }
+        let mut tail = self.tail;
+        let tail_text = String::from_utf8_lossy(tail.make_contiguous());
 
         let mut output = self.head;
-        output.push_str("\n... [truncated, middle omitted] ...\n");
-        output.extend(self.tail);
+        if self.omitted_chars != 0 {
+            output.push_str("\n... [truncated, middle omitted] ...\n");
+        }
+        output.push_str(&tail_text);
         output
     }
 }
@@ -2434,6 +2484,119 @@ print("parent_exit", flush=True)"#;
 
         assert_eq!(buffer.total_chars, 16);
         assert_eq!(buffer.render(), "abcdefghijklmnop");
+    }
+
+    /// Char-by-char reference implementation, mirroring the original
+    /// `VecDeque<char>` ring buffer. The byte-based ring buffer must stay
+    /// observationally identical to it.
+    fn head_tail_reference(max_chars: usize, chunks: &[&str]) -> (String, usize, usize) {
+        let head_budget = max_chars / 2;
+        let tail_budget = max_chars.saturating_sub(head_budget);
+        let mut head = String::new();
+        let mut tail: std::collections::VecDeque<char> = std::collections::VecDeque::new();
+        let mut head_chars = 0usize;
+        let mut tail_chars = 0usize;
+        let mut omitted_chars = 0usize;
+        let mut total_chars = 0usize;
+
+        for text in chunks {
+            for ch in text.chars() {
+                total_chars += 1;
+                if max_chars == 0 {
+                    omitted_chars += 1;
+                    continue;
+                }
+                if head_chars < head_budget {
+                    head.push(ch);
+                    head_chars += 1;
+                    continue;
+                }
+                if tail_budget == 0 {
+                    omitted_chars += 1;
+                    continue;
+                }
+                tail.push_back(ch);
+                tail_chars += 1;
+                if tail_chars > tail_budget {
+                    tail.pop_front();
+                    tail_chars -= 1;
+                    omitted_chars += 1;
+                }
+            }
+        }
+
+        let mut output = head;
+        if omitted_chars != 0 {
+            output.push_str("\n... [truncated, middle omitted] ...\n");
+        }
+        output.extend(tail);
+        (output, total_chars, omitted_chars)
+    }
+
+    #[test]
+    fn head_tail_text_matches_char_reference_for_multibyte_input() {
+        let chunk_sets: &[&[&str]] = &[
+            &["abcdefghijklmnop"],
+            &["小游戏平台推荐给所有人"],
+            &["ab", "小游戏", "cd", "平台推荐", "ef"],
+            &["🎮🎲🎯🎰🎳", "🚀🛰️🌌", "end"],
+            &["混合ascii与🎮emoji以及中文字符的长文本内容"],
+            &["a", "", "中", "🎮", "z"],
+        ];
+
+        for max_chars in [0usize, 1, 2, 3, 5, 8, 10, 17, 64, 1024] {
+            for chunks in chunk_sets {
+                let mut buffer = HeadTailText::new(max_chars);
+                for chunk in *chunks {
+                    buffer.push_str(chunk);
+                }
+                let total = buffer.total_chars;
+                let omitted = buffer.omitted_chars;
+                let rendered = buffer.render();
+
+                let (expected, expected_total, expected_omitted) =
+                    head_tail_reference(max_chars, chunks);
+
+                assert_eq!(
+                    rendered, expected,
+                    "render mismatch: max_chars={max_chars} chunks={chunks:?}"
+                );
+                assert_eq!(
+                    total, expected_total,
+                    "total_chars mismatch: max_chars={max_chars} chunks={chunks:?}"
+                );
+                assert_eq!(
+                    omitted, expected_omitted,
+                    "omitted_chars mismatch: max_chars={max_chars} chunks={chunks:?}"
+                );
+                assert!(
+                    !rendered.contains('\u{FFFD}'),
+                    "tail ring buffer split a multi-byte char: max_chars={max_chars} chunks={chunks:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn head_tail_text_keeps_multibyte_chars_intact_under_pressure() {
+        // Every char is 3 bytes; a byte-granular ring buffer would corrupt them.
+        let text: String = "中".repeat(500);
+        let mut buffer = HeadTailText::new(10);
+        for chunk in text.as_bytes().chunks(3) {
+            buffer.push_str(std::str::from_utf8(chunk).expect("aligned chunk"));
+        }
+
+        assert_eq!(buffer.total_chars, 500);
+        let rendered = buffer.render();
+        assert!(!rendered.contains('\u{FFFD}'));
+        assert!(rendered.starts_with("中中中中中"));
+        assert!(rendered.ends_with("中中中中中"));
+        assert!(rendered.contains("truncated"));
+        // 5 head + 5 tail chars plus the truncation marker.
+        assert_eq!(
+            rendered.chars().count(),
+            10 + "\n... [truncated, middle omitted] ...\n".chars().count()
+        );
     }
 
     #[test]

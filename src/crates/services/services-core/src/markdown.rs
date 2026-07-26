@@ -1,4 +1,10 @@
 use serde_yaml::Value;
+use std::sync::LazyLock;
+
+/// Compiled once; front-matter parsing runs on every `.md` scan.
+static FRONT_MATTER_REGEX: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(r"(?s)^---\r?\n(.*?)\r?\n---").expect("front matter regex pattern is valid")
+});
 
 /// Parses and writes Markdown files with YAML front matter.
 pub struct FrontMatterMarkdown;
@@ -11,10 +17,7 @@ impl FrontMatterMarkdown {
     }
 
     pub fn load_str(content: &str) -> Result<(Value, String), String> {
-        let front_matter_pattern = r"(?s)^---\r?\n(.*?)\r?\n---";
-        let re = regex::Regex::new(front_matter_pattern)
-            .map_err(|e| format!("Failed to create regex: {}", e))?;
-        let caps = re
+        let caps = FRONT_MATTER_REGEX
             .captures(content)
             .ok_or_else(|| "Failed to capture content".to_string())?;
 

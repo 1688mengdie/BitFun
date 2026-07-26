@@ -162,6 +162,26 @@ jobs:
       - name: Run subscription authentication tests
         run: cargo test --locked -p bitfun-ai-adapters --features subscription-auth subscription_auth
 
+      # File watching is backed by a different OS API on every platform
+      # (ReadDirectoryChangesW / FSEvents / inotify), so watch registration
+      # regressions surface per-OS. The suite is behind a non-default feature
+      # and would otherwise never run anywhere.
+      #
+      # macOS is excluded: this suite already fails there before any of this
+      # branch's changes (the debounce/atomic-rename contracts time out under
+      # FSEvents coalescing), which is worth fixing separately rather than
+      # blocking unrelated work.
+      - name: Run file watch contract tests
+        if: runner.os != 'macOS'
+        run: cargo test --locked -p bitfun-services-integrations --features file-watch
+
+      # Search tools resolve paths and symlinks directly, which also differs
+      # across platforms. Scoped to the search module: the glob tests in this
+      # crate fail on Windows independently of this branch (walk-root
+      # derivation treats separators differently) and need their own fix.
+      - name: Run search tool tests
+        run: "cargo test --locked -p tool-runtime search::"
+
   # ── Frontend: build ────────────────────────────────────────────────
   frontend-build:
     name: Frontend Build
