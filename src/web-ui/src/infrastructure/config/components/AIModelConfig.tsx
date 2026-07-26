@@ -2373,6 +2373,15 @@ const AIModelConfig: React.FC = () => {
                           const selectedOption = currentTemplate.baseUrlOptions!.find(opt => opt.url === value);
                           const newProvider = selectedOption?.format || editingConfig.provider || 'openai';
                           resetRemoteModelDiscovery();
+                          if (newProvider !== editingConfig.provider) {
+                            setSelectedModelDrafts(prevDrafts =>
+                              prevDrafts.map(draft => normalizeDraftReasoningForProvider(draft, {
+                                name: editingConfig?.name,
+                                provider: newProvider,
+                                base_url: value as string,
+                              }))
+                            );
+                          }
                           setEditingConfig(prev => ({
                             ...prev,
                             base_url: value as string,
@@ -2572,7 +2581,7 @@ const AIModelConfig: React.FC = () => {
                             : [String(value)];
                           syncSelectedModelDrafts(nextModelNames, editingConfig, !!editingConfig.id);
                         }}
-                        placeholder="glm-4.7"
+                        placeholder="glm-5.2"
                         options={availableModelOptions}
                         searchable
                         multiple={!editingConfig.id}
