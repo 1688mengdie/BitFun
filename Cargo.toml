@@ -277,13 +277,25 @@ tauri-runtime-wry = { git = "https://github.com/tauri-apps/tauri.git", rev = "ce
 tauri-utils = { git = "https://github.com/tauri-apps/tauri.git", rev = "ce3860e84b79af0d5ee628b304399499a87328b1" }
 
 [profile.dev]
-incremental = true
+# Line tables only: keeps panic backtrace line numbers while shrinking PDB/DWARF
+# output dramatically, which speeds up the Windows link step the most.
+# Need full debug info for a debugger session? Override per-invocation with
+# CARGO_PROFILE_DEV_DEBUG=2.
+debug = "line-tables-only"
 
 [profile.release]
 opt-level = 3
-lto = true
+# Thin LTO instead of fat LTO: 30-60% faster release codegen/link for ~0-2%
+# runtime cost. This was already proven on the Linux aarch64 packaging runner.
+# NOTE: needs one packaging regression round across all platforms (medium risk).
+lto = "thin"
 codegen-units = 1
 strip = true
+# NOTE: do not set `panic = "abort"` here. Several production paths rely on
+# `catch_unwind` to contain third-party panics instead of taking down the app:
+# `browser_api::browser_get_url` (known wry bug where WKWebView URL is nil) and
+# the relay client's TLS connector construction. Aborting would turn those
+# recoverable failures into process crashes.
 
 [profile.release-fast]
 inherits = "release"
