@@ -1,5 +1,5 @@
-import React, { useCallback, useEffect, useState } from 'react';
-import { GitBranch, RotateCcw, Save } from 'lucide-react';
+﻿import React, { useCallback, useEffect, useState } from 'react';
+import { RotateCcw, Save } from 'lucide-react';
 import {
   Button,
   ConfigPageLoading,
@@ -85,7 +85,6 @@ const WorktreesConfig: React.FC = () => {
   return (
     <ConfigPageLayout className="bitfun-worktrees-config">
       <ConfigPageHeader
-        icon={<GitBranch size={20} aria-hidden />}
         title={t('settings.title')}
         subtitle={t('settings.description')}
       />
