@@ -1,6 +1,7 @@
 import { RemoteI18n } from '../../i18n/RemoteI18n';
 import { CARD, INK, LINE, MUTED } from './Theme';
 import { ModelServiceSettingsPanel } from './ModelServiceSettingsPanel';
+import { DefaultAccountAvatar } from './DefaultAccountAvatar';
 
 const SETTINGS_SHEET_BG: string = '#F4F4F7';
 const SETTINGS_ROW_VALUE: string = '#8F8F94';
@@ -84,8 +85,7 @@ export struct SettingsSheet {
   @Builder
   AccountEntry() {
     Row({ space: 12 }) {
-      Image($r('app.media.settings_profile_avatar_gw'))
-        .width(34).height(34).objectFit(ImageFit.Contain)
+      DefaultAccountAvatar({ avatarSize: 34 })
       Column({ space: 2 }) {
         Text(RemoteI18n.t('remote.settings.profile'))
           .fontSize(16).fontWeight(FontWeight.Medium).fontColor(INK)
