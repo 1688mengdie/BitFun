@@ -5397,6 +5397,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
             ? {
                 visible: true,
                 goal: threadGoalController.goal,
+                goalChain: threadGoalController.goalChain,
                 onOpen: () => {
                   void threadGoalController.openGoalEntry();
                 },
