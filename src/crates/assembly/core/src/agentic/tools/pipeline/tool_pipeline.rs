@@ -3014,6 +3014,7 @@ mod tests {
             session_id: "parent-session".to_string(),
             dialog_turn_id: "parent-turn".to_string(),
             tool_call_id: parent_tool_call_id.to_string(),
+            depth: None,
         });
         context
     }
@@ -4363,6 +4364,8 @@ mod tests {
             denied_tool_names: ["Bash"].into_iter().map(str::to_string).collect(),
             denied_tool_messages: Default::default(),
             path_policy: Default::default(),
+            allowed_operation_classes: Default::default(),
+            denied_operation_classes: Default::default(),
         };
 
         let context = pipeline.build_tool_use_context(&task, CancellationToken::new());
