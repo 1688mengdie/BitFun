@@ -123,7 +123,7 @@ unic-langid = { workspace = true }
 # Encryption (Remote Connect E2E)
 aes-gcm = { workspace = true, optional = true }
 sha2 = { workspace = true }
-rand = { workspace = true, optional = true }
+rand = { workspace = true }
 
 # QR code generation
 
@@ -222,7 +222,6 @@ service-integrations = [
     "dep:git2",
     "dep:image",
     "dep:md5",
-    "dep:rand",
     "dep:reqwest",
     "dep:rmcp",
     "dep:sse-stream",
@@ -255,6 +254,10 @@ required-features = ["product-full"]
 [[test]]
 name = "remote_mcp_streamable_http"
 required-features = ["service-integrations"]
+
+[[test]]
+name = "rbac_poke_integration"
+required-features = ["product-full"]
 
 [build-dependencies]
 sha2 = { workspace = true }
