@@ -1,118 +1,108 @@
 import type { SubscriptionProvider } from '../types';
 
+/** 订阅登录操作 */
 export interface SubscriptionLoginOperation {
-  id: number;
-  sessionId: string;
+  id: string;
   provider: SubscriptionProvider;
+  sessionId: string;
   cancelled: boolean;
-  startSettled: boolean;
-}
-
-export interface SubscriptionStartSettlement {
-  shouldContinue: boolean;
-  cleanupError?: unknown;
-}
-
-function createUuid(): string {
-  if (typeof globalThis.crypto?.randomUUID === 'function') {
-    return globalThis.crypto.randomUUID();
-  }
-  const bytes = new Uint8Array(16);
-  if (typeof globalThis.crypto?.getRandomValues === 'function') {
-    globalThis.crypto.getRandomValues(bytes);
-  } else {
-    // The ID only correlates local commands; this compatibility path is not a
-    // security token. Older Linux WebKit builds may lack randomUUID/Web Crypto.
-    for (let index = 0; index < bytes.length; index += 1) {
-      bytes[index] = Math.floor(Math.random() * 256);
-    }
-  }
-  bytes[6] = (bytes[6] & 0x0f) | 0x40;
-  bytes[8] = (bytes[8] & 0x3f) | 0x80;
-  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  /** 标记 startSubscriptionLogin 是否已经结算（成功或失败） */
+  startSettled?: boolean;
 }
 
 /**
- * Owns the single active subscription authorization operation.
- *
- * Keeping operation identity outside React state prevents a stale async
- * `finally` block from clearing a newer login session.
+ * 订阅登录协调器
+ * 管理模型提供商订阅账户的登录流程，确保同一时间只有一个登录流程
  */
 export class SubscriptionLoginCoordinator {
-  private nextId = 0;
-  private active: SubscriptionLoginOperation | null = null;
+  private currentOperation: SubscriptionLoginOperation | null = null;
+  private operationCounter = 0;
 
-  constructor(
-    private readonly createSessionId: () => string = createUuid,
-  ) {}
-
+  /** 开始一个新的登录操作。如果已有进行中的操作则返回 null */
   begin(provider: SubscriptionProvider): SubscriptionLoginOperation | null {
-    if (this.active) return null;
-    const operation: SubscriptionLoginOperation = {
-      id: ++this.nextId,
-      sessionId: this.createSessionId(),
+    if (this.currentOperation && !this.currentOperation.cancelled) {
+      return null;
+    }
+    this.operationCounter += 1;
+    this.currentOperation = {
+      id: `login-${this.operationCounter}-${Date.now()}`,
       provider,
+      sessionId: crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`,
       cancelled: false,
-      startSettled: false,
     };
-    this.active = operation;
-    return operation;
+    return this.currentOperation;
   }
 
-  current(): SubscriptionLoginOperation | null {
-    return this.active;
-  }
-
+  /** 检查当前操作是否仍然是传入的 operation */
   isCurrent(operation: SubscriptionLoginOperation): boolean {
-    return this.active === operation && !operation.cancelled;
+    return this.currentOperation?.id === operation.id && !this.currentOperation.cancelled;
   }
 
-  owns(operation: SubscriptionLoginOperation): boolean {
-    return this.active === operation;
+  /** 返回当前操作 */
+  current(): SubscriptionLoginOperation | null {
+    return this.currentOperation;
   }
 
-  markStartSettled(operation: SubscriptionLoginOperation): boolean {
-    if (this.active !== operation) return false;
-    operation.startSettled = true;
-    return !operation.cancelled;
-  }
-
+  /** 请求取消指定 provider 的操作，返回被取消的 operation（如果没有则返回 null） */
   requestCancel(provider: SubscriptionProvider): SubscriptionLoginOperation | null {
-    if (!this.active || this.active.provider !== provider) return null;
-    const operation = this.active;
-    operation.cancelled = true;
-    return operation;
+    if (this.currentOperation && this.currentOperation.provider === provider && !this.currentOperation.cancelled) {
+      this.currentOperation.cancelled = true;
+    }
+    return this.currentOperation;
   }
 
+  /** 检查是否拥有该 operation */
+  owns(operation: SubscriptionLoginOperation): boolean {
+    return this.currentOperation?.id === operation.id;
+  }
+
+  /** 标记开始阶段已完成 */
+  markStartSettled(operation: SubscriptionLoginOperation): void {
+    if (this.currentOperation?.id === operation.id) {
+      this.currentOperation.startSettled = true;
+    }
+  }
+
+  /** 标记登录完成，返回 true 表示成功完成 */
   complete(operation: SubscriptionLoginOperation): boolean {
-    if (this.active !== operation) return false;
-    this.active = null;
-    return true;
+    if (this.currentOperation?.id === operation.id) {
+      this.currentOperation = null;
+      return true;
+    }
+    return false;
   }
 }
 
+/** 取消登录错误 */
+export function subscriptionLoginCancelledError(): Error {
+  return new Error('Subscription login cancelled');
+}
+
+export interface SettlementResult {
+  cleanupError?: Error;
+  shouldContinue: boolean;
+}
+
 /**
- * Resolves the start/cancel race. A cancellation requested while the backend
- * start command is still running keeps the coordinator slot reserved; once
- * start returns, this helper cancels the now-created backend session before
- * the operation may be completed.
+ * 发起订阅登录流程的结算
+ * 返回 { cleanupError, shouldContinue }
  */
 export async function settleSubscriptionLoginStart(
   coordinator: SubscriptionLoginCoordinator,
   operation: SubscriptionLoginOperation,
-  cancelBackend: () => Promise<void>,
-): Promise<SubscriptionStartSettlement> {
-  if (!coordinator.owns(operation)) {
-    return { shouldContinue: false };
-  }
-  if (coordinator.markStartSettled(operation)) {
-    return { shouldContinue: true };
-  }
+  cancelFn: () => Promise<void>,
+): Promise<SettlementResult> {
   try {
-    await cancelBackend();
-    return { shouldContinue: false };
-  } catch (cleanupError) {
-    return { shouldContinue: false, cleanupError };
+    if (!coordinator.isCurrent(operation)) {
+      await cancelFn();
+      return { shouldContinue: false };
+    }
+    coordinator.markStartSettled(operation);
+    return { shouldContinue: true };
+  } catch (error) {
+    return {
+      cleanupError: error instanceof Error ? error : new Error(String(error)),
+      shouldContinue: false,
+    };
   }
 }
