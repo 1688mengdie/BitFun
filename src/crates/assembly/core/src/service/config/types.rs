@@ -24,7 +24,7 @@ where
         .collect())
 }
 
-/// Web UI font preferences (settings â†’ basics). Keys match `FontPreference` in the frontend (camelCase).
+/// Web UI font preferences (settings â†?basics). Keys match `FontPreference` in the frontend (camelCase).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FontPreferenceSnapshot {
@@ -381,7 +381,7 @@ fn default_agent_companion_pet() -> Option<AgentCompanionPetSelection> {
         id: "bitfun".to_string(),
         display_name: "Bitfun".to_string(),
         description: Some(
-            "BitFun's mascot â€” Bifang, a figure from Chinese mythology said to live on Mount Zhang'e. In the Classic of Mountains and Seas (Shan Hai Jing Â· Western Mountains), Bifang is described as crane-like with one foot, blue feathers marked with red, and a white beak.".to_string(),
+            "BitFun's mascot â€?Bifang, a figure from Chinese mythology said to live on Mount Zhang'e. In the Classic of Mountains and Seas (Shan Hai Jing Â· Western Mountains), Bifang is described as crane-like with one foot, blue feathers marked with red, and a white beak.".to_string(),
         ),
         source: "preset".to_string(),
         package_path: "/agent-companion-pets/bitfun".to_string(),
@@ -897,7 +897,7 @@ impl AIConfig {
     }
 
     /// Resolves a canonical configured model ID regardless of `enabled` state.
-    /// UI / migration only â€” never use this on the runtime model-selection path.
+    /// UI / migration only â€?never use this on the runtime model-selection path.
     pub fn resolve_model_reference_any(&self, model_id: &str) -> Option<String> {
         let mut matches = self.models.iter().filter(|m| m.id == model_id);
         let model = matches.next()?;
@@ -923,7 +923,7 @@ impl AIConfig {
     /// - `fast`: first tries the configured fast model, then falls back to primary
     ///
     /// Regular values must be canonical configured model IDs. All lookups require
-    /// the target model to be enabled â€” disabled models are treated as if they did
+    /// the target model to be enabled â€?disabled models are treated as if they did
     /// not exist.
     pub fn resolve_model_selection(&self, model_ref: &str) -> Option<String> {
         match model_ref {
@@ -1320,7 +1320,7 @@ pub enum AgentSubagentOverrideState {
 pub type ParentSubagentOverrideConfig = HashMap<String, AgentSubagentOverrideState>;
 pub type AgentSubagentOverrideConfig = HashMap<String, ParentSubagentOverrideConfig>;
 
-pub const DEFAULT_MODEL_CONTEXT_WINDOW_TOKENS: u32 = 128_128;
+pub const DEFAULT_MODEL_CONTEXT_WINDOW_TOKENS: u32 = 1_048_576;
 pub const MIN_MODEL_CONTEXT_WINDOW_TOKENS: u32 = 32_000;
 pub const MAX_CONFIGURED_OUTPUT_TOKENS_RATIO_PERCENT: u32 = 40;
 const AUTOMATIC_MAX_OUTPUT_TOKEN_TIERS: [u32; 5] = [8_000, 16_000, 24_000, 32_000, 64_000];
