@@ -2225,11 +2225,16 @@ impl DelegationPolicy {
     }
 
     pub fn spawn_child(self) -> Self {
+        let new_depth = self.nesting_depth.saturating_add(1);
         Self {
-            allow_subagent_spawn: false,
-            nesting_depth: self.nesting_depth.saturating_add(1),
+            allow_subagent_spawn: new_depth < MAX_FISSION_DEPTH,
+            nesting_depth: new_depth,
         }
     }
+}
+
+/// Maximum allowed fission depth for subagent delegation trees.
+pub const MAX_FISSION_DEPTH: u8 = 10;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -3302,7 +3307,7 @@ mod tests {
 
         let child = top_level.spawn_child();
 
-        assert!(!child.allow_subagent_spawn);
+        assert!(child.allow_subagent_spawn);
         assert_eq!(child.nesting_depth, 1);
         assert_eq!(child.spawn_child().nesting_depth, 2);
     }
