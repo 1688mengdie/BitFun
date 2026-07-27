@@ -58,6 +58,7 @@ export struct ConnectView {
   @State accountDevicesBusy: boolean = false;
   @State accountDevicesError: string = '';
   @State switchingDeviceId: string = '';
+  @State otherConnectionMethodsExpanded: boolean = false;
 
   aboutToAppear(): void {
     if (this.isAccountAuthenticated()) {
@@ -133,34 +134,7 @@ export struct ConnectView {
             .width('100%')
 
           this.AccountDeviceList()
-          this.OrDivider()
-
-          Button(RemoteI18n.t('connect.scanPairCodeAction'))
-            .width('100%')
-            .height(54)
-            .fontSize(18)
-            .fontWeight(FontWeight.Bold)
-            .fontColor(CARD)
-            .backgroundColor(ACCENT)
-            .borderRadius(8)
-            .onClick(() => {
-              this.openScannerAfterPermission();
-            })
-
-          Button(RemoteI18n.t('connect.switchManualPair'))
-            .width('100%')
-            .height(52)
-            .fontSize(17)
-            .fontWeight(FontWeight.Medium)
-            .fontColor(INK)
-            .backgroundColor(CARD)
-            .borderRadius(8)
-            .border({ width: 1.5, color: CONNECT_DISABLED })
-            .onClick(() => {
-              this.stopInlineScan();
-              this.showManualPairing = true;
-              this.onRemoteUrlInputVisibleChange(true);
-            })
+          this.OtherConnectionMethods()
         }
         .width('100%')
         .constraintSize({ minHeight: '100%' })
@@ -230,6 +204,68 @@ export struct ConnectView {
     .width('100%')
     .height(174)
     .padding({ left: 16, right: 16, top: 8, bottom: 8 })
+    .backgroundColor(CARD)
+    .borderRadius(8)
+    .border({ width: 1, color: LINE })
+  }
+
+  @Builder
+  OtherConnectionMethods() {
+    Column() {
+      Row({ space: 12 }) {
+        Text(RemoteI18n.t('connect.otherConnectionMethods'))
+          .fontSize(16)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(INK)
+        Blank()
+        if (this.otherConnectionMethodsExpanded) {
+          SymbolGlyph($r('sys.symbol.chevron_up'))
+            .fontSize(13)
+            .fontColor([MUTED])
+        } else {
+          SymbolGlyph($r('sys.symbol.chevron_down'))
+            .fontSize(13)
+            .fontColor([MUTED])
+        }
+      }
+      .width('100%')
+      .height(58)
+      .padding({ left: 16, right: 16 })
+      .onClick(() => {
+        this.otherConnectionMethodsExpanded = !this.otherConnectionMethodsExpanded;
+      })
+
+      if (this.otherConnectionMethodsExpanded) {
+        Divider()
+          .color(LINE)
+          .margin({ left: 16, right: 16 })
+
+        Row({ space: 12 }) {
+          Image($r('app.media.remote_actions_link'))
+            .width(22)
+            .height(22)
+            .objectFit(ImageFit.Contain)
+            .opacity(0.66)
+          Text(RemoteI18n.t('connect.scanPairCodeAction'))
+            .fontSize(16)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(INK)
+            .layoutWeight(1)
+          Image($r('app.media.settings_chevron_right'))
+            .width(8)
+            .height(12)
+            .objectFit(ImageFit.Contain)
+            .opacity(0.44)
+        }
+        .width('100%')
+        .height(58)
+        .padding({ left: 16, right: 16 })
+        .onClick(() => {
+          this.openScannerAfterPermission();
+        })
+      }
+    }
+    .width('100%')
     .backgroundColor(CARD)
     .borderRadius(8)
     .border({ width: 1, color: LINE })
@@ -760,19 +796,6 @@ export struct ConnectView {
   }
 
   @Builder
-  OrDivider() {
-    Row({ space: 14 }) {
-      Divider().color(LINE).layoutWeight(1)
-      Text(RemoteI18n.t('connect.or'))
-        .fontSize(13)
-        .fontColor(MUTED)
-      Divider().color(LINE).layoutWeight(1)
-    }
-    .width('100%')
-    .padding({ left: 28, right: 28, top: 6, bottom: 6 })
-  }
-
-  @Builder
   ScanCorner(x: number, y: number, isLeft: boolean, isTop: boolean) {
     Stack() {
       Text('')
@@ -1100,6 +1123,9 @@ export struct ConnectView {
         RemoteI18n.t('remote.settings.deviceLoadFailed');
     } finally {
       this.accountDevicesBusy = false;
+      if (!this.hasOnlineDesktopDevice()) {
+        this.otherConnectionMethodsExpanded = true;
+      }
     }
   }
 
@@ -1110,6 +1136,16 @@ export struct ConnectView {
 
   private canSelectAccountDevice(device: CloudAccountDevice): boolean {
     return device.online && device.deviceId !== this.deviceId && this.switchingDeviceId.length === 0;
+  }
+
+  private hasOnlineDesktopDevice(): boolean {
+    const devices = this.desktopDevices();
+    for (let index = 0; index < devices.length; index += 1) {
+      if (devices[index].online) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private accountDeviceStatus(device: CloudAccountDevice): string {
