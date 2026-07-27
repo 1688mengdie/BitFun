@@ -35,6 +35,17 @@ function installAgentBackend(app) {
 
   app.backend = {
     protocol: 'files',
+    async ensureSession(options = {}) {
+      if (!app.agent.ensureSession) {
+        throw new Error('PPT Live session initialization is unavailable');
+      }
+      return app.agent.ensureSession({
+        sessionName: 'PPT Live',
+        sessionId: options.sessionId,
+        appDataWorkspace: options.appDataWorkspace,
+        model: options.model || undefined,
+      });
+    },
     async call(action, input, options = {}) {
       if (action !== 'ppt.generate') {
         throw new Error(`Unsupported PPT Live action: ${action}`);
@@ -43,6 +54,7 @@ function installAgentBackend(app) {
       const result = await app.agent.run(buildAgentPrompt(input), {
         runId: options.idempotencyKey,
         sessionName: 'PPT Live',
+        displayText: options.displayText || input.instruction,
         sessionId: options.sessionId,
         appDataWorkspace: options.appDataWorkspace,
         model: options.model || undefined,
