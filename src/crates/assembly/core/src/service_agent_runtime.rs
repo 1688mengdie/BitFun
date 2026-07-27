@@ -2058,6 +2058,9 @@ mod tests {
 
         session.kind = SessionKind::EphemeralChild;
         assert!(!session_uses_shared_mode_default(&session));
+
+        session.kind = SessionKind::EphemeralSubagent;
+        assert!(!session_uses_shared_mode_default(&session));
     }
 
     #[test]
