@@ -3,6 +3,7 @@ import { CARD, GREEN, INK, LINE, MUTED } from './Theme';
 import { DEFAULT_CLOUD_RELAY_URL } from '../../services/CloudAccountClient';
 import { CloudAccountDevice } from '../../services/CloudAccountClient';
 import { RemotePermissionMode } from '../../model/RemoteModels';
+import { DefaultAccountAvatar } from './DefaultAccountAvatar';
 
 const REMOTE_SETTINGS_BG: string = '#F4F4F7';
 const REMOTE_SETTINGS_BLUE: string = '#0A84FF';
@@ -106,10 +107,7 @@ export struct RemoteControlSettingsSheet {
   @Builder
   private ProfileEntry() {
     Row({ space: 12 }) {
-      Image($r('app.media.settings_profile_avatar_gw'))
-        .width(34)
-        .height(34)
-        .objectFit(ImageFit.Contain)
+      DefaultAccountAvatar({ avatarSize: 34 })
       Text(RemoteI18n.t('remote.settings.profile'))
         .fontSize(18)
         .fontWeight(FontWeight.Medium)
@@ -451,10 +449,7 @@ export struct RemoteControlSettingsSheet {
         .margin({ bottom: 30 })
 
         Column({ space: 10 }) {
-          Image($r('app.media.settings_profile_avatar_gw'))
-            .width(70)
-            .height(70)
-            .objectFit(ImageFit.Contain)
+          DefaultAccountAvatar({ avatarSize: 70 })
           Text(this.profileName())
             .fontSize(22)
             .fontWeight(FontWeight.Bold)
