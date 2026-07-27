@@ -1,5 +1,3 @@
- 
-
 export { ConfigPageHeader } from './ConfigPageHeader';
 export type { ConfigPageHeaderProps } from './ConfigPageHeader';
 export { ConfigCollectionSection } from './ConfigCollectionSection';
