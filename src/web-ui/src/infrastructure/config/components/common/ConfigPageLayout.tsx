@@ -1,16 +1,11 @@
- 
-
 import React from 'react';
 import './ConfigPageLayout.scss';
 
 export interface ConfigPageLayoutProps {
-   
   children: React.ReactNode;
-   
   className?: string;
 }
 
- 
 export const ConfigPageLayout: React.FC<ConfigPageLayoutProps> = ({
   children,
   className = '',
@@ -18,21 +13,17 @@ export const ConfigPageLayout: React.FC<ConfigPageLayoutProps> = ({
   return (
     <div className={`bitfun-config-page-layout ${className}`}>
       {children}
-      {/* Real DOM spacer: keeps a guaranteed blank tail at the end of the scroll range. */}
       <div className="bitfun-config-page-layout__scroll-end-spacer" aria-hidden="true" />
     </div>
   );
 };
 
 export interface ConfigPageContentProps {
-   
   children: React.ReactNode;
-   
   className?: string;
   id?: string;
 }
 
- 
 export const ConfigPageContent: React.FC<ConfigPageContentProps> = ({
   children,
   className = '',
@@ -51,10 +42,6 @@ export interface ConfigPageSectionStackProps extends React.HTMLAttributes<HTMLDi
   children: React.ReactNode;
 }
 
-/**
- * Keeps the standard page-level spacing when sections need a shared wrapper
- * for state, test hooks, or adjacent page controls.
- */
 export const ConfigPageSectionStack: React.FC<ConfigPageSectionStackProps> = ({
   children,
   className = '',
@@ -72,7 +59,6 @@ export const ConfigPageSectionStack: React.FC<ConfigPageSectionStackProps> = ({
 
 export interface ConfigPageSectionProps {
   title: string;
-  /** Renders inline after the title (e.g. status badge). */
   titleSuffix?: React.ReactNode;
   description?: React.ReactNode;
   extra?: React.ReactNode;
@@ -119,14 +105,8 @@ export interface ConfigPageRowProps {
   children: React.ReactNode;
   className?: string;
   align?: 'start' | 'center';
-  /** Stack label above control for multi-line editors (textarea, code blocks, etc.) */
   multiline?: boolean;
-  /** Flip to 3/7 ratio giving the control column more space */
   wide?: boolean;
-  /**
-   * ~40% label / ~60% control — middle ground between default (7:3) and wide (2:8).
-   * Use when the label must stay on one line (e.g. two-word titles) and controls need room.
-   */
   balanced?: boolean;
 }
 
@@ -160,7 +140,6 @@ export const ConfigPageRow: React.FC<ConfigPageRowProps> = ({
   return (
     <div className={cls} style={gridStyle}>
       <div className="bitfun-config-page-row__meta">
-        {/* div (not p): label may contain buttons; button-in-p freezes React event path */}
         <div className="bitfun-config-page-row__label">{label}</div>
         {description ? (
           <div className="bitfun-config-page-row__description">{description}</div>
@@ -174,4 +153,3 @@ export const ConfigPageRow: React.FC<ConfigPageRowProps> = ({
 };
 
 export default ConfigPageLayout;
-
