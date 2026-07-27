@@ -261,6 +261,8 @@ async function restoreHistory(id) {
   rerender();
   syncStylePanelFromState(state);
   setStatus(t('historyRestored'));
+  await clearFocusedDeckAgentSession();
+  await ensureDeckAgentSession();
   await storageSet(STORAGE_KEY, { ...state, updatedAt: Date.now() });
 }
 
@@ -467,7 +469,7 @@ function hasUsableDeckForRevision() {
  * floating session bubble (`app.chat.onUserMessage`) — PPT Live has no
  * composer of its own; this is the single entry point either way.
  */
-async function submitInstruction(rawInstruction) {
+async function submitInstruction(rawInstruction, rawDisplayText = rawInstruction) {
   if (promptSubmitGuard || backendRunInFlight) {
     setStatus(t('bubbleBusy'));
     return;
@@ -477,6 +479,7 @@ async function submitInstruction(rawInstruction) {
     setStatus(t('promptRequired'));
     return;
   }
+  const displayText = String(rawDisplayText || '').trim() || instruction;
   promptSubmitGuard = true;
   const reviseExistingDeck = hasUsableDeckForRevision();
   state.promptDraft = instruction;
@@ -487,6 +490,7 @@ async function submitInstruction(rawInstruction) {
     await runPptLiveBackend('auto', instruction, {
       includeTopic: !reviseExistingDeck,
       persistBeforeRun: true,
+      displayText,
     });
     return;
   } catch (error) {
@@ -800,6 +804,68 @@ function currentDeckProject() {
   };
 }
 
+async function clearFocusedDeckAgentSession() {
+  try {
+    await runtime().chat?.clearSession?.();
+  } catch (error) {
+    runtime().log?.warn?.('PPT Live could not clear the previous topic session', {
+      error: String(error),
+    });
+  }
+}
+
+/**
+ * Every deck topic owns a hidden Agent session before the bubble can open.
+ * Existing/history topics rebind their persisted session id; a blank topic
+ * gets a fresh session in its own appdata project directory.
+ */
+async function ensureDeckAgentSession() {
+  const host = runtime();
+  if (typeof host.backend?.ensureSession !== 'function' || !host.appDataDir) {
+    const existingSessionId = String(state.agentSession?.id || '');
+    if (existingSessionId) {
+      void host.chat?.focusSession?.(existingSessionId)?.catch?.(() => {});
+    }
+    return existingSessionId || null;
+  }
+
+  const topicEpoch = deckEpoch;
+  const topicId = String(state.sessionId || '');
+  const project = currentDeckProject() || newDeckProject();
+  const requestSession = async (sessionId) => host.backend.ensureSession({
+    sessionId: sessionId || undefined,
+    appDataWorkspace: project.workspaceSubdir,
+    model: normalizePreferredModel(state.preferredModel),
+  });
+
+  let result;
+  const persistedSessionId = String(state.agentSession?.id || '');
+  try {
+    result = await requestSession(persistedSessionId);
+  } catch (error) {
+    if (!persistedSessionId || !isUnknownSessionBackendError(error)) throw error;
+    runtime().log?.warn?.('PPT Live topic session is stale; creating a replacement', {
+      sessionId: persistedSessionId,
+      error: String(error),
+    });
+    result = await requestSession('');
+  }
+
+  const sessionId = String(result?.sessionId || '');
+  if (!sessionId) throw new Error('PPT Live session initialization returned no sessionId');
+  if (deckEpoch !== topicEpoch || String(state.sessionId || '') !== topicId) {
+    return null;
+  }
+  state.agentSession = {
+    id: sessionId,
+    workspaceSubdir: project.workspaceSubdir,
+    runId: project.runId,
+    skillKey: PPT_DESIGN_SKILL_KEY,
+  };
+  await host.chat?.focusSession?.(sessionId);
+  return sessionId;
+}
+
 function deckSlideFileName(slideNumber) {
   return `slides/slide-${String(slideNumber).padStart(2, '0')}.html`;
 }
@@ -1041,7 +1107,9 @@ async function runPptLiveBackend(operation, instruction, options = {}) {
     if (options.persistBeforeRun) {
       await persist(true);
     }
-    await runCoworkDeckGeneration(operation, instruction);
+    await runCoworkDeckGeneration(operation, instruction, {
+      displayText: options.displayText,
+    });
   } finally {
     backendRunInFlight = false;
   }
@@ -1090,6 +1158,7 @@ async function executeBackendTurn(requestInput, hooks = {}, options = {}) {
       sessionId: options.sessionId || undefined,
       appDataWorkspace: options.appDataWorkspace || undefined,
       model: preferredModel,
+      displayText: options.displayText || requestInput.instruction,
     });
     sessionId = result?.sessionId || null;
     turnId = result?.turnId || result?.actionRunId || null;
@@ -1383,7 +1452,7 @@ function buildBackendRequestBase(operation, instruction) {
  * applies them to the UI. Interrupted attempts retry as "continue" turns
  * inside the same agent session so the model resumes with its prior context.
  */
-async function runCoworkDeckGeneration(operation, instruction) {
+async function runCoworkDeckGeneration(operation, instruction, options = {}) {
   const runEpoch = deckEpoch;
   setBusy(true, t('working'));
   resetGeneration();
@@ -1653,6 +1722,7 @@ async function runCoworkDeckGeneration(operation, instruction) {
           sessionId: retrySession?.id || undefined,
           appDataWorkspace: retrySession?.project?.workspaceSubdir,
           resultKind: project ? 'text' : undefined,
+          displayText: options.displayText || instruction,
         });
         retrySession.id = sessionId || retrySession.id;
         state.agentSession = {
@@ -2651,6 +2721,8 @@ async function newDeck() {
   rerender();
   syncStylePanelFromState(state);
   setStatus(t('blankDeckReady'));
+  await clearFocusedDeckAgentSession();
+  await ensureDeckAgentSession();
   await persist(true);
 }
 
@@ -3373,16 +3445,17 @@ function bindPropertyPanels() {
       const selected = normalizePreferredModel(modelSelect.value);
       if (selected === state.preferredModel) return;
       state.preferredModel = selected;
-      // Drop the reused session so the next turn starts with the newly chosen model
-      // context cleanly when host-side model update is unavailable.
-      if (state.agentSession?.id) {
-        state.agentSession = {
-          ...state.agentSession,
-          id: '',
-        };
-      }
       refreshFlatSelect(modelSelect);
-      void persist(true);
+      void (async () => {
+        // Keep the topic's conversation intact; ensureSession updates the
+        // persisted session's model in place.
+        await ensureDeckAgentSession();
+        await persist(true);
+      })().catch((error) => {
+        runtime().log?.warn?.('PPT Live failed to prepare the updated model session', {
+          error: String(error),
+        });
+      });
     });
   }
 }
@@ -3767,7 +3840,22 @@ function syncLocale() {
  * the host treats repeated claims as an upsert.
  */
 function syncComposerClaim() {
-  void runtime().chat?.claimComposer?.({ placeholder: t('bubblePlaceholder') })?.catch?.((error) => {
+  void runtime().chat?.claimComposer?.({
+    composer: {
+      placeholder: t('bubblePlaceholder'),
+    },
+    welcome: {
+      title: t('bubbleWelcomeTitle'),
+      description: t('bubbleWelcomeBody'),
+      workspaceLabel: t('bubbleWorkspaceLabel'),
+      suggestionsLabel: t('bubbleSuggestionsLabel'),
+      suggestions: [
+        { label: t('welcomeTip1'), prompt: t('welcomeTip1') },
+        { label: t('welcomeTip2'), prompt: t('welcomeTip2') },
+        { label: t('welcomeTip3'), prompt: t('welcomeTip3') },
+      ],
+    },
+  })?.catch?.((error) => {
     runtime().log?.warn?.('PPT Live could not claim the bubble composer', { error: String(error) });
   });
 }
@@ -3778,6 +3866,7 @@ async function init() {
     await loadState();
     await recoverFromRestart();
     syncLocale();
+    await ensureDeckAgentSession();
     syncStylePanelFromState(state);
     await loadModelOptions();
     await persist(true);
@@ -3798,6 +3887,7 @@ runtime().onLocaleChange?.(() => syncLocale());
 runtime().chat?.onUserMessage?.((payload) => {
   const text = String(payload?.text || '').trim();
   if (!text) return;
-  void submitInstruction(text);
+  const displayText = String(payload?.displayText || '').trim() || text;
+  void submitInstruction(text, displayText);
 });
 init();

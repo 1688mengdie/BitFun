@@ -119,7 +119,10 @@ pub fn build_bridge_script(
 
     // Agent namespace — full host agent turns (agent loop with tools and skills).
     // Requires manifest permissions.agent.enabled = true; enforced host-side.
+    // `opts.displayText` may carry the user's original request for the shared
+    // chat surface while `prompt` remains the MiniApp's internal agent protocol.
     agent: {{
+      ensureSession:  (opts) => _rpc('agent.ensureSession', opts || {{}}),
       run:            (prompt, opts) => _rpc('agent.run', {{ prompt, ...(opts || {{}}) }}),
       cancel:         (sessionId, turnId) => _rpc('agent.cancel', {{ sessionId, turnId }}),
       turnText:       (sessionId, turnId) => _rpc('agent.turnText', {{ sessionId, turnId }}),
@@ -139,12 +142,17 @@ pub fn build_bridge_script(
     // MiniApps. While this MiniApp's tab is active, `claimComposer` routes the
     // bubble composer to the MiniApp: user messages arrive via
     // 'chat:userMessage' instead of being sent to the host chat session, and
-    // `focusSession` shows one of the MiniApp's own agent.run sessions in the
-    // bubble so agent progress renders on the shared chat surface.
+    // `focusSession` shows one of the MiniApp's own ensureSession/agent.run
+    // sessions in the bubble so agent progress renders on the shared surface.
+    // `claimComposer` may also register bounded host-rendered content
+    // (`title`, `composer.placeholder`, and `welcome`) in that shared surface.
+    // The MiniApp contributes declarative text, prompts, and a submit route;
+    // it cannot replace or resize ChatInput or inject arbitrary host markup.
     // Requires manifest permissions.agent.enabled = true; enforced host-side.
     chat: {{
       claimComposer:   (opts) => _rpc('chat.claimComposer', opts || {{}}),
       releaseComposer: () => _rpc('chat.releaseComposer', {{}}),
+      clearSession:    () => _rpc('chat.clearSession', {{}}),
       focusSession:    (sessionId) => _rpc('chat.focusSession', {{ sessionId }}),
       // Opens the bubble and prefills its composer without sending, so the
       // MiniApp can offer example prompts the user still edits and submits.

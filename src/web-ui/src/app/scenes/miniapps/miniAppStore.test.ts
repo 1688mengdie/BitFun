@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { useMiniAppStore } from './miniAppStore';
+import {
+  normalizeMiniAppBubbleCustomization,
+  useMiniAppStore,
+} from './miniAppStore';
 
 describe('miniAppStore customization state', () => {
   beforeEach(() => {
@@ -58,13 +61,63 @@ describe('miniAppStore floating bubble composer claims', () => {
   });
 
   it('lets the newest runner take the claim', () => {
-    useMiniAppStore.getState().claimComposer('ppt', { token: 'ppt#1', placeholder: 'a' });
+    useMiniAppStore.getState().claimComposer('ppt', {
+      token: 'ppt#1',
+      placeholder: 'a',
+      sessionId: 'session-1',
+    });
     useMiniAppStore.getState().claimComposer('ppt', { token: 'ppt#2', placeholder: 'b' });
 
     expect(useMiniAppStore.getState().composerClaims.ppt).toEqual({
       token: 'ppt#2',
       placeholder: 'b',
     });
+  });
+
+  it('keeps a topic session when the same runner refreshes its localized claim', () => {
+    useMiniAppStore.getState().claimComposer('ppt', {
+      token: 'ppt#1',
+      placeholder: 'English',
+      customization: {
+        welcome: { title: 'Build a deck' },
+      },
+    });
+    useMiniAppStore.getState().setComposerSession('ppt', 'ppt#1', 'session-1');
+    useMiniAppStore.getState().claimComposer('ppt', {
+      token: 'ppt#1',
+      placeholder: '中文',
+      customization: {
+        welcome: { title: '制作演示稿' },
+      },
+    });
+
+    expect(useMiniAppStore.getState().composerClaims.ppt).toEqual({
+      token: 'ppt#1',
+      placeholder: '中文',
+      customization: {
+        welcome: { title: '制作演示稿' },
+      },
+      sessionId: 'session-1',
+    });
+  });
+
+  it('only lets the current runner bind its dedicated session', () => {
+    useMiniAppStore.getState().claimComposer('ppt', { token: 'ppt#2' });
+
+    useMiniAppStore.getState().setComposerSession('ppt', 'ppt#1', 'stale-session');
+    expect(useMiniAppStore.getState().composerClaims.ppt).toEqual({ token: 'ppt#2' });
+
+    useMiniAppStore.getState().setComposerSession('ppt', 'ppt#2', 'session-2');
+    expect(useMiniAppStore.getState().composerClaims.ppt).toEqual({
+      token: 'ppt#2',
+      sessionId: 'session-2',
+    });
+
+    useMiniAppStore.getState().clearComposerSession('ppt', 'ppt#1');
+    expect(useMiniAppStore.getState().composerClaims.ppt?.sessionId).toBe('session-2');
+
+    useMiniAppStore.getState().clearComposerSession('ppt', 'ppt#2');
+    expect(useMiniAppStore.getState().composerClaims.ppt).toEqual({ token: 'ppt#2' });
   });
 
   // The installed app and its draft preview run side by side during AI
@@ -87,5 +140,67 @@ describe('miniAppStore floating bubble composer claims', () => {
     useMiniAppStore.getState().setApps([]);
 
     expect(useMiniAppStore.getState().composerClaims).toEqual({});
+  });
+});
+
+describe('MiniApp bubble customization contract', () => {
+  it('normalizes bounded content for the host-rendered welcome and shared composer', () => {
+    const customization = normalizeMiniAppBubbleCustomization({
+      title: ' PPT Live ',
+      // Shell geometry and composer layout are deliberately ignored. A
+      // MiniApp may register content, never replace or reshape ChatInput.
+      panelSize: 'wide',
+      composer: {
+        placeholder: ' Describe a deck ',
+        hint: ' Messages stay with this deck ',
+        rows: 9,
+      },
+      welcome: {
+        title: ' What should we present? ',
+        description: ' Start with the audience and outcome. ',
+        workspaceLabel: ' PPT Live workspace ',
+        suggestionsLabel: ' Try an example ',
+        suggestions: [
+          { label: 'Strategy deck', prompt: 'Build a 10-page strategy deck' },
+          'Make this page more visual',
+        ],
+      },
+    });
+
+    expect(customization).toEqual({
+      title: 'PPT Live',
+      composer: {
+        placeholder: 'Describe a deck',
+      },
+      welcome: {
+        title: 'What should we present?',
+        description: 'Start with the audience and outcome.',
+        workspaceLabel: 'PPT Live workspace',
+        suggestionsLabel: 'Try an example',
+        suggestions: [
+          { label: 'Strategy deck', prompt: 'Build a 10-page strategy deck' },
+          { label: 'Make this page more visual', prompt: 'Make this page more visual' },
+        ],
+      },
+    });
+  });
+
+  it('ignores shell overrides and caps suggestion count', () => {
+    const customization = normalizeMiniAppBubbleCustomization({
+      panelSize: 'cover-the-screen',
+      composer: {
+        hint: 'Custom footer',
+        rows: 4,
+      },
+      welcome: {
+        suggestions: Array.from({ length: 9 }, (_, index) => ({
+          label: `Suggestion ${index}`,
+          prompt: `Prompt ${index}`,
+        })),
+      },
+    });
+
+    expect(customization?.composer).toBeUndefined();
+    expect(customization?.welcome?.suggestions).toHaveLength(6);
   });
 });
