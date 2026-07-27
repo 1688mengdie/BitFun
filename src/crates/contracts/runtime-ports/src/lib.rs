@@ -987,6 +987,23 @@ pub struct AgentSessionCreateRequest {
     pub model_id: Option<String>,
     #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
     pub metadata: serde_json::Map<String, serde_json::Value>,
+
+// ---------------------------------------------------------------------------
+// prepended_reminders kind constants (section 7 of phase-rbac-poke-type-contract)
+// ---------------------------------------------------------------------------
+
+/// `prepended_reminders` kind value for penalty/violation record injection.
+///
+/// Injected into a violating session's context at every turn until cleared.
+pub const POKE_PENALTY_KIND: &str = "PokePenalty";
+
+/// `prepended_reminders` kind value for self-boot check (iron-rule summary +
+/// Warden protocol declaration).
+pub const SELF_BOOT_CHECK_KIND: &str = "SelfBootCheck";
+
+/// `prepended_reminders` kind value for RBAC role-reminder injection.
+pub const RBAC_ROLE_REMINDER_KIND: &str = "RbacRoleReminder";
+
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1091,6 +1108,23 @@ pub struct AgentLocalCommandTurnRecordRequest {
     pub timestamp_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
     pub metadata: serde_json::Map<String, serde_json::Value>,
+
+// ---------------------------------------------------------------------------
+// prepended_reminders kind constants (section 7 of phase-rbac-poke-type-contract)
+// ---------------------------------------------------------------------------
+
+/// `prepended_reminders` kind value for penalty/violation record injection.
+///
+/// Injected into a violating session's context at every turn until cleared.
+pub const POKE_PENALTY_KIND: &str = "PokePenalty";
+
+/// `prepended_reminders` kind value for self-boot check (iron-rule summary +
+/// Warden protocol declaration).
+pub const SELF_BOOT_CHECK_KIND: &str = "SelfBootCheck";
+
+/// `prepended_reminders` kind value for RBAC role-reminder injection.
+pub const RBAC_ROLE_REMINDER_KIND: &str = "RbacRoleReminder";
+
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1199,6 +1233,23 @@ pub struct AgentSubmissionRequest {
     pub attachments: Vec<AgentInputAttachment>,
     #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
     pub metadata: serde_json::Map<String, serde_json::Value>,
+
+// ---------------------------------------------------------------------------
+// prepended_reminders kind constants (section 7 of phase-rbac-poke-type-contract)
+// ---------------------------------------------------------------------------
+
+/// `prepended_reminders` kind value for penalty/violation record injection.
+///
+/// Injected into a violating session's context at every turn until cleared.
+pub const POKE_PENALTY_KIND: &str = "PokePenalty";
+
+/// `prepended_reminders` kind value for self-boot check (iron-rule summary +
+/// Warden protocol declaration).
+pub const SELF_BOOT_CHECK_KIND: &str = "SelfBootCheck";
+
+/// `prepended_reminders` kind value for RBAC role-reminder injection.
+pub const RBAC_ROLE_REMINDER_KIND: &str = "RbacRoleReminder";
+
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1226,6 +1277,23 @@ pub struct AgentDialogTurnRequest {
     pub attachments: Vec<AgentInputAttachment>,
     #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
     pub metadata: serde_json::Map<String, serde_json::Value>,
+
+// ---------------------------------------------------------------------------
+// prepended_reminders kind constants (section 7 of phase-rbac-poke-type-contract)
+// ---------------------------------------------------------------------------
+
+/// `prepended_reminders` kind value for penalty/violation record injection.
+///
+/// Injected into a violating session's context at every turn until cleared.
+pub const POKE_PENALTY_KIND: &str = "PokePenalty";
+
+/// `prepended_reminders` kind value for self-boot check (iron-rule summary +
+/// Warden protocol declaration).
+pub const SELF_BOOT_CHECK_KIND: &str = "SelfBootCheck";
+
+/// `prepended_reminders` kind value for RBAC role-reminder injection.
+pub const RBAC_ROLE_REMINDER_KIND: &str = "RbacRoleReminder";
+
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1251,6 +1319,23 @@ pub struct AgentBackgroundResultRequest {
     pub display_content: Option<String>,
     #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
     pub metadata: serde_json::Map<String, serde_json::Value>,
+
+// ---------------------------------------------------------------------------
+// prepended_reminders kind constants (section 7 of phase-rbac-poke-type-contract)
+// ---------------------------------------------------------------------------
+
+/// `prepended_reminders` kind value for penalty/violation record injection.
+///
+/// Injected into a violating session's context at every turn until cleared.
+pub const POKE_PENALTY_KIND: &str = "PokePenalty";
+
+/// `prepended_reminders` kind value for self-boot check (iron-rule summary +
+/// Warden protocol declaration).
+pub const SELF_BOOT_CHECK_KIND: &str = "SelfBootCheck";
+
+/// `prepended_reminders` kind value for RBAC role-reminder injection.
+pub const RBAC_ROLE_REMINDER_KIND: &str = "RbacRoleReminder";
+
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1757,6 +1842,23 @@ pub struct AgentInputAttachment {
     pub id: String,
     #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
     pub metadata: serde_json::Map<String, serde_json::Value>,
+
+// ---------------------------------------------------------------------------
+// prepended_reminders kind constants (section 7 of phase-rbac-poke-type-contract)
+// ---------------------------------------------------------------------------
+
+/// `prepended_reminders` kind value for penalty/violation record injection.
+///
+/// Injected into a violating session's context at every turn until cleared.
+pub const POKE_PENALTY_KIND: &str = "PokePenalty";
+
+/// `prepended_reminders` kind value for self-boot check (iron-rule summary +
+/// Warden protocol declaration).
+pub const SELF_BOOT_CHECK_KIND: &str = "SelfBootCheck";
+
+/// `prepended_reminders` kind value for RBAC role-reminder injection.
+pub const RBAC_ROLE_REMINDER_KIND: &str = "RbacRoleReminder";
+
 }
 
 impl AgentInputAttachment {
@@ -2067,6 +2169,23 @@ pub struct RemoteControlStateSnapshot {
     pub queue_depth: usize,
     #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
     pub metadata: serde_json::Map<String, serde_json::Value>,
+
+// ---------------------------------------------------------------------------
+// prepended_reminders kind constants (section 7 of phase-rbac-poke-type-contract)
+// ---------------------------------------------------------------------------
+
+/// `prepended_reminders` kind value for penalty/violation record injection.
+///
+/// Injected into a violating session's context at every turn until cleared.
+pub const POKE_PENALTY_KIND: &str = "PokePenalty";
+
+/// `prepended_reminders` kind value for self-boot check (iron-rule summary +
+/// Warden protocol declaration).
+pub const SELF_BOOT_CHECK_KIND: &str = "SelfBootCheck";
+
+/// `prepended_reminders` kind value for RBAC role-reminder injection.
+pub const RBAC_ROLE_REMINDER_KIND: &str = "RbacRoleReminder";
+
 }
 
 #[async_trait::async_trait]
