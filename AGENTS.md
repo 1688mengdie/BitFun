@@ -182,6 +182,12 @@ await api.invoke('your_command', { request: { ... } });
 - Do not add hard-coded limits or pattern checks to the agent loop as a first response to looping behavior, such as blocking repeated tool calls by string or count alone.
 - Excessive hard-coding turns the agent loop into a brittle workflow engine. Investigate the root cause first: tool behavior, model interaction, session context packaging, prompt/tool schema design, or state synchronization issues.
 
+### Agent hooks
+
+- BitFun implements the Codex hook contract, so <https://learn.chatgpt.com/docs/hooks> is the reference for events, payload fields, and the decision schema. Do not fork that contract. [`docs/features/agent-hooks.md`](docs/features/agent-hooks.md) ([中文](docs/features/agent-hooks.zh-CN.md)) covers only the BitFun-specific parts — file locations, the `app.hooks` gates, and the deviations table — and must be updated whenever a deviation is added or closed.
+- The portable engine (settings parsing, payload construction, process execution, decision merging) lives in `bitfun-agent-runtime::native_hooks`. `bitfun-core::native_hooks` owns config discovery, gating, and per-event dispatch helpers; dispatch sites call those helpers instead of executing hooks inline.
+- Three separate things share the word "hook": these native user hooks, the internal compiled-in `post_call_hooks`, and the read-only external hook catalog of other AI applications (`external_hooks`). Keep them separate.
+
 ## Architecture
 
 ### Product architecture guardrails

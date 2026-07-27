@@ -171,6 +171,12 @@ await api.invoke('your_command', { request: { ... } });
 - 不要把硬编码限制或模式判断作为处理 agent loop 循环问题的第一反应，例如仅按字符串或次数阻止重复工具调用。
 - 过多硬编码会把 agent loop 变成脆弱的 workflow。应先定位根因：工具行为、模型交互、会话上下文封装、prompt/tool schema 设计，或状态同步问题。
 
+### Agent Hooks
+
+- BitFun 实现的是 Codex Hook 契约，因此 <https://learn.chatgpt.com/docs/hooks> 是事件、载荷字段与决策结构的参考来源，不要另起炉灶。[`docs/features/agent-hooks.zh-CN.md`](docs/features/agent-hooks.zh-CN.md)（[English](docs/features/agent-hooks.md)）只覆盖 BitFun 特有部分 —— 文件位置、`app.hooks` 开关和差异表 —— 新增或消除差异时必须同步更新。
+- 可移植引擎（配置解析、载荷构造、进程执行、决策合并）位于 `bitfun-agent-runtime::native_hooks`。`bitfun-core::native_hooks` 负责配置发现、开关门控和按事件的分发辅助函数；各分发点调用这些辅助函数，不要就地执行 Hook。
+- 有三类不同的东西共用 "hook" 一词：本文所述的原生用户 Hooks、内部编译期 `post_call_hooks`，以及其他 AI 应用的只读外部 Hook 目录（`external_hooks`）。三者必须保持区分。
+
 ## 架构
 
 ### 产品架构护栏
