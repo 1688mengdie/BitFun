@@ -989,6 +989,20 @@ pub struct AgentSessionCreateRequest {
     pub metadata: serde_json::Map<String, serde_json::Value>,
 }
 
+// ---------------------------------------------------------------------------
+// prepended_reminders kind constants
+// ---------------------------------------------------------------------------
+
+/// prepended_reminders kind value for penalty/violation record injection.
+pub const POKE_PENALTY_KIND: &str = "PokePenalty";
+
+/// prepended_reminders kind value for self-boot check.
+pub const SELF_BOOT_CHECK_KIND: &str = "SelfBootCheck";
+
+/// prepended_reminders kind value for RBAC role-reminder injection.
+pub const RBAC_ROLE_REMINDER_KIND: &str = "RbacRoleReminder";
+
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentSessionCreateResult {
