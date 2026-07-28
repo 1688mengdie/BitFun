@@ -127,6 +127,29 @@ Desktop Tauri surface: `src/apps/desktop/src/api/relay_deploy_api.rs`
 19. **Losing the runtime image build costs 20 minutes.** Retry it (clean Docker
    config, then classic builder) before falling back to a source rebuild.
 
+19a. **The runtime base image's glibc must cover every archive a client might
+   still install — not just what CI builds today.** arm64 releases through
+   v0.2.14 were built on ubuntu-24.04-arm and require **GLIBC_2.38**; on
+   `debian:bookworm-slim` (2.36) the relay could not load at all, and the deploy
+   showed only a failed health check. The release matrix now pins both arches to
+   ubuntu-22.04 (glibc 2.35, asserted by `scripts/ci/check-glibc-floor.sh`), but
+   that does **not** make bookworm safe again: Desktop pins the release tag to
+   its own version, so a v0.2.14 client installs the 2.38 archive forever. Base
+   stays `debian:trixie-slim` (2.41). The image build also greps `ldd` output to
+   fail fast on a mismatch — `ldd` exits 0 even while reporting an unsatisfied
+   symbol version, so its *output* is the gate, and the relay binary is no use
+   as a probe because it has no `--version` and just starts serving.
+
+19b. **The source-build fallback must not redo the release path.**
+   `bitfun_run_deploy_sh` is reached only after `bitfun_try_release_deploy`
+   failed, and `deploy.sh` begins with that same release path — so it must be
+   invoked with `--build-from-source`. Otherwise the published-binary attempt
+   runs twice, visibly, before the source build.
+
+19c. **Never send container diagnostics to /dev/null.** `docker logs` relays the
+   container's stderr on its own stderr and the relay logs through tracing, so
+   `2>/dev/null` discards exactly the line that explains the failure.
+
 20. **Prepare-phase death must surface as failure.** The driver claims
    `<stem>.driver.pid` before anything that can fail. Poll keeps reporting
    `preparing` while that pid is alive — an open sudo prompt is unbounded — but
