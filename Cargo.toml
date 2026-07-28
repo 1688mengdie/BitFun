@@ -36,6 +36,21 @@ members = [
     "src/crates/contracts/core-types",
     "src/crates/contracts/events",
     "src/crates/contracts/runtime-ports",
+    # taiji-quant 量化引擎 crates — 剩余crate
+    "src/crates/taiji/taiji-abnormal",
+    "src/crates/taiji/taiji-strategen",
+    "src/crates/taiji/taiji-orderflow",
+    "src/crates/taiji/taiji-pattern",
+    "src/crates/taiji/taiji-sentiment",
+    "src/crates/taiji/taiji-growth",
+    "src/crates/taiji/taiji-publisher",
+    "src/crates/taiji/taiji-knowledge-graph",
+    "src/crates/taiji/taiji-blog-gen",
+    "src/crates/taiji/taiji-engine-py",
+    "src/crates/taiji/taiji-cli",
+    "src/crates/taiji/taiji-strategy-template",
+    "src/crates/taiji/taiji-agents",
+    "src/crates/taiji/taiji-example",
 ]
 
 exclude = [
