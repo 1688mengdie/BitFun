@@ -74,6 +74,18 @@ export struct AppShell {
         duration: this.shellState.showSidebar ? 320 : 250,
         curve: Curve.EaseOut
       })
+
+      if (this.shellState.showAccount) {
+        Column() {
+          this.settings()
+        }
+        .width('100%')
+        .height('100%')
+        .backgroundColor('#FFFFFF')
+        .zIndex(20)
+        .transition(TransitionEffect.opacity(0)
+          .animation({ duration: 180, curve: Curve.EaseOut }))
+      }
     }
     .width('100%')
     .height('100%')

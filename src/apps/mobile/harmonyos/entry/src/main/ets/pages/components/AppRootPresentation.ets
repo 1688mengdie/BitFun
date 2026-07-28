@@ -289,6 +289,7 @@ export struct AppRootPresentation {
         controlTargetDeviceId: this.remotePageState.controlTargetDeviceId,
         connectionState: this.remotePageState.connectionState, statusText: this.remotePageState.statusText,
         isBusy: this.remotePageState.isBusy, onClose: this.actions.onSettings.close,
+        onOpenAccount: this.actions.onSettings.openAccount,
         onAddConnection: this.actions.onSettings.addConnection,
         cloudLogin: this.actions.onSettings.cloudLogin,
         cloudSync: this.actions.onSettings.cloudSync,
@@ -296,7 +297,7 @@ export struct AppRootPresentation {
         cloudListDevices: this.actions.onSettings.cloudListDevices,
         getPermissionMode: this.actions.onSettings.getPermissionMode,
         setPermissionMode: this.actions.onSettings.setPermissionMode,
-        openProfileOnAppear: this.shellState.settingsMode === 'account',
+        openAccountOnAppear: this.shellState.settingsMode === 'account',
         onDisconnect: this.actions.onSettings.disconnect, onReconnect: this.actions.onSettings.reconnect })
     } else {
       SettingsSheet({ generalChatApiUrl: this.generalPageState.apiUrl, generalChatModelName: this.generalPageState.modelName,

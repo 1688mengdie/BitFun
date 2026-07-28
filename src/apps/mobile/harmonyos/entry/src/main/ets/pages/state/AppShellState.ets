@@ -2,6 +2,7 @@
 export class AppShellState {
   @Trace showSidebar: boolean = false;
   @Trace showSettings: boolean = false;
+  @Trace showAccount: boolean = false;
   @Trace settingsMode: string = 'general';
   @Trace showConnectSheet: boolean = false;
 
@@ -11,11 +12,15 @@ export class AppShellState {
 
   setSettingsVisible(visible: boolean): void {
     this.showSettings = visible;
+    if (!visible) {
+      this.showAccount = false;
+    }
   }
 
   openSettings(mode: string): void {
     this.settingsMode = mode;
-    this.showSettings = true;
+    this.showSettings = mode !== 'account';
+    this.showAccount = mode === 'account';
   }
 
   setConnectSheetVisible(visible: boolean): void {
@@ -25,6 +30,7 @@ export class AppShellState {
   closeGlobalSurfaces(): void {
     this.showSidebar = false;
     this.showSettings = false;
+    this.showAccount = false;
     this.showConnectSheet = false;
   }
 }
