@@ -36,6 +36,15 @@ members = [
     "src/crates/contracts/core-types",
     "src/crates/contracts/events",
     "src/crates/contracts/runtime-ports",
+    # taiji-quant 量化引擎 crates — 核心引擎
+    "src/crates/taiji/taiji-bar",
+    "src/crates/taiji/taiji-engine",
+    "src/crates/taiji/taiji-llm",
+    "src/crates/taiji/taiji-content",
+    "src/crates/taiji/taiji-backtest",
+    "src/crates/taiji/taiji-executor",
+    "src/crates/taiji/taiji-realtime",
+    "src/crates/taiji/taiji-alert",
 ]
 
 exclude = [
