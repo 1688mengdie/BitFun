@@ -33,48 +33,10 @@ export struct AppSidebar {
   @Builder
   private SidebarContent() {
     Column() {
-      Row() {
-        Text('BitFun')
-          .fontSize(23)
-          .fontWeight(FontWeight.Bold)
-          .fontColor(INK)
-        Blank()
-        Stack({ alignContent: Alignment.Center }) {
-          this.SearchGlyph()
-        }
-          .width(46)
-          .height(46)
-          .backgroundColor(CARD)
-          .borderRadius(23)
-          .shadow({ radius: 18, color: '#10000000', offsetY: 8 })
-          .onClick(() => {
-            this.showSearch = !this.showSearch;
-            if (!this.showSearch) {
-              this.sessionSearchQuery = '';
-            }
-          })
-      }
-      .width('100%')
-      .height(50)
-      .alignItems(VerticalAlign.Center)
-
-      if (this.showSearch) {
-        TextInput({
-          placeholder: RemoteI18n.t('sidebar.searchPlaceholder'),
-          text: this.sessionSearchQuery
-        })
-          .width('100%')
-          .height(42)
-          .fontSize(14)
-          .fontColor(INK)
-          .placeholderColor(SUBTLE)
-          .padding({ left: 14, right: 14 })
-          .backgroundColor('#F4F4F2')
-          .borderRadius(8)
-          .margin({ top: 12 })
-          .onChange((value: string) => {
-            this.sessionSearchQuery = value;
-          })
+      if (this.isAccountAuthenticated()) {
+        this.AuthenticatedHeader()
+      } else {
+        this.SignedOutHeader()
       }
 
       Column({ space: 0 }) {
@@ -135,64 +97,15 @@ export struct AppSidebar {
         .width('110%')
         .height('100%')
         .margin({ left: -14 })
-        .padding({ bottom: this.isAccountAuthenticated() ? 72 : 132 })
+        .padding({ bottom: 72 })
         .scrollBar(BarState.Off)
         .divider(null)
 
-        Column({ space: 10 }) {
-          Row() {
-            Button() {
-              Row({ space: 10 }) {
-                this.EditGlyph()
-                Text(RemoteI18n.t('sidebar.newChat'))
-                  .fontSize(15)
-                  .fontWeight(FontWeight.Medium)
-                  .fontColor(CARD)
-              }
-              .justifyContent(FlexAlign.Center)
-              .width('100%')
-            }
-            .width(116)
-            .height(44)
-            .backgroundColor('#3B82F6')
-            .borderRadius(22)
-            .onClick(() => {
-              this.onNewChat();
-            })
-
-            Blank()
-
-            Stack({ alignContent: Alignment.Center }) {
-              this.SettingsGlyph()
-            }
-              .width(46)
-              .height(46)
-              .backgroundColor(CARD)
-              .borderRadius(23)
-              .shadow({ radius: 16, color: '#0E000000', offsetY: 8 })
-              .onClick(() => {
-                this.onOpenSettings();
-              })
-          }
-          .width('100%')
-          .alignItems(VerticalAlign.Center)
-
-          if (!this.isAccountAuthenticated()) {
-            Button(RemoteI18n.t('sidebar.signInBitFunAccount'))
-              .width('100%')
-              .height(48)
-              .fontSize(16)
-              .fontWeight(FontWeight.Bold)
-              .fontColor(CARD)
-              .backgroundColor(INK)
-              .borderRadius(16)
-              .onClick(() => {
-                this.onOpenAccount();
-              })
-          }
+        if (this.isAccountAuthenticated()) {
+          this.AuthenticatedFooter()
+        } else {
+          this.SignedOutFooter()
         }
-        .width('100%')
-        .padding({ top: 8 })
       }
       .width('100%')
       .layoutWeight(1)
@@ -201,6 +114,126 @@ export struct AppSidebar {
     .height('100%')
     .padding({ left: 24, right: 18, top: 4, bottom: 7 })
     .backgroundColor(CARD)
+  }
+
+  @Builder
+  private AuthenticatedHeader() {
+    Row() {
+      Text('BitFun')
+        .fontSize(23)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(INK)
+      Blank()
+      Stack({ alignContent: Alignment.Center }) {
+        this.SearchGlyph()
+      }
+        .width(46)
+        .height(46)
+        .backgroundColor(CARD)
+        .borderRadius(23)
+        .shadow({ radius: 18, color: '#10000000', offsetY: 8 })
+        .onClick(() => {
+          this.showSearch = !this.showSearch;
+          if (!this.showSearch) {
+            this.sessionSearchQuery = '';
+          }
+        })
+    }
+    .width('100%')
+    .height(50)
+    .alignItems(VerticalAlign.Center)
+
+    if (this.showSearch) {
+      TextInput({ placeholder: RemoteI18n.t('sidebar.searchPlaceholder'), text: this.sessionSearchQuery })
+        .width('100%')
+        .height(42)
+        .fontSize(14)
+        .fontColor(INK)
+        .placeholderColor(SUBTLE)
+        .padding({ left: 14, right: 14 })
+        .backgroundColor('#F4F4F2')
+        .borderRadius(8)
+        .margin({ top: 12 })
+        .onChange((value: string) => {
+          this.sessionSearchQuery = value;
+        })
+    }
+  }
+
+  @Builder
+  private SignedOutHeader() {
+    Row({ space: 16 }) {
+      SymbolGlyph($r('sys.symbol.square_and_pencil'))
+        .fontSize(25)
+        .fontColor([INK])
+        .width(26)
+        .height(26)
+      Text(RemoteI18n.t('sidebar.signedOutNewChat'))
+        .fontSize(18)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(INK)
+    }
+    .width('100%')
+    .height(50)
+    .alignItems(VerticalAlign.Center)
+    .onClick(() => {
+      this.onNewChat();
+    })
+  }
+
+  @Builder
+  private AuthenticatedFooter() {
+    Row() {
+      Button() {
+        Row({ space: 10 }) {
+          this.EditGlyph()
+          Text(RemoteI18n.t('sidebar.newChat'))
+            .fontSize(15)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(CARD)
+        }
+        .justifyContent(FlexAlign.Center)
+        .width('100%')
+      }
+      .width(116)
+      .height(44)
+      .backgroundColor('#3B82F6')
+      .borderRadius(22)
+      .onClick(() => {
+        this.onNewChat();
+      })
+
+      Blank()
+
+      Stack({ alignContent: Alignment.Center }) {
+        this.SettingsGlyph()
+      }
+        .width(46)
+        .height(46)
+        .backgroundColor(CARD)
+        .borderRadius(23)
+        .shadow({ radius: 16, color: '#0E000000', offsetY: 8 })
+        .onClick(() => {
+          this.onOpenSettings();
+        })
+    }
+    .width('100%')
+    .alignItems(VerticalAlign.Center)
+  }
+
+  @Builder
+  private SignedOutFooter() {
+    Button(RemoteI18n.t('sidebar.signInBitFunAccount'))
+      .width('100%')
+      .height(48)
+      .fontSize(16)
+      .fontWeight(FontWeight.Bold)
+      .fontColor(CARD)
+      .backgroundColor(INK)
+      .borderRadius(16)
+      .onClick(() => {
+        this.onOpenAccount();
+      })
   }
 
   @Builder
