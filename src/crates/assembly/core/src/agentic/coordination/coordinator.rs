@@ -78,6 +78,7 @@ use crate::agentic::workspace::WorkspaceServices;
 use bitfun_services_core::session::tree::SessionTreeManager;
 use crate::agentic::WorkspaceBinding;
 use crate::native_hooks::{self, NativeHookSessionFacts};
+use crate::runtime_ownership::CoreRuntimeOwnership;
 use crate::service::bootstrap::{
     ensure_workspace_persona_files_for_prompt, is_workspace_bootstrap_pending,
 };
@@ -90,7 +91,8 @@ use crate::service::session::{
     SessionMemoryMode, SessionRelationship, SessionRelationshipKind, SessionStatus,
 };
 use crate::service::workspace::{
-    get_global_workspace_service, WorkspaceActivityMode, WorkspaceCreateOptions, WorkspaceKind,
+    get_global_workspace_service, WorkspaceActivityMode, WorkspaceCreateOptions, WorkspaceInfo,
+    WorkspaceKind, WorkspaceService,
 };
 use crate::service_agent_runtime::CoreServiceAgentRuntime;
 use crate::util::errors::{BitFunError, BitFunResult};
@@ -110,8 +112,8 @@ use bitfun_runtime_ports::{
     AgentDialogPrependedReminder, AgentDialogTurnPort, AgentDialogTurnRequest,
     AgentSessionWorkspaceBinding, AgentThreadGoalDeliveryKind, AgentThreadGoalDeliveryRequest,
     DelegationPolicy, PermissionDelegationContext, PermissionRuntimeCeiling, RemoteExecPort,
-    SessionStoragePathRequest, SessionStorePort, SubagentContextMode, TerminalPort, ThreadGoal,
-    ThreadGoalContinuationPlan, ThreadGoalStatus,
+    SessionStoragePathRequest, SessionStoragePathResolution, SessionStorePort, SubagentContextMode,
+    TerminalPort, ThreadGoal, ThreadGoalContinuationPlan, ThreadGoalStatus,
 };
 use dashmap::DashMap;
 use log::{debug, error, info, warn};
@@ -904,6 +906,7 @@ impl SubagentTimeoutHandle {
 /// Conversation coordinator
 pub struct ConversationCoordinator {
     pub(crate) session_manager: Arc<SessionManager>,
+    runtime_ownership: Arc<CoreRuntimeOwnership>,
     execution_engine: Arc<ExecutionEngine>,
     tool_pipeline: Arc<ToolPipeline>,
     event_queue: Arc<EventQueue>,
@@ -1617,6 +1620,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         tool_pipeline: Arc<ToolPipeline>,
         event_queue: Arc<EventQueue>,
         event_router: Arc<EventRouter>,
+        runtime_ownership: Arc<CoreRuntimeOwnership>,
     ) -> Self {
         let coordination_database_file = session_manager
             .path_manager()
@@ -1628,6 +1632,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             event_queue,
             event_router,
             coordination_database_file,
+            runtime_ownership,
         )
     }
 
@@ -1638,6 +1643,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         event_queue: Arc<EventQueue>,
         event_router: Arc<EventRouter>,
         coordination_database_file: PathBuf,
+        runtime_ownership: Arc<CoreRuntimeOwnership>,
     ) -> Self {
         let coordination_store = Arc::new(CoordinationStore::new(coordination_database_file));
         let background_subagent_outcomes = Arc::new(BackgroundSubagentOutcomeStore::new(
@@ -1646,6 +1652,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         ));
         Self {
             session_manager,
+            runtime_ownership,
             execution_engine,
             tool_pipeline,
             event_queue,
@@ -1664,6 +1671,130 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             terminal_port: OnceLock::new(),
             remote_exec_port: OnceLock::new(),
             session_tree: Arc::new(SessionTreeManager::new(64)),
+        }
+    }
+
+    fn ensure_runtime_ownership(
+        &self,
+        workspace_path: &Path,
+        remote_connection_id: Option<&str>,
+        remote_ssh_host: Option<&str>,
+    ) -> BitFunResult<()> {
+        self.runtime_ownership
+            .ensure_workspace_scope(workspace_path, remote_connection_id, remote_ssh_host)
+            .map_err(|error| BitFunError::Service(self.runtime_ownership.error_message(&error)))
+    }
+
+    /// Ensures that this process may attach or mutate one workspace Runtime.
+    pub fn ensure_workspace_runtime_ownership(
+        &self,
+        workspace_path: &Path,
+        remote_connection_id: Option<&str>,
+        remote_ssh_host: Option<&str>,
+    ) -> BitFunResult<()> {
+        self.ensure_runtime_ownership(workspace_path, remote_connection_id, remote_ssh_host)
+    }
+
+    /// Accepts a Remote scope only after the Workspace owner has matched its
+    /// path and connection identity against persisted Workspace facts.
+    pub fn ensure_verified_remote_workspace_runtime_ownership(
+        &self,
+        workspace_path: &Path,
+        remote_connection_id: &str,
+        remote_ssh_host: Option<&str>,
+    ) -> BitFunResult<()> {
+        self.runtime_ownership
+            .register_verified_remote_scope(workspace_path, remote_connection_id, remote_ssh_host)
+            .map_err(|error| BitFunError::Service(self.runtime_ownership.error_message(&error)))?;
+        self.ensure_runtime_ownership(workspace_path, Some(remote_connection_id), remote_ssh_host)
+    }
+
+    /// Gates workspace attachment before opening it, then prepares local
+    /// Snapshot ownership without treating remote workspaces as local paths.
+    pub async fn open_workspace_with_runtime_ownership(
+        &self,
+        workspace_service: &WorkspaceService,
+        path: PathBuf,
+        remote_connection_id: Option<&str>,
+        remote_ssh_host: Option<&str>,
+        snapshot_log_context: &str,
+    ) -> BitFunResult<WorkspaceInfo> {
+        let known_remote = workspace_service
+            .find_known_remote_workspace_for_path(
+                &path.to_string_lossy(),
+                remote_connection_id,
+                remote_ssh_host,
+            )
+            .await;
+        if known_remote.is_none() && !path.exists() {
+            return Err(BitFunError::service(format!(
+                "Workspace path does not exist locally and is not a known remote SSH workspace: {}. Open it once from the desktop SSH remote UI so BitFun can remember the connection, then try again.",
+                path.display()
+            )));
+        }
+        // Caller-provided remote facts only select a known workspace. They are
+        // not authority to bypass the local Runtime ownership lease.
+        let resolved_connection_id = known_remote
+            .as_ref()
+            .and_then(WorkspaceInfo::remote_ssh_connection_id)
+            .map(ToOwned::to_owned);
+        let resolved_ssh_host = known_remote.as_ref().and_then(|workspace| {
+            workspace
+                .metadata
+                .get("sshHost")
+                .and_then(|value| value.as_str())
+                .map(ToOwned::to_owned)
+        });
+        if let Some(connection_id) = resolved_connection_id.as_deref() {
+            self.ensure_verified_remote_workspace_runtime_ownership(
+                &path,
+                connection_id,
+                resolved_ssh_host.as_deref(),
+            )?;
+        } else {
+            self.ensure_runtime_ownership(&path, None, None)?;
+        }
+        let info = workspace_service
+            .open_workspace_after_known_resolution(path, known_remote)
+            .await?;
+        if info.workspace_kind != WorkspaceKind::Remote {
+            if let Err(error) = crate::service::snapshot::initialize_snapshot_manager_for_workspace(
+                info.root_path.clone(),
+                None,
+            )
+            .await
+            {
+                error!(
+                    "Failed to initialize snapshot after {}: {}",
+                    snapshot_log_context, error
+                );
+            }
+        }
+        Ok(info)
+    }
+
+    /// Ensures ownership from the loaded session binding, or from a local
+    /// fallback workspace before a session is restored.
+    pub fn ensure_session_runtime_ownership(
+        &self,
+        session_id: &str,
+        fallback_workspace: Option<&Path>,
+    ) -> BitFunResult<()> {
+        if let Some(session) = self.session_manager.get_session(session_id) {
+            let workspace_path = session.config.workspace_path.as_deref().ok_or_else(|| {
+                BitFunError::Validation(format!("Session workspace_path is missing: {session_id}"))
+            })?;
+            return self.ensure_runtime_ownership(
+                Path::new(workspace_path),
+                session.config.remote_connection_id.as_deref(),
+                session.config.remote_ssh_host.as_deref(),
+            );
+        }
+        match fallback_workspace {
+            Some(workspace_path) => self.ensure_runtime_ownership(workspace_path, None, None),
+            None => Err(BitFunError::NotFound(format!(
+                "Session not found: {session_id}"
+            ))),
         }
     }
 
@@ -1809,6 +1940,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
     }
 
     pub async fn update_session_model(&self, session_id: &str, model_id: &str) -> BitFunResult<()> {
+        self.ensure_session_runtime_ownership(session_id, None)?;
         let normalized_model_id = normalize_model_selection(model_id).await?;
 
         self.session_manager
@@ -1860,6 +1992,11 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         // Persist the workspace binding inside the session config so execution can
         // consistently restore the correct workspace regardless of the entry point.
         config.workspace_path = Some(workspace_path.clone());
+        self.ensure_runtime_ownership(
+            Path::new(&workspace_path),
+            config.remote_connection_id.as_deref(),
+            config.remote_ssh_host.as_deref(),
+        )?;
         config.workspace_id = Self::resolve_workspace_id_for_config(&config).await;
         let defaults = Self::agent_model_defaults().await;
         snapshot_normal_session_model(&mut config, &defaults);
@@ -1978,6 +2115,16 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         created_by: Option<String>,
     ) -> BitFunResult<Session> {
         config.workspace_path = Some(workspace_path);
+        self.ensure_runtime_ownership(
+            Path::new(
+                config
+                    .workspace_path
+                    .as_deref()
+                    .expect("workspace path was assigned above"),
+            ),
+            config.remote_connection_id.as_deref(),
+            config.remote_ssh_host.as_deref(),
+        )?;
         config.workspace_id = Self::resolve_workspace_id_for_config(&config).await;
         let agent_type = Self::normalize_agent_type(&agent_type);
         self.create_hidden_subagent_session(
@@ -2651,6 +2798,9 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         workspace_path: String,
     ) -> BitFunResult<AssistantBootstrapEnsureOutcome> {
         let workspace_root = PathBuf::from(&workspace_path);
+        // Assistant workspaces are local-only. Ownership must be established
+        // before persona files are created or a persisted Session is attached.
+        self.ensure_runtime_ownership(&workspace_root, None, None)?;
         // Empty or partial assistant dirs may never have run create_assistant_workspace; fill only
         // missing persona stubs (never overwrite), while preserving completed bootstrap state.
         ensure_workspace_persona_files_for_prompt(&workspace_root).await?;
@@ -2900,11 +3050,11 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         ThreadGoalStore::new(self.session_manager.as_ref())
     }
 
-    async fn resolve_session_restore_path(
+    async fn resolve_session_restore_scope(
         workspace_path: &str,
         remote_connection_id: Option<&str>,
         remote_ssh_host: Option<&str>,
-    ) -> BitFunResult<PathBuf> {
+    ) -> BitFunResult<SessionStoragePathResolution> {
         let request = SessionStoragePathRequest {
             workspace_path: PathBuf::from(workspace_path),
             remote_connection_id: remote_connection_id.map(ToOwned::to_owned),
@@ -2914,8 +3064,17 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         CoreSessionStorePort::default()
             .resolve_session_storage_path(request)
             .await
-            .map(|resolution| resolution.effective_storage_path)
             .map_err(|error| BitFunError::Session(error.to_string()))
+    }
+
+    async fn resolve_session_restore_path(
+        workspace_path: &str,
+        remote_connection_id: Option<&str>,
+        remote_ssh_host: Option<&str>,
+    ) -> BitFunResult<PathBuf> {
+        Self::resolve_session_restore_scope(workspace_path, remote_connection_id, remote_ssh_host)
+            .await
+            .map(|resolution| resolution.effective_storage_path)
     }
 
     fn require_main_session_workspace(&self, session_id: &str) -> BitFunResult<PathBuf> {
@@ -3678,9 +3837,9 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                 .as_ref()
                 .and_then(|session| session.config.project_workspace_path.as_deref()),
         );
-        let requested_restore_path = match storage_workspace_path.as_deref() {
+        let requested_restore = match storage_workspace_path.as_deref() {
             Some(workspace_path) => Some(
-                Self::resolve_session_restore_path(
+                Self::resolve_session_restore_scope(
                     workspace_path,
                     remote_connection_id.as_deref(),
                     remote_ssh_host.as_deref(),
@@ -3695,9 +3854,11 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         // the same storage identity as this invocation.
         let session = match loaded_session {
             Some(session) => {
-                if let Some(restore_path) = requested_restore_path.as_deref() {
-                    self.session_manager
-                        .ensure_session_storage_path(&session_id, restore_path)?;
+                if let Some(restore) = requested_restore.as_ref() {
+                    self.session_manager.ensure_session_storage_path(
+                        &session_id,
+                        &restore.effective_storage_path,
+                    )?;
                 }
                 session
             }
@@ -3706,17 +3867,21 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                     "Session not found in memory, attempting restore before starting dialog: session_id={}",
                     session_id
                 );
-                let restore_path = requested_restore_path.ok_or_else(|| {
+                let restore = requested_restore.ok_or_else(|| {
                     BitFunError::Validation(format!(
                         "workspace_path is required when restoring session: {}",
                         session_id
                     ))
                 })?;
+                if !restore.is_remote_storage() {
+                    self.ensure_runtime_ownership(&restore.requested_workspace_path, None, None)?;
+                }
                 self.session_manager
-                    .restore_session_from_storage_path(&restore_path, &session_id)
+                    .restore_session_from_storage_path(&restore.effective_storage_path, &session_id)
                     .await?
             }
         };
+        self.ensure_session_runtime_ownership(&session_id, None)?;
 
         let previous_agent_type = session.last_user_dialog_agent_type.clone();
         let requested_agent_type = agent_type.trim().to_string();
@@ -5037,6 +5202,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         workspace_path: &Path,
         session_id: &str,
     ) -> BitFunResult<Session> {
+        self.ensure_runtime_ownership(workspace_path, None, None)?;
         self.session_manager
             .restore_session(workspace_path, session_id)
             .await
@@ -5067,6 +5233,11 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         request: SessionStoragePathRequest,
         session_id: &str,
     ) -> BitFunResult<Session> {
+        self.ensure_runtime_ownership(
+            &request.workspace_path,
+            request.remote_connection_id.as_deref(),
+            request.remote_ssh_host.as_deref(),
+        )?;
         self.session_manager
             .restore_session_for_workspace(request, session_id)
             .await
@@ -5077,6 +5248,11 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         request: SessionStoragePathRequest,
         session_id: &str,
     ) -> BitFunResult<Session> {
+        self.ensure_runtime_ownership(
+            &request.workspace_path,
+            request.remote_connection_id.as_deref(),
+            request.remote_ssh_host.as_deref(),
+        )?;
         self.session_manager
             .restore_internal_session_for_workspace(request, session_id)
             .await
@@ -5087,6 +5263,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         workspace_path: &Path,
         session_id: &str,
     ) -> BitFunResult<Session> {
+        self.ensure_runtime_ownership(workspace_path, None, None)?;
         self.session_manager
             .restore_internal_session(workspace_path, session_id)
             .await
@@ -5098,6 +5275,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         workspace_path: &Path,
         session_id: &str,
     ) -> BitFunResult<(Session, Vec<crate::service::session::DialogTurnData>)> {
+        self.ensure_runtime_ownership(workspace_path, None, None)?;
         self.session_manager
             .restore_session_with_turns(workspace_path, session_id)
             .await
@@ -5128,6 +5306,11 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         request: SessionStoragePathRequest,
         session_id: &str,
     ) -> BitFunResult<(Session, Vec<crate::service::session::DialogTurnData>)> {
+        self.ensure_runtime_ownership(
+            &request.workspace_path,
+            request.remote_connection_id.as_deref(),
+            request.remote_ssh_host.as_deref(),
+        )?;
         self.session_manager
             .restore_session_with_turns_for_workspace(request, session_id)
             .await
@@ -5138,6 +5321,11 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         request: SessionStoragePathRequest,
         session_id: &str,
     ) -> BitFunResult<(Session, Vec<crate::service::session::DialogTurnData>)> {
+        self.ensure_runtime_ownership(
+            &request.workspace_path,
+            request.remote_connection_id.as_deref(),
+            request.remote_ssh_host.as_deref(),
+        )?;
         self.session_manager
             .restore_internal_session_with_turns_for_workspace(request, session_id)
             .await
@@ -5148,6 +5336,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         workspace_path: &Path,
         session_id: &str,
     ) -> BitFunResult<(Session, Vec<crate::service::session::DialogTurnData>)> {
+        self.ensure_runtime_ownership(workspace_path, None, None)?;
         self.session_manager
             .restore_internal_session_with_turns(workspace_path, session_id)
             .await
@@ -7976,13 +8165,34 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         &self,
         request: SubagentExecutionRequest,
         timeout_seconds: Option<u64>,
+        // Tool cancellation is narrower than parent-turn cancellation: round
+        // injection cancels the Tool while keeping the dialog turn alive.
+        tool_cancellation_token: Option<CancellationToken>,
     ) -> BitFunResult<BackgroundSubagentStartResult> {
+        if tool_cancellation_token
+            .as_ref()
+            .is_some_and(CancellationToken::is_cancelled)
+        {
+            return Err(BitFunError::Cancelled(
+                "Background subagent start was cancelled".to_string(),
+            ));
+        }
         let request = self
             .resolve_hidden_subagent_execution_request(request)
             .await?;
         let mut request = self
             .prepare_hidden_subagent_execution_request(request)
             .await?;
+        if tool_cancellation_token
+            .as_ref()
+            .is_some_and(CancellationToken::is_cancelled)
+        {
+            self.cleanup_prepared_hidden_subagent_session_if_unsubmitted(&request)
+                .await;
+            return Err(BitFunError::Cancelled(
+                "Background subagent start was cancelled".to_string(),
+            ));
+        }
         let subagent_dialog_turn_id = request.ensure_dialog_turn_id();
         let subagent_session_id = request
             .target_session_id()
@@ -8049,6 +8259,22 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         let task_pk = registered_task.task_pk;
         let bg_task_id = registered_task.bg_task_id;
         let agent_id = registered_task.agent_id;
+        if tool_cancellation_token
+            .as_ref()
+            .is_some_and(CancellationToken::is_cancelled)
+        {
+            if let Err(error) = self.background_subagent_outcomes.discard(task_pk).await {
+                warn!(
+                    "Failed to discard cancelled background task start: task_pk={}, error={}",
+                    task_pk, error
+                );
+            }
+            self.cleanup_prepared_hidden_subagent_session_if_unsubmitted(&request)
+                .await;
+            return Err(BitFunError::Cancelled(
+                "Background subagent start was cancelled".to_string(),
+            ));
+        }
         let parent_cancel_token = self
             .execution_engine
             .cancel_token_for_dialog_turn(&subagent_parent_info.dialog_turn_id)
@@ -8092,8 +8318,33 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             let subagent_dialog_turn_id_for_emit = subagent_dialog_turn_id.clone();
 
             tokio::spawn(async move {
-                let result = match parent_cancel_token.as_ref() {
-                    Some(token) => {
+                let result = match (parent_cancel_token, tool_cancellation_token) {
+                    (Some(parent_token), Some(tool_token)) => {
+                        let received = Self::await_hidden_subagent_receiver(receiver);
+                        tokio::pin!(received);
+                        tokio::select! {
+                            _ = parent_token.cancelled() => {
+                                scheduler_for_cancel
+                                    .request_hidden_subagent_cancellation(&cancel_handle)
+                                    .await;
+                                Self::await_hidden_subagent_cancellation(
+                                    &mut received,
+                                    SUBAGENT_TIMEOUT_GRACE_PERIOD,
+                                ).await
+                            },
+                            _ = tool_token.cancelled() => {
+                                scheduler_for_cancel
+                                    .request_hidden_subagent_cancellation(&cancel_handle)
+                                    .await;
+                                Self::await_hidden_subagent_cancellation(
+                                    &mut received,
+                                    SUBAGENT_TIMEOUT_GRACE_PERIOD,
+                                ).await
+                            },
+                            result = &mut received => result,
+                        }
+                    }
+                    (Some(token), None) | (None, Some(token)) => {
                         let received = Self::await_hidden_subagent_receiver(receiver);
                         tokio::pin!(received);
                         tokio::select! {
@@ -8109,7 +8360,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                             result = &mut received => result,
                         }
                     }
-                    None => Self::await_hidden_subagent_receiver(receiver).await,
+                    (None, None) => Self::await_hidden_subagent_receiver(receiver).await,
                 };
                 if suppress_delivery.load(Ordering::SeqCst) {
                     background_subagent_tasks.remove(&task_pk);
@@ -8196,10 +8447,13 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         let execution_cancel_token = CancellationToken::new();
         let background_cancel_token_for_bridge = background_cancel_token.clone();
         let execution_cancel_token_for_bridge = execution_cancel_token.clone();
-        let cancel_bridge_handle = match parent_cancel_token {
-            Some(parent_cancel_token) => tokio::spawn(async move {
+        let cancel_bridge_handle = match (parent_cancel_token, tool_cancellation_token) {
+            (Some(parent_token), Some(tool_token)) => tokio::spawn(async move {
                 tokio::select! {
-                    _ = parent_cancel_token.cancelled() => {
+                    _ = parent_token.cancelled() => {
+                        execution_cancel_token_for_bridge.cancel();
+                    }
+                    _ = tool_token.cancelled() => {
                         execution_cancel_token_for_bridge.cancel();
                     }
                     _ = background_cancel_token_for_bridge.cancelled() => {
@@ -8207,7 +8461,17 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                     }
                 }
             }),
-            None => tokio::spawn(async move {
+            (Some(token), None) | (None, Some(token)) => tokio::spawn(async move {
+                tokio::select! {
+                    _ = token.cancelled() => {
+                        execution_cancel_token_for_bridge.cancel();
+                    }
+                    _ = background_cancel_token_for_bridge.cancelled() => {
+                        execution_cancel_token_for_bridge.cancel();
+                    }
+                }
+            }),
+            (None, None) => tokio::spawn(async move {
                 background_cancel_token_for_bridge.cancelled().await;
                 execution_cancel_token_for_bridge.cancel();
             }),
@@ -8443,6 +8707,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         user_message: &str,
         max_length: Option<usize>,
     ) -> BitFunResult<String> {
+        self.ensure_session_runtime_ownership(session_id, None)?;
         let allow_ai = is_ai_session_title_generation_enabled().await;
         let resolved = self
             .session_manager
@@ -8473,6 +8738,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         session_id: &str,
         title: &str,
     ) -> BitFunResult<String> {
+        self.ensure_session_runtime_ownership(session_id, None)?;
         let normalized = title.trim().to_string();
         if normalized.is_empty() {
             return Err(BitFunError::validation(
@@ -8492,6 +8758,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         session_id: &str,
         agent_type: &str,
     ) -> BitFunResult<()> {
+        self.ensure_session_runtime_ownership(session_id, None)?;
         let normalized = Self::normalize_agent_type(agent_type);
         self.session_manager
             .update_session_agent_type(session_id, &normalized)
@@ -8499,6 +8766,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
     }
 
     pub async fn update_session_mode(&self, session_id: &str, mode_id: &str) -> BitFunResult<()> {
+        self.ensure_session_runtime_ownership(session_id, None)?;
         let mode_id = mode_id.trim();
         if mode_id.is_empty() {
             return Err(BitFunError::Validation(
@@ -8529,6 +8797,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         session_id: &str,
         agent_type: &str,
     ) -> BitFunResult<()> {
+        self.ensure_session_runtime_ownership(session_id, None)?;
         let normalized = Self::normalize_agent_type(agent_type);
         self.session_manager
             .update_last_submitted_agent_type(session_id, &normalized)
@@ -8678,11 +8947,7 @@ async fn create_agent_session_from_runtime_request(
         .await
         .map_err(map_core_error)?;
 
-    Ok(bitfun_runtime_ports::AgentSessionCreateResult {
-        session_id: session.session_id,
-        session_name: session.session_name,
-        agent_type: session.agent_type,
-    })
+    Ok(session.into())
 }
 
 #[async_trait::async_trait]
@@ -8809,7 +9074,17 @@ impl bitfun_runtime_ports::AgentSubmissionPort for ConversationCoordinator {
             return Ok(None);
         };
 
-        self.restore_session_from_storage_path(&binding.session_storage_dir(), session_id)
+        let restore_request = SessionStoragePathRequest {
+            workspace_path: PathBuf::from(binding.root_path_string()),
+            remote_connection_id: binding.connection_id().map(ToOwned::to_owned),
+            remote_ssh_host: if binding.is_remote() {
+                Some(binding.session_identity.hostname.clone())
+                    .filter(|value| !value.trim().is_empty())
+            } else {
+                None
+            },
+        };
+        self.restore_session_for_workspace(restore_request, session_id)
             .await
             .map(|session| Some(session.agent_type))
             .map_err(|error| {
@@ -8970,6 +9245,12 @@ impl bitfun_runtime_ports::AgentSessionManagementPort for ConversationCoordinato
                 message,
             )
         })?;
+        self.ensure_runtime_ownership(
+            Path::new(&request.workspace_path),
+            request.remote_connection_id.as_deref(),
+            request.remote_ssh_host.as_deref(),
+        )
+        .map_err(runtime_port_error_preserving_message)?;
         let effective_storage_path = Self::resolve_session_restore_path(
             &request.workspace_path,
             request.remote_connection_id.as_deref(),
@@ -9003,6 +9284,12 @@ impl bitfun_runtime_ports::AgentSessionManagementPort for ConversationCoordinato
                 message,
             )
         })?;
+        self.ensure_runtime_ownership(
+            Path::new(&request.workspace_path),
+            request.remote_connection_id.as_deref(),
+            request.remote_ssh_host.as_deref(),
+        )
+        .map_err(runtime_port_error_preserving_message)?;
         let effective_storage_path = Self::resolve_session_restore_path(
             &request.workspace_path,
             request.remote_connection_id.as_deref(),
@@ -9053,6 +9340,12 @@ impl bitfun_runtime_ports::AgentSessionManagementPort for ConversationCoordinato
                 message,
             )
         })?;
+        self.ensure_runtime_ownership(
+            Path::new(&request.workspace_path),
+            request.remote_connection_id.as_deref(),
+            request.remote_ssh_host.as_deref(),
+        )
+        .map_err(runtime_port_error_preserving_message)?;
         let effective_storage_path = Self::resolve_session_restore_path(
             &request.workspace_path,
             request.remote_connection_id.as_deref(),
@@ -9172,6 +9465,8 @@ impl bitfun_runtime_ports::AgentLocalCommandTurnPort for ConversationCoordinator
         &self,
         request: bitfun_runtime_ports::AgentLocalCommandTurnRecordRequest,
     ) -> bitfun_runtime_ports::PortResult<()> {
+        self.ensure_session_runtime_ownership(&request.session_id, None)
+            .map_err(runtime_port_error_preserving_message)?;
         let metadata = if request.metadata.is_empty() {
             None
         } else {
@@ -9254,6 +9549,11 @@ impl bitfun_runtime_ports::AgentThreadGoalManagementPort for ConversationCoordin
         &self,
         request: bitfun_runtime_ports::AgentThreadGoalCreateRequest,
     ) -> bitfun_runtime_ports::PortResult<ThreadGoal> {
+        self.ensure_session_runtime_ownership(
+            &request.session_id,
+            Some(Path::new(&request.workspace_path)),
+        )
+        .map_err(runtime_port_error_preserving_message)?;
         self.create_thread_goal(
             &request.session_id,
             std::path::Path::new(&request.workspace_path),
@@ -9268,6 +9568,11 @@ impl bitfun_runtime_ports::AgentThreadGoalManagementPort for ConversationCoordin
         &self,
         request: bitfun_runtime_ports::AgentThreadGoalUpdateStatusRequest,
     ) -> bitfun_runtime_ports::PortResult<ThreadGoal> {
+        self.ensure_session_runtime_ownership(
+            &request.session_id,
+            Some(Path::new(&request.workspace_path)),
+        )
+        .map_err(runtime_port_error_preserving_message)?;
         self.update_thread_goal_status(
             &request.session_id,
             std::path::Path::new(&request.workspace_path),
@@ -9590,20 +9895,24 @@ mod tests {
     use crate::agentic::tools::{ToolPipeline, ToolStateManager};
     use crate::agentic::TurnSkillAgentSnapshot;
     use crate::infrastructure::PathManager;
+    use crate::runtime_ownership::CoreRuntimeOwnership;
     use crate::service::config::{AgentModelDefaultsConfig, SubagentModelSelection};
     use crate::service::remote_ssh::workspace_state::init_remote_workspace_manager;
     use crate::service::session::{SessionMetadata, SessionStatus};
+    use crate::service::workspace::WorkspaceKind;
     use bitfun_agent_runtime::permission::AUTO_APPROVE_ASK_CONTEXT_KEY;
     use bitfun_runtime_ports::{
         AgentSessionArchiveRequest, AgentSessionCreateRequest, AgentSessionManagementPort,
         AgentSessionRenameRequest, AgentSubmissionPort, AgentSubmissionRequest,
         AgentSubmissionSource, AgentThreadGoalGetRequest, AgentThreadGoalManagementPort,
         DelegationPolicy, PermissionEffect, PermissionRule, PermissionRuntimeCeiling,
-        SubagentContextMode, ThreadGoal, ThreadGoalStatus,
+        SessionStoragePathRequest, SubagentContextMode, ThreadGoal, ThreadGoalStatus,
     };
     use std::collections::HashMap;
+    use std::path::PathBuf;
     use std::sync::Arc;
     use std::time::Duration;
+    use tokio_util::sync::CancellationToken;
 
     #[test]
     fn worktree_execution_root_is_a_legacy_alias_for_project_storage() {
@@ -9662,6 +9971,44 @@ mod tests {
             btw_session_memory_mode(true, true),
             SessionMemoryMode::Enabled
         );
+    }
+
+    #[tokio::test]
+    async fn background_subagent_start_honors_an_already_cancelled_tool() {
+        let (coordinator, _session_manager) = test_coordinator();
+        let cancellation_token = CancellationToken::new();
+        cancellation_token.cancel();
+        let request = SubagentExecutionRequest {
+            task_description: "should not start".to_string(),
+            context_mode: SubagentContextMode::Fresh,
+            target_session_id: None,
+            subagent_type: Some("Explore".to_string()),
+            logical_subagent_type: Some("Explore".to_string()),
+            continuation_policy: SessionContinuationPolicy::Reusable,
+            model_binding_policy: SessionModelBindingPolicy::Mutable,
+            workspace_path: None,
+            model_id: None,
+            inherit_parent_model: false,
+            subagent_parent_info: SubagentParentInfo {
+                session_id: "parent-session".to_string(),
+                dialog_turn_id: "parent-turn".to_string(),
+                tool_call_id: "task-tool".to_string(),
+            },
+            context: HashMap::new(),
+            permission_runtime_ceiling: PermissionRuntimeCeiling::default(),
+            delegation_policy: DelegationPolicy::top_level().spawn_child(),
+            external_generation_lease: None,
+        };
+
+        let error = coordinator
+            .start_background_subagent(request, None, Some(cancellation_token))
+            .await
+            .expect_err("a cancelled Tool must not start a background subagent");
+
+        assert!(matches!(
+            error,
+            crate::util::errors::BitFunError::Cancelled(_)
+        ));
     }
 
     #[test]
@@ -10045,9 +10392,10 @@ mod tests {
     }
     use tokio::sync::RwLock as TokioRwLock;
 
-    fn test_coordinator_with_config(
+    fn test_coordinator_with_config_and_ownership(
         max_active_sessions: usize,
         enable_persistence: bool,
+        runtime_ownership: Arc<CoreRuntimeOwnership>,
     ) -> (ConversationCoordinator, Arc<SessionManager>) {
         let event_queue = Arc::new(EventQueue::new(EventQueueConfig::default()));
         let coordination_database_file = std::env::temp_dir()
@@ -10090,6 +10438,7 @@ mod tests {
             event_queue,
             Arc::new(EventRouter::new()),
             coordination_database_file,
+            runtime_ownership,
         );
         coordinator.set_terminal_port(
             bitfun_runtime_services::test_support::FakeRuntimeServicesProvider::terminal_port(),
@@ -10099,6 +10448,25 @@ mod tests {
         );
 
         (coordinator, session_manager)
+    }
+
+    fn test_coordinator_with_config(
+        max_active_sessions: usize,
+        enable_persistence: bool,
+    ) -> (ConversationCoordinator, Arc<SessionManager>) {
+        let ownership_root = std::env::temp_dir().join(format!(
+            "bitfun-runtime-ownership-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        test_coordinator_with_config_and_ownership(
+            max_active_sessions,
+            enable_persistence,
+            Arc::new(CoreRuntimeOwnership::embedded_with_facts(
+                ownership_root,
+                "bitfun".to_string(),
+                "test",
+            )),
+        )
     }
 
     fn test_coordinator_with_max_active_sessions(
@@ -10113,6 +10481,279 @@ mod tests {
 
     fn test_coordinator() -> (ConversationCoordinator, Arc<SessionManager>) {
         test_coordinator_with_max_active_sessions(100)
+    }
+
+    #[tokio::test]
+    async fn create_session_checks_runtime_ownership_before_persisting() {
+        let ownership_root = tempfile::tempdir().expect("ownership root");
+        let workspace = tempfile::tempdir().expect("workspace");
+        let key = bitfun_services_core::runtime_ownership::RuntimeOwnershipKey::for_workspace(
+            workspace.path(),
+            "bitfun",
+        )
+        .expect("ownership key");
+        let _shared =
+            bitfun_services_core::runtime_ownership::WorkspaceRuntimeOwnership::try_acquire(
+                ownership_root.path(),
+                &key,
+                bitfun_services_core::runtime_ownership::RuntimeDeployment::Shared,
+            )
+            .expect("shared owner");
+        let owner = Arc::new(CoreRuntimeOwnership::embedded_with_facts(
+            ownership_root.path().to_path_buf(),
+            "bitfun".to_string(),
+            "test",
+        ));
+        let (coordinator, session_manager) =
+            test_coordinator_with_config_and_ownership(100, true, owner);
+
+        let error = coordinator
+            .create_session_with_id(
+                Some("ownership-conflict".to_string()),
+                "blocked".to_string(),
+                "agentic".to_string(),
+                SessionConfig {
+                    workspace_path: Some(workspace.path().to_string_lossy().to_string()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect_err("Shared owner must block local session creation");
+
+        assert!(error.to_string().contains("ownership"));
+        assert!(session_manager.get_session("ownership-conflict").is_none());
+    }
+
+    #[tokio::test]
+    async fn assistant_bootstrap_checks_runtime_ownership_before_files_or_attach() {
+        let ownership_root = tempfile::tempdir().expect("ownership root");
+        let workspace = tempfile::tempdir().expect("workspace");
+        let key = bitfun_services_core::runtime_ownership::RuntimeOwnershipKey::for_workspace(
+            workspace.path(),
+            "bitfun",
+        )
+        .expect("ownership key");
+        let _shared =
+            bitfun_services_core::runtime_ownership::WorkspaceRuntimeOwnership::try_acquire(
+                ownership_root.path(),
+                &key,
+                bitfun_services_core::runtime_ownership::RuntimeDeployment::Shared,
+            )
+            .expect("shared owner");
+        let owner = Arc::new(CoreRuntimeOwnership::embedded_with_facts(
+            ownership_root.path().to_path_buf(),
+            "bitfun".to_string(),
+            "test",
+        ));
+        let (coordinator, session_manager) =
+            test_coordinator_with_config_and_ownership(100, true, owner);
+
+        let error = coordinator
+            .ensure_assistant_bootstrap(
+                "assistant-bootstrap-conflict".to_string(),
+                workspace.path().to_string_lossy().to_string(),
+            )
+            .await
+            .expect_err("Shared owner must block assistant bootstrap");
+
+        assert!(error.to_string().contains("ownership"));
+        assert!(session_manager
+            .get_session("assistant-bootstrap-conflict")
+            .is_none());
+        assert_eq!(
+            std::fs::read_dir(workspace.path())
+                .expect("workspace remains readable")
+                .count(),
+            0,
+            "ownership failure must happen before persona or gitignore writes"
+        );
+    }
+
+    #[test]
+    fn workspace_open_owner_gates_before_open_and_guards_snapshot_by_kind() {
+        let source = include_str!("coordinator.rs");
+        let helper = source
+            .split("pub async fn open_workspace_with_runtime_ownership")
+            .nth(1)
+            .and_then(|source| {
+                source
+                    .split("pub fn ensure_session_runtime_ownership")
+                    .next()
+            })
+            .expect("workspace open owner");
+        let ownership_gate = helper
+            .find("ensure_runtime_ownership")
+            .expect("workspace ownership gate");
+        let workspace_open = helper
+            .find("open_workspace_after_known_resolution")
+            .expect("workspace open call");
+        assert!(ownership_gate < workspace_open);
+        assert!(helper.contains("WorkspaceKind::Remote"));
+        assert!(helper.contains("initialize_snapshot_manager_for_workspace"));
+
+        let bot_router = include_str!("../../service/remote_connect/bot/command_router.rs");
+        assert!(bot_router.contains("open_workspace_with_runtime_ownership"));
+        assert!(!bot_router.contains("initialize_snapshot_manager_for_workspace"));
+    }
+
+    #[tokio::test]
+    async fn workspace_open_owner_resolves_known_remote_before_ownership_gate() {
+        let root = tempfile::tempdir().expect("test root");
+        let path_manager = Arc::new(PathManager::with_user_root_for_tests(
+            root.path().join("user-root"),
+        ));
+        let workspace_service =
+            crate::service::workspace::WorkspaceService::new_for_test_path_manager(path_manager)
+                .await;
+        let remote_path = PathBuf::from(format!(
+            "/bitfun-tests/known-remote-{}",
+            uuid::Uuid::new_v4()
+        ));
+        workspace_service
+            .track_workspace_activity(
+                remote_path.clone(),
+                crate::service::workspace::WorkspaceCreateOptions {
+                    workspace_kind: WorkspaceKind::Remote,
+                    remote_connection_id: Some("conn-known-remote".to_string()),
+                    remote_ssh_host: Some("known-host".to_string()),
+                    ..Default::default()
+                },
+                crate::service::workspace::WorkspaceActivityMode::RefreshMetadata,
+            )
+            .await
+            .expect("remember remote workspace");
+        let owner = Arc::new(CoreRuntimeOwnership::embedded_with_facts(
+            root.path().join("ownership"),
+            "bitfun".to_string(),
+            "test",
+        ));
+        let (coordinator, _) = test_coordinator_with_config_and_ownership(100, false, owner);
+
+        let opened = coordinator
+            .open_workspace_with_runtime_ownership(
+                &workspace_service,
+                remote_path,
+                None,
+                None,
+                "known remote test",
+            )
+            .await
+            .expect("path-only known remote must not acquire a local lease");
+
+        assert_eq!(opened.workspace_kind, WorkspaceKind::Remote);
+        assert_eq!(opened.remote_ssh_connection_id(), Some("conn-known-remote"));
+    }
+
+    #[tokio::test]
+    async fn unverified_remote_hint_cannot_bypass_local_workspace_ownership() {
+        let ownership_root = tempfile::tempdir().expect("ownership root");
+        let workspace = tempfile::tempdir().expect("workspace");
+        let key = bitfun_services_core::runtime_ownership::RuntimeOwnershipKey::for_workspace(
+            workspace.path(),
+            "bitfun",
+        )
+        .expect("ownership key");
+        let _shared =
+            bitfun_services_core::runtime_ownership::WorkspaceRuntimeOwnership::try_acquire(
+                ownership_root.path(),
+                &key,
+                bitfun_services_core::runtime_ownership::RuntimeDeployment::Shared,
+            )
+            .expect("shared owner");
+        let owner = Arc::new(CoreRuntimeOwnership::embedded_with_facts(
+            ownership_root.path().to_path_buf(),
+            "bitfun".to_string(),
+            "test",
+        ));
+        let (coordinator, _) = test_coordinator_with_config_and_ownership(100, false, owner);
+        let path_manager = Arc::new(PathManager::with_user_root_for_tests(
+            workspace.path().join("user-root"),
+        ));
+        let workspace_service =
+            crate::service::workspace::WorkspaceService::new_for_test_path_manager(path_manager)
+                .await;
+
+        let error = coordinator
+            .open_workspace_with_runtime_ownership(
+                &workspace_service,
+                workspace.path().to_path_buf(),
+                Some("bogus-connection"),
+                Some("bogus-host"),
+                "unverified remote hint test",
+            )
+            .await
+            .expect_err("unverified hints must not bypass local ownership");
+
+        assert!(error.to_string().contains("ownership"));
+    }
+
+    #[tokio::test]
+    async fn attach_and_mutation_paths_check_runtime_ownership_before_side_effects() {
+        let ownership_root = tempfile::tempdir().expect("ownership root");
+        let workspace = tempfile::tempdir().expect("workspace");
+        let key = bitfun_services_core::runtime_ownership::RuntimeOwnershipKey::for_workspace(
+            workspace.path(),
+            "bitfun",
+        )
+        .expect("ownership key");
+        let _shared =
+            bitfun_services_core::runtime_ownership::WorkspaceRuntimeOwnership::try_acquire(
+                ownership_root.path(),
+                &key,
+                bitfun_services_core::runtime_ownership::RuntimeDeployment::Shared,
+            )
+            .expect("shared owner");
+        let owner = Arc::new(CoreRuntimeOwnership::embedded_with_facts(
+            ownership_root.path().to_path_buf(),
+            "bitfun".to_string(),
+            "test",
+        ));
+        let (coordinator, session_manager) =
+            test_coordinator_with_config_and_ownership(100, true, owner);
+        let workspace_path = workspace.path().to_string_lossy().to_string();
+
+        let hidden_error = coordinator
+            .create_hidden_subagent_session_with_workspace(
+                Some("hidden-ownership-conflict".to_string()),
+                "hidden".to_string(),
+                "agentic".to_string(),
+                SessionConfig::default(),
+                workspace_path.clone(),
+                None,
+            )
+            .await
+            .expect_err("Hidden session creation must honor runtime ownership");
+        assert!(hidden_error.to_string().contains("ownership"));
+
+        let restore_error = coordinator
+            .restore_session_for_workspace(
+                SessionStoragePathRequest {
+                    workspace_path: workspace.path().to_path_buf(),
+                    remote_connection_id: None,
+                    remote_ssh_host: None,
+                },
+                "missing-session",
+            )
+            .await
+            .expect_err("Runtime attach must honor ownership before reading persistence");
+        assert!(restore_error.to_string().contains("ownership"));
+
+        let archive_error = bitfun_runtime_ports::AgentSessionManagementPort::set_session_archived(
+            &coordinator,
+            bitfun_runtime_ports::AgentSessionArchiveStateRequest {
+                workspace_path,
+                session_id: "missing-session".to_string(),
+                archived: true,
+                remote_connection_id: None,
+                remote_ssh_host: None,
+            },
+        )
+        .await
+        .expect_err("Metadata mutation must honor ownership before touching persistence");
+        assert!(archive_error.message.contains("ownership"));
+        assert!(session_manager
+            .get_session("hidden-ownership-conflict")
+            .is_none());
     }
 
     async fn register_test_background_task(
@@ -11081,6 +11722,13 @@ mod tests {
 
         let loaded_session_id = format!("loaded-remote-goal-{fixture_id}");
         coordinator
+            .ensure_verified_remote_workspace_runtime_ownership(
+                std::path::Path::new(logical_workspace_path),
+                &remote_identities[0].0,
+                Some(&remote_identities[0].1),
+            )
+            .expect("Workspace owner should verify the remote binding before loading a session");
+        coordinator
             .create_session_with_id(
                 Some(loaded_session_id.clone()),
                 "Loaded remote A".to_string(),
@@ -11175,6 +11823,70 @@ mod tests {
 
         for storage_path in storage_paths {
             let _ = std::fs::remove_dir_all(storage_path);
+        }
+    }
+
+    #[tokio::test]
+    async fn thread_goal_mutations_use_loaded_remote_workspace_facts() {
+        let (coordinator, session_manager) = test_persistent_coordinator();
+        let fixture_id = uuid::Uuid::new_v4();
+        let session_id = format!("remote-goal-mutation-{fixture_id}");
+        let logical_workspace_path = format!("/workspace/remote-goal-{fixture_id}");
+        let remote_connection_id = format!("connection-{fixture_id}");
+        let remote_ssh_host = format!("host-{fixture_id}");
+
+        coordinator
+            .ensure_verified_remote_workspace_runtime_ownership(
+                std::path::Path::new(&logical_workspace_path),
+                &remote_connection_id,
+                Some(&remote_ssh_host),
+            )
+            .expect("Workspace owner should verify the remote binding before loading a session");
+        coordinator
+            .create_session_with_id(
+                Some(session_id.clone()),
+                "Remote goal mutation".to_string(),
+                "agentic".to_string(),
+                SessionConfig {
+                    workspace_path: Some(logical_workspace_path.clone()),
+                    remote_connection_id: Some(remote_connection_id),
+                    remote_ssh_host: Some(remote_ssh_host),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("remote session should load without local ownership");
+
+        let created = AgentThreadGoalManagementPort::create_thread_goal(
+            &coordinator,
+            bitfun_runtime_ports::AgentThreadGoalCreateRequest {
+                session_id: session_id.clone(),
+                workspace_path: logical_workspace_path.clone(),
+                objective: "Keep remote ownership structured".to_string(),
+                token_budget: None,
+            },
+        )
+        .await
+        .expect("remote goal creation must not acquire a local workspace lock");
+        let updated = AgentThreadGoalManagementPort::update_thread_goal_status(
+            &coordinator,
+            bitfun_runtime_ports::AgentThreadGoalUpdateStatusRequest {
+                session_id: session_id.clone(),
+                workspace_path: logical_workspace_path,
+                status: ThreadGoalStatus::Complete,
+                turn_id: None,
+            },
+        )
+        .await
+        .expect("remote goal update must not acquire a local workspace lock");
+
+        assert_eq!(created.session_id, session_id);
+        assert_eq!(updated.status, ThreadGoalStatus::Complete);
+        if let Some(binding) = session_manager
+            .resolve_session_workspace_binding(&session_id)
+            .await
+        {
+            let _ = std::fs::remove_dir_all(binding.session_storage_dir());
         }
     }
 
