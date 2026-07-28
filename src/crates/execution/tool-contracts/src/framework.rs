@@ -2298,10 +2298,10 @@ pub struct ToolRuntimeRestrictions {
     #[serde(default)]
     pub path_policy: ToolPathPolicy,
     #[cfg(feature = "taiji")]
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub allowed_operation_classes: BTreeSet<OperationClass>,
     #[cfg(feature = "taiji")]
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub denied_operation_classes: BTreeSet<OperationClass>,
 }
 
@@ -2611,6 +2611,7 @@ impl ToolResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bitfun_runtime_ports::MAX_FISSION_DEPTH;
     use serde_json::json;
 
     struct TestTool {
@@ -2705,9 +2706,21 @@ mod tests {
 
     #[test]
     fn delegation_policy_tool_restrictions_block_recursive_subagents() {
-        let restrictions =
-            tool_restrictions_for_delegation_policy(DelegationPolicy::top_level().spawn_child());
+        // At depth 1 (top_level.spawn_child()), further subagent spawn is allowed
+        // because MAX_FISSION_DEPTH is 10. Only at depth >= MAX_FISSION_DEPTH
+        // should Task be blocked.
+        let child = DelegationPolicy::top_level().spawn_child();
+        assert!(child.allow_subagent_spawn);
+        let restrictions = tool_restrictions_for_delegation_policy(child);
+        assert!(restrictions.is_tool_allowed("Task"));
 
+        // At MAX_FISSION_DEPTH, further subagent spawn is blocked.
+        let mut deep = DelegationPolicy::top_level();
+        for _ in 0..MAX_FISSION_DEPTH {
+            deep = deep.spawn_child();
+        }
+        assert!(!deep.allow_subagent_spawn);
+        let restrictions = tool_restrictions_for_delegation_policy(deep);
         assert!(!restrictions.is_tool_allowed("Task"));
         assert!(restrictions.is_tool_allowed("Read"));
         assert_eq!(
