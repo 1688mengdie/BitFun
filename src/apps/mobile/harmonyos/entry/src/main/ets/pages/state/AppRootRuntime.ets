@@ -650,6 +650,10 @@ export class AppRootRuntime {
       (): void => { this.closeAppSidebar(); this.prepareNewGeneralChat(); },
       (): void => { this.closeAppSidebar(); this.enterCodeEntry(); },
       (): void => { this.closeAppSidebar(); this.appShellState.openSettings('general'); },
+      (): void => {
+        this.closeAppSidebar();
+        setTimeout(() => this.appShellState.openSettings('account'), 180);
+      },
       (session: RemoteSession): void => { this.closeAppSidebar(); this.openHomeSession(session); },
       (session: RemoteSession, archived: boolean): void => { this.archiveHomeSession(session, archived); },
       (session: RemoteSession): void => { this.exportHomeSession(session); },
