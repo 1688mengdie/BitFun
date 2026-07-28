@@ -14,7 +14,7 @@ export struct RemoteControlSettingsSheet {
   @Prop desktopId: string = '';
   @Prop userId: string = '';
   @Prop accountUsername: string = '';
-  @Prop accountUserId: string = '';
+  @Prop @Watch('handleAccountUserChanged') accountUserId: string = '';
   @Prop deviceId: string = '';
   @Prop controlTargetType: string = 'none';
   @Prop controlTargetDeviceId: string = '';
@@ -436,7 +436,7 @@ export struct RemoteControlSettingsSheet {
       onLoginSuccess: (): void => {
         this.showLogin = false;
         this.showProfile = true;
-        this.refreshAccountDevices();
+        this.refreshAccountDevices(true);
       }
     })
   }
@@ -666,8 +666,8 @@ export struct RemoteControlSettingsSheet {
     .opacity(device.online ? 1 : 0.68)
   }
 
-  private async refreshAccountDevices(): Promise<void> {
-    if (!this.isAccountAuthenticated() || this.accountDevicesBusy) return;
+  private async refreshAccountDevices(allowPendingLogin: boolean = false): Promise<void> {
+    if ((!this.isAccountAuthenticated() && !allowPendingLogin) || this.accountDevicesBusy) return;
     this.accountDevicesBusy = true;
     this.accountDevicesError = '';
     try {
@@ -845,6 +845,12 @@ export struct RemoteControlSettingsSheet {
 
   private isAccountAuthenticated(): boolean {
     return this.accountUserId.trim().length > 0;
+  }
+
+  private handleAccountUserChanged(): void {
+    if (this.isAccountAuthenticated() && this.accountDevices.length === 0) {
+      this.refreshAccountDevices();
+    }
   }
 
   private leaveAccountPage(): void {
