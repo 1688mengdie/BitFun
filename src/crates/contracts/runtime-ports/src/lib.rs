@@ -103,6 +103,72 @@ impl std::fmt::Display for PortError {
 
 impl std::error::Error for PortError {}
 
+/// Shared agent type used by SessionControl and SessionMessage tools.
+///
+/// Known built-in variants have canonical serde representations:
+/// - `Agentic` → `"agentic"` (canonical)
+/// - `Plan` → `"Plan"` (canonical)
+/// - `Cowork` → `"Cowork"` (canonical)
+///
+/// Any unrecognised string deserializes into `Other(String)`, so the enum
+/// automatically tolerates agent types added by custom or external registries
+/// without requiring a crate-level code change.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum AgentType {
+    /// Known built-in variant: `agentic`.
+    #[serde(rename = "agentic", alias = "Agentic", alias = "AGENTIC")]
+    Agentic,
+    /// Known built-in variant: `Plan`.
+    #[serde(rename = "Plan", alias = "plan", alias = "PLAN")]
+    Plan,
+    /// Known built-in variant: `Cowork`.
+    #[serde(rename = "Cowork", alias = "cowork", alias = "COWORK")]
+    Cowork,
+    /// Catch-all for any agent type string not in the known set (custom / external).
+    #[serde(untagged)]
+    Other(String),
+}
+
+impl AgentType {
+    /// Returns the canonical wire representation.
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Agentic => "agentic",
+            Self::Plan => "Plan",
+            Self::Cowork => "Cowork",
+            Self::Other(value) => value.as_str(),
+        }
+    }
+
+    /// Default agent type used when none is specified.
+    pub const fn default_value() -> Self {
+        Self::Agentic
+    }
+
+    /// Returns `true` if this is one of the three known built-in variants.
+    pub fn is_known_builtin(&self) -> bool {
+        matches!(self, Self::Agentic | Self::Plan | Self::Cowork)
+    }
+}
+
+impl From<&str> for AgentType {
+    fn from(value: &str) -> Self {
+        match value {
+            "agentic" | "Agentic" | "AGENTIC" => Self::Agentic,
+            "Plan" | "plan" | "PLAN" => Self::Plan,
+            "Cowork" | "cowork" | "COWORK" => Self::Cowork,
+            other => Self::Other(other.to_string()),
+        }
+    }
+}
+
+impl std::fmt::Display for AgentType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeServiceCapability {
