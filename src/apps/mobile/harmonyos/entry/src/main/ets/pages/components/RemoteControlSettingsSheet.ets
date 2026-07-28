@@ -1,9 +1,9 @@
 import { RemoteI18n } from '../../i18n/RemoteI18n';
 import { CARD, GREEN, INK, LINE, MUTED } from './Theme';
-import { DEFAULT_CLOUD_RELAY_URL } from '../../services/CloudAccountClient';
 import { CloudAccountDevice } from '../../services/CloudAccountClient';
 import { RemotePermissionMode } from '../../model/RemoteModels';
 import { DefaultAccountAvatar } from './DefaultAccountAvatar';
+import { BitFunAccountLoginPage } from './BitFunAccountLoginPage';
 
 const REMOTE_SETTINGS_BG: string = '#F4F4F7';
 const REMOTE_SETTINGS_BLUE: string = '#0A84FF';
@@ -21,8 +21,9 @@ export struct RemoteControlSettingsSheet {
   @Prop connectionState: string = 'idle';
   @Prop statusText: string = '';
   @Prop isBusy: boolean = false;
-  @Prop openProfileOnAppear: boolean = false;
+  @Prop openAccountOnAppear: boolean = false;
   onClose: () => void = () => {};
+  onOpenAccount: () => void = () => {};
   onAddConnection: () => void = () => {};
   cloudLogin: (relayUrl: string, username: string, password: string) => Promise<string> = async (_relayUrl: string, _username: string, _password: string): Promise<string> => '';
   cloudSync: () => Promise<string> = async (): Promise<string> => '0';
@@ -34,11 +35,7 @@ export struct RemoteControlSettingsSheet {
   onDisconnect: () => void = () => {};
   onReconnect: () => void = () => {};
   @State showProfile: boolean = false;
-  @State loginRelayUrl: string = DEFAULT_CLOUD_RELAY_URL;
-  @State loginUsername: string = '';
-  @State loginPassword: string = '';
-  @State loginError: string = '';
-  @State loginBusy: boolean = false;
+  @State showLogin: boolean = false;
   @State cloudSyncBusy: boolean = false;
   @State cloudSyncStatus: string = '';
   @State accountDevices: CloudAccountDevice[] = [];
@@ -52,7 +49,8 @@ export struct RemoteControlSettingsSheet {
   @State logoutBusy: boolean = false;
 
   aboutToAppear(): void {
-    this.showProfile = this.openProfileOnAppear;
+    this.showProfile = this.openAccountOnAppear && this.isAccountAuthenticated();
+    this.showLogin = this.openAccountOnAppear && !this.isAccountAuthenticated();
     if (this.isAccountAuthenticated()) {
       this.refreshAccountDevices();
     }
@@ -63,17 +61,21 @@ export struct RemoteControlSettingsSheet {
 
   build() {
     Stack({ alignContent: Alignment.TopEnd }) {
-      if (this.showProfile) {
+      if (this.showLogin || (this.showProfile && !this.isAccountAuthenticated())) {
+        this.LoginPage()
+      } else if (this.showProfile) {
         this.ProfilePage()
       } else {
         this.RemoteControlPage()
       }
-      this.CloseButton()
+      if (!this.showLogin && !this.showProfile) {
+        this.CloseButton()
+      }
     }
     .width('100%')
     .height('100%')
     .backgroundColor(REMOTE_SETTINGS_BG)
-    .borderRadius({ topLeft: 34, topRight: 34 })
+    .borderRadius(this.openAccountOnAppear ? 0 : { topLeft: 34, topRight: 34 })
   }
 
   @Builder
@@ -109,7 +111,8 @@ export struct RemoteControlSettingsSheet {
   private ProfileEntry() {
     Row({ space: 12 }) {
       DefaultAccountAvatar({ avatarSize: 34 })
-      Text(RemoteI18n.t('remote.settings.profile'))
+      Text(this.isAccountAuthenticated() ? RemoteI18n.t('remote.settings.profile') :
+        RemoteI18n.t('sidebar.signInBitFunAccount'))
         .fontSize(18)
         .fontWeight(FontWeight.Medium)
         .fontColor(INK)
@@ -127,7 +130,11 @@ export struct RemoteControlSettingsSheet {
     .borderRadius(28)
     .margin({ bottom: 28 })
     .onClick(() => {
-      this.showProfile = true;
+      if (this.isAccountAuthenticated()) {
+        this.showProfile = true;
+      } else {
+        this.onOpenAccount();
+      }
     })
   }
 
@@ -422,20 +429,36 @@ export struct RemoteControlSettingsSheet {
   }
 
   @Builder
+  private LoginPage() {
+    BitFunAccountLoginPage({
+      cloudLogin: this.cloudLogin,
+      onBack: (): void => this.leaveAccountPage(),
+      onLoginSuccess: (): void => {
+        this.showLogin = false;
+        this.showProfile = true;
+        this.refreshAccountDevices();
+      }
+    })
+  }
+
+  @Builder
   private ProfilePage() {
     Scroll() {
       Column({ space: 0 }) {
         Row() {
-          Button('‹')
+          Button() {
+            Image($r('app.media.remote_ref_back'))
+              .width(26)
+              .height(26)
+              .objectFit(ImageFit.Contain)
+          }
             .width(44)
             .height(44)
-            .fontSize(32)
-            .fontColor(INK)
             .padding(0)
             .type(ButtonType.Circle)
             .backgroundColor(CARD)
             .onClick(() => {
-              this.showProfile = false;
+              this.leaveAccountPage();
             })
           Text(RemoteI18n.t('remote.settings.profile'))
             .fontSize(20)
@@ -521,86 +544,34 @@ export struct RemoteControlSettingsSheet {
       }
       .width('100%')
 
-      Text(this.isAccountAuthenticated() ?
-        RemoteI18n.f('remote.settings.accountSignedInBody', this.accountUsername || this.accountUserId) :
-        RemoteI18n.t('remote.settings.accountNotSignedInBody'))
+      Text(RemoteI18n.f('remote.settings.accountSignedInBody', this.accountUsername || this.accountUserId))
         .fontSize(14)
         .lineHeight(20)
         .fontColor(MUTED)
         .width('100%')
 
-      if (!this.isAccountAuthenticated()) {
-        TextInput({ placeholder: RemoteI18n.t('remote.settings.relayUrlPlaceholder'), text: this.loginRelayUrl })
-          .height(48)
-          .fontSize(15)
-          .backgroundColor('#ECEBE8')
-          .borderRadius(24)
-          .padding({ left: 16, right: 16 })
-          .onChange((value: string) => { this.loginRelayUrl = value; })
-        TextInput({ placeholder: RemoteI18n.t('connect.accountUsernamePlaceholder'), text: this.loginUsername })
-          .height(48)
-          .fontSize(15)
-          .backgroundColor('#ECEBE8')
-          .borderRadius(24)
-          .padding({ left: 16, right: 16 })
-          .onChange((value: string) => { this.loginUsername = value; })
-        TextInput({ placeholder: RemoteI18n.t('connect.accountPasswordPlaceholder'), text: this.loginPassword })
-          .height(48)
-          .fontSize(15)
-          .backgroundColor('#ECEBE8')
-          .borderRadius(24)
-          .padding({ left: 16, right: 16 })
-          .type(InputType.Password)
-          .onChange((value: string) => { this.loginPassword = value; })
-        if (this.loginError.length > 0) {
-          Text(this.loginError).fontSize(13).fontColor('#D04A3A').width('100%')
-        }
-        Button(this.loginBusy ? RemoteI18n.t('remote.settings.accountSigningIn') : RemoteI18n.t('remote.settings.accountSignIn'))
-          .height(44)
-          .width('100%')
-          .fontSize(16)
-          .fontWeight(FontWeight.Medium)
-          .fontColor(CARD)
-          .backgroundColor(REMOTE_SETTINGS_BLUE)
-          .borderRadius(22)
-          .enabled(!this.loginBusy && this.loginRelayUrl.trim().length > 0 && this.loginUsername.trim().length > 0 && this.loginPassword.length > 0)
-          .onClick(async () => {
-            this.loginBusy = true;
-            this.loginError = '';
-            try {
-              await this.cloudLogin(this.loginRelayUrl, this.loginUsername, this.loginPassword);
-              this.loginPassword = '';
-              await this.refreshAccountDevices();
-            } catch (err) {
-              this.loginError = err instanceof Error ? err.message : RemoteI18n.t('remote.settings.accountLoginFailed');
-            } finally {
-              this.loginBusy = false;
-            }
-          })
-      } else {
-        Button(RemoteI18n.t('remote.settings.accountSync'))
-          .height(42)
-          .width('100%')
-          .fontSize(15)
-          .fontColor(REMOTE_SETTINGS_BLUE)
-          .backgroundColor('#E8F2FF')
-          .borderRadius(21)
-          .enabled(!this.cloudSyncBusy)
-          .onClick(async () => {
-            this.cloudSyncBusy = true;
-            this.cloudSyncStatus = '';
-            try {
-              const count = await this.cloudSync();
-              this.cloudSyncStatus = RemoteI18n.f('remote.settings.accountSyncSuccess', count);
-            } catch (err) {
-              this.cloudSyncStatus = err instanceof Error ? err.message : RemoteI18n.t('remote.settings.accountSyncFailed');
-            } finally {
-              this.cloudSyncBusy = false;
-            }
-          })
-        if (this.cloudSyncStatus.length > 0) {
-          Text(this.cloudSyncStatus).fontSize(13).fontColor(MUTED).width('100%')
-        }
+      Button(RemoteI18n.t('remote.settings.accountSync'))
+        .height(42)
+        .width('100%')
+        .fontSize(15)
+        .fontColor(REMOTE_SETTINGS_BLUE)
+        .backgroundColor('#E8F2FF')
+        .borderRadius(21)
+        .enabled(!this.cloudSyncBusy)
+        .onClick(async () => {
+          this.cloudSyncBusy = true;
+          this.cloudSyncStatus = '';
+          try {
+            const count = await this.cloudSync();
+            this.cloudSyncStatus = RemoteI18n.f('remote.settings.accountSyncSuccess', count);
+          } catch (err) {
+            this.cloudSyncStatus = err instanceof Error ? err.message : RemoteI18n.t('remote.settings.accountSyncFailed');
+          } finally {
+            this.cloudSyncBusy = false;
+          }
+        })
+      if (this.cloudSyncStatus.length > 0) {
+        Text(this.cloudSyncStatus).fontSize(13).fontColor(MUTED).width('100%')
       }
     }
     .width('100%')
@@ -636,6 +607,8 @@ export struct RemoteControlSettingsSheet {
       try {
         await this.cloudLogout();
         this.cloudSyncStatus = '';
+        this.showProfile = false;
+        this.showLogin = true;
       } finally {
         this.logoutBusy = false;
       }
@@ -872,5 +845,14 @@ export struct RemoteControlSettingsSheet {
 
   private isAccountAuthenticated(): boolean {
     return this.accountUserId.trim().length > 0;
+  }
+
+  private leaveAccountPage(): void {
+    if (this.openAccountOnAppear) {
+      this.onClose();
+      return;
+    }
+    this.showLogin = false;
+    this.showProfile = false;
   }
 }
