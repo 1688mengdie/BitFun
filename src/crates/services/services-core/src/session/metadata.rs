@@ -633,6 +633,7 @@ mod tests {
             workspace_hostname: None,
             new_session_memory_mode: crate::session::SessionMemoryMode::Enabled,
             existing: None,
+            is_daemon: false,
         });
 
         assert_eq!(built.workspace_path.as_deref(), Some("/worktrees/wt-1"));

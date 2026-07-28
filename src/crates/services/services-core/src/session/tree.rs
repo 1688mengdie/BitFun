@@ -332,6 +332,8 @@ mod tests {
             unread_completion: None,
             needs_user_attention: None,
             runtime_state: None,
+            project_workspace_path: None,
+            execution_target: None,
             is_daemon: false,
         }
     }

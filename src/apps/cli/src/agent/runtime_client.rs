@@ -1348,6 +1348,9 @@ mod tests {
             turn_count: 1,
             created_at_ms: 1,
             last_active_at_ms: 2,
+            is_daemon: false,
+            parent_session_id: None,
+            status: None,
         }
     }
 
