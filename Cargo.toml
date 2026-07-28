@@ -64,6 +64,7 @@ exclude = [
     "BitFun-Installer/src-tauri",
 ]
 
+
 resolver = "2"
 
 # Shared package metadata — single source of truth for version
@@ -314,6 +315,7 @@ tao = { git = "https://github.com/tauri-apps/tao.git", rev = "c704261c519c58cfdd
 tauri-runtime = { git = "https://github.com/tauri-apps/tauri.git", rev = "ce3860e84b79af0d5ee628b304399499a87328b1" }
 tauri-runtime-wry = { git = "https://github.com/tauri-apps/tauri.git", rev = "ce3860e84b79af0d5ee628b304399499a87328b1" }
 tauri-utils = { git = "https://github.com/tauri-apps/tauri.git", rev = "ce3860e84b79af0d5ee628b304399499a87328b1" }
+
 [profile.dev]
 # Line tables only: keeps panic backtrace line numbers while shrinking PDB/DWARF
 # output dramatically, which speeds up the Windows link step the most.

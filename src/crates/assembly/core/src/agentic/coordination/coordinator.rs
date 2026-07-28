@@ -9993,6 +9993,45 @@ mod tests {
     }
 
     #[test]
+    fn worktree_execution_root_is_a_legacy_alias_for_project_storage() {
+        assert_eq!(
+            session_storage_workspace_locator(
+                Some(r"D:\worktrees\session-1"),
+                Some("D:/worktrees/session-1"),
+                Some("D:/projects/BitFun"),
+            )
+            .as_deref(),
+            Some("D:/projects/BitFun")
+        );
+    }
+
+    #[test]
+    fn omitted_locator_reuses_the_loaded_session_storage_binding() {
+        assert_eq!(
+            session_storage_workspace_locator(
+                None,
+                Some("/worktrees/session-1"),
+                Some("/projects/BitFun"),
+            )
+            .as_deref(),
+            None
+        );
+    }
+
+    #[test]
+    fn unrelated_workspace_is_not_rewritten_to_the_project_storage_root() {
+        assert_eq!(
+            session_storage_workspace_locator(
+                Some("/projects/other"),
+                Some("/worktrees/session-1"),
+                Some("/projects/BitFun"),
+            )
+            .as_deref(),
+            Some("/projects/other")
+        );
+    }
+
+    #[test]
     fn btw_session_memory_mode_requires_both_generation_switches() {
         assert_eq!(
             btw_session_memory_mode(false, false),
