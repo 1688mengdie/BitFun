@@ -8,7 +8,7 @@ export { default as AppearanceConfig } from './AppearanceConfig';
 
 
 export { default as DefaultModelConfig } from './DefaultModelConfig';
-export { default as ModelSelectionRadio } from './ModelSelectionRadio';
+export { ModelSelectionRadio } from './ModelSelectionRadio';
 export type { ModelSelectionRadioProps } from './ModelSelectionRadio';
 
 
