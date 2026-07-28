@@ -49,6 +49,7 @@ export struct RemoteControlSettingsSheet {
   @State permissionModeLoaded: boolean = false;
   @State permissionModeError: string = '';
   @State confirmFullAccess: boolean = false;
+  @State logoutBusy: boolean = false;
 
   aboutToAppear(): void {
     this.showProfile = this.openProfileOnAppear;
@@ -491,6 +492,10 @@ export struct RemoteControlSettingsSheet {
         .width('100%')
         .backgroundColor(CARD)
         .borderRadius(28)
+
+        if (this.isAccountAuthenticated()) {
+          this.LogoutAction()
+        }
       }
       .width('100%')
       .padding({ left: 18, right: 18, top: 20, bottom: 42 })
@@ -593,17 +598,6 @@ export struct RemoteControlSettingsSheet {
               this.cloudSyncBusy = false;
             }
           })
-        Button(RemoteI18n.t('remote.settings.accountLogout'))
-          .height(42)
-          .width('100%')
-          .fontSize(15)
-          .fontColor('#D04A3A')
-          .backgroundColor('#FFF0EE')
-          .borderRadius(21)
-          .onClick(async () => {
-            await this.cloudLogout();
-            this.cloudSyncStatus = '';
-          })
         if (this.cloudSyncStatus.length > 0) {
           Text(this.cloudSyncStatus).fontSize(13).fontColor(MUTED).width('100%')
         }
@@ -614,6 +608,38 @@ export struct RemoteControlSettingsSheet {
     .backgroundColor(CARD)
     .borderRadius(24)
     .margin({ bottom: 24 })
+  }
+
+  @Builder
+  private LogoutAction() {
+    Row({ space: 14 }) {
+      Image($r('app.media.settings_logout_arrow'))
+        .width(24)
+        .height(24)
+        .objectFit(ImageFit.Contain)
+      Text(this.logoutBusy ? RemoteI18n.t('remote.settings.accountLoggingOut') :
+        RemoteI18n.t('remote.settings.accountLogout'))
+        .fontSize(17)
+        .fontWeight(FontWeight.Medium)
+        .fontColor('#E11D17')
+    }
+    .width('100%')
+    .height(62)
+    .padding({ left: 20, right: 20 })
+    .backgroundColor(CARD)
+    .borderRadius(24)
+    .margin({ top: 30, bottom: 8 })
+    .opacity(this.logoutBusy ? 0.55 : 1)
+    .enabled(!this.logoutBusy)
+    .onClick(async () => {
+      this.logoutBusy = true;
+      try {
+        await this.cloudLogout();
+        this.cloudSyncStatus = '';
+      } finally {
+        this.logoutBusy = false;
+      }
+    })
   }
 
   @Builder

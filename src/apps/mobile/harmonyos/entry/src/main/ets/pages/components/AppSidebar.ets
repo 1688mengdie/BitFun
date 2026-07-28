@@ -9,10 +9,12 @@ export struct AppSidebar {
   @Prop selectedSessionId: string = '';
   @Prop connectionState: string = 'idle';
   @Prop activeSection: string = 'chat';
+  @Prop accountUserId: string = '';
   onClose: () => void = () => {};
   onNewChat: () => void = () => {};
   onEnterCode: () => void = () => {};
   onOpenSettings: () => void = () => {};
+  onOpenAccount: () => void = () => {};
   onOpenSession: (session: RemoteSession) => void = (_session: RemoteSession) => {};
   onArchiveSession: (session: RemoteSession, archived: boolean) => void =
     (_session: RemoteSession, _archived: boolean) => {};
@@ -25,6 +27,15 @@ export struct AppSidebar {
   @State archivedSessionsExpanded: boolean = false;
 
   build() {
+    if (this.isAccountAuthenticated()) {
+      this.AuthenticatedSidebar()
+    } else {
+      this.SignedOutSidebar()
+    }
+  }
+
+  @Builder
+  private AuthenticatedSidebar() {
     Column() {
       Row() {
         Text('BitFun')
@@ -176,6 +187,82 @@ export struct AppSidebar {
     .height('100%')
     .padding({ left: 24, right: 18, top: 4, bottom: 7 })
     .backgroundColor(CARD)
+  }
+
+  @Builder
+  private SignedOutSidebar() {
+    Column() {
+      Row({ space: 16 }) {
+        SymbolGlyph($r('sys.symbol.square_and_pencil'))
+          .fontSize(25)
+          .fontColor([INK])
+          .width(26)
+          .height(26)
+        Text(RemoteI18n.t('sidebar.signedOutNewChat'))
+          .fontSize(18)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(INK)
+      }
+      .width('100%')
+      .height(64)
+      .alignItems(VerticalAlign.Center)
+      .onClick(() => {
+        this.onNewChat();
+      })
+
+      Divider()
+        .strokeWidth(1)
+        .color('#E5E5E5')
+
+      Column({ space: 0 }) {
+        this.SignedOutNavRow(RemoteI18n.t('sidebar.terms'))
+        this.SignedOutNavRow(RemoteI18n.t('sidebar.privacy'))
+        this.SignedOutNavRow(RemoteI18n.t('settings.title'), () => {
+          this.onOpenSettings();
+        })
+      }
+      .width('100%')
+      .margin({ top: 18 })
+
+      Blank()
+
+      Text(RemoteI18n.t('sidebar.signInPrompt'))
+        .fontSize(15)
+        .lineHeight(22)
+        .fontColor('#8E8E93')
+        .width('100%')
+        .margin({ bottom: 16 })
+
+      Button(RemoteI18n.t('sidebar.signInBitFunAccount'))
+        .width('100%')
+        .height(54)
+        .fontSize(17)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(CARD)
+        .backgroundColor('#000000')
+        .borderRadius(14)
+        .onClick(() => {
+          this.onOpenAccount();
+        })
+    }
+    .width('100%')
+    .height('100%')
+    .padding({ left: 18, right: 18, top: 4, bottom: 30 })
+    .backgroundColor(CARD)
+  }
+
+  @Builder
+  private SignedOutNavRow(label: string, action: () => void = () => {}) {
+    Row() {
+      Text(label)
+        .fontSize(18)
+        .fontWeight(FontWeight.Medium)
+        .fontColor('#8E8E93')
+    }
+    .width('100%')
+    .height(56)
+    .alignItems(VerticalAlign.Center)
+    .onClick(action)
   }
 
   @Builder
@@ -598,5 +685,9 @@ export struct AppSidebar {
         session.status !== 'archived' &&
         (query.length === 0 || session.title.toLowerCase().indexOf(query) >= 0);
     });
+  }
+
+  private isAccountAuthenticated(): boolean {
+    return this.accountUserId.trim().length > 0;
   }
 }

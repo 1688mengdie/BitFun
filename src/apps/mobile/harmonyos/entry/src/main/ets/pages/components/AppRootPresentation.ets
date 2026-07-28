@@ -113,15 +113,17 @@ export class RemoteHomePresentationActions {
 
 export class SidebarPresentationActions {
   readonly close: () => void; readonly newChat: () => void; readonly enterCode: () => void;
-  readonly settings: () => void; readonly openSession: (session: RemoteSession) => void;
+  readonly settings: () => void; readonly openAccount: () => void;
+  readonly openSession: (session: RemoteSession) => void;
   readonly archive: (session: RemoteSession, archived: boolean) => void;
   readonly exportSession: (session: RemoteSession) => void; readonly deleteSession: (session: RemoteSession) => void;
   constructor(
-    close: () => void, newChat: () => void, enterCode: () => void, settings: () => void,
+    close: () => void, newChat: () => void, enterCode: () => void, settings: () => void, openAccount: () => void,
     openSession: (session: RemoteSession) => void, archive: (session: RemoteSession, archived: boolean) => void,
     exportSession: (session: RemoteSession) => void, deleteSession: (session: RemoteSession) => void
   ) {
     this.close = close; this.newChat = newChat; this.enterCode = enterCode; this.settings = settings;
+    this.openAccount = openAccount;
     this.openSession = openSession; this.archive = archive; this.exportSession = exportSession; this.deleteSession = deleteSession;
   }
 }
@@ -191,7 +193,7 @@ export struct AppRootPresentation {
       () => {}, () => {}, () => {}, () => {}, () => {}, () => {}, () => {}, () => {}, () => {}, () => {},
       () => {}, () => {}, () => {}, () => {}, () => {}),
     new RemoteCreatePresentationActions(() => {}, () => {}, () => {}, () => {}, () => {}, () => {}, () => {}),
-    new SidebarPresentationActions(() => {}, () => {}, () => {}, () => {}, () => {}, () => {}, () => {}, () => {}),
+    new SidebarPresentationActions(() => {}, () => {}, () => {}, () => {}, () => {}, () => {}, () => {}, () => {}, () => {}),
     new SettingsPresentationActions(() => {}, () => {}, () => {}, () => {}, () => {}, async (_relayUrl: string, _username: string, _password: string): Promise<string> => '', async (): Promise<string> => '', async (): Promise<void> => {}, async (): Promise<CloudAccountDevice[]> => [], async (): Promise<RemotePermissionMode> => 'ask', async (mode: RemotePermissionMode): Promise<RemotePermissionMode> => mode, async (_url: string, _key: string, _model: string, _clear: boolean): Promise<string> => ''),
     new ConnectPresentationActions(() => {}, () => {}, () => {}, () => {}, () => {}, () => false, () => {}, () => {},
       () => {}, async (): Promise<CloudAccountDevice[]> => [], async (_device: CloudAccountDevice): Promise<void> => {}),
@@ -268,10 +270,12 @@ export struct AppRootPresentation {
     AppSidebar({ sessions: this.generalPageState.recentSessions(), pinnedSessionId: this.generalPageState.pinnedSessionId(),
       selectedSessionId: this.currentRoute === AppRoute.ChatHome || this.currentRoute === AppRoute.GeneralChat ?
         this.generalPageState.activeSession.sessionId : '', connectionState: this.remotePageState.connectionState,
+      accountUserId: this.remotePageState.accountUserId,
       activeSection: this.currentRoute === AppRoute.RemoteHome || this.currentRoute === AppRoute.RemoteChat ? 'remote' : 'chat',
       onClose: this.actions.onSidebar.close,
       onNewChat: this.actions.onSidebar.newChat, onEnterCode: this.actions.onSidebar.enterCode,
-      onOpenSettings: this.actions.onSidebar.settings, onOpenSession: this.actions.onSidebar.openSession,
+      onOpenSettings: this.actions.onSidebar.settings, onOpenAccount: this.actions.onSidebar.openAccount,
+      onOpenSession: this.actions.onSidebar.openSession,
       onArchiveSession: this.actions.onSidebar.archive, onExportSession: this.actions.onSidebar.exportSession,
       onDeleteSession: this.actions.onSidebar.deleteSession })
   }
