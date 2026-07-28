@@ -42,15 +42,15 @@ use crate::service::workspace::{get_global_workspace_service, WorkspaceInfo, Wor
 use crate::util::errors::{BitFunError, BitFunResult};
 use crate::util::sanitize_plain_model_output;
 use crate::util::timing::elapsed_ms_u64;
+use bitfun_core_types::SessionExecutionTarget;
 pub use bitfun_runtime_ports::SessionViewRestoreTiming;
 use bitfun_runtime_ports::{SessionStoragePathRequest, SessionStorePort};
 use bitfun_services_core::session::{
-    apply_session_lineage, collect_hidden_subagent_cascade as collect_hidden_subagent_cascade_ids,
+    apply_session_lineage,
     merge_session_custom_metadata as merge_session_custom_metadata_value,
     set_deep_review_run_manifest, set_review_target_evidence, set_session_relationship,
-    SessionStorageLayout,
+    SessionRelationshipKind, SessionStorageLayout,
 };
-use bitfun_core_types::SessionExecutionTarget;
 use dashmap::{mapref::entry::Entry, DashMap};
 use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
@@ -168,6 +168,20 @@ pub struct SessionExecutionBindingUpdate {
     pub execution_target: SessionExecutionTarget,
 }
 
+/// Stable failure categories for atomically moving a session execution root.
+///
+/// Worktree lifecycle maps these categories to its public structured error
+/// contract without having to inspect human-readable `BitFunError` messages.
+#[derive(Debug, thiserror::Error)]
+pub enum SessionExecutionBindingError {
+    #[error("{0}")]
+    Busy(String),
+    #[error("{0}")]
+    NotFound(String),
+    #[error(transparent)]
+    Internal(#[from] BitFunError),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SessionResourceCleanupPolicy {
     BestEffort,
@@ -218,6 +232,13 @@ pub struct SessionManager {
     evidence_ledger: Arc<SessionEvidenceLedger>,
     persistence_manager: Arc<PersistenceManager>,
     memory_database: Arc<MemoryDatabase>,
+
+    /// Cache of parent_session_id → subagent children (child_session_id, parent_dialog_turn_id).
+    /// Incrementally maintained to avoid full metadata scans during cascade traversal.
+    subagent_children: Arc<DashMap<String, Vec<(String, String)>>>,
+    /// Set to true when sessions are created or deleted so the subagent_children
+    /// cache is rebuilt on the next cascade traversal.
+    subagent_children_dirty: Arc<std::sync::atomic::AtomicBool>,
 
     /// Configuration
     config: SessionManagerConfig,
@@ -518,7 +539,8 @@ impl SessionManager {
             return Self::context_window_for_model_selection(ai_config, configured_model_id);
         }
 
-        let fallback_model_id = (session.kind != SessionKind::Subagent)
+        let fallback_model_id = (session.kind != SessionKind::Subagent
+            && session.kind != SessionKind::EphemeralSubagent)
             .then(|| ai_config.agent_model_defaults.mode.trim().to_string())
             .filter(|model_id| !Self::is_auto_model_selector(model_id));
 
@@ -630,7 +652,7 @@ impl SessionManager {
     fn should_persist_session_kind(kind: SessionKind) -> bool {
         match kind {
             SessionKind::Standard | SessionKind::Subagent => true,
-            SessionKind::EphemeralChild => false,
+            SessionKind::EphemeralChild | SessionKind::EphemeralSubagent => false,
         }
     }
 
@@ -1748,6 +1770,8 @@ impl SessionManager {
             evidence_ledger: Arc::new(SessionEvidenceLedger::new()),
             persistence_manager,
             memory_database,
+            subagent_children: Arc::new(DashMap::new()),
+            subagent_children_dirty: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             config,
         };
 
@@ -1986,6 +2010,8 @@ impl SessionManager {
                 evidence_ledger,
                 persistence_manager,
                 memory_database,
+                subagent_children: Arc::new(DashMap::new()),
+                subagent_children_dirty: Arc::new(std::sync::atomic::AtomicBool::new(true)),
                 config: manager_config,
             };
 
@@ -2238,7 +2264,12 @@ impl SessionManager {
         Ok(session)
     }
 
-    /// Get session
+    /// Get session.
+    /// Hot-path: cloning the full Session is intentional to avoid holding
+    /// the DashMap shard lock across await points.  The session struct is
+    /// relatively lightweight for typical workloads; the heaviest field
+    /// (dialog_turn_ids) is a Vec<String> that rarely exceeds a few
+    /// hundred entries.
     pub fn get_session(&self, session_id: &str) -> Option<Session> {
         self.sessions.get(session_id).map(|s| s.clone())
     }
@@ -3497,24 +3528,42 @@ impl SessionManager {
         &self,
         session_id: &str,
         binding: SessionExecutionBindingUpdate,
-    ) -> BitFunResult<()> {
+    ) -> Result<(), SessionExecutionBindingError> {
         // Mirrors update_session_model_id: an evicted session must be restored
-        // from its recorded storage path before the mutation permit is taken.
+        // before the mutation permit is taken. View-only historical restores do
+        // not populate the storage-path index, so use the owning project path as
+        // the stable fallback locator.
         if !self.sessions.contains_key(session_id) && self.config.enable_persistence {
             let session_storage_path = self
                 .session_storage_path_index
                 .get(session_id)
                 .map(|entry| entry.value().path.clone());
-            if let Some(session_storage_path) = session_storage_path {
-                let _ = self
-                    .restore_session_from_storage_path(&session_storage_path, session_id)
-                    .await;
+            let restore_result = if let Some(session_storage_path) = session_storage_path {
+                self.restore_session_from_storage_path(&session_storage_path, session_id)
+                    .await
+            } else {
+                self.restore_session(Path::new(&binding.project_workspace_path), session_id)
+                    .await
+            };
+            if let Err(restore_error) = restore_result {
+                return match restore_error {
+                    BitFunError::NotFound(message) => {
+                        Err(SessionExecutionBindingError::NotFound(message))
+                    }
+                    other => Err(SessionExecutionBindingError::Internal(other)),
+                };
             }
         }
 
         let _mutation_guard = self.acquire_session_mutation(session_id).await?;
 
         if let Some(mut session) = self.sessions.get_mut(session_id) {
+            if !session.dialog_turn_ids.is_empty() || !matches!(session.state, SessionState::Idle) {
+                return Err(SessionExecutionBindingError::Busy(
+                    "Worktree isolation can only be changed before the session's first message"
+                        .to_string(),
+                ));
+            }
             session.config.workspace_path = Some(binding.workspace_path.clone());
             session.config.project_workspace_path = Some(binding.project_workspace_path.clone());
             session.config.execution_target = Some(binding.execution_target.clone());
@@ -3522,9 +3571,8 @@ impl SessionManager {
             session.updated_at = SystemTime::now();
             session.last_activity_at = SystemTime::now();
         } else {
-            return Err(BitFunError::NotFound(format!(
-                "Session not found: {}",
-                session_id
+            return Err(SessionExecutionBindingError::NotFound(format!(
+                "Session not found: {session_id}"
             )));
         }
 
@@ -3630,7 +3678,9 @@ impl SessionManager {
             &session_storage_path,
             session_id,
         )
-        .await
+        .await?;
+        self.invalidate_subagent_children_cache();
+        Ok(())
     }
 
     pub(crate) async fn delete_session_by_id(&self, session_id: &str) -> BitFunResult<()> {
@@ -5165,13 +5215,9 @@ impl SessionManager {
                         created_at: session.created_at,
                         last_activity_at: session.last_activity_at,
                         state: session.state.clone(),
+                        parent_session_id: None,
+                        is_daemon: session.config.is_daemon,
                     }
-                })
-                .filter(|summary| {
-                    !matches!(
-                        summary.kind,
-                        SessionKind::Subagent | SessionKind::EphemeralChild
-                    )
                 })
                 .collect();
             Ok(summaries)
@@ -5353,10 +5399,15 @@ impl SessionManager {
         session_id: &str,
         relationship: SessionRelationship,
     ) -> BitFunResult<()> {
-        self.update_persisted_session_metadata(session_id, |metadata| {
-            set_session_relationship(metadata, relationship)
-        })
-        .await
+        let result = self
+            .update_persisted_session_metadata(session_id, |metadata| {
+                set_session_relationship(metadata, relationship)
+            })
+            .await;
+        if result.is_ok() {
+            self.invalidate_subagent_children_cache();
+        }
+        result
     }
 
     pub async fn persist_session_lineage(
@@ -5364,10 +5415,15 @@ impl SessionManager {
         session_id: &str,
         relationship: SessionRelationship,
     ) -> BitFunResult<()> {
-        self.update_persisted_session_metadata(session_id, |metadata| {
-            apply_session_lineage(metadata, relationship)
-        })
-        .await
+        let result = self
+            .update_persisted_session_metadata(session_id, |metadata| {
+                apply_session_lineage(metadata, relationship)
+            })
+            .await;
+        if result.is_ok() {
+            self.invalidate_subagent_children_cache();
+        }
+        result
     }
 
     pub async fn collect_hidden_subagent_cascade_for_parent_turns(
@@ -5380,15 +5436,58 @@ impl SessionManager {
             return Ok(Vec::new());
         }
 
+        self.ensure_subagent_children_cache(workspace_path).await?;
+        Ok(collect_hidden_subagent_cascade_from_index(
+            &self.subagent_children,
+            parent_session_id,
+            parent_dialog_turn_ids,
+        ))
+    }
+
+    async fn ensure_subagent_children_cache(
+        &self,
+        workspace_path: &Path,
+    ) -> BitFunResult<()> {
+        if !self
+            .subagent_children_dirty
+            .swap(false, std::sync::atomic::Ordering::AcqRel)
+        {
+            return Ok(());
+        }
         let metadata_list = self
             .persistence_manager
             .list_session_metadata_including_internal(workspace_path)
             .await?;
-        Ok(collect_hidden_subagent_cascade_ids(
-            metadata_list,
-            parent_session_id,
-            parent_dialog_turn_ids,
-        ))
+        self.subagent_children.clear();
+        for metadata in &metadata_list {
+            let Some(ref relationship) = metadata.relationship else {
+                continue;
+            };
+            if !matches!(
+                relationship.kind,
+                Some(SessionRelationshipKind::Subagent)
+            ) {
+                continue;
+            }
+            let Some(ref parent_id) = relationship.parent_session_id else {
+                continue;
+            };
+            let dialog_turn_id = relationship
+                .parent_dialog_turn_id
+                .clone()
+                .unwrap_or_default();
+            self.subagent_children
+                .entry(parent_id.clone())
+                .or_default()
+                .push((metadata.session_id.clone(), dialog_turn_id));
+        }
+        Ok(())
+    }
+
+    /// Mark subagent children cache as dirty, forcing a rebuild on next cascade traversal.
+    fn invalidate_subagent_children_cache(&self) {
+        self.subagent_children_dirty
+            .store(true, std::sync::atomic::Ordering::Release);
     }
 
     pub async fn set_session_deep_review_run_manifest(
@@ -6816,11 +6915,63 @@ impl SessionManager {
     }
 }
 
+/// Traverse the subagent_children index in post-order to collect hidden subagent
+/// session IDs matching the given parent session and dialog turn IDs.
+fn collect_hidden_subagent_cascade_from_index(
+    subagent_children: &DashMap<String, Vec<(String, String)>>,
+    parent_session_id: &str,
+    parent_dialog_turn_ids: &HashSet<String>,
+) -> Vec<String> {
+    let mut root_session_ids = Vec::new();
+    if let Some(children) = subagent_children.get(parent_session_id) {
+        for (child_id, dialog_turn_id) in children.iter() {
+            if parent_dialog_turn_ids.contains(dialog_turn_id.as_str())
+            {
+                root_session_ids.push(child_id.clone());
+            }
+        }
+    }
+
+    let mut visited = HashSet::new();
+    let mut ordered_session_ids = Vec::new();
+    for root_id in root_session_ids {
+        collect_subagent_post_order_from_index(
+            subagent_children,
+            &root_id,
+            &mut visited,
+            &mut ordered_session_ids,
+        );
+    }
+    ordered_session_ids
+}
+
+fn collect_subagent_post_order_from_index(
+    subagent_children: &DashMap<String, Vec<(String, String)>>,
+    session_id: &str,
+    visited: &mut HashSet<String>,
+    ordered_session_ids: &mut Vec<String>,
+) {
+    if !visited.insert(session_id.to_string()) {
+        return;
+    }
+    if let Some(children) = subagent_children.get(session_id) {
+        for (child_id, _) in children.iter() {
+            collect_subagent_post_order_from_index(
+                subagent_children,
+                child_id,
+                visited,
+                ordered_session_ids,
+            );
+        }
+    }
+    ordered_session_ids.push(session_id.to_string());
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        should_auto_migrate_session_model, CoreSessionStorePort, SessionManager,
-        SessionManagerConfig,
+        should_auto_migrate_session_model, CoreSessionStorePort, SessionExecutionBindingError,
+        SessionExecutionBindingUpdate, SessionManager, SessionManagerConfig,
     };
     use crate::agentic::core::{
         CompressionState, Message, MessageContent, MessageRole, ProcessingPhase, Session,
@@ -6841,6 +6992,7 @@ mod tests {
         SessionRelationship, SessionRelationshipKind, ToolCallData, ToolItemData, ToolResultData,
         TurnStatus, UserMessageData,
     };
+    use bitfun_core_types::SessionExecutionTarget;
     use bitfun_runtime_ports::SessionStoragePathRequest;
     use dashmap::{try_result::TryResult, DashMap};
     use serde_json::json;
@@ -7051,6 +7203,103 @@ mod tests {
                 prompt_cache_policy: PromptCachePolicy::default(),
             },
         )
+    }
+
+    #[tokio::test]
+    async fn execution_binding_rejects_a_session_after_its_first_turn() {
+        let manager = in_memory_test_manager();
+        let workspace = TestWorkspace::new();
+        let session = manager
+            .create_session(
+                "Binding race".to_string(),
+                "agentic".to_string(),
+                SessionConfig {
+                    workspace_path: Some(workspace.path().to_string_lossy().to_string()),
+                    ..SessionConfig::default()
+                },
+            )
+            .await
+            .expect("session should be created");
+        manager
+            .sessions
+            .get_mut(&session.session_id)
+            .expect("session should remain loaded")
+            .dialog_turn_ids
+            .push("turn-1".to_string());
+
+        let error = manager
+            .update_session_execution_binding(
+                &session.session_id,
+                SessionExecutionBindingUpdate {
+                    workspace_path: "/tmp/worktree".to_string(),
+                    project_workspace_path: workspace.path().to_string_lossy().to_string(),
+                    workspace_id: None,
+                    execution_target: SessionExecutionTarget::local("/tmp/worktree".to_string()),
+                },
+            )
+            .await
+            .expect_err("a non-empty session must not move");
+
+        assert!(matches!(error, SessionExecutionBindingError::Busy(_)));
+        assert_eq!(
+            manager
+                .get_session(&session.session_id)
+                .and_then(|session| session.config.workspace_path),
+            Some(workspace.path().to_string_lossy().to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn execution_binding_restores_a_view_only_empty_session_from_its_project() {
+        let workspace = TestWorkspace::new();
+        let persistence_manager = Arc::new(
+            PersistenceManager::new(workspace.path_manager()).expect("persistence manager"),
+        );
+        let manager = test_manager(persistence_manager);
+        let session = manager
+            .create_session(
+                "View-only binding".to_string(),
+                "agentic".to_string(),
+                SessionConfig {
+                    workspace_path: Some(workspace.path().to_string_lossy().to_string()),
+                    project_workspace_path: Some(workspace.path().to_string_lossy().to_string()),
+                    ..SessionConfig::default()
+                },
+            )
+            .await
+            .expect("session should be created");
+        assert!(manager
+            .unload_session_from_memory(&session.session_id)
+            .await
+            .expect("session should unload"));
+        manager
+            .session_storage_path_index
+            .remove(&session.session_id);
+
+        let target_path = workspace.path().join("managed-worktree");
+        manager
+            .update_session_execution_binding(
+                &session.session_id,
+                SessionExecutionBindingUpdate {
+                    workspace_path: target_path.to_string_lossy().to_string(),
+                    project_workspace_path: workspace.path().to_string_lossy().to_string(),
+                    workspace_id: Some("workspace-2".to_string()),
+                    execution_target: SessionExecutionTarget::local(
+                        target_path.to_string_lossy().to_string(),
+                    ),
+                },
+            )
+            .await
+            .expect("view-only session should restore and rebind");
+
+        let restored = manager
+            .get_session(&session.session_id)
+            .expect("session should be loaded after rebinding");
+        assert_eq!(
+            restored.config.workspace_path.as_deref(),
+            Some(target_path.to_string_lossy().as_ref())
+        );
+        assert_eq!(restored.config.workspace_id.as_deref(), Some("workspace-2"));
     }
 
     #[tokio::test]
@@ -8600,6 +8849,7 @@ mod tests {
                     parent_tool_call_id: None,
                     subagent_type: None,
                     continuation_policy: None,
+                    ..Default::default()
                 },
             )
             .await
@@ -8622,6 +8872,7 @@ mod tests {
                 parent_tool_call_id: None,
                 subagent_type: None,
                 continuation_policy: None,
+                ..Default::default()
             })
         );
 
@@ -8662,6 +8913,7 @@ mod tests {
             parent_tool_call_id: Some("tool-1".to_string()),
             subagent_type: Some("Explore".to_string()),
             continuation_policy: None,
+            ..Default::default()
         });
         persistence_manager
             .save_session_metadata(workspace.path(), &matched_root)
@@ -8684,6 +8936,7 @@ mod tests {
             parent_tool_call_id: Some("tool-child".to_string()),
             subagent_type: Some("Explore".to_string()),
             continuation_policy: None,
+            ..Default::default()
         });
         persistence_manager
             .save_session_metadata(workspace.path(), &matched_grandchild)
@@ -8706,6 +8959,7 @@ mod tests {
             parent_tool_call_id: Some("tool-2".to_string()),
             subagent_type: Some("Explore".to_string()),
             continuation_policy: None,
+            ..Default::default()
         });
         persistence_manager
             .save_session_metadata(workspace.path(), &unmatched_root)
@@ -8727,6 +8981,7 @@ mod tests {
             parent_tool_call_id: None,
             subagent_type: None,
             continuation_policy: None,
+            ..Default::default()
         });
         persistence_manager
             .save_session_metadata(workspace.path(), &visible_review_child)

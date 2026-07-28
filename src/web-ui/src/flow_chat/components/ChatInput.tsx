@@ -47,7 +47,6 @@ import {
   type SlashActionId,
 } from '../utils/slashActionSelection';
 import { notificationService } from '@/shared/notification-system';
-import { worktreeAPI } from '@/infrastructure/api/service-api/WorktreeAPI';
 import { useI18n } from '@/infrastructure/i18n';
 import { inputReducer, initialInputState, type InputAction } from '../reducers/inputReducer';
 import { modeReducer, initialModeState } from '../reducers/modeReducer';
@@ -81,6 +80,11 @@ import {
 import { isReviewSlashCommand } from '../deep-review/launch/commandParser';
 import { createLogger } from '@/shared/utils/logger';
 import { isSamePath } from '@/shared/utils/pathUtils';
+import {
+  isSessionWorktreeIsolationEnabled,
+  isSessionWorktreeBindingLocked,
+  sessionWorktreeBindingSubscriptionKey,
+} from '../utils/sessionWorktree';
 import { isTauriRuntime } from '@/infrastructure/runtime';
 import { Tooltip, IconButton, confirmDanger, confirmWarning } from '@/component-library';
 import { PendingQueuePanel } from './PendingQueuePanel';
@@ -1031,7 +1035,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
               `${s.remoteConnectionId ?? ''}|${s.remoteSshHost ?? ''}|${s.lastSubmittedMode ?? ''}|` +
               `${s.currentAcpContextUsage?.used ?? ''}|${s.currentAcpContextUsage?.size ?? ''}|` +
               `${s.currentTokenUsage?.inputTokens ?? ''}|${s.maxContextTokens ?? ''}|` +
-              `${s.needsUserAttention ? '1':'0'}`
+              `${s.needsUserAttention ? '1':'0'}|${sessionWorktreeBindingSubscriptionKey(s)}`
             );
           }
         }
@@ -1892,50 +1896,44 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   }, [isAcpTargetSession, permissionModeSaving, t, toolPermissionConfig]);
 
   /**
-   * Worktree isolation is a property of where the session runs, so it can only
-   * move while the session is still empty. Remote sessions have no worktrees.
+   * Checking worktree isolation only arms the empty session. The first prompt
+   * materializes the worktree after it has visibly been submitted.
    */
   const worktreeControl = useMemo(() => {
     if (!effectiveTargetSessionId || !effectiveTargetSession) return undefined;
     if (effectiveTargetSession.remoteConnectionId) return undefined;
     if (isSubagentInputTarget || isAcpTargetSession) return undefined;
 
-    const locked = effectiveTargetSession.dialogTurns.length > 0
-      || effectiveTargetSession.status === 'active';
+    const locked = isSessionWorktreeBindingLocked(
+      effectiveTargetSession,
+      !!derivedState?.isProcessing,
+    );
 
     return {
+      enabled: isSessionWorktreeIsolationEnabled(effectiveTargetSession),
       locked,
-      onChange: async (enabled: boolean) => {
-        try {
-          const result = await worktreeAPI.bindSession(
-            effectiveTargetSessionId,
-            enabled,
-            globalThis.crypto?.randomUUID?.() ?? `worktree-${Date.now()}`,
-          );
-          FlowChatStore.getInstance().updateSessionExecutionTarget(effectiveTargetSessionId, {
-            workspacePath: result.workspacePath,
-            projectWorkspacePath: result.projectWorkspacePath,
-            workspaceId: result.workspaceId,
-            executionTarget: result.executionTarget,
-          });
-          if (result.retainedWorktreePath) {
-            notificationService.info(
-              tWorktrees('strip.retained', { path: result.retainedWorktreePath }),
-              { duration: 6000 },
-            );
-          }
-        } catch (error) {
-          log.error('Failed to toggle session worktree isolation', error);
-          notificationService.error(
-            error instanceof Error ? error.message : String(error),
-            { duration: 5000 },
-          );
+      onChange: (enabled: boolean) => {
+        const latestSession = FlowChatStore.getInstance()
+          .getState()
+          .sessions
+          .get(effectiveTargetSessionId);
+        if (
+          !latestSession
+          || isSessionWorktreeBindingLocked(latestSession, false)
+        ) {
+          notificationService.error(tWorktrees('strip.toggleLocked'));
+          return;
         }
+        FlowChatStore.getInstance().setSessionWorktreeIsolationRequested(
+          effectiveTargetSessionId,
+          enabled,
+        );
       },
     };
   }, [
     effectiveTargetSession,
     effectiveTargetSessionId,
+    derivedState?.isProcessing,
     isAcpTargetSession,
     isSubagentInputTarget,
     tWorktrees,

@@ -167,7 +167,7 @@ describe('ChatInputWorkspaceStrip git refresh behavior', () => {
         <ChatInputWorkspaceStrip
           repositoryPath="/repo"
           workspaceLabel="repo"
-          worktreeControl={{ locked: false, onChange }}
+          worktreeControl={{ enabled: false, locked: false, onChange }}
         />
       );
     });
@@ -181,6 +181,44 @@ describe('ChatInputWorkspaceStrip git refresh behavior', () => {
       toggle?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
     expect(onChange).toHaveBeenCalledWith(true);
+  });
+
+  it('updates repeated clicks optimistically without waiting for Git work', async () => {
+    const onChange = vi.fn();
+    await act(async () => {
+      root.render(
+        <ChatInputWorkspaceStrip
+          repositoryPath="/repo"
+          workspaceLabel="repo"
+          worktreeControl={{ enabled: false, locked: false, onChange }}
+        />
+      );
+    });
+
+    const toggle = container.querySelector<HTMLButtonElement>('[data-testid="chat-input-worktree-toggle"]');
+    act(() => {
+      toggle?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      toggle?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(onChange).toHaveBeenNthCalledWith(1, true);
+    expect(onChange).toHaveBeenNthCalledWith(2, false);
+  });
+
+  it('shows an armed worktree as checked before it is materialized', async () => {
+    await act(async () => {
+      root.render(
+        <ChatInputWorkspaceStrip
+          repositoryPath="/repo"
+          workspaceLabel="repo"
+          worktreeControl={{ enabled: true, locked: false, onChange: vi.fn() }}
+        />
+      );
+    });
+
+    const toggle = container.querySelector<HTMLButtonElement>('[data-testid="chat-input-worktree-toggle"]');
+    expect(toggle?.dataset.worktreeEnabled).toBe('true');
+    expect(toggle?.dataset.worktreeMaterialized).toBe('false');
   });
 
   it('shows the toggle as on inside a worktree and asks to turn it off', async () => {
@@ -198,7 +236,7 @@ describe('ChatInputWorkspaceStrip git refresh behavior', () => {
             branch: 'bitfun/isolated',
             lifecycle: 'managed',
           }}
-          worktreeControl={{ locked: false, onChange }}
+          worktreeControl={{ enabled: true, locked: false, onChange }}
         />
       );
     });
@@ -220,7 +258,7 @@ describe('ChatInputWorkspaceStrip git refresh behavior', () => {
         <ChatInputWorkspaceStrip
           repositoryPath="/repo"
           workspaceLabel="repo"
-          worktreeControl={{ locked: true, onChange }}
+          worktreeControl={{ enabled: false, locked: true, onChange }}
         />
       );
     });
@@ -241,7 +279,7 @@ describe('ChatInputWorkspaceStrip git refresh behavior', () => {
         <ChatInputWorkspaceStrip
           repositoryPath="/repo"
           workspaceLabel="repo"
-          worktreeControl={{ locked: false, onChange }}
+          worktreeControl={{ enabled: false, locked: false, onChange }}
         />
       );
     });
@@ -258,7 +296,7 @@ describe('ChatInputWorkspaceStrip git refresh behavior', () => {
             rootPath: '/worktrees/wt-1',
             lifecycle: 'managed',
           }}
-          worktreeControl={{ locked: false, onChange }}
+          worktreeControl={{ enabled: true, locked: false, onChange }}
         />
       );
     });
