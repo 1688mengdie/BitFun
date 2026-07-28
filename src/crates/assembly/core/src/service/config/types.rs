@@ -413,6 +413,9 @@ pub struct NotificationConfig {
     /// Whether to show a toast notification when a dialog turn completes while the window is not focused.
     #[serde(default = "default_true")]
     pub dialog_completion_notify: bool,
+    /// Whether to show a toast notification when an approval request arrives while the window is not focused.
+    #[serde(default = "default_true")]
+    pub permission_request_notify: bool,
     /// Whether to show built-in tip cards on startup (can be disabled by the user).
     #[serde(default = "default_true")]
     pub enable_startup_tips: bool,
@@ -1706,6 +1709,7 @@ impl Default for AppConfig {
                 position: "topRight".to_string(),
                 duration: 5000,
                 dialog_completion_notify: true,
+                permission_request_notify: true,
                 enable_startup_tips: true,
             },
             flow_chat: AppFlowChatConfig::default(),
@@ -1958,6 +1962,7 @@ impl Default for NotificationConfig {
             position: "topRight".to_string(),
             duration: 5000,
             dialog_completion_notify: true,
+            permission_request_notify: true,
             enable_startup_tips: true,
         }
     }
@@ -2109,7 +2114,7 @@ mod tests {
     use super::{
         AIConfig, AIExperienceConfig, AIModelConfig, AgentModelDefaultsConfig, AgentProfileConfig,
         AgentProfileView, AppConfig, AppLoggingConfig, GlobalConfig, MemoryExternalContextPolicy,
-        ModelExchangeTracingMode, ReasoningMode, SubagentBatchExecutionPolicy,
+        ModelExchangeTracingMode, NotificationConfig, ReasoningMode, SubagentBatchExecutionPolicy,
         SubagentModelSelection, UserSkillGroupsConfig, UserToolGroupsConfig,
     };
     use bitfun_runtime_ports::ToolPermissionConfig;
@@ -2121,6 +2126,15 @@ mod tests {
         let config: AppConfig =
             serde_json::from_value(serde_json::json!({})).expect("empty app config should default");
         assert!(!config.prevent_sleep);
+    }
+
+    #[test]
+    fn permission_request_notifications_default_to_enabled() {
+        assert!(NotificationConfig::default().permission_request_notify);
+
+        let config: NotificationConfig = serde_json::from_value(serde_json::json!({}))
+            .expect("empty notification config should default");
+        assert!(config.permission_request_notify);
     }
 
     #[test]
@@ -2400,6 +2414,7 @@ mod tests {
                     "position": "top-right",
                     "duration": 4000,
                     "dialog_completion_notify": true,
+                    "permission_request_notify": false,
                     "enable_startup_tips": true
                 },
                 "ai_experience": {
@@ -2423,6 +2438,7 @@ mod tests {
         .expect("minimal app config with quick_actions should deserialize");
 
         let actions = &config.app.ai_experience.quick_actions;
+        assert!(!config.app.notifications.permission_request_notify);
         assert_eq!(actions.len(), 1);
         assert_eq!(actions[0].id, "custom_1");
         assert_eq!(actions[0].label, "Run tests");
@@ -2431,6 +2447,10 @@ mod tests {
         assert_eq!(
             serialized["app"]["ai_experience"]["quick_actions"][0]["id"],
             "custom_1"
+        );
+        assert_eq!(
+            serialized["app"]["notifications"]["permission_request_notify"],
+            false
         );
     }
 
