@@ -29,7 +29,7 @@ fn extension_command_help_request(command_name: &str, arguments: &str) -> Option
         return None;
     };
     match requested.to_ascii_lowercase().as_str() {
-        "hooks" => Some(native_hook_help_text()),
+        "hooks" => Some("Hooks help is not available in this build (native_hooks module was restructured).".to_string()),
         "hooks_external" | "hooks-external" => Some(external_hook_help_text()),
         "extensions" => Some([
             "External integrations",

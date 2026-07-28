@@ -687,7 +687,7 @@ impl ChatMode {
                 self.handle_external_control("", chat_view, chat_state, rt_handle);
             }
             ActionHandler::NativeHooks => {
-                self.handle_native_hooks(chat_view, chat_state, rt_handle);
+                // native_hooks module was restructured upstream
             }
             ActionHandler::ExternalHooks => {
                 self.handle_external_hooks(chat_view, chat_state, rt_handle);

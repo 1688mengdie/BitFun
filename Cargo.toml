@@ -1,4 +1,4 @@
-[workspace]
+﻿[workspace]
 members = [
     "src/apps/cli",
     "src/apps/sdk-host",
@@ -140,6 +140,21 @@ hex = "0.4"
 chardetng = "0.1.17"
 encoding_rs = "0.8.35"
 url = "2"
+
+# taiji-quant 量化引擎依赖
+rayon = "1.10"
+csv = "1.3"
+parking_lot = "0.12"
+petgraph = { version = "0.6", features = ["serde-1"] }
+jieba-rs = "0.7"
+candle-core = "0.7"
+candle-nn = "0.7"
+ndarray = { version = "0.16", features = ["serde"] }
+pyo3 = { version = "0.23", features = ["extension-module"] }
+statrs = "0.17"
+lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls-tls"] }
+tera = "1.20"
+crossbeam = "0.8"
 
 # HTTP client
 reqwest = { version = "0.13.4", default-features = false, features = ["native-tls", "rustls", "http2", "json", "stream", "multipart", "query", "form"] }
@@ -283,27 +298,12 @@ rmcp = { version = "1.7", default-features = false, features = [
     "server",
 ] }
 agent-client-protocol = { version = "0.12", features = ["unstable"] }
-russh = "0.45"
+russh = "=0.45.0"
 russh-sftp = "2.1"
-russh-keys = "0.45"
+russh-keys = "=0.45.0"
 shellexpand = "3"
 ssh_config = "0.1"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
-
-# taiji-quant 量化引擎依赖
-rayon = "1.10"
-csv = "1.3"
-parking_lot = "0.12"
-petgraph = { version = "0.6", features = ["serde-1"] }
-jieba-rs = "0.7"
-candle-core = "0.7"
-candle-nn = "0.7"
-ndarray = { version = "0.16", features = ["serde"] }
-pyo3 = { version = "0.23", features = ["extension-module"] }
-statrs = "0.17"
-lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls-tls"] }
-tera = "1.20"
-crossbeam = "0.8"
 
 [patch.crates-io]
 # tao 0.35.3 can re-enter its Windows window callback while holding input locks.
@@ -314,7 +314,6 @@ tao = { git = "https://github.com/tauri-apps/tao.git", rev = "c704261c519c58cfdd
 tauri-runtime = { git = "https://github.com/tauri-apps/tauri.git", rev = "ce3860e84b79af0d5ee628b304399499a87328b1" }
 tauri-runtime-wry = { git = "https://github.com/tauri-apps/tauri.git", rev = "ce3860e84b79af0d5ee628b304399499a87328b1" }
 tauri-utils = { git = "https://github.com/tauri-apps/tauri.git", rev = "ce3860e84b79af0d5ee628b304399499a87328b1" }
-
 [profile.dev]
 # Line tables only: keeps panic backtrace line numbers while shrinking PDB/DWARF
 # output dramatically, which speeds up the Windows link step the most.
