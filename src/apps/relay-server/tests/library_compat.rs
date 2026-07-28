@@ -37,6 +37,7 @@ fn legacy_library_path_exposes_supported_relay_api() {
         login_rate_limiter: Arc::new(routes::auth::LoginRateLimiter::new()),
         device_manager: relay::DeviceManager::new(),
         cors_allow_origins: Arc::new(Vec::new()),
+        page_browser_auth: None,
     };
 
     fn require_store<T: WebAssetStore>() {}
