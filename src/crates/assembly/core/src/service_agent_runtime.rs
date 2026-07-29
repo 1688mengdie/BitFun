@@ -2321,10 +2321,7 @@ mod tests {
         assert_eq!(messages[0].role, "user");
         assert_eq!(messages[1].role, "assistant");
         assert_eq!(messages[1].content, "visible text");
-        assert_eq!(
-            messages[1].tools.as_ref().unwrap()[0].status,
-            Some("running".to_string())
-        );
+        assert_eq!(messages[1].tools.as_ref().unwrap()[0].status, "running");
     }
 
     #[test]
