@@ -3,6 +3,7 @@ pub(crate) mod protocol;
 mod runner;
 mod store;
 mod worker;
+mod workspace;
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -13,10 +14,12 @@ use bitfun_core::service::config::{AuthConfig, GlobalConfig};
 use serde::de::DeserializeOwned;
 
 use protocol::{
+    DispatchAnswerRequest, DispatchAnswerResponse, DispatchAppendRequest, DispatchAppendResponse,
     DispatchCancelRequest, DispatchCancelResponse, DispatchJobListEntry, DispatchJobState,
     DispatchListRequest, DispatchProbeRequest, DispatchProbeResponse, DispatchStatusRequest,
-    DispatchStatusResponse, DispatchSubmitRequest, DispatchSubmitResponse, DispatchWorkspaceProbe,
-    DISPATCH_PROTOCOL_VERSION,
+    DispatchStatusResponse, DispatchSubmitRequest, DispatchSubmitResponse,
+    DispatchWorkspaceBeginRequest, DispatchWorkspaceChunkRequest, DispatchWorkspaceCommitRequest,
+    DispatchWorkspaceProbe, DISPATCH_PROTOCOL_VERSION, MAX_DISPATCH_TEXT_BYTES,
 };
 use store::{CreateJobOutcome, DispatchStateRecord, DispatchStore};
 
@@ -52,12 +55,32 @@ pub(crate) async fn run_dispatch_verb(
             let _: DispatchListRequest = parse(input)?;
             serde_json::to_value(list()?).context("encode dispatch job list")
         }
+        "answer" => {
+            serde_json::to_value(answer(parse(input)?)?).context("encode permission answer")
+        }
+        "append" => serde_json::to_value(append(parse(input)?)?).context("encode appended message"),
+        "workspace-begin" => serde_json::to_value(workspace::begin(parse::<
+            DispatchWorkspaceBeginRequest,
+        >(input)?)?)
+        .context("encode workspace begin response"),
+        "workspace-chunk" => serde_json::to_value(workspace::chunk(parse::<
+            DispatchWorkspaceChunkRequest,
+        >(input)?)?)
+        .context("encode workspace chunk response"),
+        "workspace-commit" => serde_json::to_value(workspace::commit(parse::<
+            DispatchWorkspaceCommitRequest,
+        >(input)?)?)
+        .context("encode workspace commit response"),
         _ => bail!("unsupported dispatch verb: {verb}"),
     }
 }
 
 pub(crate) async fn run_worker(job_id: String) -> Result<()> {
     worker::run(job_id).await
+}
+
+pub(crate) fn run_workspace_materializer(job_id: String) -> Result<()> {
+    workspace::materialize(job_id)
 }
 
 async fn probe(request: DispatchProbeRequest) -> Result<DispatchProbeResponse> {
@@ -73,7 +96,12 @@ async fn probe(request: DispatchProbeRequest) -> Result<DispatchProbeResponse> {
         "workspace_serialization".to_string(),
         "approval_auto".to_string(),
         "approval_reject_and_report".to_string(),
+        "approval_remote".to_string(),
         "frontend_event_projection".to_string(),
+        "append_message".to_string(),
+        "event_log_completeness".to_string(),
+        "workspace_snapshot_exact".to_string(),
+        "workspace_snapshot_chunked".to_string(),
     ];
     if runner::is_supported() {
         capabilities.push("detached_worker".to_string());
@@ -169,13 +197,66 @@ fn status(request: DispatchStatusRequest) -> Result<DispatchStatusResponse> {
     let store = DispatchStore::open_default()?;
     let state = reconcile_worker_liveness(&store, &request.job_id)?;
     let page = store.read_events(&request.job_id, request.cursor)?;
+    if state.state.is_terminal() {
+        store.clear_pending_permissions(&request.job_id);
+    }
+    let pending_permissions = if state.state.is_terminal() {
+        Vec::new()
+    } else {
+        store.list_pending_permissions(&request.job_id)?
+    };
     Ok(DispatchStatusResponse {
         state: state.state,
         cursor: page.cursor,
         events: page.events,
-        pending_permissions: Vec::new(),
+        pending_permissions,
         cursor_reset: page.cursor_reset,
+        history_truncated: page.history_truncated,
+        event_log_complete: !page.history_truncated && page.omitted_event_count == 0,
+        omitted_event_count: page.omitted_event_count,
         last_error: state.last_error,
+    })
+}
+
+fn answer(request: DispatchAnswerRequest) -> Result<DispatchAnswerResponse> {
+    if request.request_id.trim().is_empty() || request.request_id.len() > 512 {
+        bail!("dispatch permission requestId is invalid");
+    }
+    if matches!(
+        &request.reply,
+        bitfun_agent_runtime::sdk::PermissionReply::Reject {
+            feedback: Some(feedback)
+        } if feedback.len() > MAX_DISPATCH_TEXT_BYTES
+    ) {
+        bail!("dispatch permission feedback exceeds the 32 KiB request limit");
+    }
+    let store = DispatchStore::open_default()?;
+    let job = store.load_job(&request.job_id)?;
+    if job.request.approval_policy != protocol::DispatchApprovalPolicy::Remote {
+        bail!("dispatch job does not use remote approval policy");
+    }
+    let resolved =
+        store.save_permission_answer(&request.job_id, &request.request_id, request.reply)?;
+    Ok(DispatchAnswerResponse { resolved })
+}
+
+fn append(request: DispatchAppendRequest) -> Result<DispatchAppendResponse> {
+    if request.content.trim().is_empty() {
+        bail!("dispatch appended message cannot be empty");
+    }
+    let total_bytes = request
+        .content
+        .len()
+        .saturating_add(request.display_content.as_ref().map_or(0, String::len));
+    if total_bytes > MAX_DISPATCH_TEXT_BYTES {
+        bail!("dispatch appended message exceeds the 32 KiB request limit");
+    }
+    let message_id = request.message_id.clone();
+    let store = DispatchStore::open_default()?;
+    let accepted = store.enqueue_append_message(request)?;
+    Ok(DispatchAppendResponse {
+        accepted,
+        message_id,
     })
 }
 
@@ -189,6 +270,22 @@ fn cancel_in_store(
     request: DispatchCancelRequest,
     terminate: impl FnOnce(u32, &str) -> Result<bool>,
 ) -> Result<DispatchCancelResponse> {
+    cancel_in_store_with_process_checks(
+        store,
+        request,
+        runner::process_alive,
+        runner::worker_process_alive,
+        terminate,
+    )
+}
+
+fn cancel_in_store_with_process_checks(
+    store: &DispatchStore,
+    request: DispatchCancelRequest,
+    process_alive: impl Fn(u32) -> bool,
+    worker_process_alive: impl Fn(u32, &str) -> bool,
+    terminate: impl FnOnce(u32, &str) -> Result<bool>,
+) -> Result<DispatchCancelResponse> {
     let before = store.request_cancel(&request.job_id)?;
     if before.state.is_terminal() {
         return Ok(DispatchCancelResponse {
@@ -197,6 +294,23 @@ fn cancel_in_store(
     }
 
     if let Some(pid) = store.read_pid(&request.job_id)? {
+        if process_alive(pid) && !worker_process_alive(pid, &request.job_id) {
+            let message = format!(
+                "dispatch worker pid {pid} no longer matches job '{}'",
+                request.job_id
+            );
+            let (failed, _) = store.mark_state(
+                &request.job_id,
+                DispatchJobState::Failed,
+                before.turn_id.as_deref(),
+                Some(message.clone()),
+            )?;
+            store.remove_pid(&request.job_id);
+            store.clear_preparing(&request.job_id);
+            store.clear_pending_permissions(&request.job_id);
+            debug_assert_eq!(failed.state, DispatchJobState::Failed);
+            bail!("{message}; the unrelated process was not signalled");
+        }
         if let Err(error) = terminate(pid, &request.job_id) {
             let detail = format!("{error:#}");
             let _ = store.record_nonterminal_error(&request.job_id, &detail);
@@ -221,6 +335,7 @@ fn cancel_in_store(
     )?;
     store.clear_preparing(&request.job_id);
     store.remove_pid(&request.job_id);
+    store.clear_pending_permissions(&request.job_id);
     Ok(DispatchCancelResponse {
         cancelled: cancelled_state.state == DispatchJobState::Cancelled,
     })
@@ -255,13 +370,22 @@ fn reconcile_worker_liveness_with_spawn(
         if runner::worker_process_alive(pid, job_id) {
             return Ok(state);
         }
-        // A live PID with the wrong command may be a recycled process. Never
-        // infer cancellation/failure from it or signal it.
+        // A live PID with the wrong command is a recycled or replaced process.
+        // Never signal it, but do settle the orphaned job instead of leaving an
+        // unobservable non-terminal state forever.
         if runner::process_alive(pid) {
             let message =
                 format!("dispatch worker pid {pid} is live but does not match job '{job_id}'");
-            store.record_nonterminal_error(job_id, &message)?;
-            return store.load_state(job_id);
+            let (reconciled, _) = store.mark_state(
+                job_id,
+                DispatchJobState::Failed,
+                state.turn_id.as_deref(),
+                Some(message),
+            )?;
+            store.remove_pid(job_id);
+            store.clear_preparing(job_id);
+            store.clear_pending_permissions(job_id);
+            return Ok(reconciled);
         }
         if runner::worker_process_group_alive(pid) {
             // The PID marker authenticates only the leader. Once that process
@@ -279,6 +403,7 @@ fn reconcile_worker_liveness_with_spawn(
             )?;
             store.remove_pid(job_id);
             store.clear_preparing(job_id);
+            store.clear_pending_permissions(job_id);
             return Ok(reconciled);
         }
     }
@@ -306,6 +431,7 @@ fn reconcile_worker_liveness_with_spawn(
     let reconciled = store.settle_exited_worker(job_id)?;
     store.remove_pid(job_id);
     store.clear_preparing(job_id);
+    store.clear_pending_permissions(job_id);
     Ok(reconciled)
 }
 
@@ -519,8 +645,8 @@ fn validate_submit_request(request: &DispatchSubmitRequest) -> Result<()> {
     if request.prompt.trim().is_empty() {
         bail!("dispatch prompt cannot be empty");
     }
-    if request.prompt.len() > 4 * 1024 * 1024 {
-        bail!("dispatch prompt exceeds the 4 MiB request limit");
+    if request.prompt.len() > MAX_DISPATCH_TEXT_BYTES {
+        bail!("dispatch prompt exceeds the 32 KiB request limit");
     }
     Ok(())
 }
@@ -615,7 +741,7 @@ mod tests {
     }
 
     #[test]
-    fn cancel_identity_mismatch_stays_retryable_and_non_terminal() {
+    fn cancel_identity_mismatch_fails_orphaned_job_without_signalling_process() {
         let dir = tempfile::tempdir().expect("tempdir");
         let store = DispatchStore::open(dir.path().join("dispatch")).expect("store");
         store
@@ -633,9 +759,9 @@ mod tests {
             runner::terminate_worker,
         )
         .expect_err("an unrelated live process must not be treated as cancelled");
-        assert!(error.to_string().contains("does not match"));
+        assert!(error.to_string().contains("no longer matches"));
         let state = store.load_state("job-no-match").expect("state");
-        assert_eq!(state.state, DispatchJobState::Queued);
+        assert_eq!(state.state, DispatchJobState::Failed);
         assert!(state.cancel_requested());
     }
 
@@ -648,13 +774,15 @@ mod tests {
             .expect("create job");
         store
             .write_pid("job-signal-failure", 42)
-            .expect("record fake pid");
+            .expect("record injected pid");
 
-        let error = cancel_in_store(
+        let error = cancel_in_store_with_process_checks(
             &store,
             DispatchCancelRequest {
                 job_id: "job-signal-failure".to_string(),
             },
+            |_pid| true,
+            |_pid, _job_id| true,
             |_pid, _job_id| bail!("injected signal failure"),
         )
         .expect_err("signal failure must remain visible");
@@ -672,13 +800,17 @@ mod tests {
         store
             .create_job(test_request("job-stopped"), "Task".to_string())
             .expect("create job");
-        store.write_pid("job-stopped", 42).expect("record fake pid");
+        store
+            .write_pid("job-stopped", 42)
+            .expect("record injected pid");
 
-        let response = cancel_in_store(
+        let response = cancel_in_store_with_process_checks(
             &store,
             DispatchCancelRequest {
                 job_id: "job-stopped".to_string(),
             },
+            |_pid| false,
+            |_pid, _job_id| panic!("an absent process must not undergo identity inspection"),
             |_pid, _job_id| Ok(false),
         )
         .expect("confirmed stopped worker");
