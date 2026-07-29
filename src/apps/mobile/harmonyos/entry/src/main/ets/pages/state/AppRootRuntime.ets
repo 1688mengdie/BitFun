@@ -1301,6 +1301,7 @@ export class AppRootRuntime {
     // Do not keep presenting the previous device while the new account device
     // is being handshaken. Clear its projection before the async connect.
     this.remotePageState.setConnectionState(ConnectionState.Reconnecting);
+    this.remotePageState.setLoadingHome(true);
     this.remotePageState.clearControlTarget();
     this.remotePageState.setWorkspace(RemoteI18n.t('status.notConnected'), '', '', '', 'normal');
     this.remotePageState.setBusy(true);
@@ -1347,6 +1348,7 @@ export class AppRootRuntime {
       });
       this.startHeartbeat();
       await this.loadRecentWorkspacesInBackground();
+      this.remotePageState.setLoadingHome(false);
     } catch (err) {
       if (err instanceof CloudAccountRequestError && err.statusCode === 401) {
         await this.expireCloudAccountSession();
@@ -1358,6 +1360,7 @@ export class AppRootRuntime {
       this.sessionManager.reset();
       throw new Error(message);
     } finally {
+      this.remotePageState.setLoadingHome(false);
       this.remotePageState.setBusy(false);
     }
   }

@@ -4,6 +4,7 @@ import { RemoteActionsSheet } from './RemoteActionsSheet';
 import { RemoteBottomBar } from './RemoteBottomBar';
 import { RemoteHeader } from './RemoteHeader';
 import { RemoteSessionList } from './RemoteSessionList';
+import { RemoteSessionLoadingView } from './RemoteSessionLoadingView';
 import { RemotePageState } from '../state/RemotePageState';
 import { ACCENT, CARD, INK, MUTED, PAGE_BG } from './Theme';
 
@@ -42,6 +43,7 @@ export struct RemoteHomeView {
         RemoteHeader({
           desktopName: this.pageState.desktopName,
           connectionState: this.pageState.connectionState,
+          isLoading: this.pageState.isLoadingHome,
           onOpenSidebar: () => {
             this.onOpenSidebar();
           },
@@ -49,7 +51,22 @@ export struct RemoteHomeView {
             this.openRemoteActions();
           }
         })
-        if (this.canUseRemote() || this.isConnecting()) {
+        if (this.isInitialLoading()) {
+          RemoteSessionLoadingView()
+          RemoteBottomBar({
+            query: this.pageState.sessionQuery,
+            isBusy: true,
+            onQueryChange: (value: string) => {
+              this.onSessionQueryChange(value);
+            },
+            onSearch: () => {
+              this.onSearchSessions();
+            },
+            onCreate: () => {
+              this.onCreateAssistantSession();
+            }
+          })
+        } else if (this.canUseRemote()) {
             RemoteSessionList({
             sessions: this.pageState.visibleSessions(),
             query: this.pageState.sessionQuery,
@@ -275,6 +292,10 @@ export struct RemoteHomeView {
     return this.pageState.connectionState === 'parsing' ||
       this.pageState.connectionState === 'pairing' ||
       this.pageState.connectionState === 'reconnecting';
+  }
+
+  private isInitialLoading(): boolean {
+    return this.pageState.isLoadingHome || this.isConnecting();
   }
 
 }

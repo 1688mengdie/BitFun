@@ -132,6 +132,7 @@ export class RemoteConnectionViewModel {
     try {
       RemoteLogger.info(`connect start auto=${autoReconnect ? '1' : '0'}`);
       this.pageState.setBusy(true);
+      this.pageState.setLoadingHome(true);
       this.pageState.setConnectionFailureKind('');
       if (this.lockUntil > 0 && !ConnectionErrorPolicy.isLocked(this.lockUntil)) {
         this.failureCount = 0;
@@ -166,7 +167,8 @@ export class RemoteConnectionViewModel {
       this.pageState.setStatusText(RemoteI18n.t('connection.connected'));
       this.closeConnectSheet();
       this.startHeartbeat();
-      void this.loadRecentWorkspaces();
+      await this.loadRecentWorkspaces();
+      this.pageState.setLoadingHome(false);
       RemoteLogger.info('connect success');
     } catch (err) {
       if (!this.connection.isCurrentRequest()) {
@@ -193,6 +195,7 @@ export class RemoteConnectionViewModel {
       }
     } finally {
       if (this.connection.isCurrentRequest()) {
+        this.pageState.setLoadingHome(false);
         this.pageState.setBusy(false);
       }
     }
