@@ -1,29 +1,44 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from 'react';
 import {
   FolderGit2,
   GitBranch,
+  LoaderCircle,
+  MessageSquareText,
   RotateCcw,
   Save,
   Trash2,
 } from 'lucide-react';
+import { openAgentCompanionSession } from '@/app/services/openAgentCompanionSession';
 import {
   Button,
   ConfigPageLoading,
   ConfigPageMessage,
   ConfigPageRefreshButton,
   ConfirmDialog,
+  IconButton,
   Input,
   NumberInput,
   Switch,
 } from '@/component-library';
+import { confirmWarning } from '@/component-library/components/ConfirmDialog/confirmService';
+import { flowChatManager } from '@/flow_chat/services/FlowChatManager';
 import { configAPI, worktreeAPI } from '@/infrastructure/api';
+import { sessionAPI } from '@/infrastructure/api/service-api/SessionAPI';
 import type {
   WorktreeCommandError,
   WorktreeProjectSummary,
+  WorktreeSessionSummary,
   WorktreeSettings,
   WorktreeSummary,
 } from '@/infrastructure/api/service-api/WorktreeAPI';
 import { useI18n } from '@/infrastructure/i18n';
+import { notificationService } from '@/shared/notification-system';
 import {
   ConfigPageContent,
   ConfigPageHeader,
@@ -35,6 +50,7 @@ import './WorktreesConfig.scss';
 
 const AUTO_DELETE_LIMIT_MIN = 1;
 const AUTO_DELETE_LIMIT_MAX = 100;
+const WORKTREE_REMOVE_ANIMATION_MS = 180;
 
 const DEFAULT_SETTINGS: WorktreeSettings = {
   rootPath: '~/.bitfun/worktrees',
@@ -47,6 +63,12 @@ const DEFAULT_SETTINGS: WorktreeSettings = {
 interface DeleteTarget {
   projectWorkspacePath: string;
   worktree: WorktreeSummary;
+}
+
+interface ScrollSnapshot {
+  anchorTop: number;
+  scrollContainer: HTMLElement;
+  scrollTop: number;
 }
 
 type PageMessage = {
@@ -88,13 +110,44 @@ function createDeleteRequestId(): string {
     ?? `worktree-settings-delete-${Date.now()}-${Math.random()}`;
 }
 
-type DeletionBlockReason = 'associatedSessions' | 'locked' | 'missing';
+type DeletionBlockReason = 'locked' | 'missing';
 
 function deletionBlockReason(worktree: WorktreeSummary): DeletionBlockReason | null {
-  if (worktree.associatedSessionCount > 0) return 'associatedSessions';
   if (worktree.locked) return 'locked';
   if (worktree.missing) return 'missing';
   return null;
+}
+
+function workspaceName(path: string): string {
+  const parts = path.replace(/\\/g, '/').split('/').filter(Boolean);
+  return parts.at(-1) ?? path;
+}
+
+function removeWorktreeFromProjects(
+  projects: WorktreeProjectSummary[],
+  projectWorkspacePath: string,
+  worktreeId: string,
+): WorktreeProjectSummary[] {
+  return projects
+    .map(project => project.projectWorkspacePath === projectWorkspacePath
+      ? {
+          ...project,
+          worktrees: project.worktrees.filter(worktree => worktree.worktreeId !== worktreeId),
+        }
+      : project)
+    .filter(project => project.worktrees.length > 0);
+}
+
+function removalAnimationDuration(): number {
+  return globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+    ? 0
+    : WORKTREE_REMOVE_ANIMATION_MS;
+}
+
+function waitFor(ms: number): Promise<void> {
+  return ms > 0
+    ? new Promise(resolve => globalThis.setTimeout(resolve, ms))
+    : Promise.resolve();
 }
 
 const WorktreesConfig: React.FC = () => {
@@ -105,9 +158,18 @@ const WorktreesConfig: React.FC = () => {
   const [settingsMessage, setSettingsMessage] = useState<PageMessage | null>(null);
   const [projects, setProjects] = useState<WorktreeProjectSummary[]>([]);
   const [projectsLoading, setProjectsLoading] = useState(true);
+  const [projectsInitialized, setProjectsInitialized] = useState(false);
   const [projectsMessage, setProjectsMessage] = useState<PageMessage | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
   const [deletingWorktreeId, setDeletingWorktreeId] = useState<string | null>(null);
+  const [removingWorktreeId, setRemovingWorktreeId] = useState<string | null>(null);
+  const [openingSessionId, setOpeningSessionId] = useState<string | null>(null);
+  const [projectsLayoutRevision, setProjectsLayoutRevision] = useState(0);
+  const projectsResultsRef = useRef<HTMLDivElement>(null);
+  const projectsRequestIdRef = useRef(0);
+  const pendingScrollSnapshotRef = useRef<ScrollSnapshot | null>(null);
+  const worktreeMutationInFlightRef = useRef(false);
+  const pendingWorktreeRefreshRef = useRef(false);
 
   const loadSettings = useCallback(async () => {
     setSettingsLoading(true);
@@ -124,22 +186,74 @@ const WorktreesConfig: React.FC = () => {
     }
   }, [t]);
 
-  const loadProjects = useCallback(async () => {
-    setProjectsLoading(true);
-    setProjectsMessage(null);
-    try {
-      setProjects(await worktreeAPI.listProjects());
-    } catch {
-      setProjectsMessage({ type: 'error', text: t('management.loadFailed') });
-    } finally {
-      setProjectsLoading(false);
+  const captureScrollSnapshot = useCallback((): ScrollSnapshot | null => {
+    const anchor = projectsResultsRef.current;
+    const scrollContainer = anchor?.closest<HTMLElement>('.bitfun-config-page-layout');
+    if (!anchor || !scrollContainer) {
+      return null;
     }
-  }, [t]);
+    return {
+      anchorTop: anchor.getBoundingClientRect().top,
+      scrollContainer,
+      scrollTop: scrollContainer.scrollTop,
+    };
+  }, []);
+
+  const commitProjectsLayoutChange = useCallback((update: () => void) => {
+    pendingScrollSnapshotRef.current = captureScrollSnapshot();
+    update();
+    setProjectsLayoutRevision(current => current + 1);
+  }, [captureScrollSnapshot]);
+
+  useLayoutEffect(() => {
+    const snapshot = pendingScrollSnapshotRef.current;
+    const anchor = projectsResultsRef.current;
+    if (!snapshot || !anchor || !snapshot.scrollContainer.isConnected) {
+      pendingScrollSnapshotRef.current = null;
+      return;
+    }
+
+    const anchorDelta = anchor.getBoundingClientRect().top - snapshot.anchorTop;
+    snapshot.scrollContainer.scrollTop = snapshot.scrollTop + anchorDelta;
+    pendingScrollSnapshotRef.current = null;
+  }, [projectsLayoutRevision]);
+
+  const loadProjects = useCallback(async (): Promise<boolean> => {
+    const requestId = ++projectsRequestIdRef.current;
+    setProjectsLoading(true);
+    try {
+      const nextProjects = await worktreeAPI.listProjects();
+      if (requestId !== projectsRequestIdRef.current) {
+        return false;
+      }
+      commitProjectsLayoutChange(() => {
+        setProjects(nextProjects);
+        setProjectsMessage(null);
+        setProjectsInitialized(true);
+        setProjectsLoading(false);
+      });
+      return true;
+    } catch {
+      if (requestId !== projectsRequestIdRef.current) {
+        return false;
+      }
+      commitProjectsLayoutChange(() => {
+        setProjectsMessage({ type: 'error', text: t('management.loadFailed') });
+        setProjectsInitialized(true);
+        setProjectsLoading(false);
+      });
+      return false;
+    }
+  }, [commitProjectsLayoutChange, t]);
 
   useEffect(() => {
     void loadSettings();
     void loadProjects();
     return worktreeAPI.onChanged(() => {
+      if (worktreeMutationInFlightRef.current) {
+        pendingWorktreeRefreshRef.current = true;
+        return;
+      }
       void loadProjects();
     });
   }, [loadProjects, loadSettings]);
@@ -188,7 +302,8 @@ const WorktreesConfig: React.FC = () => {
 
     setDeleteTarget(null);
     setDeletingWorktreeId(target.worktree.worktreeId);
-    setProjectsMessage(null);
+    worktreeMutationInFlightRef.current = true;
+    pendingWorktreeRefreshRef.current = false;
     try {
       const discardLocalWork =
         target.worktree.dirty || target.worktree.hasUnpublishedCommits;
@@ -198,17 +313,26 @@ const WorktreesConfig: React.FC = () => {
         createDeleteRequestId(),
         discardLocalWork,
       );
-      await loadProjects();
-      setProjectsMessage({
-        type: 'success',
-        text: t('management.deleted', { path: target.worktree.path }),
+      setRemovingWorktreeId(target.worktree.worktreeId);
+      await waitFor(removalAnimationDuration());
+      commitProjectsLayoutChange(() => {
+        setProjects(current => removeWorktreeFromProjects(
+          current,
+          target.projectWorkspacePath,
+          target.worktree.worktreeId,
+        ));
+        setRemovingWorktreeId(null);
       });
+      notificationService.success(
+        t('management.deleted', { path: target.worktree.path }),
+        { duration: 2400 },
+      );
+      await loadProjects();
+      pendingWorktreeRefreshRef.current = false;
     } catch (error) {
       const code = (error as Partial<WorktreeCommandError> | null)?.code;
       const text = (() => {
         switch (code) {
-          case 'worktree_busy':
-            return t('management.errors.associatedSessions');
           case 'worktree_locked':
             return t('management.errors.locked');
           case 'dirty_worktree':
@@ -223,14 +347,63 @@ const WorktreesConfig: React.FC = () => {
             return t('management.errors.deleteFailed');
         }
       })();
-      setProjectsMessage({
-        type: 'error',
-        text,
+      commitProjectsLayoutChange(() => {
+        setProjectsMessage({
+          type: 'error',
+          text,
+        });
       });
     } finally {
+      worktreeMutationInFlightRef.current = false;
       setDeletingWorktreeId(null);
+      setRemovingWorktreeId(null);
+      if (pendingWorktreeRefreshRef.current) {
+        pendingWorktreeRefreshRef.current = false;
+        void loadProjects();
+      }
     }
   };
+
+  const openAssociatedSession = useCallback(async (
+    projectWorkspacePath: string,
+    session: WorktreeSessionSummary,
+  ) => {
+    if (openingSessionId) return;
+
+    setOpeningSessionId(session.sessionId);
+    try {
+      if (session.archived) {
+        const shouldRestore = await confirmWarning(
+          t('management.sessions.restoreTitle'),
+          t('management.sessions.restoreMessage', { name: session.sessionName }),
+        );
+        if (!shouldRestore) {
+          return;
+        }
+        await sessionAPI.unarchiveSession(session.sessionId, projectWorkspacePath);
+        await flowChatManager.refreshWorkspaceSessions({
+          rootPath: projectWorkspacePath,
+        });
+      }
+
+      let opened = await openAgentCompanionSession(session.sessionId);
+      if (!opened) {
+        await flowChatManager.refreshWorkspaceSessions({
+          rootPath: projectWorkspacePath,
+        });
+        opened = await openAgentCompanionSession(session.sessionId);
+      }
+      if (!opened) {
+        throw new Error('Associated session was not found after refreshing the workspace');
+      }
+    } catch {
+      notificationService.error(t('management.sessions.openFailed'), {
+        duration: 3200,
+      });
+    } finally {
+      setOpeningSessionId(null);
+    }
+  }, [openingSessionId, t]);
 
   const renderSettings = () => {
     if (settingsLoading) {
@@ -348,8 +521,6 @@ const WorktreesConfig: React.FC = () => {
     const blockCode = deletionBlockReason(worktree);
     const blockReason = (() => {
       switch (blockCode) {
-        case 'associatedSessions':
-          return t('management.protection.associatedSessions');
         case 'locked':
           return t('management.protection.locked');
         case 'missing':
@@ -358,9 +529,11 @@ const WorktreesConfig: React.FC = () => {
           return null;
       }
     })();
+    const sessionNames = worktree.sessions
+      .map(session => session.sessionName)
+      .join(', ');
     const branchLabel = worktree.branch
       ?? t('labels.detached', { commit: worktree.head.slice(0, 7) });
-    const forceDelete = worktree.dirty || worktree.hasUnpublishedCommits;
     const lifecycleLabel = (() => {
       switch (worktree.lifecycle) {
         case 'permanent':
@@ -374,39 +547,84 @@ const WorktreesConfig: React.FC = () => {
 
     return (
       <article
-        className="bitfun-worktrees-config__worktree"
+        className={[
+          'bitfun-worktrees-config__worktree',
+          removingWorktreeId === worktree.worktreeId
+            && 'bitfun-worktrees-config__worktree--removing',
+        ].filter(Boolean).join(' ')}
         key={worktree.worktreeId}
         data-worktree-id={worktree.worktreeId}
       >
         <div className="bitfun-worktrees-config__worktree-main">
           <div className="bitfun-worktrees-config__worktree-copy">
-            <h5 className="bitfun-worktrees-config__worktree-title">{branchLabel}</h5>
+            <div className="bitfun-worktrees-config__worktree-heading">
+              <h5 className="bitfun-worktrees-config__worktree-title">{branchLabel}</h5>
+              <div className="bitfun-worktrees-config__metadata">
+                {worktree.lifecycle !== 'managed' && <span>{lifecycleLabel}</span>}
+                {worktree.dirty && <span>{t('management.state.dirty')}</span>}
+                {worktree.hasUnpublishedCommits && (
+                  <span>{t('management.state.unpublishedCommits')}</span>
+                )}
+                {worktree.locked && <span>{t('management.state.locked')}</span>}
+                {worktree.missing && <span>{t('management.state.missing')}</span>}
+              </div>
+            </div>
             <code className="bitfun-worktrees-config__path" title={worktree.path}>
               {worktree.path}
             </code>
-            <div className="bitfun-worktrees-config__metadata">
-              <span>{lifecycleLabel}</span>
-              {worktree.dirty && <span>{t('management.state.dirty')}</span>}
-              {worktree.hasUnpublishedCommits && (
-                <span>{t('management.state.unpublishedCommits')}</span>
-              )}
-              {worktree.locked && <span>{t('management.state.locked')}</span>}
-              {worktree.missing && <span>{t('management.state.missing')}</span>}
-              {worktree.runningSessionCount > 0 && (
+            {worktree.associatedSessionCount > 0 && (
+              <div
+                className="bitfun-worktrees-config__sessions-summary"
+                title={sessionNames}
+              >
+                <MessageSquareText size={13} aria-hidden />
                 <span>
-                  {t('management.state.activeSessions', {
-                    count: worktree.runningSessionCount,
+                  {t('management.sessions.summary', {
+                    count: worktree.associatedSessionCount,
                   })}
                 </span>
-              )}
-            </div>
+                <span className="bitfun-worktrees-config__session-links">
+                  {worktree.sessions.map(session => (
+                    <button
+                      key={session.sessionId}
+                      type="button"
+                      className="bitfun-worktrees-config__session-link"
+                      disabled={openingSessionId !== null}
+                      title={t('management.sessions.openLabel', {
+                        name: session.sessionName,
+                      })}
+                      onClick={() => void openAssociatedSession(
+                        project.projectWorkspacePath,
+                        session,
+                      )}
+                    >
+                      {openingSessionId === session.sessionId && (
+                        <LoaderCircle
+                          className="bitfun-worktrees-config__session-link-spinner"
+                          size={12}
+                          aria-hidden
+                        />
+                      )}
+                      <span>{session.sessionName}</span>
+                      {session.archived && (
+                        <span className="bitfun-worktrees-config__session-link-state">
+                          {t('management.sessions.status.archived')}
+                        </span>
+                      )}
+                    </button>
+                  ))}
+                </span>
+              </div>
+            )}
           </div>
-          <div className="bitfun-worktrees-config__delete-control" title={blockReason ?? undefined}>
-            <Button
+          <div className="bitfun-worktrees-config__delete-control">
+            <IconButton
               variant="danger"
               size="small"
               disabled={Boolean(blockCode) || deletingWorktreeId !== null}
               isLoading={deletingWorktreeId === worktree.worktreeId}
+              tooltip={blockReason ?? t('management.delete.action')}
+              title={blockReason ?? undefined}
               onClick={() => setDeleteTarget({
                 projectWorkspacePath: project.projectWorkspacePath,
                 worktree,
@@ -414,53 +632,37 @@ const WorktreesConfig: React.FC = () => {
               aria-label={t('management.delete.actionLabel', { path: worktree.path })}
             >
               <Trash2 size={14} aria-hidden />
-              {t('management.delete.action')}
-            </Button>
+            </IconButton>
           </div>
-        </div>
-
-        <div className="bitfun-worktrees-config__sessions">
-          <div className="bitfun-worktrees-config__sessions-label">
-            {t('management.sessions.title')}
-          </div>
-          {worktree.sessions.length > 0 ? (
-            <ul className="bitfun-worktrees-config__session-list">
-              {worktree.sessions.map(session => (
-                <li key={session.sessionId}>
-                  <span>{session.sessionName}</span>
-                  <span className="bitfun-worktrees-config__session-status">
-                    {session.status === 'archived'
-                      ? t('management.sessions.status.archived')
-                      : session.status === 'completed'
-                      ? t('shared:statuses.done')
-                      : t('management.sessions.status.active')}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <div className="bitfun-worktrees-config__sessions-empty">
-              {t('management.sessions.empty')}
-            </div>
-          )}
-          {blockReason && (
-            <div className="bitfun-worktrees-config__protection-note">
-              {blockReason}
-            </div>
-          )}
-          {forceDelete && !blockReason && (
-            <div className="bitfun-worktrees-config__protection-note bitfun-worktrees-config__protection-note--warning">
-              {t('management.delete.forceHint')}
-            </div>
-          )}
         </div>
       </article>
     );
   };
 
+  const renderProjectsSkeleton = () => (
+    <div className="bitfun-worktrees-config__skeleton">
+      <span className="bitfun-sr-only" role="status">
+        {t('management.loading')}
+      </span>
+      <div className="bitfun-worktrees-config__skeleton-header" aria-hidden="true">
+        <span />
+        <span />
+      </div>
+      <div className="bitfun-worktrees-config__skeleton-list" aria-hidden="true">
+        {[0, 1, 2].map(index => (
+          <div className="bitfun-worktrees-config__skeleton-row" key={index}>
+            <span />
+            <span />
+            <span />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+
   const renderProjects = () => {
-    if (projectsLoading) {
-      return <ConfigPageLoading text={t('management.loading')} />;
+    if (!projectsInitialized && projectsLoading) {
+      return renderProjectsSkeleton();
     }
     if (projects.length === 0 && !projectsMessage) {
       return (
@@ -485,9 +687,12 @@ const WorktreesConfig: React.FC = () => {
             key={project.projectWorkspacePath}
           >
             <header className="bitfun-worktrees-config__project-header">
-              <h4 title={project.projectWorkspacePath}>
-                {project.projectWorkspacePath}
-              </h4>
+              <div className="bitfun-worktrees-config__project-identity">
+                <h4>{workspaceName(project.projectWorkspacePath)}</h4>
+                <code title={project.projectWorkspacePath}>
+                  {project.projectWorkspacePath}
+                </code>
+              </div>
               <span>
                 {t('management.worktreeCount', { count: project.worktrees.length })}
               </span>
@@ -504,6 +709,19 @@ const WorktreesConfig: React.FC = () => {
   const deletingWithLocalWork = Boolean(
     deleteTarget?.worktree.dirty || deleteTarget?.worktree.hasUnpublishedCommits,
   );
+  const deletingWithSessions = Boolean(deleteTarget?.worktree.associatedSessionCount);
+  const deleteMessage = (() => {
+    if (deletingWithLocalWork && deletingWithSessions) {
+      return t('management.delete.forceMessageWithSessions');
+    }
+    if (deletingWithLocalWork) {
+      return t('management.delete.forceMessage');
+    }
+    if (deletingWithSessions) {
+      return t('management.delete.messageWithSessions');
+    }
+    return t('management.delete.message');
+  })();
 
   return (
     <ConfigPageLayout className="bitfun-worktrees-config">
@@ -516,6 +734,7 @@ const WorktreesConfig: React.FC = () => {
         {renderSettings()}
         <ConfigPageSection
           className="bitfun-worktrees-config__management-section"
+          mouseGlowSurface={false}
           title={t('management.title')}
           description={t('management.description')}
           extra={(
@@ -537,7 +756,31 @@ const WorktreesConfig: React.FC = () => {
               {t('management.retry')}
             </Button>
           )}
-          {renderProjects()}
+          <div
+            ref={projectsResultsRef}
+            className={[
+              'bitfun-worktrees-config__results',
+              projectsLoading
+                && projectsInitialized
+                && 'bitfun-worktrees-config__results--refreshing',
+            ].filter(Boolean).join(' ')}
+            aria-busy={projectsLoading}
+          >
+            {projectsLoading && projectsInitialized && (
+              <>
+                <div
+                  className="bitfun-worktrees-config__refresh-progress"
+                  aria-hidden="true"
+                >
+                  <span />
+                </div>
+                <span className="bitfun-sr-only" role="status">
+                  {t('management.loading')}
+                </span>
+              </>
+            )}
+            {renderProjects()}
+          </div>
         </ConfigPageSection>
       </ConfigPageContent>
 
@@ -548,9 +791,7 @@ const WorktreesConfig: React.FC = () => {
         title={deletingWithLocalWork
           ? t('management.delete.forceTitle')
           : t('management.delete.title')}
-        message={deletingWithLocalWork
-          ? t('management.delete.forceMessage')
-          : t('management.delete.message')}
+        message={deleteMessage}
         preview={deleteTarget?.worktree.path}
         type={deletingWithLocalWork ? 'error' : 'warning'}
         confirmDanger
