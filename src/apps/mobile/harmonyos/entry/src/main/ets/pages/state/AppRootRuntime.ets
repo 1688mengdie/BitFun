@@ -1961,7 +1961,6 @@ export class AppRootRuntime {
     await this.remoteToolActionController.approve(
       toolId,
       this.activeSession.sessionId || '',
-      this.isBusy,
       this.ensureRemoteAvailable(),
       updatedInput
     );
@@ -1971,7 +1970,6 @@ export class AppRootRuntime {
     await this.remoteToolActionController.reject(
       toolId,
       this.activeSession.sessionId || '',
-      this.isBusy,
       this.ensureRemoteAvailable()
     );
   }
@@ -1980,7 +1978,6 @@ export class AppRootRuntime {
     await this.remoteToolActionController.cancel(
       toolId,
       this.activeSession.sessionId || '',
-      this.isBusy,
       this.ensureRemoteAvailable()
     );
   }
@@ -1989,7 +1986,6 @@ export class AppRootRuntime {
     await this.remoteToolActionController.answer(
       toolId,
       this.activeSession.sessionId || '',
-      this.isBusy,
       this.ensureRemoteAvailable(),
       answers
     );
