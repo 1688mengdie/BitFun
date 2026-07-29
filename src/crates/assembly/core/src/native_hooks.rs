@@ -21,9 +21,9 @@ use crate::infrastructure::try_get_path_manager_arc;
 use crate::service::config::get_global_config_service;
 pub use crate::service::config::types::AgentHooksConfig;
 use bitfun_agent_runtime::native_hooks::{
-    AgentHookEngine, AgentHookEvent, AgentHookEventPayload, AgentHookOutcome, AgentHookPayload,
-    AgentHookPayloadCommon, AgentHookPermissionMode, AgentHookPermissionOutcome, AgentHookScope,
-    AgentHookSettings, AgentHookSettingsLayer, MAX_HOOKS_FILE_BYTES,
+    AgentHookEngine, AgentHookEvent, AgentHookEventPayload, AgentHookMatcher, AgentHookOutcome,
+    AgentHookPayload, AgentHookPayloadCommon, AgentHookPermissionMode, AgentHookPermissionOutcome,
+    AgentHookScope, AgentHookSettings, AgentHookSettingsLayer, MAX_HOOKS_FILE_BYTES,
 };
 use dashmap::DashMap;
 use log::{debug, info, warn};
@@ -449,6 +449,7 @@ struct CachedHookEngine {
     engine: Arc<AgentHookEngine>,
     fingerprints: Vec<HookFileFingerprint>,
     project_hooks_enabled: bool,
+    imported_generation: u64,
 }
 
 type EngineCache = tokio::sync::Mutex<BTreeMap<Option<PathBuf>, CachedHookEngine>>;
@@ -483,20 +484,21 @@ pub(crate) fn hook_settings_paths(
     paths
 }
 
-/// Read each existing hook settings file, in the given layer order, and parse
-/// them into one engine. Unreadable or oversized files are skipped with a
-/// warning so one bad layer cannot disable the rest.
-pub(crate) fn build_engine(paths: &[(AgentHookScope, PathBuf)]) -> AgentHookEngine {
+/// Read each existing hook settings file, in the given layer order. Unreadable
+/// or oversized files are skipped and reported so one bad layer cannot disable
+/// the rest.
+fn read_layers(paths: &[(AgentHookScope, PathBuf)]) -> (Vec<AgentHookSettingsLayer>, Vec<String>) {
     let mut layers = Vec::new();
+    let mut skipped = Vec::new();
     for (scope, path) in paths {
         match std::fs::metadata(path) {
             Ok(metadata) if metadata.is_file() => {
                 if metadata.len() > MAX_HOOKS_FILE_BYTES as u64 {
-                    warn!(
+                    skipped.push(format!(
                         "Ignoring hook configuration over the {} byte limit: {}",
                         MAX_HOOKS_FILE_BYTES,
                         path.display()
-                    );
+                    ));
                     continue;
                 }
                 match std::fs::read(path) {
@@ -505,15 +507,27 @@ pub(crate) fn build_engine(paths: &[(AgentHookScope, PathBuf)]) -> AgentHookEngi
                         source: path.to_string_lossy().to_string(),
                         bytes,
                     }),
-                    Err(error) => warn!(
+                    Err(error) => skipped.push(format!(
                         "Failed to read hook configuration: path={}, error={}",
                         path.display(),
                         error
-                    ),
+                    )),
                 }
             }
             _ => {}
         }
+    }
+    (layers, skipped)
+}
+
+/// Read each existing hook settings file, in the given layer order, and parse
+/// them into one engine. Unreadable or oversized files are skipped with a
+/// warning so one bad layer cannot disable the rest.
+#[cfg(test)]
+pub(crate) fn build_engine(paths: &[(AgentHookScope, PathBuf)]) -> AgentHookEngine {
+    let (layers, skipped) = read_layers(paths);
+    for message in &skipped {
+        warn!("{message}");
     }
     let (settings, issues) = AgentHookSettings::from_layers(&layers);
     for issue in &issues {
@@ -535,18 +549,46 @@ async fn engine_for(
         .iter()
         .map(|(_, path)| fingerprint(path.clone()))
         .collect::<Vec<_>>();
+    let imported_generation =
+        match crate::external_hook_import::imported_hook_generation(workspace_root).await {
+            Ok(generation) => generation,
+            Err(error) => {
+                warn!("Imported Hook state is unavailable: {error}");
+                0
+            }
+        };
     {
         let cache = engine_cache().lock().await;
         if let Some(cached) = cache.get(&key) {
-            if cached.fingerprints == fingerprints
-                && cached.project_hooks_enabled == project_hooks_enabled
-            {
-                return Some(Arc::clone(&cached.engine));
+            if let Some(engine) = reusable_cached_engine(
+                cached,
+                &fingerprints,
+                project_hooks_enabled,
+                imported_generation,
+            ) {
+                return Some(engine);
             }
         }
     }
 
-    let engine = Arc::new(build_engine(&paths));
+    let imported_layers =
+        match crate::external_hook_import::enabled_imported_hook_layers(workspace_root).await {
+            Ok(layers) => layers,
+            Err(error) => {
+                warn!("Imported Hook layers are unavailable: {error}");
+                Vec::new()
+            }
+        };
+    let (manual_layers, skipped) = read_layers(&paths);
+    for message in &skipped {
+        warn!("{message}");
+    }
+    let layers = ordered_layers(manual_layers, imported_layers);
+    let (settings, issues) = AgentHookSettings::from_layers(&layers);
+    for issue in &issues {
+        warn!("Agent hook configuration issue: {issue}");
+    }
+    let engine = Arc::new(AgentHookEngine::new(settings));
     let mut cache = engine_cache().lock().await;
     if cache.len() >= MAX_CACHED_WORKSPACE_ENGINES && !cache.contains_key(&key) {
         let oldest = cache.keys().next().cloned();
@@ -560,7 +602,224 @@ async fn engine_for(
             engine: Arc::clone(&engine),
             fingerprints,
             project_hooks_enabled,
+            imported_generation,
         },
     );
     Some(engine)
+}
+
+fn reusable_cached_engine(
+    cached: &CachedHookEngine,
+    fingerprints: &[HookFileFingerprint],
+    project_hooks_enabled: bool,
+    imported_generation: u64,
+) -> Option<Arc<AgentHookEngine>> {
+    (cached.fingerprints == fingerprints
+        && cached.project_hooks_enabled == project_hooks_enabled
+        && cached.imported_generation == imported_generation)
+        .then(|| Arc::clone(&cached.engine))
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+
+    #[test]
+    fn imported_generation_replaces_the_next_engine_without_invalidating_a_captured_one() {
+        let captured = Arc::new(AgentHookEngine::new(Default::default()));
+        let cached = CachedHookEngine {
+            engine: Arc::clone(&captured),
+            fingerprints: Vec::new(),
+            project_hooks_enabled: false,
+            imported_generation: 7,
+        };
+
+        let reused = reusable_cached_engine(&cached, &[], false, 7).unwrap();
+        assert!(Arc::ptr_eq(&captured, &reused));
+        assert!(reusable_cached_engine(&cached, &[], false, 8).is_none());
+        assert_eq!(Arc::strong_count(&captured), 3);
+    }
+}
+
+/// One `type: "command"` handler as configured, for read-only display.
+#[derive(Debug, Clone)]
+pub struct NativeHookHandlerView {
+    /// The command this host would run (`commandWindows` already applied).
+    pub command: String,
+    /// Timeout actually applied, after the per-event default and cap.
+    pub timeout_seconds: u64,
+    pub status_message: Option<String>,
+}
+
+/// One matcher group as configured, for read-only display.
+#[derive(Debug, Clone)]
+pub struct NativeHookRuleView {
+    pub event: &'static str,
+    /// Matcher as written; `*` when the group matches everything.
+    pub matcher: String,
+    /// `false` when the pattern is malformed, which never matches anything.
+    pub matcher_is_valid: bool,
+    pub scope: &'static str,
+    /// The file this group came from.
+    pub source: String,
+    pub handlers: Vec<NativeHookHandlerView>,
+}
+
+/// One configuration layer, whether or not it currently contributes.
+#[derive(Debug, Clone)]
+pub struct NativeHookFileView {
+    pub scope: &'static str,
+    pub path: PathBuf,
+    pub exists: bool,
+    /// `false` when the layer is gated off, so its rules are not loaded.
+    pub loaded: bool,
+}
+
+/// Everything the hook configuration would contribute to a session in this
+/// workspace. Nothing here executes a handler.
+#[derive(Debug, Clone)]
+pub struct NativeHookOverview {
+    pub enabled: bool,
+    pub project_hooks_enabled: bool,
+    pub files: Vec<NativeHookFileView>,
+    /// Matcher groups in dispatch order, grouped by event.
+    pub rules: Vec<NativeHookRuleView>,
+    pub total_handlers: usize,
+    /// Configuration problems, in the wording used for the backend log.
+    pub issues: Vec<String>,
+}
+
+/// Read the hook configuration for a workspace without dispatching anything.
+///
+/// This is the read-only view behind the CLI `/hooks` command and any other
+/// surface that needs to show what is configured. It re-reads the files rather
+/// than consulting the dispatch cache, so it always reflects what is on disk.
+pub async fn overview(workspace_root: Option<&Path>) -> NativeHookOverview {
+    // Ask for every candidate path, then mark which layers a dispatch would
+    // actually load, so the view can show a gated-off project file.
+    let config = hooks_config().await;
+    let imported_layers = if config.enabled {
+        crate::external_hook_import::enabled_imported_hook_layers(workspace_root)
+            .await
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    build_overview_with_imports(
+        config,
+        hook_settings_paths(workspace_root, true),
+        imported_layers,
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn build_overview(
+    config: AgentHooksConfig,
+    candidates: Vec<(AgentHookScope, PathBuf)>,
+) -> NativeHookOverview {
+    build_overview_with_imports(config, candidates, Vec::new())
+}
+
+pub(crate) fn build_overview_with_imports(
+    config: AgentHooksConfig,
+    candidates: Vec<(AgentHookScope, PathBuf)>,
+    imported_layers: Vec<AgentHookSettingsLayer>,
+) -> NativeHookOverview {
+    let mut files = candidates
+        .iter()
+        .map(|(scope, path)| NativeHookFileView {
+            scope: scope.as_str(),
+            path: path.clone(),
+            exists: path.is_file(),
+            loaded: config.enabled
+                && (*scope == AgentHookScope::User || config.project_hooks_enabled),
+        })
+        .collect::<Vec<_>>();
+
+    let loaded_paths = candidates
+        .into_iter()
+        .zip(files.iter())
+        .filter(|(_, file)| file.loaded)
+        .map(|(candidate, _)| candidate)
+        .collect::<Vec<_>>();
+    let (manual_layers, skipped) = read_layers(&loaded_paths);
+    files.extend(imported_layers.iter().map(|layer| NativeHookFileView {
+        scope: layer.scope.as_str(),
+        path: PathBuf::from(&layer.source),
+        exists: true,
+        loaded: config.enabled,
+    }));
+    let layers = ordered_layers(manual_layers, imported_layers);
+    let (settings, issues) = AgentHookSettings::from_layers(&layers);
+
+    let mut rules = Vec::new();
+    for event in AgentHookEvent::ALL {
+        for rule in settings.rules_for(event) {
+            rules.push(NativeHookRuleView {
+                event: event.as_str(),
+                matcher: rule.matcher.display().to_string(),
+                // A malformed pattern parses into `Pattern` with no compiled
+                // regex, which never matches — same practical outcome as an
+                // outright invalid matcher, so both report as invalid here.
+                matcher_is_valid: match &rule.matcher {
+                    AgentHookMatcher::Any => true,
+                    AgentHookMatcher::Pattern { regex, .. } => regex.is_some(),
+                    AgentHookMatcher::Invalid { .. } => false,
+                },
+                scope: rule.scope.as_str(),
+                source: rule.source.clone(),
+                handlers: rule
+                    .handlers
+                    .iter()
+                    .map(|handler| NativeHookHandlerView {
+                        command: handler.effective_command().to_string(),
+                        timeout_seconds: handler.effective_timeout(event).as_secs(),
+                        status_message: handler.status_message.clone(),
+                    })
+                    .collect(),
+            });
+        }
+    }
+
+    NativeHookOverview {
+        enabled: config.enabled,
+        project_hooks_enabled: config.project_hooks_enabled,
+        files,
+        total_handlers: settings.total_handlers(),
+        rules,
+        issues: skipped
+            .into_iter()
+            .chain(issues.iter().map(ToString::to_string))
+            .collect(),
+    }
+}
+
+pub(crate) fn ordered_layers(
+    manual: Vec<AgentHookSettingsLayer>,
+    imported: Vec<AgentHookSettingsLayer>,
+) -> Vec<AgentHookSettingsLayer> {
+    let mut layers = Vec::with_capacity(manual.len() + imported.len());
+    layers.extend(
+        manual
+            .iter()
+            .filter(|layer| layer.scope == AgentHookScope::User)
+            .cloned(),
+    );
+    layers.extend(
+        imported
+            .iter()
+            .filter(|layer| layer.scope == AgentHookScope::User)
+            .cloned(),
+    );
+    layers.extend(
+        manual
+            .into_iter()
+            .filter(|layer| layer.scope == AgentHookScope::Project),
+    );
+    layers.extend(
+        imported
+            .into_iter()
+            .filter(|layer| layer.scope == AgentHookScope::Project),
+    );
+    layers
 }
