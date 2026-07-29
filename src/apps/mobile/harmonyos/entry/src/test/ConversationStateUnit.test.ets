@@ -678,6 +678,7 @@ export default function conversationStateUnitTest() {
       state.setConnectionState('connected');
       state.setConnectionFailureKind('');
       state.setBusy(true);
+      state.setLoadingHome(true);
       state.setWorkspace('BitFun', '/workspace/BitFun', 'default', 'main', 'normal');
       state.setSessions([
         remoteSession('session-1', '/canvas draw architecture'),
@@ -697,6 +698,7 @@ export default function conversationStateUnitTest() {
       expect(state.connectionState).assertEqual('connected');
       expect(state.connectionFailureKind).assertEqual('');
       expect(state.isBusy).assertTrue();
+      expect(state.isLoadingHome).assertTrue();
       expect(state.showRemoteUrlInput).assertTrue();
       expect(state.workspacePath).assertEqual('/workspace/BitFun');
       expect(state.workspaceBranch).assertEqual('main');
@@ -714,6 +716,7 @@ export default function conversationStateUnitTest() {
       state.setWorkspace('BitFun', '/workspace/BitFun', 'default');
       state.setQuery('canvas');
       state.setLoading(true);
+      state.setLoadingHome(true);
       state.setError('network failed');
 
       expect(state.isLoadingSessions).assertFalse();
@@ -726,6 +729,7 @@ export default function conversationStateUnitTest() {
       expect(state.sessions.length).assertEqual(0);
       expect(state.hasMoreSessions).assertFalse();
       expect(state.isLoadingSessions).assertFalse();
+      expect(state.isLoadingHome).assertFalse();
       expect(state.sessionQuery).assertEqual('canvas');
       expect(state.desktopName).assertEqual('Developer Mac');
       expect(state.workspaceName).assertEqual('BitFun');

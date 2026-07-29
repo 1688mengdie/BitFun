@@ -32,6 +32,7 @@ export class RemotePageState {
   @Trace connectionState: string = 'idle';
   @Trace connectionFailureKind: string = '';
   @Trace isBusy: boolean = false;
+  @Trace isLoadingHome: boolean = false;
   @Trace showRemoteUrlInput: boolean = false;
   @Trace workspaceName: string = '';
   @Trace workspacePath: string = '';
@@ -137,6 +138,10 @@ export class RemotePageState {
 
   setBusy(isBusy: boolean): void {
     this.isBusy = isBusy;
+  }
+
+  setLoadingHome(isLoadingHome: boolean): void {
+    this.isLoadingHome = isLoadingHome;
   }
 
   setRemoteUrlInputVisible(visible: boolean): void {
@@ -289,6 +294,7 @@ export class RemotePageState {
     this.sessions = [];
     this.hasMoreSessions = false;
     this.isLoadingSessions = false;
+    this.isLoadingHome = false;
     this.sessionErrorText = '';
   }
 
