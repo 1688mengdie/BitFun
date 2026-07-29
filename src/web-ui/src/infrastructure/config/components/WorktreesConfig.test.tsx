@@ -10,6 +10,12 @@ const setConfigMock = vi.hoisted(() => vi.fn());
 const listProjectsMock = vi.hoisted(() => vi.fn());
 const removeMock = vi.hoisted(() => vi.fn());
 const onChangedMock = vi.hoisted(() => vi.fn(() => vi.fn()));
+const openAgentCompanionSessionMock = vi.hoisted(() => vi.fn());
+const refreshWorkspaceSessionsMock = vi.hoisted(() => vi.fn());
+const unarchiveSessionMock = vi.hoisted(() => vi.fn());
+const confirmWarningMock = vi.hoisted(() => vi.fn());
+const notificationSuccessMock = vi.hoisted(() => vi.fn());
+const notificationErrorMock = vi.hoisted(() => vi.fn());
 const translateMock = vi.hoisted(() => vi.fn(
   (key: string, params?: Record<string, unknown>) => {
     if (key === 'labels.detached') return `detached ${params?.commit}`;
@@ -34,6 +40,33 @@ vi.mock('@/infrastructure/i18n', () => ({
   useI18n: () => ({
     t: translateMock,
   }),
+}));
+
+vi.mock('@/app/services/openAgentCompanionSession', () => ({
+  openAgentCompanionSession: openAgentCompanionSessionMock,
+}));
+
+vi.mock('@/flow_chat/services/FlowChatManager', () => ({
+  flowChatManager: {
+    refreshWorkspaceSessions: refreshWorkspaceSessionsMock,
+  },
+}));
+
+vi.mock('@/infrastructure/api/service-api/SessionAPI', () => ({
+  sessionAPI: {
+    unarchiveSession: unarchiveSessionMock,
+  },
+}));
+
+vi.mock('@/component-library/components/ConfirmDialog/confirmService', () => ({
+  confirmWarning: confirmWarningMock,
+}));
+
+vi.mock('@/shared/notification-system', () => ({
+  notificationService: {
+    success: notificationSuccessMock,
+    error: notificationErrorMock,
+  },
 }));
 
 vi.mock('@/component-library', () => ({
@@ -61,6 +94,29 @@ vi.mock('@/component-library', () => ({
   }: {
     onClick: () => void;
   }) => <button type="button" onClick={onClick}>refresh</button>,
+  IconButton: ({
+    'aria-label': ariaLabel,
+    children,
+    disabled,
+    onClick,
+    title,
+  }: {
+    'aria-label'?: string;
+    children: React.ReactNode;
+    disabled?: boolean;
+    onClick?: () => void;
+    title?: string;
+  }) => (
+    <button
+      type="button"
+      aria-label={ariaLabel}
+      disabled={disabled}
+      onClick={onClick}
+      title={title}
+    >
+      {children}
+    </button>
+  ),
   ConfirmDialog: ({
     confirmText,
     isOpen,
@@ -128,7 +184,9 @@ vi.mock('./common', () => ({
       <p>{subtitle}</p>
     </header>
   ),
-  ConfigPageLayout: ({ children }: { children: React.ReactNode }) => <main>{children}</main>,
+  ConfigPageLayout: ({ children }: { children: React.ReactNode }) => (
+    <main className="bitfun-config-page-layout">{children}</main>
+  ),
   ConfigPageRow: ({
     children,
     description,
@@ -195,6 +253,16 @@ async function flushPromises() {
   });
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, reject, resolve };
+}
+
 describe('WorktreesConfig', () => {
   let container: HTMLDivElement;
   let root: Root;
@@ -206,6 +274,12 @@ describe('WorktreesConfig', () => {
     document.body.appendChild(container);
     root = createRoot(container);
     vi.clearAllMocks();
+    Object.defineProperty(globalThis, 'matchMedia', {
+      configurable: true,
+      value: vi.fn(() => ({
+        matches: true,
+      })),
+    });
 
     getConfigMock.mockResolvedValue({
       rootPath: '/custom/worktrees',
@@ -219,6 +293,10 @@ describe('WorktreesConfig', () => {
     }]);
     removeMock.mockResolvedValue({ worktreeId: 'wt-1', removed: true });
     onChangedMock.mockReturnValue(vi.fn());
+    openAgentCompanionSessionMock.mockResolvedValue(true);
+    refreshWorkspaceSessionsMock.mockResolvedValue(undefined);
+    unarchiveSessionMock.mockResolvedValue(undefined);
+    confirmWarningMock.mockResolvedValue(true);
   });
 
   afterEach(() => {
@@ -278,6 +356,170 @@ describe('WorktreesConfig', () => {
     });
   });
 
+  it('opens an associated conversation from the worktree row', async () => {
+    listProjectsMock.mockResolvedValueOnce([{
+      projectWorkspacePath: '/repo',
+      worktrees: [worktree({
+        sessions: [{
+          sessionId: 'session-1',
+          sessionName: 'Ship worktree management',
+          status: 'active',
+          archived: false,
+        }],
+      })],
+    }]);
+
+    await act(async () => {
+      root.render(<WorktreesConfig />);
+    });
+    await flushPromises();
+
+    const sessionButton = Array.from(container.querySelectorAll('button'))
+      .find(button => button.textContent?.includes('Ship worktree management'));
+    await act(async () => {
+      sessionButton?.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(openAgentCompanionSessionMock).toHaveBeenCalledWith('session-1');
+    expect(refreshWorkspaceSessionsMock).not.toHaveBeenCalled();
+  });
+
+  it('refreshes session metadata before retrying a conversation that is not loaded', async () => {
+    openAgentCompanionSessionMock
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
+    listProjectsMock.mockResolvedValueOnce([{
+      projectWorkspacePath: '/repo',
+      worktrees: [worktree({
+        sessions: [{
+          sessionId: 'session-1',
+          sessionName: 'Ship worktree management',
+          status: 'active',
+          archived: false,
+        }],
+      })],
+    }]);
+
+    await act(async () => {
+      root.render(<WorktreesConfig />);
+    });
+    await flushPromises();
+
+    const sessionButton = Array.from(container.querySelectorAll('button'))
+      .find(button => button.textContent?.includes('Ship worktree management'));
+    await act(async () => {
+      sessionButton?.click();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(refreshWorkspaceSessionsMock).toHaveBeenCalledWith({ rootPath: '/repo' });
+    expect(openAgentCompanionSessionMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('restores an archived associated conversation before opening it', async () => {
+    await act(async () => {
+      root.render(<WorktreesConfig />);
+    });
+    await flushPromises();
+
+    const sessionButton = Array.from(container.querySelectorAll('button'))
+      .find(button => button.textContent?.includes('Ship worktree management'));
+    await act(async () => {
+      sessionButton?.click();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(confirmWarningMock).toHaveBeenCalled();
+    expect(unarchiveSessionMock).toHaveBeenCalledWith('session-1', '/repo');
+    expect(refreshWorkspaceSessionsMock).toHaveBeenCalledWith({ rootPath: '/repo' });
+    expect(openAgentCompanionSessionMock).toHaveBeenCalledWith('session-1');
+  });
+
+  it('keeps the current list mounted while a background refresh is pending', async () => {
+    const refresh = deferred<Array<{
+      projectWorkspacePath: string;
+      worktrees: ReturnType<typeof worktree>[];
+    }>>();
+
+    await act(async () => {
+      root.render(<WorktreesConfig />);
+    });
+    await flushPromises();
+    listProjectsMock.mockReturnValueOnce(refresh.promise);
+
+    const refreshButton = Array.from(container.querySelectorAll('button'))
+      .find(button => button.textContent === 'refresh');
+    act(() => refreshButton?.click());
+
+    const results = container.querySelector('.bitfun-worktrees-config__results');
+    expect(results?.getAttribute('aria-busy')).toBe('true');
+    expect(container.textContent).toContain('/managed/BitFun-wt-1');
+
+    await act(async () => {
+      refresh.resolve([{
+        projectWorkspacePath: '/repo',
+        worktrees: [worktree()],
+      }]);
+      await refresh.promise;
+      await Promise.resolve();
+    });
+
+    expect(results?.getAttribute('aria-busy')).toBe('false');
+    expect(container.textContent).toContain('/managed/BitFun-wt-1');
+  });
+
+  it('keeps the settings scroll position while deletion refreshes the list', async () => {
+    const refresh = deferred<Array<{
+      projectWorkspacePath: string;
+      worktrees: ReturnType<typeof worktree>[];
+    }>>();
+
+    await act(async () => {
+      root.render(<WorktreesConfig />);
+    });
+    await flushPromises();
+    listProjectsMock.mockReturnValueOnce(refresh.promise);
+
+    const layout = container.querySelector<HTMLElement>('.bitfun-config-page-layout');
+    expect(layout).not.toBeNull();
+    if (layout) {
+      layout.scrollTop = 420;
+    }
+
+    const deleteButton = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="management.delete.actionLabel"]',
+    );
+    act(() => deleteButton?.click());
+    const confirmButton = container.querySelector<HTMLButtonElement>('[data-testid="confirm-delete"]');
+    await act(async () => {
+      confirmButton?.click();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const results = container.querySelector('.bitfun-worktrees-config__results');
+    expect(results?.getAttribute('aria-busy')).toBe('true');
+    expect(container.querySelector('.bitfun-worktrees-config__skeleton')).toBeNull();
+    expect(layout?.scrollTop).toBe(420);
+
+    await act(async () => {
+      refresh.resolve([]);
+      await refresh.promise;
+      await Promise.resolve();
+    });
+
+    expect(results?.getAttribute('aria-busy')).toBe('false');
+    expect(container.textContent).toContain('management.empty.title');
+    expect(layout?.scrollTop).toBe(420);
+  });
+
   it('requires confirmation and uses force only when local work would be discarded', async () => {
     listProjectsMock.mockResolvedValueOnce([{
       projectWorkspacePath: '/repo',
@@ -293,8 +535,9 @@ describe('WorktreesConfig', () => {
     });
     await flushPromises();
 
-    const deleteButton = Array.from(container.querySelectorAll('button'))
-      .find(button => button.textContent?.includes('management.delete.action'));
+    const deleteButton = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="management.delete.actionLabel"]',
+    );
     act(() => deleteButton?.click());
 
     expect(container.querySelector('[role="dialog"]')?.textContent)
@@ -315,7 +558,7 @@ describe('WorktreesConfig', () => {
     );
   });
 
-  it('disables deletion while a worktree still has associated archived sessions', async () => {
+  it('allows manual deletion while preserving associated archived sessions', async () => {
     listProjectsMock.mockResolvedValueOnce([{
       projectWorkspacePath: '/repo',
       worktrees: [worktree()],
@@ -326,10 +569,27 @@ describe('WorktreesConfig', () => {
     });
     await flushPromises();
 
-    const deleteButton = Array.from(container.querySelectorAll('button'))
-      .find(button => button.textContent?.includes('management.delete.action'));
+    const deleteButton = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="management.delete.actionLabel"]',
+    );
+    act(() => deleteButton?.click());
 
-    expect(deleteButton?.disabled).toBe(true);
-    expect(container.textContent).toContain('management.protection.associatedSessions');
+    expect(deleteButton?.disabled).toBe(false);
+    expect(container.querySelector('[role="dialog"]')?.textContent)
+      .toContain('management.delete.messageWithSessions');
+
+    const confirmButton = container.querySelector<HTMLButtonElement>('[data-testid="confirm-delete"]');
+    await act(async () => {
+      confirmButton?.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(removeMock).toHaveBeenCalledWith(
+      '/repo',
+      'wt-1',
+      expect.any(String),
+      false,
+    );
   });
 });
