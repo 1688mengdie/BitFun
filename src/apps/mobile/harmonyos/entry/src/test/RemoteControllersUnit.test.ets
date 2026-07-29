@@ -151,6 +151,7 @@ import {
   FakeVoiceInputLifecycleService,
   FakeRemoteFileDownloadScheduler,
   FakeRemoteFileDownloadClient,
+  FakeRemoteFileSaver,
   RemoteDownloadStatusRecord,
   FakeRemoteToolActionClient,
   FakeRemoteModelClient,
@@ -169,6 +170,7 @@ export default function remoteControllersUnitTest() {
     it('owns remote file download progress and delayed downloading marker cleanup', 0, async () => {
       const client = new FakeRemoteFileDownloadClient();
       const scheduler = new FakeRemoteFileDownloadScheduler();
+      const fileSaver = new FakeRemoteFileSaver();
       const status = new RemoteDownloadStatusRecord();
       const busyEvents: boolean[] = [];
       let statusText = '';
@@ -189,13 +191,15 @@ export default function remoteControllersUnitTest() {
           busyEvents.push(isBusy);
         },
         100,
-        scheduler
+        scheduler,
+        fileSaver
       );
 
       await controller.download('/workspace/BitFun/README.md', 'session-1', false, true);
 
       expect(client.infoRequests[0]).assertEqual('/workspace/BitFun/README.md|session-1');
       expect(client.readRequests[0]).assertEqual('/workspace/BitFun/README.md|session-1');
+      expect(fileSaver.savedNames[0]).assertEqual('README.md');
       expect(status.downloadedFilePath).assertEqual('/workspace/BitFun/README.md');
       expect(status.fileDownloadStatus.indexOf('README.md') >= 0).assertTrue();
       expect(statusText).assertEqual(status.fileDownloadStatus);
@@ -260,10 +264,10 @@ export default function remoteControllersUnitTest() {
       );
 
       const updatedInput: ToolInputFixture = { safe: true };
-      await controller.approve('tool-1', 'session-1', false, true, updatedInput);
-      await controller.reject('tool-2', 'session-1', false, true);
-      await controller.cancel('tool-3', 'session-1', false, true);
-      await controller.answer('tool-4', 'session-1', false, true, { answer: 'yes', '0': 'yes' });
+      await controller.approve('tool-1', 'session-1', true, updatedInput);
+      await controller.reject('tool-2', 'session-1', true);
+      await controller.cancel('tool-3', 'session-1', true);
+      await controller.answer('tool-4', 'session-1', true, { answer: 'yes', '0': 'yes' });
 
       expect(client.actions[0]).assertEqual('confirm:tool-1:{"safe":true}');
       expect(client.actions[1]).assertEqual('reject:tool-2:Rejected from HarmonyOS remote client');
@@ -279,7 +283,7 @@ export default function remoteControllersUnitTest() {
       expect(statuses.indexOf(RemoteI18n.t('status.toolApproved')) >= 0).assertTrue();
     });
 
-    it('skips tool actions when route state cannot run them', 0, async () => {
+    it('runs available tool actions and skips invalid route state', 0, async () => {
       const client = new FakeRemoteToolActionClient();
       const busyEvents: boolean[] = [];
       let pollCount = 0;
@@ -294,14 +298,15 @@ export default function remoteControllersUnitTest() {
         }
       );
 
-      await controller.approve('', 'session-1', false, true);
-      await controller.approve('tool-1', '', false, true);
-      await controller.approve('tool-1', 'session-1', true, true);
-      await controller.approve('tool-1', 'session-1', false, false);
+      await controller.approve('', 'session-1', true);
+      await controller.approve('tool-1', '', true);
+      await controller.approve('tool-1', 'session-1', true);
+      await controller.approve('tool-1', 'session-1', false);
 
-      expect(client.actions.length).assertEqual(0);
-      expect(busyEvents.length).assertEqual(0);
-      expect(pollCount).assertEqual(0);
+      expect(client.actions.length).assertEqual(1);
+      expect(client.actions[0]).assertEqual('confirm:tool-1:{}');
+      expect(busyEvents.length).assertEqual(2);
+      expect(pollCount).assertEqual(1);
     });
 
     it('reports failed tool actions and clears busy without polling', 0, async () => {
@@ -323,7 +328,7 @@ export default function remoteControllersUnitTest() {
         }
       );
 
-      await controller.reject('tool-1', 'session-1', false, true);
+      await controller.reject('tool-1', 'session-1', true);
 
       expect(client.actions.length).assertEqual(1);
       expect(pollCount).assertEqual(0);

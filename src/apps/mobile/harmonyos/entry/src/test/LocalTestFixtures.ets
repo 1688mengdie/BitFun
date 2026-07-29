@@ -57,7 +57,8 @@ import { RemoteChatPollingLifecycleController } from '../main/ets/services/Remot
 import {
   RemoteFileDownloadClient,
   RemoteFileDownloadController,
-  RemoteFileDownloadScheduler
+  RemoteFileDownloadScheduler,
+  RemoteFileSaver
 } from '../main/ets/services/RemoteFileDownloadController';
 import { RemoteHeartbeatController, RemoteHeartbeatScheduler } from '../main/ets/services/RemoteHeartbeatController';
 import {
@@ -689,6 +690,15 @@ export class RemoteDownloadStatusRecord {
   downloadingFilePath: string = '';
   downloadedFilePath: string = '';
   fileDownloadStatus: string = '';
+}
+
+export class FakeRemoteFileSaver implements RemoteFileSaver {
+  savedNames: string[] = [];
+
+  async save(result: ReadFileResult): Promise<string> {
+    this.savedNames.push(result.name);
+    return `test://${result.name}`;
+  }
 }
 
 export class FakeRemoteToolActionClient implements RemoteToolActionClient {

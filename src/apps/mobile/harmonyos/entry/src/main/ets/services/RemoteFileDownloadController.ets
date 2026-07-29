@@ -16,6 +16,10 @@ export interface RemoteFileDownloadScheduler {
   clearTimeout(timerId: number): void;
 }
 
+export interface RemoteFileSaver {
+  save(result: ReadFileResult): Promise<string>;
+}
+
 class SystemRemoteFileDownloadScheduler implements RemoteFileDownloadScheduler {
   setTimeout(callback: () => void, delayMs: number): number {
     return setTimeout(callback, delayMs);
@@ -26,7 +30,7 @@ class SystemRemoteFileDownloadScheduler implements RemoteFileDownloadScheduler {
   }
 }
 
-class SystemRemoteFileSaver {
+class SystemRemoteFileSaver implements RemoteFileSaver {
   async save(result: ReadFileResult): Promise<string> {
     const options = new picker.DocumentSaveOptions();
     options.newFileNames = [result.name];
@@ -54,6 +58,7 @@ export class RemoteFileDownloadController {
   private readonly onBusy: (isBusy: boolean) => void;
   private readonly clearDelayMs: number;
   private readonly scheduler: RemoteFileDownloadScheduler;
+  private readonly fileSaver: RemoteFileSaver;
   private downloadingFilePath: string = '';
   private downloadedFilePath: string = '';
   private fileDownloadStatus: string = '';
@@ -66,7 +71,8 @@ export class RemoteFileDownloadController {
     onStatusText: (statusText: string) => void,
     onBusy: (isBusy: boolean) => void,
     clearDelayMs: number = 2500,
-    scheduler: RemoteFileDownloadScheduler = new SystemRemoteFileDownloadScheduler()
+    scheduler: RemoteFileDownloadScheduler = new SystemRemoteFileDownloadScheduler(),
+    fileSaver: RemoteFileSaver = new SystemRemoteFileSaver()
   ) {
     this.client = client;
     this.onDownloadStatus = onDownloadStatus;
@@ -75,6 +81,7 @@ export class RemoteFileDownloadController {
     this.onBusy = onBusy;
     this.clearDelayMs = clearDelayMs;
     this.scheduler = scheduler;
+    this.fileSaver = fileSaver;
   }
 
   async download(path: string, sessionId: string, isBusy: boolean, remoteAvailable: boolean): Promise<void> {
@@ -95,7 +102,7 @@ export class RemoteFileDownloadController {
           `${RemoteUiState.formatBytes(downloaded)} / ${RemoteUiState.formatBytes(total)}`
         );
       });
-      await new SystemRemoteFileSaver().save(result);
+      await this.fileSaver.save(result);
       this.setDownloadStatus(
         path,
         path,
