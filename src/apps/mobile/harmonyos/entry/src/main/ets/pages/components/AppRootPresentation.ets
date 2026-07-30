@@ -1,26 +1,46 @@
+import display from '@ohos.display';
+import mediaQuery from '@ohos.mediaquery';
+import { RemoteI18n } from '../../i18n/RemoteI18n';
 import { RemotePermissionMode, RemoteSession } from '../../model/RemoteModels';
 import { CloudAccountDevice } from '../../services/CloudAccountClient';
 import { AppShell } from './AppShell';
 import { AppSidebar } from './AppSidebar';
 import { ConnectView } from './ConnectView';
 import { ConversationIntent } from './ConversationIntent';
+import { ConversationSourceSwitcher } from './ConversationSourceSwitcher';
 import { ConversationViewHost } from './ConversationViewHost';
 import { RemoteControlSettingsSheet } from './RemoteControlSettingsSheet';
 import { RemoteCreateSessionView } from './RemoteCreateSessionView';
 import { RemoteHomeView } from './RemoteHomeView';
+import { RemoteSessionList } from './RemoteSessionList';
 import { SettingsSheet } from './SettingsSheet';
-import { PAGE_BG } from './Theme';
-import { AppNavigationBackAction, AppRoute } from '../navigation/AppRouteContract';
+import { CARD, GREEN, INK, LINE, MUTED, PAGE_BG, RED } from './Theme';
+import { AppRoute, ConversationSource } from '../navigation/AppRouteContract';
 import { AppShellState } from '../state/AppShellState';
+import {
+  ConversationLayoutCrease,
+  ConversationLayoutPolicy
+} from '../state/ConversationLayoutPolicy';
 import { GeneralChatPageState } from '../state/GeneralChatPageState';
 import { RemotePageState } from '../state/RemotePageState';
 import { RemoteCreateSessionState } from '../state/RemoteCreateSessionState';
 import { ConversationViewState } from '../state/ConversationViewState';
 
+const WIDE_DETAIL_CONTENT_MAX_WIDTH: number = 920;
+
+function safeFoldStatus(): display.FoldStatus {
+  try {
+    return display.getFoldStatus();
+  } catch (_err) {
+    return display.FoldStatus.FOLD_STATUS_UNKNOWN;
+  }
+}
+
 export class AppRootPresentationActions {
   readonly onNavigationBack: (route: AppRoute) => boolean;
   readonly onConversationIntent: (route: AppRoute, intent: ConversationIntent) => void;
   readonly onCloseSidebar: () => void;
+  readonly onWideConversationSource: (source: ConversationSource) => void;
   readonly onRemoteHome: RemoteHomePresentationActions;
   readonly onRemoteCreate: RemoteCreatePresentationActions;
   readonly onSidebar: SidebarPresentationActions;
@@ -32,6 +52,7 @@ export class AppRootPresentationActions {
     onNavigationBack: (route: AppRoute) => boolean,
     onConversationIntent: (route: AppRoute, intent: ConversationIntent) => void,
     onCloseSidebar: () => void,
+    onWideConversationSource: (source: ConversationSource) => void,
     onRemoteHome: RemoteHomePresentationActions,
     onRemoteCreate: RemoteCreatePresentationActions,
     onSidebar: SidebarPresentationActions,
@@ -42,6 +63,7 @@ export class AppRootPresentationActions {
     this.onNavigationBack = onNavigationBack;
     this.onConversationIntent = onConversationIntent;
     this.onCloseSidebar = onCloseSidebar;
+    this.onWideConversationSource = onWideConversationSource;
     this.onRemoteHome = onRemoteHome;
     this.onRemoteCreate = onRemoteCreate;
     this.onSidebar = onSidebar;
@@ -138,6 +160,7 @@ export class SettingsPresentationActions {
   readonly cloudListDevices: () => Promise<CloudAccountDevice[]>;
   readonly getPermissionMode: () => Promise<RemotePermissionMode>;
   readonly setPermissionMode: (mode: RemotePermissionMode) => Promise<RemotePermissionMode>;
+  readonly testGeneral: (url: string, key: string, model: string, clear: boolean) => Promise<string>;
   readonly saveGeneral: (url: string, key: string, model: string, clear: boolean) => Promise<string>;
   constructor(
     close: () => void, addConnection: () => void, disconnect: () => void, reconnect: () => void,
@@ -147,12 +170,14 @@ export class SettingsPresentationActions {
     cloudListDevices: () => Promise<CloudAccountDevice[]>,
     getPermissionMode: () => Promise<RemotePermissionMode>,
     setPermissionMode: (mode: RemotePermissionMode) => Promise<RemotePermissionMode>,
+    testGeneral: (url: string, key: string, model: string, clear: boolean) => Promise<string>,
     saveGeneral: (url: string, key: string, model: string, clear: boolean) => Promise<string>
   ) {
     this.close = close; this.addConnection = addConnection; this.disconnect = disconnect;
     this.reconnect = reconnect; this.openAccount = openAccount; this.cloudLogin = cloudLogin; this.cloudSync = cloudSync;
     this.cloudLogout = cloudLogout; this.cloudListDevices = cloudListDevices;
     this.getPermissionMode = getPermissionMode; this.setPermissionMode = setPermissionMode;
+    this.testGeneral = testGeneral;
     this.saveGeneral = saveGeneral;
   }
 }
@@ -187,18 +212,46 @@ export struct AppRootPresentation {
   @Param generalPageState: GeneralChatPageState = new GeneralChatPageState();
   @Param deviceId: string = '';
   @Param currentRoute: AppRoute = AppRoute.ChatHome;
+  @Local viewportWidth: number = 0;
+  @Local wideLayoutMatched: boolean = false;
+  @Local foldStatus: display.FoldStatus = safeFoldStatus();
+  @Local wideMasterPaneWidth: number = ConversationLayoutPolicy.FALLBACK_MASTER_PANE_WIDTH;
+  @Local wideMasterDetailGap: number = 0;
+  @Local wideDetailContentOffset: number = 0;
+  @Local wideDetailContentWidth: number = 0;
+  @Local remoteWideSortMode: string = 'project';
+  private wideQueryListener?: mediaQuery.MediaQueryListener;
+  private foldStatusChanged: (status: display.FoldStatus) => void =
+    (status: display.FoldStatus): void => {
+      this.foldStatus = status;
+      this.refreshWideGeometry();
+    };
+  private wideQueryChanged: (result: mediaQuery.MediaQueryResult) => void =
+    (result: mediaQuery.MediaQueryResult): void => {
+      this.wideLayoutMatched = result.matches;
+    };
   @Param actions: AppRootPresentationActions = new AppRootPresentationActions(
-    () => false, () => {}, () => {},
+    () => false, () => {}, () => {}, () => {},
     new RemoteHomePresentationActions(() => {}, () => {}, () => {}, () => {}, () => {}, () => {}, () => {},
       () => {}, () => {}, () => {}, () => {}, () => {}, () => {}, () => {}, () => {}, () => {}, () => {},
       () => {}, () => {}, () => {}, () => {}, () => {}),
     new RemoteCreatePresentationActions(() => {}, () => {}, () => {}, () => {}, () => {}, () => {}, () => {}),
     new SidebarPresentationActions(() => {}, () => {}, () => {}, () => {}, () => {}, () => {}, () => {}, () => {}, () => {}),
-    new SettingsPresentationActions(() => {}, () => {}, () => {}, () => {}, () => {}, async (_relayUrl: string, _username: string, _password: string): Promise<string> => '', async (): Promise<string> => '', async (): Promise<void> => {}, async (): Promise<CloudAccountDevice[]> => [], async (): Promise<RemotePermissionMode> => 'ask', async (mode: RemotePermissionMode): Promise<RemotePermissionMode> => mode, async (_url: string, _key: string, _model: string, _clear: boolean): Promise<string> => ''),
+    new SettingsPresentationActions(() => {}, () => {}, () => {}, () => {}, () => {}, async (_relayUrl: string, _username: string, _password: string): Promise<string> => '', async (): Promise<string> => '', async (): Promise<void> => {}, async (): Promise<CloudAccountDevice[]> => [], async (): Promise<RemotePermissionMode> => 'ask', async (mode: RemotePermissionMode): Promise<RemotePermissionMode> => mode, async (_url: string, _key: string, _model: string, _clear: boolean): Promise<string> => '', async (_url: string, _key: string, _model: string, _clear: boolean): Promise<string> => ''),
     new ConnectPresentationActions(() => {}, () => {}, () => {}, () => {}, () => {}, () => false, () => {}, () => {},
       () => {}, async (): Promise<CloudAccountDevice[]> => [], async (_device: CloudAccountDevice): Promise<void> => {}),
     () => ''
   );
+
+  aboutToAppear(): void {
+    this.bindResponsiveQueries();
+    this.bindFoldStatus();
+  }
+
+  aboutToDisappear(): void {
+    this.unbindFoldStatus();
+    this.unbindResponsiveQueries();
+  }
 
   build() {
     Stack() {
@@ -206,23 +259,44 @@ export struct AppRootPresentation {
         sidebar: () => { this.SidebarContent(); }, settings: () => { this.SettingsContent(); },
         connect: () => { this.ConnectContent(); }, onCloseSidebar: this.actions.onCloseSidebar })
     }.width('100%').height('100%')
+    .onAreaChange((_oldArea: Area, newArea: Area) => {
+      this.viewportWidth = this.areaWidth(newArea.width);
+      this.refreshWideGeometry();
+    })
   }
 
-  @Builder NavigationContent() {
+  @Builder
+  NavigationContent() {
     Navigation(this.navigationStack) { this.RouteContent(AppRoute.ChatHome) }
       .width('100%').height('100%').hideTitleBar(true).mode(NavigationMode.Stack)
       .navDestination(this.NavigationDestination)
   }
 
-  @Builder NavigationDestination(name: string) {
+  @Builder
+  NavigationDestination(name: string) {
     NavDestination() { this.RouteContent(name as AppRoute) }.hideTitleBar(true).backgroundColor(PAGE_BG)
       .onBackPressed(() => this.actions.onNavigationBack(name as AppRoute))
   }
 
-  @Builder RouteContent(route: AppRoute) {
+  @Builder
+  RouteContent(route: AppRoute) {
+    if (this.isGeneralWideRoute(route) && this.isWideLayout()) {
+      this.WideGeneralChatContent(route)
+    } else if (route === AppRoute.RemoteChat && this.isWideLayout()) {
+      this.WideRemoteChatContent()
+    } else if (route === AppRoute.RemoteHome && this.isWideLayout()) {
+      this.WideRemoteHomeContent()
+    } else {
+      this.RouteSurfaceContent(route, true, true)
+    }
+  }
+
+  @Builder
+  RouteSurfaceContent(route: AppRoute, showSidebarButton: boolean, showBackButton: boolean) {
     Column() {
       if (route === AppRoute.RemoteHome) {
         RemoteHomeView({ pageState: this.remotePageState, isBusy: this.remotePageState.isBusy,
+          selectedSessionId: this.remotePageState.activeSession.sessionId,
           onOpenSidebar: this.actions.onRemoteHome.openSidebar,
           onConnectWorkspace: this.actions.onRemoteHome.connectWorkspace,
           onAddConnection: this.actions.onRemoteHome.addConnection,
@@ -260,10 +334,483 @@ export struct AppRootPresentation {
         ConversationViewHost({
           viewState: ConversationViewState.project(route, this.remotePageState, this.generalPageState,
             this.actions.generalStatus()),
+          showSidebarButton: showSidebarButton,
+          showBackButton: showBackButton,
           onIntent: (intent: ConversationIntent) => this.actions.onConversationIntent(route, intent)
         })
       }
     }.width('100%').height('100%').backgroundColor(PAGE_BG)
+  }
+
+  @Builder
+  WideGeneralChatContent(route: AppRoute) {
+    Row() {
+      Column() {
+        AppSidebar({ sessions: this.generalPageState.recentSessions(), pinnedSessionId: this.generalPageState.pinnedSessionId(),
+          selectedSessionId: this.generalPageState.activeSession.sessionId,
+          connectionState: this.remotePageState.connectionState,
+          accountUserId: this.remotePageState.accountUserId,
+          activeSection: 'chat',
+          showConversationSourceSwitcher: true,
+          conversationSource: ConversationSource.General,
+          onClose: this.actions.onSidebar.close,
+          onNewChat: this.actions.onSidebar.newChat,
+          onEnterCode: () => this.actions.onWideConversationSource(ConversationSource.Remote),
+          onConversationSource: this.actions.onWideConversationSource,
+          onOpenSettings: this.actions.onSidebar.settings, onOpenAccount: this.actions.onSidebar.openAccount,
+          onOpenSession: this.actions.onSidebar.openSession,
+          onArchiveSession: this.actions.onSidebar.archive, onExportSession: this.actions.onSidebar.exportSession,
+          onDeleteSession: this.actions.onSidebar.deleteSession })
+      }
+      .width(this.wideMasterPaneWidth)
+      .height('100%')
+      .backgroundColor(PAGE_BG)
+      .border({ width: { right: 1 }, color: LINE })
+
+      this.WideMasterDetailGap()
+      this.WideConversationDetail(route, true)
+    }
+    .width('100%')
+    .height('100%')
+    .backgroundColor(PAGE_BG)
+  }
+
+  @Builder
+  WideRemoteHomeContent() {
+    Row() {
+      this.RemoteMasterPane('')
+      this.WideMasterDetailGap()
+
+      Column() {
+        this.RemoteFlowPlaceholder()
+      }
+      .layoutWeight(1)
+      .height('100%')
+      .backgroundColor(PAGE_BG)
+    }
+    .width('100%')
+    .height('100%')
+    .backgroundColor(PAGE_BG)
+  }
+
+  @Builder
+  RemoteMasterPane(selectedSessionId: string) {
+    Column({ space: 12 }) {
+      this.RemoteWidePaneHeader()
+      ConversationSourceSwitcher({
+        activeSource: ConversationSource.Remote,
+        onSelectSource: this.actions.onWideConversationSource
+      })
+      if (this.canShowRemoteWideList()) {
+        RemoteSessionList({
+          sessions: this.remotePageState.visibleSessions(),
+          query: this.remotePageState.sessionQuery,
+          sortMode: this.remoteWideSortMode,
+          workspaceName: this.remotePageState.workspaceName,
+          workspacePath: this.remotePageState.workspacePath,
+          workspaceKind: this.remotePageState.workspaceKind,
+          recentWorkspaces: this.remotePageState.recentWorkspaces,
+          hasMoreSessions: this.remotePageState.hasMoreSessions,
+          isBusy: this.remotePageState.isBusy || this.remotePageState.isLoadingSessions,
+          selectedSessionId: selectedSessionId,
+          onCreate: () => {
+            this.actions.onRemoteHome.create('code');
+          },
+          onCreateAssistantSession: () => {
+            this.actions.onRemoteHome.createAssistant();
+          },
+          onCreateInWorkspace: (path: string, agentType: string) => {
+            this.actions.onRemoteHome.createInWorkspace(path, agentType);
+          },
+          onSelectWorkspace: (path: string) => {
+            this.actions.onRemoteHome.selectWorkspace(path);
+          },
+          onOpenSession: (session: RemoteSession) => {
+            this.actions.onRemoteHome.openSession(session);
+          },
+          onDeleteSession: (session: RemoteSession) => {
+            this.actions.onRemoteHome.deleteSession(session);
+          },
+          onLoadMore: () => {
+            this.actions.onRemoteHome.loadMore();
+          }
+        })
+        this.RemoteWideSearchBar()
+      } else {
+        this.RemoteWideDisconnected()
+      }
+    }
+    .width(this.wideMasterPaneWidth)
+    .height('100%')
+    .padding({ left: 24, right: 18, top: 14, bottom: 12 })
+    .backgroundColor(PAGE_BG)
+    .border({ width: { right: 1 }, color: LINE })
+  }
+
+  @Builder
+  RemoteWidePaneHeader() {
+    Row({ space: 10 }) {
+      Column({ space: 4 }) {
+        Text(RemoteI18n.t('remote.title'))
+          .fontSize(20)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(INK)
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+        Row({ space: 6 }) {
+          this.RemoteWideStatusDot()
+          Text(this.remoteWideStatusText())
+            .fontSize(12)
+            .fontColor(MUTED)
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .layoutWeight(1)
+        }
+        .width('100%')
+        .alignItems(VerticalAlign.Center)
+      }
+      .layoutWeight(1)
+      .alignItems(HorizontalAlign.Start)
+
+      Stack({ alignContent: Alignment.Center }) {
+        Image($r('app.media.remote_ref_more'))
+          .width(22)
+          .height(8)
+          .objectFit(ImageFit.Contain)
+      }
+      .width(38)
+      .height(38)
+      .backgroundColor(CARD)
+      .borderRadius(19)
+      .border({ width: 1, color: LINE })
+      .onClick(() => {
+        this.actions.onRemoteHome.openSettings();
+      })
+    }
+    .width('100%')
+    .height(46)
+    .alignItems(VerticalAlign.Center)
+  }
+
+  @Builder
+  RemoteWideStatusDot() {
+    Stack() {
+      Text('')
+    }
+      .width(7)
+      .height(7)
+      .backgroundColor(this.remoteWideStatusColor())
+      .borderRadius(4)
+  }
+
+  @Builder
+  RemoteWideSearchBar() {
+    Row({ space: 8 }) {
+      Row({ space: 7 }) {
+        Image($r('app.media.remote_ref_search_reference'))
+          .width(16)
+          .height(16)
+          .objectFit(ImageFit.Contain)
+          .opacity(0.58)
+        TextInput({ placeholder: RemoteI18n.t('remote.searchChats'), text: this.remotePageState.sessionQuery })
+          .height(38)
+          .fontSize(14)
+          .fontColor(INK)
+          .placeholderColor(MUTED)
+          .backgroundColor('#00000000')
+          .padding({ left: 0, right: 0 })
+          .layoutWeight(1)
+          .onChange((value: string) => {
+            this.actions.onRemoteHome.queryChanged(value);
+          })
+          .onSubmit(() => {
+            this.actions.onRemoteHome.search();
+          })
+      }
+      .height(42)
+      .layoutWeight(1)
+      .padding({ left: 12, right: 10 })
+      .backgroundColor(CARD)
+      .borderRadius(21)
+      .border({ width: 1, color: LINE })
+
+      Stack({ alignContent: Alignment.Center }) {
+        Image($r('app.media.remote_ref_new_chat'))
+          .width(20)
+          .height(20)
+          .objectFit(ImageFit.Contain)
+      }
+      .width(42)
+      .height(42)
+      .backgroundColor(INK)
+      .borderRadius(21)
+      .opacity(this.remotePageState.isBusy ? 0.45 : 1)
+      .onClick(() => {
+        if (!this.remotePageState.isBusy) {
+          this.actions.onRemoteHome.createAssistant();
+        }
+      })
+    }
+    .width('100%')
+    .height(46)
+    .alignItems(VerticalAlign.Center)
+  }
+
+  @Builder
+  RemoteWideDisconnected() {
+    Column({ space: 12 }) {
+      Stack({ alignContent: Alignment.Center }) {
+        Image($r('app.media.remote_ref_device'))
+          .width(42)
+          .height(42)
+          .objectFit(ImageFit.Contain)
+      }
+      .width(74)
+      .height(74)
+      .backgroundColor(CARD)
+      .borderRadius(24)
+      .border({ width: 1, color: LINE })
+      Text(RemoteI18n.t('remote.connectTitle'))
+        .fontSize(18)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(INK)
+        .textAlign(TextAlign.Center)
+      Text(RemoteI18n.t('remote.connectText'))
+        .fontSize(13)
+        .lineHeight(20)
+        .fontColor(MUTED)
+        .textAlign(TextAlign.Center)
+      Button(RemoteI18n.t('connect.connect'))
+        .width(136)
+        .height(44)
+        .fontSize(15)
+        .fontColor(CARD)
+        .backgroundColor(INK)
+        .borderRadius(22)
+        .onClick(() => {
+          this.actions.onRemoteHome.connectWorkspace();
+        })
+    }
+    .layoutWeight(1)
+    .width('100%')
+    .justifyContent(FlexAlign.Center)
+    .alignItems(HorizontalAlign.Center)
+    .padding({ left: 20, right: 20, bottom: 48 })
+  }
+
+  @Builder
+  WideRemoteChatContent() {
+    Row() {
+      this.RemoteMasterPane(this.remotePageState.activeSession.sessionId)
+      this.WideMasterDetailGap()
+      this.WideConversationDetail(AppRoute.RemoteChat, false)
+    }
+    .width('100%')
+    .height('100%')
+    .backgroundColor(PAGE_BG)
+  }
+
+  @Builder
+  WideConversationDetail(route: AppRoute, showBackButton: boolean) {
+    Row() {
+      if (this.wideDetailContentOffset > 0) {
+        Blank().width(this.wideDetailContentOffset)
+      }
+      Row() {
+        Column() {
+          this.RouteSurfaceContent(route, false, showBackButton)
+        }
+        .width('100%')
+        .height('100%')
+        .constraintSize({ maxWidth: WIDE_DETAIL_CONTENT_MAX_WIDTH })
+        .backgroundColor(PAGE_BG)
+      }
+      .width(this.wideDetailContentWidth > 0 ? this.wideDetailContentWidth : '100%')
+      .height('100%')
+      .justifyContent(FlexAlign.Center)
+      if (this.wideDetailContentOffset > 0) {
+        Blank().layoutWeight(1)
+      }
+    }
+    .layoutWeight(1)
+    .height('100%')
+    .justifyContent(FlexAlign.Center)
+    .backgroundColor(PAGE_BG)
+  }
+
+  @Builder
+  WideMasterDetailGap() {
+    if (this.wideMasterDetailGap > 0) {
+      Row() {
+      }
+      .width(this.wideMasterDetailGap)
+      .height('100%')
+      .backgroundColor(LINE)
+    }
+  }
+
+  @Builder
+  RemoteFlowPlaceholder() {
+    Column() {
+      Row() {
+        Column({ space: 4 }) {
+          Text(RemoteI18n.t('remote.chats'))
+            .fontSize(20)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(INK)
+          Text(this.remoteDesktopName())
+            .fontSize(13)
+            .fontColor(MUTED)
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+        }
+        .alignItems(HorizontalAlign.Start)
+        Blank()
+      }
+      .width('100%')
+      .height(76)
+      .padding({ left: 24, right: 24, top: 14, bottom: 12 })
+      .border({ width: { bottom: 1 }, color: LINE })
+
+      Column({ space: 8 }) {
+        Text(this.remoteFlowPlaceholderTitle())
+          .fontSize(22)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(INK)
+        Text(this.remoteWideStatusText())
+          .fontSize(14)
+          .fontColor(MUTED)
+          .maxLines(2)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+      }
+      .width('100%')
+      .layoutWeight(1)
+      .justifyContent(FlexAlign.Center)
+      .alignItems(HorizontalAlign.Center)
+      .padding({ left: 24, right: 24, bottom: 48 })
+    }
+    .width('100%')
+    .height('100%')
+    .backgroundColor(PAGE_BG)
+  }
+
+  private isWideLayout(): boolean {
+    return ConversationLayoutPolicy.useMasterDetail(
+      this.viewportWidth,
+      this.wideLayoutMatched,
+      this.foldStatus === display.FoldStatus.FOLD_STATUS_FOLDED
+    );
+  }
+
+  private isGeneralWideRoute(route: AppRoute): boolean {
+    return route === AppRoute.ChatHome || route === AppRoute.GeneralChat;
+  }
+
+  private bindResponsiveQueries(): void {
+    this.unbindResponsiveQueries();
+    try {
+      const appMediaQuery = this.getUIContext().getMediaQuery();
+      this.wideQueryListener = appMediaQuery.matchMediaSync(
+        `screen and (${ConversationLayoutPolicy.WIDE_LAYOUT_MIN_WIDTH} < width)`
+      );
+      this.wideLayoutMatched = this.wideQueryListener.matches;
+      this.wideQueryListener.on('change', this.wideQueryChanged);
+    } catch (_err) {
+      this.wideLayoutMatched = this.viewportWidth >= ConversationLayoutPolicy.WIDE_LAYOUT_MIN_WIDTH;
+      this.unbindResponsiveQueries();
+    }
+  }
+
+  private bindFoldStatus(): void {
+    this.unbindFoldStatus();
+    try {
+      this.foldStatus = display.getFoldStatus();
+      this.refreshWideGeometry();
+      display.on('foldStatusChange', this.foldStatusChanged);
+    } catch (_err) {
+      this.foldStatus = display.FoldStatus.FOLD_STATUS_UNKNOWN;
+      this.unbindFoldStatus();
+    }
+  }
+
+  private unbindFoldStatus(): void {
+    try {
+      display.off('foldStatusChange', this.foldStatusChanged);
+    } catch (_err) {
+    }
+  }
+
+  private unbindResponsiveQueries(): void {
+    if (this.wideQueryListener) {
+      this.wideQueryListener.off('change', this.wideQueryChanged);
+      this.wideQueryListener = undefined;
+    }
+  }
+
+  private areaWidth(width: Object): number {
+    const value = Number.parseFloat(`${width}`);
+    return Number.isNaN(value) ? 0 : value;
+  }
+
+  private refreshWideGeometry(): void {
+    const geometry = ConversationLayoutPolicy.resolveWideGeometry(
+      this.viewportWidth,
+      this.currentVerticalCreases()
+    );
+    this.wideMasterPaneWidth = geometry.masterPaneWidth;
+    this.wideMasterDetailGap = geometry.masterDetailGap;
+    this.wideDetailContentOffset = geometry.detailContentOffset;
+    this.wideDetailContentWidth = geometry.detailContentWidth;
+  }
+
+  private currentVerticalCreases(): ConversationLayoutCrease[] {
+    if (this.foldStatus === display.FoldStatus.FOLD_STATUS_FOLDED) {
+      return [];
+    }
+    try {
+      const region = display.getCurrentFoldCreaseRegion();
+      return region.creaseRects
+        .filter((rect: display.Rect): boolean => rect.height > rect.width)
+        .map((rect: display.Rect): ConversationLayoutCrease => {
+          return new ConversationLayoutCrease(
+            this.getUIContext().px2vp(rect.left),
+            this.getUIContext().px2vp(rect.width)
+          );
+        });
+    } catch (_err) {
+      return [];
+    }
+  }
+
+  private canShowRemoteWideList(): boolean {
+    return this.remotePageState.connectionState === 'connected' || this.remotePageState.visibleSessions().length > 0 ||
+      this.remotePageState.isLoadingHome || this.remotePageState.isLoadingSessions;
+  }
+
+  private remoteWideStatusText(): string {
+    if (this.remotePageState.statusText.length > 0) {
+      return this.remotePageState.statusText;
+    }
+    return this.remoteDesktopName();
+  }
+
+  private remoteWideStatusColor(): string {
+    if (this.remotePageState.connectionState === 'connected') {
+      return GREEN;
+    }
+    if (this.remotePageState.connectionState === 'failed' || this.remotePageState.connectionState === 'disconnected') {
+      return RED;
+    }
+    return MUTED;
+  }
+
+  private remoteDesktopName(): string {
+    return this.remotePageState.desktopName.length > 0 ? this.remotePageState.desktopName :
+      RemoteI18n.t('remote.settings.noDesktop');
+  }
+
+  private remoteFlowPlaceholderTitle(): string {
+    return this.remotePageState.visibleSessions().length > 0 ? '选择会话' : RemoteI18n.t('remote.emptyTitle');
   }
 
   @Builder SidebarContent() {
@@ -304,10 +851,11 @@ export struct AppRootPresentation {
         hasGeneralChatApiKey: this.generalPageState.hasApiKey,
         accountUsername: this.remotePageState.accountUsername,
         authenticatedUserId: this.remotePageState.accountUserId,
-        deviceId: this.deviceId,
-        onOpenAccount: this.actions.onSettings.openAccount,
-        onSaveGeneralChatConfig: this.actions.onSettings.saveGeneral,
-        onClose: this.actions.onSettings.close })
+      deviceId: this.deviceId,
+      onOpenAccount: this.actions.onSettings.openAccount,
+      onTestGeneralChatConfig: this.actions.onSettings.testGeneral,
+      onSaveGeneralChatConfig: this.actions.onSettings.saveGeneral,
+      onClose: this.actions.onSettings.close })
     }
   }
 

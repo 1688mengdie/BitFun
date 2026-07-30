@@ -23,7 +23,7 @@ export class AppShellViewModel {
     return AppRouteContract.isGeneralComposerRoute(this.currentRoute());
   }
 
-  pushRoute(route: AppRoute, sessionId: string = ''): void {
+  pushRoute(route: AppRoute, sessionId: string = '', animated: boolean = true): void {
     const spec: AppNavigationPathSpec | undefined = AppRouteContract.pathSpec(
       this.currentRoute(),
       route,
@@ -33,16 +33,23 @@ export class AppShellViewModel {
       return;
     }
     if (spec.hasSessionParam()) {
-      this.navigationStack.pushPath({ name: spec.name, param: spec.routeParam() });
+      this.navigationStack.pushPath({ name: spec.name, param: spec.routeParam() }, animated);
       return;
     }
-    this.navigationStack.pushPath({ name: spec.name });
+    this.navigationStack.pushPath({ name: spec.name }, animated);
   }
 
   replaceRoute(route: AppRoute, sessionId: string = ''): void {
     this.navigationStack.clear();
     if (route !== AppRoute.ChatHome) {
       this.pushRoute(route, sessionId);
+    }
+  }
+
+  replaceRouteWithoutAnimation(route: AppRoute, sessionId: string = ''): void {
+    this.navigationStack.clear(false);
+    if (route !== AppRoute.ChatHome) {
+      this.pushRoute(route, sessionId, false);
     }
   }
 

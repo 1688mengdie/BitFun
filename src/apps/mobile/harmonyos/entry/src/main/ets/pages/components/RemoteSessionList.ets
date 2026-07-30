@@ -10,6 +10,7 @@ export struct RemoteSessionList {
   @Param sortMode: string = 'project';
   @Param hasMoreSessions: boolean = false;
   @Param isBusy: boolean = false;
+  @Param selectedSessionId: string = '';
   @Param workspaceName: string = '';
   @Param workspacePath: string = '';
   @Param workspaceKind: string = 'normal';
@@ -30,6 +31,11 @@ export struct RemoteSessionList {
   @Local yesterdayCollapsed: boolean = false;
   @Local earlierCollapsed: boolean = false;
   @Local createMenuPath: string = '';
+
+  @Monitor('isBusy', 'workspacePath')
+  onWorkspaceContextChanged(): void {
+    this.createMenuPath = '';
+  }
 
   build() {
     Column() {
@@ -194,30 +200,32 @@ export struct RemoteSessionList {
                 .height(18)
                 .objectFit(ImageFit.Contain)
             }
-            Image($r('app.media.remote_ref_edit'))
-              .width(25)
-              .height(25)
-              .objectFit(ImageFit.Contain)
-              .opacity(0.52)
-              .bindPopup(this.createMenuPath === project.path, {
-                builder: () => {
-                  this.ProjectCreateMenu(project.path)
-                },
-                placement: Placement.Top,
-                popupColor: '#00000000',
-                enableArrow: false,
-                autoCancel: true,
-                mask: false,
-                targetSpace: 6,
-                onStateChange: (event) => {
-                  if (!event.isVisible) {
-                    this.createMenuPath = '';
+            if (project.path.length > 0) {
+              Image($r('app.media.remote_ref_edit'))
+                .width(25)
+                .height(25)
+                .objectFit(ImageFit.Contain)
+                .opacity(0.52)
+                .bindPopup(this.createMenuPath.length > 0 && this.createMenuPath === project.path, {
+                  builder: () => {
+                    this.ProjectCreateMenu(project.path)
+                  },
+                  placement: Placement.Top,
+                  popupColor: '#00000000',
+                  enableArrow: false,
+                  autoCancel: true,
+                  mask: false,
+                  targetSpace: 6,
+                  onStateChange: (event) => {
+                    if (!event.isVisible) {
+                      this.createMenuPath = '';
+                    }
                   }
-                }
-              })
-              .onClick(() => {
-                this.createMenuPath = this.createMenuPath === project.path ? '' : project.path;
-              })
+                })
+                .onClick(() => {
+                  this.createMenuPath = this.createMenuPath === project.path ? '' : project.path;
+                })
+            }
           }
           .width('100%')
           .height(50)
@@ -341,18 +349,24 @@ export struct RemoteSessionList {
   @Builder
   private projectPreview(path: string) {
     ForEach(this.visibleProjectSessions(path), (item: RemoteSession) => {
-      Text(item.title || RemoteI18n.t('sidebar.untitled'))
-        .fontSize(16)
-        .fontColor(INK)
-        .width('100%')
-        .height(58)
-        .maxLines(1)
-        .textOverflow({ overflow: TextOverflow.Ellipsis })
-        .padding({ left: 0 })
-        .textAlign(TextAlign.Start)
-        .onClick(() => {
-          this.onOpenSession(item);
-        })
+      Row() {
+        Text(item.title || RemoteI18n.t('sidebar.untitled'))
+          .fontSize(16)
+          .fontColor(INK)
+          .fontWeight(this.selectedSessionId === item.id ? FontWeight.Medium : FontWeight.Regular)
+          .layoutWeight(1)
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .textAlign(TextAlign.Start)
+      }
+      .width('100%')
+      .height(58)
+      .padding({ left: 0, right: 8 })
+      .backgroundColor(this.selectedSessionId === item.id ? '#F3F3F3' : '#00000000')
+      .borderRadius(12)
+      .onClick(() => {
+        this.onOpenSession(item);
+      })
     })
     if (this.projectVisibleCount(path) < this.projectSessions(path).length) {
       Text(RemoteI18n.f('remote.sessions.showMore', String(this.nextProjectBatchSize(path))))
@@ -510,7 +524,7 @@ export struct RemoteSessionList {
     Row() {
       Text(item.title || RemoteI18n.t('sidebar.untitled'))
         .fontSize(18)
-        .fontWeight(FontWeight.Regular)
+        .fontWeight(this.selectedSessionId === item.id ? FontWeight.Medium : FontWeight.Regular)
         .fontColor(INK)
         .layoutWeight(1)
         .maxLines(1)
@@ -521,7 +535,10 @@ export struct RemoteSessionList {
     }
     .width('100%')
     .height(58)
+    .padding({ left: 12, right: 12 })
     .alignItems(VerticalAlign.Center)
+    .backgroundColor(this.selectedSessionId === item.id ? '#F3F3F3' : '#00000000')
+    .borderRadius(12)
     .onClick(() => {
       this.onOpenSession(item);
     })

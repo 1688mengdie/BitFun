@@ -53,6 +53,8 @@ export struct ConversationView {
   @Param selectedImages: ConversationUiSelectedImage[] = [];
   @Param isVoiceListening: boolean = false;
   @Param chatInput: string = '';
+  @Param showSidebarButton: boolean = true;
+  @Param showBackButton: boolean = true;
   @Event onOpenSidebar: () => void = () => {};
   @Event onBack: () => void = () => {};
   @Event onNewSession: () => void = () => {};
@@ -125,6 +127,7 @@ export struct ConversationView {
     if (this.surface === ChatSurface.General) {
       GeneralChatHeader({
         showActions: ConversationViewContract.hasRealTimelineItem(this.timelineItems),
+        showSidebarButton: this.showSidebarButton,
         onOpenSidebar: () => {
           this.onOpenSidebar();
         },
@@ -146,6 +149,7 @@ export struct ConversationView {
         canStop: this.canStop,
         modelCatalog: this.modelCatalog,
         selectedModelId: this.selectedModelId,
+        showBackButton: this.showBackButton,
         onBack: () => {
           this.onBack();
         },

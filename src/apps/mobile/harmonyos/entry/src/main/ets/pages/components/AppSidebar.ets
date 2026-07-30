@@ -1,6 +1,8 @@
 import { RemoteSession } from '../../model/RemoteModels';
 import { RemoteI18n } from '../../i18n/RemoteI18n';
 import { CARD, INK, MUTED, SUBTLE } from './Theme';
+import { ConversationSource } from '../navigation/AppRouteContract';
+import { ConversationSourceSwitcher } from './ConversationSourceSwitcher';
 
 @Component
 export struct AppSidebar {
@@ -10,9 +12,12 @@ export struct AppSidebar {
   @Prop connectionState: string = 'idle';
   @Prop activeSection: string = 'chat';
   @Prop accountUserId: string = '';
+  @Prop showConversationSourceSwitcher: boolean = false;
+  @Prop conversationSource: ConversationSource = ConversationSource.General;
   onClose: () => void = () => {};
   onNewChat: () => void = () => {};
   onEnterCode: () => void = () => {};
+  onConversationSource: (source: ConversationSource) => void = (_source: ConversationSource) => {};
   onOpenSettings: () => void = () => {};
   onOpenAccount: () => void = () => {};
   onOpenSession: (session: RemoteSession) => void = (_session: RemoteSession) => {};
@@ -40,9 +45,16 @@ export struct AppSidebar {
       }
 
       Column({ space: 0 }) {
-        this.NavRow(RemoteI18n.t('sidebar.code'), this.activeSection === 'remote', () => {
-          this.onEnterCode();
-        })
+        if (this.showConversationSourceSwitcher) {
+          ConversationSourceSwitcher({
+            activeSource: this.conversationSource,
+            onSelectSource: this.onConversationSource
+          })
+        } else {
+          this.NavRow(RemoteI18n.t('sidebar.code'), this.activeSection === 'remote', () => {
+            this.onEnterCode();
+          })
+        }
       }
       .width('100%')
       .margin({ top: 18 })
@@ -94,9 +106,9 @@ export struct AppSidebar {
               .virtualScroll({ totalCount: this.visibleArchivedSessions().length })
           }
         }
-        .width('110%')
+        .width('100%')
         .height('100%')
-        .margin({ left: -14 })
+        .margin({ left: 0 })
         .padding({ bottom: 72 })
         .scrollBar(BarState.Off)
         .divider(null)

@@ -6,6 +6,11 @@ export enum AppRoute {
   RemoteChat = 'RemoteChat'
 }
 
+export enum ConversationSource {
+  General = 'general',
+  Remote = 'remote'
+}
+
 export class ChatRouteParam {
   sessionId: string;
 
@@ -53,6 +58,27 @@ export class AppRouteContract {
 
   static isSessionRoute(route: AppRoute): boolean {
     return route === AppRoute.GeneralChat || route === AppRoute.RemoteChat;
+  }
+
+  static conversationSource(route: AppRoute): ConversationSource {
+    if (route === AppRoute.RemoteHome || route === AppRoute.RemoteCreate || route === AppRoute.RemoteChat) {
+      return ConversationSource.Remote;
+    }
+    return ConversationSource.General;
+  }
+
+  static routeForConversationSource(
+    source: ConversationSource,
+    remoteAvailable: boolean,
+    activeRemoteSessionId: string
+  ): AppNavigationPathSpec {
+    if (source === ConversationSource.General) {
+      return new AppNavigationPathSpec(AppRoute.ChatHome);
+    }
+    if (remoteAvailable && activeRemoteSessionId.length > 0) {
+      return new AppNavigationPathSpec(AppRoute.RemoteChat, activeRemoteSessionId);
+    }
+    return new AppNavigationPathSpec(AppRoute.RemoteHome);
   }
 
   static routeParam(sessionId: string): ChatRouteParam {

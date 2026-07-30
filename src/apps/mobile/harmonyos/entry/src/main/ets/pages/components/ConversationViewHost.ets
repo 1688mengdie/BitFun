@@ -10,6 +10,8 @@ import { ConversationUiQuestionAnswer } from './ConversationUiModels';
 @ComponentV2
 export struct ConversationViewHost {
   @Param viewState: ConversationViewState = new ConversationViewState();
+  @Param showSidebarButton: boolean = true;
+  @Param showBackButton: boolean = true;
   @Param onIntent: (intent: ConversationIntent) => void = (_intent: ConversationIntent) => {};
 
   build() {
@@ -40,6 +42,8 @@ export struct ConversationViewHost {
       isVoiceListening: this.viewState.isVoiceListening,
       chatInput: this.viewState.chatInput,
       isSessionPinned: this.viewState.isSessionPinned,
+      showSidebarButton: this.showSidebarButton,
+      showBackButton: this.showBackButton,
       onOpenSidebar: () => this.dispatch(ConversationIntents.simple(ConversationIntentType.OpenSidebar)),
       onBack: () => this.dispatch(ConversationIntents.simple(ConversationIntentType.Back)),
       onNewSession: () => this.dispatch(ConversationIntents.simple(ConversationIntentType.NewSession)),

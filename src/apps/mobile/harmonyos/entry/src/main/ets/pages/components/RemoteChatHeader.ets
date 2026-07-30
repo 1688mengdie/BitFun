@@ -19,6 +19,7 @@ export struct RemoteChatHeader {
     default_models: {}
   };
   @Param selectedModelId: string = '';
+  @Param showBackButton: boolean = true;
   @Event onBack: () => void = () => {};
   @Event onNewSession: () => void = () => {};
   @Event onStop: () => void = () => {};
@@ -45,12 +46,13 @@ export struct RemoteChatHeader {
   @Builder
   HeaderRow() {
     Row({ space: 12 }) {
-      Stack({ alignContent: Alignment.Center }) {
-        Image($r('app.media.remote_ref_back'))
-          .width(16)
-          .height(25)
-          .objectFit(ImageFit.Contain)
-      }
+      if (this.showBackButton) {
+        Stack({ alignContent: Alignment.Center }) {
+          Image($r('app.media.remote_ref_back'))
+            .width(16)
+            .height(25)
+            .objectFit(ImageFit.Contain)
+        }
         .width(48)
         .height(48)
         .backgroundColor(CARD)
@@ -59,6 +61,7 @@ export struct RemoteChatHeader {
         .onClick(() => {
           this.onBack();
         })
+      }
       Column({ space: 3 }) {
         Text(this.activeSession.title || RemoteI18n.t('chat.remoteSession'))
           .fontSize(18)

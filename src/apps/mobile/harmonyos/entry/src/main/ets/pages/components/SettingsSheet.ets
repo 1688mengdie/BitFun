@@ -27,7 +27,26 @@ export struct SettingsSheet {
     _modelName: string,
     _clearApiKey: boolean
   ) => '';
+  onTestGeneralChatConfig: (
+    apiUrl: string,
+    apiKey: string,
+    modelName: string,
+    clearApiKey: boolean
+  ) => Promise<string> = async (
+    _apiUrl: string,
+    _apiKey: string,
+    _modelName: string,
+    _clearApiKey: boolean
+  ) => '';
   @State showModelService: boolean = false;
+  @State savedGeneralChatApiUrl: string = '';
+  @State savedGeneralChatModelName: string = '';
+  @State savedGeneralChatHasApiKey: boolean = false;
+
+  aboutToAppear(): void {
+    this.showModelService = false;
+    this.syncGeneralChatConfig(this.generalChatApiUrl, this.generalChatModelName, this.hasGeneralChatApiKey);
+  }
 
   build() {
     Stack({ alignContent: Alignment.TopEnd }) {
@@ -202,11 +221,26 @@ export struct SettingsSheet {
   @Builder
   ModelServicePanel() {
     ModelServiceSettingsPanel({
-      apiUrl: this.generalChatApiUrl,
-      modelName: this.generalChatModelName,
-      hasApiKey: this.hasGeneralChatApiKey,
+      apiUrl: this.savedGeneralChatApiUrl,
+      modelName: this.savedGeneralChatModelName,
+      hasApiKey: this.savedGeneralChatHasApiKey,
       onClose: () => {
         this.showModelService = false;
+      },
+      onSaved: (
+        apiUrl: string,
+        modelName: string,
+        hasApiKey: boolean
+      ) => {
+        this.syncGeneralChatConfig(apiUrl, modelName, hasApiKey);
+      },
+      onTest: (
+        apiUrl: string,
+        apiKey: string,
+        modelName: string,
+        clearApiKey: boolean
+      ) => {
+        return this.onTestGeneralChatConfig(apiUrl, apiKey, modelName, clearApiKey);
       },
       onSave: (
         apiUrl: string,
@@ -220,9 +254,15 @@ export struct SettingsSheet {
   }
 
   private modelServiceStatus(): string {
-    return this.generalChatApiUrl.length > 0 &&
-      this.generalChatModelName.length > 0 && this.hasGeneralChatApiKey ?
+    return this.savedGeneralChatApiUrl.length > 0 &&
+      this.savedGeneralChatModelName.length > 0 && this.savedGeneralChatHasApiKey ?
       RemoteI18n.t('settings.modelService.configured') :
       RemoteI18n.t('settings.modelService.notConfigured');
+  }
+
+  private syncGeneralChatConfig(apiUrl: string, modelName: string, hasApiKey: boolean): void {
+    this.savedGeneralChatApiUrl = apiUrl;
+    this.savedGeneralChatModelName = modelName;
+    this.savedGeneralChatHasApiKey = hasApiKey;
   }
 }
