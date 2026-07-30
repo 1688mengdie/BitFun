@@ -18,6 +18,8 @@ mod chat_state;
 mod config;
 mod daemon;
 mod diagnostics;
+mod dispatch;
+mod hook_import;
 mod logging;
 mod management;
 mod mcp_import;
@@ -41,6 +43,7 @@ use std::sync::{Arc, OnceLock};
 
 use agent::runtime_client::CliAgentRuntimeClient;
 use config::CliConfig;
+use hook_import::HookAction;
 use mcp_import::{McpImportCommand, McpImportOutputFormat};
 use modes::chat::ChatMode;
 use modes::exec::{ExecApprovalMode, ExecOutputFormat};
@@ -218,6 +221,12 @@ enum Commands {
         action: Option<PluginAction>,
     },
 
+    /// Review and manage imported Claude Code and Codex command Hooks
+    Hooks {
+        #[command(subcommand)]
+        action: Option<HookAction>,
+    },
+
     /// Usage reporting
     Usage {
         /// Session ID to inspect; defaults to the most recent session in the current workspace
@@ -251,6 +260,12 @@ enum Commands {
     Daemon {
         #[command(subcommand)]
         action: DaemonAction,
+    },
+
+    /// Run and inspect persistent tasks owned by this machine
+    Dispatch {
+        #[command(subcommand)]
+        action: DispatchAction,
     },
 
     /// Start or inspect the Agent Client Protocol (ACP) server
@@ -566,6 +581,40 @@ enum DaemonAction {
     Status,
 }
 
+#[derive(Subcommand)]
+pub(crate) enum DispatchAction {
+    /// Report target protocol and local execution readiness
+    Probe,
+    /// Persist and start a detached dispatch job
+    Submit,
+    /// Read job state and incremental events
+    Status,
+    /// Cancel a detached dispatch job
+    Cancel,
+    /// List jobs owned by this machine
+    List,
+    /// Answer a permission request for a remotely supervised job
+    Answer,
+    /// Append a steering message to a queued or running job
+    Append,
+    #[command(name = "__workspace_begin", hide = true)]
+    WorkspaceBegin,
+    #[command(name = "__workspace_chunk", hide = true)]
+    WorkspaceChunk,
+    #[command(name = "__workspace_commit", hide = true)]
+    WorkspaceCommit,
+    #[command(name = "__workspace_materialize", hide = true)]
+    WorkspaceMaterialize {
+        #[arg(long)]
+        job: String,
+    },
+    #[command(name = "__run", hide = true)]
+    Run {
+        #[arg(long)]
+        job: String,
+    },
+}
+
 // ======================== System Initialization ========================
 
 /// Return the current project path. CLI session scope is intentionally cwd-only.
@@ -652,7 +701,26 @@ async fn initialize_core_services_for_deployment(
         .await
         .map_err(|error| anyhow!("Failed to initialize global config service: {error}"))?;
     tracing::info!("Global config service initialized");
-    let runtime_ownership = shared_runtime::acquire_ownership(workspace_root, deployment)?;
+    let path_manager = bitfun_core::infrastructure::try_get_path_manager_arc()
+        .map_err(|error| anyhow!(error.to_string()))?;
+    let entrypoint = match (deployment, bootstrap_profile) {
+        (
+            bitfun_services_core::runtime_ownership::RuntimeDeployment::Embedded,
+            BootstrapProfile::Interactive,
+        ) => "cli-interactive",
+        (bitfun_services_core::runtime_ownership::RuntimeDeployment::Embedded, _) => "cli-headless",
+        (bitfun_services_core::runtime_ownership::RuntimeDeployment::Shared, _) => {
+            "shared-tui-runtime"
+        }
+    };
+    let runtime_ownership = bitfun_core::runtime_ownership::CoreRuntimeOwnership::fixed_workspace(
+        path_manager.as_ref(),
+        entrypoint,
+        workspace_root,
+        deployment,
+    )
+    .map_err(|error| anyhow!(error.startup_message(deployment, entrypoint)))?;
+    let runtime_ownership = std::sync::Arc::new(runtime_ownership);
 
     let config_service = bitfun_core::service::config::get_global_config_service()
         .await
@@ -667,6 +735,7 @@ async fn initialize_core_services_for_deployment(
 
     let agentic_system = agent::agentic_system::init_agentic_system(
         bitfun_core::product_assembly::DeliveryProfile::Cli,
+        runtime_ownership,
     )
     .await
     .map_err(|error| anyhow!("Failed to initialize agentic system: {error}"))?;
@@ -676,7 +745,6 @@ async fn initialize_core_services_for_deployment(
         agentic_system,
         workspace_root,
         approval_policy,
-        runtime_ownership,
     )?);
     debug_assert!(runtime
         .product()
@@ -890,6 +958,10 @@ impl std::fmt::Display for ReportedCliError {
 
 impl std::error::Error for ReportedCliError {}
 
+fn is_dispatch_command(command: &Option<Commands>) -> bool {
+    matches!(command, Some(Commands::Dispatch { .. }))
+}
+
 async fn run_cli() -> Result<()> {
     let raw_args = std::env::args_os().collect::<Vec<_>>();
     let product_binary_name = option_env!("BITFUN_PRODUCT_BINARY_NAME").unwrap_or("bitfun");
@@ -934,6 +1006,7 @@ async fn run_cli() -> Result<()> {
         Err(error) => return Err(error),
     };
     let is_exec_mode = matches!(cli.command, Some(Commands::Exec { .. }));
+    let is_dispatch_mode = is_dispatch_command(&cli.command);
     let is_daemon_run = matches!(
         cli.command,
         Some(Commands::Daemon {
@@ -951,7 +1024,7 @@ async fn run_cli() -> Result<()> {
         let service_log_dir =
             logging::resolve_logs_root().join(format!("shared-runtime-{}", std::process::id()));
         logging::init_file_logging_at(&service_log_dir, file_log_level);
-    } else if is_tui_mode || is_exec_mode || is_daemon_run {
+    } else if is_tui_mode || is_exec_mode || is_daemon_run || is_dispatch_mode {
         logging::init_file_logging(file_log_level);
     } else {
         tracing_subscriber::fmt()
@@ -1113,6 +1186,10 @@ async fn run_cli() -> Result<()> {
             }
         },
 
+        Some(Commands::Hooks { action }) => {
+            hook_import::run(action).await?;
+        }
+
         Some(Commands::Usage { session_id }) => {
             management::print_usage_report(session_id.as_deref()).await?;
         }
@@ -1145,6 +1222,10 @@ async fn run_cli() -> Result<()> {
             DaemonAction::Uninstall => daemon::uninstall_service()?,
             DaemonAction::Status => daemon::print_status()?,
         },
+
+        Some(Commands::Dispatch { action }) => {
+            root_handlers::handle_dispatch_action(action).await?;
+        }
 
         Some(Commands::Acp {
             action: None | Some(AcpAction::Serve),
@@ -1575,6 +1656,66 @@ mod final_change_verification_cli_tests {
 }
 
 #[cfg(test)]
+mod hook_import_command_tests {
+    use super::{Cli, Commands};
+    use crate::hook_import::{HookAction, HookImportOutputFormat};
+    use clap::Parser;
+
+    #[test]
+    fn hook_import_is_preview_only_without_a_fingerprint() {
+        let cli = Cli::try_parse_from([
+            "bitfun",
+            "hooks",
+            "import",
+            "--source",
+            "6:codex6:global",
+            "--format",
+            "json",
+        ])
+        .expect("parse Hook import preview");
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Hooks {
+                action: Some(HookAction::Import {
+                    confirm: None,
+                    format: HookImportOutputFormat::Json,
+                    ..
+                })
+            })
+        ));
+    }
+
+    #[test]
+    fn hook_remove_requires_explicit_confirmation() {
+        assert!(Cli::try_parse_from(["bitfun", "hooks", "remove", "import-id"]).is_err());
+        let cli = Cli::try_parse_from(["bitfun", "hooks", "remove", "import-id", "--confirm"])
+            .expect("parse confirmed Hook removal");
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Hooks {
+                action: Some(HookAction::Remove { .. })
+            })
+        ));
+    }
+
+    #[test]
+    fn corrupt_hook_store_reset_requires_an_explicit_scope_and_confirmation() {
+        assert!(Cli::try_parse_from(["bitfun", "hooks", "reset", "user"]).is_err());
+        let cli = Cli::try_parse_from(["bitfun", "hooks", "reset", "project", "--confirm"])
+            .expect("parse confirmed project Hook store reset");
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Hooks {
+                action: Some(HookAction::Reset {
+                    scope: crate::hook_import::HookImportResetScope::Project,
+                    ..
+                })
+            })
+        ));
+    }
+}
+
+#[cfg(test)]
 mod sdk_host_command_tests {
     use super::Cli;
     use clap::{CommandFactory, Parser};
@@ -1644,5 +1785,60 @@ mod shared_tui_command_tests {
             .render_long_help()
             .to_string();
         assert!(!exec_help.contains("--shared"));
+    }
+}
+
+#[cfg(test)]
+mod dispatch_command_tests {
+    use super::{is_dispatch_command, Cli, Commands, DispatchAction};
+    use clap::{CommandFactory, Parser};
+
+    #[test]
+    fn dispatch_commands_parse_and_internal_worker_is_hidden() {
+        let status =
+            Cli::try_parse_from(["bitfun", "dispatch", "status"]).expect("parse dispatch status");
+        assert!(matches!(
+            status.command,
+            Some(Commands::Dispatch {
+                action: DispatchAction::Status
+            })
+        ));
+        assert!(is_dispatch_command(&status.command));
+
+        let worker = Cli::try_parse_from(["bitfun", "dispatch", "__run", "--job", "job-1"])
+            .expect("parse internal dispatch worker");
+        assert!(matches!(
+            worker.command,
+            Some(Commands::Dispatch {
+                action: DispatchAction::Run { ref job }
+            }) if job == "job-1"
+        ));
+        assert!(is_dispatch_command(&worker.command));
+        let materializer = Cli::try_parse_from([
+            "bitfun",
+            "dispatch",
+            "__workspace_materialize",
+            "--job",
+            "job-1",
+        ])
+        .expect("parse internal workspace materializer");
+        assert!(matches!(
+            materializer.command,
+            Some(Commands::Dispatch {
+                action: DispatchAction::WorkspaceMaterialize { ref job }
+            }) if job == "job-1"
+        ));
+        assert!(is_dispatch_command(&materializer.command));
+        let unrelated = Cli::try_parse_from(["bitfun", "config", "show"]).expect("parse config");
+        assert!(!is_dispatch_command(&unrelated.command));
+
+        let help = Cli::command().render_long_help().to_string();
+        assert!(help.contains("dispatch"));
+        let dispatch_help = Cli::command()
+            .find_subcommand_mut("dispatch")
+            .expect("dispatch command")
+            .render_long_help()
+            .to_string();
+        assert!(!dispatch_help.contains("__run"));
     }
 }

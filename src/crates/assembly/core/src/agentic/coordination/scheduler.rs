@@ -134,6 +134,10 @@ impl SchedulerSubmitError {
             Self::Core(BitFunError::Timeout(message)) => {
                 PortError::new(PortErrorKind::Timeout, message)
             }
+            Self::Core(BitFunError::SessionInUse { session_id }) => PortError::new(
+                PortErrorKind::SessionInUse,
+                format!("Session is already open for writing: {session_id}"),
+            ),
             Self::Core(BitFunError::NotImplemented(message)) => {
                 PortError::new(PortErrorKind::NotAvailable, message)
             }
@@ -2390,6 +2394,16 @@ mod tests {
     use bitfun_runtime_ports::{AgentDialogPrependedReminder, AgentInputAttachment, PortErrorKind};
     use tokio::sync::RwLock as TokioRwLock;
 
+    #[test]
+    fn scheduler_preserves_session_writer_conflicts() {
+        let error = SchedulerSubmitError::Core(BitFunError::SessionInUse {
+            session_id: "session-1".to_string(),
+        })
+        .into_port_error();
+
+        assert_eq!(error.kind, PortErrorKind::SessionInUse);
+    }
+
     fn test_scheduler() -> (
         Arc<DialogScheduler>,
         Arc<SessionManager>,
@@ -2436,6 +2450,16 @@ mod tests {
             tool_pipeline,
             event_queue.clone(),
             Arc::new(EventRouter::new()),
+            Arc::new(
+                crate::runtime_ownership::CoreRuntimeOwnership::embedded_with_facts(
+                    std::env::temp_dir().join(format!(
+                        "bitfun-scheduler-ownership-test-{}",
+                        uuid::Uuid::new_v4()
+                    )),
+                    "bitfun".to_string(),
+                    "test",
+                ),
+            ),
         ));
         (
             DialogScheduler::new(coordinator, session_manager.clone()),

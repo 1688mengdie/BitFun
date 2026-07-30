@@ -554,6 +554,48 @@ async fn validate_input_accepts_fork_context_with_model_id() {
 }
 
 #[tokio::test]
+async fn validate_input_accepts_fork_spawn_with_neutral_flat_schema_placeholders() {
+    let validation = TaskTool::new()
+        .validate_input(
+            &json!({
+                "action": "spawn",
+                "agent_id": "",
+                "description": "delegate",
+                "fork_context": true,
+                "model_id": "inherit",
+                "prompt": "Inspect the repo",
+                "run_in_background": true,
+                "subagent_type": ""
+            }),
+            None,
+        )
+        .await;
+
+    assert!(validation.result, "{:?}", validation.message);
+}
+
+#[tokio::test]
+async fn validate_input_accepts_fresh_spawn_with_neutral_flat_schema_placeholders() {
+    let validation = TaskTool::new()
+        .validate_input(
+            &json!({
+                "action": "spawn",
+                "agent_id": "",
+                "description": "delegate",
+                "fork_context": false,
+                "model_id": "inherit",
+                "prompt": "Inspect the repo",
+                "run_in_background": true,
+                "subagent_type": "Explore"
+            }),
+            None,
+        )
+        .await;
+
+    assert!(validation.result, "{:?}", validation.message);
+}
+
+#[tokio::test]
 async fn validate_input_rejects_fork_context_with_subagent_type_as_mode_conflict() {
     let validation = TaskTool::new()
         .validate_input(
@@ -613,6 +655,25 @@ async fn validate_input_accepts_send_input_with_model_id() {
 }
 
 #[tokio::test]
+async fn validate_input_accepts_send_input_with_neutral_spawn_placeholders() {
+    let validation = TaskTool::new()
+        .validate_input(
+            &json!({
+                "action": "send_input",
+                "agent_id": "a1",
+                "description": "continue",
+                "fork_context": false,
+                "prompt": "Continue the previous analysis",
+                "subagent_type": ""
+            }),
+            None,
+        )
+        .await;
+
+    assert!(validation.result, "{:?}", validation.message);
+}
+
+#[tokio::test]
 async fn validate_input_infers_send_input_without_action_when_agent_id_present() {
     let validation = TaskTool::new()
         .validate_input(
@@ -626,6 +687,27 @@ async fn validate_input_infers_send_input_without_action_when_agent_id_present()
         .await;
 
     assert!(validation.result);
+}
+
+#[test]
+fn permission_intents_follow_the_agent_id_contract() {
+    let tool = TaskTool::new();
+    let context = test_tool_context("agentic");
+
+    for (action, expected_resource) in [("send_input", "send_input:a1"), ("cancel", "cancel:a1")] {
+        let intents = tool
+            .permission_intents(&json!({ "action": action, "agent_id": "a1" }), &context)
+            .expect("agent_id should produce a permission intent");
+
+        assert_eq!(intents.len(), 1);
+        assert_eq!(intents[0].action, "task");
+        assert_eq!(intents[0].resources, vec![expected_resource]);
+    }
+
+    let error = tool
+        .permission_intents(&json!({ "action": "send_input" }), &context)
+        .expect_err("send_input without agent_id should be rejected");
+    assert!(error.to_string().contains("agent_id is required"));
 }
 
 #[tokio::test]
@@ -815,6 +897,26 @@ async fn validate_input_rejects_cancel_with_prompt() {
         .message
         .as_deref()
         .is_some_and(|message| message.contains("prompt is not allowed")));
+}
+
+#[tokio::test]
+async fn validate_input_accepts_cancel_with_neutral_optional_placeholders() {
+    let validation = TaskTool::new()
+        .validate_input(
+            &json!({
+                "action": "cancel",
+                "agent_id": "a1",
+                "fork_context": false,
+                "model_id": "",
+                "prompt": "",
+                "run_in_background": false,
+                "subagent_type": ""
+            }),
+            None,
+        )
+        .await;
+
+    assert!(validation.result, "{:?}", validation.message);
 }
 
 #[tokio::test]

@@ -2,6 +2,7 @@
 
 use crate::api::session_storage_path::desktop_effective_session_storage_path;
 use crate::embedded_relay_host::DesktopEmbeddedRelayHost;
+use bitfun_core::agentic::coordination::{get_global_coordinator, ConversationCoordinator};
 use bitfun_core::agentic::persistence::PersistenceManager;
 use bitfun_core::agentic::tools::account_login_capability::set_account_login_available;
 use bitfun_core::agentic::tools::page_deploy_host::set_page_deploy_handler;
@@ -16,6 +17,8 @@ use bitfun_core::service::remote_connect::{
     PairingState, RemoteConnectConfig, RemoteConnectService,
 };
 use bitfun_core::service::session::{DialogTurnData, SessionMetadata};
+use bitfun_core::service::workspace::{get_global_workspace_service, WorkspaceKind};
+use bitfun_core::service::workspace_runtime::WorkspaceRuntimeService;
 use bitfun_services_integrations::remote_connect::account::{
     error_indicates_expired_token, validate_relay_base_url,
 };
@@ -2605,7 +2608,7 @@ pub async fn account_connect_devices() -> Result<Vec<OnlineDeviceInfo>, String> 
                                     session_id,
                                     content,
                                     agent_type,
-                                    workspace_path: _,
+                                    workspace_path,
                                 }) => {
                                     let Some(_routing_effect) =
                                         lock_current_device_routing(&event_owner).await
@@ -2627,7 +2630,17 @@ pub async fn account_connect_devices() -> Result<Vec<OnlineDeviceInfo>, String> 
                                         let policy = DialogSubmissionPolicy::for_source(
                                             DialogTriggerSource::RemoteRelay,
                                         );
-                                        let wp = resolve_local_workspace_path();
+                                        let wp = match resolve_requested_local_workspace_path(
+                                            workspace_path.as_deref(),
+                                        ) {
+                                            Ok(path) => path,
+                                            Err(error) => {
+                                                log::warn!(
+                                                    "ExecuteOnDevice rejected invalid workspace: {error}"
+                                                );
+                                                continue;
+                                            }
+                                        };
                                         let agent =
                                             agent_type.unwrap_or_else(|| "agentic".to_string());
                                         if let Err(e) = scheduler
@@ -3160,12 +3173,17 @@ pub async fn account_export_all_sessions(
 #[tauri::command]
 pub async fn account_import_remote_sessions(
     workspace_path: String,
+    coordinator: State<'_, Arc<ConversationCoordinator>>,
     app_state: State<'_, crate::api::app_state::AppState>,
     path_manager: State<'_, Arc<bitfun_core::infrastructure::PathManager>>,
 ) -> Result<Vec<String>, String> {
     let generation = account_context_generation();
     let _sync_guard = lock_account_sync(generation).await?;
     let (acct_session, relay_url) = read_account_context().await?;
+
+    coordinator
+        .ensure_workspace_runtime_ownership(std::path::Path::new(&workspace_path), None, None)
+        .map_err(|error| error.to_string())?;
 
     let storage_path =
         desktop_effective_session_storage_path(&app_state, &workspace_path, None, None).await;
@@ -3233,6 +3251,7 @@ pub async fn account_import_remote_sessions(
 pub async fn account_fetch_session_turns(
     session_id: String,
     workspace_path: String,
+    coordinator: State<'_, Arc<ConversationCoordinator>>,
     app_state: State<'_, crate::api::app_state::AppState>,
     path_manager: State<'_, Arc<bitfun_core::infrastructure::PathManager>>,
 ) -> Result<bool, String> {
@@ -3243,6 +3262,10 @@ pub async fn account_fetch_session_turns(
         log::info!("Skipping cloud session turn fetch in Peer Device Mode (session={session_id})");
         return Ok(false);
     }
+
+    coordinator
+        .ensure_workspace_runtime_ownership(std::path::Path::new(&workspace_path), None, None)
+        .map_err(|error| error.to_string())?;
 
     let storage_path =
         desktop_effective_session_storage_path(&app_state, &workspace_path, None, None).await;
@@ -4193,20 +4216,28 @@ async fn export_and_upload_session(
     Ok(Some(hash))
 }
 
-/// Resolve the local workspace path for task execution. Returns the first
-/// project directory found under ~/.bitfun/projects/, or "/" as fallback.
-fn resolve_local_workspace_path() -> String {
-    let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/"));
-    let projects = home.join(".bitfun").join("projects");
-    if let Ok(entries) = std::fs::read_dir(&projects) {
-        for entry in entries.flatten() {
-            if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-                // Return the workspace slug dir path as a string
-                return entry.path().to_string_lossy().to_string();
-            }
-        }
+/// The legacy one-way execution command is path-addressed. It must never
+/// silently choose an unrelated local project when the sender omitted or
+/// mistyped the target path.
+fn resolve_requested_local_workspace_path(workspace_path: Option<&str>) -> Result<String, String> {
+    let requested = workspace_path
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .ok_or_else(|| "workspace_path is required".to_string())?;
+    let path = std::path::PathBuf::from(requested);
+    if !path.is_absolute() {
+        return Err("workspace_path must be absolute".to_string());
     }
-    "/".to_string()
+    let canonical = path
+        .canonicalize()
+        .map_err(|error| format!("resolve workspace_path: {error}"))?;
+    if !canonical.is_dir() {
+        return Err("workspace_path is not a directory".to_string());
+    }
+    canonical
+        .to_str()
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| "workspace_path is not valid UTF-8".to_string())
 }
 
 /// Execute a RemoteCommand locally (for RPC requests from other devices).
@@ -4218,6 +4249,19 @@ async fn execute_local_remote_command(
 
     match cmd {
         RemoteCommand::HostInvoke { command, args } => {
+            // Detached jobs are independent of Peer controller attachment.
+            // Route their distinct target command family directly to the
+            // durable dispatch runner before the generic webview bridge.
+            if crate::api::dispatch_host::is_target_command(command) {
+                let result = crate::api::dispatch_host::dispatch(command, args.clone()).await;
+                let (ok, value, error) = match result {
+                    Ok(value) => (true, Some(value), None),
+                    Err(error) => (false, None, Some(format!("{error:#}"))),
+                };
+                return serde_json::to_value(RemoteResponse::HostInvokeResult { ok, value, error })
+                    .map_err(|e| anyhow::anyhow!("serialize response: {e}"));
+            }
+
             // Control-plane peer attach/detach/ping can run without webview bridge.
             if command == "peer_control_attach" {
                 let controller_id = args
@@ -4306,28 +4350,23 @@ async fn import_session_bundle(bundle_json: &str, account_generation: u64) -> an
 
     let path_manager = std::sync::Arc::new(bitfun_core::infrastructure::PathManager::new()?);
     let manager = PersistenceManager::new(path_manager.clone())?;
-
-    // Find the first workspace sessions dir that exists
-    let projects_root = path_manager.projects_root();
-    let entries = std::fs::read_dir(&projects_root)?;
-    let mut target_dir: Option<std::path::PathBuf> = None;
-    for entry in entries.flatten() {
-        if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-            continue;
-        }
-        let sessions = entry.path().join("sessions");
-        if sessions.is_dir() {
-            target_dir = Some(sessions);
-            break;
-        }
+    let workspace = get_global_workspace_service()
+        .ok_or_else(|| anyhow::anyhow!("workspace service is unavailable"))?
+        .get_current_workspace()
+        .await
+        .ok_or_else(|| anyhow::anyhow!("no active workspace is available for session import"))?;
+    if workspace.workspace_kind == WorkspaceKind::Remote {
+        return Err(anyhow::anyhow!(
+            "session import requires an active local workspace"
+        ));
     }
-
-    // If no workspace sessions dir exists, create one under a "synced" workspace
-    let target_dir = target_dir.unwrap_or_else(|| {
-        let dir = projects_root.join("synced").join("sessions");
-        let _ = std::fs::create_dir_all(&dir);
-        dir
-    });
+    get_global_coordinator()
+        .ok_or_else(|| anyhow::anyhow!("Agent Runtime coordinator is unavailable"))?
+        .ensure_workspace_runtime_ownership(&workspace.root_path, None, None)
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    let target_dir = WorkspaceRuntimeService::new(path_manager.clone())
+        .context_for_local_workspace(&workspace.root_path)
+        .sessions_dir;
 
     let mut metadata: SessionMetadata = serde_json::from_value(bundle.metadata.clone())?;
     if metadata.session_id != bundle.session_id {

@@ -2,6 +2,16 @@ fn mode_change_blocks_typed_submission(pending_for_current_session: bool, input:
     pending_for_current_session && !input.trim().starts_with('/')
 }
 
+fn pending_mode_change_blocks_runtime_action(
+    shared_tui: bool,
+    pending_for_current_session: bool,
+    handler: ActionHandler,
+) -> bool {
+    shared_tui
+        && pending_for_current_session
+        && matches!(handler, ActionHandler::Sessions | ActionHandler::Init)
+}
+
 fn native_command_choice_is_active(
     resolved: Option<&ExternalCommandProjection>,
     unresolved: &[ExternalCommandProjection],
@@ -285,6 +295,16 @@ impl ChatMode {
             && native_management_available;
         if can_route_external_control {
             self.handle_external_control(arguments, chat_view, chat_state, rt_handle);
+            return Ok(None);
+        }
+        let can_route_hook_management = builtin_action.is_some_and(|action| {
+            matches!(
+                action.handler,
+                ActionHandler::NativeHooks | ActionHandler::ExternalHooks
+            )
+        }) && native_management_available;
+        if can_route_hook_management {
+            self.handle_hook_management(arguments, chat_view, chat_state, rt_handle);
             return Ok(None);
         }
         if external.is_none() && !unresolved_candidates.is_empty() && !native_choice_is_active {
@@ -624,6 +644,21 @@ impl ChatMode {
             chat_view.set_status(Some(action.unavailable_message(state)));
             return Ok(None);
         }
+        let pending_for_current_session = self
+            .pending_mode_change
+            .as_ref()
+            .is_some_and(|pending| pending.session_id == chat_state.core_session_id);
+        if pending_mode_change_blocks_runtime_action(
+            self.agent.is_shared(),
+            pending_for_current_session,
+            action.handler,
+        ) {
+            chat_view.set_status(Some(format!(
+                "Waiting for the agent mode change to finish before using {}.",
+                action.name
+            )));
+            return Ok(None);
+        }
         match action.handler {
             ActionHandler::Help => {
                 let mut help = self.keymap.help_text(state);
@@ -686,11 +721,8 @@ impl ChatMode {
             ActionHandler::Extensions => {
                 self.handle_external_control("", chat_view, chat_state, rt_handle);
             }
-            ActionHandler::NativeHooks => {
-                self.handle_native_hooks(chat_view, chat_state, rt_handle);
-            }
-            ActionHandler::ExternalHooks => {
-                self.handle_external_hooks(chat_view, chat_state, rt_handle);
+            ActionHandler::NativeHooks | ActionHandler::ExternalHooks => {
+                self.handle_hook_management("", chat_view, chat_state, rt_handle);
             }
             ActionHandler::AcpHelp => {
                 chat_state.add_system_message(crate::acp_cli::acp_help_text("bitfun"));

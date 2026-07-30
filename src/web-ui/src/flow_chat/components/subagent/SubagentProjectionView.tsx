@@ -6,9 +6,12 @@ import { ModelThinkingDisplay } from '../../tool-cards/ModelThinkingDisplay';
 import { FlowToolCard } from '../FlowToolCard';
 import { taskCollapseStateManager } from '../../store/TaskCollapseStateManager';
 import { SmoothHeightCollapse } from '../modern/SmoothHeightCollapse';
+import { FLOWCHAT_COLLAPSE_DURATION_MS } from '../modern/flowChatCollapseMotion';
 import { FlowChatStore } from '../../store/FlowChatStore';
 import { getSubagentProjectionState } from '../../utils/subagentProjection';
 import { ensureBtwSessionAvailable } from '../../services/btwSessionPane';
+import { RuntimeStatusSlot } from '../modern/RuntimeStatusSlot';
+import { useRuntimeStatusStore } from '../../store/runtimeStatusStore';
 import './SubagentProjectionView.scss';
 
 interface SubagentProjectionViewProps {
@@ -222,6 +225,11 @@ export const SubagentProjectionView: React.FC<SubagentProjectionViewProps> = ({
     ?? projectionState?.session?.sessionId
     ?? directSubagentSessionId;
   const items = liveItems;
+  const runtimeStatus = useRuntimeStatusStore(state => (
+    resolvedSubagentSessionId
+      ? state.bySessionId.get(resolvedSubagentSessionId)
+      : undefined
+  ));
 
   useEffect(() => {
     if (!resolvedSubagentSessionId || itemsProp !== undefined) {
@@ -317,7 +325,7 @@ export const SubagentProjectionView: React.FC<SubagentProjectionViewProps> = ({
 
   const shouldRenderProjection =
     Boolean(resolvedSubagentSessionId) &&
-    items.length > 0;
+    (items.length > 0 || projectionState?.isRunning === true || Boolean(runtimeStatus));
 
   if (!shouldRenderProjection) {
     return null;
@@ -328,7 +336,11 @@ export const SubagentProjectionView: React.FC<SubagentProjectionViewProps> = ({
       className={`subagent-projection-wrapper ${isCollapsed ? 'subagent-projection-wrapper--collapsed' : 'subagent-projection-wrapper--expanded'} ${className}`.trim()}
       data-subagent-session-id={resolvedSubagentSessionId}
     >
-      <SmoothHeightCollapse isOpen={!isCollapsed} className="subagent-projection-collapse">
+      <SmoothHeightCollapse
+        isOpen={!isCollapsed}
+        className="subagent-projection-collapse"
+        durationMs={FLOWCHAT_COLLAPSE_DURATION_MS}
+      >
         <div
           ref={containerRef}
           className={`subagent-projection-container ${isCollapsed ? 'subagent-projection-container--collapsed' : 'subagent-projection-container--expanded'}`}
@@ -342,6 +354,7 @@ export const SubagentProjectionView: React.FC<SubagentProjectionViewProps> = ({
               compactText,
               item.id === lastVisibleItemId,
             ))}
+            <RuntimeStatusSlot sessionId={resolvedSubagentSessionId} />
           </div>
         </div>
       </SmoothHeightCollapse>

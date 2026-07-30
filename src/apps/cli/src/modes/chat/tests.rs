@@ -15,12 +15,15 @@ mod tests {
         external_tool_run_location_label, mark_active_turn_failed,
         merge_external_agent_mutation_snapshot, mode_change_blocks_typed_submission,
         mode_change_completion_should_exit, native_command_choice_is_active,
-        native_command_reconfirmation_is_required, parse_external_agent_review_action,
-        parse_external_control_action, parse_external_tool_review_action,
-        native_hook_help_text, previous_session_mode_change_status, render_external_hook_catalog,
-        render_native_hook_overview, CommandRoute,
-        ExternalAgentReviewAction, ExternalControlUiAction, ExternalSourceConflictPreferences,
-        ExternalToolReviewAction, ModeSelectionApplyOutcome, ModelSelectionApplyOutcome,
+        native_command_reconfirmation_is_required, native_hook_help_text,
+        parse_external_agent_review_action, parse_external_control_action,
+        parse_external_tool_review_action, parse_hook_management_action,
+        pending_mode_change_blocks_runtime_action, previous_session_mode_change_status,
+        render_external_hook_catalog, render_native_hook_overview,
+        shared_session_change_is_blocked, CommandRoute, ExternalAgentReviewAction,
+        ExternalControlUiAction, ExternalSourceConflictPreferences, ExternalToolReviewAction,
+        HookManagementAction, ModeSelectionApplyOutcome, ModelSelectionApplyOutcome,
+        SHARED_TUI_CHAT_STATUS,
     };
     use crate::actions::{
         action_conflict_behavior_version, ActionHandler, ActionState, ResolvedKeymap,
@@ -29,9 +32,6 @@ mod tests {
     use crate::config::ShortcutsConfig;
     use crate::ui::command_menu::{ExternalCommandProjection, NativeCommandCollisionProjection};
     use bitfun_core::external_hooks::ExternalHookCatalogSnapshotV1;
-    use bitfun_core::native_hooks::{
-        NativeHookFileView, NativeHookHandlerView, NativeHookOverview, NativeHookRuleView,
-    };
     use bitfun_core::external_sources::{
         native_prompt_command_conflict_key, ExternalSourceAssetKind, ExternalSourceCatalogSnapshot,
         ExternalSourceControlSnapshotV1, ExternalSourceDiagnostic,
@@ -39,6 +39,10 @@ mod tests {
         ExternalSourceOperationErrorCode, ExternalSubagentActivationState,
         ExternalToolActivationState,
     };
+    use bitfun_core::native_hooks::{
+        NativeHookFileView, NativeHookHandlerView, NativeHookOverview, NativeHookRuleView,
+    };
+    use bitfun_product_domains::external_sources::ExternalSourceScope;
     use std::collections::{BTreeMap, BTreeSet};
 
     fn external_command(
@@ -701,6 +705,37 @@ mod tests {
     }
 
     #[test]
+    fn hooks_management_requires_an_explicit_second_step_for_writes() {
+        assert_eq!(
+            parse_hook_management_action("import 2").unwrap(),
+            HookManagementAction::Import {
+                source_number: 2,
+                confirm: false,
+            }
+        );
+        assert_eq!(
+            parse_hook_management_action("update 1 --confirm").unwrap(),
+            HookManagementAction::Update {
+                import_number: 1,
+                confirm: true,
+            }
+        );
+        assert!(parse_hook_management_action("remove 1").is_err());
+        assert_eq!(
+            parse_hook_management_action("remove 1 --confirm").unwrap(),
+            HookManagementAction::Remove { import_number: 1 }
+        );
+        assert!(parse_hook_management_action("reset user").is_err());
+        assert_eq!(
+            parse_hook_management_action("reset project --confirm").unwrap(),
+            HookManagementAction::Reset {
+                scope: ExternalSourceScope::Project,
+            }
+        );
+        assert!(parse_hook_management_action("enable 0").is_err());
+    }
+
+    #[test]
     fn selected_external_help_keeps_its_hooks_argument() {
         let selected_external = external_command("help", Some("external:help"));
         assert_eq!(
@@ -768,7 +803,8 @@ mod tests {
         .unwrap();
 
         let text = render_external_hook_catalog(&snapshot);
-        assert!(text.contains("External Hooks (read-only)"));
+        assert!(text.contains("Available external Hook sources"));
+        assert!(text.contains("Discovery is read-only"));
         assert!(text.contains("Claude Code"));
         assert!(text.contains("PreToolUse"));
         assert!(text.contains("coverage mapped: BitFun tool before"));
@@ -820,15 +856,13 @@ mod tests {
 
         assert!(text.contains("Hooks (BitFun)"));
         assert!(text.contains("Hooks: enabled (app.hooks.enabled)"));
-        assert!(text.contains("Project hooks: disabled (app.hooks.project_hooks_enabled)"));
+        assert!(text.contains("Project hook file: disabled (app.hooks.project_hooks_enabled)"));
         assert!(text.contains("user [loaded; present]"));
         assert!(text.contains("project [not loaded; present]"));
         assert!(text.contains("PreToolUse"));
         assert!(text.contains("matcher: Bash [user; 1 handler]"));
         assert!(text.contains("timeout 600s"));
         assert!(text.contains("is not a supported event name"));
-        // The external catalog stays discoverable from this view.
-        assert!(text.contains("/hooks_external"));
     }
 
     #[test]
@@ -859,11 +893,11 @@ mod tests {
     #[test]
     fn external_hooks_help_uses_the_established_slash_help_pattern() {
         let help = external_hook_help_text();
-        assert!(help.contains("Usage: /hooks_external"));
-        assert!(help.contains("Alias: /hooks-external"));
-        assert!(help.contains("/help hooks_external"));
-        assert!(help.contains("/hooks_external -h"));
-        assert!(help.contains("/hooks_external --help"));
+        assert!(help.contains("Usage: /hooks"));
+        assert!(help.contains("Compatibility aliases: /hooks_external and /hooks-external"));
+        assert!(help.contains("/help hooks"));
+        assert!(help.contains("/hooks -h"));
+        assert!(help.contains("/hooks --help"));
         assert!(!help.contains("/builtin:hooks"));
     }
 
@@ -1313,12 +1347,87 @@ mod tests {
     }
 
     #[test]
-    fn pending_mode_change_allows_host_commands_but_blocks_agent_submission() {
+    fn unknown_mode_update_outcome_requires_restore_before_retry() {
+        let mut current_mode = "agentic".to_string();
+        let mut state = ChatState::new(
+            "session".to_string(),
+            "Session".to_string(),
+            "agentic".to_string(),
+            Some("D:/workspace/current".to_string()),
+        );
+
+        let applied = apply_agent_mode_feedback(
+            &mut current_mode,
+            &mut state,
+            "plan",
+            ModeSelectionApplyOutcome::OutcomeUnknown("request timed out".to_string()),
+        );
+
+        assert!(!applied);
+        assert_eq!(current_mode, "agentic");
+        assert_eq!(state.agent_type, "agentic");
+        let notice = state.messages.last().expect("unknown-outcome notice");
+        let crate::chat_state::FlowItem::Text { content, .. } = &notice.flow_items[0] else {
+            panic!("unknown-outcome notice must be text");
+        };
+        assert!(content.contains("outcome is unknown"));
+        assert!(content.contains("reopen Shared TUI"));
+        assert!(content.contains("restore this session"));
+        assert!(!content.contains("was not changed"));
+    }
+
+    #[test]
+    fn pending_mode_change_routes_commands_to_their_action_guards() {
         assert!(mode_change_blocks_typed_submission(true, "continue"));
         assert!(!mode_change_blocks_typed_submission(true, "/new"));
         assert!(!mode_change_blocks_typed_submission(true, "/sessions"));
         assert!(!mode_change_blocks_typed_submission(true, "/exit"));
         assert!(!mode_change_blocks_typed_submission(false, "continue"));
+
+        assert!(pending_mode_change_blocks_runtime_action(
+            true,
+            true,
+            ActionHandler::Sessions,
+        ));
+        assert!(pending_mode_change_blocks_runtime_action(
+            true,
+            true,
+            ActionHandler::Init,
+        ));
+        assert!(!pending_mode_change_blocks_runtime_action(
+            true,
+            true,
+            ActionHandler::Exit,
+        ));
+        assert!(!pending_mode_change_blocks_runtime_action(
+            true,
+            true,
+            ActionHandler::OpenAgentSelector,
+        ));
+        assert!(!pending_mode_change_blocks_runtime_action(
+            false,
+            true,
+            ActionHandler::Sessions,
+        ));
+        assert!(!pending_mode_change_blocks_runtime_action(
+            true,
+            false,
+            ActionHandler::Sessions,
+        ));
+    }
+
+    #[test]
+    fn shared_session_change_waits_for_the_mode_update_result() {
+        assert!(shared_session_change_is_blocked(true, true));
+        assert!(!shared_session_change_is_blocked(true, false));
+        assert!(!shared_session_change_is_blocked(false, true));
+    }
+
+    #[test]
+    fn shared_chat_status_separates_mode_switching_from_agent_management() {
+        assert!(SHARED_TUI_CHAT_STATUS.contains("current Session Agent mode"));
+        assert!(SHARED_TUI_CHAT_STATUS.contains("Agent/Subagent management remain Embedded"));
+        assert!(!SHARED_TUI_CHAT_STATUS.contains("mode management remain Embedded"));
     }
 
     #[test]
