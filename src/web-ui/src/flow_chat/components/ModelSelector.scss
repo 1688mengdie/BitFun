@@ -352,7 +352,11 @@
   }
 
   &__option-provider {
+    font-size: var(--flowchat-font-size-2xs);
     color: var(--color-text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   &__option-meta {

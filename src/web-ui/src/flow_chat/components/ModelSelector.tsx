@@ -23,7 +23,7 @@ import { Switch, Tooltip } from '@/component-library';
 import { FlowChatStore } from '../store/FlowChatStore';
 import { getModelMaxTokens } from '../services/flow-chat-manager/SessionModule';
 import { acpClientIdFromAgentType } from '../utils/acpSession';
-import { buildAcpFastModeValue, resolveAcpFastModeState } from '../utils/acpSessionConfig';
+import { buildAcpFastModeValue, getAcpModelProviderName, resolveAcpFastModeState } from '../utils/acpSessionConfig';
 import { sessionProjectWorkspacePath } from '../utils/sessionWorkspace';
 import {
   buildContextUsageTooltip,
@@ -390,7 +390,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
       id: model.id,
       configName: model.name,
       modelName: model.name,
-      providerName: acpClientId ? `${acpClientId} ACP` : 'ACP',
+      providerName: getAcpModelProviderName(model) ?? (acpClientId ? `${acpClientId} ACP` : 'ACP'),
       provider: 'acp',
     }));
   }, [acpClientId, acpOptions, isAcpSession]);
@@ -780,7 +780,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                 const isSelected = currentAcpModelId === model.id;
 
                 return (
-                  <Tooltip key={model.id} content={model.id} placement="right">
+                  <Tooltip key={model.id} content={buildModelMetaText(model)} placement="right">
                     <button
                       type="button"
                       role="menuitemradio"
@@ -795,6 +795,9 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                       <div className="bitfun-model-selector__option-main">
                         <span className="bitfun-model-selector__option-name">
                           {model.modelName}
+                        </span>
+                        <span className="bitfun-model-selector__option-provider">
+                          {model.providerName}
                         </span>
                       </div>
                       {isSelected && (
