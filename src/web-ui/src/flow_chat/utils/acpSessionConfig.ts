@@ -1,6 +1,7 @@
 import type {
   AcpSessionConfigOption,
   AcpSessionConfigValue,
+  AcpSessionModelOption,
 } from '@/infrastructure/api/service-api/ACPClientAPI';
 
 const FAST_MODE_CONFIG_ID = 'fast-mode';
@@ -48,4 +49,27 @@ export function buildAcpFastModeValue(
   return option.options.some(candidate => candidate.value === value)
     ? { type: 'select', value }
     : null;
+}
+
+export function getAcpModelProviderName(model: AcpSessionModelOption): string | undefined {
+  return normalizedProviderName(model.providerName)
+    ?? providerNameFromProviderQualifiedValue(model.description)
+    ?? providerNameFromProviderQualifiedValue(model.id);
+}
+
+function normalizedProviderName(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function providerNameFromProviderQualifiedValue(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) return undefined;
+
+  const slashIndex = trimmed.indexOf('/');
+  if (slashIndex <= 0 || slashIndex === trimmed.length - 1) return undefined;
+
+  const provider = trimmed.slice(0, slashIndex).trim();
+  const modelId = trimmed.slice(slashIndex + 1).trim();
+  return provider && modelId ? provider : undefined;
 }

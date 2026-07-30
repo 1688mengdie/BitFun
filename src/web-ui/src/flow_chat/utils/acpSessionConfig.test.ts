@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
 import type { AcpSessionConfigOption } from '@/infrastructure/api/service-api/ACPClientAPI';
-import { buildAcpFastModeValue, resolveAcpFastModeState } from './acpSessionConfig';
+import {
+  buildAcpFastModeValue,
+  getAcpModelProviderName,
+  resolveAcpFastModeState,
+} from './acpSessionConfig';
 
 describe('ACP Fast mode config', () => {
   it('resolves and toggles the select fallback exposed by Codex ACP', () => {
@@ -44,5 +48,36 @@ describe('ACP Fast mode config', () => {
     expect(resolveAcpFastModeState([])).toBeNull();
     expect(resolveAcpFastModeState([malformed])).toBeNull();
     expect(buildAcpFastModeValue(malformed, true)).toBeNull();
+  });
+});
+
+describe('ACP model provider display', () => {
+  it('uses the explicit provider name when the ACP bridge includes one', () => {
+    expect(getAcpModelProviderName({
+      id: 'openai/gpt-5.4',
+      name: 'gpt-5.4',
+      providerName: 'OpenAI',
+    })).toBe('OpenAI');
+  });
+
+  it('falls back to provider-qualified description or id', () => {
+    expect(getAcpModelProviderName({
+      id: 'openai/gpt-5.4',
+      name: 'gpt-5.4',
+    })).toBe('openai');
+
+    expect(getAcpModelProviderName({
+      id: 'gpt-5.4',
+      name: 'gpt-5.4',
+      description: 'azure-openai/gpt-5.4',
+    })).toBe('azure-openai');
+  });
+
+  it('ignores unqualified descriptions', () => {
+    expect(getAcpModelProviderName({
+      id: 'gpt-5.4',
+      name: 'gpt-5.4',
+      description: 'Fast reasoning model',
+    })).toBeUndefined();
   });
 });
