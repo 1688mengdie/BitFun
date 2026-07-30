@@ -8,6 +8,8 @@
 #[cfg(feature = "product-full")]
 pub mod agentic; // Agent system, tool system, and product runtime orchestration
 #[cfg(feature = "product-full")]
+pub mod external_hook_import;
+#[cfg(feature = "product-full")]
 pub mod external_hooks;
 #[cfg(all(test, feature = "product-full"))]
 mod external_hooks_tests;
@@ -41,6 +43,10 @@ pub mod product_assembly;
 pub(crate) mod product_domain_runtime;
 #[cfg(feature = "product-full")]
 pub mod product_runtime;
+#[cfg(feature = "product-full")]
+pub mod runtime_ownership;
+#[cfg(all(test, feature = "product-full"))]
+mod runtime_ownership_tests;
 pub mod service; // Workspace, Config, FileSystem, Terminal, Git
 #[cfg(feature = "service-integrations")]
 pub(crate) mod service_agent_runtime;

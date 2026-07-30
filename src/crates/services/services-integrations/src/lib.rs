@@ -27,11 +27,17 @@ pub mod function_agents;
 #[cfg(feature = "git")]
 pub mod git;
 
+#[cfg(feature = "hook-import")]
+pub mod hook_import;
+
 #[cfg(feature = "mcp")]
 pub mod mcp;
 
 #[cfg(feature = "miniapp-runtime")]
 pub mod miniapp;
+
+#[cfg(feature = "miniapp-market")]
+pub mod miniapp_market;
 
 #[cfg(feature = "plugin-source")]
 pub mod plugin_source;

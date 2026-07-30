@@ -28,7 +28,7 @@ use bitfun_runtime_services::RuntimeServices;
 use bitfun_services_core::permission_store::ProjectPermissionSqliteStore;
 
 use crate::agentic::coordination::{
-    ConversationCoordinator, DialogScheduler, SessionMaintenancePermit,
+    ConversationCoordinator, DialogScheduler, DialogSteerOutcome, SessionMaintenancePermit,
 };
 use crate::agentic::core::Session;
 use crate::agentic::events::EventQueue;
@@ -39,8 +39,8 @@ use crate::agentic::session::CoreSessionStorePort;
 use crate::service::session::{DialogTurnData, SessionMetadata};
 use crate::service::session_usage::{generate_session_usage_report, SessionUsageReport};
 use crate::service::snapshot::{
-    get_snapshot_manager_for_workspace, initialize_snapshot_manager_for_workspace, SnapshotError,
-    SnapshotManager,
+    get_snapshot_manager_for_workspace, initialize_snapshot_manager_for_workspace,
+    open_snapshot_manager_for_view, SnapshotError, SnapshotManager,
 };
 use crate::service::token_usage::TokenUsageService;
 use crate::service_agent_runtime::CoreServiceAgentRuntime;
@@ -279,6 +279,15 @@ async fn ensure_local_snapshot_manager(workspace_path: &Path) -> PortResult<Arc<
     })
 }
 
+async fn local_snapshot_manager_for_view(
+    workspace_path: &Path,
+) -> PortResult<Arc<SnapshotManager>> {
+    validate_local_snapshot_workspace(workspace_path)?;
+    open_snapshot_manager_for_view(workspace_path)
+        .await
+        .map_err(snapshot_port_error)
+}
+
 /// Core-backed access to the existing local workspace snapshot owner.
 ///
 /// The returned port is intentionally separate from the Agent Runtime SDK and
@@ -303,8 +312,8 @@ impl LocalWorkspaceSnapshotPort for CoreLocalWorkspaceSnapshot {
         request: LocalWorkspaceSnapshotSessionRequest,
     ) -> PortResult<Vec<PathBuf>> {
         validate_persisted_session_id(&request.session_id).map_err(runtime_port_error)?;
-        ensure_local_snapshot_manager(&request.workspace_path)
-            .await?
+        let manager = local_snapshot_manager_for_view(&request.workspace_path).await?;
+        manager
             .get_session_files(&request.session_id)
             .await
             .map_err(snapshot_port_error)
@@ -315,8 +324,8 @@ impl LocalWorkspaceSnapshotPort for CoreLocalWorkspaceSnapshot {
         request: LocalWorkspaceSnapshotSessionRequest,
     ) -> PortResult<LocalWorkspaceSnapshotStats> {
         validate_persisted_session_id(&request.session_id).map_err(runtime_port_error)?;
-        let stats = ensure_local_snapshot_manager(&request.workspace_path)
-            .await?
+        let manager = local_snapshot_manager_for_view(&request.workspace_path).await?;
+        let stats = manager
             .get_session_stats_fact(&request.session_id)
             .await
             .map_err(snapshot_port_error)?;
@@ -501,6 +510,35 @@ impl CoreAgentRuntimeCompatibility {
             scheduler,
             persistence,
         }
+    }
+
+    /// Buffer a user steering message into a currently running turn.
+    ///
+    /// Detached dispatch and compatibility hosts use this narrow facade so
+    /// they do not reach through the public Runtime SDK into scheduler state.
+    pub async fn submit_steering(
+        &self,
+        session_id: String,
+        turn_id: String,
+        content: String,
+        display_content: Option<String>,
+    ) -> Result<DialogSteerOutcome, String> {
+        self.scheduler
+            .submit_steering(session_id, turn_id, content, display_content)
+            .await
+    }
+
+    /// Applies the same Core deployment owner before a product compatibility
+    /// path attaches to or mutates a structured workspace scope.
+    pub fn ensure_workspace_runtime_ownership(
+        &self,
+        request: &SessionStoragePathRequest,
+    ) -> BitFunResult<()> {
+        self.coordinator.ensure_workspace_runtime_ownership(
+            &request.workspace_path,
+            request.remote_connection_id.as_deref(),
+            request.remote_ssh_host.as_deref(),
+        )
     }
 
     pub async fn restore_session_from_storage_path(
@@ -1004,6 +1042,7 @@ fn runtime_port_error(error: BitFunError) -> PortError {
         BitFunError::NotFound(_) => PortErrorKind::NotFound,
         BitFunError::Timeout(_) => PortErrorKind::Timeout,
         BitFunError::Cancelled(_) => PortErrorKind::Cancelled,
+        BitFunError::SessionInUse { .. } => PortErrorKind::SessionInUse,
         BitFunError::SessionCreateCleanupRequired { .. } => PortErrorKind::CleanupRequired,
         _ => PortErrorKind::Backend,
     };
@@ -1033,6 +1072,13 @@ impl AgentSessionForkPort for CoreSessionOperationsPort {
             remote_connection_id,
             remote_ssh_host,
         } = request;
+        self.coordinator
+            .ensure_workspace_runtime_ownership(
+                Path::new(&workspace_path),
+                remote_connection_id.as_deref(),
+                remote_ssh_host.as_deref(),
+            )
+            .map_err(runtime_port_error)?;
         let storage_path = self
             .resolve_fork_storage_path(workspace_path, remote_connection_id, remote_ssh_host)
             .await?;
@@ -1050,6 +1096,13 @@ impl AgentSessionForkPort for CoreSessionOperationsPort {
         &self,
         request: AgentSessionForkAtTurnRequest,
     ) -> PortResult<AgentSessionForkResult> {
+        self.coordinator
+            .ensure_workspace_runtime_ownership(
+                Path::new(&request.workspace_path),
+                request.remote_connection_id.as_deref(),
+                request.remote_ssh_host.as_deref(),
+            )
+            .map_err(runtime_port_error)?;
         let storage_path = self
             .resolve_fork_storage_path(
                 request.workspace_path,
@@ -1122,10 +1175,10 @@ mod tests {
     #[allow(deprecated)]
     use super::CoreProductAgentEventSource;
     use super::{
-        generate_core_session_usage_report, latest_persisted_turn_id, runtime_port_error,
-        validate_latest_turn_fork_scope, validate_persisted_session_id,
-        CoreAgentRuntimeCompatibility, CoreLocalWorkspaceSnapshot, CoreProductAgentRuntime,
-        CoreProductEventQueueOwner, CoreSessionOperationsPort,
+        generate_core_session_usage_report, get_snapshot_manager_for_workspace,
+        latest_persisted_turn_id, runtime_port_error, validate_latest_turn_fork_scope,
+        validate_persisted_session_id, CoreAgentRuntimeCompatibility, CoreLocalWorkspaceSnapshot,
+        CoreProductAgentRuntime, CoreProductEventQueueOwner, CoreSessionOperationsPort,
     };
     use crate::agentic::coordination::{ConversationCoordinator, DialogScheduler};
     use crate::agentic::events::{EventQueue, EventQueueConfig, EventRouter};
@@ -1308,6 +1361,26 @@ mod tests {
     }
 
     #[test]
+    fn sdk_session_forks_reuse_the_coordinator_runtime_owner() {
+        let source = include_str!("product_runtime.rs");
+        let fork_impl = source
+            .split("impl AgentSessionForkPort for CoreSessionOperationsPort")
+            .nth(1)
+            .and_then(|source| source.split("impl AgentSessionUsagePort").next())
+            .expect("session fork implementation");
+
+        assert_eq!(
+            fork_impl
+                .matches("ensure_workspace_runtime_ownership")
+                .count(),
+            2,
+            "latest-turn and explicit-turn forks must share the Coordinator ownership gate"
+        );
+        assert!(!fork_impl.contains("RuntimeOwnershipKey"));
+        assert!(!fork_impl.contains("try_acquire"));
+    }
+
+    #[test]
     fn remaining_compatibility_operations_have_one_core_owned_facade() {
         fn build(
             coordinator: Arc<ConversationCoordinator>,
@@ -1374,6 +1447,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn local_workspace_snapshot_views_do_not_initialize_a_writer() {
+        let workspace = TestWorkspace::new();
+        let port = CoreLocalWorkspaceSnapshot::build();
+        let request = LocalWorkspaceSnapshotSessionRequest {
+            workspace_path: workspace.path().to_path_buf(),
+            session_id: "session-view-only".to_string(),
+        };
+
+        assert!(get_snapshot_manager_for_workspace(workspace.path()).is_none());
+        assert!(port
+            .get_session_files(request.clone())
+            .await
+            .expect("view-only files")
+            .is_empty());
+        assert_eq!(
+            port.get_session_stats(request)
+                .await
+                .expect("view-only stats")
+                .total_changes,
+            0
+        );
+        assert!(get_snapshot_manager_for_workspace(workspace.path()).is_none());
+    }
+
+    #[tokio::test]
     async fn local_workspace_snapshot_port_rejects_non_local_inputs_before_backend_access() {
         let workspace = TestWorkspace::new();
         let port = CoreLocalWorkspaceSnapshot::build();
@@ -1404,6 +1502,16 @@ mod tests {
         });
 
         assert_eq!(error.kind, PortErrorKind::CleanupRequired);
+        assert!(error.message.contains("session-1"), "{error}");
+    }
+
+    #[test]
+    fn session_writer_conflict_remains_typed_across_the_runtime_port() {
+        let error = runtime_port_error(BitFunError::SessionInUse {
+            session_id: "session-1".to_string(),
+        });
+
+        assert_eq!(error.kind, PortErrorKind::SessionInUse);
         assert!(error.message.contains("session-1"), "{error}");
     }
 
@@ -1514,6 +1622,16 @@ mod tests {
             tool_pipeline,
             event_queue,
             Arc::new(EventRouter::new()),
+            Arc::new(
+                crate::runtime_ownership::CoreRuntimeOwnership::embedded_with_facts(
+                    std::env::temp_dir().join(format!(
+                        "bitfun-product-runtime-ownership-test-{}",
+                        uuid::Uuid::new_v4()
+                    )),
+                    "bitfun".to_string(),
+                    "test",
+                ),
+            ),
         ));
         let token_usage_service = Arc::new(
             TokenUsageService::new_in_base_dir(workspace.path().join("tokens"))

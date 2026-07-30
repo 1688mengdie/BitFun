@@ -8,7 +8,8 @@ use async_trait::async_trait;
 use bitfun_events::{AgenticEvent, AgenticEventEnvelope, AgenticEventPriority};
 use bitfun_runtime_ports::{
     AgentDialogTurnRequest, AgentSessionCreateRequest, AgentSessionCreateResult,
-    AgentSessionSummary, AgentSubmissionSource, DialogSubmissionPolicy, SessionTranscript,
+    AgentSessionModeUpdateRequest, AgentSessionSummary, AgentSubmissionSource,
+    DialogSubmissionPolicy, SessionTranscript,
 };
 use serde_json::Map;
 use std::path::Path;
@@ -81,6 +82,7 @@ impl TestServer {
 struct FakeHandler {
     calls: Mutex<Vec<RuntimeIpcOperation>>,
     delay: Option<Duration>,
+    mode_delay: Option<Duration>,
     submit_delay: Option<Duration>,
     settle_cancel: bool,
     events: broadcast::Sender<RuntimeIpcEvent>,
@@ -101,6 +103,7 @@ impl Default for FakeHandler {
         Self {
             calls: Mutex::new(Vec::new()),
             delay: None,
+            mode_delay: None,
             submit_delay: None,
             settle_cancel: true,
             events,
@@ -126,16 +129,14 @@ impl RuntimeIpcRequestHandler for CreateRaceHandler {
         operation: RuntimeIpcOperation,
     ) -> Result<RuntimeIpcOperationResult, RuntimeIpcError> {
         match operation {
-            RuntimeIpcOperation::CreateSession { request: _ } => {
+            RuntimeIpcOperation::CreateSession { request } => {
                 self.create_started.notify_one();
                 self.allow_create.notified().await;
-                Ok(RuntimeIpcOperationResult::SessionCreated {
-                    session: AgentSessionCreateResult {
-                        session_id: "session-a".to_string(),
-                        session_name: "Created session".to_string(),
-                        agent_type: "agentic".to_string(),
-                    },
-                })
+                let mut session =
+                    AgentSessionCreateResult::new("session-a", "Created session", "agentic");
+                session.workspace_path = request.workspace_path;
+                session.workspace_id = Some("workspace-fixture".to_string());
+                Ok(RuntimeIpcOperationResult::SessionCreated { session })
             }
             RuntimeIpcOperation::RestoreSession { request } => Ok(restored(&request.session_id)),
             _ => Ok(RuntimeIpcOperationResult::Unit),
@@ -172,6 +173,11 @@ impl RuntimeIpcRequestHandler for FakeHandler {
             .push(operation.clone());
         if let Some(delay) = self.delay {
             tokio::time::sleep(delay).await;
+        }
+        if matches!(operation, RuntimeIpcOperation::UpdateSessionMode { .. }) {
+            if let Some(delay) = self.mode_delay {
+                tokio::time::sleep(delay).await;
+            }
         }
         match operation {
             RuntimeIpcOperation::RestoreSession { request } => Ok(restored(&request.session_id)),
@@ -350,6 +356,7 @@ async fn generated_session_is_claimed_before_another_connection_can_restore_it()
     let mut creator = server.connect("creator").await;
     let mut restorer = server.connect("restorer").await;
     let workspace_path = server.workspace.path().to_string_lossy().to_string();
+    let expected_workspace_path = workspace_path.clone();
 
     let create_task = tokio::spawn(async move {
         request(
@@ -380,13 +387,19 @@ async fn generated_session_is_claimed_before_another_connection_can_restore_it()
         "restore must wait until create has claimed its generated Session"
     );
     allow_create.notify_one();
-    assert!(matches!(
-        create_task.await.expect("create task"),
+    match create_task.await.expect("create task") {
         RuntimeIpcFrame::Response {
-            result: RuntimeIpcOperationResult::SessionCreated { .. },
+            result: RuntimeIpcOperationResult::SessionCreated { session },
             ..
+        } => {
+            assert_eq!(
+                session.workspace_path.as_deref(),
+                Some(expected_workspace_path.as_str())
+            );
+            assert_eq!(session.workspace_id.as_deref(), Some("workspace-fixture"));
         }
-    ));
+        other => panic!("unexpected create response: {other:?}"),
+    }
     assert!(matches!(
         restore_task.await.expect("restore task"),
         RuntimeIpcFrame::Error { error, .. }
@@ -474,6 +487,15 @@ fn submit_operation(workspace: &Path, session_id: &str, turn_id: &str) -> Runtim
             prepended_reminders: Vec::new(),
             attachments: Vec::new(),
             metadata: Map::new(),
+        },
+    }
+}
+
+fn update_mode_operation(session_id: &str, mode_id: &str) -> RuntimeIpcOperation {
+    RuntimeIpcOperation::UpdateSessionMode {
+        request: AgentSessionModeUpdateRequest {
+            session_id: session_id.to_string(),
+            mode_id: mode_id.to_string(),
         },
     }
 }
@@ -675,6 +697,98 @@ async fn one_connection_rejects_a_second_turn_until_the_first_finishes() {
         submitted == 1 && cancelled_first
     })
     .await;
+    server.finish().await;
+}
+
+#[tokio::test]
+async fn mode_update_requires_the_controlled_idle_session() {
+    let handler = Arc::new(FakeHandler::default());
+    let server = TestServer::start(server_config(), handler.clone()).await;
+    let mut client = server.connect("mode-controller").await;
+
+    expect_error(
+        &mut client,
+        2,
+        update_mode_operation("session-a", "ask"),
+        RuntimeIpcErrorCode::ControllerRequired,
+    )
+    .await;
+    expect_response(
+        &mut client,
+        3,
+        restore_operation(server.workspace.path(), "session-a"),
+    )
+    .await;
+    expect_error(
+        &mut client,
+        4,
+        update_mode_operation("session-b", "ask"),
+        RuntimeIpcErrorCode::SessionMismatch,
+    )
+    .await;
+    expect_response(&mut client, 5, update_mode_operation("session-a", "ask")).await;
+    expect_response(
+        &mut client,
+        6,
+        submit_operation(server.workspace.path(), "session-a", "turn-a"),
+    )
+    .await;
+    expect_error(
+        &mut client,
+        7,
+        update_mode_operation("session-a", "agentic"),
+        RuntimeIpcErrorCode::SessionInUse,
+    )
+    .await;
+
+    let calls = handler.calls.lock().expect("calls");
+    assert_eq!(
+        calls
+            .iter()
+            .filter(|operation| matches!(operation, RuntimeIpcOperation::UpdateSessionMode { .. }))
+            .count(),
+        1,
+        "only the controlled idle-session update reaches the Runtime handler"
+    );
+    drop(calls);
+    drop(client);
+    server.finish().await;
+}
+
+#[tokio::test]
+async fn timed_out_mode_update_reports_unknown_outcome_and_closes_the_connection() {
+    let handler = Arc::new(FakeHandler {
+        mode_delay: Some(Duration::from_millis(100)),
+        ..FakeHandler::default()
+    });
+    let mut config = server_config();
+    config.request_timeout = Duration::from_millis(20);
+    let server = TestServer::start(config, handler).await;
+    let mut first = server.connect("mode-timeout").await;
+    expect_response(
+        &mut first,
+        2,
+        restore_operation(server.workspace.path(), "session-a"),
+    )
+    .await;
+    expect_error(
+        &mut first,
+        3,
+        update_mode_operation("session-a", "ask"),
+        RuntimeIpcErrorCode::OutcomeUnknown,
+    )
+    .await;
+
+    assert!(read_frame(&mut first).await.is_err());
+    let mut second = server.connect("mode-timeout-successor").await;
+    expect_response(
+        &mut second,
+        2,
+        restore_operation(server.workspace.path(), "session-a"),
+    )
+    .await;
+    drop(first);
+    drop(second);
     server.finish().await;
 }
 

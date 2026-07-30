@@ -5,15 +5,19 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
 
-use bitfun_agent_runtime::sdk::{AgentSessionRestoreRequest, AgentSessionRestoreResult};
+use bitfun_agent_runtime::sdk::{
+    AgentSessionRestoreRequest, AgentSessionRestoreResult, PortErrorKind, RuntimeError,
+};
 use bitfun_core::agentic::core::Session;
 use bitfun_core::agentic::get_agent_registry;
+use bitfun_core::util::errors::BitFunError;
 use bitfun_runtime_ports::{
     AgentSessionArchiveRequest, AgentSessionCreateRequest, AgentSessionDeleteRequest,
     AgentSessionModelUpdateRequest, AgentSessionRenameRequest, AgentThreadGoalGetRequest,
     SessionStoragePathRequest,
 };
 
+use crate::diagnostics::SESSION_IN_USE_ERROR_CODE;
 use crate::peer_host::args::{get_string, optional_bool, optional_string, request_value};
 use crate::peer_host::state::PeerHostState;
 
@@ -32,13 +36,32 @@ fn session_storage_request(request: &Value) -> Result<SessionStoragePathRequest,
     })
 }
 
+pub(super) fn ensure_session_workspace_runtime_ownership(
+    state: &PeerHostState,
+    request: &Value,
+) -> Result<SessionStoragePathRequest, String> {
+    let scope = session_storage_request(request)?;
+    state
+        .compatibility
+        .ensure_workspace_runtime_ownership(&scope)
+        .map_err(|error| format!("Agent Runtime ownership is unavailable: {error}"))?;
+    Ok(scope)
+}
+
 pub(super) async fn resolved_session_storage_path(
     state: &PeerHostState,
     request: &Value,
 ) -> Result<PathBuf, String> {
+    resolved_session_storage_scope(state, session_storage_request(request)?).await
+}
+
+pub(super) async fn resolved_session_storage_scope(
+    state: &PeerHostState,
+    scope: SessionStoragePathRequest,
+) -> Result<PathBuf, String> {
     state
         .compatibility
-        .resolve_persisted_session_storage_path(session_storage_request(request)?)
+        .resolve_persisted_session_storage_path(scope)
         .await
         .map_err(|error| format!("Failed to resolve session storage path: {error}"))
 }
@@ -91,6 +114,24 @@ fn restored_session_to_json(restored: AgentSessionRestoreResult) -> Value {
         "turnCount": session.turn_count,
         "createdAt": session.created_at_ms / 1000,
     })
+}
+
+fn peer_core_session_error(operation: &str, error: BitFunError) -> String {
+    match error {
+        BitFunError::SessionInUse { session_id } => format!(
+            "{SESSION_IN_USE_ERROR_CODE}: Session is already open for writing: {session_id}"
+        ),
+        error => format!("{operation}: {error}"),
+    }
+}
+
+fn peer_runtime_session_error(operation: &str, error: RuntimeError) -> String {
+    match error {
+        RuntimeError::Port(port_error) if port_error.kind == PortErrorKind::SessionInUse => {
+            format!("{SESSION_IN_USE_ERROR_CODE}: {}", port_error.message)
+        }
+        error => format!("{operation}: {}", error.into_message()),
+    }
 }
 
 pub(crate) async fn list_persisted_sessions(
@@ -219,7 +260,7 @@ pub(crate) async fn restore_session_with_turns(
         .compatibility
         .restore_session_with_turns_for_workspace(storage_request, &session_id, include_internal)
         .await
-        .map_err(|e| format!("Failed to restore session with turns: {e}"))?;
+        .map_err(|error| peer_core_session_error("Failed to restore session with turns", error))?;
 
     let turn_count = turns.len();
     Ok(json!({
@@ -247,7 +288,7 @@ pub(crate) async fn restore_session(state: &PeerHostState, args: &Value) -> Resu
             remote_ssh_host: storage_request.remote_ssh_host,
         })
         .await
-        .map_err(|error| format!("Failed to restore session: {}", error.into_message()))?;
+        .map_err(|error| peer_runtime_session_error("Failed to restore session", error))?;
 
     Ok(restored_session_to_json(restored))
 }
@@ -296,7 +337,7 @@ pub(crate) async fn create_session(state: &PeerHostState, args: &Value) -> Resul
         }
         None => state.agent_runtime.create_session(create_request).await,
     }
-    .map_err(|error| format!("Failed to create session: {}", error.into_message()))?;
+    .map_err(|error| peer_runtime_session_error("Failed to create session", error))?;
 
     Ok(json!({
         "sessionId": session.session_id,
@@ -366,7 +407,8 @@ pub(crate) async fn touch_session_activity(
 ) -> Result<Value, String> {
     let request = request_value(args);
     let session_id = validated_session_id(request)?;
-    let workspace_path = resolved_session_storage_path(state, request).await?;
+    let scope = ensure_session_workspace_runtime_ownership(state, request)?;
+    let workspace_path = resolved_session_storage_scope(state, scope).await?;
     let _mutation = state
         .compatibility
         .begin_persisted_session_mutation(&workspace_path, &session_id)
@@ -418,6 +460,13 @@ pub(crate) async fn update_session_model(
     let request = request_value(args);
     let session_id = validated_session_id(request)?;
     let model_name = get_string(request, "modelName")?;
+    if request
+        .get("workspacePath")
+        .and_then(Value::as_str)
+        .is_some_and(|path| !path.trim().is_empty())
+    {
+        ensure_coordinator_session(state, args).await?;
+    }
     state
         .agent_runtime
         .update_session_model(AgentSessionModelUpdateRequest {
@@ -435,6 +484,7 @@ pub(crate) async fn ensure_coordinator_session(
 ) -> Result<Value, String> {
     let request = request_value(args);
     let session_id = validated_session_id(request)?;
+    let scope = ensure_session_workspace_runtime_ownership(state, request)?;
     if state
         .compatibility
         .is_session_loaded_in_memory(&session_id)
@@ -442,7 +492,7 @@ pub(crate) async fn ensure_coordinator_session(
     {
         return Ok(Value::Null);
     }
-    let storage = resolved_session_storage_path(state, request).await?;
+    let storage = resolved_session_storage_scope(state, scope).await?;
     let include_internal = optional_bool(request, "includeInternal").unwrap_or(false);
 
     state
@@ -450,7 +500,7 @@ pub(crate) async fn ensure_coordinator_session(
         .ensure_session_loaded_from_storage_path(&storage, &session_id, include_internal)
         .await
         .map(|_| Value::Null)
-        .map_err(|e| e.to_string())
+        .map_err(|error| peer_core_session_error("Failed to ensure session", error))
 }
 
 pub(crate) async fn get_available_modes() -> Result<Value, String> {
@@ -517,7 +567,8 @@ pub(crate) async fn save_session_turn(
     args: &Value,
 ) -> Result<Value, String> {
     let request = request_value(args);
-    let workspace_path = resolved_session_storage_path(state, request).await?;
+    let scope = ensure_session_workspace_runtime_ownership(state, request)?;
+    let workspace_path = resolved_session_storage_scope(state, scope).await?;
     let turn_data = request
         .get("turnData")
         .or_else(|| request.get("turn_data"))
@@ -550,12 +601,92 @@ pub(crate) async fn save_session_turn(
 #[cfg(test)]
 mod tests {
     use super::{
-        overlay_live_session_state, restored_session_to_json, session_stats_validation_error,
+        overlay_live_session_state, peer_core_session_error, peer_runtime_session_error,
+        restored_session_to_json, session_stats_validation_error,
     };
-    use bitfun_agent_runtime::sdk::{AgentSessionRestoreResult, AgentSessionSummary, SessionState};
+    use bitfun_agent_runtime::sdk::{
+        AgentSessionRestoreResult, AgentSessionSummary, PortError, PortErrorKind, RuntimeError,
+        SessionState,
+    };
     use bitfun_core::agentic::core::{
         ProcessingPhase, Session as CoreSession, SessionConfig, SessionState as CoreSessionState,
     };
+    use bitfun_core::util::errors::BitFunError;
+
+    #[test]
+    fn peer_writer_conflicts_keep_the_stable_transport_code() {
+        let core_error = peer_core_session_error(
+            "Failed to restore session with turns",
+            BitFunError::SessionInUse {
+                session_id: "session-1".to_string(),
+            },
+        );
+        let runtime_error = peer_runtime_session_error(
+            "Failed to restore session",
+            RuntimeError::Port(PortError::new(
+                PortErrorKind::SessionInUse,
+                "Session is already open for writing: session-1",
+            )),
+        );
+
+        assert_eq!(
+            core_error,
+            "session_in_use: Session is already open for writing: session-1"
+        );
+        assert_eq!(runtime_error, core_error);
+    }
+
+    #[test]
+    fn peer_writer_errors_keep_operation_context_when_they_are_not_conflicts() {
+        let error = peer_runtime_session_error(
+            "Failed to restore session",
+            RuntimeError::MissingSessionRestorePort,
+        );
+
+        assert_eq!(
+            error,
+            "Failed to restore session: agent session restore port is not registered"
+        );
+    }
+
+    #[test]
+    fn peer_attach_and_raw_mutations_reuse_core_runtime_ownership() {
+        let session_source = include_str!("session.rs");
+        for mutation in [
+            "pub(crate) async fn touch_session_activity",
+            "pub(crate) async fn ensure_coordinator_session",
+            "pub(crate) async fn save_session_turn",
+        ] {
+            let body = session_source
+                .split_once(mutation)
+                .unwrap_or_else(|| panic!("missing Peer mutation: {mutation}"))
+                .1
+                .split_once("pub(crate) async fn")
+                .unwrap_or_else(|| panic!("missing Peer mutation boundary: {mutation}"))
+                .0;
+            assert!(body.contains("ensure_session_workspace_runtime_ownership"));
+        }
+
+        let workspace_source = include_str!("workspace.rs");
+        let open = workspace_source
+            .split_once("pub(crate) async fn open_workspace")
+            .expect("Peer workspace open")
+            .1
+            .split_once("pub(crate) async fn reload_config")
+            .expect("Peer workspace open boundary")
+            .0;
+        assert!(open.contains("ensure_workspace_runtime_ownership"));
+
+        let snapshot_source = include_str!("snapshot.rs");
+        let rollback = snapshot_source
+            .split_once("pub(crate) async fn rollback_to_turn")
+            .expect("Peer rollback")
+            .1
+            .split_once("#[cfg(test)]")
+            .expect("Peer rollback boundary")
+            .0;
+        assert!(rollback.contains("ensure_session_workspace_runtime_ownership"));
+    }
 
     #[test]
     fn basic_restore_keeps_peer_host_session_shape() {

@@ -284,6 +284,28 @@ impl WorkspaceService {
         Ok(service)
     }
 
+    #[cfg(test)]
+    pub(crate) async fn new_for_test_path_manager(path_manager: Arc<PathManager>) -> Self {
+        path_manager
+            .initialize_user_directories()
+            .await
+            .expect("test user directories should initialize");
+        let config = WorkspaceManagerConfig::default();
+        let persistence = Arc::new(
+            PersistenceService::new_user_level(path_manager.clone())
+                .await
+                .expect("test persistence should initialize"),
+        );
+        let runtime_service = Arc::new(WorkspaceRuntimeService::new(path_manager.clone()));
+        Self {
+            manager: Arc::new(RwLock::new(WorkspaceManager::new(config.clone()))),
+            config,
+            persistence,
+            path_manager,
+            runtime_service,
+        }
+    }
+
     /// Returns the path manager.
     pub fn path_manager(&self) -> &Arc<PathManager> {
         &self.path_manager
@@ -318,17 +340,26 @@ impl WorkspaceService {
         preferred_ssh_host: Option<&str>,
     ) -> BitFunResult<WorkspaceInfo> {
         let path_str = path.to_string_lossy().to_string();
-        if let Some(known) = self
+        let known = self
             .find_known_remote_workspace_for_path(
                 &path_str,
                 preferred_connection_id,
                 preferred_ssh_host,
             )
+            .await;
+        self.open_workspace_after_known_resolution(path, known)
             .await
-        {
+    }
+
+    pub(crate) async fn open_workspace_after_known_resolution(
+        &self,
+        path: PathBuf,
+        known_remote: Option<WorkspaceInfo>,
+    ) -> BitFunResult<WorkspaceInfo> {
+        let path_str = path.to_string_lossy().to_string();
+        if let Some(known) = known_remote {
             return self.open_known_remote_workspace(&known).await;
         }
-
         match self.open_workspace(path).await {
             Ok(info) => Ok(info),
             Err(error) => {
@@ -385,7 +416,7 @@ impl WorkspaceService {
         result
     }
 
-    async fn find_known_remote_workspace_for_path(
+    pub(crate) async fn find_known_remote_workspace_for_path(
         &self,
         path: &str,
         preferred_connection_id: Option<&str>,
@@ -1717,7 +1748,12 @@ impl WorkspaceService {
                 .recent_workspaces
                 .clone()
                 .into_iter()
-                .filter(|id| manager.get_workspaces().contains_key(id))
+                .filter(|id| {
+                    manager.get_workspaces().get(id).is_some_and(|workspace| {
+                        // Drop MiniApp-owned workspaces recorded before they were excluded.
+                        !self.is_miniapp_owned_path(&workspace.root_path)
+                    })
+                })
                 .collect();
             if filtered_recent != data.recent_workspaces {
                 should_persist_cleaned_history = true;
@@ -2080,7 +2116,18 @@ impl WorkspaceService {
             }
         }
 
+        if self.is_miniapp_owned_path(path) {
+            options.add_to_recent = false;
+        }
+
         options
+    }
+
+    /// MiniApp agent runs and customization drafts work inside directories the
+    /// MiniApp owns under `<userRoot>/data/miniapps/`. They are app storage, not
+    /// user projects, so they must stay out of recent workspace history.
+    fn is_miniapp_owned_path(&self, path: &Path) -> bool {
+        path.starts_with(self.path_manager.miniapps_dir())
     }
 
     async fn discover_assistant_workspaces(
@@ -2323,7 +2370,7 @@ pub fn get_global_workspace_service() -> Option<Arc<WorkspaceService>> {
 mod tests {
     use super::*;
     use crate::agentic::persistence::PersistenceManager;
-    use crate::infrastructure::storage::{PersistenceService, StorageOptions};
+    use crate::infrastructure::storage::StorageOptions;
     use crate::service::session::SessionMetadata;
     use crate::service::workspace::WorkspaceWorktreeInfo;
     use std::collections::HashMap;
@@ -2361,26 +2408,7 @@ mod tests {
     }
 
     async fn build_test_workspace_service(path_manager: Arc<PathManager>) -> WorkspaceService {
-        path_manager
-            .initialize_user_directories()
-            .await
-            .expect("user directories should initialize");
-
-        let config = WorkspaceManagerConfig::default();
-        let persistence = Arc::new(
-            PersistenceService::new_user_level(path_manager.clone())
-                .await
-                .expect("persistence should initialize"),
-        );
-        let runtime_service = Arc::new(WorkspaceRuntimeService::new(path_manager.clone()));
-
-        WorkspaceService {
-            manager: Arc::new(RwLock::new(WorkspaceManager::new(config.clone()))),
-            config,
-            persistence,
-            path_manager,
-            runtime_service,
-        }
+        WorkspaceService::new_for_test_path_manager(path_manager).await
     }
 
     #[tokio::test]
@@ -2564,6 +2592,41 @@ mod tests {
         assert!(
             service.get_current_workspace().await.is_none(),
             "tracked workspace activity should not change the current workspace"
+        );
+    }
+
+    #[tokio::test]
+    async fn track_workspace_activity_keeps_miniapp_workspaces_out_of_recent_history() {
+        let env = TestEnvironment::new();
+        let service = build_test_workspace_service(env.path_manager.clone()).await;
+        let miniapp_workspace_root = env
+            .path_manager
+            .miniapp_dir("builtin-ppt-live")
+            .join("decks")
+            .join("deck-1785130332234");
+        std::fs::create_dir_all(&miniapp_workspace_root)
+            .expect("MiniApp workspace directory should be created");
+
+        let tracked = service
+            .track_workspace_activity(
+                miniapp_workspace_root.clone(),
+                WorkspaceCreateOptions::default(),
+                WorkspaceActivityMode::RefreshMetadata,
+            )
+            .await
+            .expect("MiniApp workspace tracking should succeed");
+
+        assert_eq!(
+            service
+                .get_workspace_by_path(&miniapp_workspace_root)
+                .await
+                .map(|workspace| workspace.id),
+            Some(tracked.id),
+            "MiniApp workspace should still be registered so its agent session can resolve it"
+        );
+        assert!(
+            service.get_recent_workspaces().await.is_empty(),
+            "MiniApp-owned workspaces should never enter recent workspace history"
         );
     }
 
