@@ -17,7 +17,7 @@ import { RemoteUiState } from '../../services/RemoteUiState';
  */
 @ObservedV2
 export class RemotePageState {
-  @Trace desktopName: string = 'MacBook Pro';
+  @Trace desktopName: string = '';
   @Trace desktopId: string = '';
   @Trace remoteUrl: string = '';
   @Trace userId: string = '';

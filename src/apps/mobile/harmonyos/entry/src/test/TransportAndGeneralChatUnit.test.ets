@@ -43,6 +43,7 @@ import { GeneralChatStreamLifecycleController } from '../main/ets/services/gener
 import {
   ModelProviderGeneralChatAdapter,
   ModelProviderMessage,
+  ModelProviderHttpTransport,
   ModelProviderProtocol
 } from '../main/ets/services/general-chat/ModelProviderGeneralChatAdapter';
 import { ModelProviderSseParser } from '../main/ets/services/general-chat/ModelProviderSseParser';
@@ -163,6 +164,56 @@ import {
   FakeGeneralChatCommandClient,
   FakeGeneralChatConfigStore
 } from './LocalTestFixtures';
+
+class ModelProviderRecordedRequest {
+  url: string = '';
+  apiKey: string = '';
+  body: string = '';
+  protocol: ModelProviderProtocol = ModelProviderProtocol.OpenAi;
+}
+
+class ModelProviderRecordedResponse {
+  statusCode: number = 200;
+  body: string = '';
+}
+
+class FakeModelProviderHttpTransport implements ModelProviderHttpTransport {
+  requests: ModelProviderRecordedRequest[] = [];
+  responses: ModelProviderRecordedResponse[] = [];
+
+  async postStream(
+    url: string,
+    apiKey: string,
+    body: string,
+    protocol: ModelProviderProtocol,
+    onData: (chunk: string) => void
+  ): Promise<ModelProviderRecordedResponse> {
+    const request = new ModelProviderRecordedRequest();
+    request.url = url;
+    request.apiKey = apiKey;
+    request.body = body;
+    request.protocol = protocol;
+    this.requests.push(request);
+    const response = this.responses.shift();
+    if (!response) {
+      throw new Error('Missing fake model provider HTTP response.');
+    }
+    if (response.body.length > 0) {
+      onData(response.body);
+    }
+    return response;
+  }
+
+  cancel(): void {
+  }
+}
+
+function modelProviderRecordedResponse(statusCode: number, body: string): ModelProviderRecordedResponse {
+  const response = new ModelProviderRecordedResponse();
+  response.statusCode = statusCode;
+  response.body = body;
+  return response;
+}
 
 export default function transportAndGeneralChatUnitTest() {
   describe('RemoteDescriptorParser', () => {
@@ -695,6 +746,47 @@ export default function transportAndGeneralChatUnitTest() {
         'https://llm.example.com/v1',
         customProtocol
       )).assertEqual('https://llm.example.com/v1/chat/completions');
+    });
+
+    it('probes Anthropic-compatible endpoints with a minimal streaming request', 0, async () => {
+      const transport = new FakeModelProviderHttpTransport();
+      transport.responses.push(modelProviderRecordedResponse(
+        200,
+        'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"ok"}}\n\n'
+      ));
+
+      await ModelProviderGeneralChatAdapter.probeConfiguration(
+        'https://api.openbitfun.com/',
+        'sk-test-token',
+        'deepseek-v4-flash',
+        transport
+      );
+
+      expect(transport.requests.length).assertEqual(1);
+      expect(transport.requests[0].url).assertEqual('https://api.openbitfun.com/v1/messages');
+      expect(transport.requests[0].apiKey).assertEqual('sk-test-token');
+      expect(transport.requests[0].protocol).assertEqual(ModelProviderProtocol.Anthropic);
+      expect(transport.requests[0].body.indexOf('"max_tokens":1')).assertLarger(-1);
+      expect(transport.requests[0].body.indexOf('Reply with one short word.')).assertLarger(-1);
+    });
+
+    it('rejects probe responses that never produce visible text', 0, async () => {
+      const transport = new FakeModelProviderHttpTransport();
+      transport.responses.push(modelProviderRecordedResponse(200, 'data: [DONE]\n\n'));
+
+      let message = '';
+      try {
+        await ModelProviderGeneralChatAdapter.probeConfiguration(
+          'https://api.openbitfun.com',
+          'sk-test-token',
+          'deepseek-v4-flash',
+          transport
+        );
+      } catch (err) {
+        message = err instanceof Error ? err.message : `${err}`;
+      }
+
+      expect(message).assertEqual('模型没有返回文字内容。');
     });
 
     it('extracts text from Anthropic and OpenAI compatible responses', 0, () => {

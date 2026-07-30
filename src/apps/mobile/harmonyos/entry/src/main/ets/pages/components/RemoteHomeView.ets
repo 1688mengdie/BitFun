@@ -12,6 +12,7 @@ import { ACCENT, CARD, INK, MUTED, PAGE_BG } from './Theme';
 export struct RemoteHomeView {
   @Param pageState: RemotePageState = new RemotePageState();
   @Param isBusy: boolean = false;
+  @Param selectedSessionId: string = '';
   @Event onOpenSidebar: () => void = () => {};
   @Event onConnectWorkspace: () => void = () => {};
   @Event onAddConnection: () => void = () => {};
@@ -67,7 +68,7 @@ export struct RemoteHomeView {
             }
           })
         } else if (this.canUseRemote()) {
-            RemoteSessionList({
+          RemoteSessionList({
             sessions: this.pageState.visibleSessions(),
             query: this.pageState.sessionQuery,
             sortMode: this.sortMode,
@@ -95,11 +96,12 @@ export struct RemoteHomeView {
             onDeleteSession: (session: RemoteSession) => {
               this.onDeleteSession(session);
             },
+            selectedSessionId: this.selectedSessionId,
             onLoadMore: () => {
               this.onLoadMoreSessions();
             }
-            })
-            RemoteBottomBar({
+          })
+          RemoteBottomBar({
             query: this.pageState.sessionQuery,
             isBusy: this.isBusy,
             onQueryChange: (value: string) => {
@@ -111,7 +113,7 @@ export struct RemoteHomeView {
             onCreate: () => {
               this.onCreateAssistantSession();
             }
-            })
+          })
         } else {
           this.DisconnectedState()
         }

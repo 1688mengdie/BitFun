@@ -19,7 +19,8 @@ import { ImagePickerService } from '../../services/ImagePickerService';
 import {
   GeneralChatConfigSnapshot,
   GeneralChatConfigStore,
-  GeneralChatConfigUpdate
+  GeneralChatConfigUpdate,
+  GeneralChatConfigValidator
 } from '../../services/general-chat/GeneralChatConfigStore';
 import { GeneralChatBootstrapController } from '../../services/general-chat/GeneralChatBootstrapController';
 import { GeneralChatCommandController } from '../../services/general-chat/GeneralChatCommandController';
@@ -79,7 +80,8 @@ import {
 import {
   AppNavigationBackAction,
   AppRoute,
-  AppRouteContract
+  AppRouteContract,
+  ConversationSource
 } from '../navigation/AppRouteContract';
 import { AppShellState } from './AppShellState';
 import { AppShellViewModel } from './AppShellViewModel';
@@ -110,6 +112,7 @@ import {
   GeneralChatConversationViewModel,
   GeneralChatConversationViewModelHooks
 } from './GeneralChatConversationViewModel';
+import { ModelProviderGeneralChatAdapter } from '../../services/general-chat/ModelProviderGeneralChatAdapter';
 
 enum ConnectionState {
   Idle = 'idle',
@@ -143,7 +146,6 @@ export class AppRootRuntime {
   readonly cloudAccountSessionStore: CloudAccountSessionStore = new CloudAccountSessionStore();
   private cloudAccountSession?: CloudAccountSession;
   private cloudAccountRelayUrl: string = '';
-  private cloudTargetRestoreAttempted: boolean = false;
   readonly clipboardService: ClipboardService = new ClipboardService();
   readonly qrScanService: QrScanService = new QrScanService();
   readonly imagePickerService: ImagePickerService = new ImagePickerService();
@@ -621,6 +623,7 @@ export class AppRootRuntime {
     (route: AppRoute): boolean => this.handleNavigationBack(route),
     (route: AppRoute, intent: ConversationIntent): void => this.handleConversationIntent(route, intent),
     (): void => this.closeAppSidebar(),
+    (source: ConversationSource): void => { this.switchWideConversationSource(source); },
     new RemoteHomePresentationActions(
       (): void => this.openAppSidebar(), (): void => this.enterCodeEntry(), (): void => this.openAddConnection(),
       (): void => this.openRemoteControlSettings(), (): void => { this.refreshSessions(); },
@@ -674,6 +677,8 @@ export class AppRootRuntime {
       (): Promise<CloudAccountDevice[]> => this.listCloudAccountDevices(),
       (): Promise<RemotePermissionMode> => this.getRemotePermissionMode(),
       (mode: RemotePermissionMode): Promise<RemotePermissionMode> => this.setRemotePermissionMode(mode),
+      async (url: string, key: string, model: string, clear: boolean): Promise<string> =>
+        this.testGeneralChatConfig(url, key, model, clear),
       async (url: string, key: string, model: string, clear: boolean): Promise<string> =>
         this.saveGeneralChatConfig(url, key, model, clear)
     ),
@@ -741,7 +746,6 @@ export class AppRootRuntime {
     this.remoteConnectionCoordinator.invalidate();
     this.setRemoteBusy(false);
     this.persistVisibleGeneralChatDraft();
-    this.stopGeneralChatStream(true, 'failed');
   }
 
   aboutToDisappear(): void {
@@ -865,6 +869,7 @@ export class AppRootRuntime {
     return false;
   }
 
+
   handleConversationIntent(route: AppRoute, intent: ConversationIntent): void {
     this.conversationIntentDispatcher.dispatch(route, intent);
   }
@@ -883,12 +888,77 @@ export class AppRootRuntime {
       clearApiKey
     };
     try {
+      const validationError = await this.validateGeneralChatConfig(update);
+      if (validationError.length > 0) {
+        return validationError;
+      }
+      if (!update.clearApiKey) {
+        const probeError = await this.probeGeneralChatConfig(update);
+        if (probeError.length > 0) {
+          return probeError;
+        }
+      }
       const snapshot = await this.generalChatConfigStore.save(update);
       this.applyGeneralChatConfig(snapshot);
       return '';
     } catch (err) {
       return ConnectionErrorPolicy.errorText(err);
     }
+  }
+
+  async testGeneralChatConfig(
+    apiUrl: string,
+    apiKey: string,
+    modelName: string,
+    clearApiKey: boolean
+  ): Promise<string> {
+    const update: GeneralChatConfigUpdate = {
+      apiUrl,
+      apiKey,
+      modelName,
+      clearApiKey
+    };
+    try {
+      const validationError = await this.validateGeneralChatConfig(update);
+      if (validationError.length > 0) {
+        return validationError;
+      }
+      if (update.clearApiKey) {
+        return RemoteI18n.t('settings.modelService.testNeedsKey');
+      }
+      return await this.probeGeneralChatConfig(update);
+    } catch (err) {
+      return ConnectionErrorPolicy.errorText(err);
+    }
+  }
+
+  private async validateGeneralChatConfig(update: GeneralChatConfigUpdate): Promise<string> {
+    const snapshot = await this.generalChatConfigStore.snapshot();
+    return GeneralChatConfigValidator.validate(update, snapshot.hasApiKey);
+  }
+
+  private async probeGeneralChatConfig(update: GeneralChatConfigUpdate): Promise<string> {
+    const apiKey = await this.effectiveGeneralChatApiKey(update);
+    if (apiKey.length === 0) {
+      return RemoteI18n.t('settings.modelService.apiKeyRequired');
+    }
+    try {
+      await ModelProviderGeneralChatAdapter.probeConfiguration(update.apiUrl, apiKey, update.modelName);
+      return '';
+    } catch (err) {
+      return ConnectionErrorPolicy.errorText(err);
+    }
+  }
+
+  private async effectiveGeneralChatApiKey(update: GeneralChatConfigUpdate): Promise<string> {
+    const directKey = update.apiKey.trim();
+    if (directKey.length > 0) {
+      return directKey;
+    }
+    if (update.clearApiKey) {
+      return '';
+    }
+    return (await this.generalChatConfigStore.accessToken()).trim();
   }
 
   applyGeneralChatConfig(snapshot: GeneralChatConfigSnapshot): void {
@@ -901,7 +971,7 @@ export class AppRootRuntime {
   }
 
   async restoreIdentity(): Promise<void> {
-    if (this.remotePageState.controlTargetType === 'account_device' || this.cloudTargetRestoreAttempted) {
+    if (this.remotePageState.controlTargetType === 'account_device') {
       return;
     }
     await this.remoteConnectionViewModel.restore(this.host.context());
@@ -1091,6 +1161,33 @@ export class AppRootRuntime {
     this.appShellState.setConnectSheetVisible(true);
   }
 
+  async switchWideConversationSource(source: ConversationSource): Promise<void> {
+    if (AppRouteContract.conversationSource(this.currentRoute()) === source) {
+      return;
+    }
+    if (this.visibleVoiceListening()) {
+      await this.stopVoiceInput(false);
+    }
+    if (source === ConversationSource.General) {
+      this.stopPolling();
+      this.appShellViewModel.replaceRouteWithoutAnimation(AppRoute.ChatHome);
+      return;
+    }
+    this.persistVisibleGeneralChatDraft();
+    const activeRemoteSessionId = this.remotePageState.activeSession.sessionId || '';
+    const target = AppRouteContract.routeForConversationSource(
+      source,
+      RemoteUiState.canUseRemote(this.connectionState),
+      activeRemoteSessionId
+    );
+    const targetSessionId = target.hasSessionParam() ? target.routeParam().sessionId : '';
+    this.appShellViewModel.replaceRouteWithoutAnimation(target.name, targetSessionId);
+    if (target.name === AppRoute.RemoteChat) {
+      this.startPolling();
+      await this.loadActiveMessages();
+    }
+  }
+
   openAddConnection(): void {
     this.appShellState.setConnectSheetVisible(true);
   }
@@ -1111,15 +1208,11 @@ export class AppRootRuntime {
   async loginCloudAccount(relayUrl: string, username: string, password: string): Promise<string> {
     RemoteLogger.info('cloud account UI login requested');
     const session = await this.cloudAccountClient.login(relayUrl, username, password, this.identityStoreSnapshotInstallId());
-    this.cloudAccountSession = session;
-    this.cloudAccountRelayUrl = relayUrl.trim();
-    this.cloudTargetRestoreAttempted = false;
+    this.applyCloudAccountSession(session, relayUrl, username);
     await this.cloudAccountSessionStore.save({
       relayUrl: relayUrl.trim(), username: username.trim(), token: session.token, userId: session.userId,
       masterKey: Encoding.bytesToBase64(session.masterKey)
     });
-    this.remotePageState.setAccountUserId(session.userId);
-    this.remotePageState.setAccountUsername(username.trim());
     RemoteLogger.info('cloud account credentials persisted, refreshing account devices');
     RemoteLogger.info(`cloud account login success user=${session.userId}`);
     return session.userId;
@@ -1134,12 +1227,7 @@ export class AppRootRuntime {
         userId: persisted.userId,
         masterKey: Encoding.base64ToBytes(persisted.masterKey)
       };
-      this.cloudAccountSession = session;
-      this.cloudAccountRelayUrl = persisted.relayUrl;
-      this.remotePageState.setAccountUserId(session.userId);
-      this.remotePageState.setAccountUsername(persisted.username || session.userId);
-      this.cloudTargetRestoreAttempted = (persisted.targetDeviceId || '').trim().length > 0;
-      await this.restoreCloudTarget(persisted.targetDeviceId || '', persisted.targetDeviceName || '');
+      this.applyCloudAccountSession(session, persisted.relayUrl, persisted.username || session.userId);
     } catch (err) {
       RemoteLogger.warn(`cloud account restore failed: ${err instanceof Error ? err.message : 'unknown error'}`);
       await this.cloudAccountSessionStore.clear();
@@ -1164,6 +1252,13 @@ export class AppRootRuntime {
     return String(bundles.length);
   }
 
+  protected applyCloudAccountSession(session: CloudAccountSession, relayUrl: string, username: string): void {
+    this.cloudAccountSession = session;
+    this.cloudAccountRelayUrl = relayUrl.trim();
+    this.remotePageState.setAccountUserId(session.userId);
+    this.remotePageState.setAccountUsername(username.trim());
+  }
+
   async logoutCloudAccount(): Promise<void> {
     if (this.remotePageState.controlTargetType === 'account_device') {
       this.remoteActivityViewModel.invalidate();
@@ -1178,7 +1273,6 @@ export class AppRootRuntime {
     }
     this.cloudAccountSession = undefined;
     this.cloudAccountRelayUrl = '';
-    this.cloudTargetRestoreAttempted = false;
     await this.cloudAccountSessionStore.clear();
     this.remotePageState.setAccountUserId('');
     this.remotePageState.setAccountUsername('');
@@ -1249,7 +1343,6 @@ export class AppRootRuntime {
   private async expireCloudAccountSession(): Promise<void> {
     this.cloudAccountSession = undefined;
     this.cloudAccountRelayUrl = '';
-    this.cloudTargetRestoreAttempted = false;
     await this.cloudAccountSessionStore.clear();
     this.remotePageState.setAccountUserId('');
     this.remotePageState.setAccountUsername('');

@@ -27,7 +27,7 @@ export struct ConnectView {
   @Prop connectionFailureKind: string = '';
   @Prop isBusy: boolean = false;
   @Prop isConnected: boolean = false;
-  @Prop desktopName: string = 'MacBook Pro';
+  @Prop desktopName: string = '';
   @Prop desktopId: string = '';
   @Prop deviceId: string = '';
   @Prop accountUserId: string = '';

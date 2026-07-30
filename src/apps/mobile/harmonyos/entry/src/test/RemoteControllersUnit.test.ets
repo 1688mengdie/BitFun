@@ -84,6 +84,10 @@ import { GeneralChatPageState } from '../main/ets/pages/state/GeneralChatPageSta
 import { RemotePageState } from '../main/ets/pages/state/RemotePageState';
 import { ConversationViewState } from '../main/ets/pages/state/ConversationViewState';
 import {
+  ConversationLayoutCrease,
+  ConversationLayoutPolicy
+} from '../main/ets/pages/state/ConversationLayoutPolicy';
+import {
   GENERAL_CHAT_COMPOSER_CAPABILITIES,
   REMOTE_CHAT_COMPOSER_CAPABILITIES
 } from '../main/ets/pages/components/ChatComposerCapabilities';
@@ -93,7 +97,8 @@ import {
   AppNavigationBackAction,
   AppNavigationPathSpec,
   AppRoute,
-  AppRouteContract
+  AppRouteContract,
+  ConversationSource
 } from '../main/ets/pages/navigation/AppRouteContract';
 import { TimeFormat } from '../main/ets/services/TimeFormat';
 import { X25519 } from '../main/ets/services/X25519';
@@ -1016,6 +1021,142 @@ export default function remoteControllersUnitTest() {
         .assertEqual(AppNavigationBackAction.PopRemoteHome);
       expect(AppRouteContract.backAction(AppRoute.ChatHome, false))
         .assertEqual(AppNavigationBackAction.AllowSystem);
+    });
+
+    it('derives conversation sources and wide source destinations', 0, () => {
+      expect(AppRouteContract.conversationSource(AppRoute.ChatHome)).assertEqual(ConversationSource.General);
+      expect(AppRouteContract.conversationSource(AppRoute.GeneralChat)).assertEqual(ConversationSource.General);
+      expect(AppRouteContract.conversationSource(AppRoute.RemoteHome)).assertEqual(ConversationSource.Remote);
+      expect(AppRouteContract.conversationSource(AppRoute.RemoteChat)).assertEqual(ConversationSource.Remote);
+
+      const general = AppRouteContract.routeForConversationSource(ConversationSource.General, true, 'remote-1');
+      const remoteHome = AppRouteContract.routeForConversationSource(ConversationSource.Remote, false, 'remote-1');
+      const connectedRemoteHome = AppRouteContract.routeForConversationSource(ConversationSource.Remote, true, '');
+      const remoteChat = AppRouteContract.routeForConversationSource(ConversationSource.Remote, true, 'remote-1');
+      expect(general.name).assertEqual(AppRoute.ChatHome);
+      expect(general.hasSessionParam()).assertFalse();
+      expect(remoteHome.name).assertEqual(AppRoute.RemoteHome);
+      expect(remoteHome.hasSessionParam()).assertFalse();
+      expect(connectedRemoteHome.name).assertEqual(AppRoute.RemoteHome);
+      expect(connectedRemoteHome.hasSessionParam()).assertFalse();
+      expect(remoteChat.name).assertEqual(AppRoute.RemoteChat);
+      expect(remoteChat.routeParam().sessionId).assertEqual('remote-1');
+    });
+  });
+
+  describe('ConversationLayoutPolicy', () => {
+    it('keeps folded and narrow surfaces compact', 0, () => {
+      expect(ConversationLayoutPolicy.useMasterDetail(480, false, false)).assertFalse();
+      expect(ConversationLayoutPolicy.useMasterDetail(900, true, true)).assertFalse();
+      expect(ConversationLayoutPolicy.useMasterDetail(900, false, true)).assertFalse();
+    });
+
+    it('uses master-detail for media-query or width-qualified surfaces', 0, () => {
+      expect(ConversationLayoutPolicy.useMasterDetail(480, true, false)).assertTrue();
+      expect(ConversationLayoutPolicy.useMasterDetail(
+        ConversationLayoutPolicy.WIDE_LAYOUT_MIN_WIDTH,
+        false,
+        false
+      )).assertTrue();
+    });
+
+    it('keeps the existing master width when no usable crease is available', 0, () => {
+      const geometry = ConversationLayoutPolicy.resolveWideGeometry(860, []);
+      const invalidCrease = ConversationLayoutPolicy.resolveWideGeometry(
+        860,
+        [new ConversationLayoutCrease(120, 10)]
+      );
+      expect(geometry.masterPaneWidth).assertEqual(ConversationLayoutPolicy.FALLBACK_MASTER_PANE_WIDTH);
+      expect(geometry.masterDetailGap).assertEqual(0);
+      expect(geometry.isExtraWide).assertFalse();
+      expect(geometry.detailContentOffset).assertEqual(0);
+      expect(geometry.detailContentWidth).assertEqual(516);
+      expect(invalidCrease.masterPaneWidth).assertEqual(ConversationLayoutPolicy.FALLBACK_MASTER_PANE_WIDTH);
+    });
+
+    it('returns no detail content band when the viewport cannot fit the fallback master', 0, () => {
+      const geometry = ConversationLayoutPolicy.resolveWideGeometry(300, []);
+      expect(geometry.masterPaneWidth).assertEqual(ConversationLayoutPolicy.FALLBACK_MASTER_PANE_WIDTH);
+      expect(geometry.detailContentOffset).assertEqual(0);
+      expect(geometry.detailContentWidth).assertEqual(0);
+    });
+
+    it('aligns the master boundary with the first usable fold crease', 0, () => {
+      const geometry = ConversationLayoutPolicy.resolveWideGeometry(
+        820,
+        [new ConversationLayoutCrease(382, 8)]
+      );
+      expect(geometry.masterPaneWidth).assertEqual(382);
+      expect(geometry.masterDetailGap).assertEqual(8);
+      expect(geometry.isExtraWide).assertFalse();
+      expect(geometry.detailContentOffset).assertEqual(0);
+      expect(geometry.detailContentWidth).assertEqual(430);
+    });
+
+    it('accepts a zero-width crease without creating an empty detail segment', 0, () => {
+      const geometry = ConversationLayoutPolicy.resolveWideGeometry(
+        900,
+        [new ConversationLayoutCrease(352, 0)]
+      );
+      expect(geometry.masterPaneWidth).assertEqual(352);
+      expect(geometry.masterDetailGap).assertEqual(0);
+      expect(geometry.detailContentOffset).assertEqual(0);
+      expect(geometry.detailContentWidth).assertEqual(548);
+    });
+
+    it('treats two creases as an extra-wide master-detail surface', 0, () => {
+      const geometry = ConversationLayoutPolicy.resolveWideGeometry(
+        1080,
+        [new ConversationLayoutCrease(352, 8), new ConversationLayoutCrease(712, 8)]
+      );
+      expect(geometry.masterPaneWidth).assertEqual(352);
+      expect(geometry.masterDetailGap).assertEqual(8);
+      expect(geometry.isExtraWide).assertTrue();
+      expect(geometry.detailContentOffset).assertEqual(360);
+      expect(geometry.detailContentWidth).assertEqual(360);
+    });
+
+    it('selects the widest hinge-free detail band on asymmetric three-screen geometry', 0, () => {
+      const geometry = ConversationLayoutPolicy.resolveWideGeometry(
+        1080,
+        [new ConversationLayoutCrease(352, 8), new ConversationLayoutCrease(800, 8)]
+      );
+      expect(geometry.detailContentOffset).assertEqual(0);
+      expect(geometry.detailContentWidth).assertEqual(440);
+    });
+
+    it('uses width as the extra-wide fallback when crease data is missing', 0, () => {
+      const geometry = ConversationLayoutPolicy.resolveWideGeometry(
+        ConversationLayoutPolicy.EXTRA_WIDE_MIN_WIDTH,
+        []
+      );
+      expect(geometry.isExtraWide).assertTrue();
+      expect(geometry.detailContentOffset).assertEqual(0);
+      expect(geometry.detailContentWidth).assertEqual(736);
+    });
+
+    it('ignores crease regions outside the application viewport', 0, () => {
+      const geometry = ConversationLayoutPolicy.resolveWideGeometry(
+        900,
+        [
+          new ConversationLayoutCrease(-12, 8),
+          new ConversationLayoutCrease(420, -2),
+          new ConversationLayoutCrease(910, 8)
+        ]
+      );
+      expect(geometry.masterPaneWidth).assertEqual(ConversationLayoutPolicy.FALLBACK_MASTER_PANE_WIDTH);
+      expect(geometry.detailContentOffset).assertEqual(0);
+      expect(geometry.detailContentWidth).assertEqual(556);
+    });
+
+    it('rejects a crease that leaves too little detail space', 0, () => {
+      const geometry = ConversationLayoutPolicy.resolveWideGeometry(
+        900,
+        [new ConversationLayoutCrease(600, 8)]
+      );
+      expect(geometry.masterPaneWidth).assertEqual(ConversationLayoutPolicy.FALLBACK_MASTER_PANE_WIDTH);
+      expect(geometry.detailContentOffset).assertEqual(264);
+      expect(geometry.detailContentWidth).assertEqual(292);
     });
   });
 

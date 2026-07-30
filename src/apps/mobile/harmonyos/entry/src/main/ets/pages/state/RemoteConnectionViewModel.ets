@@ -233,6 +233,7 @@ export class RemoteConnectionViewModel {
     this.replaceRoute(AppRoute.RemoteHome);
     if (clearPairing) {
       this.pageState.setRemoteUrl('');
+      this.pageState.setDesktopIdentity('', '');
       this.pageState.setUserId(this.deviceId);
       this.pageState.setAccountPairing(false, '');
       this.pageState.setRemoteUrlInputVisible(false);

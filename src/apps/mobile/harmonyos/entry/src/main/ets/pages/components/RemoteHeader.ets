@@ -4,8 +4,8 @@ import { RemoteI18n } from '../../i18n/RemoteI18n';
 
 @ComponentV2
 export struct RemoteHeader {
-  @Param desktopName: string = 'MacBook Pro';
-  @Param connectionState: string = 'connected';
+  @Param desktopName: string = '';
+  @Param connectionState: string = 'idle';
   @Param isLoading: boolean = false;
   @Event onOpenSidebar: () => void = () => {};
   @Event onOpenActions: () => void = () => {};
@@ -36,7 +36,7 @@ export struct RemoteHeader {
             .width(19)
             .height(15)
             .objectFit(ImageFit.Contain)
-          Text(this.desktopName)
+          Text(this.desktopName || RemoteI18n.t('remote.settings.noDesktop'))
             .fontSize(13)
             .fontColor(MUTED)
             .maxLines(1)

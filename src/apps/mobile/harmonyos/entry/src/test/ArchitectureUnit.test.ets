@@ -64,5 +64,24 @@ export default function architectureUnitTest() {
       expect(shell.currentRoute()).assertEqual(AppRoute.GeneralChat);
       expect(shell.isGeneralChatVisible()).assertTrue();
     });
+
+    it('replaces conversation sources without growing cross-source history', 0, () => {
+      const shell = new AppShellViewModel();
+      shell.pushRoute(AppRoute.GeneralChat, 'general-1');
+      shell.pushRoute(AppRoute.RemoteHome);
+      expect(shell.navigationStack.getAllPathName().length).assertEqual(2);
+
+      shell.replaceRouteWithoutAnimation(AppRoute.RemoteChat, 'remote-1');
+      expect(shell.currentRoute()).assertEqual(AppRoute.RemoteChat);
+      expect(shell.navigationStack.getAllPathName().length).assertEqual(1);
+
+      shell.replaceRouteWithoutAnimation(AppRoute.ChatHome);
+      expect(shell.currentRoute()).assertEqual(AppRoute.ChatHome);
+      expect(shell.navigationStack.getAllPathName().length).assertEqual(0);
+
+      shell.replaceRouteWithoutAnimation(AppRoute.RemoteHome);
+      expect(shell.currentRoute()).assertEqual(AppRoute.RemoteHome);
+      expect(shell.navigationStack.getAllPathName().length).assertEqual(1);
+    });
   });
 }

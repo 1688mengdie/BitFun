@@ -669,6 +669,16 @@ export default function conversationStateUnitTest() {
   });
 
   describe('RemotePageState', () => {
+    it('does not invent a desktop identity before pairing', 0, () => {
+      const state = new RemotePageState();
+
+      expect(state.desktopName).assertEqual('');
+      expect(state.desktopId).assertEqual('');
+      expect(RemoteUiState.desktopNameFromRemoteUrl('bitfun://pair?room=room-1')).assertEqual('');
+      expect(RemoteUiState.desktopNameFromRemoteUrl('bitfun://pair?room=room-1&dn=Developer%20Mac'))
+        .assertEqual('Developer Mac');
+    });
+
     it('projects connection summary and filters visible sessions', 0, () => {
       const state = new RemotePageState();
       state.setDesktopIdentity('Developer Mac', 'desktop-1');
