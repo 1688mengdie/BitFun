@@ -87,7 +87,13 @@ cargo run -p bitfun-miniapp-market-server
 | `MARKET_SESSION_SECRET` | 会话签名 secret，生产至少 24 字符并应使用强随机值 |
 | `MARKET_ADMIN_GITHUB_IDS` | 逗号分隔的 GitHub 数字 ID |
 | `MARKET_PUBLIC_BROWSE` | 是否向匿名用户开放目录 |
+| `MARKET_WEB_SUBMISSIONS_ENABLED` | 是否允许 Web Cookie 会话投稿；默认及生产为 `false`，Desktop Bearer 投稿不受影响 |
 | `RUST_LOG` | 英文 JSON 日志过滤器 |
+
+未设置 `MARKET_WEB_SUBMISSIONS_ENABLED` 时服务按 `false` 处理；它与
+`MARKET_PUBLIC_BROWSE` 相互独立。生产修改该值需要仅 recreate 市场容器，并通过
+`GET /miniapp/api/v1/config` 核对实际的 `webSubmissionsEnabled`，不能只根据
+env 文件内容判断已经生效。
 
 固定生产 OAuth callback 是：
 
