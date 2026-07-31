@@ -84,6 +84,7 @@ export default defineConfig(({ mode, command }) => {
             },
             workbox: {
               globPatterns: ['**/*.{js,css,html,woff2,png,svg,ico,webp}'],
+              maximumFileSizeToCacheInBytes: 10 * 1024 * 1024,
               runtimeCaching: [
                 // API calls: Network First with 30s timeout, fallback to cache
                 {
