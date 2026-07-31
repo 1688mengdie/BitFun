@@ -1,0 +1,84 @@
+# =============================================================================
+# LVPA（太极多维量化系统）— cargo-deny 配置
+# 许可合规 + 依赖审查 + 漏洞门禁
+# =============================================================================
+# 被 taiji-security.yml 中的 cargo-deny-action 引用
+# 参考：https://embarkstudios.github.io/cargo-deny/
+
+[advisories]
+# 忽略以下 advisory（需明确记录原因）
+# ignore = [
+#     # 示例：{ id = "RUSTSEC-2024-0001", reason = "不影响 taiji 的量化计算场景" },
+# ]
+vulnerability = "deny"
+unmaintained = "warn"
+notice = "warn"
+severity-threshold = "high"
+# 忽略 yanked crate 警告（上游不维护时可自行决定）
+ignore-yanked = false
+
+[bans]
+# 禁止特定 crate
+multiple-versions = "deny"        # 不允许同一 crate 多版本
+wildcard-predicates = "deny"      # 不允许 "*" 版本约束
+deny = []
+# skip 列表 — 允许某些 crate 存在多版本（通常因传递依赖不可避免）
+skip = []
+# skip-tree — 允许以某 crate 为根的整个子树有多版本
+skip-tree = [
+    # tokio-util 多版本问题常见于传递依赖
+    { name = "tokio-util", version = "0.6" },
+    { name = "tokio-util", version = "0.7" },
+    # 部分 crate 依赖不同版本的对象存储 SDK
+    { name = "aws-sdk-s3", version = "0.39" },
+    { name = "aws-sdk-s3", version = "1.0" },
+]
+
+[licenses]
+# 允许的许可证
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Unlicense",
+    "CC0-1.0",
+    "Zlib",
+    "MPL-2.0",
+]
+# 需要明确审批的许可证
+deny = [
+    "AGPL-3.0",
+    "GPL-3.0",
+    "GPL-2.0",
+    "LGPL-3.0",
+    "CC-BY-4.0",   # 部分 CC 可能限制商业使用
+]
+# 需要人工确认的许可证
+copyleft = "deny"
+allow-osi-fsf-free = "both"
+confidence-threshold = 0.8
+default = "deny"
+# 异常 — 明确获得许可的 crate
+exceptions = [
+    # 允许特定 crate 的特定许可证
+    { allow = ["MPL-2.0"], name = "ring" },
+    { allow = ["MPL-2.0"], name = "webpki" },
+    { allow = ["MPL-2.0"], name = "untrusted" },
+    { allow = ["ISC"], name = "ipnetwork" },
+]
+
+[sources]
+# 允许的 crate 来源
+allow-git-registry = true
+allow-registry = true
+# 未知来源（如未发布在 crates.io 的 git 依赖）需要明确允许
+unknown-registry = "deny"
+unknown-git = "deny"
+# git 依赖白名单
+allow-git = [
+    # 如果 taiji-* crate 依赖未发布的 git 仓库，在此列出
+]

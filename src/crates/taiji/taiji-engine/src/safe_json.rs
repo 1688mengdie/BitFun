@@ -4,6 +4,7 @@
 //! from deeply nested JSON payloads. The depth limit is set to 100 layers,
 //! which is more than sufficient for any legitimate trading data while
 //! blocking DoS vectors.
+//! 参考: 量价时空/Phase-2-派发提示词.md:188 — R-2-201 — ComputeNode trait + Pipeline DAG
 
 use serde::de::DeserializeOwned;
 use serde_json::Value;

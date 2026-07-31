@@ -1,0 +1,90 @@
+# E2E 测试 CI 管线
+#
+# 架构总纲 §13.1 — CI 管线骨架
+#   job-e2e (on main/PR labeled e2e):
+#     ├── pnpm e2e:test:l0:all
+#     ├── pnpm e2e:test:lvpa
+#     └── (预留) cargo test --test e2e
+#
+# 架构总纲 §12.1 — Layer 3: 端到端测试
+#   - Tauri 桌面壳 E2E (WebDriver) — WebDriverIO
+#   - Web 前端 E2E (Playwright) — 预留
+
+name: E2E Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    # 仅在 PR 被标记 e2e label 时运行（架构总纲 §13.1 定义）
+    types: [opened, synchronize, labeled]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+env:
+  CI: true
+  BITFUN_E2E_APP_MODE: debug
+
+jobs:
+  # ── Tauri 桌面壳 E2E（WebDriverIO）──
+  desktop-e2e:
+    # 仅在 main 分支或 PR 带 e2e label 时运行
+    if: >
+      github.ref == 'refs/heads/main' ||
+      (github.event_name == 'pull_request' &&
+       contains(github.event.pull_request.labels.*.name, 'e2e'))
+
+    timeout-minutes: 30
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest]
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.12
+          cache: 'pnpm'
+
+      - name: 安装 Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: 安装 E2E 依赖
+        run: pnpm run e2e:install
+
+      - name: 构建 Tauri 桌面应用 (debug)
+        run: cargo build -p bitfun-desktop
+
+      - name: 运行 L0 冒烟测试
+        run: pnpm run e2e:test:l0:all
+        continue-on-error: false
+
+      - name: 运行 LVPA 场景测试
+        run: pnpm run e2e:test:lvpa
+        continue-on-error: false
+
+      - name: 运行 L1 功能测试（核心）
+        run: pnpm run e2e:test:l1
+        continue-on-error: true
+
+      - name: 上传测试报告
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-report-${{ matrix.os }}
+          path: tests/e2e/reports/
+          retention-days: 7

@@ -1,0 +1,225 @@
+/* ── WorkshopDAG: 工坊 DAG 可视化 ── */
+
+.workshop-dag {
+  width: 100%;
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 24px;
+
+  &__header {
+    margin-bottom: 20px;
+  }
+
+  &__title {
+    font-size: 20px;
+    font-weight: 700;
+    color: var(--lvpa-ink, #1c1c1f);
+    margin: 0 0 4px;
+  }
+
+  &__subtitle {
+    font-size: 13px;
+    color: var(--lvpa-muted, #6a6a6a);
+    margin: 0;
+  }
+
+  /* ── 工坊列表 ── */
+
+  &__workshops {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 16px;
+    margin-bottom: 24px;
+  }
+
+  &__card {
+    padding: 16px;
+    border-radius: 10px;
+    border: 1px solid rgba(90, 107, 80, 0.15);
+    background: rgba(126, 176, 155, 0.04);
+    cursor: pointer;
+    transition: all 0.2s ease;
+
+    &:hover {
+      border-color: rgba(126, 176, 155, 0.3);
+      background: rgba(126, 176, 155, 0.08);
+    }
+
+    &--selected {
+      border-color: var(--lvpa-gold, #d4a843);
+      background: rgba(212, 168, 67, 0.06);
+    }
+
+    &--running { border-left: 3px solid var(--lvpa-jade, #7eb09b); }
+    &--paused { border-left: 3px solid var(--lvpa-gold, #d4a843); }
+    &--idle { border-left: 3px solid #9a9a9a; }
+  }
+
+  &__card-top {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    margin-bottom: 8px;
+  }
+
+  &__card-icon {
+    font-size: 24px;
+    flex-shrink: 0;
+  }
+
+  &__card-info {
+    flex: 1;
+    min-width: 0;
+  }
+
+  &__card-name {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--lvpa-ink, #1c1c1f);
+  }
+
+  &__card-namecn {
+    font-size: 12px;
+    color: var(--lvpa-muted, #6a6a6a);
+    margin-left: 6px;
+  }
+
+  &__card-desc {
+    font-size: 12px;
+    color: var(--lvpa-muted, #6a6a6a);
+    margin-top: 2px;
+  }
+
+  &__card-meta {
+    display: flex;
+    gap: 12px;
+    font-size: 11px;
+    color: var(--lvpa-muted, #6a6a6a);
+  }
+
+  &__card-status {
+    font-size: 11px;
+    padding: 1px 8px;
+    border-radius: 3px;
+
+    &--running { background: rgba(126, 176, 155, 0.12); color: var(--lvpa-jade, #7eb09b); }
+    &--paused { background: rgba(212, 168, 67, 0.12); color: var(--lvpa-gold, #d4a843); }
+    &--idle { background: rgba(154, 154, 154, 0.12); color: #9a9a9a; }
+  }
+
+  &__card-progress {
+    margin-top: 8px;
+  }
+
+  &__progress-bar {
+    height: 4px;
+    border-radius: 2px;
+    background: rgba(90, 107, 80, 0.1);
+    overflow: hidden;
+  }
+
+  &__progress-fill {
+    height: 100%;
+    border-radius: 2px;
+    background: var(--lvpa-jade, #7eb09b);
+    transition: width 0.6s ease;
+  }
+
+  &__progress-label {
+    font-size: 10px;
+    color: var(--lvpa-muted, #6a6a6a);
+    margin-top: 2px;
+    text-align: right;
+  }
+
+  /* ── DAG 流程图 ── */
+
+  &__dag {
+    padding: 20px;
+    background: rgba(126, 176, 155, 0.03);
+    border: 1px solid rgba(90, 107, 80, 0.12);
+    border-radius: 10px;
+  }
+
+  &__dag-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--lvpa-ink, #1c1c1f);
+    margin-bottom: 16px;
+  }
+
+  &__dag-flow {
+    display: flex;
+    align-items: flex-start;
+    gap: 0;
+    flex-wrap: wrap;
+  }
+
+  &__dag-node {
+    display: flex;
+    align-items: center;
+    gap: 0;
+  }
+
+  &__dag-node-box {
+    padding: 8px 14px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 500;
+    white-space: nowrap;
+    border: 1px solid rgba(90, 107, 80, 0.15);
+    background: rgba(126, 176, 155, 0.04);
+    color: var(--lvpa-ink, #1c1c1f);
+
+    &--done {
+      background: rgba(126, 176, 155, 0.12);
+      border-color: rgba(126, 176, 155, 0.25);
+      color: var(--lvpa-jade, #7eb09b);
+    }
+
+    &--running {
+      background: rgba(212, 168, 67, 0.1);
+      border-color: rgba(212, 168, 67, 0.25);
+      color: var(--lvpa-gold, #d4a843);
+    }
+
+    &--error {
+      background: rgba(200, 16, 46, 0.08);
+      border-color: rgba(200, 16, 46, 0.2);
+      color: var(--lvpa-vermillion, #c8102e);
+    }
+
+    &--input { border-left: 3px solid var(--lvpa-jade, #7eb09b); }
+    &--output { border-right: 3px solid var(--lvpa-gold, #d4a843); }
+  }
+
+  &__dag-arrow {
+    display: flex;
+    align-items: center;
+    padding: 0 6px;
+    color: rgba(90, 107, 80, 0.25);
+    font-size: 14px;
+  }
+
+  &__dag-node-progress {
+    font-size: 10px;
+    color: var(--lvpa-muted, #6a6a6a);
+    margin-top: 2px;
+    text-align: center;
+  }
+
+  &__dag-empty {
+    padding: 20px;
+    text-align: center;
+    color: var(--lvpa-muted, #6a6a6a);
+    font-size: 13px;
+  }
+}
+
+/* ── 空状态 ── */
+.workshop-dag__none {
+  text-align: center;
+  padding: 40px 20px;
+  color: var(--lvpa-muted, #6a6a6a);
+  font-size: 13px;
+}

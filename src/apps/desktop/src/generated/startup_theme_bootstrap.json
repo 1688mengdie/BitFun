@@ -82,6 +82,26 @@
       "textPrimary": "#c0caf5",
       "textMuted": "#787c99",
       "accentColor": "#7aa2f7"
+    },
+    {
+      "id": "lvpa-cultivation",
+      "bgPrimary": "#faf8f0",
+      "bgSecondary": "#f5f3e8",
+      "bgScene": "#faf8f0",
+      "isLight": true,
+      "textPrimary": "#1c1c1f",
+      "textMuted": "#6a6a6a",
+      "accentColor": "#7eb09b"
+    },
+    {
+      "id": "lvpa-cultivation-night",
+      "bgPrimary": "#2a2a2d",
+      "bgSecondary": "#252527",
+      "bgScene": "#2a2a2d",
+      "isLight": false,
+      "textPrimary": "#e8e8e8",
+      "textMuted": "#928f89",
+      "accentColor": "#5a8f7a"
     }
   ]
 }

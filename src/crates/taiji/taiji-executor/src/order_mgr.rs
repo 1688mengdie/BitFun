@@ -1,3 +1,5 @@
+//! 参考: 量价时空/Phase-2-派发提示词.md:843 — R-2-504 — taiji-executor 执行器
+
 use dashmap::DashMap;
 
 use crate::types::{Direction, Fill, Offset, OrderAck, OrderRequest, OrderStatus, OrderType};
@@ -23,9 +25,10 @@ pub struct OrderState {
 /// The state machine transitions:
 ///
 /// ```text
-/// Submitted ──┬── PartialFilled ── Filled
-///              ├── Cancelled
-///              └── Rejected
+/// Pending ──┬── Sent ──┬── PartiallyFilled ── Filled
+///            │          ├── Rejected
+///            │          └── Cancelled
+///            └── Rejected (risk pre-check)
 /// ```
 pub struct OrderManager {
     orders: DashMap<String, OrderState>,
@@ -44,11 +47,11 @@ impl OrderManager {
         }
     }
 
-    /// Register a newly submitted order. Returns a `Submitted` ack.
+    /// Register a newly submitted order. Transitions Pending → Sent.
     pub fn submit(&self, order: OrderRequest) -> OrderAck {
         let ack = OrderAck {
             order_id: order.order_id.clone(),
-            status: OrderStatus::Submitted,
+            status: OrderStatus::Sent,
             filled_volume: 0,
             filled_price: None,
             error: None,
@@ -61,7 +64,7 @@ impl OrderManager {
             price: order.price,
             volume: order.volume,
             order_type: order.order_type,
-            status: OrderStatus::Submitted,
+            status: OrderStatus::Sent,
             filled_volume: 0,
             filled_price: None,
             error: None,
@@ -70,7 +73,45 @@ impl OrderManager {
         ack
     }
 
-    /// Apply a fill event. Transitions `Submitted` → `PartialFilled` or `Filled`.
+    /// Mark an order as pending (enqueued but not yet sent to bridge).
+    pub fn mark_pending(&self, order_id: &str, instrument: &str, volume: u32, price: f64) -> OrderAck {
+        let state = OrderState {
+            order_id: order_id.to_string(),
+            instrument: instrument.to_string(),
+            direction: Direction::Buy,
+            offset: Offset::Open,
+            price,
+            volume,
+            order_type: OrderType::Market,
+            status: OrderStatus::Pending,
+            filled_volume: 0,
+            filled_price: None,
+            error: None,
+        };
+        self.orders.insert(state.order_id.clone(), state);
+        OrderAck {
+            order_id: order_id.to_string(),
+            status: OrderStatus::Pending,
+            filled_volume: 0,
+            filled_price: None,
+            error: None,
+        }
+    }
+
+    /// Transition Pending → Sent when the order is actually dispatched.
+    pub fn confirm_sent(&self, order_id: &str) -> Option<OrderAck> {
+        let mut state = self.orders.get_mut(order_id)?;
+        state.status = OrderStatus::Sent;
+        Some(OrderAck {
+            order_id: state.order_id.clone(),
+            status: OrderStatus::Sent,
+            filled_volume: state.filled_volume,
+            filled_price: state.filled_price,
+            error: None,
+        })
+    }
+
+    /// Apply a fill event. Transitions `Sent` → `PartiallyFilled` or `Filled`.
     pub fn on_fill(&self, fill: &Fill) -> Option<OrderAck> {
         let mut state = self.orders.get_mut(&fill.order_id)?;
         state.filled_volume += fill.volume;
@@ -79,7 +120,7 @@ impl OrderManager {
         state.status = if state.filled_volume >= state.volume {
             OrderStatus::Filled
         } else {
-            OrderStatus::PartialFilled
+            OrderStatus::PartiallyFilled
         };
 
         Some(OrderAck {
@@ -147,11 +188,11 @@ mod tests {
     }
 
     #[test]
-    fn submit_returns_submitted() {
+    fn submit_returns_sent() {
         let mgr = OrderManager::new();
         let ack = mgr.submit(make_order("ord-001", 3));
         assert_eq!(ack.order_id, "ord-001");
-        assert_eq!(ack.status, OrderStatus::Submitted);
+        assert_eq!(ack.status, OrderStatus::Sent);
         assert_eq!(ack.filled_volume, 0);
     }
 
@@ -162,7 +203,7 @@ mod tests {
 
         // Partial fill: volume 1 of 3.
         let ack = mgr.on_fill(&make_fill("ord-001", 1, 5625.0)).unwrap();
-        assert_eq!(ack.status, OrderStatus::PartialFilled);
+        assert_eq!(ack.status, OrderStatus::PartiallyFilled);
         assert_eq!(ack.filled_volume, 1);
 
         // Second partial fill: volume 2 of 3 → now filled.
@@ -170,6 +211,16 @@ mod tests {
         assert_eq!(ack.status, OrderStatus::Filled);
         assert_eq!(ack.filled_volume, 3);
         assert_eq!(ack.filled_price, Some(5626.0));
+    }
+
+    #[test]
+    fn mark_pending_and_confirm_sent() {
+        let mgr = OrderManager::new();
+        let ack = mgr.mark_pending("ord-p1", "ag2506", 3, 5625.0);
+        assert_eq!(ack.status, OrderStatus::Pending);
+
+        let ack = mgr.confirm_sent("ord-p1").unwrap();
+        assert_eq!(ack.status, OrderStatus::Sent);
     }
 
     #[test]

@@ -4,6 +4,7 @@
 //! Volume-bucket approach: classify each tick as buy/sell, accumulate volume
 //! into fixed-size buckets, then compute VPIN = E[|V_buy - V_sell|] / V_bucket.
 //! VPIN > 0.8 signals high toxicity (flash-crash / liquidity-drain warning).
+//! 参考: 量价时空/Phase-2-派发提示词.md:795 — R-2-502 — taiji-orderflow ComputeNode
 
 use crate::welford::WelfordStats;
 use taiji_engine::error::Result;

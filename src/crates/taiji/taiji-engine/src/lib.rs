@@ -1,5 +1,6 @@
 //! Taiji trading engine — DAG-based compute pipeline.
 //! Architecture: tick → BarGenerator → DAG (ComputeNode graph) → signals.
+//! 参考: 量价时空/Phase-2-派发提示词.md:188 — R-2-201 — ComputeNode trait + Pipeline DAG
 
 pub mod compliance;
 pub mod config;

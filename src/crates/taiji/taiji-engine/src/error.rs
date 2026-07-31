@@ -1,3 +1,5 @@
+//! 参考: 量价时空/Phase-2-派发提示词.md:188 — R-2-201 — ComputeNode trait + Pipeline DAG
+
 use crate::types::state::StateKey;
 use crate::types::NodeId;
 use thiserror::Error;
@@ -61,9 +63,15 @@ pub enum TaijiError {
     /// Permission denied for the requested operation.
     #[error("permission denied: {0}")]
     PermissionDenied(String),
+    /// Signal was rejected by RiskMonitor (风控拦截).
+    #[error("risk rejected: {0}")]
+    RiskRejected(String),
     /// Resource cleanup required before retry.
     #[error("cleanup required: {0}")]
     CleanupRequired(String),
+    /// Feature not yet implemented.
+    #[error("not implemented: {0}")]
+    Unimplemented(String),
 }
 
 impl TaijiError {
@@ -85,7 +93,9 @@ impl TaijiError {
             Self::Timeout(_) => TaijiErrorKind::Timeout,
             Self::Cancelled(_) => TaijiErrorKind::Cancelled,
             Self::PermissionDenied(_) => TaijiErrorKind::PermissionDenied,
+            Self::RiskRejected(_) => TaijiErrorKind::PermissionDenied,
             Self::CleanupRequired(_) => TaijiErrorKind::CleanupRequired,
+            Self::Unimplemented(_) => TaijiErrorKind::InvalidRequest,
         }
     }
 

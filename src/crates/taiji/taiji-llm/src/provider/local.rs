@@ -28,6 +28,7 @@
 //!     let response = provider.chat(&messages, &config).await.unwrap();
 //! }
 //! ```
+//! 参考: 量价时空/Phase-2-派发提示词.md:891 — R-2-506 — taiji-llm LLM 集成
 
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;

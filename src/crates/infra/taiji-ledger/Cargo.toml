@@ -1,0 +1,27 @@
+[package]
+name = "taiji-ledger"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version = "1.85"
+description = "LVPA infrastructure — Ledger (功德簿) audit log + Git semantic orchestration"
+
+[lib]
+name = "taiji_ledger"
+crate-type = ["rlib"]
+
+[dependencies]
+taiji-types = { path = "../../taiji/taiji-types" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+git2 = { workspace = true }
+
+[dev-dependencies]
+
+[lints]
+workspace = true

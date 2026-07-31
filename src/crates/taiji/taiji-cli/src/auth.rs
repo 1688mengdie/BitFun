@@ -51,13 +51,13 @@ pub(crate) fn resolve_tier() -> Result<(Tier, ResolvedConfig), AuthError> {
             let tier = parse_key_tier(&key)?;
             info!("TAIJI_API_KEY detected: tier={:?}, prefix={}", tier, &key[..7.min(key.len())]);
             let config = load_product_config(tier)
-                .map_err(|e| AuthError::ConfigError(e))?;
+                .map_err(AuthError::ConfigError)?;
             Ok((tier, config))
         }
         Err(std::env::VarError::NotPresent) => {
             info!("TAIJI_API_KEY not set, defaulting to Free tier");
             let config = load_product_config(Tier::Free)
-                .map_err(|e| AuthError::ConfigError(e))?;
+                .map_err(AuthError::ConfigError)?;
             Ok((Tier::Free, config))
         }
         Err(e) => Err(AuthError::InvalidKey(format!("Env error: {}", e))),
@@ -163,7 +163,7 @@ pub(crate) fn device_code_login() -> Result<AuthResult, AuthError> {
     if key.is_empty() {
         println!("未输入 Key，使用免费版。");
         let config = load_product_config(Tier::Free)
-            .map_err(|e| AuthError::ConfigError(e))?;
+            .map_err(AuthError::ConfigError)?;
         let result = AuthResult {
             tier: Tier::Free,
             config,
@@ -175,7 +175,7 @@ pub(crate) fn device_code_login() -> Result<AuthResult, AuthError> {
 
     let tier = parse_key_tier(key)?;
     let config = load_product_config(tier)
-        .map_err(|e| AuthError::ConfigError(e))?;
+        .map_err(AuthError::ConfigError)?;
     let prefix = key[..7.min(key.len())].to_string();
     let result = AuthResult {
         tier,

@@ -6,6 +6,7 @@
 //! - [`WalkForwardValidator`]: walk-forward cross-validation with configurable folds
 //! - [`TradeRecord`]: individual trade tracking with PnL computation
 //! - [`BacktestConfig`]: YAML-driven backtest configuration
+//! 参考: 量价时空/Phase-2-派发提示词.md:867 — R-2-505 — taiji-backtest 回测引擎
 
 pub mod config;
 pub mod runner;

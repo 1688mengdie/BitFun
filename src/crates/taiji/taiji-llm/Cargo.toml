@@ -17,6 +17,7 @@ tokio = { workspace = true }
 async-trait = { workspace = true }
 futures = { workspace = true }
 anyhow = { workspace = true }
+taiji-infra-config = { path = "../../infra/config" }
 candle-core = { workspace = true, optional = true }
 bitfun-ai-adapters = { path = "../../adapters/ai-adapters" }
 bitfun-core = { path = "../../assembly/core" }

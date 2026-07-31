@@ -1,3 +1,5 @@
+//! 参考: 量价时空/Phase-2-派发提示词.md:867 — R-2-505 — taiji-backtest 回测引擎
+
 use serde::{Deserialize, Serialize};
 
 /// Performance statistics computed from a list of closed trades and an equity curve.
@@ -23,6 +25,8 @@ pub struct PerformanceStats {
     pub total_trades: usize,
     /// Net profit (sum of all trade PnLs minus commissions).
     pub net_profit: f64,
+    /// Total return rate (net_profit / initial_capital).
+    pub total_return: f64,
 }
 
 impl PerformanceStats {
@@ -63,6 +67,13 @@ impl PerformanceStats {
         // --- Max drawdown ---
         let max_drawdown = compute_max_drawdown(equity_curve);
 
+        // --- Total return ---
+        let total_return = if initial_capital > 0.0 {
+            net_profit / initial_capital
+        } else {
+            0.0
+        };
+
         // --- Expectancy ---
         let expectancy = if total_trades > 0 {
             net_profit / total_trades as f64
@@ -101,6 +112,7 @@ impl PerformanceStats {
             alpha,
             total_trades,
             net_profit,
+            total_return,
         }
     }
 }
@@ -272,6 +284,7 @@ mod tests {
         assert_eq!(stats.net_profit, 0.0);
         assert_eq!(stats.win_rate, 0.0);
         assert_eq!(stats.sharpe_ratio, 0.0);
+        assert_eq!(stats.total_return, 0.0);
     }
 
     #[test]
@@ -283,6 +296,7 @@ mod tests {
         assert!((stats.net_profit - 2300.0).abs() < 1e-9);
         assert!(stats.profit_factor.is_infinite());
         assert!((stats.expectancy - 2300.0 / 3.0).abs() < 1e-3);
+        assert!((stats.total_return - 0.023).abs() < 1e-9);
     }
 
     #[test]
@@ -294,6 +308,7 @@ mod tests {
         assert!((stats.net_profit - 1100.0).abs() < 1e-9);
         // Profit factor = (1000+600) / (300+200) = 1600/500 = 3.2
         assert!((stats.profit_factor - 3.2).abs() < 1e-9);
+        assert!((stats.total_return - 0.011).abs() < 1e-9);
     }
 
     #[test]
@@ -302,6 +317,7 @@ mod tests {
         let equity = vec![100_000.0, 99_500.0, 99_200.0];
         let stats = PerformanceStats::compute(&pnls, &equity, 100_000.0, None);
         assert!((stats.profit_factor - 0.0).abs() < 1e-9);
+        assert!((stats.total_return + 0.008).abs() < 1e-9);
     }
 
     #[test]
@@ -316,6 +332,8 @@ mod tests {
         assert!(stats.sharpe_ratio > 0.0);
         // No trades but equity curve has daily returns
         assert!(stats.max_drawdown < 1e-9);
+        // No trades, so total_return = 0
+        assert_eq!(stats.total_return, 0.0);
     }
 
     #[test]

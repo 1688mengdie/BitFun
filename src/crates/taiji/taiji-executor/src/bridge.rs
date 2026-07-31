@@ -1,3 +1,5 @@
+//! 参考: 量价时空/Phase-2-派发提示词.md:843 — R-2-504 — taiji-executor 执行器
+
 use async_trait::async_trait;
 use tokio::sync::mpsc;
 

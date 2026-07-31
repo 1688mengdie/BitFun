@@ -1,0 +1,11 @@
+/**
+ * SectScene — 宗门场景
+ * 背景：云白（宣纸色）
+ */
+
+.lvpa-scene-sect {
+  height: 100%;
+  overflow-y: auto;
+  background-color: var(--lvpa-scene-sect-bg, var(--lvpa-cloud, #faf8f0));
+  color: var(--lvpa-ink, #1c1c1f);
+}

@@ -1,0 +1,36 @@
+[package]
+name = "taiji-infra-transport"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version = "1.85"
+description = "LVPA infrastructure — Layer 3 transport layer (传音阵), WebSocket/HTTP IPC adapters"
+
+[lib]
+name = "taiji_infra_transport"
+crate-type = ["rlib"]
+
+[dependencies]
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+async-trait = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+
+# Tauri 桌面端适配（可选）
+tauri = { workspace = true, optional = true }
+
+[features]
+default = []
+tauri = ["dep:tauri"]
+
+[dev-dependencies]
+taiji-infra-event-bus = { path = "../event-bus" }
+taiji-types = { path = "../../taiji/taiji-types" }
+bytes = { workspace = true }
+uuid = { workspace = true, features = ["v7"] }
+
+[lints]
+workspace = true

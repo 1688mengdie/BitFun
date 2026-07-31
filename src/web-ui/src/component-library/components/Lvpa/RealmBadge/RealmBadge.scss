@@ -1,0 +1,59 @@
+/**
+ * RealmBadge — 境界徽章样式
+ * 圆形色点 + 境界名称，支持 sm/md/lg 三种尺寸
+ * 色值通过 CSS 变量 --realm-color 动态注入
+ */
+
+@use '../../../styles/tokens.scss' as tokens;
+
+.realm-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  flex-shrink: 0;
+
+  &__dot {
+    display: inline-block;
+    border-radius: 50%;
+    background: var(--realm-color, #8a8a8a);
+    flex-shrink: 0;
+  }
+
+  &__label {
+    font-weight: 500;
+    line-height: 1.2;
+    color: var(--color-text-primary);
+  }
+
+  // Size variants
+  &--sm {
+    .realm-badge__dot {
+      width: 8px;
+      height: 8px;
+    }
+    .realm-badge__label {
+      font-size: var(--font-size-xs);
+    }
+  }
+
+  &--md {
+    .realm-badge__dot {
+      width: 10px;
+      height: 10px;
+    }
+    .realm-badge__label {
+      font-size: var(--font-size-sm);
+    }
+  }
+
+  &--lg {
+    .realm-badge__dot {
+      width: 14px;
+      height: 14px;
+    }
+    .realm-badge__label {
+      font-size: var(--font-size-base);
+    }
+  }
+}

@@ -1,0 +1,124 @@
+/* ── CardSlots: 卡槽系统 ── */
+
+.card-slots {
+  width: 100%;
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 0 24px 24px;
+
+  &__title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--lvpa-ink, #1c1c1f);
+    margin-bottom: 12px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  &__hint {
+    font-size: 11px;
+    font-weight: 400;
+    color: var(--lvpa-muted, #6a6a6a);
+  }
+
+  &__grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+    gap: 10px;
+  }
+
+  &__slot {
+    position: relative;
+    padding: 12px;
+    border-radius: 10px;
+    border: 1.5px dashed rgba(90, 107, 80, 0.2);
+    background: rgba(126, 176, 155, 0.03);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    transition: all 0.2s ease;
+
+    &--filled {
+      border-style: solid;
+      background: rgba(126, 176, 155, 0.06);
+      border-color: rgba(126, 176, 155, 0.2);
+    }
+
+    &--natal {
+      border-color: var(--lvpa-gold, #d4a843);
+      background: rgba(212, 168, 67, 0.06);
+      order: -1; /* 本命魂卡排最前 */
+    }
+
+    &--locked {
+      opacity: 0.5;
+      cursor: not-allowed;
+      background: rgba(0, 0, 0, 0.02);
+      border-color: rgba(0, 0, 0, 0.08);
+    }
+  }
+
+  &__slot-index {
+    font-size: 10px;
+    color: var(--lvpa-muted, #6a6a6a);
+    position: absolute;
+    top: 4px;
+    right: 6px;
+  }
+
+  &__card-icon {
+    font-size: 24px;
+    line-height: 1;
+  }
+
+  &__card-name {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--lvpa-ink, #1c1c1f);
+    text-align: center;
+    line-height: 1.2;
+  }
+
+  &__card-grade {
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 3px;
+    background: rgba(212, 168, 67, 0.12);
+    color: var(--lvpa-gold, #d4a843);
+  }
+
+  &__card-type {
+    font-size: 10px;
+    color: var(--lvpa-muted, #6a6a6a);
+  }
+
+  &__card-effect {
+    font-size: 10px;
+    color: var(--lvpa-jade, #7eb09b);
+    text-align: center;
+    line-height: 1.2;
+  }
+
+  /* 锁定状态 */
+  &__lock-icon {
+    font-size: 18px;
+  }
+
+  &__lock-realm {
+    font-size: 10px;
+    color: #9a9a9a;
+  }
+
+  &__lock-cost {
+    font-size: 10px;
+    color: var(--lvpa-gold, #d4a843);
+  }
+
+  &__slot-label {
+    font-size: 11px;
+    color: var(--lvpa-muted, #6a6a6a);
+    font-weight: 500;
+  }
+}

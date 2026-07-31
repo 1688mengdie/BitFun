@@ -1,0 +1,34 @@
+[package]
+name = "taiji-gateway"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version = "1.85"
+description = "LVPA infrastructure — authentication gateway (接引台)"
+documentation = "https://github.com/lvpa/taiji-quant"
+
+[lib]
+name = "taiji_gateway"
+crate-type = ["rlib"]
+
+[dependencies]
+taiji-types = { path = "../../taiji/taiji-types" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+uuid = { workspace = true, features = ["v7", "v5", "serde"] }
+base64 = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+taiji-agent-system = { path = "../taiji-agent-system" }
+taiji-harness = { path = "../taiji-harness" }
+taiji-tool-bus = { path = "../taiji-tool-bus" }
+taiji-ledger = { path = "../taiji-ledger" }
+futures = { workspace = true }
+
+[lints]
+workspace = true

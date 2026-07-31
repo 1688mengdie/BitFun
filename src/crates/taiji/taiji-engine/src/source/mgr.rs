@@ -1,3 +1,5 @@
+//! 参考: 量价时空/Phase-2-派发提示词.md:316 — R-2-202 — DataSource 18源→4实现
+
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 

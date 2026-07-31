@@ -1,6 +1,7 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import path from "path";
+import { VitePWA } from "vite-plugin-pwa";
 import { versionInjectionPlugin } from "./vite.config.version-plugin";
 import { bitfunCanvasRuntimeBundlePlugin } from "./vite.config.canvas-runtime-plugin";
 
@@ -38,7 +39,99 @@ export default defineConfig(({ mode, command }) => {
     plugins: [
       react(),
       bitfunCanvasRuntimeBundlePlugin(),
-      versionInjectionPlugin()
+      versionInjectionPlugin(),
+      // PWA only for web mode — Tauri desktop does not need a service worker
+      ...(command === 'build' && mode !== 'desktop'
+        ? [VitePWA({
+            registerType: 'autoUpdate',
+            includeAssets: [
+              'taiji-icon-128.png',
+              'Logo-ICON*.png',
+              'BitFun-Logo.png',
+              'fonts/**/*.woff2',
+            ],
+            manifest: {
+              name: 'BitFun - AI Code Assistant & 太极多维量化系统',
+              short_name: 'BitFun',
+              description: 'AI Code Assistant 与 LVPA 太极多维量化系统前端',
+              theme_color: '#121214',
+              background_color: '#121214',
+              display: 'standalone',
+              orientation: 'any',
+              start_url: '/',
+              scope: '/',
+              categories: ['productivity', 'development', 'finance'],
+              lang: 'zh-CN',
+              icons: [
+                {
+                  src: 'taiji-icon-128.png',
+                  sizes: '128x128',
+                  type: 'image/png',
+                },
+                {
+                  src: 'Logo-ICON-128.png',
+                  sizes: '128x128',
+                  type: 'image/png',
+                  purpose: 'any maskable',
+                },
+                {
+                  src: 'Logo-ICON.png',
+                  sizes: '512x512',
+                  type: 'image/png',
+                  purpose: 'any maskable',
+                },
+              ],
+            },
+            workbox: {
+              globPatterns: ['**/*.{js,css,html,woff2,png,svg,ico,webp}'],
+              runtimeCaching: [
+                // API calls: Network First with 30s timeout, fallback to cache
+                {
+                  urlPattern: /^https?:\/\/.*\/api\/.*/i,
+                  handler: 'NetworkFirst',
+                  options: {
+                    networkTimeoutSeconds: 30,
+                    cacheName: 'api-cache',
+                    expiration: {
+                      maxEntries: 128,
+                      maxAgeSeconds: 60 * 60, // 1 hour
+                    },
+                    backgroundSync: {
+                      name: 'api-sync-queue',
+                      options: {
+                        maxRetentionTime: 24 * 60, // 24 hours
+                      },
+                    },
+                  },
+                },
+                // Static assets: Stale While Revalidate
+                {
+                  urlPattern: /\.(?:png|jpg|jpeg|svg|gif|ico|webp|woff2?)$/,
+                  handler: 'StaleWhileRevalidate',
+                  options: {
+                    cacheName: 'static-assets',
+                    expiration: {
+                      maxEntries: 256,
+                      maxAgeSeconds: 60 * 60 * 24 * 30, // 30 days
+                    },
+                  },
+                },
+                // Fonts: Cache First (immutable)
+                {
+                  urlPattern: /\/fonts\/.*/,
+                  handler: 'CacheFirst',
+                  options: {
+                    cacheName: 'fonts',
+                    expiration: {
+                      maxEntries: 32,
+                      maxAgeSeconds: 60 * 60 * 24 * 365, // 1 year
+                    },
+                  },
+                },
+              ],
+            },
+          })]
+        : []),
     ],
 
     // Path resolution

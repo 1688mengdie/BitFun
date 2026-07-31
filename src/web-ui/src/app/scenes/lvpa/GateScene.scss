@@ -1,0 +1,20 @@
+/**
+ * GateScene — 接引台/副本大厅场景
+ * 背景：朱砂色（暗色）
+ */
+
+.lvpa-scene-gate {
+  height: 100%;
+  overflow-y: auto;
+  background-color: var(--lvpa-scene-gate-bg, var(--lvpa-vermillion, #c8102e));
+  color: var(--lvpa-cloud, #faf8f0);
+
+  /* 子组件覆盖暗色变量 */
+  --lvpa-ink: #e8e8e8;
+  --lvpa-muted: #c5b0b0;
+
+  .party-lobby__dungeon {
+    background: rgba(0, 0, 0, 0.08);
+    border-color: rgba(255, 255, 255, 0.1);
+  }
+}

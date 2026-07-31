@@ -12308,6 +12308,7 @@ mod tests {
                     session_id: parent_session.session_id,
                     dialog_turn_id: "parent-turn".to_string(),
                     tool_call_id: "task-tool".to_string(),
+                    depth: None,
                 },
                 context: HashMap::new(),
                 permission_runtime_ceiling: PermissionRuntimeCeiling::default(),

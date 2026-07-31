@@ -3,6 +3,7 @@
 //! 逻辑参考自 czsc bar_generator.rs（Apache 2.0, zengbin93）。
 //! 以 Rust 独立实现，重构为 ComputeNode 管线架构。
 //! 仅实现了时间聚合（AggMode::Time）；成交量/范围聚合预留扩展。
+//! 参考: 量价时空/Phase-2-派发提示词.md:429 — R-2-203 — BarGenerator tick→K线
 
 use std::collections::BTreeMap;
 

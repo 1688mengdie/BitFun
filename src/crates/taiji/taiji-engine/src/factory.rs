@@ -1,3 +1,5 @@
+//! 参考: 量价时空/Phase-2-派发提示词.md:188 — R-2-201 — ComputeNode trait + Pipeline DAG
+
 use crate::error::Result;
 use crate::node::{ComputeNode, NodeConfig};
 use std::collections::{HashMap, HashSet};

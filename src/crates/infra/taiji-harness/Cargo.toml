@@ -1,0 +1,22 @@
+[package]
+name = "taiji-harness"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "LVPA infrastructure — harness (护山大阵), 6-stage permission gate"
+
+[lib]
+name = "taiji_harness"
+crate-type = ["rlib"]
+
+[dependencies]
+taiji-types = { path = "../../taiji/taiji-types" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

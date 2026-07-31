@@ -1,3 +1,5 @@
+//! 参考: 量价时空/Phase-2-派发提示词.md:188 — R-2-201 — Debate 多智能体决策
+
 use std::sync::Arc;
 
 use taiji_llm::{ChatMessage, DecisionOutput, LlmClient, LlmConfig};

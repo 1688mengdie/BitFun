@@ -1,0 +1,135 @@
+/* ── SectMap: 宗门大地图 ── */
+
+.sect-map {
+  position: relative;
+  width: 100%;
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 24px;
+
+  &__title {
+    font-size: 20px;
+    font-weight: 700;
+    color: var(--lvpa-ink, #1c1c1f);
+    margin-bottom: 4px;
+  }
+
+  &__subtitle {
+    font-size: 13px;
+    color: var(--lvpa-muted, #6a6a6a);
+    margin-bottom: 20px;
+  }
+
+  &__grid {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 12 / 10;
+    background:
+      radial-gradient(circle at 20% 30%, rgba(126, 176, 155, 0.05) 0%, transparent 60%),
+      radial-gradient(circle at 80% 70%, rgba(212, 168, 67, 0.04) 0%, transparent 50%);
+    border: 1px solid rgba(90, 107, 80, 0.15);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+
+  /* 建筑区块 */
+  &__building {
+    position: absolute;
+    border-radius: 10px;
+    padding: 10px;
+    cursor: pointer;
+    transition: all 0.25s ease;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    text-align: center;
+    border: 1px solid transparent;
+
+    &--unlocked {
+      background: rgba(126, 176, 155, 0.08);
+      border-color: rgba(126, 176, 155, 0.2);
+
+      &:hover {
+        background: rgba(126, 176, 155, 0.15);
+        border-color: rgba(126, 176, 155, 0.4);
+        transform: translateY(-1px);
+        box-shadow: 0 4px 12px rgba(126, 176, 155, 0.15);
+      }
+    }
+
+    &--active {
+      background: rgba(212, 168, 67, 0.1);
+      border-color: rgba(212, 168, 67, 0.3);
+
+      &:hover {
+        background: rgba(212, 168, 67, 0.18);
+        border-color: rgba(212, 168, 67, 0.5);
+        transform: translateY(-1px);
+        box-shadow: 0 4px 12px rgba(212, 168, 67, 0.15);
+      }
+    }
+
+    &--busy {
+      background: rgba(200, 16, 46, 0.08);
+      border-color: rgba(200, 16, 46, 0.2);
+
+      &:hover {
+        background: rgba(200, 16, 46, 0.14);
+        border-color: rgba(200, 16, 46, 0.35);
+      }
+    }
+
+    &--locked {
+      opacity: 0.4;
+      cursor: not-allowed;
+      background: rgba(0, 0, 0, 0.03);
+      border-color: rgba(0, 0, 0, 0.08);
+    }
+  }
+
+  &__building-icon {
+    font-size: 22px;
+    line-height: 1;
+  }
+
+  &__building-name {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--lvpa-ink, #1c1c1f);
+  }
+
+  &__building-desc {
+    font-size: 10px;
+    color: var(--lvpa-muted, #6a6a6a);
+    line-height: 1.3;
+    display: none;
+
+    .sect-map__building--unlocked:hover &,
+    .sect-map__building--active:hover & {
+      display: block;
+    }
+  }
+
+  &__building-status {
+    font-size: 9px;
+    padding: 1px 6px;
+    border-radius: 4px;
+
+    &--idle { background: rgba(126, 176, 155, 0.12); color: var(--lvpa-jade, #7eb09b); }
+    &--active { background: rgba(212, 168, 67, 0.15); color: var(--lvpa-gold, #d4a843); }
+    &--busy { background: rgba(200, 16, 46, 0.12); color: var(--lvpa-vermillion, #c8102e); }
+  }
+
+  /* 锁定遮罩 */
+  &__lock {
+    font-size: 14px;
+    margin-top: 2px;
+  }
+
+  &__lock-realm {
+    font-size: 9px;
+    color: #9a9a9a;
+  }
+}

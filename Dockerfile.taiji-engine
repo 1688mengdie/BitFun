@@ -1,0 +1,102 @@
+# syntax=docker/dockerfile:1.7
+# =============================================================================
+# LVPA Layer 1 量价引擎 — 多阶段 Docker 构建
+# =============================================================================
+# 用途：taiji-engine（核心量价计算引擎）的容器化部署
+# 特性：
+#   - 多阶段构建（distroless runtime）
+#   - BuildKit 缓存挂载加速
+#   - 多架构支持 (amd64 / arm64)
+#   - 镜像体积 ~30MB（distroless/static）
+#
+# 构建：
+#   docker build -f Dockerfile.taiji-engine -t lvpa/taiji-engine:latest .
+#
+# 运行：
+#   docker run --rm -p 8080:8080 lvpa/taiji-engine:latest
+#
+# Layer 1 约束：
+#   - 纯 Rust，无 LLM/IO/网络阻塞
+#   - 独享 CPU 核/last-level cache
+#   - 适用于裸机部署或容器化的实时计算节点
+# =============================================================================
+
+# ── Stage 1: Rust Builder ─────────────────────────────────────────────
+FROM rust:1.96-bookworm AS builder
+
+WORKDIR /build
+
+ARG CARGO_BUILD_JOBS=
+ENV CARGO_TERM_COLOR=always \
+    CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse \
+    RUSTFLAGS="-C target-cpu=haswell -C link-arg=-s"
+
+# 系统依赖（最小集）
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        pkg-config \
+        build-essential \
+        ca-certificates \
+        cmake \
+        # taiji-engine-py 需要 Python
+        python3 \
+        libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# 复制 workspace 清单
+COPY Cargo.toml Cargo.lock ./
+COPY src/crates/taiji/taiji-engine/Cargo.toml ./src/crates/taiji/taiji-engine/
+
+# 预编译依赖（placeholder sources，BuildKit 缓存挂载加速）
+RUN --mount=type=cache,id=lvpa-engine-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,id=lvpa-engine-cargo-git,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,id=lvpa-engine-target,target=/build/target,sharing=locked \
+    mkdir -p src/crates/taiji/taiji-engine/src \
+    && printf 'fn main() {}\n' > src/crates/taiji/taiji-engine/src/main.rs \
+    && printf '// placeholder\n' > src/crates/taiji/taiji-engine/src/lib.rs \
+    && { [ -n "${CARGO_BUILD_JOBS:-}" ] || unset CARGO_BUILD_JOBS; } \
+    && cargo build --release -p taiji-engine 2>/dev/null || true \
+    && rm -rf src/crates/taiji/taiji-engine/src
+
+# 复制源码（缓存层仅重建变更的 crate）
+COPY src/crates/taiji/taiji-engine/src/ ./src/crates/taiji/taiji-engine/src/
+
+# 全量构建 + 剥离
+RUN --mount=type=cache,id=lvpa-engine-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,id=lvpa-engine-cargo-git,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,id=lvpa-engine-target,target=/build/target,sharing=locked \
+    { [ -n "${CARGO_BUILD_JOBS:-}" ] || unset CARGO_BUILD_JOBS; } \
+    && cargo build --release -p taiji-engine \
+    && cp target/release/taiji-engine /usr/local/bin/taiji-engine \
+    && strip /usr/local/bin/taiji-engine
+
+# ── Stage 2: Distroless Runtime ───────────────────────────────────────
+# 极小 runtime 镜像，仅包含 taiji-engine 二进制和 glibc
+FROM gcr.io/distroless/cc-debian12:latest AS runtime
+
+ARG ENGINE_GIT_COMMIT=unknown
+ARG ENGINE_BUILD_DATE=unknown
+
+LABEL org.opencontainers.image.title="LVPA Taiji Engine (Layer 1)" \
+      org.opencontainers.image.description="Real-time volume-price-time-space quant engine" \
+      org.opencontainers.image.revision="${ENGINE_GIT_COMMIT}" \
+      org.opencontainers.image.created="${ENGINE_BUILD_DATE}" \
+      org.opencontainers.image.licenses="MIT"
+
+# scatch/distroless 无法 apt，ca-certificate 从 builder 复制
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+
+COPY --from=builder /usr/local/bin/taiji-engine /app/taiji-engine
+
+# Layer 1 零阻塞运行时用户
+USER 10001:10001
+
+WORKDIR /data
+
+# Layer 1 默认监听端口（REST API 用于指标查询，非交易接口）
+EXPOSE 8080
+
+HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
+  CMD ["/app/taiji-engine", "--check-health"]
+
+ENTRYPOINT ["/app/taiji-engine"]

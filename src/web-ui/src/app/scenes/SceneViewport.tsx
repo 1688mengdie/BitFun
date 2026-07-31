@@ -44,6 +44,14 @@ const WelcomeScene    = lazy(() => import('./welcome/WelcomeScene'));
 const MiniAppScene    = lazy(() => import('./miniapps/MiniAppScene'));
 const PanelViewScene  = lazy(() => import('./panel-view/PanelViewScene'));
 
+// ── LVPA 修仙场景 ──
+const SectScene       = lazy(() => import('./lvpa/SectScene'));
+const WorkshopScene   = lazy(() => import('./lvpa/WorkshopScene'));
+const MarketScene     = lazy(() => import('./lvpa/MarketScene'));
+const CaveScene       = lazy(() => import('./lvpa/CaveScene'));
+const LibraryScene    = lazy(() => import('./lvpa/LibraryScene'));
+const GateScene       = lazy(() => import('./lvpa/GateScene'));
+
 // Keep in sync with bitfun-motion-view-exit in app/styles/motion.scss.
 const SCENE_EXIT_DURATION_MS = 140;
 
@@ -251,6 +259,18 @@ function renderScene(
       return <ShellScene isActive={isActive} />;
     case 'panel-view':
       return <PanelViewScene workspacePath={workspacePath} />;
+    case 'lvpa-sect':
+      return <SectScene />;
+    case 'lvpa-workshop':
+      return <WorkshopScene />;
+    case 'lvpa-market':
+      return <MarketScene />;
+    case 'lvpa-cave':
+      return <CaveScene />;
+    case 'lvpa-library':
+      return <LibraryScene />;
+    case 'lvpa-gate':
+      return <GateScene />;
     default:
       if (typeof id === 'string' && id.startsWith('miniapp:')) {
         return <MiniAppScene appId={id.slice('miniapp:'.length)} />;

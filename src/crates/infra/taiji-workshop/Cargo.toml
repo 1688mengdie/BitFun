@@ -1,0 +1,25 @@
+[package]
+name = "taiji-workshop"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "LVPA workshop system — 4 fixed workflow DAGs (Tianji/Jinsuan/Danqing/Liuying)"
+
+[lib]
+name = "taiji_workshop"
+crate-type = ["rlib"]
+
+[dependencies]
+taiji-types = { path = "../../taiji/taiji-types" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true, features = ["v7"] }
+chrono = { workspace = true }
+toml = "0.8"
+
+[lints]
+workspace = true

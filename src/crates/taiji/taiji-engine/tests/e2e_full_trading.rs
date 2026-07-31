@@ -382,7 +382,7 @@ async fn run_e2e_pipeline() -> Result<Vec<TradeRecord>, String> {
         let ack = order_mgr.submit(order_req);
         assert_eq!(
             ack.status,
-            OrderStatus::Submitted,
+            OrderStatus::Sent,
             "order should be submitted"
         );
 

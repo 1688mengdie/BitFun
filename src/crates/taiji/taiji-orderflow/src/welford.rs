@@ -1,5 +1,6 @@
 //! Welford's online algorithm — single-pass mean, variance, and CDF.
 //! O(1) space, O(1) per update. Numerically stable for streaming tick data.
+//! 参考: 量价时空/Phase-2-派发提示词.md:795 — R-2-502 — taiji-orderflow ComputeNode
 
 /// Welford's online statistics accumulator.
 ///

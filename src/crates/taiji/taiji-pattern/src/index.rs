@@ -1,3 +1,5 @@
+//! 参考: 量价时空/Phase-2-派发提示词.md:770 — R-2-501 — taiji-pattern ComputeNode
+
 use ndarray::Array2;
 use std::collections::HashMap;
 

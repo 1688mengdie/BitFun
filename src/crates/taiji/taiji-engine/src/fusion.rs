@@ -6,6 +6,7 @@
 //! Phase 2 — LLM contradiction resolution:
 //!   If |fusion_score| ≤ 0.2 and an [`LlmClient`] is configured, the ambiguous
 //!   signal set is sent to the LLM for a tie-breaking adjudication.
+//! 参考: 量价时空/Phase-2-派发提示词.md:188 — R-2-201 — ComputeNode trait + Pipeline DAG
 
 mod weight_calibrator;
 

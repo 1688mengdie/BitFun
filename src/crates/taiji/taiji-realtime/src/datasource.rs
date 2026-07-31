@@ -5,6 +5,7 @@
 //!   → crossbeam::channel::bounded(4096)
 //!   → tokio task → SchemaAdapter → TickData
 //!   → Pipeline::feed_tick_direct()
+//! 参考: 量价时空/Phase-2-派发提示词.md:819 — R-2-503 — taiji-realtime 行情接入
 
 use std::collections::HashMap;
 use std::path::PathBuf;

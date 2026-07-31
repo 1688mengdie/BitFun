@@ -1,0 +1,22 @@
+[package]
+name = "taiji-infra-message-bus"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version = "1.85"
+description = "LVPA infrastructure — asynchronous message bus (传音符), zero-semantic byte transport layer"
+
+[lib]
+name = "taiji_infra_message_bus"
+crate-type = ["rlib"]
+
+[dependencies]
+tokio = { workspace = true }
+dashmap = { workspace = true }
+serde = { workspace = true }
+bytes = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

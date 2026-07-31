@@ -1,3 +1,5 @@
+//! 参考: 量价时空/Phase-2-派发提示词.md:707 — R-2-206 — taiji-engine-py PyO3 绑定
+
 use std::cell::RefCell;
 use std::collections::HashMap;
 use pyo3::prelude::*;

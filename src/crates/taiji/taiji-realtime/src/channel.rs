@@ -1,6 +1,7 @@
 //! SPSC 通道封装 — crossbeam bounded channel。
 //!
 //! 数据流：FFI callback → Sender → bounded(4096) → Receiver → tokio task → Pipeline
+//! 参考: 量价时空/Phase-2-派发提示词.md:819 — R-2-503 — taiji-realtime 行情接入
 
 use crossbeam::channel::{self, Receiver, Sender};
 use taiji_engine::types::tick::TickData;

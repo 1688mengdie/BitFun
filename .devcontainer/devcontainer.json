@@ -1,0 +1,99 @@
+// =============================================================================
+// LVPA（太极多维量化系统）— Dev Container 配置
+// =============================================================================
+// 提供一站式开发环境：Rust 60+ crate workspace + TypeScript frontend + Python quant
+//
+// 安装内容：
+//   - Rust 工具链 (rustfmt/clippy/cargo-nextest/cargo-audit)
+//   - Node.js 22 + pnpm
+//   - Python 3.11 + 量化依赖
+//   - Tauri 系统依赖 (Linux)
+//   - 常见 CLI 工具
+//
+// 使用：
+//   在 VS Code 中打开项目根目录 → "Reopen in Container"
+// =============================================================================
+{
+  "name": "LVPA Development Container",
+  "image": "mcr.microsoft.com/devcontainers/universal:2-linux",
+
+  // 等待前端 framework 追加进来
+
+  "features": {
+    "ghcr.io/devcontainers/features/rust:1": {
+      "version": "stable",
+      "profile": "complete",
+      "targets": "x86_64-unknown-linux-gnu,aarch64-unknown-linux-gnu"
+    },
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "22",
+      "pnpmVersion": "10.15"
+    },
+    "ghcr.io/devcontainers/features/python:1": {
+      "version": "3.11"
+    },
+    "ghcr.io/devcontainers/features/git:1": {
+      "version": "latest"
+    },
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {}
+  },
+
+  // 安装 Tauri 系统依赖 + Rust 扩展工具
+  "postCreateCommand": {
+    "system-deps": "sudo apt-get update && sudo apt-get install -y --no-install-recommends pkg-config libssl-dev libwebkit2gtk-4.1-dev libgtk-3-dev libxdo-dev librsvg2-dev libayatana-appindicator3-dev patchelf libleptonica-dev libtesseract-dev tesseract-ocr tesseract-ocr-eng clang cmake libglib2.0-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev && sudo rm -rf /var/lib/apt/lists/*",
+    "rust-tools": "cargo install cargo-audit cargo-deny cargo-nextest cargo-criterion --locked",
+    "python-deps": "pip install --upgrade pip && pip install akshare pandas numpy matplotlib flake8 mypy pylink",
+    "project-deps": "pnpm install"
+  },
+
+  // 容器内 VS Code 扩展
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "rust-lang.rust-analyzer",
+        "tamasfe.even-better-toml",
+        "vadimcn.vscode-lldb",
+        "fill-labs.dependi",
+        "esbenp.prettier-vscode",
+        "dbaeumer.vscode-eslint",
+        "ms-python.python",
+        "ms-python.flake8",
+        "eamodio.gitlens",
+        "github.vscode-github-actions",
+        "bierner.markdown-mermaid"
+      ],
+      "settings": {
+        "editor.formatOnSave": true,
+        "[rust]": {
+          "editor.defaultFormatter": "rust-lang.rust-analyzer"
+        },
+        "[typescript]": {
+          "editor.defaultFormatter": "esbenp.prettier-vscode"
+        },
+        "[python]": {
+          "editor.defaultFormatter": "ms-python.python"
+        },
+        "rust-analyzer.check.command": "clippy",
+        "rust-analyzer.cargo.allFeatures": true,
+        "files.eol": "\n",
+        "files.insertFinalNewline": true
+      }
+    }
+  },
+
+  // 持久化设置
+  "mounts": [
+    "source=lvpa-cargo-registry,target=/usr/local/cargo/registry,type=volume",
+    "source=lvpa-pnpm-store,target=/root/.local/share/pnpm/store,type=volume"
+  ],
+
+  // 远程用户
+  "remoteUser": "root",
+
+  // 容器内环境变量
+  "containerEnv": {
+    "CARGO_TERM_COLOR": "always",
+    "NODE_OPTIONS": "--max-old-space-size=6144",
+    "SHELL": "/bin/bash"
+  }
+}

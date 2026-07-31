@@ -1,6 +1,7 @@
 //! Confidence-bucket weight calibrator.
 //! Tracks per-bucket accuracy from backtest results and provides
 //! confidence-adjusted accuracy lookups for downstream recalibration.
+//! 参考: 量价时空/Phase-2-派发提示词.md:188 — R-2-201 — Signal fusion weight calibrator
 
 /// A single confidence bucket tracking accuracy in that range.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

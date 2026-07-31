@@ -1,3 +1,5 @@
+//! 参考: 量价时空/Phase-2-派发提示词.md:188 — R-2-201 — Pipeline 执行引擎
+
 use crate::node::NodeId;
 use serde::Serialize;
 
@@ -15,8 +17,17 @@ pub struct PipelineStatus {
 #[derive(Debug, Clone, Serialize)]
 pub enum PipelineState {
     Initializing,
+    /// 正常运行中
     Running,
+    /// 暂停（手动挂起）
+    Paused,
+    /// 部分功能降级运行
     Degraded(String),
+    /// 正常完成
+    Completed,
+    /// 异常停止
+    Failed(String),
+    /// 手动停止
     Stopped,
 }
 

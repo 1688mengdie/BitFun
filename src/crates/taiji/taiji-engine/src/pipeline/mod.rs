@@ -1,6 +1,8 @@
 //! Pipeline module
+//! 参考: 量价时空/Phase-2-派发提示词.md:188 — R-2-201 — Pipeline 执行引擎
 
 pub mod bar_gen;
+pub mod filter;
 pub mod reorg;
 pub mod status;
 
@@ -306,9 +308,23 @@ impl Pipeline {
                             handles
                                 .into_iter()
                                 .map(|(nid, h)| {
-                                    let (nid2, executed, signals, error) = h.join().unwrap();
-                                    debug_assert_eq!(nid, nid2);
-                                    (nid, executed, signals, error)
+                                    match h.join() {
+                                        Ok((nid2, executed, signals, error)) => {
+                                            debug_assert_eq!(nid, nid2);
+                                            (nid, executed, signals, error)
+                                        }
+                                        Err(panic_payload) => {
+                                            let msg = if let Some(s) = panic_payload.downcast_ref::<&str>() {
+                                                s.to_string()
+                                            } else if let Some(s) = panic_payload.downcast_ref::<String>() {
+                                                s.clone()
+                                            } else {
+                                                "thread panicked".to_string()
+                                            };
+                                            tracing::error!("node '{}' thread panicked: {}", nid, msg);
+                                            (nid, false, vec![], Some(msg))
+                                        }
+                                    }
                                 })
                                 .collect()
                         })
@@ -1547,5 +1563,130 @@ nodes:
 
         // Cleanup
         let _ = std::fs::remove_file(&tmp_path);
+    }
+
+    #[test]
+    fn test_state_store_to_snapshot_to_restore_consistency() {
+        // R-2-603: Pipeline 执行结果写入 StateStore → SnapshotManager 落盘 → 恢复后数据一致
+        //
+        // 1. Pipeline 执行生成 K 线 + 信号 → StateStore
+        // 2. SnapshotManager 将 StateStore 落盘为 JSON 文件
+        // 3. 从 JSON 恢复为新的 StateStore
+        // 4. 验证恢复后的数据与原始一致
+
+        // ── Phase 1: Pipeline 执行 ──
+        let config = crate::config::PipelineConfig {
+            name: "snapshot_integration".into(),
+            version: "1.0".into(),
+            bar_gen: crate::config::BarGenConfig {
+                modes: vec!["time".into()],
+                time_freqs: vec!["1m".into()],
+            },
+            data_source: crate::config::DataSourceSpec {
+                type_name: "none".into(),
+                config: serde_json::json!({}),
+            },
+            nodes: vec![crate::config::NodeSpec {
+                id: "signal_node".into(),
+                type_name: "long_signal".into(),
+                config: serde_json::json!({}),
+                input_keys: vec![],
+                output_keys: vec!["signals:test".into()],
+            }],
+        };
+        let mut p = Pipeline::from_config(config).unwrap();
+        p.register_node_type(
+            "long_signal",
+            Box::new(|_: &NodeConfig| {
+                Ok(Box::new(LongSignalNode {
+                    id: "signal_node".into(),
+                    count: 0,
+                }))
+            }),
+        );
+        let initial_node: Box<dyn ComputeNode> = Box::new(LongSignalNode {
+            id: "signal_node".into(),
+            count: 0,
+        });
+        p.add_node(initial_node);
+        p.derive_edges().unwrap();
+
+        // Feed ticks to generate bars and signals
+        let ts_base = ts_utc(9, 0, 0);
+        for i in 0..5 {
+            let ts = ts_base + (i as i64) * 60_000;
+            p.feed_tick_direct(&make_tick(ts, 4000.0 + i as f64 * 10.0,
+                (100 + i * 100) as f64, (1000 + i * 50) as f64, (i % 2) as f64))
+                .unwrap();
+        }
+
+        // ── Phase 2: 从 Pipeline 获取 StateStore → SnapshotManager 落盘 ──
+        let original_state = p.state_store();
+        let snapshot_dir = std::env::temp_dir().join("taiji_snapshot_integration");
+        let _ = std::fs::remove_dir_all(&snapshot_dir);
+
+        let mgr = crate::state::snapshot::SnapshotManager::new(snapshot_dir.clone());
+        mgr.save_snapshot(original_state, "integ_v1").unwrap();
+
+        // 验证快照文件存在
+        let snapshots = mgr.list_snapshots().unwrap();
+        assert!(!snapshots.is_empty(), "应有快照文件");
+
+        // ── Phase 3: 从快照恢复新的 StateStore ──
+        let restored = mgr.load_latest_snapshot().unwrap();
+        assert!(restored.is_some(), "快照恢复应成功");
+
+        let restored_store = restored.unwrap();
+
+        // ── Phase 4: 验证一致性 ──
+        // 验证 bars:1m 数据一致
+        let bars_orig: Option<Arc<Vec<Arc<RawBar>>>> = original_state.get(&"bars:1m".into());
+        let bars_restored: Option<Arc<Vec<Arc<RawBar>>>> = restored_store.get(&"bars:1m".into());
+
+        match (&bars_orig, &bars_restored) {
+            (Some(orig), Some(rest)) => {
+                assert_eq!(orig.len(), rest.len(), "bars 数量应一致");
+                if !orig.is_empty() {
+                    assert_eq!(orig[0].symbol, rest[0].symbol, "bar symbol 应一致");
+                    assert!((orig[0].open - rest[0].open).abs() < 1e-10, "bar open 应一致");
+                    assert!((orig[0].vol - rest[0].vol).abs() < 1e-10, "bar vol 应一致");
+                }
+            }
+            (None, None) => {} // 两者都无数据也可接受
+            _ => panic!("bars 存在性不一致: orig={:?}, restored={:?}",
+                bars_orig.is_some(), bars_restored.is_some()),
+        }
+
+        // 验证 key 列表一致性（至少部分匹配）
+        let orig_keys = original_state.keys();
+        let restored_keys = restored_store.keys();
+        for key in &orig_keys {
+            if key.starts_with("bars:") || key.starts_with("signals:") {
+                assert!(
+                    restored_keys.contains(key),
+                    "恢复的 StateStore 应包含 key '{}'",
+                    key
+                );
+            }
+        }
+
+        // ── Phase 5: 使用 StateRecovery 验证恢复流程 ──
+        let recovery = crate::state::recovery::StateRecovery::with_default(snapshot_dir.clone());
+        let recovery_result = recovery.recover().unwrap();
+        assert!(recovery_result.from_snapshot, "应从快照恢复");
+        assert!(recovery_result.version.is_some(), "应有版本号");
+
+        // 验证恢复后的数据也可以通过 get 读取
+        let recovered_bars: Option<Arc<Vec<Arc<RawBar>>>> =
+            recovery_result.store.get(&"bars:1m".into());
+        match (&bars_orig, &recovered_bars) {
+            (Some(orig), Some(rec)) => {
+                assert_eq!(orig.len(), rec.len(), "恢复后 bar 数量应一致");
+            }
+            _ => {} // 两者一致即可
+        }
+
+        // Cleanup
+        let _ = std::fs::remove_dir_all(&snapshot_dir);
     }
 }

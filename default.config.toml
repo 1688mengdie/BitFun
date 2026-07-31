@@ -1,0 +1,132 @@
+# ============================================================================
+# LVPA 太极多维量化系统 — 默认配置文件
+# ============================================================================
+#
+# 本文件为 LVPA 系统的默认配置示例，包含全部 6 个基础设施模块的配置键。
+# 复制此文件为 ~/.taiji-quant/config.toml 并修改所需值即可启用。
+#
+# 三平面优先级（高→低）：
+#   1. 环境变量  LVPA_XXX       （最高优先级）
+#   2. 配置文件  config.toml     （本文件）
+#   3. 硬编码                      （最低优先级）
+#
+# 环境变量格式：LVPA_{SECTION}_{KEY}
+#   示例：LVPA_MONITOR_LEVEL=debug 等价于本文件的 monitor.level = "debug"
+#   示例：LVPA_HARNESS_MODE=explore 等价于 harness.mode = "explore"
+#
+# 配置变更通过 event-bus 广播 ConfigChangeEvent，订阅者可实时响应。
+#
+# ============================================================================
+
+# ============================================================================
+# 引擎配置（engine）
+# ============================================================================
+[engine]
+# 引擎类型：pglite（默认）| postgres
+# 环境变量：LVPA_ENGINE
+engine = "pglite"
+
+# ============================================================================
+# 数据库配置（database）
+# ============================================================================
+[database]
+# 数据库连接 URL（默认 null 表示使用本地文件路径）
+# 环境变量：LVPA_DATABASE_URL
+# database_url = "postgresql://user:pass@host:5432/lvpa"
+
+# 数据库文件路径（SQLite 模式）
+# 环境变量：LVPA_DATABASE_PATH
+database_path = "~/.taiji-quant/data/lvpa.db"
+
+# ============================================================================
+# AI Provider 配置（llm）
+# ============================================================================
+[llm]
+# LLM API Key（生产环境必须设置，建议通过环境变量注入）
+# 环境变量：LVPA_LLM_API_KEY
+# llm_api_key = "sk-xxx"
+
+# 嵌入模型名称
+# 环境变量：LVPA_EMBEDDING_MODEL
+embedding_model = "text-embedding-3-small"
+
+# 嵌入向量维度
+# 环境变量：LVPA_EMBEDDING_DIMENSIONS
+embedding_dimensions = 1536
+
+# 聊天模型名称
+# 环境变量：LVPA_CHAT_MODEL
+chat_model = "gpt-4o"
+
+# ============================================================================
+# 监控配置（monitor）— 天眼阵
+# ============================================================================
+[monitor]
+# 监控日志级别：trace | debug | info | warn | error | off
+# 环境变量：LVPA_MONITOR_LEVEL
+level = "info"
+
+# 告警通知渠道：stdout（默认）| log | event_bus
+# 环境变量：LVPA_MONITOR_ALERT_CHANNEL
+alert_channel = "stdout"
+
+# 健康检查间隔（秒）
+# 环境变量：LVPA_MONITOR_HEALTH_CHECK_INTERVAL_SECS
+health_check_interval_secs = 30
+
+# ============================================================================
+# 权限门控配置（harness）— 护山大阵
+# ============================================================================
+[harness]
+# 护山大阵模式：default | accept_edits | explore | bypass | dont_ask
+# 环境变量：LVPA_HARNESS_MODE
+mode = "default"
+
+# 允许的工作目录列表
+# 环境变量：LVPA_HARNESS_WORKING_DIRECTORIES（逗号分隔）
+working_directories = ["~/.taiji-quant"]
+
+[harness.resource_quota]
+# 每秒请求上限
+# 环境变量：LVPA_HARNESS_RESOURCE_QUOTA_MAX_RPS
+max_rps = 100
+
+# 最大并发数
+# 环境变量：LVPA_HARNESS_RESOURCE_QUOTA_MAX_CONCURRENCY
+max_concurrency = 10
+
+# ============================================================================
+# 交易配置（trading）— 量化交易
+# ============================================================================
+[trading]
+# 交易 broker：simnow（默认）| ctp | xtp
+# 环境变量：LVPA_TRADING_BROKER
+broker = "simnow"
+
+# 交易账号（生产环境必须设置）
+# 环境变量：LVPA_TRADING_ACCOUNT
+# account = "your_account"
+
+# 风险限额（占总资金比例）
+# 环境变量：LVPA_TRADING_RISK_LIMIT
+risk_limit = 0.1
+
+# CTP 交易前置地址
+# 环境变量：LVPA_TRADING_CTP_ADDR
+ctp_addr = "tcp://180.168.146.187:10130"
+
+# ============================================================================
+# 日志配置（logging）
+# ============================================================================
+[logging]
+# 日志级别：trace | debug | info | warn | error
+# 环境变量：LVPA_LOGGING_LEVEL
+level = "info"
+
+# 是否包含敏感诊断信息
+# 环境变量：LVPA_LOGGING_INCLUDE_SENSITIVE_DIAGNOSTICS
+include_sensitive_diagnostics = false
+
+# 日志文件路径
+# 环境变量：LVPA_LOGGING_PATH
+path = "~/.taiji-quant/logs/"

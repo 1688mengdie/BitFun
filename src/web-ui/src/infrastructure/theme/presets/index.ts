@@ -8,6 +8,15 @@ export { bitfunChinaNightTheme } from './china-night-theme';
 export { bitfunCyberTheme } from './cyber-theme';
 export { bitfunSlateTheme } from './slate-theme';
 export { bitfunTokyoNightTheme } from './tokyo-night-theme';
+export { lvpaCultivationTheme } from './lvpa-cultivation-theme';
+export { lvpaCultivationNightTheme } from './lvpa-cultivation-night-theme';
+export {
+  LVPA_COLOR_TOKENS,
+  LVPA_REALM_COLORS,
+  LVPA_SPIRIT_ROOT_COLORS,
+  injectLvpaCssVars,
+  removeLvpaCssVars,
+} from './lvpa-design-tokens';
 
 import { bitfunDarkTheme } from './dark-theme';
 import { bitfunLightTheme } from './light-theme';
@@ -17,6 +26,8 @@ import { bitfunChinaNightTheme } from './china-night-theme';
 import { bitfunCyberTheme } from './cyber-theme';
 import { bitfunSlateTheme } from './slate-theme';
 import { bitfunTokyoNightTheme } from './tokyo-night-theme';
+import { lvpaCultivationTheme } from './lvpa-cultivation-theme';
+import { lvpaCultivationNightTheme } from './lvpa-cultivation-night-theme';
 import { ThemeConfig, ThemeId } from '../types';
 
 /** Default light / dark builtin themes used when following system appearance. */
@@ -49,6 +60,8 @@ export const builtinThemes: ThemeConfig[] = [
   bitfunChinaNightTheme,
   bitfunCyberTheme,
   bitfunTokyoNightTheme,
+  lvpaCultivationTheme,
+  lvpaCultivationNightTheme,
 ];
 
  

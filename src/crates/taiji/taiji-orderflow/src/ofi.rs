@@ -3,6 +3,7 @@
 //! Reference: Cont, Kukanov, Stoikov (2014), "The Price Impact of Order Book Events".
 //! OFI = Σ Δbid_vol[i] - Σ Δask_vol[i]  (per tick, 5 levels).
 //! Positive OFI → buying pressure, negative OFI → selling pressure.
+//! 参考: 量价时空/Phase-2-派发提示词.md:795 — R-2-502 — taiji-orderflow ComputeNode
 
 use taiji_engine::error::Result;
 use taiji_engine::node::{ComputeNode, NodeConfig, NodeId};

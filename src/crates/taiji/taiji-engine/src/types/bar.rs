@@ -1,3 +1,5 @@
+//! 参考: 量价时空/Phase-2-派发提示词.md:1 — Phase 2 总纲 — 共享类型定义
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::sync::Arc;
@@ -25,8 +27,8 @@ impl Serialize for Symbol {
 
 impl<'de> Deserialize<'de> for Symbol {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let s: &str = Deserialize::deserialize(deserializer)?;
-        Ok(Symbol(Arc::from(s)))
+        let s: String = Deserialize::deserialize(deserializer)?;
+        Ok(Symbol(Arc::from(s.as_str())))
     }
 }
 

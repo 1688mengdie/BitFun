@@ -18,6 +18,7 @@
 //! [`ToolRegistry<Tool>`]: bitfun_tool_contracts::ToolRegistry
 //! [`ToolRegistryItem`]: bitfun_tool_contracts::ToolRegistryItem
 //! [`NodeId`]: crate::node::NodeId
+//! 参考: 量价时空/Phase-2-派发提示词.md:188 — R-2-201 — ComputeNode trait + Pipeline DAG
 
 use crate::node::NodeId;
 use std::collections::HashMap;

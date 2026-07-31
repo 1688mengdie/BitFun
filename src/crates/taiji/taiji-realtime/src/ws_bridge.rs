@@ -6,7 +6,7 @@
 //!
 //! ## 双通道架构（dual-channel bridge）
 //!
-//! ```
+//! ```text
 //!   crossbeam Receiver → (dedicated OS thread) → tokio broadcast → axum WS handlers
 //! ```
 //!
@@ -60,6 +60,7 @@
 //! relay 负责所有连接管理、协议适配和背压策略。WsBridge 模块届时可退役。
 //!
 //! 每个连接的 WebSocket 客户端收到 JSON 格式的 TickData。
+//! 参考: 量价时空/Phase-2-派发提示词.md:819 — R-2-503 — taiji-realtime 行情接入
 
 use std::net::SocketAddr;
 use std::thread;

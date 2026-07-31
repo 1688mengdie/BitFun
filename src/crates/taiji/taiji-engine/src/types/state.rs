@@ -1,4 +1,5 @@
 //! State types — R2.2
+//! 参考: 量价时空/Phase-2-派发提示词.md:1 — Phase 2 总纲 — 共享类型定义
 pub type StateKey = String;
 
 use serde::{Deserialize, Serialize};
@@ -91,7 +92,7 @@ pub struct SixCoreMetrics {
 
 // === StateValue ===
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum StateValue {
     Tick(Arc<TickData>),
     Bars(Arc<Vec<Arc<RawBar>>>),

@@ -6,7 +6,6 @@
   "scripts": {
     "test": "wdio run ./config/wdio.conf.ts",
     "test:l0": "wdio run ./config/wdio.conf.ts --spec \"./specs/l0-smoke.spec.ts\"",
-    "test:l0:protocol": "wdio run ./config/wdio.conf.ts --spec \"./specs/l0-webdriver-protocol.spec.ts\"",
     "test:l0:all": "wdio run ./config/wdio.conf_l0.ts",
     "test:l0:workspace": "wdio run ./config/wdio.conf.ts --spec \"./specs/l0-open-workspace.spec.ts\"",
     "test:l0:observe": "wdio run ./config/wdio.conf.ts --spec \"./specs/l0-observe.spec.ts\"",
@@ -16,6 +15,8 @@
     "test:l0:theme": "wdio run ./config/wdio.conf.ts --spec \"./specs/l0-theme.spec.ts\"",
     "test:l0:i18n": "wdio run ./config/wdio.conf.ts --spec \"./specs/l0-i18n.spec.ts\"",
     "test:l0:notification": "wdio run ./config/wdio.conf.ts --spec \"./specs/l0-notification.spec.ts\"",
+    "test:l0:protocol": "wdio run ./config/wdio.conf.ts --spec \"./specs/l0-webdriver-protocol.spec.ts\"",
+    "test:l0:lvpa": "wdio run ./config/wdio.conf.ts --spec \"./specs/lvpa/l0-lvpa-app-shell.spec.ts\"",
     "test:l1": "wdio run ./config/wdio.conf_l1.ts",
     "test:l1:chat": "wdio run ./config/wdio.conf.ts --spec \"./specs/l1-chat-input.spec.ts\"",
     "test:l1:workspace": "wdio run ./config/wdio.conf.ts --spec \"./specs/l1-workspace.spec.ts\"",
@@ -32,6 +33,9 @@
     "test:l1:worktree": "wdio run ./config/wdio.conf.ts --spec \"./specs/l1-worktree.spec.ts\"",
     "test:l1:worktree-restart": "node ./scripts/run-worktree-restart-e2e.mjs",
     "test:l1:browser-video": "wdio run ./config/wdio.conf.ts --spec \"../specs/l1-browser-video-stream.spec.ts\"",
+    "test:l1:lvpa-workshop": "wdio run ./config/wdio.conf.ts --spec \"./specs/lvpa/l1-lvpa-workshop.spec.ts\"",
+    "test:l1:lvpa-team": "wdio run ./config/wdio.conf.ts --spec \"./specs/lvpa/l1-lvpa-team-formation.spec.ts\"",
+    "test:lvpa": "wdio run ./config/wdio.conf.ts --spec \"./specs/lvpa/*.spec.ts\"",
     "test:perf": "wdio run ./config/wdio.conf.ts --spec \"./specs/performance/startup-session-perf.spec.ts\"",
     "fixture:long-session": "node ./scripts/generate-long-session-fixture.mjs",
     "test:smoke": "wdio run ./config/wdio.conf.ts --spec \"./specs/startup/*.spec.ts\"",
@@ -39,6 +43,7 @@
     "clean": "rimraf ./reports"
   },
   "devDependencies": {
+    "@playwright/test": "^1.52.0",
     "@types/node": "^20.0.0",
     "@wdio/cli": "^9.0.0",
     "@wdio/devtools-service": "^10.1.0",

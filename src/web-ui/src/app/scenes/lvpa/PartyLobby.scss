@@ -1,0 +1,182 @@
+/* ── PartyLobby: 副本大厅 ── */
+
+.party-lobby {
+  width: 100%;
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 24px;
+
+  &__header {
+    margin-bottom: 20px;
+  }
+
+  &__title {
+    font-size: 20px;
+    font-weight: 700;
+    color: var(--lvpa-ink, #1c1c1f);
+    margin: 0 0 4px;
+  }
+
+  &__subtitle {
+    font-size: 13px;
+    color: var(--lvpa-muted, #6a6a6a);
+    margin: 0;
+  }
+
+  &__grid {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  &__dungeon {
+    border: 1px solid rgba(90, 107, 80, 0.15);
+    border-radius: 10px;
+    padding: 16px;
+    background: rgba(126, 176, 155, 0.03);
+    transition: border-color 0.2s;
+
+    &:hover {
+      border-color: rgba(126, 176, 155, 0.3);
+    }
+
+    &--open { border-left: 3px solid var(--lvpa-jade, #7eb09b); }
+    &--in_progress { border-left: 3px solid var(--lvpa-gold, #d4a843); }
+    &--closed { border-left: 3px solid #9a9a9a; opacity: 0.6; }
+  }
+
+  &__dungeon-top {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    margin-bottom: 10px;
+  }
+
+  &__dungeon-icon {
+    font-size: 24px;
+    flex-shrink: 0;
+  }
+
+  &__dungeon-info {
+    flex: 1;
+    min-width: 0;
+  }
+
+  &__dungeon-name {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--lvpa-ink, #1c1c1f);
+  }
+
+  &__dungeon-desc {
+    font-size: 12px;
+    color: var(--lvpa-muted, #6a6a6a);
+    margin-top: 2px;
+  }
+
+  &__dungeon-meta {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    font-size: 11px;
+    color: var(--lvpa-muted, #6a6a6a);
+    margin-top: 6px;
+  }
+
+  &__dungeon-meta-item {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  &__dungeon-rewards {
+    font-size: 11px;
+    color: var(--lvpa-gold, #d4a843);
+    background: rgba(212, 168, 67, 0.06);
+    padding: 6px 10px;
+    border-radius: 6px;
+    margin-top: 8px;
+  }
+
+  &__status-badge {
+    font-size: 11px;
+    padding: 2px 10px;
+    border-radius: 4px;
+
+    &--open { background: rgba(126, 176, 155, 0.12); color: var(--lvpa-jade, #7eb09b); }
+    &--in_progress { background: rgba(212, 168, 67, 0.12); color: var(--lvpa-gold, #d4a843); }
+    &--closed { background: rgba(154, 154, 154, 0.12); color: #9a9a9a; }
+  }
+
+  /* ── 组队成员 ── */
+
+  &__party {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid rgba(90, 107, 80, 0.08);
+  }
+
+  &__member {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 6px;
+    background: rgba(126, 176, 155, 0.06);
+    border: 1px solid rgba(126, 176, 155, 0.1);
+    font-size: 11px;
+
+    &--ready { border-color: rgba(126, 176, 155, 0.2); }
+    &--not-ready { opacity: 0.6; }
+  }
+
+  &__member-name {
+    font-weight: 500;
+    color: var(--lvpa-ink, #1c1c1f);
+  }
+
+  &__member-realm {
+    color: var(--lvpa-muted, #6a6a6a);
+  }
+
+  &__member-role {
+    color: var(--lvpa-muted, #6a6a6a);
+  }
+
+  &__member-status {
+    font-size: 9px;
+    padding: 1px 5px;
+    border-radius: 3px;
+    background: rgba(126, 176, 155, 0.1);
+    color: var(--lvpa-jade, #7eb09b);
+
+    &--not-ready {
+      background: rgba(200, 16, 46, 0.08);
+      color: var(--lvpa-vermillion, #c8102e);
+    }
+  }
+
+  &__join-btn {
+    padding: 3px 12px;
+    border-radius: 4px;
+    border: none;
+    background: var(--lvpa-jade, #7eb09b);
+    color: var(--lvpa-cloud, #faf8f0);
+    font-size: 11px;
+    cursor: pointer;
+    transition: background 0.2s;
+    margin-top: 8px;
+
+    &:hover {
+      background: #5a9078;
+    }
+
+    &:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+  }
+}

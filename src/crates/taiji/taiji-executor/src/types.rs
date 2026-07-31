@@ -1,3 +1,5 @@
+//! 参考: 量价时空/Phase-2-派发提示词.md:843 — R-2-504 — taiji-executor 执行器
+
 use serde::{Deserialize, Serialize};
 
 /// An order request sent to the execution bridge.
@@ -34,14 +36,27 @@ pub enum OrderType {
     Market,
 }
 
-/// Order lifecycle status.
+/// Order lifecycle status — full state machine.
+///
+/// Pending → Sent → PartiallyFilled → Filled
+///                    ├── Rejected
+///                    └── Cancelled
+///
+/// Reference: R-2-504 验收标准 §订单状态机完整
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum OrderStatus {
-    Submitted,
-    PartialFilled,
+    /// Signal queued but not yet submitted to execution bridge.
+    Pending,
+    /// Order submitted to bridge / exchange.
+    Sent,
+    /// Partially filled (0 < filled < volume).
+    PartiallyFilled,
+    /// Fully filled.
     Filled,
-    Cancelled,
+    /// Rejected by exchange or risk check.
     Rejected,
+    /// Cancelled by user.
+    Cancelled,
 }
 
 /// Acknowledgement from the execution layer after order submission.

@@ -1,3 +1,5 @@
+//! 参考: 量价时空/Phase-2-派发提示词.md:867 — R-2-505 — taiji-backtest 回测引擎
+
 use crate::config::WalkForwardConfig;
 use crate::stats::PerformanceStats;
 use chrono::NaiveDate;

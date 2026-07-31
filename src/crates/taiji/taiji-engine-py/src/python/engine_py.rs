@@ -1,3 +1,5 @@
+//! 参考: 量价时空/Phase-2-派发提示词.md:707 — R-2-206 — taiji-engine-py PyO3 绑定
+
 use pyo3::prelude::*;
 use std::sync::{Arc, Mutex};
 use taiji_engine::config::PipelineConfig;
@@ -104,5 +106,61 @@ impl PipelinePy {
             }
             None => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_pipeline_py_new_state() {
+        let pp = PipelinePy::new();
+        let inner = pp.inner.lock().unwrap();
+        assert!(inner.is_none());
+        let state = pp.state.lock().unwrap();
+        assert!(state.is_none());
+    }
+
+    #[test]
+    fn test_pipeline_py_status_not_initialized() {
+        let pp = PipelinePy::new();
+        let status = pp.status().unwrap();
+        assert_eq!(status, "not initialized");
+    }
+
+    #[test]
+    fn test_pipeline_py_state_store_none_when_not_initialized() {
+        let pp = PipelinePy::new();
+        let store = pp.state_store();
+        assert!(store.is_none());
+    }
+
+    #[test]
+    fn test_pipeline_py_from_yaml_invalid_yaml() {
+        let pp = PipelinePy::new();
+        let result = pp.from_yaml("not valid yaml: {{{");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_pipeline_py_from_yaml_empty_string() {
+        let pp = PipelinePy::new();
+        let result = pp.from_yaml("");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_pipeline_py_from_yaml_missing_required_fields() {
+        let pp = PipelinePy::new();
+        let result = pp.from_yaml("name: test\nversion: 1.0\n");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_pipeline_py_repr_not_initialized() {
+        let pp = PipelinePy::new();
+        let repr = pp.__repr__();
+        assert_eq!(repr, "PipelinePy(not initialized)");
     }
 }

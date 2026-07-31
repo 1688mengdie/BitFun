@@ -180,6 +180,7 @@ mod tests {
             alpha: Some(0.05),
             total_trades: 100,
             net_profit: 5000.0,
+            total_return: 0.5,
         }
     }
 
@@ -195,6 +196,7 @@ mod tests {
             alpha: None,
             total_trades: 50,
             net_profit: -1500.0,
+            total_return: -0.15,
         }
     }
 

@@ -1,3 +1,5 @@
+//! 参考: 量价时空/Phase-2-派发提示词.md:891 — R-2-506 — taiji-llm LLM 集成
+
 use serde::{Deserialize, Serialize};
 
 /// 交易决策输出 —— Agent 产出的结构化决策结果。

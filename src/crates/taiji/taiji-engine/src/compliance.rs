@@ -2,6 +2,7 @@
 //!
 //! Ensures every signal and AI-generated content carries explicit risk warnings.
 //! The CLI requires explicit acknowledgement before any pipeline execution.
+//! 参考: 量价时空/Phase-2-派发提示词.md:188 — R-2-201 — ComputeNode trait + Pipeline DAG
 
 use crate::types::signal::Signal;
 

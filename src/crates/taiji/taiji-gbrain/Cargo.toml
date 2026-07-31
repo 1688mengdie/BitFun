@@ -1,0 +1,31 @@
+[package]
+name = "taiji-gbrain"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "LVPA gbrain engine — knowledge base, vector search, RAG pipeline"
+
+[lib]
+name = "taiji_gbrain"
+crate-type = ["rlib"]
+
+[[bin]]
+name = "taiji-gbrain"
+path = "src/main.rs"
+
+[dependencies]
+taiji-types = { path = "../taiji-types" }
+taiji-llm = { path = "../taiji-llm" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true, features = ["v7", "serde"] }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+clap = { workspace = true }
+
+[lints]
+workspace = true

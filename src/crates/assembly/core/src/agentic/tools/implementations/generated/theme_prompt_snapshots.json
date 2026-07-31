@@ -138,6 +138,40 @@
       "spacing4": "16px",
       "shadowBase": "0 4px 12px rgba(0, 0, 0, 0.48)",
       "styleNotes": "Tokyo Night — deep indigo base, soft blue and magenta accents (palette from the Tokyo Night theme family)"
+    },
+    {
+      "id": "lvpa-cultivation",
+      "themeType": "light",
+      "bgPrimary": "#faf8f0",
+      "bgSecondary": "#f5f3e8",
+      "bgScene": "#faf8f0",
+      "textPrimary": "#1c1c1f",
+      "textMuted": "#6a6a6a",
+      "accent500": "#7eb09b",
+      "accent600": "#5a9078",
+      "borderBase": "rgba(90, 107, 80, 0.2)",
+      "elementBase": "rgba(126, 176, 155, 0.1)",
+      "radiusBase": "6px",
+      "spacing4": "16px",
+      "shadowBase": "0 4px 8px rgba(90, 107, 80, 0.1)",
+      "styleNotes": "LVPA 修仙亮色主题 — 宣纸朱砂，金线青玉，如日之升"
+    },
+    {
+      "id": "lvpa-cultivation-night",
+      "themeType": "dark",
+      "bgPrimary": "#2a2a2d",
+      "bgSecondary": "#252527",
+      "bgScene": "#2a2a2d",
+      "textPrimary": "#e8e8e8",
+      "textMuted": "#928f89",
+      "accent500": "#5a8f7a",
+      "accent600": "#4a7a64",
+      "borderBase": "rgba(232, 232, 232, 0.16)",
+      "elementBase": "rgba(90, 143, 122, 0.12)",
+      "radiusBase": "6px",
+      "spacing4": "16px",
+      "shadowBase": "0 4px 8px rgba(0, 0, 0, 0.65)",
+      "styleNotes": "LVPA 修仙暗色主题 — 星夜墨色，月华如水，清幽致远"
     }
   ]
 }

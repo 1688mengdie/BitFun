@@ -1,3 +1,5 @@
+//! 参考: 量价时空/Phase-2-派发提示词.md:891 — R-2-506 — taiji-llm LLM 集成
+
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -85,9 +87,7 @@ impl LlmClient for BitFunAiAdapter {
         _messages: &[ChatMessage],
         _config: &LlmConfig,
     ) -> Result<ChatStream, anyhow::Error> {
-        // TODO: 实现流式适配——将 AIClient.send_message_stream 的
-        // StreamResponse 转换为 ChatStream（Pin<Box<dyn Stream<Item = Result<ChatChunk>>>）。
-        // 当前上层 Agent 使用非流式 chat() 即可完成决策。
-        todo!("BitFunAiAdapter streaming not yet implemented")
+        // 流式适配暂未实现；上层 Agent 使用非流式 chat() 即可完成决策。
+        anyhow::bail!("BitFunAiAdapter streaming not yet implemented")
     }
 }

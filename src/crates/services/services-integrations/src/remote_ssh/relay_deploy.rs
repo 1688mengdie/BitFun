@@ -1783,6 +1783,7 @@ echo {TASK_DONE_MARKER}
 
 #[cfg(test)]
 mod tests {
+    #[allow(unused_imports)]
     use super::{
         classify_docker_access, decide_task_status, deploy_body_script_with_checksums,
         install_docker_body_script, interactive_driver_script, parse_preflight,

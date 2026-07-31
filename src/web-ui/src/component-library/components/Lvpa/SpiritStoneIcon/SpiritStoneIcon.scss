@@ -1,0 +1,70 @@
+/**
+ * SpiritStoneIcon — 灵石图标样式
+ * 金币风格图标 + 数量文字，使用 --lvpa-gold 色
+ * 支持 sm/md/lg 三种尺寸
+ */
+
+.spirit-stone-icon {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  color: var(--lvpa-gold, #d4a843);
+
+  &__coin {
+    flex-shrink: 0;
+    line-height: 1;
+  }
+
+  &__amount {
+    font-weight: 600;
+    line-height: 1.2;
+    color: var(--lvpa-gold, #d4a843);
+  }
+
+  &__label {
+    line-height: 1.2;
+    color: var(--color-text-muted);
+  }
+
+  // Size variants
+  &--sm {
+    gap: 3px;
+    .spirit-stone-icon__coin {
+      font-size: 14px;
+    }
+    .spirit-stone-icon__amount {
+      font-size: var(--font-size-xs);
+    }
+    .spirit-stone-icon__label {
+      font-size: var(--font-size-xs);
+    }
+  }
+
+  &--md {
+    gap: 4px;
+    .spirit-stone-icon__coin {
+      font-size: 18px;
+    }
+    .spirit-stone-icon__amount {
+      font-size: var(--font-size-sm);
+    }
+    .spirit-stone-icon__label {
+      font-size: var(--font-size-xs);
+    }
+  }
+
+  &--lg {
+    gap: 6px;
+    .spirit-stone-icon__coin {
+      font-size: 24px;
+    }
+    .spirit-stone-icon__amount {
+      font-size: var(--font-size-base);
+    }
+    .spirit-stone-icon__label {
+      font-size: var(--font-size-sm);
+    }
+  }
+}

@@ -33,13 +33,16 @@
 //!     Ok(())
 //! }
 //! ```
+//! 参考: 量价时空/Phase-2-派发提示词.md:891 — R-2-506 — taiji-llm LLM 集成
 
 pub mod client;
 pub mod embedding;
+pub mod prompt;
 pub mod provider;
 pub mod types;
 
 // 重新导出常用类型
 pub use client::{ChatMessage, ChatResponse, LlmClient, LlmConfig, MockClient, Role, Usage};
 pub use embedding::EmbeddingService;
+pub use prompt::PromptTemplate;
 pub use types::{ChatChunk, DecisionOutput};

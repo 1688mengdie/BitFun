@@ -308,4 +308,53 @@ mod tests {
             _ => panic!("unknown feature should default to Ok"),
         }
     }
+
+    #[test]
+    fn test_tier_config_suffix() {
+        assert_eq!(Tier::Free.config_suffix(), "free");
+        assert_eq!(Tier::Standard.config_suffix(), "standard");
+        assert_eq!(Tier::Ultimate.config_suffix(), "ultimate");
+    }
+
+    #[test]
+    fn test_tier_from_str_cases() {
+        assert_eq!(Tier::from_str("FREE"), Some(Tier::Free));
+        assert_eq!(Tier::from_str("Standard"), Some(Tier::Standard));
+        assert_eq!(Tier::from_str("ultimate"), Some(Tier::Ultimate));
+        assert_eq!(Tier::from_str("ULTIMATE"), Some(Tier::Ultimate));
+        assert_eq!(Tier::from_str(""), None);
+        assert_eq!(Tier::from_str("premium"), None);
+    }
+
+    #[test]
+    fn test_deep_merge_empty_overlay() {
+        let mut base = HashMap::new();
+        base.insert("feature_a".into(), true);
+        let overlay = HashMap::new();
+        let merged = deep_merge_features(&base, &overlay);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged.get("feature_a"), Some(&true));
+    }
+
+    #[test]
+    fn test_gate_result_debug() {
+        let result = GateResult::UpgradeRequired {
+            feature: "cli.test".to_string(),
+            current_tier: Tier::Free,
+            message: "请升级".to_string(),
+        };
+        let debug = format!("{:?}", result);
+        assert!(debug.contains("cli.test"));
+    }
+
+    #[test]
+    fn test_resolved_config_default_data_sources() {
+        let config = ResolvedConfig {
+            tier: Tier::Free,
+            features: HashMap::new(),
+            data_sources: vec![],
+        };
+        assert!(config.data_sources.is_empty());
+        assert_eq!(config.tier, Tier::Free);
+    }
 }

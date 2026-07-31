@@ -1,6 +1,7 @@
 //! Tick types — 标准化 47 字段，与 CTP FTD-XML 协议对应。
 //! 字段布局参考 openctp（BSD License, https://github.com/openctp/openctp）。
 //! 版权声明：Copyright (c) openctp contributors. All rights reserved.
+//! 参考: 量价时空/Phase-2-派发提示词.md:1 — Phase 2 总纲 — 共享类型定义
 
 use std::collections::HashMap;
 

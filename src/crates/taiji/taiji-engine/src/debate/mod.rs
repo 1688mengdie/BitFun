@@ -3,6 +3,7 @@
 //! Three roles (Bull / Bear / Neutral) debate market direction,
 //! with a DecisionAgent synthesizing the final verdict. Only triggered
 //! when agent signals conflict or confidence variance exceeds threshold.
+//! 参考: 量价时空/Phase-2-派发提示词.md:188 — R-2-201 — Debate 多智能体决策
 
 pub mod agents;
 pub mod decision;

@@ -1,3 +1,5 @@
+//! 参考: 量价时空/Phase-2-派发提示词.md:527 — R-2-204 — StateStore + 快照恢复
+
 use crate::types::state::{FromStateValue, StateKey, StateValue};
 use crate::types::NodeId;
 use dashmap::DashMap;
@@ -102,6 +104,21 @@ impl StateStore {
             }
         }
         serde_json::Value::Object(map)
+    }
+
+    /// Restore StateStore from a JSON Value (produced by to_json()).
+    ///
+    /// Each JSON entry is deserialized back to StateValue.
+    /// Provenance info is not persisted in JSON and will be empty after restore.
+    pub fn from_json(value: &serde_json::Value) -> crate::error::Result<Self> {
+        let store = Self::new();
+        if let Some(obj) = value.as_object() {
+            for (key, val) in obj {
+                let state_val: StateValue = serde_json::from_value(val.clone())?;
+                store.data.insert(key.clone(), state_val);
+            }
+        }
+        Ok(store)
     }
 
     /// Get all keys (owned).

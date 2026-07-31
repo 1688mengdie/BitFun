@@ -1,0 +1,43 @@
+[package]
+name = "taiji-infra-db-store"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version = "1.85"
+description = "LVPA infrastructure — database storage (灵脉), SQLite backend with migration and SharedBarBuffer"
+
+[lib]
+name = "taiji_infra_db_store"
+crate-type = ["rlib"]
+
+[dependencies]
+# Async runtime
+tokio = { workspace = true, features = ["sync"] }
+async-trait = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Time
+chrono = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+
+# Identifiers
+uuid = { workspace = true }
+
+# SQLite
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "migrate", "derive"] }
+
+# Lock-free primitives (SharedBarBuffer)
+arc-swap = "1.7"
+crossbeam = { workspace = true }
+
+# Migration checksum
+sha2 = { workspace = true }
+
+[lints]
+workspace = true

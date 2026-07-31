@@ -137,6 +137,7 @@ impl WorkspaceStdio {
     }
 
     #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) fn spawn_local_process(executable: &str, args: &[String]) -> anyhow::Result<Self> {
         Self::spawn_local_process_with_signal_hook(executable, args, None)
     }
@@ -474,6 +475,7 @@ async fn run_local_process(
 
 #[cfg(test)]
 mod tests {
+    #[allow(unused_imports)]
     use super::*;
 
     #[tokio::test]

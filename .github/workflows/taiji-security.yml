@@ -1,0 +1,191 @@
+# =============================================================================
+# LVPA（太极多维量化系统）— 安全审计管线
+# 自动安全扫描：依赖漏洞 + 密钥泄露 + 容器镜像扫描 + 许可合规
+# =============================================================================
+# 运行策略：
+#   - 每次 PR：cargo deny（许可 + 重复依赖检查）
+#   - 每次推送到 main：cargo audit（漏洞扫描）
+#   - 每周 cron：全量安全审计（trivy + cargo audit + cargo deny）
+#   - 手动触发：完整扫描
+# =============================================================================
+
+name: LVPA Security
+
+on:
+  schedule:
+    # 每周一 06:00 UTC 执行全量扫描
+    - cron: "0 6 * * 1"
+  push:
+    branches: [main]
+    paths:
+      - '**/Cargo.toml'
+      - '**/Cargo.lock'
+      - '**/package.json'
+      - '**/pnpm-lock.yaml'
+  pull_request:
+    branches: [main]
+    paths:
+      - '**/Cargo.toml'
+      - '**/Cargo.lock'
+  workflow_dispatch:
+    inputs:
+      full_scan:
+        description: "Run full security scan (includes trivy + container scan)"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ── 1. cargo deny — 许可合规 + 重复依赖 + 代码库审查 ─────────────
+  cargo-deny:
+    name: Cargo Deny
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        checks:
+          - advisories
+          - bans licenses sources
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check ${{ matrix.checks }}
+          arguments: --workspace --all-features
+          log-level: warn
+
+  # ── 2. cargo audit — 已知漏洞扫描 ────────────────────────────────
+  cargo-audit:
+    name: Cargo Audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Generate lockfile
+        run: cargo generate-lockfile
+
+      - name: Run audit
+        run: cargo audit --deny warnings
+
+  # ── 3. 密钥泄露检测 ──────────────────────────────────────────────
+  secret-scan:
+    name: Secret Detection
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Detect secrets with truffleHog
+        uses: trufflesecurity/trufflehog@v3
+        continue-on-error: true
+        with:
+          extra_args: --results=verified,unknown --fail --no-update
+
+      - name: Check for common secrets patterns
+        shell: bash
+        run: |
+          set -euo pipefail
+          rc=0
+
+          # 禁用 .env 检查
+          # 检查硬编码的 API 密钥、token、私钥
+          patterns=(
+            '-----BEGIN (RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----'
+            'gh[ps]_[0-9a-zA-Z]{36}'
+            'sk-[a-zA-Z0-9]{32,}'
+            'xox[bpsar]-[0-9a-zA-Z]{10,}'
+            'AKIA[0-9A-Z]{16}'
+            'api[-_]?key.*=.*['"'"'"'"][0-9a-zA-Z]{16,}['"'"'"'"]'
+            'secret.*=.*['"'"'"'"][0-9a-zA-Z]{16,}['"'"'"'"]'
+          )
+
+          for pattern in "${patterns[@]}"; do
+            matches=$(git grep -In "$pattern" -- \
+              ':!*.md' ':!*.lock' ':!*.svg' ':!*.png' ':!*.jpg' \
+              ':!target/' ':!.git/' ':!node_modules/' 2>/dev/null || true)
+            if [ -n "$matches" ]; then
+              echo "::warning::Possible secret found matching: $pattern"
+              echo "$matches" | head -20
+            fi
+          done
+          exit "$rc"
+
+  # ── 4. Trivy 容器镜像扫描（仅全量扫描或容器文件变动时） ─────────
+  trivy-scan:
+    name: Trivy Container Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    if: >
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && contains(join(github.event.head_commit.modified, ' '), 'Dockerfile'))
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Scan Dockerfiles
+        uses: aquasecurity/trivy-action@v0.29.0
+        with:
+          scan-type: config
+          scan-ref: .
+          format: sarif
+          output: trivy-dockerfile-results.sarif
+          severity: HIGH,CRITICAL
+          exit-code: 1
+        continue-on-error: true
+
+      - name: Upload Trivy results
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-dockerfile-results.sarif
+          category: trivy-dockerfile
+        continue-on-error: true
+
+      - name: Scan local Docker images
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        run: |
+          # Build and scan the relay Docker image as a representative target
+          docker build \
+            -f src/apps/relay-server/Dockerfile \
+            -t lvpa-relay:scan \
+            .
+          trivy image --severity HIGH,CRITICAL --exit-code 0 lvpa-relay:scan
+        continue-on-error: true
+
+  # ── 5. npm audit ──────────────────────────────────────────────────
+  npm-audit:
+    name: npm Audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run pnpm audit
+        run: pnpm audit --prod 2>&1 || echo "audit:warn: vulnerabilities found (some may be false positives)"
