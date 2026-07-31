@@ -384,7 +384,7 @@ export class AgenticEventListener {
         break;
       case 'agentic://thread-goal-updated':
         callbacks.onThreadGoalUpdated?.(
-          payload as { sessionId: string; goal?: Record<string, unknown> | null },
+          payload as { sessionId: string; goal?: ThreadGoalUpdatedPayload['goal'] | null },
         );
         break;
       case 'agentic://open-built-in-browser':
