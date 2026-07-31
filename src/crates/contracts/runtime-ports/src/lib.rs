@@ -253,6 +253,8 @@ pub struct SessionViewRestoreTiming {
     pub visibility_metadata_duration_ms: u64,
     pub load_session_with_turns_duration_ms: u64,
     pub normalize_turn_ids_duration_ms: u64,
+    #[serde(default)]
+    pub turn_catalog_duration_ms: u64,
     pub total_duration_ms: u64,
     pub turn_load: SessionTurnLoadTiming,
 }

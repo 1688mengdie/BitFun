@@ -1287,7 +1287,7 @@ describe('ModernFlowChatContainer historical empty state', () => {
     expect(virtualListMock.pinTurnToTopWithStatus.mock.calls.length).toBe(retryCallCount);
   });
 
-  it('does not synthesize unloaded turn-rail targets in partial history', async () => {
+  it('renders non-navigable count placeholders for old hosts without a turn catalog', async () => {
     stateMocks.activeSession = createSession({
       isHistorical: false,
       historyState: 'ready',
@@ -1318,9 +1318,112 @@ describe('ModernFlowChatContainer historical empty state', () => {
       currentTurn: 99,
       totalTurns: 100,
     });
-    expect(container.querySelectorAll('.flowchat-turn-rail__item')).toHaveLength(2);
+    expect(container.querySelectorAll('.flowchat-turn-rail__item')).toHaveLength(100);
+    expect(container.querySelector('[data-turn-key="storage:0"]')?.getAttribute('aria-disabled')).toBe('true');
     expect(container.querySelector('[data-turn-id="turn-98"]')).toBeNull();
+    expect(container.querySelector('[data-turn-id="turn-99"]')?.getAttribute('aria-disabled')).toBeNull();
+    expect(container.querySelector('[data-turn-id="turn-100"]')?.getAttribute('aria-disabled')).toBeNull();
     expect(virtualListMock.pinTurnToTopWithStatus).not.toHaveBeenCalled();
+  });
+
+  it('renders every catalog marker and resolves loaded tail identities', async () => {
+    stateMocks.activeSession = createSession({
+      isHistorical: false,
+      historyState: 'ready',
+      isPartial: true,
+      loadedTurnCount: 2,
+      totalTurnCount: 100,
+      turnCatalog: {
+        schemaVersion: 1,
+        sessionId: 'session-1',
+        revision: 'catalog-1',
+        totalTurnCount: 100,
+        complete: false,
+        entries: Array.from({ length: 100 }, (_, ordinal) => ({
+          ordinal,
+          storageTurnIndex: ordinal,
+          ...(ordinal === 98
+            ? { turnId: 'turn-99', preview: 'Stale catalog preview' }
+            : ordinal === 99
+              ? { turnId: 'turn-100', preview: 'Latest catalog preview' }
+              : {}),
+          previewTruncated: false,
+        })),
+      },
+      dialogTurns: [
+        createTurn('turn-99', 'Recent restored prompt'),
+        createTurn('turn-100', 'Latest restored prompt'),
+      ],
+    } as Partial<Session>);
+    stateMocks.virtualItems = [
+      { type: 'user-message', turnId: 'turn-99', data: { id: 'user-turn-99', content: 'Recent restored prompt' } },
+      { type: 'user-message', turnId: 'turn-100', data: { id: 'user-turn-100', content: 'Latest restored prompt' } },
+    ];
+    stateMocks.visibleTurnInfo = {
+      turnId: 'turn-100',
+      turnIndex: 2,
+      totalTurns: 2,
+      userMessage: 'Latest restored prompt',
+      visibleTurnIds: ['turn-99', 'turn-100'],
+    };
+
+    await act(async () => {
+      root.render(<ModernFlowChatContainer />);
+    });
+
+    const markers = container.querySelectorAll('.flowchat-turn-rail__item');
+    expect(markers).toHaveLength(100);
+    expect(container.querySelector('[data-turn-key="storage:0"]')?.getAttribute('aria-disabled')).toBe('true');
+    expect(container.querySelector('[data-turn-id="turn-99"]')?.getAttribute('aria-disabled')).toBeNull();
+    expect(container.querySelector('[data-turn-id="turn-100"]')?.getAttribute('aria-disabled')).toBeNull();
+  });
+
+  it('requests the existing full-history fallback for an unloaded catalog target', async () => {
+    const projectionSpy = vi
+      .spyOn(flowChatStore, 'requestSessionFullHistoryProjection')
+      .mockReturnValue(true);
+    stateMocks.activeSession = createSession({
+      isHistorical: false,
+      historyState: 'ready',
+      isPartial: true,
+      loadedTurnCount: 2,
+      totalTurnCount: 100,
+      turnCatalog: {
+        schemaVersion: 1,
+        sessionId: 'session-1',
+        revision: 'complete-catalog',
+        totalTurnCount: 100,
+        complete: true,
+        entries: Array.from({ length: 100 }, (_, ordinal) => ({
+          ordinal,
+          storageTurnIndex: ordinal,
+          turnId: `turn-${ordinal + 1}`,
+          preview: `Prompt ${ordinal + 1}`,
+          previewTruncated: false,
+        })),
+      },
+      dialogTurns: [
+        createTurn('turn-99', 'Recent restored prompt'),
+        createTurn('turn-100', 'Latest restored prompt'),
+      ],
+    } as Partial<Session>);
+    stateMocks.virtualItems = [
+      { type: 'user-message', turnId: 'turn-99', data: { id: 'user-turn-99', content: 'Recent restored prompt' } },
+      { type: 'user-message', turnId: 'turn-100', data: { id: 'user-turn-100', content: 'Latest restored prompt' } },
+    ];
+
+    await act(async () => {
+      root.render(<ModernFlowChatContainer />);
+    });
+
+    clickTurnRailItem(container, 'turn-1');
+
+    expect(projectionSpy).toHaveBeenCalledWith('session-1', 'turn-rail-navigation');
+    expect(virtualListMock.pinTurnToTopWithStatus).not.toHaveBeenCalledWith(
+      'turn-1',
+      expect.anything(),
+    );
+    projectionSpy.mockRestore();
   });
 
   it('lets streaming restored sessions use follow-output instead of container sticky anchoring', async () => {

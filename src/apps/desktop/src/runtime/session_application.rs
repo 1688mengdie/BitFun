@@ -23,7 +23,7 @@ use bitfun_core::service::remote_ssh::workspace_state::get_effective_session_pat
 use bitfun_core::service::remote_ssh::SSHConnectionManager;
 use bitfun_core::service::session::{
     DialogTurnData, DialogTurnKind, SessionMetadata, SessionStatus, SessionTranscriptExport,
-    SessionTranscriptExportOptions,
+    SessionTranscriptExportOptions, SessionTurnCatalog,
 };
 use bitfun_core::service::session_usage::SessionUsageReport;
 use bitfun_core::service::token_usage::TokenUsageService;
@@ -122,6 +122,7 @@ pub(crate) struct DesktopSessionViewRestore {
     pub session: Session,
     pub turns: Vec<DialogTurnData>,
     pub total_turn_count: usize,
+    pub turn_catalog: SessionTurnCatalog,
     pub timings: SessionViewRestoreTiming,
 }
 
@@ -689,7 +690,7 @@ impl DesktopSessionApplication {
         let resolve_storage_path_duration_ms =
             path_started_at.elapsed().as_millis().min(u64::MAX as u128) as u64;
         on_storage_path_resolved(resolve_storage_path_duration_ms);
-        let (mut session, turns, total_turn_count, mut timings) = self
+        let (mut session, turns, total_turn_count, turn_catalog, mut timings) = self
             .compatibility
             .restore_session_view_from_storage_path(
                 &storage_path,
@@ -709,6 +710,7 @@ impl DesktopSessionApplication {
             session,
             turns,
             total_turn_count,
+            turn_catalog,
             timings,
         })
     }

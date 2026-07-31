@@ -2545,6 +2545,19 @@ describe('FlowChatStore historical session hydration state', () => {
         isPartial: true,
         loadedTurnCount: 1,
         totalTurnCount: 5,
+        turnCatalog: {
+          schemaVersion: 1,
+          sessionId: 'history-1',
+          revision: 'partial-catalog',
+          totalTurnCount: 5,
+          complete: false,
+          entries: Array.from({ length: 5 }, (_, ordinal) => ({
+            ordinal,
+            storageTurnIndex: ordinal,
+            ...(ordinal === 4 ? { turnId: 'turn-5', preview: 'prompt 5' } : {}),
+            previewTruncated: false,
+          })),
+        },
       })
       .mockResolvedValueOnce({
         session: {
@@ -2560,6 +2573,20 @@ describe('FlowChatStore historical session hydration state', () => {
         isPartial: false,
         loadedTurnCount: 5,
         totalTurnCount: 5,
+        turnCatalog: {
+          schemaVersion: 1,
+          sessionId: 'history-1',
+          revision: 'complete-catalog',
+          totalTurnCount: 5,
+          complete: true,
+          entries: Array.from({ length: 5 }, (_, ordinal) => ({
+            ordinal,
+            storageTurnIndex: ordinal,
+            turnId: `turn-${ordinal + 1}`,
+            preview: `prompt ${ordinal + 1}`,
+            previewTruncated: false,
+          })),
+        },
       });
     flowChatStore.setState(() => ({
       sessions: new Map([
@@ -2581,6 +2608,11 @@ describe('FlowChatStore historical session hydration state', () => {
       expect(
         flowChatStore.getState().sessions.get('history-1')?.dialogTurns.map(turn => turn.id)
       ).toEqual(['turn-5']);
+      expect(flowChatStore.getState().sessions.get('history-1')?.turnCatalog).toMatchObject({
+        revision: 'complete-catalog',
+        complete: true,
+        totalTurnCount: 5,
+      });
 
       expect(flowChatStore.revealPreviousSessionHistoryWindow('history-1', 'wheel-up', 2)).toBe(true);
 
@@ -2602,6 +2634,10 @@ describe('FlowChatStore historical session hydration state', () => {
         startTime: 6,
       } as any;
       flowChatStore.addDialogTurn('history-1', newTurn);
+      expect(flowChatStore.getState().sessions.get('history-1')).toMatchObject({
+        loadedTurnCount: 4,
+        totalTurnCount: 6,
+      });
 
       expect(flowChatStore.requestSessionFullHistoryProjection('history-1', 'search')).toBe(true);
       expect(
@@ -3692,6 +3728,20 @@ describe('FlowChatStore historical session hydration state', () => {
       },
       turns: [restoredTurn],
       contextRestoreState: 'pending',
+      turnCatalog: {
+        schemaVersion: 1,
+        sessionId: 'history-1',
+        revision: 'catalog-1',
+        totalTurnCount: 1,
+        complete: true,
+        entries: [{
+          ordinal: 0,
+          storageTurnIndex: 0,
+          turnId: 'turn-1',
+          preview: 'hello',
+          previewTruncated: false,
+        }],
+      },
     });
     flowChatStore.setState(() => ({
       sessions: new Map([
@@ -3713,6 +3763,10 @@ describe('FlowChatStore historical session hydration state', () => {
       isHistorical: false,
       historyState: 'ready',
       contextRestoreState: 'pending',
+      turnCatalog: expect.objectContaining({
+        revision: 'catalog-1',
+        complete: true,
+      }),
       dialogTurns: expect.arrayContaining([
         expect.objectContaining({
           id: 'turn-1',

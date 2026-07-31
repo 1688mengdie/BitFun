@@ -7,6 +7,7 @@ import type {
   DialogTurnKind,
   SessionKind,
   SessionTitleSource,
+  SessionTurnCatalog,
 } from '@/shared/types/session-history';
 import type { AiErrorDetail } from '@/shared/ai-errors/aiErrorPresenter';
 import type { ReviewTargetEvidence, ReviewTeamRunManifest } from '@/shared/services/reviewTeamService';
@@ -344,6 +345,7 @@ export interface Session {
   isPartial?: boolean;
   loadedTurnCount?: number;
   totalTurnCount?: number;
+  turnCatalog?: SessionTurnCatalog;
   
   todos?: TodoItem[];
   

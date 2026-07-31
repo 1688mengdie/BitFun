@@ -218,7 +218,7 @@ pub(crate) async fn restore_session_view(
         .filter(|n| *n > 0)
         .map(|n| n.min(16));
 
-    let (mut session, turns, total_turn_count, timings) = state
+    let (mut session, turns, total_turn_count, turn_catalog, timings) = state
         .compatibility
         .restore_session_view_for_workspace(
             storage_request,
@@ -239,6 +239,7 @@ pub(crate) async fn restore_session_view(
     Ok(json!({
         "session": session_to_json(session, total_turn_count),
         "turns": turns,
+        "turnCatalog": turn_catalog,
         "contextRestoreState": "pending",
         "isPartial": is_partial,
         "loadedTurnCount": loaded_turn_count,
