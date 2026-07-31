@@ -2,7 +2,6 @@ import { create } from 'zustand';
 import {
   createJSONStorage,
   persist,
-  type StateStorage,
 } from 'zustand/middleware';
 import type {
   DispatchApprovalPolicy,
@@ -14,11 +13,32 @@ import type {
   OutboundDispatchRecord,
 } from './types';
 import { isDispatchJobTerminal } from './types';
+import { createLogger } from '@/shared/utils/logger';
 
+const log = createLogger('DispatchJobStore');
 const MAX_APPLIED_EVENT_IDS = 2048;
 const MAX_DISMISSED_JOB_IDS = 2048;
+const MAX_DISMISSED_SESSION_IDS = 2048;
+const DISPATCH_JOB_STORAGE_KEY = 'bitfun-dispatch-jobs-v1';
+// Keep deletion authority outside the general Zustand snapshot. A stale HMR
+// renderer may still persist its old job cache, but it must never erase a
+// dismissal recorded by the current renderer.
+const DISPATCH_DISMISSAL_LEDGER_KEY = 'bitfun-dispatch-dismissals-v1';
+const reportedSuppressedProjectionKeys = new Set<string>();
 const fallbackStorageValues = new Map<string, string>();
-const fallbackStorage: StateStorage = {
+
+interface SyncStringStorage {
+  getItem: (name: string) => string | null;
+  setItem: (name: string, value: string) => void;
+  removeItem: (name: string) => void;
+}
+
+interface DispatchDismissalLedger {
+  dismissedJobIds: string[];
+  dismissedSessionIds: string[];
+}
+
+const fallbackStorage: SyncStringStorage = {
   getItem: (name) => fallbackStorageValues.get(name) ?? null,
   setItem: (name, value) => {
     fallbackStorageValues.set(name, value);
@@ -27,6 +47,84 @@ const fallbackStorage: StateStorage = {
     fallbackStorageValues.delete(name);
   },
 };
+
+function getDispatchStorage(): SyncStringStorage {
+  return typeof localStorage === 'undefined' ? fallbackStorage : localStorage;
+}
+
+function mergeDismissedIds(
+  current: unknown[],
+  additions: unknown[],
+  limit: number,
+): string[] {
+  return Array.from(new Set(
+    [...current, ...additions]
+      .filter((value): value is string => typeof value === 'string')
+      .map(value => value.trim())
+      .filter(Boolean),
+  )).slice(-limit);
+}
+
+function readDismissalLedger(): DispatchDismissalLedger {
+  try {
+    const raw = getDispatchStorage().getItem(DISPATCH_DISMISSAL_LEDGER_KEY);
+    if (!raw) {
+      return { dismissedJobIds: [], dismissedSessionIds: [] };
+    }
+    const parsed = JSON.parse(raw) as Partial<DispatchDismissalLedger>;
+    return {
+      dismissedJobIds: mergeDismissedIds(
+        [],
+        Array.isArray(parsed.dismissedJobIds) ? parsed.dismissedJobIds : [],
+        MAX_DISMISSED_JOB_IDS,
+      ),
+      dismissedSessionIds: mergeDismissedIds(
+        [],
+        Array.isArray(parsed.dismissedSessionIds) ? parsed.dismissedSessionIds : [],
+        MAX_DISMISSED_SESSION_IDS,
+      ),
+    };
+  } catch (error) {
+    log.warn('Failed to read dispatch dismissal ledger', { error });
+    return { dismissedJobIds: [], dismissedSessionIds: [] };
+  }
+}
+
+function recordDismissals(
+  jobIds: string[],
+  sessionIds: string[],
+): DispatchDismissalLedger {
+  const current = readDismissalLedger();
+  const next = {
+    dismissedJobIds: mergeDismissedIds(
+      current.dismissedJobIds,
+      jobIds,
+      MAX_DISMISSED_JOB_IDS,
+    ),
+    dismissedSessionIds: mergeDismissedIds(
+      current.dismissedSessionIds,
+      sessionIds,
+      MAX_DISMISSED_SESSION_IDS,
+    ),
+  };
+  try {
+    getDispatchStorage().setItem(
+      DISPATCH_DISMISSAL_LEDGER_KEY,
+      JSON.stringify(next),
+    );
+  } catch (error) {
+    log.error('Failed to persist dispatch dismissal ledger', { error });
+  }
+  return next;
+}
+
+function clearDismissalLedger(): void {
+  try {
+    getDispatchStorage().removeItem(DISPATCH_DISMISSAL_LEDGER_KEY);
+  } catch (error) {
+    log.warn('Failed to clear dispatch dismissal ledger', { error });
+  }
+}
 
 export interface DispatchObserverJob {
   jobId: string;
@@ -40,6 +138,8 @@ export interface DispatchObserverJob {
   approvalPolicy: DispatchApprovalPolicy;
   workspaceDelivery: DispatchWorkspaceDeliveryRequest;
   model?: string;
+  availableModels?: string[];
+  defaultModel?: string;
   cursor: number;
   state: DispatchJobState;
   terminalDrained?: boolean;
@@ -67,11 +167,13 @@ interface DispatchJobStoreState {
   transportByJobId: Record<string, DispatchTransportState>;
   /** Local projection tombstones. The target job remains durable, but must not reopen in navigation. */
   dismissedJobIds: string[];
+  /**
+   * Session-level tombstones cover incomplete projections where the job id is
+   * temporarily missing when the user deletes the navigation row.
+   */
+  dismissedSessionIds: string[];
   registerJob: (job: DispatchObserverJob) => void;
-  mergeOutboundRecords: (
-    records: OutboundDispatchRecord[],
-    fallbackSourceWorkspacePath?: string,
-  ) => void;
+  mergeOutboundRecords: (records: OutboundDispatchRecord[]) => void;
   updateProgress: (
     jobId: string,
     update: {
@@ -94,7 +196,20 @@ interface DispatchJobStoreState {
     lastTransportError?: string,
   ) => void;
   resetReplay: (jobId: string) => void;
+  adoptCachedReplay: (
+    jobId: string,
+    cached: {
+      cursor: number;
+      appliedEventIds: string[];
+      eventLogComplete: boolean;
+      historyTruncated: boolean;
+      omittedEventCount: number;
+    },
+  ) => void;
   updateTitle: (jobId: string, title: string) => void;
+  updateModel: (jobId: string, model: string) => void;
+  updateApprovalPolicy: (jobId: string, policy: DispatchApprovalPolicy) => void;
+  dismissSession: (sessionId: string, knownJobId?: string) => void;
   dismissJob: (jobId: string) => void;
   removeJob: (jobId: string) => void;
   clear: () => void;
@@ -129,15 +244,41 @@ function requestFromTarget(target: DispatchTarget): DispatchTargetRequest {
   }
 }
 
+const initialDismissalLedger = readDismissalLedger();
+
 export const useDispatchJobStore = create<DispatchJobStoreState>()(
   persist(
     (set, get) => ({
       jobs: {},
       transportByJobId: {},
-      dismissedJobIds: [],
+      dismissedJobIds: initialDismissalLedger.dismissedJobIds,
+      dismissedSessionIds: initialDismissalLedger.dismissedSessionIds,
 
       registerJob: (job) => {
         set(state => {
+          const ledger = readDismissalLedger();
+          const dismissedJobIds = mergeDismissedIds(
+            state.dismissedJobIds,
+            ledger.dismissedJobIds,
+            MAX_DISMISSED_JOB_IDS,
+          );
+          const dismissedSessionIds = mergeDismissedIds(
+            state.dismissedSessionIds,
+            ledger.dismissedSessionIds,
+            MAX_DISMISSED_SESSION_IDS,
+          );
+          if (
+            dismissedJobIds.includes(job.jobId)
+            || dismissedSessionIds.includes(job.sessionId)
+          ) {
+            log.info('Dispatch diagnostic: job registration suppressed by tombstone', {
+              jobId: job.jobId,
+              sessionId: job.sessionId,
+              jobTombstoned: dismissedJobIds.includes(job.jobId),
+              sessionTombstoned: dismissedSessionIds.includes(job.sessionId),
+            });
+            return { dismissedJobIds, dismissedSessionIds };
+          }
           const transportByJobId = {
             ...state.transportByJobId,
             [job.jobId]: state.transportByJobId[job.jobId] ?? {
@@ -154,16 +295,74 @@ export const useDispatchJobStore = create<DispatchJobStoreState>()(
               },
             },
             transportByJobId,
-            dismissedJobIds: state.dismissedJobIds.filter(id => id !== job.jobId),
+            dismissedJobIds,
+            dismissedSessionIds,
           };
         });
       },
 
-      mergeOutboundRecords: (records, fallbackSourceWorkspacePath) => {
+      mergeOutboundRecords: (records) => {
         set(state => {
+          const ledger = readDismissalLedger();
+          const dismissedJobIds = mergeDismissedIds(
+            state.dismissedJobIds,
+            ledger.dismissedJobIds,
+            MAX_DISMISSED_JOB_IDS,
+          );
+          const dismissedSessionIds = mergeDismissedIds(
+            state.dismissedSessionIds,
+            ledger.dismissedSessionIds,
+            MAX_DISMISSED_SESSION_IDS,
+          );
           const jobs = { ...state.jobs };
+          const authoritativeJobIds = new Set(records.map(record => record.jobId));
+          const prunedJobIds = new Set<string>();
+          for (const [jobId, job] of Object.entries(jobs)) {
+            if (
+              dismissedJobIds.includes(jobId)
+              || dismissedSessionIds.includes(job.sessionId)
+              || (
+                !authoritativeJobIds.has(jobId)
+                && job.state !== 'submitting'
+                && job.state !== 'submission_unknown'
+              )
+            ) {
+              // The controller index is authoritative after acknowledgement,
+              // while a tombstone also wins over cache rehydrated by an older
+              // renderer build.
+              delete jobs[jobId];
+              prunedJobIds.add(jobId);
+            }
+          }
           for (const record of records) {
-            if (state.dismissedJobIds.includes(record.jobId)) {
+            if (
+              dismissedJobIds.includes(record.jobId)
+              || dismissedSessionIds.includes(record.sessionId)
+            ) {
+              const projectionKey = `${record.jobId}:${record.sessionId}`;
+              if (!reportedSuppressedProjectionKeys.has(projectionKey)) {
+                if (reportedSuppressedProjectionKeys.size >= MAX_DISMISSED_JOB_IDS) {
+                  reportedSuppressedProjectionKeys.clear();
+                }
+                reportedSuppressedProjectionKeys.add(projectionKey);
+                log.info('Dispatch diagnostic: outbound record suppressed by tombstone', {
+                  jobId: record.jobId,
+                  sessionId: record.sessionId,
+                  jobTombstoned: dismissedJobIds.includes(record.jobId),
+                  sessionTombstoned: dismissedSessionIds.includes(record.sessionId),
+                });
+              }
+              continue;
+            }
+            const sourceWorkspacePath = record.sourceWorkspacePath?.trim() || undefined;
+            if (!sourceWorkspacePath) {
+              // A legacy/adopted record without controller-side ownership
+              // cannot safely be projected into any workspace. In particular,
+              // never assign it to whichever workspace happened to initialize
+              // first after restart. Remove any previously inferred cache
+              // entry so the old behavior migrates itself away.
+              delete jobs[record.jobId];
+              prunedJobIds.add(record.jobId);
               continue;
             }
             const existing = jobs[record.jobId];
@@ -174,6 +373,11 @@ export const useDispatchJobStore = create<DispatchJobStoreState>()(
                 ...existing,
                 target: record.target,
                 targetRequest: requestFromTarget(record.target),
+                // The durable outbound record is the only authority allowed
+                // to restore a projection after renderer restart.
+                sourceWorkspacePath,
+                sourceWorkspaceId:
+                  record.sourceWorkspaceId || existing.sourceWorkspaceId,
                 title: record.title || existing.title,
                 agentType: record.agentType || existing.agentType,
                 approvalPolicy: record.approvalPolicy || existing.approvalPolicy,
@@ -188,12 +392,19 @@ export const useDispatchJobStore = create<DispatchJobStoreState>()(
               };
               continue;
             }
+            log.info('Dispatch diagnostic: outbound record restored into renderer cache', {
+              jobId: record.jobId,
+              sessionId: record.sessionId,
+              sourceWorkspaceId: record.sourceWorkspaceId,
+              state: record.lastState,
+            });
             jobs[record.jobId] = {
               jobId: record.jobId,
               sessionId: record.sessionId,
               targetRequest: requestFromTarget(record.target),
               target: record.target,
-              sourceWorkspacePath: fallbackSourceWorkspacePath,
+              sourceWorkspacePath,
+              sourceWorkspaceId: record.sourceWorkspaceId,
               title: record.title || record.promptPreview || record.sessionId.slice(0, 8),
               agentType: record.agentType || 'agentic',
               approvalPolicy: record.approvalPolicy || 'reject-and-report',
@@ -214,10 +425,18 @@ export const useDispatchJobStore = create<DispatchJobStoreState>()(
             };
           }
           const transportByJobId = { ...state.transportByJobId };
+          for (const jobId of prunedJobIds) {
+            delete transportByJobId[jobId];
+          }
           for (const jobId of Object.keys(jobs)) {
             transportByJobId[jobId] ??= { reachability: 'unknown' };
           }
-          return { jobs, transportByJobId };
+          return {
+            jobs,
+            transportByJobId,
+            dismissedJobIds,
+            dismissedSessionIds,
+          };
         });
       },
 
@@ -306,6 +525,32 @@ export const useDispatchJobStore = create<DispatchJobStoreState>()(
         });
       },
 
+      adoptCachedReplay: (jobId, cached) => {
+        set(state => {
+          const current = state.jobs[jobId];
+          if (!current) return state;
+          return {
+            jobs: {
+              ...state.jobs,
+              [jobId]: {
+                ...current,
+                // Replaces rather than merges, and may move the cursor
+                // backwards. The restored transcript defines exactly which
+                // events are already on screen; anything this store remembers
+                // beyond that was projected into a renderer that is gone.
+                cursor: Math.max(0, cached.cursor),
+                terminalDrained: false,
+                appliedEventIds: cached.appliedEventIds.slice(-MAX_APPLIED_EVENT_IDS),
+                eventLogComplete: cached.eventLogComplete,
+                historyTruncated: cached.historyTruncated,
+                omittedEventCount: cached.omittedEventCount,
+                updatedAt: Date.now(),
+              },
+            },
+          };
+        });
+      },
+
       updateTitle: (jobId, title) => {
         set(state => {
           const current = state.jobs[jobId];
@@ -326,19 +571,111 @@ export const useDispatchJobStore = create<DispatchJobStoreState>()(
         });
       },
 
-      dismissJob: (jobId) => {
+      updateModel: (jobId, model) => {
         set(state => {
+          const current = state.jobs[jobId];
+          const normalizedModel = model.trim();
+          if (!current || !normalizedModel || current.model === normalizedModel) {
+            return state;
+          }
+          return {
+            jobs: {
+              ...state.jobs,
+              [jobId]: {
+                ...current,
+                model: normalizedModel,
+                updatedAt: Date.now(),
+              },
+            },
+          };
+        });
+      },
+
+      updateApprovalPolicy: (jobId, approvalPolicy) => {
+        set(state => {
+          const current = state.jobs[jobId];
+          if (!current || current.approvalPolicy === approvalPolicy) {
+            return state;
+          }
+          return {
+            jobs: {
+              ...state.jobs,
+              [jobId]: {
+                ...current,
+                approvalPolicy,
+                updatedAt: Date.now(),
+              },
+            },
+          };
+        });
+      },
+
+      dismissSession: (rawSessionId, knownJobId) => {
+        const sessionId = rawSessionId.trim();
+        const normalizedKnownJobId = knownJobId?.trim();
+        const matchingJobIds = Object.values(get().jobs)
+          .filter(job => job.sessionId === sessionId)
+          .map(job => job.jobId);
+        const ledger = recordDismissals(
+          [
+            ...matchingJobIds,
+            ...(normalizedKnownJobId ? [normalizedKnownJobId] : []),
+          ],
+          sessionId ? [sessionId] : [],
+        );
+        set(state => {
+          const dismissedJobIds = new Set(mergeDismissedIds(
+            state.dismissedJobIds,
+            ledger.dismissedJobIds,
+            MAX_DISMISSED_JOB_IDS,
+          ));
+          for (const job of Object.values(state.jobs)) {
+            if (job.sessionId === sessionId) {
+              dismissedJobIds.add(job.jobId);
+            }
+          }
+
           const jobs = { ...state.jobs };
           const transportByJobId = { ...state.transportByJobId };
-          delete jobs[jobId];
-          delete transportByJobId[jobId];
+          for (const jobId of dismissedJobIds) {
+            delete jobs[jobId];
+            delete transportByJobId[jobId];
+          }
+
           return {
             jobs,
             transportByJobId,
-            dismissedJobIds: Array.from(new Set([...state.dismissedJobIds, jobId]))
+            dismissedJobIds: Array.from(dismissedJobIds)
               .slice(-MAX_DISMISSED_JOB_IDS),
+            dismissedSessionIds: mergeDismissedIds(
+              state.dismissedSessionIds,
+              ledger.dismissedSessionIds,
+              MAX_DISMISSED_SESSION_IDS,
+            ),
           };
         });
+        const state = get();
+        log.info('Dispatch diagnostic: projection dismissed', {
+          sessionId,
+          knownJobId: normalizedKnownJobId,
+          matchingJobIds,
+          persistedJobTombstone: normalizedKnownJobId
+            ? state.dismissedJobIds.includes(normalizedKnownJobId)
+            : false,
+          persistedSessionTombstone: state.dismissedSessionIds.includes(sessionId),
+          ledgerJobTombstone: normalizedKnownJobId
+            ? ledger.dismissedJobIds.includes(normalizedKnownJobId)
+            : matchingJobIds.length > 0
+              && matchingJobIds.every(jobId => ledger.dismissedJobIds.includes(jobId)),
+          ledgerSessionTombstone: ledger.dismissedSessionIds.includes(sessionId),
+          dismissedJobCount: state.dismissedJobIds.length,
+          dismissedSessionCount: state.dismissedSessionIds.length,
+        });
+      },
+
+      dismissJob: (jobId) => {
+        const sessionId = get().jobs[jobId]?.sessionId ?? '';
+        get().dismissSession(sessionId, jobId);
       },
 
       removeJob: (jobId) => {
@@ -352,18 +689,67 @@ export const useDispatchJobStore = create<DispatchJobStoreState>()(
         });
       },
 
-      clear: () => set({ jobs: {}, transportByJobId: {}, dismissedJobIds: [] }),
+      clear: () => {
+        clearDismissalLedger();
+        set({
+          jobs: {},
+          transportByJobId: {},
+          dismissedJobIds: [],
+          dismissedSessionIds: [],
+        });
+      },
     }),
     {
-      name: 'bitfun-dispatch-jobs-v1',
+      name: DISPATCH_JOB_STORAGE_KEY,
       version: 1,
-      storage: createJSONStorage(() => (
-        typeof localStorage === 'undefined' ? fallbackStorage : localStorage
-      )),
+      storage: createJSONStorage(getDispatchStorage),
       partialize: state => ({
         jobs: state.jobs,
         dismissedJobIds: state.dismissedJobIds,
+        dismissedSessionIds: state.dismissedSessionIds,
       }),
+      merge: (persistedState, currentState) => {
+        const persisted = (persistedState ?? {}) as Partial<DispatchJobStoreState>;
+        const ledger = recordDismissals(
+          persisted.dismissedJobIds ?? [],
+          persisted.dismissedSessionIds ?? [],
+        );
+        const dismissedJobIds = mergeDismissedIds(
+          persisted.dismissedJobIds ?? [],
+          ledger.dismissedJobIds,
+          MAX_DISMISSED_JOB_IDS,
+        );
+        const dismissedSessionIds = mergeDismissedIds(
+          persisted.dismissedSessionIds ?? [],
+          ledger.dismissedSessionIds,
+          MAX_DISMISSED_SESSION_IDS,
+        );
+        const jobs = Object.fromEntries(
+          Object.entries(persisted.jobs ?? {}).filter(([, job]) => (
+            !dismissedJobIds.includes(job.jobId)
+            && !dismissedSessionIds.includes(job.sessionId)
+          )),
+        );
+        return {
+          ...currentState,
+          ...persisted,
+          jobs,
+          transportByJobId: {},
+          dismissedJobIds,
+          dismissedSessionIds,
+        };
+      },
+      onRehydrateStorage: () => (state, error) => {
+        if (error) {
+          log.error('Dispatch diagnostic: projection state rehydration failed', { error });
+          return;
+        }
+        log.info('Dispatch diagnostic: projection state rehydrated', {
+          jobIds: Object.keys(state?.jobs ?? {}),
+          dismissedJobIds: state?.dismissedJobIds ?? [],
+          dismissedSessionIds: state?.dismissedSessionIds ?? [],
+        });
+      },
     },
   ),
 );

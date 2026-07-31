@@ -30,6 +30,13 @@ import {
   DISPATCH_PROTOCOL_VERSION,
   isDispatchWorkspaceReady,
 } from './dispatchPreflight';
+import {
+  compareDispatchModels,
+  syncableLocalModelIds,
+} from './dispatchModelParity';
+import { configManager } from '@/infrastructure/config';
+import { getModelDisplayName } from '@/infrastructure/config/services/modelConfigs';
+import type { AIModelConfig } from '@/infrastructure/config/types';
 import './DispatchInstallDialog.scss';
 
 const log = createLogger('DispatchInstallDialog');
@@ -71,7 +78,9 @@ export const DispatchInstallDialog: React.FC<DispatchInstallDialogProps> = ({
   const { t } = useI18n('common');
   const [workspacePath, setWorkspacePath] = useState('');
   const [approvalPolicy, setApprovalPolicy] = useState<DispatchApprovalPolicy | null>(null);
-  const [deliveryKind, setDeliveryKind] = useState<'existing' | 'snapshot-exact'>('existing');
+  const [deliveryKind, setDeliveryKind] = useState<
+    'existing' | 'snapshot-source' | 'snapshot-exact'
+  >('existing');
   const [sensitiveFilesConfirmed, setSensitiveFilesConfirmed] = useState(false);
   const [probe, setProbe] = useState<DispatchSshProbe | null>(null);
   const [probedWorkspaceInput, setProbedWorkspaceInput] = useState<string | null>(null);
@@ -81,6 +90,7 @@ export const DispatchInstallDialog: React.FC<DispatchInstallDialogProps> = ({
   const [installStart, setInstallStart] = useState<DispatchInstallStart | null>(null);
   const [installOutput, setInstallOutput] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [localModels, setLocalModels] = useState<AIModelConfig[] | null>(null);
   const generationRef = useRef(0);
   const activeInstallRef = useRef<ActiveInstall | null>(null);
   const workspacePathRef = useRef(workspacePath);
@@ -126,9 +136,14 @@ export const DispatchInstallDialog: React.FC<DispatchInstallDialogProps> = ({
   useEffect(() => {
     if (!open || !targetId) return;
     const initialPath = target?.defaultWorkspace?.trim() ?? '';
+    const initialDelivery = initialPath
+      ? 'existing'
+      : sourceWorkspacePath?.trim()
+        ? 'snapshot-source'
+        : 'existing';
     setWorkspacePath(initialPath);
     setApprovalPolicy(null);
-    setDeliveryKind('existing');
+    setDeliveryKind(initialDelivery);
     setSensitiveFilesConfirmed(false);
     setProbe(null);
     setProbedWorkspaceInput(null);
@@ -138,7 +153,29 @@ export const DispatchInstallDialog: React.FC<DispatchInstallDialogProps> = ({
     setSyncingModel(false);
     setError(null);
     void runProbe(initialPath);
-  }, [open, runProbe, target?.defaultWorkspace, targetId]);
+  }, [open, runProbe, sourceWorkspacePath, target?.defaultWorkspace, targetId]);
+
+  // Reload on every open: the model catalog can change in settings while this
+  // dialog is closed, and a stale local list would report a false divergence.
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    void configManager.getConfig<AIModelConfig[]>('ai.models')
+      .then(models => {
+        if (!cancelled) setLocalModels(Array.isArray(models) ? models : []);
+      })
+      .catch(nextError => {
+        // Parity is advisory. Losing it degrades the readout to the target's
+        // own facts rather than blocking the dialog.
+        log.warn('Failed to read local model configuration for dispatch parity', {
+          error: nextError,
+        });
+        if (!cancelled) setLocalModels(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
 
   const clearActiveInstall = useCallback((generation: number) => {
     if (activeInstallRef.current?.generation === generation) {
@@ -347,9 +384,11 @@ export const DispatchInstallDialog: React.FC<DispatchInstallDialogProps> = ({
   const requiredCapabilities = [
     ...BASE_DISPATCH_CAPABILITIES,
     ...(selectedApprovalCapability ? [selectedApprovalCapability] : []),
-    ...(deliveryKind === 'snapshot-exact'
+    ...(deliveryKind === 'snapshot-source'
       ? ['workspace_snapshot_exact', 'workspace_snapshot_chunked']
-      : []),
+      : deliveryKind === 'snapshot-exact'
+        ? ['workspace_snapshot_exact', 'workspace_snapshot_chunked']
+        : []),
   ];
   const missingCapabilities = protocol
     ? requiredCapabilities.filter(capability => !protocol.capabilities.includes(capability))
@@ -362,11 +401,29 @@ export const DispatchInstallDialog: React.FC<DispatchInstallDialogProps> = ({
     !!protocol &&
     !probe.protocolError &&
     protocolCompatible;
-  const workspaceReady = deliveryKind === 'snapshot-exact'
-    ? !!sourceWorkspacePath?.trim() && sensitiveFilesConfirmed
-    : isDispatchWorkspaceReady(workspacePath, workspace, probedWorkspaceInput ?? undefined);
+  const workspaceReady = deliveryKind === 'snapshot-source'
+    ? !!sourceWorkspacePath?.trim()
+    : deliveryKind === 'snapshot-exact'
+      ? !!sourceWorkspacePath?.trim() && sensitiveFilesConfirmed
+      : isDispatchWorkspaceReady(workspacePath, workspace, probedWorkspaceInput ?? undefined);
   const modelReady = protocol?.modelConfigured === true;
   const ready = cliReady && workspaceReady && modelReady && approvalPolicy !== null;
+
+  const targetModelCount = protocol?.availableModels?.length ?? 0;
+  const modelParity = compareDispatchModels(
+    syncableLocalModelIds(localModels),
+    protocol?.availableModels,
+  );
+  // The probe carries ids, which name nothing a user recognizes. Resolve the
+  // target's default through the local catalog when the two agree; when they
+  // do not, the id would be misleading anyway and the count is the actionable
+  // fact.
+  const targetDefaultModelLabel = (() => {
+    const id = protocol?.defaultModel?.trim();
+    if (!id) return t('dispatch.modelAutomatic');
+    const local = localModels?.find(model => model.id?.trim() === id);
+    return local ? getModelDisplayName(local) : id;
+  })();
 
   const confirmTarget = () => {
     if (
@@ -380,7 +437,12 @@ export const DispatchInstallDialog: React.FC<DispatchInstallDialogProps> = ({
       ? workspace?.path?.trim() || workspacePath.trim()
       : '';
     const workspaceDelivery: DispatchWorkspaceDeliveryRequest =
-      deliveryKind === 'snapshot-exact'
+      deliveryKind === 'snapshot-source'
+        ? {
+            kind: 'snapshot-source',
+            sourceWorkspacePath: sourceWorkspacePath!.trim(),
+          }
+        : deliveryKind === 'snapshot-exact'
         ? {
             kind: 'snapshot-exact',
             sourceWorkspacePath: sourceWorkspacePath!.trim(),
@@ -407,6 +469,8 @@ export const DispatchInstallDialog: React.FC<DispatchInstallDialogProps> = ({
       },
       workspaceDelivery,
       approvalPolicy,
+      availableModels: protocol?.availableModels,
+      defaultModel: protocol?.defaultModel,
     });
   };
 
@@ -465,6 +529,25 @@ export const DispatchInstallDialog: React.FC<DispatchInstallDialogProps> = ({
                   type="button"
                   role="radio"
                   className="dispatch-install-dialog__option"
+                  aria-checked={deliveryKind === 'snapshot-source'}
+                  data-selected={deliveryKind === 'snapshot-source'}
+                  disabled={!sourceWorkspacePath?.trim()}
+                  onClick={() => setDeliveryKind('snapshot-source')}
+                >
+                  <span>
+                    <strong>{t('dispatch.deliverySourceSnapshot')}</strong>
+                    <small>
+                      {sourceWorkspacePath?.trim()
+                        ? t('dispatch.deliverySourceSnapshotDescription')
+                        : t('dispatch.deliverySnapshotUnavailable')}
+                    </small>
+                  </span>
+                  {deliveryKind === 'snapshot-source' ? <Check size={16} /> : null}
+                </button>
+                <button
+                  type="button"
+                  role="radio"
+                  className="dispatch-install-dialog__option"
                   aria-checked={deliveryKind === 'snapshot-exact'}
                   data-selected={deliveryKind === 'snapshot-exact'}
                   disabled={!sourceWorkspacePath?.trim()}
@@ -510,7 +593,7 @@ export const DispatchInstallDialog: React.FC<DispatchInstallDialogProps> = ({
                     </Button>
                   </div>
                 </label>
-              ) : (
+              ) : deliveryKind === 'snapshot-exact' ? (
                 <>
                   <div className="dispatch-install-dialog__consent">
                     <strong>{t('dispatch.snapshotSource')}</strong>
@@ -527,6 +610,22 @@ export const DispatchInstallDialog: React.FC<DispatchInstallDialogProps> = ({
                   </div>
                   {/* The design contract requires naming where results land; until a
                       pull-back exists this is the only way to reach them. */}
+                  <div className="dispatch-install-dialog__field">
+                    <span className="dispatch-install-dialog__field-label">
+                      {t('dispatch.snapshotResultLocation')}
+                    </span>
+                    <span className="dispatch-install-dialog__hint">
+                      {t('dispatch.snapshotResultLocationHint')}
+                    </span>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="dispatch-install-dialog__consent">
+                    <strong>{t('dispatch.snapshotSource')}</strong>
+                    <code>{sourceWorkspacePath}</code>
+                    <span>{t('dispatch.sourceSnapshotHint')}</span>
+                  </div>
                   <div className="dispatch-install-dialog__field">
                     <span className="dispatch-install-dialog__field-label">
                       {t('dispatch.snapshotResultLocation')}
@@ -596,9 +695,13 @@ export const DispatchInstallDialog: React.FC<DispatchInstallDialogProps> = ({
                   <div data-state={modelReady ? 'ok' : 'blocked'}>
                     <span>{t('dispatch.modelStatus')}</span>
                     <strong>
-                      {modelReady
-                        ? t('dispatch.modelReady', { model: protocol?.defaultModel || t('dispatch.modelAutomatic') })
-                        : protocol?.modelDiagnostic || t('dispatch.modelMissing')}
+                      {!modelReady
+                        ? protocol?.modelDiagnostic || t('dispatch.modelMissing')
+                        : modelParity === 'match'
+                          ? t('dispatch.modelMatchesLocal', { model: targetDefaultModelLabel })
+                          : modelParity === 'diverged'
+                            ? t('dispatch.modelDiffersFromLocal', { count: targetModelCount })
+                            : t('dispatch.modelReadyCount', { count: targetModelCount })}
                     </strong>
                   </div>
                 </div>
@@ -672,7 +775,7 @@ export const DispatchInstallDialog: React.FC<DispatchInstallDialogProps> = ({
             </section>
           ) : null}
 
-          {target?.kind === 'ssh' && probe?.protocol && !modelReady ? (
+          {target?.kind === 'ssh' && probe?.protocol ? (
             <section className="dispatch-install-dialog__section">
               <div className="dispatch-install-dialog__section-header">
                 <h3 className="dispatch-install-dialog__section-title">

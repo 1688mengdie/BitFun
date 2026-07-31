@@ -256,12 +256,14 @@ Headless CLI 和公开 Agent SDK 都调用同一 Agent Runtime API，但交付�
 
 | 形态 | 默认部署 | 当前 Shared 范围 |
 |---|---|---|
-| 交互式 TUI | Embedded | 显式 `--shared` 后支持 Session list/create/restore、transcript、当前 Session rename/Agent mode/model、声明式上下文 reload、当前 Session 手动 context compaction、Turn submit/cancel、Permission 和 UserInput |
+| 交互式 TUI | Embedded | 显式 `--shared` 后支持 Session list/create/restore/delete/fork、transcript、当前 Session rename/Agent mode/model、声明式上下文 reload、当前 Session 手动 context compaction、Session undo/redo、Turn submit/cancel、Permission 和 UserInput |
 | `bitfun exec` / CI | Embedded | 不接受 Shared；保持独立进程、stdout/stderr 和退出码语义 |
 | ACP / SDK Host / GUI / Remote / Peer | 各自既有部署 | 不消费 TUI IPC，也不因本开关改变生命周期 |
 
-Shared TUI 不提供 Session delete/fork、模型目录/默认值、Agent/Subagent 管理、MCP/扩展、账号同步、用量、observer、replay 或 controller transfer；对应入口给出明确的 Embedded 恢复建议，不在 Client 进程初始化第二套 Core owner。
-Shared 模式的斜杠命令、快捷键帮助和底部提示使用同一能力投影：`/rename <name>` 修改当前 Session 名称；`/agent`、Tab 和 Shift+Tab 只切换当前 Session 的 Agent mode；`/models` 只切换当前 Session 的 model；`/reload [skills|instructions]` 刷新下一条消息使用的声明式上下文；OpenCode 对齐的 `/compact` 及其 `/summarize` alias 以一个可取消的 maintenance Turn 压缩当前 Session 上下文，不增加自创命令或快捷键。该 Turn 与普通对话共用 Session 原子准入，取得所有权后再读取待压缩上下文；权威 transcript 保留完整 tool payload，但重建模型上下文时排除该 maintenance Turn。Embedded 与 Shared 的 `/help` 都从 Action Registry 展示这些入口；在 slash menu 中选择 rename 只预填命令并等待用户输入名称。若外部来源使用相同命令名，用户明确选择的 BitFun 命令可完成这一次参数提交，即使偏好保存失败也不会重新弹出来源选择。它们不进入管理页面，也不修改未来 Session 的默认值。其他不支持动作不显示为可执行入口。Session 切换失败保留原控制权；单个连接已有活动 Turn 时拒绝重复提交、manual compaction 以及 Session rename/mode/model update，但允许 reload 只影响下一条消息；事件订阅失效后当前视图立即失效并要求重启 Shared TUI。
+Shared TUI 不提供 Session archive、模型目录/默认值、Agent/Subagent 管理、MCP/扩展、账号同步、用量、observer、replay 或通用 controller transfer；对应入口给出明确的 Embedded 恢复建议，不在 Client 进程初始化第二套 Core owner。
+Shared 模式的斜杠命令、快捷键帮助和底部提示使用同一能力投影：OpenCode 对齐的 `/fork` 以 `Full session` 或历史用户提示词选择分支边界；选择提示词时 fork 只复制该 Turn 之前的历史，并把提示词放回 composer 而不自动发送。`/rename <name>` 修改当前 Session 名称；`/agent`、Tab 和 Shift+Tab 只切换当前 Session 的 Agent mode；`/models` 只切换当前 Session 的 model；`/reload [skills|instructions]` 刷新下一条消息使用的声明式上下文；OpenCode 对齐的 `/compact` 及其 `/summarize` alias 以一个可取消的 maintenance Turn 压缩当前 Session 上下文，不增加自创命令或快捷键。该 Turn 与普通对话共用 Session 原子准入，取得所有权后再读取待压缩上下文；权威 transcript 保留完整 tool payload，但重建模型上下文时排除该 maintenance Turn。Embedded 与 Shared 的 `/help` 都从 Action Registry 展示这些入口；在 slash menu 中选择 rename 只预填命令并等待用户输入名称。若外部来源使用相同命令名，用户明确选择的 BitFun 命令可完成这一次参数提交，即使偏好保存失败也不会重新弹出来源选择。它们不进入管理页面，也不修改未来 Session 的默认值。其他不支持动作不显示为可执行入口。Session 切换或 fork 失败保留原控制权；Shared fork 只有在新 Session 与 transcript 的响应可编码后才原子转移 controller。单个连接已有活动 Turn 时拒绝重复提交、fork、manual compaction 以及 Session rename/mode/model update，但允许 reload 只影响下一条消息；事件订阅失效后当前视图立即失效并要求重启 Shared TUI。
+
+OpenCode 对齐的 `/undo` 与 `/redo` 只提供这两个命令名，不增加 alias、快捷键或通用 checkpoint API。Core 以持久化的 staged boundary 同步裁剪可见 transcript、模型上下文和该边界后的受跟踪工作区改动；`/undo` 把被撤销的用户提示词放回 composer，连续调用可继续向前，`/redo` 逐级恢复直到清除 boundary，usage 与 fork 也只读取该 boundary 前的可见事实。活动 Turn 必须先由 scheduler 完成取消和 drain，失败时不写入 boundary；Shared 仍要求 current controller，并以 Runtime 返回的权威 transcript 更新 TUI。暂存期间提交新提示词或执行既有本地 snapshot accept/reject/rollback mutation，会先进入可恢复的 committing 阶段，永久删除隐藏后缀再建立新分支；同一阶段的 snapshot record 被拒绝，避免追加到隐藏历史。崩溃恢复会按持久化阶段重放 workspace/context 对齐或完成提交；跨文件系统与 Session 存储不宣称原子事务，部分失败返回 `outcome_unknown` 并要求恢复 Session 后检查。该能力当前只支持本地工作区，Remote 在任何回退写入前返回 `NotAvailable`。
 
 部署差异由 CLI Runtime client 封装。Embedded 以 Rust 类型直接调用 `AgentRuntime`，不初始化 IPC 或执行 JSON 编解码；Shared 将同一业务请求映射为一个有界本机 frame，Client/Server 各自只编码一次，再交给同一 Runtime owner。多 TUI 复用一个 Runtime 进程，连接和队列保持有界，不按 TUI 数量复制 Session owner。详细的 4+1 视图、帧上限和并发边界见
 [`agent-runtime-deployment-design.md`](agent-runtime-deployment-design.md)。
@@ -542,14 +544,30 @@ plan stale 后只保留旧选择与新 eligible 项的交集，新候选不自�
 规则文件优先复用项目已有文件，不复制出第二份内容。若不同生态规则冲突，导入报告必须展示目标文件、
 优先级和冲突段，不能自动拼接。
 
-当前 Workspace Instructions 只消费真实工作区根，本地和 Remote 共用同一个解析器与 `WorkspaceFileSystem` 端口。
-固定顺序是：`AGENTS.override.md`（存在时替代 `AGENTS.md`，空文件也不回退）、根 `CLAUDE.md` 或
-`.claude/CLAUDE.md`、`CLAUDE.local.md`、不带 `paths` front matter 的 `.claude/rules/**/*.md`，最后是项目根与
-`.opencode` 中 `opencode.json/jsonc` 的本地 `instructions` 文件或 glob。Claude `@import` 只跟随工作区内文件，
-深度上限为 5，并对重复和循环引用去重；所有目录遍历都跳过符号链接。运行时尚无稳定的嵌套活动目录事实，因此
-不声明 root-to-cwd 级联。递归扫描跳过 VCS、依赖与构建目录，并对扫描节点、文件数量、单文件和总内容字节设置固定
-上限，避免宽 glob 阻塞本地或 Remote 工作区。Claude path-scoped rules、全局规则、OpenCode 远程 URL、变化监听和冲突
-报告也不属于当前实现。
+本地 Workspace Instructions 先读取用户级生态来源，再追加项目来源。用户级固定顺序是 OpenCode、Codex、Claude Code：
+OpenCode 读取 `$XDG_CONFIG_HOME/opencode/AGENTS.md`（默认 `~/.config/opencode/AGENTS.md`），不存在时回退
+`~/.claude/CLAUDE.md`；随后按 `config.json`、`opencode.json`、`opencode.jsonc` 的原生覆盖顺序读取最终
+`instructions` 数组，支持 workspace 相对、`~/`、绝对本地精确文件和有界 glob，不获取 HTTP/HTTPS URL。Codex 在
+`$CODEX_HOME`（默认 `~/.codex`）中读取首个非空的 `AGENTS.override.md` 或 `AGENTS.md`；空 override 继续回退到基础文件。Claude Code
+从 `$CLAUDE_CONFIG_DIR`（默认 `~/.claude`）读取 `CLAUDE.md`、不带 `paths` front matter 的 `rules/**/*.md`，并只在
+该用户配置根内跟随深度最多 5 的 `@import`。跨生态按 canonical path 保留首个来源，用户来源合计限制为 256 个文件、
+单文件 1 MiB、总内容 2 MiB；进入提示词的名称只显示 `~`、环境变量根、`<workspace>` 或 `<configured-path>`。环境变量
+指定的用户根必须是绝对路径，无法确定用户根时跳过该生态而不回退进程 cwd。Codex 只读取用户根的 Instruction 文件，
+不扫描 `$CODEX_HOME/plugins/cache` 等产品插件缓存。用户与项目来源合成后再次执行一个共享的 256 文件、2 MiB 最终
+渲染预算；按既定顺序保留完整文件前缀，不截断单个 Instruction 文档。
+
+项目来源仍由 Workspace Instructions owner 通过本地文件系统或 `WorkspaceFileSystem` 端口统一解析。固定顺序是：
+`AGENTS.override.md`（存在时替代 `AGENTS.md`，空文件也不回退）、根 `CLAUDE.md` 或 `.claude/CLAUDE.md`、
+`CLAUDE.local.md`、不带 `paths` front matter 的 `.claude/rules/**/*.md`，最后是项目根与 `.opencode` 中
+`opencode.json/jsonc` 的本地 `instructions` 文件或 glob。Claude `@import` 只跟随工作区内文件，深度上限为 5，并对
+重复和循环引用去重；所有目录遍历都跳过符号链接。运行时尚无稳定的嵌套活动目录事实，因此不声明 root-to-cwd 级联。
+递归扫描跳过 VCS、依赖与构建目录，并对扫描节点、文件数量、单文件和总内容字节设置固定上限，避免宽 glob 阻塞本地
+或 Remote 工作区。Remote 只使用端口可见的项目来源，绝不回退到控制端的本机用户目录。单个用户生态读取失败只隔离
+该生态，项目来源和其他用户生态仍可用；I/O 或解析失败时这次 user context 构建不写缓存，下一条消息会重试。确定性
+遍历预算超限则跳过对应 OpenCode glob 或 Claude rules 集合、保留已读取的基础文件并允许缓存，避免每条消息重复同一宽扫描。
+
+Claude path-scoped rules、OpenCode 远程 URL、managed/organization policy、变化监听、冲突报告和 Plugin Runtime 不属于
+当前实现。
 
 现有对 `.claude/.codex/.opencode/.agents` Skill 根的直接发现已经保留来源身份和全局/项目使用范围，并在 GUI/TUI
 展示来源和默认覆盖状态，模式配置再展示实际采用项；固定根顺序保持为 Skill Registry 的独立回归契约。Registry 仅按

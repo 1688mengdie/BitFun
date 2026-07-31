@@ -159,6 +159,15 @@
     }
   }
 
+  // Inert "installed" state that sits beside the action buttons in the modal footer.
+  &__installed-state {
+    display: inline-flex;
+    align-items: center;
+    gap: $size-gap-1;
+    color: var(--color-success);
+    font-size: var(--font-size-sm);
+  }
+
   &__screenshots {
     display: flex;
     gap: $size-gap-2;
@@ -221,6 +230,23 @@
       border-radius: $size-radius-base;
       color: var(--color-text-secondary);
       font-size: var(--font-size-sm);
+    }
+  }
+
+  &__releases-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: $size-gap-1;
+    margin-top: $size-gap-2;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--color-text-muted);
+    font-size: var(--font-size-xs);
+    cursor: pointer;
+
+    &:hover {
+      color: var(--color-text-secondary);
     }
   }
 }

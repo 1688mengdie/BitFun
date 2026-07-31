@@ -14,9 +14,10 @@ use tokio::sync::{broadcast, Mutex};
 use bitfun_agent_runtime::sdk::{
     AgentDialogTurnRequest, AgentEventReceiver, AgentLocalCommandTurnRecordRequest, AgentRuntime,
     AgentSessionCompactionRequest, AgentSessionCreateRequest, AgentSessionDeleteRequest,
-    AgentSessionForkRequest, AgentSessionForkResult, AgentSessionListRequest,
-    AgentSessionModeUpdateRequest, AgentSessionModelUpdateRequest, AgentSessionRenameRequest,
-    AgentSessionRestoreRequest, AgentSessionUsageRequest, AgentTurnCancellationRequest,
+    AgentSessionForkBeforeTurnRequest, AgentSessionForkRequest, AgentSessionForkResult,
+    AgentSessionListRequest, AgentSessionModeUpdateRequest, AgentSessionModelUpdateRequest,
+    AgentSessionRenameRequest, AgentSessionRestoreRequest, AgentSessionRevertRequest,
+    AgentSessionRevertResult, AgentSessionUsageRequest, AgentTurnCancellationRequest,
     AgentTurnSettlementRequest, AgentUserAnswersRequest, PermissionReply, PermissionRequest,
     PermissionRequestEventReceiver, PortError, PortErrorKind, RuntimeError, SessionTranscript,
     SessionTranscriptRequest, SessionUsageReport,
@@ -24,8 +25,8 @@ use bitfun_agent_runtime::sdk::{
 use bitfun_agent_runtime_ipc::{
     RuntimeIpcClient, RuntimeIpcClientError, RuntimeIpcClientEvent, RuntimeIpcErrorCode,
     RuntimeIpcEvent, RuntimeIpcOperation, RuntimeIpcOperationResult,
-    RuntimeIpcStreamInvalidationReason, RuntimeSessionRenameRequest, RuntimeSessionRestoreRequest,
-    RuntimeUserAnswersRequest,
+    RuntimeIpcStreamInvalidationReason, RuntimeSessionForkRequest, RuntimeSessionRenameRequest,
+    RuntimeSessionRestoreRequest, RuntimeUserAnswersRequest,
 };
 use bitfun_events::{AgenticEvent, AgenticEventEnvelope};
 use bitfun_runtime_ports::{
@@ -729,6 +730,139 @@ impl CliAgentRuntimeClient {
             })
             .await
             .map_err(|error| anyhow::anyhow!(error.into_message()))
+    }
+
+    pub(crate) async fn fork_current_session(
+        &self,
+        before_turn_id: Option<&str>,
+    ) -> Result<(
+        AgentSessionSummary,
+        AgentSessionWorkspaceBinding,
+        SessionTranscript,
+    )> {
+        let source_session_id = self.require_session_id().await?;
+        let workspace_path = self.project_workspace_path_string();
+        let (session, transcript) = match &self.backend {
+            CliAgentRuntimeBackend::Embedded(runtime) => {
+                let forked = match before_turn_id {
+                    Some(source_turn_id) => {
+                        runtime
+                            .fork_session_before_turn(AgentSessionForkBeforeTurnRequest {
+                                workspace_path: workspace_path.clone(),
+                                source_session_id,
+                                source_turn_id: source_turn_id.to_string(),
+                                remote_connection_id: None,
+                                remote_ssh_host: None,
+                            })
+                            .await
+                    }
+                    None => {
+                        runtime
+                            .fork_session(AgentSessionForkRequest {
+                                workspace_path: workspace_path.clone(),
+                                source_session_id,
+                                remote_connection_id: None,
+                                remote_ssh_host: None,
+                            })
+                            .await
+                    }
+                }
+                .map_err(|error| anyhow::anyhow!(error.into_message()))?;
+                let restored = runtime
+                    .restore_session(AgentSessionRestoreRequest {
+                        workspace_path: workspace_path.clone(),
+                        session_id: forked.session_id.clone(),
+                        include_internal: false,
+                        remote_connection_id: None,
+                        remote_ssh_host: None,
+                    })
+                    .await
+                    .map_err(|error| anyhow::anyhow!(error.into_message()))?;
+                let transcript = runtime
+                    .read_session_transcript(SessionTranscriptRequest {
+                        session_id: forked.session_id,
+                        turn_id: None,
+                    })
+                    .await
+                    .map_err(|error| anyhow::anyhow!(error.into_message()))?;
+                (restored.session, transcript)
+            }
+            CliAgentRuntimeBackend::Shared(client) => match client
+                .request(RuntimeIpcOperation::ForkSession {
+                    request: RuntimeSessionForkRequest {
+                        session_id: source_session_id,
+                        before_turn_id: before_turn_id.map(str::to_string),
+                    },
+                })
+                .await?
+            {
+                RuntimeIpcOperationResult::SessionForked {
+                    session,
+                    transcript,
+                } => (session, transcript),
+                _ => return Err(unexpected_shared_result("fork_session")),
+            },
+        };
+
+        let binding = self
+            .resolve_session_workspace_binding(&session.session_id, Path::new(&workspace_path))
+            .await?;
+        *self.session_id.lock().await = Some(session.session_id.clone());
+        *self.current_turn_id.lock().await = None;
+        self.shared_pending_permissions
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clear();
+        Ok((session, binding, transcript))
+    }
+
+    pub(crate) async fn revert_current_session(
+        &self,
+        undo: bool,
+    ) -> Result<AgentSessionRevertResult> {
+        let session_id = self.require_session_id().await?;
+        let request = AgentSessionRevertRequest {
+            workspace_path: self.project_workspace_path_string(),
+            session_id: session_id.clone(),
+            remote_connection_id: None,
+            remote_ssh_host: None,
+        };
+        let locally_active_turn_id = self.current_turn_id.lock().await.clone();
+        let mut reverted = match &self.backend {
+            CliAgentRuntimeBackend::Embedded(runtime) => if undo {
+                runtime.undo_session(request).await
+            } else {
+                runtime.redo_session(request).await
+            }
+            .map_err(|error| anyhow::anyhow!(error.into_message()))?,
+            CliAgentRuntimeBackend::Shared(client) => {
+                let operation = if undo {
+                    RuntimeIpcOperation::UndoSession { request }
+                } else {
+                    RuntimeIpcOperation::RedoSession { request }
+                };
+                match client.request(operation).await? {
+                    RuntimeIpcOperationResult::SessionReverted { revert }
+                        if revert.session_id == session_id =>
+                    {
+                        revert
+                    }
+                    _ => return Err(unexpected_shared_result("revert_session")),
+                }
+            }
+        };
+        if reverted.session_id != session_id {
+            return Err(anyhow::anyhow!(
+                "Runtime reverted an unexpected session identity"
+            ));
+        }
+        if let Some(turn_id) = locally_active_turn_id {
+            if !reverted.retired_turn_ids.contains(&turn_id) {
+                reverted.retired_turn_ids.push(turn_id);
+            }
+        }
+        *self.current_turn_id.lock().await = None;
+        Ok(reverted)
     }
 
     pub(crate) async fn generate_session_usage_report(
@@ -1551,6 +1685,44 @@ mod tests {
         assert!(compact.contains("RuntimeIpcOperationResult::TurnAccepted"));
         assert!(!compact.contains("serde_json::to_value"));
         assert!(!compact.contains("serde_json::from_value"));
+    }
+
+    #[test]
+    fn interactive_session_fork_uses_the_same_runtime_boundary_in_both_deployments() {
+        let source = include_str!("runtime_client.rs").replace("\r\n", "\n");
+        let fork = source
+            .split_once("pub(crate) async fn fork_current_session(")
+            .expect("interactive fork method")
+            .1
+            .split_once("pub(crate) async fn generate_session_usage_report(")
+            .expect("interactive fork method boundary")
+            .0;
+
+        assert!(fork.contains("CliAgentRuntimeBackend::Embedded(runtime)"));
+        assert!(fork.contains(".fork_session_before_turn("));
+        assert!(fork.contains(".fork_session(AgentSessionForkRequest"));
+        assert!(fork.contains("CliAgentRuntimeBackend::Shared(client)"));
+        assert!(fork.contains("RuntimeIpcOperation::ForkSession"));
+        assert!(fork.contains("RuntimeIpcOperationResult::SessionForked"));
+    }
+
+    #[test]
+    fn session_revert_uses_the_same_authoritative_result_in_both_deployments() {
+        let source = include_str!("runtime_client.rs").replace("\r\n", "\n");
+        let revert = source
+            .split_once("pub(crate) async fn revert_current_session(")
+            .expect("session revert method")
+            .1
+            .split_once("pub(crate) async fn generate_session_usage_report(")
+            .expect("session revert method boundary")
+            .0;
+
+        assert!(revert.contains("CliAgentRuntimeBackend::Embedded(runtime)"));
+        assert!(revert.contains("runtime.undo_session(request)"));
+        assert!(revert.contains("runtime.redo_session(request)"));
+        assert!(revert.contains("RuntimeIpcOperation::UndoSession"));
+        assert!(revert.contains("RuntimeIpcOperation::RedoSession"));
+        assert!(revert.contains("RuntimeIpcOperationResult::SessionReverted"));
     }
 
     #[test]

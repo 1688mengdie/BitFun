@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   installCliCancel: vi.fn(),
   syncModelConfig: vi.fn(),
   confirmWarning: vi.fn(),
+  getConfig: vi.fn(),
   modalOnClose: null as (() => void) | null,
   modalLifecycleProps: null as {
     closeOnOverlayClick?: boolean;
@@ -38,6 +39,15 @@ vi.mock('@/infrastructure/i18n', () => ({
   useI18n: () => ({
     t: (key: string) => key,
   }),
+}));
+
+vi.mock('@/infrastructure/config', () => ({
+  configManager: { getConfig: mocks.getConfig },
+}));
+
+vi.mock('@/infrastructure/config/services/modelConfigs', () => ({
+  getModelDisplayName: (config: { name?: string; model_name?: string }) =>
+    `${config.name ?? ''}/${config.model_name ?? ''}`,
 }));
 
 vi.mock('@/component-library', () => ({
@@ -129,6 +139,7 @@ describe('DispatchInstallDialog installation lifecycle', () => {
     });
     mocks.confirmWarning.mockResolvedValue(true);
     mocks.installCliCancel.mockResolvedValue(undefined);
+    mocks.getConfig.mockResolvedValue([]);
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
@@ -306,6 +317,76 @@ describe('DispatchInstallDialog installation lifecycle', () => {
     expect(container.textContent).toContain('dispatch.snapshotResultLocationHint');
   });
 
+  it('defaults an unbound target to a source snapshot and preserves target model facts', async () => {
+    const onReady = vi.fn();
+    mocks.probeTarget.mockResolvedValue({
+      cliInstalled: true,
+      os: 'linux',
+      arch: 'x86_64',
+      installSupported: false,
+      protocol: {
+        protocolVersion: 2,
+        cliVersion: '1.2.3',
+        os: 'linux',
+        arch: 'x86_64',
+        capabilities: [
+          'persistent_jobs',
+          'cursor_events',
+          'detached_worker',
+          'frontend_event_projection',
+          'workspace_serialization',
+          'dispatch_worker_cli_profile',
+          'workspace_snapshot_exact',
+          'workspace_snapshot_chunked',
+          'approval_remote',
+        ],
+        modelConfigured: true,
+        availableModels: ['model-a', 'model-b'],
+        defaultModel: 'model-b',
+      },
+    });
+
+    await act(async () => {
+      root.render(
+        <DispatchInstallDialog
+          open
+          target={{ kind: 'ssh', connectionId: 'ssh-1', displayName: 'build-host' }}
+          sourceWorkspacePath="/home/me/project"
+          onClose={vi.fn()}
+          onReady={onReady}
+        />,
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const sourceSnapshot = Array.from(container.querySelectorAll('button'))
+      .find(button => button.textContent?.includes('dispatch.deliverySourceSnapshot'));
+    expect(sourceSnapshot?.getAttribute('aria-checked')).toBe('true');
+
+    const remoteApproval = Array.from(container.querySelectorAll('button'))
+      .find(button => button.textContent?.includes('dispatch.approvalRemote'));
+    await act(async () => {
+      remoteApproval?.click();
+    });
+    const useTarget = Array.from(container.querySelectorAll('button'))
+      .find(button => button.textContent?.includes('dispatch.useTarget'));
+    expect(useTarget?.disabled).toBe(false);
+
+    await act(async () => {
+      useTarget?.click();
+    });
+    expect(onReady).toHaveBeenCalledWith(expect.objectContaining({
+      workspaceDelivery: {
+        kind: 'snapshot-source',
+        sourceWorkspacePath: '/home/me/project',
+      },
+      approvalPolicy: 'remote',
+      availableModels: ['model-a', 'model-b'],
+      defaultModel: 'model-b',
+    }));
+  });
+
   it('cancels an acknowledged installer when the parent closes the dialog during polling', async () => {
     const poll = createDeferred<{
       cursor: number;
@@ -403,6 +484,7 @@ describe('DispatchInstallDialog model configuration sync', () => {
           'detached_worker',
           'frontend_event_projection',
           'workspace_serialization',
+          'dispatch_worker_cli_profile',
         ],
         modelConfigured,
         availableModels: modelConfigured ? ['claude'] : [],
@@ -437,6 +519,7 @@ describe('DispatchInstallDialog model configuration sync', () => {
     mocks.modalOnClose = null;
     mocks.probeTarget.mockImplementation(async () => probeResult());
     mocks.confirmWarning.mockResolvedValue(true);
+    mocks.getConfig.mockResolvedValue([]);
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
@@ -447,7 +530,7 @@ describe('DispatchInstallDialog model configuration sync', () => {
     container.remove();
   });
 
-  it('offers the sync only while the target CLI answers without a usable model', async () => {
+  it('keeps model sync available after the target reports a usable model', async () => {
     await mount();
     expect(syncButton()).toBeDefined();
 
@@ -467,7 +550,7 @@ describe('DispatchInstallDialog model configuration sync', () => {
     expect(mocks.syncModelConfig).toHaveBeenCalledWith('ssh-1');
     // The sync re-probes so the model check reflects the target, not the write.
     expect(mocks.probeTarget.mock.calls.length).toBeGreaterThan(probesBeforeSync);
-    expect(syncButton()).toBeUndefined();
+    expect(syncButton()).toBeDefined();
   });
 
   it('does not write the credential-bearing config when the confirmation is declined', async () => {
@@ -510,5 +593,127 @@ describe('DispatchInstallDialog model configuration sync', () => {
     });
 
     expect(mocks.probeTarget.mock.calls.length).toBe(probesBeforeClose);
+  });
+});
+
+describe('DispatchInstallDialog target model readout', () => {
+  let container: HTMLDivElement;
+  let root: Root;
+
+  const target = {
+    kind: 'ssh' as const,
+    connectionId: 'ssh-1',
+    displayName: 'build-host',
+  };
+
+  function localModel(id: string, modelName: string) {
+    return {
+      id,
+      name: 'Anthropic',
+      model_name: modelName,
+      provider: 'anthropic',
+      base_url: 'https://example.test',
+      api_key: 'secret',
+      enabled: true,
+      category: 'chat',
+      capabilities: [],
+    };
+  }
+
+  function probeWith(availableModels: string[], defaultModel: string) {
+    return {
+      cliInstalled: true,
+      os: 'linux',
+      arch: 'x86_64',
+      installSupported: true,
+      protocol: {
+        protocolVersion: 2,
+        cliVersion: '1.2.3',
+        os: 'linux',
+        arch: 'x86_64',
+        capabilities: [
+          'persistent_jobs',
+          'cursor_events',
+          'detached_worker',
+          'frontend_event_projection',
+          'workspace_serialization',
+          'dispatch_worker_cli_profile',
+        ],
+        modelConfigured: true,
+        availableModels,
+        defaultModel,
+      },
+    };
+  }
+
+  async function mount() {
+    await act(async () => {
+      root.render(
+        <DispatchInstallDialog
+          open
+          target={target}
+          onClose={vi.fn()}
+          onReady={vi.fn()}
+        />,
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.modalOnClose = null;
+    mocks.confirmWarning.mockResolvedValue(true);
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  it('reports parity with this device instead of an opaque config id', async () => {
+    mocks.probeTarget.mockResolvedValue(
+      probeWith(['model_1', 'model_2'], 'model_2'),
+    );
+    mocks.getConfig.mockResolvedValue([
+      localModel('model_1', 'claude-haiku'),
+      localModel('model_2', 'claude-opus'),
+    ]);
+
+    await mount();
+
+    expect(container.textContent).toContain('dispatch.modelMatchesLocal');
+    expect(container.textContent).not.toContain('dispatch.modelDiffersFromLocal');
+    // The id itself must never be what the user is asked to read.
+    expect(container.textContent).not.toContain('model_2');
+  });
+
+  it('reports the target model count when the catalogs differ', async () => {
+    mocks.probeTarget.mockResolvedValue(probeWith(['model_1'], 'model_1'));
+    mocks.getConfig.mockResolvedValue([
+      localModel('model_1', 'claude-haiku'),
+      localModel('model_2', 'claude-opus'),
+    ]);
+
+    await mount();
+
+    expect(container.textContent).toContain('dispatch.modelDiffersFromLocal');
+    expect(container.textContent).not.toContain('dispatch.modelMatchesLocal');
+  });
+
+  it('claims no parity when the local catalog cannot be read', async () => {
+    mocks.probeTarget.mockResolvedValue(probeWith(['model_1'], 'model_1'));
+    mocks.getConfig.mockRejectedValue(new Error('config unavailable'));
+
+    await mount();
+
+    expect(container.textContent).toContain('dispatch.modelReadyCount');
+    expect(container.textContent).not.toContain('dispatch.modelMatchesLocal');
+    expect(container.textContent).not.toContain('dispatch.modelDiffersFromLocal');
   });
 });

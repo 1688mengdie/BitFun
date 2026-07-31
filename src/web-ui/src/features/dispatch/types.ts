@@ -22,6 +22,10 @@ export type DispatchApprovalPolicy = 'auto' | 'reject-and-report' | 'remote';
 export type DispatchWorkspaceDeliveryRequest =
   | { kind: 'existing' }
   | {
+      kind: 'snapshot-source';
+      sourceWorkspacePath: string;
+    }
+  | {
       kind: 'snapshot-exact';
       sourceWorkspacePath: string;
       sensitiveFilesConfirmed: true;
@@ -223,6 +227,9 @@ export interface OutboundDispatchRecord {
   jobId: string;
   target: DispatchTarget;
   sessionId: string;
+  /** Controller workspace that owns the observer session. */
+  sourceWorkspacePath?: string;
+  sourceWorkspaceId?: string;
   workspacePath: string;
   promptPreview: string;
   title?: string;
@@ -235,12 +242,42 @@ export interface OutboundDispatchRecord {
   updatedAt: string;
 }
 
+/**
+ * Bumped whenever the projection this cache stores changes shape or meaning.
+ *
+ * A mismatch discards the cache and replays the job from byte zero, so this is
+ * the only thing standing between a projection change and a transcript rendered
+ * by rules that no longer exist.
+ */
+export const DISPATCH_TRANSCRIPT_SCHEMA_VERSION = 1;
+
+/**
+ * The controller's UI cache for one observer projection.
+ *
+ * Cursor, turns, and completeness facts are one document on purpose: the cursor
+ * is only meaningful next to the turns it produced, and rendering a truncated
+ * transcript as a complete one is exactly what dispatch invariant 14 forbids.
+ */
+export interface DispatchTranscriptCache {
+  schemaVersion: number;
+  jobId: string;
+  sessionId: string;
+  cursor: number;
+  dialogTurns: unknown[];
+  appliedEventIds: string[];
+  eventLogComplete: boolean;
+  historyTruncated: boolean;
+  omittedEventCount: number;
+}
+
 export interface DispatchSelection {
   request: Exclude<DispatchTargetRequest, { kind: 'local' }>;
   target: Exclude<DispatchTarget, { kind: 'local' }>;
   workspaceDelivery: DispatchWorkspaceDeliveryRequest;
   approvalPolicy: DispatchApprovalPolicy;
   model?: string;
+  availableModels?: string[];
+  defaultModel?: string;
 }
 
 export function isNonLocalDispatchTarget(

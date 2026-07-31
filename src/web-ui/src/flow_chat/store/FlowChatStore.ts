@@ -72,8 +72,42 @@ import {
   isDispatchJobTerminal,
   isNonLocalDispatchTarget,
 } from '@/features/dispatch/types';
+import { dispatchJobStore } from '@/features/dispatch/dispatchJobStore';
 
 const log = createLogger('FlowChatStore');
+
+function logPersistedDispatchMetadataOverlap(
+  metadata: Record<string, unknown>,
+  source: 'metadata-page' | 'metadata-list',
+): void {
+  const sessionId =
+    typeof metadata.sessionId === 'string' ? metadata.sessionId : undefined;
+  if (!sessionId) return;
+
+  const dispatchState = dispatchJobStore.getState();
+  const observerJobIds = Object.values(dispatchState.jobs)
+    .filter(job => job.sessionId === sessionId)
+    .map(job => job.jobId);
+  const sessionTombstoned = dispatchState.dismissedSessionIds.includes(sessionId);
+  const metadataDispatchJobId =
+    typeof metadata.dispatchJobId === 'string'
+      ? metadata.dispatchJobId
+      : typeof metadata.dispatch_job_id === 'string'
+        ? metadata.dispatch_job_id
+        : undefined;
+  if (!sessionTombstoned && observerJobIds.length === 0 && !metadataDispatchJobId) {
+    return;
+  }
+
+  log.info('Dispatch diagnostic: persisted backend metadata overlaps observer state', {
+    source,
+    sessionId,
+    metadataDispatchJobId,
+    observerJobIds,
+    sessionTombstoned,
+    dismissedSessionCount: dispatchState.dismissedSessionIds.length,
+  });
+}
 
 function sameDispatchTargetIdentity(
   left: NonNullable<SessionConfig['dispatchTarget']>,
@@ -2252,6 +2286,56 @@ config: {
     });
   }
 
+  /** Update the target-owned model choice before an observer job is submitted. */
+  public updateSessionDispatchModel(sessionId: string, modelName: string): void {
+    this.setState(prev => {
+      const session = prev.sessions.get(sessionId);
+      const normalizedModelName = modelName.trim();
+      if (
+        !session
+        || !normalizedModelName
+        || session.config.dispatchModel === normalizedModelName
+      ) {
+        return prev;
+      }
+
+      const newSessions = new Map(prev.sessions);
+      newSessions.set(sessionId, {
+        ...session,
+        config: {
+          ...session.config,
+          dispatchModel: normalizedModelName,
+        },
+        lastActiveAt: Date.now(),
+      });
+      return { ...prev, sessions: newSessions };
+    });
+  }
+
+  /** Update the immutable-at-submit approval policy while the job is still local. */
+  public updateSessionDispatchApprovalPolicy(
+    sessionId: string,
+    approvalPolicy: NonNullable<SessionConfig['dispatchApprovalPolicy']>,
+  ): void {
+    this.setState(prev => {
+      const session = prev.sessions.get(sessionId);
+      if (!session || session.config.dispatchApprovalPolicy === approvalPolicy) {
+        return prev;
+      }
+
+      const newSessions = new Map(prev.sessions);
+      newSessions.set(sessionId, {
+        ...session,
+        config: {
+          ...session.config,
+          dispatchApprovalPolicy: approvalPolicy,
+        },
+        lastActiveAt: Date.now(),
+      });
+      return { ...prev, sessions: newSessions };
+    });
+  }
+
   /**
    * Apply a backend session rebind (worktree isolation toggled on or off).
    * The project root stays put; only the execution directory moves.
@@ -2301,8 +2385,13 @@ config: {
       target: NonNullable<SessionConfig['dispatchTarget']>;
       jobId: string;
       approvalPolicy: NonNullable<SessionConfig['dispatchApprovalPolicy']>;
+      model?: string;
+      availableModels?: string[];
+      defaultModel?: string;
       state?: NonNullable<SessionConfig['dispatchJobState']>;
       cursor?: number;
+      sourceWorkspacePath?: string;
+      sourceWorkspaceId?: string;
     },
   ): void {
     this.setState(prev => {
@@ -2324,14 +2413,30 @@ config: {
       }
 
       const newSessions = new Map(prev.sessions);
+      const sourceWorkspacePath = binding.sourceWorkspacePath?.trim() || undefined;
+      const sourceWorkspaceId = binding.sourceWorkspaceId?.trim() || undefined;
       newSessions.set(sessionId, {
         ...session,
+        workspacePath: sourceWorkspacePath ?? session.workspacePath,
+        projectWorkspacePath:
+          sourceWorkspacePath ?? session.projectWorkspacePath,
+        workspaceId: sourceWorkspaceId ?? session.workspaceId,
         config: {
           ...session.config,
+          workspacePath:
+            sourceWorkspacePath ?? session.config.workspacePath,
+          projectWorkspacePath:
+            sourceWorkspacePath ?? session.config.projectWorkspacePath,
+          workspaceId: sourceWorkspaceId ?? session.config.workspaceId,
           dispatchTargetRequest: binding.targetRequest,
           dispatchTarget: binding.target,
           dispatchJobId: binding.jobId,
           dispatchApprovalPolicy: binding.approvalPolicy,
+          dispatchModel: binding.model ?? session.config.dispatchModel,
+          dispatchAvailableModels:
+            binding.availableModels ?? session.config.dispatchAvailableModels,
+          dispatchDefaultModel:
+            binding.defaultModel ?? session.config.dispatchDefaultModel,
           dispatchJobState: binding.state ?? session.config.dispatchJobState ?? 'queued',
           dispatchCursor: Math.max(0, binding.cursor ?? session.config.dispatchCursor ?? 0),
         },
@@ -2339,6 +2444,51 @@ config: {
       });
       return { ...prev, sessions: newSessions };
     });
+  }
+
+  /**
+   * Restore an observer projection's transcript from the controller's UI cache.
+   *
+   * Frontend state only, exactly like {@link updateSessionDispatchTarget}: the
+   * target CLI still owns the durable session, so this must not create a local
+   * runtime session or write the normal session store.
+   *
+   * The turns and the cursor are cached together, so the cursor may only be
+   * adopted when this call reports success. Refuses to hydrate a session that
+   * already has turns — replacing live content with a stale cache would drop
+   * whatever the observer projected in the meantime.
+   */
+  public hydrateDispatchTranscript(
+    sessionId: string,
+    turns: DialogTurn[],
+  ): boolean {
+    if (turns.length === 0) return false;
+    let hydrated = false;
+
+    this.setState(prev => {
+      const session = prev.sessions.get(sessionId);
+      if (
+        !session ||
+        session.dialogTurns.length > 0 ||
+        !session.config.dispatchTarget ||
+        session.config.dispatchTarget.kind === 'local'
+      ) {
+        return prev;
+      }
+
+      const newSessions = new Map(prev.sessions);
+      newSessions.set(sessionId, {
+        ...session,
+        // `historyState` deliberately stays as `addExternalSession` left it.
+        // An observer projection has no local history to lazily hydrate, and
+        // the full-replay path does not move it either.
+        dialogTurns: [...turns].sort(compareDialogTurnOrder),
+      });
+      hydrated = true;
+      return { ...prev, sessions: newSessions };
+    });
+
+    return hydrated;
   }
 
   /**
@@ -4109,6 +4259,7 @@ config: {
 
     const processSession = async (metadata: any) => {
       try {
+        logPersistedDispatchMetadataOverlap(metadata, 'metadata-page');
         if (surfaceGeneration !== this.surfaceGeneration) {
           return;
         }
@@ -4485,6 +4636,7 @@ config: {
 
       const processSession = async (metadata: any) => {
         try {
+          logPersistedDispatchMetadataOverlap(metadata, 'metadata-list');
           const existingSession = this.state.sessions.get(metadata.sessionId);
           if (existingSession) {
             return;

@@ -19,6 +19,7 @@ import {
   type ContextProp,
 } from 'react-virtuoso';
 import { useTranslation } from 'react-i18next';
+import { Loader2 } from 'lucide-react';
 import { useActiveSessionState } from '../../hooks/useActiveSessionState';
 import { VirtualItemRenderer } from './VirtualItemRenderer';
 import { ScrollToLatestBar } from '../ScrollToLatestBar';
@@ -27,7 +28,6 @@ import { useScrollToTurnHeader } from '../../hooks/useScrollToTurnHeader';
 import { useVisibleTaskInfo } from '../../hooks/useVisibleTaskInfo';
 import { StickyTaskIndicator } from '../StickyTaskIndicator';
 import { RuntimeStatusSlot } from './RuntimeStatusSlot';
-import { ScrollAnchor } from './ScrollAnchor';
 import { useFlowChatFollowOutput } from './useFlowChatFollowOutput';
 import type { FlowChatPinTurnToTopMode } from '../../events/flowchatNavigation';
 import { useVirtualItems, useActiveSession, useModernFlowChatStore, type VisibleTurnInfo, type VirtualItem } from '../../store/modernFlowChatStore';
@@ -105,6 +105,7 @@ import './VirtualMessageList.scss';
 const PINNED_TURN_VIEWPORT_OFFSET_PX = 57; // Keep in sync with `.message-list-header`.
 const TOUCH_SCROLL_INTENT_EXIT_THRESHOLD_PX = 6;
 const USER_UPWARD_SCROLL_INTENT_WINDOW_MS = 800;
+const STATIC_HISTORY_BOTTOM_RETURN_INTENT_WINDOW_MS = 800;
 const LATEST_END_ANCHOR_STABILIZATION_MAX_ATTEMPTS = 120;
 const LATEST_END_ANCHOR_STABILIZATION_MIN_ATTEMPTS = 12;
 const LATEST_END_ANCHOR_STABLE_VISIBLE_FRAMES = 8;
@@ -114,7 +115,9 @@ const LATEST_END_ANCHOR_STATIC_FAST_PATH_TOLERANCE_PX = 96;
 const VIRTUOSO_FIRST_ITEM_INDEX_BASE = 1_000_000;
 const PARTIAL_HISTORY_INITIAL_TAIL_TURN_BUDGET = 16;
 const PARTIAL_HISTORY_FULL_PROJECTION_TOP_THRESHOLD_PX = 1200;
+const PARTIAL_HISTORY_STATIC_BOUNDARY_THRESHOLD_PX = 120;
 const HISTORY_PROJECTION_HANDOFF_MAX_DURATION_MS = 5000;
+const TURN_PIN_REQUEST_TTL_MS = 5000;
 const SESSION_OPEN_HANDOFF_ITEM_BUDGET = 24;
 const PREVIOUS_HISTORY_BOUNDARY_STATUS_DURATION_MS = 2500;
 const SEARCH_NAVIGATION_MAX_ATTEMPTS = 24;
@@ -124,6 +127,15 @@ const STICKY_PIN_GROWTH_SETTLE_MS = 300;
 const RETAINED_COLLAPSE_QUIET_SETTLE_MS = 120;
 const RETAINED_COLLAPSE_QUIET_SETTLE_FRAMES = 2;
 const RETAINED_COLLAPSE_RELEASE_QUIET_MS = COLLAPSE_INTENT_TTL_MS;
+
+function getPinnedTurnScrollTop(scroller: HTMLElement, targetElement: HTMLElement): number {
+  const targetRect = targetElement.getBoundingClientRect();
+  const scrollerRect = scroller.getBoundingClientRect();
+  return Math.max(
+    0,
+    scroller.scrollTop + targetRect.top - scrollerRect.top - PINNED_TURN_VIEWPORT_OFFSET_PX,
+  );
+}
 
 type FlowChatVirtuosoContext = {
   footerRef: React.RefCallback<HTMLDivElement>;
@@ -136,6 +148,20 @@ const FlowChatVirtuosoHeader = ({ context }: ContextProp<FlowChatVirtuosoContext
     <div className="message-list-header" />
     {context.previousHistoryBoundaryStatusNode}
   </>
+);
+
+const FlowChatHistoryPagingSentinel = ({ visible, label }: { visible: boolean; label: string }) => (
+  <div
+    className="virtual-message-list__history-paging-sentinel"
+    data-history-paging-sentinel={visible ? 'loading' : 'idle'}
+    data-history-boundary-status={visible ? 'preparing' : undefined}
+    aria-hidden={!visible}
+    role={visible ? 'status' : undefined}
+    aria-live={visible ? 'polite' : undefined}
+  >
+    <Loader2 size={14} aria-hidden className="virtual-message-list__history-paging-spinner" />
+    <span>{label}</span>
+  </div>
 );
 
 const FlowChatVirtuosoFooter = ({ context }: ContextProp<FlowChatVirtuosoContext>) => (
@@ -268,6 +294,7 @@ interface PendingTurnPinState {
 interface PendingStaticTurnPinState {
   turnId: string;
   behavior: ScrollBehavior;
+  pinMode: FlowChatPinTurnToTopMode;
 }
 
 function sanitizeReservationPx(value: number): number {
@@ -405,7 +432,6 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
     virtuosoIndexState.virtualItems = virtualItems;
   }
   const virtuosoFirstItemIndex = virtuosoIndexState.firstItemIndex;
-  const toVirtuosoIndex = useCallback((localIndex: number) => virtuosoFirstItemIndex + localIndex, [virtuosoFirstItemIndex]);
 
   const [isAtBottom, setIsAtBottom] = useState(true);
   const [scrollerElement, setScrollerElement] = useState<HTMLElement | null>(null);
@@ -415,6 +441,9 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
   const [pendingTurnPin, setPendingTurnPin] = useState<PendingTurnPinState | null>(null);
   const [historyProjectionHandoff, setHistoryProjectionHandoff] = useState<HistoryProjectionHandoffSnapshot | null>(null);
   const [expandedInitialHistoryRenderKey, setExpandedInitialHistoryRenderKey] = useState<string | null>(null);
+  const [historyPagingActive, setHistoryPagingActive] = useState(false);
+  const [historyPagingLoading, setHistoryPagingLoading] = useState(false);
+  const [historyPagingAnchorTurnId, setHistoryPagingAnchorTurnId] = useState<string | null>(null);
   const [staticAnchorWindowTurnId, setStaticAnchorWindowTurnId] = useState<string | null>(null);
   const [previousHistoryBoundaryStatus, setPreviousHistoryBoundaryStatus] = useState<{
     sessionId: string;
@@ -435,7 +464,6 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
   const sessionOpenHandoffSessionIdRef = useRef<string | null>(null);
   const previousActiveSessionIdForOpenHandoffRef = useRef<string | null | undefined>(undefined);
   const viewportCoordinatorRef = useRef(new FlowChatViewportCoordinator());
-  const pendingStaticAnchorTurnIdRef = useRef<string | null>(null);
   const bottomReservationStateRef = useRef<BottomReservationState>(createInitialBottomReservationState());
   const restoreScrollerMethodsRef = useRef<(() => void) | null>(null);
   const previousMeasuredHeightRef = useRef<number | null>(null);
@@ -451,14 +479,30 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
     omittedEstimatedHeightPx: number;
     wasAtBottom: boolean;
   } | null>(null);
+  const pendingHistoryPrependAnchorRef = useRef<{
+    turnId: string;
+    offsetFromScrollerTop: number;
+    beforeItemCount: number;
+    handoffRestored: boolean;
+    prependRestored: boolean;
+  } | null>(null);
+  const historyPagingActiveRef = useRef(false);
+  const historyPagingRevealScheduledRef = useRef(false);
+  const pendingHistoryPagingRevealRef = useRef<{
+    sessionId: string;
+    reason: string;
+  } | null>(null);
+  const historyPagingRetryTimerRef = useRef<number | null>(null);
   const pendingStaticTurnPinRef = useRef<PendingStaticTurnPinState | null>(null);
   const pendingStaticLatestScrollBehaviorRef = useRef<('auto' | 'smooth') | null>(null);
+  const staticHistoryBottomReturnIntentUntilMsRef = useRef(0);
   const initialHistoryRenderWindowCheckFrameRef = useRef<number | null>(null);
   const measureFrameRef = useRef<number | null>(null);
   const visibleTurnMeasureFrameRef = useRef<number | null>(null);
   const pinReservationReconcileFrameRef = useRef<number | null>(null);
   const turnPinStabilizationFrameRef = useRef<number | null>(null);
   const turnPinRequestGenerationRef = useRef(0);
+  const activeTurnPinRequestRef = useRef<PendingTurnPinState | null>(null);
   const latestEndAnchorStabilizationFrameRef = useRef<number | null>(null);
   const searchNavigationRequestIdRef = useRef(0);
   const staticInitialHistoryBottomGuardFrameRef = useRef<number | null>(null);
@@ -496,6 +540,7 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
   });
   const stickyPinGrowthSettleTimerRef = useRef<number | null>(null);
   const settlePendingStickyPinGrowthRef = useRef<(reason: string) => void>(() => {});
+  const cancelUnresolvedTurnPinRef = useRef<() => void>(() => {});
   const maybeHandoffPinnedTurnToTailRef = useRef<(reason: string) => boolean>(() => false);
   const preparePinnedTurnFollowHandoffRef = useRef<() => void>(() => {});
   const finalizeCollapseIntentRef = useRef<(
@@ -641,6 +686,26 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
     staticInitialHistoryUserLeftBottomRef.current =
       distanceFromBottom > LATEST_END_ANCHOR_STABLE_EPSILON_PX;
   }, [getEffectiveBottomScrollTop]);
+
+  const clearStaticHistoryBottomReturnIntent = useCallback(() => {
+    staticHistoryBottomReturnIntentUntilMsRef.current = 0;
+  }, []);
+
+  const markStaticHistoryBottomReturnIntent = useCallback(() => {
+    staticHistoryBottomReturnIntentUntilMsRef.current =
+      performance.now() + STATIC_HISTORY_BOTTOM_RETURN_INTENT_WINDOW_MS;
+  }, []);
+
+  const hasRecentStaticHistoryBottomReturnIntent = useCallback(() => {
+    const intentUntilMs = staticHistoryBottomReturnIntentUntilMsRef.current;
+    return intentUntilMs > 0 && performance.now() <= intentUntilMs;
+  }, []);
+
+  const releaseStaticHistoryAnchorWindow = useCallback(() => {
+    pendingStaticTurnPinRef.current = null;
+    clearStaticHistoryBottomReturnIntent();
+    setStaticAnchorWindowTurnId(null);
+  }, [clearStaticHistoryBottomReturnIntent]);
 
   const recordScrollerGeometryIfLayoutStable = useCallback((scroller: HTMLElement) => {
     const previousGeometry = previousScrollerGeometryRef.current;
@@ -854,6 +919,7 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
 
   const clearTurnPinRequest = useCallback(() => {
     turnPinRequestGenerationRef.current += 1;
+    activeTurnPinRequestRef.current = null;
     transientTurnPinStabilizationRef.current = null;
 
     if (turnPinStabilizationFrameRef.current !== null) {
@@ -1848,15 +1914,12 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
   const useInitialHistoryRenderBudget = hasPendingHistoryCompletion || hasPartialHistoryInitialViewport;
   const useStaticInitialHistoryList = useInitialHistoryRenderBudget;
   useStaticInitialHistoryListRef.current = useStaticInitialHistoryList;
-  useEffect(() => {
-    setStaticAnchorWindowTurnId(null);
-  }, [activeSession?.sessionId]);
   const hasPrimedMountedStreamingTurnFollowRef = useRef(false);
   const previousLatestTurnIdForFollowRef = useRef<string | null>(latestTurnId);
   const previousSessionIdForFollowRef = useRef<string | undefined>(activeSession?.sessionId);
 
   const visibleTurnInfoByTurnId = React.useMemo(() => {
-    const infoMap = new Map<string, VisibleTurnInfo>();
+    const infoMap = new Map<string, Omit<VisibleTurnInfo, 'visibleTurnIds'>>();
 
     userMessageItems.forEach(({ item }, index) => {
       if (item.type !== 'user-message') return;
@@ -1885,12 +1948,16 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
 
     const scroller = scrollerElementRef.current;
     if (!scroller) {
-      const fallbackInfo = visibleTurnInfoByTurnId.get(userMessageItems[0]?.item.turnId ?? '') ?? null;
+      const fallbackBaseInfo = visibleTurnInfoByTurnId.get(userMessageItems[0]?.item.turnId ?? '') ?? null;
+      const fallbackInfo: VisibleTurnInfo | null = fallbackBaseInfo
+        ? { ...fallbackBaseInfo, visibleTurnIds: [] }
+        : null;
       if (
         currentVisibleTurnInfo?.turnId !== fallbackInfo?.turnId ||
         currentVisibleTurnInfo?.turnIndex !== fallbackInfo?.turnIndex ||
         currentVisibleTurnInfo?.totalTurns !== fallbackInfo?.totalTurns ||
-        currentVisibleTurnInfo?.userMessage !== fallbackInfo?.userMessage
+        currentVisibleTurnInfo?.userMessage !== fallbackInfo?.userMessage ||
+        (currentVisibleTurnInfo?.visibleTurnIds?.length ?? 0) !== 0
       ) {
         setVisibleTurnInfo(fallbackInfo);
       }
@@ -1904,19 +1971,43 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
       scroller.querySelectorAll<HTMLElement>('.virtual-item-wrapper[data-turn-id]')
     );
 
-    const topVisibleItem = renderedItems.find(node => {
+    const visibleTurnIds: string[] = [];
+    const visibleTurnIdSet = new Set<string>();
+    let topVisibleTurnId: string | null = null;
+    for (const node of renderedItems) {
       const rect = node.getBoundingClientRect();
-      return rect.bottom > viewportTop && rect.top < viewportBottom;
-    });
+      if (rect.bottom <= viewportTop || rect.top >= viewportBottom) {
+        continue;
+      }
 
-    const nextTurnId = topVisibleItem?.dataset.turnId ?? userMessageItems[0]?.item.turnId ?? null;
-    const nextInfo = nextTurnId ? (visibleTurnInfoByTurnId.get(nextTurnId) ?? null) : null;
+      const turnId = node.dataset.turnId;
+      if (!turnId) {
+        continue;
+      }
+
+      topVisibleTurnId ??= turnId;
+      if (!visibleTurnIdSet.has(turnId)) {
+        visibleTurnIdSet.add(turnId);
+        visibleTurnIds.push(turnId);
+      }
+    }
+
+    const nextTurnId = topVisibleTurnId ?? userMessageItems[0]?.item.turnId ?? null;
+    const nextBaseInfo = nextTurnId ? (visibleTurnInfoByTurnId.get(nextTurnId) ?? null) : null;
+    const nextInfo: VisibleTurnInfo | null = nextBaseInfo
+      ? { ...nextBaseInfo, visibleTurnIds }
+      : null;
+    const currentVisibleTurnIds = currentVisibleTurnInfo?.visibleTurnIds ?? [];
+    const visibleTurnIdsUnchanged =
+      currentVisibleTurnIds.length === visibleTurnIds.length &&
+      currentVisibleTurnIds.every((turnId, index) => turnId === visibleTurnIds[index]);
 
     if (
       currentVisibleTurnInfo?.turnId === nextInfo?.turnId &&
       currentVisibleTurnInfo?.turnIndex === nextInfo?.turnIndex &&
       currentVisibleTurnInfo?.totalTurns === nextInfo?.totalTurns &&
-      currentVisibleTurnInfo?.userMessage === nextInfo?.userMessage
+      currentVisibleTurnInfo?.userMessage === nextInfo?.userMessage &&
+      visibleTurnIdsUnchanged
     ) {
       return;
     }
@@ -2233,6 +2324,20 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
       return false;
     }
 
+    // A new arbitrary-turn navigation may be materializing a distant target
+    // while the previous sticky-latest footer still provides physical range.
+    // Do not let the old sticky target rewrite that reservation until the new
+    // request has either aligned or been cancelled.
+    const activeTurnPinTargetId = activeTurnPinRequestRef.current?.turnId ??
+      pendingStaticTurnPinRef.current?.turnId ??
+      null;
+    if (
+      activeTurnPinTargetId &&
+      activeTurnPinTargetId !== pinReservation.targetTurnId
+    ) {
+      return false;
+    }
+
     const collapseIntent = pendingCollapseIntentRef.current;
     const hasActiveCollapseProtection = (
       collapseIntent.active
@@ -2381,12 +2486,7 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
       return false;
     }
 
-    const targetRect = targetElement.getBoundingClientRect();
-    const scrollerRect = scroller.getBoundingClientRect();
-    const targetScrollTop = Math.max(
-      0,
-      scroller.scrollTop + targetRect.top - scrollerRect.top - PINNED_TURN_VIEWPORT_OFFSET_PX,
-    );
+    const targetScrollTop = getPinnedTurnScrollTop(scroller, targetElement);
     cancelStaticInitialHistoryBottomGuard();
     scroller.scrollTo({
       top: targetScrollTop,
@@ -2496,7 +2596,7 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
       }
 
       virtuoso.scrollToIndex({
-        index: toVirtuosoIndex(targetItem.index),
+        index: targetItem.index,
         align: 'start',
         behavior: fallbackBehavior,
       });
@@ -2626,7 +2726,6 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
     schedulePinReservationReconcile,
     scheduleVisibleTurnMeasure,
     snapshotMeasuredContentHeight,
-    toVirtuosoIndex,
     updateBottomReservationState,
     userMessageItems,
   ]);
@@ -2638,6 +2737,9 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
     }
 
     if (request.pinMode !== 'transient' || performance.now() > request.expiresAtMs) {
+      if (activeTurnPinRequestRef.current?.generation === request.generation) {
+        activeTurnPinRequestRef.current = null;
+      }
       transientTurnPinStabilizationRef.current = null;
       return;
     }
@@ -3091,6 +3193,10 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
       window.clearTimeout(previousHistoryBoundaryStatusTimerRef.current);
       previousHistoryBoundaryStatusTimerRef.current = null;
     }
+    if (historyPagingRetryTimerRef.current !== null) {
+      window.clearTimeout(historyPagingRetryTimerRef.current);
+      historyPagingRetryTimerRef.current = null;
+    }
   }, []);
 
   useEffect(() => {
@@ -3102,6 +3208,32 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
     });
   }, [activeSessionId]);
 
+  const captureHistoryPrependAnchor = useCallback(() => {
+    const scroller = scrollerElementRef.current;
+    if (!scroller) {
+      return null;
+    }
+
+    const scrollerRect = scroller.getBoundingClientRect();
+    const nodes = Array.from(scroller.querySelectorAll<HTMLElement>(
+      '.virtual-item-wrapper[data-item-type="user-message"][data-turn-id]',
+    ));
+    const visibleNode = nodes.find(node => {
+      const rect = node.getBoundingClientRect();
+      return rect.bottom > scrollerRect.top && rect.top < scrollerRect.bottom;
+    });
+    const node = visibleNode ?? nodes[0];
+    const turnId = node?.dataset.turnId;
+    if (!node || !turnId) {
+      return null;
+    }
+
+    return {
+      turnId,
+      offsetFromScrollerTop: node.getBoundingClientRect().top - scrollerRect.top,
+    };
+  }, []);
+
   const revealPreviousHistoryWindowForUserIntent = useCallback((reason: string) => {
     const sessionId = activeSession?.sessionId;
     if (
@@ -3111,6 +3243,46 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
     ) {
       return;
     }
+
+    if (!historyPagingActiveRef.current) {
+      const anchor = captureHistoryPrependAnchor();
+      historyPagingActiveRef.current = true;
+      setHistoryPagingActive(true);
+      setHistoryPagingLoading(true);
+      if (anchor) {
+        setHistoryPagingAnchorTurnId(anchor.turnId);
+        pendingHistoryPrependAnchorRef.current = {
+          ...anchor,
+          beforeItemCount: virtualItems.length,
+          handoffRestored: false,
+          prependRestored: false,
+        };
+      }
+      showPreviousHistoryBoundaryStatus(sessionId, reason, 'preparing');
+      if (useStaticInitialHistoryListRef.current) {
+        pendingHistoryPagingRevealRef.current = { sessionId, reason };
+        return;
+      }
+    }
+
+    if (historyPagingRevealScheduledRef.current || pendingHistoryPagingRevealRef.current) {
+      return;
+    }
+
+    const pendingAnchor = pendingHistoryPrependAnchorRef.current;
+    if (!pendingAnchor || pendingAnchor.prependRestored) {
+      const anchor = captureHistoryPrependAnchor();
+      if (anchor) {
+        setHistoryPagingAnchorTurnId(anchor.turnId);
+        pendingHistoryPrependAnchorRef.current = {
+          ...anchor,
+          beforeItemCount: virtualItems.length,
+          handoffRestored: true,
+          prependRestored: false,
+        };
+      }
+    }
+    setHistoryPagingLoading(true);
 
     if (!flowChatStore.hasDeferredSessionHistoryProjection(sessionId)) {
       if (flowChatStore.hasPendingSessionHistoryCompletion(sessionId)) {
@@ -3124,7 +3296,16 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
           reason,
           released,
         });
+        if (historyPagingRetryTimerRef.current === null) {
+          historyPagingRetryTimerRef.current = window.setTimeout(() => {
+            historyPagingRetryTimerRef.current = null;
+            if (activeSessionIdRef.current === sessionId && historyPagingActiveRef.current) {
+              revealPreviousHistoryWindowForUserIntent('history-ready-after-scroll');
+            }
+          }, 50);
+        }
       } else {
+        setHistoryPagingLoading(false);
         showPreviousHistoryBoundaryStatus(sessionId, reason, 'not-ready');
         startupTrace.markPhase('flowchat_previous_history_window_not_ready', {
           sessionId,
@@ -3135,9 +3316,14 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
     }
 
     const revealed = flowChatStore.revealPreviousSessionHistoryWindow(sessionId, reason);
+    if (historyPagingRetryTimerRef.current !== null) {
+      window.clearTimeout(historyPagingRetryTimerRef.current);
+      historyPagingRetryTimerRef.current = null;
+    }
     if (revealed) {
       clearPreviousHistoryBoundaryStatus();
     } else {
+      setHistoryPagingLoading(false);
       showPreviousHistoryBoundaryStatus(sessionId, reason, 'not-ready');
     }
     startupTrace.markPhase('flowchat_previous_history_window_requested', {
@@ -3149,8 +3335,48 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
     activeSession?.historyState,
     activeSession?.isPartial,
     activeSession?.sessionId,
+    captureHistoryPrependAnchor,
     clearPreviousHistoryBoundaryStatus,
     showPreviousHistoryBoundaryStatus,
+    virtualItems.length,
+  ]);
+
+  useEffect(() => {
+    const pendingReveal = pendingHistoryPagingRevealRef.current;
+    const pendingAnchor = pendingHistoryPrependAnchorRef.current;
+    if (
+      !pendingReveal ||
+      !historyPagingActive ||
+      !scrollerElement?.isConnected ||
+      (pendingAnchor && !pendingAnchor.handoffRestored) ||
+      historyPagingRevealScheduledRef.current
+    ) {
+      return;
+    }
+
+    historyPagingRevealScheduledRef.current = true;
+    const frameId = requestAnimationFrame(() => {
+      historyPagingRevealScheduledRef.current = false;
+      const currentPendingReveal = pendingHistoryPagingRevealRef.current;
+      if (
+        !currentPendingReveal ||
+        currentPendingReveal.sessionId !== pendingReveal.sessionId ||
+        activeSessionIdRef.current !== pendingReveal.sessionId
+      ) {
+        return;
+      }
+      pendingHistoryPagingRevealRef.current = null;
+      revealPreviousHistoryWindowForUserIntent(currentPendingReveal.reason);
+    });
+
+    return () => {
+      cancelAnimationFrame(frameId);
+      historyPagingRevealScheduledRef.current = false;
+    };
+  }, [
+    historyPagingActive,
+    revealPreviousHistoryWindowForUserIntent,
+    scrollerElement,
   ]);
 
   const shouldRevealPreviousHistoryWindowForUserIntent = useCallback((options?: { force?: boolean }) => {
@@ -3228,8 +3454,19 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
     pendingCollapseIntentRef.current = createInactiveCollapseIntentState();
     retainedCollapseAnchorRef.current = null;
     previousScrollerGeometryRef.current = null;
-    pendingStaticAnchorTurnIdRef.current = null;
-    pendingStaticTurnPinRef.current = null;
+    releaseStaticHistoryAnchorWindow();
+    pendingStaticLatestScrollBehaviorRef.current = null;
+    historyPagingActiveRef.current = false;
+    historyPagingRevealScheduledRef.current = false;
+    pendingHistoryPagingRevealRef.current = null;
+    if (historyPagingRetryTimerRef.current !== null) {
+      window.clearTimeout(historyPagingRetryTimerRef.current);
+      historyPagingRetryTimerRef.current = null;
+    }
+    pendingHistoryPrependAnchorRef.current = null;
+    setHistoryPagingActive(false);
+    setHistoryPagingLoading(false);
+    setHistoryPagingAnchorTurnId(null);
     const currentSessionId = activeSession?.sessionId ?? null;
     const activeHandoff = historyProjectionHandoffRef.current;
     if (!activeHandoff || activeHandoff.sessionId !== currentSessionId) {
@@ -3245,6 +3482,7 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
     clearPendingStickyPinGrowth,
     clearHistoryProjectionHandoff,
     clearTurnPinRequest,
+    releaseStaticHistoryAnchorWindow,
     resetBottomReservations,
   ]);
 
@@ -3397,6 +3635,13 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
       const intentCheckPreviousScrollTop = previousScrollTopRef.current;
       const intentCheckScrollDelta = intentCheckScrollTop - intentCheckPreviousScrollTop;
       const hasRecentUserUpwardIntent = now <= userInitiatedUpwardScrollUntilMsRef.current;
+      if (scrollbarPointerInteractionActiveRef.current) {
+        if (intentCheckScrollDelta > COMPENSATION_EPSILON_PX) {
+          markStaticHistoryBottomReturnIntent();
+        } else if (intentCheckScrollDelta < -COMPENSATION_EPSILON_PX) {
+          clearStaticHistoryBottomReturnIntent();
+        }
+      }
       if (
         flowChatDiagnostics.isEnabled() &&
         Math.abs(intentCheckScrollDelta) > COMPENSATION_EPSILON_PX
@@ -3609,6 +3854,12 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
         cancelLatestEndAnchorStabilization();
       }
 
+      if (event.deltaY > 0) {
+        markStaticHistoryBottomReturnIntent();
+      } else if (event.deltaY < 0) {
+        clearStaticHistoryBottomReturnIntent();
+      }
+
       if (event.deltaY < 0) {
         staticInitialHistoryUserLeftBottomRef.current = true;
         userInitiatedUpwardScrollUntilMsRef.current =
@@ -3641,6 +3892,12 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
         notifyUserScrollIntent();
         clearTurnPinRequest();
         cancelLatestEndAnchorStabilization();
+
+        if (currentY - startY < -TOUCH_SCROLL_INTENT_EXIT_THRESHOLD_PX) {
+          markStaticHistoryBottomReturnIntent();
+        } else {
+          clearStaticHistoryBottomReturnIntent();
+        }
       }
 
       if (currentY - startY > TOUCH_SCROLL_INTENT_EXIT_THRESHOLD_PX) {
@@ -3650,6 +3907,9 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
           performance.now() + USER_UPWARD_SCROLL_INTENT_WINDOW_MS;
         schedulePreviousHistoryWindowForUserIntent('touch-scroll-up');
         followOutputControllerRef.current.handleUserScrollIntent();
+      }
+      if (Math.abs(currentY - startY) > TOUCH_SCROLL_INTENT_EXIT_THRESHOLD_PX) {
+        touchScrollIntentStartYRef.current = currentY;
       }
     };
 
@@ -3675,9 +3935,11 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
       cancelLatestEndAnchorStabilization();
 
       if (!isUpwardScrollIntentKey(event)) {
+        markStaticHistoryBottomReturnIntent();
         return;
       }
 
+      clearStaticHistoryBottomReturnIntent();
       staticInitialHistoryUserLeftBottomRef.current = true;
       userInitiatedUpwardScrollUntilMsRef.current =
         performance.now() + USER_UPWARD_SCROLL_INTENT_WINDOW_MS;
@@ -3978,6 +4240,8 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
     getTotalBottomCompensationPx,
     latestTurnId,
     notifyUserScrollIntent,
+    clearStaticHistoryBottomReturnIntent,
+    markStaticHistoryBottomReturnIntent,
     pendingTurnPin?.pinMode,
     pendingTurnPin?.turnId,
     preserveCollapseAnchorScrollTop,
@@ -4174,7 +4438,7 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
     } else if (virtuoso) {
       request.visibleFrames = 0;
       virtuoso.scrollToIndex({
-        index: toVirtuosoIndex(targetIndex),
+        index: targetIndex,
         align: 'end',
         behavior: 'auto',
       });
@@ -4227,14 +4491,55 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
     recordScrollerGeometry,
     scheduleVisibleTurnMeasure,
     snapshotMeasuredContentHeight,
-    toVirtuosoIndex,
     virtualItems,
   ]);
   resolveLatestEndAnchorStabilizationRef.current = resolveLatestEndAnchorStabilization;
 
+  const resolvePendingTurnPinFromRangeChange = useCallback(() => {
+    if (
+      !pendingTurnPin ||
+      !isTurnPinRequestCurrent(pendingTurnPin) ||
+      performance.now() > pendingTurnPin.expiresAtMs
+    ) {
+      return;
+    }
+
+    const nextRequest: PendingTurnPinState = {
+      ...pendingTurnPin,
+      attempts: pendingTurnPin.attempts + 1,
+      behavior: 'auto',
+    };
+    if (!tryResolvePendingTurnPin(nextRequest)) {
+      setPendingTurnPin(current => (
+        current?.generation === nextRequest.generation ? nextRequest : current
+      ));
+      return;
+    }
+
+    if (nextRequest.pinMode === 'transient') {
+      activateTransientTurnPinStabilization(nextRequest);
+      scheduleTransientTurnPinStabilization(2);
+      setPendingTurnPin(current => (
+        current?.generation === nextRequest.generation ? null : current
+      ));
+    } else {
+      clearTurnPinRequest();
+    }
+    scheduleVisibleTurnMeasure(2);
+  }, [
+    activateTransientTurnPinStabilization,
+    clearTurnPinRequest,
+    isTurnPinRequestCurrent,
+    pendingTurnPin,
+    scheduleTransientTurnPinStabilization,
+    scheduleVisibleTurnMeasure,
+    tryResolvePendingTurnPin,
+  ]);
+
   // `rangeChanged` is affected by overscan/increaseViewportBy, so treat it as a
   // "rendered DOM changed" signal and derive the pinned turn from real DOM visibility.
   const handleRangeChanged = useCallback(() => {
+    resolvePendingTurnPinFromRangeChange();
     resolveLatestEndAnchorStabilization('range-changed');
     scheduleVisibleTurnMeasure(2);
     schedulePinReservationReconcile(2);
@@ -4246,6 +4551,7 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
     // so the handoff stays until 3 frames of stability pass.
     scheduleHistoryProjectionHandoffRelease(3);
   }, [
+    resolvePendingTurnPinFromRangeChange,
     resolveLatestEndAnchorStabilization,
     scheduleFollowToLatestWithViewportState,
     scheduleHistoryProjectionHandoffRelease,
@@ -4285,11 +4591,13 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
     }
 
     if (performance.now() > pendingTurnPin.expiresAtMs) {
-      clearTurnPinRequest();
       if (clearExpiredProvisionalStickyPin(pendingTurnPin)) {
+        clearTurnPinRequest();
         followOutputControllerRef.current.scheduleFollowToLatest(
           'unresolved-turn-pin-expired',
         );
+      } else {
+        cancelUnresolvedTurnPinRef.current();
       }
       return;
     }
@@ -4453,6 +4761,13 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
     updateBottomReservationState,
   ]);
 
+  cancelUnresolvedTurnPinRef.current = () => {
+    clearPinReservationForUserNavigation('unresolved-turn-pin-expired', {
+      preserveCurrentRange: true,
+    });
+    viewportCoordinatorRef.current.release('unresolved-turn-pin-expired');
+  };
+
   exitPinnedViewportForUserIntentRef.current = reason => {
     if (flowChatDiagnostics.isEnabled()) {
       flowChatDiagnostics.trace({
@@ -4495,19 +4810,96 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
     return lastDialogTurn.modelRounds.some(round => round.isStreaming);
   }, [activeSession, isProcessing]);
   const initialTopMostItemIndex = React.useMemo(() => {
+    const pendingTurnId = pendingTurnPin?.turnId ??
+      pendingStaticTurnPinRef.current?.turnId ??
+      staticAnchorWindowTurnId;
+    if (pendingTurnId) {
+      const pendingTargetIndex = virtualItems.findIndex(item => (
+        item.turnId === pendingTurnId && item.type === 'user-message'
+      ));
+      if (pendingTargetIndex >= 0) {
+        return {
+          index: pendingTargetIndex,
+          align: 'start' as const,
+        };
+      }
+    }
+
+    if (historyPagingActive && historyPagingAnchorTurnId) {
+      const anchorIndex = virtualItems.findIndex(item => (
+        item.turnId === historyPagingAnchorTurnId && item.type === 'user-message'
+      ));
+      if (anchorIndex >= 0) {
+        return {
+          index: anchorIndex,
+          align: 'start' as const,
+        };
+      }
+    }
+
     if (isStreamingOutput) {
-      return toVirtuosoIndex(latestUserMessageIndex);
+      return latestUserMessageIndex;
     }
 
     return {
-      index: toVirtuosoIndex(Math.max(0, virtualItems.length - 1)),
+      index: Math.max(0, virtualItems.length - 1),
       align: 'end' as const,
     };
   }, [
     isStreamingOutput,
+    historyPagingActive,
+    historyPagingAnchorTurnId,
     latestUserMessageIndex,
-    toVirtuosoIndex,
-    virtualItems.length,
+    pendingTurnPin?.turnId,
+    staticAnchorWindowTurnId,
+    virtualItems,
+  ]);
+
+  useLayoutEffect(() => {
+    if (!historyPagingActive || !historyPagingAnchorTurnId) {
+      return;
+    }
+
+    const pendingAnchor = pendingHistoryPrependAnchorRef.current;
+    if (!pendingAnchor || pendingAnchor.turnId !== historyPagingAnchorTurnId) {
+      return;
+    }
+    const isPrependCommit = virtualItems.length > pendingAnchor.beforeItemCount;
+    if (isPrependCommit ? pendingAnchor.prependRestored : pendingAnchor.handoffRestored) {
+      return;
+    }
+
+    const scroller = scrollerElementRef.current;
+    const anchorElement = getRenderedUserMessageElement(historyPagingAnchorTurnId);
+    if (!scroller || !anchorElement) {
+      return;
+    }
+
+    const scrollerRect = scroller.getBoundingClientRect();
+    const actualOffset = anchorElement.getBoundingClientRect().top - scrollerRect.top;
+    const correction = actualOffset - pendingAnchor.offsetFromScrollerTop;
+    if (Math.abs(correction) > COMPENSATION_EPSILON_PX) {
+      scroller.scrollTop = Math.max(0, scroller.scrollTop + correction);
+    }
+    if (isPrependCommit) {
+      pendingAnchor.prependRestored = true;
+      setHistoryPagingLoading(false);
+      clearPreviousHistoryBoundaryStatus();
+    } else {
+      pendingAnchor.handoffRestored = true;
+    }
+    previousScrollTopRef.current = scroller.scrollTop;
+    previousMeasuredHeightRef.current = snapshotMeasuredContentHeight(scroller);
+    recordScrollerGeometry(scroller);
+  }, [
+    clearPreviousHistoryBoundaryStatus,
+    getRenderedUserMessageElement,
+    historyPagingActive,
+    historyPagingAnchorTurnId,
+    recordScrollerGeometry,
+    scrollerElement,
+    snapshotMeasuredContentHeight,
+    virtualItems,
   ]);
 
   useEffect(() => {
@@ -4680,10 +5072,8 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
     if (!scroller) return;
 
     if (useStaticInitialHistoryListRef.current && staticAnchorWindowTurnId) {
-      pendingStaticTurnPinRef.current = null;
-      pendingStaticAnchorTurnIdRef.current = null;
       pendingStaticLatestScrollBehaviorRef.current = behavior;
-      setStaticAnchorWindowTurnId(null);
+      releaseStaticHistoryAnchorWindow();
       return;
     }
 
@@ -4734,6 +5124,7 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
     clearPinReservationForUserNavigation,
     getTotalBottomCompensationPx,
     recordStaticInitialHistoryBottomState,
+    releaseStaticHistoryAnchorWindow,
     staticAnchorWindowTurnId,
   ]);
   useLayoutEffect(() => {
@@ -4762,11 +5153,17 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
       return 'rejected';
     }
 
+    // Replacing a pending navigation must invalidate its RAF/state generation,
+    // but it must not remove the footer range that keeps the current viewport
+    // physically reachable while the new target is being materialized.
+    clearTurnPinRequest();
+
     if (!virtuosoRef.current) {
       if (!useStaticInitialHistoryList) {
         return 'rejected';
       }
 
+      clearStaticHistoryBottomReturnIntent();
       retainedCollapseAnchorRef.current = null;
       if (requestedPinMode === 'sticky-latest' && turnId === latestTurnId) {
         preparePinnedTurnFollowHandoffRef.current();
@@ -4776,6 +5173,7 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
       pendingStaticTurnPinRef.current = {
         turnId,
         behavior: requestedBehavior,
+        pinMode: requestedPinMode,
       };
 
       startupTrace.markPhase('flowchat_static_turn_pin_request', {
@@ -4820,10 +5218,11 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
       turnId,
       behavior: requestedBehavior,
       pinMode: requestedPinMode,
-      expiresAtMs: performance.now() + 1500,
+      expiresAtMs: performance.now() + TURN_PIN_REQUEST_TTL_MS,
       attempts: 0,
     };
     turnPinRequestGenerationRef.current = request.generation;
+    activeTurnPinRequestRef.current = request;
 
     startupTrace.markPhase('flowchat_turn_pin_request', {
       turnId,
@@ -4849,6 +5248,7 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
     activeSession?.dialogTurns,
     activateTransientTurnPinStabilization,
     clearTurnPinRequest,
+    clearStaticHistoryBottomReturnIntent,
     latestTurnId,
     scheduleTransientTurnPinStabilization,
     scheduleVisibleTurnMeasure,
@@ -4856,6 +5256,35 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
     tryResolvePendingTurnPin,
     useStaticInitialHistoryList,
     userMessageItems,
+  ]);
+
+  useLayoutEffect(() => {
+    if (useStaticInitialHistoryList || !virtuosoRef.current || pendingTurnPin) {
+      return;
+    }
+
+    const pendingStaticTurnPin = pendingStaticTurnPinRef.current;
+    if (!pendingStaticTurnPin) {
+      return;
+    }
+
+    // The static renderer can be replaced by Virtuoso while a target window
+    // is still being materialized. Keep the target as Virtuoso's initial
+    // position (computed above), then continue through the normal pin
+    // transaction once the new scroller exists.
+    pendingStaticTurnPinRef.current = null;
+    releaseStaticHistoryAnchorWindow();
+    requestTurnPinToTop(pendingStaticTurnPin.turnId, {
+      behavior: pendingStaticTurnPin.behavior,
+      pinMode: pendingStaticTurnPin.pinMode,
+    });
+  }, [
+    pendingTurnPin,
+    releaseStaticHistoryAnchorWindow,
+    requestTurnPinToTop,
+    scrollerElement,
+    useStaticInitialHistoryList,
+    virtualItems.length,
   ]);
 
   const performAutoFollowSync = useCallback(() => {
@@ -4964,7 +5393,7 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
         // switch; scrolling by index lets Virtuoso resolve the correct position.
         const scrollToBottom = () => {
           virtuosoRef.current?.scrollToIndex({
-            index: toVirtuosoIndex(virtualItems.length - 1),
+            index: virtualItems.length - 1,
             align: 'end',
             behavior: 'auto',
           });
@@ -5008,7 +5437,6 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
     isStreamingOutput,
     latestTurnId,
     resumeFollowOutputForMountedStream,
-    toVirtuosoIndex,
     virtualItems.length,
   ]);
 
@@ -5207,12 +5635,12 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
       virtuosoRef.current.scrollTo({ top: 0, behavior: 'smooth' });
     } else {
       virtuosoRef.current.scrollToIndex({
-        index: toVirtuosoIndex(targetItem.index),
+        index: targetItem.index,
         behavior: 'smooth',
         align: 'center',
       });
     }
-  }, [clearPinReservationForUserNavigation, exitFollowOutput, toVirtuosoIndex, userMessageItems]);
+  }, [clearPinReservationForUserNavigation, exitFollowOutput, userMessageItems]);
 
   const scrollToIndex = useCallback((index: number) => {
     if (!virtuosoRef.current) return;
@@ -5225,9 +5653,9 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
     if (index === 0) {
       virtuosoRef.current.scrollTo({ top: 0, behavior: 'auto' });
     } else {
-      virtuosoRef.current.scrollToIndex({ index: toVirtuosoIndex(index), align: 'center', behavior: 'auto' });
+      virtuosoRef.current.scrollToIndex({ index, align: 'center', behavior: 'auto' });
     }
-  }, [clearPinReservationForUserNavigation, exitFollowOutput, toVirtuosoIndex, virtualItems.length]);
+  }, [clearPinReservationForUserNavigation, exitFollowOutput, virtualItems.length]);
 
   const clearSearchMatch = useCallback(() => {
     searchNavigationRequestIdRef.current += 1;
@@ -5257,6 +5685,7 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
     retainedCollapseAnchorRef.current = null;
     exitFollowOutput('scroll-to-index');
     clearPinReservationForUserNavigation();
+    clearStaticHistoryBottomReturnIntent();
 
     const virtuoso = virtuosoRef.current;
     if (virtuoso) {
@@ -5264,7 +5693,7 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
         virtuoso.scrollTo({ top: 0, behavior: 'auto' });
       } else {
         virtuoso.scrollToIndex({
-          index: toVirtuosoIndex(target.virtualItemIndex),
+          index: target.virtualItemIndex,
           align: 'center',
           behavior: 'auto',
         });
@@ -5435,12 +5864,12 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
     requestAnimationFrame(resolveExactTextPosition);
   }, [
     clearPinReservationForUserNavigation,
+    clearStaticHistoryBottomReturnIntent,
     clearSearchMatch,
     exitFollowOutput,
     getRenderedVirtualItemElement,
     recordScrollerGeometry,
     scheduleVisibleTurnMeasure,
-    toVirtuosoIndex,
     virtualItems,
   ]);
 
@@ -5456,13 +5885,14 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
     );
     if (shouldExitFollowOutput) {
       exitFollowOutput('pin-turn-to-top');
-      // Drop stale sticky tail padding before transient jumps so the previous
-      // latest-turn reservation cannot leak into the new viewport.
-      clearPinReservationForUserNavigation();
     }
 
     return requestTurnPinToTop(turnId, options);
-  }, [clearPinReservationForUserNavigation, exitFollowOutput, latestTurnId, requestTurnPinToTop]);
+  }, [
+    exitFollowOutput,
+    latestTurnId,
+    requestTurnPinToTop,
+  ]);
 
   const pinTurnToTop = useCallback((turnId: string, options?: { behavior?: ScrollBehavior; pinMode?: FlowChatPinTurnToTopMode }) => {
     return pinTurnToTopWithStatus(turnId, options) !== 'rejected';
@@ -5651,7 +6081,7 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
       virtualItemCount: virtualItems.length,
     });
     virtuosoRef.current.scrollToIndex({
-      index: toVirtuosoIndex(targetIndex),
+      index: targetIndex,
       align: 'end',
       behavior: 'auto',
     });
@@ -5673,7 +6103,6 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
     resolveLatestEndAnchorStabilization,
     scheduleVisibleTurnMeasure,
     snapshotMeasuredContentHeight,
-    toVirtuosoIndex,
     useStaticInitialHistoryList,
     virtualItems,
   ]);
@@ -5916,6 +6345,7 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
     initialHistoryRenderWindow.startIndex,
   ].join(':');
   const isInitialHistoryRenderWindowExpanded =
+    historyPagingActive ||
     !initialHistoryRenderWindow.isWindowed ||
     expandedInitialHistoryRenderKey === initialHistoryRenderKey;
   const renderedInitialHistoryItems = isInitialHistoryRenderWindowExpanded
@@ -5930,17 +6360,6 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
   const trailingOmittedInitialHistoryEstimatedHeightPx = isInitialHistoryRenderWindowExpanded
     ? 0
     : initialHistoryRenderWindow.trailingOmittedEstimatedHeightPx;
-  const getStaticAnchorScrollTop = useCallback((turnId: string) => {
-    const scroller = scrollerElementRef.current;
-    const targetElement = getRenderedUserMessageElement(turnId);
-    if (!scroller || !targetElement) return null;
-
-    const targetRect = targetElement.getBoundingClientRect();
-    const scrollerRect = scroller.getBoundingClientRect();
-    const targetTop = scroller.scrollTop + targetRect.top - scrollerRect.top;
-    const centerOffset = Math.max(0, (scroller.clientHeight - targetRect.height) / 2);
-    return Math.max(0, targetTop - centerOffset);
-  }, [getRenderedUserMessageElement]);
   const expandInitialHistoryRenderWindow = useCallback((reason: string) => {
     if (
       !useStaticInitialHistoryList ||
@@ -5980,54 +6399,43 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
     useStaticInitialHistoryList,
     virtualItems.length,
   ]);
-  useLayoutEffect(() => {
-    const pendingAnchorTurnId = pendingStaticAnchorTurnIdRef.current;
-    if (!pendingAnchorTurnId || pendingAnchorTurnId !== staticAnchorWindowTurnId) {
-      return;
-    }
-
-    const scroller = scrollerElementRef.current;
-    const anchorScrollTop = getStaticAnchorScrollTop(pendingAnchorTurnId);
-    if (!scroller || anchorScrollTop === null) {
-      return;
-    }
-
-    scroller.scrollTo({
-      top: anchorScrollTop,
-      behavior: 'smooth',
-    });
-    previousScrollTopRef.current = anchorScrollTop;
-    previousMeasuredHeightRef.current = snapshotMeasuredContentHeight(scroller);
-    recordScrollerGeometry(scroller);
-    pendingStaticAnchorTurnIdRef.current = null;
-  }, [
-    getStaticAnchorScrollTop,
-    initialHistoryRenderKey,
-    recordScrollerGeometry,
-    snapshotMeasuredContentHeight,
-    staticAnchorWindowTurnId,
-  ]);
   const expandInitialHistoryRenderWindowIfNeeded = useCallback((reason: string) => {
     if (
       !useStaticInitialHistoryList ||
-      !initialHistoryRenderWindow.isWindowed ||
-      isInitialHistoryRenderWindowExpanded ||
-      omittedInitialHistoryEstimatedHeightPx <= 0
+      isInitialHistoryRenderWindowExpanded && activeSession?.isPartial !== true
     ) {
       return;
     }
 
     const scroller = scrollerElementRef.current;
-    if (!scroller || scroller.scrollTop > omittedInitialHistoryEstimatedHeightPx) {
+    if (!scroller) {
+      return;
+    }
+
+    if (activeSession?.isPartial === true) {
+      const pagingThresholdPx = omittedInitialHistoryEstimatedHeightPx + PARTIAL_HISTORY_STATIC_BOUNDARY_THRESHOLD_PX;
+      if (scroller.scrollTop <= pagingThresholdPx) {
+        revealPreviousHistoryWindowForUserIntent(reason);
+      }
+      return;
+    }
+
+    if (!initialHistoryRenderWindow.isWindowed || omittedInitialHistoryEstimatedHeightPx <= 0) {
+      return;
+    }
+
+    if (scroller.scrollTop > omittedInitialHistoryEstimatedHeightPx) {
       return;
     }
 
     expandInitialHistoryRenderWindow(reason);
   }, [
     expandInitialHistoryRenderWindow,
+    activeSession?.isPartial,
     initialHistoryRenderWindow.isWindowed,
     isInitialHistoryRenderWindowExpanded,
     omittedInitialHistoryEstimatedHeightPx,
+    revealPreviousHistoryWindowForUserIntent,
     useStaticInitialHistoryList,
   ]);
   const scheduleInitialHistoryRenderWindowCheck = useCallback((reason: string) => {
@@ -6065,21 +6473,38 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
       getEffectiveBottomScrollTop(scroller) - scroller.scrollTop,
     );
     const atBottom = distanceFromBottom <= 50;
-    setIsAtBottom(atBottom);
-    if (atBottom && staticAnchorWindowTurnId) {
-      pendingStaticTurnPinRef.current = null;
-      pendingStaticAnchorTurnIdRef.current = null;
-      setStaticAnchorWindowTurnId(null);
+    const hasRecentBottomReturnIntent = hasRecentStaticHistoryBottomReturnIntent();
+    const hasRecentPreviousHistoryIntent =
+      performance.now() <= userInitiatedUpwardScrollUntilMsRef.current ||
+      scrollbarPointerInteractionActiveRef.current;
+    const shouldReleaseStaticAnchorWindow = atBottom &&
+      staticAnchorWindowTurnId !== null &&
+      hasRecentBottomReturnIntent;
+    // A programmatic static-history pin can temporarily report the old
+    // physical bottom while its smooth scroll is still in flight. Keep the
+    // semantic state away from latest until the user explicitly heads back to
+    // the bottom.
+    setIsAtBottom(shouldReleaseStaticAnchorWindow || (atBottom && !staticAnchorWindowTurnId));
+    if (shouldReleaseStaticAnchorWindow) {
+      releaseStaticHistoryAnchorWindow();
     }
-    expandInitialHistoryRenderWindowIfNeeded('scroll-near-omitted-history');
+    if (hasRecentPreviousHistoryIntent) {
+      expandInitialHistoryRenderWindowIfNeeded('scroll-near-omitted-history');
+    }
   }, [
     expandInitialHistoryRenderWindowIfNeeded,
     getEffectiveBottomScrollTop,
+    hasRecentStaticHistoryBottomReturnIntent,
     staticAnchorWindowTurnId,
+    releaseStaticHistoryAnchorWindow,
   ]);
-  const handleInitialHistoryStaticWheelCapture = useCallback(() => {
-    scheduleInitialHistoryRenderWindowCheck('wheel-near-omitted-history');
-  }, [scheduleInitialHistoryRenderWindowCheck]);
+  const handleInitialHistoryStaticWheelCapture = useCallback((event: React.WheelEvent<HTMLDivElement>) => {
+    if (event.deltaY >= 0) {
+      return;
+    }
+    expandInitialHistoryRenderWindowIfNeeded('wheel-up');
+    scheduleInitialHistoryRenderWindowCheck('wheel-up');
+  }, [expandInitialHistoryRenderWindowIfNeeded, scheduleInitialHistoryRenderWindowCheck]);
   const handleInitialHistoryStaticKeyDownCapture = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
     if (
       event.key === 'Home' ||
@@ -6122,7 +6547,6 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
 
     if (expandedInitialHistoryRenderKey !== initialHistoryRenderKey) {
       pendingInitialHistoryExpansionRef.current = null;
-      pendingStaticAnchorTurnIdRef.current = null;
       return;
     }
 
@@ -6132,13 +6556,7 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
       return;
     }
 
-    const pendingAnchorTurnId = pendingStaticAnchorTurnIdRef.current;
-    const anchorScrollTop = pendingAnchorTurnId
-      ? getStaticAnchorScrollTop(pendingAnchorTurnId)
-      : null;
-    pendingStaticAnchorTurnIdRef.current = null;
-
-    const nextScrollTop = anchorScrollTop ?? mapInitialHistoryExpansionScrollTop({
+    const nextScrollTop = mapInitialHistoryExpansionScrollTop({
       previousScrollTop: pending.scrollTop,
       previousScrollHeight: pending.scrollHeight,
       nextScrollHeight: scroller.scrollHeight,
@@ -6152,7 +6570,6 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
     recordScrollerGeometry(scroller);
   }, [
     expandedInitialHistoryRenderKey,
-    getStaticAnchorScrollTop,
     initialHistoryRenderKey,
     recordScrollerGeometry,
     snapshotMeasuredContentHeight,
@@ -6284,7 +6701,7 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
     }
 
     const scroller = scrollerElementRef.current;
-    if (!scroller || staticAnchorWindowTurnId || pendingStaticAnchorTurnIdRef.current) {
+    if (!scroller || staticAnchorWindowTurnId) {
       return;
     }
 
@@ -6376,7 +6793,9 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
     useStaticInitialHistoryList,
   ]);
   const previousHistoryBoundaryStatusNode = React.useMemo(
-    () => previousHistoryBoundaryStatus?.sessionId === activeSessionId ? (
+    () => previousHistoryBoundaryStatus?.sessionId === activeSessionId && (
+      previousHistoryBoundaryStatus.state === 'not-ready' || !historyPagingActive
+    ) ? (
       <div
         className="virtual-message-list__history-boundary-status"
         data-history-boundary-status={previousHistoryBoundaryStatus.state}
@@ -6388,18 +6807,31 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
           : t('historyState.olderHistoryNotReady')}
       </div>
     ) : null,
-    [activeSessionId, previousHistoryBoundaryStatus, t],
+    [activeSessionId, historyPagingActive, previousHistoryBoundaryStatus, t],
+  );
+  const historyPagingSentinelNode = React.useMemo(
+    () => historyPagingActive && activeSession?.isPartial === true ? (
+      <FlowChatHistoryPagingSentinel
+        visible={historyPagingLoading}
+        label={t('historyState.preparingOlderHistory')}
+      />
+    ) : null,
+    [activeSession?.isPartial, historyPagingActive, historyPagingLoading, t],
   );
   const virtuosoContext = React.useMemo<FlowChatVirtuosoContext>(() => ({
     // Reservation pixels are applied imperatively to the stable Footer node.
     // Keeping them out of context prevents a measurement-sensitive Virtuoso
     // render for every compensation update.
     footerRef: handleFooterElementRef,
-    previousHistoryBoundaryStatusNode,
+    previousHistoryBoundaryStatusNode: <>
+      {historyPagingSentinelNode}
+      {previousHistoryBoundaryStatusNode}
+    </>,
     runtimeStatusSessionId: activeSessionId,
   }), [
     activeSessionId,
     handleFooterElementRef,
+    historyPagingSentinelNode,
     previousHistoryBoundaryStatusNode,
   ]);
   const computeVirtuosoItemKey = useCallback((_: number, item: VirtualItem) => (
@@ -6441,6 +6873,7 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
           onKeyDownCapture={handleInitialHistoryStaticKeyDownCapture}
         >
           <div className="message-list-header" />
+          {historyPagingSentinelNode}
           {previousHistoryBoundaryStatusNode}
           {omittedInitialHistoryEstimatedHeightPx > 0 ? (
             <div
@@ -6547,40 +6980,6 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
           </div>
         </div>
       ) : null}
-
-      <ScrollAnchor
-        onAnchorNavigate={(turnId) => {
-          if (!turnId) return;
-
-          if (virtuosoRef.current) {
-            pinTurnToTop(turnId, { behavior: 'smooth' });
-            return;
-          }
-
-          const targetItem = userMessageItems.find(({ item }) => item.turnId === turnId);
-          if (!targetItem) return;
-
-          retainedCollapseAnchorRef.current = null;
-          exitFollowOutput('scroll-to-turn');
-          clearPinReservationForUserNavigation();
-
-          pendingStaticAnchorTurnIdRef.current = turnId;
-          const anchorScrollTop = getStaticAnchorScrollTop(turnId);
-          if (anchorScrollTop === null) {
-            setStaticAnchorWindowTurnId(turnId);
-            return;
-          }
-
-          if (scrollerElementRef.current) {
-            scrollerElementRef.current.scrollTo({
-              top: anchorScrollTop,
-              behavior: 'smooth',
-            });
-          }
-          pendingStaticAnchorTurnIdRef.current = null;
-        }}
-        scrollerRef={scrollerElementRef}
-      />
 
       <ScrollToTurnHeaderButton
         visible={shouldShowTurnHeaderButton}

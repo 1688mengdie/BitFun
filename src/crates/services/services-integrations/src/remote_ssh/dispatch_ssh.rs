@@ -50,7 +50,15 @@ const GLIBC_FLOOR: &str = "2.35";
 const SOURCE_BUILD_FREE_KB: u64 = 6 * 1024 * 1024;
 const REPO_GIT_URL: &str = "https://github.com/GCWing/BitFun.git";
 const DISPATCH_PROTOCOL_VERSION: u64 = 2;
-const REQUIRED_DISPATCH_CAPABILITIES: [&str; 12] = [
+const DISPATCH_WORKER_CLI_PROFILE_CAPABILITY: &str = "dispatch_worker_cli_profile";
+/// First stable release whose CLI is known to contain every capability below.
+///
+/// Development builds can require capabilities before their next stable
+/// version is published. In that window `CARGO_PKG_VERSION` still names the
+/// previous release, so comparing only the installed and controller version
+/// strings is not a sound compatibility test.
+const FIRST_COMPATIBLE_STABLE_DISPATCH_RELEASE: (u64, u64, u64) = (0, 2, 15);
+const REQUIRED_DISPATCH_CAPABILITIES: [&str; 13] = [
     "persistent_jobs",
     "cursor_events",
     "detached_worker",
@@ -63,6 +71,7 @@ const REQUIRED_DISPATCH_CAPABILITIES: [&str; 12] = [
     "event_log_completeness",
     "workspace_snapshot_exact",
     "workspace_snapshot_chunked",
+    DISPATCH_WORKER_CLI_PROFILE_CAPABILITY,
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -127,8 +136,6 @@ struct RemoteTarget {
     arch: String,
     home: String,
     cli_path: Option<String>,
-    /// Version string of the installed CLI, when one is present and runnable.
-    cli_version: Option<String>,
     tar_available: bool,
     /// Fetcher the target can use to pull the release itself, if any.
     downloader: Option<RemoteDownloader>,
@@ -211,7 +218,12 @@ pub async fn probe(
         )
         .await
         {
-            Ok(response) => protocol = Some(response),
+            Ok(response) => {
+                protocol_error = validate_dispatch_protocol(&response, None)
+                    .err()
+                    .map(|error| error.to_string());
+                protocol = Some(response);
+            }
             Err(error) => protocol_error = Some(error.to_string()),
         }
     }
@@ -222,7 +234,9 @@ pub async fn probe(
             .is_some_and(dispatch_protocol_is_compatible);
     // A platform mismatch is decided before any network work: no release exists
     // that would install successfully, so resolving one only hides the reason.
-    let incompatibility = needs_install.then(|| prebuilt_incompatibility(&target)).flatten();
+    let incompatibility = needs_install
+        .then(|| prebuilt_incompatibility(&target))
+        .flatten();
     let (release, install_error) = if needs_install {
         if let Some(incompatibility) = &incompatibility {
             (None, Some(incompatibility.describe()))
@@ -231,29 +245,29 @@ pub async fn probe(
                 None,
                 Some("remote target has no tar executable; install tar and retry".to_string()),
             )
+        } else if !published_release_supports_required_dispatch_protocol(RELEASE_VERSION) {
+            // The controller is ahead of the latest stable artifact. Avoid an
+            // unnecessary release request and offer its exact source instead.
+            (None, None)
         } else {
             match resolve_release(&target.os, &target.arch).await {
-                Ok(release) => match already_at_release_version(&target, &release) {
-                    // Reinstalling a release the target already runs cannot add
-                    // a protocol it does not implement. Offering the install
-                    // anyway traps the user in a loop of successful installs
-                    // that never clear the incompatibility.
-                    //
-                    // Carry the probe's own error: a release that genuinely
-                    // predates dispatch and a target that failed to answer for
-                    // some other reason look identical from here, and only the
-                    // underlying message tells them apart.
-                    Some(version) => {
-                        let detail = protocol_error.as_deref().unwrap_or("no dispatch protocol");
-                        (
-                            None,
-                            Some(format!(
-                                "target already runs BitFun CLI {version}, which did not answer the dispatch protocol ({detail}); reinstalling the same release cannot change this"
-                            )),
-                        )
-                    }
-                    None => (Some(release.public), None),
-                },
+                // Capability support is a fact about the published artifact,
+                // not about whether its semver happens to equal the installed
+                // binary. A locally or previously source-built CLI may share a
+                // version string with a different artifact.
+                Ok(release)
+                    if published_release_supports_required_dispatch_protocol(
+                        &release.public.version,
+                    ) =>
+                {
+                    (Some(release.public), None)
+                }
+                // Before the first compatible stable release exists, the exact
+                // controller source is the only deterministic repair path. Do
+                // not show a speculative "same version means same binary"
+                // warning; the readiness row already names the missing
+                // capability and the source-build action explains the remedy.
+                Ok(_) => (None, None),
                 Err(error) => (None, Some(error.to_string())),
             }
         }
@@ -279,7 +293,9 @@ pub async fn probe(
         protocol_error,
         release,
         protocol,
-        prebuilt_incompatible: incompatibility.as_ref().map(PrebuiltIncompatibility::describe),
+        prebuilt_incompatible: incompatibility
+            .as_ref()
+            .map(PrebuiltIncompatibility::describe),
         source_build,
     })
 }
@@ -386,7 +402,9 @@ fn source_build_availability(target: &RemoteTarget) -> DispatchSourceBuild {
         blockers.push("no git on the target".to_string());
     }
     if !target.cc_available {
-        blockers.push("no C compiler on the target (install build-essential or equivalent)".to_string());
+        blockers.push(
+            "no C compiler on the target (install build-essential or equivalent)".to_string(),
+        );
     }
     if let Some(free_kb) = target.free_kb {
         if free_kb < SOURCE_BUILD_FREE_KB {
@@ -405,15 +423,34 @@ fn source_build_availability(target: &RemoteTarget) -> DispatchSourceBuild {
     }
 }
 
-/// The version the target already runs, when it matches the release we would
-/// install and therefore makes installing pointless.
+/// Whether a published artifact is expected to implement the controller's
+/// required protocol.
 ///
-/// A CLI that answered `--version` with the exact release version is a working
-/// binary, so the incompatibility is a missing feature in that release rather
-/// than a damaged install.
-fn already_at_release_version(target: &RemoteTarget, release: &ResolvedRelease) -> Option<String> {
-    let installed = target.cli_version.as_deref()?;
-    (installed == release.public.version).then(|| installed.to_string())
+/// Nightly Desktop and CLI artifacts are built from the same checkout, so a
+/// nightly is compatible by construction. Stable artifacts use an explicit
+/// capability floor. This avoids treating equal version labels as proof that
+/// two binaries are identical while still keeping known-old releases out of
+/// the install loop.
+fn published_release_supports_required_dispatch_protocol(version: &str) -> bool {
+    if version.contains("-nightly.") {
+        return true;
+    }
+    let core = version.split('+').next().unwrap_or(version);
+    let core = core.split('-').next().unwrap_or(core);
+    let mut parts = core.split('.');
+    let parsed = (
+        parts.next().and_then(|part| part.parse::<u64>().ok()),
+        parts.next().and_then(|part| part.parse::<u64>().ok()),
+        parts.next().and_then(|part| part.parse::<u64>().ok()),
+    );
+    if parts.next().is_some() {
+        return false;
+    }
+    matches!(
+        parsed,
+        (Some(major), Some(minor), Some(patch))
+            if (major, minor, patch) >= FIRST_COMPATIBLE_STABLE_DISPATCH_RELEASE
+    )
 }
 
 fn dispatch_protocol_is_compatible(protocol: &Value) -> bool {
@@ -443,6 +480,7 @@ pub fn validate_dispatch_protocol(protocol: &Value, approval_policy: Option<&str
             "workspace_serialization",
             "frontend_event_projection",
             "approval_auto",
+            DISPATCH_WORKER_CLI_PROFILE_CAPABILITY,
         ],
         Some("reject-and-report") => &[
             "persistent_jobs",
@@ -451,6 +489,7 @@ pub fn validate_dispatch_protocol(protocol: &Value, approval_policy: Option<&str
             "workspace_serialization",
             "frontend_event_projection",
             "approval_reject_and_report",
+            DISPATCH_WORKER_CLI_PROFILE_CAPABILITY,
         ],
         Some("remote") => &[
             "persistent_jobs",
@@ -459,6 +498,7 @@ pub fn validate_dispatch_protocol(protocol: &Value, approval_policy: Option<&str
             "workspace_serialization",
             "frontend_event_projection",
             "approval_remote",
+            DISPATCH_WORKER_CLI_PROFILE_CAPABILITY,
         ],
         Some(_) => return Err(anyhow!("unsupported dispatch approval policy")),
         None => &REQUIRED_DISPATCH_CAPABILITIES,
@@ -499,6 +539,12 @@ pub async fn install_cli_start(
         ));
     }
     let release = resolve_release(&target.os, &target.arch).await?;
+    if !published_release_supports_required_dispatch_protocol(&release.public.version) {
+        return Err(anyhow!(
+            "published BitFun CLI {} does not contain the dispatch capabilities required by this controller; build from the controller source instead",
+            release.public.version
+        ));
+    }
     ensure_confirmed_release(&release.public, expected_release)?;
 
     // Stop an earlier attempt before replacing any of its staged files. A
@@ -862,6 +908,117 @@ pub async fn install_cli_source_start(
     })
 }
 
+/// Build and install the CLI from an exact controller-provided source archive.
+///
+/// Development Desktop builds use this after the same explicit source-build
+/// confirmation as the repository-clone path. It prevents an untagged
+/// controller from "updating" a same-semver target back to an older release
+/// whose dispatch protocol is missing required behavioral capabilities.
+pub async fn install_cli_source_archive_start(
+    manager: &SSHConnectionManager,
+    connection_id: &str,
+    source_archive: &[u8],
+    revision: &str,
+) -> Result<DispatchInstallStart> {
+    ensure_plain_ssh_target(manager, connection_id).await?;
+    if source_archive.is_empty() {
+        return Err(anyhow!("controller source archive is empty"));
+    }
+    if source_archive.len() > MAX_ARCHIVE_BYTES {
+        return Err(anyhow!(
+            "controller source archive exceeds the {} MB safety limit",
+            MAX_ARCHIVE_BYTES / (1024 * 1024)
+        ));
+    }
+    let revision = revision.trim();
+    if revision.is_empty()
+        || revision.len() > 80
+        || !revision.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_')
+        })
+    {
+        return Err(anyhow!("controller source revision is invalid"));
+    }
+
+    let target = probe_remote_target(manager, connection_id).await?;
+    let mut availability = source_build_availability(&target);
+    // The controller supplied a complete archive, so the target does not need
+    // git. It still needs tar to unpack that archive.
+    availability
+        .blockers
+        .retain(|blocker| blocker != "no git on the target");
+    if !target.tar_available {
+        availability
+            .blockers
+            .push("no tar executable on the target".to_string());
+    }
+    if !availability.blockers.is_empty() {
+        return Err(anyhow!(
+            "target cannot build BitFun from controller source: {}",
+            availability.blockers.join("; ")
+        ));
+    }
+
+    install_cli_cancel(manager, connection_id)
+        .await
+        .context("stop an earlier BitFun CLI installation")?;
+
+    let dir = format!("{}/{}", target.home, INSTALL_STATE_DIR);
+    let archive_path = format!("{dir}/controller-source.tar.gz");
+    let body_path = format!("{dir}/{INSTALL_STEM}-body.sh");
+    let script_path = format!("{dir}/{INSTALL_STEM}.sh");
+    let install_token = format!("bitfun-install-{}", uuid::Uuid::new_v4().as_simple());
+    let version = RELEASE_VERSION
+        .split('+')
+        .next()
+        .unwrap_or(RELEASE_VERSION)
+        .to_string();
+
+    exec_ok(
+        manager,
+        connection_id,
+        &format!(
+            "mkdir -p {dir} && chmod 700 {root} {dispatch} {dir}",
+            root = shell_quote_posix(&format!("{}/.bitfun", target.home)),
+            dispatch = shell_quote_posix(&format!("{}/.bitfun/dispatch", target.home)),
+            dir = shell_quote_posix(&dir),
+        ),
+    )
+    .await?;
+    manager
+        .sftp_write(connection_id, &archive_path, source_archive)
+        .await
+        .context("stage controller BitFun source archive")?;
+
+    let body = to_unix_script(&source_archive_build_body_script(
+        &dir,
+        &archive_path,
+        &version,
+        revision,
+    ));
+    let driver = to_unix_script(&install_driver_script(&dir, &body_path, &install_token));
+    stage_and_launch_installer(
+        manager,
+        connection_id,
+        &dir,
+        Some(&archive_path),
+        &body_path,
+        &script_path,
+        &body,
+        &driver,
+        &install_token,
+    )
+    .await?;
+
+    Ok(DispatchInstallStart {
+        script_path,
+        version,
+        target: format!("{} {}", target.os, target.arch),
+        url: format!("controller-source:{revision}"),
+        sha256: String::new(),
+    })
+}
+
 fn ensure_confirmed_release(
     resolved: &DispatchCliRelease,
     expected: &DispatchCliRelease,
@@ -1010,7 +1167,9 @@ pub async fn sync_model_config(
     }
     let config_dir = get("dir");
     if config_dir.is_empty() {
-        return Err(anyhow!("could not resolve the target BitFun config directory"));
+        return Err(anyhow!(
+            "could not resolve the target BitFun config directory"
+        ));
     }
     let config_path = format!("{config_dir}/app.json");
 
@@ -1067,7 +1226,8 @@ fn validate_model_config_payload(
     }
     if payload
         .get("models")
-        .and_then(Value::as_array).is_none_or(|models| models.is_empty())
+        .and_then(Value::as_array)
+        .is_none_or(|models| models.is_empty())
     {
         return Err(anyhow!(
             "the controller has no configured AI models to sync"
@@ -1671,18 +1831,11 @@ async fn probe_remote_target(
         return Err(anyhow!("could not resolve remote $HOME"));
     }
     let cli_path = get("cli");
-    // `bitfun --version` prints "bitfun <semver>"; keep only the version.
-    let cli_version = get("cliversion")
-        .split_whitespace()
-        .next_back()
-        .unwrap_or_default()
-        .to_string();
     Ok(RemoteTarget {
         os: get("os"),
         arch: get("arch"),
         home,
         cli_path: (!cli_path.is_empty()).then_some(cli_path),
-        cli_version: (!cli_version.is_empty()).then_some(cli_version),
         tar_available: get("tar") == "1",
         downloader: match get("downloader").as_str() {
             "curl" => Some(RemoteDownloader::Curl),
@@ -1726,9 +1879,6 @@ else
   BITFUN_BIN="$(command -v bitfun 2>/dev/null || true)"
 fi
 printf 'cli=%s\n' "$BITFUN_BIN"
-if [ -n "$BITFUN_BIN" ]; then
-  printf 'cliversion=%s\n' "$("$BITFUN_BIN" --version 2>/dev/null || true)"
-fi
 if [ "$(uname -s 2>/dev/null || true)" = "Linux" ]; then
   if ls /lib/ld-musl-* >/dev/null 2>&1 || ldd --version 2>&1 | head -n1 | grep -qi musl; then
     printf 'libc=musl\n'
@@ -2005,6 +2155,14 @@ if ! staged_dispatch="$("$PRIMARY_NEW" dispatch --help 2>&1 >/dev/null)"; then
   echo "ERROR: this BitFun build does not provide dispatch support: $staged_dispatch" >&2
   exit 1
 fi
+if ! staged_probe="$(printf '{{}}\n' | "$PRIMARY_NEW" dispatch probe 2>/dev/null)"; then
+  echo "ERROR: staged BitFun dispatch probe failed" >&2
+  exit 1
+fi
+case "$staged_probe" in
+  *'"{worker_profile_capability}"'*) ;;
+  *) echo "ERROR: staged BitFun CLI lacks safe dispatch worker profile selection" >&2; exit 1 ;;
+esac
 if [ -e "$PRIMARY_TARGET" ]; then
   mv -f "$PRIMARY_TARGET" "$PRIMARY_BACKUP"
   HAD_PRIMARY=1
@@ -2030,7 +2188,8 @@ COMMITTED=1
 {post_commit}
 echo "Installed $installed at $HOME/.local/bin/bitfun"
 echo {INSTALL_DONE_MARKER}
-"#
+"#,
+        worker_profile_capability = DISPATCH_WORKER_CLI_PROFILE_CAPABILITY,
     )
 }
 
@@ -2115,6 +2274,43 @@ LEGACY="$SRC/target/release/bitfun-cli"
         // The checkout is many gigabytes; leaving it behind would silently fill
         // the target's home directory after a few installs.
         commit = install_commit_fragment(r#"rm -rf "$SRC""#),
+    )
+}
+
+fn source_archive_build_body_script(
+    dir: &str,
+    archive_path: &str,
+    expected_version: &str,
+    revision: &str,
+) -> String {
+    let build = format!(
+        r#"SRC="$D/source"
+SOURCE_ARCHIVE={archive}
+echo "Building BitFun CLI controller source {revision_plain} on the target. This can take a while."
+FREE_KB="$(df -Pk "$HOME" 2>/dev/null | awk 'NR==2 {{print $4}}' || echo 0)"
+if [ "${{FREE_KB:-0}}" -lt {free_kb} ]; then
+  echo "ERROR: source build needs about {free_gb} GB free under $HOME, found $((FREE_KB / 1024 / 1024)) GB" >&2
+  exit 1
+fi
+rm -rf "$SRC"
+mkdir -p "$SRC"
+tar -xzf "$SOURCE_ARCHIVE" -C "$SRC"
+echo ">>> cargo build --release (bitfun, bitfun-cli)"
+( cd "$SRC" && cargo build --release --locked -p bitfun-cli --bin bitfun --bin bitfun-cli )
+PRIMARY="$SRC/target/release/bitfun"
+LEGACY="$SRC/target/release/bitfun-cli"
+[ -f "$PRIMARY" ] || {{ echo "ERROR: source build produced no bitfun binary" >&2; exit 1; }}
+[ -f "$LEGACY" ] || {{ echo "ERROR: source build produced no bitfun-cli binary" >&2; exit 1; }}
+"#,
+        archive = shell_quote_posix(archive_path),
+        revision_plain = revision,
+        free_kb = SOURCE_BUILD_FREE_KB,
+        free_gb = SOURCE_BUILD_FREE_KB / 1024 / 1024,
+    );
+    format!(
+        "{preamble}{build}{commit}",
+        preamble = install_preamble_fragment(dir, expected_version),
+        commit = install_commit_fragment(r#"rm -rf "$SRC"; rm -f "$SOURCE_ARCHIVE""#),
     )
 }
 
@@ -2472,11 +2668,8 @@ mod tests {
             "/home/user/.bitfun/dispatch/install/install-cli-body.sh",
             "bitfun-install-test-token",
         );
-        let source = source_build_body_script(
-            "/home/user/.bitfun/dispatch/install",
-            "1.2.3",
-            "v1.2.3",
-        );
+        let source =
+            source_build_body_script("/home/user/.bitfun/dispatch/install", "1.2.3", "v1.2.3");
         for (name, script) in [("body", body), ("driver", driver), ("source", source)] {
             let script = to_unix_script(&script);
             assert!(!script.contains('\r'), "{name} must be LF-only");
@@ -2514,7 +2707,6 @@ mod tests {
             arch: "x86_64".to_string(),
             home: "/home/user".to_string(),
             cli_path: None,
-            cli_version: None,
             tar_available: true,
             downloader,
             digest_tool,
@@ -2569,11 +2761,14 @@ mod tests {
         let staging = temp.path().join(".results");
         std::fs::create_dir_all(&staging).expect("staging");
         // Simulate a permissive umask having created it.
-        std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o755))
-            .expect("loosen");
+        std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o755)).expect("loosen");
         harden_result_directory(&staging).expect("harden");
         assert_eq!(
-            std::fs::metadata(&staging).expect("stat").permissions().mode() & 0o777,
+            std::fs::metadata(&staging)
+                .expect("stat")
+                .permissions()
+                .mode()
+                & 0o777,
             0o700,
             "the staging directory holds user source and must not be world-readable"
         );
@@ -2581,7 +2776,11 @@ mod tests {
         let bundle = staging.join("job-1.tar.gz");
         write_private_file(&bundle, b"bundle bytes").expect("write");
         assert_eq!(
-            std::fs::metadata(&bundle).expect("stat").permissions().mode() & 0o777,
+            std::fs::metadata(&bundle)
+                .expect("stat")
+                .permissions()
+                .mode()
+                & 0o777,
             0o600,
             "the bundle itself must be owner-only"
         );
@@ -2590,7 +2789,11 @@ mod tests {
         // Rewriting must not widen the mode or leave a stale tail.
         write_private_file(&bundle, b"short").expect("rewrite");
         assert_eq!(
-            std::fs::metadata(&bundle).expect("stat").permissions().mode() & 0o777,
+            std::fs::metadata(&bundle)
+                .expect("stat")
+                .permissions()
+                .mode()
+                & 0o777,
             0o600
         );
         assert_eq!(std::fs::read(&bundle).expect("read"), b"short");
@@ -2690,7 +2893,10 @@ mod tests {
             availability.blockers
         );
         assert!(
-            availability.blockers.iter().any(|b| b.contains("rustup.rs")),
+            availability
+                .blockers
+                .iter()
+                .any(|b| b.contains("rustup.rs")),
             "a missing toolchain must say where to get one"
         );
 
@@ -2711,7 +2917,14 @@ mod tests {
             "1.2.3",
             &ArchiveSource::TargetDownload,
         );
-        let source = source_build_body_script("/home/user/.bitfun/dispatch/install", "1.2.3", "v1.2.3");
+        let source =
+            source_build_body_script("/home/user/.bitfun/dispatch/install", "1.2.3", "v1.2.3");
+        let controller_source = source_archive_build_body_script(
+            "/home/user/.bitfun/dispatch/install",
+            "/home/user/.bitfun/dispatch/install/controller-source.tar.gz",
+            "1.2.3",
+            "abc123",
+        );
         // The atomic-replace and rollback semantics must not be able to drift
         // between the two paths.
         let commit = install_commit_fragment(r#"rm -f "$ARCHIVE""#);
@@ -2719,7 +2932,11 @@ mod tests {
             .lines()
             .find(|line| line.contains("mv -f \"$PRIMARY_NEW\""))
             .expect("commit fragment swaps the primary");
-        for (name, script) in [("release", &release), ("source", &source)] {
+        for (name, script) in [
+            ("release", &release),
+            ("source", &source),
+            ("controller source", &controller_source),
+        ] {
             assert!(script.contains(shared), "{name} must use the shared commit");
             assert!(
                 script.contains(r#"PRIMARY_NEW="$STAGE/bitfun""#),
@@ -2728,6 +2945,10 @@ mod tests {
             assert!(
                 script.contains("rollback_install"),
                 "{name} must keep rollback"
+            );
+            assert!(
+                script.contains(DISPATCH_WORKER_CLI_PROFILE_CAPABILITY),
+                "{name} must reject a CLI whose detached worker can select the wrong profile"
             );
         }
         assert!(
@@ -2742,34 +2963,33 @@ mod tests {
             source.contains(r#"rm -rf "$SRC""#),
             "the checkout must be cleaned up after a successful build"
         );
+        assert!(
+            controller_source.contains("tar -xzf \"$SOURCE_ARCHIVE\"")
+                && controller_source.contains("controller source abc123")
+                && !controller_source.contains("git clone"),
+            "a controller archive must build exactly the confirmed local revision"
+        );
     }
 
     #[test]
-    fn reinstalling_the_version_already_present_is_not_offered() {
-        let release = test_release(true);
-        let mut target = test_target(
-            Some(RemoteDownloader::Curl),
-            Some(RemoteDigestTool::Sha256Sum),
-        );
-
-        target.cli_version = Some("1.2.3".to_string());
-        assert_eq!(
-            already_at_release_version(&target, &release).as_deref(),
-            Some("1.2.3"),
-            "an install that cannot change anything must not be offered"
-        );
-
-        target.cli_version = Some("1.2.2".to_string());
+    fn release_compatibility_uses_capability_floor_not_installed_version() {
         assert!(
-            already_at_release_version(&target, &release).is_none(),
-            "an older target must still be offered the upgrade"
+            !published_release_supports_required_dispatch_protocol("0.2.14"),
+            "the last release without the worker profile must use the exact controller source"
         );
-
-        target.cli_version = None;
         assert!(
-            already_at_release_version(&target, &release).is_none(),
-            "a target with no runnable CLI must still be offered the install"
+            published_release_supports_required_dispatch_protocol("0.2.15"),
+            "the first compatible stable release must be installable"
         );
+        assert!(published_release_supports_required_dispatch_protocol(
+            "0.3.0+build.1"
+        ));
+        assert!(published_release_supports_required_dispatch_protocol(
+            "0.2.14-nightly.20260730+abc123"
+        ));
+        assert!(!published_release_supports_required_dispatch_protocol(
+            "not-a-version"
+        ));
     }
 
     #[test]
@@ -2797,8 +3017,11 @@ mod tests {
     fn a_target_missing_its_tools_falls_back_to_the_push_path() {
         let signed = test_release(true);
         assert!(
-            target_download_blocker(&test_target(None, Some(RemoteDigestTool::Sha256Sum)), &signed)
-                .is_some(),
+            target_download_blocker(
+                &test_target(None, Some(RemoteDigestTool::Sha256Sum)),
+                &signed
+            )
+            .is_some(),
             "no curl or wget must fall back"
         );
         assert!(
@@ -2823,8 +3046,7 @@ mod tests {
             ("shasum -a 256", RemoteDigestTool::Shasum),
         ]
         .into_iter()
-        .find(|(command, _)| available(command.split_whitespace().next().unwrap_or(command)))
-        else {
+        .find(|(command, _)| available(command.split_whitespace().next().unwrap_or(command))) else {
             return; // no digest tool on this host
         };
         if !available("curl") {
@@ -2839,7 +3061,10 @@ mod tests {
         let digest_output = std::process::Command::new("bash")
             .args([
                 "-c",
-                &format!("{digest_command} {}", shell_quote_posix(&source.to_string_lossy())),
+                &format!(
+                    "{digest_command} {}",
+                    shell_quote_posix(&source.to_string_lossy())
+                ),
             ])
             .output()
             .expect("compute digest");
@@ -2924,7 +3149,20 @@ mod tests {
     /// Mirrors a real `bitfun`: answers `--version` and has a `dispatch`
     /// subcommand.
     const DISPATCH_CAPABLE_PRIMARY: &str = "#!/bin/bash\n\
-         if [ \"${1:-}\" = dispatch ]; then exit 0; fi\n\
+         if [ \"${1:-}\" = dispatch ]; then\n\
+         if [ \"${2:-}\" = probe ]; then\n\
+         echo '{\"capabilities\":[\"dispatch_worker_cli_profile\"]}'\n\
+         fi\n\
+         exit 0\n\
+         fi\n\
+         echo \"bitfun 1.2.3\"\n";
+
+    /// Has the dispatch command but predates safe worker profile selection.
+    const UNSAFE_DISPATCH_PRIMARY: &str = "#!/bin/bash\n\
+         if [ \"${1:-}\" = dispatch ]; then\n\
+         if [ \"${2:-}\" = probe ]; then echo '{\"capabilities\":[]}' ; fi\n\
+         exit 0\n\
+         fi\n\
          echo \"bitfun 1.2.3\"\n";
 
     /// Mirrors a release that predates dispatch: the binary is healthy and
@@ -2974,9 +3212,24 @@ mod tests {
     }
 
     #[cfg(unix)]
-    fn run_install_body_fixture(
-        primary: &str,
-    ) -> (std::process::Output, tempfile::TempDir) {
+    #[test]
+    fn a_dispatch_build_without_safe_worker_profile_selection_is_not_installed() {
+        let (output, temp) = run_install_body_fixture(UNSAFE_DISPATCH_PRIMARY);
+        assert!(
+            !output.status.success(),
+            "a target that accepts jobs but cannot run workers must fail installation"
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .contains("lacks safe dispatch worker profile selection"),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(!temp.path().join(".local/bin/bitfun").exists());
+    }
+
+    #[cfg(unix)]
+    fn run_install_body_fixture(primary: &str) -> (std::process::Output, tempfile::TempDir) {
         use std::os::unix::fs::PermissionsExt;
 
         let temp = tempfile::tempdir().expect("temp dir");
@@ -2986,7 +3239,8 @@ mod tests {
         let pkg = temp.path().join("pkg/bitfun-cli-1.2.3-test");
         std::fs::create_dir_all(&pkg).expect("package dir");
         std::fs::write(pkg.join("bitfun"), primary).expect("write primary");
-        std::fs::write(pkg.join("bitfun-cli"), SIBLING_RESOLVING_COMPANION).expect("write companion");
+        std::fs::write(pkg.join("bitfun-cli"), SIBLING_RESOLVING_COMPANION)
+            .expect("write companion");
         for name in ["bitfun", "bitfun-cli"] {
             std::fs::set_permissions(pkg.join(name), std::fs::Permissions::from_mode(0o755))
                 .expect("chmod package binary");
@@ -3132,6 +3386,12 @@ mod tests {
                 "bitfun-install-test-token",
             ),
             source_build_body_script("/home/user/.bitfun/dispatch/install", "1.2.3", "v1.2.3"),
+            source_archive_build_body_script(
+                "/home/user/.bitfun/dispatch/install",
+                "/home/user/.bitfun/dispatch/install/controller-source.tar.gz",
+                "1.2.3",
+                "abc123",
+            ),
             target_download_script(
                 RemoteDownloader::Curl,
                 RemoteDigestTool::Sha256Sum,
@@ -3481,11 +3741,32 @@ mod tests {
                 "detached_worker",
                 "workspace_serialization",
                 "frontend_event_projection",
-                "approval_reject_and_report"
+                "approval_reject_and_report",
+                DISPATCH_WORKER_CLI_PROFILE_CAPABILITY
             ],
         });
         validate_dispatch_protocol(&reject_only, Some("reject-and-report"))
             .expect("selected policy is supported");
         assert!(validate_dispatch_protocol(&reject_only, Some("auto")).is_err());
+
+        let unsafe_worker = serde_json::json!({
+            "protocolVersion": DISPATCH_PROTOCOL_VERSION,
+            "capabilities": [
+                "persistent_jobs",
+                "cursor_events",
+                "detached_worker",
+                "workspace_serialization",
+                "frontend_event_projection",
+                "approval_reject_and_report"
+            ],
+        });
+        let error = validate_dispatch_protocol(&unsafe_worker, Some("reject-and-report"))
+            .expect_err("a worker that can select product-full first must be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains(DISPATCH_WORKER_CLI_PROFILE_CAPABILITY),
+            "{error}"
+        );
     }
 }

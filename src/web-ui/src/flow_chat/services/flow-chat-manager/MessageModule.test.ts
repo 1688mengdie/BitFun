@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { cancelSessionTask, sendMessage, syncSessionModelSelection } from './MessageModule';
 import { SessionExecutionEvent } from '../../state-machine/types';
+import {
+  getRuntimeStatus,
+  resetRuntimeStatuses,
+} from '../../store/runtimeStatusStore';
 
 const mockTransition = vi.fn();
 const mockGetCurrentState = vi.fn(() => 'processing');
@@ -346,6 +350,7 @@ describe('MessageModule session writer conflict', () => {
 describe('MessageModule cancellation', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resetRuntimeStatuses();
     mockGetCurrentState.mockReturnValue('processing');
     mockTransition.mockResolvedValue(true);
   });
@@ -410,14 +415,20 @@ describe('MessageModule detached dispatch', () => {
     });
   });
 
-  function createDispatchContext(approvalPolicy: 'auto' | 'reject-and-report') {
+  function createDispatchContext(approvalPolicy: 'auto' | 'reject-and-report' | 'remote') {
     const session = {
       sessionId: 'dispatch-session',
       title: 'New Chat',
       titleStatus: 'generated',
       mode: 'agentic',
-      dialogTurns: [],
+      dialogTurns: [] as any[],
+      workspacePath: '/controller/repo',
+      projectWorkspacePath: '/controller/repo',
+      workspaceId: 'workspace-1',
       config: {
+        workspacePath: '/controller/repo',
+        projectWorkspacePath: '/controller/repo',
+        workspaceId: 'workspace-1',
         modelName: 'controller-model',
         dispatchTargetRequest: {
           kind: 'ssh',
@@ -444,6 +455,14 @@ describe('MessageModule detached dispatch', () => {
             activeSessionId: session.sessionId,
             sessions: new Map([[session.sessionId, session]]),
           }),
+          addDialogTurn: vi.fn((_sessionId: string, turn: any) => {
+            if (!session.dialogTurns.some(existing => existing.id === turn.id)) {
+              session.dialogTurns.push(turn);
+            }
+          }),
+          deleteDialogTurn: vi.fn((_sessionId: string, turnId: string) => {
+            session.dialogTurns = session.dialogTurns.filter(turn => turn.id !== turnId);
+          }),
           applyDispatchSnapshot: vi.fn(() => ({ applied: true, cursor: 0 })),
           updateSessionLastSubmittedMode: vi.fn(),
           updateSessionMode: vi.fn(),
@@ -453,10 +472,56 @@ describe('MessageModule detached dispatch', () => {
     };
   }
 
-  it('submits with existing workspace delivery and lets the target derive model/title', async () => {
-    const { context } = createDispatchContext('reject-and-report');
+  it('projects the user message immediately while the target is still queued', async () => {
+    const { context, session } = createDispatchContext('reject-and-report');
+    (session.config as any).dispatchWorkspaceDelivery = {
+      kind: 'snapshot-source',
+      sourceWorkspacePath: '/controller/repo',
+    };
+    let resolveSubmit!: (value: {
+      accepted: boolean;
+      jobId: string;
+      sessionId: string;
+      state: string;
+    }) => void;
+    mockDispatchSubmit.mockImplementationOnce(() => new Promise(resolve => {
+      resolveSubmit = resolve;
+    }));
 
-    await sendMessage(context, 'run remote checks', 'dispatch-session');
+    const submission = sendMessage(
+      context,
+      'expanded remote prompt',
+      'dispatch-session',
+      'run remote checks',
+    );
+
+    expect(session.dialogTurns).toHaveLength(1);
+    expect(session.dialogTurns[0]).toMatchObject({
+      id: 'dispatch_pending_job-1',
+      sessionId: 'dispatch-session',
+      agentType: 'agentic',
+      userMessage: {
+        content: 'run remote checks',
+        metadata: {
+          __bitfunOptimisticDispatchJobId: 'job-1',
+        },
+      },
+      modelRounds: [],
+      status: 'pending',
+    });
+    expect(getRuntimeStatus('dispatch-session')).toMatchObject({
+      turnId: 'dispatch_pending_job-1',
+      roundId: 'dispatch-transfer:job-1',
+      label: 'flow-chat:chatInput.dispatch.transferInProgress',
+    });
+    resolveSubmit({
+      accepted: true,
+      jobId: 'job-1',
+      sessionId: 'dispatch-session',
+      state: 'queued',
+    });
+    await submission;
+    expect(getRuntimeStatus('dispatch-session')).toBeUndefined();
 
     expect(mockDispatchSubmit).toHaveBeenCalledWith({
       target: {
@@ -464,36 +529,39 @@ describe('MessageModule detached dispatch', () => {
         connectionId: 'ssh-1',
         workspacePath: '/target/repo',
       },
-      workspaceDelivery: { kind: 'existing' },
+      workspaceDelivery: {
+        kind: 'snapshot-source',
+        sourceWorkspacePath: '/controller/repo',
+      },
       jobId: 'job-1',
       sessionId: 'dispatch-session',
       agentType: 'agentic',
-      prompt: 'run remote checks',
+      prompt: 'expanded remote prompt',
       approvalPolicy: 'reject-and-report',
       model: undefined,
+      sourceWorkspacePath: '/controller/repo',
+      sourceWorkspaceId: 'workspace-1',
     });
     expect(mockStartDialogTurn).not.toHaveBeenCalled();
     expect(mockBindSession).not.toHaveBeenCalled();
   });
 
-  it('requires a one-shot auto-approval confirmation before the actual submit', async () => {
+  it('removes the optimistic message when dispatch submission fails', async () => {
+    const { context, session } = createDispatchContext('reject-and-report');
+    mockDispatchSubmit.mockRejectedValueOnce(new Error('target unavailable'));
+
+    await expect(
+      sendMessage(context, 'run remote checks', 'dispatch-session'),
+    ).rejects.toThrow('target unavailable');
+
+    expect(session.dialogTurns).toEqual([]);
+  });
+
+  it('submits with the session-scoped auto-approval setting without another confirmation', async () => {
     const { context } = createDispatchContext('auto');
 
     await expect(
       sendMessage(context, 'run remote checks', 'dispatch-session'),
-    ).rejects.toThrow('requires an explicit confirmation');
-    expect(mockDispatchSubmit).not.toHaveBeenCalled();
-
-    await expect(
-      sendMessage(
-        context,
-        'run remote checks',
-        'dispatch-session',
-        undefined,
-        undefined,
-        undefined,
-        { dispatchAutoConfirmed: true },
-      ),
     ).resolves.toBeUndefined();
     expect(mockDispatchSubmit).toHaveBeenCalledTimes(1);
   });

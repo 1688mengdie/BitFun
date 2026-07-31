@@ -526,43 +526,78 @@ async fn run_initialized_connection(
                         continue;
                     }
                 };
+                if matches!(result, RuntimeIpcOperationResult::SessionReverted { .. }) {
+                    // Core has cancelled and drained the owned turn before applying
+                    // the revert, so the connection must drop its provisional view.
+                    *active_turn_id = None;
+                }
                 let response = RuntimeIpcFrame::Response { request_id, result };
-                let response_bytes =
-                    match serialize_frame_with_limit(&response, MAX_RESPONSE_FRAME_BYTES) {
-                        Err(RuntimeIpcIoError::FrameTooLarge { .. }) => {
-                            config.leases.rollback(connection_id, lease_transition);
-                            send_error(
+                let revert_response = matches!(
+                    &response,
+                    RuntimeIpcFrame::Response {
+                        result: RuntimeIpcOperationResult::SessionReverted { .. },
+                        ..
+                    }
+                );
+                let response_bytes = match serialize_frame_with_limit(
+                    &response,
+                    MAX_RESPONSE_FRAME_BYTES,
+                ) {
+                    Err(RuntimeIpcIoError::FrameTooLarge { .. }) if revert_response => {
+                        config.leases.rollback(connection_id, lease_transition);
+                        send_error(
                                 stream,
                                 config.request_timeout,
                                 Some(request_id),
-                                RuntimeIpcErrorCode::FrameTooLarge,
-                                "runtime IPC response exceeds the supported frame size",
+                                RuntimeIpcErrorCode::OutcomeUnknown,
+                                "session revert completed but its authoritative transcript exceeds the Shared TUI response limit; reconnect and restore the Session",
                             )
                             .await?;
-                            continue;
-                        }
-                        Err(error) => return Err(RuntimeIpcServerError::Io(error)),
-                        Ok(bytes) => bytes,
-                    };
+                        return Err(RuntimeIpcServerError::Disconnected);
+                    }
+                    Err(RuntimeIpcIoError::FrameTooLarge { .. }) => {
+                        config.leases.rollback(connection_id, lease_transition);
+                        send_error(
+                            stream,
+                            config.request_timeout,
+                            Some(request_id),
+                            RuntimeIpcErrorCode::FrameTooLarge,
+                            "runtime IPC response exceeds the supported frame size",
+                        )
+                        .await?;
+                        continue;
+                    }
+                    Err(error) => return Err(RuntimeIpcServerError::Io(error)),
+                    Ok(bytes) => bytes,
+                };
 
                 let RuntimeIpcFrame::Response { result, .. } = &response else {
                     unreachable!("response frame was just constructed")
                 };
-                if let RuntimeIpcOperationResult::SessionCreated { session } = result {
-                    lease_transition =
-                        match config.leases.switch(connection_id, &session.session_id) {
-                            Ok(transition) => transition,
-                            Err(error) => {
-                                send_runtime_error(
-                                    stream,
-                                    config.request_timeout,
-                                    Some(request_id),
-                                    error,
-                                )
-                                .await?;
-                                continue;
-                            }
-                        };
+                let created_session_id = match result {
+                    RuntimeIpcOperationResult::SessionCreated { session } => {
+                        Some(session.session_id.as_str())
+                    }
+                    RuntimeIpcOperationResult::SessionForked { session, .. } => {
+                        Some(session.session_id.as_str())
+                    }
+                    _ => None,
+                };
+                if let Some(created_session_id) = created_session_id {
+                    lease_transition = match config.leases.switch(connection_id, created_session_id)
+                    {
+                        Ok(transition) => transition,
+                        Err(error) => {
+                            send_runtime_error(
+                                stream,
+                                config.request_timeout,
+                                Some(request_id),
+                                error,
+                            )
+                            .await?;
+                            continue;
+                        }
+                    };
                 }
                 let mut event_stream_unavailable = false;
                 if let Some(session_id) = match result {
@@ -570,6 +605,9 @@ async fn run_initialized_connection(
                         Some(session.session_id.as_str())
                     }
                     RuntimeIpcOperationResult::SessionRestored { session, .. } => {
+                        Some(session.session_id.as_str())
+                    }
+                    RuntimeIpcOperationResult::SessionForked { session, .. } => {
                         Some(session.session_id.as_str())
                     }
                     _ => None,

@@ -4,6 +4,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  DISPATCH_JOB_POLL_INTERVAL_MS,
   dispatchEventId,
   installDispatchJobObserver,
   projectDispatchAgentEvent,
@@ -27,6 +28,8 @@ import {
 const mocks = vi.hoisted(() => ({
   listJobs: vi.fn(),
   status: vi.fn(),
+  loadTranscript: vi.fn(),
+  saveTranscript: vi.fn(),
   dispatchExternal: vi.fn(),
 }));
 
@@ -34,6 +37,8 @@ vi.mock('./dispatchApi', () => ({
   dispatchApi: {
     listJobs: mocks.listJobs,
     status: mocks.status,
+    loadTranscript: mocks.loadTranscript,
+    saveTranscript: mocks.saveTranscript,
   },
 }));
 
@@ -47,7 +52,33 @@ vi.mock('@/flow_chat/services/AgenticEventListener', () => ({
   },
 }));
 
-function registerRunningJob(): void {
+function runningOutboundRecord() {
+  return {
+    jobId: 'job-1',
+    sessionId: 'session-1',
+    target: {
+      kind: 'ssh' as const,
+      connectionId: 'ssh-1',
+      workspacePath: '/repo',
+      displayName: 'build-host',
+    },
+    sourceWorkspacePath: '/source',
+    workspacePath: '/repo',
+    promptPreview: 'Dispatch test',
+    title: 'Dispatch test',
+    agentType: 'agentic',
+    approvalPolicy: 'reject-and-report' as const,
+    lastCursor: 0,
+    lastState: 'running' as const,
+    createdAt: '2026-07-28T00:00:00Z',
+    updatedAt: '2026-07-28T00:00:01Z',
+  };
+}
+
+function registerRunningJob(
+  overrides: { cursor?: number; appliedEventIds?: string[] } = {},
+): void {
+  mocks.listJobs.mockResolvedValue([runningOutboundRecord()]);
   dispatchJobStore.getState().registerJob({
     jobId: 'job-1',
     sessionId: 'session-1',
@@ -76,6 +107,7 @@ function registerRunningJob(): void {
     omittedEventCount: 0,
     createdAt: 1,
     updatedAt: 1,
+    ...overrides,
   });
 }
 
@@ -246,6 +278,42 @@ function status(
   };
 }
 
+function cachedTranscript(
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    schemaVersion: 1,
+    jobId: 'job-1',
+    sessionId: 'session-1',
+    cursor: 120,
+    dialogTurns: [{
+      id: 'turn-cached',
+      sessionId: 'session-1',
+      userMessage: {
+        id: 'user-cached',
+        content: 'run task',
+        timestamp: 1,
+      },
+      modelRounds: [],
+      status: 'completed',
+      startTime: 1,
+    }],
+    appliedEventIds: ['event-cached'],
+    eventLogComplete: true,
+    historyTruncated: false,
+    omittedEventCount: 0,
+    ...overrides,
+  };
+}
+
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>(resolvePromise => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
 describe('DispatchJobObserver', () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -259,6 +327,8 @@ describe('DispatchJobObserver', () => {
     stateMachineManager.clear();
     mocks.listJobs.mockReset().mockResolvedValue([]);
     mocks.status.mockReset();
+    mocks.loadTranscript.mockReset().mockResolvedValue(null);
+    mocks.saveTranscript.mockReset().mockResolvedValue(true);
     mocks.dispatchExternal.mockReset().mockReturnValue(true);
   });
 
@@ -408,10 +478,167 @@ describe('DispatchJobObserver', () => {
       ...dispatchJobStore.getState().jobs['job-1'],
       state: 'submitting',
     });
+    mocks.listJobs.mockResolvedValue([]);
     const cleanup = installDispatchJobObserver(createContext());
 
     await vi.advanceTimersByTimeAsync(0);
     expect(mocks.status).not.toHaveBeenCalled();
+    cleanup();
+  });
+
+  it('does not recreate a dismissed projection from an in-flight status response', async () => {
+    registerRunningJob();
+    const deferred = createDeferred<DispatchStatusResponse>();
+    mocks.status.mockReturnValue(deferred.promise);
+    const context = createContext();
+    const cleanup = installDispatchJobObserver(context);
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mocks.status).toHaveBeenCalledWith('job-1', 0);
+
+    dispatchJobStore.getState().dismissJob('job-1');
+    deferred.resolve(status({
+      cursor: 1,
+      events: [{
+        type: 'agentEvent',
+        timestamp: '2026-07-28T00:00:01Z',
+        event: {
+          id: 'event-after-delete',
+          frontendEventName: 'agentic://session-created',
+          frontendPayload: {
+            sessionId: 'session-1',
+            sessionName: 'Dispatch test',
+          },
+        },
+      }],
+    }));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(mocks.dispatchExternal).not.toHaveBeenCalled();
+    expect(context.flowChatStore.applyDispatchSnapshot).not.toHaveBeenCalled();
+    expect(dispatchJobStore.getState().jobs['job-1']).toBeUndefined();
+    expect(dispatchJobStore.getState().dismissedJobIds).toContain('job-1');
+    cleanup();
+  });
+
+  it('never restores an unowned legacy job into the current workspace', async () => {
+    const record = {
+      jobId: 'job-restored',
+      sessionId: 'session-restored',
+      target: {
+        kind: 'ssh' as const,
+        connectionId: 'ssh-1',
+        workspacePath: '/target/repo',
+        displayName: 'build-host',
+      },
+      workspacePath: '/target/repo',
+      promptPreview: 'Dispatch test',
+      title: 'Dispatch test',
+      agentType: 'agentic',
+      approvalPolicy: 'reject-and-report' as const,
+      lastCursor: 0,
+      lastState: 'running' as const,
+      createdAt: '2026-07-28T00:00:00Z',
+      updatedAt: '2026-07-28T00:00:01Z',
+    };
+    mocks.listJobs.mockResolvedValue([record]);
+    mocks.status.mockResolvedValue(status());
+    const sessions = new Map<string, any>();
+    const context = createContext();
+    context.currentWorkspacePath = null;
+    context.flowChatStore.getState = vi.fn(() => ({ sessions }));
+    context.flowChatStore.applyDispatchSnapshot = vi.fn(() => ({
+      applied: true,
+      cursor: 0,
+    }));
+    context.flowChatStore.addExternalSession = vi.fn((
+      sessionId: string,
+      _title: string,
+      _mode: string,
+      workspacePath: string,
+      meta: { projectWorkspacePath: string },
+    ) => {
+      sessions.set(sessionId, {
+        sessionId,
+        workspacePath,
+        projectWorkspacePath: meta.projectWorkspacePath,
+        config: {},
+      });
+    });
+
+    const cleanup = installDispatchJobObserver(context);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(context.flowChatStore.addExternalSession).not.toHaveBeenCalled();
+
+    context.currentWorkspacePath = '/projects/BitFun';
+    await vi.advanceTimersByTimeAsync(DISPATCH_JOB_POLL_INTERVAL_MS);
+    expect(context.flowChatStore.addExternalSession).not.toHaveBeenCalled();
+    expect(dispatchJobStore.getState().jobs['job-restored']).toBeUndefined();
+    expect(mocks.status).not.toHaveBeenCalled();
+    cleanup();
+  });
+
+  it('restores a projection only from its durable source workspace', async () => {
+    mocks.listJobs.mockResolvedValue([{
+      jobId: 'job-restored',
+      sessionId: 'session-restored',
+      target: {
+        kind: 'ssh',
+        connectionId: 'ssh-1',
+        workspacePath: '/target/repo',
+        displayName: 'build-host',
+      },
+      sourceWorkspacePath: '/projects/BitFun',
+      sourceWorkspaceId: 'workspace-1',
+      workspacePath: '/target/repo',
+      promptPreview: 'Dispatch test',
+      title: 'Dispatch test',
+      agentType: 'agentic',
+      approvalPolicy: 'reject-and-report',
+      lastCursor: 0,
+      lastState: 'running',
+      createdAt: '2026-07-28T00:00:00Z',
+      updatedAt: '2026-07-28T00:00:01Z',
+    }]);
+    mocks.status.mockResolvedValue(status());
+    const sessions = new Map<string, any>();
+    const context = createContext();
+    context.currentWorkspacePath = null;
+    context.flowChatStore.getState = vi.fn(() => ({ sessions }));
+    context.flowChatStore.applyDispatchSnapshot = vi.fn(() => ({
+      applied: true,
+      cursor: 0,
+    }));
+    context.flowChatStore.addExternalSession = vi.fn((
+      sessionId: string,
+      _title: string,
+      _mode: string,
+      workspacePath: string,
+      meta: { projectWorkspacePath: string; workspaceId?: string },
+    ) => {
+      sessions.set(sessionId, {
+        sessionId,
+        workspacePath,
+        projectWorkspacePath: meta.projectWorkspacePath,
+        workspaceId: meta.workspaceId,
+        config: {},
+      });
+    });
+
+    const cleanup = installDispatchJobObserver(context);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(context.flowChatStore.addExternalSession).toHaveBeenCalledWith(
+      'session-restored',
+      'Dispatch test',
+      'agentic',
+      '/projects/BitFun',
+      expect.objectContaining({
+        projectWorkspacePath: '/projects/BitFun',
+        workspaceId: 'workspace-1',
+      }),
+    );
+    expect(mocks.status).toHaveBeenCalledWith('job-restored', 0);
     cleanup();
   });
 
@@ -475,7 +702,7 @@ describe('DispatchJobObserver', () => {
     cleanup();
   });
 
-  it('settles cancellation after the terminal log drains without a dialog-turn-cancelled event', async () => {
+  it('drains the terminal log within one poll and settles cancellation without a dialog-turn-cancelled event', async () => {
     registerRunningJob();
     installProcessingProjection();
     const context = createTerminalContext();
@@ -502,13 +729,12 @@ describe('DispatchJobObserver', () => {
     const cleanup = installDispatchJobObserver(context);
 
     await vi.advanceTimersByTimeAsync(0);
-    expect(flowChatStore.getState().sessions.get('session-1')?.dialogTurns[0].status)
-      .toBe('processing');
-    expect(stateMachineManager.getCurrentState('session-1'))
-      .toBe(SessionExecutionState.PROCESSING);
-
-    requestDispatchJobRefresh('job-1');
-    await vi.advanceTimersByTimeAsync(0);
+    // The terminal page carrying events does not settle anything by itself;
+    // the empty page at the same cursor does. Both are pulled in this one
+    // cycle, so a long log no longer costs one poll interval per page.
+    expect(mocks.status).toHaveBeenCalledTimes(2);
+    expect(mocks.status).toHaveBeenNthCalledWith(1, 'job-1', 0);
+    expect(mocks.status).toHaveBeenNthCalledWith(2, 'job-1', 12);
     const turn = flowChatStore.getState().sessions.get('session-1')?.dialogTurns[0];
     expect(turn).toMatchObject({
       status: 'cancelled',
@@ -527,6 +753,108 @@ describe('DispatchJobObserver', () => {
     expect(context.processingManager.clearSessionStatus)
       .toHaveBeenCalledWith('session-1');
     expect(mocks.dispatchExternal).not.toHaveBeenCalled();
+    cleanup();
+  });
+
+  it('resumes a restarted projection from the cached transcript instead of replaying', async () => {
+    // The renderer's own cursor survived in localStorage but its transcript did
+    // not. The cache is what makes resuming possible at all, so it also decides
+    // where to resume — even though it trails the persisted cursor here.
+    registerRunningJob({ cursor: 900, appliedEventIds: ['event-stale'] });
+    mocks.loadTranscript.mockResolvedValue(cachedTranscript());
+    mocks.status.mockResolvedValue(status({ state: 'running', cursor: 120 }));
+    const cleanup = installDispatchJobObserver(createTerminalContext());
+
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(mocks.status).toHaveBeenNthCalledWith(1, 'job-1', 120);
+    const session = flowChatStore.getState().sessions.get('session-1');
+    expect(session?.dialogTurns.map(turn => turn.id)).toEqual(['turn-cached']);
+    expect(session?.config.dispatchCursor).toBe(120);
+    const job = dispatchJobStore.getState().jobs['job-1'];
+    expect(job.cursor).toBe(120);
+    // Replaced, not merged: an id remembered past the cached cursor would make
+    // the observer skip an event whose projection is not in the restored turns.
+    expect(job.appliedEventIds).toEqual(['event-cached']);
+    cleanup();
+  });
+
+  it('replays from byte zero when no transcript is cached', async () => {
+    registerRunningJob({ cursor: 900 });
+    mocks.loadTranscript.mockResolvedValue(null);
+    mocks.status.mockResolvedValue(status({ state: 'running', cursor: 0 }));
+    const cleanup = installDispatchJobObserver(createTerminalContext());
+
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(mocks.status).toHaveBeenNthCalledWith(1, 'job-1', 0);
+    expect(dispatchJobStore.getState().jobs['job-1'].cursor).toBe(0);
+    expect(flowChatStore.getState().sessions.get('session-1')?.dialogTurns)
+      .toEqual([]);
+    cleanup();
+  });
+
+  it('replays from byte zero when the cached transcript predates the current projection rules', async () => {
+    registerRunningJob({ cursor: 900 });
+    mocks.loadTranscript.mockResolvedValue(cachedTranscript({ schemaVersion: 0 }));
+    mocks.status.mockResolvedValue(status({ state: 'running', cursor: 0 }));
+    const cleanup = installDispatchJobObserver(createTerminalContext());
+
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(mocks.status).toHaveBeenNthCalledWith(1, 'job-1', 0);
+    expect(flowChatStore.getState().sessions.get('session-1')?.dialogTurns)
+      .toEqual([]);
+    cleanup();
+  });
+
+  it('restores truncation facts with the transcript so an incomplete history is not shown as whole', async () => {
+    registerRunningJob();
+    mocks.loadTranscript.mockResolvedValue(cachedTranscript({
+      eventLogComplete: false,
+      historyTruncated: true,
+      omittedEventCount: 42,
+    }));
+    mocks.status.mockResolvedValue(status({
+      state: 'running',
+      cursor: 120,
+      eventLogComplete: false,
+      historyTruncated: true,
+      omittedEventCount: 42,
+    }));
+    const cleanup = installDispatchJobObserver(createTerminalContext());
+
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(dispatchJobStore.getState().jobs['job-1']).toMatchObject({
+      eventLogComplete: false,
+      historyTruncated: true,
+      omittedEventCount: 42,
+    });
+    cleanup();
+  });
+
+  it('caches the transcript together with the cursor that produced it', async () => {
+    registerRunningJob();
+    installProcessingProjection();
+    mocks.status.mockResolvedValue(status({ state: 'running', cursor: 12 }));
+    const cleanup = installDispatchJobObserver(createTerminalContext());
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mocks.saveTranscript).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(mocks.saveTranscript).toHaveBeenCalledTimes(1);
+    const [jobId, payload] = mocks.saveTranscript.mock.calls[0];
+    expect(jobId).toBe('job-1');
+    expect(payload).toMatchObject({
+      schemaVersion: 1,
+      jobId: 'job-1',
+      sessionId: 'session-1',
+      cursor: 12,
+    });
+    expect(payload.dialogTurns.map((turn: { id: string }) => turn.id))
+      .toEqual(['turn-1']);
     cleanup();
   });
 

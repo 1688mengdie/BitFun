@@ -163,6 +163,8 @@ pub(crate) enum FlowItem {
 #[derive(Debug, Clone)]
 pub(crate) struct ChatMessage {
     pub id: String,
+    /// Stable persisted DialogTurn identity used for history operations.
+    pub turn_id: Option<String>,
     pub role: MessageRole,
     pub timestamp: SystemTime,
     pub flow_items: Vec<FlowItem>,
@@ -272,6 +274,7 @@ impl ChatMessage {
                 .id
                 .clone()
                 .unwrap_or_else(|| format!("transcript-message-{index}")),
+            turn_id: msg.turn_id.clone(),
             role,
             timestamp: UNIX_EPOCH
                 .checked_add(Duration::from_millis(msg.timestamp_ms.unwrap_or_default()))
@@ -281,6 +284,13 @@ impl ChatMessage {
             version: 0,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SessionForkPoint {
+    pub turn_id: String,
+    pub prompt: String,
+    pub timestamp: SystemTime,
 }
 
 // ============ Chat Metadata ============
@@ -348,6 +358,9 @@ pub(crate) struct ChatState {
     // -- Streaming state (transient, not persisted) --
     /// Current turn ID being processed
     current_turn_id: Option<String>,
+    /// Turns retired by authoritative Session operations. Their already queued
+    /// events are fenced from the rebuilt visible transcript.
+    ignored_turn_ids: HashSet<String>,
     /// Ordered flow items for the current streaming message.
     /// Text, thinking, and tool blocks are interleaved in chronological order,
     /// matching the actual conversation flow (inspired by opencode's Part model).
@@ -404,6 +417,7 @@ impl ChatState {
             metadata: ChatMetadata::default(),
             last_primary_model_usage: None,
             current_turn_id: None,
+            ignored_turn_ids: HashSet::new(),
             current_flow_items: Vec::new(),
             tool_index: HashMap::new(),
             is_processing: false,
@@ -458,6 +472,32 @@ impl ChatState {
 
     pub(crate) fn has_conversation_history(&self) -> bool {
         self.metadata.message_count > 0
+    }
+
+    /// User prompts eligible for `/fork`, newest first like OpenCode's fork dialog.
+    pub(crate) fn session_fork_points(&self) -> Vec<SessionForkPoint> {
+        self.messages
+            .iter()
+            .rev()
+            .filter(|message| message.role == MessageRole::User)
+            .filter_map(|message| {
+                let turn_id = message.turn_id.clone()?;
+                let prompt = message
+                    .flow_items
+                    .iter()
+                    .filter_map(|item| match item {
+                        FlowItem::Text { content, .. } => Some(content.as_str()),
+                        FlowItem::Thinking { .. } | FlowItem::Tool { .. } => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                (!prompt.is_empty()).then_some(SessionForkPoint {
+                    turn_id,
+                    prompt,
+                    timestamp: message.timestamp,
+                })
+            })
+            .collect()
     }
 
     pub(crate) fn set_worktree_control_available(&mut self, available: bool) {
@@ -707,6 +747,37 @@ impl ChatState {
         state
     }
 
+    /// Replace the render projection from the Runtime-owned transcript while
+    /// retaining Session/workspace/product settings owned by the TUI shell.
+    pub(crate) fn replace_from_authoritative_transcript(
+        &mut self,
+        transcript: &SessionTranscript,
+        retired_turn_ids: &[String],
+    ) {
+        debug_assert_eq!(transcript.session_id, self.core_session_id);
+        let projected = Self::from_session_transcript(
+            self.core_session_id.clone(),
+            self.session_name.clone(),
+            self.agent_type.clone(),
+            self.workspace.clone(),
+            transcript,
+        );
+        self.messages = projected.messages;
+        self.metadata = projected.metadata;
+        self.last_primary_model_usage = None;
+        if let Some(turn_id) = self.current_turn_id.take() {
+            self.ignored_turn_ids.insert(turn_id);
+        }
+        self.ignored_turn_ids
+            .extend(retired_turn_ids.iter().cloned());
+        self.current_flow_items.clear();
+        self.tool_index.clear();
+        self.is_processing = false;
+        self.permission_prompt = None;
+        self.permission_queue.clear();
+        self.question_prompt = None;
+    }
+
     // ============ Event Handlers ============
 
     /// Handle the start of a new dialog turn
@@ -720,6 +791,7 @@ impl ChatState {
         // Add user message
         self.messages.push(ChatMessage {
             id: uuid::Uuid::new_v4().to_string(),
+            turn_id: Some(turn_id.to_string()),
             role: MessageRole::User,
             timestamp: SystemTime::now(),
             flow_items: vec![FlowItem::Text {
@@ -734,6 +806,7 @@ impl ChatState {
         // Add empty assistant message (will be filled by streaming)
         self.messages.push(ChatMessage {
             id: uuid::Uuid::new_v4().to_string(),
+            turn_id: Some(turn_id.to_string()),
             role: MessageRole::Assistant,
             timestamp: SystemTime::now(),
             flow_items: Vec::new(),
@@ -1163,6 +1236,17 @@ impl ChatState {
         self.question_prompt = None;
     }
 
+    pub(crate) fn should_apply_turn_cancelled(&mut self, turn_id: &str) -> bool {
+        if self.should_ignore_turn_event(turn_id) {
+            return false;
+        }
+        self.current_turn_id.is_none() || self.current_turn_id.as_deref() == Some(turn_id)
+    }
+
+    pub(crate) fn should_ignore_turn_event(&self, turn_id: &str) -> bool {
+        self.ignored_turn_ids.contains(turn_id)
+    }
+
     /// Record the latest primary-model request observed by this TUI.
     pub(crate) fn handle_primary_model_usage(&mut self, usage: ModelTokenUsageSnapshot) {
         self.last_primary_model_usage = Some(usage);
@@ -1172,6 +1256,7 @@ impl ChatState {
     pub(crate) fn add_system_message(&mut self, content: String) {
         self.messages.push(ChatMessage {
             id: uuid::Uuid::new_v4().to_string(),
+            turn_id: None,
             role: MessageRole::System,
             timestamp: SystemTime::now(),
             flow_items: vec![FlowItem::Text {
@@ -1187,6 +1272,7 @@ impl ChatState {
     pub(crate) fn add_assistant_message(&mut self, content: String) {
         self.messages.push(ChatMessage {
             id: uuid::Uuid::new_v4().to_string(),
+            turn_id: None,
             role: MessageRole::Assistant,
             timestamp: SystemTime::now(),
             flow_items: vec![FlowItem::Text {
@@ -1750,6 +1836,125 @@ mod tests {
             },
             &wire_input
         );
+    }
+
+    #[test]
+    fn authoritative_transcript_replaces_only_session_projection_and_clears_active_turn() {
+        let mut state = ChatState::new(
+            "session-1".to_string(),
+            "Session".to_string(),
+            "agentic".to_string(),
+            Some("D:/workspace/project".to_string()),
+        );
+        state.current_model_id = Some("model-1".to_string());
+        state.handle_turn_started("turn-2", "Hidden prompt");
+        let transcript = SessionTranscript {
+            session_id: "session-1".to_string(),
+            messages: vec![TranscriptMessage {
+                id: Some("user-1".to_string()),
+                role: "user".to_string(),
+                turn_id: Some("turn-1".to_string()),
+                timestamp_ms: Some(1_000),
+                content: TranscriptContent::Text("Visible prompt".to_string()),
+            }],
+        };
+
+        state.replace_from_authoritative_transcript(&transcript, &[]);
+
+        assert_eq!(state.messages.len(), 1);
+        assert_eq!(state.messages[0].turn_id.as_deref(), Some("turn-1"));
+        assert_eq!(state.current_model_id.as_deref(), Some("model-1"));
+        assert_eq!(state.workspace.as_deref(), Some("D:/workspace/project"));
+        assert!(!state.is_processing);
+        assert!(state.current_turn_id().is_none());
+        assert!(!state.should_apply_turn_cancelled("turn-2"));
+    }
+
+    #[test]
+    fn authoritative_transcript_fences_a_turn_start_that_arrives_after_revert() {
+        let mut state = ChatState::new(
+            "session-1".to_string(),
+            "Session".to_string(),
+            "agentic".to_string(),
+            None,
+        );
+        let transcript = SessionTranscript {
+            session_id: "session-1".to_string(),
+            messages: vec![TranscriptMessage {
+                id: Some("assistant-visible".to_string()),
+                role: "assistant".to_string(),
+                turn_id: Some("turn-visible".to_string()),
+                timestamp_ms: Some(1_000),
+                content: TranscriptContent::Text("Visible answer".to_string()),
+            }],
+        };
+
+        state.replace_from_authoritative_transcript(
+            &transcript,
+            &["retired-turn".to_string(), "queued-turn".to_string()],
+        );
+
+        assert!(state.should_ignore_turn_event("retired-turn"));
+        assert!(state.should_ignore_turn_event("queued-turn"));
+        if !state.should_ignore_turn_event("retired-turn") {
+            state.handle_turn_started("retired-turn", "late prompt");
+        }
+        assert_eq!(state.messages.len(), 1);
+        assert!(!state.is_processing);
+        assert!(!state.should_apply_turn_cancelled("retired-turn"));
+        assert!(!state.should_apply_turn_cancelled("queued-turn"));
+        if state.should_apply_turn_cancelled("queued-turn") {
+            state.handle_turn_cancelled();
+        }
+        assert!(matches!(
+            state.messages[0].flow_items.as_slice(),
+            [FlowItem::Text { content, .. }] if content == "Visible answer"
+        ));
+    }
+
+    #[test]
+    fn session_fork_points_keep_stable_turn_ids_and_newest_prompt_first() {
+        let transcript = SessionTranscript {
+            session_id: "session-1".to_string(),
+            messages: vec![
+                TranscriptMessage {
+                    id: Some("user-1".to_string()),
+                    role: "user".to_string(),
+                    turn_id: Some("turn-1".to_string()),
+                    timestamp_ms: Some(1_000),
+                    content: TranscriptContent::Text("First prompt".to_string()),
+                },
+                TranscriptMessage {
+                    id: Some("assistant-1".to_string()),
+                    role: "assistant".to_string(),
+                    turn_id: Some("turn-1".to_string()),
+                    timestamp_ms: Some(1_100),
+                    content: TranscriptContent::Text("First answer".to_string()),
+                },
+                TranscriptMessage {
+                    id: Some("user-2".to_string()),
+                    role: "user".to_string(),
+                    turn_id: Some("turn-2".to_string()),
+                    timestamp_ms: Some(2_000),
+                    content: TranscriptContent::Text("Second\nprompt".to_string()),
+                },
+            ],
+        };
+        let state = ChatState::from_session_transcript(
+            "session-1".to_string(),
+            "Session".to_string(),
+            "agentic".to_string(),
+            None,
+            &transcript,
+        );
+
+        let points = state.session_fork_points();
+
+        assert_eq!(points.len(), 2);
+        assert_eq!(points[0].turn_id, "turn-2");
+        assert_eq!(points[0].prompt, "Second\nprompt");
+        assert_eq!(points[1].turn_id, "turn-1");
+        assert_eq!(points[1].prompt, "First prompt");
     }
 
     #[test]

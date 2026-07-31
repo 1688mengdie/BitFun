@@ -5,6 +5,8 @@
 //! update transaction against the desktop MiniApp manager.
 
 use crate::api::app_state::AppState;
+use bitfun_core::infrastructure::events::{emit_global_event, BackendEvent};
+use bitfun_core::miniapp::lifecycle::miniapp_runtime_event_payload;
 use bitfun_core::miniapp::{
     MiniApp, MiniAppCustomizationMetadata, MiniAppPermissionDiff, MiniAppPermissions, MiniAppSource,
 };
@@ -19,6 +21,7 @@ use bitfun_services_integrations::miniapp_market::{
     RatingAggregate, ValidatedMarketPackage,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 use tokio::io::AsyncWriteExt;
@@ -246,15 +249,7 @@ pub async fn miniapp_market_installed_status(
         .await
         .map_err(|error| error.to_string())?;
     for app in apps {
-        let Some(metadata) = state
-            .miniapp_manager
-            .load_customization_metadata(&app.id)
-            .await
-            .map_err(|error| error.to_string())?
-        else {
-            continue;
-        };
-        let Some(origin) = metadata.origin.market else {
+        let Some((origin, local_override)) = load_market_origin(&state, &app.id).await? else {
             continue;
         };
         if origin.listing_id == request.listing_id {
@@ -263,11 +258,56 @@ pub async fn miniapp_market_installed_status(
                 app_version: app.version,
                 permissions: app.permissions,
                 origin,
-                local_override: metadata.local_override,
+                local_override,
             }));
         }
     }
     Ok(None)
+}
+
+/// Marketplace origins of every installed MiniApp, keyed by local app id.
+///
+/// The local `MiniApp::version` counter tracks edits to the installed copy and
+/// is deliberately independent from the marketplace release number, so any
+/// surface that wants to name the release a user installed has to read it from
+/// the origin instead of from the app itself.
+#[tauri::command]
+pub async fn miniapp_market_installed_origins(
+    state: State<'_, AppState>,
+) -> Result<HashMap<String, InstalledMarketOrigin>, String> {
+    let apps = state
+        .miniapp_manager
+        .list()
+        .await
+        .map_err(|error| error.to_string())?;
+    let mut origins = HashMap::new();
+    for app in apps {
+        if let Some((origin, _)) = load_market_origin(&state, &app.id).await? {
+            origins.insert(app.id, origin);
+        }
+    }
+    Ok(origins)
+}
+
+/// Reads an app's marketplace origin plus its local-override flag, or `None`
+/// when the app did not come from the marketplace.
+async fn load_market_origin(
+    state: &AppState,
+    app_id: &str,
+) -> Result<Option<(InstalledMarketOrigin, bool)>, String> {
+    let Some(metadata) = state
+        .miniapp_manager
+        .load_customization_metadata(app_id)
+        .await
+        .map_err(|error| error.to_string())?
+    else {
+        return Ok(None);
+    };
+    let local_override = metadata.local_override;
+    Ok(metadata
+        .origin
+        .market
+        .map(|origin| (origin, local_override)))
 }
 
 #[tauri::command]
@@ -344,6 +384,16 @@ pub async fn miniapp_market_install(
             .map_err(|error| error.to_string())?;
         (app, false, diff)
     };
+    let (event_name, reason) = if updated {
+        ("miniapp-updated", "market-update")
+    } else {
+        ("miniapp-created", "market-install")
+    };
+    let _ = emit_global_event(BackendEvent::Custom {
+        event_name: event_name.to_string(),
+        payload: miniapp_runtime_event_payload(&app, reason),
+    })
+    .await;
     Ok(MarketInstallResult {
         app,
         origin,

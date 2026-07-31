@@ -62,11 +62,13 @@ pub use bitfun_runtime_ports::{
     AgentInputAttachment, AgentLifecycleDeliveryPort, AgentLocalCommandTurnPort,
     AgentLocalCommandTurnRecordRequest, AgentSessionArchiveRequest,
     AgentSessionArchiveStateRequest, AgentSessionClosePort, AgentSessionCompactionPort,
-    AgentSessionCompactionRequest, AgentSessionCompactionResult, AgentSessionCreateRequest,
-    AgentSessionCreateResult, AgentSessionDeleteRequest, AgentSessionForkAtTurnRequest,
-    AgentSessionForkPort, AgentSessionForkRequest, AgentSessionForkResult, AgentSessionListRequest,
+    AgentSessionCompactionRequest, AgentSessionCompactionResult, AgentSessionComposerUpdate,
+    AgentSessionCreateRequest, AgentSessionCreateResult, AgentSessionDeleteRequest,
+    AgentSessionForkAtTurnRequest, AgentSessionForkBeforeTurnRequest, AgentSessionForkPort,
+    AgentSessionForkRequest, AgentSessionForkResult, AgentSessionListRequest,
     AgentSessionManagementPort, AgentSessionModePort, AgentSessionModeUpdateRequest,
     AgentSessionModelPort, AgentSessionModelUpdateRequest, AgentSessionRenameRequest,
+    AgentSessionRevertPort, AgentSessionRevertRequest, AgentSessionRevertResult,
     AgentSessionSummary, AgentSessionUsagePort, AgentSessionUsageRequest,
     AgentSessionWorkspaceBinding, AgentSessionWorkspaceRequest, AgentSubmissionPort,
     AgentSubmissionRequest, AgentSubmissionResult, AgentSubmissionSource,
@@ -148,6 +150,11 @@ impl AgentRuntimeBuilder {
         port: Arc<dyn AgentSessionCompactionPort>,
     ) -> Self {
         self.inner = self.inner.with_session_compaction_port(port);
+        self
+    }
+
+    pub fn with_session_revert_port(mut self, port: Arc<dyn AgentSessionRevertPort>) -> Self {
+        self.inner = self.inner.with_session_revert_port(port);
         self
     }
 
@@ -485,6 +492,20 @@ impl AgentRuntime {
         self.inner.start_session_compaction(request).await
     }
 
+    pub async fn undo_session(
+        &self,
+        request: AgentSessionRevertRequest,
+    ) -> Result<AgentSessionRevertResult, RuntimeError> {
+        self.inner.undo_session(request).await
+    }
+
+    pub async fn redo_session(
+        &self,
+        request: AgentSessionRevertRequest,
+    ) -> Result<AgentSessionRevertResult, RuntimeError> {
+        self.inner.redo_session(request).await
+    }
+
     pub async fn fork_session(
         &self,
         request: AgentSessionForkRequest,
@@ -497,6 +518,13 @@ impl AgentRuntime {
         request: AgentSessionForkAtTurnRequest,
     ) -> Result<AgentSessionForkResult, RuntimeError> {
         self.inner.fork_session_at_turn(request).await
+    }
+
+    pub async fn fork_session_before_turn(
+        &self,
+        request: AgentSessionForkBeforeTurnRequest,
+    ) -> Result<AgentSessionForkResult, RuntimeError> {
+        self.inner.fork_session_before_turn(request).await
     }
 
     pub async fn generate_session_usage(

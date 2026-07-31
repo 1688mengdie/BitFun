@@ -753,7 +753,7 @@ dependencies = [
 
 [[package]]
 name = "bitfun-acp"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "agent-client-protocol",
  "async-trait",
@@ -776,7 +776,7 @@ dependencies = [
 
 [[package]]
 name = "bitfun-agent-runtime"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "async-trait",
  "bitfun-agent-stream",
@@ -803,7 +803,7 @@ dependencies = [
 
 [[package]]
 name = "bitfun-agent-runtime-ipc"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "async-trait",
  "bitfun-events",
@@ -823,7 +823,7 @@ dependencies = [
 
 [[package]]
 name = "bitfun-agent-stream"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -843,7 +843,7 @@ dependencies = [
 
 [[package]]
 name = "bitfun-agent-tools"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "async-trait",
  "bitfun-core-types",
@@ -856,7 +856,7 @@ dependencies = [
 
 [[package]]
 name = "bitfun-ai-adapters"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "anyhow",
  "apple-native-keyring-store",
@@ -890,7 +890,7 @@ dependencies = [
 
 [[package]]
 name = "bitfun-claude-code-adapter"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "bitfun-product-domains",
  "bitfun-services-core",
@@ -908,7 +908,7 @@ dependencies = [
 
 [[package]]
 name = "bitfun-cli"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "anyhow",
  "arboard",
@@ -961,9 +961,10 @@ dependencies = [
 
 [[package]]
 name = "bitfun-codex-adapter"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "bitfun-product-domains",
+ "bitfun-services-core",
  "bitfun-static-hook-support",
  "dirs 6.0.0",
  "dunce",
@@ -977,7 +978,7 @@ dependencies = [
 
 [[package]]
 name = "bitfun-core"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -1058,7 +1059,7 @@ dependencies = [
 
 [[package]]
 name = "bitfun-core-types"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "serde",
  "serde_json",
@@ -1066,7 +1067,7 @@ dependencies = [
 
 [[package]]
 name = "bitfun-desktop"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "alloc-no-stdlib",
  "alloc-stdlib",
@@ -1149,7 +1150,7 @@ dependencies = [
 
 [[package]]
 name = "bitfun-events"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1163,7 +1164,7 @@ dependencies = [
 
 [[package]]
 name = "bitfun-external-sources"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "bitfun-product-domains",
  "futures",
@@ -1173,7 +1174,7 @@ dependencies = [
 
 [[package]]
 name = "bitfun-harness"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "async-trait",
  "thiserror 2.0.19",
@@ -1182,7 +1183,7 @@ dependencies = [
 
 [[package]]
 name = "bitfun-miniapp-market-server"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "anyhow",
  "axum",
@@ -1194,7 +1195,7 @@ dependencies = [
 
 [[package]]
 name = "bitfun-miniapp-market-service"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "anyhow",
  "axum",
@@ -1225,7 +1226,7 @@ dependencies = [
 
 [[package]]
 name = "bitfun-opencode-adapter"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "async-trait",
  "bitfun-plugin-runtime-client",
@@ -1236,6 +1237,7 @@ dependencies = [
  "bitfun-static-hook-support",
  "dirs 6.0.0",
  "dunce",
+ "globset",
  "hex",
  "oxc",
  "regex",
@@ -1252,7 +1254,7 @@ dependencies = [
 
 [[package]]
 name = "bitfun-page-function-runtime"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "rquickjs",
  "serde",
@@ -1263,7 +1265,7 @@ dependencies = [
 
 [[package]]
 name = "bitfun-plugin-runtime-client"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "async-trait",
  "bitfun-runtime-ports",
@@ -1272,7 +1274,7 @@ dependencies = [
 
 [[package]]
 name = "bitfun-product-capabilities"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "async-trait",
  "bitfun-agent-runtime",
@@ -1285,7 +1287,7 @@ dependencies = [
 
 [[package]]
 name = "bitfun-product-domains"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "dirs 6.0.0",
  "hex",
@@ -1301,7 +1303,7 @@ dependencies = [
 
 [[package]]
 name = "bitfun-relay-server"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "anyhow",
  "axum",
@@ -1318,7 +1320,7 @@ dependencies = [
 
 [[package]]
 name = "bitfun-relay-service"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -1347,7 +1349,7 @@ dependencies = [
 
 [[package]]
 name = "bitfun-runtime-ports"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1361,7 +1363,7 @@ dependencies = [
 
 [[package]]
 name = "bitfun-runtime-services"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1376,7 +1378,7 @@ dependencies = [
 
 [[package]]
 name = "bitfun-sdk-host"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "async-trait",
  "bitfun-agent-runtime",
@@ -1394,7 +1396,7 @@ dependencies = [
 
 [[package]]
 name = "bitfun-sdk-host-app"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1413,7 +1415,7 @@ dependencies = [
 
 [[package]]
 name = "bitfun-server"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "anyhow",
  "axum",
@@ -1433,7 +1435,7 @@ dependencies = [
 
 [[package]]
 name = "bitfun-services-core"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1473,7 +1475,7 @@ dependencies = [
 
 [[package]]
 name = "bitfun-services-integrations"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -1547,7 +1549,7 @@ dependencies = [
 
 [[package]]
 name = "bitfun-static-hook-support"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "bitfun-product-domains",
  "bitfun-services-core",
@@ -1560,7 +1562,7 @@ dependencies = [
 
 [[package]]
 name = "bitfun-tool-call-jsonrepair"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "serde",
  "serde_json",
@@ -1568,11 +1570,11 @@ dependencies = [
 
 [[package]]
 name = "bitfun-tool-packs"
-version = "0.2.14"
+version = "0.2.15"
 
 [[package]]
 name = "bitfun-transport"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1584,7 +1586,7 @@ dependencies = [
 
 [[package]]
 name = "bitfun-webdriver"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "anyhow",
  "axum",
@@ -10540,7 +10542,7 @@ dependencies = [
 
 [[package]]
 name = "taiji-abnormal"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "chrono",
  "serde",
@@ -10551,7 +10553,7 @@ dependencies = [
 
 [[package]]
 name = "taiji-alert"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "chrono",
  "lettre",
@@ -10565,7 +10567,7 @@ dependencies = [
 
 [[package]]
 name = "taiji-backtest"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "anyhow",
  "chrono",
@@ -10582,7 +10584,7 @@ dependencies = [
 
 [[package]]
 name = "taiji-bar"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "chrono",
  "serde_json",
@@ -10592,7 +10594,7 @@ dependencies = [
 
 [[package]]
 name = "taiji-blog-gen"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "anyhow",
  "chrono",
@@ -10605,7 +10607,7 @@ dependencies = [
 
 [[package]]
 name = "taiji-cli"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "agent-client-protocol",
  "anyhow",
@@ -10638,7 +10640,7 @@ dependencies = [
 
 [[package]]
 name = "taiji-content"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "bitfun-core",
  "chrono",
@@ -10651,7 +10653,7 @@ dependencies = [
 
 [[package]]
 name = "taiji-engine"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -10677,7 +10679,7 @@ dependencies = [
 
 [[package]]
 name = "taiji-engine-py"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "chrono",
  "parking_lot",
@@ -10688,7 +10690,7 @@ dependencies = [
 
 [[package]]
 name = "taiji-example"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "chrono",
  "serde_json",
@@ -10697,7 +10699,7 @@ dependencies = [
 
 [[package]]
 name = "taiji-executor"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "async-trait",
  "chrono",
@@ -10712,7 +10714,7 @@ dependencies = [
 
 [[package]]
 name = "taiji-growth"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "async-trait",
  "chrono",
@@ -10730,7 +10732,7 @@ dependencies = [
 
 [[package]]
 name = "taiji-infra-config"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "async-trait",
  "chrono",
@@ -10745,7 +10747,7 @@ dependencies = [
 
 [[package]]
 name = "taiji-knowledge-graph"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "anyhow",
  "chrono",
@@ -10757,7 +10759,7 @@ dependencies = [
 
 [[package]]
 name = "taiji-llm"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -10773,7 +10775,7 @@ dependencies = [
 
 [[package]]
 name = "taiji-orderflow"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "serde",
  "serde_json",
@@ -10782,7 +10784,7 @@ dependencies = [
 
 [[package]]
 name = "taiji-pattern"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "chrono",
  "ndarray",
@@ -10793,7 +10795,7 @@ dependencies = [
 
 [[package]]
 name = "taiji-publisher"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "async-trait",
  "chrono",
@@ -10807,7 +10809,7 @@ dependencies = [
 
 [[package]]
 name = "taiji-realtime"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "axum",
  "crossbeam",
@@ -10823,7 +10825,7 @@ dependencies = [
 
 [[package]]
 name = "taiji-sentiment"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "jieba-rs",
  "serde",
@@ -10833,7 +10835,7 @@ dependencies = [
 
 [[package]]
 name = "taiji-strategen"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -10853,7 +10855,7 @@ dependencies = [
 
 [[package]]
 name = "taiji-strategy-template"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "chrono",
  "serde",
@@ -11429,7 +11431,7 @@ dependencies = [
 
 [[package]]
 name = "terminal-core"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -11870,7 +11872,7 @@ checksum = "7d56353a2a665ad0f41a421187180aab746c8c325620617ad883a99a1cbe66d2"
 
 [[package]]
 name = "tool-runtime"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "bitfun-agent-tools",
  "bitfun-events",

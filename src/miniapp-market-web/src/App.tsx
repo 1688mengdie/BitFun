@@ -33,6 +33,7 @@ import {
 import { downloadUrl, loginUrl, marketApi, MarketApiError } from './api';
 import { formatCompactNumber, formatMarketDate } from './format';
 import { useLocale, type Locale, type MessageKey } from './i18n';
+import { MiniAppIcon } from './MiniAppIcon';
 import { useTheme, type Theme } from './theme';
 import type {
   AdminSubmissionDetail,
@@ -598,18 +599,18 @@ function AppCard({
           <img src={app.screenshotUrls[0]} alt={localized.name} loading="lazy" />
         ) : (
           <span className="app-icon-large">
-            {app.icon || <Cube weight="duotone" aria-hidden="true" />}
+            <MiniAppIcon name={app.icon} />
           </span>
         )}
       </div>
       <div className="card-body">
         <div className="card-topline">
           <span className="category-chip">{categoryLabel(app.category, t)}</span>
-          <span>BitFun {app.minBitfunVersion}+</span>
+          <span className="card-version">v{app.latestRelease}</span>
         </div>
         <div className="card-heading">
           <span className="app-icon">
-            {app.icon || <Cube weight="duotone" aria-hidden="true" />}
+            <MiniAppIcon name={app.icon} />
           </span>
           <div>
             <h2>{localized.name}</h2>
@@ -620,16 +621,22 @@ function AppCard({
         </div>
         <p className="card-description">{localized.description}</p>
         <div className="card-meta">
-          <span>
+          <span title={t('ratingLabel')}>
             <Star weight={app.ratingAverage > 0 ? 'fill' : 'regular'} aria-hidden="true" />
             {app.ratingAverage.toFixed(1)}
             <small>{app.ratingCount}</small>
+            <span className="sr-only">{t('ratingLabel')}</span>
           </span>
-          <span>
+          <span className={`card-favorites ${app.isFavorited ? 'active' : ''}`} title={t('favoritesLabel')}>
+            <Heart weight={app.isFavorited ? 'fill' : 'regular'} aria-hidden="true" />
+            {formatCompactNumber(app.favoriteCount, locale)}
+            <span className="sr-only">{t('favoritesLabel')}</span>
+          </span>
+          <span title={t('downloadsLabel')}>
             <DownloadSimple aria-hidden="true" />
             {formatCompactNumber(app.downloadCount, locale)}
+            <span className="sr-only">{t('downloadsLabel')}</span>
           </span>
-          <span className="card-version">v{app.latestRelease}</span>
           <ArrowRight className="card-arrow" aria-hidden="true" />
         </div>
       </div>
@@ -715,7 +722,7 @@ function DetailPage({
           <span className="category-chip">{categoryLabel(app.category, t)}</span>
           <div className="detail-title-row">
             <span className="detail-icon">
-              {app.icon || <Cube weight="duotone" aria-hidden="true" />}
+              <MiniAppIcon name={app.icon} />
             </span>
             <div>
               <h1>{localized.name}</h1>
@@ -744,6 +751,7 @@ function DetailPage({
             >
               <Heart weight={app.isFavorited ? 'fill' : 'regular'} aria-hidden="true" />
               {app.isFavorited ? t('favorited') : t('favorite')}
+              <small>{formatCompactNumber(app.favoriteCount, locale)}</small>
             </button>
             {owner && webSubmissionsEnabled && (
               <button
@@ -806,7 +814,7 @@ function DetailPage({
               ))}
             </div>
           ) : (
-            <span>{app.icon || <Cube weight="duotone" aria-hidden="true" />}</span>
+            <span><MiniAppIcon name={app.icon} /></span>
           )}
         </div>
       </section>
@@ -1036,7 +1044,7 @@ function SubmitPage({
           <legend>{t('releaseSection')}</legend>
           <div className="form-grid">
             <Field label={t('minBitfunVersionLabel')}>
-              <input name="minBitfunVersion" required defaultValue="0.2.14" />
+              <input name="minBitfunVersion" required defaultValue="0.2.15" />
             </Field>
             <Field label={t('publicRepositoryOptional')}>
               <input name="repositoryUrl" type="url" placeholder="https://github.com/…" />
@@ -1260,7 +1268,7 @@ function AdminPage({
               }}
             >
               <span className="app-icon">
-                {item.icon || <Cube weight="duotone" aria-hidden="true" />}
+                <MiniAppIcon name={item.icon} />
               </span>
               <span>
                 <strong>{item.name}</strong>
@@ -1284,7 +1292,7 @@ function AdminPage({
             <>
               <div className="review-summary">
                 <span className="detail-icon">
-                  {selected.submission.icon || <Cube weight="duotone" aria-hidden="true" />}
+                  <MiniAppIcon name={selected.submission.icon} />
                 </span>
                 <div>
                   <h2>{selected.submission.name}</h2>
@@ -1509,7 +1517,7 @@ function SubmissionRow({
   return (
     <article className="submission-row">
       <span className="app-icon">
-        {item.icon || <Cube weight="duotone" aria-hidden="true" />}
+        <MiniAppIcon name={item.icon} />
       </span>
       <div>
         <h2>{item.name}</h2>

@@ -383,6 +383,14 @@ pub const REMOTE_WORKSPACE_COMMAND_POLICIES: &[(&str, RemoteWorkspacePolicy)] = 
     ),
     ("dispatch_answer", RemoteWorkspacePolicy::WorkspaceAgnostic),
     ("dispatch_append", RemoteWorkspacePolicy::WorkspaceAgnostic),
+    (
+        "dispatch_load_transcript",
+        RemoteWorkspacePolicy::WorkspaceAgnostic,
+    ),
+    (
+        "dispatch_save_transcript",
+        RemoteWorkspacePolicy::WorkspaceAgnostic,
+    ),
     ("dispatch_status", RemoteWorkspacePolicy::WorkspaceAgnostic),
     ("dispatch_submit", RemoteWorkspacePolicy::WorkspaceAgnostic),
     (
@@ -1141,6 +1149,10 @@ pub const REMOTE_WORKSPACE_COMMAND_POLICIES: &[(&str, RemoteWorkspacePolicy)] = 
         RemoteWorkspacePolicy::LocalOnly,
     ),
     ("miniapp_market_install", RemoteWorkspacePolicy::LocalOnly),
+    (
+        "miniapp_market_installed_origins",
+        RemoteWorkspacePolicy::LocalOnly,
+    ),
     (
         "miniapp_market_installed_status",
         RemoteWorkspacePolicy::LocalOnly,

@@ -2,8 +2,9 @@ use bitfun_product_domains::tool_permissions::{PermissionReply, PermissionReques
 use bitfun_runtime_ports::{
     AgentContextReloadRequest, AgentDialogTurnRequest, AgentSessionCompactionRequest,
     AgentSessionCreateRequest, AgentSessionCreateResult, AgentSessionListRequest,
-    AgentSessionModeUpdateRequest, AgentSessionModelUpdateRequest, AgentSessionSummary,
-    AgentTurnCancellationRequest, AgentTurnCancellationResult, SessionTranscript,
+    AgentSessionModeUpdateRequest, AgentSessionModelUpdateRequest, AgentSessionRevertRequest,
+    AgentSessionRevertResult, AgentSessionSummary, AgentTurnCancellationRequest,
+    AgentTurnCancellationResult, SessionTranscript,
 };
 use serde::{Deserialize, Serialize};
 
@@ -19,6 +20,16 @@ pub struct RuntimeSessionRestoreRequest {
 pub struct RuntimeSessionRenameRequest {
     pub session_id: String,
     pub session_name: String,
+}
+
+/// Forks the controlled Session at its latest persisted turn, or immediately
+/// before `before_turn_id` when the TUI selected a historical user prompt.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeSessionForkRequest {
+    pub session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before_turn_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -59,11 +70,20 @@ pub enum RuntimeIpcOperation {
     RenameSession {
         request: RuntimeSessionRenameRequest,
     },
+    ForkSession {
+        request: RuntimeSessionForkRequest,
+    },
     ReloadSessionContext {
         request: AgentContextReloadRequest,
     },
     CompactSession {
         request: AgentSessionCompactionRequest,
+    },
+    UndoSession {
+        request: AgentSessionRevertRequest,
+    },
+    RedoSession {
+        request: AgentSessionRevertRequest,
     },
     SubmitTurn {
         request: AgentDialogTurnRequest,
@@ -92,8 +112,11 @@ impl RuntimeIpcOperation {
             Self::UpdateSessionMode { request } => Some(&request.session_id),
             Self::UpdateSessionModel { request } => Some(&request.session_id),
             Self::RenameSession { request } => Some(&request.session_id),
+            Self::ForkSession { request } => Some(&request.session_id),
             Self::ReloadSessionContext { request } => Some(&request.session_id),
             Self::CompactSession { request } => Some(&request.session_id),
+            Self::UndoSession { request } => Some(&request.session_id),
+            Self::RedoSession { request } => Some(&request.session_id),
             Self::SubmitTurn { request } => Some(&request.session_id),
             Self::CancelTurn { request } => Some(&request.session_id),
             Self::PendingPermissions { session_id }
@@ -126,7 +149,12 @@ impl RuntimeIpcOperation {
             | Self::SubmitTurn { .. } => {
                 RuntimeIpcOperationRules::new(CurrentController, true, false, true)
             }
+            Self::ForkSession { .. } => {
+                RuntimeIpcOperationRules::new(CurrentController, true, true, true)
+            }
             Self::ReloadSessionContext { .. }
+            | Self::UndoSession { .. }
+            | Self::RedoSession { .. }
             | Self::CancelTurn { .. }
             | Self::RespondPermission { .. }
             | Self::SubmitUserAnswers { .. } => {
@@ -194,6 +222,13 @@ pub enum RuntimeIpcOperationResult {
         session: AgentSessionSummary,
         transcript: SessionTranscript,
         pending_permissions: Vec<PermissionRequest>,
+    },
+    SessionForked {
+        session: AgentSessionSummary,
+        transcript: SessionTranscript,
+    },
+    SessionReverted {
+        revert: AgentSessionRevertResult,
     },
     TurnAccepted {
         session_id: String,

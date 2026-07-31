@@ -22,7 +22,6 @@ import { Tooltip, IconButton } from '@/component-library';
 import { useGitState } from '@/tools/git/hooks/useGitState';
 import type { SessionExecutionTarget } from '@/infrastructure/api/service-api/WorktreeAPI';
 import { useI18n } from '@/infrastructure/i18n';
-import { DispatchTargetPicker } from '@/features/dispatch/DispatchTargetPicker';
 import { DispatchResultDialog } from '@/features/dispatch/DispatchResultDialog';
 import type { DispatchSelection, DispatchTarget } from '@/features/dispatch/types';
 import './ChatInputWorkspaceStrip.scss';
@@ -48,6 +47,9 @@ export interface ChatInputWorkspaceStripProps {
   permissionControl?: {
     mode: ChatInputPermissionMode;
     saving?: boolean;
+    disabled?: boolean;
+    options?: Array<Exclude<ChatInputPermissionMode, 'acp'>>;
+    scopeLabel?: string;
     onChange?: (mode: Exclude<ChatInputPermissionMode, 'acp'>) => void | Promise<void>;
     onHide?: () => void | Promise<void>;
   };
@@ -82,9 +84,9 @@ export interface ChatInputWorkspaceStripProps {
   };
 }
 
-export type ChatInputPermissionMode = 'ask' | 'auto' | 'full_access' | 'acp';
+export type ChatInputPermissionMode = 'ask' | 'auto' | 'full_access' | 'reject' | 'acp';
 
-const NATIVE_PERMISSION_MODES: Array<Exclude<ChatInputPermissionMode, 'acp'>> = [
+const NATIVE_PERMISSION_MODES: Array<Exclude<ChatInputPermissionMode, 'acp' | 'reject'>> = [
   'ask',
   'auto',
   'full_access',
@@ -134,8 +136,8 @@ export const ChatInputWorkspaceStrip: React.FC<ChatInputWorkspaceStripProps> = (
   const showUsage = usageReport?.visible && !!usageReport.onOpen;
   const showGoal = threadGoal?.visible && !!threadGoal.onOpen;
   const showPermission = !!permissionControl;
-  const showDispatch = !!dispatchControl;
-  const showRightActions = showDispatch || showPermission || showUsage || showGoal;
+  const showDispatchResult = !!dispatchControl?.completedSnapshotJobId;
+  const showRightActions = showDispatchResult || showPermission || showUsage || showGoal;
   const isWorktree = !!executionTarget?.worktreeId;
   const worktreeEnabled = worktreeControl?.enabled ?? isWorktree;
   const worktreeEnabledRef = useRef(worktreeEnabled);
@@ -154,6 +156,10 @@ export const ChatInputWorkspaceStrip: React.FC<ChatInputWorkspaceStripProps> = (
     full_access: {
       label: t('chatInput.permissionMode.fullAccess.label'),
       description: t('chatInput.permissionMode.fullAccess.description'),
+    },
+    reject: {
+      label: t('chatInput.permissionMode.reject.label'),
+      description: t('chatInput.permissionMode.reject.description'),
     },
     acp: {
       label: t('chatInput.permissionMode.acp.label'),
@@ -216,6 +222,11 @@ export const ChatInputWorkspaceStrip: React.FC<ChatInputWorkspaceStripProps> = (
     worktreeTooltip = tWorktrees('strip.toggleOnDescription', { path: trimmedPath });
   }
   const permissionMode = permissionControl?.mode ?? 'ask';
+  const permissionModes = permissionControl?.options ?? NATIVE_PERMISSION_MODES;
+  const permissionDisabled =
+    permissionControl?.disabled
+    || permissionControl?.saving
+    || permissionMode === 'acp';
   const permissionModeLabel = permissionCopy[permissionMode].label;
   const permissionTooltip = permissionMode === 'acp'
     ? t('chatInput.permissionMode.acp.tooltip')
@@ -315,15 +326,11 @@ export const ChatInputWorkspaceStrip: React.FC<ChatInputWorkspaceStripProps> = (
 
       {showRightActions ? (
         <div className="bitfun-chat-input-workspace-strip__actions">
-          {dispatchControl ? (
-            <DispatchTargetPicker
-              target={dispatchControl.target}
-              sourceWorkspacePath={dispatchControl.sourceWorkspacePath}
-              locked={dispatchControl.locked}
-              onSelectLocal={dispatchControl.onSelectLocal}
-              onSelectTarget={dispatchControl.onSelectTarget}
-            />
-          ) : null}
+          {/*
+           * 0.2.15 release gate: dispatch session creation stays hidden while
+           * its lifecycle semantics stabilize. Restore DispatchTargetPicker
+           * here in a later release; existing result review remains available.
+           */}
           {dispatchControl?.completedSnapshotJobId ? (
             <>
               <Tooltip content={tCommon('dispatch.resultTitle')} placement="top">
@@ -364,14 +371,16 @@ export const ChatInputWorkspaceStrip: React.FC<ChatInputWorkspaceStripProps> = (
                     .filter(Boolean)
                     .join(' ')}
                   aria-label={permissionTooltip}
-                  aria-haspopup={permissionMode === 'acp' ? undefined : 'menu'}
-                  aria-expanded={permissionMode === 'acp' ? undefined : permissionMenuOpen}
-                  disabled={permissionControl.saving || permissionMode === 'acp'}
+                  aria-haspopup={permissionDisabled ? undefined : 'menu'}
+                  aria-expanded={permissionDisabled ? undefined : permissionMenuOpen}
+                  disabled={permissionDisabled}
                   data-testid="chat-input-permission-trigger"
                   data-permission-mode={permissionMode}
                   onClick={event => {
                     event.stopPropagation();
-                    setPermissionMenuOpen(open => !open);
+                    if (!permissionDisabled) {
+                      setPermissionMenuOpen(open => !open);
+                    }
                   }}
                 >
                   <PermissionIcon size={12} strokeWidth={2} aria-hidden />
@@ -392,10 +401,12 @@ export const ChatInputWorkspaceStrip: React.FC<ChatInputWorkspaceStripProps> = (
                 >
                   <div className="bitfun-chat-input-workspace-strip__permission-menu-header">
                     <span>{t('chatInput.permissionMode.menuLabel')}</span>
-                    <span>{t('chatInput.permissionMode.globalScope')}</span>
+                    <span>
+                      {permissionControl.scopeLabel ?? t('chatInput.permissionMode.globalScope')}
+                    </span>
                   </div>
                   <div className="bitfun-chat-input-workspace-strip__permission-options">
-                    {NATIVE_PERMISSION_MODES.map(mode => {
+                    {permissionModes.map(mode => {
                       const selected = permissionMode === mode;
                       const copy = permissionCopy[mode];
                       return (

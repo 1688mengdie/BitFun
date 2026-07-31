@@ -55,10 +55,54 @@ import {
   type DispatchTarget,
 } from '@/features/dispatch/types';
 import { dispatchJobStore } from '@/features/dispatch/dispatchJobStore';
+import { forgetDispatchTranscript } from '@/features/dispatch/dispatchTranscriptCache';
 
 const log = createLogger('SessionModule');
 const pendingSessionCreations = new Map<string, Promise<string>>();
 const DISPATCH_OBSERVER_MAX_CONTEXT_TOKENS = 128128;
+
+function isDispatchObserverProjection(
+  sessionId: string,
+  session: Session | undefined,
+): boolean {
+  if (
+    isNonLocalDispatchTarget(session?.config.dispatchTarget)
+    || Boolean(session?.config.dispatchJobId?.trim())
+  ) {
+    return true;
+  }
+
+  return Object.values(dispatchJobStore.getState().jobs)
+    .some(job => job.sessionId === sessionId);
+}
+
+function dismissDispatchObserverProjection(
+  sessionId: string,
+  session: Session | undefined,
+): void {
+  // Collect before dismissing: dismissSession removes the store entries that
+  // are the only remaining link from this session to its cached transcripts.
+  const jobIds = new Set(
+    Object.values(dispatchJobStore.getState().jobs)
+      .filter(job => job.sessionId === sessionId)
+      .map(job => job.jobId),
+  );
+  const configuredJobId = session?.config.dispatchJobId?.trim();
+  if (configuredJobId) {
+    jobIds.add(configuredJobId);
+  }
+
+  dispatchJobStore.getState().dismissSession(
+    sessionId,
+    session?.config.dispatchJobId,
+  );
+
+  // The projection is gone for good, so its cached transcript must not stay
+  // readable on disk until retention gets around to it.
+  jobIds.forEach(jobId => {
+    void forgetDispatchTranscript(jobId);
+  });
+}
 
 const getHydrationLocationKey = (
   location: SessionHistoryHydrationLocation | undefined,
@@ -769,6 +813,8 @@ export async function createChatSession(
           // Do not inherit the controller's model selector. An omitted target
           // model lets the probed target use its own configured default.
           model: config.dispatchModel?.trim() || undefined,
+          availableModels: config.dispatchAvailableModels,
+          defaultModel: config.dispatchDefaultModel,
           cursor: 0,
           state: 'submitting',
           appliedEventIds: [],
@@ -991,11 +1037,22 @@ export async function deleteChatSession(
       && removedSessionIdSet.has(stateBeforeDelete.activeSessionId)
     );
     const session = stateBeforeDelete.sessions.get(sessionId);
-    if (isNonLocalDispatchTarget(session?.config.dispatchTarget)) {
-      if (session?.config.dispatchJobId) {
-        dispatchJobStore.getState().dismissJob(session.config.dispatchJobId);
-      }
-      context.flowChatStore.removeSession(
+    const observerJobIds = Object.values(dispatchJobStore.getState().jobs)
+      .filter(job => job.sessionId === sessionId)
+      .map(job => job.jobId);
+    const deleteAsDispatchProjection = isDispatchObserverProjection(sessionId, session);
+    log.info('Dispatch diagnostic: session delete evaluated', {
+      sessionId,
+      sessionFound: Boolean(session),
+      dispatchTargetKind: session?.config.dispatchTarget?.kind,
+      dispatchJobId: session?.config.dispatchJobId,
+      observerJobIds,
+      deleteAsDispatchProjection,
+      cascadeSessionIds: removedSessionIds,
+    });
+    if (deleteAsDispatchProjection) {
+      dismissDispatchObserverProjection(sessionId, session);
+      const locallyRemovedSessionIds = context.flowChatStore.removeSession(
         sessionId,
         removedActiveSession ? { nextActiveSessionId: null } : undefined,
       );
@@ -1004,8 +1061,17 @@ export async function deleteChatSession(
         cleanupSaveState(context, id);
         cleanupSessionBuffers(context, id);
       });
+      log.info('Dispatch diagnostic: projection removed from flow chat store', {
+        sessionId,
+        locallyRemovedSessionIds,
+        activeSessionId: context.flowChatStore.getState().activeSessionId,
+      });
       return;
     }
+    log.info('Dispatch diagnostic: delete routed to persisted backend session', {
+      sessionId,
+      hasWorkspacePath: Boolean(session && sessionProjectWorkspacePath(session)),
+    });
     await context.flowChatStore.deleteSession(
       sessionId,
       removedActiveSession ? { nextActiveSessionId: null } : undefined,
@@ -1042,10 +1108,8 @@ export async function archiveChatSession(
       && removedSessionIdSet.has(stateBeforeArchive.activeSessionId)
     );
 
-    if (isNonLocalDispatchTarget(session.config.dispatchTarget)) {
-      if (session.config.dispatchJobId) {
-        dispatchJobStore.getState().dismissJob(session.config.dispatchJobId);
-      }
+    if (isDispatchObserverProjection(sessionId, session)) {
+      dismissDispatchObserverProjection(sessionId, session);
       context.flowChatStore.removeSession(
         sessionId,
         removedActiveSession ? { nextActiveSessionId: null } : undefined,
