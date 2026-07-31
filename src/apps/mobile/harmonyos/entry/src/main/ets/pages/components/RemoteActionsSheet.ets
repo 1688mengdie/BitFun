@@ -4,11 +4,11 @@ import { CARD, GREEN, INK, LINE, MUTED, RED, SUBTLE } from './Theme';
 
 @ComponentV2
 export struct RemoteActionsSheet {
-  @Param desktopName: string = 'MacBook Pro';
+  @Param desktopName: string = '';
   @Param workspaceName: string = 'BitFun';
   @Param workspacePath: string = '';
   @Param assistantId: string = '';
-  @Param connectionState: string = 'connected';
+  @Param connectionState: string = 'idle';
   @Param isBusy: boolean = false;
   @Param sortMode: string = 'project';
   @Param recentWorkspaces: RecentWorkspaceEntry[] = [];

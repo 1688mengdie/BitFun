@@ -1,6 +1,8 @@
 import { RemoteSession } from '../../model/RemoteModels';
 import { RemoteI18n } from '../../i18n/RemoteI18n';
 import { CARD, INK, MUTED, SUBTLE } from './Theme';
+import { ConversationSource } from '../navigation/AppRouteContract';
+import { ConversationSourceSwitcher } from './ConversationSourceSwitcher';
 
 @Component
 export struct AppSidebar {
@@ -9,10 +11,15 @@ export struct AppSidebar {
   @Prop selectedSessionId: string = '';
   @Prop connectionState: string = 'idle';
   @Prop activeSection: string = 'chat';
+  @Prop accountUserId: string = '';
+  @Prop showConversationSourceSwitcher: boolean = false;
+  @Prop conversationSource: ConversationSource = ConversationSource.General;
   onClose: () => void = () => {};
   onNewChat: () => void = () => {};
   onEnterCode: () => void = () => {};
+  onConversationSource: (source: ConversationSource) => void = (_source: ConversationSource) => {};
   onOpenSettings: () => void = () => {};
+  onOpenAccount: () => void = () => {};
   onOpenSession: (session: RemoteSession) => void = (_session: RemoteSession) => {};
   onArchiveSession: (session: RemoteSession, archived: boolean) => void =
     (_session: RemoteSession, _archived: boolean) => {};
@@ -22,57 +29,32 @@ export struct AppSidebar {
   @State pendingDeleteSessionId: string = '';
   @State showSearch: boolean = false;
   @State sessionSearchQuery: string = '';
+  @State archivedSessionsExpanded: boolean = false;
 
   build() {
-    Column() {
-      Row() {
-        Text('BitFun')
-          .fontSize(23)
-          .fontWeight(FontWeight.Bold)
-          .fontColor(INK)
-        Blank()
-        Stack({ alignContent: Alignment.Center }) {
-          this.SearchGlyph()
-        }
-          .width(46)
-          .height(46)
-          .backgroundColor(CARD)
-          .borderRadius(23)
-          .shadow({ radius: 18, color: '#10000000', offsetY: 8 })
-          .onClick(() => {
-            this.showSearch = !this.showSearch;
-            if (!this.showSearch) {
-              this.sessionSearchQuery = '';
-            }
-          })
-      }
-      .width('100%')
-      .height(50)
-      .alignItems(VerticalAlign.Center)
+    this.SidebarContent()
+  }
 
-      if (this.showSearch) {
-        TextInput({
-          placeholder: RemoteI18n.t('sidebar.searchPlaceholder'),
-          text: this.sessionSearchQuery
-        })
-          .width('100%')
-          .height(42)
-          .fontSize(14)
-          .fontColor(INK)
-          .placeholderColor(SUBTLE)
-          .padding({ left: 14, right: 14 })
-          .backgroundColor('#F4F4F2')
-          .borderRadius(8)
-          .margin({ top: 12 })
-          .onChange((value: string) => {
-            this.sessionSearchQuery = value;
-          })
+  @Builder
+  private SidebarContent() {
+    Column() {
+      if (this.isAccountAuthenticated()) {
+        this.AuthenticatedHeader()
+      } else {
+        this.SignedOutHeader()
       }
 
       Column({ space: 0 }) {
-        this.NavRow(RemoteI18n.t('sidebar.code'), this.activeSection === 'remote', () => {
-          this.onEnterCode();
-        })
+        if (this.showConversationSourceSwitcher) {
+          ConversationSourceSwitcher({
+            activeSource: this.conversationSource,
+            onSelectSource: this.onConversationSource
+          })
+        } else {
+          this.NavRow(RemoteI18n.t('sidebar.code'), this.activeSection === 'remote', () => {
+            this.onEnterCode();
+          })
+        }
       }
       .width('100%')
       .margin({ top: 18 })
@@ -94,67 +76,48 @@ export struct AppSidebar {
         .margin({ top: 18, bottom: 10 })
 
       Stack({ alignContent: Alignment.Bottom }) {
-        if (this.visibleSessions().length === 0) {
-          Column() {
-            this.EmptyRecent()
+        List({ space: 2 }) {
+          if (this.visibleRecentSessions().length === 0) {
+            ListItem() {
+              this.EmptyRecent()
+            }
           }
-          .width('100%')
-          .height('100%')
-        } else {
-          List({ space: 2 }) {
-            Repeat<RemoteSession>(this.visibleSessions())
+          Repeat<RemoteSession>(this.visibleRecentSessions())
+            .each((obj: RepeatItem<RemoteSession>) => {
+              ListItem() {
+                this.RecentRow(obj)
+              }
+            })
+            .key((item: RemoteSession) => item.id)
+            .virtualScroll({ totalCount: this.visibleRecentSessions().length })
+          if (this.archivedSessionCount() > 0) {
+            ListItem() {
+              this.ArchivedDisclosureRow()
+            }
+          }
+          if (this.archivedSessionsExpanded) {
+            Repeat<RemoteSession>(this.visibleArchivedSessions())
               .each((obj: RepeatItem<RemoteSession>) => {
                 ListItem() {
                   this.RecentRow(obj)
                 }
               })
               .key((item: RemoteSession) => item.id)
-              .virtualScroll({ totalCount: this.visibleSessions().length })
+              .virtualScroll({ totalCount: this.visibleArchivedSessions().length })
           }
-          .width('110%')
-          .height('100%')
-          .margin({ left: -14 })
-          .padding({ bottom: 72 })
-          .scrollBar(BarState.Off)
-          .divider(null)
-        }
-
-        Row() {
-          Button() {
-            Row({ space: 10 }) {
-              this.EditGlyph()
-              Text(RemoteI18n.t('sidebar.newChat'))
-                .fontSize(15)
-                .fontWeight(FontWeight.Medium)
-                .fontColor(CARD)
-            }
-            .justifyContent(FlexAlign.Center)
-            .width('100%')
-          }
-          .width(116)
-          .height(44)
-          .backgroundColor('#3B82F6')
-          .borderRadius(22)
-          .onClick(() => {
-            this.onNewChat();
-          })
-
-          Blank()
-
-          Stack({ alignContent: Alignment.Center }) {
-            this.SettingsGlyph()
-          }
-            .width(46)
-            .height(46)
-            .backgroundColor(CARD)
-            .borderRadius(23)
-            .shadow({ radius: 16, color: '#0E000000', offsetY: 8 })
-            .onClick(() => {
-              this.onOpenSettings();
-            })
         }
         .width('100%')
-        .alignItems(VerticalAlign.Center)
+        .height('100%')
+        .margin({ left: 0 })
+        .padding({ bottom: 72 })
+        .scrollBar(BarState.Off)
+        .divider(null)
+
+        if (this.isAccountAuthenticated()) {
+          this.AuthenticatedFooter()
+        } else {
+          this.SignedOutFooter()
+        }
       }
       .width('100%')
       .layoutWeight(1)
@@ -163,6 +126,126 @@ export struct AppSidebar {
     .height('100%')
     .padding({ left: 24, right: 18, top: 4, bottom: 7 })
     .backgroundColor(CARD)
+  }
+
+  @Builder
+  private AuthenticatedHeader() {
+    Row() {
+      Text('BitFun')
+        .fontSize(23)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(INK)
+      Blank()
+      Stack({ alignContent: Alignment.Center }) {
+        this.SearchGlyph()
+      }
+        .width(46)
+        .height(46)
+        .backgroundColor(CARD)
+        .borderRadius(23)
+        .shadow({ radius: 18, color: '#10000000', offsetY: 8 })
+        .onClick(() => {
+          this.showSearch = !this.showSearch;
+          if (!this.showSearch) {
+            this.sessionSearchQuery = '';
+          }
+        })
+    }
+    .width('100%')
+    .height(50)
+    .alignItems(VerticalAlign.Center)
+
+    if (this.showSearch) {
+      TextInput({ placeholder: RemoteI18n.t('sidebar.searchPlaceholder'), text: this.sessionSearchQuery })
+        .width('100%')
+        .height(42)
+        .fontSize(14)
+        .fontColor(INK)
+        .placeholderColor(SUBTLE)
+        .padding({ left: 14, right: 14 })
+        .backgroundColor('#F4F4F2')
+        .borderRadius(8)
+        .margin({ top: 12 })
+        .onChange((value: string) => {
+          this.sessionSearchQuery = value;
+        })
+    }
+  }
+
+  @Builder
+  private SignedOutHeader() {
+    Row({ space: 16 }) {
+      SymbolGlyph($r('sys.symbol.square_and_pencil'))
+        .fontSize(25)
+        .fontColor([INK])
+        .width(26)
+        .height(26)
+      Text(RemoteI18n.t('sidebar.signedOutNewChat'))
+        .fontSize(18)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(INK)
+    }
+    .width('100%')
+    .height(50)
+    .alignItems(VerticalAlign.Center)
+    .onClick(() => {
+      this.onNewChat();
+    })
+  }
+
+  @Builder
+  private AuthenticatedFooter() {
+    Row() {
+      Button() {
+        Row({ space: 10 }) {
+          this.EditGlyph()
+          Text(RemoteI18n.t('sidebar.newChat'))
+            .fontSize(15)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(CARD)
+        }
+        .justifyContent(FlexAlign.Center)
+        .width('100%')
+      }
+      .width(116)
+      .height(44)
+      .backgroundColor('#3B82F6')
+      .borderRadius(22)
+      .onClick(() => {
+        this.onNewChat();
+      })
+
+      Blank()
+
+      Stack({ alignContent: Alignment.Center }) {
+        this.SettingsGlyph()
+      }
+        .width(46)
+        .height(46)
+        .backgroundColor(CARD)
+        .borderRadius(23)
+        .shadow({ radius: 16, color: '#0E000000', offsetY: 8 })
+        .onClick(() => {
+          this.onOpenSettings();
+        })
+    }
+    .width('100%')
+    .alignItems(VerticalAlign.Center)
+  }
+
+  @Builder
+  private SignedOutFooter() {
+    Button(RemoteI18n.t('sidebar.signInBitFunAccount'))
+      .width('100%')
+      .height(48)
+      .fontSize(16)
+      .fontWeight(FontWeight.Bold)
+      .fontColor(CARD)
+      .backgroundColor(INK)
+      .borderRadius(16)
+      .onClick(() => {
+        this.onOpenAccount();
+      })
   }
 
   @Builder
@@ -181,6 +264,60 @@ export struct AppSidebar {
     .backgroundColor(isActive ? '#F3F3F3' : '#00000000')
     .borderRadius(12)
     .onClick(action)
+  }
+
+  @Builder
+  ArchivedDisclosureRow() {
+    Row({ space: 12 }) {
+      SymbolGlyph($r('sys.symbol.archivebox'))
+        .fontSize(20)
+        .fontColor([MUTED])
+        .width(22)
+        .height(22)
+      Text(RemoteI18n.t('sidebar.archived'))
+        .fontSize(16)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(INK)
+      Blank()
+      Row({ space: 8 }) {
+        Text(`${this.archivedSessionCount()}`)
+          .fontSize(12)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(MUTED)
+          .width(24)
+          .height(22)
+          .textAlign(TextAlign.Center)
+          .backgroundColor('#EFEFED')
+          .borderRadius(11)
+        Stack({ alignContent: Alignment.Center }) {
+          if (this.archivedSessionsExpanded) {
+            SymbolGlyph($r('sys.symbol.chevron_up'))
+              .fontSize(13)
+              .fontColor([MUTED])
+          } else {
+            SymbolGlyph($r('sys.symbol.chevron_down'))
+              .fontSize(13)
+              .fontColor([MUTED])
+          }
+        }
+        .width(20)
+        .height(22)
+      }
+      .width(52)
+      .height(22)
+      .alignItems(VerticalAlign.Center)
+    }
+    .width('100%')
+    .height(46)
+    .padding({ left: 14, right: 68 })
+    .margin({ top: 8 })
+    .backgroundColor(this.archivedSessionsExpanded ? '#F7F7F5' : '#00000000')
+    .borderRadius(14)
+    .onClick(() => {
+      this.archivedSessionsExpanded = !this.archivedSessionsExpanded;
+      this.activeActionSessionId = '';
+      this.pendingDeleteSessionId = '';
+    })
   }
 
   @Builder
@@ -500,20 +637,28 @@ export struct AppSidebar {
       .translate({ x: -5 })
   }
 
-  private visibleSessions(): RemoteSession[] {
+  private visibleRecentSessions(): RemoteSession[] {
     const query = this.sessionSearchQuery.trim().toLowerCase();
     return this.sessions.filter((session: RemoteSession) => {
-      if (session.agentType !== 'chat') {
+      if (session.agentType !== 'chat' || session.status === 'archived' || session.id === this.pinnedSessionId) {
         return false;
       }
-      if (session.id === this.pinnedSessionId) {
-        return false;
-      }
-      if (query.length > 0) {
-        return session.title.toLowerCase().indexOf(query) >= 0;
-      }
-      return session.status !== 'archived';
+      return query.length === 0 || session.title.toLowerCase().indexOf(query) >= 0;
     });
+  }
+
+  private visibleArchivedSessions(): RemoteSession[] {
+    const query = this.sessionSearchQuery.trim().toLowerCase();
+    return this.sessions.filter((session: RemoteSession) => {
+      return session.agentType === 'chat' && session.status === 'archived' &&
+        (query.length === 0 || session.title.toLowerCase().indexOf(query) >= 0);
+    });
+  }
+
+  private archivedSessionCount(): number {
+    return this.sessions.filter((session: RemoteSession) => {
+      return session.agentType === 'chat' && session.status === 'archived';
+    }).length;
   }
 
   private visiblePinnedSessions(): RemoteSession[] {
@@ -523,5 +668,9 @@ export struct AppSidebar {
         session.status !== 'archived' &&
         (query.length === 0 || session.title.toLowerCase().indexOf(query) >= 0);
     });
+  }
+
+  private isAccountAuthenticated(): boolean {
+    return this.accountUserId.trim().length > 0;
   }
 }

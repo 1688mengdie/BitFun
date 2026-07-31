@@ -1,4 +1,4 @@
-import { ChatMessage, ChatMessageItemResponse, ImageAttachment, RemoteQuestionAnswerPayload, RemoteToolStatusResponse } from '../../model/RemoteModels';
+import { ConversationUiImage, ConversationUiMessage, ConversationUiMessageItem, ConversationUiQuestionAnswer, ConversationUiToolStatus } from './ConversationUiModels';
 import { RemoteI18n } from '../../i18n/RemoteI18n';
 import { ACCENT, CARD, INK, LINE, MUTED, RED, SOFT } from './Theme';
 import { FileReferenceCard } from './FileReferenceCard';
@@ -14,13 +14,18 @@ interface FileReference {
   label: string;
 }
 
+interface SubagentTaskInput {
+  description?: string;
+  title?: string;
+  prompt?: string;
+}
 interface StructuredRenderGroup {
   type: string;
-  items: ChatMessageItemResponse[];
+  items: ConversationUiMessageItem[];
   itemStatuses: string[];
   itemStreaming: boolean[];
   itemChildActiveScopes: boolean[];
-  tools: RemoteToolStatusResponse[];
+  tools: ConversationUiToolStatus[];
   key: string;
   path: string;
 }
@@ -32,36 +37,36 @@ interface ActivityGroupStats {
   otherCount: number;
 }
 
-@Component
+@ComponentV2
 export struct ChatMessageBubble {
-  @Prop item: ChatMessage = {
+  @Param item: ConversationUiMessage = {
     id: '',
     role: 'assistant',
     text: '',
     status: '',
     detail: ''
   };
-  @Prop isStreaming: boolean = false;
-  @Prop isFinalizing: boolean = false;
-  @Prop isBusy: boolean = false;
-  @Prop downloadingFilePath: string = '';
-  @Prop downloadedFilePath: string = '';
-  @Prop fileDownloadStatus: string = '';
-  onApproveTool: (toolId: string, updatedInput?: Object) => void =
+  @Param isStreaming: boolean = false;
+  @Param isFinalizing: boolean = false;
+  @Param isBusy: boolean = false;
+  @Param downloadingFilePath: string = '';
+  @Param downloadedFilePath: string = '';
+  @Param fileDownloadStatus: string = '';
+  @Event onApproveTool: (toolId: string, updatedInput?: Object) => void =
     (_toolId: string, _updatedInput?: Object) => {};
-  onRejectTool: (toolId: string) => void = (_toolId: string) => {};
-  onCancelTool: (toolId: string) => void = (_toolId: string) => {};
-  onAnswerQuestion: (toolId: string, answers: RemoteQuestionAnswerPayload) => void =
-    (_toolId: string, _answers: RemoteQuestionAnswerPayload) => {};
-  onCopyMessage: (text: string) => void = (_text: string) => {};
-  onRetryMessage: (text: string) => void = (_text: string) => {};
-  onDownloadFile: (path: string) => void = (_path: string) => {};
-  @State expandedActivityPath: string = '';
-  @State typingPhase: number = 0;
+  @Event onRejectTool: (toolId: string) => void = (_toolId: string) => {};
+  @Event onCancelTool: (toolId: string) => void = (_toolId: string) => {};
+  @Event onAnswerQuestion: (toolId: string, answers: ConversationUiQuestionAnswer) => void =
+    (_toolId: string, _answers: ConversationUiQuestionAnswer) => {};
+  @Event onCopyMessage: (text: string) => void = (_text: string) => {};
+  @Event onRetryMessage: (text: string) => void = (_text: string) => {};
+  @Event onDownloadFile: (path: string) => void = (_path: string) => {};
+  @Local expandedActivityPath: string = '';
+  @Local typingPhase: number = 0;
   private typingTimerId: number = 0;
 
   aboutToAppear(): void {
-    if (!this.shouldShowTypingDots(this.item)) {
+    if (!this.shouldShowTypingDots(this.item) && !this.hasRunningSubagentTask(this.item)) {
       return;
     }
     this.typingTimerId = setInterval(() => {
@@ -166,7 +171,7 @@ export struct ChatMessageBubble {
   }
 
   @Builder
-  FinalContent(item: ChatMessage) {
+  FinalContent(item: ConversationUiMessage) {
     this.MessageText(this.finalMessageText(item), false, `${item.id}-final`)
     if (this.fileReferences(this.finalMessageText(item)).length > 0) {
       this.FileCards(this.finalMessageText(item))
@@ -174,7 +179,7 @@ export struct ChatMessageBubble {
   }
 
   @Builder
-  ProcessContent(item: ChatMessage) {
+  ProcessContent(item: ConversationUiMessage) {
     if (this.shouldRenderStructuredItems(item)) {
       this.StructuredItems(item.items || [], this.shouldOmitStructuredThinking(item))
       if (this.uncoveredTools(item).length > 0) {
@@ -227,7 +232,7 @@ export struct ChatMessageBubble {
   }
 
   @Builder
-  StructuredItems(items: ChatMessageItemResponse[], omitActiveThinking: boolean = false) {
+  StructuredItems(items: ConversationUiMessageItem[], omitActiveThinking: boolean = false) {
     Column({ space: 10 }) {
       ForEach(this.structuredGroups(items, 'item'), (group: StructuredRenderGroup) => {
         this.StructuredGroup(group, omitActiveThinking)
@@ -243,7 +248,7 @@ export struct ChatMessageBubble {
     } else if (group.type === 'tool_group') {
       this.Tools(group.tools)
       if (group.items.length > 0) {
-        ForEach(group.items, (entry: ChatMessageItemResponse, index: number) => {
+        ForEach(group.items, (entry: ConversationUiMessageItem, index: number) => {
           this.StructuredItem(
             entry,
             `${group.path}-adjacent-${index}`,
@@ -251,7 +256,7 @@ export struct ChatMessageBubble {
             group.itemStreaming[index] || false,
             group.itemChildActiveScopes[index] || false
           )
-        }, (entry: ChatMessageItemResponse, index: number) => {
+        }, (entry: ConversationUiMessageItem, index: number) => {
           return this.structuredItemKey(entry, `${group.path}-adjacent-${index}`);
         })
       }
@@ -272,7 +277,7 @@ export struct ChatMessageBubble {
       if (this.activityGroupTools(group).length > 0) {
         this.Tools(this.activityGroupTools(group))
       }
-      ForEach(group.items, (entry: ChatMessageItemResponse, index: number) => {
+      ForEach(group.items, (entry: ConversationUiMessageItem, index: number) => {
         if (!omitActiveThinking &&
           this.isRenderableActivityThinking(entry, group.itemStatuses[index] || '', group.itemStreaming[index] || false)) {
           this.Thinking(
@@ -282,7 +287,7 @@ export struct ChatMessageBubble {
             group.itemStreaming[index] || false
           )
         }
-      }, (entry: ChatMessageItemResponse, index: number) => {
+      }, (entry: ConversationUiMessageItem, index: number) => {
         return this.structuredItemKey(entry, `${group.path}-activity-thinking-${index}`);
       })
     }
@@ -291,7 +296,7 @@ export struct ChatMessageBubble {
 
   @Builder
   StructuredItem(
-    entry: ChatMessageItemResponse,
+    entry: ConversationUiMessageItem,
     path: string,
     statusOverride: string = '',
     streaming: boolean = false,
@@ -322,7 +327,7 @@ export struct ChatMessageBubble {
   }
 
   @Builder
-  SubagentGroup(entry: ChatMessageItemResponse, path: string, activeScope: boolean = false) {
+  SubagentGroup(entry: ConversationUiMessageItem, path: string, activeScope: boolean = false) {
     Column({ space: 8 }) {
       Row({ space: 8 }) {
         Text('↳')
@@ -339,6 +344,9 @@ export struct ChatMessageBubble {
           .textOverflow({ overflow: TextOverflow.Ellipsis })
       }
       .width('100%')
+      if (entry.tool && this.isRunningTool(entry.tool)) {
+        this.TypingDots()
+      }
       if (entry.content && entry.content.trim().length > 0 && !this.isTextEntry(entry) && !this.isThinkingEntry(entry)) {
         this.MessageText(entry.content, activeScope && (!entry.subItems || entry.subItems.length === 0), `${this.item.id}-${path}-subagent`)
       }
@@ -354,7 +362,7 @@ export struct ChatMessageBubble {
   }
 
   @Builder
-  ChildItems(items: ChatMessageItemResponse[], parentPath: string, activeScope: boolean = false) {
+  ChildItems(items: ConversationUiMessageItem[], parentPath: string, activeScope: boolean = false) {
     Column({ space: 8 }) {
       ForEach(this.structuredGroups(items, parentPath, activeScope), (group: StructuredRenderGroup) => {
         this.StructuredGroup(group)
@@ -380,7 +388,7 @@ export struct ChatMessageBubble {
   }
 
   @Builder
-  Tools(tools: RemoteToolStatusResponse[]) {
+  Tools(tools: ConversationUiToolStatus[]) {
     ToolStatusList({
       tools,
       isBusy: this.isBusy,
@@ -393,7 +401,7 @@ export struct ChatMessageBubble {
       onCancelTool: (toolId: string) => {
         this.onCancelTool(toolId);
       },
-      onAnswerQuestion: (toolId: string, answers: RemoteQuestionAnswerPayload) => {
+      onAnswerQuestion: (toolId: string, answers: ConversationUiQuestionAnswer) => {
         this.onAnswerQuestion(toolId, answers);
       }
     })
@@ -433,9 +441,9 @@ export struct ChatMessageBubble {
   }
 
   @Builder
-  MessageImages(images: ImageAttachment[]) {
+  MessageImages(images: ConversationUiImage[]) {
     Flex({ direction: FlexDirection.Row, wrap: FlexWrap.Wrap }) {
-      ForEach(images, (image: ImageAttachment) => {
+      ForEach(images, (image: ConversationUiImage) => {
         Image(image.data_url)
           .width(92)
           .height(92)
@@ -443,7 +451,7 @@ export struct ChatMessageBubble {
           .borderRadius(14)
           .border({ width: 1, color: LINE })
           .margin({ right: 8, bottom: 8 })
-      }, (image: ImageAttachment) => image.name)
+      }, (image: ConversationUiImage) => image.name)
     }
     .width('100%')
   }
@@ -488,7 +496,7 @@ export struct ChatMessageBubble {
     .width('100%')
   }
 
-  private visibleMessageText(item: ChatMessage): string {
+  private visibleMessageText(item: ConversationUiMessage): string {
     const text = item.text.trim();
     if (text === '(空消息)' || text === '(empty message)') {
       return '';
@@ -496,7 +504,7 @@ export struct ChatMessageBubble {
     return text;
   }
 
-  private shouldShowTypingDots(item: ChatMessage): boolean {
+  private shouldShowTypingDots(item: ConversationUiMessage): boolean {
     if (item.role === 'user' || (item.status || '').toLowerCase() !== 'active') {
       return false;
     }
@@ -509,38 +517,38 @@ export struct ChatMessageBubble {
     return this.item.role !== 'user' && (this.isStreaming || (this.item.status || '').toLowerCase() === 'active');
   }
 
-  private shouldRenderStructuredItems(item: ChatMessage): boolean {
+  private shouldRenderStructuredItems(item: ConversationUiMessage): boolean {
     if (item.role === 'user' || !item.items || item.items.length === 0) {
       return false;
     }
-    return item.items.some((entry: ChatMessageItemResponse) => {
+    return item.items.some((entry: ConversationUiMessageItem) => {
       return this.isRenderableStructuredEntry(entry);
     });
   }
 
-  private uncoveredTools(item: ChatMessage): RemoteToolStatusResponse[] {
+  private uncoveredTools(item: ConversationUiMessage): ConversationUiToolStatus[] {
     return this.toolsNotCoveredByItems(item.tools || [], item.items || []);
   }
 
-  private shouldPinThinkingToBottom(item: ChatMessage): boolean {
+  private shouldPinThinkingToBottom(item: ConversationUiMessage): boolean {
     return this.isStreamingAssistant() &&
       !this.hasVisibleAssistantOutput(item) &&
       this.currentThinkingText(item).length > 0;
   }
 
-  private pinnedThinkingText(item: ChatMessage): string {
+  private pinnedThinkingText(item: ConversationUiMessage): string {
     if (!this.shouldPinThinkingToBottom(item)) {
       return '';
     }
     return this.currentThinkingText(item);
   }
 
-  private shouldOmitStructuredThinking(item: ChatMessage): boolean {
+  private shouldOmitStructuredThinking(item: ConversationUiMessage): boolean {
     return this.shouldPinThinkingToBottom(item) ||
       (this.isStreamingAssistant() && this.hasVisibleAssistantOutput(item));
   }
 
-  private hasVisibleAssistantOutput(item: ChatMessage): boolean {
+  private hasVisibleAssistantOutput(item: ConversationUiMessage): boolean {
     if (this.lastTopLevelText(item.items || []).length > 0) {
       return true;
     }
@@ -548,7 +556,7 @@ export struct ChatMessageBubble {
     return visible.length > 0 && visible !== (item.thinking || '').trim();
   }
 
-  private currentThinkingText(item: ChatMessage): string {
+  private currentThinkingText(item: ConversationUiMessage): string {
     const structured = this.lastThinkingText(item.items || []);
     if (structured.length > 0) {
       return structured;
@@ -556,7 +564,7 @@ export struct ChatMessageBubble {
     return (item.thinking || '').trim();
   }
 
-  private lastThinkingText(items: ChatMessageItemResponse[]): string {
+  private lastThinkingText(items: ConversationUiMessageItem[]): string {
     for (let index = items.length - 1; index >= 0; index--) {
       const entry = items[index];
       if (this.isThinkingEntry(entry)) {
@@ -572,7 +580,7 @@ export struct ChatMessageBubble {
     return '';
   }
 
-  private shouldRenderFinalOnly(item: ChatMessage): boolean {
+  private shouldRenderFinalOnly(item: ConversationUiMessage): boolean {
     if (item.role === 'user') {
       return false;
     }
@@ -585,7 +593,7 @@ export struct ChatMessageBubble {
     return this.finalMessageText(item).length > 0;
   }
 
-  private isFinishedAssistant(item: ChatMessage): boolean {
+  private isFinishedAssistant(item: ConversationUiMessage): boolean {
     const status = (item.status || '').toLowerCase();
     return status === 'done' ||
       status === 'completed' ||
@@ -594,7 +602,7 @@ export struct ChatMessageBubble {
       status.length === 0;
   }
 
-  private finalMessageText(item: ChatMessage): string {
+  private finalMessageText(item: ConversationUiMessage): string {
     const structuredText = this.lastTopLevelText(item.items || []);
     if (structuredText.length > 0) {
       return structuredText;
@@ -606,7 +614,7 @@ export struct ChatMessageBubble {
     return '';
   }
 
-  private lastTopLevelText(items: ChatMessageItemResponse[]): string {
+  private lastTopLevelText(items: ConversationUiMessageItem[]): string {
     for (let index = items.length - 1; index >= 0; index--) {
       if (this.isMainTextEntry(items[index])) {
         const text = (items[index].content || '').trim();
@@ -618,12 +626,12 @@ export struct ChatMessageBubble {
     return '';
   }
 
-  private hasVisibleProcessAttention(item: ChatMessage): boolean {
+  private hasVisibleProcessAttention(item: ConversationUiMessage): boolean {
     return this.hasAttentionTools(item.tools || []) || this.hasAttentionItems(item.items || []);
   }
 
-  private hasAttentionItems(items: ChatMessageItemResponse[]): boolean {
-    return items.some((entry: ChatMessageItemResponse) => {
+  private hasAttentionItems(items: ConversationUiMessageItem[]): boolean {
+    return items.some((entry: ConversationUiMessageItem) => {
       if (entry.tool && this.isAttentionTool(entry.tool)) {
         return true;
       }
@@ -631,13 +639,13 @@ export struct ChatMessageBubble {
     });
   }
 
-  private hasAttentionTools(tools: RemoteToolStatusResponse[]): boolean {
-    return tools.some((tool: RemoteToolStatusResponse) => {
+  private hasAttentionTools(tools: ConversationUiToolStatus[]): boolean {
+    return tools.some((tool: ConversationUiToolStatus) => {
       return this.isAttentionTool(tool);
     });
   }
 
-  private isAttentionTool(tool: RemoteToolStatusResponse): boolean {
+  private isAttentionTool(tool: ConversationUiToolStatus): boolean {
     return this.hasToolError(tool) ||
       this.isPendingTool(tool) ||
       this.isRunningTool(tool) ||
@@ -645,14 +653,14 @@ export struct ChatMessageBubble {
   }
 
   private structuredGroups(
-    items: ChatMessageItemResponse[],
+    items: ConversationUiMessageItem[],
     prefix: string,
     activeScope: boolean = this.isStreamingAssistant()
   ): StructuredRenderGroup[] {
     const groups: StructuredRenderGroup[] = [];
-    let toolBuffer: RemoteToolStatusResponse[] = [];
+    let toolBuffer: ConversationUiToolStatus[] = [];
     let toolStart = 0;
-    let activityItems: ChatMessageItemResponse[] = [];
+    let activityItems: ConversationUiMessageItem[] = [];
     let activityStatuses: string[] = [];
     let activityStreaming: boolean[] = [];
     let activityChildScopes: boolean[] = [];
@@ -682,7 +690,7 @@ export struct ChatMessageBubble {
         return;
       }
       if (!activityHasThinking) {
-        activityItems.forEach((entry: ChatMessageItemResponse, offset: number) => {
+        activityItems.forEach((entry: ConversationUiMessageItem, offset: number) => {
           if (entry.tool) {
             if (toolBuffer.length === 0) {
               toolStart = activityStart + offset;
@@ -721,7 +729,7 @@ export struct ChatMessageBubble {
       activityHasThinking = false;
     };
 
-    items.forEach((entry: ChatMessageItemResponse, index: number) => {
+    items.forEach((entry: ConversationUiMessageItem, index: number) => {
       if (this.shouldFoldIntoActivityGroup(entry)) {
         if (activityItems.length === 0) {
           activityStart = index;
@@ -761,7 +769,7 @@ export struct ChatMessageBubble {
     return groups;
   }
 
-  private lastRenderableItemIndex(items: ChatMessageItemResponse[]): number {
+  private lastRenderableItemIndex(items: ConversationUiMessageItem[]): number {
     for (let index = items.length - 1; index >= 0; index--) {
       const entry = items[index];
       if (this.isRenderableStructuredEntry(entry)) {
@@ -771,7 +779,7 @@ export struct ChatMessageBubble {
     return -1;
   }
 
-  private itemStatusForEntry(entry: ChatMessageItemResponse, index: number, activeItemIndex: number): string {
+  private itemStatusForEntry(entry: ConversationUiMessageItem, index: number, activeItemIndex: number): string {
     if (this.isThinkingEntry(entry) && index === activeItemIndex && this.isStreamingAssistant()) {
       return this.item.status || 'active';
     }
@@ -781,7 +789,7 @@ export struct ChatMessageBubble {
     return '';
   }
 
-  private itemShouldStream(entry: ChatMessageItemResponse, index: number, activeItemIndex: number): boolean {
+  private itemShouldStream(entry: ConversationUiMessageItem, index: number, activeItemIndex: number): boolean {
     if (index !== activeItemIndex || !this.isStreamingAssistant()) {
       return false;
     }
@@ -789,12 +797,12 @@ export struct ChatMessageBubble {
       (this.isSubagentEntry(entry) && (!entry.subItems || entry.subItems.length === 0));
   }
 
-  private itemChildActiveScope(entry: ChatMessageItemResponse, index: number, activeItemIndex: number): boolean {
+  private itemChildActiveScope(entry: ConversationUiMessageItem, index: number, activeItemIndex: number): boolean {
     return index === activeItemIndex && this.isStreamingAssistant() &&
       !!entry.subItems && entry.subItems.length > 0;
   }
 
-  private shouldFoldIntoActivityGroup(entry: ChatMessageItemResponse): boolean {
+  private shouldFoldIntoActivityGroup(entry: ConversationUiMessageItem): boolean {
     if (this.isThinkingEntry(entry)) {
       return true;
     }
@@ -804,7 +812,7 @@ export struct ChatMessageBubble {
     return this.shouldFoldToolWithThinking(entry.tool);
   }
 
-  private shouldFoldToolWithThinking(tool: RemoteToolStatusResponse): boolean {
+  private shouldFoldToolWithThinking(tool: ConversationUiToolStatus): boolean {
     if (!this.isCollapsibleActivityTool(tool)) {
       return false;
     }
@@ -814,12 +822,12 @@ export struct ChatMessageBubble {
     return this.isCompletedTool(tool) || this.isCancelledTool(tool);
   }
 
-  private isCollapsibleActivityTool(tool: RemoteToolStatusResponse): boolean {
+  private isCollapsibleActivityTool(tool: ConversationUiToolStatus): boolean {
     const kind = this.activityToolKind(tool);
     return kind === 'read' || kind === 'search';
   }
 
-  private activityToolKind(tool: RemoteToolStatusResponse): string {
+  private activityToolKind(tool: ConversationUiToolStatus): string {
     const raw = tool.name || '';
     const normalized = this.normalizedToolName(tool);
     if (raw === 'Read' || raw === 'LS' ||
@@ -869,14 +877,14 @@ export struct ChatMessageBubble {
     return parts.join(' · ');
   }
 
-  private activityGroupStats(items: ChatMessageItemResponse[]): ActivityGroupStats {
+  private activityGroupStats(items: ConversationUiMessageItem[]): ActivityGroupStats {
     const stats: ActivityGroupStats = {
       thinkingCount: 0,
       readCount: 0,
       searchCount: 0,
       otherCount: 0
     };
-    items.forEach((entry: ChatMessageItemResponse) => {
+    items.forEach((entry: ConversationUiMessageItem) => {
       if (this.isThinkingEntry(entry)) {
         stats.thinkingCount += 1;
         return;
@@ -895,9 +903,9 @@ export struct ChatMessageBubble {
     return stats;
   }
 
-  private activityGroupTools(group: StructuredRenderGroup): RemoteToolStatusResponse[] {
-    const tools: RemoteToolStatusResponse[] = [];
-    group.items.forEach((entry: ChatMessageItemResponse) => {
+  private activityGroupTools(group: StructuredRenderGroup): ConversationUiToolStatus[] {
+    const tools: ConversationUiToolStatus[] = [];
+    group.items.forEach((entry: ConversationUiMessageItem) => {
       if (entry.tool) {
         tools.push(entry.tool);
       }
@@ -906,7 +914,7 @@ export struct ChatMessageBubble {
   }
 
   private isRenderableActivityThinking(
-    entry: ChatMessageItemResponse,
+    entry: ConversationUiMessageItem,
     status: string,
     streaming: boolean
   ): boolean {
@@ -920,21 +928,21 @@ export struct ChatMessageBubble {
     return streaming || normalized === 'active' || normalized === 'running';
   }
 
-  private stableToolHash(tools: RemoteToolStatusResponse[]): string {
+  private stableToolHash(tools: ConversationUiToolStatus[]): string {
     const parts: string[] = [];
-    tools.forEach((tool: RemoteToolStatusResponse) => {
+    tools.forEach((tool: ConversationUiToolStatus) => {
       parts.push(`${tool.id || ''}:${tool.name || ''}:${tool.status || ''}`);
     });
     return this.stableTextHash(parts.join('|'));
   }
 
   private toolsNotCoveredByItems(
-    tools: RemoteToolStatusResponse[],
-    items: ChatMessageItemResponse[]
-  ): RemoteToolStatusResponse[] {
+    tools: ConversationUiToolStatus[],
+    items: ConversationUiMessageItem[]
+  ): ConversationUiToolStatus[] {
     const coveredTools = this.itemToolCoverageGroups(items);
     const matched: boolean[] = coveredTools.map((_keys: string[]) => false);
-    return tools.filter((tool: RemoteToolStatusResponse) => {
+    return tools.filter((tool: ConversationUiToolStatus) => {
       const matchIndex = this.matchCoveredToolIndex(this.toolCoverageKeys(tool), coveredTools, matched);
       if (matchIndex >= 0) {
         matched[matchIndex] = true;
@@ -944,9 +952,9 @@ export struct ChatMessageBubble {
     });
   }
 
-  private itemToolCoverageGroups(items: ChatMessageItemResponse[]): string[][] {
+  private itemToolCoverageGroups(items: ConversationUiMessageItem[]): string[][] {
     const groups: string[][] = [];
-    items.forEach((entry: ChatMessageItemResponse) => {
+    items.forEach((entry: ConversationUiMessageItem) => {
       if (entry.tool) {
         groups.push(this.toolCoverageKeys(entry.tool));
       }
@@ -974,7 +982,7 @@ export struct ChatMessageBubble {
     return -1;
   }
 
-  private toolCoverageKeys(tool: RemoteToolStatusResponse): string[] {
+  private toolCoverageKeys(tool: ConversationUiToolStatus): string[] {
     const keys: string[] = [];
     const toolId = tool.id || '';
     if (toolId.length > 0) {
@@ -987,7 +995,7 @@ export struct ChatMessageBubble {
     return keys;
   }
 
-  private toolFingerprint(tool: RemoteToolStatusResponse, includeStatus: boolean): string {
+  private toolFingerprint(tool: ConversationUiToolStatus, includeStatus: boolean): string {
     const parts: string[] = [
       this.normalizedToolName(tool),
       includeStatus ? (tool.status || '') : '',
@@ -1003,7 +1011,7 @@ export struct ChatMessageBubble {
     return this.stableTextHash(parts.join('|'));
   }
 
-  private hasToolFingerprintData(tool: RemoteToolStatusResponse): boolean {
+  private hasToolFingerprintData(tool: ConversationUiToolStatus): boolean {
     return (tool.input_preview || '').length > 0 ||
       (tool.result_preview || '').length > 0 ||
       (tool.error_preview || '').length > 0 ||
@@ -1024,24 +1032,24 @@ export struct ChatMessageBubble {
     }
   }
 
-  private isRenderableStructuredEntry(entry: ChatMessageItemResponse): boolean {
+  private isRenderableStructuredEntry(entry: ConversationUiMessageItem): boolean {
     if (this.isThinkingEntry(entry) || this.isTextEntry(entry) || this.isSubagentEntry(entry) || !!entry.tool) {
       return true;
     }
-    return !!entry.subItems && entry.subItems.some((child: ChatMessageItemResponse) => {
+    return !!entry.subItems && entry.subItems.some((child: ConversationUiMessageItem) => {
       return this.isRenderableStructuredEntry(child);
     });
   }
 
-  private isThinkingEntry(entry: ChatMessageItemResponse): boolean {
+  private isThinkingEntry(entry: ConversationUiMessageItem): boolean {
     return (entry.type || '').toLowerCase() === 'thinking' && (entry.content || '').trim().length > 0;
   }
 
-  private isTextEntry(entry: ChatMessageItemResponse): boolean {
+  private isTextEntry(entry: ConversationUiMessageItem): boolean {
     return this.isMainTextEntry(entry);
   }
 
-  private isMainTextEntry(entry: ChatMessageItemResponse): boolean {
+  private isMainTextEntry(entry: ConversationUiMessageItem): boolean {
     const type = (entry.type || '').toLowerCase();
     if ((entry.content || '').trim().length === 0) {
       return false;
@@ -1052,15 +1060,22 @@ export struct ChatMessageBubble {
     return type === 'text' || type === 'message' || type.length === 0;
   }
 
-  private isSubagentEntry(entry: ChatMessageItemResponse): boolean {
+  private isSubagentEntry(entry: ConversationUiMessageItem): boolean {
     const type = (entry.type || '').toLowerCase();
-    return entry.is_subagent === true || type === 'subagent' || type === 'agent';
+    return entry.is_subagent === true || type === 'subagent' || type === 'agent' ||
+      (!!entry.tool && this.normalizedToolName(entry.tool) === 'task');
   }
 
-  private subagentTitle(entry: ChatMessageItemResponse): string {
+  private subagentTitle(entry: ConversationUiMessageItem): string {
     const content = (entry.content || '').trim();
     if (content.length > 0 && content.length <= 80) {
       return content;
+    }
+    if (entry.tool && this.normalizedToolName(entry.tool) === 'task') {
+      const title = this.subagentTaskTitle(entry.tool);
+      if (title.length > 0) {
+        return title;
+      }
     }
     if (entry.tool && entry.tool.name) {
       return entry.tool.name;
@@ -1068,7 +1083,29 @@ export struct ChatMessageBubble {
     return 'Subagent';
   }
 
-  private structuredItemKey(entry: ChatMessageItemResponse, path: string): string {
+  private subagentTaskTitle(tool: ConversationUiToolStatus): string {
+    const raw = tool.input_preview || '';
+    if (raw.length > 0) {
+      try {
+        const input = JSON.parse(raw) as SubagentTaskInput;
+        const title = input.description || input.title || '';
+        if (title.trim().length > 0) {
+          return title.trim();
+        }
+      } catch (_err) {
+      }
+    }
+    return '';
+  }
+
+  private hasRunningSubagentTask(item: ConversationUiMessage): boolean {
+    return (item.items || []).some((entry: ConversationUiMessageItem) => {
+      return !!entry.tool && this.normalizedToolName(entry.tool) === 'task' &&
+        this.isRunningTool(entry.tool);
+    });
+  }
+
+  private structuredItemKey(entry: ConversationUiMessageItem, path: string): string {
     if (entry.tool && entry.tool.id) {
       return `${path}-tool-${entry.tool.id}`;
     }
@@ -1085,9 +1122,9 @@ export struct ChatMessageBubble {
     return Math.abs(hash).toString(36);
   }
 
-  private activityGroupKey(items: ChatMessageItemResponse[], path: string): string {
+  private activityGroupKey(items: ConversationUiMessageItem[], path: string): string {
     const parts: string[] = [];
-    items.forEach((entry: ChatMessageItemResponse, index: number) => {
+    items.forEach((entry: ConversationUiMessageItem, index: number) => {
       const content = entry.content || '';
       const tool = entry.tool;
       parts.push([
@@ -1100,38 +1137,38 @@ export struct ChatMessageBubble {
     return `${path}-${items.length}-${this.stableTextHash(parts.join('|'))}`;
   }
 
-  private normalizedToolName(tool: RemoteToolStatusResponse): string {
+  private normalizedToolName(tool: ConversationUiToolStatus): string {
     return (tool.name || 'Tool').replace(/[\s-]/g, '_').toLowerCase();
   }
 
-  private isCompletedTool(tool: RemoteToolStatusResponse): boolean {
+  private isCompletedTool(tool: ConversationUiToolStatus): boolean {
     const normalized = (tool.status || '').toLowerCase();
     return normalized === 'completed' || normalized === 'done' || normalized === 'success';
   }
 
-  private isCancelledTool(tool: RemoteToolStatusResponse): boolean {
+  private isCancelledTool(tool: ConversationUiToolStatus): boolean {
     const normalized = (tool.status || '').toLowerCase();
     return normalized === 'cancelled' || normalized === 'canceled';
   }
 
-  private isRunningTool(tool: RemoteToolStatusResponse): boolean {
+  private isRunningTool(tool: ConversationUiToolStatus): boolean {
     const normalized = (tool.status || '').toLowerCase();
     return normalized === 'running' || normalized === 'active';
   }
 
-  private isPendingTool(tool: RemoteToolStatusResponse): boolean {
+  private isPendingTool(tool: ConversationUiToolStatus): boolean {
     const normalized = (tool.status || '').toLowerCase();
     return normalized === 'pending' || normalized === 'queued' ||
       normalized === 'pending_confirmation' || normalized === 'needs_confirmation';
   }
 
-  private hasToolError(tool: RemoteToolStatusResponse): boolean {
+  private hasToolError(tool: ConversationUiToolStatus): boolean {
     const normalized = (tool.status || '').toLowerCase();
     return normalized === 'failed' || normalized === 'error' || normalized === 'timeout' ||
       (tool.error_preview || '').length > 0;
   }
 
-  private isQuestionTool(tool: RemoteToolStatusResponse): boolean {
+  private isQuestionTool(tool: ConversationUiToolStatus): boolean {
     const normalized = this.normalizedToolName(tool);
     return (tool.name || '') === 'AskUserQuestion' || normalized === 'askuserquestion' ||
       normalized === 'ask_user_question';

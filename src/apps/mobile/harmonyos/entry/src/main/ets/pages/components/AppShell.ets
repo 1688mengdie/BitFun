@@ -15,7 +15,7 @@ export struct AppShell {
       Column() {
         this.sidebar()
       }
-      .width('76%')
+      .width(this.sidebarWidth())
       .height('100%')
       .alignItems(HorizontalAlign.Start)
       .opacity(this.shellState.showSidebar ? 1 : 0)
@@ -69,11 +69,23 @@ export struct AppShell {
         centerX: '0%',
         centerY: '50%'
       })
-      .translate({ x: this.shellState.showSidebar ? this.shellWidth * 0.765 : 0 })
+      .translate({ x: this.shellState.showSidebar ? this.sidebarWidth() : 0 })
       .animation({
         duration: this.shellState.showSidebar ? 320 : 250,
         curve: Curve.EaseOut
       })
+
+      if (this.shellState.showAccount) {
+        Column() {
+          this.settings()
+        }
+        .width('100%')
+        .height('100%')
+        .backgroundColor('#FFFFFF')
+        .zIndex(20)
+        .transition(TransitionEffect.opacity(0)
+          .animation({ duration: 180, curve: Curve.EaseOut }))
+      }
     }
     .width('100%')
     .height('100%')
@@ -87,6 +99,16 @@ export struct AppShell {
       showClose: false,
       dragBar: false
     })
+  }
+
+  private sidebarWidth(): number {
+    if (this.shellWidth <= 0) {
+      return 280;
+    }
+    if (this.shellWidth < 720) {
+      return Math.min(280, Math.max(220, Math.round(this.shellWidth * 0.68)));
+    }
+    return Math.min(420, Math.max(280, Math.round(this.shellWidth * 0.35)));
   }
 
   @Builder

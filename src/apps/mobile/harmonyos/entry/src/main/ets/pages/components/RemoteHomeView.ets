@@ -4,6 +4,7 @@ import { RemoteActionsSheet } from './RemoteActionsSheet';
 import { RemoteBottomBar } from './RemoteBottomBar';
 import { RemoteHeader } from './RemoteHeader';
 import { RemoteSessionList } from './RemoteSessionList';
+import { RemoteSessionLoadingView } from './RemoteSessionLoadingView';
 import { RemotePageState } from '../state/RemotePageState';
 import { ACCENT, CARD, INK, MUTED, PAGE_BG } from './Theme';
 
@@ -11,6 +12,7 @@ import { ACCENT, CARD, INK, MUTED, PAGE_BG } from './Theme';
 export struct RemoteHomeView {
   @Param pageState: RemotePageState = new RemotePageState();
   @Param isBusy: boolean = false;
+  @Param selectedSessionId: string = '';
   @Event onOpenSidebar: () => void = () => {};
   @Event onConnectWorkspace: () => void = () => {};
   @Event onAddConnection: () => void = () => {};
@@ -30,18 +32,11 @@ export struct RemoteHomeView {
   @Event onClearPairing: () => void = () => {};
   @Event onCreate: (agentType: string) => void = (_agentType: string) => {};
   @Event onCreateAssistantSession: () => void = () => {};
-  @Event onCreateInWorkspace: (path: string) => void = (_path: string) => {};
+  @Event onCreateInWorkspace: (path: string, agentType: string) => void = (_path: string, _agentType: string) => {};
   @Event onOpenSession: (session: RemoteSession) => void = (_session: RemoteSession) => {};
   @Event onDeleteSession: (session: RemoteSession) => void = (_session: RemoteSession) => {};
   @Local showRemoteActions: boolean = false;
-  @Local shimmerOffset: number = -72;
   @Local sortMode: string = 'project';
-
-  aboutToAppear(): void {
-    setTimeout(() => {
-      this.shimmerOffset = 380;
-    }, 60);
-  }
 
   build() {
     Stack() {
@@ -49,6 +44,7 @@ export struct RemoteHomeView {
         RemoteHeader({
           desktopName: this.pageState.desktopName,
           connectionState: this.pageState.connectionState,
+          isLoading: this.pageState.isLoadingHome,
           onOpenSidebar: () => {
             this.onOpenSidebar();
           },
@@ -56,13 +52,29 @@ export struct RemoteHomeView {
             this.openRemoteActions();
           }
         })
-        if (this.canUseRemote()) {
-            RemoteSessionList({
+        if (this.isInitialLoading()) {
+          RemoteSessionLoadingView()
+          RemoteBottomBar({
+            query: this.pageState.sessionQuery,
+            isBusy: true,
+            onQueryChange: (value: string) => {
+              this.onSessionQueryChange(value);
+            },
+            onSearch: () => {
+              this.onSearchSessions();
+            },
+            onCreate: () => {
+              this.onCreateAssistantSession();
+            }
+          })
+        } else if (this.canUseRemote()) {
+          RemoteSessionList({
             sessions: this.pageState.visibleSessions(),
             query: this.pageState.sessionQuery,
             sortMode: this.sortMode,
             workspaceName: this.pageState.workspaceName,
             workspacePath: this.pageState.workspacePath,
+            workspaceKind: this.pageState.workspaceKind,
             recentWorkspaces: this.pageState.recentWorkspaces,
             hasMoreSessions: this.pageState.hasMoreSessions,
             isBusy: this.isBusy || this.pageState.isLoadingSessions,
@@ -72,8 +84,8 @@ export struct RemoteHomeView {
             onCreateAssistantSession: () => {
               this.onCreateAssistantSession();
             },
-            onCreateInWorkspace: (path: string) => {
-              this.onCreateInWorkspace(path);
+            onCreateInWorkspace: (path: string, agentType: string) => {
+              this.onCreateInWorkspace(path, agentType);
             },
             onSelectWorkspace: (path: string) => {
               this.onSelectWorkspace(path);
@@ -84,11 +96,12 @@ export struct RemoteHomeView {
             onDeleteSession: (session: RemoteSession) => {
               this.onDeleteSession(session);
             },
+            selectedSessionId: this.selectedSessionId,
             onLoadMore: () => {
               this.onLoadMoreSessions();
             }
-            })
-            RemoteBottomBar({
+          })
+          RemoteBottomBar({
             query: this.pageState.sessionQuery,
             isBusy: this.isBusy,
             onQueryChange: (value: string) => {
@@ -100,9 +113,7 @@ export struct RemoteHomeView {
             onCreate: () => {
               this.onCreateAssistantSession();
             }
-            })
-        } else if (this.isConnecting()) {
-          this.ConnectingState()
+          })
         } else {
           this.DisconnectedState()
         }
@@ -234,59 +245,6 @@ export struct RemoteHomeView {
   }
 
   @Builder
-  ConnectingState() {
-    Column() {
-      Column({ space: 26 }) {
-        this.SkeletonLine(110, 0)
-        this.SkeletonLine(220, 110)
-        this.SkeletonLine(330, 220)
-        this.SkeletonLine(130, 330)
-        this.SkeletonLine(240, 440)
-        this.SkeletonLine(340, 550)
-        this.SkeletonLine(150, 660)
-        this.SkeletonLine(260, 770)
-        this.SkeletonLine(100, 880)
-        this.SkeletonLine(220, 990)
-      }
-      .width('100%')
-      .padding({ top: 24, left: 12, right: 12 })
-      .layoutWeight(1)
-
-      RemoteBottomBar({
-        query: '',
-        isBusy: true,
-        onQueryChange: (_value: string) => {},
-        onSearch: () => {},
-        onCreate: () => {}
-      })
-    }
-    .width('100%')
-    .layoutWeight(1)
-  }
-
-  @Builder
-  SkeletonLine(width: number, delay: number) {
-    Stack({ alignContent: Alignment.Start }) {
-      Text('')
-        .width('100%')
-        .height('100%')
-        .backgroundColor('#EFEFEF')
-      Text('')
-        .width(46)
-        .height('100%')
-        .borderRadius(10)
-        .backgroundColor('#7AFFFFFF')
-        .translate({ x: this.shimmerOffset })
-        .animation({ duration: 1550, delay, curve: Curve.Linear, iterations: -1 })
-    }
-    .width(width)
-    .height(20)
-    .borderRadius(10)
-    .clip(true)
-    .alignSelf(ItemAlign.Start)
-  }
-
-  @Builder
   LargeDesktopGlyph() {
     Stack() {
       Text('')
@@ -336,6 +294,10 @@ export struct RemoteHomeView {
     return this.pageState.connectionState === 'parsing' ||
       this.pageState.connectionState === 'pairing' ||
       this.pageState.connectionState === 'reconnecting';
+  }
+
+  private isInitialLoading(): boolean {
+    return this.pageState.isLoadingHome || this.isConnecting();
   }
 
 }
