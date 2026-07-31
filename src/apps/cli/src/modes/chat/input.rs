@@ -1,5 +1,5 @@
-fn shared_session_change_is_blocked(is_shared: bool, mode_change_pending: bool) -> bool {
-    is_shared && mode_change_pending
+fn shared_session_change_is_blocked(is_shared: bool, session_update_pending: bool) -> bool {
+    is_shared && session_update_pending
 }
 
 impl ChatMode {
@@ -127,7 +127,7 @@ impl ChatMode {
                         self.apply_model_selection(&selected, chat_view, chat_state, rt_handle);
                     }
                 }
-                KeyCode::Char('e') => {
+                KeyCode::Char('e') if chat_view.model_selector_allows_edit() => {
                     if let Some(selected) = chat_view.model_selector_confirm() {
                         chat_view.hide_model_selector();
                         self.edit_model(&selected, chat_view, rt_handle);
@@ -352,6 +352,7 @@ impl ChatMode {
         match (key.code, key.modifiers) {
             (KeyCode::Backspace, _) => {
                 chat_view.handle_backspace();
+                self.sync_selected_native_command(chat_view);
             }
 
             (KeyCode::Left, _) => {
@@ -380,6 +381,7 @@ impl ChatMode {
                 if !c.is_control() && c != '\u{0}' =>
             {
                 chat_view.handle_char(c);
+                self.sync_selected_native_command(chat_view);
             }
 
             _ => {}
@@ -404,16 +406,17 @@ impl ChatMode {
             ChatExitReason::SwitchSession(_) | ChatExitReason::NewSession
         ) && shared_session_change_is_blocked(
             this.agent.is_shared(),
-            this.pending_mode_change.is_some(),
+            this.pending_session_operation.is_some(),
         ) {
             chat_view.set_status(Some(
-                "Wait for the agent mode change to finish before changing sessions.".to_string(),
+                "Wait for the pending Session operation to finish before changing sessions."
+                    .to_string(),
             ));
             return;
         }
         match reason {
             ChatExitReason::SwitchSession(new_session_id) => {
-                if let Some(pending) = this.pending_mode_change.as_mut() {
+                if let Some(pending) = this.pending_session_operation.as_mut() {
                     pending.exit_warning_shown = false;
                 }
                 match this.switch_to_session(
@@ -431,7 +434,7 @@ impl ChatMode {
                 }
             }
             ChatExitReason::NewSession => {
-                if let Some(pending) = this.pending_mode_change.as_mut() {
+                if let Some(pending) = this.pending_session_operation.as_mut() {
                     pending.exit_warning_shown = false;
                 }
                 match this.create_new_session(session_id, chat_state, chat_view, rt_handle) {
@@ -444,11 +447,11 @@ impl ChatMode {
                 }
             }
             ChatExitReason::Quit => {
-                if let Some(pending) = this.pending_mode_change.as_mut() {
+                if let Some(pending) = this.pending_session_operation.as_mut() {
                     if !pending.exit_warning_shown {
                         pending.exit_warning_shown = true;
                         chat_view.set_status(Some(
-                            "Exit requested. Waiting for the agent mode change to finish; exit again to leave now. This mode change may not be saved, and the next restore will use the last successfully persisted mode."
+                            "Exit requested. Waiting for the pending Session operation to finish; exit again to leave now. Its outcome may be unknown until the Session list is inspected again."
                                 .to_string(),
                         ));
                         return;
@@ -622,6 +625,7 @@ impl ChatMode {
                     && !context.this.any_popup_visible(context.chat_view)
                 {
                     context.chat_view.insert_paste(&text);
+                    context.this.sync_selected_native_command(context.chat_view);
                 }
                 outcome.request_redraw = true;
             }

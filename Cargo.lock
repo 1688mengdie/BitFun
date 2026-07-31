@@ -931,6 +931,7 @@ dependencies = [
  "dirs 6.0.0",
  "dunce",
  "flate2",
+ "fs2",
  "futures-util",
  "hex",
  "libc",
@@ -1294,6 +1295,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tokio",
+ "url",
  "which 8.0.5",
 ]
 
@@ -1447,6 +1449,7 @@ dependencies = [
  "fs2",
  "futures",
  "git2",
+ "globset",
  "ignore",
  "libc",
  "log",
@@ -1547,6 +1550,7 @@ name = "bitfun-static-hook-support"
 version = "0.2.14"
 dependencies = [
  "bitfun-product-domains",
+ "bitfun-services-core",
  "hex",
  "serde_json",
  "sha2",

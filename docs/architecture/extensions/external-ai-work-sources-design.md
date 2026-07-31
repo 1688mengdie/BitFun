@@ -23,16 +23,16 @@ MCP 安全子集，以及 Codex Subagent、MCP 安全子集；三种生态使用
 Codex/Claude Code 运行时适配、primary agent 替换和外部 Subagent 续接仍属于后续阶段，不能因来源被识别就宣称已经可用。OpenCode、Claude Code 与 Codex 的本地 Hook 脱敏目录
 已作为独立只读切片接入；在此之上，Claude Code 与 Codex 的同步 command 子集可经精确命令审阅复制为 BitFun 管理的
 原生 Hook 层，仍由唯一 `AgentHookEngine` 执行。OpenCode handler、非 command/异步 handler 和未审阅声明仍不可执行。
-独立的 MCP C0a 快照导入复用上述来源与现有 MCP 配置 owner：Desktop 和根 CLI 可预览 OpenCode / Claude Code
-中语义等价的安全声明，并在用户显式确认后原子写入 disabled 原生条目。Codex 导入投影、凭据/header/env/cwd
-迁移、通用导入记录、undo、Peer/Remote 写入均未实现；这不改变外部 MCP 持续兼容来源的运行路径。
+独立的 MCP C0a 快照导入复用上述来源与现有 MCP 配置 owner：Desktop 和根 CLI 可预览 OpenCode、Claude Code
+与 Codex 中语义等价的安全声明，并在用户显式确认后原子写入 disabled 原生条目。凭据/header/env/cwd 迁移、
+通用导入记录、undo、Peer/Remote 写入均未实现；这不改变外部 MCP 持续兼容来源的运行路径。
 
 ## 0. 当前 MCP 快照导入契约（C0a）
 
 快照导入是显式复制，不是持续同步，也不改变现有外部 MCP 兼容来源。Desktop 与根 CLI 只负责展示脱敏预览并发送
-typed intent；OpenCode / Claude Code sibling adapter 复用各自已合并的解析结果生成私有安全投影，外部来源协调器固定
-当前 candidate 与行为版本，core 负责重新规划，最终仍由唯一 MCP 配置 service 校验并写入 `mcp_servers`。
-Codex 继续参与现有只读发现，但当前没有导入投影。
+typed intent；OpenCode、Claude Code 与 Codex sibling adapter 复用各自已合并的解析结果生成私有安全投影，外部来源
+协调器固定当前 candidate 与行为版本，core 负责重新规划，最终仍由唯一 MCP 配置 service 校验并写入
+`mcp_servers`。Codex 的投影与其运行准备共用同一当前 candidate/version fencing，不建立第二套解析或缓存。
 
 公开的 versioned plan/apply DTO 只包含 schema version、plan fingerprint、candidate ID、display name、transport、建议
 native ID、disposition 和稳定 reason code，不包含 command arguments、URL、原始 JSON、凭据、environment/header 值或
@@ -42,10 +42,15 @@ native ID、disposition 和稳定 reason code，不包含 command arguments、UR
 当前只复制能够与原生配置保持等价语义的声明：
 
 - 无显式 environment/cwd 的 local stdio command 与 adapter 已解析 arguments；
-- 无 userinfo、query、fragment、header 或 provider OAuth 变化的 HTTPS streamable HTTP URL。
+- 无 userinfo、query、fragment、header、bearer token 或 provider OAuth 变化的 HTTPS streamable HTTP URL。
 
 environment 值或引用、header/authorization、cwd、未知字段和其他 transport 不猜测、不复制、不记录。导入条目始终为
 `enabled: false` 与 `autoStart: false`；local 条目不继承完整父进程环境，只保留 MCP runtime owner 提供的安全环境。
+Codex 的 legacy `name` 是上游忽略的展示字段，不进入导入结果或行为版本；`startup_timeout_sec`、`tool_timeout_sec`、
+`enabled_tools`、`disabled_tools`、approval、environment/scopes/OAuth 与并行调用等运行敏感字段仍按不支持处理，不能因
+静态发现成功而丢弃语义后导入。
+Codex 未显式声明 cwd 时，其兼容运行投影仍会把当前 workspace 作为 effective cwd；现有原生快照格式不会保留这项隐式
+语义，因此 workspace 场景的 local 声明返回“需要设置”，不能以“没有 cwd 字段”为由导入后继承 BitFun 进程目录。
 
 native ID 优先使用外部 logical name，再使用稳定生态后缀和最小可用数字后缀；超长名称使用 bounded digest，已有条目
 永不覆盖。plan fingerprint 同时绑定脱敏 plan、私有投影和当前原生 MCP 配置摘要。apply 会重新发现并重建 plan；来源或
@@ -58,6 +63,11 @@ native ID 优先使用外部 logical name，再使用稳定生态后缀和最小
 `--native-id` 指定目标 ID，`--format json` 输出 versioned plan/result。当前没有 TUI/Mobile/Server/Peer/Remote/ACP/SDK
 写入口、导入 journal、tombstone、undo、外部应用回写或插件安装/激活策略；导入后仍由既有 MCP manager 完成复核、编辑、
 启用和删除。
+
+Desktop 的导入卡默认选中当前 plan 中全部 eligible 项，用户可在原卡片内取消个别条目；每项同时显示来源生态和
+用户/项目使用范围，不增加新的向导或主选择器。apply 只发送当前选中 candidate。若并发来源或目标配置变化导致 plan
+stale，界面替换为服务端返回的新 plan，并只保留“旧选择与新 eligible candidate 的交集”；新出现的 candidate 不自动
+勾选，避免一次旧确认扩大到用户未见过的内容。取消、完成或切换作用域会清空这份易失选择。
 
 ## 1. 产品判断与竞品启示
 
@@ -264,11 +274,11 @@ OpenCode Subagent 属于 L2：adapter 只读取声明，不执行外部代码；
 
 | 能力 | OpenCode | Claude Code | Codex | 当前边界 |
 |---|---|---|---|---|
-| Prompt Command | JSON/JSONC、Markdown 的 prompt-only 安全子集 | legacy `commands/**/*.md` 的 prompt-only 安全子集；Skills 仍由 Skill 归属模块处理 | 没有稳定、独立于 Skills 的声明式 Command 来源，因此不伪造 provider | `$ARGUMENTS`/位置参数可展开；shell、文件动态引用、指定 Agent/模型等未接通语义整体受限，不做部分执行。 |
+| Prompt Command | JSON/JSONC、Markdown 的 prompt-only 与静态本地文本文件子集 | legacy `commands/**/*.md` 的同一静态本地文本文件子集；Skills 仍由 Skill 归属模块处理 | 没有稳定、独立于 Skills 的声明式 Command 来源，因此不伪造 provider | `$ARGUMENTS`/位置参数及模板内 workspace 相对 UTF-8 `@file` 可展开；shell、动态/绝对/越界文件、指定 Agent/模型等整体受限。 |
 | Subagent | 用户/项目声明的安全子集 | 用户/项目 `agents/**/*.md` 的安全子集 | 用户/项目 `[agents]`、角色文件与安全配置层子集 | prompt、描述、精确模型和可表达工具请求进入既有归属模块；权限、私有 MCP/Hook、推理/并发等没有对应实现的字段会阻止激活。 |
 | MCP | 用户/显式目录/项目配置的安全子集 | user/project/local 原生层的安全子集 | 用户与项目 `config.toml` 原生层的安全子集 | 支持可表达的 stdio 与 HTTPS Streamable HTTP；发现不启动 Server，首次激活继续经 BitFun MCP 审批。OAuth、remote executor、per-tool policy 等不完整语义明确降级。 |
 | Standalone Tool | 已有单文件 JavaScript 子集 | 无稳定的 runtime-free standalone Tool 来源 | 无稳定的 runtime-free standalone Tool 来源 | TypeScript、package/plugin Tool 与动态工具注册依赖独立 Plugin Host，不在声明式 adapter 中猜测。 |
-| Skill | 由现有 Skill 加载模块发现 `.opencode` 等标准根 | 由现有 Skill 加载模块发现 `.claude` 标准根 | 由现有 Skill 加载模块发现 `.codex`、`.agents` 标准根 | Skill 的加载、覆盖、模式开关与执行仍由同一个 Skill 模块负责，不复制进外部来源管理模块。 |
+| Skill | 由现有 Skill 加载模块发现 `.opencode` 标准根及 OpenCode 本地配置根 | 由现有 Skill 加载模块发现 `.claude` 标准根；目录名是调用身份，描述可回退正文首段，`when_to_use` 合入索引，声明参数可做纯文本命名展开 | 由现有 Skill 加载模块发现 `.codex`、`.agents` 标准根；`.codex` 缺少 `name` 时回退目录名 | OpenCode V1 `skills.paths`/当前本地字符串数组只经 `bitfun-core/external_sources` 组合边界投影根目录，递归、加载、覆盖、模式开关与执行仍由同一个 Skill 模块负责；URL 不加载。 |
 | Hook | 静态目录 | 脱敏目录；同步 command 子集可审阅导入 | 脱敏目录；同步 command 子集可审阅导入 | 仅复制到私有原生快照并由 `AgentHookEngine` 执行；OpenCode、非 command、异步、未知或依赖未观察激活语义的 handler 不导入。 |
 
 生态原生语义由各 adapter 以契约测试固定，不抽象成全局优先级：
@@ -276,7 +286,16 @@ OpenCode Subagent 属于 L2：adapter 只读取声明，不执行外部代码；
 - Claude legacy Command 扫描用户与项目 `.claude/commands/**/*.md`，保留 `frontend/component` 到
   `/frontend:component` 的原生命名空间；同层重名无效，遵循 Claude Code 当前“personal 覆盖 project”的 Skill/legacy Command
   规则，同名 Skill 仅通过有界名称索引遮蔽 Command。
-  只展开 `$ARGUMENTS`、`$ARGUMENTS[N]` 和 `$N` 纯文本参数；shell、文件引用和改变 Agent、模型、工具或 Hook 的字段整体阻止激活。
+  展开 `$ARGUMENTS`、`$ARGUMENTS[N]` 和 `$N` 纯文本参数，并允许原模板中的静态 workspace 相对 `@file`；shell、动态/绝对/越界文件引用和改变 Agent、模型、工具或 Hook 的字段整体阻止激活。
+- Skill Registry 继续拥有所有根的发现、覆盖、显式加载与刷新，只用既有稳定 source slot 在内部选择格式方言，不向用户
+  暴露主选择器，也不按路径字符串临时猜测。`.claude` Skill 的调用名固定为目录名；`description` 缺失时取正文首个
+  非空段落，并与可选 `when_to_use` 合并为最多 1536 个 Unicode 字符的模型索引说明。`arguments` 可为以空白分隔的名称
+  字符串或字符串列表；名称按参数顺序绑定并由现有纯文本参数展开器处理，缺失命名参数展开为空，既有缺失位置参数仍保留
+  占位符。`.codex` Skill 只增加上游已有的目录名 fallback，`description` 仍必填；`.agents`、`.opencode`、`.bitfun` 和
+  `.cursor` 的严格格式不变。本地与 Remote 发现及实际加载必须使用同一方言映射，避免目录显示可用而执行时重新解析失败。
+- Claude `allowed-tools` 不能授予 BitFun 工具预批准，因此安全降级为无额外权限；`context`/`fork`、`agent`、`model`、
+  `effort`、`hooks`、`paths`、`shell`、`runtime` 等会改变执行行为而当前没有等价 owner 的字段阻止加载。Claude runtime 变量与动态
+  shell 注入也不执行。此切片不增加插件 Skill、祖先活动目录、文件 watcher、URL 来源或另一条 reload 命令。
 - Claude Subagent 扫描用户与逐层项目 `.claude/agents/**/*.md`，近工作目录定义整项覆盖；Claude MCP 保留
   `local > project > user` 的整项覆盖，local 只读取与规范化当前工作区严格匹配的项目项。
 - Codex Subagent 从用户与逐层项目 `[agents]`、角色文件合并，缺失字段按 Codex 层级继承；`enabled`、默认模型等已支持
@@ -461,8 +480,8 @@ Command；明确缺失且未被标记失败的 Command 是稳定删除。产品�
 2. 发现 OpenCode 当前支持的用户全局和项目 Command 来源，建立来源限定身份、生态内覆盖关系和聚合清单；
    OpenCode 自身定义的项目/用户优先级仍由 adapter 解释，跨 provider 或与 BitFun 本地 Command 的同名冲突进入待选择状态。
 3. 支持 `$ARGUMENTS` 与位置参数的 prompt-only 命令在用户显式选择或输入时展开并提交；发现本身不向会话发送内容。
-4. 含 `!shell`、`@file`、`{env:...}`、`{file:...}`、`agent`、`model`、`variant` 或 `subtask` 等未接通语义的命令标记为“部分受限”，不做
-   静默忽略后的部分执行。
+4. 模板内静态 workspace 相对 `@file` 经有界 UTF-8 读取后原子装配；含 `!shell`、动态/绝对/越界文件引用、`{env:...}`、
+   `{file:...}`、`agent`、`model`、`variant` 或 `subtask` 等未接通语义的命令标记为“部分受限”，不做静默忽略后的部分执行。
 5. Desktop 提供统一来源状态、刷新、按执行域抑制/恢复和冲突候选选择；首次 provider 扫描完成前显示中性检查状态，
    不把暂时空目录误报为最终空结果；已经选择且内容摘要未变化的冲突退出待处理区。交互式 TUI（ChatMode）使用同一目录列出和执行
    Command；跨 provider 候选由现有命令菜单按来源、使用范围和兼容状态展示，并通过内部稳定 candidate ID 选择，同次选择也解析本地同名冲突。发现或确认不阻塞

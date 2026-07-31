@@ -3,15 +3,18 @@ import { open } from '@tauri-apps/plugin-dialog';
 import {
   AlertTriangle,
   Camera,
+  ChevronDown,
+  ChevronRight,
   FileImage,
   Github,
+  History,
   Loader2,
   PackageOpen,
   RefreshCw,
   Send,
   X,
 } from 'lucide-react';
-import { Badge, Button, Input } from '@/component-library';
+import { Badge, Button, Input, Select } from '@/component-library';
 import { GalleryEmpty, GalleryLayout, GalleryPageHeader } from '@/app/components';
 import { useI18n } from '@/infrastructure/i18n';
 import { systemAPI } from '@/infrastructure/api/service-api/SystemAPI';
@@ -30,6 +33,7 @@ import { useNotification } from '@/shared/notification-system';
 import { createLogger } from '@/shared/utils/logger';
 import { useSceneManager } from '@/app/hooks/useSceneManager';
 import type { SceneTabId } from '@/app/components/SceneBar/types';
+import { renderMiniAppIcon } from '../utils/miniAppIcons';
 import './MiniAppSubmissionsView.scss';
 
 const log = createLogger('MiniAppSubmissionsView');
@@ -71,6 +75,7 @@ const MiniAppSubmissionsView: React.FC = () => {
   const [selectedAppId, setSelectedAppId] = useState('');
   const [draft, setDraft] = useState<MarketSubmissionDraftRequest>(emptyDraft);
   const [screenshotPaths, setScreenshotPaths] = useState<string[]>([]);
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [progress, setProgress] = useState<MarketUploadProgress>();
@@ -203,6 +208,13 @@ const MiniAppSubmissionsView: React.FC = () => {
     setBusy(true);
     setProgress({ phase: 'validating', completed: 0, total: 1 });
     try {
+      // The marketplace rejects submissions declaring both license forms, so
+      // an SPDX expression wins over a custom URL when both are filled in.
+      const spdxExpression = draft.license.spdxExpression?.trim() || undefined;
+      const customUrl = draft.license.customUrl?.trim() || undefined;
+      const changelogFallback = draft.releaseNumber > 1
+        ? t('market.submissions.changelogFallbackUpdate')
+        : t('market.submissions.changelogFallbackFirst');
       const created = await miniAppMarketAPI.submitInstalled(
         selectedApp.id,
         {
@@ -210,13 +222,10 @@ const MiniAppSubmissionsView: React.FC = () => {
           slug: draft.slug.trim().toLowerCase(),
           name: draft.name.trim(),
           description: draft.description.trim(),
-          changelog: draft.changelog.trim(),
+          changelog: draft.changelog.trim() || changelogFallback,
           tags: draft.tags.map((tag) => tag.trim()).filter(Boolean),
           repositoryUrl: draft.repositoryUrl?.trim() || undefined,
-          license: {
-            spdxExpression: draft.license.spdxExpression?.trim() || undefined,
-            customUrl: draft.license.customUrl?.trim() || undefined,
-          },
+          license: spdxExpression ? { spdxExpression } : { customUrl },
         },
         screenshotPaths,
       );
@@ -302,51 +311,24 @@ const MiniAppSubmissionsView: React.FC = () => {
 
       <div className="miniapp-submissions__workspace">
         <form className="miniapp-submissions__form" onSubmit={(event) => void submit(event)}>
-          <div className="miniapp-submissions__section-heading">
-            <PackageOpen size={18} />
-            <div>
-              <h3>{t('market.submissions.newTitle')}</h3>
-              <p>{t('market.submissions.newHint')}</p>
-            </div>
-          </div>
+          <header className="miniapp-submissions__section-heading">
+            <h3>
+              <PackageOpen size={14} />
+              {t('market.submissions.newTitle')}
+            </h3>
+            <p>{t('market.submissions.newHint')}</p>
+          </header>
 
-          <label className="miniapp-submissions__field">
-            <span>{t('market.submissions.app')}</span>
-            <select
-              value={selectedAppId}
-              onChange={(event) => {
-                const app = apps.find((item) => item.id === event.target.value);
-                if (app) selectApp(app);
-              }}
-              disabled={busy || localActionsDisabled}
-            >
-              {apps.map((app) => <option key={app.id} value={app.id}>{app.name}</option>)}
-            </select>
-          </label>
-
-          <div className="miniapp-submissions__form-grid">
-            <Input
-              label={t('market.submissions.slug')}
-              value={draft.slug}
-              pattern="[a-z0-9][a-z0-9-]{2,62}"
-              required
-              disabled={busy}
-              onChange={(event) => setDraft({ ...draft, slug: event.target.value })}
-              hint={t('market.submissions.slugHint')}
-            />
-            <Input
-              label={t('market.submissions.release')}
-              type="number"
-              min={1}
-              max={4294967295}
-              value={draft.releaseNumber}
-              required
-              disabled={busy}
-              onChange={(event) =>
-                setDraft({ ...draft, releaseNumber: Number(event.target.value) })
-              }
-            />
-          </div>
+          <Select
+            label={t('market.submissions.app')}
+            value={selectedAppId}
+            onChange={(value) => {
+              const app = apps.find((item) => item.id === value);
+              if (app) selectApp(app);
+            }}
+            disabled={busy || localActionsDisabled}
+            options={apps.map((app) => ({ value: app.id, label: app.name }))}
+          />
 
           <Input
             label={t('market.submissions.name')}
@@ -368,110 +350,33 @@ const MiniAppSubmissionsView: React.FC = () => {
             />
           </label>
 
-          <div className="miniapp-submissions__form-grid">
-            <label className="miniapp-submissions__field">
-              <span>{t('market.submissions.category')}</span>
-              <select
-                value={draft.category}
-                disabled={busy}
-                onChange={(event) => setDraft({ ...draft, category: event.target.value })}
-              >
-                {MARKET_CATEGORIES.map((value) => (
-                  <option key={value} value={value}>
-                    {marketCategoryLabel(value, t)}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <Input
-              label={t('market.submissions.minVersion')}
-              value={draft.minBitfunVersion}
-              required
-              disabled={busy}
-              onChange={(event) => setDraft({ ...draft, minBitfunVersion: event.target.value })}
-            />
-          </div>
-
-          <Input
-            label={t('market.submissions.tags')}
-            value={draft.tags.join(', ')}
-            disabled={busy}
-            onChange={(event) =>
-              setDraft({ ...draft, tags: event.target.value.split(',').slice(0, 10) })
-            }
-            hint={t('market.submissions.tagsHint')}
-          />
-
-          <label className="miniapp-submissions__field">
-            <span>{t('market.submissions.changelog')}</span>
-            <textarea
-              value={draft.changelog}
-              maxLength={4000}
-              required
-              disabled={busy}
-              onChange={(event) => setDraft({ ...draft, changelog: event.target.value })}
-            />
-          </label>
-
-          <div className="miniapp-submissions__form-grid">
-            <Input
-              label={t('market.submissions.spdx')}
-              value={draft.license.spdxExpression ?? ''}
-              disabled={busy}
-              onChange={(event) =>
-                setDraft({
-                  ...draft,
-                  license: { ...draft.license, spdxExpression: event.target.value },
-                })
-              }
-            />
-            <Input
-              label={t('market.submissions.licenseUrl')}
-              type="url"
-              value={draft.license.customUrl ?? ''}
-              disabled={busy}
-              onChange={(event) =>
-                setDraft({
-                  ...draft,
-                  license: { ...draft.license, customUrl: event.target.value },
-                })
-              }
-            />
-          </div>
-
-          <Input
-            label={t('market.submissions.repository')}
-            type="url"
-            value={draft.repositoryUrl ?? ''}
-            disabled={busy}
-            onChange={(event) => setDraft({ ...draft, repositoryUrl: event.target.value })}
-          />
-
           <div className="miniapp-submissions__screenshots">
-            <div>
+            <div className="miniapp-submissions__screenshots-copy">
               <span>{t('market.submissions.screenshots')}</span>
               <small>{t('market.submissions.screenshotHint')}</small>
             </div>
-            <Button
-              type="button"
-              size="small"
-              variant="secondary"
-              disabled={busy || localActionsDisabled}
-              onClick={() => void chooseScreenshots()}
-            >
-              <Camera size={14} />
-              {t('market.submissions.choose')}
-            </Button>
-            <Button
-              type="button"
-              size="small"
-              variant="secondary"
-              disabled={busy || localActionsDisabled || !selectedApp}
-              onClick={() => void captureCurrentApp()}
-            >
-              <Camera size={14} />
-              {t('market.submissions.capture')}
-            </Button>
+            <div className="miniapp-submissions__screenshots-actions">
+              <Button
+                type="button"
+                size="small"
+                variant="secondary"
+                disabled={busy || localActionsDisabled}
+                onClick={() => void chooseScreenshots()}
+              >
+                <FileImage size={14} />
+                {t('market.submissions.choose')}
+              </Button>
+              <Button
+                type="button"
+                size="small"
+                variant="secondary"
+                disabled={busy || localActionsDisabled || !selectedApp}
+                onClick={() => void captureCurrentApp()}
+              >
+                <Camera size={14} />
+                {t('market.submissions.capture')}
+              </Button>
+            </div>
           </div>
           {screenshotPaths.length ? (
             <div className="miniapp-submissions__files">
@@ -490,6 +395,134 @@ const MiniAppSubmissionsView: React.FC = () => {
                   </button>
                 </div>
               ))}
+            </div>
+          ) : null}
+
+          <button
+            type="button"
+            className="miniapp-submissions__advanced-toggle"
+            onClick={() => setShowAdvanced((current) => !current)}
+          >
+            {showAdvanced ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+            <span>{t('market.submissions.advanced')}</span>
+            {!showAdvanced ? (
+              <small>
+                {[
+                  draft.slug,
+                  `v${draft.releaseNumber}`,
+                  marketCategoryLabel(
+                    normalizeCategory(draft.category) as (typeof MARKET_CATEGORIES)[number],
+                    t,
+                  ),
+                  draft.license.spdxExpression,
+                ].filter(Boolean).join(' · ')}
+              </small>
+            ) : null}
+          </button>
+
+          {showAdvanced ? (
+            <div className="miniapp-submissions__advanced">
+              <div className="miniapp-submissions__form-grid">
+                <Input
+                  label={t('market.submissions.slug')}
+                  value={draft.slug}
+                  pattern="[a-z0-9][a-z0-9-]{2,62}"
+                  required
+                  disabled={busy}
+                  onChange={(event) => setDraft({ ...draft, slug: event.target.value })}
+                  hint={t('market.submissions.slugHint')}
+                />
+                <Input
+                  label={t('market.submissions.release')}
+                  type="number"
+                  min={1}
+                  max={4294967295}
+                  value={draft.releaseNumber}
+                  required
+                  disabled={busy}
+                  onChange={(event) =>
+                    setDraft({ ...draft, releaseNumber: Number(event.target.value) })
+                  }
+                />
+              </div>
+
+              <div className="miniapp-submissions__form-grid">
+                <Select
+                  label={t('market.submissions.category')}
+                  value={draft.category}
+                  disabled={busy}
+                  onChange={(value) => setDraft({ ...draft, category: String(value) })}
+                  options={MARKET_CATEGORIES.map((value) => ({
+                    value,
+                    label: marketCategoryLabel(value, t),
+                  }))}
+                />
+                <Input
+                  label={t('market.submissions.minVersion')}
+                  value={draft.minBitfunVersion}
+                  required
+                  disabled={busy}
+                  onChange={(event) =>
+                    setDraft({ ...draft, minBitfunVersion: event.target.value })
+                  }
+                />
+              </div>
+
+              <Input
+                label={t('market.submissions.tags')}
+                value={draft.tags.join(', ')}
+                disabled={busy}
+                onChange={(event) =>
+                  setDraft({ ...draft, tags: event.target.value.split(',').slice(0, 10) })
+                }
+                hint={t('market.submissions.tagsHint')}
+              />
+
+              <label className="miniapp-submissions__field">
+                <span>{t('market.submissions.changelog')}</span>
+                <textarea
+                  value={draft.changelog}
+                  maxLength={4000}
+                  placeholder={t('market.submissions.changelogPlaceholder')}
+                  disabled={busy}
+                  onChange={(event) => setDraft({ ...draft, changelog: event.target.value })}
+                />
+              </label>
+
+              <div className="miniapp-submissions__form-grid">
+                <Input
+                  label={t('market.submissions.spdx')}
+                  value={draft.license.spdxExpression ?? ''}
+                  disabled={busy}
+                  onChange={(event) =>
+                    setDraft({
+                      ...draft,
+                      license: { ...draft.license, spdxExpression: event.target.value },
+                    })
+                  }
+                  hint={t('market.submissions.licenseHint')}
+                />
+                <Input
+                  label={t('market.submissions.licenseUrl')}
+                  type="url"
+                  value={draft.license.customUrl ?? ''}
+                  disabled={busy}
+                  onChange={(event) =>
+                    setDraft({
+                      ...draft,
+                      license: { ...draft.license, customUrl: event.target.value },
+                    })
+                  }
+                />
+              </div>
+
+              <Input
+                label={t('market.submissions.repository')}
+                type="url"
+                value={draft.repositoryUrl ?? ''}
+                disabled={busy}
+                onChange={(event) => setDraft({ ...draft, repositoryUrl: event.target.value })}
+              />
             </div>
           ) : null}
 
@@ -514,19 +547,21 @@ const MiniAppSubmissionsView: React.FC = () => {
         </form>
 
         <section className="miniapp-submissions__history">
-          <div className="miniapp-submissions__section-heading">
-            <RefreshCw size={18} />
-            <div>
-              <h3>{t('market.submissions.history')}</h3>
-              <p>{t('market.submissions.historyHint')}</p>
-            </div>
-          </div>
+          <header className="miniapp-submissions__section-heading">
+            <h3>
+              <History size={14} />
+              {t('market.submissions.history')}
+            </h3>
+            <p>{t('market.submissions.historyHint')}</p>
+          </header>
           {submissions.length ? (
             <div className="miniapp-submissions__list">
               {submissions.map((submission) => (
                 <article key={submission.submissionId}>
-                  <div>
-                    <span className="miniapp-submissions__app-icon">{submission.icon}</span>
+                  <div className="miniapp-submissions__list-head">
+                    <span className="miniapp-submissions__app-icon">
+                      {renderMiniAppIcon(submission.icon || 'box', 16)}
+                    </span>
                     <div>
                       <strong>{submission.name}</strong>
                       <small>{submission.slug} · v{submission.releaseNumber}</small>
@@ -548,7 +583,7 @@ const MiniAppSubmissionsView: React.FC = () => {
                     ) : null}
                   </div>
                   {submission.rejectionReason ? (
-                    <p>{t('market.submissions.rejection', {
+                    <p className="miniapp-submissions__rejection">{t('market.submissions.rejection', {
                       reason: submission.rejectionReason,
                     })}</p>
                   ) : null}

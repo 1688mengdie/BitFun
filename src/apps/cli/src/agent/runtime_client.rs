@@ -13,17 +13,19 @@ use tokio::sync::{broadcast, Mutex};
 
 use bitfun_agent_runtime::sdk::{
     AgentDialogTurnRequest, AgentEventReceiver, AgentLocalCommandTurnRecordRequest, AgentRuntime,
-    AgentSessionCreateRequest, AgentSessionDeleteRequest, AgentSessionForkRequest,
-    AgentSessionForkResult, AgentSessionListRequest, AgentSessionModeUpdateRequest,
-    AgentSessionModelUpdateRequest, AgentSessionRestoreRequest, AgentSessionUsageRequest,
-    AgentTurnCancellationRequest, AgentTurnSettlementRequest, AgentUserAnswersRequest,
-    PermissionReply, PermissionRequest, PermissionRequestEventReceiver, PortError, PortErrorKind,
-    RuntimeError, SessionTranscript, SessionTranscriptRequest, SessionUsageReport,
+    AgentSessionCompactionRequest, AgentSessionCreateRequest, AgentSessionDeleteRequest,
+    AgentSessionForkRequest, AgentSessionForkResult, AgentSessionListRequest,
+    AgentSessionModeUpdateRequest, AgentSessionModelUpdateRequest, AgentSessionRenameRequest,
+    AgentSessionRestoreRequest, AgentSessionUsageRequest, AgentTurnCancellationRequest,
+    AgentTurnSettlementRequest, AgentUserAnswersRequest, PermissionReply, PermissionRequest,
+    PermissionRequestEventReceiver, PortError, PortErrorKind, RuntimeError, SessionTranscript,
+    SessionTranscriptRequest, SessionUsageReport,
 };
 use bitfun_agent_runtime_ipc::{
     RuntimeIpcClient, RuntimeIpcClientError, RuntimeIpcClientEvent, RuntimeIpcErrorCode,
     RuntimeIpcEvent, RuntimeIpcOperation, RuntimeIpcOperationResult,
-    RuntimeIpcStreamInvalidationReason, RuntimeSessionRestoreRequest, RuntimeUserAnswersRequest,
+    RuntimeIpcStreamInvalidationReason, RuntimeSessionRenameRequest, RuntimeSessionRestoreRequest,
+    RuntimeUserAnswersRequest,
 };
 use bitfun_events::{AgenticEvent, AgenticEventEnvelope};
 use bitfun_runtime_ports::{
@@ -66,49 +68,83 @@ fn validated_session_summary(
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct SessionModeMigrationNotice {
-    pub(crate) previous_mode_id: String,
-    pub(crate) restored_mode_id: String,
+pub(crate) enum SessionMigrationNotice {
+    Mode {
+        previous_id: String,
+        restored_id: String,
+    },
+    Model {
+        previous_id: String,
+        restored_id: String,
+    },
 }
 
-impl SessionModeMigrationNotice {
+impl SessionMigrationNotice {
     pub(crate) fn user_message(&self) -> String {
+        let (setting, previous_id, restored_id) = match self {
+            Self::Mode {
+                previous_id,
+                restored_id,
+            } => ("mode", previous_id, restored_id),
+            Self::Model {
+                previous_id,
+                restored_id,
+            } => ("model", previous_id, restored_id),
+        };
         format!(
-            "Session mode \"{}\" is unavailable. This session was restored with \"{}\". Review the mode before continuing.",
-            self.previous_mode_id, self.restored_mode_id
+            "Session {setting} \"{previous_id}\" is unavailable. This session was restored with \"{restored_id}\". Review the {setting} before continuing."
         )
     }
 }
 
-fn session_mode_migration_notice(
+fn session_migration_notices(
     previous: &AgentSessionSummary,
     restored: &AgentSessionSummary,
-) -> Option<SessionModeMigrationNotice> {
-    (previous.agent_type != restored.agent_type).then(|| SessionModeMigrationNotice {
-        previous_mode_id: previous.agent_type.clone(),
-        restored_mode_id: restored.agent_type.clone(),
-    })
+) -> Vec<SessionMigrationNotice> {
+    let mut notices = Vec::with_capacity(2);
+    if previous.agent_type != restored.agent_type {
+        notices.push(SessionMigrationNotice::Mode {
+            previous_id: previous.agent_type.clone(),
+            restored_id: restored.agent_type.clone(),
+        });
+    }
+    if let (Some(previous_id), Some(restored_id)) =
+        (previous.model_id.as_ref(), restored.model_id.as_ref())
+    {
+        if previous_id != restored_id {
+            notices.push(SessionMigrationNotice::Model {
+                previous_id: previous_id.clone(),
+                restored_id: restored_id.clone(),
+            });
+        }
+    }
+    notices
 }
 
 #[derive(Debug)]
-pub(crate) struct SessionModeUpdateError {
+pub(crate) struct SessionOperationError {
     message: String,
     outcome_unknown: bool,
 }
 
-impl fmt::Display for SessionModeUpdateError {
+impl fmt::Display for SessionOperationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(&self.message)
     }
 }
 
-impl std::error::Error for SessionModeUpdateError {}
+impl std::error::Error for SessionOperationError {}
 
-impl SessionModeUpdateError {
+impl SessionOperationError {
     fn runtime(error: RuntimeError) -> Self {
+        let outcome_unknown = matches!(
+            &error,
+            RuntimeError::Port(port_error)
+                if port_error.kind == PortErrorKind::OutcomeUnknown
+        );
         Self {
             message: error.into_message(),
-            outcome_unknown: false,
+            outcome_unknown,
         }
     }
 
@@ -446,7 +482,7 @@ impl CliAgentRuntimeClient {
     ) -> Result<(
         AgentSessionSummary,
         AgentSessionWorkspaceBinding,
-        Option<SessionModeMigrationNotice>,
+        Vec<SessionMigrationNotice>,
         SessionTranscript,
     )> {
         tracing::info!("Restoring session: {}", session_id);
@@ -529,8 +565,8 @@ impl CliAgentRuntimeClient {
             );
         }
 
-        let migration_notice = session_mode_migration_notice(&previous_summary, &restored);
-        Ok((restored, binding, migration_notice, transcript))
+        let migration_notices = session_migration_notices(&previous_summary, &restored);
+        Ok((restored, binding, migration_notices, transcript))
     }
 
     async fn resolve_session_workspace_binding(
@@ -570,37 +606,96 @@ impl CliAgentRuntimeClient {
             .await
     }
 
-    pub(crate) async fn delete_session(&self, session_id: &str) -> Result<()> {
-        self.embedded_runtime("deleting sessions")?
-            .delete_session(AgentSessionDeleteRequest {
-                workspace_path: self.project_workspace_path_string(),
-                session_id: session_id.to_string(),
-                remote_connection_id: None,
-                remote_ssh_host: None,
-            })
-            .await
-            .map_err(|error| anyhow::anyhow!(error.into_message()))
+    pub(crate) async fn delete_session(
+        &self,
+        session_id: &str,
+    ) -> std::result::Result<(), SessionOperationError> {
+        match &self.backend {
+            CliAgentRuntimeBackend::Embedded(runtime) => runtime
+                .delete_session(AgentSessionDeleteRequest {
+                    workspace_path: self.project_workspace_path_string(),
+                    session_id: session_id.to_string(),
+                    remote_connection_id: None,
+                    remote_ssh_host: None,
+                })
+                .await
+                .map_err(SessionOperationError::runtime),
+            CliAgentRuntimeBackend::Shared(client) => {
+                let result = client
+                    .request(RuntimeIpcOperation::DeleteSession {
+                        session_id: session_id.to_string(),
+                    })
+                    .await
+                    .map_err(SessionOperationError::shared)?;
+                expect_unit(result, "delete_session").map_err(SessionOperationError::unexpected)
+            }
+        }
     }
 
     pub(crate) async fn update_session_model(
         &self,
         session_id: &str,
         model_id: &str,
-    ) -> Result<()> {
-        self.embedded_runtime("changing the session model")?
-            .update_session_model(AgentSessionModelUpdateRequest {
-                session_id: session_id.to_string(),
-                model_id: model_id.to_string(),
-            })
-            .await
-            .map_err(|error| anyhow::anyhow!(error.into_message()))
+    ) -> std::result::Result<(), SessionOperationError> {
+        let request = AgentSessionModelUpdateRequest {
+            session_id: session_id.to_string(),
+            model_id: model_id.to_string(),
+        };
+        match &self.backend {
+            CliAgentRuntimeBackend::Embedded(runtime) => runtime
+                .update_session_model(request)
+                .await
+                .map_err(SessionOperationError::runtime),
+            CliAgentRuntimeBackend::Shared(client) => {
+                let result = client
+                    .request(RuntimeIpcOperation::UpdateSessionModel { request })
+                    .await
+                    .map_err(SessionOperationError::shared)?;
+                expect_unit(result, "update_session_model")
+                    .map_err(SessionOperationError::unexpected)
+            }
+        }
+    }
+
+    pub(crate) async fn rename_session(
+        &self,
+        session_id: &str,
+        session_name: &str,
+    ) -> std::result::Result<(), SessionOperationError> {
+        match &self.backend {
+            CliAgentRuntimeBackend::Embedded(runtime) => {
+                let request = AgentSessionRenameRequest {
+                    workspace_path: self.project_workspace_path_string(),
+                    session_id: session_id.to_string(),
+                    session_name: session_name.to_string(),
+                    remote_connection_id: None,
+                    remote_ssh_host: None,
+                };
+                runtime
+                    .rename_session(request)
+                    .await
+                    .map_err(SessionOperationError::runtime)
+            }
+            CliAgentRuntimeBackend::Shared(client) => {
+                let result = client
+                    .request(RuntimeIpcOperation::RenameSession {
+                        request: RuntimeSessionRenameRequest {
+                            session_id: session_id.to_string(),
+                            session_name: session_name.to_string(),
+                        },
+                    })
+                    .await
+                    .map_err(SessionOperationError::shared)?;
+                expect_unit(result, "rename_session").map_err(SessionOperationError::unexpected)
+            }
+        }
     }
 
     pub(crate) async fn update_session_mode(
         &self,
         session_id: &str,
         mode_id: &str,
-    ) -> std::result::Result<(), SessionModeUpdateError> {
+    ) -> std::result::Result<(), SessionOperationError> {
         let request = AgentSessionModeUpdateRequest {
             session_id: session_id.to_string(),
             mode_id: mode_id.to_string(),
@@ -609,14 +704,14 @@ impl CliAgentRuntimeClient {
             CliAgentRuntimeBackend::Embedded(runtime) => runtime
                 .update_session_mode(request)
                 .await
-                .map_err(SessionModeUpdateError::runtime),
+                .map_err(SessionOperationError::runtime),
             CliAgentRuntimeBackend::Shared(client) => {
                 let result = client
                     .request(RuntimeIpcOperation::UpdateSessionMode { request })
                     .await
-                    .map_err(SessionModeUpdateError::shared)?;
+                    .map_err(SessionOperationError::shared)?;
                 expect_unit(result, "update_session_mode")
-                    .map_err(SessionModeUpdateError::unexpected)
+                    .map_err(SessionOperationError::unexpected)
             }
         }
     }
@@ -842,6 +937,49 @@ impl CliAgentRuntimeClient {
         tracing::info!("Created core session: {}", id);
 
         Ok(id)
+    }
+
+    pub(crate) async fn start_session_compaction(&self, session_id: &str) -> Result<String> {
+        let turn_id = uuid::Uuid::new_v4().to_string();
+        let request = AgentSessionCompactionRequest {
+            session_id: session_id.to_string(),
+            turn_id: turn_id.clone(),
+        };
+        *self.current_turn_id.lock().await = Some(turn_id.clone());
+
+        let submission: Result<String> = async {
+            match &self.backend {
+                CliAgentRuntimeBackend::Embedded(runtime) => {
+                    let accepted = runtime
+                        .start_session_compaction(request)
+                        .await
+                        .map_err(|error| anyhow::anyhow!(error.into_message()))?;
+                    if accepted.session_id != session_id || accepted.turn_id != turn_id {
+                        return Err(anyhow::anyhow!(
+                            "Runtime accepted manual compaction with an unexpected identity"
+                        ));
+                    }
+                    Ok(accepted.turn_id)
+                }
+                CliAgentRuntimeBackend::Shared(client) => match client
+                    .request(RuntimeIpcOperation::CompactSession { request })
+                    .await?
+                {
+                    RuntimeIpcOperationResult::TurnAccepted {
+                        session_id: accepted_session,
+                        turn_id: accepted_turn,
+                    } if accepted_session == session_id && accepted_turn == turn_id => {
+                        Ok(accepted_turn)
+                    }
+                    _ => return Err(unexpected_shared_result("compact_session")),
+                },
+            }
+        }
+        .await;
+        if submission.is_err() {
+            *self.current_turn_id.lock().await = None;
+        }
+        submission
     }
 
     pub(crate) async fn send_message(&self, message: String, agent_type: &str) -> Result<String> {
@@ -1196,7 +1334,7 @@ fn project_routed_permission_event(
     }
 }
 
-fn expect_unit(result: RuntimeIpcOperationResult, operation: &str) -> Result<()> {
+pub(super) fn expect_unit(result: RuntimeIpcOperationResult, operation: &str) -> Result<()> {
     match result {
         RuntimeIpcOperationResult::Unit => Ok(()),
         _ => Err(unexpected_shared_result(operation)),
@@ -1240,13 +1378,15 @@ mod tests {
 
     use bitfun_agent_runtime::sdk::{
         PermissionDelegationContext, PermissionRequest, PermissionRequestEvent,
-        PermissionRequestSource, PermissionRequestSourceKind,
+        PermissionRequestSource, PermissionRequestSourceKind, PortError, PortErrorKind,
+        RuntimeError,
     };
     use bitfun_agent_runtime_ipc::{RuntimeIpcClientError, RuntimeIpcError, RuntimeIpcErrorCode};
 
     use super::{
-        project_routed_permission_event, session_mode_migration_notice, shared_disconnect_message,
-        shared_restore_error, validated_session_summary, CliWorkspacePaths, SessionModeUpdateError,
+        project_routed_permission_event, session_migration_notices, shared_disconnect_message,
+        shared_restore_error, validated_session_summary, CliWorkspacePaths, SessionMigrationNotice,
+        SessionOperationError,
     };
     use bitfun_agent_runtime_ipc::RuntimeIpcStreamInvalidationReason;
 
@@ -1262,12 +1402,11 @@ mod tests {
     }
 
     #[test]
-    fn shared_mode_update_preserves_unknown_outcome_as_a_typed_fact() {
-        let error =
-            SessionModeUpdateError::shared(RuntimeIpcClientError::Remote(RuntimeIpcError {
-                code: RuntimeIpcErrorCode::OutcomeUnknown,
-                message: "inspect authoritative state before retrying".to_string(),
-            }));
+    fn shared_session_update_preserves_unknown_outcome_as_a_typed_fact() {
+        let error = SessionOperationError::shared(RuntimeIpcClientError::Remote(RuntimeIpcError {
+            code: RuntimeIpcErrorCode::OutcomeUnknown,
+            message: "inspect authoritative state before retrying".to_string(),
+        }));
 
         assert!(error.outcome_unknown());
         assert!(error.to_string().contains("OutcomeUnknown"));
@@ -1277,19 +1416,38 @@ mod tests {
             RuntimeIpcClientError::Disconnected,
             RuntimeIpcClientError::UnexpectedResponse,
         ] {
-            assert!(SessionModeUpdateError::shared(transport_error).outcome_unknown());
+            assert!(SessionOperationError::shared(transport_error).outcome_unknown());
         }
         assert!(
-            SessionModeUpdateError::unexpected(anyhow::anyhow!("unexpected response shape"))
+            SessionOperationError::unexpected(anyhow::anyhow!("unexpected response shape"))
                 .outcome_unknown()
         );
         assert!(
-            !SessionModeUpdateError::shared(RuntimeIpcClientError::Remote(RuntimeIpcError {
+            !SessionOperationError::shared(RuntimeIpcClientError::Remote(RuntimeIpcError {
                 code: RuntimeIpcErrorCode::InvalidRequest,
                 message: "unknown mode".to_string(),
             },))
             .outcome_unknown()
         );
+        assert!(
+            !SessionOperationError::shared(RuntimeIpcClientError::RequestEncoding(
+                bitfun_agent_runtime_ipc::RuntimeIpcIoError::FrameTooLarge {
+                    size: 129,
+                    max_bytes: 128,
+                },
+            ))
+            .outcome_unknown()
+        );
+    }
+
+    #[test]
+    fn embedded_runtime_unknown_outcome_is_preserved() {
+        let error = SessionOperationError::runtime(RuntimeError::Port(PortError::new(
+            PortErrorKind::OutcomeUnknown,
+            "inspect authoritative state",
+        )));
+
+        assert!(error.outcome_unknown());
     }
 
     #[test]
@@ -1347,16 +1505,72 @@ mod tests {
     #[test]
     fn model_updates_use_the_runtime_sdk_without_the_core_compatibility_facade() {
         let source = include_str!("runtime_client.rs").replace("\r\n", "\n");
-        let runtime_update = [
-            "self.embedded_runtime(\"changing the session model\")?",
-            "\n            .update_session_model",
-        ]
-        .concat();
         let compatibility_update =
             ["self.compatibility", "\n            .update_session_model"].concat();
 
-        assert!(source.contains(&runtime_update));
+        assert!(source.contains("CliAgentRuntimeBackend::Embedded(runtime)"));
+        assert!(source.contains("runtime.update_session_model(request)"));
+        assert!(source.contains("CliAgentRuntimeBackend::Shared(client)"));
+        assert!(source.contains("RuntimeIpcOperation::UpdateSessionModel { request }"));
         assert!(!source.contains(&compatibility_update));
+    }
+
+    #[test]
+    fn session_rename_uses_direct_runtime_or_private_shared_ipc() {
+        let source = include_str!("runtime_client.rs").replace("\r\n", "\n");
+        let rename = source
+            .split_once("pub(crate) async fn rename_session(")
+            .expect("rename method")
+            .1
+            .split_once("pub(crate) async fn update_session_mode(")
+            .expect("rename method boundary")
+            .0;
+
+        assert!(source.contains("pub(crate) async fn rename_session("));
+        assert!(rename.contains("CliAgentRuntimeBackend::Embedded(runtime)"));
+        assert!(rename.contains(".rename_session(request)"));
+        assert!(rename.contains("RuntimeIpcOperation::RenameSession"));
+        assert!(!rename.contains("serde_json::to_value"));
+        assert!(!rename.contains("serde_json::from_value"));
+    }
+
+    #[test]
+    fn session_compaction_uses_direct_runtime_or_private_shared_ipc() {
+        let source = include_str!("runtime_client.rs").replace("\r\n", "\n");
+        let compact = source
+            .split_once("pub(crate) async fn start_session_compaction(")
+            .expect("compaction method")
+            .1
+            .split_once("pub(crate) async fn send_message(")
+            .expect("compaction method boundary")
+            .0;
+
+        assert!(compact.contains("CliAgentRuntimeBackend::Embedded(runtime)"));
+        assert!(compact.contains(".start_session_compaction(request)"));
+        assert!(compact.contains("RuntimeIpcOperation::CompactSession { request }"));
+        assert!(compact.contains("RuntimeIpcOperationResult::TurnAccepted"));
+        assert!(!compact.contains("serde_json::to_value"));
+        assert!(!compact.contains("serde_json::from_value"));
+    }
+
+    #[test]
+    fn session_delete_uses_direct_runtime_or_private_shared_ipc() {
+        let source = include_str!("runtime_client.rs").replace("\r\n", "\n");
+        let delete = source
+            .split_once("pub(crate) async fn delete_session(")
+            .expect("delete method")
+            .1
+            .split_once("pub(crate) async fn update_session_model(")
+            .expect("delete method boundary")
+            .0;
+
+        assert!(delete.contains("CliAgentRuntimeBackend::Embedded(runtime)"));
+        assert!(delete.contains(".delete_session(AgentSessionDeleteRequest {"));
+        assert!(delete.contains("CliAgentRuntimeBackend::Shared(client)"));
+        assert!(delete.contains("RuntimeIpcOperation::DeleteSession"));
+        assert!(!delete.contains("embedded_runtime"));
+        assert!(!delete.contains("serde_json::to_value"));
+        assert!(!delete.contains("serde_json::from_value"));
     }
 
     #[test]
@@ -1442,18 +1656,45 @@ mod tests {
         };
         let restored = session_summary("mode-migration");
 
-        let notice = session_mode_migration_notice(&previous, &restored)
-            .expect("changed mode should be reported to the TUI");
+        let notices = session_migration_notices(&previous, &restored);
 
-        assert_eq!(notice.previous_mode_id, "removed-mode");
-        assert_eq!(notice.restored_mode_id, "agentic");
+        assert_eq!(
+            notices,
+            vec![SessionMigrationNotice::Mode {
+                previous_id: "removed-mode".to_string(),
+                restored_id: "agentic".to_string(),
+            }]
+        );
     }
 
     #[test]
-    fn restore_does_not_report_a_notice_when_the_mode_is_unchanged() {
+    fn restore_reports_a_cli_local_notice_when_core_migrates_the_model() {
+        let previous = AgentSessionSummary {
+            model_id: Some("removed-model".to_string()),
+            ..session_summary("model-migration")
+        };
+        let restored = AgentSessionSummary {
+            model_id: Some("auto".to_string()),
+            ..session_summary("model-migration")
+        };
+
+        let notices = session_migration_notices(&previous, &restored);
+
+        assert_eq!(
+            notices,
+            vec![SessionMigrationNotice::Model {
+                previous_id: "removed-model".to_string(),
+                restored_id: "auto".to_string(),
+            }]
+        );
+        assert!(notices[0].user_message().contains("unavailable"));
+    }
+
+    #[test]
+    fn restore_does_not_report_notices_when_session_settings_are_unchanged() {
         let summary = session_summary("unchanged-mode");
 
-        assert!(session_mode_migration_notice(&summary, &summary).is_none());
+        assert!(session_migration_notices(&summary, &summary).is_empty());
     }
 
     #[test]

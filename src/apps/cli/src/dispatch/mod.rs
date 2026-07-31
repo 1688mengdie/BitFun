@@ -19,6 +19,7 @@ use protocol::{
     DispatchListRequest, DispatchProbeRequest, DispatchProbeResponse, DispatchStatusRequest,
     DispatchStatusResponse, DispatchSubmitRequest, DispatchSubmitResponse,
     DispatchWorkspaceBeginRequest, DispatchWorkspaceChunkRequest, DispatchWorkspaceCommitRequest,
+    DispatchWorkspaceResultChunkRequest, DispatchWorkspaceResultRequest,
     DispatchWorkspaceProbe, DISPATCH_PROTOCOL_VERSION, MAX_DISPATCH_TEXT_BYTES,
 };
 use store::{CreateJobOutcome, DispatchStateRecord, DispatchStore};
@@ -71,6 +72,14 @@ pub(crate) async fn run_dispatch_verb(
             DispatchWorkspaceCommitRequest,
         >(input)?)?)
         .context("encode workspace commit response"),
+        "workspace-result" => serde_json::to_value(workspace::result(parse::<
+            DispatchWorkspaceResultRequest,
+        >(input)?)?)
+        .context("encode workspace result response"),
+        "workspace-result-chunk" => serde_json::to_value(workspace::result_chunk(parse::<
+            DispatchWorkspaceResultChunkRequest,
+        >(input)?)?)
+        .context("encode workspace result chunk response"),
         _ => bail!("unsupported dispatch verb: {verb}"),
     }
 }
@@ -102,6 +111,9 @@ async fn probe(request: DispatchProbeRequest) -> Result<DispatchProbeResponse> {
         "event_log_completeness".to_string(),
         "workspace_snapshot_exact".to_string(),
         "workspace_snapshot_chunked".to_string(),
+        // Optional on purpose: controllers must feature-detect this rather than
+        // require it, so an older target stays usable for everything else.
+        "workspace_result_bundle".to_string(),
     ];
     if runner::is_supported() {
         capabilities.push("detached_worker".to_string());
@@ -751,15 +763,22 @@ mod tests {
             .write_pid("job-no-match", std::process::id())
             .expect("record test pid");
 
-        let error = cancel_in_store(
+        let terminate_called = std::cell::Cell::new(false);
+        let error = cancel_in_store_with_process_checks(
             &store,
             DispatchCancelRequest {
                 job_id: "job-no-match".to_string(),
             },
-            runner::terminate_worker,
+            |_pid| true,
+            |_pid, _job_id| false,
+            |_pid, _job_id| {
+                terminate_called.set(true);
+                Ok(true)
+            },
         )
         .expect_err("an unrelated live process must not be treated as cancelled");
         assert!(error.to_string().contains("no longer matches"));
+        assert!(!terminate_called.get());
         let state = store.load_state("job-no-match").expect("state");
         assert_eq!(state.state, DispatchJobState::Failed);
         assert!(state.cancel_requested());

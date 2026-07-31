@@ -20,7 +20,7 @@ bitfun sessions list
 bitfun usage
 bitfun doctor
 bitfun health
-bitfun mcp import                       # preview safe OpenCode / Claude Code MCP declarations
+bitfun mcp import                       # preview safe OpenCode / Claude Code / Codex MCP declarations
 bitfun mcp import --apply               # copy eligible declarations as disabled native entries
 bitfun mcp import --apply --candidate <candidate-id>  # repeat to select a subset
 bitfun mcp import --apply --candidate <candidate-id> --native-id <native-id>
@@ -30,11 +30,11 @@ bitfun update --check                   # report only; do not install
 ```
 
 `bitfun mcp import` is an explicit snapshot operation, not continuous sync. It
-does not copy credentials, headers, environment values, or working directories,
-and Codex MCP import is not supported in the current slice. Apply revalidates the
-preview and never overwrites an existing native entry; imported entries remain
-disabled until reviewed and enabled through the existing MCP manager. Use
-`--format json` for the versioned machine-readable plan or result.
+does not copy credentials, headers, environment values, or explicit working
+directories. Apply revalidates the preview and never overwrites an existing
+native entry; imported entries remain disabled until reviewed and enabled
+through the existing MCP manager. Use `--format json` for the versioned
+machine-readable plan or result.
 
 Official Linux archive installations check for updates before interactive TUI
 startup at most once every six hours. That check only fetches the release
@@ -79,6 +79,20 @@ global configuration. Non-interactive `exec` rejects permission requests by defa
 only when the current invocation may approve tool requests. Non-interactive `exec` does not expose
 `AskUserQuestion`; provide all required input in the initial prompt. The hidden legacy `--confirm`
 flag maps to the safe default and should not be used in new automation.
+
+### Interactive session and context commands
+
+The Embedded and Shared TUI use the same session command names:
+
+- `/sessions` opens the session browser; `/resume`, `/continue`, and `/history` are aliases.
+- `/new` starts a fresh conversation session; `/clear` is its OpenCode-compatible alias and does not
+  merely clear the terminal display.
+- `/status` opens a transient view of current session, runtime, workspace, approval, and latest
+  primary-model request facts observed by this TUI. It is not a cumulative usage report; use
+  `/usage` for cumulative session usage in Embedded TUI.
+- `/compact` compacts the current session's model context without deleting saved conversation
+  history; `/summarize` is its OpenCode-compatible alias. Compaction is available only while the
+  session is idle.
 
 The interactive TUI supports per-session worktree isolation through `/worktree`. Run the command
 without arguments to toggle it, or use `/worktree on`, `/worktree off`, and `/worktree status`.

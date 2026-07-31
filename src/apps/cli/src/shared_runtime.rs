@@ -1,16 +1,17 @@
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use bitfun_agent_runtime::sdk::{
-    AgentRuntime, AgentSessionRestoreRequest, AgentUserAnswersRequest, DialogSubmitOutcome,
-    PermissionRequest, PermissionRequestEvent, PortErrorKind, RuntimeError,
-    SessionTranscriptRequest,
+    AgentRuntime, AgentSessionDeleteRequest, AgentSessionRenameRequest, AgentSessionRestoreRequest,
+    AgentUserAnswersRequest, DialogSubmitOutcome, PermissionRequest, PermissionRequestEvent,
+    PortErrorKind, RuntimeError, SessionTranscriptRequest,
 };
 use bitfun_agent_runtime_ipc::{
     DiscoveryStore, RuntimeInstanceIdentity, RuntimeIpcClient, RuntimeIpcError,
     RuntimeIpcErrorCode, RuntimeIpcEvent, RuntimeIpcOperation, RuntimeIpcOperationResult,
     RuntimeIpcRequestHandler, RuntimeIpcServer, RuntimeIpcServerConfig,
-    RuntimeIpcStreamInvalidationReason, PROTOCOL_VERSION,
+    RuntimeIpcStreamInvalidationReason, RuntimeSessionRenameRequest, PROTOCOL_VERSION,
 };
+use bitfun_core::product_runtime::CoreAgentRuntimeCompatibility;
 use bitfun_core::runtime_ownership::CoreRuntimeOwnership;
 use bitfun_events::{AgenticEvent, ToolEventData};
 use bitfun_services_core::runtime_ownership::RuntimeDeployment;
@@ -33,6 +34,7 @@ type SessionEventSenders = Mutex<HashMap<String, broadcast::Sender<RuntimeIpcEve
 
 pub(crate) struct SharedRuntimeHandler {
     runtime: AgentRuntime,
+    compatibility: CoreAgentRuntimeCompatibility,
     workspace: PathBuf,
     events: Arc<SessionEventSenders>,
     question_sessions: Arc<Mutex<HashMap<String, String>>>,
@@ -41,7 +43,11 @@ pub(crate) struct SharedRuntimeHandler {
 }
 
 impl SharedRuntimeHandler {
-    pub(crate) fn build(runtime: AgentRuntime, workspace: &Path) -> Result<Self> {
+    pub(crate) fn build(
+        runtime: AgentRuntime,
+        compatibility: CoreAgentRuntimeCompatibility,
+        workspace: &Path,
+    ) -> Result<Self> {
         let mut agent_events = runtime
             .subscribe_events()
             .map_err(runtime_error_message)
@@ -178,6 +184,7 @@ impl SharedRuntimeHandler {
 
         Ok(Self {
             runtime,
+            compatibility,
             workspace: dunce::canonicalize(workspace)
                 .context("canonicalize Shared Runtime workspace")?,
             events,
@@ -258,6 +265,10 @@ impl RuntimeIpcRequestHandler for SharedRuntimeHandler {
                     pending_permissions,
                 })
             }
+            RuntimeIpcOperation::DeleteSession { session_id } => {
+                delete_owned_session(&self.runtime, &self.workspace, session_id).await?;
+                Ok(RuntimeIpcOperationResult::Unit)
+            }
             RuntimeIpcOperation::UpdateSessionMode { request } => {
                 self.runtime
                     .update_session_mode(request)
@@ -265,6 +276,33 @@ impl RuntimeIpcRequestHandler for SharedRuntimeHandler {
                     .map_err(runtime_ipc_error)?;
                 Ok(RuntimeIpcOperationResult::Unit)
             }
+            RuntimeIpcOperation::UpdateSessionModel { request } => {
+                self.runtime
+                    .update_session_model(request)
+                    .await
+                    .map_err(runtime_ipc_error)?;
+                Ok(RuntimeIpcOperationResult::Unit)
+            }
+            RuntimeIpcOperation::RenameSession { request } => {
+                rename_owned_session(&self.runtime, &self.workspace, request).await?;
+                Ok(RuntimeIpcOperationResult::Unit)
+            }
+            RuntimeIpcOperation::ReloadSessionContext { request } => {
+                self.compatibility
+                    .reload_session_context(request)
+                    .await
+                    .map_err(core_ipc_error)?;
+                Ok(RuntimeIpcOperationResult::Unit)
+            }
+            RuntimeIpcOperation::CompactSession { request } => self
+                .runtime
+                .start_session_compaction(request)
+                .await
+                .map(|result| RuntimeIpcOperationResult::TurnAccepted {
+                    session_id: result.session_id,
+                    turn_id: result.turn_id,
+                })
+                .map_err(runtime_ipc_error),
             RuntimeIpcOperation::SubmitTurn { request } => {
                 let outcome = self
                     .runtime
@@ -371,6 +409,46 @@ impl RuntimeIpcRequestHandler for SharedRuntimeHandler {
     ) -> std::result::Result<broadcast::Receiver<RuntimeIpcEvent>, RuntimeIpcError> {
         subscribe_session_events(&self.events, &self.event_stream_available, session_id)
     }
+}
+
+fn owned_session_rename_request(
+    workspace: &Path,
+    request: RuntimeSessionRenameRequest,
+) -> AgentSessionRenameRequest {
+    AgentSessionRenameRequest {
+        workspace_path: workspace.to_string_lossy().to_string(),
+        session_id: request.session_id,
+        session_name: request.session_name,
+        remote_connection_id: None,
+        remote_ssh_host: None,
+    }
+}
+
+async fn rename_owned_session(
+    runtime: &AgentRuntime,
+    workspace: &Path,
+    request: RuntimeSessionRenameRequest,
+) -> std::result::Result<(), RuntimeIpcError> {
+    runtime
+        .rename_session(owned_session_rename_request(workspace, request))
+        .await
+        .map_err(runtime_ipc_error)
+}
+
+async fn delete_owned_session(
+    runtime: &AgentRuntime,
+    workspace: &Path,
+    session_id: String,
+) -> std::result::Result<(), RuntimeIpcError> {
+    runtime
+        .delete_session(AgentSessionDeleteRequest {
+            workspace_path: workspace.to_string_lossy().to_string(),
+            session_id,
+            remote_connection_id: None,
+            remote_ssh_host: None,
+        })
+        .await
+        .map_err(runtime_ipc_error)
 }
 
 fn subscribe_session_events(
@@ -636,6 +714,7 @@ pub(crate) async fn run_service(workspace: PathBuf, expected_identity: String) -
     .await?;
     let handler = Arc::new(SharedRuntimeHandler::build(
         runtime.agent_runtime().clone(),
+        runtime.compatibility().clone(),
         &workspace,
     )?);
     let server = RuntimeIpcServer::bind_with_handler(
@@ -929,6 +1008,12 @@ fn runtime_ipc_error(error: RuntimeError) -> RuntimeIpcError {
         RuntimeError::Port(port_error) if port_error.kind == PortErrorKind::InvalidRequest => {
             RuntimeIpcErrorCode::InvalidRequest
         }
+        RuntimeError::Port(port_error) if port_error.kind == PortErrorKind::OutcomeUnknown => {
+            RuntimeIpcErrorCode::OutcomeUnknown
+        }
+        RuntimeError::Port(port_error) if port_error.kind == PortErrorKind::NotFound => {
+            RuntimeIpcErrorCode::NotFound
+        }
         _ => RuntimeIpcErrorCode::Unavailable,
     };
     RuntimeIpcError {
@@ -937,24 +1022,111 @@ fn runtime_ipc_error(error: RuntimeError) -> RuntimeIpcError {
     }
 }
 
+fn core_ipc_error(error: bitfun_core::util::errors::BitFunError) -> RuntimeIpcError {
+    let code = match &error {
+        bitfun_core::util::errors::BitFunError::Validation(_)
+        | bitfun_core::util::errors::BitFunError::NotFound(_) => {
+            RuntimeIpcErrorCode::InvalidRequest
+        }
+        bitfun_core::util::errors::BitFunError::SessionInUse { .. } => {
+            RuntimeIpcErrorCode::SessionInUse
+        }
+        _ => RuntimeIpcErrorCode::Unavailable,
+    };
+    RuntimeIpcError {
+        code,
+        message: error.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        await_permission_route, connect_existing, index_user_question, invalidate_event_stream,
-        permission_event_session, permission_targets_session, project_subagent_link_route,
-        project_user_question_route, publish_event, route_agent_event, runtime_ipc_error,
+        await_permission_route, connect_existing, delete_owned_session, index_user_question,
+        invalidate_event_stream, owned_session_rename_request, permission_event_session,
+        permission_targets_session, project_subagent_link_route, project_user_question_route,
+        publish_event, rename_owned_session, route_agent_event, runtime_ipc_error,
         subscribe_session_events, SessionEventSenders, EVENT_BUFFER,
     };
     use bitfun_agent_runtime::sdk::{
-        PermissionDelegationContext, PermissionReplySource, PermissionRequest,
-        PermissionRequestEvent, PermissionRequestSource, PermissionRequestSourceKind, PortError,
-        PortErrorKind, RuntimeError,
+        AgentRuntimeBuilder, AgentSessionCreateRequest, AgentSessionCreateResult,
+        AgentSessionDeleteRequest, AgentSessionListRequest, AgentSessionManagementPort,
+        AgentSessionRenameRequest, AgentSessionSummary, AgentSessionWorkspaceBinding,
+        AgentSessionWorkspaceRequest, AgentSubmissionPort, AgentSubmissionRequest,
+        AgentSubmissionResult, PermissionDelegationContext, PermissionReplySource,
+        PermissionRequest, PermissionRequestEvent, PermissionRequestSource,
+        PermissionRequestSourceKind, PortError, PortErrorKind, PortResult, RuntimeError,
     };
+    use bitfun_agent_runtime_ipc::{RuntimeIpcErrorCode, RuntimeSessionRenameRequest};
     use bitfun_events::{AgenticEvent, ToolEventData, ToolEventIdentity};
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
     use tokio::sync::{watch, Notify};
+
+    #[derive(Default)]
+    struct RecordingSessionPort {
+        delete_requests: Mutex<Vec<AgentSessionDeleteRequest>>,
+        rename_requests: Mutex<Vec<AgentSessionRenameRequest>>,
+    }
+
+    #[async_trait::async_trait]
+    impl AgentSubmissionPort for RecordingSessionPort {
+        async fn create_session(
+            &self,
+            request: AgentSessionCreateRequest,
+        ) -> PortResult<AgentSessionCreateResult> {
+            Ok(AgentSessionCreateResult::new(
+                "session-1",
+                request.session_name,
+                request.agent_type,
+            ))
+        }
+
+        async fn submit_message(
+            &self,
+            request: AgentSubmissionRequest,
+        ) -> PortResult<AgentSubmissionResult> {
+            Ok(AgentSubmissionResult {
+                turn_id: request.turn_id.unwrap_or_else(|| "turn-1".to_string()),
+                accepted: true,
+            })
+        }
+
+        async fn resolve_session_agent_type(
+            &self,
+            _session_id: &str,
+        ) -> PortResult<Option<String>> {
+            Ok(Some("agentic".to_string()))
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl AgentSessionManagementPort for RecordingSessionPort {
+        async fn list_sessions(
+            &self,
+            _request: AgentSessionListRequest,
+        ) -> PortResult<Vec<AgentSessionSummary>> {
+            Ok(Vec::new())
+        }
+
+        async fn delete_session(&self, request: AgentSessionDeleteRequest) -> PortResult<()> {
+            self.delete_requests.lock().unwrap().push(request);
+            Ok(())
+        }
+
+        async fn rename_session(&self, request: AgentSessionRenameRequest) -> PortResult<()> {
+            self.rename_requests.lock().unwrap().push(request);
+            Ok(())
+        }
+
+        async fn resolve_session_workspace_binding(
+            &self,
+            _request: AgentSessionWorkspaceRequest,
+        ) -> PortResult<Option<AgentSessionWorkspaceBinding>> {
+            Ok(None)
+        }
+    }
 
     #[test]
     fn session_writer_conflict_reuses_the_existing_ipc_error() {
@@ -979,6 +1151,117 @@ mod tests {
         assert_eq!(
             error.code,
             bitfun_agent_runtime_ipc::RuntimeIpcErrorCode::InvalidRequest
+        );
+    }
+
+    #[test]
+    fn unknown_runtime_outcomes_keep_their_ipc_error_category() {
+        let error = runtime_ipc_error(RuntimeError::Port(PortError::new(
+            PortErrorKind::OutcomeUnknown,
+            "inspect authoritative state",
+        )));
+
+        assert_eq!(error.code, RuntimeIpcErrorCode::OutcomeUnknown);
+    }
+
+    #[test]
+    fn missing_runtime_sessions_keep_their_ipc_error_category() {
+        let error = runtime_ipc_error(RuntimeError::Port(PortError::new(
+            PortErrorKind::NotFound,
+            "Session not found: session-1",
+        )));
+
+        assert_eq!(error.code, RuntimeIpcErrorCode::NotFound);
+    }
+
+    #[test]
+    fn shared_rename_uses_the_server_workspace_and_no_remote_identity() {
+        let request = owned_session_rename_request(
+            std::path::Path::new("D:/workspace/project"),
+            RuntimeSessionRenameRequest {
+                session_id: "session-1".to_string(),
+                session_name: "Auth refactor".to_string(),
+            },
+        );
+
+        assert_eq!(request.workspace_path, "D:/workspace/project");
+        assert_eq!(request.session_id, "session-1");
+        assert_eq!(request.session_name, "Auth refactor");
+        assert!(request.remote_connection_id.is_none());
+        assert!(request.remote_ssh_host.is_none());
+    }
+
+    #[tokio::test]
+    async fn embedded_and_shared_rename_reach_the_same_runtime_owner() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let canonical_workspace = dunce::canonicalize(workspace.path()).expect("workspace path");
+        let workspace_path = canonical_workspace.to_string_lossy().to_string();
+        let port = Arc::new(RecordingSessionPort::default());
+        let runtime = AgentRuntimeBuilder::new()
+            .with_submission_port(port.clone())
+            .with_session_management_port(port.clone())
+            .build()
+            .expect("runtime");
+        let expected = AgentSessionRenameRequest {
+            workspace_path: workspace_path.clone(),
+            session_id: "session-1".to_string(),
+            session_name: "Auth refactor".to_string(),
+            remote_connection_id: None,
+            remote_ssh_host: None,
+        };
+
+        runtime
+            .rename_session(expected.clone())
+            .await
+            .expect("embedded rename");
+
+        rename_owned_session(
+            &runtime,
+            &canonical_workspace,
+            RuntimeSessionRenameRequest {
+                session_id: "session-1".to_string(),
+                session_name: "Auth refactor".to_string(),
+            },
+        )
+        .await
+        .expect("shared rename");
+
+        assert_eq!(
+            port.rename_requests.lock().unwrap().as_slice(),
+            &[expected.clone(), expected]
+        );
+    }
+
+    #[tokio::test]
+    async fn embedded_and_shared_delete_reach_the_same_runtime_owner() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let canonical_workspace = dunce::canonicalize(workspace.path()).expect("workspace path");
+        let workspace_path = canonical_workspace.to_string_lossy().to_string();
+        let port = Arc::new(RecordingSessionPort::default());
+        let runtime = AgentRuntimeBuilder::new()
+            .with_submission_port(port.clone())
+            .with_session_management_port(port.clone())
+            .build()
+            .expect("runtime");
+        let expected = AgentSessionDeleteRequest {
+            workspace_path,
+            session_id: "session-2".to_string(),
+            remote_connection_id: None,
+            remote_ssh_host: None,
+        };
+
+        runtime
+            .delete_session(expected.clone())
+            .await
+            .expect("embedded delete");
+
+        delete_owned_session(&runtime, &canonical_workspace, "session-2".to_string())
+            .await
+            .expect("shared delete");
+
+        assert_eq!(
+            port.delete_requests.lock().unwrap().as_slice(),
+            &[expected.clone(), expected]
         );
     }
 

@@ -256,12 +256,15 @@ Headless CLI 和公开 Agent SDK 都调用同一 Agent Runtime API，但交付�
 
 | 形态 | 默认部署 | 当前 Shared 范围 |
 |---|---|---|
-| 交互式 TUI | Embedded | 显式 `--shared` 后支持 Session list/create/restore、transcript、当前 Session Agent mode、Turn submit/cancel、Permission 和 UserInput |
+| 交互式 TUI | Embedded | 显式 `--shared` 后支持 Session list/create/restore、transcript、当前 Session rename/Agent mode/model、声明式上下文 reload、当前 Session 手动 context compaction、Turn submit/cancel、Permission 和 UserInput |
 | `bitfun exec` / CI | Embedded | 不接受 Shared；保持独立进程、stdout/stderr 和退出码语义 |
 | ACP / SDK Host / GUI / Remote / Peer | 各自既有部署 | 不消费 TUI IPC，也不因本开关改变生命周期 |
 
-Shared TUI 不提供 Session delete/fork、模型、Agent/Subagent 管理、MCP/扩展、账号同步、用量、observer、replay 或 controller transfer；对应入口给出明确的 Embedded 恢复建议，不在 Client 进程初始化第二套 Core owner。
-Shared 模式的命令面板、快捷键帮助和底部提示使用同一能力投影：`/agent`、Tab 和 Shift+Tab 只切换当前 Session 的 Agent mode，不进入管理页面；其他不支持动作不显示为可执行入口。Session 切换失败保留原控制权，单个连接已有活动 Turn 时拒绝重复提交和 mode update；事件订阅失效后当前视图立即失效并要求重启 Shared TUI。
+Shared TUI 不提供 Session delete/fork、模型目录/默认值、Agent/Subagent 管理、MCP/扩展、账号同步、用量、observer、replay 或 controller transfer；对应入口给出明确的 Embedded 恢复建议，不在 Client 进程初始化第二套 Core owner。
+Shared 模式的斜杠命令、快捷键帮助和底部提示使用同一能力投影：`/rename <name>` 修改当前 Session 名称；`/agent`、Tab 和 Shift+Tab 只切换当前 Session 的 Agent mode；`/models` 只切换当前 Session 的 model；`/reload [skills|instructions]` 刷新下一条消息使用的声明式上下文；OpenCode 对齐的 `/compact` 及其 `/summarize` alias 以一个可取消的 maintenance Turn 压缩当前 Session 上下文，不增加自创命令或快捷键。该 Turn 与普通对话共用 Session 原子准入，取得所有权后再读取待压缩上下文；权威 transcript 保留完整 tool payload，但重建模型上下文时排除该 maintenance Turn。Embedded 与 Shared 的 `/help` 都从 Action Registry 展示这些入口；在 slash menu 中选择 rename 只预填命令并等待用户输入名称。若外部来源使用相同命令名，用户明确选择的 BitFun 命令可完成这一次参数提交，即使偏好保存失败也不会重新弹出来源选择。它们不进入管理页面，也不修改未来 Session 的默认值。其他不支持动作不显示为可执行入口。Session 切换失败保留原控制权；单个连接已有活动 Turn 时拒绝重复提交、manual compaction 以及 Session rename/mode/model update，但允许 reload 只影响下一条消息；事件订阅失效后当前视图立即失效并要求重启 Shared TUI。
+
+部署差异由 CLI Runtime client 封装。Embedded 以 Rust 类型直接调用 `AgentRuntime`，不初始化 IPC 或执行 JSON 编解码；Shared 将同一业务请求映射为一个有界本机 frame，Client/Server 各自只编码一次，再交给同一 Runtime owner。多 TUI 复用一个 Runtime 进程，连接和队列保持有界，不按 TUI 数量复制 Session owner。详细的 4+1 视图、帧上限和并发边界见
+[`agent-runtime-deployment-design.md`](agent-runtime-deployment-design.md)。
 
 #### 管理与诊断
 
@@ -298,6 +301,8 @@ TUI renderer、实验性接口和完整外部 Server 协议按总矩阵明确降
 | 层/模块 | 负责 | 不负责 |
 |---|---|---|
 | `src/apps/cli` | Clap 入口、TUI 状态/渲染、终端事件、入口本地设置、命令展示与结构化输出 | 会话状态机、工具执行、权限裁决、插件内部 ABI、品牌能力真值 |
+| CLI Runtime client | 屏蔽 Embedded/Shared 部署差异，将 CLI 的类型化调用映射到进程内 Runtime 或私有本机 IPC | 实现 Session 业务规则、暴露公开 SDK 或在两种部署中复制行为 |
+| `adapters/agent-runtime-ipc` | Shared TUI 的私有本机 transport、严格握手、frame 上限、连接控制和封闭 operation 映射 | 服务 Embedded、公开协议、Remote transport 或 Runtime 业务 owner |
 | `assembly/product-capabilities` | Delivery Profile、Product Capability 计划、静态 eligibility、服务需求和组装计划 | 品牌资源读取、动态可用性、用户配置、UI 状态、具体服务创建 |
 | 产品构建期校验 | 校验产品定义、品牌资源、TUI 布局选择和内置扩展版本，输出产品组装结果 | 创建运行时服务、实现终端行为或保存用户配置 |
 | Product Assembly | 读取产品组装结果中本次 CLI 需要的字段，选择能力/服务/扩展，构建 Runtime Parts | 读取原始品牌资源、实现 Agent/Tool/插件适配器/终端行为或运行构建脚本 |
@@ -333,6 +338,8 @@ CLI/TUI 的会话创建、列出、删除、恢复和历史转录读取通过 Ru
 由 Desktop 和 Peer Host 分别转换为现有协议；Desktop 保留既有远程空结果，Peer Host 返回明确不支持错误，远程请求都不进入本地实现。快照记录、持久化、事件、历史截断与维护编排仍在原归属模块。
 账户同步、富历史及其他未覆盖操作继续使用经过审查的 Core compatibility 方法，直到各自具备明确 owner、稳定 DTO、远程语义和行为等价测试。
 这是一条垂直链路迁移，不是删除整个兼容接口或新建 CLI 专用服务层。
+
+交互式命令 `/rename <name>` 复用已有 Session rename owner。Runtime 只写名称相关 metadata，再发布内存名称；写入失败时先恢复旧 metadata，无法确认恢复结果则返回 `outcome_unknown`。Shared 请求写入后的超时或断连也返回 `outcome_unknown`。两种情况都要求恢复 Session 后检查，不自动重试可能已经生效的写操作；发送前编码失败或请求过大则明确未执行并保留连接。Session 选择器不保留第二套内联重命名状态。
 
 Runtime Configuration Service 当前由 `bitfun-core/service/config` 负责。在经评审的 port/provider
 迁移完成前，CLI 和生态适配器不得另建写入器；adapter 只做 discover/parse/normalize，配置服务才能
@@ -487,10 +494,10 @@ Configuration 只能覆盖产品定义明确允许的默认值；用户插件只
 Plugin/Tool、可执行 Skill/Command、MCP/LSP/Formatter、远程 Reference 等 L2/L3 内容在 OC-R2 完成归属模块保护
 前只发现和展示；完成后仍须在首次启用或能力扩大时确认。它们无需先迁移；
 显式导入用于用户希望取得 BitFun 独立管理快照的场景。当前只落地两个经过评审的窄切片：Desktop 与
-`bitfun mcp import` 可以预览 OpenCode / Claude Code 中语义等价的 MCP 安全声明，只有显式 `--apply` 才原子写入现有
+`bitfun mcp import` 可以预览 OpenCode、Claude Code 与 Codex 中语义等价的 MCP 安全声明，只有显式 `--apply` 才原子写入现有
 BitFun MCP 配置；`bitfun hooks` 和统一 `/hooks` 可预览 Claude Code / Codex 中受支持的同步 command Hook，并用精确
 计划指纹确认后复制到现有原生 Hook 层。两者都不写回来源文件，也不表示通用 Canonical Config 导入已进入 CLI-P1。
-MCP 的 Codex 投影、凭据、header、env、cwd、通用导入记录和 undo 均未实现；Hook 的 OpenCode、非 command 或依赖
+MCP 的凭据、header、env、cwd、通用导入记录和 undo 均未实现；Hook 的 OpenCode、非 command 或依赖
 外部 Runtime 的 handler 仍只静态展示。其他资产在 CLI-P0 仍截止到 Dry-run，只有各自经过评审的 apply 切片才能写入：
 
 ```text
@@ -505,6 +512,13 @@ Hook C0：脱敏发现 -> 精确命令预览 | 指纹确认 -> 原子发布本�
 返回类型化 `action-required`；无关待办只进入结构化状态或 `stderr` 摘要，不等待不可见输入，也不自动批准。
 当前只能静态预览的 custom tool 名称只显示“已发现，未执行”。
 
+Codex MCP 快照沿用同一 `bitfun mcp import` 心智：local stdio 只在没有 environment 且无需 effective working directory
+时接纳；显式 cwd 或当前 workspace 形成的隐式 cwd 都返回“需要设置”，避免导入后改用 BitFun 进程目录。remote 只接纳无
+userinfo/query/fragment/header/bearer 和额外 OAuth 语义的纯 HTTPS URL；其他字段返回“需要设置”或“不支持”，不做降级
+复制。导入结果仍为 disabled、`autoStart: false`。Desktop 在已有导入卡内默认选中全部 eligible 项并允许逐项取消；
+plan stale 后只保留旧选择与新 eligible 项的交集，新候选不自动选中。CLI 保持默认全量和重复 `--candidate` 缩小集合，
+仅在展示名重复时附带既有 candidate ID 消歧，不新增生态专用命令。
+
 导入预览只使用四种用户可读结论：可直接使用、需要转换、会发生功能降级、输入无效。每项同时说明是原地
 引用、写入 BitFun 配置、继续保持外部来源还是不支持；不得用“已映射”推导为已写入、已信任或已启用。
 
@@ -516,7 +530,8 @@ Hook C0：脱敏发现 -> 精确命令预览 | 指纹确认 -> 原子发布本�
 仍等于导入值的字段；用户后续修改、来源变化或部分重新导入造成冲突时，逐字段选择“保留 BitFun / 重新导入
 外部 / 手工处理”，不得整批覆盖。
 
-下表描述目标覆盖范围；当前能力仅限上文列出的 MCP C0a 与 Hook C0，不能由本表推导出其他资产已经实现。
+下表描述目标覆盖范围；显式配置导入能力仍仅限上文列出的 MCP C0a 与 Hook C0。Skill 的原地发现与调用使用下文所述
+的既有 Skill Registry 路径，不属于显式配置导入，也不能由本表推导出其他资产已经实现。
 
 | 来源 | 目标可导入 | 目标不导入 |
 |---|---|---|
@@ -527,16 +542,46 @@ Hook C0：脱敏发现 -> 精确命令预览 | 指纹确认 -> 原子发布本�
 规则文件优先复用项目已有文件，不复制出第二份内容。若不同生态规则冲突，导入报告必须展示目标文件、
 优先级和冲突段，不能自动拼接。
 
-当前 Workspace Instructions 只消费真实工作区根：本地和 Remote 共用 `WorkspaceFileSystem` 读取，
-`AGENTS.override.md` 文件存在时替代同目录 `AGENTS.md`（空文件也不回退），`CLAUDE.md` 继续作为独立来源按既有顺序追加。
-运行时尚无稳定的嵌套活动目录事实，因此不声明 root-to-cwd 级联；全局规则、Claude rules/import、OpenCode
-`instructions` glob/URL、变化监听和冲突报告也不属于当前实现。
+当前 Workspace Instructions 只消费真实工作区根，本地和 Remote 共用同一个解析器与 `WorkspaceFileSystem` 端口。
+固定顺序是：`AGENTS.override.md`（存在时替代 `AGENTS.md`，空文件也不回退）、根 `CLAUDE.md` 或
+`.claude/CLAUDE.md`、`CLAUDE.local.md`、不带 `paths` front matter 的 `.claude/rules/**/*.md`，最后是项目根与
+`.opencode` 中 `opencode.json/jsonc` 的本地 `instructions` 文件或 glob。Claude `@import` 只跟随工作区内文件，
+深度上限为 5，并对重复和循环引用去重；所有目录遍历都跳过符号链接。运行时尚无稳定的嵌套活动目录事实，因此
+不声明 root-to-cwd 级联。递归扫描跳过 VCS、依赖与构建目录，并对扫描节点、文件数量、单文件和总内容字节设置固定
+上限，避免宽 glob 阻塞本地或 Remote 工作区。Claude path-scoped rules、全局规则、OpenCode 远程 URL、变化监听和冲突
+报告也不属于当前实现。
 
 现有对 `.claude/.codex/.opencode/.agents` Skill 根的直接发现已经保留来源身份和全局/项目使用范围，并在 GUI/TUI
-展示来源和默认覆盖状态，模式配置再展示实际采用项；固定根顺序保持为 Skill Registry 的独立回归契约。
+展示来源和默认覆盖状态，模式配置再展示实际采用项；固定根顺序保持为 Skill Registry 的独立回归契约。Registry 仅按
+既有 source slot 在内部选择来源方言，不向用户增加主选择器，也不让本地与 Remote 分支各自猜测路径。
 Skill Registry 还保留来源资产声明的隐式调用意图：Claude `SKILL.md` 的 `disable-model-invocation: true` 与 Codex
 `agents/openai.yaml` 的 `policy.allow_implicit_invocation: false` 都会让 Skill 不进入模型自动目录，但不影响 `/skills`、
-模式配置和显式加载。BitFun 不继承来源产品的全局启停策略，也未实现 URL/额外根和自动变化监听。
+模式配置和显式加载。Claude `user-invocable: false` 与上述模型调用策略相互独立：它只让 Skill 不进入 Web/CLI 的用户
+调用选择器，不从管理目录删除，也不改变模型目录或现有启停状态。缺省时 Skill 可由用户调用；`argument-hint` 只作为
+选择器提示显示，不自动写入输入框。Web 与 CLI/TUI 选择 Skill 后统一生成 `[$skill-name]` 引用，用户可以直接在后面继续
+输入参数，不需要先导入、复制或学习第二种启用流程。
+
+显式调用仍由现有 `SkillTool` 和 Skill Registry 加载实际优先级赢家，本地与 Remote 分支沿用同一加载语义。工具的可选
+`arguments` 字段使用共享的静态模板展开：支持原始 `$ARGUMENTS`、从零开始的 `$ARGUMENTS[N]` 和 `$N`、单/双引号
+分组以及 `\$` 转义；缺失的位置参数保留原占位符，模板没有未转义占位符时才追加 `ARGUMENTS:` 段。该展开器只处理
+字符串，不执行命令、脚本或动态变量。未携带 `arguments` 的旧工具调用保持原 Skill 正文不变。
+
+Claude Skill 使用目录名作为稳定调用身份；frontmatter `description` 可缺省并回退正文首个非空段落，可选
+`when_to_use` 只能与已有描述合并，合并后限制为 1536 个 Unicode 字符。`arguments` 可声明为空白分隔字符串或字符串列表，并按顺序把
+`$name` 绑定到同一个调用参数列表；缺失命名参数展开为空，位置参数兼容规则不变。Codex Skill 在缺少 `name` 时回退
+目录名，但仍要求 `description`。`.agents/.opencode/.bitfun/.cursor` 继续使用原有严格语义。Claude `allowed-tools` 不授予
+预批准；`context`/`fork`、`agent`、`model`、`effort`、`hooks`、`paths`、`shell`、`runtime` 及动态 shell/runtime 变量等未接通行为会
+整体拒绝加载，而不是静默忽略后部分执行。
+
+这项能力不新增导入记录、来源图、后台 watcher 或第二套刷新生命周期。用户只需要一个手动入口：`/reload` 同时刷新
+Skill Registry 并失效当前 Session 的 Workspace Instructions 缓存；`/reload skills` 与 `/reload instructions` 用于只刷新
+一类内容。Desktop、Embedded CLI 与 Shared TUI 共用同一 core 协调入口，但 Skill Registry 刷新和 Session
+`UserContext` 缓存失效仍由各自既有 owner 完成。指令变更从下一条消息开始生效；运行期不承诺文件监听或当前生成中的
+消息热替换。缓存 generation 会拒绝活动 Turn 在失效之后写回的旧构建结果；旧 `/reload-skills` 输入仅作为隐藏兼容别名
+映射到 `/reload skills`，不增加第二个命令入口。
+本切片也不实现 `allowed-tools` 的权限预批准、`context`、`fork`、`agent`、`model`、动态 shell/runtime 变量、URL、祖先目录
+级联、插件 Runtime 或 OpenCode 复杂 Hook。后续只有在存在稳定消费方和独立安全边界时才扩展这些语义。
+
 Skill 说明和索引可按 L1 处理，脚本、URL 和外部依赖按 L2 确认；显式导入仍不得复制凭据值。MCP 启用状态按
 OpenCode 来源解释，首次连接、策略限制和凭据缺失分别显示。
 

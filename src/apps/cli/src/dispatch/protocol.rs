@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use bitfun_agent_runtime::sdk::{PermissionReply, PermissionRequest};
-use bitfun_services_core::dispatch_workspace::WorkspaceSnapshotMetadata;
+use bitfun_services_core::dispatch_workspace::{WorkspaceResultSummary, WorkspaceSnapshotMetadata};
 
 pub(crate) const DISPATCH_PROTOCOL_VERSION: u32 = 2;
 pub(crate) const MAX_DISPATCH_TEXT_BYTES: usize = 32 * 1024;
@@ -184,6 +184,48 @@ pub(crate) struct DispatchWorkspaceCommitResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) workspace_path: Option<String>,
     pub(crate) metadata: WorkspaceSnapshotMetadata,
+}
+
+/// Ask the target to diff its terminal tree against the delivered snapshot.
+///
+/// Read-only on the target: it builds a bundle and reports what changed. The
+/// controller decides whether to fetch it, and applying it locally is a
+/// separate step the user confirms.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct DispatchWorkspaceResultRequest {
+    pub(crate) job_id: String,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DispatchWorkspaceResultResponse {
+    /// Absolute path of the bundle on the target, for the controller to fetch.
+    pub(crate) bundle_path: String,
+    pub(crate) workspace_path: String,
+    pub(crate) summary: WorkspaceResultSummary,
+}
+
+/// Read a slice of an already-built result bundle.
+///
+/// Exists for transports with no file channel of their own: SSH pulls the
+/// bundle over SFTP, but an account device can only carry JSON, so it streams
+/// the same bytes back in chunks — the mirror of the upload path.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct DispatchWorkspaceResultChunkRequest {
+    pub(crate) job_id: String,
+    pub(crate) offset: u64,
+    pub(crate) length: u64,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DispatchWorkspaceResultChunkResponse {
+    pub(crate) offset: u64,
+    pub(crate) data_base64: String,
+    /// True once this chunk reaches the end of the bundle.
+    pub(crate) eof: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]

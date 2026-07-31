@@ -19,11 +19,13 @@ import {
   reconcileUnsignaledShrinkReservation,
   releasePinReservationForUserNavigation,
   resolveAutoCollapseAnchorScrollTop,
+  resolveCollapseIntentSettlementStrategy,
+  resolveFollowingTailShrinkClampRecovery,
   resolveProvisionalStickyPinReservationPx,
+  resolveStickyPinGrowthSettlementStrategy,
   settleRetainedCollapseReservationForAnchor,
-  settleCollapseReservationForPreservedViewport,
+  settleCollapseReservationForViewport,
   shouldBypassShrinkCompensationInTailFollow,
-  shouldPreserveCollapseReservationAfterIntent,
   shouldClearExpiredProvisionalStickyPin,
   shouldSyncPhysicalBottom,
   shouldSuppressFollowingTailNegativeScrollBy,
@@ -439,7 +441,7 @@ describe('VirtualMessageList session boundary', () => {
 
   it('transfers collapse space to a sticky pin in one reservation state', () => {
     const currentState = {
-      collapse: { kind: 'collapse' as const, px: 1_583, floorPx: 0 },
+      collapse: { kind: 'collapse' as const, px: 1_583, floorPx: 181 },
       pin: {
         kind: 'pin' as const,
         px: 0,
@@ -450,8 +452,8 @@ describe('VirtualMessageList session boundary', () => {
     };
     const nextPin = {
       ...currentState.pin,
-      px: 378,
-      floorPx: 378,
+      px: 559,
+      floorPx: 559,
     };
 
     expect(transferCollapseReservationToPin(currentState, nextPin)).toEqual({
@@ -603,7 +605,7 @@ describe('VirtualMessageList session boundary', () => {
   });
 
   it('protects a settled element range from later unsignaled shrink reconciliation', () => {
-    const settledState = settleCollapseReservationForPreservedViewport({
+    const settledState = settleCollapseReservationForViewport({
       collapse: { kind: 'collapse', px: 1_022, floorPx: 670 },
       pin: {
         kind: 'pin',
@@ -622,6 +624,23 @@ describe('VirtualMessageList session boundary', () => {
       px: 702,
       floorPx: 702,
     });
+
+    const settledPinnedRange = settleCollapseReservationForViewport({
+      collapse: { kind: 'collapse', px: 152.7, floorPx: 67.7 },
+      pin: {
+        kind: 'pin',
+        px: 674.6,
+        floorPx: 674.6,
+        mode: 'sticky-latest',
+        targetTurnId: 'turn-a',
+      },
+    }, {
+      scrollTop: 5_122,
+      scrollHeight: 6_235,
+      clientHeight: 1_027,
+    });
+    expect(settledPinnedRange.collapse.px).toBeCloseTo(67.7, 1);
+    expect(settledPinnedRange.collapse.floorPx).toBeCloseTo(67.7, 1);
 
     const protectedState = protectCurrentCollapseReservation({
       collapse: { kind: 'collapse', px: 784, floorPx: 670 },
@@ -804,13 +823,22 @@ describe('VirtualMessageList session boundary', () => {
       collapseProtectionActive: false,
       wasAtPhysicalBottom: true,
       ownsElementAnchor: true,
+      isFollowingTail: false,
     })).toBe(false);
     expect(shouldSyncPhysicalBottom({
       viewportGeometryChanged: true,
       collapseProtectionActive: false,
       wasAtPhysicalBottom: true,
       ownsElementAnchor: false,
+      isFollowingTail: false,
     })).toBe(true);
+    expect(shouldSyncPhysicalBottom({
+      viewportGeometryChanged: true,
+      collapseProtectionActive: false,
+      wasAtPhysicalBottom: true,
+      ownsElementAnchor: false,
+      isFollowingTail: true,
+    })).toBe(false);
   });
 
   it('suppresses only negative virtualizer compensation while following the streaming tail', () => {
@@ -840,6 +868,53 @@ describe('VirtualMessageList session boundary', () => {
     })).toBe(false);
   });
 
+  it('recognizes only a non-user physical-bottom clamp from a shrinking scroll range', () => {
+    const clampGeometry = {
+      previousGeometry: {
+        scrollTop: 645.3333129882812,
+        scrollHeight: 1_673,
+        clientHeight: 1_027,
+      },
+      currentGeometry: {
+        scrollTop: 402.6666564941406,
+        scrollHeight: 1_430,
+        clientHeight: 1_027,
+      },
+      isFollowingOutput: true,
+      isStreamingOutput: true,
+      hasRecentUserUpwardIntent: false,
+      scrollbarPointerInteractionActive: false,
+      collapseProtectionActive: false,
+    };
+
+    const recovery = resolveFollowingTailShrinkClampRecovery(clampGeometry);
+    expect(recovery?.targetScrollTop).toBe(645.3333129882812);
+    expect(recovery?.rangeShrinkPx).toBe(243);
+    expect(recovery?.scrollClampPx).toBeCloseTo(242.6666564941406, 10);
+    expect(resolveFollowingTailShrinkClampRecovery({
+      ...clampGeometry,
+      hasRecentUserUpwardIntent: true,
+    })).toBeNull();
+    expect(resolveFollowingTailShrinkClampRecovery({
+      ...clampGeometry,
+      isFollowingOutput: false,
+    })).toBeNull();
+    expect(resolveFollowingTailShrinkClampRecovery({
+      ...clampGeometry,
+      currentGeometry: {
+        ...clampGeometry.currentGeometry,
+        scrollTop: 500,
+      },
+    })).toBeNull();
+    expect(resolveFollowingTailShrinkClampRecovery({
+      ...clampGeometry,
+      currentGeometry: {
+        ...clampGeometry.currentGeometry,
+        clientHeight: 900,
+      },
+    })).toBeNull();
+  });
+
   it('cancels unsettled sticky pin growth only for unsignaled height corrections', () => {
     expect(getCanceledUnsettledStickyPinGrowthPx({
       pendingGrowthPx: 207,
@@ -858,7 +933,77 @@ describe('VirtualMessageList session boundary', () => {
     })).toBe(0);
   });
 
-  it('lets known streaming collapses reconcile while preserving their reservation', () => {
+  it('settles sticky pin growth as soon as it exhausts the remaining pin floor', () => {
+    expect(resolveStickyPinGrowthSettlementStrategy({
+      pendingGrowthPx: 0,
+      pinFloorPx: 11.77,
+      hasActiveCollapseIntent: false,
+    })).toBe('none');
+    expect(resolveStickyPinGrowthSettlementStrategy({
+      pendingGrowthPx: 10,
+      pinFloorPx: 11.77,
+      hasActiveCollapseIntent: false,
+    })).toBe('wait-for-quiet');
+    expect(resolveStickyPinGrowthSettlementStrategy({
+      pendingGrowthPx: 126,
+      pinFloorPx: 11.77,
+      hasActiveCollapseIntent: true,
+    })).toBe('wait-for-collapse');
+    expect(resolveStickyPinGrowthSettlementStrategy({
+      pendingGrowthPx: 126,
+      pinFloorPx: 11.77,
+      hasActiveCollapseIntent: false,
+    })).toBe('settle-now');
+  });
+
+  it('selects an explicit settlement strategy for each collapse viewport owner', () => {
+    const stickyReservation = {
+      collapse: { kind: 'collapse' as const, px: 152.7, floorPx: 67.7 },
+      pin: {
+        kind: 'pin' as const,
+        px: 674.6,
+        floorPx: 674.6,
+        mode: 'sticky-latest' as const,
+        targetTurnId: 'turn-a',
+      },
+    };
+
+    expect(resolveCollapseIntentSettlementStrategy({
+      coordinatorMode: 'pinned-item',
+      isFollowingOutput: false,
+      isStreamingOutput: true,
+      reservation: stickyReservation,
+    })).toBe('reconcile-sticky-pin');
+    expect(resolveCollapseIntentSettlementStrategy({
+      coordinatorMode: 'following-tail',
+      isFollowingOutput: true,
+      isStreamingOutput: true,
+      reservation: stickyReservation,
+    })).toBe('retain-following-tail');
+    expect(resolveCollapseIntentSettlementStrategy({
+      coordinatorMode: 'preserving-element',
+      isFollowingOutput: false,
+      isStreamingOutput: true,
+      reservation: stickyReservation,
+    })).toBe('settle-preserved-element');
+    expect(resolveCollapseIntentSettlementStrategy({
+      coordinatorMode: 'idle',
+      isFollowingOutput: false,
+      isStreamingOutput: true,
+      reservation: stickyReservation,
+    })).toBe('settle-protected-viewport');
+    expect(resolveCollapseIntentSettlementStrategy({
+      coordinatorMode: 'idle',
+      isFollowingOutput: false,
+      isStreamingOutput: true,
+      reservation: {
+        ...stickyReservation,
+        collapse: { ...stickyReservation.collapse, floorPx: 0 },
+      },
+    })).toBe('drain');
+  });
+
+  it('lets known streaming collapses reconcile without bypassing active intents', () => {
     expect(shouldBypassShrinkCompensationInTailFollow({
       isFollowingOutput: true,
       isStreamingOutput: true,
@@ -869,30 +1014,6 @@ describe('VirtualMessageList session boundary', () => {
       isStreamingOutput: true,
       hasActiveCollapseIntent: true,
     })).toBe(false);
-    expect(shouldPreserveCollapseReservationAfterIntent({
-      isFollowingOutput: true,
-      isStreamingOutput: true,
-      isPreservingElement: false,
-      hasProtectedCollapseRange: false,
-    })).toBe(true);
-    expect(shouldPreserveCollapseReservationAfterIntent({
-      isFollowingOutput: false,
-      isStreamingOutput: true,
-      isPreservingElement: false,
-      hasProtectedCollapseRange: false,
-    })).toBe(false);
-    expect(shouldPreserveCollapseReservationAfterIntent({
-      isFollowingOutput: false,
-      isStreamingOutput: true,
-      isPreservingElement: true,
-      hasProtectedCollapseRange: false,
-    })).toBe(true);
-    expect(shouldPreserveCollapseReservationAfterIntent({
-      isFollowingOutput: false,
-      isStreamingOutput: true,
-      isPreservingElement: false,
-      hasProtectedCollapseRange: true,
-    })).toBe(true);
   });
 
   it('recovers the last stable scroll position when an auto collapse arrives after clamp', () => {
@@ -1035,6 +1156,65 @@ describe('VirtualMessageList session boundary', () => {
       footerHeightBeforeCollapse + 151,
       2,
     );
+  });
+
+  it('recovers a late following-tail shrink clamp after collapse protection was released', () => {
+    flowDiagnosticsMocks.enabled = true;
+    const session = createSession('session-a', 'turn-a');
+    session.dialogTurns[0].status = 'processing';
+    session.dialogTurns[0].modelRounds = [{
+      id: 'round-turn-a',
+      status: 'streaming',
+      isStreaming: true,
+      items: [],
+      startTime: 1,
+    } as typeof session.dialogTurns[number]['modelRounds'][number]];
+    stateMocks.activeSession = session;
+    stateMocks.virtualItems = [createItem('turn-a'), createModelItem('turn-a')];
+
+    act(() => {
+      root.render(<VirtualMessageList />);
+    });
+
+    const scroller = container.querySelector<HTMLElement>('[data-virtuoso-scroller="true"]');
+    const footer = container.querySelector<HTMLElement>('.message-list-footer');
+    expect(scroller).not.toBeNull();
+    expect(footer).not.toBeNull();
+    if (!scroller || !footer) {
+      return;
+    }
+
+    let contentHeight = 2_076;
+    Object.defineProperties(scroller, {
+      clientHeight: { configurable: true, value: 1_000 },
+      scrollHeight: {
+        configurable: true,
+        get: () => contentHeight + (Number.parseFloat(footer.style.height) || 0),
+      },
+      scrollTop: { configurable: true, writable: true, value: 0 },
+    });
+    const footerHeightBeforeClamp = Number.parseFloat(footer.style.height);
+    const stableScrollTop = scroller.scrollHeight - scroller.clientHeight;
+    scroller.scrollTop = stableScrollTop;
+    act(() => {
+      window.dispatchEvent(new Event('resize'));
+    });
+
+    contentHeight -= 250;
+    scroller.scrollTop = scroller.scrollHeight - scroller.clientHeight;
+    act(() => {
+      scroller.dispatchEvent(new Event('scroll', { bubbles: true }));
+    });
+
+    expect(scroller.scrollTop).toBe(stableScrollTop);
+    expect(Number.parseFloat(footer.style.height)).toBeCloseTo(
+      footerHeightBeforeClamp + 251,
+      2,
+    );
+    expect(flowDiagnosticsMocks.trace).toHaveBeenCalledWith(expect.objectContaining({
+      location: 'VirtualMessageList.handleScroll',
+      message: 'Following-tail shrink clamp recovered as a viewport transaction',
+    }));
   });
 
   it('retains following-tail collapse protection after the animation finalizer', () => {

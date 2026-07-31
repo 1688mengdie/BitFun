@@ -103,6 +103,21 @@ const PRESETS: AcpClientPreset[] = [
 
 const PRESET_BY_ID = new Map(PRESETS.map(preset => [preset.id, preset]));
 
+interface SelfManagedInstallInfo extends Record<string, string> {
+  name: string;
+  command: string;
+}
+
+function selfManagedInstallInfoForPreset(preset?: AcpClientPreset): SelfManagedInstallInfo | null {
+  if (!preset || !SELF_MANAGED_INSTALL_PRESET_IDS.has(preset.id)) {
+    return null;
+  }
+  return {
+    name: preset.name,
+    command: preset.command,
+  };
+}
+
 function loadRequirementProbes(options: { force?: boolean } = {}): Promise<AcpClientRequirementProbe[]> {
   return ACPClientAPI.probeClientRequirements({ force: options.force });
 }
@@ -344,7 +359,7 @@ function AgentStatusBadge({
 
 const AcpAgentsConfig: React.FC = () => {
   const { t } = useTranslation('settings/acp-agents');
-  const { error: notifyError, success: notifySuccess } = useNotification();
+  const { error: notifyError, info: notifyInfo, success: notifySuccess } = useNotification();
   const jsonEditorRef = useRef<HTMLTextAreaElement>(null);
 
   const [config, setConfig] = useState<AcpClientConfigFile>({ acpClients: {} });
@@ -682,7 +697,10 @@ const AcpAgentsConfig: React.FC = () => {
     ),
   });
 
-  const saveConfig = async (nextConfig = config, options: { mergeEnvDrafts?: boolean } = {}) => {
+  const saveConfig = async (
+    nextConfig = config,
+    options: { mergeEnvDrafts?: boolean; successMessage?: string } = {}
+  ) => {
     savingConfigRef.current = true;
     try {
       setSaving(true);
@@ -698,7 +716,7 @@ const AcpAgentsConfig: React.FC = () => {
       await refreshRequirementProbes({ force: true, notifyOnError: false });
       loadedRemoteProbeIdsRef.current.clear();
       setRemoteProbeRefreshNonce(prev => prev + 1);
-      notifySuccess(t('notifications.saveSuccess'));
+      notifySuccess(options.successMessage ?? t('notifications.saveSuccess'));
     } catch (error) {
       log.error('Failed to save ACP agent config', error);
       notifyError(error instanceof Error ? error.message : String(error), {
@@ -710,7 +728,10 @@ const AcpAgentsConfig: React.FC = () => {
     }
   };
 
-  const addPresetClient = async (preset: AcpClientPreset) => {
+  const addPresetClient = async (
+    preset: AcpClientPreset,
+    options: { manualCliRequired?: boolean } = {}
+  ) => {
     const nextClient = defaultConfigForPreset(preset);
     const next = {
       ...config,
@@ -726,7 +747,15 @@ const AcpAgentsConfig: React.FC = () => {
       [preset.id]: formatEnv(nextClient.env),
     }));
     setDirty(true);
-    await saveConfig(next, { mergeEnvDrafts: false });
+    await saveConfig(next, {
+      mergeEnvDrafts: false,
+      successMessage: options.manualCliRequired
+        ? t('notifications.configAddedManualCliRequired', {
+          name: preset.name,
+          command: preset.command,
+        })
+        : t('notifications.configAdded'),
+    });
   };
 
   const saveJsonConfig = async () => {
@@ -824,8 +853,9 @@ const AcpAgentsConfig: React.FC = () => {
     issueKind: RequirementIssueKind;
     probe?: AcpClientRequirementProbe;
     requiresAdapter: boolean;
+    selfManagedInstallInfo?: SelfManagedInstallInfo | null;
   }) => {
-    const { status, issueKind, probe, requiresAdapter } = args;
+    const { status, issueKind, probe, requiresAdapter, selfManagedInstallInfo } = args;
     const lines: string[] = [];
     if (status === 'enabled') {
       lines.push(t('registry.enabled'));
@@ -848,7 +878,11 @@ const AcpAgentsConfig: React.FC = () => {
     } else if (issueKind === 'adapter_missing' || (requiresAdapter && probe?.adapter && !probe.adapter.installed)) {
       lines.push(t('registry.acpMissingDetail'));
     } else if (issueKind === 'cli_missing' || probe?.tool.installed === false) {
-      lines.push(t('registry.cliMissingDetail'));
+      lines.push(
+        selfManagedInstallInfo
+          ? t('registry.selfManagedCliMissingDetail', selfManagedInstallInfo)
+          : t('registry.cliMissingDetail')
+      );
     } else if (status === 'invalid') {
       lines.push(t('registry.configInvalidDetail'));
     }
@@ -874,6 +908,12 @@ const AcpAgentsConfig: React.FC = () => {
   const getRemoteSummary = useCallback((available: number, total: number) => {
     return t('remote.summary', { available, total });
   }, [t]);
+
+  const showSelfManagedInstallInfo = useCallback((info: SelfManagedInstallInfo) => {
+    notifyInfo(t('registry.selfManagedCliMissingDetail', info), {
+      title: t('registry.cliMissing'),
+    });
+  }, [notifyInfo, t]);
 
   const openLearnMore = useCallback(() => {
     void systemAPI.openExternal('https://agentclientprotocol.com/get-started/introduction').catch((error) => {
@@ -1022,8 +1062,9 @@ const AcpAgentsConfig: React.FC = () => {
                 const hasConfigEntry = Boolean(config.acpClients[preset.id]);
                 const configured = hasConfigEntry;
                 const enabled = clientConfig.enabled;
-                const requiresAdapter = preset.id !== 'opencode' || Boolean(requirementProbe?.adapter);
+                const requiresAdapter = Boolean(requirementProbe?.adapter || !NATIVE_ACP_PRESET_IDS.has(preset.id));
                 const issueKind = getIssueKind({ probe: requirementProbe, requiresAdapter });
+                const selfManagedInstallInfo = selfManagedInstallInfoForPreset(preset);
                 const status = getAgentRowStatus({
                   configured,
                   enabled,
@@ -1039,11 +1080,15 @@ const AcpAgentsConfig: React.FC = () => {
                   probe: requirementProbe,
                   requiresAdapter,
                 });
+                const selfManagedCliMissing = Boolean(selfManagedInstallInfo)
+                  && status === 'not_installed'
+                  && (issueKind === 'cli_missing' || requirementProbe?.tool.installed === false);
                 const statusTitle = getStatusTitle({
                   status,
                   issueKind,
                   probe: requirementProbe,
                   requiresAdapter,
+                  selfManagedInstallInfo,
                 });
                 const installing = installingClientIds.has(preset.id);
                 const configuring = installingClientIds.has(preset.id);
@@ -1118,6 +1163,16 @@ const AcpAgentsConfig: React.FC = () => {
                           <FileJson size={14} />
                           {t('actions.configureAcp')}
                         </Button>
+                      ) : selfManagedCliMissing && hasConfigEntry && selfManagedInstallInfo ? (
+                        <Button
+                          className="bitfun-acp-agents__add-button"
+                          variant="secondary"
+                          size="small"
+                          onClick={() => showSelfManagedInstallInfo(selfManagedInstallInfo)}
+                        >
+                          <CircleAlert size={14} />
+                          {t('actions.viewInstructions')}
+                        </Button>
                       ) : canViewError ? (
                         <Button
                           className="bitfun-acp-agents__add-button"
@@ -1133,16 +1188,20 @@ const AcpAgentsConfig: React.FC = () => {
                           <CircleAlert size={14} />
                           {t('actions.viewError')}
                         </Button>
-                      ) : (
+                      ) : !hasConfigEntry ? (
                         <Button
                           className="bitfun-acp-agents__add-button"
                           variant="secondary"
                           size="small"
-                          onClick={() => addPresetClient(preset)}
+                          onClick={() => addPresetClient(preset, {
+                            manualCliRequired: selfManagedCliMissing,
+                          })}
                         >
                           <Plus size={14} />
-                          {t('actions.add')}
+                          {selfManagedCliMissing ? t('actions.addConfig') : t('actions.add')}
                         </Button>
+                      ) : (
+                        null
                       )}
                     </div>
                   </div>
@@ -1274,8 +1333,11 @@ const AcpAgentsConfig: React.FC = () => {
                     const hasConfigEntry = Boolean(clientConfig);
                     const effectiveConfig = clientConfig ?? (preset ? defaultConfigForPreset(preset) : undefined);
                     const enabled = effectiveConfig?.enabled ?? true;
-                    const requiresAdapter = Boolean(requirementProbe?.adapter || preset?.id !== 'opencode');
+                    const requiresAdapter = Boolean(
+                      requirementProbe?.adapter || (preset && !NATIVE_ACP_PRESET_IDS.has(preset.id))
+                    );
                     const issueKind = getIssueKind({ probe: requirementProbe, requiresAdapter });
+                    const selfManagedInstallInfo = selfManagedInstallInfoForPreset(preset);
                     const status = getAgentRowStatus({
                       configured: hasConfigEntry,
                       enabled,
@@ -1300,6 +1362,7 @@ const AcpAgentsConfig: React.FC = () => {
                       enabled,
                       requiresAdapter,
                       issueKind,
+                      selfManagedInstallInfo,
                       status,
                       displayName,
                       description,
@@ -1369,9 +1432,13 @@ const AcpAgentsConfig: React.FC = () => {
                             issueKind: row.issueKind,
                             probe: row.requirementProbe,
                             requiresAdapter: row.requiresAdapter,
+                            selfManagedInstallInfo: row.selfManagedInstallInfo,
                           });
                           const canInstallCli = row.preset && row.status === 'not_installed' && row.issueKind === 'cli_missing'
                             && !SELF_MANAGED_INSTALL_PRESET_IDS.has(row.preset.id);
+                          const selfManagedCliMissing = Boolean(row.selfManagedInstallInfo)
+                            && row.status === 'not_installed'
+                            && (row.issueKind === 'cli_missing' || row.requirementProbe?.tool.installed === false);
                           const canViewError = row.status === 'invalid' || row.status === 'partial'
                             || row.issueKind === 'connection_failed'
                             || row.issueKind === 'permission_denied'
@@ -1430,6 +1497,16 @@ const AcpAgentsConfig: React.FC = () => {
                                   >
                                     <Download size={14} />
                                     {t('actions.installCli')}
+                                  </Button>
+                                ) : selfManagedCliMissing && row.selfManagedInstallInfo ? (
+                                  <Button
+                                    className="bitfun-acp-agents__add-button"
+                                    variant="secondary"
+                                    size="small"
+                                    onClick={() => showSelfManagedInstallInfo(row.selfManagedInstallInfo!)}
+                                  >
+                                    <CircleAlert size={14} />
+                                    {t('actions.viewInstructions')}
                                   </Button>
                                 ) : row.status === 'enabled' || row.status === 'ready' ? (
                                   row.clientConfig ? (

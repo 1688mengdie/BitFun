@@ -6,9 +6,9 @@ export const forbiddenContentRules = [
     reason: 'agent-runtime-ipc operation scope is frozen to the reviewed Shared TUI slice',
     patterns: [
       {
-        regex: /^\s+(?!(?:Health|ListSessions|CreateSession|RestoreSession|UpdateSessionMode|SubmitTurn|CancelTurn|PendingPermissions|RespondPermission|SubmitUserAnswers|Unit|Sessions|SessionCreated|SessionRestored|TurnAccepted|TurnCancelled|Self|AgentDialogTurnRequest|AgentSessionCreateRequest|AgentSessionCreateResult|AgentSessionListRequest|AgentSessionModeUpdateRequest|AgentSessionSummary|AgentTurnCancellationRequest|AgentTurnCancellationResult|SessionTranscript)\b)[A-Z][A-Za-z0-9_]*\b/,
+        regex: /^\s+(?!(?:Health|ListSessions|CreateSession|RestoreSession|DeleteSession|RenameSession|UpdateSessionMode|UpdateSessionModel|ReloadSessionContext|CompactSession|SubmitTurn|CancelTurn|PendingPermissions|RespondPermission|SubmitUserAnswers|Unit|Sessions|SessionCreated|SessionRestored|TurnAccepted|TurnCancelled|None|CurrentController|AttachExisting|UncontrolledTarget|Self|RuntimeIpcSessionRequirement|RuntimeIpcOperationRules|AgentContextReloadRequest|AgentDialogTurnRequest|AgentSessionCompactionRequest|AgentSessionCreateRequest|AgentSessionCreateResult|AgentSessionListRequest|AgentSessionModeUpdateRequest|AgentSessionModelUpdateRequest|AgentSessionSummary|AgentTurnCancellationRequest|AgentTurnCancellationResult|SessionTranscript)\b)[A-Z][A-Za-z0-9_]*\b/,
         message:
-          'agent-runtime-ipc may not add replay, observer, controller-transfer, deletion, fork, or other operations beyond the reviewed Shared TUI slice',
+          'agent-runtime-ipc may not add archive, replay, observer, controller-transfer, fork, or other operations beyond the reviewed Shared TUI slice',
       },
     ],
   },
@@ -4118,6 +4118,7 @@ export const forbiddenContentUnderRules = [
         allowPaths: [
           'src/crates/adapters/opencode-adapter/tests/opencode_source_adapter.rs',
           'src/crates/adapters/opencode-adapter/tests/opencode_command_adapter.rs',
+          'src/crates/adapters/opencode-adapter/tests/opencode_skill_roots.rs',
           'src/crates/adapters/opencode-adapter/tests/tool_source_contracts.rs',
           'src/crates/adapters/opencode-adapter/tests/opencode_subagent_adapter.rs',
           'src/crates/adapters/opencode-adapter/tests/opencode_mcp_adapter.rs',

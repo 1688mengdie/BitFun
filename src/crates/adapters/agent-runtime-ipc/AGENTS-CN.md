@@ -15,10 +15,11 @@
 ## 边界
 
 - 只导出 CLI adapter 实际使用的 workspace-private API，且 crate 不得发布，也不得把 wire 作为 SDK 合同。
-- 封闭 operation 范围为 Health、Session list/create/restore（restore 结果包含 transcript）、Turn submit/cancel、pending/respond Permission 和 UserInput answers。断连 cleanup 属于内部生命周期，不是 detach operation。禁止顺带加入 delete、fork、replay、observer、controller transfer、Tool/MCP/Hook 管理或产品配置。
+- 封闭 operation 范围为 Health、Session list/create/restore/delete（restore 结果包含 transcript）、当前 Session rename、Agent mode/model update 和手动 context compaction、声明式上下文 reload、Turn submit/cancel、pending/respond Permission 和 UserInput answers。delete 只允许作用于未被任何 Client 控制的空闲 Session。手动 compaction 要求当前 controller 且 Session 空闲；Client 在准入前提供精确 Turn ID，使超时或断连 cleanup 可以取消同一个 owned task；Core 开始原子 context commit 后，晚到取消不能暴露错误的空闲状态。上下文 reload 可在活动 Turn 中执行，不改写该 Turn，并通过缓存保护保证下一条消息重新读取已失效的 instructions。断连 cleanup 属于内部生命周期，不是 detach operation。模型目录和默认值仍是 wire 之外的产品配置；禁止顺带加入 archive、fork、replay、observer、controller transfer、Tool/MCP/Hook 管理或其他产品配置。
 - 可以复用稳定 Event、Product Domain 和 Runtime Port DTO。禁止依赖 `bitfun-core`、Agent Runtime 实现、SDK Host、services、Tauri、terminal、tool runtime 或远程 transport。
 - 只使用 Windows Named Pipe 或 Unix Domain Socket；禁止 TCP、HTTP、WebSocket、浏览器访问或远程 fallback。
 - 这是本机同用户隔离，不是沙箱。未来产品 composition 必须提供当前用户私有 runtime 目录。
+- Embedded 调用方必须继续以强类型直接调用 Agent Runtime，不能初始化本 transport。Shared 的 request、response 和 event frame 在写出前只编码一次；不能为了吞吐量削弱严格解码、未知字段拒绝、frame 上限、有界队列和背压。
 
 ## 验证
 

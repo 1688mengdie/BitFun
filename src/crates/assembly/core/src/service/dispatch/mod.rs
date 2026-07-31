@@ -18,14 +18,25 @@ use tokio::fs;
 
 use crate::infrastructure::PathManager;
 
+/// Result-bundle shapes the desktop layer returns to the renderer.
+#[cfg(feature = "ssh-remote")]
+pub use bitfun_services_core::dispatch_workspace::{
+    WorkspaceResultApplyOutcome, WorkspaceResultConflict, WorkspaceResultConflictReason,
+    WorkspaceResultSummary,
+};
 #[cfg(feature = "ssh-remote")]
 pub use controller::{
     answer as answer_dispatch, append as append_dispatch, cancel as cancel_dispatch,
     install_cli_cancel as cancel_dispatch_cli_install,
-    install_cli_poll as poll_dispatch_cli_install, install_cli_start as start_dispatch_cli_install,
+    install_cli_poll as poll_dispatch_cli_install,
+    install_cli_source_start as start_dispatch_cli_source_build,
+    install_cli_start as start_dispatch_cli_install,
     list_jobs as list_dispatch_jobs, list_targets as list_dispatch_targets,
-    probe_target as probe_dispatch_target, status as get_dispatch_status,
-    submit as submit_dispatch, DispatchAnswerRequest, DispatchAppendRequest,
+    apply_result as apply_dispatch_result, probe_target as probe_dispatch_target,
+    pull_result as pull_dispatch_result,
+    status as get_dispatch_status,
+    submit as submit_dispatch, sync_model_config as sync_dispatch_model_config,
+    DispatchAnswerRequest, DispatchApplyResultRequest, DispatchAppendRequest,
     DispatchConnectionRequest, DispatchInstallPollRequest, DispatchInstallStartRequest,
     DispatchJobRequest, DispatchListJobsRequest, DispatchListTargetsRequest,
     DispatchPermissionReplyKind, DispatchProbeTargetRequest, DispatchStatusRequest,
@@ -35,13 +46,17 @@ pub use controller::{
 pub use device_controller::{
     answer_device as answer_device_dispatch, append_device as append_device_dispatch,
     cancel_device as cancel_device_dispatch, list_device_jobs as list_device_dispatch_jobs,
-    probe_device as probe_device_dispatch_target, status_device as get_device_dispatch_status,
+    probe_device as probe_device_dispatch_target,
+    pull_device_result as pull_device_dispatch_result,
+    status_device as get_device_dispatch_status,
     submit_device as submit_device_dispatch, DeviceDispatchRpc,
 };
 pub use target::{DispatchTarget, DispatchTargetRequest, DispatchWorkspaceDeliveryRequest};
 
 const PROMPT_PREVIEW_CHARS: usize = 160;
 const OUTBOUND_WORKSPACE_UPLOADS_DIR: &str = ".workspace-uploads";
+/// Where pulled result bundles are staged before the user applies them.
+pub(super) const OUTBOUND_RESULTS_DIR: &str = ".results";
 const TERMINAL_OUTBOUND_RETENTION_DAYS: i64 = 30;
 
 #[derive(Debug, Clone)]
@@ -275,6 +290,16 @@ impl OutboundDispatchStore {
                             .num_days()
                             >= TERMINAL_OUTBOUND_RETENTION_DAYS =>
                 {
+                    // Best effort: a stranded bundle is disk waste, not a
+                    // correctness problem, and must not keep the expired record
+                    // alive forever.
+                    if let Err(error) = self.remove_result_bundle(&record.job_id).await {
+                        log::warn!(
+                            "Failed to remove expired dispatch result bundle: job_id={} error={}",
+                            record.job_id,
+                            error
+                        );
+                    }
                     if let Err(error) = self.remove_workspace_snapshot(&record.job_id).await {
                         log::warn!(
                             "Failed to remove expired outbound dispatch snapshot: job_id={} error={}",
@@ -428,6 +453,27 @@ impl OutboundDispatchStore {
         })
     }
 
+    /// Drop a pulled result bundle and its summary.
+    ///
+    /// Separate from `remove_workspace_snapshot` on purpose: that one runs as
+    /// soon as the target durably owns the job, which is long before the user
+    /// has had a chance to look at the results.
+    pub async fn remove_result_bundle(&self, job_id: &str) -> anyhow::Result<()> {
+        validate_id(job_id)?;
+        let results = self.root.join(OUTBOUND_RESULTS_DIR);
+        for path in [
+            results.join(format!("{job_id}.tar.gz")),
+            results.join(format!("{job_id}.json")),
+        ] {
+            match fs::remove_file(&path).await {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Ok(())
+    }
+
     pub async fn remove_workspace_snapshot(&self, job_id: &str) -> anyhow::Result<()> {
         validate_id(job_id)?;
         let uploads = self.root.join(OUTBOUND_WORKSPACE_UPLOADS_DIR);
@@ -572,7 +618,7 @@ fn target_workspace_path_is_absolute(path: &str) -> bool {
         return false;
     };
     let mut components = unc_path
-        .split(|character| matches!(character, '\\' | '/'))
+        .split(['\\', '/'])
         .filter(|component| !component.is_empty());
     components.next().is_some() && components.next().is_some()
 }
@@ -713,6 +759,37 @@ mod tests {
                 0o600
             );
         }
+    }
+
+    #[tokio::test]
+    async fn expired_jobs_do_not_strand_their_result_bundles() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store = OutboundDispatchStore::new_in_root_for_tests(temp.path().to_path_buf());
+        let results = temp.path().join(OUTBOUND_RESULTS_DIR);
+        fs::create_dir_all(&results).await.expect("results dir");
+        let bundle = results.join("job-1.tar.gz");
+        let summary = results.join("job-1.json");
+        fs::write(&bundle, b"bundle").await.expect("bundle");
+        fs::write(&summary, b"{}").await.expect("summary");
+        // A second job's bundle must survive the first job's cleanup.
+        let other = results.join("job-2.tar.gz");
+        fs::write(&other, b"other").await.expect("other");
+
+        store.remove_result_bundle("job-1").await.expect("remove");
+        assert!(!bundle.exists(), "expired bundle must be removed");
+        assert!(!summary.exists(), "expired summary must be removed");
+        assert!(other.exists(), "an unrelated job must be untouched");
+
+        // Removing twice is how GC behaves after a partial failure.
+        store
+            .remove_result_bundle("job-1")
+            .await
+            .expect("removing an absent bundle is not an error");
+
+        assert!(
+            store.remove_result_bundle("../escape").await.is_err(),
+            "job ids must stay validated on this path too"
+        );
     }
 
     #[tokio::test]

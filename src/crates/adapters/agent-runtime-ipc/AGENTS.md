@@ -22,9 +22,13 @@ session controller leases, event delivery, connection bounds, and cleanup. It is
 
 - Export only the exact workspace-private API needed by the CLI adapter. Do not
   publish this crate or expose its wire as an SDK contract.
-- The closed operation budget is Health, Session list/create/restore (including transcript), Turn submit/cancel, pending/respond Permission,
-  and UserInput answers. Disconnect cleanup is internal lifecycle, not a detach operation. Do not add delete, fork, replay, observer,
-  controller transfer, Tool/MCP/Hook management, or product configuration incidentally.
+- The closed operation budget is Health, Session list/create/restore/delete (including transcript on restore), current-Session rename, Agent mode/model update and manual context compaction,
+  declarative context reload, Turn submit/cancel, pending/respond Permission, and UserInput answers. Delete is limited to an idle Session not controlled by any client.
+  Manual compaction is a current-controller, idle-only Turn operation. The client supplies its exact Turn ID before admission so timeout or disconnect cleanup can cancel the same owned task; once Core begins the atomic context commit, a late cancellation does not expose a false idle state.
+  Context reload may run during an active Turn, does not rewrite that Turn, and guards the cache so the next message reads invalidated instructions.
+  Disconnect cleanup is internal lifecycle, not a detach operation.
+  Model catalogs and defaults remain product configuration outside this wire. Do not add archive, fork, replay, observer,
+  controller transfer, Tool/MCP/Hook management, or other product configuration incidentally.
 - Stable Event, Product Domain, and Runtime Port DTOs may be reused. Do not
   depend on `bitfun-core`, Agent Runtime implementations, SDK Host, services,
   Tauri, terminal, tool runtime, or remote transports.
@@ -32,6 +36,11 @@ session controller leases, event delivery, connection bounds, and cleanup. It is
   WebSocket, browser access, or remote fallback.
 - Treat this as same-user local isolation, not a sandbox. Product composition
   must supply a user-private runtime directory.
+- Embedded callers must continue to invoke the typed Agent Runtime directly and
+  must not initialize this transport. Shared outgoing request, response, and
+  event frames are encoded once before write; strict decoding, unknown-field
+  rejection, frame limits, bounded queues, and backpressure must not be weakened
+  for throughput.
 
 ## Verification
 

@@ -1066,13 +1066,14 @@ impl StartupPage {
             }
             ActionHandler::ClosePopups => self.close_all_popups(),
             ActionHandler::NavigateBack => self.navigate_back(),
-            ActionHandler::ClearConversation
-            | ActionHandler::ReloadSkills
+            ActionHandler::RenameSession
+            | ActionHandler::Reload
             | ActionHandler::Tools
             | ActionHandler::Extensions
             | ActionHandler::NativeHooks
             | ActionHandler::ExternalHooks
-            | ActionHandler::History
+            | ActionHandler::Status
+            | ActionHandler::CompactSession
             | ActionHandler::ToggleAutoApprove
             | ActionHandler::ToggleWorktree
             | ActionHandler::Interrupt
@@ -1396,17 +1397,10 @@ impl StartupPage {
             })
             .collect();
 
-        self.session_selector
-            .show(session_items, None, !self.agent.is_shared());
+        self.session_selector.show(session_items, None, true);
     }
 
     fn handle_session_delete(&mut self, item: &SessionItem) {
-        if self.agent.is_shared() {
-            self.status = Some(format!(
-                "Session deletion is unavailable in Shared TUI preview. {SHARED_TUI_EMBEDDED_HANDOFF}; then run `bitfun sessions delete`"
-            ));
-            return;
-        }
         let agent = Arc::clone(&self.agent);
         let sid = item.session_id.clone();
 
@@ -1456,7 +1450,7 @@ impl StartupPage {
 
         match result {
             Some((models, current_id)) if !models.is_empty() => {
-                self.model_selector.show(models, current_id);
+                self.model_selector.show(models, current_id, true, false);
             }
             _ => {
                 self.status = Some("No available models found.".to_string());
@@ -1923,14 +1917,17 @@ impl StartupPage {
             tokio::runtime::Handle::current().block_on(async {
                 let registry = SkillRegistry::global();
                 registry
-                    .get_resolved_skills_for_workspace(Some(workspace.as_path()), Some(&agent_type))
+                    .get_user_invocable_skills_for_workspace(
+                        Some(workspace.as_path()),
+                        Some(&agent_type),
+                    )
                     .await
             })
         });
 
         if skills.is_empty() {
             self.status = Some(format!(
-                "No enabled skills found for agent mode '{}'.",
+                "No user-invocable skills found for agent mode '{}'.",
                 self.agent_type
             ));
             return;
@@ -1978,7 +1975,7 @@ impl StartupPage {
             SkillSelectorAction::ConfigureSkills => self.show_skill_config_selector(),
             SkillSelectorAction::Execute(selected) => {
                 self.skill_selector.hide();
-                self.set_input(&format!("Execute the {} skill.", selected.name));
+                self.set_input(&selected.invocation_text());
             }
             SkillSelectorAction::Toggle(selected) => {
                 self.set_skill_enabled(&selected, !selected.enabled);
@@ -2053,6 +2050,7 @@ impl StartupPage {
             default_enabled: true,
             is_shadowed: info.is_shadowed,
             shadowed_by_key: info.shadowed_by_key,
+            argument_hint: info.argument_hint,
         }
     }
 
@@ -2069,6 +2067,7 @@ impl StartupPage {
             default_enabled: info.default_enabled,
             is_shadowed: info.skill.is_shadowed,
             shadowed_by_key: info.skill.shadowed_by_key,
+            argument_hint: info.skill.argument_hint,
         }
     }
 

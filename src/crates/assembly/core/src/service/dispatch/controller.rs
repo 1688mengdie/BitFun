@@ -1,3 +1,7 @@
+use anyhow::Context as _;
+use bitfun_services_core::dispatch_workspace::{
+    apply_workspace_result_bundle, WorkspaceResultApplyOutcome, WorkspaceResultSummary,
+};
 use bitfun_services_integrations::remote_ssh::{
     dispatch_ssh::{
         self, DispatchCliRelease, DispatchInstallPoll, DispatchInstallStart, DispatchSshProbe,
@@ -75,6 +79,17 @@ pub struct DispatchStatusRequest {
 #[serde(rename_all = "camelCase")]
 pub struct DispatchJobRequest {
     pub job_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DispatchApplyResultRequest {
+    pub job_id: String,
+    /// Local workspace the bundle is applied to.
+    pub workspace_path: String,
+    /// Take the target's version for paths that changed on both sides.
+    #[serde(default)]
+    pub overwrite_conflicts: bool,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -184,6 +199,14 @@ pub async fn install_cli_start(
     dispatch_ssh::install_cli_start(manager, request.connection_id.trim(), &request.release).await
 }
 
+/// Build and install the CLI from source, for targets no published binary fits.
+pub async fn install_cli_source_start(
+    manager: &SSHConnectionManager,
+    request: DispatchConnectionRequest,
+) -> anyhow::Result<DispatchInstallStart> {
+    dispatch_ssh::install_cli_source_start(manager, request.connection_id.trim()).await
+}
+
 pub async fn install_cli_poll(
     manager: &SSHConnectionManager,
     request: DispatchInstallPollRequest,
@@ -196,6 +219,48 @@ pub async fn install_cli_cancel(
     request: DispatchConnectionRequest,
 ) -> anyhow::Result<()> {
     dispatch_ssh::install_cli_cancel(manager, request.connection_id.trim()).await
+}
+
+/// Copy this controller's model configuration (catalog, credentials, and
+/// default-model selections) onto the SSH target so its CLI can resolve a
+/// ready model. Explicit, credential-bearing operation: the UI must confirm
+/// before calling it, mirroring CLI installation.
+pub async fn sync_model_config(
+    manager: &SSHConnectionManager,
+    request: DispatchConnectionRequest,
+) -> anyhow::Result<()> {
+    crate::service::config::initialize_global_config()
+        .await
+        .map_err(|error| anyhow::anyhow!("initialize controller configuration: {error}"))?;
+    let config_service = crate::service::config::get_global_config_service()
+        .await
+        .map_err(|error| anyhow::anyhow!("read controller configuration: {error}"))?;
+    let config: crate::service::config::GlobalConfig = config_service
+        .get_config(None)
+        .await
+        .map_err(|error| anyhow::anyhow!("load controller configuration: {error}"))?;
+    if !config.ai.models.iter().any(|model| model.enabled) {
+        anyhow::bail!("no enabled AI model is configured on this device to sync");
+    }
+    let ai = serde_json::to_value(&config.ai)
+        .map_err(|error| anyhow::anyhow!("encode controller model configuration: {error}"))?;
+    let mut payload = serde_json::Map::new();
+    for key in [
+        "models",
+        "default_models",
+        "agent_model_defaults",
+        "func_agent_models",
+    ] {
+        if let Some(value) = ai.get(key) {
+            payload.insert(key.to_string(), value.clone());
+        }
+    }
+    dispatch_ssh::sync_model_config(
+        manager,
+        request.connection_id.trim(),
+        &Value::Object(payload),
+    )
+    .await
 }
 
 pub async fn submit(
@@ -415,6 +480,95 @@ pub async fn status(
     // materialized snapshot. The controller no longer needs the source archive.
     let _ = store.remove_workspace_snapshot(&record.job_id).await;
     Ok(response)
+}
+
+/// Fetch what a finished snapshot job changed on its target.
+///
+/// Download and inspection only. The bundle lands in this controller's own
+/// staging area; nothing touches the user's workspace until they review the
+/// reported diff and explicitly apply it. The target tree and the local tree
+/// have diverged independently since the snapshot, so silently merging would
+/// be the one thing detached execution must never do.
+pub async fn pull_result(
+    manager: &SSHConnectionManager,
+    store: &OutboundDispatchStore,
+    request: DispatchJobRequest,
+) -> anyhow::Result<Value> {
+    let record = store
+        .get(&request.job_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("Outbound dispatch job was not found"))?;
+    let DispatchTarget::Ssh { connection_id, .. } = &record.target else {
+        anyhow::bail!("SSH dispatch result pull requires an SSH target");
+    };
+    let destination = result_bundle_path(store, &request.job_id);
+    let response =
+        dispatch_ssh::pull_result(manager, connection_id, &request.job_id, &destination).await?;
+    record_result_summary(store, &request.job_id, &response)?;
+    Ok(response)
+}
+
+/// Persist the summary next to the bundle so applying reads both from disk.
+///
+/// The digests that decide whether a local file may be overwritten must come
+/// from the verified pull, not from whatever the caller hands back later.
+pub(super) fn record_result_summary(
+    store: &OutboundDispatchStore,
+    job_id: &str,
+    response: &Value,
+) -> anyhow::Result<()> {
+    if let Some(summary) = response.get("summary") {
+        // Owner-only like the bundle beside it: this records which paths of the
+        // user's workspace changed.
+        let summary_path = result_summary_path(store, job_id);
+        dispatch_ssh::write_private_file(&summary_path, &serde_json::to_vec(summary)?)
+            .with_context(|| format!("record result summary {}", summary_path.display()))?;
+    }
+    Ok(())
+}
+
+pub(super) fn result_bundle_path(
+    store: &OutboundDispatchStore,
+    job_id: &str,
+) -> std::path::PathBuf {
+    store
+        .root()
+        .join(super::OUTBOUND_RESULTS_DIR)
+        .join(format!("{job_id}.tar.gz"))
+}
+
+fn result_summary_path(store: &OutboundDispatchStore, job_id: &str) -> std::path::PathBuf {
+    store
+        .root()
+        .join(super::OUTBOUND_RESULTS_DIR)
+        .join(format!("{job_id}.json"))
+}
+
+/// Apply a pulled result bundle to a local workspace.
+///
+/// Refuses to write anything when a path changed on both sides unless the user
+/// explicitly chose to take the target's version.
+pub async fn apply_result(
+    store: &OutboundDispatchStore,
+    request: DispatchApplyResultRequest,
+) -> anyhow::Result<WorkspaceResultApplyOutcome> {
+    let workspace = request.workspace_path.trim();
+    if workspace.is_empty() {
+        anyhow::bail!("Applying dispatch results requires a workspacePath");
+    }
+    let bundle = result_bundle_path(store, &request.job_id);
+    if !bundle.is_file() {
+        anyhow::bail!("Pull the dispatch result before applying it");
+    }
+    let summary: WorkspaceResultSummary =
+        serde_json::from_slice(&std::fs::read(result_summary_path(store, &request.job_id))?)
+            .context("read recorded dispatch result summary")?;
+    apply_workspace_result_bundle(
+        &bundle,
+        std::path::Path::new(workspace),
+        &summary,
+        request.overwrite_conflicts,
+    )
 }
 
 pub async fn cancel(

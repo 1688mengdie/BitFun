@@ -12,6 +12,7 @@ use async_trait::async_trait;
 use bitfun_agent_runtime::sdk::{
     AgentRuntime, AgentSessionArchiveStateRequest, AgentSessionDeleteRequest,
     AgentSessionForkAtTurnRequest, AgentSessionRenameRequest, AgentSessionUsageRequest,
+    PortErrorKind, RuntimeError,
 };
 use bitfun_core::agentic::coordination::{ConversationCoordinator, DialogScheduler};
 use bitfun_core::agentic::core::Session;
@@ -25,6 +26,7 @@ use bitfun_core::service::session_usage::SessionUsageReport;
 use bitfun_core::service::token_usage::TokenUsageService;
 use bitfun_core::service::workspace::WorkspaceService;
 use bitfun_core::util::errors::BitFunError;
+use bitfun_runtime_ports::AgentContextReloadRequest;
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
@@ -59,6 +61,8 @@ pub(crate) enum DesktopSessionApplicationError {
     Runtime(String),
     #[error("{0}")]
     RestoreBeforeRename(String),
+    #[error("outcome_unknown: {0}")]
+    OutcomeUnknown(String),
     #[error("session_in_use: {0}")]
     SessionInUse(String),
 }
@@ -70,7 +74,19 @@ fn desktop_core_session_error(error: BitFunError) -> DesktopSessionApplicationEr
         BitFunError::SessionInUse { session_id } => DesktopSessionApplicationError::SessionInUse(
             format!("Session is already open for writing: {session_id}"),
         ),
+        BitFunError::OutcomeUnknown(message) => {
+            DesktopSessionApplicationError::OutcomeUnknown(message)
+        }
         error => DesktopSessionApplicationError::Core(error.to_string()),
+    }
+}
+
+fn desktop_runtime_session_error(error: RuntimeError) -> DesktopSessionApplicationError {
+    match error {
+        RuntimeError::Port(port_error) if port_error.kind == PortErrorKind::OutcomeUnknown => {
+            DesktopSessionApplicationError::OutcomeUnknown(port_error.message)
+        }
+        error => DesktopSessionApplicationError::Runtime(error.into_message()),
     }
 }
 
@@ -137,7 +153,7 @@ impl DesktopSessionScopeResolver {
                 .is_some_and(|registered| {
                     requested_remote_ssh_host
                         .as_deref()
-                        .map_or(true, |requested| requested.eq_ignore_ascii_case(registered))
+                        .is_none_or(|requested| requested.eq_ignore_ascii_case(registered))
                 });
         let mut saved_remote_ssh_host = None;
         if requested_remote_ssh_host.is_none() && registered_remote_ssh_host.is_none() {
@@ -236,6 +252,16 @@ impl DesktopSessionApplication {
 
     pub(crate) fn agent_runtime(&self) -> &AgentRuntime {
         &self.agent_runtime
+    }
+
+    pub(crate) async fn reload_session_context(
+        &self,
+        request: AgentContextReloadRequest,
+    ) -> DesktopSessionApplicationResult<()> {
+        self.compatibility
+            .reload_session_context(request)
+            .await
+            .map_err(|error| DesktopSessionApplicationError::Core(error.to_string()))
     }
 
     async fn resolved_scope(
@@ -505,7 +531,7 @@ impl DesktopSessionApplication {
                     remote_ssh_host: scope.resolved_remote_ssh_host,
                 })
                 .await
-                .map_err(|error| DesktopSessionApplicationError::Runtime(error.into_message()))?;
+                .map_err(desktop_runtime_session_error)?;
             self.host_effects
                 .notify_session_changed(&session_id, &scope.workspace_path);
             return Ok(normalized_title);
@@ -524,7 +550,7 @@ impl DesktopSessionApplication {
             .compatibility
             .update_loaded_session_title(&session_id, &title)
             .await
-            .map_err(|error| DesktopSessionApplicationError::Core(error.to_string()))?;
+            .map_err(desktop_core_session_error)?;
         self.host_effects.notify_session_changed(&session_id, "");
         Ok(updated_title)
     }
@@ -702,7 +728,7 @@ fn merge_ui_owned_session_metadata(
                 custom.insert(key.to_string(), value.clone());
             }
         }
-        current.custom_metadata = (!custom.is_empty()).then(|| serde_json::Value::Object(custom));
+        current.custom_metadata = (!custom.is_empty()).then_some(serde_json::Value::Object(custom));
     }
 }
 
@@ -733,6 +759,35 @@ mod tests {
         assert_eq!(
             error.to_string(),
             "session_in_use: Session is already open for writing: session-1"
+        );
+    }
+
+    #[test]
+    fn unknown_rename_outcomes_keep_a_stable_desktop_transport_code() {
+        let error = desktop_runtime_session_error(RuntimeError::Port(PortError::new(
+            PortErrorKind::OutcomeUnknown,
+            "inspect authoritative state",
+        )));
+
+        assert!(matches!(
+            error,
+            DesktopSessionApplicationError::OutcomeUnknown(_)
+        ));
+        assert_eq!(
+            error.to_string(),
+            "outcome_unknown: inspect authoritative state"
+        );
+    }
+
+    #[test]
+    fn compatibility_rename_unknown_outcomes_keep_the_same_transport_code() {
+        let error = desktop_core_session_error(BitFunError::OutcomeUnknown(
+            "inspect authoritative state".to_string(),
+        ));
+
+        assert_eq!(
+            error.to_string(),
+            "outcome_unknown: inspect authoritative state"
         );
     }
 

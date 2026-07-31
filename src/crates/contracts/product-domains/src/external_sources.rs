@@ -876,6 +876,20 @@ impl PreparedExternalMcpImportServer {
             }
             PreparedExternalMcpImportTransport::Remote { url } => {
                 validate_text(url, "prepared MCP import URL")?;
+                let parsed = url::Url::parse(url).map_err(|_| {
+                    ExternalSourceContractError::InvalidIdentifier("prepared MCP import URL")
+                })?;
+                if parsed.scheme() != "https"
+                    || parsed.host_str().is_none()
+                    || !parsed.username().is_empty()
+                    || parsed.password().is_some()
+                    || parsed.query().is_some()
+                    || parsed.fragment().is_some()
+                {
+                    return Err(ExternalSourceContractError::InvalidIdentifier(
+                        "prepared MCP import URL",
+                    ));
+                }
             }
         }
         Ok(())
@@ -1491,6 +1505,14 @@ pub struct ExpandedPromptCommand {
     pub content: String,
 }
 
+/// Provider-prepared command content plus the narrow set of local workspace
+/// files that Product Assembly must resolve before sending the final prompt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PromptCommandExpansion {
+    pub content: String,
+    pub workspace_file_references: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PromptCommandProviderIdentity {
@@ -1670,7 +1692,7 @@ pub trait PromptCommandSourceProvider: Send + Sync {
         &self,
         command: &PromptCommandDefinition,
         arguments: &str,
-    ) -> Result<ExpandedPromptCommand, ExternalSourceProviderError>;
+    ) -> Result<PromptCommandExpansion, ExternalSourceProviderError>;
 
     /// Resolves same-ecosystem overlays after product suppression is applied.
     /// The full snapshot is supplied so a provider can preserve native source

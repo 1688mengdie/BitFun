@@ -11,10 +11,10 @@ impl ChatMode {
         let agent = self.agent.clone();
         let sid = new_session_id.to_string();
 
-        let (new_state, restored_agent_type, migration_notice) =
+        let (new_state, restored_agent_type, migration_notices) =
             tokio::task::block_in_place(|| {
                 rt_handle.block_on(async {
-                    let (session_summary, workspace_binding, migration_notice, transcript) =
+                    let (session_summary, workspace_binding, migration_notices, transcript) =
                         agent.restore_session_in_current_workspace(&sid).await?;
                     let restored_agent_type = session_summary.agent_type.clone();
                     let effective_workspace = Some(workspace_binding.workspace_path.clone());
@@ -26,9 +26,10 @@ impl ChatMode {
                         effective_workspace,
                         &transcript,
                     );
+                    state.current_model_id = session_summary.model_id;
                     state.apply_workspace_binding(workspace_binding);
 
-                    Ok::<_, anyhow::Error>((state, restored_agent_type, migration_notice))
+                    Ok::<_, anyhow::Error>((state, restored_agent_type, migration_notices))
                 })
             })?;
 
@@ -40,6 +41,7 @@ impl ChatMode {
         self.workspace = chat_state.workspace.clone();
         self.refresh_workspace_git_status(chat_state, rt_handle);
         self.auto_approve_ask_override = None;
+        clear_selected_native_command_prefill(&mut self.selected_native_command_once, chat_view);
         chat_state.auto_approve_ask = self.auto_approve_ask_default;
         self.agent
             .set_approval_policy(crate::runtime::approval::CliApprovalPolicy::Ask);
@@ -47,7 +49,7 @@ impl ChatMode {
         // Reload model name
         self.load_current_model_name(chat_state, rt_handle);
 
-        if let Some(notice) = migration_notice {
+        for notice in migration_notices {
             chat_state.add_system_message(notice.user_message());
         }
 
@@ -91,6 +93,7 @@ impl ChatMode {
         self.workspace = chat_state.workspace.clone();
         self.refresh_workspace_git_status(chat_state, rt_handle);
         self.auto_approve_ask_override = None;
+        clear_selected_native_command_prefill(&mut self.selected_native_command_once, chat_view);
         chat_state.auto_approve_ask = self.auto_approve_ask_default;
         self.agent
             .set_approval_policy(crate::runtime::approval::CliApprovalPolicy::Ask);
@@ -116,12 +119,12 @@ impl ChatMode {
         rt_handle: &tokio::runtime::Handle,
     ) {
         if self
-            .pending_mode_change
+            .pending_session_operation
             .as_ref()
             .is_some_and(|pending| pending.session_id == chat_state.core_session_id)
         {
             chat_view.set_status(Some(
-                "Waiting for the agent mode change to finish before sending.".to_string(),
+                "Waiting for the pending Session operation to finish before sending.".to_string(),
             ));
             return;
         }
@@ -210,47 +213,66 @@ impl ChatMode {
         chat_view.show_session_selector(
             session_items,
             Some(current_session_id),
-            !self.agent.is_shared(),
+            session_delete_allowed(
+                false,
+                self.agent.is_shared(),
+                chat_state.is_processing,
+                self.pending_session_operation.is_some(),
+            ),
         );
     }
 
     /// Handle session deletion from the session selector
     fn handle_session_delete(
-        &self,
+        &mut self,
         item: &SessionItem,
         chat_view: &mut ChatView,
         chat_state: &mut ChatState,
         rt_handle: &tokio::runtime::Handle,
     ) {
-        if self.agent.is_shared() {
-            chat_view.set_status(Some(format!(
-                "Session deletion is unavailable in Shared TUI preview. {SHARED_TUI_EMBEDDED_HANDOFF}; then run `bitfun sessions delete`"
-            )));
+        let deleting_current_session = item.session_id == chat_state.core_session_id;
+        if deleting_current_session {
+            chat_view.set_status(Some("Cannot delete the active session".to_string()));
             return;
         }
-        // Prevent deleting the currently active session
-        if item.session_id == chat_state.core_session_id {
-            chat_view.set_status(Some("Cannot delete the active session".to_string()));
+        if !session_delete_allowed(
+            deleting_current_session,
+            self.agent.is_shared(),
+            chat_state.is_processing,
+            self.pending_session_operation.is_some(),
+        ) {
+            let message = if self.pending_session_operation.is_some() {
+                "Another Session operation is already in progress. Please wait."
+            } else {
+                "Session deletion cannot start during the current Turn in Shared TUI."
+            };
+            chat_view.set_status(Some(message.to_string()));
             return;
         }
 
         let agent = self.agent.clone();
-        let sid = item.session_id.clone();
-
-        let result = tokio::task::block_in_place(|| {
-            rt_handle.block_on(async { agent.delete_session(&sid).await })
+        let session_id = item.session_id.clone();
+        let task_session_id = session_id.clone();
+        let session_name = item.session_name.clone();
+        chat_view.hide_session_selector();
+        chat_view.set_status(Some(format!("Deleting session {session_name}...")));
+        let handle = rt_handle.spawn(async move { agent.delete_session(&task_session_id).await });
+        self.pending_session_operation = Some(PendingSessionOperation {
+            session_id,
+            kind: PendingSessionOperationKind::Delete { session_name },
+            started_at: Instant::now(),
+            slow_notice_shown: false,
+            exit_warning_shown: false,
+            handle,
         });
-
-        match result {
-            Ok(()) => {
-                chat_view.session_selector_remove_item(&item.session_id);
-                chat_view.set_status(Some(format!("Session deleted: {}", item.session_name)));
-                tracing::info!("Deleted session: {}", item.session_id);
-            }
-            Err(e) => {
-                chat_view.set_status(Some(format!("Failed to delete session: {}", e)));
-                tracing::error!("Failed to delete session: {}", e);
-            }
-        }
     }
+}
+
+fn session_delete_allowed(
+    deleting_current_session: bool,
+    shared_tui: bool,
+    current_turn_active: bool,
+    operation_pending: bool,
+) -> bool {
+    !deleting_current_session && !operation_pending && (!shared_tui || !current_turn_active)
 }

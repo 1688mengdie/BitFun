@@ -1,3 +1,133 @@
+fn primary_model_usage_for_active_turn(
+    event: &AgenticEvent,
+    chat_state: &ChatState,
+) -> Option<ModelTokenUsageSnapshot> {
+    let AgenticEvent::TokenUsageUpdated {
+        session_id,
+        turn_id,
+        model_config_id,
+        effective_model_name,
+        input_tokens,
+        output_tokens,
+        total_tokens,
+        max_context_tokens,
+        is_subagent,
+        cached_tokens,
+        ..
+    } = event
+    else {
+        return None;
+    };
+    if *is_subagent
+        || session_id != &chat_state.core_session_id
+        || chat_state.current_turn_id() != Some(turn_id.as_str())
+    {
+        return None;
+    }
+
+    Some(ModelTokenUsageSnapshot {
+        model_config_id: model_config_id.clone(),
+        effective_model_name: effective_model_name.clone(),
+        input_tokens: *input_tokens,
+        output_tokens: *output_tokens,
+        total_tokens: *total_tokens,
+        max_context_tokens: *max_context_tokens,
+        cached_tokens: *cached_tokens,
+    })
+}
+
+fn context_compression_tool_event(
+    event: &AgenticEvent,
+    chat_state: &ChatState,
+) -> Option<ToolEventData> {
+    let (session_id, turn_id) = match event {
+        AgenticEvent::ContextCompressionStarted {
+            session_id,
+            turn_id,
+            ..
+        }
+        | AgenticEvent::ContextCompressionCompleted {
+            session_id,
+            turn_id,
+            ..
+        }
+        | AgenticEvent::ContextCompressionFailed {
+            session_id,
+            turn_id,
+            ..
+        } => (session_id, turn_id),
+        _ => return None,
+    };
+    if session_id != &chat_state.core_session_id
+        || chat_state.current_turn_id() != Some(turn_id.as_str())
+    {
+        return None;
+    }
+
+    match event {
+        AgenticEvent::ContextCompressionStarted {
+            compression_id,
+            trigger,
+            tokens_before,
+            context_window,
+            ..
+        } => Some(ToolEventData::Started {
+            identity: ToolEventIdentity::direct(compression_id, "ContextCompression"),
+            params: serde_json::json!({
+                "trigger": trigger,
+                "tokens_before": tokens_before,
+                "context_window": context_window,
+            }),
+            timeout_seconds: None,
+        }),
+        AgenticEvent::ContextCompressionCompleted {
+            compression_id,
+            compression_count,
+            tokens_before,
+            tokens_after,
+            compression_ratio,
+            duration_ms,
+            has_summary,
+            summary_source,
+            applied,
+            ..
+        } => Some(ToolEventData::Completed {
+            identity: ToolEventIdentity::direct(compression_id, "ContextCompression"),
+            result: serde_json::json!({
+                "compression_count": compression_count,
+                "tokens_before": tokens_before,
+                "tokens_after": tokens_after,
+                "compression_ratio": compression_ratio,
+                "duration": duration_ms,
+                "applied": applied,
+                "has_summary": has_summary,
+                "summary_source": summary_source,
+            }),
+            result_for_assistant: None,
+            image_attachments: None,
+            duration_ms: *duration_ms,
+            queue_wait_ms: None,
+            preflight_ms: None,
+            confirmation_wait_ms: None,
+            execution_ms: Some(*duration_ms),
+        }),
+        AgenticEvent::ContextCompressionFailed {
+            compression_id,
+            error,
+            ..
+        } => Some(ToolEventData::Failed {
+            identity: ToolEventIdentity::direct(compression_id, "ContextCompression"),
+            error: error.clone(),
+            duration_ms: None,
+            queue_wait_ms: None,
+            preflight_ms: None,
+            confirmation_wait_ms: None,
+            execution_ms: None,
+        }),
+        _ => None,
+    }
+}
+
 impl ChatMode {
     pub(crate) fn run(
         &mut self,
@@ -43,7 +173,7 @@ impl ChatMode {
             })
         });
 
-        let (mut session_id, mut chat_state, mode_migration_notice) =
+        let (mut session_id, mut chat_state, migration_notices) =
             if let Some(ref restore_id) = self.restore_session_id {
                 // Restore existing session
                 tracing::info!("Restoring session: {}", restore_id);
@@ -53,7 +183,7 @@ impl ChatMode {
                 tokio::task::block_in_place(|| {
                     rt_handle.block_on(async {
                         // Restore session in core (loads metadata, messages, managers)
-                        let (summary, workspace_binding, migration_notice, transcript) =
+                        let (summary, workspace_binding, migration_notices, transcript) =
                             agent.restore_session_in_current_workspace(&rid).await?;
                         let effective_workspace = Some(workspace_binding.workspace_path.clone());
 
@@ -64,6 +194,7 @@ impl ChatMode {
                             effective_workspace,
                             &transcript,
                         );
+                        state.current_model_id = summary.model_id;
                         state.apply_workspace_binding(workspace_binding);
 
                         tracing::info!(
@@ -72,7 +203,7 @@ impl ChatMode {
                             transcript.messages.len()
                         );
 
-                        Ok::<_, anyhow::Error>((rid, state, migration_notice))
+                        Ok::<_, anyhow::Error>((rid, state, migration_notices))
                     })
                 })?
             } else {
@@ -95,7 +226,7 @@ impl ChatMode {
                     Some(workspace_binding.workspace_path.clone()),
                 );
                 state.apply_workspace_binding(workspace_binding);
-                (session_id, state, None)
+                (session_id, state, Vec::new())
             };
         chat_state.set_worktree_control_available(!self.agent.is_shared());
         self.auto_approve_ask_override = None;
@@ -199,16 +330,16 @@ impl ChatMode {
             }
         }
 
-        if let Some(notice) = &mode_migration_notice {
+        for notice in &migration_notices {
             chat_state.add_system_message(notice.user_message());
         }
 
         // Send initial prompt if provided (from startup page input)
         if let Some(prompt) = self.initial_prompt.take() {
-            if mode_migration_notice.is_some() {
+            if !migration_notices.is_empty() {
                 chat_view.text_input.set_text(&prompt);
                 chat_view.set_status(Some(
-                    "The restored session uses a fallback mode. Review it, then send the preserved input explicitly."
+                    "The restored session uses fallback settings. Review them, then send the preserved input explicitly."
                         .to_string(),
                 ));
             } else if prompt.starts_with('/') {
@@ -251,9 +382,9 @@ impl ChatMode {
                 self.action_state(chat_state.is_processing, false),
                 &self.keymap,
             );
-            chat_view.set_agent_mode_switch_allowed(agent_mode_switch_allowed(
+            chat_view.set_agent_mode_switch_allowed(session_update_allowed(
                 chat_state.is_processing,
-                self.pending_mode_change.is_some(),
+                self.pending_session_operation.is_some(),
             ));
 
             // Keep spinner animation smooth without forcing full redraw every loop.
@@ -273,15 +404,19 @@ impl ChatMode {
             if self.poll_mcp_task_completion(&mut chat_view, &mut chat_state, &rt_handle) {
                 needs_redraw = true;
             }
-            match self.poll_mode_change_completion(&mut chat_view, &mut chat_state, &rt_handle) {
-                ModeChangePollOutcome::NoChange => {}
-                ModeChangePollOutcome::Redraw => needs_redraw = true,
-                ModeChangePollOutcome::ExitAfterSave => {
+            match self.poll_session_operation_completion(
+                &mut chat_view,
+                &mut chat_state,
+                &rt_handle,
+            ) {
+                SessionUpdatePollOutcome::NoChange => {}
+                SessionUpdatePollOutcome::Redraw => needs_redraw = true,
+                SessionUpdatePollOutcome::ExitAfterSave => {
                     should_quit = true;
                     exit_reason = ChatExitReason::Quit;
                     continue;
                 }
-                ModeChangePollOutcome::ExitAfterUnknownOutcome(message) => {
+                SessionUpdatePollOutcome::ExitAfterUnknownOutcome(message) => {
                     fatal_event_stream_error = Some(message);
                     break;
                 }
@@ -636,6 +771,20 @@ impl ChatMode {
                         needs_redraw = true;
                     }
 
+                    AgenticEvent::ContextCompressionStarted { .. }
+                    | AgenticEvent::ContextCompressionCompleted { .. }
+                    | AgenticEvent::ContextCompressionFailed { .. } => {
+                        if let Some(tool_event) = context_compression_tool_event(event, &chat_state)
+                        {
+                            if matches!(event, AgenticEvent::ContextCompressionStarted { .. }) {
+                                chat_view.set_status(Some("Compacting context...".to_string()));
+                            }
+                            chat_state.handle_tool_event(&tool_event);
+                            chat_view.invalidate_lines_cache();
+                            needs_redraw = true;
+                        }
+                    }
+
                     AgenticEvent::DialogTurnCompleted {
                         turn_id,
                         total_rounds,
@@ -693,13 +842,30 @@ impl ChatMode {
                         }
                     }
 
-                    AgenticEvent::TokenUsageUpdated {
-                        turn_id,
-                        total_tokens,
+                    AgenticEvent::TokenUsageUpdated { .. } => {
+                        if let Some(usage) = primary_model_usage_for_active_turn(event, &chat_state)
+                        {
+                            chat_state.handle_primary_model_usage(usage);
+                            needs_redraw = true;
+                        }
+                    }
+
+                    AgenticEvent::SessionModelAutoMigrated {
+                        session_id,
+                        previous_model_id,
+                        new_model_id,
+                        reason,
                         ..
                     } => {
-                        if chat_state.current_turn_id() == Some(turn_id.as_str()) {
-                            chat_state.handle_token_usage(*total_tokens);
+                        if apply_session_model_migration(
+                            &mut chat_state,
+                            session_id,
+                            previous_model_id,
+                            new_model_id,
+                            reason,
+                        ) {
+                            self.load_current_model_name(&mut chat_state, &rt_handle);
+                            chat_view.invalidate_lines_cache();
                             needs_redraw = true;
                         }
                     }

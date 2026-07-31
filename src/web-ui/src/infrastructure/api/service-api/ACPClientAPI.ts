@@ -108,6 +108,7 @@ export interface SetAcpSessionConfigOptionRequest {
 export interface AcpSessionModelOption {
   id: string;
   name: string;
+  providerName?: string;
   description?: string;
 }
 

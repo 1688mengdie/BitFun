@@ -1,6 +1,8 @@
 import type { FlowChatPinTurnToTopMode } from '../../events/flowchatNavigation';
+import type { FlowChatViewportAnchorMode } from './FlowChatViewportCoordinator';
 
 export const COMPENSATION_EPSILON_PX = 0.5;
+const FOLLOWING_TAIL_SHRINK_CLAMP_TOLERANCE_PX = 2;
 
 type BottomReservationKind = 'collapse' | 'pin';
 
@@ -118,7 +120,7 @@ export function protectCurrentCollapseReservation(
   });
 }
 
-export function settleCollapseReservationForPreservedViewport(
+export function settleCollapseReservationForViewport(
   currentState: BottomReservationState,
   geometry: {
     scrollTop: number;
@@ -426,12 +428,14 @@ export function shouldSyncPhysicalBottom(options: {
   collapseProtectionActive: boolean;
   wasAtPhysicalBottom: boolean;
   ownsElementAnchor: boolean;
+  isFollowingTail: boolean;
 }): boolean {
   return (
     options.viewportGeometryChanged &&
     !options.collapseProtectionActive &&
     options.wasAtPhysicalBottom &&
-    !options.ownsElementAnchor
+    !options.ownsElementAnchor &&
+    !options.isFollowingTail
   );
 }
 
@@ -450,6 +454,86 @@ export function shouldSuppressFollowingTailNegativeScrollBy(options: {
   );
 }
 
+export interface FollowingTailShrinkClampRecovery {
+  targetScrollTop: number;
+  rangeShrinkPx: number;
+  scrollClampPx: number;
+}
+
+/** Distinguishes a browser range clamp from user or programmatic upward scrolling. */
+export function resolveFollowingTailShrinkClampRecovery(options: {
+  previousGeometry: {
+    scrollTop: number;
+    scrollHeight: number;
+    clientHeight: number;
+  } | null;
+  currentGeometry: {
+    scrollTop: number;
+    scrollHeight: number;
+    clientHeight: number;
+  };
+  isFollowingOutput: boolean;
+  isStreamingOutput: boolean;
+  hasRecentUserUpwardIntent: boolean;
+  scrollbarPointerInteractionActive: boolean;
+  collapseProtectionActive: boolean;
+}): FollowingTailShrinkClampRecovery | null {
+  if (
+    !options.previousGeometry ||
+    !options.isFollowingOutput ||
+    !options.isStreamingOutput ||
+    options.hasRecentUserUpwardIntent ||
+    options.scrollbarPointerInteractionActive ||
+    options.collapseProtectionActive
+  ) {
+    return null;
+  }
+
+  const previous = options.previousGeometry;
+  const current = options.currentGeometry;
+  const values = [
+    previous.scrollTop,
+    previous.scrollHeight,
+    previous.clientHeight,
+    current.scrollTop,
+    current.scrollHeight,
+    current.clientHeight,
+  ];
+  if (values.some(value => !Number.isFinite(value))) {
+    return null;
+  }
+
+  if (
+    Math.abs(previous.clientHeight - current.clientHeight) >
+      FOLLOWING_TAIL_SHRINK_CLAMP_TOLERANCE_PX
+  ) {
+    return null;
+  }
+
+  const previousMaxScrollTop = Math.max(0, previous.scrollHeight - previous.clientHeight);
+  const currentMaxScrollTop = Math.max(0, current.scrollHeight - current.clientHeight);
+  const rangeShrinkPx = previousMaxScrollTop - currentMaxScrollTop;
+  const scrollClampPx = previous.scrollTop - current.scrollTop;
+  if (
+    rangeShrinkPx <= COMPENSATION_EPSILON_PX ||
+    scrollClampPx <= COMPENSATION_EPSILON_PX ||
+    Math.abs(previousMaxScrollTop - previous.scrollTop) >
+      FOLLOWING_TAIL_SHRINK_CLAMP_TOLERANCE_PX ||
+    Math.abs(currentMaxScrollTop - current.scrollTop) >
+      FOLLOWING_TAIL_SHRINK_CLAMP_TOLERANCE_PX ||
+    Math.abs(rangeShrinkPx - scrollClampPx) >
+      FOLLOWING_TAIL_SHRINK_CLAMP_TOLERANCE_PX
+  ) {
+    return null;
+  }
+
+  return {
+    targetScrollTop: previous.scrollTop,
+    rangeShrinkPx,
+    scrollClampPx,
+  };
+}
+
 export function getCanceledUnsettledStickyPinGrowthPx(options: {
   pendingGrowthPx: number;
   shrinkPx: number;
@@ -464,6 +548,35 @@ export function getCanceledUnsettledStickyPinGrowthPx(options: {
   );
 }
 
+export type StickyPinGrowthSettlementStrategy =
+  | 'none'
+  | 'wait-for-quiet'
+  | 'wait-for-collapse'
+  | 'settle-now';
+
+export function resolveStickyPinGrowthSettlementStrategy(options: {
+  pendingGrowthPx: number;
+  pinFloorPx: number;
+  hasActiveCollapseIntent: boolean;
+}): StickyPinGrowthSettlementStrategy {
+  const pendingGrowthPx = sanitizeReservationPx(options.pendingGrowthPx);
+  const pinFloorPx = sanitizeReservationPx(options.pinFloorPx);
+  if (
+    pendingGrowthPx <= COMPENSATION_EPSILON_PX ||
+    pinFloorPx <= COMPENSATION_EPSILON_PX
+  ) {
+    return 'none';
+  }
+
+  if (pendingGrowthPx + COMPENSATION_EPSILON_PX < pinFloorPx) {
+    return 'wait-for-quiet';
+  }
+
+  return options.hasActiveCollapseIntent
+    ? 'wait-for-collapse'
+    : 'settle-now';
+}
+
 export function shouldBypassShrinkCompensationInTailFollow(options: {
   isFollowingOutput: boolean;
   isStreamingOutput: boolean;
@@ -476,17 +589,41 @@ export function shouldBypassShrinkCompensationInTailFollow(options: {
   );
 }
 
-export function shouldPreserveCollapseReservationAfterIntent(options: {
+export type CollapseIntentSettlementStrategy =
+  | 'reconcile-sticky-pin'
+  | 'retain-following-tail'
+  | 'settle-preserved-element'
+  | 'settle-protected-viewport'
+  | 'drain';
+
+export function resolveCollapseIntentSettlementStrategy(options: {
+  coordinatorMode: FlowChatViewportAnchorMode;
   isFollowingOutput: boolean;
   isStreamingOutput: boolean;
-  isPreservingElement: boolean;
-  hasProtectedCollapseRange: boolean;
-}): boolean {
-  return (
-    (options.isFollowingOutput && options.isStreamingOutput) ||
-    options.isPreservingElement ||
-    options.hasProtectedCollapseRange
+  reservation: BottomReservationState;
+}): CollapseIntentSettlementStrategy {
+  const ownsStickyPin = (
+    options.coordinatorMode === 'pinned-item' &&
+    options.reservation.pin.mode === 'sticky-latest' &&
+    Boolean(options.reservation.pin.targetTurnId)
   );
+  if (ownsStickyPin) {
+    return 'reconcile-sticky-pin';
+  }
+  if (
+    options.coordinatorMode === 'following-tail' &&
+    options.isFollowingOutput &&
+    options.isStreamingOutput
+  ) {
+    return 'retain-following-tail';
+  }
+  if (options.coordinatorMode === 'preserving-element') {
+    return 'settle-preserved-element';
+  }
+  if (options.reservation.collapse.floorPx > COMPENSATION_EPSILON_PX) {
+    return 'settle-protected-viewport';
+  }
+  return 'drain';
 }
 
 export function resolveAutoCollapseAnchorScrollTop(options: {

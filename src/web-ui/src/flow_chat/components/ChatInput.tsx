@@ -46,8 +46,8 @@ import {
   resolveSlashActionInputValue,
   type SlashActionId,
 } from '../utils/slashActionSelection';
+import { parseReloadCommand, supportsLocalReloadContext } from '../utils/reloadCommand';
 import { notificationService } from '@/shared/notification-system';
-import { isRemoteWorkspace } from '@/shared/types';
 import { useI18n } from '@/infrastructure/i18n';
 import { inputReducer, initialInputState, type InputAction } from '../reducers/inputReducer';
 import { modeReducer, initialModeState } from '../reducers/modeReducer';
@@ -91,6 +91,7 @@ import {
   isSessionWorktreeBindingLocked,
   sessionWorktreeBindingSubscriptionKey,
 } from '../utils/sessionWorktree';
+import { isRemoteWorkspaceSession } from '../utils/sessionWorkspace';
 import { isTauriRuntime } from '@/infrastructure/runtime';
 import { Tooltip, IconButton, confirmDanger, confirmWarning } from '@/component-library';
 import { PendingQueuePanel } from './PendingQueuePanel';
@@ -146,6 +147,7 @@ import {
 import {
   appendSkillPromptReferenceToken,
   createSkillPromptReferenceToken,
+  isSkillAvailableForUserInvocation,
   isSlashAddressableSkillName,
   replaceLeadingSlashCommandWithSkillToken,
 } from '../utils/skillPromptReference';
@@ -519,6 +521,12 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   );
   const { commands: acpAgentCommands } = useAcpSlashCommands(acpSessionForInput);
   const isAcpInputSession = Boolean(acpSessionForInput);
+  const reloadContextSupported = supportsLocalReloadContext({
+    desktopRuntime: isTauriRuntime(),
+    acpSession: isAcpInputSession,
+    dispatchTransport: usesDispatchTransport,
+  });
+  const canReloadContext = reloadContextSupported && Boolean(effectiveTargetSessionId);
   const { entries: acpPlanEntries } = useAcpPlan(acpSessionForInput?.sessionId ?? null);
   const threadGoalController = useThreadGoalController(effectiveTargetSession, {
     isBtwSession,
@@ -1036,9 +1044,9 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const setChatInputActive = useChatInputState(state => state.setActive);
   const setChatInputExpanded = useChatInputState(state => state.setExpanded);
   const setChatInputHeight = useChatInputState(state => state.setInputHeight);
-  const runtimeResolvedSkills = useMemo(
-    // Only surface skills that this mode will actually resolve at runtime.
-    () => resolvedModeSkills.filter(skill => skill.selectedForRuntime),
+  const userInvocableSkills = useMemo(
+    // Management keeps the full catalog; invocation surfaces apply both runtime and author visibility.
+    () => resolvedModeSkills.filter(isSkillAvailableForUserInvocation),
     [resolvedModeSkills]
   );
 
@@ -1992,9 +2000,12 @@ export const ChatInput: React.FC<ChatInputProps> = ({
    * Checking worktree isolation only arms the empty session. The first prompt
    * materializes the worktree after it has visibly been submitted.
    */
+  const remoteWorkspaceSession =
+    isRemoteWorkspaceSession(effectiveTargetSession, workspace);
+
   const worktreeControl = useMemo(() => {
     if (!effectiveTargetSessionId || !effectiveTargetSession) return undefined;
-    if (effectiveTargetSession.remoteConnectionId) return undefined;
+    if (remoteWorkspaceSession) return undefined;
     if (usesDispatchTransport) return undefined;
     if (isSubagentInputTarget || isAcpTargetSession) return undefined;
 
@@ -2030,6 +2041,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     derivedState?.isProcessing,
     isAcpTargetSession,
     isSubagentInputTarget,
+    remoteWorkspaceSession,
     tWorktrees,
     usesDispatchTransport,
   ]);
@@ -2060,35 +2072,47 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       registration ||
       isBtwSession ||
       isSubagentInputTarget ||
-      isAcpInputSession
+      isAcpInputSession ||
+      remoteWorkspaceSession
     ) {
       return undefined;
     }
     const target: DispatchTarget =
       effectiveTargetSession?.config.dispatchTarget ?? { kind: 'local' };
-    const snapshotSourceIsRemote =
-      !!effectiveTargetSession?.remoteConnectionId || isRemoteWorkspace(workspace);
+    // Results only exist for a snapshot-delivered job that has finished: an
+    // "existing directory" job never took a snapshot to diff against, and a
+    // running one has no terminal tree yet.
+    const jobId = effectiveTargetSession?.config.dispatchJobId;
+    const jobState = effectiveTargetSession?.config.dispatchJobState;
+    const completedSnapshotJobId =
+      effectiveTargetSession?.config.dispatchWorkspaceDelivery?.kind === 'snapshot-exact' &&
+      (jobState === 'succeeded' || jobState === 'failed') &&
+      jobId
+        ? jobId
+        : undefined;
     return {
       target,
-      sourceWorkspacePath:
-        !snapshotSourceIsRemote && workspacePath ? workspacePath : undefined,
+      sourceWorkspacePath: workspacePath || undefined,
       locked:
         isNonLocalDispatchTarget(target) ||
         (effectiveTargetSession?.dialogTurns.length ?? 0) > 0 ||
         !!derivedState?.isProcessing,
       onSelectTarget: handleSelectDispatchTarget,
+      completedSnapshotJobId,
     };
   }, [
     derivedState?.isProcessing,
+    effectiveTargetSession?.config.dispatchJobId,
+    effectiveTargetSession?.config.dispatchJobState,
     effectiveTargetSession?.config.dispatchTarget,
+    effectiveTargetSession?.config.dispatchWorkspaceDelivery?.kind,
     effectiveTargetSession?.dialogTurns.length,
-    effectiveTargetSession?.remoteConnectionId,
     handleSelectDispatchTarget,
     isAcpInputSession,
     isBtwSession,
     isSubagentInputTarget,
     registration,
-    workspace,
+    remoteWorkspaceSession,
     workspacePath,
   ]);
 
@@ -2585,12 +2609,12 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         command: '/usage',
         label: t('chatInput.usageAction'),
       },
-      ...(canUseSkillsForTarget
+      ...(canReloadContext
         ? [{
             kind: 'action' as const,
-            id: 'reload-skills' as const,
-            command: '/reload-skills',
-            label: t('chatInput.reloadSkillsAction'),
+            id: 'reload' as const,
+            command: '/reload',
+            label: t('chatInput.reloadAction'),
           }]
         : []),
       ...(!derivedState?.isProcessing
@@ -2621,7 +2645,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       const cmd = i.command.slice(1).toLowerCase();
       return cmd.includes(q) || i.label.toLowerCase().includes(q);
     });
-  }, [canLaunchReview, canUseSkillsForTarget, derivedState?.isProcessing, isAcpInputSession, isBtwSession, isSubagentInputTarget, slashCommandState.query, t]);
+  }, [canLaunchReview, canReloadContext, derivedState?.isProcessing, isAcpInputSession, isBtwSession, isSubagentInputTarget, slashCommandState.query, t]);
 
   const getFilteredMcpPromptCommands = useCallback((): SlashMcpPromptItem[] => {
     if (isAcpInputSession) {
@@ -2674,7 +2698,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 
     const q = (slashCommandState.query || '').trim().toLowerCase();
     const seenNames = new Set<string>();
-    return runtimeResolvedSkills
+    return userInvocableSkills
       .filter(skill => {
         const normalizedName = skill.name.trim();
         const normalizedNameKey = normalizedName.toLowerCase();
@@ -2698,7 +2722,9 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         kind: 'skill' as const,
         id: skill.key,
         command: `/${skill.name}`,
-        label: skill.description || skill.name,
+        label: [skill.argumentHint?.trim(), skill.description || skill.name]
+          .filter(Boolean)
+          .join(' — '),
         skillName: skill.name,
       }))
       .sort((a, b) => {
@@ -2708,7 +2734,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         const bExact = bName === q ? 0 : bName.startsWith(q) ? 1 : 2;
         return aExact - bExact || aName.localeCompare(bName);
       });
-  }, [canUseSkillsForTarget, runtimeResolvedSkills, slashCommandState.query]);
+  }, [canUseSkillsForTarget, slashCommandState.query, userInvocableSkills]);
 
   const resolveTypedMcpPromptCommand = useCallback((text: string): SlashMcpPromptItem | null => {
     const trimmed = text.trim();
@@ -3211,10 +3237,15 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     threadGoalController,
   ]);
 
-  const submitReloadSkillsFromInput = useCallback(async () => {
+  const submitReloadFromInput = useCallback(async () => {
     const message = inputState.value.trim();
-    if (!/^\/reload-skills\s*$/i.test(message)) {
-      notificationService.warning(t('chatInput.reloadSkillsUsage'));
+    const parsed = parseReloadCommand(message);
+    if (!parsed || parsed.kind === 'invalid') {
+      notificationService.warning(t('chatInput.reloadUsage'));
+      return;
+    }
+    if (!effectiveTargetSessionId) {
+      notificationService.error(t('chatInput.reloadNoSession'));
       return;
     }
 
@@ -3223,34 +3254,36 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     setSlashCommandState({ isActive: false, kind: 'modes', query: '', selectedIndex: 0 });
 
     try {
-      // Re-fetch skill configs with forceRefresh=true. The Tauri command
-      // (skill_api.rs::get_skill_configs) calls SkillRegistry::global().refresh()
-      // before serializing the result, so this single call both refreshes
-      // the registry cache and returns the new view. Pass workspacePath so
-      // workspace-level skills (`.bitfun/skills/`, `.cursor/skills/`, etc.)
-      // are included in the count — without it, the registry falls back
-      // to user + built-in slots only and the toast would undercount.
-      const skills = await configAPI.getSkillConfigs({
-        forceRefresh: true,
-        workspacePath: sessionBoundWorkspacePath || undefined,
+      await agentAPI.reloadSessionContext({
+        sessionId: effectiveTargetSessionId,
+        target: parsed.target,
       });
+      const successMessage = parsed.target === 'all'
+        ? t('chatInput.reloadAllDone')
+        : parsed.target === 'skills'
+          ? t('chatInput.reloadSkillsDone')
+          : t('chatInput.reloadInstructionsDone');
       notificationService.success(
-        t('chatInput.reloadSkillsDone', { count: skills.length }),
+        successMessage,
         { duration: 3000 }
       );
     } catch (error) {
-      log.error('Failed to trigger /reload-skills', { error });
+      log.error('Failed to reload session context', {
+        error,
+        sessionId: effectiveTargetSessionId,
+        target: parsed.target,
+      });
       dispatchInput({ type: 'ACTIVATE' });
       dispatchInput({ type: 'SET_VALUE', payload: message });
       notificationService.error(
         error instanceof Error ? error.message : t('error.unknown'),
         {
-          title: t('chatInput.reloadSkillsFailed'),
+          title: t('chatInput.reloadFailed'),
           duration: 5000,
         }
       );
     }
-  }, [dispatchInput, inputState.value, sessionBoundWorkspacePath, setQueuedInput, t]);
+  }, [dispatchInput, effectiveTargetSessionId, inputState.value, setQueuedInput, t]);
 
   const submitReviewFromInput = useCallback(async () => {
     if (!canLaunchReview) {
@@ -3803,6 +3836,9 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       !isAcpInputSession &&
       !usesDispatchTransport &&
       messageOverride === undefined;
+    const parsedReload = messageOverride === undefined
+      ? parseReloadCommand(message)
+      : null;
 
     if (localSlashCommandsEnabled && await submitExternalPromptCommandFromInput(
       message,
@@ -3843,8 +3879,12 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       return;
     }
 
-    if (localSlashCommandsEnabled && /^\/reload-skills\s*$/i.test(message)) {
-      await submitReloadSkillsFromInput();
+    if (parsedReload && !reloadContextSupported) {
+      notificationService.warning(t('chatInput.reloadDesktopOnly'));
+      return;
+    }
+    if (parsedReload?.kind === 'reload') {
+      await submitReloadFromInput();
       return;
     }
 
@@ -3874,8 +3914,8 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       return;
     }
 
-    if (localSlashCommandsEnabled && isSlashCommand(message, '/reload-skills')) {
-      notificationService.warning(t('chatInput.reloadSkillsUsage'));
+    if (localSlashCommandsEnabled && parsedReload?.kind === 'invalid') {
+      notificationService.warning(t('chatInput.reloadUsage'));
       return;
     }
     
@@ -4015,7 +4055,8 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     submitInitFromInput,
     submitReviewFromInput,
     submitMcpPromptFromInput,
-    submitReloadSkillsFromInput,
+    submitReloadFromInput,
+    reloadContextSupported,
     confirmPromptCacheGuardIfNeeded,
     t,
     resolveTypedMcpPromptCommand,
@@ -5519,11 +5560,11 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                                     <Loader2 size={14} className="bitfun-chat-input__boost-submenu-spinner" aria-hidden />
                                     <span>{t('chatInput.boostSkillsLoading')}</span>
                                   </div>
-                                ) : runtimeResolvedSkills.length === 0 ? (
+                                ) : userInvocableSkills.length === 0 ? (
                                   <div className="bitfun-chat-input__boost-submenu-empty">{t('chatInput.boostSkillsEmpty')}</div>
                                 ) : (
                                   <div className="bitfun-chat-input__boost-submenu-list">
-                                    {runtimeResolvedSkills.map(skill => (
+                                    {userInvocableSkills.map(skill => (
                                       <div
                                         key={skill.key}
                                         role="button"
@@ -5537,7 +5578,9 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                                         onKeyDown={e => e.key === 'Enter' && insertSkillIntoInput(skill.name)}
                                       >
                                         <Sparkles size={12} className="bitfun-chat-input__boost-submenu-item-icon" aria-hidden />
-                                        <span className="bitfun-chat-input__boost-submenu-item-name">{skill.name}</span>
+                                        <span className="bitfun-chat-input__boost-submenu-item-name">
+                                          {[skill.name, skill.argumentHint?.trim()].filter(Boolean).join(' ')}
+                                        </span>
                                       </div>
                                     ))}
                                   </div>

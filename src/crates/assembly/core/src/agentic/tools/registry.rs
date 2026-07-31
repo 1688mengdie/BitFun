@@ -544,6 +544,8 @@ mod tests {
             "Worktree",
             "ReviewPlatform",
             "InitMiniApp",
+            "FinalizeMiniApp",
+            "PublishMiniApp",
             "PageDeploy",
             "PagePublish",
             "ControlHub",
@@ -699,6 +701,8 @@ mod tests {
         assert!(registry.is_tool_deferred("Worktree"));
         assert!(registry.is_tool_deferred("ReviewPlatform"));
         assert!(!registry.is_tool_deferred("InitMiniApp"));
+        assert!(!registry.is_tool_deferred("FinalizeMiniApp"));
+        assert!(!registry.is_tool_deferred("PublishMiniApp"));
     }
 
     #[test]

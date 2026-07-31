@@ -8,36 +8,41 @@ impl ChatMode {
         chat_view.show_skill_menu();
     }
 
-    /// Re-scan skill directories from disk and rebuild the registry cache.
-    ///
-    /// Mirrors Claude Code 2.1.152 `/reload-skills`. Safe to call at any
-    /// time — does not require `is_processing` to be false because the
-    /// registry swap is atomic and a held `SkillInfo` reference is not
-    /// kept across the call.
-    fn reload_skills_from_disk(
+    fn reload_context(
         &self,
+        target: bitfun_runtime_ports::AgentContextReloadTarget,
         chat_view: &mut ChatView,
         chat_state: &mut ChatState,
         rt_handle: &tokio::runtime::Handle,
     ) {
-        let registry = SkillRegistry::global();
-        let workspace = self.agent.workspace_path_buf();
-        let outcome = tokio::task::block_in_place(|| {
-            // refresh() is the global re-scan entry point; the workspace
-            // arg of refresh_for_workspace is currently a no-op upstream,
-            // so we call refresh() directly and re-resolve the workspace
-            // count afterwards.
-            rt_handle.block_on(async {
-                registry.refresh().await;
-                registry
-                    .get_resolved_skills_for_workspace(Some(workspace.as_path()), None)
-                    .await
-            })
-        });
+        use bitfun_runtime_ports::{AgentContextReloadRequest, AgentContextReloadTarget};
 
-        let count = outcome.len();
-        chat_state.add_system_message(format!("Reloaded {} skill(s) from disk.", count));
-        chat_view.set_status(Some(format!("Skills reloaded ({} available)", count)));
+        let request = AgentContextReloadRequest {
+            session_id: chat_state.core_session_id.clone(),
+            target,
+        };
+        let outcome =
+            tokio::task::block_in_place(|| rt_handle.block_on(self.context_reload.reload(request)));
+
+        match outcome {
+            Ok(_) => {
+                let message = match target {
+                    AgentContextReloadTarget::All => {
+                        "Reloaded skills. Instructions will be reread for the next message."
+                    }
+                    AgentContextReloadTarget::Skills => "Reloaded skills.",
+                    AgentContextReloadTarget::Instructions => {
+                        "Instructions will be reread for the next message."
+                    }
+                };
+                chat_state.add_system_message(message.to_string());
+                chat_view.set_status(Some(message.to_string()));
+            }
+            Err(error) => {
+                chat_state.add_system_message(format!("Could not reload context: {error}"));
+                chat_view.set_status(Some("Context reload failed".to_string()));
+            }
+        }
     }
 
     fn show_available_skill_list(
@@ -52,14 +57,17 @@ impl ChatMode {
             rt_handle.block_on(async {
                 let registry = SkillRegistry::global();
                 registry
-                    .get_resolved_skills_for_workspace(Some(workspace.as_path()), Some(&agent_type))
+                    .get_user_invocable_skills_for_workspace(
+                        Some(workspace.as_path()),
+                        Some(&agent_type),
+                    )
                     .await
             })
         });
 
         if skills.is_empty() {
             chat_state.add_system_message(format!(
-                "No enabled skills found for agent mode '{}'. Add skills in .bitfun/skills/, .cursor/skills/, or ~/.cursor/skills/, or enable built-in skills for this mode.",
+                "No user-invocable skills found for agent mode '{}'. Add or enable a skill, then check its user-invocable metadata.",
                 self.agent_type
             ));
             return;
@@ -107,7 +115,7 @@ impl ChatMode {
     }
 
     fn handle_skill_selector_action(
-        &self,
+        &mut self,
         action: SkillSelectorAction,
         chat_view: &mut ChatView,
         chat_state: &mut ChatState,
@@ -132,8 +140,9 @@ impl ChatMode {
     }
 
     /// Apply skill selection: fill input box with execution command
-    fn apply_skill_selection(&self, selected: &SkillItem, chat_view: &mut ChatView) {
-        chat_view.set_input(&format!("Execute the {} skill.", selected.name));
+    fn apply_skill_selection(&mut self, selected: &SkillItem, chat_view: &mut ChatView) {
+        chat_view.set_input(&selected.invocation_text());
+        self.selected_native_command_once = None;
     }
 
     fn set_skill_enabled(
@@ -211,6 +220,7 @@ impl ChatMode {
             default_enabled: true,
             is_shadowed: info.is_shadowed,
             shadowed_by_key: info.shadowed_by_key,
+            argument_hint: info.argument_hint,
         }
     }
 
@@ -227,6 +237,7 @@ impl ChatMode {
             default_enabled: info.default_enabled,
             is_shadowed: info.skill.is_shadowed,
             shadowed_by_key: info.skill.shadowed_by_key,
+            argument_hint: info.skill.argument_hint,
         }
     }
 
@@ -347,11 +358,12 @@ impl ChatMode {
     }
 
     /// Apply subagent selection: fill input box with launch command
-    fn apply_subagent_selection(&self, selected: &SubagentItem, chat_view: &mut ChatView) {
+    fn apply_subagent_selection(&mut self, selected: &SubagentItem, chat_view: &mut ChatView) {
         chat_view.set_input(&format!(
             "Launch subagent {} to finish task: ",
             selected.name
         ));
+        self.selected_native_command_once = None;
     }
 
     fn set_subagent_enabled(

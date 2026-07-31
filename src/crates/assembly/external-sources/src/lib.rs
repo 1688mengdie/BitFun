@@ -31,13 +31,13 @@ pub use tool::{
 };
 
 use bitfun_product_domains::external_sources::{
-    prompt_command_conflict_key, EcosystemId, ExpandedPromptCommand, ExternalSourceCatalogEntry,
+    prompt_command_conflict_key, EcosystemId, ExternalSourceCatalogEntry,
     ExternalSourceCatalogSnapshot, ExternalSourceContext, ExternalSourceDiagnostic,
     ExternalSourceHealth, ExternalSourceLifecycleState, ExternalSourceProviderError,
     ExternalSourceRecord, ExternalWatchRoot, PromptCommandAvailability, PromptCommandCatalogEntry,
     PromptCommandConflict, PromptCommandConflictCandidate, PromptCommandDefinition,
-    PromptCommandProviderIdentity, PromptCommandProviderSnapshot, PromptCommandSourceProvider,
-    ProviderId, SourceKey,
+    PromptCommandExpansion, PromptCommandProviderIdentity, PromptCommandProviderSnapshot,
+    PromptCommandSourceProvider, ProviderId, SourceKey,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -458,7 +458,7 @@ impl ExternalSourceCoordinator {
         &self,
         name: &str,
         arguments: &str,
-    ) -> Result<ExpandedPromptCommand, ExternalSourceProviderError> {
+    ) -> Result<PromptCommandExpansion, ExternalSourceProviderError> {
         self.expand_command_guarded(name, arguments, None, None)
     }
 
@@ -468,7 +468,7 @@ impl ExternalSourceCoordinator {
         arguments: &str,
         expected_candidate_id: Option<&str>,
         expected_content_version: Option<&str>,
-    ) -> Result<ExpandedPromptCommand, ExternalSourceProviderError> {
+    ) -> Result<PromptCommandExpansion, ExternalSourceProviderError> {
         let command = self
             .snapshot
             .commands
@@ -650,7 +650,7 @@ impl ExternalSourceCoordinator {
         let mut commands = Vec::new();
         let mut command_conflicts = Vec::new();
         for (command_name, mut candidates) in command_candidates_by_name {
-            candidates.sort_by(|left, right| left.id.stable_key().cmp(&right.id.stable_key()));
+            candidates.sort_by_key(|left| left.id.stable_key());
             let requires_reconfirmation = candidates.len() == 1
                 && self
                     .conflicted_candidate_ids

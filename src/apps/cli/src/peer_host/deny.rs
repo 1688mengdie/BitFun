@@ -77,6 +77,7 @@ static LOCAL_ONLY_COMMANDS: &[&str] = &[
     "dispatch_install_cli_start",
     "dispatch_install_cli_poll",
     "dispatch_install_cli_cancel",
+    "dispatch_sync_model_config",
     "dispatch_submit",
     "dispatch_status",
     "dispatch_cancel",
@@ -100,11 +101,11 @@ static CLI_UNSUPPORTED_EXACT: &[&str] = &[
 ];
 
 pub(crate) fn is_local_only_command(command: &str) -> bool {
-    LOCAL_ONLY_COMMANDS.iter().any(|denied| *denied == command)
+    LOCAL_ONLY_COMMANDS.contains(&command)
 }
 
 pub(crate) fn is_cli_unsupported_command(command: &str) -> bool {
-    if CLI_UNSUPPORTED_EXACT.iter().any(|c| *c == command) {
+    if CLI_UNSUPPORTED_EXACT.contains(&command) {
         return true;
     }
     let prefixes = [
@@ -133,6 +134,7 @@ mod tests {
             "dispatch_install_cli_start",
             "dispatch_install_cli_poll",
             "dispatch_install_cli_cancel",
+            "dispatch_sync_model_config",
             "dispatch_submit",
             "dispatch_status",
             "dispatch_cancel",

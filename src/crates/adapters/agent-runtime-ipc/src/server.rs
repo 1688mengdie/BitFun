@@ -1,11 +1,13 @@
+use crate::operation::RuntimeIpcSessionRequirement;
 use crate::{
-    read_frame, serialize_frame_with_limit, write_frame_with_limit, DiscoveryRecord,
-    DiscoveryStore, InitializeResult, LeaseTransition, LocalIpcEndpoint, LocalIpcListener,
-    LocalIpcStream, RuntimeInstanceIdentity, RuntimeInstanceLock, RuntimeIpcCapabilities,
-    RuntimeIpcDiscoveryError, RuntimeIpcError, RuntimeIpcErrorCode, RuntimeIpcEvent,
-    RuntimeIpcFrame, RuntimeIpcFrameReader, RuntimeIpcIoError, RuntimeIpcOperation,
-    RuntimeIpcOperationResult, RuntimeIpcRequestHandler, RuntimeIpcTransportError,
-    RuntimeSessionLeases, MAX_REQUEST_FRAME_BYTES, MAX_RESPONSE_FRAME_BYTES, PROTOCOL_VERSION,
+    read_frame, serialize_frame_with_limit, write_frame_with_limit,
+    write_serialized_frame_with_limit, DiscoveryRecord, DiscoveryStore, InitializeResult,
+    LeaseTransition, LocalIpcEndpoint, LocalIpcListener, LocalIpcStream, RuntimeInstanceIdentity,
+    RuntimeInstanceLock, RuntimeIpcCapabilities, RuntimeIpcDiscoveryError, RuntimeIpcError,
+    RuntimeIpcErrorCode, RuntimeIpcEvent, RuntimeIpcFrame, RuntimeIpcFrameReader,
+    RuntimeIpcIoError, RuntimeIpcOperation, RuntimeIpcOperationResult, RuntimeIpcRequestHandler,
+    RuntimeIpcTransportError, RuntimeSessionLeases, MAX_REQUEST_FRAME_BYTES,
+    MAX_RESPONSE_FRAME_BYTES, PROTOCOL_VERSION,
 };
 use bitfun_events::AgenticEvent;
 use bitfun_runtime_ports::{AgentSubmissionSource, AgentTurnCancellationRequest};
@@ -342,23 +344,26 @@ async fn run_initialized_connection(
                     *active_turn_id = None;
                 }
                 let frame = RuntimeIpcFrame::Event { event };
-                if matches!(
-                    serialize_frame_with_limit(&frame, MAX_RESPONSE_FRAME_BYTES),
-                    Err(RuntimeIpcIoError::FrameTooLarge { .. })
-                ) {
-                    timeout_write(
-                        config.request_timeout,
-                        stream,
-                        &RuntimeIpcFrame::Event {
-                            event: RuntimeIpcEvent::StreamInvalidated {
-                                reason: crate::RuntimeIpcStreamInvalidationReason::FrameTooLarge,
+                let frame_bytes = match serialize_frame_with_limit(&frame, MAX_RESPONSE_FRAME_BYTES)
+                {
+                    Ok(bytes) => bytes,
+                    Err(RuntimeIpcIoError::FrameTooLarge { .. }) => {
+                        timeout_write(
+                            config.request_timeout,
+                            stream,
+                            &RuntimeIpcFrame::Event {
+                                event: RuntimeIpcEvent::StreamInvalidated {
+                                    reason:
+                                        crate::RuntimeIpcStreamInvalidationReason::FrameTooLarge,
+                                },
                             },
-                        },
-                    )
-                    .await?;
-                    return Err(RuntimeIpcServerError::EventStreamUnavailable);
-                }
-                timeout_write(config.request_timeout, stream, &frame).await?;
+                        )
+                        .await?;
+                        return Err(RuntimeIpcServerError::EventStreamUnavailable);
+                    }
+                    Err(error) => return Err(RuntimeIpcServerError::Io(error)),
+                };
+                timeout_write_serialized(config.request_timeout, stream, &frame_bytes).await?;
             }
             ConnectionInput::EventLagged => {
                 return Err(RuntimeIpcServerError::EventStreamUnavailable)
@@ -407,33 +412,23 @@ async fn run_initialized_connection(
                     continue;
                 }
 
-                if active_turn_id.is_some()
-                    && matches!(
-                        operation,
-                        RuntimeIpcOperation::SubmitTurn { .. }
-                            | RuntimeIpcOperation::RestoreSession { .. }
-                            | RuntimeIpcOperation::CreateSession { .. }
-                            | RuntimeIpcOperation::UpdateSessionMode { .. }
-                    )
-                {
+                let rules = operation.rules();
+                if active_turn_id.is_some() && rules.requires_idle {
                     send_error(
                         stream,
                         config.request_timeout,
                         Some(request_id),
                         RuntimeIpcErrorCode::SessionInUse,
-                        "finish or cancel the active turn before changing the controlled session or its agent mode",
+                        "finish or cancel the active turn before starting this session operation",
                     )
                     .await?;
                     continue;
                 }
 
                 // Serialize attachment so a newly visible Session cannot be claimed
-                // before its generated ID returns to the creating connection.
-                let _attachment_guard = if matches!(
-                    operation,
-                    RuntimeIpcOperation::CreateSession { .. }
-                        | RuntimeIpcOperation::RestoreSession { .. }
-                ) {
+                // before its generated ID returns to the creating connection, or
+                // deleted while another connection is attaching it.
+                let _attachment_guard = if rules.serializes_session_selection {
                     Some(config.attachment_gate.lock().await)
                 } else {
                     None
@@ -468,13 +463,16 @@ async fn run_initialized_connection(
                         *active_turn_id = Some(turn_id.clone());
                         Some(turn_id)
                     }
+                    RuntimeIpcOperation::CompactSession { request } => {
+                        let turn_id = request.turn_id.clone();
+                        *active_turn_id = Some(turn_id.clone());
+                        Some(turn_id)
+                    }
                     _ => None,
                 };
-                let result = tokio::time::timeout(
-                    config.request_timeout,
-                    handler.execute(operation.clone()),
-                )
-                .await;
+                let side_effecting = rules.side_effecting;
+                let result =
+                    tokio::time::timeout(config.request_timeout, handler.execute(operation)).await;
                 let result = match result {
                     Ok(Ok(result)) => result,
                     Ok(Err(error)) => {
@@ -499,7 +497,7 @@ async fn run_initialized_connection(
                         .await?;
                         return Err(RuntimeIpcServerError::Disconnected);
                     }
-                    Err(_) if operation_has_side_effects(&operation) => {
+                    Err(_) if side_effecting => {
                         config
                             .leases
                             .rollback(connection_id, lease_transition.clone());
@@ -529,22 +527,23 @@ async fn run_initialized_connection(
                     }
                 };
                 let response = RuntimeIpcFrame::Response { request_id, result };
-                match serialize_frame_with_limit(&response, MAX_RESPONSE_FRAME_BYTES) {
-                    Err(RuntimeIpcIoError::FrameTooLarge { .. }) => {
-                        config.leases.rollback(connection_id, lease_transition);
-                        send_error(
-                            stream,
-                            config.request_timeout,
-                            Some(request_id),
-                            RuntimeIpcErrorCode::FrameTooLarge,
-                            "runtime IPC response exceeds the supported frame size",
-                        )
-                        .await?;
-                        continue;
-                    }
-                    Err(error) => return Err(RuntimeIpcServerError::Io(error)),
-                    Ok(_) => {}
-                }
+                let response_bytes =
+                    match serialize_frame_with_limit(&response, MAX_RESPONSE_FRAME_BYTES) {
+                        Err(RuntimeIpcIoError::FrameTooLarge { .. }) => {
+                            config.leases.rollback(connection_id, lease_transition);
+                            send_error(
+                                stream,
+                                config.request_timeout,
+                                Some(request_id),
+                                RuntimeIpcErrorCode::FrameTooLarge,
+                                "runtime IPC response exceeds the supported frame size",
+                            )
+                            .await?;
+                            continue;
+                        }
+                        Err(error) => return Err(RuntimeIpcServerError::Io(error)),
+                        Ok(bytes) => bytes,
+                    };
 
                 let RuntimeIpcFrame::Response { result, .. } = &response else {
                     unreachable!("response frame was just constructed")
@@ -587,13 +586,15 @@ async fn run_initialized_connection(
                             config.request_timeout,
                             Some(request_id),
                             RuntimeIpcErrorCode::Internal,
-                            "runtime returned a different turn id than the submitted operation",
+                            "runtime returned a different turn id than the accepted turn operation",
                         )
                         .await?;
                         return Err(RuntimeIpcServerError::Disconnected);
                     }
                 }
-                if let Err(error) = timeout_write(config.request_timeout, stream, &response).await {
+                if let Err(error) =
+                    timeout_write_serialized(config.request_timeout, stream, &response_bytes).await
+                {
                     config.leases.rollback(connection_id, lease_transition);
                     return Err(error);
                 }
@@ -664,39 +665,27 @@ async fn wait_until_unavailable(availability: Option<&mut watch::Receiver<bool>>
     }
 }
 
-fn operation_has_side_effects(operation: &RuntimeIpcOperation) -> bool {
-    matches!(
-        operation,
-        RuntimeIpcOperation::CreateSession { .. }
-            | RuntimeIpcOperation::RestoreSession { .. }
-            | RuntimeIpcOperation::UpdateSessionMode { .. }
-            | RuntimeIpcOperation::SubmitTurn { .. }
-            | RuntimeIpcOperation::CancelTurn { .. }
-            | RuntimeIpcOperation::RespondPermission { .. }
-            | RuntimeIpcOperation::SubmitUserAnswers { .. }
-    )
-}
-
 fn prepare_operation(
     config: &ConnectionConfig,
     connection_id: &str,
     operation: &RuntimeIpcOperation,
 ) -> Result<LeaseTransition, RuntimeIpcError> {
-    if matches!(operation, RuntimeIpcOperation::CreateSession { .. }) {
-        return Ok(LeaseTransition::Unchanged);
-    }
-
-    if let RuntimeIpcOperation::RestoreSession { request } = operation {
-        return config.leases.switch(connection_id, &request.session_id);
-    }
-
-    if operation.requires_controller() {
-        config.leases.validate(
+    let session_id = operation.session_id();
+    match operation.rules().session_requirement {
+        RuntimeIpcSessionRequirement::None => {}
+        RuntimeIpcSessionRequirement::CurrentController => config.leases.validate(
             connection_id,
-            operation
-                .session_id()
-                .expect("controller operations are session scoped"),
-        )?;
+            session_id.expect("controller operations are session scoped"),
+        )?,
+        RuntimeIpcSessionRequirement::AttachExisting => {
+            return config.leases.switch(
+                connection_id,
+                session_id.expect("attachment operations are session scoped"),
+            );
+        }
+        RuntimeIpcSessionRequirement::UncontrolledTarget => config.leases.validate_uncontrolled(
+            session_id.expect("uncontrolled-target operations are session scoped"),
+        )?,
     }
     Ok(LeaseTransition::Unchanged)
 }
@@ -834,6 +823,20 @@ async fn timeout_write(
     tokio::time::timeout(
         timeout,
         write_frame_with_limit(stream, frame, MAX_RESPONSE_FRAME_BYTES),
+    )
+    .await
+    .map_err(|_| RuntimeIpcServerError::IoTimeout)?
+    .map_err(RuntimeIpcServerError::Io)
+}
+
+async fn timeout_write_serialized(
+    timeout: Duration,
+    stream: &mut LocalIpcStream,
+    bytes: &[u8],
+) -> Result<(), RuntimeIpcServerError> {
+    tokio::time::timeout(
+        timeout,
+        write_serialized_frame_with_limit(stream, bytes, MAX_RESPONSE_FRAME_BYTES),
     )
     .await
     .map_err(|_| RuntimeIpcServerError::IoTimeout)?
