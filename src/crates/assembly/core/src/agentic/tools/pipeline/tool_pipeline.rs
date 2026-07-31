@@ -969,7 +969,7 @@ impl ToolPipeline {
         // Poke audit check: for write/destructive tool calls, classify the
         // operation and prepare audit context so that the Warden can send an
         // Audit-Poke to the session. This is the integration point between
-        // PostToolUse and the Warden Poke system (R-003 taiji feature).
+        // PostToolUse and the Warden Poke system.
         #[cfg(feature = "taiji")]
         if !tool_result.is_error {
             use bitfun_agent_tools::classify_tool_call;

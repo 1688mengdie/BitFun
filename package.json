@@ -109,11 +109,7 @@
     "e2e:test:perf:debug": "cross-env BITFUN_E2E_APP_MODE=debug E2E_LOG_LEVEL=warn pnpm --dir tests/e2e run test:perf",
     "e2e:test:perf:release-fast": "cross-env BITFUN_E2E_APP_MODE=release-fast E2E_LOG_LEVEL=warn pnpm --dir tests/e2e run test:perf",
     "e2e:test:perf:startup-stability:release-fast": "cross-env BITFUN_E2E_APP_MODE=release-fast E2E_LOG_LEVEL=warn node tests/e2e/scripts/run-startup-stability.mjs",
-    "e2e:test:perf:long-session-interactions:release-fast": "cross-env BITFUN_E2E_APP_MODE=release-fast E2E_LOG_LEVEL=warn node tests/e2e/scripts/run-long-session-interaction-matrix.mjs",
-    "e2e:test:lvpa": "cross-env BITFUN_E2E_APP_MODE=debug pnpm --dir tests/e2e run test:lvpa",
-    "e2e:test:lvpa-l0": "cross-env BITFUN_E2E_APP_MODE=debug pnpm --dir tests/e2e run test:l0:lvpa",
-    "e2e:test:lvpa-l1-workshop": "cross-env BITFUN_E2E_APP_MODE=debug pnpm --dir tests/e2e run test:l1:lvpa-workshop",
-    "e2e:test:lvpa-l1-team": "cross-env BITFUN_E2E_APP_MODE=debug pnpm --dir tests/e2e run test:l1:lvpa-team"
+    "e2e:test:perf:long-session-interactions:release-fast": "cross-env BITFUN_E2E_APP_MODE=release-fast E2E_LOG_LEVEL=warn node tests/e2e/scripts/run-long-session-interaction-matrix.mjs"
   },
   "devDependencies": {
     "@noble/hashes": "^2.0.1",

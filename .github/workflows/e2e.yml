@@ -3,7 +3,7 @@
 # 架构总纲 §13.1 — CI 管线骨架
 #   job-e2e (on main/PR labeled e2e):
 #     ├── pnpm e2e:test:l0:all
-#     ├── pnpm e2e:test:lvpa
+#     ├── pnpm e2e:test:l1
 #     └── (预留) cargo test --test e2e
 #
 # 架构总纲 §12.1 — Layer 3: 端到端测试
@@ -71,10 +71,6 @@ jobs:
 
       - name: 运行 L0 冒烟测试
         run: pnpm run e2e:test:l0:all
-        continue-on-error: false
-
-      - name: 运行 LVPA 场景测试
-        run: pnpm run e2e:test:lvpa
         continue-on-error: false
 
       - name: 运行 L1 功能测试（核心）

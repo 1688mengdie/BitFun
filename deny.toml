@@ -1,14 +1,13 @@
 # =============================================================================
-# LVPA（太极多维量化系统）— cargo-deny 配置
+# cargo-deny 配置
 # 许可合规 + 依赖审查 + 漏洞门禁
 # =============================================================================
-# 被 taiji-security.yml 中的 cargo-deny-action 引用
 # 参考：https://embarkstudios.github.io/cargo-deny/
 
 [advisories]
 # 忽略以下 advisory（需明确记录原因）
 # ignore = [
-#     # 示例：{ id = "RUSTSEC-2024-0001", reason = "不影响 taiji 的量化计算场景" },
+#     # 示例：{ id = "RUSTSEC-2024-0001", reason = "说明忽略原因" },
 # ]
 vulnerability = "deny"
 unmaintained = "warn"
@@ -80,5 +79,5 @@ unknown-registry = "deny"
 unknown-git = "deny"
 # git 依赖白名单
 allow-git = [
-    # 如果 taiji-* crate 依赖未发布的 git 仓库，在此列出
+    # 如有 git 依赖未发布到 crates.io，在此列出
 ]

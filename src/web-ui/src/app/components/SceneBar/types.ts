@@ -22,14 +22,7 @@ export type SceneTabId =
   | 'insights'
   | 'shell'
   | 'panel-view'
-  | `miniapp:${string}`
-  // ── LVPA 修仙场景 ──
-  | 'lvpa-sect'
-  | 'lvpa-workshop'
-  | 'lvpa-market'
-  | 'lvpa-cave'
-  | 'lvpa-library'
-  | 'lvpa-gate';
+  | `miniapp:${string}`;
 
 /** Static definition (from registry) for a scene tab type */
 export interface SceneTabDef {

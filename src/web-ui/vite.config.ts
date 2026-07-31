@@ -45,29 +45,23 @@ export default defineConfig(({ mode, command }) => {
         ? [VitePWA({
             registerType: 'autoUpdate',
             includeAssets: [
-              'taiji-icon-128.png',
               'Logo-ICON*.png',
               'BitFun-Logo.png',
               'fonts/**/*.woff2',
             ],
             manifest: {
-              name: 'BitFun - AI Code Assistant & 太极多维量化系统',
+              name: 'BitFun - AI Code Assistant',
               short_name: 'BitFun',
-              description: 'AI Code Assistant 与 LVPA 太极多维量化系统前端',
+              description: 'BitFun AI Code Assistant frontend',
               theme_color: '#121214',
               background_color: '#121214',
               display: 'standalone',
               orientation: 'any',
               start_url: '/',
               scope: '/',
-              categories: ['productivity', 'development', 'finance'],
+              categories: ['productivity', 'development'],
               lang: 'zh-CN',
               icons: [
-                {
-                  src: 'taiji-icon-128.png',
-                  sizes: '128x128',
-                  type: 'image/png',
-                },
                 {
                   src: 'Logo-ICON-128.png',
                   sizes: '128x128',

@@ -17,7 +17,6 @@ import { useI18n } from '../../../infrastructure/i18n';
 import { PanelLeftIcon } from '../TitleBar/PanelIcons';
 import { createLogger } from '@/shared/utils/logger';
 import { isMacOSDesktopRuntime, supportsNativeWindowDragging } from '@/infrastructure/runtime';
-import { LvpaModeSwitch } from './LvpaModeSwitch';
 import './NavBar.scss';
 
 const log = createLogger('NavBar');
@@ -137,9 +136,6 @@ const NavBar: React.FC<NavBarProps> = ({
           <ArrowRight size={15} />
         </button>
       </Tooltip>
-
-      {/* LVPA 模式切换 */}
-      <LvpaModeSwitch />
 
     </div>
   );

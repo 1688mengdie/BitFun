@@ -42,5 +42,3 @@ export * from './DotMatrixLoader';
 export * from './TaskRunningIndicator';
 
 export * from './FlowChatCards';
-
-export * from './Lvpa';
