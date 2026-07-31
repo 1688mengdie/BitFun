@@ -1037,7 +1037,7 @@ function SubmitPage({
           <legend>{t('releaseSection')}</legend>
           <div className="form-grid">
             <Field label={t('minBitfunVersionLabel')}>
-              <input name="minBitfunVersion" required defaultValue="0.2.14" />
+              <input name="minBitfunVersion" required defaultValue="0.2.15" />
             </Field>
             <Field label={t('publicRepositoryOptional')}>
               <input name="repositoryUrl" type="url" placeholder="https://github.com/…" />
