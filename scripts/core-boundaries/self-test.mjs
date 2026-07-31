@@ -3062,7 +3062,7 @@ export function runManifestParserSelfTest({
         'core_service_agent_runtime_owner_normalizes_remote_session_model_ids',
         'core_service_agent_runtime_owner_normalizes_remote_model_selection_aliases',
         'core_service_agent_runtime_owner_preserves_remote_chat_history_shape',
-        'core_service_agent_runtime_owner_skips_in_progress_remote_assistant_history',
+        'core_service_agent_runtime_owner_preserves_in_progress_remote_assistant_history',
         'core_service_agent_runtime_owner_maps_image_context_to_lifecycle_attachment',
         'core_service_agent_runtime_owner_keeps_scheduler_lifecycle_port_contracts',
       ],

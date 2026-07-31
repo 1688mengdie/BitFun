@@ -1,5 +1,5 @@
 import { RemoteI18n } from '../../i18n/RemoteI18n';
-import { ACCENT, CARD, INK, LINE, MUTED, RED, SOFT, SUBTLE } from './Theme';
+import { ACCENT, CARD, GREEN, INK, LINE, MUTED, RED, SOFT, SUBTLE } from './Theme';
 
 @Component
 export struct ModelServiceSettingsPanel {
@@ -7,6 +7,18 @@ export struct ModelServiceSettingsPanel {
   @Prop modelName: string = '';
   @Prop hasApiKey: boolean = false;
   onClose: () => void = () => {};
+  onSaved: (apiUrl: string, modelName: string, hasApiKey: boolean) => void = () => {};
+  onTest: (
+    apiUrl: string,
+    apiKey: string,
+    modelName: string,
+    clearApiKey: boolean
+  ) => Promise<string> = async (
+    _apiUrl: string,
+    _apiKey: string,
+    _modelName: string,
+    _clearApiKey: boolean
+  ) => '';
   onSave: (
     apiUrl: string,
     apiKey: string,
@@ -23,14 +35,18 @@ export struct ModelServiceSettingsPanel {
   @State draftModelName: string = '';
   @State clearApiKey: boolean = false;
   @State isSaving: boolean = false;
-  @State errorText: string = '';
+  @State isTesting: boolean = false;
+  @State feedbackText: string = '';
+  @State feedbackIsError: boolean = false;
 
   aboutToAppear(): void {
     this.draftApiUrl = this.apiUrl;
     this.draftModelName = this.modelName;
     this.draftApiKey = '';
     this.clearApiKey = false;
-    this.errorText = '';
+    this.isTesting = false;
+    this.feedbackText = '';
+    this.feedbackIsError = false;
   }
 
   build() {
@@ -40,7 +56,7 @@ export struct ModelServiceSettingsPanel {
         .height('100%')
         .backgroundColor('#33000000')
         .onClick(() => {
-          if (!this.isSaving) {
+          if (!this.isSaving && !this.isTesting) {
             this.onClose();
           }
         })
@@ -60,25 +76,49 @@ export struct ModelServiceSettingsPanel {
               RemoteI18n.t('settings.modelService.modelPlaceholder'),
               'model'
             )
-            if (this.errorText.length > 0) {
-              Text(this.errorText)
-                .fontSize(13)
-                .lineHeight(19)
-                .fontColor(RED)
+            Row({ space: 12 }) {
+              Button(this.isTesting ? RemoteI18n.t('common.loading') : RemoteI18n.t('settings.modelService.testConnection'))
+                .layoutWeight(1)
+                .height(50)
+                .fontSize(16)
+                .fontWeight(FontWeight.Medium)
+                .fontColor(INK)
+                .backgroundColor(this.isTesting ? MUTED : SOFT)
+                .borderRadius(25)
+                .enabled(!this.isSaving && !this.isTesting && this.hasTestableApiKey())
+                .onClick(() => {
+                  this.testConnection();
+                })
+              Button(this.isSaving ? RemoteI18n.t('common.loading') : RemoteI18n.t('common.save'))
+                .layoutWeight(1)
+                .height(50)
+                .fontSize(16)
+                .fontWeight(FontWeight.Medium)
+                .fontColor(CARD)
+                .backgroundColor(this.isSaving ? MUTED : ACCENT)
+                .borderRadius(25)
+                .enabled(!this.isSaving && !this.isTesting)
+                .onClick(() => {
+                  this.save();
+                })
+            }
+            .width('100%')
+
+            if (!this.hasTestableApiKey()) {
+              Text(RemoteI18n.t('settings.modelService.testNeedsKey'))
+                .fontSize(12)
+                .lineHeight(18)
+                .fontColor(SUBTLE)
                 .width('100%')
             }
-            Button(this.isSaving ? RemoteI18n.t('common.loading') : RemoteI18n.t('common.save'))
-              .width('100%')
-              .height(50)
-              .fontSize(16)
-              .fontWeight(FontWeight.Medium)
-              .fontColor(CARD)
-              .backgroundColor(this.isSaving ? MUTED : ACCENT)
-              .borderRadius(25)
-              .enabled(!this.isSaving)
-              .onClick(() => {
-                this.save();
-              })
+
+            if (this.feedbackText.length > 0) {
+              Text(this.feedbackText)
+                .fontSize(13)
+                .lineHeight(19)
+                .fontColor(this.feedbackIsError ? RED : GREEN)
+                .width('100%')
+            }
           }
           .width('100%')
           .padding({ left: 22, right: 22, top: 18, bottom: 30 })
@@ -117,7 +157,7 @@ export struct ModelServiceSettingsPanel {
       .type(ButtonType.Circle)
       .backgroundColor(SOFT)
       .onClick(() => {
-        if (!this.isSaving) {
+        if (!this.isSaving && !this.isTesting) {
           this.onClose();
         }
       })
@@ -155,7 +195,7 @@ export struct ModelServiceSettingsPanel {
           } else {
             this.draftModelName = value;
           }
-          this.errorText = '';
+          this.clearFeedback();
         })
     }
     .width('100%')
@@ -197,21 +237,21 @@ export struct ModelServiceSettingsPanel {
           if (value.length > 0) {
             this.clearApiKey = false;
           }
-          this.errorText = '';
+          this.clearFeedback();
         })
       if (this.hasApiKey) {
         Text(this.clearApiKey ?
           RemoteI18n.t('settings.modelService.keepKey') :
           RemoteI18n.t('settings.modelService.clearKey'))
           .fontSize(13)
-          .fontWeight(FontWeight.Medium)
-          .fontColor(this.clearApiKey ? INK : RED)
-          .width('100%')
-          .onClick(() => {
-            this.clearApiKey = !this.clearApiKey;
-            this.draftApiKey = '';
-            this.errorText = '';
-          })
+        .fontWeight(FontWeight.Medium)
+        .fontColor(this.clearApiKey ? INK : RED)
+        .width('100%')
+        .onClick(() => {
+          this.clearApiKey = !this.clearApiKey;
+          this.draftApiKey = '';
+          this.clearFeedback();
+        })
       }
     }
     .width('100%')
@@ -225,11 +265,11 @@ export struct ModelServiceSettingsPanel {
   }
 
   private async save(): Promise<void> {
-    if (this.isSaving) {
+    if (this.isSaving || this.isTesting) {
       return;
     }
     this.isSaving = true;
-    this.errorText = '';
+    this.clearFeedback();
     const error = await this.onSave(
       this.draftApiUrl,
       this.draftApiKey,
@@ -238,9 +278,46 @@ export struct ModelServiceSettingsPanel {
     );
     this.isSaving = false;
     if (error.length > 0) {
-      this.errorText = error;
+      this.feedbackText = error;
+      this.feedbackIsError = true;
       return;
     }
+    this.onSaved(
+      this.draftApiUrl.trim(),
+      this.draftModelName.trim(),
+      !this.clearApiKey && (this.draftApiKey.trim().length > 0 || this.hasApiKey)
+    );
     this.onClose();
+  }
+
+  private async testConnection(): Promise<void> {
+    if (this.isSaving || this.isTesting || !this.hasTestableApiKey()) {
+      return;
+    }
+    this.isTesting = true;
+    this.clearFeedback();
+    const error = await this.onTest(
+      this.draftApiUrl,
+      this.draftApiKey,
+      this.draftModelName,
+      this.clearApiKey
+    );
+    this.isTesting = false;
+    if (error.length > 0) {
+      this.feedbackText = error;
+      this.feedbackIsError = true;
+      return;
+    }
+    this.feedbackText = RemoteI18n.t('settings.modelService.testSuccess');
+    this.feedbackIsError = false;
+  }
+
+  private hasTestableApiKey(): boolean {
+    return this.draftApiKey.trim().length > 0 || (this.hasApiKey && !this.clearApiKey);
+  }
+
+  private clearFeedback(): void {
+    this.feedbackText = '';
+    this.feedbackIsError = false;
   }
 }

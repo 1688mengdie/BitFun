@@ -4,32 +4,35 @@ import { CARD, INK, PAGE_BG } from './Theme';
 export struct GeneralChatHeader {
   onOpenSidebar: () => void = () => {};
   @Prop showActions: boolean = false;
+  @Prop showSidebarButton: boolean = true;
   onNewSession: () => void = () => {};
   onOpenActions: () => void = () => {};
 
   build() {
     Row() {
-      Stack({ alignContent: Alignment.Center }) {
-        Image($r('app.media.gpt_home_menu_glyph'))
-          .width(26)
-          .height(26)
-          .objectFit(ImageFit.Contain)
+      if (this.showSidebarButton) {
+        Stack({ alignContent: Alignment.Center }) {
+          Image($r('app.media.gpt_home_menu_glyph'))
+            .width(26)
+            .height(26)
+            .objectFit(ImageFit.Contain)
+        }
+        .width(48)
+        .height(48)
+        .backgroundColor(CARD)
+        .borderRadius(24)
+        .shadow({ radius: 16, color: '#10000000', offsetY: 7 })
+        .onClick(() => {
+          this.onOpenSidebar();
+        })
       }
-      .width(48)
-      .height(48)
-      .backgroundColor(CARD)
-      .borderRadius(24)
-      .shadow({ radius: 16, color: '#10000000', offsetY: 7 })
-      .onClick(() => {
-        this.onOpenSidebar();
-      })
       Text('BitFun')
         .fontSize(17)
         .fontWeight(FontWeight.Medium)
         .fontColor(INK)
         .height(48)
-        .padding({ left: 18, right: 18 })
-        .margin({ left: 12 })
+        .padding({ left: this.showSidebarButton ? 18 : 0, right: 18 })
+        .margin({ left: this.showSidebarButton ? 12 : 0 })
       Blank()
       if (this.showActions) {
         Row() {

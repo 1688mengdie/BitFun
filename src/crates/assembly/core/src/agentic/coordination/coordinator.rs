@@ -79,6 +79,7 @@ use bitfun_agent_runtime::remote_file_delivery::{
     needs_computer_links_for_source, remote_file_delivery_reminder,
     TOOL_CONTEXT_REMOTE_FILE_DELIVERY_KEY,
 };
+use bitfun_agent_runtime::sdk::PermissionReply;
 use bitfun_agent_runtime::user_questions::USER_INPUT_AVAILABLE_CONTEXT_KEY;
 use bitfun_runtime_ports::{
     AgentSessionWorkspaceBinding, AgentThreadGoalDeliveryKind, AgentThreadGoalDeliveryRequest,
@@ -5767,6 +5768,10 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
     /// Cancel tool execution
     pub async fn cancel_tool(&self, tool_id: &str, reason: String) -> BitFunResult<()> {
         self.tool_pipeline.cancel_tool(tool_id, reason).await
+    }
+
+    pub async fn reply_to_tool(&self, tool_id: &str, reply: PermissionReply) -> BitFunResult<()> {
+        self.tool_pipeline.reply_to_tool(tool_id, reply).await
     }
 
     async fn get_subagent_concurrency_limiter(&self) -> SubagentConcurrencyLimiter {

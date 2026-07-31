@@ -85,6 +85,8 @@ export interface CreateSessionOptions {
   instruction: string;
 }
 
+export type RemotePermissionMode = 'ask' | 'auto' | 'full_access';
+
 export interface PairRequest {
   public_key: string;
   device_id: string;
@@ -121,6 +123,7 @@ export interface RemoteCommand {
   tool_id?: string;
   model_id?: string;
   reason?: string;
+  mode?: RemotePermissionMode;
   answers?: Object;
   image_contexts?: RemoteImageContext[];
   images?: ImageAttachment[];
@@ -133,6 +136,10 @@ export interface PairChallengeResponse {
 export interface CommandStatusResponse {
   resp?: string;
   message?: string;
+}
+
+export interface PermissionModeResponse extends CommandStatusResponse {
+  mode?: RemotePermissionMode;
 }
 
 export interface WorkspaceInfoResponse extends CommandStatusResponse {
