@@ -40,7 +40,8 @@ fn session_restore_timing_serializes_camel_case_fields() {
         visibility_metadata_duration_ms: 2,
         load_session_with_turns_duration_ms: 3,
         normalize_turn_ids_duration_ms: 4,
-        total_duration_ms: 5,
+        turn_catalog_duration_ms: 5,
+        total_duration_ms: 10,
         turn_load: SessionTurnLoadTiming {
             requested_tail_turn_count: Some(8),
             loaded_turn_count: 8,
@@ -60,6 +61,7 @@ fn session_restore_timing_serializes_camel_case_fields() {
 
     let encoded = serde_json::to_value(&timing).expect("timing should serialize");
     assert_eq!(encoded["resolveStoragePathDurationMs"], 1);
+    assert_eq!(encoded["turnCatalogDurationMs"], 5);
     assert_eq!(encoded["turnLoad"]["requestedTailTurnCount"], 8);
     assert_eq!(encoded["turnLoad"]["fastPath"], true);
 }

@@ -6,6 +6,7 @@ import type {
   DialogTurnData,
   ModelRoundAttemptDiagnostic,
   SessionRelationship,
+  SessionTurnCatalog,
 } from '@/shared/types/session-history';
 import type { ImageContextData as ImageInputContextData } from './ImageContextTypes';
 import type { AgentSource } from './CustomAgentAPI';
@@ -214,6 +215,7 @@ export interface SessionViewRestoreTiming {
   visibilityMetadataDurationMs: number;
   loadSessionWithTurnsDurationMs: number;
   normalizeTurnIdsDurationMs: number;
+  turnCatalogDurationMs?: number;
   totalDurationMs: number;
   turnLoad: SessionTurnLoadTiming;
 }
@@ -221,6 +223,7 @@ export interface SessionViewRestoreTiming {
 export interface RestoreSessionViewResponse {
   session: SessionInfo;
   turns: DialogTurnData[];
+  turnCatalog?: SessionTurnCatalog;
   contextRestoreState: 'ready' | 'pending';
   isPartial?: boolean;
   loadedTurnCount?: number;

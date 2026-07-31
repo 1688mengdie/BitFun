@@ -5,9 +5,10 @@ import { observeElementResize } from '@/shared/utils/sharedResizeObserver';
 import './FlowChatTurnRail.scss';
 
 export interface FlowChatTurnRailItem {
-  turnId: string;
+  itemKey: string;
+  turnId: string | null;
   turnIndex: number;
-  content: string;
+  content: string | null;
 }
 
 interface FlowChatTurnRailProps {
@@ -27,32 +28,36 @@ export const FlowChatTurnRail: React.FC<FlowChatTurnRailProps> = ({
   const railRef = useRef<HTMLElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
   const itemRefs = useRef(new Map<string, HTMLButtonElement>());
-  const [focusTurnId, setFocusTurnId] = useState<string | null>(
-    currentTurnId ?? turns[0]?.turnId ?? null,
+  const currentItemKey = useMemo(
+    () => turns.find(turn => turn.turnId === currentTurnId)?.itemKey ?? null,
+    [currentTurnId, turns],
+  );
+  const [focusItemKey, setFocusItemKey] = useState<string | null>(
+    currentItemKey ?? turns[0]?.itemKey ?? null,
   );
   const visibleTurnIdSet = useMemo(() => new Set(visibleTurnIds), [visibleTurnIds]);
 
   useEffect(() => {
-    const focusTurnStillExists = focusTurnId !== null && turns.some(turn => turn.turnId === focusTurnId);
-    if (!focusTurnStillExists) {
-      setFocusTurnId(currentTurnId ?? turns[0]?.turnId ?? null);
+    const focusItemStillExists = focusItemKey !== null && turns.some(turn => turn.itemKey === focusItemKey);
+    if (!focusItemStillExists) {
+      setFocusItemKey(currentItemKey ?? turns[0]?.itemKey ?? null);
       return;
     }
 
     if (
-      currentTurnId &&
+      currentItemKey &&
       railRef.current &&
       !railRef.current.contains(document.activeElement)
     ) {
-      setFocusTurnId(currentTurnId);
+      setFocusItemKey(currentItemKey);
     }
-  }, [currentTurnId, focusTurnId, turns]);
+  }, [currentItemKey, focusItemKey, turns]);
 
   const keepCurrentTurnVisible = useCallback(() => {
-    if (!currentTurnId) return;
+    if (!currentItemKey) return;
 
     const list = listRef.current;
-    const activeItem = itemRefs.current.get(currentTurnId);
+    const activeItem = itemRefs.current.get(currentItemKey);
     if (!list || !activeItem || list.clientHeight <= 0) return;
 
     const itemTop = activeItem.offsetTop;
@@ -65,7 +70,7 @@ export const FlowChatTurnRail: React.FC<FlowChatTurnRailProps> = ({
     } else if (itemBottom > visibleBottom) {
       list.scrollTop = itemBottom - list.clientHeight;
     }
-  }, [currentTurnId]);
+  }, [currentItemKey]);
 
   useLayoutEffect(() => {
     keepCurrentTurnVisible();
@@ -82,8 +87,8 @@ export const FlowChatTurnRail: React.FC<FlowChatTurnRailProps> = ({
     const turn = turns[index];
     if (!turn) return;
 
-    setFocusTurnId(turn.turnId);
-    itemRefs.current.get(turn.turnId)?.focus();
+    setFocusItemKey(turn.itemKey);
+    itemRefs.current.get(turn.itemKey)?.focus();
   }, [turns]);
 
   const handleKeyDown = useCallback((event: React.KeyboardEvent, index: number) => {
@@ -125,41 +130,51 @@ export const FlowChatTurnRail: React.FC<FlowChatTurnRailProps> = ({
     >
       <div ref={listRef} className="flowchat-turn-rail__list">
         {turns.map((turn, index) => {
-          const isCurrent = turn.turnId === currentTurnId;
-          const isVisible = visibleTurnIdSet.has(turn.turnId);
+          const isCurrent = turn.turnId !== null && turn.turnId === currentTurnId;
+          const isVisible = turn.turnId !== null && visibleTurnIdSet.has(turn.turnId);
           const turnLabel = t('flowChatHeader.turnBadge', { current: turn.turnIndex });
-          const content = turn.content.trim() || untitledTurnLabel;
+          const content = turn.content === null
+            ? null
+            : turn.content.trim() || untitledTurnLabel;
 
           return (
             <Tooltip
-              key={turn.turnId}
+              key={turn.itemKey}
               placement="right"
               delay={250}
               className="flowchat-turn-rail__tooltip"
               content={(
                 <span className="flowchat-turn-rail__tooltip-content">
                   <span className="flowchat-turn-rail__tooltip-turn">{turnLabel}</span>
-                  <span className="flowchat-turn-rail__tooltip-message">{content}</span>
+                  {content !== null ? (
+                    <span className="flowchat-turn-rail__tooltip-message">{content}</span>
+                  ) : null}
                 </span>
               )}
             >
               <button
                 ref={(node) => {
                   if (node) {
-                    itemRefs.current.set(turn.turnId, node);
+                    itemRefs.current.set(turn.itemKey, node);
                   } else {
-                    itemRefs.current.delete(turn.turnId);
+                    itemRefs.current.delete(turn.itemKey);
                   }
                 }}
                 type="button"
                 className={`flowchat-turn-rail__item${isVisible ? ' flowchat-turn-rail__item--visible' : ''}`}
                 aria-label={turnLabel}
                 aria-current={isCurrent ? 'step' : undefined}
-                tabIndex={turn.turnId === focusTurnId ? 0 : -1}
-                data-turn-id={turn.turnId}
+                aria-disabled={turn.turnId === null ? true : undefined}
+                tabIndex={turn.itemKey === focusItemKey ? 0 : -1}
+                data-turn-id={turn.turnId ?? undefined}
+                data-turn-key={turn.itemKey}
                 data-turn-index={turn.turnIndex}
-                onClick={() => onNavigate(turn.turnId)}
-                onFocus={() => setFocusTurnId(turn.turnId)}
+                onClick={() => {
+                  if (turn.turnId) {
+                    onNavigate(turn.turnId);
+                  }
+                }}
+                onFocus={() => setFocusItemKey(turn.itemKey)}
                 onKeyDown={(event) => handleKeyDown(event, index)}
               >
                 <span className="flowchat-turn-rail__bar" aria-hidden="true" />

@@ -8,6 +8,7 @@ use bitfun_events::ModelRoundAttemptDiagnostic;
 use serde::{Deserialize, Serialize};
 
 pub const SESSION_STORAGE_SCHEMA_VERSION: u32 = 2;
+pub const SESSION_TURN_CATALOG_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -364,6 +365,39 @@ impl Default for SessionList {
             version: "1.0".to_string(),
         }
     }
+}
+
+/// Lightweight, rebuildable navigation metadata for one persisted dialog turn.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionTurnCatalogEntry {
+    /// Zero-based position in the current catalog projection.
+    pub ordinal: usize,
+    /// Absolute persisted Turn index used by the storage layout.
+    pub storage_turn_index: usize,
+    /// Missing only while a legacy catalog is being reconstructed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<String>,
+    /// Bounded, user-readable input preview. Never contains model or tool output.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview: Option<String>,
+    #[serde(default)]
+    pub preview_truncated: bool,
+}
+
+/// Lightweight navigation catalog for a persisted Session.
+///
+/// This is a derived cache. Persisted Turn files and the staged-revert boundary
+/// remain authoritative and may be used to rebuild this value at any time.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionTurnCatalog {
+    pub schema_version: u32,
+    pub session_id: String,
+    pub revision: String,
+    pub total_turn_count: usize,
+    pub complete: bool,
+    pub entries: Vec<SessionTurnCatalogEntry>,
 }
 
 /// Full dialog turn data

@@ -51,7 +51,7 @@ use bitfun_core::service::config::project_permission_store::{
 use bitfun_core::service::remote_ssh::workspace_state::resolve_workspace_session_identity;
 use bitfun_core::service::session::{
     DialogTurnData, SessionMemoryMode, SessionMetadata, SessionRelationship,
-    SessionRelationshipKind,
+    SessionRelationshipKind, SessionTurnCatalog,
 };
 use bitfun_core::service::workspace::WorkspaceKind;
 use bitfun_core::service::workspace::{WorkspaceActivityMode, WorkspaceCreateOptions};
@@ -463,6 +463,7 @@ pub struct RestoreSessionWithTurnsResponse {
 pub struct RestoreSessionViewResponse {
     pub session: SessionResponse,
     pub turns: Vec<DialogTurnData>,
+    pub turn_catalog: SessionTurnCatalog,
     pub context_restore_state: String,
     pub is_partial: bool,
     pub loaded_turn_count: usize,
@@ -2914,9 +2915,16 @@ pub async fn restore_session_view(
         let session = restored.session;
         let mut turns = restored.turns;
         let total_turn_count = restored.total_turn_count;
+        let turn_catalog = restored.turn_catalog;
         let timings = restored.timings;
         let loaded_turn_count = turns.len();
         let is_partial = loaded_turn_count < total_turn_count;
+        let turn_catalog_preview_chars = turn_catalog
+            .entries
+            .iter()
+            .filter_map(|entry| entry.preview.as_deref())
+            .map(|preview| preview.chars().count())
+            .sum::<usize>();
 
         if log::log_enabled!(log::Level::Debug) {
             let payload_stats = restore_turn_payload_stats(&turns);
@@ -2943,18 +2951,22 @@ pub async fn restore_session_view(
         compact_tool_results_for_session_view(&mut turns);
 
         debug!(
-            "restore_session_view completed: trace_id={}, session_id={}, turn_count={}, total_turn_count={}, is_partial={}, context_restore_state=pending, duration_ms={}",
+            "restore_session_view completed: trace_id={}, session_id={}, turn_count={}, total_turn_count={}, is_partial={}, turn_catalog_complete={}, turn_catalog_entry_count={}, turn_catalog_preview_chars={}, context_restore_state=pending, duration_ms={}",
             trace_id,
             request.session_id,
             turns.len(),
             total_turn_count,
             is_partial,
+            turn_catalog.complete,
+            turn_catalog.entries.len(),
+            turn_catalog_preview_chars,
             started_at.elapsed().as_millis()
         );
 
         Ok(RestoreSessionViewResponse {
             session: session_to_response_with_turn_count(session, total_turn_count),
             turns,
+            turn_catalog,
             context_restore_state: "pending".to_string(),
             is_partial,
             loaded_turn_count,

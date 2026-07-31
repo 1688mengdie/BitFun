@@ -9,7 +9,7 @@ mod runtime_services;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::OnceLock;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use bitfun_agent_runtime::permission::PermissionRequestManager;
 use bitfun_agent_runtime::sdk::{
@@ -42,6 +42,7 @@ use crate::agentic::session::{CoreSessionStorePort, PromptCacheScope};
 use crate::agentic::tools::implementations::skills::SkillRegistry;
 use crate::service::session::{
     DialogTurnData, SessionMetadata, SessionTranscriptExport, SessionTranscriptExportOptions,
+    SessionTurnCatalog,
 };
 use crate::service::session_usage::{
     generate_session_usage_report_from_storage_path, SessionUsageReport,
@@ -695,10 +696,13 @@ impl CoreAgentRuntimeCompatibility {
         Session,
         Vec<DialogTurnData>,
         usize,
+        SessionTurnCatalog,
         SessionViewRestoreTiming,
     )> {
         validate_persisted_session_id(session_id)?;
-        if let Some(tail_turn_count) = tail_turn_count {
+        let (session, turns, total_turn_count, mut timing) = if let Some(tail_turn_count) =
+            tail_turn_count
+        {
             if include_internal {
                 self.coordinator
                     .restore_internal_session_view_from_storage_path_tail_timed(
@@ -706,7 +710,7 @@ impl CoreAgentRuntimeCompatibility {
                         session_id,
                         tail_turn_count,
                     )
-                    .await
+                    .await?
             } else {
                 self.coordinator
                     .restore_session_view_from_storage_path_tail_timed(
@@ -714,7 +718,7 @@ impl CoreAgentRuntimeCompatibility {
                         session_id,
                         tail_turn_count,
                     )
-                    .await
+                    .await?
             }
         } else {
             let (session, turns, timing) = if include_internal {
@@ -727,8 +731,21 @@ impl CoreAgentRuntimeCompatibility {
                     .await?
             };
             let total_turn_count = turns.len();
-            Ok((session, turns, total_turn_count, timing))
-        }
+            (session, turns, total_turn_count, timing)
+        };
+        let turn_catalog_started_at = Instant::now();
+        let turn_catalog = self
+            .persistence
+            .load_session_turn_catalog(storage_path, session_id, &turns, total_turn_count)
+            .await?;
+        timing.turn_catalog_duration_ms = turn_catalog_started_at
+            .elapsed()
+            .as_millis()
+            .min(u64::MAX as u128) as u64;
+        timing.total_duration_ms = timing
+            .total_duration_ms
+            .saturating_add(timing.turn_catalog_duration_ms);
+        Ok((session, turns, total_turn_count, turn_catalog, timing))
     }
 
     pub async fn restore_session_with_turns_from_storage_path(
@@ -759,41 +776,18 @@ impl CoreAgentRuntimeCompatibility {
         Session,
         Vec<DialogTurnData>,
         usize,
+        SessionTurnCatalog,
         SessionViewRestoreTiming,
     )> {
         validate_persisted_session_id(session_id)?;
-        if let Some(tail_turn_count) = tail_turn_count {
-            let storage_path = self.resolve_persisted_session_storage_path(request).await?;
-            if include_internal {
-                self.coordinator
-                    .restore_internal_session_view_from_storage_path_tail_timed(
-                        &storage_path,
-                        session_id,
-                        tail_turn_count,
-                    )
-                    .await
-            } else {
-                self.coordinator
-                    .restore_session_view_from_storage_path_tail_timed(
-                        &storage_path,
-                        session_id,
-                        tail_turn_count,
-                    )
-                    .await
-            }
-        } else {
-            let (session, turns, timing) = if include_internal {
-                self.coordinator
-                    .restore_internal_session_view_for_workspace_timed(request, session_id)
-                    .await?
-            } else {
-                self.coordinator
-                    .restore_session_view_for_workspace_timed(request, session_id)
-                    .await?
-            };
-            let total_turn_count = turns.len();
-            Ok((session, turns, total_turn_count, timing))
-        }
+        let storage_path = self.resolve_persisted_session_storage_path(request).await?;
+        self.restore_session_view_from_storage_path(
+            &storage_path,
+            session_id,
+            include_internal,
+            tail_turn_count,
+        )
+        .await
     }
 
     pub async fn restore_session_with_turns_for_workspace(

@@ -35,10 +35,10 @@ vi.mock('@/component-library', () => ({
 }));
 
 const turns: FlowChatTurnRailItem[] = [
-  { turnId: 'turn-1', turnIndex: 1, content: 'First user message' },
-  { turnId: 'turn-2', turnIndex: 2, content: 'Second user message' },
-  { turnId: 'turn-3', turnIndex: 3, content: 'Third user message' },
-  { turnId: 'turn-4', turnIndex: 4, content: 'Fourth user message' },
+  { itemKey: 'storage:0', turnId: 'turn-1', turnIndex: 1, content: 'First user message' },
+  { itemKey: 'storage:1', turnId: 'turn-2', turnIndex: 2, content: 'Second user message' },
+  { itemKey: 'storage:2', turnId: 'turn-3', turnIndex: 3, content: 'Third user message' },
+  { itemKey: 'storage:3', turnId: 'turn-4', turnIndex: 4, content: 'Fourth user message' },
 ];
 
 describe('FlowChatTurnRail', () => {
@@ -115,6 +115,70 @@ describe('FlowChatTurnRail', () => {
 
     expect(onNavigate).toHaveBeenCalledOnce();
     expect(onNavigate).toHaveBeenCalledWith('turn-3');
+  });
+
+  it('keeps placeholder markers visible and non-navigable', () => {
+    const onNavigate = vi.fn();
+    act(() => {
+      root.render(
+        <FlowChatTurnRail
+          turns={[
+            turns[0],
+            { itemKey: 'storage:1', turnId: null, turnIndex: 2, content: null },
+          ]}
+          currentTurnId="turn-1"
+          visibleTurnIds={['turn-1']}
+          onNavigate={onNavigate}
+        />,
+      );
+    });
+
+    const placeholder = container.querySelector<HTMLButtonElement>('[data-turn-key="storage:1"]');
+    expect(placeholder).not.toBeNull();
+    expect(placeholder?.getAttribute('aria-disabled')).toBe('true');
+    expect(placeholder?.getAttribute('data-turn-id')).toBeNull();
+
+    act(() => placeholder?.click());
+
+    expect(onNavigate).not.toHaveBeenCalled();
+    const tooltipMessages = container.querySelectorAll('.flowchat-turn-rail__tooltip-message');
+    expect(tooltipMessages).toHaveLength(1);
+  });
+
+  it('keeps marker identity stable when a placeholder resolves', () => {
+    act(() => {
+      root.render(
+        <FlowChatTurnRail
+          turns={[{ itemKey: 'storage:7', turnId: null, turnIndex: 8, content: null }]}
+          currentTurnId={null}
+          visibleTurnIds={[]}
+          onNavigate={vi.fn()}
+        />,
+      );
+    });
+    const placeholder = container.querySelector<HTMLButtonElement>('[data-turn-key="storage:7"]');
+    expect(placeholder?.getAttribute('aria-disabled')).toBe('true');
+
+    act(() => {
+      root.render(
+        <FlowChatTurnRail
+          turns={[{
+            itemKey: 'storage:7',
+            turnId: 'turn-8',
+            turnIndex: 8,
+            content: 'Resolved message',
+          }]}
+          currentTurnId="turn-8"
+          visibleTurnIds={['turn-8']}
+          onNavigate={vi.fn()}
+        />,
+      );
+    });
+
+    const resolved = container.querySelector<HTMLButtonElement>('[data-turn-key="storage:7"]');
+    expect(resolved).toBe(placeholder);
+    expect(resolved?.getAttribute('data-turn-id')).toBe('turn-8');
+    expect(resolved?.getAttribute('aria-disabled')).toBeNull();
   });
 
   it('keeps the active turn visible by scrolling only the rail list', () => {

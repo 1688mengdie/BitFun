@@ -280,6 +280,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
   const releasedHistoryCompletionKeyRef = useRef<string | null>(null);
   const visibleTurnInfoRef = useRef<VisibleTurnInfo | null>(visibleTurnInfo);
   const turnSummariesRef = useRef<FlowChatTurnSummary[]>([]);
+  const turnRailTurnIdsRef = useRef<Set<string>>(new Set());
   const requestTurnPinRef = useRef<((turnId: string, behavior?: ScrollBehavior) => FlowChatTurnPinRequestStatus) | null>(null);
   const virtualListRef = useRef<VirtualMessageListRef>(null);
   const chatScopeRef = useRef<HTMLDivElement>(null);
@@ -542,9 +543,15 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     }
     return result;
   }, [activeSession?.dialogTurns]);
-  const sessionTotalTurnCount = activeSession?.isPartial === true
-    ? Math.max(activeSession.totalTurnCount ?? turnSummaries.length, turnSummaries.length)
-    : turnSummaries.length;
+  const activeTurnCatalog = activeSession?.turnCatalog;
+  const turnCatalog = activeTurnCatalog?.sessionId === activeSession?.sessionId
+    ? activeTurnCatalog
+    : undefined;
+  const sessionTotalTurnCount = Math.max(
+    activeSession?.totalTurnCount ?? 0,
+    turnCatalog?.totalTurnCount ?? 0,
+    turnSummaries.length,
+  );
   const absoluteTurnIndexOffset = activeSession?.isPartial === true
     ? Math.max(0, sessionTotalTurnCount - turnSummaries.length)
     : 0;
@@ -563,19 +570,67 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     return new Map(absoluteTurnSummaries.map(turn => [turn.turnId, turn]));
   }, [absoluteTurnSummaries]);
   const turnRailItems = useMemo<FlowChatTurnRailItem[]>(() => {
-    const userMessageByTurnId = new Map(
-      (activeSession?.dialogTurns ?? []).map(turn => [
-        turn.id,
-        turn.userMessage?.content ?? '',
-      ]),
+    const dialogTurnById = new Map(
+      (activeSession?.dialogTurns ?? []).map(turn => [turn.id, turn]),
     );
+    const loadedByStorageIndex = new Map<number, { turnId: string; content: string }>();
+    const loadedByOrdinal = new Map<number, { turnId: string; content: string }>();
+    for (const summary of absoluteTurnSummaries) {
+      const loaded = {
+        turnId: summary.turnId,
+        content: dialogTurnById.get(summary.turnId)?.userMessage?.content ?? '',
+      };
+      loadedByOrdinal.set(Math.max(0, summary.turnIndex - 1), loaded);
+      if (typeof summary.backendTurnIndex === 'number') {
+        loadedByStorageIndex.set(summary.backendTurnIndex, loaded);
+      }
+    }
 
-    return absoluteTurnSummaries.map(turn => ({
-      turnId: turn.turnId,
-      turnIndex: turn.turnIndex,
-      content: userMessageByTurnId.get(turn.turnId) ?? '',
-    }));
-  }, [absoluteTurnSummaries, activeSession?.dialogTurns]);
+    const catalogEntryByOrdinal = new Map(
+      (turnCatalog?.entries ?? []).map(entry => [entry.ordinal, entry]),
+    );
+    const itemCount = Math.max(sessionTotalTurnCount, turnCatalog?.entries.length ?? 0);
+    const usedLoadedTurnIds = new Set<string>();
+    const items = Array.from({ length: itemCount }, (_, ordinal): FlowChatTurnRailItem => {
+      const catalogEntry = catalogEntryByOrdinal.get(ordinal);
+      const storageTurnIndex = catalogEntry?.storageTurnIndex ?? ordinal;
+      const catalogDialogTurn = catalogEntry?.turnId
+        ? dialogTurnById.get(catalogEntry.turnId)
+        : undefined;
+      const loaded = loadedByStorageIndex.get(storageTurnIndex)
+        ?? (catalogEntry?.turnId && catalogDialogTurn ? {
+          turnId: catalogEntry.turnId,
+          content: catalogDialogTurn.userMessage?.content ?? '',
+        } : undefined)
+        ?? loadedByOrdinal.get(ordinal);
+      const turnId = loaded?.turnId ?? catalogEntry?.turnId ?? null;
+      if (loaded?.turnId) {
+        usedLoadedTurnIds.add(loaded.turnId);
+      }
+      return {
+        itemKey: `storage:${storageTurnIndex}`,
+        turnId,
+        turnIndex: ordinal + 1,
+        content: loaded?.content ?? catalogEntry?.preview ?? null,
+      };
+    });
+
+    for (const summary of absoluteTurnSummaries) {
+      if (usedLoadedTurnIds.has(summary.turnId)) {
+        continue;
+      }
+      items.push({
+        itemKey: typeof summary.backendTurnIndex === 'number'
+          ? `storage:${summary.backendTurnIndex}`
+          : `live:${summary.turnId}`,
+        turnId: summary.turnId,
+        turnIndex: summary.turnIndex,
+        content: dialogTurnById.get(summary.turnId)?.userMessage?.content ?? '',
+      });
+    }
+
+    return items.sort((left, right) => left.turnIndex - right.turnIndex);
+  }, [absoluteTurnSummaries, activeSession?.dialogTurns, sessionTotalTurnCount, turnCatalog]);
   const latestTurnId = turnSummaries[turnSummaries.length - 1]?.turnId;
   const hasPendingHistoryCompletion = activeSession?.sessionId
     ? flowChatStore.hasPendingSessionHistoryCompletion(activeSession.sessionId)
@@ -718,6 +773,12 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     turnSummariesRef.current = turnSummaries;
   }, [turnSummaries]);
 
+  useEffect(() => {
+    turnRailTurnIdsRef.current = new Set(
+      turnRailItems.flatMap(turn => turn.turnId ? [turn.turnId] : []),
+    );
+  }, [turnRailItems]);
+
   const currentHeaderMessage = useMemo(() => {
     const turnId = effectiveVisibleTurnInfo?.turnId;
     if (!turnId) {
@@ -765,9 +826,12 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
         return;
       }
 
-      const targetStillExists = turnSummariesRef.current.some(turn => turn.turnId === queuedTurnPinId);
-      if (!targetStillExists) {
+      if (!turnRailTurnIdsRef.current.has(queuedTurnPinId)) {
         setQueuedTurnPinId(null);
+        return;
+      }
+      const targetIsLoaded = turnSummariesRef.current.some(turn => turn.turnId === queuedTurnPinId);
+      if (!targetIsLoaded) {
         return;
       }
 
@@ -796,6 +860,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     };
   }, [
     queuedTurnPinId,
+    turnSummaries.length,
   ]);
 
   useLayoutEffect(() => {
@@ -1083,8 +1148,20 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
   const handleJumpToTurn = useCallback((turnId: string) => {
     if (!turnId) return false;
 
-    const targetStillExists = turnSummaries.some(turn => turn.turnId === turnId);
-    if (!targetStillExists) {
+    const targetIsLoaded = turnSummaries.some(turn => turn.turnId === turnId);
+    if (!targetIsLoaded) {
+      const targetExistsInCatalog = turnRailItems.some(turn => turn.turnId === turnId);
+      const sessionId = activeSession?.sessionId;
+      const historyRequested = targetExistsInCatalog && sessionId
+        ? flowChatStore.requestSessionFullHistoryProjection(sessionId, 'turn-rail-navigation')
+        : false;
+      const historyPending = sessionId
+        ? flowChatStore.hasPendingSessionHistoryCompletion(sessionId)
+        : false;
+      if (targetExistsInCatalog && (historyRequested || historyPending)) {
+        setQueuedTurnPinId(turnId);
+        return true;
+      }
       setQueuedTurnPinId(null);
       return false;
     }
@@ -1102,7 +1179,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
 
     setQueuedTurnPinId(turnId);
     return false;
-  }, [requestTurnPin, turnSummaries]);
+  }, [activeSession?.sessionId, requestTurnPin, turnRailItems, turnSummaries]);
 
   const handleRetryHistoryLoad = useCallback(() => {
     const sessionId = activeSession?.sessionId;

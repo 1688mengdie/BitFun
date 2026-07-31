@@ -30,7 +30,12 @@ import {
 import { elapsedMs, nowMs } from '@/shared/utils/timing';
 import { isPeerDeviceModeActive } from '@/infrastructure/peer-device/peerModeFlag';
 import { i18nService } from '@/infrastructure/i18n/core/I18nService';
-import type { DialogTurnData, LocalCommandMetadata, SessionKind } from '@/shared/types/session-history';
+import type {
+  DialogTurnData,
+  LocalCommandMetadata,
+  SessionKind,
+  SessionTurnCatalog,
+} from '@/shared/types/session-history';
 import {
   agentAPI,
   type SessionInfo as AgentSessionInfo,
@@ -773,6 +778,29 @@ function areStringArraysEqual(left: string[], right: string[]): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
+function selectPreferredTurnCatalog(
+  current: SessionTurnCatalog | undefined,
+  restored: SessionTurnCatalog | undefined,
+): SessionTurnCatalog | undefined {
+  if (!restored) {
+    return current;
+  }
+  if (!current) {
+    return restored;
+  }
+  if (current.complete && !restored.complete) {
+    return current;
+  }
+  if (
+    current.revision === restored.revision
+    && current.complete === restored.complete
+    && current.totalTurnCount === restored.totalTurnCount
+  ) {
+    return current;
+  }
+  return restored;
+}
+
 function startsWithStringArray(values: string[], prefix: string[]): boolean {
   return values.length >= prefix.length && prefix.every((value, index) => values[index] === value);
 }
@@ -871,6 +899,7 @@ function sessionViewRestoreTimingTraceFields(
     restoreVisibilityMetadataDurationMs: timing.visibilityMetadataDurationMs,
     restoreLoadSessionWithTurnsDurationMs: timing.loadSessionWithTurnsDurationMs,
     restoreNormalizeTurnIdsDurationMs: timing.normalizeTurnIdsDurationMs,
+    restoreTurnCatalogDurationMs: timing.turnCatalogDurationMs,
     restoreTotalDurationMs: timing.totalDurationMs,
     restoreTurnTailCount: timing.turnLoad?.requestedTailTurnCount,
     restoreTurnLoadedCount: timing.turnLoad?.loadedTurnCount,
@@ -1582,6 +1611,29 @@ export class FlowChatStore {
         durationMs: elapsedMs(startedAt),
       });
       return;
+    }
+
+    if (restored.turnCatalog?.sessionId === request.sessionId) {
+      this.setState(prev => {
+        const session = prev.sessions.get(request.sessionId);
+        if (!session) {
+          return prev;
+        }
+        const turnCatalog = selectPreferredTurnCatalog(session.turnCatalog, restored.turnCatalog);
+        if (turnCatalog === session.turnCatalog) {
+          return prev;
+        }
+
+        const newSessions = new Map(prev.sessions);
+        newSessions.set(request.sessionId, {
+          ...session,
+          turnCatalog,
+        });
+        return {
+          ...prev,
+          sessions: newSessions,
+        };
+      });
     }
 
     const convertStartedAt = nowMs();
@@ -2988,9 +3040,30 @@ export class FlowChatStore {
       }
 
       const updatedDialogTurns = [...session.dialogTurns, dialogTurn];
+      const catalogAlreadyCountsTurn = session.turnCatalog?.entries.some(entry =>
+        entry.turnId === dialogTurn.id
+        || (
+          typeof dialogTurn.backendTurnIndex === 'number'
+          && entry.storageTurnIndex === dialogTurn.backendTurnIndex
+        )
+      ) === true;
+      const previousTotalTurnCount = Math.max(
+        session.totalTurnCount ?? 0,
+        session.turnCatalog?.totalTurnCount ?? 0,
+        session.dialogTurns.length,
+      );
       const updatedSession = {
         ...session,
         dialogTurns: updatedDialogTurns,
+        loadedTurnCount: session.isPartial === true
+          ? updatedDialogTurns.length
+          : session.loadedTurnCount,
+        totalTurnCount: session.isPartial === true
+          ? Math.max(
+            updatedDialogTurns.length,
+            previousTotalTurnCount + (catalogAlreadyCountsTurn ? 0 : 1),
+          )
+          : session.totalTurnCount,
         lastUserDialogMode: this.deriveLastUserDialogMode(updatedDialogTurns),
         lastActiveAt: Date.now()
       };
@@ -4777,7 +4850,10 @@ export class FlowChatStore {
         }
       }
 
-      if (!turnsChanged) {
+      const turnCatalog = restored.turnCatalog?.sessionId === sessionId
+        ? selectPreferredTurnCatalog(session.turnCatalog, restored.turnCatalog)
+        : session.turnCatalog;
+      if (!turnsChanged && turnCatalog === session.turnCatalog) {
         return prev;
       }
 
@@ -4799,6 +4875,7 @@ export class FlowChatStore {
           restored.totalTurnCount ?? restored.session.turnCount,
           mergedTurns.length,
         ),
+        turnCatalog,
         config: {
           ...session.config,
           ...(restored.session.modelName
@@ -4886,6 +4963,7 @@ export class FlowChatStore {
       let restoredHistoryPartial = false;
       let restoredLoadedTurnCount: number | undefined;
       let restoredTotalTurnCount: number | undefined;
+      let restoredTurnCatalog: SessionTurnCatalog | undefined;
       let restoredTiming: SessionViewRestoreTiming | undefined;
 
       // Finish or resume relay history import before Core restores its model
@@ -5023,6 +5101,9 @@ export class FlowChatStore {
               restoredHistoryPartial = restored.isPartial === true;
               restoredLoadedTurnCount = restored.loadedTurnCount;
               restoredTotalTurnCount = restored.totalTurnCount;
+              restoredTurnCatalog = restored.turnCatalog?.sessionId === sessionId
+                ? restored.turnCatalog
+                : undefined;
               restoredTiming = restored.timings;
             } catch (error) {
               if (!isUnsupportedTauriCommandError(error, 'restore_session_view')) {
@@ -5182,6 +5263,7 @@ export class FlowChatStore {
           isPartial: restoredHistoryPartial,
           loadedTurnCount: restoredLoadedTurnCount ?? dialogTurns.length,
           totalTurnCount: restoredTotalTurnCount ?? dialogTurns.length,
+          turnCatalog: selectPreferredTurnCatalog(session.turnCatalog, restoredTurnCatalog),
           error: null,
           config: {
             ...session.config,
