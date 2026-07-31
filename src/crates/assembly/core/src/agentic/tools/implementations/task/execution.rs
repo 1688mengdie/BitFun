@@ -188,7 +188,7 @@ impl TaskTool {
         let coordinator = get_global_coordinator()
             .ok_or_else(|| BitFunError::tool("coordinator not initialized".to_string()))?;
         let target_session_id = coordinator
-            .resolve_agent_id(parent_session_id, agent_id)
+            .resolve_agent_id(parent_session_id, agent_id, false)
             .await?;
         let cancelled_count = coordinator
             .cancel_background_subagents_for_parent(parent_session_id, &target_session_id)
@@ -235,7 +235,7 @@ impl TaskTool {
                 "tasks": tasks,
             }),
             result_for_assistant: Some(format!(
-                "Found {} background subagent(s) for the current conversation.",
+                "Found {} background subagent(s) managed from this conversation (tasks spawned by this session or any descendant session).",
                 tasks.len()
             )),
             image_attachments: None,
@@ -246,21 +246,20 @@ impl TaskTool {
         parent_session_id: &str,
         invocation: TaskInvocation,
     ) -> BitFunResult<Vec<ToolResult>> {
-        let target_session_id = if let Some(agent_id) = invocation.target_agent_id.as_deref() {
+        // Task history is a subtree-scoped read: agent_id must resolve inside
+        // the caller's session subtree (no global fallback), and a missing
+        // agent_id is rejected up front.
+        let target_session_id = {
+            let agent_id = invocation.target_agent_id.as_deref().ok_or_else(|| {
+                BitFunError::tool(
+                    "agent_id or session_id is required when action is history".to_string(),
+                )
+            })?;
             let coordinator = get_global_coordinator()
                 .ok_or_else(|| BitFunError::tool("coordinator not initialized".to_string()))?;
             coordinator
-                .resolve_agent_id(parent_session_id, agent_id)
+                .resolve_agent_id(parent_session_id, agent_id, false)
                 .await?
-        } else {
-            invocation
-                .target_agent_id
-                .clone()
-                .ok_or_else(|| {
-                    BitFunError::tool(
-                        "agent_id or session_id is required when action is history".to_string(),
-                    )
-                })?
         };
 
         let (_display_workspace, session_storage_dir) =
@@ -341,7 +340,14 @@ impl TaskTool {
         })?;
         let context_mode = invocation.context_mode;
         let target_session_id = match invocation.target_agent_id.as_deref() {
-            Some(agent_id) => Some(coordinator.resolve_agent_id(&session_id, agent_id).await?),
+            // spawn/send_input targets must resolve inside the caller's session
+            // subtree; global fallback is forbidden so a conversation cannot
+            // reach subagents owned by other conversations.
+            Some(agent_id) => Some(
+                coordinator
+                    .resolve_agent_id(&session_id, agent_id, false)
+                    .await?,
+            ),
             None => None,
         };
         let mut model_id = invocation.model_id.clone();

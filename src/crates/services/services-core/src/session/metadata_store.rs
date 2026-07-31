@@ -8,7 +8,10 @@ use super::layout::SessionStorageLayout;
 use super::metadata::{
     build_session_index_snapshot, remove_session_index_entry, upsert_session_index_entry,
 };
-use super::page::{build_session_metadata_page, empty_session_metadata_page};
+use super::page::{
+    build_session_metadata_page, build_session_metadata_page_with_options,
+    empty_session_metadata_page,
+};
 use super::types::{SessionMetadata, StoredSessionIndexFile, StoredSessionMetadataFile};
 use super::SessionMetadataPage;
 use crate::file_lock::{FileLock, FileLockError, FileLockMode};
@@ -308,6 +311,20 @@ impl SessionMetadataStore {
     }
 
     pub async fn list_metadata(&self) -> Result<Vec<SessionMetadata>, SessionMetadataStoreError> {
+        self.list_metadata_with_options(false).await
+    }
+
+    /// Lists session metadata. With `include_internal` the visible index is
+    /// bypassed and every metadata directory is scanned (same semantics as
+    /// `list_metadata_including_internal`), so hidden Subagent/Ephemeral
+    /// sessions become visible for full conversation management.
+    pub async fn list_metadata_with_options(
+        &self,
+        include_internal: bool,
+    ) -> Result<Vec<SessionMetadata>, SessionMetadataStoreError> {
+        if include_internal {
+            return self.list_metadata_including_internal().await;
+        }
         if !self.sessions_root().exists() {
             return Ok(Vec::new());
         }
@@ -354,6 +371,28 @@ impl SessionMetadataStore {
         cursor: Option<&str>,
         limit: usize,
     ) -> Result<SessionMetadataPage, SessionMetadataStoreError> {
+        self.list_metadata_page_with_options(cursor, limit, false).await
+    }
+
+    /// Paginated variant of [`list_metadata_with_options`]. With
+    /// `include_internal` the visible index is bypassed and the page is built
+    /// from a full metadata scan so hidden sessions participate in pagination.
+    pub async fn list_metadata_page_with_options(
+        &self,
+        cursor: Option<&str>,
+        limit: usize,
+        include_internal: bool,
+    ) -> Result<SessionMetadataPage, SessionMetadataStoreError> {
+        if include_internal {
+            let mut sessions = self.scan_metadata_dirs().await?;
+            sessions.sort_by_key(|metadata| std::cmp::Reverse(metadata.last_active_at));
+            return Ok(build_session_metadata_page_with_options(
+                sessions,
+                cursor,
+                limit,
+                true,
+            ));
+        }
         if !self.sessions_root().exists() {
             return Ok(empty_session_metadata_page());
         }
@@ -710,6 +749,41 @@ mod tests {
                 .list_metadata_including_internal()
                 .await
                 .expect("all metadata")
+                .len(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn metadata_store_with_options_includes_hidden_sessions() {
+        let dir = tempdir().expect("tempdir");
+        let store = SessionMetadataStore::new(dir.path());
+        let mut hidden = metadata("hidden", 30);
+        hidden.session_kind = bitfun_core_types::SessionKind::Subagent;
+        store
+            .save_metadata(&hidden)
+            .await
+            .expect("save hidden metadata");
+
+        assert!(store
+            .list_metadata_with_options(false)
+            .await
+            .expect("visible list")
+            .is_empty());
+        assert_eq!(
+            store
+                .list_metadata_with_options(true)
+                .await
+                .expect("full list")
+                .len(),
+            1
+        );
+        assert_eq!(
+            store
+                .list_metadata_page_with_options(None, 10, true)
+                .await
+                .expect("full page")
+                .sessions
                 .len(),
             1
         );

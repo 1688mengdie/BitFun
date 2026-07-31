@@ -1142,6 +1142,10 @@ pub struct AgentSessionListRequest {
     pub remote_connection_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote_ssh_host: Option<String>,
+    /// When true, hidden Subagent/Ephemeral sessions are included in the
+    /// listing (full conversation management).
+    #[serde(default)]
+    pub include_hidden: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -3513,6 +3517,7 @@ mod tests {
             workspace_path: "/workspace/project".to_string(),
             remote_connection_id: Some("conn-1".to_string()),
             remote_ssh_host: Some("host-1".to_string()),
+            include_hidden: false,
         };
         let summary = AgentSessionSummary {
             session_id: "session_1".to_string(),

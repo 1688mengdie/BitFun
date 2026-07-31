@@ -1032,6 +1032,17 @@ impl PersistenceManager {
         &self,
         workspace_path: &Path,
     ) -> BitFunResult<Vec<SessionMetadata>> {
+        self.list_session_metadata_with_options(workspace_path, false)
+            .await
+    }
+
+    /// Lists session metadata. With `include_internal`, hidden Subagent/
+    /// Ephemeral sessions are included for full conversation management.
+    pub async fn list_session_metadata_with_options(
+        &self,
+        workspace_path: &Path,
+        include_internal: bool,
+    ) -> BitFunResult<Vec<SessionMetadata>> {
         if !workspace_path.exists() {
             return Ok(Vec::new());
         }
@@ -1041,7 +1052,7 @@ impl PersistenceManager {
         }
 
         self.session_metadata_store(workspace_path)
-            .list_metadata()
+            .list_metadata_with_options(include_internal)
             .await
             .map_err(Self::session_metadata_store_error)
     }
@@ -1052,6 +1063,18 @@ impl PersistenceManager {
         cursor: Option<&str>,
         limit: usize,
     ) -> BitFunResult<SessionMetadataPage> {
+        self.list_session_metadata_page_with_options(workspace_path, cursor, limit, false)
+            .await
+    }
+
+    /// Paginated variant of [`list_session_metadata_with_options`].
+    pub async fn list_session_metadata_page_with_options(
+        &self,
+        workspace_path: &Path,
+        cursor: Option<&str>,
+        limit: usize,
+        include_internal: bool,
+    ) -> BitFunResult<SessionMetadataPage> {
         if !workspace_path.exists() {
             return Ok(empty_session_metadata_page());
         }
@@ -1061,7 +1084,7 @@ impl PersistenceManager {
         }
 
         self.session_metadata_store(workspace_path)
-            .list_metadata_page(cursor, limit)
+            .list_metadata_page_with_options(cursor, limit, include_internal)
             .await
             .map_err(Self::session_metadata_store_error)
     }

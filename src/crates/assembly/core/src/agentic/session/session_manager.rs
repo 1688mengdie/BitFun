@@ -5577,8 +5577,53 @@ impl SessionManager {
 
     /// List all sessions
     pub async fn list_sessions(&self, workspace_path: &Path) -> BitFunResult<Vec<SessionSummary>> {
+        self.list_sessions_with_options(workspace_path, false).await
+    }
+
+    /// Lists sessions, optionally including hidden Subagent/Ephemeral sessions
+    /// for full conversation management.
+    pub async fn list_sessions_with_options(
+        &self,
+        workspace_path: &Path,
+        include_internal: bool,
+    ) -> BitFunResult<Vec<SessionSummary>> {
         if self.config.enable_persistence {
-            self.persistence_manager.list_sessions(workspace_path).await
+            self.persistence_manager
+                .list_session_metadata_with_options(workspace_path, include_internal)
+                .await
+                .map(|metadata_list| {
+                    let mut summaries = Vec::with_capacity(metadata_list.len());
+                    for metadata in metadata_list {
+                        summaries.push(SessionSummary {
+                            session_id: metadata.session_id,
+                            session_name: metadata.session_name,
+                            agent_type: metadata.agent_type,
+                            model_id: (!metadata.model_name.trim().is_empty())
+                                .then_some(metadata.model_name),
+                            last_user_dialog_agent_type: metadata.last_user_dialog_agent_type,
+                            last_submitted_agent_type: metadata.last_submitted_agent_type,
+                            created_by: metadata.created_by,
+                            kind: metadata.session_kind,
+                            turn_count: metadata.turn_count,
+                            created_at: std::time::UNIX_EPOCH
+                                + std::time::Duration::from_millis(metadata.created_at),
+                            last_activity_at: std::time::UNIX_EPOCH
+                                + std::time::Duration::from_millis(metadata.last_active_at),
+                            state: metadata
+                                .runtime_state
+                                .as_ref()
+                                .and_then(|v| serde_json::from_value::<SessionState>(v.clone()).ok())
+                                .unwrap_or(SessionState::Idle),
+                            parent_session_id: metadata
+                                .relationship
+                                .as_ref()
+                                .and_then(|r| r.parent_session_id.clone()),
+                            is_daemon: metadata.is_daemon,
+                        });
+                    }
+                    summaries.sort_by_key(|summary| std::cmp::Reverse(summary.last_activity_at));
+                    summaries
+                })
         } else {
             let summaries: Vec<_> = self
                 .sessions

@@ -342,24 +342,45 @@ impl DesktopSessionApplication {
         &self,
         request: DesktopSessionScopeRequest,
     ) -> DesktopSessionApplicationResult<Vec<SessionMetadata>> {
+        self.list_persisted_sessions_with_options(request, false)
+            .await
+    }
+
+    pub(crate) async fn list_persisted_sessions_with_options(
+        &self,
+        request: DesktopSessionScopeRequest,
+        include_hidden: bool,
+    ) -> DesktopSessionApplicationResult<Vec<SessionMetadata>> {
         let scope = self.resolved_scope(request).await;
         let storage_path = self.storage_path(&scope);
         self.compatibility
-            .list_persisted_sessions(&storage_path)
+            .list_persisted_sessions_with_options(&storage_path, include_hidden)
             .await
             .map_err(|error| DesktopSessionApplicationError::Core(error.to_string()))
     }
 
+    #[allow(dead_code)]
     pub(crate) async fn list_persisted_sessions_page(
         &self,
         request: DesktopSessionScopeRequest,
         cursor: Option<&str>,
         limit: usize,
     ) -> DesktopSessionApplicationResult<SessionMetadataPage> {
+        self.list_persisted_sessions_page_with_options(request, cursor, limit, false)
+            .await
+    }
+
+    pub(crate) async fn list_persisted_sessions_page_with_options(
+        &self,
+        request: DesktopSessionScopeRequest,
+        cursor: Option<&str>,
+        limit: usize,
+        include_hidden: bool,
+    ) -> DesktopSessionApplicationResult<SessionMetadataPage> {
         let scope = self.resolved_scope(request).await;
         let storage_path = self.storage_path(&scope);
         self.compatibility
-            .list_persisted_sessions_page(&storage_path, cursor, limit)
+            .list_persisted_sessions_page_with_options(&storage_path, cursor, limit, include_hidden)
             .await
             .map_err(|error| DesktopSessionApplicationError::Core(error.to_string()))
     }

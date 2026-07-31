@@ -201,6 +201,7 @@ async fn ensure_session_exists(
                 workspace_path: workspace.project_workspace.clone(),
                 remote_connection_id: workspace.remote_connection_id.clone(),
                 remote_ssh_host: workspace.remote_ssh_host.clone(),
+                include_hidden: false,
             })
             .await
             .map_err(|error| {
@@ -689,20 +690,68 @@ Arguments:
                     ));
                 }
 
+                // R-A.04: Reject cancellation of daemon sessions.
+                {
+                    let session_manager = coordinator.get_session_manager();
+                    let is_daemon = if let Some(session) = session_manager.get_session(session_id) {
+                        session.config.is_daemon || session.agent_type.starts_with("warden-")
+                    } else {
+                        // Fall back to persisted metadata
+                        session_manager
+                            .load_session_metadata(
+                                &std::path::PathBuf::from(&workspace.display_workspace),
+                                session_id,
+                            )
+                            .await
+                            .ok()
+                            .flatten()
+                            .map(|m| m.is_daemon || m.agent_type.starts_with("warden-"))
+                            .unwrap_or(false)
+                    };
+                    if is_daemon {
+                        return Err(BitFunError::tool(format!(
+                            "cannot cancel daemon/warden session '{session_id}'"
+                        )));
+                    }
+                }
+
                 // R-011: Skip list-based pre-check so subagent (Task) sessions can be cancelled.
                 // The runtime's cancel_turn handles session-existence internally.
 
-                // Authorization: verify the calling session is an ancestor of the target session.
-                // First try the in-memory tree (fast path). If the tree is not yet populated
-                // (walk_ancestors returns empty), fall back to a persisted metadata chain query
-                // so that an empty tree cannot be exploited to bypass authorization.
+                // R-2: Authorization intentionally widened for full conversation
+                // management: a caller may cancel a session it created (created_by
+                // marker matches) OR any session in its descendant subtree. The
+                // "cannot cancel the current session" guard above is preserved.
                 let current_session_id = context.session_id.as_ref().ok_or_else(|| {
                     BitFunError::tool(
                         "cannot cancel a session without a caller session in tool context"
                             .to_string(),
                     )
                 })?;
-                {
+                let created_by_match = {
+                    let session_manager = coordinator.get_session_manager();
+                    let target_metadata = session_manager
+                        .load_session_metadata(
+                            &std::path::PathBuf::from(&workspace.display_workspace),
+                            session_id,
+                        )
+                        .await
+                        .ok()
+                        .flatten();
+                    target_metadata
+                        .as_ref()
+                        .and_then(|metadata| metadata.created_by.as_deref())
+                        .is_some_and(|creator| {
+                            creator == session_control_creator_marker(current_session_id)
+                        })
+                };
+                if !created_by_match {
+                    // Ancestor authorization: verify the calling session is an
+                    // ancestor of the target session. First try the in-memory tree
+                    // (fast path). If the tree is not yet populated (walk_ancestors
+                    // returns empty), fall back to a persisted metadata chain query
+                    // so that an empty tree cannot be exploited to bypass
+                    // authorization.
                     let tree = coordinator.session_tree();
                     let tree_ancestors = tree.walk_ancestors(session_id);
                     let ancestors: Vec<String> = if !tree_ancestors.is_empty() {
@@ -713,6 +762,10 @@ Arguments:
                         // 已知优化点：可改为批量查询，避免每个祖先 session 都串表await。
                         let session_manager = coordinator.get_session_manager();
                         let mut metadata_ancestors = Vec::new();
+                        // Guard against cyclic metadata chains: never revisit a
+                        // session id already seen during this walk.
+                        let mut visited = std::collections::HashSet::new();
+                        visited.insert(session_id.to_string());
                         let mut current = session_id.to_string();
                         loop {
                             let metadata = session_manager
@@ -727,6 +780,11 @@ Arguments:
                                 .and_then(|m| m.relationship.and_then(|r| r.parent_session_id))
                             {
                                 Some(parent_id) => {
+                                    if !visited.insert(parent_id.clone()) {
+                                        // Cycle detected; stop walking to avoid
+                                        // hanging on a corrupt lineage chain.
+                                        break;
+                                    }
                                     metadata_ancestors.push(parent_id.clone());
                                     current = parent_id;
                                 }
@@ -742,7 +800,7 @@ Arguments:
                     }
                     if !ancestors.contains(current_session_id) {
                         return Err(BitFunError::tool(format!(
-                            "session '{current_session_id}' is not authorized to cancel session '{session_id}': not a parent/ancestor"
+                            "session '{current_session_id}' is not authorized to cancel session '{session_id}': not a parent/ancestor and not the creator"
                         )));
                     }
                 }
@@ -857,17 +915,41 @@ Arguments:
                 // coordinator.delete_session() handles session-existence internally;
                 // skipping the list-based pre-check so subagent (Task) sessions are supported.
 
-                // Authorization: verify the calling session is an ancestor of the target session.
-                // First try the in-memory tree (fast path). If the tree is not yet populated
-                // (walk_ancestors returns empty), fall back to a persisted metadata chain query
-                // so that an empty tree cannot be exploited to bypass authorization.
+                // R-2: Authorization intentionally widened for full conversation
+                // management: a caller may delete a session it created (created_by
+                // marker matches) OR any session in its descendant subtree. The
+                // "cannot delete the current session" and "cannot delete
+                // daemon/warden" guards above are preserved.
                 let current_session_id = context.session_id.as_ref().ok_or_else(|| {
                     BitFunError::tool(
                         "cannot delete a session without a caller session in tool context"
                             .to_string(),
                     )
                 })?;
-                {
+                let created_by_match = {
+                    let session_manager = coordinator.get_session_manager();
+                    let target_metadata = session_manager
+                        .load_session_metadata(
+                            &std::path::PathBuf::from(&workspace.display_workspace),
+                            session_id,
+                        )
+                        .await
+                        .ok()
+                        .flatten();
+                    target_metadata
+                        .as_ref()
+                        .and_then(|metadata| metadata.created_by.as_deref())
+                        .is_some_and(|creator| {
+                            creator == session_control_creator_marker(current_session_id)
+                        })
+                };
+                if !created_by_match {
+                    // Ancestor authorization: verify the calling session is an
+                    // ancestor of the target session. First try the in-memory tree
+                    // (fast path). If the tree is not yet populated (walk_ancestors
+                    // returns empty), fall back to a persisted metadata chain query
+                    // so that an empty tree cannot be exploited to bypass
+                    // authorization.
                     let tree = coordinator.session_tree();
                     let tree_ancestors = tree.walk_ancestors(session_id);
                     let ancestors: Vec<String> = if !tree_ancestors.is_empty() {
@@ -878,6 +960,10 @@ Arguments:
                         // 已知优化点：可改为批量查询，避免每个祖先 session 都串表await。
                         let session_manager = coordinator.get_session_manager();
                         let mut metadata_ancestors = Vec::new();
+                        // Guard against cyclic metadata chains: never revisit a
+                        // session id already seen during this walk.
+                        let mut visited = std::collections::HashSet::new();
+                        visited.insert(session_id.to_string());
                         let mut current = session_id.to_string();
                         loop {
                             let metadata = session_manager
@@ -892,6 +978,11 @@ Arguments:
                                 .and_then(|m| m.relationship.and_then(|r| r.parent_session_id))
                             {
                                 Some(parent_id) => {
+                                    if !visited.insert(parent_id.clone()) {
+                                        // Cycle detected; stop walking to avoid
+                                        // hanging on a corrupt lineage chain.
+                                        break;
+                                    }
                                     metadata_ancestors.push(parent_id.clone());
                                     current = parent_id;
                                 }
@@ -907,7 +998,7 @@ Arguments:
                     }
                     if !ancestors.contains(current_session_id) {
                         return Err(BitFunError::tool(format!(
-                            "session '{current_session_id}' is not authorized to delete session '{session_id}': not a parent/ancestor"
+                            "session '{current_session_id}' is not authorized to delete session '{session_id}': not a parent/ancestor and not the creator"
                         )));
                     }
                 }
@@ -976,6 +1067,35 @@ Arguments:
                     }
 
                     for child_id in &cascade_ids {
+                        // R-A.04: Never cascade-delete daemon/warden children;
+                        // skip them and record a failure so the tree is not
+                        // cleaned while those sessions still exist.
+                        let is_daemon_child = {
+                            let session_manager = coordinator.get_session_manager();
+                            if let Some(session) = session_manager.get_session(child_id) {
+                                session.config.is_daemon
+                                    || session.agent_type.starts_with("warden-")
+                            } else {
+                                session_manager
+                                    .load_session_metadata(
+                                        &std::path::PathBuf::from(&workspace.display_workspace),
+                                        child_id,
+                                    )
+                                    .await
+                                    .ok()
+                                    .flatten()
+                                    .map(|m| m.is_daemon || m.agent_type.starts_with("warden-"))
+                                    .unwrap_or(false)
+                            }
+                        };
+                        if is_daemon_child {
+                            warn!(
+                                "Skipping cascade-delete of daemon/warden child session {}",
+                                child_id
+                            );
+                            cascade_failures.push(child_id.clone());
+                            continue;
+                        }
                         if let Err(error) = deletion_runtime
                             .delete_session(AgentSessionDeleteRequest {
                                 workspace_path: workspace.display_workspace.clone(),
@@ -1050,6 +1170,10 @@ Arguments:
                         workspace_path: workspace.project_workspace.clone(),
                         remote_connection_id: workspace.remote_connection_id.clone(),
                         remote_ssh_host: workspace.remote_ssh_host.clone(),
+                        // R-2: Full conversation management — include hidden
+                        // Subagent/Ephemeral sessions; daemon/warden sessions
+                        // are filtered below.
+                        include_hidden: true,
                     })
                     .await
                     .map_err(|error| {

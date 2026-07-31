@@ -2339,6 +2339,7 @@ mod tests {
                 workspace_path: "/workspace/project".to_string(),
                 remote_connection_id: None,
                 remote_ssh_host: None,
+                include_hidden: false,
             })
             .await
             .unwrap_err();
@@ -2360,6 +2361,7 @@ mod tests {
                 workspace_path: "/workspace/project".to_string(),
                 remote_connection_id: None,
                 remote_ssh_host: None,
+                include_hidden: false,
             })
             .await
             .expect("list sessions");

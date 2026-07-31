@@ -431,6 +431,7 @@ async fn list_cli_sessions(
             workspace_path: workspace_path.to_string_lossy().to_string(),
             remote_connection_id: None,
             remote_ssh_host: None,
+            include_hidden: false,
         })
         .await
         .map_err(|error| anyhow::anyhow!(error.into_message()))

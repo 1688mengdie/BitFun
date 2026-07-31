@@ -636,6 +636,7 @@ Allowed agent types when creating a session are dynamically resolved from the av
                         workspace_path: workspace_target.project_workspace_path.clone(),
                         remote_connection_id: workspace_target.remote_connection_id.clone(),
                         remote_ssh_host: workspace_target.remote_ssh_host.clone(),
+                        include_hidden: false,
                     })
                     .await
                     .map_err(|error| {

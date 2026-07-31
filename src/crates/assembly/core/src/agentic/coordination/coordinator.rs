@@ -6309,6 +6309,18 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         self.session_manager.list_sessions(workspace_path).await
     }
 
+    /// List all sessions, optionally including hidden Subagent/Ephemeral
+    /// sessions for full conversation management.
+    pub async fn list_sessions_with_options(
+        &self,
+        workspace_path: &Path,
+        include_internal: bool,
+    ) -> BitFunResult<Vec<SessionSummary>> {
+        self.session_manager
+            .list_sessions_with_options(workspace_path, include_internal)
+            .await
+    }
+
     /// Get a best-effort message view for a session.
     pub async fn get_messages(&self, session_id: &str) -> BitFunResult<Vec<Message>> {
         self.session_manager.get_messages(session_id).await
@@ -8698,9 +8710,13 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         self.ensure_subagent_session_loaded_for_reuse(subagent_session_id, parent_session_id)
             .await?;
 
+        // R-2: The target session was already resolved through global agent_id
+        // resolution (subtree-first, whole-database fallback), so cancellation
+        // matches the subagent session globally instead of requiring the
+        // caller to be the direct spawner. This is the intended widening for
+        // full background-task management.
         let controls = self.claim_background_subagent_controls(|control| {
-            control.parent_session_id == parent_session_id
-                && control.subagent_session_id == subagent_session_id
+            control.subagent_session_id == subagent_session_id
         });
         let task_pks = controls
             .iter()
@@ -8766,9 +8782,17 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         &self,
         parent_session_id: &str,
         agent_id: &str,
+        allow_global_fallback: bool,
     ) -> BitFunResult<String> {
+        // R-2: Global agent_id resolution. Prefer the caller's session subtree
+        // (parent + descendants). Whole-database fallback is only allowed when
+        // the caller opts in (e.g. read-only listing); mutating Task operations
+        // (cancel/send_input/history) pass false so a scope miss is "not found"
+        // instead of reaching subagents owned by other conversations.
+        let mut scope = vec![parent_session_id.to_string()];
+        scope.extend(self.session_tree.get_descendants(parent_session_id));
         self.background_subagent_outcomes
-            .resolve_agent_id(parent_session_id, agent_id)
+            .resolve_agent_id_in_scope(&scope, agent_id, allow_global_fallback)
             .await
     }
 
@@ -8776,8 +8800,12 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         &self,
         parent_session_id: &str,
     ) -> BitFunResult<Vec<BackgroundTaskRecord>> {
+        // R-2: List background tasks spawned anywhere in the caller's session
+        // subtree so a conversation can manage every subagent task it owns.
+        let mut scope = vec![parent_session_id.to_string()];
+        scope.extend(self.session_tree.get_descendants(parent_session_id));
         self.background_subagent_outcomes
-            .list_records(parent_session_id)
+            .list_records_for_parents(&scope)
             .await
     }
 
@@ -10162,8 +10190,15 @@ impl bitfun_runtime_ports::AgentSessionManagementPort for ConversationCoordinato
             self.session_tree.load_from_sessions(&metadata_list);
         }
 
-        self.list_sessions(&effective_storage_path)
-            .await
+        let sessions = if request.include_hidden {
+            // R-2: Full conversation management — include hidden Subagent/
+            // Ephemeral sessions in the listing.
+            self.list_sessions_with_options(&effective_storage_path, true)
+                .await
+        } else {
+            self.list_sessions(&effective_storage_path).await
+        };
+        sessions
             .map(|sessions| {
                 sessions
                     .into_iter()
@@ -10901,6 +10936,10 @@ mod tests {
             created_at: std::time::UNIX_EPOCH,
             last_activity_at: std::time::UNIX_EPOCH,
             state: bitfun_agent_runtime::session_state::SessionState::Idle,
+            #[cfg(feature = "taiji")]
+            parent_session_id: None,
+            #[cfg(feature = "taiji")]
+            is_daemon: false,
         });
 
         assert_eq!(summary.model_id.as_deref(), Some("fast"));
@@ -11831,6 +11870,7 @@ mod tests {
         child.relationship = Some(SessionRelationship {
             kind: Some(SessionRelationshipKind::Subagent),
             parent_session_id: Some(local_session_id.clone()),
+            depth: Some(1),
             parent_request_id: None,
             parent_dialog_turn_id: Some("turn-1".to_string()),
             parent_turn_index: Some(1),
@@ -11854,6 +11894,7 @@ mod tests {
         grandchild.relationship = Some(SessionRelationship {
             kind: Some(SessionRelationshipKind::Subagent),
             parent_session_id: Some(child_session_id.clone()),
+            depth: Some(2),
             parent_request_id: None,
             parent_dialog_turn_id: Some("child-turn".to_string()),
             parent_turn_index: Some(0),
@@ -12581,7 +12622,7 @@ mod tests {
         assert_eq!(other_parent_agent, "a1");
         assert_eq!(
             coordinator
-                .resolve_agent_id("parent-1", "a2")
+                .resolve_agent_id("parent-1", "a2", false)
                 .await
                 .expect("resolve agent id"),
             "subagent-session-2"
@@ -12620,7 +12661,7 @@ mod tests {
         assert_eq!(custom.bg_task_id, "reviewer_bg1");
         assert_eq!(
             coordinator
-                .resolve_agent_id("parent-1", "reviewer")
+                .resolve_agent_id("parent-1", "reviewer", false)
                 .await
                 .expect("resolve caller-named agent"),
             "reviewer-session"

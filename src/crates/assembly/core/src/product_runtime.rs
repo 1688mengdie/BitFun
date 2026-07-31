@@ -818,7 +818,21 @@ impl CoreAgentRuntimeCompatibility {
         &self,
         workspace_path: &Path,
     ) -> BitFunResult<Vec<SessionMetadata>> {
-        self.persistence.list_session_metadata(workspace_path).await
+        self.list_persisted_sessions_with_options(workspace_path, false)
+            .await
+    }
+
+    /// Lists persisted session metadata. With `include_internal`, hidden
+    /// Subagent/Ephemeral sessions are included for full conversation
+    /// management.
+    pub async fn list_persisted_sessions_with_options(
+        &self,
+        workspace_path: &Path,
+        include_internal: bool,
+    ) -> BitFunResult<Vec<SessionMetadata>> {
+        self.persistence
+            .list_session_metadata_with_options(workspace_path, include_internal)
+            .await
     }
 
     pub async fn list_persisted_sessions_page(
@@ -827,8 +841,20 @@ impl CoreAgentRuntimeCompatibility {
         cursor: Option<&str>,
         limit: usize,
     ) -> BitFunResult<SessionMetadataPage> {
+        self.list_persisted_sessions_page_with_options(workspace_path, cursor, limit, false)
+            .await
+    }
+
+    /// Paginated variant of [`list_persisted_sessions_with_options`].
+    pub async fn list_persisted_sessions_page_with_options(
+        &self,
+        workspace_path: &Path,
+        cursor: Option<&str>,
+        limit: usize,
+        include_internal: bool,
+    ) -> BitFunResult<SessionMetadataPage> {
         self.persistence
-            .list_session_metadata_page(workspace_path, cursor, limit)
+            .list_session_metadata_page_with_options(workspace_path, cursor, limit, include_internal)
             .await
     }
 

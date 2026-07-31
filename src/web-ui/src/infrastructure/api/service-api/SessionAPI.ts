@@ -244,12 +244,14 @@ export class SessionAPI {
   async listSessions(
     workspacePath: string,
     remoteConnectionId?: string,
-    remoteSshHost?: string
+    remoteSshHost?: string,
+    includeHidden = false
   ): Promise<SessionMetadata[]> {
     try {
       return await api.invoke('list_persisted_sessions', {
         request: {
           workspace_path: workspacePath,
+          include_hidden: includeHidden,
           ...remoteSessionFields(remoteConnectionId, remoteSshHost),
         }
       });
@@ -259,13 +261,15 @@ export class SessionAPI {
   }
 
   async listSessionsPage(
-    request: SessionMetadataPageRequest
+    request: SessionMetadataPageRequest,
+    includeHidden = false
   ): Promise<SessionMetadataPage> {
     try {
       return await api.invoke('list_persisted_sessions_page', {
         request: {
           workspace_path: request.workspacePath,
           limit: request.limit,
+          include_hidden: includeHidden,
           ...(request.cursor ? { cursor: request.cursor } : {}),
           ...remoteSessionFields(request.remoteConnectionId, request.remoteSshHost),
         }

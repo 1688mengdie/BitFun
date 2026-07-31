@@ -456,6 +456,7 @@ impl CliAgentRuntimeClient {
             workspace_path: workspace_path.to_string_lossy().to_string(),
             remote_connection_id: None,
             remote_ssh_host: None,
+            include_hidden: false,
         };
         match &self.backend {
             CliAgentRuntimeBackend::Embedded(runtime) => runtime
@@ -924,6 +925,7 @@ impl CliAgentRuntimeClient {
                 workspace_path: project_workspace.to_string_lossy().to_string(),
                 remote_connection_id: None,
                 remote_ssh_host: None,
+                include_hidden: false,
             })
             .await
         {

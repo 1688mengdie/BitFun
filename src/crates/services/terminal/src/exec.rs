@@ -1714,6 +1714,8 @@ mod tests {
     use encoding_rs::GBK;
     use std::collections::HashMap;
     
+    #[cfg(windows)]
+    use std::path::PathBuf;
     use std::sync::Arc;
 
     #[cfg(windows)]

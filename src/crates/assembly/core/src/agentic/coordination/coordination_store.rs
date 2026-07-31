@@ -152,6 +152,9 @@ impl CoordinationStore {
         .await
     }
 
+    /// Single-parent resolution kept for compatibility and tests; subtree/
+    /// global callers use [`Self::resolve_agent_id_in_scope`].
+    #[allow(dead_code)]
     pub(crate) async fn resolve_agent_id(
         &self,
         parent_session_id: &str,
@@ -170,6 +173,124 @@ impl CoordinationStore {
                 .map_err(db_error)?
                 .flatten()
                 .ok_or_else(|| BitFunError::tool(format!("Agent was not found: {agent_id}")))
+        })
+        .await
+    }
+
+    /// Global agent_id resolution for full background-task management.
+    ///
+    /// `agent_id` is unique per parent session (`UNIQUE(parent_session_id,
+    /// agent_id)`), so different parents may each own an `a1`. Resolution
+    /// strategy:
+    /// 1. Prefer a match inside `scope_session_ids` (the caller's session
+    ///    subtree). A single in-scope hit wins immediately; multiple in-scope
+    ///    hits are ambiguous and reported with candidates.
+    /// 2. If the scope has no match and `allow_global_fallback` is true, fall
+    ///    back to a whole-database match so a caller can manage subagents
+    ///    spawned outside its subtree. A unique global hit is returned;
+    ///    multiple hits report candidates instead of picking arbitrarily.
+    ///    When `allow_global_fallback` is false, a scope miss is reported as
+    ///    "not found" so mutating operations (cancel/send_input/history)
+    ///    cannot cross session-subtree boundaries.
+    pub(crate) async fn resolve_agent_id_in_scope(
+        &self,
+        scope_session_ids: &[String],
+        agent_id: &str,
+        allow_global_fallback: bool,
+    ) -> BitFunResult<String> {
+        let scope_session_ids = scope_session_ids.to_vec();
+        let agent_id = agent_id.to_string();
+        self.with_connection(move |connection| {
+            let scope_hits = if scope_session_ids.is_empty() {
+                Vec::new()
+            } else {
+                let placeholders: Vec<String> = (1..=scope_session_ids.len())
+                    .map(|i| format!("?{i}"))
+                    .collect();
+                let sql = format!(
+                    "SELECT parent_session_id, child_session_id FROM agents WHERE parent_session_id IN ({}) AND agent_id = ?{} AND state = 'active' ORDER BY agent_pk",
+                    placeholders.join(", "),
+                    scope_session_ids.len() + 1
+                );
+                let mut statement = connection.prepare(&sql).map_err(db_error)?;
+                let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> =
+                    Vec::with_capacity(scope_session_ids.len() + 1);
+                for id in &scope_session_ids {
+                    param_values.push(Box::new(id.clone()));
+                }
+                param_values.push(Box::new(agent_id.clone()));
+                let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+                    param_values.iter().map(|v| v.as_ref()).collect();
+                let rows = statement
+                    .query_map(param_refs.as_slice(), |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, Option<String>>(1)?,
+                        ))
+                    })
+                    .map_err(db_error)?;
+                rows.collect::<rusqlite::Result<Vec<_>>>()
+                    .map_err(db_error)?
+            };
+
+            match scope_hits.as_slice() {
+                [(_, Some(child_session_id))] => {
+                    return Ok(child_session_id.clone());
+                }
+                [] => {}
+                hits => {
+                    let candidates = hits
+                        .iter()
+                        .filter_map(|(parent, child)| {
+                            child.as_ref().map(|child| format!("{parent}/{child}"))
+                        })
+                        .collect::<Vec<_>>();
+                    return Err(BitFunError::tool(format!(
+                        "Agent id '{agent_id}' is ambiguous in the caller's session subtree; candidates: {}",
+                        candidates.join(", ")
+                    )));
+                }
+            }
+
+            // Fall back to a whole-database match so any caller can manage
+            // subagents spawned outside its subtree — unless the caller
+            // disallowed global fallback (mutating Task operations), in which
+            // case a scope miss is an authorization boundary.
+            if !allow_global_fallback {
+                return Err(BitFunError::tool(format!(
+                    "Agent was not found: {agent_id}"
+                )));
+            }
+            let mut statement = connection
+                .prepare(
+                    "SELECT parent_session_id, child_session_id FROM agents WHERE agent_id = ?1 AND state = 'active' ORDER BY agent_pk",
+                )
+                .map_err(db_error)?;
+            let rows = statement
+                .query_map(params![agent_id], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                    ))
+                })
+                .map_err(db_error)?;
+            let global_hits = rows.collect::<rusqlite::Result<Vec<_>>>().map_err(db_error)?;
+            match global_hits.as_slice() {
+                [(_, Some(child_session_id))] => Ok(child_session_id.clone()),
+                [] => Err(BitFunError::tool(format!("Agent was not found: {agent_id}"))),
+                hits => {
+                    let candidates = hits
+                        .iter()
+                        .filter_map(|(parent, child)| {
+                            child.as_ref().map(|child| format!("{parent}/{child}"))
+                        })
+                        .collect::<Vec<_>>();
+                    Err(BitFunError::tool(format!(
+                        "Agent id '{agent_id}' is ambiguous across sessions; candidates: {}",
+                        candidates.join(", ")
+                    )))
+                }
+            }
         })
         .await
     }
@@ -375,7 +496,10 @@ WHERE task_pk = ?5 AND status = 'running'
         .await
     }
 
+    /// Single-parent task list kept for compatibility; subtree/global callers
+    /// use [`Self::list_tasks_for_parents`].
     #[cfg(feature = "taiji")]
+    #[allow(dead_code)]
     pub(crate) async fn list_tasks(
         &self,
         parent_session_id: &str,
@@ -392,6 +516,43 @@ WHERE task_pk = ?5 AND status = 'running'
                 .query_map(params![parent_session_id], background_task_from_row)
                 .map_err(db_error)?;
             collect_rows(rows)
+        })
+        .await
+    }
+
+    /// Lists background tasks spawned by any session in `parent_session_ids`
+    /// (typically the caller's subtree). Used by the Task `list` action so a
+    /// conversation can manage subagent tasks spawned anywhere in its subtree.
+    #[cfg(feature = "taiji")]
+    pub(crate) async fn list_tasks_for_parents(
+        &self,
+        parent_session_ids: &[String],
+    ) -> BitFunResult<Vec<BackgroundTaskRecord>> {
+        let parent_session_ids = parent_session_ids.to_vec();
+        self.with_connection(move |connection| {
+            if parent_session_ids.is_empty() {
+                return Ok(Vec::new());
+            }
+            let mut all_records = Vec::new();
+            for chunk in parent_session_ids.chunks(990) {
+                let placeholders: Vec<String> = (1..=chunk.len())
+                    .map(|i| format!("?{i}"))
+                    .collect();
+                let sql = format!(
+                    "{} WHERE tasks.parent_session_id IN ({}) ORDER BY tasks.task_pk",
+                    BACKGROUND_TASK_SELECT,
+                    placeholders.join(", ")
+                );
+                let mut statement = connection.prepare(&sql).map_err(db_error)?;
+                let rows = statement
+                    .query_map(
+                        rusqlite::params_from_iter(chunk.iter()),
+                        background_task_from_row,
+                    )
+                    .map_err(db_error)?;
+                all_records.extend(collect_rows(rows)?);
+            }
+            Ok(all_records)
         })
         .await
     }
@@ -1023,6 +1184,93 @@ mod tests {
                 .expect("resolve named agent"),
             "child-reviewer"
         );
+    }
+
+    #[tokio::test]
+    async fn global_agent_resolution_prefers_subtree_then_falls_back_globally() {
+        let (_root, store) = test_store();
+        store
+            .register_background_task(registration("parent-1", "child-1", "parent-turn-1", None))
+            .await
+            .expect("register parent-1 task");
+        store
+            .register_background_task(registration("parent-2", "child-2", "parent-turn-1", None))
+            .await
+            .expect("register parent-2 task");
+        store
+            .register_background_task(registration(
+                "parent-2",
+                "child-reviewer",
+                "parent-turn-2",
+                Some("reviewer"),
+            ))
+            .await
+            .expect("register reviewer task");
+
+        // Subtree preference: caller subtree [parent-1] resolves its own a1.
+        assert_eq!(
+            store
+                .resolve_agent_id_in_scope(&["parent-1".to_string()], "a1", false)
+                .await
+                .expect("subtree-local a1"),
+            "child-1"
+        );
+        // Global fallback: reviewer exists only under parent-2, still resolvable
+        // when the caller explicitly allows the whole-database fallback.
+        assert_eq!(
+            store
+                .resolve_agent_id_in_scope(&["parent-1".to_string()], "reviewer", true)
+                .await
+                .expect("global reviewer"),
+            "child-reviewer"
+        );
+        // Without global fallback, the same scope miss is "not found".
+        assert!(store
+            .resolve_agent_id_in_scope(&["parent-1".to_string()], "reviewer", false)
+            .await
+            .is_err());
+        // Ambiguity: caller subtree covering both parents sees two a1 matches.
+        let error = store
+            .resolve_agent_id_in_scope(
+                &["parent-1".to_string(), "parent-2".to_string()],
+                "a1",
+                false,
+            )
+            .await
+            .expect_err("ambiguous a1 must be rejected");
+        assert!(error.to_string().contains("ambiguous"));
+
+        // Unknown agent.
+        assert!(store
+            .resolve_agent_id_in_scope(&["parent-1".to_string()], "missing", false)
+            .await
+            .is_err());
+    }
+
+    #[cfg(feature = "taiji")]
+    #[tokio::test]
+    async fn list_tasks_for_parents_covers_multiple_parents() {
+        let (_root, store) = test_store();
+        store
+            .register_background_task(registration("parent-1", "child-1", "turn-1", None))
+            .await
+            .expect("parent-1 task");
+        store
+            .register_background_task(registration("parent-2", "child-2", "turn-1", None))
+            .await
+            .expect("parent-2 task");
+        let tasks = store
+            .list_tasks_for_parents(&["parent-1".to_string(), "parent-2".to_string()])
+            .await
+            .expect("list across parents");
+        assert_eq!(tasks.len(), 2);
+        assert!(tasks.iter().any(|t| t.parent_session_id == "parent-1"));
+        assert!(tasks.iter().any(|t| t.parent_session_id == "parent-2"));
+        assert!(store
+            .list_tasks_for_parents(&[])
+            .await
+            .expect("empty scope")
+            .is_empty());
     }
 
     #[tokio::test]
