@@ -48,9 +48,9 @@
 
   &__action {
     margin-top: var(--size-gap-3);
-    padding: tokens.$btn-padding-y tokens.$btn-padding-x;
+    padding: tokens.$size-gap-2 tokens.$size-gap-4;
     border: none;
-    border-radius: tokens.$btn-border-radius;
+    border-radius: tokens.$size-radius-base;
     background: var(--lvpa-vermillion, #c8102e);
     color: var(--lvpa-cloud, #faf8f0);
     font-size: var(--font-size-sm);
