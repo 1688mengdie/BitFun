@@ -1412,6 +1412,9 @@ where
 #[async_trait::async_trait]
 pub trait RemotePollRuntimeHost: Send + Sync {
     fn ensure_tracker(&self, session_id: &str) -> Arc<RemoteSessionStateTracker>;
+    /// Hydrate permission requests that may have been registered before the
+    /// remote tracker observed the corresponding tool event.
+    fn sync_pending_permissions(&self, _session_id: &str, _tracker: &RemoteSessionStateTracker) {}
     async fn load_model_catalog(&self, session_id: &str) -> Option<RemoteModelCatalog>;
     async fn resolve_session_storage_dir(&self, session_id: &str) -> Option<PathBuf>;
     async fn load_remote_chat_messages(
@@ -1438,6 +1441,7 @@ where
     };
 
     let tracker = host.ensure_tracker(session_id);
+    host.sync_pending_permissions(session_id, &tracker);
     let current_version = tracker.version();
     let current_model_catalog = host.load_model_catalog(session_id).await;
     let model_catalog_delta =
@@ -1485,6 +1489,13 @@ where
 #[async_trait::async_trait]
 pub trait RemoteInteractionRuntimeHost: Send + Sync {
     async fn cancel_tool(&self, tool_id: &str, reason: String) -> Result<(), String>;
+    async fn confirm_tool(&self, tool_id: &str) -> Result<(), String>;
+    async fn reject_tool(&self, tool_id: &str, reason: String) -> Result<(), String>;
+    async fn get_permission_mode(&self) -> Result<RemotePermissionMode, String>;
+    async fn set_permission_mode(
+        &self,
+        mode: RemotePermissionMode,
+    ) -> Result<RemotePermissionMode, String>;
     fn answer_question(&self, tool_id: &str, answers: serde_json::Value) -> Result<(), String>;
 }
 
@@ -1496,6 +1507,30 @@ where
     H: RemoteInteractionRuntimeHost + ?Sized,
 {
     match command {
+        RemoteCommand::ConfirmTool { tool_id } => remote_interaction_accepted_response(
+            "confirm_tool",
+            tool_id.clone(),
+            host.confirm_tool(tool_id).await,
+        ),
+        RemoteCommand::RejectTool { tool_id, reason } => remote_interaction_accepted_response(
+            "reject_tool",
+            tool_id.clone(),
+            host.reject_tool(
+                tool_id,
+                reason
+                    .clone()
+                    .unwrap_or_else(|| "User rejected".to_string()),
+            )
+            .await,
+        ),
+        RemoteCommand::GetPermissionMode => match host.get_permission_mode().await {
+            Ok(mode) => RemoteResponse::PermissionMode { mode },
+            Err(message) => RemoteResponse::Error { message },
+        },
+        RemoteCommand::SetPermissionMode { mode } => match host.set_permission_mode(*mode).await {
+            Ok(mode) => RemoteResponse::PermissionMode { mode },
+            Err(message) => RemoteResponse::Error { message },
+        },
         RemoteCommand::CancelTool { tool_id, reason } => {
             let cancel_reason = reason
                 .clone()
@@ -1708,6 +1743,7 @@ pub fn resolve_remote_agent_type(mobile_type: Option<&str>) -> &'static str {
         Some("code") | Some("agentic") | Some("Agentic") => "agentic",
         Some("multitask") | Some("Multitask") => "Multitask",
         Some("cowork") | Some("Cowork") => "Cowork",
+        Some("claw") | Some("Claw") | Some("assistant") | Some("chat") => "Claw",
         Some("plan") | Some("Plan") => "Plan",
         Some("debug") | Some("Debug") => "debug",
         _ => "agentic",
@@ -1843,10 +1879,6 @@ pub fn build_remote_chat_messages(turns: Vec<RemoteChatHistoryTurn>) -> Vec<Chat
                 Some(turn.user_images)
             },
         });
-
-        if turn.is_in_progress {
-            continue;
-        }
 
         struct OrderedEntry {
             order_index: Option<usize>,
@@ -2032,6 +2064,14 @@ pub struct RemoteToolStatus {
     pub tool_input: Option<serde_json::Value>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RemotePermissionMode {
+    Ask,
+    Auto,
+    FullAccess,
+}
+
 /// Commands that remote clients can send to the desktop runtime.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "cmd", rename_all = "snake_case")]
@@ -2101,6 +2141,17 @@ pub enum RemoteCommand {
     CancelTool {
         tool_id: String,
         reason: Option<String>,
+    },
+    ConfirmTool {
+        tool_id: String,
+    },
+    RejectTool {
+        tool_id: String,
+        reason: Option<String>,
+    },
+    GetPermissionMode,
+    SetPermissionMode {
+        mode: RemotePermissionMode,
     },
     AnswerQuestion {
         tool_id: String,
@@ -2293,6 +2344,9 @@ pub enum RemoteResponse {
         action: String,
         target_id: String,
     },
+    PermissionMode {
+        mode: RemotePermissionMode,
+    },
     FileContent {
         name: String,
         content_base64: String,
@@ -2423,9 +2477,12 @@ where
         | RemoteCommand::ReadFileChunk { .. }
         | RemoteCommand::GetFileInfo { .. } => host.handle_workspace_file_command(command).await,
 
-        RemoteCommand::CancelTool { .. } | RemoteCommand::AnswerQuestion { .. } => {
-            host.handle_interaction_command(command).await
-        }
+        RemoteCommand::ConfirmTool { .. }
+        | RemoteCommand::RejectTool { .. }
+        | RemoteCommand::GetPermissionMode
+        | RemoteCommand::SetPermissionMode { .. }
+        | RemoteCommand::CancelTool { .. }
+        | RemoteCommand::AnswerQuestion { .. } => host.handle_interaction_command(command).await,
 
         RemoteCommand::SendMessage {
             session_id,
@@ -2661,6 +2718,39 @@ impl RemoteSessionStateTracker {
             state.turn_status = "active".to_string();
             state.session_state = "running".to_string();
         }
+        drop(state);
+        self.bump_version();
+    }
+
+    pub fn sync_pending_permission(
+        &self,
+        tool_id: String,
+        tool_name: String,
+        input_preview: Option<String>,
+        tool_input: Option<serde_json::Value>,
+    ) {
+        let mut state = self.state.write().unwrap();
+        if state.turn_id.is_none() {
+            return;
+        }
+        let already_pending = state
+            .active_tools
+            .iter()
+            .any(|tool| tool.id == tool_id && tool.status == "pending_confirmation");
+        if already_pending {
+            return;
+        }
+        Self::upsert_active_tool(
+            &mut state,
+            &tool_id,
+            &tool_name,
+            "pending_confirmation",
+            input_preview,
+            tool_input,
+            false,
+        );
+        state.session_state = "running".to_string();
+        state.turn_status = "active".to_string();
         drop(state);
         self.bump_version();
     }
@@ -3704,6 +3794,25 @@ mod tests {
 
     #[async_trait::async_trait]
     impl RemoteInteractionRuntimeHost for FakeInteractionHost {
+        async fn confirm_tool(&self, _tool_id: &str) -> Result<(), String> {
+            Ok(())
+        }
+
+        async fn reject_tool(&self, _tool_id: &str, _reason: String) -> Result<(), String> {
+            Ok(())
+        }
+
+        async fn get_permission_mode(&self) -> Result<RemotePermissionMode, String> {
+            Ok(RemotePermissionMode::Ask)
+        }
+
+        async fn set_permission_mode(
+            &self,
+            mode: RemotePermissionMode,
+        ) -> Result<RemotePermissionMode, String> {
+            Ok(mode)
+        }
+
         async fn cancel_tool(&self, _tool_id: &str, _reason: String) -> Result<(), String> {
             Ok(())
         }

@@ -129,7 +129,8 @@ export class RemoteSessionController {
     agentType: string,
     isBusy: boolean,
     remoteAvailable: boolean,
-    onCreated: (session: SessionSummary) => Promise<void>
+    onCreated: (session: SessionSummary) => Promise<void>,
+    instruction: string = ''
   ): Promise<void> {
     if (isBusy || !remoteAvailable) {
       return;
@@ -140,7 +141,7 @@ export class RemoteSessionController {
       const session = await this.client.createSession({
         agentType,
         title: '',
-        instruction: ''
+        instruction
       });
       this.callbacks.onActiveSession(session);
       this.callbacks.onStatusText(RemoteI18n.t('status.sessionCreated'));

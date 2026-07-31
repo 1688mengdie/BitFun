@@ -19,6 +19,7 @@ use crate::util::errors::{BitFunError, BitFunResult};
 use bitfun_agent_runtime::permission::{
     PendingPermissionReceiver, PermissionRequestManager, PermissionWaitOutcome,
 };
+use bitfun_agent_runtime::sdk::PermissionReplySource;
 use bitfun_agent_stream::ToolArgumentRepairKind;
 use bitfun_agent_tools::{
     build_invalid_tool_call_error_message, build_normal_tool_json_repair_notice,
@@ -2349,6 +2350,26 @@ impl ToolPipeline {
             tool_id, reason
         );
         Ok(())
+    }
+
+    pub async fn reply_to_tool(&self, tool_id: &str, reply: PermissionReply) -> BitFunResult<()> {
+        let manager = self.permission_request_manager.as_ref().ok_or_else(|| {
+            BitFunError::service("Permission request manager is unavailable".to_string())
+        })?;
+        let request = manager
+            .pending_requests()
+            .into_iter()
+            .find(|request| {
+                request.tool_call_id.as_deref() == Some(tool_id) || request.request_id == tool_id
+            })
+            .ok_or_else(|| {
+                BitFunError::NotFound(format!("Permission request not found for tool: {tool_id}"))
+            })?;
+        manager
+            .reply(&request.request_id, reply, PermissionReplySource::User)
+            .await
+            .map(|_| ())
+            .map_err(|error| BitFunError::service(error.to_string()))
     }
 
     /// Cancel all tools for a dialog turn
