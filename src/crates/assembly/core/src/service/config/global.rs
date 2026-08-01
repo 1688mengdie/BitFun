@@ -35,8 +35,8 @@ pub enum ConfigUpdateEvent {
         model_id: String,
         model_name: String,
     },
-    /// Theme configuration updated.
-    ThemeUpdated { theme_id: String },
+    /// Web UI appearance selection updated.
+    AppearanceUpdated { appearance_id: String },
     /// Editor configuration updated.
     EditorUpdated,
     /// Terminal configuration updated.
@@ -212,14 +212,16 @@ impl GlobalConfigManager {
         Ok(())
     }
 
-    /// Updates the theme configuration and broadcasts an event.
-    pub async fn update_theme(&self, theme_id: &str) -> BitFunResult<()> {
+    /// Updates the Web UI appearance selection and broadcasts an event.
+    pub async fn update_appearance(&self, appearance_id: &str) -> BitFunResult<()> {
         let service = Self::get_service().await?;
-        service.set_config("theme.id", theme_id).await?;
-        let stored_theme_id: String = service.get_config(Some("themes.current")).await?;
+        service
+            .set_config("appearance.selection", appearance_id)
+            .await?;
+        let stored_appearance_id: String = service.get_config(Some("appearance.selection")).await?;
 
-        Self::broadcast_update(ConfigUpdateEvent::ThemeUpdated {
-            theme_id: stored_theme_id,
+        Self::broadcast_update(ConfigUpdateEvent::AppearanceUpdated {
+            appearance_id: stored_appearance_id,
         })
         .await;
 

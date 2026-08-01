@@ -6,8 +6,8 @@ function readText(filePath) {
   return fs.readFileSync(filePath, 'utf8');
 }
 
-test('startup theme bootstrap check is stable across line endings', () => {
-  const generatorSource = readText('scripts/generate-startup-theme-bootstrap.mjs');
+test('startup appearance bootstrap check is stable across line endings', () => {
+  const generatorSource = readText('scripts/generate-startup-appearance-bootstrap.mjs');
 
   assert.match(generatorSource, /normalizeGeneratedText/, 'generator check should normalize line endings');
   assert.match(
