@@ -150,7 +150,7 @@ const ChatPaneInner: React.FC<ChatPaneProps> = ({
   }, [addPanelTab]);
 
   return (
-    <div
+    <div data-bf-component="chat-pane" data-bf-part="root"
       className="bitfun-chat-pane__content"
       data-shortcut-scope="chat"
       data-fullscreen={isFullscreen}
@@ -170,8 +170,7 @@ const ChatPaneInner: React.FC<ChatPaneProps> = ({
         config={{
           enableMarkdown: true,
           autoScroll: true,
-          showTimestamps: false,
-          theme: 'auto'
+          showTimestamps: false
         }}
       />
       {showChatInput && (

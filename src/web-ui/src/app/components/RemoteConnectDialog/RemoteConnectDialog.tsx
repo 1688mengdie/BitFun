@@ -891,7 +891,7 @@ export const RemoteConnectDialog: React.FC<RemoteConnectDialogProps> = ({
     if (!error) return null;
     const isNgrokErr = error.includes('ngrok is not installed');
     return (
-      <div className="bitfun-remote-connect__error-group">
+      <div data-bf-component="remote-connect-dialog" data-bf-part="error" className="bitfun-remote-connect__error-group">
         <p className="bitfun-remote-connect__error">{error}</p>
         {isNgrokErr && (
           <button type="button" className="bitfun-remote-connect__error-action" onClick={handleOpenNgrokSetup}>
@@ -906,8 +906,8 @@ export const RemoteConnectDialog: React.FC<RemoteConnectDialogProps> = ({
     onDisconnect: () => void,
     username?: string | null,
   ) => (
-    <div className="bitfun-remote-connect__connected">
-      <div className="bitfun-remote-connect__status">
+    <div className="bitfun-remote-connect__connected" data-bf-component="remote-connect-dialog" data-bf-part="body" data-bf-state="connected">
+      <div className="bitfun-remote-connect__status" data-bf-component="remote-connect-dialog" data-bf-part="status" data-bf-state="connected">
         <Badge variant="success">{t('remoteConnect.stateConnected')}</Badge>
         {username && (
           <span className="bitfun-remote-connect__peer-username">
@@ -936,7 +936,7 @@ export const RemoteConnectDialog: React.FC<RemoteConnectDialogProps> = ({
   const renderPairingInProgress = () => {
     if (!connectionResult) return null;
     return (
-      <div className="bitfun-remote-connect__body">
+      <div data-bf-component="remote-connect-dialog" data-bf-part="body" className="bitfun-remote-connect__body">
         {connectionResult.qr_url && (
           <button
             type="button"
@@ -955,7 +955,7 @@ export const RemoteConnectDialog: React.FC<RemoteConnectDialogProps> = ({
             </div>
           </div>
         )}
-        <div className="bitfun-remote-connect__status">
+        <div className="bitfun-remote-connect__status" data-bf-component="remote-connect-dialog" data-bf-part="status">
           <Badge variant={qrCopied ? 'success' : 'warning'}>
             {qrCopied
               ? t('remoteConnect.urlCopied')
@@ -1010,7 +1010,7 @@ export const RemoteConnectDialog: React.FC<RemoteConnectDialogProps> = ({
       return renderPairingInProgress();
     }
     return (
-      <div className="bitfun-remote-connect__body">
+      <div data-bf-component="remote-connect-dialog" data-bf-part="body" className="bitfun-remote-connect__body">
         {renderInfoCard(
           <>
             {networkTab === 'lan' && (lanNetworkInfo?.availableIps.length || lanNetworkInfo?.gatewayIp) && (
@@ -1107,13 +1107,13 @@ export const RemoteConnectDialog: React.FC<RemoteConnectDialogProps> = ({
   const renderBotContent = () => {
     if (isBotConnected && connectedBotTab === botTab) {
       return (
-        <div className="bitfun-remote-connect__connected">
+        <div data-bf-component="remote-connect-dialog" data-bf-part="body" data-bf-state="connected" className="bitfun-remote-connect__connected">
           {botTab === 'weixin' && renderInfoCard(
             <p className="bitfun-remote-connect__info-text">
               {t('remoteConnect.botWeixinRestriction')}
             </p>,
           )}
-          <div className="bitfun-remote-connect__status">
+          <div className="bitfun-remote-connect__status" data-bf-component="remote-connect-dialog" data-bf-part="status" data-bf-state="connected">
             <Badge variant="success">{t('remoteConnect.stateConnected')}</Badge>
           </div>
           <div className="bitfun-remote-connect__mode-selector">
@@ -1146,7 +1146,7 @@ export const RemoteConnectDialog: React.FC<RemoteConnectDialogProps> = ({
       return renderPairingInProgress();
     }
     return (
-      <div className="bitfun-remote-connect__body">
+      <div data-bf-component="remote-connect-dialog" data-bf-part="body" className="bitfun-remote-connect__body">
         {botTab === 'telegram' ? (
           <div className="bitfun-remote-connect__bot-guide">
             {renderInfoCard(
@@ -1369,9 +1369,9 @@ export const RemoteConnectDialog: React.FC<RemoteConnectDialogProps> = ({
         showCloseButton
         size="large"
       >
-        <div className="bitfun-remote-connect">
+        <div className="bitfun-remote-connect" data-bf-component="remote-connect-dialog" data-bf-part="root" data-bf-group={activeGroup}>
           {/* ── Group tabs ── */}
-          <div className="bitfun-remote-connect__groups" role="tablist" aria-label={t('shared:features.remoteControl')}>
+          <div className="bitfun-remote-connect__groups" data-bf-component="remote-connect-dialog" data-bf-part="groups" role="tablist" aria-label={t('shared:features.remoteControl')}>
             <Tooltip
               content={t('header.remoteConnectRequiresWorkspace')}
               placement="bottom"
@@ -1386,6 +1386,10 @@ export const RemoteConnectDialog: React.FC<RemoteConnectDialogProps> = ({
                 tabIndex={activeGroup === 'network' ? 0 : -1}
                 onKeyDown={handleTabArrowKey}
                 className={`bitfun-remote-connect__group-btn${activeGroup === 'network' ? ' is-active' : ''}`}
+                data-bf-component="remote-connect-dialog"
+                data-bf-part="groupTab"
+                data-bf-group="network"
+                data-bf-state={activeGroup === 'network' ? 'active' : undefined}
                 onClick={() => handleGroupChange('network')}
                 disabled={!hasWorkspace}
               >
@@ -1408,6 +1412,10 @@ export const RemoteConnectDialog: React.FC<RemoteConnectDialogProps> = ({
                 tabIndex={activeGroup === 'bot' ? 0 : -1}
                 onKeyDown={handleTabArrowKey}
                 className={`bitfun-remote-connect__group-btn${activeGroup === 'bot' ? ' is-active' : ''}`}
+                data-bf-component="remote-connect-dialog"
+                data-bf-part="groupTab"
+                data-bf-group="bot"
+                data-bf-state={activeGroup === 'bot' ? 'active' : undefined}
                 onClick={() => handleGroupChange('bot')}
                 disabled={!hasWorkspace}
               >
@@ -1425,6 +1433,10 @@ export const RemoteConnectDialog: React.FC<RemoteConnectDialogProps> = ({
               tabIndex={activeGroup === 'account' || !hasWorkspace ? 0 : -1}
               onKeyDown={handleTabArrowKey}
               className={`bitfun-remote-connect__group-btn${activeGroup === 'account' ? ' is-active' : ''}`}
+              data-bf-component="remote-connect-dialog"
+              data-bf-part="groupTab"
+              data-bf-group="account"
+              data-bf-state={activeGroup === 'account' ? 'active' : undefined}
               onClick={() => handleGroupChange('account')}
             >
               {t('remoteConnect.groupAccount')}
@@ -1434,7 +1446,7 @@ export const RemoteConnectDialog: React.FC<RemoteConnectDialogProps> = ({
 
           {/* ── Sub-tabs ── */}
           {activeGroup === 'account' ? null : activeGroup === 'network' ? (
-            <div className="bitfun-remote-connect__subtabs" role="tablist" aria-label={t('remoteConnect.groupNetwork')}>
+            <div className="bitfun-remote-connect__subtabs" data-bf-component="remote-connect-dialog" data-bf-part="subtabs" data-bf-group="network" role="tablist" aria-label={t('remoteConnect.groupNetwork')}>
               {NETWORK_TABS.map((tab, i) => (
                 <React.Fragment key={tab.id}>
                   {i > 0 && <span className="bitfun-remote-connect__subtab-divider" />}
@@ -1447,6 +1459,12 @@ export const RemoteConnectDialog: React.FC<RemoteConnectDialogProps> = ({
                     tabIndex={networkTab === tab.id ? 0 : -1}
                     onKeyDown={handleTabArrowKey}
                     className={`bitfun-remote-connect__subtab${networkTab === tab.id ? ' is-active' : ''}${isRelayConnected && connectedNetworkTab === tab.id ? ' is-connected' : ''}`}
+                    data-bf-component="remote-connect-dialog"
+                    data-bf-part="subtab"
+                    data-bf-state={[
+                      networkTab === tab.id && 'active',
+                      isRelayConnected && connectedNetworkTab === tab.id && 'connected',
+                    ].filter(Boolean).join(' ') || undefined}
                     onClick={() => {
                       if (networkTab !== tab.id) void cancelPendingWork();
                       setNetworkTab(tab.id);
@@ -1463,7 +1481,7 @@ export const RemoteConnectDialog: React.FC<RemoteConnectDialogProps> = ({
               ))}
             </div>
           ) : (
-            <div className="bitfun-remote-connect__subtabs" role="tablist" aria-label={t('remoteConnect.groupBot')}>
+            <div className="bitfun-remote-connect__subtabs" data-bf-component="remote-connect-dialog" data-bf-part="subtabs" data-bf-group="bot" role="tablist" aria-label={t('remoteConnect.groupBot')}>
               {BOT_TABS.map((tab, i) => (
                 <React.Fragment key={tab.id}>
                   {i > 0 && <span className="bitfun-remote-connect__subtab-divider" />}
@@ -1476,6 +1494,12 @@ export const RemoteConnectDialog: React.FC<RemoteConnectDialogProps> = ({
                     tabIndex={botTab === tab.id ? 0 : -1}
                     onKeyDown={handleTabArrowKey}
                     className={`bitfun-remote-connect__subtab${botTab === tab.id ? ' is-active' : ''}${isBotConnected && connectedBotTab === tab.id ? ' is-connected' : ''}`}
+                    data-bf-component="remote-connect-dialog"
+                    data-bf-part="subtab"
+                    data-bf-state={[
+                      botTab === tab.id && 'active',
+                      isBotConnected && connectedBotTab === tab.id && 'connected',
+                    ].filter(Boolean).join(' ') || undefined}
                     onClick={() => {
                       if (botTab !== tab.id) void cancelPendingWork();
                       setBotTab(tab.id);
@@ -1497,6 +1521,9 @@ export const RemoteConnectDialog: React.FC<RemoteConnectDialogProps> = ({
           {activeGroup === 'account' ? (
             <div
               id="remote-connect-panel-account"
+              data-bf-component="remote-connect-dialog"
+              data-bf-part="panel"
+              data-bf-group="account"
               role="tabpanel"
               aria-labelledby="remote-connect-group-account"
             >
@@ -1505,6 +1532,9 @@ export const RemoteConnectDialog: React.FC<RemoteConnectDialogProps> = ({
           ) : activeGroup === 'network' ? (
             <div
               id="remote-connect-panel-network"
+              data-bf-component="remote-connect-dialog"
+              data-bf-part="panel"
+              data-bf-group="network"
               role="tabpanel"
               aria-labelledby="remote-connect-group-network"
             >
@@ -1519,6 +1549,9 @@ export const RemoteConnectDialog: React.FC<RemoteConnectDialogProps> = ({
           ) : (
             <div
               id="remote-connect-panel-bot"
+              data-bf-component="remote-connect-dialog"
+              data-bf-part="panel"
+              data-bf-group="bot"
               role="tabpanel"
               aria-labelledby="remote-connect-group-bot"
             >
