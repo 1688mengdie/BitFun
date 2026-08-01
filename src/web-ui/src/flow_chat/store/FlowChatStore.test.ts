@@ -4005,6 +4005,19 @@ describe('FlowChatStore historical session hydration state', () => {
       totalTurnCount: 15,
     });
     expect(apiMocks.restoreSessionView).toHaveBeenCalledTimes(1);
+
+    flowChatStore.restoreSessionTailPresentation('history-1');
+    expect(flowChatStore.getSessionHistoryViewState('history-1')?.activeRange).toBeNull();
+
+    const reactivated = presentation
+      ? flowChatStore.reactivateSessionHistoryWindow('history-1', presentation.range)
+      : null;
+    expect(reactivated?.range).toEqual(presentation?.range);
+    expect(reactivated?.turns).toHaveLength(15);
+    expect(flowChatStore.getSessionHistoryViewState('history-1')?.activeRange).toEqual(
+      presentation?.range,
+    );
+    expect(apiMocks.loadSessionTurnWindow).toHaveBeenCalledTimes(1);
   });
 
   it('caches an older response without letting it remain the current navigation intent', async () => {

@@ -130,6 +130,19 @@ interface FlowChatHistoryPresentationState extends SessionHistoryPresentation {
   revision: number;
 }
 
+type FlowChatViewportIntent =
+  | {
+      kind: 'live-tail';
+      sessionId: string;
+    }
+  | {
+      kind: 'turn';
+      sessionId: string;
+      ordinal: number;
+      turnId: string | null;
+      source: 'canonical-tail' | 'history-range';
+    };
+
 interface QueuedTurnNavigation {
   ordinal: number;
   turnId: string | null;
@@ -284,24 +297,60 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
   const canonicalVirtualItems = useVirtualItems();
   const activeSession = useActiveSession();
   const [historyPresentation, setHistoryPresentation] = useState<FlowChatHistoryPresentationState | null>(null);
+  const [viewportIntent, setViewportIntent] = useState<FlowChatViewportIntent | null>(null);
   const [historyBoundaryState, setHistoryBoundaryState] = useState<FlowChatHistoryBoundaryState>(
     IDLE_HISTORY_BOUNDARY_STATE,
   );
   const historyPresentationRef = useRef<FlowChatHistoryPresentationState | null>(null);
+  const viewportIntentRef = useRef<FlowChatViewportIntent | null>(null);
+  const updateViewportIntent = useCallback((next: FlowChatViewportIntent | null) => {
+    viewportIntentRef.current = next;
+    setViewportIntent(next);
+  }, []);
   const historyBoundaryRequestsRef = useRef<Record<SessionHistoryWindowDirection, Promise<boolean> | null>>({
     before: null,
     after: null,
   });
   const historyPresentationOwnerGenerationRef = useRef(0);
+  const activeHistoryPresentation = historyPresentation?.sessionId === activeSession?.sessionId
+    ? historyPresentation
+    : null;
+  const activeViewportIntent = viewportIntent?.sessionId === activeSession?.sessionId
+    ? viewportIntent
+    : null;
+  const isShowingHistoryPresentation = Boolean(
+    activeHistoryPresentation
+    && activeViewportIntent?.kind === 'turn'
+    && activeViewportIntent.source === 'history-range'
+  );
+  const historyPresentationTurns = useMemo(() => {
+    if (!activeSession || !activeHistoryPresentation) {
+      return [];
+    }
+
+    const canonicalTurnById = new Map(
+      activeSession.dialogTurns.map(turn => [turn.id, turn]),
+    );
+    let changed = false;
+    const turns = activeHistoryPresentation.turns.map(turn => {
+      const canonicalTurn = canonicalTurnById.get(turn.id);
+      if (!canonicalTurn || canonicalTurn === turn) {
+        return turn;
+      }
+      changed = true;
+      return canonicalTurn;
+    });
+    return changed ? turns : activeHistoryPresentation.turns;
+  }, [activeHistoryPresentation, activeSession]);
   const virtualItems = useMemo(() => {
-    if (!activeSession || historyPresentation?.sessionId !== activeSession.sessionId) {
+    if (!activeSession || !isShowingHistoryPresentation) {
       return canonicalVirtualItems;
     }
     return sessionToVirtualItems({
       ...activeSession,
-      dialogTurns: historyPresentation.turns,
+      dialogTurns: historyPresentationTurns,
     });
-  }, [activeSession, canonicalVirtualItems, historyPresentation]);
+  }, [activeSession, canonicalVirtualItems, historyPresentationTurns, isShowingHistoryPresentation]);
   const {
     requests: permissionRequests,
     activeBatch: activePermissionBatch,
@@ -336,7 +385,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
   const visibleTurnInfoRef = useRef<VisibleTurnInfo | null>(visibleTurnInfo);
   const turnSummariesRef = useRef<FlowChatTurnSummary[]>([]);
   const turnRailTurnIdsRef = useRef<Set<string>>(new Set());
-  const requestTurnPinRef = useRef<((turnId: string, behavior?: ScrollBehavior) => FlowChatTurnPinRequestStatus) | null>(null);
+  const requestTurnNavigationPinRef = useRef<((turnId: string) => FlowChatTurnPinRequestStatus) | null>(null);
   const searchFullHistorySessionIdRef = useRef<string | null>(null);
   const virtualListRef = useRef<VirtualMessageListRef>(null);
   const chatScopeRef = useRef<HTMLDivElement>(null);
@@ -407,23 +456,32 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
   useFlowChatSync();
   useFlowChatCopyDialog();
 
-  const clearHistoryPresentationForSession = useCallback((sessionId: string) => {
+  const switchToLiveTailForSession = useCallback((
+    sessionId: string,
+    options?: { discardRecentHistory?: boolean },
+  ) => {
     historyPresentationOwnerGenerationRef.current += 1;
     flowChatStore.restoreSessionTailPresentation(sessionId);
-    historyPresentationRef.current = null;
-    setHistoryPresentation(null);
+    if (options?.discardRecentHistory) {
+      historyPresentationRef.current = null;
+      setHistoryPresentation(null);
+    }
+    updateViewportIntent({ kind: 'live-tail', sessionId });
     setHistoryBoundaryState(IDLE_HISTORY_BOUNDARY_STATE);
     setQueuedTurnNavigation(null);
-  }, []);
+  }, [updateViewportIntent]);
 
   const handleBeforeTurnPinRequest = useCallback((request: FlowChatPinTurnToTopRequest) => {
+    const currentViewportIntent = viewportIntentRef.current;
     if (
       request.source === 'send-message'
-      && historyPresentationRef.current?.sessionId === request.sessionId
+      && currentViewportIntent?.sessionId === request.sessionId
+      && currentViewportIntent.kind === 'turn'
+      && currentViewportIntent.source === 'history-range'
     ) {
-      clearHistoryPresentationForSession(request.sessionId);
+      switchToLiveTailForSession(request.sessionId);
     }
-  }, [clearHistoryPresentationForSession]);
+  }, [switchToLiveTailForSession]);
 
   useEffect(() => {
     historyPresentationRef.current = historyPresentation;
@@ -434,12 +492,13 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     historyPresentationOwnerGenerationRef.current += 1;
     historyPresentationRef.current = null;
     setHistoryPresentation(null);
+    updateViewportIntent(sessionId ? { kind: 'live-tail', sessionId } : null);
     setHistoryBoundaryState(IDLE_HISTORY_BOUNDARY_STATE);
     historyBoundaryRequestsRef.current = { before: null, after: null };
     if (sessionId) {
       flowChatStore.restoreSessionTailPresentation(sessionId);
     }
-  }, [activeSession?.sessionId]);
+  }, [activeSession?.sessionId, updateViewportIntent]);
 
   useEffect(() => {
     const handleHistorySessionOpenIntent = (event: Event) => {
@@ -627,12 +686,11 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     }
     return result;
   }, [activeSession?.dialogTurns]);
-  const activeHistoryPresentation = historyPresentation?.sessionId === activeSession?.sessionId
-    ? historyPresentation
-    : null;
   const renderedTurns = useMemo(
-    () => activeHistoryPresentation?.turns ?? activeSession?.dialogTurns ?? [],
-    [activeHistoryPresentation, activeSession?.dialogTurns],
+    () => isShowingHistoryPresentation
+      ? historyPresentationTurns
+      : activeSession?.dialogTurns ?? [],
+    [activeSession?.dialogTurns, historyPresentationTurns, isShowingHistoryPresentation],
   );
   const renderedTurnSummaries = useMemo<FlowChatTurnSummary[]>(() => {
     const result: FlowChatTurnSummary[] = [];
@@ -659,7 +717,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     ? Math.max(0, sessionTotalTurnCount - turnSummaries.length)
     : 0;
   const absoluteRenderedTurnSummaries = useMemo<FlowChatTurnSummary[]>(() => {
-    if (activeHistoryPresentation) {
+    if (isShowingHistoryPresentation && activeHistoryPresentation) {
       return renderedTurnSummaries.map((turn, index) => ({
         ...turn,
         turnIndex: activeHistoryPresentation.range.startOrdinal + index + 1,
@@ -678,6 +736,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     absoluteTurnIndexOffset,
     activeSession?.isPartial,
     activeHistoryPresentation,
+    isShowingHistoryPresentation,
     renderedTurnSummaries,
   ]);
   const absoluteRenderedTurnSummaryById = useMemo(() => {
@@ -928,21 +987,15 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     return effectiveVisibleTurnInfo?.userMessage ?? '';
   }, [effectiveVisibleTurnInfo?.turnId, effectiveVisibleTurnInfo?.userMessage, renderedTurns, resolveLocalCommandHeaderTitle]);
 
-  const requestTurnPin = useCallback((turnId: string, behavior: ScrollBehavior = 'smooth'): FlowChatTurnPinRequestStatus => {
-    const isLatestTurn = turnSummaries[turnSummaries.length - 1]?.turnId === turnId;
-    const targetTurn = findDialogTurn(activeSession?.dialogTurns, turnId);
-    const pinMode = isLatestTurn && shouldUseStickyLatestPin(targetTurn)
-      ? 'sticky-latest'
-      : 'transient';
-
+  const requestTurnNavigationPin = useCallback((turnId: string): FlowChatTurnPinRequestStatus => {
     return virtualListRef.current?.pinTurnToTopWithStatus(turnId, {
-      behavior,
-      pinMode,
+      behavior: 'auto',
+      pinMode: 'transient',
     }) ?? 'rejected';
-  }, [activeSession?.dialogTurns, turnSummaries]);
+  }, []);
   useEffect(() => {
-    requestTurnPinRef.current = requestTurnPin;
-  }, [requestTurnPin]);
+    requestTurnNavigationPinRef.current = requestTurnNavigationPin;
+  }, [requestTurnNavigationPin]);
   const handleVirtualListUserScrollIntent = useCallback(() => {
     setQueuedTurnNavigation(null);
   }, []);
@@ -986,7 +1039,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
         return;
       }
 
-      const pinStatus = requestTurnPinRef.current?.(queuedTurnId, 'auto') ?? 'rejected';
+      const pinStatus = requestTurnNavigationPinRef.current?.(queuedTurnId) ?? 'rejected';
       if (pinStatus === 'settled' || pinStatus === 'pending') {
         setQueuedTurnNavigation(null);
         return;
@@ -1033,7 +1086,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
       : null;
     if (
       !sessionId
-      || historyPresentationRef.current?.sessionId === sessionId
+      || isShowingHistoryPresentation
       || !latestTurnId
       || autoPinnedTurnKeyRef.current === latestTurnKey
     ) {
@@ -1180,6 +1233,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     activeSession?.remoteConnectionId,
     activeSession?.remoteSshHost,
     hasPendingHistoryCompletion,
+    isShowingHistoryPresentation,
     latestTurnId,
     latestTurnUsesFollowOutput,
     latestTurnUsesStickyPin,
@@ -1305,7 +1359,13 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
   const applyHistoryPresentation = useCallback((
     sessionId: string,
     presentation: SessionHistoryPresentation,
-    options?: { completedBoundary?: SessionHistoryWindowDirection },
+    options?: {
+      completedBoundary?: SessionHistoryWindowDirection;
+      viewportTarget?: {
+        ordinal: number;
+        turnId: string | null;
+      };
+    },
   ) => {
     historyPresentationOwnerGenerationRef.current += 1;
     setHistoryPresentation(previous => {
@@ -1317,6 +1377,15 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
       historyPresentationRef.current = next;
       return next;
     });
+    if (options?.viewportTarget) {
+      updateViewportIntent({
+        kind: 'turn',
+        sessionId,
+        ordinal: options.viewportTarget.ordinal,
+        turnId: options.viewportTarget.turnId,
+        source: 'history-range',
+      });
+    }
     const completedBoundary = options?.completedBoundary;
     if (completedBoundary) {
       setHistoryBoundaryState(previous => ({
@@ -1326,15 +1395,20 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     } else {
       setHistoryBoundaryState(IDLE_HISTORY_BOUNDARY_STATE);
     }
-  }, []);
+  }, [updateViewportIntent]);
 
-  const restoreTailPresentation = useCallback((options?: { followLatest?: boolean }) => {
+  const restoreTailPresentation = useCallback((options?: {
+    followLatest?: boolean;
+    discardRecentHistory?: boolean;
+  }) => {
     const sessionId = activeSession?.sessionId;
     if (!sessionId) {
       return false;
     }
 
-    clearHistoryPresentationForSession(sessionId);
+    switchToLiveTailForSession(sessionId, {
+      discardRecentHistory: options?.discardRecentHistory,
+    });
 
     if (options?.followLatest) {
       requestAnimationFrame(() => {
@@ -1344,7 +1418,11 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
       });
     }
     return true;
-  }, [activeSession?.sessionId, clearHistoryPresentationForSession]);
+  }, [activeSession?.sessionId, switchToLiveTailForSession]);
+
+  const jumpToLiveTail = useCallback(() => {
+    return restoreTailPresentation({ followLatest: true });
+  }, [restoreTailPresentation]);
 
   const handleSearchChange = useCallback((query: string) => {
     setSearchQuery(query);
@@ -1361,29 +1439,19 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     searchFullHistorySessionIdRef.current = sessionId;
     void flowChatStore.ensureSessionFullHistory(sessionId, 'flowchat-search').then(ready => {
       if (ready && activeSessionIdRef.current === sessionId) {
-        restoreTailPresentation();
+        restoreTailPresentation({ discardRecentHistory: true });
       } else if (activeSessionIdRef.current === sessionId) {
         searchFullHistorySessionIdRef.current = null;
       }
     });
   }, [activeSession?.isPartial, activeSession?.sessionId, restoreTailPresentation, setSearchQuery]);
 
-  const handleJumpToTurn = useCallback(async (target: FlowChatTurnRailItem | string) => {
+  const navigateToTurn = useCallback(async (target: FlowChatTurnRailItem | string) => {
     const targetItem = typeof target === 'string'
       ? turnRailItems.find(turn => turn.turnId === target)
       : target;
     const sessionId = activeSession?.sessionId;
     if (!targetItem || !sessionId) return false;
-
-    const canonicalLatestTurnId = turnSummaries[turnSummaries.length - 1]?.turnId ?? null;
-    const isLatestOrdinal = targetItem.ordinal === Math.max(0, sessionTotalTurnCount - 1);
-    if (
-      isLatestOrdinal
-      && canonicalLatestTurnId
-      && historyPresentationRef.current?.sessionId === sessionId
-    ) {
-      return restoreTailPresentation({ followLatest: true });
-    }
 
     const renderedTargetId = targetItem.turnId;
     const targetIsRendered = Boolean(
@@ -1391,7 +1459,14 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
       && renderedTurnSummaries.some(turn => turn.turnId === renderedTargetId),
     );
     if (renderedTargetId && targetIsRendered) {
-      const pinStatus = requestTurnPin(renderedTargetId);
+      updateViewportIntent({
+        kind: 'turn',
+        sessionId,
+        ordinal: targetItem.ordinal,
+        turnId: renderedTargetId,
+        source: isShowingHistoryPresentation ? 'history-range' : 'canonical-tail',
+      });
+      const pinStatus = requestTurnNavigationPin(renderedTargetId);
       if (pinStatus === 'settled' || pinStatus === 'pending') {
         setQueuedTurnNavigation(null);
         return true;
@@ -1401,6 +1476,45 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
         turnId: renderedTargetId,
       });
       return true;
+    }
+
+    const recentHistoryPresentation = historyPresentationRef.current?.sessionId === sessionId
+      ? historyPresentationRef.current
+      : null;
+    const recentHistoryTurn = recentHistoryPresentation
+      ? recentHistoryPresentation.turns[
+          targetItem.ordinal - recentHistoryPresentation.range.startOrdinal
+        ]
+      : undefined;
+    const targetIsInRecentHistory = Boolean(
+      recentHistoryPresentation
+      && targetItem.ordinal >= recentHistoryPresentation.range.startOrdinal
+      && targetItem.ordinal < recentHistoryPresentation.range.endOrdinalExclusive
+      && recentHistoryTurn
+      && (!targetItem.turnId || recentHistoryTurn.id === targetItem.turnId)
+    );
+    if (recentHistoryPresentation && targetIsInRecentHistory && recentHistoryTurn) {
+      const reactivatedPresentation = flowChatStore.reactivateSessionHistoryWindow(
+        sessionId,
+        recentHistoryPresentation.range,
+      );
+      if (reactivatedPresentation) {
+        const preparedPin = virtualListRef.current?.prepareTurnPinToTop(recentHistoryTurn.id, {
+          behavior: 'auto',
+          pinMode: 'transient',
+        }) ?? 'rejected';
+        if (preparedPin !== 'rejected') {
+          applyHistoryPresentation(sessionId, reactivatedPresentation, {
+            viewportTarget: {
+              ordinal: targetItem.ordinal,
+              turnId: recentHistoryTurn.id,
+            },
+          });
+          setQueuedTurnNavigation(null);
+          return true;
+        }
+        flowChatStore.restoreSessionTailPresentation(sessionId);
+      }
     }
 
     let result;
@@ -1441,7 +1555,12 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
         return false;
       }
 
-      applyHistoryPresentation(sessionId, presentation);
+      applyHistoryPresentation(sessionId, presentation, {
+        viewportTarget: {
+          ordinal: result.targetOrdinal,
+          turnId: targetTurnId,
+        },
+      });
       setQueuedTurnNavigation(null);
       return true;
     }
@@ -1452,7 +1571,14 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
         'turn-rail-navigation',
       );
       if (historyReady && activeSessionIdRef.current === sessionId) {
-        restoreTailPresentation();
+        restoreTailPresentation({ discardRecentHistory: true });
+        updateViewportIntent({
+          kind: 'turn',
+          sessionId,
+          ordinal: targetItem.ordinal,
+          turnId: targetItem.turnId,
+          source: 'canonical-tail',
+        });
         setQueuedTurnNavigation({
           ordinal: targetItem.ordinal,
           turnId: targetItem.turnId,
@@ -1465,12 +1591,12 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
   }, [
     activeSession?.sessionId,
     applyHistoryPresentation,
+    isShowingHistoryPresentation,
     renderedTurnSummaries,
-    requestTurnPin,
+    requestTurnNavigationPin,
     restoreTailPresentation,
-    sessionTotalTurnCount,
     turnRailItems,
-    turnSummaries,
+    updateViewportIntent,
   ]);
 
   const handleNavigateToFocusTurn = useCallback(async (request: FlowChatFocusItemRequest) => {
@@ -1484,7 +1610,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
       ? turnRailItems.find(turn => turn.turnId === requestedTurnId)
       : undefined;
     if (targetById) {
-      return handleJumpToTurn(targetById);
+      return navigateToTurn(targetById);
     }
 
     if (requestedTurnId) {
@@ -1503,7 +1629,14 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
         return false;
       }
 
-      restoreTailPresentation();
+      restoreTailPresentation({ discardRecentHistory: true });
+      updateViewportIntent({
+        kind: 'turn',
+        sessionId,
+        ordinal: hydratedTurnIndex,
+        turnId: requestedTurnId,
+        source: 'canonical-tail',
+      });
       setQueuedTurnNavigation({
         ordinal: hydratedTurnIndex,
         turnId: requestedTurnId,
@@ -1518,12 +1651,13 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
       return false;
     }
     const targetByOrdinal = turnRailItems.find(turn => turn.ordinal === requestedOrdinal);
-    return targetByOrdinal ? handleJumpToTurn(targetByOrdinal) : false;
+    return targetByOrdinal ? navigateToTurn(targetByOrdinal) : false;
   }, [
     activeSession?.sessionId,
-    handleJumpToTurn,
+    navigateToTurn,
     restoreTailPresentation,
     turnRailItems,
+    updateViewportIntent,
   ]);
 
   useFlowChatNavigation({
@@ -1555,7 +1689,11 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     }
 
     const request = (async () => {
-      const presentation = historyPresentationRef.current;
+      const currentViewportIntent = viewportIntentRef.current;
+      const presentation = currentViewportIntent?.kind === 'turn'
+        && currentViewportIntent.source === 'history-range'
+        ? historyPresentationRef.current
+        : null;
       const sessionId = activeSessionIdRef.current;
       const presentationOwnerGeneration = historyPresentationOwnerGenerationRef.current;
       if (!sessionId || (presentation && presentation.sessionId !== sessionId)) {
@@ -1650,7 +1788,17 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
           setHistoryBoundaryState(previous => ({ ...previous, [direction]: 'error' }));
           return false;
         }
-        applyHistoryPresentation(sessionId, nextPresentation, { completedBoundary: direction });
+        applyHistoryPresentation(sessionId, nextPresentation, {
+          completedBoundary: direction,
+          ...(!presentation ? {
+            viewportTarget: {
+              ordinal: targetOrdinal,
+              turnId: nextPresentation.turns[
+                targetOrdinal - nextPresentation.range.startOrdinal
+              ]?.id ?? null,
+            },
+          } : {}),
+        });
         return true;
       } catch (error) {
         if (viewportPreparationStarted) {
@@ -2069,7 +2217,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
           sessionId={activeSession?.sessionId}
           onJumpToCurrentTurn={() => {
             const turnId = effectiveVisibleTurnInfo?.turnId;
-            if (turnId) handleJumpToTurn(turnId);
+            if (turnId) navigateToTurn(turnId);
           }}
           searchQuery={searchQuery}
           onSearchChange={handleSearchChange}
@@ -2123,7 +2271,8 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
           data-show-history-open-intent-overlay={showHistoryOpenIntentOverlay ? 'true' : 'false'}
           data-has-pending-history-completion={hasPendingHistoryCompletion ? 'true' : 'false'}
           data-has-deferred-history-projection={hasDeferredHistoryProjection ? 'true' : 'false'}
-          data-presentation-mode={historyPresentation ? 'history-window' : 'tail'}
+          data-presentation-mode={isShowingHistoryPresentation ? 'history-window' : 'tail'}
+          data-viewport-intent={activeViewportIntent?.kind ?? 'live-tail'}
           data-latest-turn-id={latestTurnId ?? ''}
           data-history-initial-content-ready={
             historyInitialContentKey === null || historyInitialContentReadyKey === historyInitialContentKey
@@ -2162,14 +2311,12 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
                 <VirtualMessageList
                   ref={virtualListRef}
                   items={virtualItems}
-                  presentationMode={historyPresentation ? 'history-window' : 'tail'}
-                  historyWindow={historyPresentation?.range ?? null}
-                  presentationRevision={historyPresentation?.revision ?? 0}
+                  presentationMode={isShowingHistoryPresentation ? 'history-window' : 'tail'}
+                  historyWindow={isShowingHistoryPresentation ? activeHistoryPresentation?.range ?? null : null}
+                  presentationRevision={isShowingHistoryPresentation ? activeHistoryPresentation?.revision ?? 0 : 0}
                   historyBoundaryState={historyBoundaryState}
                   onHistoryWindowBoundaryIntent={handleHistoryWindowBoundaryIntent}
-                  onRequestJumpToLatest={() => {
-                    restoreTailPresentation({ followLatest: true });
-                  }}
+                  onRequestJumpToLatest={jumpToLiveTail}
                   onUserScrollIntent={handleVirtualListUserScrollIntent}
                 />
               </>
@@ -2179,7 +2326,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
                 turns={turnRailItems}
                 currentTurnId={effectiveVisibleTurnInfo?.turnId ?? null}
                 visibleTurnIds={effectiveVisibleTurnInfo?.visibleTurnIds ?? []}
-                onNavigate={handleJumpToTurn}
+                onNavigate={navigateToTurn}
               />
             ) : null}
             {showHistoryLoadingLayer && (

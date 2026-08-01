@@ -1017,10 +1017,230 @@ describe('ModernFlowChatContainer historical empty state', () => {
     clickTurnRailItem(container, 'turn-99');
 
     expect(virtualListMock.pinTurnToTopWithStatus).toHaveBeenLastCalledWith('turn-99', {
-      behavior: 'smooth',
+      behavior: 'auto',
       pinMode: 'transient',
     });
 
+  });
+
+  it('treats the latest streaming Turn marker as transient immediate navigation', async () => {
+    const streamingTurn = {
+      ...createTurn('turn-2', 'Streaming prompt', 'processing'),
+      modelRounds: [{
+        id: 'round-2',
+        index: 0,
+        items: [{
+          id: 'text-2',
+          type: 'text' as const,
+          content: 'Streaming output',
+          isStreaming: true,
+          timestamp: 1,
+          status: 'streaming' as const,
+        }],
+        isStreaming: true,
+        isComplete: false,
+        status: 'streaming' as const,
+        startTime: 1,
+      }],
+    } as Session['dialogTurns'][number];
+    stateMocks.activeSession = createSession({
+      isHistorical: false,
+      historyState: 'ready',
+      dialogTurns: [
+        createTurn('turn-1', 'Older prompt'),
+        streamingTurn,
+      ],
+    } as Partial<Session>);
+    stateMocks.virtualItems = [
+      { type: 'user-message', turnId: 'turn-1', data: { id: 'user-turn-1', content: 'Older prompt' } },
+      { type: 'user-message', turnId: 'turn-2', data: { id: 'user-turn-2', content: 'Streaming prompt' } },
+    ];
+    stateMocks.visibleTurnInfo = {
+      turnId: 'turn-1',
+      turnIndex: 1,
+      totalTurns: 2,
+      userMessage: 'Older prompt',
+    };
+
+    await act(async () => {
+      root.render(<ModernFlowChatContainer />);
+    });
+
+    const restoreTailSpy = vi.spyOn(flowChatStore, 'restoreSessionTailPresentation');
+    const latestEndCallCount = virtualListMock.scrollToLatestEndPosition.mock.calls.length;
+    clickTurnRailItem(container, 'turn-2');
+
+    expect(virtualListMock.pinTurnToTopWithStatus).toHaveBeenLastCalledWith('turn-2', {
+      behavior: 'auto',
+      pinMode: 'transient',
+    });
+    expect(restoreTailSpy).not.toHaveBeenCalled();
+    expect(virtualListMock.scrollToLatestEndPosition.mock.calls.length).toBe(latestEndCallCount);
+
+    restoreTailSpy.mockRestore();
+  });
+
+  it('keeps an active history presentation when its latest Turn marker is selected', async () => {
+    const presentationTurns = Array.from(
+      { length: 8 },
+      (_, index) => createTurn(`turn-${index + 3}`, `Prompt ${index + 3}`),
+    );
+    const catalog = {
+      schemaVersion: 1,
+      sessionId: 'session-1',
+      revision: 'catalog-v1',
+      totalTurnCount: 10,
+      complete: true,
+      entries: Array.from({ length: 10 }, (_, ordinal) => ({
+        ordinal,
+        storageTurnIndex: ordinal,
+        turnId: `turn-${ordinal + 1}`,
+        preview: `Prompt ${ordinal + 1}`,
+        previewTruncated: false,
+      })),
+    };
+    const loadSpy = vi.spyOn(flowChatStore, 'loadSessionTurnWindow').mockResolvedValue({
+      status: 'ready',
+      sessionId: 'session-1',
+      targetOrdinal: 4,
+      targetTurnId: 'turn-5',
+      navigationGeneration: 7,
+      isCurrent: true,
+      cacheHit: true,
+      catalog,
+      range: {
+        startOrdinal: 2,
+        endOrdinalExclusive: 10,
+        turns: presentationTurns,
+        lastAccessedAt: 1,
+        source: 'target',
+      },
+    });
+    const activateSpy = vi.spyOn(flowChatStore, 'activateSessionHistoryWindow').mockReturnValue({
+      range: {
+        startOrdinal: 2,
+        endOrdinalExclusive: 10,
+        targetTurnId: 'turn-5',
+        mode: 'history-window',
+      },
+      turns: presentationTurns,
+    });
+    stateMocks.activeSession = createSession({
+      historyState: 'ready',
+      isPartial: true,
+      totalTurnCount: 10,
+      turnCatalog: catalog,
+      dialogTurns: [
+        createTurn('turn-9', 'Recent prompt'),
+        createTurn('turn-10', 'Latest prompt'),
+      ],
+    } as Partial<Session>);
+    stateMocks.virtualItems = stateMocks.activeSession.dialogTurns.map(turn => ({
+      type: 'user-message',
+      turnId: turn.id,
+      data: turn.userMessage,
+    }));
+
+    await act(async () => {
+      root.render(<ModernFlowChatContainer />);
+    });
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('[data-turn-id="turn-5"]')?.click();
+      await Promise.resolve();
+    });
+    expect(virtualListPropsMock.latest).toMatchObject({ presentationMode: 'history-window' });
+
+    const restoreTailSpy = vi.spyOn(flowChatStore, 'restoreSessionTailPresentation');
+    const latestEndCallCount = virtualListMock.scrollToLatestEndPosition.mock.calls.length;
+    scrollTurnRailToOrdinal(container, 9);
+    clickTurnRailItem(container, 'turn-10');
+
+    expect(virtualListMock.pinTurnToTopWithStatus).toHaveBeenLastCalledWith('turn-10', {
+      behavior: 'auto',
+      pinMode: 'transient',
+    });
+    expect(restoreTailSpy).not.toHaveBeenCalled();
+    expect(virtualListPropsMock.latest).toMatchObject({ presentationMode: 'history-window' });
+    expect(virtualListMock.scrollToLatestEndPosition.mock.calls.length).toBe(latestEndCallCount);
+
+    stateMocks.activeSession = {
+      ...stateMocks.activeSession,
+      dialogTurns: [
+        createTurn('turn-9', 'Recent prompt'),
+        createTurn('turn-10', 'Latest live update', 'processing'),
+      ],
+    };
+    stateMocks.virtualItems = stateMocks.activeSession.dialogTurns.map(turn => ({
+      type: 'user-message',
+      turnId: turn.id,
+      data: turn.userMessage,
+    }));
+    await act(async () => {
+      root.render(<ModernFlowChatContainer />);
+    });
+    const liveLatestItem = (virtualListPropsMock.latest?.items as Array<{
+      type: string;
+      turnId?: string;
+      data?: { content?: string };
+    }>).find(item => item.type === 'user-message' && item.turnId === 'turn-10');
+    expect(liveLatestItem?.data?.content).toBe('Latest live update');
+    expect(virtualListPropsMock.latest).toMatchObject({ presentationMode: 'history-window' });
+
+    await act(async () => {
+      (virtualListPropsMock.latest?.onRequestJumpToLatest as (() => void) | undefined)?.();
+    });
+    flushAnimationFrame();
+    expect(restoreTailSpy).toHaveBeenCalledOnce();
+    expect(restoreTailSpy).toHaveBeenLastCalledWith('session-1');
+    expect(virtualListPropsMock.latest).toMatchObject({ presentationMode: 'tail' });
+    expect(virtualListMock.scrollToLatestEndPosition.mock.calls.length).toBe(latestEndCallCount + 1);
+
+    const tailAnchorCallCount = virtualListMock.scrollToTurnEndAndClearPin.mock.calls.length;
+    stateMocks.activeSession = {
+      ...stateMocks.activeSession,
+      totalTurnCount: 11,
+      dialogTurns: [
+        ...stateMocks.activeSession.dialogTurns,
+        createTurn('turn-11', 'New completed prompt'),
+      ],
+    };
+    stateMocks.virtualItems = stateMocks.activeSession.dialogTurns.map(turn => ({
+      type: 'user-message',
+      turnId: turn.id,
+      data: turn.userMessage,
+    }));
+    await act(async () => {
+      root.render(<ModernFlowChatContainer />);
+    });
+    flushAnimationFrame();
+    expect(virtualListPropsMock.latest).toMatchObject({ presentationMode: 'tail' });
+    expect(virtualListMock.scrollToTurnEndAndClearPin.mock.calls.length).toBe(tailAnchorCallCount + 1);
+    expect(virtualListMock.scrollToTurnEndAndClearPin).toHaveBeenLastCalledWith('turn-11');
+
+    const reactivateSpy = vi.spyOn(flowChatStore, 'reactivateSessionHistoryWindow').mockReturnValue({
+      range: {
+        startOrdinal: 2,
+        endOrdinalExclusive: 10,
+        targetTurnId: 'turn-5',
+        mode: 'history-window',
+      },
+      turns: presentationTurns,
+    });
+    scrollTurnRailToOrdinal(container, 4);
+    clickTurnRailItem(container, 'turn-5');
+    expect(reactivateSpy).toHaveBeenCalledWith('session-1', {
+      startOrdinal: 2,
+      endOrdinalExclusive: 10,
+      targetTurnId: 'turn-5',
+      mode: 'history-window',
+    });
+    expect(loadSpy).toHaveBeenCalledTimes(1);
+    expect(virtualListPropsMock.latest).toMatchObject({ presentationMode: 'history-window' });
+
+    reactivateSpy.mockRestore();
+    restoreTailSpy.mockRestore();
+    loadSpy.mockRestore();
+    activateSpy.mockRestore();
   });
 
   it('retries turn-rail selection without advancing visible-turn state until the virtual list accepts it', async () => {
@@ -1055,7 +1275,7 @@ describe('ModernFlowChatContainer historical empty state', () => {
 
     clickTurnRailItem(container, 'turn-1');
     expect(virtualListMock.pinTurnToTopWithStatus).toHaveBeenLastCalledWith('turn-1', {
-      behavior: 'smooth',
+      behavior: 'auto',
       pinMode: 'transient',
     });
     expect(headerPropsMock.latest).toMatchObject({
@@ -1126,7 +1346,7 @@ describe('ModernFlowChatContainer historical empty state', () => {
 
     clickTurnRailItem(container, 'turn-1');
     expect(virtualListMock.pinTurnToTopWithStatus).toHaveBeenLastCalledWith('turn-1', {
-      behavior: 'smooth',
+      behavior: 'auto',
       pinMode: 'transient',
     });
     expect(headerPropsMock.latest).toMatchObject({
@@ -1185,7 +1405,7 @@ describe('ModernFlowChatContainer historical empty state', () => {
 
     clickTurnRailItem(container, 'turn-1');
     expect(virtualListMock.pinTurnToTopWithStatus).toHaveBeenLastCalledWith('turn-1', {
-      behavior: 'smooth',
+      behavior: 'auto',
       pinMode: 'transient',
     });
     const pendingCallCount = virtualListMock.pinTurnToTopWithStatus.mock.calls.length;
@@ -1265,7 +1485,7 @@ describe('ModernFlowChatContainer historical empty state', () => {
     clickTurnRailItem(container, 'turn-7');
     expect(virtualListMock.pinTurnToTopWithStatus.mock.calls.length).toBe(beforeSelectionCallCount + 1);
     expect(virtualListMock.pinTurnToTopWithStatus).toHaveBeenLastCalledWith('turn-7', {
-      behavior: 'smooth',
+      behavior: 'auto',
       pinMode: 'transient',
     });
 
