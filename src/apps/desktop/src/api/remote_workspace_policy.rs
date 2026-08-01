@@ -915,6 +915,10 @@ pub const REMOTE_WORKSPACE_COMMAND_POLICIES: &[(&str, RemoteWorkspacePolicy)] = 
         "load_persisted_session_metadata",
         RemoteWorkspacePolicy::LegacyUnaudited,
     ),
+    (
+        "load_session_turn_window",
+        RemoteWorkspacePolicy::RemoteRouted,
+    ),
     ("load_session_turns", RemoteWorkspacePolicy::LegacyUnaudited),
     (
         "logout_subscription_account",

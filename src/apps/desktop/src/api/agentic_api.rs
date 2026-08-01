@@ -51,7 +51,7 @@ use bitfun_core::service::config::project_permission_store::{
 use bitfun_core::service::remote_ssh::workspace_state::resolve_workspace_session_identity;
 use bitfun_core::service::session::{
     DialogTurnData, SessionMemoryMode, SessionMetadata, SessionRelationship,
-    SessionRelationshipKind, SessionTurnCatalog,
+    SessionRelationshipKind, SessionTurnCatalog, SessionTurnWindowResponse,
 };
 use bitfun_core::service::workspace::WorkspaceKind;
 use bitfun_core::service::workspace::{WorkspaceActivityMode, WorkspaceCreateOptions};
@@ -61,9 +61,12 @@ use bitfun_core_types::{
     WorktreeError, WorktreeErrorCode,
 };
 use bitfun_product_domains::tool_permissions::PermissionRule;
+use bitfun_runtime_ports::SessionTurnWindowRequest;
 
 const SESSION_VIEW_TOOL_RESULT_TOTAL_CHAR_BUDGET: usize = 512 * 1024;
 const SESSION_VIEW_TOOL_RESULT_STRING_CHAR_LIMIT: usize = 16 * 1024;
+const SESSION_TURN_WINDOW_DEFAULT_BEFORE: usize = 4;
+const SESSION_TURN_WINDOW_DEFAULT_AFTER: usize = 12;
 const SESSION_VIEW_TRUNCATED_MARKER: &str = "\n... Output truncated for session preview";
 const SESSION_VIEW_OMITTED_MARKER: &str = "Output omitted from session preview";
 
@@ -778,6 +781,28 @@ pub struct RestoreSessionRequest {
     pub trace_id: Option<String>,
     #[serde(default)]
     pub tail_turn_count: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoadSessionTurnWindowRequest {
+    pub session_id: String,
+    pub workspace_path: String,
+    #[serde(default)]
+    pub include_internal: bool,
+    pub target_storage_turn_index: usize,
+    #[serde(default)]
+    pub expected_turn_id: Option<String>,
+    #[serde(default)]
+    pub expected_catalog_revision: Option<String>,
+    #[serde(default)]
+    pub before: Option<usize>,
+    #[serde(default)]
+    pub after: Option<usize>,
+    #[serde(default)]
+    pub remote_connection_id: Option<String>,
+    #[serde(default)]
+    pub remote_ssh_host: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2976,6 +3001,85 @@ pub async fn restore_session_view(
     }
     .await;
     startup_trace.record_tauri_command_elapsed("restore_session_view", None, started_at);
+    result
+}
+
+#[tauri::command]
+pub async fn load_session_turn_window(
+    runtime: State<'_, DesktopRuntimeContext>,
+    startup_trace: State<'_, DesktopStartupTrace>,
+    request: LoadSessionTurnWindowRequest,
+) -> Result<SessionTurnWindowResponse, String> {
+    let started_at = Instant::now();
+    let result = async {
+        debug!(
+            "load_session_turn_window request received: session_id={} target_storage_turn_index={} before={} after={}",
+            request.session_id,
+            request.target_storage_turn_index,
+            request.before.unwrap_or(SESSION_TURN_WINDOW_DEFAULT_BEFORE),
+            request.after.unwrap_or(SESSION_TURN_WINDOW_DEFAULT_AFTER)
+        );
+        let mut response = runtime
+            .session_application()
+            .load_session_turn_window(
+                desktop_session_scope(
+                    request.workspace_path.clone(),
+                    request.remote_connection_id.clone(),
+                    request.remote_ssh_host.clone(),
+                ),
+                SessionTurnWindowRequest {
+                    workspace_path: PathBuf::from(&request.workspace_path),
+                    session_id: request.session_id.clone(),
+                    include_internal: request.include_internal,
+                    target_storage_turn_index: request.target_storage_turn_index,
+                    expected_turn_id: request.expected_turn_id.clone(),
+                    expected_catalog_revision: request.expected_catalog_revision.clone(),
+                    before: request.before.unwrap_or(SESSION_TURN_WINDOW_DEFAULT_BEFORE),
+                    after: request.after.unwrap_or(SESSION_TURN_WINDOW_DEFAULT_AFTER),
+                },
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+
+        if let Some(turns) = response.ready_turns_mut() {
+            compact_tool_results_for_session_view(turns);
+        }
+        match &response {
+            SessionTurnWindowResponse::Ready {
+                total_turn_count,
+                start_ordinal,
+                end_ordinal_exclusive,
+                turns,
+                ..
+            } => debug!(
+                "load_session_turn_window completed: session_id={} status=ready target_storage_turn_index={} turn_count={} total_turn_count={} start_ordinal={} end_ordinal_exclusive={} duration_ms={}",
+                request.session_id,
+                request.target_storage_turn_index,
+                turns.len(),
+                total_turn_count,
+                start_ordinal,
+                end_ordinal_exclusive,
+                started_at.elapsed().as_millis()
+            ),
+            SessionTurnWindowResponse::Stale { catalog } => debug!(
+                "load_session_turn_window completed: session_id={} status=stale target_storage_turn_index={} total_turn_count={} duration_ms={}",
+                request.session_id,
+                request.target_storage_turn_index,
+                catalog.total_turn_count,
+                started_at.elapsed().as_millis()
+            ),
+            SessionTurnWindowResponse::NotFound { catalog } => debug!(
+                "load_session_turn_window completed: session_id={} status=not-found target_storage_turn_index={} total_turn_count={} duration_ms={}",
+                request.session_id,
+                request.target_storage_turn_index,
+                catalog.total_turn_count,
+                started_at.elapsed().as_millis()
+            ),
+        }
+        Ok(response)
+    }
+    .await;
+    startup_trace.record_tauri_command_elapsed("load_session_turn_window", None, started_at);
     result
 }
 

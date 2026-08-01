@@ -23,13 +23,13 @@ use bitfun_core::service::remote_ssh::workspace_state::get_effective_session_pat
 use bitfun_core::service::remote_ssh::SSHConnectionManager;
 use bitfun_core::service::session::{
     DialogTurnData, DialogTurnKind, SessionMetadata, SessionStatus, SessionTranscriptExport,
-    SessionTranscriptExportOptions, SessionTurnCatalog,
+    SessionTranscriptExportOptions, SessionTurnCatalog, SessionTurnWindowResponse,
 };
 use bitfun_core::service::session_usage::SessionUsageReport;
 use bitfun_core::service::token_usage::TokenUsageService;
 use bitfun_core::service::workspace::WorkspaceService;
 use bitfun_core::util::errors::BitFunError;
-use bitfun_runtime_ports::AgentContextReloadRequest;
+use bitfun_runtime_ports::{AgentContextReloadRequest, SessionTurnWindowRequest};
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
@@ -400,6 +400,20 @@ impl DesktopSessionApplication {
         let storage_path = self.storage_path(&scope);
         self.compatibility
             .load_persisted_session_turns(&storage_path, session_id, limit)
+            .await
+            .map_err(|error| DesktopSessionApplicationError::Core(error.to_string()))
+    }
+
+    pub(crate) async fn load_session_turn_window(
+        &self,
+        scope_request: DesktopSessionScopeRequest,
+        mut request: SessionTurnWindowRequest,
+    ) -> DesktopSessionApplicationResult<SessionTurnWindowResponse> {
+        let scope = self.resolved_scope(scope_request).await;
+        let storage_path = self.storage_path(&scope);
+        request.workspace_path = storage_path.clone();
+        self.compatibility
+            .load_session_turn_window_from_storage_path(&storage_path, request)
             .await
             .map_err(|error| DesktopSessionApplicationError::Core(error.to_string()))
     }

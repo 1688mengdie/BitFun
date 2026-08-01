@@ -24,7 +24,7 @@ use bitfun_runtime_ports::{
     LocalWorkspaceSnapshotSessionRequest, LocalWorkspaceSnapshotStats,
     LocalWorkspaceSnapshotTurnRequest, PortError, PortErrorKind, PortResult,
     RuntimeServiceCapability, RuntimeServicePort, SessionStoragePathRequest, SessionStorePort,
-    SessionViewRestoreTiming,
+    SessionTurnWindowRequest, SessionViewRestoreTiming,
 };
 use bitfun_runtime_services::RuntimeServices;
 use bitfun_services_core::permission_store::ProjectPermissionSqliteStore;
@@ -42,7 +42,7 @@ use crate::agentic::session::{CoreSessionStorePort, PromptCacheScope};
 use crate::agentic::tools::implementations::skills::SkillRegistry;
 use crate::service::session::{
     DialogTurnData, SessionMetadata, SessionTranscriptExport, SessionTranscriptExportOptions,
-    SessionTurnCatalog,
+    SessionTurnCatalog, SessionTurnWindowResponse,
 };
 use crate::service::session_usage::{
     generate_session_usage_report_from_storage_path, SessionUsageReport,
@@ -746,6 +746,33 @@ impl CoreAgentRuntimeCompatibility {
             .total_duration_ms
             .saturating_add(timing.turn_catalog_duration_ms);
         Ok((session, turns, total_turn_count, turn_catalog, timing))
+    }
+
+    pub async fn load_session_turn_window_from_storage_path(
+        &self,
+        storage_path: &Path,
+        mut request: SessionTurnWindowRequest,
+    ) -> BitFunResult<SessionTurnWindowResponse> {
+        validate_persisted_session_id(&request.session_id)?;
+        if self
+            .persistence
+            .load_session_metadata(storage_path, &request.session_id)
+            .await?
+            .is_some_and(|metadata| {
+                !request.include_internal && metadata.should_hide_from_user_lists()
+            })
+        {
+            return Err(BitFunError::NotFound(format!(
+                "Session not found: {}",
+                request.session_id
+            )));
+        }
+
+        let _read = self
+            .begin_persisted_session_read(storage_path, &request.session_id)
+            .await?;
+        request.workspace_path = storage_path.to_path_buf();
+        self.persistence.load_session_turn_window(&request).await
     }
 
     pub async fn restore_session_with_turns_from_storage_path(
