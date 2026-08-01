@@ -131,7 +131,7 @@ describe('FlowChatHeader', () => {
     });
 
     const header = container.querySelector<HTMLElement>('.flowchat-header');
-    expect(header?.style.getPropertyValue('--flowchat-header-side-width')).toBe('196px');
+    expect(header?.style.getPropertyValue('--bf-appearance-token-flowchat-header-side-width')).toBe('196px');
   });
 
   it('omits the list, previous-turn, and next-turn navigation controls', () => {

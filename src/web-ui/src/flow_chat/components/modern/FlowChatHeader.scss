@@ -8,10 +8,10 @@
   justify-content: space-between;
   gap: $size-gap-1;
   padding: 0 $size-gap-3;
-  border-bottom: 1px dashed var(--border-base);
+  border-bottom: 1px dashed var(--bf-appearance-token-border-base);
 
   // Frosted glass effect.
-  background: color-mix(in srgb, var(--color-bg-elevated) 45%, transparent);
+  background: color-mix(in srgb, var(--bf-appearance-token-color-bg-elevated) 45%, transparent);
   backdrop-filter: blur(20px) saturate(1.3);
   -webkit-backdrop-filter: blur(20px) saturate(1.3);
   
@@ -34,9 +34,9 @@
     
     background: linear-gradient(
       to bottom,
-      color-mix(in srgb, var(--color-bg-elevated) 35%, transparent) 0%,
-      color-mix(in srgb, var(--color-bg-elevated) 20%, transparent) 35%,
-      color-mix(in srgb, var(--color-bg-elevated) 8%, transparent) 65%,
+      color-mix(in srgb, var(--bf-appearance-token-color-bg-elevated) 35%, transparent) 0%,
+      color-mix(in srgb, var(--bf-appearance-token-color-bg-elevated) 20%, transparent) 35%,
+      color-mix(in srgb, var(--bf-appearance-token-color-bg-elevated) 8%, transparent) 65%,
       transparent 100%
     );
 
@@ -51,7 +51,7 @@
     flex: 0 0 auto;
 
     &:not(:disabled):hover {
-      background: color-mix(in srgb, var(--element-bg-soft) 82%, transparent);
+      background: color-mix(in srgb, var(--bf-appearance-token-element-bg-soft) 82%, transparent);
     }
   }
 
@@ -66,16 +66,16 @@
 
     &:not(:disabled):hover,
     &--active {
-      background: color-mix(in srgb, var(--element-bg-soft) 82%, transparent);
+      background: color-mix(in srgb, var(--bf-appearance-token-element-bg-soft) 82%, transparent);
     }
 
     &--has-commands {
-      color: color-mix(in srgb, var(--color-success) 86%, var(--color-text-primary));
+      color: color-mix(in srgb, var(--bf-appearance-token-color-success) 86%, var(--bf-appearance-token-color-text-primary));
 
       &:not(:disabled):hover,
       &.flowchat-header__background-command-nav-button--active {
-        color: var(--color-success);
-        background: color-mix(in srgb, var(--color-success) 12%, transparent);
+        color: var(--bf-appearance-token-color-success);
+        background: color-mix(in srgb, var(--bf-appearance-token-color-success) 12%, transparent);
       }
     }
   }
@@ -94,10 +94,10 @@
     width: 4px;
     height: 4px;
     border-radius: 999px;
-    background: color-mix(in srgb, var(--color-success) 92%, white 8%);
+    background: color-mix(in srgb, var(--bf-appearance-token-color-success) 92%, white 8%);
     box-shadow:
-      0 0 0 1px var(--color-bg-elevated),
-      0 0 0 0 color-mix(in srgb, var(--color-success) 42%, transparent);
+      0 0 0 1px var(--bf-appearance-token-color-bg-elevated),
+      0 0 0 0 color-mix(in srgb, var(--bf-appearance-token-color-success) 42%, transparent);
     animation: flowchat-header-background-command-pulse 1.45s ease-out infinite;
   }
 
@@ -107,16 +107,16 @@
       transform: scale(1);
       opacity: 0.9;
       box-shadow:
-        0 0 0 1px var(--color-bg-elevated),
-        0 0 0 0 color-mix(in srgb, var(--color-success) 40%, transparent);
+        0 0 0 1px var(--bf-appearance-token-color-bg-elevated),
+        0 0 0 0 color-mix(in srgb, var(--bf-appearance-token-color-success) 40%, transparent);
     }
 
     50% {
       transform: scale(1.22);
       opacity: 1;
       box-shadow:
-        0 0 0 1px var(--color-bg-elevated),
-        0 0 0 5px color-mix(in srgb, var(--color-success) 0%, transparent);
+        0 0 0 1px var(--bf-appearance-token-color-bg-elevated),
+        0 0 0 5px color-mix(in srgb, var(--bf-appearance-token-color-success) 0%, transparent);
     }
   }
 
@@ -132,7 +132,7 @@
     flex: 0 0 auto;
 
     &:not(:disabled):hover {
-      background: color-mix(in srgb, var(--element-bg-soft) 82%, transparent);
+      background: color-mix(in srgb, var(--bf-appearance-token-element-bg-soft) 82%, transparent);
     }
   }
 
@@ -165,7 +165,7 @@
 
   &__search-prefix-icon {
     flex-shrink: 0;
-    color: var(--color-text-secondary);
+    color: var(--bf-appearance-token-color-text-secondary);
     opacity: 0.75;
   }
 
@@ -175,14 +175,14 @@
     gap: 0;
     padding-left: 2px;
     margin-left: 2px;
-    border-left: 1px solid var(--border-subtle);
+    border-left: 1px solid var(--bf-appearance-token-border-subtle);
   }
 
   &__search-count {
     flex-shrink: 0;
     padding: 0 3px;
-    color: var(--color-text-secondary);
-    font-size: var(--flowchat-font-size-xs);
+    color: var(--bf-appearance-token-color-text-secondary);
+    font-size: var(--bf-appearance-token-flowchat-font-size-xs);
     white-space: nowrap;
 
     &:empty {
@@ -207,7 +207,7 @@
     padding: 0;
     border: none;
     background: transparent;
-    color: var(--color-text-secondary);
+    color: var(--bf-appearance-token-color-text-secondary);
     cursor: pointer;
     opacity: 0.8;
     transition: opacity $motion-base $easing-standard, background $motion-base $easing-standard;
@@ -215,7 +215,7 @@
 
     &:hover:not(:disabled) {
       opacity: 1;
-      background: var(--element-bg-soft);
+      background: var(--bf-appearance-token-element-bg-soft);
     }
 
     &:disabled {
@@ -233,10 +233,10 @@
     display: flex;
     flex-direction: column;
     overflow: hidden;
-    border: 1px solid var(--border-base);
+    border: 1px solid var(--bf-appearance-token-border-base);
     border-radius: $size-radius-lg;
-    background: color-mix(in srgb, var(--color-bg-elevated) 94%, transparent);
-    box-shadow: var(--shadow-lg);
+    background: color-mix(in srgb, var(--bf-appearance-token-color-bg-elevated) 94%, transparent);
+    box-shadow: var(--bf-appearance-token-shadow-lg);
     backdrop-filter: blur(16px);
     -webkit-backdrop-filter: blur(16px);
     z-index: 30;
@@ -248,9 +248,9 @@
     justify-content: space-between;
     gap: $size-gap-2;
     padding: $size-gap-2 $size-gap-3;
-    border-bottom: 1px solid var(--border-base);
-    font-size: var(--flowchat-font-size-xs);
-    color: var(--color-text-secondary);
+    border-bottom: 1px solid var(--bf-appearance-token-border-base);
+    font-size: var(--bf-appearance-token-flowchat-font-size-xs);
+    color: var(--bf-appearance-token-color-text-secondary);
   }
 
   &__background-command-panel-header-actions {
@@ -279,13 +279,13 @@
     border: 0;
     border-radius: $size-radius-base;
     background: transparent;
-    color: var(--color-text-primary);
+    color: var(--bf-appearance-token-color-text-primary);
     text-align: left;
     cursor: pointer;
     transition: background $motion-base $easing-standard;
 
     &:hover {
-      background: color-mix(in srgb, var(--element-bg-soft) 88%, transparent);
+      background: color-mix(in srgb, var(--bf-appearance-token-element-bg-soft) 88%, transparent);
     }
   }
 
@@ -298,7 +298,7 @@
     transition: background $motion-base $easing-standard;
 
     &:hover {
-      background: color-mix(in srgb, var(--element-bg-soft) 88%, transparent);
+      background: color-mix(in srgb, var(--bf-appearance-token-element-bg-soft) 88%, transparent);
     }
   }
 
@@ -332,11 +332,11 @@
 
   &__background-command-menu-button {
     flex: 0 0 auto;
-    color: var(--color-text-secondary);
+    color: var(--bf-appearance-token-color-text-secondary);
 
     &:not(:disabled):hover {
-      color: var(--color-text-primary);
-      background: color-mix(in srgb, var(--element-bg-soft) 88%, transparent);
+      color: var(--bf-appearance-token-color-text-primary);
+      background: color-mix(in srgb, var(--bf-appearance-token-element-bg-soft) 88%, transparent);
     }
   }
 
@@ -351,10 +351,10 @@
     flex-direction: column;
     gap: 2px;
     padding: 4px;
-    border: 1px solid var(--border-base);
+    border: 1px solid var(--bf-appearance-token-border-base);
     border-radius: $size-radius-base;
-    background: color-mix(in srgb, var(--color-bg-elevated) 98%, transparent);
-    box-shadow: var(--shadow-base);
+    background: color-mix(in srgb, var(--bf-appearance-token-color-bg-elevated) 98%, transparent);
+    box-shadow: var(--bf-appearance-token-shadow-base);
     z-index: 40;
 
     &--compact {
@@ -378,19 +378,19 @@
     border: 0;
     border-radius: calc($size-radius-base - 2px);
     background: transparent;
-    color: var(--color-text-primary);
-    font-size: var(--flowchat-font-size-xs);
+    color: var(--bf-appearance-token-color-text-primary);
+    font-size: var(--bf-appearance-token-flowchat-font-size-xs);
     text-align: left;
     white-space: nowrap;
     cursor: pointer;
 
     svg {
       flex: 0 0 auto;
-      color: var(--color-text-secondary);
+      color: var(--bf-appearance-token-color-text-secondary);
     }
 
     &:hover:not(:disabled) {
-      background: color-mix(in srgb, var(--element-bg-soft) 88%, transparent);
+      background: color-mix(in srgb, var(--bf-appearance-token-element-bg-soft) 88%, transparent);
     }
 
     &:disabled {
@@ -399,11 +399,11 @@
     }
 
     &--danger:hover:not(:disabled) {
-      color: var(--color-error);
-      background: color-mix(in srgb, var(--color-error) 12%, transparent);
+      color: var(--bf-appearance-token-color-error);
+      background: color-mix(in srgb, var(--bf-appearance-token-color-error) 12%, transparent);
 
       svg {
-        color: var(--color-error);
+        color: var(--bf-appearance-token-color-error);
       }
     }
   }
@@ -413,7 +413,7 @@
     align-items: center;
     gap: $size-gap-1;
     width: 100%;
-    font-size: var(--flowchat-font-size-sm);
+    font-size: var(--bf-appearance-token-flowchat-font-size-sm);
     color: inherit;
     white-space: nowrap;
     overflow: hidden;
@@ -421,7 +421,7 @@
 
     svg {
       flex: 0 0 auto;
-      color: var(--color-text-secondary);
+      color: var(--bf-appearance-token-color-text-secondary);
       opacity: 0.82;
     }
 
@@ -434,8 +434,8 @@
 
   &__background-command-list-meta {
     width: 100%;
-    font-size: var(--flowchat-font-size-xs);
-    color: var(--color-text-secondary);
+    font-size: var(--bf-appearance-token-flowchat-font-size-xs);
+    color: var(--bf-appearance-token-color-text-secondary);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -444,8 +444,8 @@
   // ==================== Center message ====================
   &__message {
     position: absolute;
-    left: calc(var(--flowchat-header-side-width) + #{$size-gap-5});
-    right: calc(var(--flowchat-header-side-width) + #{$size-gap-5});
+    left: calc(var(--bf-appearance-token-flowchat-header-side-width) + #{$size-gap-5});
+    right: calc(var(--bf-appearance-token-flowchat-header-side-width) + #{$size-gap-5});
     min-width: 0;
     padding: 0 $size-gap-3;
     display: flex;
@@ -458,13 +458,13 @@
     transition: background $motion-base $easing-standard;
 
     &:hover {
-      background: color-mix(in srgb, var(--element-bg-soft) 70%, transparent);
+      background: color-mix(in srgb, var(--bf-appearance-token-element-bg-soft) 70%, transparent);
     }
 
     &:focus-visible {
       outline: none;
-      background: color-mix(in srgb, var(--element-bg-soft) 82%, transparent);
-      box-shadow: 0 0 0 1.5px var(--border-strong);
+      background: color-mix(in srgb, var(--bf-appearance-token-element-bg-soft) 82%, transparent);
+      box-shadow: 0 0 0 1.5px var(--bf-appearance-token-border-strong);
     }
   }
 
@@ -475,17 +475,17 @@
     max-width: 100%;
     padding: 2px 8px;
     border-radius: 999px;
-    background: color-mix(in srgb, var(--element-bg-soft) 82%, transparent);
-    color: var(--color-text-secondary);
-    font-size: var(--flowchat-font-size-xs);
+    background: color-mix(in srgb, var(--bf-appearance-token-element-bg-soft) 82%, transparent);
+    color: var(--bf-appearance-token-color-text-secondary);
+    font-size: var(--bf-appearance-token-flowchat-font-size-xs);
     line-height: 1;
     white-space: nowrap;
   }
 
   &__message-text {
     min-width: 0;
-    font-size: var(--flowchat-font-size-sm);
-    color: var(--color-text-primary);
+    font-size: var(--bf-appearance-token-flowchat-font-size-sm);
+    color: var(--bf-appearance-token-color-text-primary);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;

@@ -76,7 +76,13 @@ export const SessionMenu: React.FC<SessionMenuProps> = ({ onOpenChange }) => {
   }, [isMenuOpen, setOpen]);
 
   return (
-    <div className="bitfun-session-menu" onKeyDown={handleKeyDown}>
+    <div
+      className="bitfun-session-menu"
+      data-bf-component="session-menu"
+      data-bf-part="root"
+      data-bf-state={isMenuOpen ? 'open' : undefined}
+      onKeyDown={handleKeyDown}
+    >
       <Tooltip content={t('toolCards.toolbar.openSessionMenu')}>
         <button
           type="button"
@@ -84,6 +90,8 @@ export const SessionMenu: React.FC<SessionMenuProps> = ({ onOpenChange }) => {
             'bitfun-session-menu__trigger',
             isMenuOpen ? 'bitfun-session-menu__trigger--open' : '',
           ].filter(Boolean).join(' ')}
+          data-bf-component="session-menu"
+          data-bf-part="trigger"
           onClick={toggleMenu}
           aria-expanded={isMenuOpen}
           aria-haspopup="listbox"
@@ -95,47 +103,59 @@ export const SessionMenu: React.FC<SessionMenuProps> = ({ onOpenChange }) => {
       {isMenuOpen && (
         <div
           className="bitfun-session-menu__dropdown"
+          data-bf-component="session-menu"
+          data-bf-part="dropdown"
           ref={dropdownRef}
           onMouseDown={(e) => e.stopPropagation()}
         >
-          <div className="bitfun-session-menu__actions">
+          <div className="bitfun-session-menu__actions" data-bf-component="session-menu" data-bf-part="actions">
             <button
               type="button"
               className="bitfun-session-menu__item bitfun-session-menu__item--new"
+              data-bf-component="session-menu"
+              data-bf-part="item"
+              data-bf-item-kind="create"
+              data-bf-session-kind="code"
               onMouseDown={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
                 createSession('code');
               }}
             >
-              <span className="bitfun-session-menu__item-icon" aria-hidden>
+              <span className="bitfun-session-menu__item-icon" data-bf-component="session-menu" data-bf-part="itemIcon" aria-hidden>
                 <Plus size={13} strokeWidth={2.25} />
               </span>
-              <span className="bitfun-session-menu__item-label">
+              <span className="bitfun-session-menu__item-label" data-bf-component="session-menu" data-bf-part="itemLabel">
                 {t('toolCards.toolbar.newCodeSessionItem')}
               </span>
             </button>
             <button
               type="button"
               className="bitfun-session-menu__item bitfun-session-menu__item--new"
+              data-bf-component="session-menu"
+              data-bf-part="item"
+              data-bf-item-kind="create"
+              data-bf-session-kind="cowork"
               onMouseDown={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
                 createSession('cowork');
               }}
             >
-              <span className="bitfun-session-menu__item-icon" aria-hidden>
+              <span className="bitfun-session-menu__item-icon" data-bf-component="session-menu" data-bf-part="itemIcon" aria-hidden>
                 <Plus size={13} strokeWidth={2.25} />
               </span>
-              <span className="bitfun-session-menu__item-label">
+              <span className="bitfun-session-menu__item-label" data-bf-component="session-menu" data-bf-part="itemLabel">
                 {t('toolCards.toolbar.newCoworkSessionItem')}
               </span>
             </button>
-            <div className="bitfun-session-menu__divider" role="separator" />
+            <div className="bitfun-session-menu__divider" data-bf-component="session-menu" data-bf-part="divider" role="separator" />
           </div>
 
           <div
             className="bitfun-session-menu__scroll"
+            data-bf-component="session-menu"
+            data-bf-part="scroll"
             role="listbox"
             aria-label={t('session.switchSession')}
           >
@@ -147,6 +167,10 @@ export const SessionMenu: React.FC<SessionMenuProps> = ({ onOpenChange }) => {
                   'bitfun-session-menu__item',
                   session.sessionId === activeSessionId ? 'bitfun-session-menu__item--active' : '',
                 ].filter(Boolean).join(' ')}
+                data-bf-component="session-menu"
+                data-bf-part="item"
+                data-bf-item-kind="session"
+                data-bf-state={session.sessionId === activeSessionId ? 'active' : undefined}
                 onMouseDown={(e) => switchSession(e, session.sessionId)}
               >
                 {resolveDisplayTitle(session)}

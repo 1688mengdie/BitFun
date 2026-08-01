@@ -81,7 +81,7 @@ export const VirtualItemRenderer = React.memo<VirtualItemRendererProps>(
 
         case 'image-analyzing':
           return (
-            <div className="model-round-item model-round-item--streaming">
+            <div data-bf-component="virtual-item" data-bf-part="imageAnalyzing" className="model-round-item model-round-item--streaming">
               <CompactToolCard
                 status="running"
                 header={
@@ -95,7 +95,7 @@ export const VirtualItemRenderer = React.memo<VirtualItemRendererProps>(
           );
 
         default:
-          return <div style={{ minHeight: '1px' }} />;
+          return <div data-bf-component="virtual-item" data-bf-part="placeholder" style={{ minHeight: '1px' }} />;
       }
     })();
     
@@ -108,7 +108,10 @@ export const VirtualItemRenderer = React.memo<VirtualItemRendererProps>(
     ].filter(Boolean).join(' ');
 
     return (
-      <div 
+      <div
+        data-bf-component="virtual-item"
+        data-bf-part="root"
+        data-bf-state={[isSearchMatch && 'searchMatch', isSearchCurrent && 'searchCurrent'].filter(Boolean).join(' ')}
         className={wrapperClassName}
         data-testid="flowchat-message-item"
         data-turn-id={item.turnId}
