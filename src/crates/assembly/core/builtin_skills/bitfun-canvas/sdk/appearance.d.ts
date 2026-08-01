@@ -58,4 +58,4 @@ export declare const canvasRadius: {
     readonly full: 9999;
 };
 export type CanvasRadius = typeof canvasRadius;
-//# sourceMappingURL=theme.d.ts.map
+//# sourceMappingURL=appearance.d.ts.map

@@ -1,11 +1,11 @@
 {
-  "version": 1,
-  "defaultLightThemeId": "bitfun-light",
-  "defaultDarkThemeId": "bitfun-dark",
-  "themes": [
+  "schemaVersion": 1,
+  "defaultLightAppearanceId": "bitfun-light",
+  "defaultDarkAppearanceId": "bitfun-dark",
+  "appearances": [
     {
       "id": "bitfun-light",
-      "themeType": "light",
+      "mode": "light",
       "bgPrimary": "#f3f3f5",
       "bgSecondary": "#ffffff",
       "bgScene": "#ffffff",
@@ -18,11 +18,11 @@
       "radiusBase": "8px",
       "spacing4": "16px",
       "shadowBase": "0 4px 8px rgba(71, 85, 105, 0.1)",
-      "styleNotes": "Light theme - Neutral gray surfaces, black primary actions"
+      "styleNotes": "Light appearance - Neutral gray surfaces, black primary actions"
     },
     {
       "id": "bitfun-slate",
-      "themeType": "dark",
+      "mode": "dark",
       "bgPrimary": "#1c1c1f",
       "bgSecondary": "#262626",
       "bgScene": "#262626",
@@ -35,11 +35,11 @@
       "radiusBase": "6px",
       "spacing4": "16px",
       "shadowBase": "0 4px 8px rgba(0, 0, 0, 0.75)",
-      "styleNotes": "Slate gray geometric theme - Deep immersion, high contrast grayscale aesthetics"
+      "styleNotes": "Slate gray geometric appearance - Deep immersion, high contrast grayscale aesthetics"
     },
     {
       "id": "bitfun-dark",
-      "themeType": "dark",
+      "mode": "dark",
       "bgPrimary": "#0e0e10",
       "bgSecondary": "#1c1c1f",
       "bgScene": "#1c1c1f",
@@ -52,11 +52,11 @@
       "radiusBase": "8px",
       "spacing4": "16px",
       "shadowBase": "0 4px 8px rgba(0, 0, 0, 0.7)",
-      "styleNotes": "Default dark theme"
+      "styleNotes": "Default dark appearance"
     },
     {
       "id": "bitfun-midnight",
-      "themeType": "dark",
+      "mode": "dark",
       "bgPrimary": "#2b2d30",
       "bgSecondary": "#1c1c1f",
       "bgScene": "#2b2d30",
@@ -69,11 +69,11 @@
       "radiusBase": "8px",
       "spacing4": "16px",
       "shadowBase": "0 4px 8px rgba(0, 0, 0, 0.7)",
-      "styleNotes": "Midnight gray dark theme - Professional and elegant, inspired by JetBrains IDE"
+      "styleNotes": "Midnight gray dark appearance - Professional and elegant, inspired by JetBrains IDE"
     },
     {
       "id": "bitfun-china-style",
-      "themeType": "light",
+      "mode": "light",
       "bgPrimary": "#faf8f0",
       "bgSecondary": "#f5f3e8",
       "bgScene": "#faf8f0",
@@ -86,11 +86,11 @@
       "radiusBase": "6px",
       "spacing4": "16px",
       "shadowBase": "0 4px 8px rgba(106, 92, 70, 0.1)",
-      "styleNotes": "Chinese style theme - Rice paper and ink, blue and vermilion, warm and elegant"
+      "styleNotes": "Chinese style appearance - Rice paper and ink, blue and vermilion, warm and elegant"
     },
     {
       "id": "bitfun-china-night",
-      "themeType": "dark",
+      "mode": "dark",
       "bgPrimary": "#1c1c1f",
       "bgSecondary": "#212019",
       "bgScene": "#1c1c1f",
@@ -103,11 +103,11 @@
       "radiusBase": "6px",
       "spacing4": "16px",
       "shadowBase": "0 4px 8px rgba(0, 0, 0, 0.65)",
-      "styleNotes": "Chinese dark theme - Starlit ink night, moonlight like water, serene and elegant"
+      "styleNotes": "Chinese dark appearance - Starlit ink night, moonlight like water, serene and elegant"
     },
     {
       "id": "bitfun-cyber",
-      "themeType": "dark",
+      "mode": "dark",
       "bgPrimary": "#0e0e10",
       "bgSecondary": "#1c1c1f",
       "bgScene": "#1c1c1f",
@@ -120,11 +120,11 @@
       "radiusBase": "6px",
       "spacing4": "16px",
       "shadowBase": "0 4px 12px rgba(0, 0, 0, 0.8)",
-      "styleNotes": "Tech-style theme - Deep black hole, neon future, ultimate tech aesthetics"
+      "styleNotes": "Tech-style appearance - Deep black hole, neon future, ultimate tech aesthetics"
     },
     {
       "id": "bitfun-tokyo-night",
-      "themeType": "dark",
+      "mode": "dark",
       "bgPrimary": "#1a1b26",
       "bgSecondary": "#1e202e",
       "bgScene": "#1a1b26",
@@ -137,7 +137,7 @@
       "radiusBase": "6px",
       "spacing4": "16px",
       "shadowBase": "0 4px 12px rgba(0, 0, 0, 0.48)",
-      "styleNotes": "Tokyo Night — deep indigo base, soft blue and magenta accents (palette from the Tokyo Night theme family)"
+      "styleNotes": "Tokyo Night - deep indigo base with soft blue and magenta accents"
     }
   ]
 }

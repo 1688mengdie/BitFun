@@ -1,5 +1,5 @@
 /**
- * Git Graph MiniApp — theme adapter: read --branch-* and node stroke from CSS for graph colors.
+ * Git Graph MiniApp — appearance adapter: read --branch-* and node stroke from CSS for graph colors.
  */
 (function () {
   window.__GG = window.__GG || {};
@@ -9,7 +9,7 @@
     return getComputedStyle(root).getPropertyValue(name).trim() || null;
   }
 
-  /** Returns array of 7 branch/lane colors from CSS variables (theme-aware). */
+  /** Returns array of 7 branch/lane colors from CSS variables (appearance-aware). */
   window.__GG.getGraphColors = function () {
     const colors = [];
     for (let i = 1; i <= 7; i++) {
